@@ -771,6 +771,9 @@ mod tests {
     const TERMINATOR: &str = "╰󰬪";
     /// The closing row of a LIVE Context with nothing to fold (hs-d688).
     const NEW_PLAN: &str = "╰󰬪 new";
+    /// The tree root's archive row, folded and expanded (hs-d698, hs-d707).
+    const ARCHIVE_DOWN: &str = "\u{F0B26} archive";
+    const ARCHIVE_UP: &str = "\u{F0B2C} archive";
 
     /// A Plan with an idle Lead named `name` and no forks.
     fn lone(id: &str, name: &str, phase: Phase, counts: [usize; 6]) -> PlanNode {
@@ -1034,13 +1037,14 @@ mod tests {
         gone.archived_at = Some(WHEN.into());
         let t = tree(vec![managed(context("cc", vec![p]), Dot::Working(None)), gone]);
         let mut state = state_for(&t, &[], &[]);
+        state.open(vec![ARCHIVE.to_owned()]);
         unfold(&mut state, &t, "zz");
         for frame in 0..SPINNER.len() {
             let buf = render_at(&t, &mut state, 24, 12, false, frame);
             let grey = (String::from("\u{E3D5}"), color(Meaning::Nothing));
             assert_eq!(cell(&buf, 2, 1), grey, "frame {frame}: an archived Plan row, always the hollow ring {:?}", lines(&buf));
-            assert_eq!(cell(&buf, 1, 4), grey, "frame {frame}: an archived Context row {:?}", lines(&buf));
-            assert_eq!(cell(&buf, 2, 5), grey, "frame {frame}: its Plan row");
+            assert_eq!(cell(&buf, 1, 5), grey, "frame {frame}: an archived Context row {:?}", lines(&buf));
+            assert_eq!(cell(&buf, 2, 6), grey, "frame {frame}: its Plan row");
             assert_eq!(buf[(1, 0)].symbol(), SPINNER[frame], "while the live Context row turns");
         }
     }
@@ -1396,7 +1400,9 @@ mod tests {
     #[test]
     fn archived_plans_and_forks_are_inside_the_expanded_block_after_the_live_rows_muted_with_no_group_row_and_one_toggle() {
         let t = archived();
-        let buf = render(&t, &mut state_for(&t, &[], &[]), 44, 16, false);
+        let mut state = state_for(&t, &[], &[]);
+        state.open(vec![ARCHIVE.to_owned()]);
+        let buf = render(&t, &mut state, 44, 20, false);
         assert_eq!(
             lines(&buf)[..13],
             [
@@ -1478,14 +1484,26 @@ mod tests {
         let t = archived();
         let mut state = state_for(&t, &[], &[]);
         assert!(!state.opened().contains(&toggle_of(&["zeta"])), "an archived Context starts folded");
-        let buf = render(&t, &mut state, 44, 16, false);
-        let rows = lines(&buf);
-        assert_eq!(rows[11..], [format!("╭{STOPPED} gamma"), NEW_PLAN.to_owned(), String::new(), format!("╭{STOPPED} zeta"), EXPAND.to_owned()], "{rows:#?}");
-        unfold(&mut state, &t, "zeta");
-        let buf = render(&t, &mut state, 44, 18, false);
+        state.open(vec![ARCHIVE.to_owned()]);
+        let buf = render(&t, &mut state, 44, 22, false);
         let rows = lines(&buf);
         assert_eq!(
-            rows[14..],
+            rows[11..17],
+            [
+                format!("╭{STOPPED} gamma"),
+                NEW_PLAN.to_owned(),
+                String::new(),
+                ARCHIVE_UP.to_owned(),
+                format!("╭{STOPPED} zeta"),
+                EXPAND.to_owned()
+            ],
+            "{rows:#?}"
+        );
+        unfold(&mut state, &t, "zeta");
+        let buf = render(&t, &mut state, 44, 24, false);
+        let rows = lines(&buf);
+        assert_eq!(
+            rows[15..19],
             [
                 format!("╭{STOPPED} zeta"),
                 row_of(&format!("├─{STOPPED} zp"), "2", 44),
@@ -1494,7 +1512,7 @@ mod tests {
             ],
             "{rows:#?}"
         );
-        for y in 14..18 {
+        for y in 15..19 {
             for x in 0..44 {
                 if buf[(x, y)].symbol() != " " {
                     // the closing row's arrow and word are the fold toggle's colour 7; everything else is muted
@@ -1505,7 +1523,7 @@ mod tests {
             }
         }
         assert!(click_toggle(&mut state, &t, &toggle_of(&["zeta"])));
-        assert_eq!(lines(&render(&t, &mut state, 44, 18, false))[14..16], [format!("╭{STOPPED} zeta"), EXPAND.to_owned()]);
+        assert_eq!(lines(&render(&t, &mut state, 44, 24, false))[15..17], [format!("╭{STOPPED} zeta"), EXPAND.to_owned()]);
     }
 
     #[test]

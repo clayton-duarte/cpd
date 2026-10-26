@@ -33,6 +33,7 @@ fn an_archived_manager_is_a_muted_row_in_its_contexts_archived_section() {
     let mut opened = HashSet::new();
     opened.insert(vec!["zeta".to_owned()]);
     opened.insert(vec![rows::toggle_id("zeta")]);
+    opened.insert(vec![rows::ARCHIVE.to_owned()]);
 
     let manager = tree
         .contexts
