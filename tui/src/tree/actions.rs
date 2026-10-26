@@ -161,6 +161,8 @@ pub enum Action {
     Snooze { item: i64, until: Until },
     /// `inbox dismiss <id>` (§21.4): the Inbox menu's Dismiss and `d`.
     Dismiss(i64),
+    /// Stub: `inbox claim <id>`.
+    Claim(i64),
     /// `plan delete <id>` or `context delete <id>` (§4.14, §3.14): the menu's Delete. Without `yes` the command deletes
     /// nothing and lists what would go, for the popup ([`super::ask::Question::Delete`]); with it, it deletes.
     Delete { what: Deletable, yes: bool },
@@ -214,6 +216,7 @@ impl Action {
             ],
             Action::Snooze { item, until } => words(&["inbox", "snooze", &item.to_string(), until.arg()]),
             Action::Dismiss(item) => words(&["inbox", "dismiss", &item.to_string()]),
+            Action::Claim(_) => unimplemented!("inbox claim"),
             Action::Delete { what, yes } => what.command(*yes),
         }
     }
@@ -278,6 +281,7 @@ impl Action {
             Action::Tell { manager, .. } => format!("told {manager}"),
             Action::Snooze { .. } => "snoozed".into(),
             Action::Dismiss(_) => "dismissed".into(),
+            Action::Claim(_) => unimplemented!("inbox claim"),
             Action::Delete { .. } if reply["already"] == true => "already deleted".into(),
             Action::Delete { .. } => "deleted".into(),
         }

@@ -30,6 +30,8 @@ pub enum Item {
     Snooze1h,
     SnoozeTomorrow,
     Dismiss,
+    /// Stub: not in any menu yet.
+    Claim,
 }
 
 impl Entry for Item {
@@ -50,6 +52,7 @@ impl Entry for Item {
             Item::Snooze1h => "Snooze 1 h",
             Item::SnoozeTomorrow => "Snooze until tomorrow 09:00",
             Item::Dismiss => "Dismiss",
+            Item::Claim => "Claim",
         }
     }
 }

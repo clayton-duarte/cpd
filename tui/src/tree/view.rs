@@ -575,6 +575,7 @@ impl View {
             Item::CopyId => row.shown_id().map_or(Effect::None, |id| Effect::Run(Action::CopyId(id))),
             // an Inbox item's entries are the menu's `inbox` branch above
             Item::NewContext | Item::Snooze15 | Item::Snooze1h | Item::SnoozeTomorrow | Item::Dismiss => Effect::None,
+            Item::Claim => unimplemented!("claim"),
         }
     }
 
