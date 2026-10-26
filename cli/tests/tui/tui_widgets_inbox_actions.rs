@@ -190,11 +190,12 @@ fn run(fx: &Fx, signals: Vec<Signal>) -> Vec<Screen> {
     show_with(fx, HEIGHT, all, &World::new(), recording)
 }
 
-/// The labels of the menu box on `screen`: the `│ <label> │` rows between the `╮` and the `╯` rows.
+/// The labels of the menu box on `screen`: the `│ <label> │` rows between the `╮` and the `╯` rows (the segment before the last `│`: the
+/// menu opens over the Inbox's item rows, which have a `│` of their own on its left).
 fn menu_labels(screen: &[String]) -> Vec<String> {
     let top = screen.iter().position(|r| r.contains('╮'));
     let Some(top) = top else { return vec![] };
-    screen[top + 1..].iter().take_while(|r| !r.contains('╯')).filter_map(|r| r.split('│').nth(1)).map(|l| l.trim().to_owned()).collect()
+    screen[top + 1..].iter().take_while(|r| !r.contains('╯')).filter_map(|r| r.rsplit('│').nth(1)).map(|l| l.trim().to_owned()).collect()
 }
 
 fn the_menu_is_closed(screen: &[String]) -> bool {
