@@ -222,3 +222,15 @@ test("in fullscreen mode a wheel turn, a mouse move, a button release and a righ
 		}
 	} finally { s.shutdown(); }
 });
+
+test("a key that an extension shortcut takes focuses a pane that reported nothing", async () => {
+	const s = await real("fullscreen");
+	try {
+		(s.editor as { onExtensionShortcut?: (data: string) => boolean }).onExtensionShortcut = () => true;
+		assert.deepEqual(s.border(), ["97"], "before any input");
+		s.send("\x1bb");
+		const rows = s.editor.render(30);
+		assert.ok(cursorDrawn(rows), `the cursor cell is drawn: ${readable(rows.join("\n"))}`);
+		assert.deepEqual(s.border(), ["94"], "the first render after the shortcut key");
+	} finally { s.shutdown(); }
+});
