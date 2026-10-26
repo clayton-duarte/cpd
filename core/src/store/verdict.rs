@@ -462,6 +462,20 @@ mod tests {
         assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
     }
 
+    /// hs-d704: the `store_too_new` refusal names the floor migration, so an operator
+    /// can see which migration this binary lacks.
+    #[test]
+    fn the_store_too_new_message_names_the_floor_migration() {
+        let (_dir, home) = tmp_home();
+        let newer = breaking(ADD_B);
+        drop(open_named(&home, &[ADD_A, newer]).unwrap());
+        let verdict = judge(&home, &[ADD_A]);
+        let err = verdict.refusal().expect("a store whose floor the binary lacks is refused");
+        assert_eq!(err.code(), ErrorCode::StoreTooNew);
+        assert!(err.message().contains(ADD_B.name), "the message names the floor migration: {}", err.message());
+        assert_eq!(err.details()["floor"], ADD_B.name);
+    }
+
     #[test]
     fn the_floor_is_the_breaking_migration_with_the_highest_seq() {
         // `a` breaking, then `b` additive: a binary that knows `a` and lacks `b` opens.
