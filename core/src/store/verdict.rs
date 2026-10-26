@@ -200,12 +200,16 @@ pub fn refuse_user_version(version: i64) -> Result<(), CpdError> {
 }
 
 /// `store_too_new` (§4.5): the store has a breaking migration this cpd does not
-/// know, or a later scheme. `floor` is the store's newest breaking migration.
+/// know, or a later scheme. `floor` is the store's newest breaking migration; the
+/// message names it when it is known, so an operator can see which one this binary lacks.
 fn too_new(version: i64, floor: Option<&str>, unknown: &[String]) -> CpdError {
-    CpdError::new(
-        ErrorCode::StoreTooNew,
-        format!("The database was migrated by a newer cpd (schema {version}): upgrade cpd."),
-    )
+    let message = match floor {
+        Some(floor) => format!(
+            "The database was migrated by a newer cpd (schema {version}): it applied migration {floor}, which this cpd does not know. Upgrade cpd."
+        ),
+        None => format!("The database was migrated by a newer cpd (schema {version}): upgrade cpd."),
+    };
+    CpdError::new(ErrorCode::StoreTooNew, message)
     .with("user_version", version)
     .with("floor", floor)
     .with("unknown", unknown)
@@ -462,6 +466,20 @@ mod tests {
         assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
     }
 
+    /// hs-d704: the `store_too_new` refusal names the floor migration, so an operator
+    /// can see which migration this binary lacks.
+    #[test]
+    fn the_store_too_new_message_names_the_floor_migration() {
+        let (_dir, home) = tmp_home();
+        let newer = breaking(ADD_B);
+        drop(open_named(&home, &[ADD_A, newer]).unwrap());
+        let verdict = judge(&home, &[ADD_A]);
+        let err = verdict.refusal().expect("a store whose floor the binary lacks is refused");
+        assert_eq!(err.code(), ErrorCode::StoreTooNew);
+        assert!(err.message().contains(ADD_B.name), "the message names the floor migration: {}", err.message());
+        assert_eq!(err.details()["floor"], ADD_B.name);
+    }
+
     #[test]
     fn the_floor_is_the_breaking_migration_with_the_highest_seq() {
         // `a` breaking, then `b` additive: a binary that knows `a` and lacks `b` opens.
@@ -498,6 +516,9 @@ mod tests {
             stmt.query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<Vec<String>>>().unwrap()
         };
         raw(&home, "DROP TRIGGER schema_migrations_no_update; DROP TRIGGER schema_migrations_no_delete");
+        // Every breaking migration that sorts after the restored name and landed after it must
+        // go too; cyan-tier (20261028T0900) sorts after gate-causes, so leaving it applied would
+        // make the still-pending gate-causes a migration-order refusal.
         raw(&home, "DELETE FROM schema_migrations WHERE name IN ('20261026T1200-gate-causes','20261027T1000-attempt-lead-branch','20261028T0900-cyan-tier')");
         raw(&home, "UPDATE schema_migrations SET name = '20261025T2300-queue-failed' WHERE name = '20261027T1100-queue-failed'");
         for sql in guards {

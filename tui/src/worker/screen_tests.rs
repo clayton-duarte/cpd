@@ -21,19 +21,19 @@ use cpd_core::ids::{AttemptId, JobKey, PlanId};
 use cpd_core::store::Store;
 
 /// A store in a temporary home, which lives as long as `dir`.
-struct Env {
+pub(super) struct Env {
     dir: tempfile::TempDir,
     store: Store,
 }
 
-fn env() -> Env {
+pub(super) fn env() -> Env {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&CpdHome::resolve(Some(dir.path().into()), None).unwrap(), 5000).unwrap();
     Env { dir, store }
 }
 
 impl Env {
-    fn sql(&mut self, text: &str) {
+    pub(super) fn sql(&mut self, text: &str) {
         self.store
             .write("fixture", |tx| {
                 tx.execute_batch(text)?;
@@ -50,7 +50,7 @@ impl Env {
         view
     }
 
-    fn attempt(&mut self) -> View {
+    pub(super) fn attempt(&mut self) -> View {
         self.view(&Target::Attempt(AttemptId::parse("api-a1").unwrap()))
     }
 
@@ -61,7 +61,7 @@ impl Env {
 
 /// Plan `ship` with Job `api` and its first Attempt `api-a1`, running. Its Worker Session `w1`, `working`, has
 /// the session file `file`, or none registered yet.
-fn populate(env: &mut Env, file: Option<&Path>) {
+pub(super) fn populate(env: &mut Env, file: Option<&Path>) {
     let file = file.map_or("NULL".to_owned(), |f| format!("'{}'", f.display()));
     env.sql(&format!(
         "INSERT INTO contexts (id, title, jira, created_at, created_on)
@@ -92,7 +92,7 @@ fn entry(role: &str, part: serde_json::Value) -> String {
     json!({"type": "message", "timestamp": "2026-10-15T16:33:44.329Z", "message": {"role": role, "content": [part]}}).to_string() + "\n"
 }
 
-fn session_file(env: &Env) -> PathBuf {
+pub(super) fn session_file(env: &Env) -> PathBuf {
     let path = env.dir.path().join("worker.jsonl");
     let text = [
         json!({"type": "session", "id": "w1"}).to_string() + "\n",
@@ -107,7 +107,7 @@ fn session_file(env: &Env) -> PathBuf {
 }
 
 /// What the view draws in a `width` × `height` pane.
-fn draw(view: &mut View, width: u16, height: u16) -> Buffer {
+pub(super) fn draw(view: &mut View, width: u16, height: u16) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| view.draw(f)).unwrap();
     terminal.backend().buffer().clone()

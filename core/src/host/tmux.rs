@@ -201,7 +201,7 @@ pub static SERVER_OPTIONS: LazyLock<Vec<Vec<String>>> = LazyLock::new(|| {
 /// The terminal window's title (contract §6.1, hs-d300): the config's machine
 /// name, which `cpd tui` sets as the global `@cpd_machine`; the host's short
 /// name until then, on a server another command started.
-const SET_TITLES_STRING: &str = "cpd · #{?@cpd_machine,#{@cpd_machine},#{host_short}}";
+const SET_TITLES_STRING: &str = "φ · #{?@cpd_machine,#{@cpd_machine},#{host_short}}";
 
 /// What a click on a StatusBar button runs (contract §6.1): `cpd tui action`
 /// with the button's range and the clicking client, `cpd` found on `PATH` as
@@ -1220,6 +1220,9 @@ pub mod pill;
 
 #[cfg(test)]
 mod pill_lines_tests;
+
+#[cfg(test)]
+mod title_tests;
 
 #[cfg(test)]
 mod pill_tests;

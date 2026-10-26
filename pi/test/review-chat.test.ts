@@ -15,7 +15,7 @@ const TITLE = "Review title";
 const SUMMARY = `# ${TITLE}\nPlan p1: Plan · review r1\n\nGoal: Show a review in chat\n\nApprove | Change | Open full plan (/x/plan-r1.md)\n`;
 const OPTIONS = ["Approve", "Change", "Open full plan"];
 const STILL_WAITING = (r: string) => `Plan review ${r} is still waiting: /plan-review reopens it`;
-const NONE_WAITING = "φ: no plan review is waiting in chat";
+const NONE_WAITING = "\x1b[1mφ\x1b[22m: no plan review is waiting in chat";
 
 const pending = (id = "r1", over: Record<string, unknown> = {}) => planShow({ review: { id, status: "pending", fingerprint: "ff", current: true, title: TITLE, ...over } });
 const reviewEvent = (id: number, review = "r1", status = "pending") => ev(id, "plan-review", { data: { review, fingerprint: "ff", status, title: TITLE } });
