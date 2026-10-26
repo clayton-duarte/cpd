@@ -180,12 +180,6 @@ fn decide(
             return Err(order(named.name, &after, unknown));
         }
     }
-    // Unreachable when the build's order check holds (§4.5 A2 check 2); it fails loudly anyway.
-    if let Some(floor) = floor {
-        if let Some(named) = pending.iter().find(|n| n.name < floor) {
-            return Err(order(named.name, &[floor], unknown));
-        }
-    }
     Ok(Start::Named)
 }
 
@@ -611,14 +605,17 @@ mod tests {
     }
 
     #[test]
-    fn a_pending_additive_migration_before_the_floor_is_migration_order() {
+    fn a_pending_additive_migration_before_the_floor_opens_and_is_applied() {
         let (_dir, home) = tmp_home();
         let floor = breaking(ADD_B);
         drop(open_named(&home, &[floor]).unwrap());
-        let (code, details) = refusal(&judge(&home, &[ADD_A, floor]));
-        assert_eq!(code, ErrorCode::MigrationOrder);
-        assert_eq!(details["name"], ADD_A.name);
-        assert_eq!(details["applied_after"], json!([ADD_B.name]));
+        let list = [ADD_A, floor];
+        let verdict = judge(&home, &list);
+        assert!(verdict.opens(), "{verdict:?}");
+        assert_eq!(verdict.pending_names(), [ADD_A.name]);
+        let mut store = open_named(&home, &list).unwrap();
+        let names: Vec<String> = applied(&mut store).into_iter().skip(LEGACY.len()).map(|(n, ..)| n).collect();
+        assert_eq!(names, [floor.name, ADD_A.name], "the store applied the floor first, then the pending additive a by O2");
     }
 
     #[test]
