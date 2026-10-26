@@ -41,7 +41,7 @@ use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode, Exit};
 use cpd_core::home::CpdHome;
 use cpd_core::host::exe::started_as;
-use cpd_core::host::layout::{LEGACY_STATUSBAR, MAIN_WINDOW, chat_slot, view_pane};
+use cpd_core::host::layout::{LEGACY_VIEWS, MAIN_WINDOW, chat_slot, view_pane};
 use cpd_core::host::spawn::Launch;
 use cpd_core::host::tmux::{client, installed_version, installed_version_with, older_version};
 use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux, View};
@@ -51,8 +51,7 @@ use cpd_core::ports::Ports;
 use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
 
-/// The views of `main`'s layout: a dead one is respawned (amendment 9). The
-/// `worker` view is not part of it: it is opened and closed by the plan view.
+/// The views of `main`'s layout: a dead one is respawned (amendment 9).
 const LAYOUT: [View; 4] = [View::Tree, View::Plan, View::Widgets, View::Chat];
 
 pub(super) fn run(attach: bool, respawn: bool, version: &str, run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
@@ -131,7 +130,7 @@ fn ensure(
             respawned = respawn_live_views(tmux, home, &main)?;
         }
         chat_added = add_missing_panes(tmux, home, cockpit, &main)?.contains(&View::Chat);
-        remove_old_statusbar(tmux, cockpit)?;
+        remove_old_panes(tmux, cockpit)?;
     }
     tmux.apply_server_options()?;
     // The window title's machine name (contract §6.1, hs-d300): SERVER_OPTIONS is static.
@@ -249,12 +248,12 @@ fn split(tmux: &Tmux, home: &CpdHome, view: View, target: &PaneId, flags: &[&str
     Ok(pane)
 }
 
-/// An existing `main` that still has an older cpd's StatusBar pane loses it
-/// once (`kill-pane`), then gets reset-layout, so the other panes take the
+/// An existing `main` that still has an older cpd's StatusBar or Worker pane
+/// loses it once (`kill-pane`), then gets reset-layout, so the other panes take the
 /// freed row and get their sizes back (commands.md §13.1, amendment 15).
-fn remove_old_statusbar(tmux: &Tmux, cockpit: &str) -> Result<(), CpdError> {
+fn remove_old_panes(tmux: &Tmux, cockpit: &str) -> Result<(), CpdError> {
     let old: Vec<PaneId> =
-        main_views(tmux, cockpit)?.into_iter().filter(|(_, view)| view == LEGACY_STATUSBAR).map(|(pane, _)| pane).collect();
+        main_views(tmux, cockpit)?.into_iter().filter(|(_, view)| LEGACY_VIEWS.contains(&view.as_str())).map(|(pane, _)| pane).collect();
     if old.is_empty() {
         return Ok(());
     }
@@ -296,21 +295,18 @@ const TREE_WIDTH: &str = "20%";
 const WIDGETS_WIDTH: &str = "30%";
 /// The Plan view's height on reset.
 const PLAN_HEIGHT: &str = "30%";
-/// The Worker pane's width on reset.
-const WORKER_WIDTH: &str = "30%";
 
 /// Reset-layout (commands.md §13.2): the views resized, in order, with the
 /// `resize-pane` flag and size of each. tmux takes a percentage as a share of
 /// the window. The chat slot is never resized: it takes what is left.
-const RESET_ORDER: [(View, &str, &str); 4] = [
+const RESET_ORDER: [(View, &str, &str); 3] = [
     (View::Tree, "-x", TREE_WIDTH),
     (View::Widgets, "-x", WIDGETS_WIDTH),
     (View::Plan, "-y", PLAN_HEIGHT),
-    (View::Worker, "-x", WORKER_WIDTH),
 ];
 
 /// The ordered `resize-pane` arguments that reset the window, given each pane
-/// as `(pane, view)`. The Worker's step is only there when a Worker pane is open.
+/// as `(pane, view)`.
 fn reset_steps(panes: &[(PaneId, View)]) -> Vec<Vec<String>> {
     RESET_ORDER
         .iter()
@@ -422,10 +418,9 @@ pub(crate) fn on_client(mut popup: Vec<String>, client: &str) -> Vec<String> {
 }
 
 /// `--respawn`: restarts every live pane of `main` that has `@cpd_view` (the
-/// views, the chat placeholder and a Worker view) in place with `respawn-pane
+/// views and the chat placeholder) in place with `respawn-pane
 /// -k`, so each runs the installed binary again; a Lead's or the engine's pane
-/// is never touched. Each reruns its own command (a Worker view keeps its
-/// Attempt), with `CPD_HOME` passed again since `-e` does not outlive a
+/// is never touched. Each reruns its own command, with `CPD_HOME` passed again since `-e` does not outlive a
 /// respawn. Returns the panes restarted.
 fn respawn_live_views(tmux: &Tmux, home: &CpdHome, main: &[Pane]) -> Result<Vec<PaneId>, CpdError> {
     let rerun = home_spawn(home, Vec::new());
@@ -710,14 +705,6 @@ mod tests {
         // %0 tree, %1 chat, %2 widgets, %3 plan
         let p = panes(&[Some(View::Tree), Some(View::Chat), Some(View::Widgets), Some(View::Plan)]);
         assert_eq!(joined(reset_steps(&p)), ["resize-pane -t %0 -x 20%", "resize-pane -t %2 -x 30%", "resize-pane -t %3 -y 30%"]);
-    }
-
-    #[test]
-    fn an_open_worker_pane_is_resized_last_to_30_percent() {
-        let p = panes(&[Some(View::Tree), Some(View::Chat), Some(View::Worker), Some(View::Widgets), Some(View::Plan)]);
-        let s = joined(reset_steps(&p));
-        assert_eq!(s.len(), 4);
-        assert_eq!(s[3], "resize-pane -t %2 -x 30%");
     }
 
     #[test]

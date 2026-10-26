@@ -14,17 +14,17 @@ fn tui_action_reset_resizes_the_cockpit_20_50_30_columns_and_30_70_rows() {
         assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8(out.stdout).expect("tmux's stdout is UTF-8").trim().to_owned()
     };
-    // `cpd:main` holds five views: %0 tree, %1 chat, %2 widgets, %3 plan, %4 worker.
+    // `cpd:main` holds four views: %0 tree, %1 chat, %2 widgets, %3 plan.
     let first = tmux(&["new-session", "-d", "-s", "cpd", "-n", "main", "-P", "-F", "#{pane_id}", "cpd tui view tree"]);
     tmux(&["set", "-p", "-t", &first, "@cpd_view", "tree"]);
-    for view in ["chat", "widgets", "plan", "worker"] {
+    for view in ["chat", "widgets", "plan"] {
         let pane = tmux(&["split-window", "-d", "-t", &first, "-P", "-F", "#{pane_id}", &format!("cpd tui view {view}")]);
         tmux(&["set", "-p", "-t", &pane, "@cpd_view", view]);
     }
     // (tmux lists a pane split from %0 next to it, so the list order is not the creation order)
     let mut panes: Vec<String> = tmux(&["list-panes", "-t", "=cpd:main", "-F", "#{pane_id} #{@cpd_view}"]).lines().map(str::to_owned).collect();
     panes.sort();
-    assert_eq!(panes, ["%0 tree", "%1 chat", "%2 widgets", "%3 plan", "%4 worker"]);
+    assert_eq!(panes, ["%0 tree", "%1 chat", "%2 widgets", "%3 plan"]);
 
     let before = fx.calls("tmux").len();
     action(&fx, &["reset", "--client", "/dev/pts/nobody"]);
@@ -37,7 +37,6 @@ fn tui_action_reset_resizes_the_cockpit_20_50_30_columns_and_30_70_rows() {
         ["resize-pane", "-t", "%0", "-x", "20%"],
         ["resize-pane", "-t", "%2", "-x", "30%"],
         ["resize-pane", "-t", "%3", "-y", "30%"],
-        ["resize-pane", "-t", "%4", "-x", "30%"],
     ]
     .iter()
     .map(|c| c.iter().map(|s| s.to_string()).collect())

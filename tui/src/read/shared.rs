@@ -108,11 +108,6 @@ string_enum! {
 }
 
 string_enum! {
-    /// An Escalation's status (§3.5).
-    EscalationStatus { Open = "open", Answered = "answered", Expired = "expired" }
-}
-
-string_enum! {
     /// A Plan review's status.
     ReviewStatus { Pending = "pending", Approved = "approved", Rejected = "rejected", Superseded = "superseded" }
 }

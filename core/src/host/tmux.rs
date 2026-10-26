@@ -34,7 +34,7 @@ use crate::ports::Ports;
 use super::deadline::Failed;
 use super::runner::Runner;
 use super::spawn::{Pid as ProcessId, Spawn as ProcessPort};
-use super::layout::{LEGACY_STATUSBAR, View};
+use super::layout::{LEGACY_VIEWS, View};
 
 /// Every tmux call's deadline (contract §6.3): a local socket answers in
 /// milliseconds, so a longer wait means a hung server.
@@ -92,7 +92,7 @@ const DANGO: [u8; 3] = [5, 7, 2];
 /// the placeholder say what they are; the views have their column titles; any
 /// other pane shows its command. Every title is a pill (hs-d266, hs-d475): the
 /// text (reversed) on a block with no padding, between a rounded cap on each
-/// side, `\u{e0b6}` and `\u{e0b4}`. A Lead's, the Worker's and another pane's pill is grey
+/// side, `\u{e0b6}` and `\u{e0b4}`. A Lead's and another pane's pill is grey
 /// (colour 7, hs-d534) and blue on the focused pane, set in the format itself (`pane_active`);
 /// the three view pills are dango ([`DANGO`], hs-d671) and keep their colour when focused, so the
 /// caps and the block take it whatever the border lines' colour is. tmux draws two
@@ -116,8 +116,8 @@ pub static BORDER_FORMAT: LazyLock<String> = LazyLock::new(|| {
         "#{{?#{{@cpd_session}},#{{?#{{@cpd_title}},{},}},#{{?#{{==:#{{@cpd_view}},chat}},,#{{?#{{==:#{{@cpd_view}},history}},,{}}}}}}}",
         title(&plain, "#{@cpd_title}"),
         title(&view_colour, concat!(
-            "#{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,",
-            "#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}"
+            "#{?#{==:#{@cpd_view},tree},Context,",
+            "#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}"
         )),
     )
 });
@@ -155,7 +155,7 @@ pub const WINDOW_UNLINKED_HOOK: &str =
 
 /// Every global option, key binding and hook of contract §6.1, each as the
 /// arguments after `tmux -L <socket>`, in the order of the reference's
-/// `tui/scripts/tmux.conf` (lines 2–17), renamed (`@cpd_view`, `@cpd_job`).
+/// `tui/scripts/tmux.conf` (lines 2–17), renamed (`@cpd_view`).
 /// Set at every server start, whichever command starts it (see
 /// [`new_session_args`]), and again by [`Tmux::apply_server_options`].
 ///
@@ -1023,7 +1023,7 @@ impl Tmux {
             match parse_pane(line).ok_or_else(|| self.unexpected(&args, line))? {
                 Line::Pane(pane) => panes.push(pane),
                 Line::UnknownView(view) => warn_unknown_view(&view),
-                Line::LegacyStatusbar => {}
+                Line::LegacyView => {}
             }
         }
         Ok(panes)
@@ -1155,9 +1155,9 @@ enum Line {
     /// A well-formed pane whose `@cpd_view` this binary does not know (§6.3): a
     /// newer cpd made it, so it is skipped, not an error.
     UnknownView(String),
-    /// A well-formed pane with `@cpd_view` [`LEGACY_STATUSBAR`]: an older
-    /// cpd's StatusBar pane, which `cpd tui` removes. Skipped, without a warning.
-    LegacyStatusbar,
+    /// A well-formed pane with `@cpd_view` in [`LEGACY_VIEWS`]: an older
+    /// cpd's StatusBar or Worker pane, which `cpd tui` removes. Skipped, without a warning.
+    LegacyView,
 }
 
 /// Logs an unknown `@cpd_view` value to stderr, once per value and process.
@@ -1193,7 +1193,7 @@ fn parse_pane(line: &str) -> Option<Line> {
     }
     match View::parse(cpd_view) {
         Some(view) => Some(Line::Pane(Pane { cpd_view: Some(view), ..pane })),
-        None if cpd_view == LEGACY_STATUSBAR => Some(Line::LegacyStatusbar),
+        None if LEGACY_VIEWS.contains(&cpd_view) => Some(Line::LegacyView),
         None => Some(Line::UnknownView(cpd_view.to_owned())),
     }
 }
@@ -1520,7 +1520,7 @@ mod tests {
 
     #[test]
     fn an_old_statusbar_pane_is_a_line_to_skip_quietly() {
-        assert_eq!(parse_pane("%4\t@2\tcpd\tmain\t0\t\t4242\t\tstatusbar"), Some(Line::LegacyStatusbar));
+        assert_eq!(parse_pane("%4\t@2\tcpd\tmain\t0\t\t4242\t\tstatusbar"), Some(Line::LegacyView));
         assert_eq!(parse_pane("%4\t@2\tcpd\tmain\t2\t\t4242\t\tstatusbar"), None);
     }
 

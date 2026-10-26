@@ -3,7 +3,7 @@
 
 use super::TmuxRoute;
 use crate::clock::ManualClock;
-use crate::host::layout::{LEGACY_STATUSBAR, View};
+use crate::host::layout::{LEGACY_VIEWS, View};
 use crate::host::runner::{Call, FakeRunner, Handler, Reply};
 use crate::host::tmux::{PaneId, Spawn, Split, Tmux, WindowId, supported_version};
 use crate::ids::SessionId;
@@ -142,7 +142,7 @@ fn adapter_list_panes_skips_a_pane_with_an_unknown_view() {
 #[test]
 fn adapter_list_panes_skips_a_legacy_statusbar_pane() {
     let fx = Fx::started();
-    fx.run(&["set", "-p", "-t", "%0", "@cpd_view", LEGACY_STATUSBAR]);
+    fx.run(&["set", "-p", "-t", "%0", "@cpd_view", LEGACY_VIEWS[0]]);
     assert_eq!(fx.tmux.list_panes().unwrap(), Vec::new());
 }
 

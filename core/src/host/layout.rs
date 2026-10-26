@@ -22,7 +22,6 @@ pub enum View {
     Tree,
     Plan,
     Widgets,
-    Worker,
     /// The chat slot's placeholder.
     Chat,
     /// The chat slot showing an archived Session's history (`cpd session history`).
@@ -30,14 +29,13 @@ pub enum View {
 }
 
 impl View {
-    pub const ALL: [View; 6] = [View::Tree, View::Plan, View::Widgets, View::Worker, View::Chat, View::History];
+    pub const ALL: [View; 5] = [View::Tree, View::Plan, View::Widgets, View::Chat, View::History];
 
     pub fn as_str(self) -> &'static str {
         match self {
             View::Tree => "tree",
             View::Plan => "plan",
             View::Widgets => "widgets",
-            View::Worker => "worker",
             View::Chat => "chat",
             View::History => "history",
         }
@@ -48,11 +46,11 @@ impl View {
     }
 }
 
-/// The `@cpd_view` of the StatusBar pane of a cockpit built before the
-/// StatusBar moved to tmux's status line (contract §6.1). No longer a
-/// [`View`]: `list-panes` skips such a pane quietly, and `cpd tui` kills it
-/// (commands.md §13.1).
-pub const LEGACY_STATUSBAR: &str = "statusbar";
+/// The `@cpd_view` values of the panes of a cockpit built by an older cpd: the
+/// StatusBar (moved to tmux's status line, contract §6.1) and the Worker pane
+/// (removed with the Job pill's click). No longer [`View`]s: `list-panes` skips
+/// such a pane quietly, and `cpd tui` kills it (commands.md §13.1).
+pub const LEGACY_VIEWS: [&str; 2] = ["statusbar", "worker"];
 
 /// A Session's label: its Plan id, or the first 8 characters of its id when it
 /// has no Plan.
@@ -146,7 +144,7 @@ mod tests {
 
     #[test]
     fn the_chat_slot_is_the_main_pane_with_a_session_or_the_placeholder() {
-        let worker = pane("%5", "cpd", "main", None, Some(View::Worker));
+        let worker = pane("%5", "cpd", "main", None, Some(View::Widgets));
         let tree = pane("%1", "cpd", "main", None, Some(View::Tree));
         let parked = pane("%9", "cpd", "park-x", Some("lead-b"), None);
         let placeholder = pane("%3", "cpd", "main", None, Some(View::Chat));

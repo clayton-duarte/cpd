@@ -28,8 +28,8 @@ fn border_format_title_pills_follow_the_rule() {
         lead = format!("{LEAD_CAP}#{{@cpd_title}}#[noreverse]\u{e0b4}"),
         views = format!(
             "{VIEW_CAP}{}#[noreverse]\u{e0b4}",
-            "#{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,\
-             #{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}"
+            "#{?#{==:#{@cpd_view},tree},Context,\
+             #{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}"
         ),
     );
     assert_eq!(*BORDER_FORMAT, want);
