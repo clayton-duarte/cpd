@@ -6,6 +6,7 @@ mod common;
 
 mod bare;
 mod inbox;
+mod inbox_claim;
 mod inbox_rules;
 mod tui_chat_pad;
 mod tui_cause;
