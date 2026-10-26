@@ -130,7 +130,8 @@ test("a Worker's other tools are never refused", async (t) => {
 test("a Lead's identical calls are not refused", async (t) => {
   const f = await started("lead");
   t.after(() => f.close());
-  for (const c of REFUSED) assert.equal(await call(f, c), undefined, c);
+  // the `timeout N` entries are left out: a Lead's wait over 30 s is refused by noblock (commands.md 15.11)
+  for (const c of REFUSED.filter((c) => !c.startsWith("timeout "))) assert.equal(await call(f, c), undefined, c);
 });
 
 test("a Manager is not refused for a test run (its own guard is the no-block one)", async (t) => {

@@ -99,6 +99,8 @@ error_codes! {
     DistillFailed = "distill_failed" => Failure,
     TitleFailed = "title_failed" => Failure,
     InstallStateInvalid = "install_state_invalid" => Failure,
+    // The install (commands.md §14.4).
+    InstallFailed = "install_failed" => Failure,
     // The holographic engine rail (contract §4.6, hs-d677).
     EngineFailed = "engine_failed" => Failure,
     // Policies (contract §8.3, hs-d288).
@@ -264,7 +266,6 @@ error_codes! {
     ShapeViolation = "shape_violation" => Refused,
     ShapeIncomplete = "shape_incomplete" => Refused,
     TestsUnconfigured = "tests_unconfigured" => Refused,
-    RepoUnconfigured = "repo_unconfigured" => Refused,
     TestFilesMissing = "test_files_missing" => Refused,
     TestsBuildFailed = "tests_build_failed" => Refused,
     TestsNotRed = "tests_not_red" => Refused,
@@ -491,7 +492,6 @@ mod tests {
             (ErrorCode::RepoUnkeyed, 1),
             (ErrorCode::OwnerMismatch, 3),
             (ErrorCode::OwnerUnset, 3),
-            (ErrorCode::RepoUnconfigured, 3),
             (ErrorCode::OwnerInUse, 3),
         ];
         for (code, exit) in cases {

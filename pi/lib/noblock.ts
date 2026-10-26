@@ -1,13 +1,15 @@
-/** commands.md §15.11: what a Manager's `bash` call may not wait for. Pure: the adapter (`adapter.ts`) applies it to a Manager's `tool_call`. */
+/** commands.md §15.11: what a Manager's or a Lead's `bash` call may not wait for. Pure: the adapter (`adapter.ts`) applies it to their `tool_call`. */
 
 import { PREFIXES, simpleCommands } from "./shell.ts";
 
-/** The longest a Manager's bash call may wait, in seconds. */
+/** The longest a Manager's or a Lead's bash call may wait, in seconds. */
 export const BOUND_SECONDS = 30;
 
-/** The rule's reason, one line naming it (§15.11). */
-export const reasonText = (matched: string): string =>
-  `φ: a Manager never blocks: a wait over ${BOUND_SECONDS} s runs in the background or is the owning Lead's or Worker's job; refused: ${matched}`;
+/** The rule's reason, one line naming it (§15.11): the role names who never blocks and where the wait goes instead. */
+export const reasonText = (matched: string, role: "manager" | "lead"): string => {
+  const tail = role === "manager" ? "is the owning Lead's or Worker's job" : "is left to the engine's Events";
+  return `φ: a ${role === "manager" ? "Manager" : "Lead"} never blocks: a wait over ${BOUND_SECONDS} s runs in the background or ${tail}; refused: ${matched}`;
+};
 
 const LOOPS = new Set(["while", "until"]);
 
