@@ -24,13 +24,13 @@ Q5 answer: **partly**. cpd matches the standard on the runner model (nextest, pr
 | Slow tests | none | `slow-timeout` default 60 s, only reports unless `terminate-after` (<https://nexte.st/docs/features/slow-tests/>) |
 | Limits per set of tests | none | test groups (`max-threads`), `threads-required` for "heavy tests" that "might overwhelm" the CPU (<https://nexte.st/docs/configuration/test-groups/>, <https://nexte.st/docs/configuration/threads-required/>) |
 
-What the leak timer is for (leaky-tests page): a test that starts a subprocess which inherits stdout/stderr and does not clean it up; nextest "can detect some, but not all" such cases. It was designed to spot a real child, with default result `pass`, because the signal is advisory. The page does not mention a late nextest or a loaded host (verified: read the page; the word load does not appear).
+What the leak timer is for (leaky-tests page): a test that starts a subprocess which inherits stdout/stderr and does not clean it up; nextest "can detect some, but not all" such cases. It was designed to spot a real child, with default result `pass`, because the signal is advisory. The page does not mention a late nextest or a loaded host (verified: read the page; the words load, overload and busy do not appear).
 
 What nextest says about CI and shared machines: it documents CI features (`--partition` sharding across machines: <https://nexte.st/docs/ci-features/partitioning/>; archives) for runs "that take too long on a single machine". I found no page that discusses several nextest runs on one host (unverified: I read the pages above, not the whole site). `-j/--test-threads` accepts a negative integer, "relative to CPU count" (running page), the mechanism omicron uses.
 
 GitHub-hosted runners: "each GitHub-hosted runner is a new virtual machine (VM)", except single-CPU runners (container on a shared VM) (<https://docs.github.com/en/actions/concepts/runners/about-github-hosted-runners>). So one test run per VM and no neighbour run on the same cores. This is Q1's likely axis, not answered here.
 
-### 2. Projects (read at HEAD during this Job; `gh api`, 76 calls of the 120 allowed, see Reproduction)
+### 2. Projects (read at HEAD during this Job; `gh api`, 74 calls of the 120 allowed (16 of them a wasted duplicate call), see Reproduction)
 
 | # | project | test runner (file:line) | nextest config keys | runs-on | shared host? | files read |
 |---|---|---|---|---|---|---|
@@ -68,7 +68,7 @@ Counts (over the 16 rows):
 | one test run per VM | 16 of 16 on CI VMs (GitHub-hosted: new VM per job) | about 5 runs on one host, plus Workers' builds | **cpd's own** |
 | default threads | 4 of 6 nextest users default; 2 cap it for their runner (uv, omicron) | default (14), x about 5 concurrent runs = about 70 | default is standard; the default under 5 concurrent runs is **cpd's own** |
 | thread cap when the host is loaded | omicron: `-2` because the system was "too overloaded" and tests "take longer than their default timeouts" (build-and-test.sh:124-128); tikv: libtest 2 on macOS | none (PR `threads` pending: 4) | the standard does cap, case by case |
-| leak result `pass` | 18 of 18 that set a timeout or none: `pass` | `fail` | **cpd's own** |
+| leak result `pass` | 0 of 18 set `fail`; the rest `pass` (default) | `fail` | **cpd's own** |
 | leak period | default 100 ms (2 of 2 that set it keep 100 ms) | 100 ms | standard |
 | retries on CI | 4 of 16 | none (repo rule) | minority practice; cpd's own stricter choice |
 | process per test (nextest) | 6 of 16, a large share of the big ones | yes | standard |
@@ -88,7 +88,7 @@ Counts (over the 16 rows):
 
 ## Reproduction
 
-Needs `gh` authenticated; read-only; about 76 calls. Save as a script in a temp dir and run with `bash`.
+Needs `gh` authenticated; read-only; about 58 calls. Save as a script in a temp dir and run with `bash`.
 
 ```bash
 set -u
