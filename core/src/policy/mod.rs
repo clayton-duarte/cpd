@@ -267,7 +267,7 @@ mod tests {
         write(&home, "owners/acme.toml", "[gate]\npr = \"local\"\n");
         let r = resolve(&home, &host(), &repo_key("acme", "other")).unwrap();
         assert_eq!(r.policy.gate.pr, Gate::Local);
-        assert!(matches!(r.sources.get(Domain::Gate).source, Source::Owner(_)));
+        assert!(matches!(r.sources.get(Domain::Gates).source, Source::Owner(_)));
     }
 
     #[test]
