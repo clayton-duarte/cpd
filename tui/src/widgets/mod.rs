@@ -305,7 +305,9 @@ fn show<B: Backend>(
                     }
                     Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
                         let at = Position::new(m.column, m.row);
-                        let result = if let Some(icon) = drawn.icons.iter().find(|i| i.area.contains(at)) {
+                        let result = if let Some(url) = drawn.links.at(at) {
+                            Some(("Open Link", crate::link::open_url(&*ports.runner, url)))
+                        } else if let Some(icon) = drawn.icons.iter().find(|i| i.area.contains(at)) {
                             Some(("Merge Pull Request", crate::merge::open(opener.tmux, &icon.pull)))
                         } else {
                             drawn.hits.iter().find(|h| h.contains(at)).map(|hit| {

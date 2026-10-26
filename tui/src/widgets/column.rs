@@ -12,7 +12,7 @@ use ratatui::widgets::{Clear, Paragraph};
 use super::host::Usage;
 use crate::cells;
 use crate::dialog::scroll::{self, Cue};
-use crate::link;
+use crate::link::{self, Link, Links};
 use crate::palette::{self, Meaning};
 use crate::box_widget::SectionTitle;
 use crate::read::{Dot, OpenPr, PrFacts, PrState, ReviewDecision, pr_look};
@@ -269,6 +269,8 @@ pub struct Drawn {
     pub icons: Vec<MergeIcon>,
     /// Where a right click reaches a pull request: every one on screen, owned or not.
     pub rows: Vec<PrRow>,
+    /// Every link drawn (the PR rows' cues): a click on one opens its url.
+    pub links: Links,
 }
 
 /// Draws the column in `area`: a blank row, the machine, then the PRs under their header. The PRs section
@@ -327,12 +329,19 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, scrol
         let cue = scroll::cue(Cue::Below, win.below, usize::from(prs.width));
         f.render_widget(Paragraph::new(cue), Rect::new(prs.x, prs.bottom() - 1, prs.width, 1));
     }
+    let mut links = Links::default();
     for (y, pr) in &shown {
         if let Some(x) = arrow_x {
-            link::link(f.buffer_mut(), Rect::new(x, *y, 1, 1), &pr.url);
+            let buf = f.buffer_mut();
+            let block = buf[(x, *y)].style();
+            links.draw(Link::new(&pr.url), Rect::new(x, *y, 1, 1), buf);
+            // The active block keeps its colours on every cell (rule (3)): the cue's own colour is for the other rows.
+            if pr.active {
+                buf[(x, *y)].set_style(block);
+            }
         }
     }
-    Drawn { hits, prs, max_scroll: max_scroll(open.len(), height, 2), icons, rows }
+    Drawn { hits, prs, max_scroll: max_scroll(open.len(), height, 2), icons, rows, links }
 }
 
 
