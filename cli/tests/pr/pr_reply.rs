@@ -1,9 +1,8 @@
 //! `pr reply` (Plan fb-path, DESIGN item 5): answers an item of the stored feedback list with a marked reply, never resolves.
 
 use std::fs;
-use std::sync::{Arc, Mutex};
 
-use cpd_core::host::runner::{Call, Handler, Reply};
+use cpd_core::host::runner::{Call, Reply};
 use serde_json::{Value, json};
 
 use super::pr_view::{Pay, fx};
@@ -14,30 +13,6 @@ const COMMENT_URL: &str = "https://github.com/acme/pay/pull/812#issuecomment-5";
 const THREAD_ANSWER: &str = r#"{"data": {"addPullRequestReviewThreadReply": {"comment": {"id": "c1", "url": "https://github.com/acme/repo/pull/7#discussion_r1"}}}}"#;
 const COMMENT_ANSWER: &str = r#"{"data": {"addComment": {"commentEdge": {"node": {"id": "c2", "url": "https://github.com/acme/repo/pull/7#issuecomment-2"}}}}}"#;
 const PR_ID_ANSWER: &str = r#"{"data": {"repository": {"pullRequest": {"id": "PR_node"}}}}"#;
-
-/// The mock `gh`: answers the node-id read and the two mutations; `fail`, when set, fails every call.
-#[derive(Default)]
-struct Gh {
-    fail: Mutex<bool>,
-}
-
-impl Handler for Gh {
-    fn handle(&self, call: &Call) -> Reply {
-        if *self.fail.lock().unwrap() {
-            return Reply::exit(1, "", "HTTP 502: bad gateway\n");
-        }
-        let all = call.args.join("\n");
-        if all.contains("addPullRequestReviewThreadReply") {
-            Reply::ok(THREAD_ANSWER)
-        } else if all.contains("addComment") {
-            Reply::ok(COMMENT_ANSWER)
-        } else if all.contains("pullRequest") {
-            Reply::ok(PR_ID_ANSWER)
-        } else {
-            Reply::exit(9, "", "unexpected gh call\n")
-        }
-    }
-}
 
 fn item(id: &str, kind: &str, path: Value, url: &str) -> Value {
     json!({"id": id, "kind": kind, "last": id, "author": "reviewer", "bot": false, "path": path, "outdated": false,
@@ -50,15 +25,23 @@ fn list() -> Value {
            item("PRR_1", "review", Value::Null, "https://github.com/acme/pay/pull/812#pullrequestreview-3")])
 }
 
-/// Plan `pay` with `status` PR, the list stored, and the mock `gh` (which fails when `fail`).
-fn setup(status: &str, fail: bool) -> (Pay, Arc<Gh>) {
+/// Plan `pay` with `status` PR, the list stored, and the mock `gh` as runner rules (`fx` routes `gh` to `pr_view`'s
+/// handler, which the rules precede); every call fails when `fail`.
+fn setup(status: &str, fail: bool) -> Pay {
     let pay = fx(status);
-    let gh = Arc::new(Gh::default());
-    *gh.fail.lock().unwrap() = fail;
-    let _ = (*pay.fx.fakes.runner).clone().route("gh", gh.clone());
+    let has = |text: &'static str| move |c: &Call| c.args.join("\n").contains(text);
+    let runner = (*pay.fx.fakes.runner).clone();
+    let _ = if fail {
+        runner.on("gh", |_| true, Reply::exit(1, "", "HTTP 502: bad gateway\n"))
+    } else {
+        runner
+            .on("gh", has("addPullRequestReviewThreadReply"), Reply::ok(THREAD_ANSWER))
+            .on("gh", has("addComment"), Reply::ok(COMMENT_ANSWER))
+            .on("gh", has("pullRequest"), Reply::ok(PR_ID_ANSWER))
+    };
     let sql = format!("UPDATE pull_requests SET feedback = '{}' WHERE number = 812;", list());
     pay.store().write("fixture", |tx| tx.execute_batch(&sql).map_err(Into::into)).unwrap();
-    (pay, gh)
+    pay
 }
 
 fn mutations(pay: &Pay) -> Vec<String> {
@@ -75,7 +58,7 @@ fn feedback(pay: &Pay) -> Option<String> {
 
 #[test]
 fn a_reply_to_a_thread_posts_the_thread_reply_mutation_with_the_marker_and_prints_its_url() {
-    let (pay, _gh) = setup("open", false);
+    let pay = setup("open", false);
 
     let out = pay.fx.cpd(&["pr", "reply", "--pr", "repo", "--plan", "pay", "--to", "PRRT_1", "--body", "Fixed in abc."]).ok();
 
@@ -90,7 +73,7 @@ fn a_reply_to_a_thread_posts_the_thread_reply_mutation_with_the_marker_and_print
 #[test]
 fn a_reply_to_a_comment_or_review_posts_an_issue_comment_quoting_its_url_and_ending_with_the_marker() {
     for (to, url) in [("IC_1", COMMENT_URL), ("PRR_1", "https://github.com/acme/pay/pull/812#pullrequestreview-3")] {
-        let (pay, _gh) = setup("open", false);
+        let pay = setup("open", false);
 
         let out = pay.fx.cpd(&["pr", "reply", "--pr", "repo", "--plan", "pay", "--to", to, "--body", "Done."]).ok();
 
@@ -108,7 +91,7 @@ fn a_reply_to_a_comment_or_review_posts_an_issue_comment_quoting_its_url_and_end
 
 #[test]
 fn the_body_can_come_from_a_file() {
-    let (pay, _gh) = setup("open", false);
+    let pay = setup("open", false);
     let file = pay.fx.env.root().join("body.md");
     fs::write(&file, "From a file.\n").unwrap();
 
@@ -122,7 +105,7 @@ fn the_body_can_come_from_a_file() {
 
 #[test]
 fn an_unknown_item_is_refused_feedback_not_found_and_posts_nothing() {
-    let (pay, _gh) = setup("open", false);
+    let pay = setup("open", false);
 
     let run = pay.fx.cpd(&["pr", "reply", "--pr", "repo", "--plan", "pay", "--to", "NOPE", "--body", "Hi."]);
 
@@ -133,7 +116,7 @@ fn an_unknown_item_is_refused_feedback_not_found_and_posts_nothing() {
 
 #[test]
 fn a_pr_that_is_not_open_is_refused_pr_not_open_and_posts_nothing() {
-    let (pay, _gh) = setup("waiting", false);
+    let pay = setup("waiting", false);
 
     let run = pay.fx.cpd(&["pr", "reply", "--pr", "repo", "--plan", "pay", "--to", "PRRT_1", "--body", "Hi."]);
 
@@ -143,7 +126,7 @@ fn a_pr_that_is_not_open_is_refused_pr_not_open_and_posts_nothing() {
 
 #[test]
 fn an_empty_body_or_both_or_neither_body_option_is_a_usage_error() {
-    let (pay, _gh) = setup("open", false);
+    let pay = setup("open", false);
     let file = pay.fx.env.root().join("body.md");
     fs::write(&file, "x").unwrap();
     let file = file.to_str().unwrap();
@@ -165,7 +148,7 @@ fn an_empty_body_or_both_or_neither_body_option_is_a_usage_error() {
 
 #[test]
 fn a_gh_failure_is_gh_failed_and_writes_nothing_in_the_store() {
-    let (pay, _gh) = setup("open", true);
+    let pay = setup("open", true);
     let before = (count(&pay, "txns"), count(&pay, "events"), feedback(&pay));
 
     let run = pay.fx.cpd(&["pr", "reply", "--pr", "repo", "--plan", "pay", "--to", "PRRT_1", "--body", "Hi."]);
@@ -176,7 +159,7 @@ fn a_gh_failure_is_gh_failed_and_writes_nothing_in_the_store() {
 
 #[test]
 fn it_never_resolves_a_thread_and_writes_no_event() {
-    let (pay, _gh) = setup("open", false);
+    let pay = setup("open", false);
     let before = (count(&pay, "txns"), count(&pay, "events"), feedback(&pay));
 
     pay.fx.cpd(&["pr", "reply", "--pr", "repo", "--plan", "pay", "--to", "PRRT_1", "--body", "Done."]).ok();

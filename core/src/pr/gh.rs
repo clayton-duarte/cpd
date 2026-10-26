@@ -657,13 +657,60 @@ fn polled_call(call: &str, e: CpdError) -> CpdError {
 /// Runs the GraphQL `query` inline (`-f query=@file` would send the literal text) in `cwd`, killed after
 /// [`POLL_TIMEOUT`] (a timeout is transient, `reason` `timeout`; tests: `CPD_TEST_DEADLINE_GH`, [`limit`]).
 fn graphql(runner: &dyn Runner, cwd: &Path, query: &str) -> Result<(Vec<String>, Output), CpdError> {
-    let args = vec!["api".to_owned(), "graphql".to_owned(), "-f".to_owned(), format!("query={query}")];
+    graphql_with(runner, cwd, query, &[])
+}
+
+/// [`graphql`] with string variables, each sent as its own `-f name=value` (a body keeps its newlines).
+fn graphql_with(runner: &dyn Runner, cwd: &Path, query: &str, vars: &[(&str, &str)]) -> Result<(Vec<String>, Output), CpdError> {
+    let mut args = vec!["api".to_owned(), "graphql".to_owned(), "-f".to_owned(), format!("query={query}")];
+    for (name, value) in vars {
+        args.push("-f".to_owned());
+        args.push(format!("{name}={value}"));
+    }
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let timeout = limit("DEADLINE_GH", POLL_TIMEOUT);
     match run_timed_with(runner, cwd, &refs, timeout)? {
         Ok(out) => Ok((args, out)),
         Err(k) => Err(killed(&refs, timeout, &k.stderr).with("transient", true).with("reason", "timeout")),
     }
+}
+
+/// The GraphQL node id of the pull request `repo`#`number`.
+pub fn pull_request_id(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) -> Result<String, CpdError> {
+    let (owner, name) = repo_parts(repo)
+        .ok_or_else(|| CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo.")).with("repo", repo))?;
+    let query = format!("query {{ repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ id }} }} }}");
+    posted(runner, cwd, &query, &[], "/repository/pullRequest/id")
+}
+
+/// Replies in the review thread `thread` (never resolves it); the new comment's url.
+pub fn reply_to_thread(runner: &dyn Runner, cwd: &Path, thread: &str, body: &str) -> Result<String, CpdError> {
+    let query = "mutation($thread: ID!, $body: String!) { addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $thread, body: $body}) { comment { id url } } }";
+    posted(runner, cwd, query, &[("thread", thread), ("body", body)], "/addPullRequestReviewThreadReply/comment/url")
+}
+
+/// Comments on the pull request whose node id is `pull`; the new comment's url.
+pub fn reply_to_comment(runner: &dyn Runner, cwd: &Path, pull: &str, body: &str) -> Result<String, CpdError> {
+    let query = "mutation($pull: ID!, $body: String!) { addComment(input: {subjectId: $pull, body: $body}) { commentEdge { node { id url } } } }";
+    posted(runner, cwd, query, &[("pull", pull), ("body", body)], "/addComment/commentEdge/node/url")
+}
+
+/// Runs a call and reads the string at `pointer` of its `data`; any failure is `gh_failed`.
+fn posted(runner: &dyn Runner, cwd: &Path, query: &str, vars: &[(&str, &str)], pointer: &str) -> Result<String, CpdError> {
+    let (args, out) = graphql_with(runner, cwd, query, vars)?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let reply = Reply { args: &refs, out: &out };
+    if out.exit != Some(0) {
+        return Err(reply.fail(format!("gh {} exited {}.", refs[0], out.exit.map_or("with a signal".to_owned(), |c| c.to_string()))));
+    }
+    let (data, errors): (Value, _) = reply.envelope()?;
+    if let Some(first) = errors.first() {
+        return Err(reply.fail(format!("gh api graphql answered with errors: {}", first.message.as_deref().unwrap_or("(no message)"))));
+    }
+    data.pointer(pointer)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| reply.fail(format!("gh api graphql answered without data{pointer}.")))
 }
 
 /// The User's open pull requests (`SEARCH_QUERY`), 15 s at most. A response with

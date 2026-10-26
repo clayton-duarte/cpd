@@ -5,6 +5,7 @@
 //! - `open`: the Gate, the push and the PR (`pr open`);
 //! - `poll`, with `feedback` and `pulls` (the table `pull_requests`, written only there): one poll of every open pull request of the User (`pr poll`);
 //! - `view`: a PR's checks, reviews and comments, read-only (`pr view`);
+//! - `reply`: a marked reply to an open feedback item, never a resolve (`pr reply`);
 //! - `rebase`: the Lead Branch onto the base, the Gate and the push (`pr rebase`);
 //! - `push`: the Gate and a plain push of the Lead Branch (`pr push`);
 //! - `merge`: a clean pull request squash-merged on GitHub (`pr merge`);
@@ -34,6 +35,7 @@ mod open;
 pub(crate) mod poll;
 pub mod pulls;
 mod push;
+mod reply;
 pub(crate) mod rebase;
 #[cfg(test)]
 pub(crate) use rebase::remote_contains_with;
@@ -83,6 +85,8 @@ pub enum Command {
     Push(Args),
     /// Show the PR's checks, reviews and comments (§9.8)
     View(Args),
+    /// Reply to an open feedback item of the PR's pull request as the User, with the cpd marker; never resolves a thread
+    Reply(reply::ReplyArgs),
     /// Squash-merge a clean pull request on GitHub and delete its branch (§9.10)
     Merge(merge::MergeArgs),
 }
@@ -203,6 +207,7 @@ pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdE
         Command::Rebase(args) => rebase::rebase(args),
         Command::Push(args) => push::push(args),
         Command::View(args) => view::view(ports, args),
+        Command::Reply(args) => reply::reply(ports, args),
         Command::Merge(args) => merge::merge(ports, args),
     }
 }
