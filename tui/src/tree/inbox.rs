@@ -891,7 +891,7 @@ mod tests {
     }
 
     #[test]
-    fn a_curate_item_draws_its_own_glyph_in_the_blue_colour_and_another_blue_item_the_generic_one() {
+    fn a_curate_item_draws_its_own_glyph_in_the_cyan_colour_and_another_cyan_item_the_generic_one() {
         let cyan = Some(palette::color_clickable(Meaning::Notice));
         let row = |kind| glyph_of(&item(1, kind, Urgency::Cyan, "alpha: 2", OPENED));
         assert_eq!(row(Kind::CurateDocs), ("\u{F0653}".to_owned(), cyan), "a documentation candidate");
