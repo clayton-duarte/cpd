@@ -546,28 +546,34 @@ fn the_frozen_check_passes_on_a_breaking_renumber_with_an_unchanged_body() {
     clone.check().unwrap();
 }
 
-/// hs-d697: a breaking migration may be restored to the name a live store applied with
-/// its body unchanged, even when that older name sorts before its current one.
-#[test]
-fn the_frozen_check_passes_on_a_breaking_restore_to_an_older_name() {
-    let clone = Clone::new();
-    let old = clone.migrations().join(MAIN_FILES[1].0);
-    let new = clone.migrations().join("20251201T0000-kind-tables.sql");
-    // The body is untouched; the older name still has the one legacy migration before it.
-    fs::rename(&old, &new).unwrap();
-    clone.commit();
-    clone.check().unwrap();
-}
+/// The module is named `migrations` (not `tests`) so nextest prefixes each test with the
+/// file: `migrations::<fn>` is the name the Job's acceptance lists.
+mod migrations {
+    use super::*;
 
-/// hs-d700: when a restore shifts the count, a breaking migration's `breaking after <n>`
-/// header may be corrected in place while every line after the first stays byte-identical.
-#[test]
-fn the_frozen_check_passes_on_a_header_only_correction_of_a_breaking_migration() {
-    let clone = Clone::new();
-    let file = clone.migrations().join(MAIN_FILES[1].0);
-    fs::write(&file, BREAKING_TEXT.replace("breaking after 1", "breaking after 2")).unwrap();
-    clone.commit();
-    clone.check().unwrap();
+    /// hs-d697: a breaking migration may be restored to the name a live store applied with
+    /// its body unchanged, even when that older name sorts before its current one.
+    #[test]
+    fn the_frozen_check_passes_on_a_breaking_restore_to_an_older_name() {
+        let clone = Clone::new();
+        let old = clone.migrations().join(MAIN_FILES[1].0);
+        let new = clone.migrations().join("20251201T0000-kind-tables.sql");
+        // The body is untouched; the older name still has the one legacy migration before it.
+        fs::rename(&old, &new).unwrap();
+        clone.commit();
+        clone.check().unwrap();
+    }
+
+    /// hs-d700: when a restore shifts the count, a breaking migration's `breaking after <n>`
+    /// header may be corrected in place while every line after the first stays byte-identical.
+    #[test]
+    fn the_frozen_check_passes_on_a_header_only_correction_of_a_breaking_migration() {
+        let clone = Clone::new();
+        let file = clone.migrations().join(MAIN_FILES[1].0);
+        fs::write(&file, BREAKING_TEXT.replace("breaking after 1", "breaking after 2")).unwrap();
+        clone.commit();
+        clone.check().unwrap();
+    }
 }
 
 /// Everything that is not one of those allowances still fails: an edit, a delete, and a
