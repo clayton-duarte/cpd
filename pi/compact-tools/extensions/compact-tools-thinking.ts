@@ -22,7 +22,8 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { chrome, fgOpen, ink, paint, TEXT, thinkingPill } from "./compact-tools-indices.ts";
+import { chrome, fgOpen, ink, paint, TEXT, THINKING_LABEL, thinkingPill } from "./compact-tools-indices.ts";
+import { italic } from "../../lib/italic.ts";
 import { localTime } from "../../lib/time.ts";
 import { hookMethod } from "./compact-tools-hook.ts";
 import type { ToggleGlyphs } from "./compact-tools-types.ts";
@@ -69,7 +70,7 @@ type ThinkingSection = { summary: string; detail: string };
 /** One section: the title is the literal "Thinking…", the whole text is the fold's body. */
 function splitThinkingSections(markdown: string): ThinkingSection[] {
 	const normalized = markdown.includes("\r") ? markdown.replace(/\r\n?/gu, "\n") : markdown;
-	return [{ summary: "Thinking…", detail: normalized.trim() }];
+	return [{ summary: THINKING_LABEL, detail: normalized.trim() }];
 }
 
 export function compactDetail(
@@ -144,7 +145,7 @@ function renderThinkingSections(
 	availableWidth: number,
 	options: ThinkingRenderOptions = {},
 ): string {
-	if (view === "hidden") return "Thinking…";
+	if (view === "hidden") return italic(THINKING_LABEL);
 	const controls = options.controls ?? ((hasDetail: boolean) =>
 		hasDetail ? "ctrl+t toggle • click to hide" : undefined);
 	const styleControlPrefix = options.styleControlPrefix ?? ((prefix: string) => prefix);
@@ -195,20 +196,23 @@ const bound: ThinkingCycleController[] = [];
 type ThinkingMessage = {
 	hideThinkingBlock: boolean;
 	thinkingVisibilityOverrides: Map<number, boolean>;
-	contentContainer: { children: Array<{ child?: { defaultTextStyle?: { italic?: boolean }; theme?: { italic: (text: string) => string }; text?: string; setText?: (text: string) => void } }> };
+	contentContainer: { children: Array<{ child?: { defaultTextStyle?: { italic?: boolean }; theme?: { italic: (text: string) => string; code?: (text: string) => string; highlightCode?: (code: string, lang?: string) => string[] }; text?: string; setText?: (text: string) => void } }> };
 	updateContent(message: unknown, isStreaming?: boolean): void;
 };
+
+const upright = (text: string): string => text.replace(/\x1b\[2?3m/gu, "");
 
 const HOOK_NAME = "assistant.thinking";
 
 /**
  * pi's thinking block has cuts we do not want: a click on a visible block records an override that
- * swaps in pi's plain hidden label (never our expanded view), its Markdown/hidden label are drawn
+ * swaps in pi's plain hidden label (never our expanded view), its Markdown is drawn
  * with italic, and its hideThinkingBlock flag decides the first view. All are decided inside
  * AssistantMessageComponent.updateContent, which offers no hook, so it is wrapped once per process
  * (hookMethod: a reload only replaces the behavior, so the newest load's controller owns it): a click
  * override becomes our fold toggle, visibility is ours while a controller is bound, and the italic is
- * cancelled on the thinking children it just built (the agent's reply keeps pi's emphasis).
+ * cancelled on the body of the thinking children it just built (emphasis, inline code, highlighted code;
+ * the agent's reply keeps pi's emphasis); the label "Thinking…" is italic (hs-d557/hs-d587 amended).
  */
 function thinkingBehavior(self: ThinkingMessage, args: any[], original: (...args: any[]) => any): unknown {
 	const owner = bound[bound.length - 1];
@@ -227,9 +231,18 @@ function thinkingBehavior(self: ThinkingMessage, args: any[], original: (...args
 		if (!child) continue;
 		// Emphasis spans (*em*, _em_, quotes) take their italic from the Markdown's theme: give this thinking
 		// child a theme whose italic is the identity (links, lists, tables inherit it; the reply is untouched).
-		if (child.theme) child.theme = { ...child.theme, italic: (text) => text };
+		// pi's Theme.fg hook italicises inline code and highlighted code: strip SGR 3/23 from both so the body stays upright.
+		// pi's hidden-label Text keeps its italic: the label is italic.
+		if (child.theme) {
+			const { code, highlightCode } = child.theme;
+			child.theme = {
+				...child.theme,
+				italic: (text) => text,
+				...(code ? { code: (text: string) => upright(code(text)) } : {}),
+				...(highlightCode ? { highlightCode: (src: string, lang?: string) => highlightCode(src, lang).map(upright) } : {}),
+			};
+		}
 		if (child.defaultTextStyle?.italic) child.defaultTextStyle = { ...child.defaultTextStyle, italic: false };
-		else if (typeof child.text === "string" && child.setText) child.setText(child.text.replace(/\x1b\[2?3m/gu, ""));
 	}
 	if (clicked) owner.refresh();
 	return result;
@@ -315,7 +328,7 @@ export class ThinkingCycleController {
 		// the hidden label in thinkingText, so an inner text span keeps it consistent with
 		// completed summary titles.
 		this.phase = "summary";
-		const hiddenLabel = ink("text", this.theme.bold("Thinking…"));
+		const hiddenLabel = ink("text", this.theme.bold(italic(THINKING_LABEL)));
 		// Pi does not currently expose transcript invalidation directly. Updating
 		// this label rebuilds assistant Markdown and requests a render without
 		// changing the message or its hidden/visible state.
