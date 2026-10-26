@@ -33,7 +33,7 @@ use cpd_tui::link::CUE;
 use cpd_tui::palette::{self, DRAFT, FAILED, MERGED, MERGING, Meaning, QUEUED, SPINNER};
 use cpd_tui::read::Kind;
 use ratatui::buffer::Buffer;
-use ratatui::crossterm::event::KeyCode;
+use ratatui::crossterm::event::{KeyCode, MouseEventKind};
 use ratatui::style::Color;
 use serde_json::json;
 
@@ -103,6 +103,11 @@ const ONE_SECOND: Duration = Duration::from_secs(1);
 /// A press of the character `c`, as the scripted pump hands it to the loop.
 fn press(c: char) -> Signal {
     Signal::Input(common::screen::ch(c))
+}
+
+/// One notch of the wheel down over the chart, as the scripted pump hands it to the loop.
+fn scroll_down() -> Signal {
+    Signal::Input(common::screen::wheel(MouseEventKind::ScrollDown, 3, 5))
 }
 
 /// The end of a script: the terminal fails.
@@ -414,7 +419,7 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_drawn_muted_after_them() 
     ];
     fx.env.sql(&plan_with("dispatch", None, jobs));
     let screen = rows(&draw(&fx));
-    // a column is as wide as its widest pill (the failed pill, `failed│S3│a3`); the tier, and `aN` from the second Attempt, sit at its right
+    // a column is as wide as its widest pill (the failed pill, `failed│#3│S3`); the tier sits at its right, the attempt `#N` (from the second Attempt) before it
     let want = format!(
         "
  \u{e0b6}{DRAFT} draft    │S3\u{e0b4}
@@ -427,7 +432,7 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_drawn_muted_after_them() 
 
  \u{e0b6}{MERGED} merged   │S3\u{e0b4}
 
- \u{e0b6}{FAILED} failed│S3│a3\u{e0b4}",
+ \u{e0b6}{FAILED} failed│#3│S3\u{e0b4}",
         SPINNER[0]
     );
     assert_eq!(chart_rows(&screen, 11), want.strip_prefix('\n').unwrap(), "{}", screen.join("\n"));
@@ -649,7 +654,7 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
 }
 
 #[test]
-fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_reset() {
+fn each_plan_keeps_its_scroll_offset_while_the_view_runs() {
     let fx = fx();
     let keys: Vec<String> = (10..60).map(|n| format!("j{n}")).collect();
     let jobs: Vec<(&str, &str, &str, &[&str], u32)> = keys.iter().map(|k| (k.as_str(), "queued", "S3", &[][..], 0)).collect();
@@ -665,8 +670,8 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
             let top = top.clone();
             move |screen| *top.borrow_mut() = screen.shown_rows()
         })
-        // arrow keys select the pills one by one, and the chart scrolls to keep the selection visible: the 45th pill from j10 is j54
-        .at("the last pill selected", |s| row_selected(s, " j54│"), {
+        // the wheel scrolls the chart, a notch scrolls it three rows: j10 leaves the top
+        .at("the chart scrolled by a notch", |s| s.height() > 2 && !s.shown_row(2).contains(" j10│"), {
             let (scrolled, world, clock) = (scrolled.clone(), world.clone(), clock.clone());
             move |screen| {
                 *scrolled.borrow_mut() = screen.shown_rows();
@@ -686,9 +691,8 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
         })
         .at("the chart where it was left", { let scrolled = scrolled.clone(); move |s| s.shown_rows() == *scrolled.borrow() }, move |screen| {
             assert_ne!(screen.shown_rows(), *top.borrow());
-            assert!(!any_selected(screen), "a pill is selected");
         });
-    let mut signals: Vec<Signal> = (0..45).map(|_| press('j')).collect();
+    let mut signals = vec![scroll_down()];
     signals.extend([Signal::Commit, Signal::Commit, gone()]);
     show(&fx, signals, &steps);
 }
@@ -710,7 +714,7 @@ fn scroll_file(env: &TestEnv) -> std::path::PathBuf {
 }
 
 #[test]
-fn the_scroll_offset_survives_a_restart_of_the_view_and_the_selection_does_not() {
+fn the_scroll_offset_survives_a_restart_of_the_view() {
     let fx = fx();
     fx.env.sql(&tall_plan());
     let clock = fx.fakes.clock.clone();
@@ -720,8 +724,8 @@ fn the_scroll_offset_survives_a_restart_of_the_view_and_the_selection_does_not()
             let top = top.clone();
             move |screen| *top.borrow_mut() = screen.shown_rows()
         })
-        // select down the chart: it scrolls to keep the selection visible
-        .at("the last pill selected", |s| row_selected(s, " j54│"), {
+        // the wheel scrolls down the chart, a notch three rows
+        .at("the chart scrolled by a notch", |s| s.height() > 2 && !s.shown_row(2).contains(" j10│"), {
             let scrolled = scrolled.clone();
             move |screen| {
                 *scrolled.borrow_mut() = screen.shown_rows();
@@ -730,7 +734,7 @@ fn the_scroll_offset_survives_a_restart_of_the_view_and_the_selection_does_not()
                 clock.advance(3 * ONE_SECOND / 2);
             }
         });
-    let mut signals: Vec<Signal> = (0..45).map(|_| press('j')).collect();
+    let mut signals = vec![scroll_down()];
     signals.extend([Signal::Due, gone()]);
     show(&fx, signals, &steps);
     // the offset is in the file; restart the view
@@ -743,7 +747,6 @@ fn the_scroll_offset_survives_a_restart_of_the_view_and_the_selection_does_not()
 
     let steps = Steps::new().at("the offset restored", { let scrolled = scrolled.clone(); move |s| s.shown_rows() == *scrolled.borrow() }, move |screen| {
         assert_ne!(screen.shown_rows(), *top.borrow());
-        assert!(!any_selected(screen), "a pill is selected");
     });
     show(&fx, vec![gone()], &steps);
     assert_eq!(offset().unwrap(), written, "the restart did not move the offset");
@@ -829,119 +832,58 @@ fn panes(tmux: &TmuxProbe, format: &str) -> String {
     tmux.run(&["list-panes", "-t", "=cpd:main", "-F", format])
 }
 
-/// The program (argv, a word each) of the pane whose `@cpd_view` is `view`.
-fn program_of(tmux: &TmuxProbe, view: &str) -> Vec<String> {
-    let panes = tmux.state().panes();
-    panes.into_iter().find(|p| p.options.iter().any(|(k, v)| k == "@cpd_view" && v == view)).unwrap_or_else(|| panic!("no {view} pane")).argv
-}
-
 /// A press of `code`, as the scripted pump hands it to the loop.
 fn press_key(code: KeyCode) -> Signal {
     Signal::Input(common::screen::key(code))
 }
 
 #[test]
-fn a_selected_pill_opens_its_worker_beside_the_chat_and_a_second_enter_closes_it() {
+fn a_click_on_a_pill_opens_no_pane_and_selects_nothing() {
     let fx = tmux_fx();
     fx.env.sql(&plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1), ("b", "queued", "S3", &["a"], 0)]));
     cockpit_centre(&fx);
-    let workers = "#{@cpd_view} #{@cpd_job} #{@cpd_attempt}";
-    let (before, opened, closed) = (fx.tmux_probe(), fx.tmux_probe(), fx.tmux_probe());
+    let layout = "#{pane_id} #{@cpd_view} #{pane_active}";
+    let (before, after) = (fx.tmux_probe().run(&["list-panes", "-t", "=cpd:main", "-F", layout]), fx.tmux_probe());
+    // the pill of `a` is the chart's first row (row 2, below the box's top edge); the click lands on its icon
+    let click = || Signal::Input(common::screen::left_click(3, 2));
+    // after each click: nothing is selected, no pane is open
+    let (one, two) = (fx.tmux_probe(), fx.tmux_probe());
     let steps = Steps::new()
         .at("the chart", |s| s.shown_row(2).contains(" a│"), |_| {})
-        // nothing is selected until the User asks: an arrow selects the first pill, Enter opens its Worker
-        .at("the pill selected", any_selected, move |_| assert!(!panes(&before, workers).contains("worker"), "nothing opened yet"))
-        .next("the Worker pane", move |_| {
-            assert!(panes(&opened, workers).contains("worker a a-a1"), "{}", panes(&opened, workers));
-            // the Worker view is started in the pane, in cpd's home, for the Attempt
-            let started = ["cpd", "tui", "view", "worker", "a-a1", "--plan", "ship"].map(str::to_owned).to_vec();
-            assert_eq!(program_of(&opened, "worker")[program_of(&opened, "worker").len() - started.len()..], started);
-            // beside the chat, without taking the focus: the plan view keeps it
-            let layout = panes(&opened, "#{pane_id} #{@cpd_view} #{pane_active} #{pane_top} #{pane_width}");
-            let row = |view: &str| layout.lines().find(|l| l.split(' ').nth(1) == Some(view)).unwrap().split(' ').map(str::to_owned).collect::<Vec<_>>();
-            let (worker, chat_row) = (row("worker"), row("chat"));
-            assert_eq!((worker[2].as_str(), worker[3].as_str()), ("0", chat_row[3].as_str()), "{layout}");
-            assert_eq!(row("plan")[2], "1", "{layout}");
+        .next("the first click", move |screen| {
+            assert!(!any_selected(screen), "a pill is selected:\n{}", screen.text());
+            assert_eq!(panes(&one, "#{@cpd_view}"), "plan\nchat", "no pane opened");
         })
-        .next("the Worker pane closed", move |_| assert!(!panes(&closed, workers).contains("worker"), "{}", panes(&closed, workers)));
-    show(&fx, vec![press_key(KeyCode::Right), press_key(KeyCode::Enter), press_key(KeyCode::Enter), gone()], &steps);
-}
-
-#[test]
-fn a_pill_without_an_attempt_opens_its_worker_view_in_the_job_form() {
-    let fx = tmux_fx();
-    fx.env.sql(&plan_with("dispatch", None, &[("b", "queued", "S3", &[], 0)]));
-    cockpit_centre(&fx);
-    let workers = "#{@cpd_view}|#{@cpd_job}|#{@cpd_attempt}|#{pane_active}";
-    let (opened, closed) = (fx.tmux_probe(), fx.tmux_probe());
-    let steps = Steps::new()
-        .at("the chart", |s| s.shown_row(2).contains(" b│"), |_| {})
-        // Right selects the first pill, `b`, which has no Attempt; Enter opens its Worker
-        .at("the pill selected", any_selected, |_| {})
-        .next("the Worker pane", move |_| {
-            let panes = panes(&opened, workers);
-            // without taking the focus
-            assert!(panes.lines().any(|l| l == "worker|b||0"), "{panes}");
-            let started = ["cpd", "tui", "view", "worker", "--job", "b", "--plan", "ship"].map(str::to_owned).to_vec();
-            let program = program_of(&opened, "worker");
-            assert_eq!(program[program.len() - started.len()..], started, "{program:?}");
-        })
-        .next("the Worker pane closed", move |_| assert!(!panes(&closed, workers).contains("worker"), "{}", panes(&closed, workers)));
-    show(&fx, vec![press_key(KeyCode::Right), press_key(KeyCode::Enter), press_key(KeyCode::Enter), gone()], &steps);
-}
-
-/// Opening a Worker runs several tmux calls (`toggle_worker`): the view keeps following Events meanwhile (tui-W7). That the
-/// calls run off the view's thread is `Background`'s (`tui/src/background_tests.rs`); the scripted pump runs them inline,
-/// so here the Event is committed with the key that opens the pane, and the chart follows it with no other input.
-#[test]
-fn the_chart_keeps_following_events_while_a_worker_pane_is_being_opened() {
-    let fx = tmux_fx();
-    fx.env.sql(&plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1)]));
-    cockpit_centre(&fx);
-    let (world, opened) = (World::of(&fx), fx.tmux_probe());
-    let steps = Steps::new()
-        .at("the chart", |s| s.shown_row(2).contains(" a│"), |_| {})
-        .at("the pill selected", any_selected, move |_| {
-            world.write(
-                &(job_row("ship", "b", "queued", "S3")
-                    + &need_row("ship", "b", "a")
-                    + &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":["a"]}"#)),
-            );
-        })
-        .at("Job b", |s| s.shown_row(2).contains(" b│"), move |_| {
-            assert!(panes(&opened, "#{@cpd_view}").contains("worker"), "the Worker pane opened too");
+        .next("the second click", move |screen| {
+            assert!(!any_selected(screen), "a pill is selected:\n{}", screen.text());
+            assert_eq!(panes(&two, "#{@cpd_view}"), "plan\nchat", "no pane opened");
         });
-    show(&fx, vec![press_key(KeyCode::Right), press_key(KeyCode::Enter), Signal::Commit, gone()], &steps);
+    show(&fx, vec![click(), click(), gone()], &steps);
+    assert_eq!(panes(&after, layout), before, "the panes are as the cockpit left them");
 }
 
 #[test]
-fn another_job_retargets_the_worker_pane_in_place() {
+fn no_key_selects_a_pill_or_opens_a_pane() {
     let fx = tmux_fx();
-    fx.env.sql(&plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1), ("b", "running", "S3", &["a"], 1)]));
+    fx.env.sql(&plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1), ("b", "queued", "S3", &["a"], 0)]));
     cockpit_centre(&fx);
-    let workers = "#{pane_id} #{@cpd_view} #{@cpd_job} #{@cpd_attempt}";
-    let (first, second) = (fx.tmux_probe(), fx.tmux_probe());
-    let pane = Rc::new(RefCell::new(String::new()));
-    let remembered = pane.clone();
-    let steps = Steps::new()
-        .at("the chart", |s| s.shown_row(2).contains(" a│"), |_| {})
-        .at("the pill selected", any_selected, |_| {})
-        .next("the Worker pane of a", move |_| {
-            let panes = panes(&first, workers);
-            assert!(panes.contains("worker a a-a1"), "{panes}");
-            *remembered.borrow_mut() = panes.lines().find(|l| l.contains(" worker ")).unwrap().split(' ').next().unwrap().to_owned();
-        })
-        // the next Job's pill: the same pane shows it
-        .next("the next pill", |_| {})
-        .next("the Worker pane of b", move |_| {
-            let after = panes(&second, workers);
-            assert_eq!(after.lines().filter(|l| l.contains(" worker ")).count(), 1, "{after}");
-            assert!(after.contains(&format!("{} worker b b-a1", pane.borrow())), "retargeted in place: {after}");
-            let started = ["cpd", "tui", "view", "worker", "b-a1", "--plan", "ship"].map(str::to_owned).to_vec();
-            let program = program_of(&second, "worker");
-            assert_eq!(program[program.len() - started.len()..], started, "{program:?}");
+    let after = fx.tmux_probe();
+    let mut keys: Vec<Signal> = [KeyCode::Right, KeyCode::Left, KeyCode::Down, KeyCode::Up].into_iter().map(press_key).collect();
+    keys.extend(['h', 'j', 'k', 'l'].map(press));
+    keys.extend([press_key(KeyCode::Enter), press_key(KeyCode::Esc), press_key(KeyCode::Enter)]);
+    // each key draws a frame: after it nothing is selected, no Worker pane is open, and the chart still draws
+    let mut steps = Steps::new().at("the chart", |s| s.shown_row(2).contains(" a│"), |_| {});
+    for _ in &keys {
+        let probe = fx.tmux_probe();
+        steps = steps.next("a key", move |screen| {
+            assert!(!any_selected(screen), "a pill is selected:\n{}", screen.text());
+            assert_eq!(panes(&probe, "#{@cpd_view}"), "plan\nchat", "no pane opened");
+            assert!(screen.shown_row(2).contains(" a│"), "the chart still draws:\n{}", screen.text());
         });
-    show(&fx, vec![press_key(KeyCode::Right), press_key(KeyCode::Enter), press_key(KeyCode::Right), press_key(KeyCode::Enter), gone()], &steps);
+    }
+    keys.push(gone());
+    show(&fx, keys, &steps);
+    assert_eq!(panes(&after, "#{@cpd_view}"), "plan\nchat", "no pane opened");
 }
 
 // ---------- Pulse (a Manager in the chat slot; User, hs-d327) ----------
