@@ -23,7 +23,7 @@ use crate::tree::actions::Action;
 use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
 use crate::cells::{self, truncate};
 use crate::fold;
-use crate::merge::Pull;
+pub(crate) use crate::merge::Pull;
 use crate::palette;
 use crate::phi;
 use crate::read::{Tree, age_text};
@@ -206,8 +206,6 @@ pub enum Jump {
     Run(Action),
     /// These actions in order, each stopping the flow when it is refused: `plan-review` opens its Lead, then copies its page.
     Steps(Vec<Action>),
-    /// The merge popup of this pull request (`pr-ready`).
-    Merge(Pull),
     /// The checklist dialog of a `curate-retire` or `curate-docs` item of this Context (hs-d549, hs-d551).
     Curate(Kind, cpd_core::ids::ContextId),
 }
@@ -286,8 +284,7 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
 }
 
 /// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts, but a row of the old `engine-error` or `job-stuck` kind (hs-d314, hs-d318) or the terminator `╰󰬪` (hs-d574). `engine-down`
-/// starts the engine; `pr-ready` opens the merge popup of its pull request (`None` for a subject that is not
-/// `pr:<owner>/<repo>#<n>`); `plan-review` opens the Lead of its Plan and copies the review page's `url` (when there is
+/// starts the engine; `pr-ready` has none (the label is a link; Merge is in its menu); `plan-review` opens the Lead of its Plan and copies the review page's `url` (when there is
 /// one); `review-waiting` opens its Session, then copies the `url` likewise; the `url` is copied for `review-requested` (a click on the label of a link kind opens its page instead, see [`Link`]). `None` only for an item without what its jump needs.
 pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     match item.kind {
@@ -317,7 +314,8 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
         Kind::LoopGuard => item.session.as_ref().map(|s| Jump::Run(Action::SessionResume(s.clone()))),
         // a deploy item has no jump; its label is a Link to the run's page (pro-d100)
         Kind::Deploy => None,
-        Kind::PrReady => Pull::from_subject(&item.subject).map(Jump::Merge),
+        // a plain click does nothing (pro-d111): the label is a Link to the pull request, Merge is in the menu
+        Kind::PrReady => None,
         Kind::ReviewRequested => {
             item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))
         }
@@ -325,9 +323,8 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
 }
 
 /// What a left click on `item` runs, as [`jump`] says but for what is already so: an action whose Session already is in the
-/// chat slot is dropped, and so is the merge popup of a pull request whose merge runs (`merging`, hs-d495): the click, like
-/// the glyph's spinner, is its marker's.
-pub fn click(tree: &Tree, item: &Item, merging: &std::collections::BTreeSet<String>) -> Option<Jump> {
+/// chat slot is dropped.
+pub fn click(tree: &Tree, item: &Item) -> Option<Jump> {
     let in_focus = |action: &Action| {
         let Action::Open(id) = action else { return false };
         tree.contexts.iter().flat_map(|c| &c.plans).flat_map(|p| &p.sessions).any(|s| &s.id == id && s.is_active())
@@ -338,7 +335,6 @@ pub fn click(tree: &Tree, item: &Item, merging: &std::collections::BTreeSet<Stri
             let steps: Vec<Action> = steps.into_iter().filter(|a| !in_focus(a)).collect();
             (!steps.is_empty()).then_some(Jump::Steps(steps))
         }
-        Jump::Merge(pull) if merging.contains(&pull.to_string()) => None,
         jump => Some(jump),
     }
 }
@@ -384,6 +380,37 @@ impl crate::menu::Entry for Choice {
             Choice::SnoozeTomorrow => "Snooze until tomorrow 09:00",
             Choice::Dismiss => "Dismiss",
         }
+    }
+}
+
+/// An entry of an item's menu as drawn: Merge (a `pr-ready` item whose pull request is clean, pro-d111), or a [`Choice`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Entry {
+    Merge,
+    /// A merge of the pull request runs: the `Merge` entry with the spinner, not selectable.
+    Merging,
+    Choice(Choice),
+}
+
+impl Entry {
+    /// The entries of the menu of a row of `kind`, in order: `Merge` first when `merge` says the item's pull request is clean
+    /// (`Some(merging)`: whether its merge runs), then the [`Choice`]s.
+    pub fn entries(kind: Kind, merge: Option<bool>) -> Vec<Entry> {
+        let merge = merge.map(|merging| if merging { Entry::Merging } else { Entry::Merge });
+        merge.into_iter().chain(Choice::entries(kind).into_iter().map(Entry::Choice)).collect()
+    }
+}
+
+impl crate::menu::Entry for Entry {
+    fn label(self) -> &'static str {
+        match self {
+            Entry::Merge | Entry::Merging => "Merge",
+            Entry::Choice(choice) => crate::menu::Entry::label(choice),
+        }
+    }
+
+    fn busy(self) -> bool {
+        self == Entry::Merging
     }
 }
 
@@ -680,19 +707,11 @@ mod tests {
             Some(Jump::Run(Action::Open(sid("l-ship")))),
             "no port file: the Lead opens and nothing else happens"
         );
-        let merge = |subject: &str| Pull::from_subject(subject).map(Jump::Merge);
         let ready = |subject: &'static str| move |item: &mut Item| item.subject = subject.to_owned();
-        assert!(merge("pr:acme/api#3").is_some());
-        assert_eq!(jump(&tree, &with(Kind::PrReady, &ready("pr:acme/api#3"))), merge("pr:acme/api#3"), "a pull request no Plan owns");
-        let owned_ready = |item: &mut Item| {
-            plan(item);
-            ready("pr:acme/api#3")(item);
-        };
-        assert_eq!(jump(&tree, &with(Kind::PrReady, &owned_ready)), merge("pr:acme/api#3"), "a Plan's pull request");
-        assert_eq!(jump(&tree, &with(Kind::PrReady, &|i| i.url = Some("https://example.com".into()))), None, "subject:1 is no pull request");
-        for subject in ["acme/api#3", "pr:api#3", "pr:acme/api", "pr:acme/api#x", "pr:acme/api#0", "session:l-ship", "pr:"] {
-            assert_eq!(jump(&tree, &with(Kind::PrReady, &ready(subject))), None, "{subject:?} gives no merge popup");
+        for subject in ["pr:acme/api#3", "acme/api#3", "pr:", "session:l-ship"] {
+            assert_eq!(jump(&tree, &with(Kind::PrReady, &ready(subject))), None, "{subject:?}: a plain click does nothing (pro-d111)");
         }
+        assert_eq!(jump(&tree, &with(Kind::PrReady, &owned)), None, "a Plan's pull request: nor does it");
         for kind in [Kind::PrFailing, Kind::PrChanges] {
             assert_eq!(jump(&tree, &with(kind, &owned)), None, "{kind:?} (an old row, hs-d470): no click, a Plan's or not");
             assert_eq!(jump(&tree, &with(kind, &url)), None, "{kind:?} (an old row, hs-d470): no url copy");

@@ -214,12 +214,12 @@ fn deploy_menu_merge_runs_the_merge_action_at_once_with_no_popup() {
 #[test]
 fn plain_click_on_a_pr_ready_row_outside_its_link_does_nothing() {
     use crate::tree::fixture::sample;
-    use crate::widgets::inbox::{Jump, item, jump};
+    use crate::widgets::inbox::{item, jump};
     use cpd_core::inbox::model::{Kind, Urgency};
     let mut ready = item(1, Kind::PrReady, Urgency::Yellow, "api#3 ready", "2026-01-01T00:00:00.000Z");
     ready.subject = "pr:acme/api#3".to_owned();
     ready.url = Some(URL.to_owned());
-    assert!(!matches!(jump(&sample(), &ready), Some(Jump::Merge(_))), "a plain click never merges");
+    assert_eq!(jump(&sample(), &ready), None, "a plain click on a pr-ready item does nothing");
 
     let (_dir, home) = home_with("clean");
     let baseline = run(&home, vec![]);
