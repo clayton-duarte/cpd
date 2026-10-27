@@ -433,6 +433,13 @@ pub const TIER_YELLOW: &str = "\u{F069A}";
 /// Red: a blocker only the User can clear.
 pub const TIER_RED: &str = "\u{F0362}";
 
+/// STUB (red tests of the TUI Job, pro-d100): the glyph of a `deploy` item, U+F15A9 (yellow tier); not used yet.
+pub const ITEM_DEPLOY: &str = "\u{F15A9}";
+/// STUB: the glyph of a `pr-ready` item, U+F12F4 (yellow tier); not used yet.
+pub const ITEM_PR_READY: &str = "\u{F12F4}";
+/// STUB: the glyph of a `review-requested` item, U+F12F2 (blue tier); not used yet.
+pub const ITEM_REVIEW_REQUESTED: &str = "\u{F12F2}";
+
 /// The tier glyph of `urgency`, in the bright colour of its urgency (the Inbox row is clickable; the colours of the tree's dots).
 pub fn tier_span(urgency: Urgency) -> Span<'static> {
     let (glyph, meaning) = match urgency {
