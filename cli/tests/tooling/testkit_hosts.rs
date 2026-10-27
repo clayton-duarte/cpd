@@ -225,14 +225,14 @@ fn a_commit_made_through_the_fixture_is_seen_by_pr_add_in_one_library_call() {
     plan_pay(&fx);
     let repo = fx.keyed_repo("pay").canonicalize().unwrap();
     fx.commit_file(&repo, "src/lib.rs", "pub fn pay() {}\n", "add lib");
-    // The branch of the legacy Lead name is at the new commit: `pr add` must find it.
-    fx.git(&repo, &["branch", "cpd/pay-1"]);
+    // The branch named after the Plan clashes with the Lead Branch pay-1/web: `pr add` must find it.
+    fx.git(&repo, &["branch", "pay-1"]);
 
     let run = pr_add(&fx, &repo);
 
     let error = run.error();
     assert_eq!(error["code"], "branch_exists", "{run:?}");
-    assert_eq!(error["details"]["branch"], "cpd/pay-1", "{error}");
+    assert_eq!(error["details"]["branch"], "pay-1", "{error}");
     no_child();
 }
 
