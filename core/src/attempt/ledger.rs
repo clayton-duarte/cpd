@@ -223,6 +223,12 @@ impl Cause {
     }
 }
 
+/// How many times a Job is requeued at the same Tier after a `provider_error`, counted since its last `job retry` (pro-d102 A1).
+pub const PROVIDER_RETRIES: u32 = 3;
+
+/// How long E3 holds a Job after an Attempt that ended `provider_error` (pro-d102 A2).
+pub const PROVIDER_RETRY_SECONDS: u64 = 30;
+
 /// How an Attempt ends.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum End {
@@ -402,8 +408,15 @@ pub fn end_opened(
         }
         End::Failed { cause, detail } => match next_tier(tx, attempt, *cause, ladder)? {
             Some(next) => {
+                let said = match cause {
+                    Cause::ProviderError => format!(
+                        "{detail} Retry {} of {PROVIDER_RETRIES} at the same Tier, not before {PROVIDER_RETRY_SECONDS} s have passed.",
+                        provider_errors(tx, plan, job)?
+                    ),
+                    _ => detail.clone(),
+                };
                 let text = format!(
-                    "Attempt {id} of Job {job} failed ({}): {detail} The Job is queued again at Tier {next}. Next: {show}",
+                    "Attempt {id} of Job {job} failed ({}): {said} The Job is queued again at Tier {next}. Next: {show}",
                     cause.as_str()
                 );
                 ("queued", None, NewEvent::attempt_retry(text, "failed", cause.as_str(), &next.to_string(), detail))
@@ -411,8 +424,12 @@ pub fn end_opened(
             None => {
                 let attempts: i64 =
                     tx.query_row("SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2", params![plan, job], |r| r.get(0))?;
+                let used_up = match cause {
+                    Cause::ProviderError => format!(" The {PROVIDER_RETRIES} retries are used up."),
+                    _ => String::new(),
+                };
                 let text = format!(
-                    "Job {job} failed ({}): {detail} Decide: cpd job retry {job} --tier <T> --plan {plan}, or cpd job cancel {job} --reason <text> --plan {plan}",
+                    "Job {job} failed ({}): {detail}{used_up} Decide: cpd job retry {job} --tier <T> --plan {plan}, or cpd job cancel {job} --reason <text> --plan {plan}",
                     cause.as_str()
                 );
                 ("failed", Some(cause.as_str()), NewEvent::job_failed(text, cause.as_str(), detail, &tier, attempts))
@@ -448,7 +465,20 @@ pub(crate) fn automatic_attempts(tx: &WriteTxn<'_>, plan: &str, job: &str) -> Re
     Ok(tx.query_row(
         "SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2
            AND number >= coalesce((SELECT max(number) FROM attempts WHERE plan = ?1 AND job = ?2 AND origin = 'retry'), 1)
-           AND status = 'ended' AND outcome IN ('merged', 'failed') AND driver_pid IS NOT NULL",
+           AND status = 'ended' AND outcome IN ('merged', 'failed') AND driver_pid IS NOT NULL
+           AND cause <> 'provider_error'",
+        params![plan, job],
+        |r| r.get(0),
+    )?)
+}
+
+/// The Attempts of Job `job` that ended `provider_error` since the last `job retry` (that one included): the window of
+/// [`automatic_attempts`], for the provider-error retries (pro-d102).
+fn provider_errors(tx: &WriteTxn<'_>, plan: &str, job: &str) -> Result<u32, CpdError> {
+    Ok(tx.query_row(
+        "SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2
+           AND number >= coalesce((SELECT max(number) FROM attempts WHERE plan = ?1 AND job = ?2 AND origin = 'retry'), 1)
+           AND status = 'ended' AND cause = 'provider_error'",
         params![plan, job],
         |r| r.get(0),
     )?)
@@ -458,8 +488,13 @@ pub(crate) fn automatic_attempts(tx: &WriteTxn<'_>, plan: &str, job: &str) -> Re
 /// ladder has one and the automatic Attempts since the last `job retry` are
 /// fewer than `1 + retry_cap`. An Attempt whose driver never started
 /// (`driver_pid` null, §3.4) does not raise the Tier: its own Tier again.
-/// (A `merging` Attempt always had a driver.)
+/// (A `merging` Attempt always had a driver.) A `provider_error` is a retry cause: see below.
 fn next_tier(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder<'_>) -> Result<Option<Tier>, CpdError> {
+    // pro-d102: a provider error requeues at the Attempt's own Tier, never raising it, up to PROVIDER_RETRIES times.
+    if cause == Cause::ProviderError {
+        let used = provider_errors(tx, attempt.plan.as_str(), attempt.job.as_str())?;
+        return Ok((used <= PROVIDER_RETRIES).then_some(attempt.tier));
+    }
     if !cause.is_ladder() {
         return Ok(None);
     }

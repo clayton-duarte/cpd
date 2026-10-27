@@ -258,11 +258,11 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey, all
 
     let bad = |what: String| CpdError::new(ErrorCode::StoreFailed, format!("The Ledger holds an invalid value: {what}."));
     // `never_started`: the previous Attempt's driver never started (`driver_pid` null, §3.4).
-    let previous: Option<(u32, String, bool)> = conn
+    let previous: Option<(u32, String, bool, bool)> = conn
         .query_row(
-            "SELECT number, tier, driver_pid IS NULL FROM attempts WHERE plan = ?1 AND job = ?2 ORDER BY number DESC LIMIT 1",
+            "SELECT number, tier, driver_pid IS NULL, cause IS 'provider_error' FROM attempts WHERE plan = ?1 AND job = ?2 ORDER BY number DESC LIMIT 1",
             params![plan.as_str(), key.as_str()],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()?;
     let retry = match &job.retry_tier {
@@ -275,10 +275,10 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey, all
             let tier = job.require_tier()?;
             (Tier::parse(tier).map_err(|_| bad(format!("tier {tier:?} of Job {key}")))?, Origin::Ladder)
         }
-        (None, Some((number, tier, never_started))) => {
+        (None, Some((number, tier, never_started, provider_error))) => {
             let last = Tier::parse(tier).map_err(|_| bad(format!("tier {tier:?} of Attempt {key}-a{number}")))?;
-            if *never_started || !catalog.is_valid(last) {
-                // The ledger queued the Job at that Tier again: the Attempt was not a try.
+            if *never_started || *provider_error || !catalog.is_valid(last) {
+                // The ledger queued the Job at that Tier again: the Attempt was not a try (a provider error never raises the Tier, pro-d102).
                 // A Tier the catalog refuses is left as is here: step_up below raises it.
                 (last, Origin::Ladder)
             } else {
@@ -293,7 +293,7 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey, all
     let tier = if catalog.is_valid(tier) { tier } else { catalog.step_up(tier).unwrap_or(tier) };
     // pro-d82, hs-d554: a Job stored on a Tier outside H0-H3, S0-S3 is never started (E3 raises one `error` per Job).
     tier.check_worker()?;
-    let number = previous.map_or(1, |(n, _, _)| n + 1);
+    let number = previous.map_or(1, |(n, ..)| n + 1);
     let attempt = AttemptId::new(key.clone(), NonZeroU32::new(number).expect("numbers start at 1"));
     // A linear Attempt (hs-d680, pro-d52) is the PR's only live Attempt for its whole life: it runs in the PR's one
     // workflow worktree on the Lead Branch, which a parallel Attempt's merge would move under it. Counted here, inside
