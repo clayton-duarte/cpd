@@ -20,6 +20,26 @@ pub use cmd::{Command, run};
 #[cfg(test)]
 mod tests;
 
+/// The reserved name of the built-in resource: the host's Worker slots (contract §8.3 "The built-in resource `workers`").
+pub const WORKERS: &str = "workers";
+
+/// The built-in resource `workers` as `cpd resource list` and `job show` read it: a host pool of `concurrency` slots, whose
+/// tenants are the Attempts not `ended`. It has no lock file: the Ledger is the record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Workers {
+    /// The config's `concurrency`.
+    pub slots: u32,
+    /// One record per Attempt not `ended`, `{by: attempt}`, in start order (`started_at`, then Attempt id); `at` is its `started_at`.
+    /// More than `slots` while an urgent Job holds the slot beyond.
+    pub holders: Vec<Holder>,
+}
+
+/// The Worker slots now: `concurrency` slots, the Attempts not `ended` as tenants. Stub.
+pub fn workers(conn: &rusqlite::Connection, concurrency: u32) -> Result<Workers, CpdError> {
+    let _ = (conn, concurrency);
+    Ok(Workers { slots: 0, holders: Vec::new() })
+}
+
 /// The holder record of a held resource (contract §1.4): what the taker wrote into the lock file.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "by", rename_all = "lowercase")]
