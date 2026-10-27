@@ -136,3 +136,15 @@ fn the_contract_table_exposure_column_is_the_code() {
     }
     assert!(checked >= ALL_THREE.len(), "the table has the domain rows");
 }
+
+#[test]
+fn a_pr_post_table_in_a_machine_file_is_policy_invalid() {
+    for text in [
+        "[pr.post]\nenabled = true\n",
+        "[pr]\npost.channel = \"C02JU6C2Z1D\"\n",
+        "[pr.post]\n",
+        "pr.post.template = \"{{ url }}\"\n",
+    ] {
+        refused(Machine, text, "pr.post", "owner, repo");
+    }
+}
