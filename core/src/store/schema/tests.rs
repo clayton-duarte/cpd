@@ -1826,6 +1826,9 @@ fn converts_keeping_every_row_and_id(n: usize) {
         assert_eq!(rows_after.remove("incident"), Some(Vec::new()));
         // `incident-plans` made another, and it is empty too.
         assert_eq!(rows_after.remove("incident_plans"), Some(Vec::new()));
+        // `tier-catalog-source` rebuilds tier_catalog EMPTY (a cache, recomputed by the next `cpd tiers`): the one table conversion drops.
+        assert_eq!(rows_after.remove("tier_catalog"), Some(Vec::new()));
+        assert!(rows_before.remove("tier_catalog").is_some_and(|r| !r.is_empty()), "the legacy tier_catalog row was seeded");
         let (history_before, history_after) = (rows_before.remove("history").unwrap(), rows_after.remove("history").unwrap());
         assert_eq!(history_after[..history_before.len()], history_before[..]);
         assert!(history_after[history_before.len()..].iter().all(|r| r.contains("\"update\"")), "{history_after:?}");
