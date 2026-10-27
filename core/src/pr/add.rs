@@ -289,7 +289,7 @@ pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &Base
     if let Some(key) = base_key.as_ref().filter(|b| needs.contains(b)) {
         return Err(CpdError::new(
             ErrorCode::Usage,
-            format!("{key} is the base PR and a need: a need must be merged before this PR starts, a base PR only started."),
+            format!("{key} is the base PR and a need: the base PR is already the implied need (this PR waits for it to open), so drop --needs {key}."),
         )
         .with("pr", key.as_str()));
     }
@@ -393,8 +393,16 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         Some(a) => BaseArg::Branch(Some(a.base.clone())),
         None => env.store.read(|conn| classify_base(conn, args.base.as_deref()))?,
     };
+    // A branch that is a PR's Lead Branch of the Plan and repo is its base PR's: it needs no branch yet (that PR may be `waiting`).
+    let lead_branch_of_pr = match &base {
+        BaseArg::Branch(Some(branch)) => env.store.read(|conn| Ok(derived_base_pr(&known_prs(conn, &plan)?, &repo.display().to_string(), branch).is_some()))?,
+        _ => false,
+    };
     let wanted = Wanted {
-        base: wanted_base(&repo, base)?,
+        base: match base {
+            BaseArg::Branch(Some(branch)) if lead_branch_of_pr => BaseWanted::Branch(branch),
+            base => wanted_base(&repo, base)?,
+        },
         adopt: adopt.map(|pull| Adopt { pull, confirm: args.confirm_author }),
         repo: repo.display().to_string(),
         name,
@@ -413,7 +421,15 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
             if let Some(legacy) = &legacy {
                 move_legacy_branch(&plan, legacy)?;
             }
-            no_branch_clash(&repo, &plan, &wanted.key)?;
+            // A PR stacked on the PR whose Lead Branch is `cpd/<plan>` is no clash with it: that branch is its base.
+            let stacked_on_legacy = env.store.read(|conn| Ok(base_branch(conn, &wanted.base)? == format!("cpd/{plan}")))?;
+            if stacked_on_legacy {
+                if branch_exists(&repo, &pr_branch(&plan, &wanted.key))? {
+                    no_branch_clash(&repo, &plan, &wanted.key)?;
+                }
+            } else {
+                no_branch_clash(&repo, &plan, &wanted.key)?;
+            }
             env.store.write(COMMAND, |tx| match decide(tx, &plan, &wanted, None)? {
                 Decision::Already { status, lead_branch, appended, base, base_pr, needs } => {
                     Ok((status, lead_branch, appended, base, base_pr, needs, true))
@@ -547,13 +563,19 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Optio
             .with("head_ref", existing.head_ref.clone())
             .with("status", existing.status.as_str()));
     }
+    // Stacked (§2.2 "The base PR"): `--base` names a base PR, or a branch that is a PR's Lead Branch; its base is its link.
+    let stacked = match &wanted.base {
+        BaseWanted::Pr(..) => true,
+        BaseWanted::Branch(branch) => derived_base_pr(&known_prs(conn, plan)?, &wanted.repo, branch).is_some(),
+    };
     let needs = match &wanted.needs {
         Some(needs) => needs.clone(),
         None if matches!(phase, Phase::Deploy | Phase::Done) => merged_keys(&prs),
+        None if phase == Phase::Dispatch && stacked => Vec::new(),
         None if phase == Phase::Dispatch => {
             return Err(CpdError::new(
                 ErrorCode::NeedsRequired,
-                format!("Plan {plan} is in dispatch: say --needs <pr> to link PR {} to the PR it waits on, or --no-needs. A PR with no needs is started at once.", wanted.key),
+                format!("Plan {plan} is in dispatch: say --needs <pr> to link PR {} to the PR it waits on (merged), --base <pr> to stack it on a PR it waits on to open, or --no-needs. A PR with no needs is started at once.", wanted.key),
             )
             .with("plan", plan.as_str())
             .with("pr", wanted.key.as_str())

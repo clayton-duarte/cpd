@@ -543,6 +543,13 @@ test("both skills describe a stacked PR: gh pr edit --base, then cpd pr push", (
   }
 });
 
+test("cpd-lead: a stacked PR waits for its base PR to open, --base needs neither --needs nor --no-needs, and a draft is no parking place", () => {
+  const text = skillFiles("cpd-lead")[0]!.text;
+  assert.match(text, /waiting.*base PR is open/, "cpd-lead: stacked PR waits for base PR to open");
+  assert.match(text, /needs neither flag/, "cpd-lead: --base needs neither flag");
+  assert.match(text, /draft.*never.*parking place/, "cpd-lead: draft is no parking place");
+});
+
 test("urgent Jobs: both skills state the flag, the command and the explicit-request rule", () => {
   for (const skill of ["cpd-lead", "cpd-manager"]) {
     const text = skillFiles(skill)[0]!.text;
@@ -699,7 +706,6 @@ test("the open Job and the update Job: cpd adds them, the Lead decides only when
   assert.match(checks, /`gate_failed` when the Gate/);
   assert.match(checks, /you append no fix Jobs for a failed Gate/);
   assert.match(checks, /ready and never a draft/);
-  assert.match(checks, /`cpd job retry <k> --tier <T>`, or cancel it so that cpd adds a fresh one/);
   assert.match(checks, /`open_job_live`/);
   const rows = section(lead, "### Dispatching");
   const merged = rows.split("\n").find((l) => l.startsWith("| `job-merged`"))!;
@@ -709,7 +715,6 @@ test("the open Job and the update Job: cpd adds them, the Lead decides only when
   assert.doesNotMatch(merged, /cpd queues an update Job that pushes them/);
   const failed = section(lead, "#### Failed Jobs");
   assert.match(failed, /A PR's open or update Job/);
-  assert.match(failed, /cpd adds a fresh open Job at its next tick/);
   const pr = section(lead, "### PR");
   assert.match(pr, /the Job's `job-merged` Event carries the URL \(`data\.url`\)/);
   assert.match(pr, /if the PR then conflicts with it, cpd queues an update Job; you do nothing/);

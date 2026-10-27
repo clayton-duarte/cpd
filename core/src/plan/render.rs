@@ -156,14 +156,14 @@ fn graph(direction: &str, prefix: &str, nodes: &[(&str, &[String])]) -> String {
 /// The PRs in the order of the needs graph: a PR comes after every PR it
 /// needs, ties by key. Needs outside `prs` are ignored; a cycle (the schema
 /// forbids none, `pr add` does) ends the order with the rest by key.
-fn ordered<'a>(prs: &[&'a PrRow]) -> Vec<&'a PrRow> {
+fn ordered<'a>(prs: &[&'a PrRow], display: &Display) -> Vec<&'a PrRow> {
     let mut rest: Vec<&PrRow> = prs.to_vec();
     rest.sort_by(|a, b| a.key.cmp(&b.key));
     let mut out: Vec<&PrRow> = Vec::new();
     while !rest.is_empty() {
         let next = rest
             .iter()
-            .position(|p| p.needs.iter().all(|n| out.iter().any(|o| o.key.as_str() == n) || !rest.iter().any(|r| r.key.as_str() == n)))
+            .position(|p| display.pr_needs(p).iter().all(|n| out.iter().any(|o| o.key.as_str() == n) || !rest.iter().any(|r| r.key.as_str() == n)))
             .unwrap_or(0);
         out.push(rest.remove(next));
     }
@@ -232,7 +232,7 @@ fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool, ope
     out.extend([
         format!("## PR {}", pr.key),
         String::new(),
-        format!("Repo: {} · Base: `{}` · Needs: {}", code(&pr.repo), pr.base, joined(&pr.needs, code)),
+        format!("Repo: {} · Base: `{}` · Needs: {}", code(&pr.repo), pr.base, joined(&shown.display.pr_needs(pr), code)),
         String::new(),
     ]);
     if jobs.is_empty() && placeholder.is_none() {
@@ -254,7 +254,7 @@ fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool, ope
             tcode(&j.key),
             cell(&j.title),
             j.kind,
-            j.tier.as_deref().unwrap_or(MISSING_TIER),
+            shown.display.job_tier(j).as_deref().unwrap_or(MISSING_TIER),
             job_status(j, blockers, &shown.anchors),
             joined(&j.needs, tcode),
             j.spec.as_ref().map_or_else(|| MISSING_TIER.to_owned(), |s| joined(&strings(&s.touches), tcode)),
@@ -286,7 +286,7 @@ fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool, ope
                 if blockers.is_empty() { j.status.as_str() } else { "waiting" },
                 if j.kind == "work" { String::new() } else { format!(" · Kind: `{}`", j.kind) },
                 if later { format!(" · {}", mark(j)) } else { String::new() },
-                j.tier.as_deref().map_or_else(|| MISSING_TIER.to_owned(), |t| format!("`{t}`")),
+                shown.display.job_tier(j).map_or_else(|| MISSING_TIER.to_owned(), |t| format!("`{t}`")),
                 joined(&j.needs, code)
             ),
             String::new(),
@@ -402,7 +402,7 @@ pub fn markdown(heading: &Heading, context: &str, phase: &str, prs: &[PrRow], jo
         out.extend(["No PRs yet.".to_owned(), String::new()]);
         return out.join("\n");
     }
-    let order = ordered(&prs);
+    let order = ordered(&prs, display);
     out.extend([
         "## PRs".to_owned(),
         String::new(),
@@ -419,11 +419,12 @@ pub fn markdown(heading: &Heading, context: &str, phase: &str, prs: &[PrRow], jo
             ("waiting", _) => "queued".to_owned(),
             (status, _) => status.to_owned(),
         };
-        out.push(format!("| {} | {} | {} | {} | {status} |", tcode(p.key.as_str()), tcode(&p.repo), tcode(&p.base), joined(&p.needs, tcode)));
+        out.push(format!("| {} | {} | {} | {} | {status} |", tcode(p.key.as_str()), tcode(&p.repo), tcode(&p.base), joined(&display.pr_needs(p), tcode)));
     }
     out.push(String::new());
     if prs.len() >= 2 {
-        let nodes: Vec<(&str, &[String])> = order.iter().map(|p| (p.key.as_str(), p.needs.as_slice())).collect();
+        let needs: Vec<Vec<String>> = order.iter().map(|p| display.pr_needs(p)).collect();
+        let nodes: Vec<(&str, &[String])> = order.iter().zip(&needs).map(|(p, n)| (p.key.as_str(), n.as_slice())).collect();
         out.extend([graph("LR", "p", &nodes), String::new()]);
     }
     overlaps_section(&mut out, overlaps);
@@ -492,7 +493,7 @@ mod tests {
     fn prs_are_ordered_by_needs_then_key() {
         let all = [pr("a-integration", &["b"]), pr("b", &["a-contract"]), pr("a-contract", &[]), pr("z", &[]), pr("c", &["gone"])];
         let refs: Vec<&PrRow> = all.iter().collect();
-        let keys: Vec<&str> = ordered(&refs).iter().map(|p| p.key.as_str()).collect();
+        let keys: Vec<&str> = ordered(&refs, &Display::of(&all)).iter().map(|p| p.key.as_str()).collect();
         assert_eq!(keys, ["a-contract", "b", "a-integration", "c", "z"]);
     }
 
