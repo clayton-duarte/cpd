@@ -267,6 +267,7 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("inbox-closed", "", "cpjs", &["item", "kind"], &[]),
     ("inbox-snoozed", "", "cpjs", &["item", "until"], &[]),
     ("inbox-dismissed", "", "cpjs", &["item"], &[]),
+    ("inbox-claimed", "", "cpjs", &["item"], &[]),
     ("watch-started", "", "", &["pid"], &[]),
     ("watch-stopped", "", "", &["pid"], &[]),
     ("error", "", "cpjas", &["source", "code", "message", "details"], &[]),

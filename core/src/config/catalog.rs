@@ -11,6 +11,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use super::cache;
 use super::file::Config;
@@ -123,9 +124,9 @@ fn tail(bytes: &[u8]) -> String {
 /// catalog).
 ///
 /// This is the one place the catalog is obtained. It is cached in `tier_catalog`
-/// per pi version (commands.md §14.3): read when the cache holds the configured
-/// models under the installed pi's version; otherwise computed from pi and
-/// written in one transaction, replacing what was cached.
+/// per pi version and `models.json` fingerprint (commands.md §14.3): read when the cache holds the configured
+/// models under the installed pi's version and the file's fingerprint; otherwise computed from pi and
+/// written in one transaction (append-only: old rows stay).
 pub fn load(config: &Config, models: &Models) -> Result<Catalog, CpdError> {
     // The open waits out a migration on the ambient clock, so a test passes a `ManualClock`.
     let mut store = Store::open_with(&*Ports::current().clock, &CpdHome::from_env()?, config.timeouts.store_busy_ms.into(), None)?;
@@ -140,12 +141,24 @@ pub fn load_with(models: &Models, store: &mut Store) -> Result<Catalog, CpdError
 
 fn load_from(pi: &PiInstall, models: &Models, store: &mut Store) -> Result<Catalog, CpdError> {
     let refs = [models.o.as_str(), models.s.as_str(), models.h.as_str()];
-    if let Some(cached) = cache::read(store, &pi.version, refs, &models.g)? {
+    let sha = models_sha(&pi.agent_dir)?;
+    if let Some(cached) = cache::read(store, &pi.version, &sha, refs, &models.g)? {
         return Ok(cached);
     }
     let catalog = read(pi, models, NODE_DEADLINE)?;
-    cache::write(store, &catalog)?;
+    cache::write(store, &sha, &catalog)?;
     Ok(catalog)
+}
+
+/// The cache key's second part (commands.md §14.3): the lowercase hex SHA-256 of the bytes of `<agentDir>/models.json`, which pi
+/// reads for custom models and their `thinkingLevelMap`; `""` when the file does not exist. Any other read error is `catalog_failed`.
+fn models_sha(agent_dir: &Path) -> Result<String, CpdError> {
+    let path = agent_dir.join("models.json");
+    match std::fs::read(&path) {
+        Ok(bytes) => Ok(format!("{:x}", Sha256::digest(bytes))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(catalog_failed(format!("cannot read {}: {e}.", path.display())).with("models_json", path.display().to_string())),
+    }
 }
 
 /// Runs the embedded module with pi's Node (killed past `deadline`) and builds the [`Catalog`] from what it prints.
@@ -257,7 +270,7 @@ mod tests {
             h: tier(&models.h),
             g: TierModel { model: models.g.clone(), efforts: vec![] },
         };
-        cache::write(&mut store, &cached).unwrap();
+        cache::write(&mut store, "", &cached).unwrap();
 
         // pi's entry points do not exist: a cache miss would fail in `read`.
         assert_eq!(load_from(&pi(), &models, &mut store).unwrap(), cached);
