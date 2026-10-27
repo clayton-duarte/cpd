@@ -2137,7 +2137,7 @@ The detail behind a `pr-feedback` (hs-d98, D10; contract §7.6): the checks, rev
 
 Effects: **gh**, in the PR's Lead worktree: `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url,baseRefName` and `gh api repos/{owner}/{repo}/pulls/<n>/comments`. No rows, no Event.
 
-Output: `plan`; `pr`, the PR's `key`, `number`, `url`, `title`, `base` (the pull request's base branch on GitHub, `baseRefName`), `base_pr` (the base PR as `<plan>/<key>`, derived from the PR's stored `base`, or null: it differs from `base` only until the poll has followed a repoint, contract §3.8 "Stacked PRs" step 8), `state` (`open`, `closed` or `merged`), `review_decision` and `checks` (`none`, `passed`, `pending` or `failed`; the per-check mapping of contract §7.6 step 3b: FAILURE, TIMED_OUT, ACTION_REQUIRED, STARTUP_FAILURE, ERROR are failing; CANCELLED is not; pending checks never fail); `checks`, one entry for each check, `{name, conclusion, url?}` (includes CANCELLED and pending checks with their conclusions unmodified, mapping applies to the summary only); `reviews`, `{id, author, state, body}`; `comments`, `{id, author, body}`; `inline_comments`, the pull request's review comments, `{id, author, path, body}`; `feedback` (pro-d68), the row's stored list of open feedback items (contract §2.2 "Feedback item"; null when the poll never read it), which is what `pr reply --to` names; and `post` (pro-d65, contract §2.2), null for an unposted PR, else `{channel, ts, link, posted_at, reaction, reacted_at}`. `reviews`, `comments` and `inline_comments` are as before and list everything, a bot's included.
+Output: `plan`; `pr`, the PR's `key`, `number`, `url`, `title`, `base` (the pull request's base branch on GitHub, `baseRefName`), `base_pr` (the base PR as `<plan>/<key>`, derived from the PR's stored `base`, or null: it differs from `base` only until the poll has followed a repoint, contract §3.8 "Stacked PRs" step 8), `state` (`open`, `closed` or `merged`), `review_decision` and `checks` (`none`, `passed`, `pending` or `failed`; the per-check mapping of contract §7.6 step 3b: FAILURE, TIMED_OUT, ACTION_REQUIRED, STARTUP_FAILURE, ERROR are failing; CANCELLED is not; pending checks never fail); `checks`, one entry for each check, `{name, conclusion, url?}` (includes CANCELLED and pending checks with their conclusions unmodified, mapping applies to the summary only); `reviews`, `{id, author, state, body}`; `comments`, `{id, author, body}`; `inline_comments`, the pull request's review comments, `{id, author, path, body}`; `feedback` (pro-d68), the row's stored list of open feedback items (contract §2.2 "Feedback item"; null when the poll never read it), which is what `pr reply --to` names; and `post` (pro-d65, contract §2.2), null for an unposted PR, else `{channel, ts, link, posted_at, reaction, reacted_at}`; `reacted_at` is set by engine E16 (§21.9) after the PR merges. `reviews`, `comments` and `inline_comments` are as before and list everything, a bot's included.
 
 ```json
 {"ok": true, "plan": "pay-4521",
@@ -4638,7 +4638,7 @@ Output, one JSON value on stdout (contract §1.2), progress on stderr:
 
 A helper that exits 0 and prints no result is not one of these refusals: E11 reports it as `spawn_failed`, whose message is `<argv> exited 0 but printed no result.` (any other exit with no result keeps `<argv> printed no result.`) and whose `details` are `{argv, exit, stdout, stderr}`, the last two the tail of what the child printed.
 
-Writes nothing: no file, no Slack message, no reaction (hermes' `post_message`, `add_reaction` and `mark_merged` are not ported); the message and the reaction are done by the later helpers `slack-post.ts` (§21.8) and `slack-react.ts`. The `:eyes:` reaction is not placed (C7, §21.7: it awaits a writable Slack integration). The credential is read and refreshed inside pi's modules; the helper holds no token.
+Writes nothing: no file, no Slack message, no reaction (hermes' `post_message`, `add_reaction` and `mark_merged` are not ported); the message and the reaction are done by the later helpers `slack-post.ts` (§21.10) and `slack-react.ts` (§21.8). The `:eyes:` reaction is not placed (C7, §21.7: it awaits a writable Slack integration). The credential is read and refreshed inside pi's modules; the helper holds no token.
 
 **The helper is no Session** (contract §6.11): `--no-mcp` and `cpd mcp attach` (§24.1) do not reach it. It keeps reading the `slack` entry of `<agentDir>/mcp.json`, which therefore stays until a later Plan moves the helper (pro-d10).
 
@@ -4665,9 +4665,55 @@ Effects, one transaction: **rows** `inbox_items.claimed_at` = now; **Event** `in
 
 Idempotent: yes. An item already claimed returns `"already": true` and writes nothing, with no Event.
 
-### 21.8 The helper `slack-post.ts`
+### 21.8 The helper `slack-react.ts`
 
-`pi/lib/slack-post.ts` in cpd's `pi/` package, beside `slack-channel.ts` (§21.6 contract §8 `pi_adapter`). Not a cpd command: `pr post` (§9.8b) runs it, and later (PR `react`) `slack-react.ts` runs the same way. It calls the Slack MCP server's tools **through pi's own MCP client and token store**, so cpd has no HTTP client and never reads, copies or logs the credential.
+`pi/lib/slack-react.ts` in cpd's `pi/` package, beside `slack-channel.ts` (§21.6) and `slack-post.ts` (§21.10, contract §8 `pi_adapter`). Not a cpd command: engine E16 (§21.9) runs it, detached. It calls the Slack MCP server's tools **through pi's own MCP client and token store**, so cpd has no HTTP client (hs-d107) and never reads, copies or logs the credential.
+
+```
+node <adapter>/lib/slack-react.ts --coding-agent <…/@earendil-works/pi-coding-agent/dist/index.js> --channel <C…> --ts <message ts> --emoji <name>
+```
+
+Environment: `PI_CODING_AGENT_DIR` (the agent directory of the pi release, contract §9). cwd is `$CPD_HOME`; the helper hands it to the connection. Constants in the helper, each with its source: tool `slack_add_reaction`, server entry `slack` of `<agentDir>/mcp.json` (the global file only; a project file is never read), deadline 30 s for the reaction call (matched with the E16 deadline of §3.7).
+
+**Arguments:** validated before connecting: `--channel <C…>` matches `^C[A-Z0-9]{8,}$`, `--ts <ts>` matches `^[0-9]{10}\.[0-9]{6}$`, `--emoji <name>` matches `^[a-z0-9_+-]{1,100}$` and is without colons (Slack's internal format); anything else is `usage` (exit 2).
+
+What it does:
+1. **Loads pi's modules** by file URL from the directory of `--coding-agent`, reuses `connect`, `Refusal`, `parseArgs` and `CallTool` from `slack-channel.ts` (§21.6). A failure is `slack_helper_failed`.
+2. **Adds the reaction**: `callTool("slack_add_reaction", {channel_id, message_ts, emoji})` with a 30 s deadline. Not signed in is `slack_auth`. A timeout or any other failure is `slack_failed`.
+3. **Reads the answer** and validates it: on `ok`, the call succeeded; on an error whose text contains `already_reacted` (the reaction is already there), the call failed with that error, but the state is the desired one (idempotent success, `"already": true`); any other error is `slack_failed`.
+
+Output, one JSON value on stdout (contract §1.2):
+
+```json
+{"ok": true, "channel": "C02JU6C2Z1D", "ts": "1793040197.490209", "emoji": "git-merge", "already": false}
+```
+
+or `"already": true` when the reaction was already there.
+
+| Failure | Code | Exit |
+|---|---|---|
+| no `--channel`, `--ts`, or `--emoji`, or arguments malformed, or emoji has colons | `usage` | 2 |
+| the `slack` server is not in `<agentDir>/mcp.json` | `slack_not_configured` | 3 |
+| Slack needs a sign-in (step 2) | `slack_auth` | 3 |
+| the add-reaction call failed or timed out (step 2) | `slack_failed` | 1 |
+| pi's modules did not load (step 1) | `slack_helper_failed` | 1 |
+| the helper could not be started | `spawn_failed` | 1 |
+
+Writes one Slack reaction (or confirms one already present) and nothing else. The credential is read and refreshed inside pi's modules; the helper holds no token. The caller (engine E16, §21.9) writes the `reacted_at` column after a successful reaction.
+
+### 21.9 The merge reaction (engine E16)
+
+Not a command. The merge reaction (Plan pr-post, PR `react`, User decision pro-d64 step 7): engine step E16 runs the helper (§21.8) once after a PR merges, to add the owner's configured emoji reaction to the PR's post in Slack (§21.5 and §21.6 cache its `ts`, channel and reaction). It writes no row and appends no Event of its own (a failure is reported, below).
+
+- **When:** each tick, when incident mode holds (hs-d643), log `E16: holding: incident mode is on` and do nothing; otherwise, when a helper run is in flight, collect its answer; otherwise, pick the oldest PR in status `merged` whose `pr_posts` row has a non-null `reaction` and null `reacted_at`: `SELECT p.plan, p.pr, p.channel, p.ts, p.reaction FROM pr_posts p JOIN prs r ON r.plan = p.plan AND r.key = p.pr WHERE r.status = 'merged' AND p.reaction IS NOT NULL AND p.reacted_at IS NULL ORDER BY r.merged_at, p.plan, p.pr LIMIT 1`. With none, clear the step with `engine.clear(Step::E16, &About::Machine)` and nothing else.
+- **The helper call:** `cpd_core::slack::call(&config, "slack-react.ts", &[("channel", p.channel), ("ts", p.ts), ("emoji", p.reaction)], None, <120 s deadline>)` (§3.7 "Deadline", §1.2 `tool_timeout`), run detached on its own thread (never holding the tick), answer read with `cpd_core::slack::answer` at a later tick.
+- **On success** (`ok: true`, `already` true or false): one store transaction sets that row's `reacted_at` to the transaction's time where it is still NULL (`UPDATE pr_posts SET reacted_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE plan = ?1 AND pr = ?2 AND reacted_at IS NULL`), no Event, and the step is cleared.
+- **On any failure:** `engine.fail(Step::E16, About::Machine, failure)`: one `error` Event per code (`source` `watch`, reported again only when the code changes or after `watch.error_repeat_seconds` has passed; hs-d514; the codes are the helper's: `usage` (malformed call, unverified), `slack_not_configured`, `slack_auth`, `slack_failed`, `slack_helper_failed`, or the spawn codes `pi_not_found`, `spawn_failed`, `tool_timeout`), no Inbox item, and **`reacted_at` stays NULL**. The same post is tried again `watch.error_repeat_seconds` after the end of the failed run: a reaction is never lost, only late.
+- **What it does not do:** A PR posted before this PR, or by hand, has no `pr_posts` row and gets no reaction (not built: decided at the Plan review, pro-d64 step 7). A reaction is placed only by this step, never by E11 or E16 as part of another operation.
+
+### 21.10 The helper `slack-post.ts`
+
+`pi/lib/slack-post.ts` in cpd's `pi/` package, beside `slack-channel.ts` (§21.6) and `slack-react.ts` (§21.8, contract §8 `pi_adapter`). Not a cpd command: `pr post` (§9.8b) runs it, and later engine E16 (§21.9) runs `slack-react.ts` the same way. It calls the Slack MCP server's tools **through pi's own MCP client and token store**, so cpd has no HTTP client and never reads, copies or logs the credential.
 
 ```
 node <adapter>/lib/slack-post.ts --coding-agent <…/@earendil-works/pi-coding-agent/dist/index.js> --channel <C…>
