@@ -14,7 +14,7 @@ use crate::ids::PlanId;
 pub const STATUSES: [&str; 6] = ["draft", "queued", "running", "merged", "failed", "cancelled"];
 
 /// The kinds of Job (`jobs.kind`, §2.2 "Job kinds"): `open` and `update` are cpd's, the others the Lead's.
-pub const KINDS: [&str; 6] = ["work", "docs", "test", "impl", "open", "update"];
+pub const KINDS: [&str; 7] = ["work", "docs", "test", "impl", "verify", "open", "update"];
 
 /// The Spec of a Job (§2.2): all five fields, or none (a stub, below). The
 /// arrays are kept as the JSON values stored, so a fingerprint hashes exactly

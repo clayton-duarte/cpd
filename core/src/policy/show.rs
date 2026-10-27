@@ -234,7 +234,7 @@ pub(super) fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &Do
             vec![("O", value(&m.o)), ("S", value(&m.s)), ("H", value(&m.h)), ("G", value(&m.g))]
         }
         Domain::Protected => vec![(PATHS, value(&resolved.policy.protected.paths))],
-        Domain::Resources => vec![("names", value(&resolved.policy.resources.names))],
+        Domain::Resources => vec![("names", value(&resolved.policy.resources.names)), ("declared", value(&resolved.policy.resources.declared))],
         Domain::Deploys => vec![(WORKFLOWS, value(&resolved.policy.deploys.workflows))],
         _ => Vec::new(),
     };

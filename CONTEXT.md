@@ -117,7 +117,7 @@ A self-contained unit of work defined by a Spec, executable by a fresh agent ses
 _Avoid_: card, task, step
 
 **Job kind** (new, hs-d340, hs-d341):
-What a Job is for, and so which checks its submit runs: `work` (the default: any Job, as before), `docs` (the contract amended first), `test` (red tests, written from the docs by a Worker other than the implementer, with stubs so the branch builds; its Spec names its `tests` and the `test_files` that hold them), `impl` (makes the tests of the test Jobs it needs pass, and may not change their files unless the Lead approved the path with `job approve-tests`), and `open` and `update`, which only cpd adds. A PR's shape (`pr add --shape tdd|docs|config`, stored and enforced) lays out its kinds: `tdd` is docs, tests, impl; `docs` and `config` have no test Job. A repo needs `[test-commands]` in its repo policy file before its PRs can be `tdd`.
+What a Job is for, and so which checks its submit runs: `work` (the default: any Job, as before), `docs` (the contract amended first), `test` (red tests, written from the docs by a Worker other than the implementer, with stubs so the branch builds; its Spec names its `tests` and the `test_files` that hold them), `impl` (makes the tests of the test Jobs it needs pass, and may not change their files unless the Lead approved the path with `job approve-tests`), `verify` (adds checks: end-to-end, smoke, load, contract; changes no product behaviour; a label like `docs`, with no Spec section of its own and no check at submit beyond the quick check; the Lead adds it by hand, it needs an `impl` Job of its PR, and a `tdd` or `free` PR allows it), and `open` and `update`, which only cpd adds. A PR's shape (`pr add --shape tdd|docs|config`, stored and enforced) lays out its kinds: `tdd` is docs, tests, impl; `docs` and `config` have no test Job. A repo needs `[test-commands]` in its repo policy file before its PRs can be `tdd`.
 _Avoid_: type, category, role
 
 **Open Job** (new, hs-d340):
@@ -284,9 +284,16 @@ _Avoid_: visibility, permission
 What a Policy is resolved for: an owner, or an owner and a repo name (`Owner(login) | Repo(login, name)`). cpd derives it from the one row a consumer acts on: a Context, its Manager and its Leads use the Context's owner; a PR, its Workers and the commands on it use the PR's repo. Never a machine, a path or a cwd.
 _Avoid_: scope, selector, context
 
-**Resource** (new, pro-d74):
-A named exclusive thing of a repo, declared in its repo policy file (`[resources.<name>]`, contract §8.3 "The `resources` domain"), that one holder at a time may use, such as the one port an e2e run needs. A Job takes it through its Spec's `resources` and its Attempt holds it until it ends; a human takes it with `cpd resource run`. The lock is per repo on one machine, a kernel `flock` released when its holder dies. A repo that declares none has no lock and no limit.
-_Avoid_: slot, lock, mutex, semaphore
+**Resource** (pro-d74, pro-d92):
+Anything that has a limited number of slots available for concurrent use, declared in a policy file at host, owner or repo level (`[resources.<name>]`, contract §8.3 "The `resources` domain"), such as the one port an e2e run needs. A Job takes a slot through its Spec's `resources` and its Attempt holds it until it ends; a human takes one with `cpd resource run`. Each slot is a kernel `flock` released when its tenant dies. Nothing declared means no lock and no limit. The built-in `workers` is the host's Worker slots, its tenants the Attempts not `ended` (contract §8.3).
+_Avoid_: lock, mutex, semaphore
+
+**Slot** (pro-d92):
+The number of available concurrent units of a determined resource: one concurrent unit of it. Contract §1.4 "The resource locks and the holder record".
+_Avoid_: lock, seat
+
+**Tenant** (pro-d92):
+The Job or user occupying a resource slot. Its holder record names it (contract §1.4).
 
 **Machine policy** (changed, pro-d1):
 The machine Scope's file, `$CPD_HOME/policy/host.toml` (contract §8.3), which dotfiles render per machine: its `[model]` table first, then the machine's `cpd.policy` text (its `[mcp.servers.*]`). Besides Domains it may hold an `[mcp]` table, the MCP servers the machine may use, which only a machine file may have; `[mcp]` is not a Domain and takes no part in a Policy key.

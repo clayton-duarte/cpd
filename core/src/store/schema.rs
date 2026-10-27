@@ -110,7 +110,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "ff4ab47bdb1b3297cb3a7af41a74fb761c6b7b9051fde385b3aa072f902ea9d7";
+pub const SCHEMA_HASH: &str = "e2ff57d3bc56ee9f24d3fc52ecf2307604121b6bcb61231d94e54e394ae837ad";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -868,6 +868,8 @@ pub(super) fn generated_mismatch(conn: &Connection) -> Result<Option<(String, St
 mod tests;
 #[cfg(test)]
 mod blue_tests;
+#[cfg(test)]
+mod job_verify_tests;
 #[cfg(test)]
 mod job_edit_tests;
 #[cfg(test)]
