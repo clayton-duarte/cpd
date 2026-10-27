@@ -614,8 +614,10 @@ fn an_open_job_adopts_a_pull_request_merged_on_github_after_its_gates_with_no_pu
 #[test]
 fn an_open_job_ignores_a_merged_pull_request_created_before_the_pr_started() {
     let live = open_live();
-    live.gh_creates();
-    live.runner().on("gh", |c| c.args[..2] == ["pr", "list"], Reply::ok(&format!("[{{\"number\":265,\"url\":\"https://github.com/acme/pay/pull/265\",\"state\":\"MERGED\",\"createdAt\":\"2026-10-22T08:00:00Z\"}}]")));
+    live.runner()
+        .on("gh", |c| c.args[..2] == ["pr", "create"], Reply::ok(PR_URL))
+        .on("gh", |c| c.args[..2] == ["api", "graphql"], Reply::ok(&common::pay_lookup()))
+        .on("gh", |c| c.args[..2] == ["pr", "list"], Reply::ok(&format!("[{{\"number\":265,\"url\":\"https://github.com/acme/pay/pull/265\",\"state\":\"MERGED\",\"createdAt\":\"2026-10-22T08:00:00Z\"}}]")));
     let tip = live.lead_sha();
 
     let (attempt, submitted) = live.run_job("open-repo", submit_only);
