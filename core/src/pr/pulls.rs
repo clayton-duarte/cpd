@@ -7,6 +7,7 @@
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde_json::{Value, json};
 
+use super::comments::{Item, Read};
 use super::gh::{Listed, Membership, PolledPr};
 use crate::error::CpdError;
 use crate::ids::{PlanId, PrKey};
@@ -34,10 +35,24 @@ pub struct PullRequest {
     pub merge_state: String,
     pub authored: bool,
     pub review_requested: bool,
+    /// GitHub's `updatedAt` at the last read of the feedback; `None` = never read.
+    pub updated_at: Option<String>,
+    /// The open feedback items at that read; `None` = never read.
+    pub feedback: Option<Vec<Item>>,
 }
 
 const COLUMNS: &str = "id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, \
-                       mergeable, merge_state, authored, review_requested";
+                       mergeable, merge_state, authored, review_requested, updated_at, feedback";
+
+/// The items a `feedback` column holds: parsed once, here.
+fn feedback_of(text: Option<String>) -> rusqlite::Result<Option<Vec<Item>>> {
+    text.map(|t| serde_json::from_str(&t).map_err(|e| rusqlite::Error::FromSqlConversionFailure(17, rusqlite::types::Type::Text, Box::new(e)))).transpose()
+}
+
+/// The `feedback` column of `items`: JSON.
+fn feedback_text(items: &[Item]) -> String {
+    serde_json::to_string(items).expect("items are plain data")
+}
 
 impl PullRequest {
     fn from_row(r: &Row) -> rusqlite::Result<PullRequest> {
@@ -58,6 +73,8 @@ impl PullRequest {
             merge_state: r.get(13)?,
             authored: r.get(14)?,
             review_requested: r.get(15)?,
+            updated_at: r.get(16)?,
+            feedback: feedback_of(r.get(17)?)?,
         })
     }
 
@@ -77,14 +94,19 @@ impl PullRequest {
         })
     }
 
-    /// Whether the row already holds what `listed` reports. `created_at` is not compared:
-    /// it is written once, with the row, and never changes (§2.2, store-W5).
-    pub(super) fn holds(&self, listed: &Listed) -> Result<bool, CpdError> {
+    /// Whether the row already holds what `listed` reports, and what `read` (the comments read of this poll, if any)
+    /// found. `created_at` is not compared: it is written once, with the row, and never changes (§2.2, store-W5);
+    /// `updated_at` is not either: the row's is that of its last comments read, not of the listing.
+    pub(super) fn holds(&self, listed: &Listed, read: Option<&Read>) -> Result<bool, CpdError> {
+        let read_held = read.is_none_or(|r| self.updated_at.as_deref() == Some(r.updated_at.as_str()) && self.feedback.as_deref() == Some(r.items.as_slice()));
+        if !read_held {
+            return Ok(false);
+        }
         // GitHub never un-merges: a stored merge is final against any listing that is not MERGED (hs-d550).
         if self.state == "merged" && listed.pr.state != super::status::PrState::Merged {
             return Ok(true);
         }
-        let same_but_created_at = PolledPr { created_at: self.created_at.clone(), ..listed.pr.clone() };
+        let same_but_created_at = PolledPr { created_at: self.created_at.clone(), updated_at: self.polled()?.updated_at, ..listed.pr.clone() };
         Ok(self.polled()? == same_but_created_at && self.membership() == listed.membership)
     }
 
@@ -121,6 +143,7 @@ impl PullRequest {
                 .find(|s| s.as_str() == self.merge_state)
                 .ok_or_else(|| bad("merge_state", &self.merge_state))?,
             created_at: self.created_at.clone(),
+            updated_at: self.updated_at.clone().unwrap_or_default(),
             merged_at: self.merged_at.clone(),
         })
     }
@@ -172,6 +195,8 @@ pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, PrKey, PullRe
                 merge_state: r.get(15)?,
                 authored: r.get(16)?,
                 review_requested: r.get(17)?,
+                updated_at: r.get(18)?,
+                feedback: feedback_of(r.get(19)?)?,
             };
             Ok((plan, key, pull))
         })?
@@ -208,19 +233,21 @@ pub(super) fn txn_time(tx: &WriteTxn<'_>) -> Result<String, CpdError> {
 /// (`changed_at` = the transaction's time; the searches that listed it are values):
 /// a poll that finds nothing new writes nothing. `None` when nothing changed. `created_at`
 /// is the one value never updated: GitHub's, as first written.
-pub(super) fn upsert(tx: &WriteTxn<'_>, listed: &Listed) -> Result<Option<Change>, CpdError> {
+pub(super) fn upsert(tx: &WriteTxn<'_>, listed: &Listed, read: Option<&Read>) -> Result<Option<Change>, CpdError> {
     let Listed { pr: polled, membership } = listed;
     let Some(before) = find(tx, &polled.repo, polled.number)? else {
-        return Ok(Some(Change { before: None, after: insert(tx, polled, *membership)? }));
+        return Ok(Some(Change { before: None, after: insert(tx, polled, *membership, read)? }));
     };
-    if before.holds(listed)? {
+    if before.holds(listed, read)? {
         return Ok(None);
     }
     let at = txn_time(tx)?;
+    let updated_at = read.map(|r| r.updated_at.clone()).or_else(|| before.updated_at.clone());
+    let feedback = read.map(|r| feedback_text(&r.items)).or_else(|| before.feedback.as_deref().map(feedback_text));
     tx.execute(
         "UPDATE pull_requests SET url = ?1, title = ?2, draft = ?3, state = ?4, review_decision = ?5, checks = ?6,
                 merged_at = ?7, changed_at = ?8, mergeable = ?9, merge_state = ?10, authored = ?11,
-                review_requested = ?12 WHERE id = ?13",
+                review_requested = ?12, updated_at = ?13, feedback = ?14 WHERE id = ?15",
         rusqlite::params![
             polled.url,
             polled.title,
@@ -234,6 +261,8 @@ pub(super) fn upsert(tx: &WriteTxn<'_>, listed: &Listed) -> Result<Option<Change
             polled.merge_state.as_str(),
             membership.authored,
             membership.review_requested,
+            updated_at,
+            feedback,
             before.id
         ],
     )?;
@@ -246,16 +275,16 @@ pub(super) fn upsert(tx: &WriteTxn<'_>, listed: &Listed) -> Result<Option<Change
 pub(super) fn ensure(tx: &WriteTxn<'_>, polled: &PolledPr) -> Result<i64, CpdError> {
     match find(tx, &polled.repo, polled.number)? {
         Some(row) => Ok(row.id),
-        None => Ok(insert(tx, polled, Membership { authored: true, review_requested: false })?.id),
+        None => Ok(insert(tx, polled, Membership { authored: true, review_requested: false }, None)?.id),
     }
 }
 
-fn insert(tx: &WriteTxn<'_>, polled: &PolledPr, membership: Membership) -> Result<PullRequest, CpdError> {
+fn insert(tx: &WriteTxn<'_>, polled: &PolledPr, membership: Membership, read: Option<&Read>) -> Result<PullRequest, CpdError> {
     let at = txn_time(tx)?;
     tx.execute(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at,
-                                    mergeable, merge_state, authored, review_requested)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                                    mergeable, merge_state, authored, review_requested, updated_at, feedback)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         rusqlite::params![
             polled.repo,
             polled.number,
@@ -271,7 +300,9 @@ fn insert(tx: &WriteTxn<'_>, polled: &PolledPr, membership: Membership) -> Resul
             polled.mergeable.as_str(),
             polled.merge_state.as_str(),
             membership.authored,
-            membership.review_requested
+            membership.review_requested,
+            read.map(|r| r.updated_at.as_str()),
+            read.map(|r| feedback_text(&r.items))
         ],
     )?;
     load(tx, tx.last_insert_rowid())
@@ -282,6 +313,7 @@ fn insert(tx: &WriteTxn<'_>, polled: &PolledPr, membership: Membership) -> Resul
 pub(super) enum Reason {
     ChecksFailed,
     ChangesRequested,
+    Comments,
     Closed,
 }
 
@@ -291,6 +323,7 @@ impl Reason {
         match self {
             Reason::ChecksFailed => "checks_failed",
             Reason::ChangesRequested => "changes_requested",
+            Reason::Comments => "comments",
             Reason::Closed => "closed",
         }
     }
@@ -298,10 +331,10 @@ impl Reason {
 
 /// D7: the reasons `after` needs attention that `before` did not: checks
 /// became `failed`, the review became `changes_requested` (each from anything
-/// else), the state became `closed` from `open`. `before` none is a row first
+/// else), the state became `closed` from `open`, or the feedback has `new` open items (`comments::new_items`). `before` none is a row first
 /// seen: it counts as no checks, no review and `open`. A conflict is no reason any more (hs-d340): it queues an `update` Job
 /// (`poll::update_for_conflict`). Checks are a reason only when the PR's `pr.feedback.checks` is `any` (§8.3, hs-d292).
-pub(super) fn attention(before: Option<&PullRequest>, after: &PullRequest, checks_policy: Checks) -> Vec<Reason> {
+pub(super) fn attention(before: Option<&PullRequest>, after: &PullRequest, checks_policy: Checks, new: &[&Item]) -> Vec<Reason> {
     let (checks, review, state) = match before {
         Some(b) => (b.checks.as_str(), b.review_decision.as_str(), b.state.as_str()),
         None => ("none", "none", "open"),
@@ -312,6 +345,9 @@ pub(super) fn attention(before: Option<&PullRequest>, after: &PullRequest, check
     }
     if after.review_decision == "changes_requested" && review != "changes_requested" {
         reasons.push(Reason::ChangesRequested);
+    }
+    if !new.is_empty() {
+        reasons.push(Reason::Comments);
     }
     if after.state == "closed" && state == "open" {
         reasons.push(Reason::Closed);
@@ -336,7 +372,7 @@ mod tests {
 
     /// `super::attention` with `pr.feedback.checks` `any`, cpd's default.
     fn attention(before: Option<&PullRequest>, after: &PullRequest) -> Vec<Reason> {
-        super::attention(before, after, Checks::Any)
+        super::attention(before, after, Checks::Any, &[])
     }
     use crate::home::CpdHome;
     use crate::store::Store;
@@ -359,6 +395,8 @@ mod tests {
             merge_state: "unknown".into(),
             authored: true,
             review_requested: false,
+            updated_at: None,
+            feedback: None,
         }
     }
 
@@ -375,9 +413,9 @@ mod tests {
     #[test]
     fn attention_ignores_failing_checks_when_the_policy_is_none_and_keeps_every_other_reason() {
         let open = row("open", "none", "none");
-        assert_eq!(super::attention(Some(&open), &row("open", "none", "failed"), Checks::None), []);
-        assert_eq!(super::attention(Some(&open), &row("open", "none", "failed"), Checks::Any), [Reason::ChecksFailed]);
-        let all = super::attention(Some(&row("open", "none", "pending")), &row("closed", "changes_requested", "failed"), Checks::None);
+        assert_eq!(super::attention(Some(&open), &row("open", "none", "failed"), Checks::None, &[]), []);
+        assert_eq!(super::attention(Some(&open), &row("open", "none", "failed"), Checks::Any, &[]), [Reason::ChecksFailed]);
+        let all = super::attention(Some(&row("open", "none", "pending")), &row("closed", "changes_requested", "failed"), Checks::None, &[]);
         assert_eq!(all, [Reason::ChangesRequested, Reason::Closed]);
     }
 
@@ -433,6 +471,7 @@ mod tests {
             review_decision: ReviewDecision::None,
             checks,
             created_at: "2026-01-01T00:00:00.000Z".into(),
+            updated_at: "2026-01-02T00:00:00Z".into(),
             merged_at: None,
         }
     }
@@ -441,7 +480,7 @@ mod tests {
 
     /// `upsert` of a pull request the User wrote.
     fn up(tx: &WriteTxn<'_>, polled: &PolledPr) -> Result<Option<Change>, CpdError> {
-        upsert(tx, &Listed { pr: polled.clone(), membership: AUTHORED })
+        upsert(tx, &Listed { pr: polled.clone(), membership: AUTHORED }, None)
     }
 
     fn store(dir: &tempfile::TempDir) -> Store {
@@ -511,7 +550,7 @@ mod tests {
         let both = Membership { authored: true, review_requested: true };
         let requested = Membership { authored: false, review_requested: true };
         let put = |store: &mut Store, membership| {
-            store.write("test", |tx| upsert(tx, &Listed { pr: polled(7, ChecksSummary::None), membership })).unwrap()
+            store.write("test", |tx| upsert(tx, &Listed { pr: polled(7, ChecksSummary::None), membership }, None)).unwrap()
         };
 
         let first = put(&mut store, requested).unwrap();
@@ -559,7 +598,7 @@ mod tests {
             store.write("test", |tx| up(tx, &polled(n, ChecksSummary::None))).unwrap();
         }
         let closed = PolledPr { state: PrState::Closed, ..polled(9, ChecksSummary::None) };
-        store.write("test", |tx| upsert(tx, &Listed { pr: closed, membership: Membership::default() })).unwrap();
+        store.write("test", |tx| upsert(tx, &Listed { pr: closed, membership: Membership::default() }, None)).unwrap();
         let open: Vec<i64> = store.read(stored_open).unwrap().iter().map(|r| r.number).collect();
         assert_eq!(open, [7, 8]);
     }

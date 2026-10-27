@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::error::{CpdError, ErrorCode};
+use super::comments;
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use crate::git::{TAIL_LINES, tail};
 use crate::host::limit::limit;
@@ -375,7 +376,7 @@ pub fn inline_comments(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<V
 /// The fields of a pull request, as the search and the lookup both select them.
 macro_rules! pr_fields {
     () => {
-        "repository { nameWithOwner } number url title isDraft state createdAt mergedAt baseRefName reviewDecision \
+        "repository { nameWithOwner } number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision \
          mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
     };
 }
@@ -409,6 +410,8 @@ pub struct PolledPr {
     pub mergeable: Mergeable,
     pub merge_state: MergeState,
     pub created_at: String,
+    /// GitHub's `updatedAt`: when it moves, the pull request's comments are read again (`read_comments`).
+    pub updated_at: String,
     pub merged_at: Option<String>,
 }
 
@@ -528,6 +531,8 @@ struct RawPr {
     state: String,
     #[serde(rename = "createdAt")]
     created_at: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
     #[serde(rename = "mergedAt")]
     merged_at: Option<String>,
     /// The search always selects it; it is optional only so that a reply without it (a test's fake `gh`) follows nothing.
@@ -622,6 +627,7 @@ impl Reply<'_> {
             mergeable,
             merge_state,
             created_at: raw.created_at,
+            updated_at: raw.updated_at,
             merged_at: raw.merged_at,
         })
     }
@@ -651,13 +657,60 @@ fn polled_call(call: &str, e: CpdError) -> CpdError {
 /// Runs the GraphQL `query` inline (`-f query=@file` would send the literal text) in `cwd`, killed after
 /// [`POLL_TIMEOUT`] (a timeout is transient, `reason` `timeout`; tests: `CPD_TEST_DEADLINE_GH`, [`limit`]).
 fn graphql(runner: &dyn Runner, cwd: &Path, query: &str) -> Result<(Vec<String>, Output), CpdError> {
-    let args = vec!["api".to_owned(), "graphql".to_owned(), "-f".to_owned(), format!("query={query}")];
+    graphql_with(runner, cwd, query, &[])
+}
+
+/// [`graphql`] with string variables, each sent as its own `-f name=value` (a body keeps its newlines).
+fn graphql_with(runner: &dyn Runner, cwd: &Path, query: &str, vars: &[(&str, &str)]) -> Result<(Vec<String>, Output), CpdError> {
+    let mut args = vec!["api".to_owned(), "graphql".to_owned(), "-f".to_owned(), format!("query={query}")];
+    for (name, value) in vars {
+        args.push("-f".to_owned());
+        args.push(format!("{name}={value}"));
+    }
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let timeout = limit("DEADLINE_GH", POLL_TIMEOUT);
     match run_timed_with(runner, cwd, &refs, timeout)? {
         Ok(out) => Ok((args, out)),
         Err(k) => Err(killed(&refs, timeout, &k.stderr).with("transient", true).with("reason", "timeout")),
     }
+}
+
+/// The GraphQL node id of the pull request `repo`#`number`.
+pub fn pull_request_id(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) -> Result<String, CpdError> {
+    let (owner, name) = repo_parts(repo)
+        .ok_or_else(|| CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo.")).with("repo", repo))?;
+    let query = format!("query {{ repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ id }} }} }}");
+    posted(runner, cwd, &query, &[], "/repository/pullRequest/id")
+}
+
+/// Replies in the review thread `thread` (never resolves it); the new comment's url.
+pub fn reply_to_thread(runner: &dyn Runner, cwd: &Path, thread: &str, body: &str) -> Result<String, CpdError> {
+    let query = "mutation($thread: ID!, $body: String!) { addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $thread, body: $body}) { comment { id url } } }";
+    posted(runner, cwd, query, &[("thread", thread), ("body", body)], "/addPullRequestReviewThreadReply/comment/url")
+}
+
+/// Comments on the pull request whose node id is `pull`; the new comment's url.
+pub fn reply_to_comment(runner: &dyn Runner, cwd: &Path, pull: &str, body: &str) -> Result<String, CpdError> {
+    let query = "mutation($pull: ID!, $body: String!) { addComment(input: {subjectId: $pull, body: $body}) { commentEdge { node { id url } } } }";
+    posted(runner, cwd, query, &[("pull", pull), ("body", body)], "/addComment/commentEdge/node/url")
+}
+
+/// Runs a call and reads the string at `pointer` of its `data`; any failure is `gh_failed`.
+fn posted(runner: &dyn Runner, cwd: &Path, query: &str, vars: &[(&str, &str)], pointer: &str) -> Result<String, CpdError> {
+    let (args, out) = graphql_with(runner, cwd, query, vars)?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let reply = Reply { args: &refs, out: &out };
+    if out.exit != Some(0) {
+        return Err(reply.fail(format!("gh {} exited {}.", refs[0], out.exit.map_or("with a signal".to_owned(), |c| c.to_string()))));
+    }
+    let (data, errors): (Value, _) = reply.envelope()?;
+    if let Some(first) = errors.first() {
+        return Err(reply.fail(format!("gh api graphql answered with errors: {}", first.message.as_deref().unwrap_or("(no message)"))));
+    }
+    data.pointer(pointer)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| reply.fail(format!("gh api graphql answered without data{pointer}.")))
 }
 
 /// The User's open pull requests (`SEARCH_QUERY`), 15 s at most. A response with
@@ -709,7 +762,7 @@ fn parse_search(reply: &Reply) -> Result<Search, CpdError> {
 }
 
 /// `owner/name` with each part of `[A-Za-z0-9_.-]+`: nothing else reaches a query text.
-fn repo_parts(repo: &str) -> Option<(&str, &str)> {
+pub(super) fn repo_parts(repo: &str) -> Option<(&str, &str)> {
     let part = |p: &str| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
     repo.split_once('/').filter(|(owner, name)| part(owner) && part(name))
 }
@@ -753,6 +806,33 @@ fn lookup_query(prs: &[(String, i64)], viewer: bool) -> Result<String, CpdError>
     }
     query.push_str(" }");
     Ok(query)
+}
+
+/// The comments of the pull requests `(owner/name, number)`, one alias each, in one call, 15 s at most: what
+/// `comments::query` reads, `parse`d with the `bots` logins (contract §7.6 step 3a). Any failure is `gh_failed` with
+/// the poll's `details` (`call` `lookup`). An empty `prs` makes no call.
+pub fn read_comments(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], bots: &[String]) -> Result<Vec<comments::Read>, CpdError> {
+    if prs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let read = || {
+        for (repo, _) in prs {
+            repo_parts(repo).ok_or_else(|| {
+                CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo.")).with("repo", repo.as_str())
+            })?;
+        }
+        let pairs: Vec<(&str, i64)> = prs.iter().map(|(repo, number)| (repo.as_str(), *number)).collect();
+        let (args, out) = graphql(runner, cwd, &comments::query(&pairs))?;
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let reply = Reply { args: &refs, out: &out };
+        if out.exit != Some(0) {
+            let json = serde_json::from_str::<Value>(&out.stdout);
+            let errors = json.as_ref().is_ok_and(|v| v.get("errors").is_some());
+            return Err(reply.fail_unless_transient(format!("gh {} exited {}.", refs[0], out.exit.map_or("with a signal".to_owned(), |c| c.to_string())), errors, json.is_err()));
+        }
+        comments::parse(&pairs, &out.stdout, bots).map_err(|e| reply.fail(e.message().to_owned()))
+    };
+    read().map_err(|e| polled_call("lookup", e))
 }
 
 fn lookup_call(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], viewer: bool) -> Result<Vec<Option<Listed>>, CpdError> {
@@ -818,7 +898,7 @@ mod tests {
     fn pr(repo: &str, number: i64, draft: bool, state: &str, rollup: &str) -> String {
         format!(
             r#"{{"repository":{{"nameWithOwner":"{repo}"}},"number":{number},"url":"https://github.com/{repo}/pull/{number}","title":"T{number}",
-            "isDraft":{draft},"state":"{state}","createdAt":"2026-05-01T10:00:00Z","mergedAt":null,"reviewDecision":"APPROVED",
+            "isDraft":{draft},"state":"{state}","createdAt":"2026-05-01T10:00:00Z","updatedAt":"2026-05-02T10:00:00Z","mergedAt":null,"reviewDecision":"APPROVED",
             "mergeable":"CONFLICTING","mergeStateStatus":"DIRTY",
             "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}"#
         )
@@ -841,10 +921,10 @@ mod tests {
         assert_eq!(
             SEARCH_QUERY,
             "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { \
-             issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt mergedAt \
+             issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt updatedAt mergedAt \
              baseRefName reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
              reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { \
-             issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt mergedAt \
+             issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt updatedAt mergedAt \
              baseRefName reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
              rateLimit { cost remaining resetAt } }"
         );

@@ -365,6 +365,18 @@ pub fn end_opened(
                 text.push_str(&format!(" Pull request #{} of PR {} is open: {}.", pull.number, attempt.pr, pull.url));
             }
             text.push_str(&format!(" Next: {show}"));
+            if attempt.kind == "work" {
+                let open: i64 = tx.query_row(
+                    "SELECT coalesce((SELECT json_array_length(r.feedback) FROM prs p JOIN pull_requests r ON r.id = p.pull_request
+                                       WHERE p.plan = ?1 AND p.key = ?2 AND p.status = 'open'), 0)",
+                    params![plan, attempt.pr.as_str()],
+                    |r| r.get(0),
+                )?;
+                if open > 0 {
+                    let key = attempt.pr.as_str();
+                    text.push_str(&format!(" PR {key} still has {open} open review comments: cpd pr view --pr {key}, then cpd pr reply."));
+                }
+            }
             let pull = pull.map(|p| (attempt.pr.as_str(), p.number, p.url));
             ("merged", None, NewEvent::job_merged(text, sha, &tier, &attempt.kind, turn, cancel_too_late, pull))
         }

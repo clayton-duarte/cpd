@@ -316,7 +316,7 @@ pub(super) fn submit(live: &Live, id: &str) -> Value {
 }
 
 /// A Worker that did nothing: it submits the Lead Branch as it is.
-fn submit_only(live: &Live, id: &str) -> Value {
+pub(super) fn submit_only(live: &Live, id: &str) -> Value {
     submit(live, id)
 }
 

@@ -206,7 +206,7 @@ test("cpd-lead is organised by the CPD flow: Context, Plan and Deploy with their
   assert.deepEqual(flow, [
     "## 1. Context", "### Grounding", "### Clarifying", "### Specifying",
     "## 2. Plan", "### Dividing", "### Sequencing", "### Approving", "### Dispatching",
-    "## 3. Deploy", "### Mechanical checks", "### PR", "### Reviewing and Monitoring", "### Addressing",
+    "## 3. Deploy", "### Mechanical checks", "### PR", "### Reviewing and Monitoring", "### Addressing", "### Review comments",
   ]);
   assert.match(section(text, "### Specifying"), /cpd plan phase plan/);
   assert.match(section(text, "### Dispatching"), /\| `job-merged` \|/, "the Events table stays under Dispatching");
@@ -489,7 +489,7 @@ test("every Event kind of the Lead's Dispatching table is one the adapter delive
 
 test("the skills' list of pr-feedback reasons and of ladder causes is the contract's", () => {
   const reasons = vocabulary().reasons;
-  assert.ok(reasons.size === 3); // a conflict is an update Job, not a reason (hs-d340)
+  assert.ok(reasons.size === 4); // a conflict is an update Job, not a reason (hs-d340)
   const lead = skillFiles("cpd-lead")[0]!.text;
   const stated = /`data\.reasons` lists ((?:`[a-z_]+`(?:, | or )?)+)/.exec(lead);
   assert.ok(stated, "the pr-feedback row lists data.reasons");

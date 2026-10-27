@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use common::fx::{Fx as Kit, exit_code};
-use common::Run;
+use common::{Run, empty_comments};
 use common::refused;
 use cpd_core::clock::Clock;
 use cpd_core::host::runner::Reply;
@@ -272,10 +272,13 @@ impl Fx {
             if call.args.iter().any(|arg| arg.contains("search(type: ISSUE")) {
                 return Reply::ok(EMPTY_SEARCH);
             }
+            if let Some(query) = call.args.iter().find(|arg| arg.contains("reviewThreads")) {
+                return Reply::ok(&empty_comments(query));
+            }
             // E5 polls whatever the phase (§3.7): its search lists nothing, so it looks up a1's pull request.
             let (state, at) = if merged.load(Ordering::SeqCst) { ("MERGED", r#""2026-10-14T10:00:00Z""#) } else { ("OPEN", "null") };
             let node = format!(
-                r#"{{"repository":{{"nameWithOwner":"acme/a1"}},"number":1,"url":"https://github.com/acme/a1/pull/1","title":"T","isDraft":false,"state":"{state}","createdAt":"t","mergedAt":{at},"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{{"nodes":[]}}}}"#
+                r#"{{"repository":{{"nameWithOwner":"acme/a1"}},"number":1,"url":"https://github.com/acme/a1/pull/1","title":"T","isDraft":false,"state":"{state}","createdAt":"t","updatedAt":"U1","mergedAt":{at},"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{{"nodes":[]}}}}"#
             );
             Reply::ok(&format!(r#"{{"data":{{"p0":{{"pullRequest":{node}}}}}}}"#))
         });

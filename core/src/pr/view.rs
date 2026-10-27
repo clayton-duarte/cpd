@@ -54,6 +54,8 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     let inline_comments: Vec<Value> =
         inline.iter().map(|c| json!({"id": c.id.0, "author": login(&c.user), "path": c.path, "body": c.body})).collect();
 
+    let row = pr.pull_request.expect("an open or merged PR has its pull_request row (prs CHECK)");
+    let feedback = env.store.read(|conn| crate::pr::pulls::load(conn, row))?.feedback;
     Ok(Output::success(json!({
         "plan": id,
         "pr": {
@@ -64,5 +66,6 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         "reviews": reviews,
         "comments": comments,
         "inline_comments": inline_comments,
+        "feedback": feedback,
     })))
 }

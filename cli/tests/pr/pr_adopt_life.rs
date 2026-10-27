@@ -284,7 +284,7 @@ fn a_pull_request_merged_on_github_is_found_by_the_head_branch() {
     fx.start().ok();
     fs::write(fx.env.root().join("list.json"), json!([{"number": 7, "url": URL, "state": "MERGED"}]).to_string()).unwrap();
     let node = json!({"repository": {"nameWithOwner": "acme/pay"}, "number": 7, "url": URL, "title": "Polish", "isDraft": false, "state": "MERGED",
-        "createdAt": "opened", "mergedAt": "2026-10-14T10:00:00Z", "reviewDecision": null, "mergeable": "UNKNOWN", "mergeStateStatus": "UNKNOWN",
+        "createdAt": "opened","updatedAt":"U1", "mergedAt": "2026-10-14T10:00:00Z", "reviewDecision": null, "mergeable": "UNKNOWN", "mergeStateStatus": "UNKNOWN",
         "viewerDidAuthor": true, "viewerLatestReviewRequest": null, "commits": {"nodes": [{"commit": {"statusCheckRollup": null}}]}});
     fs::write(fx.env.root().join("lookup.json"), json!({"data": {"p0": {"pullRequest": node}}}).to_string()).unwrap();
     let attempt = fx.submitted("open");

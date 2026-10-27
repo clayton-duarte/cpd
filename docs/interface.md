@@ -72,6 +72,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd pr rebase` | Rebase the Lead Branch onto the base and push; --continue or --abort a rebase stopped at a conflict (§9.3) | Lead | |
 | `cpd pr push` | Gate, then push the Lead Branch as it is, without a rebase (§9.9) | Lead | |
 | `cpd pr view` | Show the PR's checks, reviews and comments (§9.8) | Lead | |
+| `cpd pr reply` | Reply to an open feedback item of the PR's pull request as the User, with the cpd marker; never resolves a thread | Lead | |
 | `cpd pr merge` | Squash-merge a clean pull request on GitHub and delete its branch (§9.10) | | yes |
 | `cpd review` | Plannotator sessions a Session has open (hs-d496) | | |
 | `cpd review open` | Record an open plannotator session | Lead, Manager | |
