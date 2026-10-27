@@ -185,6 +185,34 @@ fn a_stuck_job_is_one_message_to_the_manager_and_opens_no_item() {
     assert_eq!(data(&mut fx, "inbox-opened"), Vec::<Value>::new());
 }
 
+/// pro-d88: a failed Job with a `queued` fix Job of its PR created after it is being worked on, so the Manager hears
+/// nothing while the fix is underway; when the fix is cancelled the next tick sends the one message, once.
+#[test]
+fn a_failed_job_with_a_fix_underway_sends_the_manager_no_nudge_until_the_fix_ends() {
+    let mut fx = fx();
+    fx.fixture("UPDATE sessions SET state = 'idle' WHERE id = 'lead1';");
+    manager(&mut fx);
+    failed_job(&mut fx, "old", 2);
+    fx.fixture(
+        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                           fingerprint, created_txn, created_at)
+         VALUES ('pay', 'repo', 'fix', 'Title', 'S2', 'Goal.', 'Because.', '[\"a\"]', '[\"ok\"]', '[]', 'queued', 1,
+                 hex(zeroblob(32)), cpd_txn(), 't');",
+    );
+    for _ in 0..3 {
+        tick(&mut fx);
+    }
+    assert_eq!(messages(&mut fx), []);
+    assert_eq!(open_items(&mut fx), []);
+
+    fx.fixture("UPDATE jobs SET status = 'cancelled', cancel_reason = 'r', cancel_requested_at = 't' WHERE key = 'fix';");
+    for _ in 0..3 {
+        tick(&mut fx);
+    }
+    assert_eq!(messages(&mut fx), [("mgr1".to_owned(), None, true, stuck_text("old", 2, "crashed"))]);
+    assert_eq!(open_items(&mut fx), []);
+}
+
 /// The record that a Job was told of is the message itself, in the store: a restarted engine sends nothing again.
 #[test]
 fn a_restarted_engine_does_not_tell_the_manager_of_the_same_failure_again() {

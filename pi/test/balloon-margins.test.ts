@@ -1,7 +1,8 @@
 /**
- * Chat balloon margins (docs/contract.md section 6.9, "Chat balloons"; Plan pi-theme): the agent's balloon has
- * no outer margin (the root pad supplies the left cell), the user's the opposite and no outer right margin; the width is
- * min(pane - 4, longest row + 4); text wraps at pane - 8; 1 padding column each side, none above or below.
+ * Chat balloon margins (docs/contract.md section 6.9, "Chat balloons"; Plans pi-theme and chat-margins): the agent's
+ * balloon starts in column 0 (the root pad supplies the left cell) with one blank row above it; the user's ends in the
+ * pane's last column; the agent's width is min(pane - 4, longest row + 4) and its text wraps at pane - 8, the user's
+ * min(pane - 3, longest row + 4) and pane - 7; 1 padding column each side, none above or below.
  */
 import "./compact-tools/indicator-harness.ts";
 import assert from "node:assert/strict";
@@ -23,6 +24,7 @@ const plain = (rows: string[]) => rows.map((row) => row.replace(OSC, "").replace
 test("an agent balloon starts at the padded content edge and leaves at least three columns on its right", async () => {
 	const out = plain(await draw(["agent reply"], "agent", 40));
 	assert.deepEqual(out, [
+		"",
 		"╭─────────────╮",
 		"│ agent reply │",
 		"│╭────────────╯",
@@ -30,12 +32,12 @@ test("an agent balloon starts at the padded content edge and leaves at least thr
 	]);
 	const wide = plain(await draw(["x".repeat(60)], "agent", 20));
 	for (const row of wide) assert.ok(row.length <= 16, `three margin columns on the right: ${JSON.stringify(row)}`);
-	assert.ok(wide[0]!.startsWith("╭"));
+	assert.ok(wide[1]!.startsWith("╭"));
 });
 
 test("a user balloon has no outer right margin and at least three columns on its left", async () => {
 	const out = plain(await draw(["user prompt"], "user", 40));
-	const pad = " ".repeat(24);
+	const pad = " ".repeat(25);
 	assert.deepEqual(out, [
 		pad + "╭─────────────╮",
 		pad + "│ user prompt │",
@@ -44,27 +46,29 @@ test("a user balloon has no outer right margin and at least three columns on its
 	]);
 	const wide = plain(await draw(["x".repeat(60)], "user", 20));
 	for (const row of wide) {
-		assert.equal(row.length, 19, JSON.stringify(row));
+		assert.equal(row.length, 20, JSON.stringify(row));
 		assert.ok(row.startsWith("   "), `three margin columns on the left: ${JSON.stringify(row)}`);
 		assert.ok(!row.endsWith(" "), `no outer right margin: ${JSON.stringify(row)}`);
 	}
 });
 
-test("a balloon spans its text up to the pane width minus four", async () => {
+test("a balloon spans its text up to the pane width minus its far gap (four for the agent, three for the user)", async () => {
+	const top = (rows: string[]) => rows.find((row) => row.trim() !== "")!.trim();
 	for (const side of ["user", "agent"] as const) {
+		const gap = side === "user" ? 3 : 4;
 		const short = plain(await draw(["hello"], side, 60));
-		assert.equal(short[0]!.trim().length, 9, `${side}: longest row 5 + 4`);
+		assert.equal(top(short).length, 9, `${side}: longest row 5 + 4`);
 		for (const width of [12, 20, 30]) {
-			const out = plain(await draw(["x".repeat(width - 8)], side, width));
-			assert.equal(out[0]!.trim().length, width - 4, `${side} ${width}: fills pane minus four`);
+			const out = plain(await draw(["x".repeat(width - gap - 4)], side, width));
+			assert.equal(top(out).length, width - gap, `${side} ${width}: fills pane minus ${gap}`);
 			const over = plain(await draw(["x".repeat(width)], side, width));
-			assert.equal(over[0]!.trim().length, width - 4, `${side} ${width}: never wider than pane minus four`);
+			assert.equal(top(over).length, width - gap, `${side} ${width}: never wider than pane minus ${gap}`);
 		}
 	}
 });
 
-test("text wraps at the pane width minus eight", async () => {
-	const harness = await loadExtension({}, { tui: true });
+test("text wraps at the pane width minus eight (the agent) or minus seven (the user)", async () => {
+	const harness = await loadExtension({ style: "compact", fold: "toggle" }, { tui: true, defaults: true });
 	try {
 		const text = "alpha beta gamma delta epsilon zeta";
 		const width = 20;
@@ -72,14 +76,14 @@ test("text wraps at the pane width minus eight", async () => {
 			new AssistantMessageComponent({ role: "assistant", content: [{ type: "text", text }], stopReason: "stop" } as never).render(width),
 		);
 		const user = plain(new UserMessageComponent(text).render(width));
-		for (const rows of [agent, user]) {
+		for (const [rows, limit] of [[agent, width - 8], [user, width - 7]] as const) {
 			const body = rows.filter((row) => row.includes("│ ") && /[a-z]/.test(row));
 			assert.ok(body.length >= 3, rows.join("\n"));
 			for (const row of body) {
 				const inner = row.slice(row.indexOf("│") + 2, row.lastIndexOf("│") - 1).trimEnd();
-				assert.ok(inner.length <= width - 8, `${JSON.stringify(inner)} is at most ${width - 8} columns`);
+				assert.ok(inner.length <= limit, `${JSON.stringify(inner)} is at most ${limit} columns`);
 			}
-			assert.ok(body.some((row) => row.includes("alpha beta")), "words fill the 12 columns");
+			assert.ok(body.some((row) => row.includes("alpha beta")), "words fill the columns");
 		}
 	} finally {
 		shutdown(harness);
@@ -88,10 +92,13 @@ test("text wraps at the pane width minus eight", async () => {
 
 test("a balloon has one padding column on each side and none above or below", async () => {
 	for (const side of ["user", "agent"] as const) {
-		const out = plain(await draw(["ab", "abcd"], side, 40)).map((row) => row.trim());
+		const drawn = plain(await draw(["ab", "abcd"], side, 40)).map((row) => row.trim());
+		// The agent's balloon is preceded by its one blank top-margin row; the balloon itself has none inside.
+		if (side === "agent") assert.equal(drawn[0], "", "agent: one blank row of top margin");
+		const out = side === "agent" ? drawn.slice(1) : drawn;
 		assert.deepEqual(out.slice(0, 3), ["╭──────╮", "│ ab   │", "│ abcd │"], side);
 		assert.equal(out.length, 5, `${side}: top, two text rows, two tail rows`);
-		assert.ok(out.every((row) => row !== ""), `${side}: no blank row`);
+		assert.ok(out.every((row) => row !== ""), `${side}: no blank row in the balloon`);
 		assert.ok(!out.some((row) => /^│\s+│$/.test(row)), `${side}: no blank inner row`);
 	}
 });
@@ -113,18 +120,18 @@ test("the agent's tail starts directly under the last text row", async () => {
 	assert.equal(out.length, last + 3);
 });
 
-test("no blank row sits above or below a balloon in pi's components", async () => {
-	const harness = await loadExtension({}, { tui: true });
+test("no blank row sits below a balloon, nor above the user's, in pi's components", async () => {
+	const harness = await loadExtension({ style: "compact", fold: "toggle" }, { tui: true, defaults: true });
 	try {
 		const user = plain(new UserMessageComponent("user prompt").render(40));
 		assert.equal(user.length, 4, user.join("\n"));
 		assert.ok(user[0]!.includes("╭") && user.at(-1)!.includes("╰╯"), user.join("\n"));
-		assert.equal(user[0]![24], "╭");
+		assert.equal(user[0]![25], "╭");
 		assert.ok(user.every((row) => row.trim() !== ""), "no blank row in the user balloon");
 		const agent = plain(
 			new AssistantMessageComponent({ role: "assistant", content: [{ type: "text", text: "agent reply" }], stopReason: "stop" } as never).render(40),
 		);
-		assert.deepEqual(agent, ["╭─────────────╮", "│ agent reply │", "│╭────────────╯", "╰╯"]);
+		assert.deepEqual(agent, ["", "╭─────────────╮", "│ agent reply │", "│╭────────────╯", "╰╯"]);
 	} finally {
 		shutdown(harness);
 	}

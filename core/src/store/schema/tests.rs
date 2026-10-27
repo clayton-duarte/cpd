@@ -1758,6 +1758,12 @@ fn converts_keeping_every_row_and_id(n: usize) {
     assert_eq!(violations, 0, "version {n}: foreign_key_check");
     for (table, ids) in &ids_before {
         let after = rowids(&conn, table);
+        if table == "tier_catalog" {
+            // Migration `20261030T1100-tier-catalog-source` rebuilds tier_catalog EMPTY: it is a cache, recomputed by the next
+            // `cpd tiers`, so it is the one table conversion does not keep.
+            assert!(after.is_empty(), "version {n}: tier_catalog is empty after conversion (a cache, rebuilt by tier-catalog-source)");
+            continue;
+        }
         assert!(ids.iter().all(|id| after.contains(id)), "version {n}: {table} lost a row id");
     }
     let recorded: Vec<(String, String, i64, i64)> = conn
@@ -1820,6 +1826,9 @@ fn converts_keeping_every_row_and_id(n: usize) {
         assert_eq!(rows_after.remove("incident"), Some(Vec::new()));
         // `incident-plans` made another, and it is empty too.
         assert_eq!(rows_after.remove("incident_plans"), Some(Vec::new()));
+        // `tier-catalog-source` rebuilds tier_catalog EMPTY (a cache, recomputed by the next `cpd tiers`): the one table conversion drops.
+        assert_eq!(rows_after.remove("tier_catalog"), Some(Vec::new()));
+        assert!(rows_before.remove("tier_catalog").is_some_and(|r| !r.is_empty()), "the legacy tier_catalog row was seeded");
         let (history_before, history_after) = (rows_before.remove("history").unwrap(), rows_after.remove("history").unwrap());
         assert_eq!(history_after[..history_before.len()], history_before[..]);
         assert!(history_after[history_before.len()..].iter().all(|r| r.contains("\"update\"")), "{history_after:?}");
@@ -2987,7 +2996,7 @@ fn job_kinds_keeps_every_job_and_pr_as_work_and_free_and_matches_a_fresh_store()
     assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-job-kinds")));
     assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
 
-    // Every Job is `work` with the other columns null and every PR is `free`: the rows are as they were, plus those.
+    // Every Job is `work` with the other columns null (`resources` of `job-resources` too) and every PR is `free`: the rows are as they were, plus those.
     let after = dump(&connection(&home.db()));
     let strip = |rows: &[String], added: usize, default: &str| -> Vec<String> {
         rows.iter()
@@ -3000,7 +3009,7 @@ fn job_kinds_keeps_every_job_and_pr_as_work_and_free_and_matches_a_fresh_store()
             })
             .collect()
     };
-    assert_eq!(strip(&after["jobs"], 4, "work"), before["jobs"]);
+    assert_eq!(strip(&after["jobs"], 5, "work"), before["jobs"]);
     assert_eq!(strip(&after["prs"], 2, "free"), before["prs"]);
     assert_eq!(count(&mut store, "SELECT count(*) FROM jobs WHERE status = 'merged'"), 1);
 
@@ -3125,8 +3134,21 @@ fn kind_tests_and_test_files_are_locked_with_the_job_and_test_approved_is_not() 
     for key in ["impl-draft", "test-draft"] {
         write(&mut store, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = '{key}'")).unwrap();
     }
-    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET tests = '[\"a\"]' WHERE key = 'test-draft'")), "job_locked");
-    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET test_files = '[\"a\"]' WHERE key = 'test-draft'")), "job_locked");
+    // `tests` and `test_files` are Spec columns: they change while the queued Job has no Attempt, and are Locked once it has one.
+    write(&mut store, "UPDATE jobs SET tests = '[\"a\"]' WHERE key = 'test-draft'").unwrap();
+    write(&mut store, "UPDATE jobs SET test_files = '[\"a\"]' WHERE key = 'test-draft'").unwrap();
+    write(
+        &mut store,
+        "UPDATE jobs SET status = 'running' WHERE key = 'test-draft';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+           VALUES ('pl', 'test-draft-a1', 'test-draft', 1, 'S2', 'ladder', 'running', 'cpd/pl--test-draft-a1', '/w', 't');
+         UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'test-draft-a1';
+         UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'test-draft';
+         UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE key = 'test-draft';",
+    )
+    .unwrap();
+    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET tests = '[\"b\"]' WHERE key = 'test-draft'")), "job_locked");
+    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET test_files = '[\"b\"]' WHERE key = 'test-draft'")), "job_locked");
     // `test_approved` changes after the lock: that is what `job approve-tests` does.
     write(&mut store, "UPDATE jobs SET test_approved = '[\"tests/t.rs\"]' WHERE key = 'impl-draft'").unwrap();
     assert_eq!(rows(&mut store, "SELECT test_approved FROM jobs WHERE key = 'impl-draft'"), vec![serde_json::json!(["[\"tests/t.rs\"]"])]);

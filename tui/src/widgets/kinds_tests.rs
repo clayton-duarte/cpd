@@ -48,3 +48,8 @@ fn a_session_state_event_makes_the_dispatch_follow_report_a_change() {
         .unwrap();
     assert!(follow.poll_changes(&mut store).unwrap().any(), "a session-state Event must make the Dispatch follow report a change");
 }
+
+#[test]
+fn the_dispatch_kinds_include_inbox_claimed() {
+    assert!(KINDS.contains(&Kind::InboxClaimed), "KINDS lacks Kind::InboxClaimed");
+}

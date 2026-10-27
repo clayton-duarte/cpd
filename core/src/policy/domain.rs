@@ -175,6 +175,44 @@ impl HasText for Protected {
     }
 }
 
+/// The `resources` domain (repo scope only, no `text`): the declared exclusive resource names, sorted.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Resources {
+    pub names: Vec<String>,
+}
+
+impl HasText for Resources {
+    fn text(&self) -> &str {
+        ""
+    }
+}
+
+/// A resource name: `^[a-z][a-z0-9-]{0,31}$`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ResourceName(String);
+
+impl<'de> Deserialize<'de> for ResourceName {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(d)?;
+        let mut chars = name.chars();
+        let ok = chars.next().is_some_and(|c| c.is_ascii_lowercase())
+            && name.len() <= 32
+            && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if ok { Ok(ResourceName(name)) } else { Err(serde::de::Error::custom(format!("`{name}` is not a resource name (^[a-z][a-z0-9-]{{0,31}}$)"))) }
+    }
+}
+
+/// One declared resource: an empty table.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceDecl {}
+
+/// What a scope file's `[resources]` table sets: one empty table per resource name.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct ResourcesSet(pub std::collections::BTreeMap<ResourceName, ResourceDecl>);
+
 /// What a scope file's `[hooks]` table sets. It is not read from a value (`toml::Table` sorts keys, and a
 /// block's commands keep file order): the loader reads it from the file text (`load::parse_scope`).
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -358,6 +396,18 @@ impl Set for ProtectedSet {
     }
 }
 
+impl Set for ResourcesSet {
+    type Value = Resources;
+
+    fn fill(&self, _base: &Resources) -> (Resources, Vec<&'static str>) {
+        (Resources { names: self.0.keys().map(|n| n.0.clone()).collect() }, Vec::new())
+    }
+
+    fn complete(&self) -> Option<Resources> {
+        Some(Resources { names: self.0.keys().map(|n| n.0.clone()).collect() })
+    }
+}
+
 /// Where a domain's value came from (contract §8.3 "Model").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Source {
@@ -538,6 +588,7 @@ domains! {
     hooks, Hooks, [], [Repo], Hooks, HooksSet;
     test_commands = "test-commands", TestCommands, [], [Repo], Option<RepoTests>, TestCommandsSet;
     protected, Protected, [], [Repo], Protected, ProtectedSet;
+    resources, Resources, [], [Repo], Resources, ResourcesSet;
 }
 
 impl Sources {

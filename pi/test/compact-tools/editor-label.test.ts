@@ -1,6 +1,6 @@
 /**
  * The working label in the editor's top border: `╭─[<frame> <words>]──…╮` with the loader inside the pill
- * (contract 6.1.1, 6.9; hs-d475, hs-d478). Only the top border row is asserted; the margin columns are stripped.
+ * (contract 6.1.1, 6.9; hs-d475, hs-d478). Only the top border row is asserted; the box has no margin column.
  */
 import "./pinned-themes.ts";
 import assert from "node:assert/strict";
@@ -19,7 +19,7 @@ const LOADER = MOON_FRAMES;
 const LEFT_CAP = "\ue0b6";
 const RIGHT_CAP = "\ue0b4";
 const strip = (value: string) => value.replace(/\x1b\[[0-9;]*m/gu, "");
-/** The pane width the editor renders in, and the box width after the two margin columns. */
+/** The pane width the editor renders in; the box spans it. */
 const PANE = 60;
 
 type Handler = (event: unknown) => void;
@@ -48,8 +48,8 @@ function working(label: (start: Handler) => void = (start) => start({})) {
 	editor.setWorkingStatusIndicator(status);
 	return {
 		editor,
-		/** The top border as drawn, with the margin columns removed. */
-		row: (pane = PANE) => editor.render(pane)[0]!.replace(/^ /u, "").replace(/ $/u, ""),
+		/** The top border as drawn. */
+		row: (pane = PANE) => editor.render(pane)[0]!,
 		dispose: () => { status.dispose(); controller.dispose(); },
 	};
 }
@@ -59,7 +59,7 @@ test("while working the top border is a corner, one line cell, the pill, then li
 	try {
 		const row = strip(w.row());
 		assert.match(row, new RegExp(`^╭─${LEFT_CAP}.+${RIGHT_CAP}─+╮$`, "u"));
-		assert.equal(visibleWidth(row), PANE - 2);
+		assert.equal(visibleWidth(row), PANE);
 	} finally { w.dispose(); }
 });
 
@@ -120,12 +120,12 @@ test("a narrow pane truncates the words with … inside the pill and keeps the c
 	try {
 		const row = strip(w.row(24));
 		assert.ok(row.endsWith("╮"), "the corner stays");
-		assert.equal(visibleWidth(row), 22);
+		assert.equal(visibleWidth(row), 24);
 		const body = row.slice(row.indexOf(LEFT_CAP) + 1, row.indexOf(RIGHT_CAP));
 		assert.match(body, /^[\u{e3c8}-\u{e3e3}\u{f0000}-\u{fffff}] Thinking…$/u, "this pane still fits the short label");
 		const narrow = strip(w.row(14));
 		assert.ok(narrow.endsWith("╮"), "the corner stays when narrow");
-		assert.equal(visibleWidth(narrow), 12);
+		assert.equal(visibleWidth(narrow), 14);
 		const inside = narrow.slice(narrow.indexOf(LEFT_CAP) + 1, narrow.indexOf(RIGHT_CAP));
 		assert.ok(inside.endsWith("…") && !inside.includes("Thinking…"), `the words are cut with …, got ${JSON.stringify(inside)}`);
 		assert.ok(inside.includes("Thi"), "the start of the words stays");
@@ -135,16 +135,16 @@ test("a narrow pane truncates the words with … inside the pill and keeps the c
 test("an idle editor's top border is plain", () => {
 	const ui = { requestRender: () => {}, terminal: { rows: 40, columns: PANE } };
 	const editor = new CustomEditor(ui as never, { borderColor: (text: string) => text } as never, { matches: () => false } as never, { embedWorkingStatus: true } as never);
-	const row = strip(editor.render(PANE)[0]!).replace(/^ /u, "").replace(/ $/u, "");
-	assert.equal(row, `╭${"─".repeat(PANE - 4)}╮`);
+	const row = strip(editor.render(PANE)[0]!);
+	assert.equal(row, `╭${"─".repeat(PANE - 2)}╮`);
 });
 
-test("the left cap is the fourth cell of the row: margin, corner, one line cell, cap", () => {
+test("the left cap is the third cell of the row: corner, one line cell, cap", () => {
 	const w = working();
 	try {
 		const row = strip(w.editor.render(PANE)[0]!);
 		assert.equal(visibleWidth(row), PANE);
-		assert.ok(row.startsWith(` ╭─${LEFT_CAP}`), `got ${JSON.stringify(row)}`);
-		assert.equal([...row].indexOf(LEFT_CAP), 3, "three cells sit between the container's limit and the cap");
+		assert.ok(row.startsWith(`╭─${LEFT_CAP}`), `got ${JSON.stringify(row)}`);
+		assert.equal([...row].indexOf(LEFT_CAP), 2, "two cells sit between the container's limit and the cap");
 	} finally { w.dispose(); }
 });

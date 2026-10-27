@@ -180,6 +180,18 @@ fn click_on(screen: &[String], label: &str) -> Signal {
     common::inbox::click(10, row_of(screen, label))
 }
 
+/// A left click on the tier glyph of the item `label`'s row (the first cell after the rail `│ `): the jump.
+fn click_glyph_of(screen: &[String], label: &str) -> Signal {
+    common::inbox::click(3, row_of(screen, label))
+}
+
+/// A left click on the link cue of the item `label`'s row.
+fn click_cue_of(screen: &[String], label: &str) -> Signal {
+    let row = &screen[usize::from(row_of(screen, label))];
+    let at = row.chars().position(|c| c.to_string() == cpd_tui::link::CUE).expect("the cue on the row");
+    common::inbox::click(u16::try_from(at).unwrap(), row_of(screen, label))
+}
+
 /// Runs the view on `signals` (after a first commit) with the fake `cpd` answering `{"ok":true}` to what nobody scripted.
 fn run(fx: &Fx, signals: Vec<Signal>) -> Vec<Screen> {
     RAN.with(|ran| ran.borrow_mut().clear());
@@ -250,7 +262,7 @@ fn a_click_on_a_plan_review_item_opens_its_lead_and_copies_the_review_page() {
     let _engine = engine(&fx);
     let chat = cockpit(&fx);
     let screen = first_rows(&fx);
-    run(&fx, vec![click_on(&screen, "ship plan review")]);
+    run(&fx, vec![click_glyph_of(&screen, "ship plan review")]);
     assert_eq!(cpd_calls(&fx), [words(&["session", "open", "l-ship"])], "the Lead of the item's Plan is opened");
     assert_eq!(focused(&fx), [chat]);
     assert_eq!(copies(&fx), [REVIEW]);
@@ -264,7 +276,7 @@ fn a_plan_review_item_whose_lead_cannot_open_copies_nothing_and_shows_a_text_dia
     cockpit(&fx);
     says(&fx, &["session", "open"], Says::Refused(ErrorCode::NoCockpit, "No cockpit."));
     let screen = first_rows(&fx);
-    run(&fx, vec![click_on(&screen, "ship plan review")]);
+    run(&fx, vec![click_glyph_of(&screen, "ship plan review")]);
     assert_eq!(cpd_calls(&fx), [words(&["session", "open", "l-ship"])]);
     assert_eq!(copies(&fx), Vec::<String>::new(), "the page is not copied when its Lead did not open");
     let commands = commands(&fx);
@@ -296,7 +308,7 @@ fn a_click_on_a_review_requested_item_copies_its_url() {
     let _engine = engine(&fx);
     cockpit(&fx);
     let screen = first_rows(&fx);
-    run(&fx, vec![click_on(&screen, "acme/web#5 review requested")]);
+    run(&fx, vec![click_glyph_of(&screen, "acme/web#5 review requested")]);
     assert_eq!(copies(&fx), [url]);
     assert_eq!(cpd_calls(&fx), Vec::<Vec<String>>::new(), "a copy runs no command");
     assert!(popups(&fx).is_empty(), "{:?}", popups(&fx));
@@ -311,7 +323,7 @@ fn a_click_on_a_pr_ready_item_opens_the_merge_popup() {
     let _engine = engine(&fx);
     cockpit(&fx);
     let screen = first_rows(&fx);
-    run(&fx, vec![click_on(&screen, "acme/api#3 ready")]);
+    run(&fx, vec![click_glyph_of(&screen, "acme/api#3 ready")]);
     let popups = popups(&fx);
     let [popup] = &popups[..] else { panic!("{popups:?}") };
     assert_eq!(popup.last().unwrap(), &format!("cpd tui view merge 'acme/api#3' --client '{CLIENT}'"), "{popup:?}");
@@ -480,4 +492,105 @@ fn a_refused_snooze_shows_the_failure_dialog_and_esc_closes_the_menu() {
     let [dialog] = &commands[..] else { panic!("{commands:?}") };
     assert!(dialog.starts_with("cpd tui view dialog text --title="), "a text dialog: {dialog}");
     assert!(dialog.ends_with("--body='item_closed: Item 2 is closed.'"), "the body is why: {dialog}");
+}
+
+#[test]
+fn a_click_on_the_label_or_the_cue_of_a_link_kind_item_runs_open_with_its_url_and_no_jump() {
+    let items = [
+        (plan_review(), "ship plan review", REVIEW),
+        (
+            Condition {
+                plan: None,
+                context: None,
+                ..linked(Kind::ReviewRequested, Urgency::Yellow, "pr:acme/web#5", "acme/web#5 review requested", None, Some("https://x.io/review"))
+            },
+            "acme/web#5 review requested",
+            "https://x.io/review",
+        ),
+        (
+            Condition { plan: None, ..linked(Kind::PrReady, Urgency::White, "pr:acme/api#3", "acme/api#3 ready", None, Some("https://x.io/ready")) },
+            "acme/api#3 ready",
+            "https://x.io/ready",
+        ),
+    ];
+    for (item, label, url) in items {
+        let fx = rig(vec![item]);
+        let _engine = engine(&fx);
+        cockpit(&fx);
+        fx.fake("open", Reply::ok(""));
+        let screen = first_rows(&fx);
+        for click in [click_on(&screen, label), click_cue_of(&screen, label)] {
+            let before = fx.calls("open").len();
+            run(&fx, vec![click]);
+            let opened: Vec<_> = fx.calls("open").into_iter().skip(before).map(|c| c.args).collect();
+            assert_eq!(opened, [[url]], "one `open` with the url of {label}");
+        }
+        assert_eq!(cpd_calls(&fx), Vec::<Vec<String>>::new(), "no jump for {label}");
+        assert_eq!(copies(&fx), Vec::<String>::new(), "no copy for {label}");
+        assert!(popups(&fx).is_empty(), "{:?}", popups(&fx));
+    }
+}
+
+fn review_requested() -> Condition {
+    Condition {
+        plan: None,
+        context: None,
+        ..linked(Kind::ReviewRequested, Urgency::Yellow, "pr:acme/web#5", "acme/web#5 review requested", None, Some("https://x.io/review"))
+    }
+}
+
+const CLAIM_ENTRIES: [&str; 5] = ["Claim", "Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00", "Dismiss"];
+
+#[test]
+fn a_right_click_on_a_review_requested_item_opens_claim_first_and_no_other_item_has_claim() {
+    let fx = rig(vec![review_requested()]);
+    let _engine = engine(&fx);
+    cockpit(&fx);
+    let screen = first_rows(&fx);
+    let frames = run(&fx, pick(&screen, "acme/web#5 review requested", 0).into_iter().take(1).collect());
+    frame_with(&frames, 0, "the review-requested item's menu", |r| menu_labels(r) == CLAIM_ENTRIES);
+    drop(_engine);
+    drop(fx);
+
+    let fx = rig(four());
+    let _engine = engine(&fx);
+    cockpit(&fx);
+    let screen = first_rows(&fx);
+    let frames = run(&fx, pick(&screen, "l-rel label", 0).into_iter().take(1).collect());
+    frame_with(&frames, 0, "the menu of another kind without Claim", |r| menu_labels(r) == ENTRIES);
+}
+
+#[test]
+fn choosing_claim_runs_inbox_claim_with_the_items_id() {
+    let fx = rig(vec![review_requested()]);
+    let _engine = engine(&fx);
+    cockpit(&fx);
+    let screen = first_rows(&fx);
+    let frames = run(&fx, pick(&screen, "acme/web#5 review requested", 0));
+    let open = frame_with(&frames, 0, "the item's menu", |r| menu_labels(r) == CLAIM_ENTRIES);
+    frame_with(&frames, open, "the menu closed", the_menu_is_closed);
+    assert_eq!(cpd_calls(&fx), [words(&["inbox", "claim", "1"])]);
+    assert!(popups(&fx).is_empty(), "{:?}", popups(&fx));
+}
+
+#[test]
+fn a_refused_claim_shows_the_failure_dialog_and_esc_closes_the_menu() {
+    let fx = rig(vec![review_requested()]);
+    let _engine = engine(&fx);
+    cockpit(&fx);
+    says(&fx, &["inbox", "claim"], Says::Refused(ErrorCode::ItemClosed, "Item 1 is closed."));
+    let screen = first_rows(&fx);
+    let label = "acme/web#5 review requested";
+    let mut signals = pick(&screen, label, 0);
+    signals.extend([Signal::Input(right_click(10, row_of(&screen, label))), common::inbox::press(KeyCode::Esc)]);
+    let frames = run(&fx, signals);
+    let first = frame_with(&frames, 0, "the menu", |r| menu_labels(r) == CLAIM_ENTRIES);
+    let closed = frame_with(&frames, first, "the menu closed by Claim", the_menu_is_closed);
+    let again = frame_with(&frames, closed, "the menu again", |r| menu_labels(r) == CLAIM_ENTRIES);
+    frame_with(&frames, again, "the menu closed by Esc", the_menu_is_closed);
+    assert_eq!(cpd_calls(&fx), [words(&["inbox", "claim", "1"])], "Esc runs nothing");
+    let commands = commands(&fx);
+    let [dialog] = &commands[..] else { panic!("{commands:?}") };
+    assert!(dialog.starts_with("cpd tui view dialog text --title="), "a text dialog: {dialog}");
+    assert!(dialog.ends_with("--body='item_closed: Item 1 is closed.'"), "the body is why: {dialog}");
 }

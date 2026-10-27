@@ -2,7 +2,7 @@
 //! boundary: a value the schema forbids is `store_failed`, never defaulted),
 //! Job counts, PR state, Sessions and Plan heads.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use clap::ValueEnum;
 use rusqlite::{Connection, ToSql};
@@ -10,6 +10,7 @@ use rusqlite::{Connection, ToSql};
 use cpd_core::attempt::ledger::Stored;
 use cpd_core::config::Tier;
 use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::job::worked_on::failed_worked_on;
 use cpd_core::ids::{AttemptId, ContextId, PlanId, SessionId};
 use cpd_core::plan::Phase;
 use cpd_core::session::{Role, State};
@@ -326,6 +327,8 @@ pub struct PlanHead {
     pub done_at: Option<String>,
     /// When it was archived (contract §4.5); archived Plans are in the model.
     pub archived_at: Option<String>,
+    /// The Plan has a failed Job being worked on (pro-d88): its Lead's dot is the red loader.
+    pub fixing: bool,
 }
 
 impl PlanHead {
@@ -336,6 +339,7 @@ impl PlanHead {
 
 /// The Plans of `only` (all of them when `None`), oldest first, with their counts: four queries, whatever the number of Plans.
 pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec<PlanHead>, CpdError> {
+    let only_plan = only;
     let only = only.map(|p| p.as_str().to_owned());
 
     let mut counts: BTreeMap<String, JobCounts> = BTreeMap::new();
@@ -362,6 +366,8 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
             JobStatus::Cancelled => c.cancelled += n,
         }
     }
+
+    let fixing: BTreeSet<PlanId> = failed_worked_on(conn, only_plan)?.into_iter().map(|(plan, _)| plan).collect();
 
     let mut open: BTreeMap<String, usize> = BTreeMap::new();
     let mut stmt = conn.prepare(
@@ -423,6 +429,7 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
             all_merged_at: r.get(13)?,
             done_at: r.get(14)?,
             archived_at: r.get(15)?,
+            fixing: fixing.contains(&plan),
             phase,
             pr,
             id: plan,

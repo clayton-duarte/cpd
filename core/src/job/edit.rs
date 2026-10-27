@@ -13,6 +13,7 @@ use super::{
     plan_phase, sorted_needs,
 };
 use crate::error::{CpdError, ErrorCode};
+use crate::home::CpdHome;
 use crate::events::{NewEvent, append};
 use crate::ids::{JobKey, PlanId};
 use crate::output::Output;
@@ -29,6 +30,8 @@ struct Edits {
     pr: Option<String>,
     needs: Option<Vec<String>>,
     kind: Option<String>,
+    /// `CPD_ATTEMPT` is set: a Worker's pane, not the Lead's.
+    worker: bool,
 }
 
 enum Decision {
@@ -66,17 +69,20 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
         pr: args.pr.map(|p| p.as_str().to_owned()),
         needs,
         kind: args.kind,
+        worker: std::env::var("CPD_ATTEMPT").is_ok_and(|v| !v.is_empty()),
     };
     let key = args.key;
 
-    let decision = env.store.read(|conn| decide(conn, &plan, &key, &edits))?;
+    let home = env.home.clone();
+    let decision = env.store.read(|conn| decide(conn, &home, &plan, &key, &edits))?;
     let (job, fields, already) = match decision {
         Decision::Already(job) => (job, Vec::new(), true),
-        Decision::Update { .. } => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, &edits)? {
+        Decision::Update { .. } => env.store.write(COMMAND, |tx| match decide(tx, &home, &plan, &key, &edits)? {
             Decision::Already(job) => Ok((job, Vec::new(), true)),
             Decision::Update { before, after, fields } => {
                 update(tx, &plan, &before, &after)?;
-                let text = format!("Job {key} of Plan {plan} edited ({}). Next: cpd plan render --plan {plan}", fields.join(", "));
+                let state = if before.is_draft() { "" } else { " (queued, Locked)" };
+                let text = format!("Job {key} of Plan {plan}{state} edited ({}). Next: cpd plan render --plan {plan}", fields.join(", "));
                 append(tx, NewEvent::job_edited(text, &fields).plan(plan.clone()).job(key.clone()))?;
                 Ok((after, fields, false))
             }
@@ -89,11 +95,12 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     Ok(Output::success(out))
 }
 
-fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Result<Decision, CpdError> {
+fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits: &Edits) -> Result<Decision, CpdError> {
     plan_phase(conn, plan)?;
     let all = jobs::load(conn, plan)?;
     let before = find(&all, plan, key)?;
-    if matches!(before.kind.as_str(), "open" | "update") {
+    // open and update Jobs are cpd's, a draft one included.
+    if before.is_draft() && matches!(before.kind.as_str(), "open" | "update") {
         return Err(CpdError::new(
             ErrorCode::JobLocked,
             format!("Job {key} is an {} Job: its Spec is cpd's, and cannot be edited.", before.kind),
@@ -102,14 +109,28 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
         .with("job", key.as_str())
         .with("status", before.status.as_str()));
     }
-    if !before.is_draft() {
-        return Err(CpdError::new(
-            ErrorCode::JobLocked,
-            format!("Job {key} is {}: only a draft Job can be edited.", before.status),
-        )
-        .with("plan", plan.as_str())
-        .with("job", key.as_str())
-        .with("status", before.status.as_str()));
+    let locked = !before.is_draft();
+    if locked && edits.worker {
+        return Err(CpdError::new(ErrorCode::NotALead, "Only the Lead edits a Locked Job: ask it with cpd ask."));
+    }
+    if locked {
+        let attempts: i64 = conn.query_row("SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
+        let editable = before.status == "queued" && !matches!(before.kind.as_str(), "open" | "update") && attempts == 0;
+        let spec_only = edits.title.is_none() && edits.tier.is_none() && edits.pr.is_none() && edits.kind.is_none() && edits.needs.is_none();
+        if !editable || !spec_only {
+            let why = if editable {
+                "only its Spec (--spec) can change; title, Tier, PR, kind and Dependencies are Locked".to_owned()
+            } else if matches!(before.kind.as_str(), "open" | "update") {
+                format!("it is an {} Job: its Spec is cpd's, and cannot be edited", before.kind)
+            } else {
+                format!("it is {} with {attempts} Attempt(s): only a queued Job with no Attempt can be edited; retry it, or cancel it and append a replacement", before.status)
+            };
+            return Err(CpdError::new(ErrorCode::JobLocked, format!("Job {key} is Locked: {why}."))
+                .with("plan", plan.as_str())
+                .with("job", key.as_str())
+                .with("status", before.status.as_str())
+                .with("attempts", attempts));
+        }
     }
     let mut after = before.clone();
     if let Some(title) = &edits.title {
@@ -123,12 +144,14 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
     }
     if let Some(spec) = &edits.spec {
         spec.check_kind(&after.kind)?;
+        spec.check_resources_allowed(after.review)?;
         // The Spec names no primary checkout of a PR of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
         spec.check_primary_roots(&super::add::primary_roots(&load_prs(conn, plan)?), &std::env::home_dir().unwrap_or_default())?;
         spec.check_files_relative()?;
         after.spec = Some(spec.stored());
         after.tests = spec.tests.as_ref().map(|t| json!(t));
         after.test_files = spec.test_files.as_ref().map(|t| json!(t));
+        after.resources = spec.resources.as_ref().map(|t| json!(t));
     }
     // The Spec fits the kind (§5.2): a `test` Job with a Spec has `tests` and `test_files`, every other kind neither.
     if edits.kind.is_some() && after.kind != before.kind {
@@ -158,8 +181,19 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
     if let Some(spec) = &edits.spec {
         let prs = load_prs(conn, plan)?;
         if let Some(pr) = prs.iter().find(|p| p.key.as_str() == after.pr) {
-            super::add::check_touches(pr, &spec.touches)?;
+            // A Lead Branch that is not in the repo (yet) is no tree to read: the Job starts from the PR's base.
+            let mut pr = pr.clone();
+            let lead_exists = crate::git::run::run(std::path::Path::new(&pr.repo), &["rev-parse", "--verify", "--quiet", &format!("{}^{{commit}}", pr.lead_branch)])
+                .is_ok_and(|o| o.code == 0);
+            if locked && !lead_exists {
+                pr.lead_worktree = None;
+            }
+            super::add::check_touches(&pr, &spec.touches)?;
         }
+    }
+    if edits.spec.is_some() || moved {
+        let names: Option<Vec<String>> = after.resources.as_ref().and_then(|r| serde_json::from_value(r.clone()).ok());
+        super::add::check_resources_declared(conn, home, plan, &after.pr, key.as_str(), names.as_deref())?;
     }
     if moved || after.kind != before.kind {
         check_shape_allows(&load_prs(conn, plan)?, plan, &after.pr, &after.kind, after.review)?;
@@ -227,7 +261,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
 }
 
 /// The Tier and Spec columns (`tests` and `test_files` of a `test` Job with them) as stored, in column order: `None` is null (a stub).
-fn columns(job: &Job) -> [(&'static str, Option<String>); 8] {
+fn columns(job: &Job) -> [(&'static str, Option<String>); 9] {
     let spec = job.spec.as_ref();
     [
         ("tier", job.tier.clone()),
@@ -238,6 +272,7 @@ fn columns(job: &Job) -> [(&'static str, Option<String>); 8] {
         ("out_of_scope", spec.map(|s| s.out_of_scope.to_string())),
         ("tests", job.tests.as_ref().map(|t| t.to_string())),
         ("test_files", job.test_files.as_ref().map(|t| t.to_string())),
+        ("resources", job.resources.as_ref().map(|t| t.to_string())),
     ]
 }
 
@@ -253,7 +288,12 @@ fn update(tx: &Connection, plan: &PlanId, before: &Job, after: &Job) -> Result<(
     written.extend(columns(before).into_iter().zip(columns(after)).map(|(b, a)| (a.0, b.1 != a.1, a.1)));
     written.push(("pr", before.pr != after.pr, Some(after.pr.clone())));
     let changed: Vec<&(&str, bool, Option<String>)> = written.iter().filter(|(_, changed, _)| *changed).collect();
+    let fingerprint = (!after.is_draft()).then(|| jobs::locked_fingerprint(after));
     if !changed.is_empty() {
+        let mut changed = changed;
+        let fp = (fingerprint.is_some()).then(|| ("fingerprint", true, fingerprint.clone()));
+        let fp_ref = fp.as_ref();
+        changed.extend(fp_ref);
         let set = changed.iter().enumerate().map(|(i, (name, _, _))| format!("{name} = ?{}", i + 3)).collect::<Vec<_>>().join(", ");
         let plan_s = plan.as_str();
         let mut params: Vec<&dyn rusqlite::ToSql> = vec![&plan_s, &after.key];

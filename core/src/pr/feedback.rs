@@ -5,14 +5,19 @@
 use std::collections::BTreeMap;
 
 
-use super::gh::View;
+use super::gh::{Check, View};
 use super::pulls::{PullRequest, Reason};
 use crate::events::NewEvent;
 
 /// The PR's current checks: name (a CheckRun's `name`, a StatusContext's `context`) → conclusion (else state).
 pub(super) fn current_checks(view: &View) -> BTreeMap<String, String> {
+    checks_map(view.checks.iter().flatten())
+}
+
+/// [`current_checks`] of any list of checks.
+pub(super) fn checks_map<'a>(list: impl IntoIterator<Item = &'a Check>) -> BTreeMap<String, String> {
     let mut checks = BTreeMap::new();
-    for c in view.checks.iter().flatten() {
+    for c in list {
         let Some(name) = c.name.clone().or_else(|| c.context.clone()) else { continue };
         let conclusion = c.conclusion.clone().filter(|s| !s.is_empty()).or_else(|| c.state.clone()).unwrap_or_default();
         checks.insert(name, conclusion);
@@ -96,6 +101,8 @@ mod tests {
         assert_eq!(summary(vec![("a", "success")]), ChecksSummary::Passed);
         assert_eq!(summary(vec![("a", "SUCCESS"), ("b", "")]), ChecksSummary::Pending);
         assert_eq!(summary(vec![("a", "SKIPPED"), ("b", "queued"), ("c", "startup_failure")]), ChecksSummary::Failed);
+        assert_eq!(summary(vec![("a", "CANCELLED"), ("b", "SUCCESS")]), ChecksSummary::Passed);
+        assert_eq!(summary(vec![("a", "CANCELLED"), ("b", "")]), ChecksSummary::Pending);
     }
 
     #[test]

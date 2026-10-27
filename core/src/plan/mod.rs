@@ -15,6 +15,8 @@ pub(crate) mod delete;
 pub mod display;
 pub mod fingerprint;
 pub mod jobs;
+#[cfg(test)]
+mod display_tier_tests;
 mod lead;
 mod list;
 pub(crate) mod lock;

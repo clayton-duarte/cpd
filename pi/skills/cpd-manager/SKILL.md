@@ -119,8 +119,8 @@ Prevent conflicts between Leads' PRs before the work starts, and remedy them whe
 
 Three ways to communicate are distinct:
 
-- **Message** (`cpd session send`): only to unblock another agent, with `--unblocks "<reason>"`. A message always wakes an idle agent; send sparingly. No broadcasts, no FYI, no acks.
-- **Board** (`cpd board post --to <session>`): for information another agent needs at its next turn. A board post does not wake; it arrives when the agent's turn starts.
+- **Message** (`cpd session send <id> "<text>" --unblocks "<reason>"`): for anything that needs another agent to act or that unblocks it: an escalated bug, a request for a Plan or a split, anything the User asks you to escalate, an answer to a question. It always wakes an idle agent; send sparingly; no broadcasts, no acks.
+- **Board** (`cpd board post --to <session>`): information only (FYI) that the agent reads at its next turn; a board post never wakes, so never use it to ask the Manager (or a Lead) to act.
 - **Record** (`cpd context decide`, `cpd context note`): facts and rules for everyone. Written to the Context, records live as long as the Context and reach all agents at their turn start.
 
 ### Sending a message

@@ -1,5 +1,5 @@
 /**
- * The closing row of a running tool row (docs/contract.md 6.1.1, 6.9): " ╰" in 8 and ONE frame of pi's moon-phase loader
+ * The closing row of a running tool row (docs/contract.md 6.1.1, 6.9): "╰" in 8 and ONE frame of pi's moon-phase loader
  * in 6 (loader-frames.ts, one frame every 50 ms), no text after it. A finished row closes with its
  * toggle in 7; fold "status" keeps " └ Running".
  */
@@ -47,8 +47,8 @@ const closing = (row: ReturnType<typeof makeRow>) => drawn(row).at(-1)!;
 
 function assertLoaderRow(close: string): void {
 	const text = plain(close);
-	assert.match(text, new RegExp(`^ \u2570[${MOON_FRAMES.join("")}]$`, "u"), JSON.stringify(close));
-	assert.ok(close.includes("\x1b[90m \u2570") || close.includes("\x1b[90m\u2570"), `line in 8: ${JSON.stringify(close)}`);
+	assert.match(text, new RegExp(`^\u2570[${MOON_FRAMES.join("")}]$`, "u"), JSON.stringify(close));
+	assert.ok(close.includes("\x1b[90m\u2570"), `line in 8: ${JSON.stringify(close)}`);
 	const frame = [...text].at(-1)!;
 	const at = close.indexOf(frame);
 	assert.ok(/\x1b\[36m$/u.test(close.slice(0, at)), `frame in 6: ${JSON.stringify(close)}`);
@@ -62,7 +62,7 @@ test("a running tool row closes with a line in 8 and a loader frame in 6", async
 test("a running group head has the same closing row and never an open rail", async () => {
 	await withRow("toggle", "date; ls; pwd; whoami", (row) => {
 		const lines = drawn(row);
-		assert.match(plain(lines[0]!), /^ \u256D\u2500.*Run date \+ \d+ more steps/u, JSON.stringify(plain(lines[0]!)));
+		assert.match(plain(lines[0]!), /^\u256D\u2500.*Run date \+ \d+ more steps/u, JSON.stringify(plain(lines[0]!)));
 		assert.ok(lines.length >= 2, `an open rail: ${JSON.stringify(lines.map(plain))}`);
 		assertLoaderRow(lines.at(-1)!);
 	});
@@ -91,7 +91,7 @@ test("the running closing row has no text after the glyph", async () => {
 		for (let step = 0; step < 3; step++) {
 			const close = plain(closing(row));
 			assert.ok(!close.includes("Running") && !/\d+(\.\d+)?m?s/u.test(close), JSON.stringify(close));
-			assert.equal([...close].length, 3, `" ╰" and one frame only: ${JSON.stringify(close)}`);
+			assert.equal([...close].length, 2, `"╰" and one frame only: ${JSON.stringify(close)}`);
 			assert.ok(!close.includes(OLD_GLYPH), "no U+F0B2A");
 			advance(5000);
 		}
@@ -101,7 +101,7 @@ test("the running closing row has no text after the glyph", async () => {
 test("a finished row closes with its toggle as before", async () => {
 	await withRow("toggle", undefined, (row) => {
 		const close = closing(row);
-		assert.ok(close.includes("\x1b[90m \u2570") || close.includes("\x1b[90m\u2570"), `line in 8: ${JSON.stringify(close)}`);
+		assert.ok(close.includes("\x1b[90m\u2570"), `line in 8: ${JSON.stringify(close)}`);
 		assert.match(close, /\x1b\[37m[^\x1b]*[\u{F0B26}\u{F0B2C}]/u, `toggle in 7: ${JSON.stringify(close)}`);
 		assert.ok(!FRAMES.some((frame) => close.includes(frame)), "no loader frame once finished");
 	}, true);

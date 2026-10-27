@@ -9,7 +9,13 @@ use std::path::PathBuf;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::attempt::ledger::{self, Cause, End, Ladder, Stage};
-use super::lock::Starter;
+use super::lock::{RESOURCE_FDS_ENV, Starter};
+use crate::resource::{self, Held, Holder, Take};
+use nix::fcntl::{FcntlArg, FdFlag, fcntl};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+
+/// The lowest descriptor number a resource lock is handed to the driver on.
+const HAND_OVER_MIN: i32 = 100;
 use crate::config::{Catalog, Config, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -127,8 +133,44 @@ pub fn start_with_allocation(
     allocation: Option<Allocation>,
 ) -> Result<Started, CpdError> {
     let next = store.read(|conn| decide(conn, ctx.catalog, plan, key, allocation))?;
+    // A name the repo policy no longer declares refuses the start before any lock is taken (§3.4 "Resources of a Job").
+    let wanted = store.read(|conn| {
+        let wanted = resource::wanted(conn, plan, key.as_str())?;
+        if let Some(w) = &wanted {
+            crate::job::add::check_resources_declared(conn, ctx.home, plan, &w.pr, key.as_str(), Some(&w.names))?;
+        }
+        Ok(wanted)
+    })?;
     // §3.4 step 1: the lock before the transaction that inserts the Attempt.
     let lock = Starter::take(ctx.home, plan, &next.attempt)?;
+    // Then the Job's resources, all or none, before the Attempt row exists. Dropping `held` on any later failure releases them.
+    let held = match &wanted {
+        None => None,
+        Some(w) => {
+            let holder = Holder::Attempt {
+                plan: plan.to_string(),
+                job: key.to_string(),
+                attempt: next.attempt.to_string(),
+                at: crate::clock::timestamp(ports.clock.utc()),
+            };
+            let names: Vec<&str> = w.names.iter().map(String::as_str).collect();
+            match resource::take(ctx.home, &w.owner, &w.repo, &names, &holder)? {
+                Take::Held(held) => Some(held),
+                Take::Busy { resource, holder } => {
+                    // Nothing changes: the driver lock file made for an Attempt that will not exist goes too.
+                    drop(lock);
+                    super::lock::remove(ctx.home, plan, &next.attempt)?;
+                    return Err(CpdError::new(
+                        ErrorCode::ResourceBusy,
+                        format!("Job {key} cannot start: the resource {resource} of {}/{} is held by another holder.", w.owner, w.repo),
+                    )
+                    .with("job", key.as_str())
+                    .with("resource", resource)
+                    .with("holder", serde_json::to_value(holder).expect("a holder serialises")));
+                }
+            }
+        }
+    };
     store.write(ctx.command, |tx| {
         if decide(tx, ctx.catalog, plan, key, allocation)? != next {
             return Err(CpdError::new(ErrorCode::CasLost, format!("Job {key} changed while its Attempt was being started: try again."))
@@ -152,7 +194,7 @@ pub fn start_with_allocation(
     })?;
 
     // §3.4 step 2: spawn the driver with the lock as fd 3.
-    let spawned = spawn(ports, ctx.home, plan, &next.attempt, &lock);
+    let spawned = spawn(ports, ctx.home, plan, &next.attempt, &lock, held);
     let pid = match spawned {
         Ok(pid) => pid,
         Err(e) => {
@@ -247,7 +289,7 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey, all
     };
     // hs-n465, hs-d632: a stored or retry Tier the catalog refuses starts at the next valid Worker Tier.
     let tier = if catalog.is_valid(tier) { tier } else { catalog.step_up(tier).unwrap_or(tier) };
-    // pro-d53, hs-d554: a Job stored on a Tier outside H0-H4, S0-S3 is never started (E3 raises one `error` per Job).
+    // pro-d82, hs-d554: a Job stored on a Tier outside H0-H3, S0-S3 is never started (E3 raises one `error` per Job).
     tier.check_worker()?;
     let number = previous.map_or(1, |(n, _, _)| n + 1);
     let attempt = AttemptId::new(key.clone(), NonZeroU32::new(number).expect("numbers start at 1"));
@@ -383,7 +425,7 @@ fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &N
 /// Spawns `cpd attempt run <attempt> --plan <plan>` detached (`setsid`), with
 /// the lock as fd 3, stdin from `/dev/null`, and stdout and stderr appended to
 /// `run/<plan>/logs/attempt-<attempt>.log`, through `ports.spawn`. Returns its pid.
-fn spawn(ports: &Ports, home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock: &Starter) -> Result<u32, String> {
+fn spawn(ports: &Ports, home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock: &Starter, held: Option<Held>) -> Result<u32, String> {
     // The path recorded at process start: the live path of the file is `(deleted)` after an install.
     let exe = ports.spawn.self_exe().map_err(|e| e.to_string())?;
     let log_path = home.driver_log(plan, attempt);
@@ -394,11 +436,30 @@ fn spawn(ports: &Ports, home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock
     if !exe.exists() {
         return Err(format!("cannot run {}: no such file", exe.display()));
     }
+    // The resource locks go to the driver as copies of the same open file descriptions, numbered from `HAND_OVER_MIN` up:
+    // clear of the numbers the starter's own files take, and not close-on-exec. The driver learns the numbers from the
+    // environment and makes them close-on-exec again (A1). The starter's own descriptors close here; the copies close
+    // when this function returns, after the spawn.
+    let mut env_set = vec![("CPD_HOME".to_owned(), home.root().display().to_string())];
+    let mut handed: Vec<OwnedFd> = Vec::new();
+    if let Some(held) = held {
+        for name in held.names() {
+            let fd = held.fd(name).expect("a name of the held resources");
+            // SAFETY: `held` owns the descriptor for the whole call.
+            let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+            let copy = fcntl(borrowed, FcntlArg::F_DUPFD(HAND_OVER_MIN)).map_err(|e| format!("cannot hand over the resource {name}: {e}"))?;
+            // SAFETY: `F_DUPFD` returned a new descriptor that nothing else owns.
+            handed.push(unsafe { OwnedFd::from_raw_fd(copy) });
+        }
+        drop(held);
+        let numbers: Vec<String> = handed.iter().map(|fd| fd.as_raw_fd().to_string()).collect();
+        env_set.push((RESOURCE_FDS_ENV.to_owned(), numbers.join(",")));
+    }
     // hs-d528: nice and ionice exec (`idle`), so the recorded pid is the driver's.
     let launch = Launch {
         program: exe.display().to_string(),
         args: ["attempt", "run", &attempt.to_string(), "--plan", plan.as_str()].map(str::to_owned).to_vec(),
-        env_set: vec![("CPD_HOME".to_owned(), home.root().display().to_string())],
+        env_set,
         // The caller's own identity is not the driver's.
         env_remove: ["CPD_PLAN", "CPD_SESSION", "CPD_ATTEMPT", "TMUX", "TMUX_PANE"].map(str::to_owned).to_vec(),
         cwd: Some(home.root().to_path_buf()),
@@ -410,5 +471,6 @@ fn spawn(ports: &Ports, home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock
     };
     // The real `Spawn` reaps the child on a thread, if this process outlives it (the engine); detached otherwise.
     let pid = ports.spawn.spawn(&launch).map_err(|e| format!("cannot run {}: {e}", exe.display()))?;
+    drop(handed);
     Ok(pid.0)
 }

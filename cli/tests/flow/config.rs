@@ -74,7 +74,7 @@ fn config_defaults_context_distill_tier_to_gx() {
                 "sleep_seconds": 3600,
                 "archive_sleep_seconds": 86400
             },
-            "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "team_review_seconds": 1800, "models_discovery_seconds": 604800, "error_repeat_seconds": 600, "pr_poll_transient_minutes": 10},
+            "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "team_review_seconds": 1800, "models_discovery_seconds": 604800, "janitor_minutes": 60, "error_repeat_seconds": 600, "pr_poll_transient_minutes": 10},
             "inbox": {
                 "stuck_job_minutes": 10,
                 "team_channel": "",
@@ -241,6 +241,7 @@ tick_seconds = 1
 pr_poll_seconds = 1
 team_review_seconds = 1
 models_discovery_seconds = 1
+janitor_minutes = 1
 pr_poll_transient_minutes = 1
 error_repeat_seconds = 1
 [inbox]
@@ -411,21 +412,23 @@ fn config_refuses_each_bad_file_with_its_key_path() {
     }
 }
 
-/// pro-d53: `open_tier` is a Worker Tier: H0-H4 or S0-S3 (`cpd config` reads only the file, no catalog, so H4 loads).
+/// pro-d82: `open_tier` is a Worker Tier: H0-H3 or S0-S3.
 #[test]
 fn config_accepts_an_open_tier_in_the_worker_range() {
     let fx = Fx::new();
-    for tier in ["H0", "H1", "H2", "H3", "H4", "S0", "S1", "S2", "S3"] {
+    for tier in ["H0", "H1", "H2", "H3", "S0", "S1", "S2", "S3"] {
         let ok = config_with(&fx, &format!("version = 1\nmachine = \"hs\"\nopen_tier = \"{tier}\"\n")).ok();
         assert_eq!(ok["config"]["open_tier"], tier);
     }
+    // The range ends at H3: H4 is not part of it.
+    assert_eq!(config_with(&fx, "version = 1\nmachine = \"hs\"\nopen_tier = \"H4\"\n").error()["code"], "config_invalid");
 }
 
-/// pro-d53 (hs-d554 for the cost reason): `open_tier` outside H0-H4, S0-S3 is refused.
+/// pro-d82 (hs-d554 for the cost reason): `open_tier` outside H0-H3, S0-S3 is refused.
 #[test]
 fn config_refuses_an_open_tier_outside_the_worker_range() {
     let fx = Fx::new();
-    for tier in ["H5", "S4", "S5", "O2"] {
+    for tier in ["H4", "H5", "S4", "S5", "O2"] {
         let run = config_with(&fx, &format!("version = 1\nmachine = \"hs\"\nopen_tier = \"{tier}\"\n"));
         let err = run.error();
         assert_eq!(run.exit, 1, "{tier}");
@@ -1030,6 +1033,52 @@ fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
     assert_eq!(fx.cpd(&["tiers"]).ok()["pi_version"], "1.3.0");
 }
 
+/// pro-d26 (Plan bifrost, PR catfp; commands.md §14.3): the cache is keyed by the fingerprint of `<agentDir>/models.json` too. The
+/// agent directory of [`install_pi`] is the test root. `cpd doctor`'s `tiers` check asks pi each time and never reads the cache, so
+/// the command that needs the fingerprint is `cpd tiers`, and every Lead and Worker launch through the same `load`.
+#[test]
+fn tiers_sees_a_models_json_changed_under_the_same_pi_version() {
+    let fx = tiers_fx(TIERS_MODELS);
+    let models_json = fx.env.root().join("models.json");
+    fs::write(&models_json, r#"{"thinkingLevelMap": {"minimal": null}}"#).unwrap();
+    fx.fake_once("node", levels(r#"{"O":["off","low"],"S":["off","low","medium","high"],"H":["off"],"G":["off"]}"#));
+    let first = fx.cpd(&["tiers"]).ok();
+    assert_eq!(first["tiers"]["S"]["efforts"], json!([0, 1, 2, 3]));
+
+    // The same pi version and the same models: only the file pi reads changed (Sonnet gains xhigh and max).
+    fs::write(&models_json, r#"{"thinkingLevelMap": {"minimal": null, "xhigh": "xhigh", "max": "max"}}"#).unwrap();
+    fx.fake_once("node", levels(r#"{"O":["off","low"],"S":["off","low","medium","high","xhigh","max"],"H":["off"],"G":["off"]}"#));
+    let second = fx.cpd(&["tiers"]).ok();
+    assert_eq!(second["pi_version"], "1.2.0");
+    assert_eq!(second["tiers"]["S"]["efforts"], json!([0, 1, 2, 3, 4, 5]), "the changed models.json is seen");
+    assert_eq!(fx.calls("node").len(), 2);
+    // Append-only: the first bytes' rows stay beside the second's.
+    let rows = cached_rows(&fx.env);
+    assert_eq!(rows.len(), 6, "{rows:?}");
+    assert!(rows.contains(&row("1.2.0", "S", "p/m-sonnet", "[0,1,2,3]")), "{rows:?}");
+    assert!(rows.contains(&row("1.2.0", "S", "p/m-sonnet", "[0,1,2,3,4,5]")), "{rows:?}");
+
+    // Unchanged bytes are a hit: node has no reply left.
+    assert_eq!(fx.cpd(&["tiers"]).ok()["tiers"]["S"]["efforts"], json!([0, 1, 2, 3, 4, 5]));
+    assert_eq!(fx.calls("node").len(), 2);
+}
+
+/// An unreadable `models.json` (a directory in its place) is `catalog_failed` with the path, and nothing is cached.
+#[test]
+fn tiers_with_an_unreadable_models_json_is_catalog_failed_with_its_path() {
+    let fx = tiers_fx(TIERS_MODELS);
+    let models_json = fx.env.root().join("models.json");
+    fs::create_dir(&models_json).unwrap();
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    let run = fx.cpd(&["tiers"]);
+    let err = run.error();
+    assert_eq!(err["code"], "catalog_failed");
+    assert_eq!(run.exit, 1);
+    assert!(err["details"].to_string().contains(models_json.canonicalize().unwrap().to_str().unwrap()), "{err}");
+    assert!(fx.calls("node").is_empty(), "no fallback: pi was not asked");
+    assert_eq!(cached_rows(&fx.env), []);
+}
+
 #[test]
 fn tiers_refreshes_the_cache_when_a_configured_model_changes() {
     let fx = tiers_fx(TIERS_MODELS);
@@ -1171,4 +1220,26 @@ fn config_migrate_on_a_missing_file_is_config_missing() {
     let err = run.error();
     assert_eq!(err["code"], "config_missing", "{err}");
     assert_eq!(err["details"]["path"], path.to_str().unwrap(), "{err}");
+}
+
+/// Contract §8.2: `watch.janitor_minutes` is 60 unless the file says otherwise.
+#[test]
+fn watch_janitor_minutes_defaults_to_60() {
+    let fx = Fx::new();
+    let out = config_with(&fx, MINIMAL).ok();
+    assert_eq!(out["config"]["watch"]["janitor_minutes"], 60);
+    assert_eq!(out["sources"]["watch.janitor_minutes"], "default");
+}
+
+/// Contract §8.2: `watch.janitor_minutes` is at least 1, else `config_invalid` with `details.key`.
+#[test]
+fn watch_janitor_minutes_below_1_is_config_invalid() {
+    let fx = Fx::new();
+    for value in ["0", "-1"] {
+        let run = config_with(&fx, &format!("{MINIMAL}[watch]\njanitor_minutes = {value}\n"));
+        let err = run.error();
+        assert_eq!(run.exit, 1, "{value}");
+        assert_eq!(err["code"], "config_invalid", "{value}: {err}");
+        assert_eq!(err["details"]["key"], "watch.janitor_minutes", "{value}: {err}");
+    }
 }

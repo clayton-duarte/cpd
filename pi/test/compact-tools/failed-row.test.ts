@@ -81,8 +81,8 @@ test("collapsed failed row cuts the reason below half the width", async () => {
 	{
 		const { row, harness } = await failedRow("ask_user_question", {}, REFUSAL);
 		const line = closing(row.render(80));
-		assert.ok(line.startsWith(" \u2570"), line);
-		assert.match(line, /^ \u2570\S+ expand \u00B7 03:11 \u00B7 Failed in [0-9.]+m?s \u00B7 φ: ask_user_question is for a few shor\u2026$/u);
+		assert.ok(line.startsWith("\u2570"), line);
+		assert.match(line, /^\u2570\S+ expand \u00B7 03:11 \u00B7 Failed in [0-9.]+m?s \u00B7 φ: ask_user_question is for a few shor\u2026$/u);
 		shutdown(harness);
 	}
 	{
@@ -100,7 +100,7 @@ test("collapsed failed row cuts the reason below half the width", async () => {
 		const { row, harness } = await failedRow("bash", { command: "npm test" }, LONG);
 		const flat = row.render(2).map(plain).join("").replace(/\s+/gu, "");
 		for (const word of ["TypeError", "diagnostic"]) assert.ok(!flat.includes(word), `no reason at width 2: ${flat}`);
-		assert.ok(!flat.includes(SEPARATOR.trim()), `no separator at width 2: ${flat}`);
+		assert.ok(!/Failedin[0-9.]+m?s\u00B7/u.test(flat), `no reason separator after the time at width 2: ${flat}`);
 		shutdown(harness);
 	}
 });
@@ -156,7 +156,7 @@ test("the full error is inside the fold: collapsed cuts it, expanded shows it wh
 	row.setExpanded(true);
 	const body = row.render(100).map(plain).filter((line) => line.trim() !== "");
 	const last = body.at(-1)!;
-	assert.match(last, /^ \u2570\S+ collapse \u00B7 03:11 \u00B7 Failed in [0-9.]+m?s$/u, last);
+	assert.match(last, /^\u2570\S+ collapse \u00B7 03:11 \u00B7 Failed in [0-9.]+m?s$/u, last);
 	const joined = body.slice(0, -1).map((line) => line.replace(/^\s*\u2502 ?/u, "").trim()).join(" ");
 	assert.ok(joined.replace(/\s+/gu, " ").includes(REFUSAL), `the body holds the whole error: ${JSON.stringify(joined)}`);
 	shutdown(harness);

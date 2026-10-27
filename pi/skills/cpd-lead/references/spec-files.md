@@ -27,6 +27,7 @@ The file passed as `--spec` when you add a Job is JSON with exactly these fields
 | `touches` | Exact paths the Worker may change, at least one. New files included. The Worker may touch nothing else. Paths are repo-relative, never the primary checkout of the repo. |
 | `acceptance` | At least one item, each checkable by a command or an observable result. Test items name the targeted tests: the test files or modules of what the Job changes plus its new tests (for example `scripts/cargo.sh nextest run -p cpd --test plan_overlap`, `node --test pi/test/updates.test.ts`). Never a full unfiltered run (the whole workspace, `npm test` of everything): the full suite is the Gate's, run by the PR's open Job. |
 | `out_of_scope` | The adjacent temptations to refuse. May be empty, rarely should be. |
+| `resources` | Optional. A list of one or more distinct names of the repo's declared exclusive resources (an e2e port, for example) that the Job's run needs; absent means none. Find the names with `cpd policy show --pr <key>` (the `resources` domain) or `cpd resource list` run in the PR's Lead worktree; a name the repo does not declare is `resource_undeclared`, and a review Job takes none (`spec_invalid`). The Job waits `queued` until every listed resource is free, and `cpd job show` has `waiting_for` while it waits; you are not told otherwise. A dev server you run for the User is prefixed with `cpd resource run <name> --`. |
 
 Write the text in GFM only: tables, lists, code and Mermaid. Footnotes render as literal text and raw HTML is not rendered, so the User would see them broken in the Plan.
 
@@ -56,7 +57,7 @@ Put these in the `context` of every Spec (they are a Worker's only rules):
 
 ## Tiers
 
-Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku), `G` (gemini, auxiliary only); effort 0–5, or `GX` for G. An invalid Tier is refused when you add the Job (`tier_invalid`, with the valid efforts in `error.details.efforts`). `cpd tiers` prints the efforts each model accepts. **A Worker Job's Tier is `H0`–`H4` or `S0`–`S3` only** (pro-d53); the ladder of a Worker ends at `S3`. `cpd tiers` prints the efforts each model accepts; the catalog can cut further. G (written `GX`, no effort levels) is never a Job's Tier: it is for auxiliary one-shot pi runs only (the distiller, title writer, and similar helpers), never a Worker's, Lead's or Manager's.
+Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku), `G` (gemini, auxiliary only); effort 0–5, or `GX` for G. An invalid Tier is refused when you add the Job (`tier_invalid`, with the valid efforts in `error.details.efforts`). `cpd tiers` prints the efforts each model accepts. **A Worker Job's Tier is `H0`–`H3` or `S0`–`S3` only** (pro-d82); a Worker's ladder goes H0>H1>H2>H3>S1>S2>S3 and ends at `S3`. `cpd tiers` prints the efforts each model accepts; the catalog can cut further. G (written `GX`, no effort levels) is never a Job's Tier: it is for auxiliary one-shot pi runs only (the distiller, title writer, and similar helpers), never a Worker's, Lead's or Manager's.
 
 | Work | Tier | Why |
 |---|---|---|

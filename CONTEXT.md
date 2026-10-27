@@ -153,7 +153,7 @@ A Job the User has not approved yet. The engine never runs it, and it is editabl
 _Avoid_: proposed, pending Job
 
 **Locked**:
-The state of every Job that is not a draft: its Spec, Tier and Dependencies can no longer change; it can only be re-attempted or cancelled, and new Jobs can be appended. A Job is Locked when the Plan is locked, or, if it was added as a draft later, when the review that covers it is approved.
+The state of every Job that is not a draft: its title, Tier, PR, kind and Dependencies can no longer change, and its Spec can change only while the Job is queued and has no Attempt, when the Lead corrects it with `job edit --spec` (no Plan review; the old text stays in the history); it can otherwise only be re-attempted or cancelled, and new Jobs can be appended. A Job is Locked when the Plan is locked, or, if it was added as a draft later, when the review that covers it is approved.
 _Avoid_: frozen, final
 
 ## Runtime
@@ -279,6 +279,10 @@ _Avoid_: visibility, permission
 **Policy key** (new, hs-d288):
 What a Policy is resolved for: an owner, or an owner and a repo name (`Owner(login) | Repo(login, name)`). cpd derives it from the one row a consumer acts on: a Context, its Manager and its Leads use the Context's owner; a PR, its Workers and the commands on it use the PR's repo. Never a machine, a path or a cwd.
 _Avoid_: scope, selector, context
+
+**Resource** (new, pro-d74):
+A named exclusive thing of a repo, declared in its repo policy file (`[resources.<name>]`, contract §8.3 "The `resources` domain"), that one holder at a time may use, such as the one port an e2e run needs. A Job takes it through its Spec's `resources` and its Attempt holds it until it ends; a human takes it with `cpd resource run`. The lock is per repo on one machine, a kernel `flock` released when its holder dies. A repo that declares none has no lock and no limit.
+_Avoid_: slot, lock, mutex, semaphore
 
 **Machine policy** (changed, pro-d1):
 The machine Scope's file, `$CPD_HOME/policy/host.toml` (contract §8.3), which dotfiles render per machine: its `[model]` table first, then the machine's `cpd.policy` text (its `[mcp.servers.*]`). Besides Domains it may hold an `[mcp]` table, the MCP servers the machine may use, which only a machine file may have; `[mcp]` is not a Domain and takes no part in a Policy key.

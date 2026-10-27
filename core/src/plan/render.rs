@@ -254,7 +254,7 @@ fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool, ope
             tcode(&j.key),
             cell(&j.title),
             j.kind,
-            j.tier.as_deref().unwrap_or(MISSING_TIER),
+            shown.display.job_tier(j).as_deref().unwrap_or(MISSING_TIER),
             job_status(j, blockers, &shown.anchors),
             joined(&j.needs, tcode),
             j.spec.as_ref().map_or_else(|| MISSING_TIER.to_owned(), |s| joined(&strings(&s.touches), tcode)),
@@ -286,7 +286,7 @@ fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool, ope
                 if blockers.is_empty() { j.status.as_str() } else { "waiting" },
                 if j.kind == "work" { String::new() } else { format!(" · Kind: `{}`", j.kind) },
                 if later { format!(" · {}", mark(j)) } else { String::new() },
-                j.tier.as_deref().map_or_else(|| MISSING_TIER.to_owned(), |t| format!("`{t}`")),
+                shown.display.job_tier(j).map_or_else(|| MISSING_TIER.to_owned(), |t| format!("`{t}`")),
                 joined(&j.needs, code)
             ),
             String::new(),
@@ -298,6 +298,9 @@ fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool, ope
         if let (Some(tests), Some(files)) = (&j.tests, &j.test_files) {
             out.extend(["#### Tests".to_owned(), String::new(), strings(tests).iter().map(|t| format!("- {}", code(t))).collect::<Vec<_>>().join("\n"), String::new()]);
             out.extend(["#### Test files".to_owned(), String::new(), strings(files).iter().map(|t| format!("- {}", code(t))).collect::<Vec<_>>().join("\n"), String::new()]);
+        }
+        if let Some(resources) = &j.resources {
+            out.extend(["#### Resources".to_owned(), String::new(), strings(resources).iter().map(|t| format!("- {}", code(t))).collect::<Vec<_>>().join("\n"), String::new()]);
         }
     }
     if let Some(open) = &placeholder {
@@ -512,6 +515,7 @@ mod tests {
             tests: None,
             test_files: None,
             test_approved: None,
+            resources: None,
             urgent: false,
             fingerprint: None,
             retry_tier: None,

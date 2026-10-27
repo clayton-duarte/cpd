@@ -75,7 +75,8 @@ fn seed_pay(mut store: Store, phase: &str, job: &str, branch: &str, repo: &Path,
            VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', {locked}, {done});
          {pull_request}
          INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{columns})
-           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', '{status}', '{branch}', {worktree}, '{REPO_TITLE}', 'config', cpd_txn(), 't', {locked}{values});",
+           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', '{status}', '{branch}', {worktree}, '{REPO_TITLE}', 'config', cpd_txn(), 't', {started}{values});",
+        started = if locked == "NULL" { "NULL" } else { "'2026-10-27T09:00:00.000Z'" },
         repo = repo.display(),
         branch = branch,
     );
@@ -506,7 +507,13 @@ fn rebase_with_gate_ci_runs_no_gate_and_pushes() {
 
 /// `gh pr list` answering one pull request of the Lead Branch in `state`.
 fn list_of(state: &str) -> Reply {
-    Reply::ok(&format!("[{{\"number\": 812, \"url\": \"{URL}\", \"state\": \"{state}\"}}]\n"))
+    list_created(812, state, "2026-10-28T10:00:00Z")
+}
+
+/// `gh pr list` answering one pull request `number` of the Lead Branch in `state`, created at `created` (the PR row started 2026-10-27).
+fn list_created(number: i64, state: &str, created: &str) -> Reply {
+    let url = format!("https://github.com/acme/pay/pull/{number}");
+    Reply::ok(&format!("[{{\"number\": {number}, \"url\": \"{url}\", \"state\": \"{state}\", \"createdAt\": \"{created}\"}}]\n"))
 }
 
 /// A fixture of phase `dispatch` whose `pre-merge` hook leaves a marker file when it runs; and that marker.
@@ -565,7 +572,7 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
     assert!(config.stdout.is_empty(), "{}", String::from_utf8_lossy(&config.stdout));
     // gh: look for an existing PR (twice: before the Gate's push, and to open it), then create it with the Jobs table as its body.
     let calls = fx.gh_calls();
-    let list = ["pr", "list", "--head", "cpd/pay", "--state", "all", "--json", "number,url,state"];
+    let list = ["pr", "list", "--head", "cpd/pay", "--state", "all", "--json", "number,url,state,createdAt"];
     assert_eq!(calls[0], list);
     assert_eq!(calls[1], list);
     assert_eq!(calls[2][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", REPO_TITLE]);
@@ -605,6 +612,58 @@ fn open_fails_loud_when_gh_cannot_find_the_pull_request_it_created() {
     let End::Failed { detail, .. } = end else { panic!("{end:?}") };
     assert!(detail.contains("gh_failed"), "{detail}");
     assert_eq!(fx.plan_row().0, "dispatch");
+}
+
+/// The pull request #265 of the Lead Branch, created 2026-10-22, before the PR row started (2026-10-27): not the row's.
+fn old_pull_request(state: &str) -> Reply {
+    list_created(265, state, "2026-10-22T08:00:00Z")
+}
+
+#[test]
+fn open_ignores_a_merged_pull_request_created_before_the_pr_started() {
+    let fx = poll_fx("dispatch");
+    fx.gh.list.set(old_pull_request("MERGED"));
+    let (attempt, _, tip) = fx.submitted_opener();
+
+    let end = fx.merge(&attempt);
+
+    assert_eq!(end, End::Merged { sha: tip });
+    assert_eq!(fx.gh_calls().iter().filter(|c| c[1] == "create").count(), 1, "{:?}", fx.gh_calls());
+    let row = fx.plan_row();
+    assert_eq!((row.0.as_str(), row.1), ("deploy", Some(812)));
+    let status: String = fx.store().read(|c| Ok(c.query_row("SELECT status FROM prs WHERE plan = 'pay' AND key = 'repo'", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(status, "open");
+    assert!(fx.events("pr-merged").is_empty());
+}
+
+#[test]
+fn open_ignores_a_closed_pull_request_created_before_the_pr_started() {
+    let fx = poll_fx("dispatch");
+    fx.gh.list.set(old_pull_request("CLOSED"));
+    let (attempt, _, tip) = fx.submitted_opener();
+
+    let end = fx.merge(&attempt);
+
+    assert_eq!(end, End::Merged { sha: tip });
+    assert_eq!(fx.gh_calls().iter().filter(|c| c[1] == "create").count(), 1, "{:?}", fx.gh_calls());
+    assert_eq!(fx.plan_row().1, Some(812));
+    assert!(fx.events("pr-closed").is_empty());
+}
+
+#[test]
+fn open_does_not_adopt_an_open_pull_request_created_before_the_pr_started() {
+    let fx = poll_fx("dispatch");
+    fx.gh.list.set(old_pull_request("OPEN"));
+    fx.gh.create.set(Reply::exit(1, "", "a pull request for branch cpd/pay already exists\n"));
+    let (attempt, _, _) = fx.submitted_opener();
+
+    let end = fx.merge(&attempt);
+
+    let End::Failed { detail, .. } = end else { panic!("{end:?}") };
+    assert!(detail.contains("gh_failed"), "{detail}");
+    assert!(fx.gh_calls().iter().any(|c| c[1] == "create"), "{:?}", fx.gh_calls());
+    let row = fx.plan_row();
+    assert_eq!((row.0.as_str(), row.1), ("dispatch", None));
 }
 
 #[test]
@@ -1146,6 +1205,17 @@ impl Handler for Gh {
                 Some(text) => Reply::ok(&format!("{text}\n")),
                 None => Reply::ok(&format!("{}\n", empty_comments(query))),
             },
+            // The checks read (poll step 3b): one failing check for each pull request, so a FAILURE rollup is confirmed.
+            ["api", "graphql", "-f", query, ..] if query.contains("contexts(first: 100") => {
+                let run = serde_json::json!({"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"});
+                let page = serde_json::json!({"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": [run]});
+                let pull = serde_json::json!({"commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": page}}}]}});
+                let mut data = serde_json::Map::new();
+                for i in 0..query.matches(": repository(").count() {
+                    data.insert(format!("p{i}"), serde_json::json!({"pullRequest": pull}));
+                }
+                Reply::ok(&format!("{}\n", serde_json::json!({"data": data})))
+            }
             ["api", "graphql", "-f", query, ..] if query.contains("p0: repository") => self.lookup.get(),
             ["api", "graphql", "-f", query, ..] => Reply::exit(9, "", &format!("unexpected graphql query: {query}\n")),
             _ => Reply::exit(9, "", &format!("unexpected gh call: {}\n", args.join(" "))),
@@ -1588,7 +1658,7 @@ fn is_search(call: &[String]) -> bool {
 }
 
 fn is_lookup(call: &[String]) -> bool {
-    call[..3] == ["api", "graphql", "-f"] && call[3].starts_with("query=query { p0: repository(owner: ")
+    call[..3] == ["api", "graphql", "-f"] && call[3].starts_with("query=query { p0: repository(owner: ") && !call[3].contains("contexts(first: 100")
 }
 
 #[test]
@@ -2268,21 +2338,6 @@ fn a_failed_direct_read_fails_the_poll_and_writes_nothing() {
     assert_eq!((fx.txns(), fx.event_count(), fx.memberships()), (txns, events, rows));
     assert_eq!(fx.pull_request_history("delete", None), 0);
     assert_eq!(fx.widget_prs(), [("acme/pay".to_owned(), 901)]);
-}
-
-#[test]
-fn poll_with_a_done_plan_reruns_its_clean_up() {
-    let fx = poll_fx("done");
-    let (worktree, branch) = kept_attempt(&fx);
-    fx.search(&[]);
-
-    let out = fx.poll();
-
-    assert_eq!(out["done"], json!([]));
-    assert_eq!(out["prs"][0]["status"], "merged");
-    assert!(!worktree.exists());
-    assert_eq!(fx.git(&fx.repo, &["branch", "--list", &branch]), "");
-    assert!(fx.lead.exists());
 }
 
 #[test]
@@ -3017,8 +3072,7 @@ fn an_owned_pull_request_that_left_the_search_and_is_closed_is_told_to_the_plan_
 fn an_owned_pull_request_that_left_the_search_and_is_merged_takes_the_merged_path() {
     let fx = poll_fx("deploy");
     let (worktree, branch) = kept_attempt(&fx);
-    // The Lead Branch is pushed and clean, as a merged PR's is: its clean-up removes the worktree, which unpushed work would keep.
-    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
+        fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
     let started = fx.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "pay--b-a1", "cat"]);
     assert!(started.status.success(), "{started:?}");
     assert!(fx.tmux(&["new-window", "-d", "-t", "cpd-work", "-n", "other-plan", "cat"]).status.success());
@@ -3042,13 +3096,13 @@ fn an_owned_pull_request_that_left_the_search_and_is_merged_takes_the_merged_pat
     assert_eq!(merged.len(), 1);
     assert_eq!(merged[0].1, json!({"pr": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}));
     assert!(fx.events("pr-feedback").is_empty());
-    // The Attempt's worktree and branch and the Lead's (pushed, clean) are gone, the Attempt's window is killed.
-    assert!(!worktree.exists());
-    assert_eq!(fx.git(&fx.repo, &["branch", "--list", &branch]), "");
-    assert!(!fx.lead.exists());
-    assert_eq!(fx.git(&fx.repo, &["branch", "--list", "cpd/pay"]), "");
+    // The poll cleans nothing (commands.md §9.2): the Attempt's worktree and branch, the Lead's, and the windows stay for `cpd janitor`.
+    assert!(worktree.exists());
+    assert_ne!(fx.git(&fx.repo, &["branch", "--list", &branch]), "");
+    assert!(fx.lead.exists());
+    assert_ne!(fx.git(&fx.repo, &["branch", "--list", "cpd/pay"]), "");
     let windows = fx.window_names();
-    assert!(!windows.contains("pay--b-a1") && windows.contains("cpd-work:other-plan"), "{windows}");
+    assert!(windows.contains("pay--b-a1") && windows.contains("cpd-work:other-plan"), "{windows}");
 
     // Done: a rerun polls again and finds nothing new.
     let txns = fx.txns();

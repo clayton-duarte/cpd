@@ -195,6 +195,11 @@ pub(super) fn run(engine: &mut Engine) {
             }
             // Every slot is taken: the next tick tries again.
             Err(e) if e.code() == ErrorCode::NoSlot => break,
+            // A resource of the Job is held: it stays queued, no Attempt, no back-off, no Event; the next tick tries again
+            // (§3.7 E3 "Resources").
+            Err(e) if e.code() == ErrorCode::ResourceBusy => {
+                engine.log.line(&format!("E3: Job {key} of Plan {plan} waits: {}", e.message()));
+            }
             // The Job changed since it was read (another starter, a cancel): decided again next tick.
             Err(e) if matches!(e.code(), ErrorCode::CasLost | ErrorCode::JobNotReady) => {
                 engine.log.line(&format!("E3: skipped Job {key} of Plan {plan}: {}", e.message()));

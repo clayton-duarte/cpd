@@ -40,3 +40,5 @@ G = "github-copilot/gemini-3.8-flash"
 
 [protected]
 paths = []
+
+[resources]

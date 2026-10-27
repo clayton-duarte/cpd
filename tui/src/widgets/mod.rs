@@ -6,7 +6,7 @@
 //! CPU, GPU and memory, the error, the size, a click or the wheel changed, and at each frame while a spinner turns. It makes no write of
 //! its own, but for what a click on an owned PR row asks of `cpd session open`, the merge popup a click on a merge
 //! icon opens, and what a click or the menu of an Inbox item runs (commands.md §13.2, pro-d55). A right click on a PR row
-//! opens its menu ([`crate::menu`]: Merge, Copy Link, Go to Lead), on an Inbox item its menu (Snooze 15 min, Snooze 1 h,
+//! opens its menu ([`crate::menu`]: Merge, Copy Link, Go to Lead), on an Inbox item its menu (Claim on a `review-requested` row only, Snooze 15 min, Snooze 1 h,
 //! Snooze until tomorrow 09:00, Dismiss); a menu then takes every key and click until it closes. Otherwise it has no key;
 //! mouse capture is on, for the clicks and the wheel over the PRs and the Inbox sections.
 //!
@@ -189,6 +189,7 @@ const KINDS: &[Kind] = &[
     Kind::InboxClosed,
     Kind::InboxSnoozed,
     Kind::InboxDismissed,
+    Kind::InboxClaimed,
 ];
 
 /// The area the Deploy column's right-click menu is clamped in and hit-tested against: the pane less a blank column on
@@ -355,7 +356,11 @@ fn show<B: Backend>(
             drawn_second = second;
             ctx.draw(|f| {
                 pane = f.area();
-                last = Some(draw(f, pane, &prs, &machine, scroll, frame, &inbox, (inbox_expanded, inbox_scroll), ports.clock.utc(), &merging));
+                // an open Inbox menu is drawn over the labels: a link piece (2 cells, forced width) under its border would swallow
+                // the border's cell, so while it is open the labels are drawn without their OSC 8 links
+                let unlinked: Vec<model::Item> = inbox_menu.iter().flat_map(|_| inbox.iter().cloned().map(|i| model::Item { url: None, ..i })).collect();
+                let shown = if inbox_menu.is_some() { &unlinked } else { &inbox };
+                last = Some(draw(f, pane, &prs, &machine, scroll, frame, shown, (inbox_expanded, inbox_scroll), ports.clock.utc(), &merging));
                 if let Some(error) = error.as_ref().or(watch_failure.as_ref()) {
                     draw_error(f, pane, error);
                 }
@@ -414,7 +419,7 @@ fn show<B: Backend>(
                             let item = &inbox[i];
                             if item.kind != model::Kind::EngineDown {
                                 let at = Position::new(m.column, m.row);
-                                inbox_menu = Some(InboxMenu { menu: Menu::new(Choice::ALL.to_vec(), at), id: item.id });
+                                inbox_menu = Some(InboxMenu { menu: Menu::new(Choice::entries(item.kind), at), id: item.id });
                             }
                         }
                     }
@@ -423,7 +428,7 @@ fn show<B: Backend>(
                         menu = drawn.rows.iter().find(|r| r.area.contains(at)).map(|row| PrMenu { menu: Menu::new(row.items(), at), row: row.clone() });
                     }
                     // a left click on the Inbox's toggle row folds or unfolds it, on an item row jumps to its cause
-                    Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) && drawn.inbox.contains(Position::new(m.column, m.row)) => {
+                    Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) && drawn.inbox.contains(Position::new(m.column, m.row)) && drawn.links.at(Position::new(m.column, m.row)).is_none() => {
                         match drawn.inbox_shape.hit(m.row - drawn.inbox.y) {
                             Some(InboxHit::Toggle) => {
                                 inbox_expanded = !inbox_expanded;

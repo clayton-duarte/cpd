@@ -159,19 +159,16 @@ fn require_no_conflict(repo: &Path, worktree: &Path, pr: &PrRow, base_sha: &str,
     .with("next", json!([format!("git -C {} merge --no-edit {remote}", worktree.display()), again])))
 }
 
-/// The open pull request of the PR's head, adopted when it exists (an earlier run
-/// died before its transaction), else `gh pr create`. When the create fails, the
-/// lookup runs again and adopts what it finds (a concurrent `pr open` of the PR
-/// created it, §7.6 step 3); otherwise the failure stands.
-/// The open pull request step 0 found, else a new one; when `gh pr create` fails, the Lead Branch's pull request is
-/// looked up again and adopted if it is open now (another `pr open` of the PR created it).
+/// The open pull request step 0 found, else a new one; when `gh pr create` fails, the head's pull request created at or after the
+/// PR's start (an adopted PR: any) is looked up again and adopted if it is open now (another `pr open` of the PR created it).
 fn find_or_create(lead: &Path, pr: &PrRow, existing: Option<PrRef>, title: &str, list: &[jobs::Job]) -> Result<PrRef, CpdError> {
     if let Some(found) = existing {
         return Ok(found);
     }
     match gh::create_pr(lead, &pr.base, pr.remote_branch(), title, &summary(title, list)) {
         Ok(created) => Ok(created),
-        Err(failed) => gh::head_pr(lead, pr.remote_branch())
+        Err(failed) => pr.bound_since()
+            .and_then(|since| gh::head_pr(lead, pr.remote_branch(), since))
             .ok()
             .flatten()
             .filter(|h| h.state == HeadState::Open)
@@ -205,11 +202,11 @@ impl Pulled {
 }
 
 /// The pull request of PR `pr`'s Lead Branch for an `open` Job's merge (§7.4 step 8b), `pr open`'s steps 0 and 3 (§7.6): the newest pull
-/// request of the branch in any state decides, `gh pr list --head <lead branch> --state all`. `MERGED` is adopted as it is; `CLOSED` is
+/// request of the branch created at or after the PR's start (`prs.started_at`; an adopted PR has no such bound) decides, in any state, `gh pr list --head <lead branch> --state all`; an older one is not the PR's and is ignored. `MERGED` is adopted as it is; `CLOSED` is
 /// `pr_closed`; an `OPEN` one is adopted, and with none one is created, never a draft (hs-d329), through the one seam from the stored
 /// title to GitHub's. `lead` is the PR's Lead worktree, so `gh` addresses its repo; `list` the PR's Jobs, for the body.
 pub fn pull_request(lead: &Path, pr: &PrRow, stored_title: &str, list: &[jobs::Job]) -> Result<Pulled, CpdError> {
-    match gh::head_pr(lead, pr.remote_branch())? {
+    match gh::head_pr(lead, pr.remote_branch(), pr.bound_since()?)? {
         Some(head) if head.state == HeadState::Merged => Ok(Pulled { row: merged_row(lead, &head)?, merged: true }),
         Some(head) if head.state == HeadState::Closed => Err(closed(&pr.key, pr.remote_branch(), &head)),
         Some(head) => Ok(Pulled { row: opened_row(lead, pr, Some(PrRef { number: head.number, url: head.url }), stored_title, list)?, merged: false }),
@@ -219,8 +216,8 @@ pub fn pull_request(lead: &Path, pr: &PrRow, stored_title: &str, list: &[jobs::J
 
 /// Whether the newest pull request of the Lead Branch is already `merged` on GitHub and never recorded (§7.6 `pr open` step 0, §7.7 submit
 /// step 1): an `open` Job adopts it, with no Gate and no push.
-pub fn is_merged_on_github(lead: &Path, branch: &str) -> Result<bool, CpdError> {
-    Ok(gh::head_pr(lead, branch)?.is_some_and(|head| head.state == HeadState::Merged))
+pub fn is_merged_on_github(lead: &Path, pr: &PrRow) -> Result<bool, CpdError> {
+    Ok(gh::head_pr(lead, pr.remote_branch(), pr.bound_since()?)?.is_some_and(|head| head.state == HeadState::Merged))
 }
 
 /// `pr_closed` (exit 3): the newest pull request of the Lead Branch is closed without a merge (§7.6 `pr open` step 0, §7.7 submit check 1).
@@ -402,7 +399,7 @@ pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jo
     let mut adopting = false;
     if job.kind == "open" {
         stored_title(env, plan, &key)?;
-        if let Some(head) = gh::head_pr(&lead, pr.remote_branch())? {
+        if let Some(head) = gh::head_pr(&lead, pr.remote_branch(), pr.bound_since()?)? {
             match head.state {
                 HeadState::Closed => return Err(closed(&key, pr.remote_branch(), &head).with("plan", plan.as_str())),
                 HeadState::Merged => adopting = true,

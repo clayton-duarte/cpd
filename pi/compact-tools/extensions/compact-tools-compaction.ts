@@ -24,17 +24,20 @@ import type { ToggleGlyphs } from "./compact-tools-types.ts";
 const bound: CompactionFoldController[] = [];
 const HOOK_NAME = "compaction.updateDisplay";
 
-/** The fold rows, as the contract fixes them: a `╭─` head with the compaction pill, the toggle row, and the summary on rails when open. */
+/** The horizontal padding pi gave each notice, kept while the fold drops it (the fold has no horizontal margin) and put back when pi's own row returns. */
+const piPadding = new WeakMap<object, number>();
+
+/** The fold rows, as the contract fixes them: a `╭─` head with the compaction pill, the toggle row, and the summary on rails when open. The rows take the whole width: the rail is in column 0 and the text ends at column `width - 3`. */
 function foldRows(self: { message: { tokensBefore: number; summary: string }; expanded: boolean }, width: number, toggle: ToggleGlyphs): string[] {
 	const message = self.message;
 	const metadata = chrome(`Compacted from ${message.tokensBefore.toLocaleString()} tokens`);
 	const closing = self.expanded
-		? toggleRow(chrome, toggle.collapse, "collapse", metadata, width)
-		: toggleRow(chrome, toggle.expand, "expand", metadata, width);
+		? toggleRow(chrome, toggle.collapse, "collapse", metadata, width - 2)
+		: toggleRow(chrome, toggle.expand, "expand", metadata, width - 2);
 	let rows = chrome("╭─") + thinkingPill("compaction");
 	if (self.expanded) {
 		// The rail and the text take the Thinking detail renderer's painters: rail 8, text 7.
-		rows += "\n" + compactDetail(message.summary, width, (prefix) => chrome(prefix) + fgOpen(TEXT));
+		rows += "\n" + compactDetail(message.summary, width - 2, (prefix) => chrome(prefix) + fgOpen(TEXT));
 	}
 	return (rows + "\n" + closing.join("\n")).split("\n");
 }
@@ -43,7 +46,16 @@ function foldRows(self: { message: { tokensBefore: number; summary: string }; ex
 function compactionBehavior(self: any, args: any[], original: (...args: any[]) => any): unknown {
 	const owner = bound[bound.length - 1];
 	const toggle = owner?.toggle();
-	if (!owner || !owner.enabled() || toggle === undefined) return original.apply(self, args);
+	if (!owner || !owner.enabled() || toggle === undefined) {
+		const padding = piPadding.get(self);
+		if (padding !== undefined) {
+			self.paddingX = padding;
+			piPadding.delete(self);
+		}
+		return original.apply(self, args);
+	}
+	if (!piPadding.has(self)) piPadding.set(self, self.paddingX);
+	self.paddingX = 0;
 	self.clear();
 	self.addChild(new MouseRegion({
 		render: (width: number): string[] => foldRows(self, width, toggle),

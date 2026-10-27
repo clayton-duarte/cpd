@@ -10,6 +10,8 @@ use crate::error::{CpdError, ErrorCode};
 use crate::plan::jobs::JobSpec;
 
 const FIELDS: [&str; 5] = ["goal", "context", "touches", "acceptance", "out_of_scope"];
+/// The Spec fields any non-review Job may add (contract §2.2).
+const OPTIONAL_FIELDS: [&str; 1] = ["resources"];
 /// The two more of a `test` Job's Spec (contract §2.2 "Job kinds"), refused for every other kind.
 const TEST_FIELDS: [&str; 2] = ["tests", "test_files"];
 
@@ -25,6 +27,8 @@ pub struct Spec {
     pub tests: Option<Vec<String>>,
     /// `test_files` of a `test` Job: the files that hold them (repo-relative paths or `dir/` prefixes).
     pub test_files: Option<Vec<String>>,
+    /// `resources` of a non-review Job: the names of the repo's declared exclusive resources it takes.
+    pub resources: Option<Vec<String>>,
 }
 
 impl Spec {
@@ -37,6 +41,14 @@ impl Spec {
                 (false, true) => return Err(invalid(&format!("$.{name}"), format!("unknown field: only a `test` Job's Spec has {name}, and this Job is `{kind}`"))),
                 _ => {}
             }
+        }
+        Ok(())
+    }
+
+    /// `resources` fit the Job: any kind but a review Job's (commands.md §5.1), else `spec_invalid` at `$.resources`.
+    pub fn check_resources_allowed(&self, review: bool) -> Result<(), CpdError> {
+        if review && self.resources.is_some() {
+            return Err(invalid("$.resources", "unknown field: a review Job takes no resources"));
         }
         Ok(())
     }
@@ -165,12 +177,14 @@ pub fn parse(text: &str) -> Result<Spec, CpdError> {
     let Value::Object(mut fields) = value else {
         return Err(invalid("$", "expected an object"));
     };
-    if let Some(unknown) = fields.keys().find(|k| !FIELDS.contains(&k.as_str()) && !TEST_FIELDS.contains(&k.as_str())) {
+    if let Some(unknown) = fields.keys().find(|k| !FIELDS.contains(&k.as_str()) && !TEST_FIELDS.contains(&k.as_str()) && !OPTIONAL_FIELDS.contains(&k.as_str())) {
         return Err(invalid(&format!("$.{unknown}"), "unknown field"));
     }
     let tests = fields.contains_key("tests").then(|| tests_field(&mut fields)).transpose()?;
     let test_files = fields.contains_key("test_files").then(|| test_files_field(&mut fields)).transpose()?;
+    let resources = fields.contains_key("resources").then(|| resources_field(&mut fields)).transpose()?;
     Ok(Spec {
+        resources,
         tests,
         test_files,
         goal: text_field(&mut fields, "goal", true)?,
@@ -179,6 +193,22 @@ pub fn parse(text: &str) -> Result<Spec, CpdError> {
         acceptance: list_field(&mut fields, "acceptance", true)?,
         out_of_scope: list_field(&mut fields, "out_of_scope", false)?,
     })
+}
+
+/// `resources`: one or more distinct names, each `^[a-z][a-z0-9-]{0,31}$` (contract §2.2).
+fn resources_field(fields: &mut Map<String, Value>) -> Result<Vec<String>, CpdError> {
+    let names = list_field(fields, "resources", true)?;
+    for (i, name) in names.iter().enumerate() {
+        let mut chars = name.chars();
+        let ok = chars.next().is_some_and(|c| c.is_ascii_lowercase()) && name.len() <= 32 && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if !ok {
+            return Err(invalid(&format!("$.resources[{i}]"), "must be a resource name, ^[a-z][a-z0-9-]{0,31}$"));
+        }
+        if names[..i].contains(name) {
+            return Err(invalid(&format!("$.resources[{i}]"), "repeats an earlier resource"));
+        }
+    }
+    Ok(names)
 }
 
 /// `tests`: one or more distinct one-line strings.

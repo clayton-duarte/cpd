@@ -457,7 +457,7 @@ fn pr_of_job(store: &mut Store, target: &Attempt) -> Result<(crate::plan::PrRow,
 /// Whether the newest pull request of the PR's Lead Branch is already merged on GitHub: the `open` Job adopts it (§7.7 submit step 1).
 fn pull_request_is_merged(store: &mut Store, target: &Attempt) -> Result<bool, CpdError> {
     let (pr, _, _) = pr_of_job(store, target)?;
-    crate::pr::is_merged_on_github(&target.lead_worktree, pr.remote_branch())
+    crate::pr::is_merged_on_github(&target.lead_worktree, &pr)
 }
 
 /// Step 8b (§7.4): the pull request of the Lead Branch, created or adopted, as `pr open` steps 0 and 3 do it (never `--draft`).
