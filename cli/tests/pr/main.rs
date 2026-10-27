@@ -21,6 +21,7 @@ mod pr_merge;
 mod pr_needs_required;
 mod pr_open;
 mod pr_post;
+mod pr_post_auto_merge;
 mod pr_post_flow;
 mod pr_push;
 mod pr_reaction_queue;

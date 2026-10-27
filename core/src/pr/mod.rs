@@ -27,6 +27,7 @@ mod incident_tests;
 mod poll_tests;
 
 mod add;
+pub mod auto_merge;
 mod cancel;
 mod deploys;
 pub mod comments;

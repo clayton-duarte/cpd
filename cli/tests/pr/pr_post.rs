@@ -1,5 +1,5 @@
 //! `pr post` (commands.md §9.8b, §21.8): posts a PR's stored pull request to Slack through the helper (`node`, a scripted
-//! fake here) and records it in `pr_posts`. The command makes no GitHub call: `gh` is the fake that must never be called.
+//! fake here) and records it in `pr_posts`. Its GitHub calls (auto-merge, §9.8b) are tested in `pr_post_auto_merge`; a refusal makes none.
 
 use std::fs;
 
@@ -150,6 +150,8 @@ fn posts_the_rendered_message_and_records_it() {
     );
     let posted_at = row["posted_at"].as_str().unwrap();
     assert!(!posted_at.is_empty());
+    let mut out = out;
+    out.as_object_mut().unwrap().remove("auto_merge"); // its own tests: pr_post_auto_merge
     assert_eq!(
         out,
         json!({"ok": true, "plan": "pay", "pr": "repo", "number": 812, "url": URL,
@@ -162,7 +164,7 @@ fn posts_the_rendered_message_and_records_it() {
 }
 
 #[test]
-fn calls_the_helper_with_the_pi_entry_and_the_channel_and_no_gh() {
+fn calls_the_helper_with_the_pi_entry_and_the_channel() {
     let pay = post(Setup::baseline());
 
     pay.post_cmd().ok();
@@ -185,7 +187,6 @@ fn calls_the_helper_with_the_pi_entry_and_the_channel_and_no_gh() {
     }
     assert_eq!(call.cwd, Some(pay.fx.env.cpd_home().canonicalize().unwrap()));
     assert_eq!(call.deadline, std::time::Duration::from_secs(60));
-    assert!(pay.fx.calls("gh").is_empty(), "no GitHub call");
 }
 
 #[test]

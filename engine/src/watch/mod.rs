@@ -9,6 +9,7 @@
 //! - [`archive_leads`] E14: archives the done Plan of a Lead asleep past `timeouts.archive_sleep_seconds`;
 //! - [`team`] E11: reads the team Slack channel through the detached helper into `run/team-review.json`;
 //! - [`models`] E15: lists the models pi can offer into `run/models-<provider>.json` (7 days);
+//! - [`auto_merge`] E18: turns on squash auto-merge for posted PRs whose request is pending (deferred while stacked);
 //! - [`janitor`] E16: starts `cpd janitor` detached every `watch.janitor_minutes`;
 //! - [`escalations`] E1, [`liveness`] E2, [`schedule`] E3, [`open`] E4,
 //!   [`pr`] E5, [`inbox`] E8: one module per step (E6 was removed, its number stays);
@@ -21,6 +22,7 @@
 
 mod archive;
 mod archive_leads;
+mod auto_merge;
 mod open;
 mod distill;
 mod engine;

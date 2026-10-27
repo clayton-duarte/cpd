@@ -292,6 +292,8 @@ error_codes! {
     PrNotClosed = "pr_not_closed" => Refused,
     PrNotOpen = "pr_not_open" => Refused,
     AlreadyPosted = "already_posted" => Refused,
+    // Only an `error` Event's code (engine E18, pro-d117), never a command's failure.
+    AutoMergeRefused = "auto_merge_refused" => Refused,
     PostDisabled = "post_disabled" => Refused,
     NotAuthored = "not_authored" => Refused,
     PostUnconfigured = "post_unconfigured" => Refused,
@@ -520,6 +522,7 @@ mod tests {
             (ErrorCode::PrNotClosed, 3),
             (ErrorCode::PrNotOpen, 3),
             (ErrorCode::AlreadyPosted, 3),
+            (ErrorCode::AutoMergeRefused, 3),
             (ErrorCode::PostDisabled, 3),
             (ErrorCode::NotAuthored, 3),
             (ErrorCode::PostUnconfigured, 3),
