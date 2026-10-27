@@ -97,6 +97,16 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
     plan_phase(conn, plan)?;
     let all = jobs::load(conn, plan)?;
     let before = find(&all, plan, key)?;
+    // open and update Jobs are cpd's, a draft one included.
+    if before.is_draft() && matches!(before.kind.as_str(), "open" | "update") {
+        return Err(CpdError::new(
+            ErrorCode::JobLocked,
+            format!("Job {key} is an {} Job: its Spec is cpd's, and cannot be edited.", before.kind),
+        )
+        .with("plan", plan.as_str())
+        .with("job", key.as_str())
+        .with("status", before.status.as_str()));
+    }
     let locked = !before.is_draft();
     if locked && edits.worker {
         return Err(CpdError::new(ErrorCode::NotALead, "Only the Lead edits a Locked Job: ask it with cpd ask."));
@@ -167,7 +177,14 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
     if let Some(spec) = &edits.spec {
         let prs = load_prs(conn, plan)?;
         if let Some(pr) = prs.iter().find(|p| p.key.as_str() == after.pr) {
-            super::add::check_touches(pr, &spec.touches)?;
+            // A Lead Branch that is not in the repo (yet) is no tree to read: the Job starts from the PR's base.
+            let mut pr = pr.clone();
+            let lead_exists = crate::git::run::run(std::path::Path::new(&pr.repo), &["rev-parse", "--verify", "--quiet", &format!("{}^{{commit}}", pr.lead_branch)])
+                .is_ok_and(|o| o.code == 0);
+            if locked && !lead_exists {
+                pr.lead_worktree = None;
+            }
+            super::add::check_touches(&pr, &spec.touches)?;
         }
     }
     if moved || after.kind != before.kind {
