@@ -444,6 +444,8 @@ mod tests {
             review_requested: false,
             updated_at: None,
             feedback: None,
+            base_ref: None,
+            default_branch: None,
         }
     }
 

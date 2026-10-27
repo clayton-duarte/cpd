@@ -99,6 +99,8 @@ mod tests {
             review_requested: false,
             updated_at: None,
             feedback: Some(vec![]),
+            base_ref: None,
+            default_branch: None,
         }
     }
 
