@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 56
+-- cpd-migration: breaking after 58
 -- The optional Spec field `resources` (contract §2.2, commands.md §5.1): the names of the repo's declared exclusive
 -- resources a Job takes, a JSON array of one or more names, null for a Job that takes none. Locked with the Job and
 -- in no fingerprint. Breaking: one `CREATE TRIGGER` on `jobs` is breaking by A1; the history triggers of `jobs` are
