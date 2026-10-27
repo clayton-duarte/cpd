@@ -810,6 +810,8 @@ mod margin_tests;
 #[cfg(test)]
 mod pill_label_tests;
 #[cfg(test)]
+mod pill_tier_tests;
+#[cfg(test)]
 mod lines_tests;
 #[cfg(test)]
 mod box_lines_tests;
