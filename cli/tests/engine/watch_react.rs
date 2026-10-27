@@ -421,10 +421,11 @@ fn incident_mode_holds_the_step() {
     let t = react(LONG);
     t.pr("repo", 7, Some(3600));
     t.post("repo", TS, Some(EMOJI));
-    t.fx.env.sql(
-        "INSERT INTO incident (id, started_at, started_by, reason, started_txn) VALUES (1, 't', 'pay-lead', 'why', cpd_txn());
+    t.fx.env.sql(&format!(
+        "INSERT INTO incident (id, started_at, started_by, reason, started_txn) VALUES (1, '{}', 'pay-lead', 'why', cpd_txn());
          INSERT INTO incident_plans (plan, started_txn) VALUES ('pay', cpd_txn());",
-    );
+        t.fx.stamp_ago(0)
+    ));
     // Held for five ticks; then incident mode ends and the step runs.
     let held = Arc::new(Mutex::new(None));
     let record = held.clone();
