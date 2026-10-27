@@ -1715,7 +1715,7 @@ CREATE TABLE slack_reactions (
   CHECK ((plan IS NULL) = (pr IS NULL)),
   CHECK ((refused_at IS NULL) = (refusal IS NULL)),
   CHECK (reacted_at IS NULL OR (refused_at IS NULL AND refusal IS NULL))
-) STRICT;;
+) STRICT;
 
 -- ---------- Message board (hs-d514) ----------
 CREATE TABLE board_posts (
