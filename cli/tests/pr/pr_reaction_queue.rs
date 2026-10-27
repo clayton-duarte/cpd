@@ -90,7 +90,7 @@ fn a_merge_queues_the_posts_reaction() {
     let env = &fx.env;
     assert_eq!(queued(env), 1);
     let row = env.query::<String>(
-        "SELECT json_object('channel', channel, 'ts', ts, 'emoji', emoji, 'reacted_at', reacted_at, 'queued', queued_at IS NOT NULL) FROM slack_reactions",
+        "SELECT json_object('channel', channel, 'ts', ts, 'emoji', emoji, 'reacted_at', reacted_at, 'queued', json(CASE WHEN queued_at IS NOT NULL THEN 'true' END)) FROM slack_reactions",
     );
     let row: serde_json::Value = serde_json::from_str(&row).unwrap();
     assert_eq!(row, json!({"channel": CHANNEL, "ts": TS, "emoji": "git-merge", "reacted_at": null, "queued": true}));
