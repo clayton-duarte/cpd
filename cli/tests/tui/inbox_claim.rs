@@ -255,3 +255,68 @@ fn list_counts_and_names_a_claimed_item_with_all() {
     let all = fx.ok(&["list", "--all"]);
     assert_eq!(all["hidden"], json!({"snoozed": 0, "dismissed": 0, "claimed": 1}));
 }
+
+/// `(channel, ts, emoji)` of every `slack_reactions` row, oldest first, plus the first row's `reacted_at`. Empty while
+/// the table does not exist; any other error panics.
+fn queued_rows(fx: &Fixture) -> Vec<(String, String, String, Option<String>)> {
+    let home = cpd_core::home::CpdHome::resolve(Some(fx.fx.env.cpd_home().into()), None).unwrap();
+    let result = cpd_core::store::Store::open(&home, 5000)
+        .unwrap()
+        .read(|c| {
+            let rows = c
+                .prepare("SELECT channel, ts, emoji, reacted_at FROM slack_reactions ORDER BY id")
+                .and_then(|mut s| s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<Result<Vec<_>, _>>());
+            Ok(rows)
+        })
+        .unwrap();
+    match result {
+        Ok(rows) => rows,
+        Err(e) if e.to_string().contains("no such table") => Vec::new(),
+        Err(e) => panic!("{e}"),
+    }
+}
+
+fn queued(fx: &Fixture) -> Vec<(String, String, String)> {
+    queued_rows(fx).into_iter().map(|(c, t, e, _)| (c, t, e)).collect()
+}
+
+fn eyes() -> (String, String, String) {
+    (CHANNEL.to_owned(), TS_RAW.to_owned(), "eyes".to_owned())
+}
+
+#[test]
+fn claim_queues_eyes_on_the_post_with_the_caches_channel_and_ts_raw() {
+    let (fx, id) = claimable();
+    fx.ok(&["claim", &id.to_string()]);
+    assert_eq!(queued(&fx), vec![eyes()]);
+    assert_eq!(queued_rows(&fx)[0].3, None, "reacted_at is null until the helper succeeds");
+    let messages = fx.events("session-message");
+    let text = messages[0]["data"]["text"].as_str().unwrap();
+    assert!(text.contains(CHANNEL) && text.contains(TS_RAW), "{text}");
+}
+
+#[test]
+fn a_refused_claim_queues_nothing() {
+    let (mut fx, id) = claimable();
+    assert_eq!(refusal(&fx, "999"), (4, "item_not_found".to_owned()));
+    assert_eq!(refusal(&fx, &fx.id("unread").to_string()), (3, "not_claimable".to_owned()));
+    fx.fx.env.write_config("version = 1\nmachine = \"m1\"\n");
+    assert_eq!(refusal(&fx, &id.to_string()), (3, "review_context_unset".to_owned()));
+    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket(), "ctx1"));
+    assert_eq!(refusal(&fx, &id.to_string()), (3, "no_manager".to_owned()));
+    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket(), "eec-codereview"));
+    write_cache(&fx, 7);
+    assert_eq!(refusal(&fx, &id.to_string()), (3, "post_not_found".to_owned()));
+    reconcile(&mut fx.store, &base(), CLOSED_Y).unwrap();
+    assert_eq!(refusal(&fx, &id.to_string()), (3, "item_closed".to_owned()));
+    assert!(queued(&fx).is_empty());
+}
+
+#[test]
+fn claiming_an_already_claimed_item_queues_nothing_more() {
+    let (fx, id) = claimable();
+    let id = id.to_string();
+    fx.ok(&["claim", &id]);
+    assert_eq!(fx.ok(&["claim", &id])["already"], true);
+    assert_eq!(queued(&fx), vec![eyes()]);
+}
