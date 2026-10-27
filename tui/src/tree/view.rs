@@ -139,7 +139,7 @@ pub struct View {
     /// footer (commands.md §17 "No notes", rule (b)).
     pub error: Option<String>,
     /// `$CPD_HOME/policy`: the tree whose known owners (`<owner>/owner.toml`) New Context… chooses the owner from (none when the home is unresolved).
-    policy_dir: Option<PathBuf>,
+    pub(crate) policy_dir: Option<PathBuf>,
     /// The engine's downtime now: since when `locks/watch.lock` has been read free on every snapshot, and whether the
     /// Managers were told of it (view state only).
     down: Option<Down>,

@@ -43,6 +43,9 @@ pub enum Mode {
     Checklist { rows: Vec<Row>, ticked: Vec<bool>, cursor: usize },
     /// A radio list: the prompt, then one row per option, with the `OK` and `Cancel` buttons. `cursor` is an option.
     Select { options: Vec<String>, cursor: usize },
+    /// A text box labelled `input_label`, then a radio list labelled `select_label`, with the `OK` and `Cancel` buttons
+    /// (pro-d114). Skeleton: the drawing and the keys are not done yet.
+    Form { input_label: String, select_label: String, options: Vec<String>, cursor: usize, field: Field },
 }
 
 /// One row of a `checklist`: the `--items` file is a JSON array of these.
@@ -243,6 +246,12 @@ impl Dialog {
         Dialog { title, text, mode, scroll: Scroll::default(), area: Rect::default() }
     }
 
+    /// A `form`: a text box labelled `input_label` and a radio list of `options` labelled `select_label` (skeleton).
+    pub(crate) fn form(title: String, input_label: String, select_label: String, options: Vec<String>) -> Dialog {
+        let mode = Mode::Form { input_label, select_label, options, cursor: 0, field: Field::new("") };
+        Dialog::new(title, String::new(), mode)
+    }
+
     /// The buttons' labels, the confirming one first.
     fn labels(&self) -> Vec<String> {
         match &self.mode {
@@ -250,7 +259,7 @@ impl Dialog {
             Mode::Input { .. } => vec![OK.to_owned(), CANCEL.to_owned()],
             Mode::Text => vec![CLOSE.to_owned()],
             Mode::Checklist { .. } => vec![APPROVE.to_owned(), LATER.to_owned()],
-            Mode::Select { .. } => vec![OK.to_owned(), CANCEL.to_owned()],
+            Mode::Select { .. } | Mode::Form { .. } => vec![OK.to_owned(), CANCEL.to_owned()],
         }
     }
 

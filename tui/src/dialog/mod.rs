@@ -21,6 +21,8 @@ mod input_tests;
 #[cfg(test)]
 mod select_tests;
 #[cfg(test)]
+mod form_tests;
+#[cfg(test)]
 mod pane;
 #[cfg(test)]
 mod pane_tests;
@@ -70,6 +72,8 @@ enum Kind {
     Checklist(Checklist),
     /// A radio list of options, with `[OK]` and `[Cancel]`; the outcome is `{confirmed, value}`
     Select(Select),
+    /// A labelled text box and a labelled radio list, with `[OK]` and `[Cancel]`; the outcome is `{confirmed, value, choice}`
+    Form(Form),
 }
 
 /// What every kind takes.
@@ -140,6 +144,21 @@ struct Select {
     options: Vec<String>,
 }
 
+#[derive(clap::Args, Debug)]
+struct Form {
+    #[command(flatten)]
+    common: Common,
+    /// The label of the text box
+    #[arg(long)]
+    input_label: String,
+    /// The label of the radio list
+    #[arg(long)]
+    select_label: String,
+    /// An option, repeated, in the order shown
+    #[arg(long = "option", required = true)]
+    options: Vec<String>,
+}
+
 /// The options of a `select` on the command line: at least one, each non-empty, one line, no control character, at most
 /// 70 characters, all distinct; otherwise `args_invalid`.
 fn check_options(options: &[String]) -> Result<(), CpdError> {
@@ -165,19 +184,27 @@ pub struct Outcome {
     confirmed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     value: Option<String>,
+    /// The option chosen in a `form`, and only then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    choice: Option<String>,
 }
 
 impl Outcome {
     pub fn confirmed() -> Outcome {
-        Outcome { confirmed: true, value: None }
+        Outcome { confirmed: true, value: None, choice: None }
     }
 
     pub fn cancelled() -> Outcome {
-        Outcome { confirmed: false, value: None }
+        Outcome { confirmed: false, value: None, choice: None }
     }
 
     pub fn value(value: String) -> Outcome {
-        Outcome { confirmed: true, value: Some(value) }
+        Outcome { confirmed: true, value: Some(value), choice: None }
+    }
+
+    /// An accepted `form`: the typed text and the option chosen.
+    pub fn form(value: String, choice: String) -> Outcome {
+        Outcome { confirmed: true, value: Some(value), choice: Some(choice) }
     }
 }
 
@@ -207,6 +234,11 @@ impl Kind {
             Kind::Select(a) => {
                 check_options(&a.options)?;
                 let dialog = Dialog::new(a.common.title.clone(), a.prompt, Mode::Select { options: a.options, cursor: 0 });
+                (a.common, dialog)
+            }
+            Kind::Form(a) => {
+                // skeleton (Job dlg-tests): the options are not checked yet
+                let dialog = Dialog::form(a.common.title.clone(), a.input_label, a.select_label, a.options);
                 (a.common, dialog)
             }
             Kind::Text(a) => {

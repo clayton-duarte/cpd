@@ -123,6 +123,12 @@ pub trait Dialogs {
     fn confirm(&self, title: &str, text: &str, yes_label: &str) -> Result<bool, CpdError>;
     /// The option chosen in a `select` popup; `None` when cancelled.
     fn select(&self, title: &str, prompt: &str, options: &[String]) -> Result<Option<String>, CpdError>;
+    /// The `(title, option)` of a `form` popup: a text box labelled `input_label` and a radio list of `options` labelled
+    /// `select_label`; `None` when cancelled.
+    #[allow(dead_code)] // the tree's New Context… (Job dlg-impl)
+    fn form(&self, _title: &str, _input_label: &str, _select_label: &str, _options: &[String]) -> Result<Option<(String, String)>, CpdError> {
+        unimplemented!("the form popup (skeleton of Job dlg-tests)")
+    }
     /// What the delete of `what` would remove: the reply of the command without `--yes`, or why it is refused.
     fn preview(&self, what: &Deletable) -> Result<Value, String>;
 }

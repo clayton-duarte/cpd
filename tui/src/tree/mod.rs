@@ -47,6 +47,8 @@ mod inbox_merge_tests;
 #[path = "another_owner_tests.rs"]
 mod another_owner_tests;
 #[cfg(test)]
+mod no_confirm_tests;
+#[cfg(test)]
 mod counter_tests;
 #[cfg(test)]
 mod asleep_tests;
