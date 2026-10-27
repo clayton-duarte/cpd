@@ -327,9 +327,10 @@ fn an_open_job_stuck_item_closes_and_none_opens() {
 /// Pull request missionlane/cc-api-orc-apollo#2385 as the poll stores it, with the given review decision and merge state.
 fn polled_2385(fx: &mut Fx, review_decision: &str, merge_state: &str) {
     fx.fixture(&format!(
-        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, merge_state, created_at, changed_at)
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, merge_state, created_at, changed_at,
+                                        base_ref, default_branch)
          VALUES ('missionlane/cc-api-orc-apollo', 2385, 'https://github.com/missionlane/cc-api-orc-apollo/pull/2385', 'T2385', 0,
-                 'open', '{review_decision}', 'passed', '{merge_state}', 't', 't');"
+                 'open', '{review_decision}', 'passed', '{merge_state}', 't', 't', 'main', 'main');"
     ));
 }
 
