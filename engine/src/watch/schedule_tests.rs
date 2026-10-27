@@ -62,31 +62,31 @@ fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
     assert_eq!(fx.job_status("api"), "queued");
 }
 
-/// pro-d53 (hs-d554): a store written before the rule may hold a queued Job on a Tier outside H0-H4, S0-S3. E3 never starts it:
+/// pro-d82 (hs-d554): a store written before the rule may hold a queued Job on a Tier outside H0-H3, S0-S3. E3 never starts it:
 /// one `error` Event (`tier_not_allowed`) per Job, once, the Job stays `queued`, no Attempt is made.
 #[test]
 fn e3_does_not_start_a_job_on_a_tier_outside_the_worker_range_and_raises_one_error_per_job() {
     let mut fx = Fx::with_plan("");
-    for (key, tier) in [("api", "O3"), ("web", "S5"), ("app", "S4"), ("ui", "H5")] {
+    for (key, tier) in [("api", "O3"), ("web", "S5"), ("app", "S4"), ("ui", "H5"), ("cli", "H4")] {
         fx.add_job_on(tier, "repo", key, &[], "");
     }
 
     ticks(&mut fx, 3);
 
     let errors = fx.events("error");
-    assert_eq!(errors.len(), 4, "{errors:?}");
+    assert_eq!(errors.len(), 5, "{errors:?}");
     let mut jobs_named: Vec<_> = errors.iter().map(|(plan, job, attempt, _)| (plan.clone(), job.clone().unwrap(), attempt.clone())).collect();
     jobs_named.sort();
     assert_eq!(
         jobs_named,
-        [("api", None), ("app", None), ("ui", None), ("web", None)].map(|(job, attempt): (&str, Option<String>)| (Some("pay".to_string()), job.to_string(), attempt))
+        [("api", None), ("app", None), ("cli", None), ("ui", None), ("web", None)].map(|(job, attempt): (&str, Option<String>)| (Some("pay".to_string()), job.to_string(), attempt))
     );
     for (_, _, _, data) in &errors {
         assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("tier_not_allowed")), "{data}");
     }
-    assert!(texts(&mut fx, "error").iter().all(|t| t.contains("pro-d53")), "{:?}", texts(&mut fx, "error"));
+    assert!(texts(&mut fx, "error").iter().all(|t| t.contains("pro-d82")), "{:?}", texts(&mut fx, "error"));
     assert_eq!(attempts(&mut fx), 0);
-    for key in ["api", "web", "app", "ui"] {
+    for key in ["api", "web", "app", "ui", "cli"] {
         assert_eq!(fx.job_status(key), "queued", "{key}");
     }
 }

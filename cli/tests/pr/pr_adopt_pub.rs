@@ -19,7 +19,7 @@ use rusqlite::params;
 use serde_json::json;
 
 const URL: &str = "https://github.com/acme/pay/pull/7";
-const LIST_HEAD: [&str; 8] = ["pr", "list", "--head", "feat/x", "--state", "all", "--json", "number,url,state"];
+const LIST_HEAD: [&str; 8] = ["pr", "list", "--head", "feat/x", "--state", "all", "--json", "number,url,state,createdAt"];
 
 /// The fake `gh`: the lookup of `feat/x` finds pull request 7, every other head has none, `pr create` would make 812, and the poll's lookup
 /// answers pull request 7.
@@ -32,7 +32,7 @@ fn gh(env: &TestEnv) {
     fs::write(env.root().join("lookup.json"), lookup).unwrap();
     env.fake_gh(&format!(
         "case \"$1 $2\" in\n\
-         \"pr list\") case \"$*\" in *\"--head feat/x \"*) echo '[{{\"number\":7,\"url\":\"{URL}\",\"state\":\"OPEN\"}}]';; *) echo '[]';; esac;;\n\
+         \"pr list\") case \"$*\" in *\"--head feat/x \"*) echo '[{{\"number\":7,\"url\":\"{URL}\",\"state\":\"OPEN\",\"createdAt\":\"2099-01-01T00:00:00Z\"}}]';; *) echo '[]';; esac;;\n\
          \"pr create\") echo 'https://github.com/acme/pay/pull/812';;\n\
          \"api graphql\") cat '{}/lookup.json';;\n\
          *) echo \"unexpected gh $*\" >&2; exit 9;;\nesac",

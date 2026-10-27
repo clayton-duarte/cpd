@@ -15,6 +15,8 @@ const WIDTH: u32 = 123;
 
 struct Fx {
     env: Ip,
+    /// The janitor lock, held for the test: E16 starts no `cpd janitor`, so the launches are the retitles' alone.
+    _janitor: fs::File,
 }
 
 /// A tick a second, the Tier catalog of a pi install, a fake `pi` that answers a title, Context `ctx` and one idle Manager
@@ -42,7 +44,11 @@ fn fx() -> Fx {
         serde_json::json!({"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": "With an auxiliary agent."}]}}),
     ];
     fs::write(&file, lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n") + "\n").unwrap();
-    let fx = Fx { env };
+    let home = cpd_core::home::CpdHome::resolve(Some(env.env.cpd_home().into()), None).unwrap();
+    fs::create_dir_all(home.locks_dir()).unwrap();
+    let janitor = fs::File::create(home.locks_dir().join("janitor.lock")).unwrap();
+    assert!(cpd_core::lock::try_lock(&janitor).unwrap(), "the fixture takes the janitor lock");
+    let fx = Fx { env, _janitor: janitor };
     fx.fixture(&format!(
         "INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES
            ('1.0.0', 'O', 'p/opus', '[0,1,2,3,4,5]', 't'), ('1.0.0', 'S', 'p/sonnet', '[1,2,3,4,5]', 't'),

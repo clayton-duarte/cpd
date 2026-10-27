@@ -117,12 +117,12 @@ function cells(row: string): Array<{ ch: string; fg: string | undefined }> {
 /** Every box-drawing cell of every row, with its colour. */
 const borderFgs = (rows: string[]) => new Set(rows.flatMap((row) => cells(row).filter((cell) => BORDER.has(cell.ch)).map((cell) => cell.fg)));
 const withBorder = (width: number, lines: string[]) => [
-	` ╭${"─".repeat(width - 4)}╮ `,
-	...lines.map((line) => ` │ ${line.padEnd(width - 6)} │ `),
-	` ╰${"─".repeat(width - 4)}╯ `,
+	`╭${"─".repeat(width - 2)}╮`,
+	...lines.map((line) => `│ ${line.padEnd(width - 4)} │`),
+	`╰${"─".repeat(width - 2)}╯`,
 ];
 
-test("the editor draws a rounded box with one margin column and one padding column", async () => {
+test("the editor draws a rounded box with no margin column and one padding column", async () => {
 	const s = await session({ text: "fix the build\nthen ship it" });
 	try {
 		const rows = s.editor.render(40);
@@ -137,8 +137,8 @@ test("every row of the editor is as wide as the pane", async () => {
 			const rows = s.editor.render(width).map(strip);
 			assert.equal(rows.length, 5, `width ${width}: top, three text rows, bottom`);
 			rows.forEach((row) => assert.equal(visibleWidth(row), width, `width ${width}: ${JSON.stringify(row)}`));
-			assert.ok(rows[0]!.startsWith(" ╭") && rows[0]!.endsWith("╮ "));
-			assert.ok(rows.at(-1)!.startsWith(" ╰") && rows.at(-1)!.endsWith("╯ "));
+			assert.ok(rows[0]!.startsWith("╭") && rows[0]!.endsWith("╮"));
+			assert.ok(rows.at(-1)!.startsWith("╰") && rows.at(-1)!.endsWith("╯"));
 		}
 	} finally { s.dispose(); }
 });
@@ -151,18 +151,18 @@ test("typed text, wrapping and the cursor stay inside the box", async () => {
 		s.editor.handleInput("b");
 		assert.equal(s.editor.getText(), "ab");
 		let rows = s.editor.render(20);
-		assert.equal(strip(rows[1]!), ` │ ${"ab ".padEnd(14)} │ `, "the fake cursor is one cell after the text");
-		// The cursor (the fake one, a reversed cell) sits after "ab" in column 5, inside the box.
+		assert.equal(strip(rows[1]!), `│ ${"ab ".padEnd(16)} │`, "the fake cursor is one cell after the text");
+		// The cursor (the fake one, a reversed cell) sits after "ab" in column 4, inside the box.
 		assert.ok(rows[1]!.includes(`ab${MARKER}`), "the cursor marker follows the text");
-		// Text wraps at the text area, W-6 = 14 columns, and the walls stay put.
-		s.editor.setText("x".repeat(30));
+		// Text wraps at the text area, W-4 = 16 columns, and the walls stay put.
+		s.editor.setText("x".repeat(40));
 		rows = s.editor.render(20).map(strip);
-		assert.equal(rows.length, 5, "three wrapped rows of at most 14 columns");
+		assert.equal(rows.length, 5, "three wrapped rows of at most 16 columns");
 		rows.slice(1, -1).forEach((row) => {
 			assert.equal(visibleWidth(row), 20);
-			assert.ok(row.startsWith(" │ ") && row.endsWith(" │ "), JSON.stringify(row));
+			assert.ok(row.startsWith("│ ") && row.endsWith(" │"), JSON.stringify(row));
 		});
-		assert.ok(rows.slice(1, -1).every((row) => row.slice(3, -3).trimEnd().length <= 14));
+		assert.ok(rows.slice(1, -1).every((row) => row.slice(2, -2).trimEnd().length <= 16));
 	} finally { s.dispose(); }
 });
 
@@ -171,12 +171,12 @@ test("the scroll labels stay on the borders of the box", async () => {
 	try {
 		// The cursor is at the end, so the view is scrolled down: the label is in the top border.
 		let rows = s.editor.render(40).map(strip);
-		assert.match(rows[0]!, /^ ╭─+ ↑ \d+ more ─+╮ $/u, rows[0]);
+		assert.match(rows[0]!, /^╭─+ ↑ \d+ more ─+╮$/u, rows[0]);
 		for (let i = 0; i < 30; i++) s.editor.handleInput("\x1b[A");
 		rows = s.editor.render(40).map(strip);
-		assert.match(rows.at(-1)!, /^ ╰─+ ↓ \d+ more ─+╯ $/u, rows.at(-1));
+		assert.match(rows.at(-1)!, /^╰─+ ↓ \d+ more ─+╯$/u, rows.at(-1));
 		assert.ok(rows.every((row) => visibleWidth(row) === 40));
-		assert.ok(rows.slice(1, -1).every((row) => row.startsWith(" │ ") && row.endsWith(" │ ")));
+		assert.ok(rows.slice(1, -1).every((row) => row.startsWith("│ ") && row.endsWith(" │")));
 	} finally { s.dispose(); }
 });
 
@@ -184,13 +184,13 @@ test("a click in the box places the cursor at the clicked text column", async ()
 	const s = await session({ text: "hello world" });
 	try {
 		s.editor.render(40);
-		// Column 3 is the first text column (0-based), so x = 3 + 4 is the fifth character.
+		// Column 2 is the first text column (0-based), so x = 2 + 4 is the fifth character.
 		const click = (x: number) => s.editor.handleMouse({ type: "click", button: "left", x, y: 1, width: 40, height: 3 } as never);
-		click(3 + 4);
+		click(2 + 4);
 		assert.deepEqual(s.editor.getCursor(), { line: 0, col: 4 });
-		click(3);
+		click(2);
 		assert.deepEqual(s.editor.getCursor(), { line: 0, col: 0 });
-		click(3 + 8);
+		click(2 + 8);
 		assert.deepEqual(s.editor.getCursor(), { line: 0, col: 8 });
 	} finally { s.dispose(); }
 });
@@ -209,11 +209,11 @@ test("the autocomplete rows start at the text column under the box", async () =>
 		await new Promise((resolve) => setTimeout(resolve, 100));
 		const rows = s.editor.render(40).map(strip);
 		assert.equal(rows.length > 3, true, "autocomplete rows follow the bottom border");
-		assert.match(rows[2]!, /^ ╰─+╯ $/u);
+		assert.match(rows[2]!, /^╰─+╯$/u);
 		const list = rows.slice(3);
 		assert.ok(list.some((row) => row.includes("build")), JSON.stringify(list));
 		for (const row of list) {
-			assert.ok(row.startsWith("   "), `the list starts at column 3: ${JSON.stringify(row)}`);
+			assert.ok(/^ {2}(→ | {2})\S/u.test(row), `the list starts at column 2: ${JSON.stringify(row)}`);
 			assert.ok(visibleWidth(row) <= 40);
 		}
 	} finally { s.dispose(); }
@@ -248,7 +248,7 @@ test("the border is colour 6 while the agent works whatever the focus", async ()
 			const rows = s.editor.render(50);
 			assert.deepEqual([...borderFgs(rows)], ["36"], `focus ${inside}: ${readable(rows.join("\n"))}`);
 			const top = strip(rows[0]!);
-			assert.match(top, new RegExp(`^ ╭─${LEFT_CAP}${FRAME} Preparing tools…${RIGHT_CAP}─+╮ $`, "u"), top);
+			assert.match(top, new RegExp(`^╭─${LEFT_CAP}${FRAME} Preparing tools…${RIGHT_CAP}─+╮$`, "u"), top);
 			assert.equal(visibleWidth(top), 50);
 			// The pill is one colour block: caps 6 and text inverted (ESC[7m) with the frame inside it, nothing of its own.
 			const pill = rows[0]!.slice(rows[0]!.indexOf(LEFT_CAP));
@@ -259,7 +259,7 @@ test("the border is colour 6 while the agent works whatever the focus", async ()
 		// A pane too narrow for the label truncates the words with … inside the pill and keeps the corner.
 		const narrow = strip(s.editor.render(20).at(0)!);
 		assert.equal(visibleWidth(narrow), 20);
-		assert.match(narrow, new RegExp(`^ ╭─${LEFT_CAP}${FRAME} [^…]*…${RIGHT_CAP}─*╮ $`, "u"), narrow);
+		assert.match(narrow, new RegExp(`^╭─${LEFT_CAP}${FRAME} [^…]*…${RIGHT_CAP}─*╮$`, "u"), narrow);
 	} finally { s.dispose(); }
 });
 

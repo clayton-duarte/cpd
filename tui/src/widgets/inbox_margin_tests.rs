@@ -34,7 +34,7 @@ fn blank_after(buf: &Buffer, y: u16, last: usize) -> bool {
 
 fn inbox_buffer(items: &[Item], shape: Shape, height: u16) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(W, height)).unwrap();
-    terminal.draw(|f| draw(f, f.area(), items, shape, None, now(), &|_| None)).unwrap();
+    terminal.draw(|f| { draw(f, f.area(), items, shape, None, now(), &|_| None); }).unwrap();
     terminal.backend().buffer().clone()
 }
 

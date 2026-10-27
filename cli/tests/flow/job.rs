@@ -25,7 +25,7 @@ pub(super) fn store(env: &TestEnv) -> Store {
     Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
 }
 
-fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
+pub(super) fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
     Ok(())
 }
@@ -108,11 +108,11 @@ pub(super) fn plan(env: &TestEnv, id: &str, phase: &str) {
     fixture(env, &sql);
 }
 
-fn spec_json() -> Value {
+pub(super) fn spec_json() -> Value {
     json!({"goal": "Do it.", "context": "Because.", "touches": ["src/a.rs"], "acceptance": ["cargo test"], "out_of_scope": ["Everything else."]})
 }
 
-fn write_spec(env: &TestEnv, name: &str, text: &str) -> String {
+pub(super) fn write_spec(env: &TestEnv, name: &str, text: &str) -> String {
     let path: PathBuf = env.root().join(name);
     fs::write(&path, text).unwrap();
     path.to_str().unwrap().to_owned()
@@ -133,7 +133,7 @@ pub(super) fn job_add(fx: &Fx, plan: &str, key: &str, tier: &str, needs: &[&str]
     fx.cpd(&args)
 }
 
-fn job(env: &Fx, args: &[&str], plan: &str) -> Run {
+pub(super) fn job(env: &Fx, args: &[&str], plan: &str) -> Run {
     let mut all = vec!["job"];
     all.extend(args);
     all.extend(["--plan", plan]);
@@ -149,7 +149,7 @@ pub(super) fn count(env: &TestEnv, table: &str) -> i64 {
 }
 
 /// A Plan `p` in phase `plan` with draft Jobs `a` and `b` (needs `a`).
-fn drafted(fx: &Fx) {
+pub(super) fn drafted(fx: &Fx) {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     job_add(fx, "pl", "a", "S2", &[]).ok();
@@ -176,7 +176,7 @@ pub(super) fn lock(env: &TestEnv, plan_id: &str) {
 }
 
 /// Moves the queued Job `key` to `status` the way the engine would.
-fn engine(env: &TestEnv, plan_id: &str, key: &str, status: &str) {
+pub(super) fn engine(env: &TestEnv, plan_id: &str, key: &str, status: &str) {
     let attempt = format!("INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
         VALUES ('{plan_id}', '{key}-a1', '{key}', 1, 'S2', 'ladder', 'running', 'cpd/{plan_id}--{key}-a1', '/w', 't');");
     let ended = |outcome: &str, cause: &str| {
@@ -203,7 +203,7 @@ fn engine(env: &TestEnv, plan_id: &str, key: &str, status: &str) {
     fixture(env, &sql);
 }
 
-fn job_row(env: &TestEnv, plan_id: &str, key: &str, column: &str) -> Value {
+pub(super) fn job_row(env: &TestEnv, plan_id: &str, key: &str, column: &str) -> Value {
     store(env)
         .read(|conn| {
             Ok(conn.query_row(
@@ -493,7 +493,7 @@ fn a_locked_job_cannot_be_edited_by_the_command_or_by_the_database() {
     }
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
     // The trigger of §4.4 refuses the same writes.
-    let result = store(&fx.env).write("fixture", |tx| exec(tx, "UPDATE jobs SET goal = 'Else.' WHERE key = 'a';"));
+    let result = store(&fx.env).write("fixture", |tx| exec(tx, "UPDATE jobs SET title = 'Else.' WHERE key = 'a';"));
     assert_eq!(result.unwrap_err().code(), cpd_core::error::ErrorCode::JobLocked);
     let result = store(&fx.env).write("fixture", |tx| exec(tx, "DELETE FROM dependencies WHERE job = 'b';"));
     assert_eq!(result.unwrap_err().code(), cpd_core::error::ErrorCode::JobLocked);
@@ -1724,16 +1724,16 @@ fn fixture_error(env: &TestEnv, sql: &str) -> String {
     store(env).write("fixture", |tx| exec(tx, sql)).unwrap_err().to_string()
 }
 
-// ---------- Tier rules (pro-d53, hs-d554): Workers use only H0-H4 and S0-S3 ----------
+// ---------- Tier rules (pro-d82, hs-d554): Workers use only H0-H3 and S0-S3 ----------
 
-/// The refusal of pro-d53 (hs-d554 for the cost reason): `tier_not_allowed`, exit 2, naming the rule, its reason and the allowed range.
+/// The refusal of pro-d82 (hs-d554 for the cost reason): `tier_not_allowed`, exit 2, naming the rule, its reason and the allowed range.
 fn not_allowed(run: &Run, tier: &str) {
     let e = refused(run, "tier_not_allowed", 2);
     assert_eq!(e["details"]["tier"], tier, "{run:?}");
-    assert_eq!(e["details"]["allowed"], "H0-H4, S0-S3", "{run:?}");
-    assert_eq!(e["details"]["rule"], "pro-d53", "{run:?}");
+    assert_eq!(e["details"]["allowed"], "H0-H3, S0-S3", "{run:?}");
+    assert_eq!(e["details"]["rule"], "pro-d82", "{run:?}");
     let message = e["message"].as_str().unwrap();
-    for part in ["pro-d53", "hs-d554", "cost", "H0-H4, S0-S3"] {
+    for part in ["pro-d82", "hs-d554", "cost", "H0-H3, S0-S3"] {
         assert!(message.contains(part), "`{part}` missing from: {message}");
     }
 }
@@ -1743,12 +1743,13 @@ fn add_refuses_a_tier_outside_the_worker_range_and_writes_nothing() {
     let fx = Fx::new();
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
+    fixture(&fx.env, "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';"); // H4 reaches the Worker range check
     let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
-    for tier in ["O1", "O3", "S4", "S5"] {
+    for tier in ["H4", "O1", "O3", "S4", "S5"] {
         not_allowed(&job_add(&fx, "pl", "k", tier, &[]), tier);
     }
     // A stub draft's Tier is checked too.
-    for tier in ["O1", "O3", "S4", "S5"] {
+    for tier in ["H4", "O1", "O3", "S4", "S5"] {
         not_allowed(&stub_add(&fx, "pl", "k", &["--tier", tier]), tier);
     }
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, rows));
@@ -1779,8 +1780,9 @@ fn add_says_tier_invalid_before_tier_not_allowed() {
 fn edit_refuses_a_tier_outside_the_worker_range_and_writes_nothing() {
     let fx = Fx::new();
     drafted(&fx);
+    fixture(&fx.env, "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';"); // H4 reaches the Worker range check
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    for tier in ["O1", "O3", "S4", "S5"] {
+    for tier in ["H4", "O1", "O3", "S4", "S5"] {
         not_allowed(&job(&fx, &["edit", "b", "--tier", tier], "pl"), tier);
         not_allowed(&job(&fx, &["edit", "b", "--tier", tier, "--title", "New"], "pl"), tier);
     }
@@ -1828,13 +1830,34 @@ fn retry_refuses_a_tier_outside_the_worker_range_checks_it_first_and_writes_noth
     lock(&fx.env, "pl");
     engine(&fx.env, "pl", "a", "failed");
     engine(&fx.env, "pl", "c", "running");
+    fixture(&fx.env, "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';"); // H4 reaches the Worker range check
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    for tier in ["O1", "O3", "O5", "S4", "S5"] {
+    for tier in ["H4", "O1", "O3", "O5", "S4", "S5"] {
         not_allowed(&job(&fx, &["retry", "a", "--tier", tier], "pl"), tier);
     }
     // Checked first: a Job that is not failed still gets the Tier refusal.
     not_allowed(&job(&fx, &["retry", "c", "--tier", "O4"], "pl"), "O4");
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(job_row(&fx.env, "pl", "a", "status"), "failed");
+    assert_eq!(job_row(&fx.env, "pl", "a", "retry_tier"), Value::Null);
+}
+
+/// pro-d82: H4 is refused as tier_not_allowed even when the catalog has H4 (the catalog check passes, the Worker range does not).
+#[test]
+fn add_edit_and_retry_refuse_h4_even_when_the_catalog_has_h4() {
+    let fx = Fx::new();
+    drafted(&fx);
+    job_add(&fx, "pl", "c", "S2", &[]).ok();
+    lock(&fx.env, "pl");
+    engine(&fx.env, "pl", "a", "failed");
+    fixture(&fx.env, "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';");
+    let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
+    not_allowed(&job_add(&fx, "pl", "k", "H4", &[]), "H4");
+    not_allowed(&stub_add(&fx, "pl", "k", &["--tier", "H4"]), "H4");
+    not_allowed(&job(&fx, &["edit", "b", "--tier", "H4"], "pl"), "H4");
+    not_allowed(&job(&fx, &["retry", "a", "--tier", "H4"], "pl"), "H4");
+    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, rows));
+    assert_eq!(job_row(&fx.env, "pl", "b", "tier"), "S2");
     assert_eq!(job_row(&fx.env, "pl", "a", "status"), "failed");
     assert_eq!(job_row(&fx.env, "pl", "a", "retry_tier"), Value::Null);
 }
@@ -2065,7 +2088,7 @@ fn job_cancel_checks_no_shape_for_a_pr_that_is_not_tdd_or_that_has_opened() {
 }
 
 /// A Plan `pl` locked with the test Job `t` (`tests/t.rs`, `tests/more/`) and the impl Job `i` that needs it, both queued.
-fn locked_tdd(fx: &Fx) {
+pub(super) fn locked_tdd(fx: &Fx) {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     let tests = test_spec_file(&fx.env, "t.json", json!(["t::one"]), json!(["tests/t.rs", "tests/more/"]));
@@ -2073,7 +2096,7 @@ fn locked_tdd(fx: &Fx) {
     add_needing(fx, "pl", "i", "impl", &["t"], "repo").ok();
 }
 
-fn approve(fx: &Fx, args: &[&str]) -> Run {
+pub(super) fn approve(fx: &Fx, args: &[&str]) -> Run {
     let mut all = vec!["job", "approve-tests"];
     all.extend(args);
     all.extend(["--plan", "pl"]);
@@ -2119,7 +2142,7 @@ fn approve_tests_records_the_paths_the_impl_job_may_change_and_tells_the_event()
 }
 
 /// The Locked-Job fingerprint of Job `key` of Plan `pl`, recomputed.
-fn locked_fingerprint_of(env: &TestEnv, key: &str) -> String {
+pub(super) fn locked_fingerprint_of(env: &TestEnv, key: &str) -> String {
     let id = PlanId::parse("pl").unwrap();
     let all = store(env).read(|conn| jobs::load(conn, &id)).unwrap();
     locked_fingerprint(all.iter().find(|j| j.key == key).unwrap())
@@ -2165,7 +2188,7 @@ fn approve_tests_refuses_what_it_cannot_approve_and_writes_nothing() {
 
 /// Plan `pl` in `plan`, whose PR's repo is a repo of the fake git (a real directory, its objects in the `Universe`)
 /// with `src/a.rs` on `main` (the tree a Job of the unstarted PR starts from).
-fn touches_fx() -> Fx {
+pub(super) fn touches_fx() -> Fx {
     let fx = Fx::with_ports();
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
@@ -2176,7 +2199,7 @@ fn touches_fx() -> Fx {
 }
 
 /// `job add <key> --spec` of a Spec whose `touches` are `touches`, into Plan `pl`.
-fn add_touching(fx: &Fx, key: &str, touches: &[&str]) -> Run {
+pub(super) fn add_touching(fx: &Fx, key: &str, touches: &[&str]) -> Run {
     let mut spec = spec_json();
     spec["touches"] = json!(touches);
     let spec = write_spec(&fx.env, &format!("{key}.json"), &spec.to_string());

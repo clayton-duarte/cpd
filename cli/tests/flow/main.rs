@@ -28,6 +28,7 @@ mod driver;
 mod context_inbox_cyan;
 mod host_repair;
 mod job;
+mod job_edit_locked;
 mod job_fix;
 mod driver_fix;
 mod metrics;

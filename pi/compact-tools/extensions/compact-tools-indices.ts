@@ -22,6 +22,11 @@ export const RUNNING = INDEX.cyan;
 /** Fold toggles and read-only text. */
 export const TEXT = INDEX.grey;
 
+/** A rail fold's body row under fold "toggle": the rail in column 0, one blank (docs/contract.md 6.1.1 "The rail fold"). */
+export const RAIL_TOGGLE = "│ ";
+/** The blank columns a rail fold's rows keep at the right under fold "toggle". */
+export const TOGGLE_RESERVE = 2;
+
 /** The foreground SGR parameter for an index: 30-37 below 8, 90-97 from 8. */
 function sgrParam(index: number): number {
 	return index < 8 ? 30 + index : 90 + index - 8;

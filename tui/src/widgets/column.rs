@@ -311,7 +311,7 @@ pub fn draw(
         Layout::vertical([Constraint::Length(1), Constraint::Length(2), Constraint::Min(0), Constraint::Length(inbox_height)]).areas(area);
     let [prs_header, prs] = Layout::vertical([Constraint::Length(SectionTitle::ROWS), Constraint::Min(1)]).areas(prs_section);
     // the section's title carries the padding itself, so the section is drawn across the column
-    inbox::draw(f, inbox_area, inbox, shape, None, now, &|item| inbox::merges(merging, item).then_some(frame));
+    let mut links = inbox::draw(f, inbox_area, inbox, shape, None, now, &|item| inbox::merges(merging, item).then_some(frame));
     f.render_widget(SectionTitle::new("PRs", Some(open.len())), prs_header);
     f.render_widget(Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::styled(machine.usage_line(), palette::read_only_text())]), home);
     let height = usize::from(prs.height);
@@ -356,7 +356,6 @@ pub fn draw(
         let cue = scroll::cue(Cue::Below, win.below, usize::from(prs.width));
         f.render_widget(Paragraph::new(cue), Rect::new(prs.x, prs.bottom() - 1, prs.width, 1));
     }
-    let mut links = Links::default();
     for (y, pr) in &shown {
         if let Some(x) = arrow_x {
             let buf = f.buffer_mut();
