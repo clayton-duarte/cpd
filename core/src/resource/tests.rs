@@ -320,7 +320,7 @@ fn resource_slot_lock_is_free_again_when_its_holder_dies() {
     drop(second);
 }
 
-/// A store with Plan `pay` and its Attempts: `a-a1` running, `b-a1` starting, `c-a1` running, `d-a1` ended (all four of different Jobs).
+/// A store with Plan `pay` and its Attempts: `a-a1` running, `b-a1` starting, `c-a1` running, `d-a1` ended (all four of different Jobs; `d` is `failed`, so a tenant still).
 fn store_with_attempts() -> (tempfile::TempDir, crate::store::Store) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
@@ -361,12 +361,17 @@ fn workers_is_a_host_resource_with_concurrency_slots_and_attempts_as_tenants() {
     let tenant = |job: &str, at: &str| Holder::Attempt { plan: "pay".to_owned(), job: job.to_owned(), attempt: format!("{job}-a1"), at: at.to_owned() };
     assert_eq!(
         pool.holders,
-        [tenant("a", "2026-10-26T21:40:00.000Z"), tenant("b", "2026-10-26T21:41:00.000Z"), tenant("c", "2026-10-26T21:42:00.000Z")],
-        "every Attempt not `ended`, in start order, and no other"
+        [
+            tenant("a", "2026-10-26T21:40:00.000Z"),
+            tenant("b", "2026-10-26T21:41:00.000Z"),
+            tenant("c", "2026-10-26T21:42:00.000Z"),
+            tenant("d", "2026-10-26T21:43:00.000Z")
+        ],
+        "every tenant Job of `workers` in start order: the `failed` Job `d` keeps its worker though its Attempt ended"
     );
     // The slots follow the config, the tenants do not.
     assert_eq!(store.read(|conn| workers(conn, 1)).unwrap().slots, 1);
-    assert_eq!(store.read(|conn| workers(conn, 1)).unwrap().holders.len(), 3, "an urgent Job's slot beyond concurrency is a tenant too");
+    assert_eq!(store.read(|conn| workers(conn, 1)).unwrap().holders.len(), 4, "an urgent Job's slot beyond concurrency is a tenant too");
     // No lock file: the Ledger is the record.
     let locks = dir.path().join("locks");
     assert!(!locks.exists() || fs::read_dir(&locks).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().contains("workers")));

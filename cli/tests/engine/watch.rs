@@ -1097,7 +1097,7 @@ fn e2_removes_the_lock_of_a_dead_driver_it_ends_and_does_not_recreate_it() {
 #[test]
 fn e2_climbs_the_ladder_for_a_dead_driver() {
     let fx = engine_with_plan("concurrency = 1");
-    // A live Attempt holds the only slot, so E3 does not start the next one.
+    // A live Attempt holds the only slot; `api` is a tenant already, so E3 starts its next Attempt at once, competing for nothing.
     let _busy = fx.live_driver("busy-a1");
     fx.add_running("busy", "running", &ago_in(&fx, 1));
     fx.add_running("api", "running", &ago_in(&fx, 1));
@@ -1105,11 +1105,13 @@ fn e2_climbs_the_ladder_for_a_dead_driver() {
     fx.watch_first_tick().unwrap();
 
     assert_eq!(fx.attempt("api-a1").0, "ended");
-    assert_eq!(fx.job_status("api"), "queued");
-    let retry = fx.events("attempt-retry");
+    // The Attempt E2 ended climbs the ladder once; the next one started at once (this engine has no installed binary, so its driver
+    // could not start: its own `attempt-retry`, which is not E2's).
+    let retry: Vec<_> = fx.events("attempt-retry").into_iter().filter(|e| e.2.as_deref() == Some("api-a1")).collect();
     assert_eq!(retry.len(), 1);
     assert_eq!((&retry[0].3["cause"], &retry[0].3["next_tier"]), (&json!("crashed"), &json!("S3")));
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 1);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api' AND number <= 2"), 2);
+    assert_eq!(fx.env.query::<String>("SELECT tier FROM attempts WHERE id = 'api-a2'"), "S3");
 }
 
 /// hs-n465, hs-d632: the catalog refuses the Tier of an Attempt whose driver died (`S2` when
@@ -1119,7 +1121,7 @@ fn e2_climbs_the_ladder_for_a_dead_driver() {
 fn e2_ends_an_attempt_whose_tier_the_catalog_refuses_and_requeues_at_the_next_valid_tier() {
     let fx = engine_with_plan("concurrency = 1");
     fx.env.sql("UPDATE tier_catalog SET efforts = '[0,1,3,5]' WHERE letter = 'S';");
-    // A live Attempt holds the only slot, so E3 does not start the next one after E2 queues `api`.
+    // A live Attempt holds the only slot; `api` is a tenant already, so E3 starts its next Attempt after E2 queues it, competing for nothing.
     let _busy = fx.live_driver("busy-a1");
     fx.add_running("busy", "running", &ago_in(&fx, 1));
     fx.add_running("api", "starting", &ago_in(&fx, 1));
@@ -1127,8 +1129,9 @@ fn e2_ends_an_attempt_whose_tier_the_catalog_refuses_and_requeues_at_the_next_va
     fx.watch_first_tick().unwrap();
 
     assert_ne!(fx.attempt("api-a1").0, "starting", "the Attempt stayed starting");
-    assert_eq!(fx.job_status("api"), "queued");
-    let retry = fx.events("attempt-retry");
+    assert_eq!(fx.env.query::<String>("SELECT tier FROM attempts WHERE id = 'api-a2'"), "S3", "the tenant Job's next Attempt started at once, at S3");
+    // The Attempt E2 ended climbs the ladder once (the next one's driver could not start, with no installed binary: its own `attempt-retry`).
+    let retry: Vec<_> = fx.events("attempt-retry").into_iter().filter(|e| e.2.as_deref() == Some("api-a1")).collect();
     assert_eq!(retry.len(), 1, "{retry:?}");
     assert_eq!(
         (retry[0].1.as_deref(), retry[0].2.as_deref(), &retry[0].3["cause"], &retry[0].3["next_tier"]),

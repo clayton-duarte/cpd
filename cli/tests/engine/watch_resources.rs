@@ -233,12 +233,14 @@ fn job_stays_queued_while_every_slot_is_held_and_job_show_lists_the_holders() {
     assert_eq!((status(&fx, "api"), attempts(&fx), all_errors(&fx)), ("queued".into(), 0, 0));
     assert_eq!(fx.fakes.spawn.launches_but_janitor(), []);
     let shown = fx.cpd(&["job", "show", "api", "--plan", PLAN]).ok();
+    let held = |record: &str, slot: u8| json!({"slot": slot, "holder": serde_json::from_str::<Value>(record).unwrap()});
     assert_eq!(
         shown["job"]["waiting_for"],
         json!([{
             "resource": "e2e-port", "scope": "repo", "slots": 2,
-            "holders": [serde_json::from_str::<Value>(COMMAND_RECORD).unwrap(), serde_json::from_str::<Value>(ATTEMPT_RECORD).unwrap()],
-        }])
+            "holders": [held(COMMAND_RECORD, 1), held(ATTEMPT_RECORD, 2)],
+        }]),
+        "the held command slots, each with its slot number, in the shape of `resource list`"
     );
 }
 
@@ -252,8 +254,9 @@ fn job_starts_when_one_of_two_slots_is_free() {
 
     assert_eq!(started(&fx), ["api"], "the Job takes the free slot");
     assert_eq!(status(&fx, "api"), "running");
-    let record: Value = serde_json::from_str(&fs::read_to_string(fx.env.cpd_home().join("locks/resource.repo.acme.pay.e2e-port.2.lock")).unwrap()).unwrap();
-    assert_eq!((record["by"].as_str(), record["job"].as_str()), (Some("attempt"), Some("api")));
+    // The Job is the tenant of the pool in the Ledger: its row commits with its Attempt, and it takes no lock file.
+    assert_eq!(fx.env.query::<i64>(&format!("SELECT count(*) FROM job_tenants WHERE job = 'api' AND pool = '{PORT_POOL}'")), 1);
+    assert!(!fx.env.cpd_home().join("locks/resource.repo.acme.pay.e2e-port.2.lock").exists(), "a Job writes no slot file");
     assert_eq!(fs::read_to_string(fx.env.cpd_home().join("locks/resource.repo.acme.pay.e2e-port.1.lock")).unwrap(), COMMAND_RECORD);
 }
 
@@ -269,6 +272,12 @@ fn tenant(fx: &Fx, key: &str, resources: &[&str], pools: &[&str], failed: bool) 
         "UPDATE jobs SET status = 'running' WHERE plan = '{PLAN}' AND key = '{key}';
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
            VALUES ('{PLAN}', '{key}-a1', '{key}', 1, 'S2', 'ladder', 'running', 'cpd/{PLAN}--{key}-a1', '/w', 't');"
+    );
+    // The Attempt turned `running`: E2 reads this Event for a live Attempt, as `Fx::add_running` writes it.
+    then += &format!(
+        "INSERT INTO events (txn, at, kind, context, plan, job, attempt, text, data)
+           VALUES (cpd_txn(), '{}', 'attempt-status', 'ctx', '{PLAN}', '{key}', '{key}-a1', 'running', '{{\"from\":\"starting\",\"to\":\"running\"}}');",
+        fx.stamp_ago(60_000)
     );
     for pool in pools {
         then += &format!("INSERT INTO job_pools (plan, job, pool) VALUES ('{PLAN}', '{key}', '{pool}');");
