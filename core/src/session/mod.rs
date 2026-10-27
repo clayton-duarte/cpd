@@ -29,6 +29,7 @@ mod resolve;
 mod resume;
 mod retier;
 mod report;
+mod switch;
 pub(crate) mod retitle;
 mod row;
 pub(crate) mod run;
@@ -103,6 +104,12 @@ pub enum Command {
     /// Report an adapter error to the Manager (pi adapter) (§10.18)
     #[command(hide = true)]
     Report(ReportArgs),
+    /// Record a failed model switch (pi adapter) (§10.18a)
+    #[command(hide = true, name = "switch-failed")]
+    SwitchFailed(SwitchFailedArgs),
+    /// Record a successful model switch (pi adapter) (§10.18b)
+    #[command(hide = true)]
+    Switched(SwitchedArgs),
     /// The program in every Lead pane (internal; owns its terminal) (§10.8)
     #[command(hide = true)]
     Run(RunArgs),
@@ -313,6 +320,26 @@ pub struct ReportArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct SwitchFailedArgs {
+    /// The adapter's error code
+    #[arg(long, value_name = "code")]
+    code: report::Code,
+    /// The error's message
+    #[arg(long, value_name = "text")]
+    message: report::Short,
+    /// The Session whose switch failed [default: $CPD_SESSION]
+    #[arg(long, value_name = "id", env = "CPD_SESSION", hide_env = true)]
+    session: Option<SessionRef>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct SwitchedArgs {
+    /// The Session whose switch succeeded [default: $CPD_SESSION]
+    #[arg(long, value_name = "id", env = "CPD_SESSION", hide_env = true)]
+    session: Option<SessionRef>,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct RunArgs {
     /// The Lead Session this pane runs
     #[arg(value_name = "id")]
@@ -345,6 +372,8 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::FirstMessage(args) => first_message::first_message(args),
         Command::Retitle(args) => retitle::retitle(args),
         Command::Report(args) => report::report(args),
+        Command::SwitchFailed(args) => switch::failed(args),
+        Command::Switched(args) => switch::switched(args),
         Command::Run(args) => run::run(args),
     }
 }

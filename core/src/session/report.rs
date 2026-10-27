@@ -21,7 +21,7 @@ fn usage(message: String) -> CpdError {
 
 /// 1 to 2000 characters (`--what`, `--message`).
 #[derive(Clone, Debug)]
-pub struct Short(String);
+pub struct Short(pub(super) String);
 
 impl FromStr for Short {
     type Err = CpdError;
@@ -36,7 +36,7 @@ impl FromStr for Short {
 
 /// `^[a-z][a-z0-9_]{0,63}$`.
 #[derive(Clone, Debug)]
-pub struct Code(String);
+pub struct Code(pub(super) String);
 
 impl FromStr for Code {
     type Err = CpdError;

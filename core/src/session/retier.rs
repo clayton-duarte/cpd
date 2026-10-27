@@ -58,7 +58,7 @@ pub(super) fn retier(args: RetierArgs) -> Result<Output, CpdError> {
                     unchanged.push(row.id.to_string());
                     continue;
                 }
-                tx.execute("UPDATE sessions SET tier = ?1 WHERE id = ?2", [to.as_str(), row.id.as_str()])?;
+                tx.execute("UPDATE sessions SET tier = ?1, switch_failed = NULL WHERE id = ?2", [to.as_str(), row.id.as_str()])?;
                 let text = format!("Session {} moved from {} to {to}.", row.id, row.tier);
                 let event = append(tx, scoped(NewEvent::session_retiered(text, &row.tier, &to), &row))?;
                 moved.push(json!({"session": row.id, "role": row.role.as_str(), "from": row.tier, "to": to, "event": event}));
