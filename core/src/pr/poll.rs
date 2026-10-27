@@ -10,6 +10,7 @@ use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use super::comments::{self, Read};
+use super::deploys;
 use super::feedback;
 use super::gh::{self, Listed};
 use super::pulls::{self, Change, Reason};
@@ -182,6 +183,8 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &reads, &owned, &checks, &follows, open_tier))? } else { Outcome::default() };
 
     report_unresolved(&mut env, &unresolved)?;
+    // After the poll's own rows are written (§7.6 step 8): a failure of the deploy read loses none of them.
+    deploys::read(&*env.ports.runner, &env.home, &crate::clock::now())?;
 
     let printed_prs = match &selected {
         Some(id) => {

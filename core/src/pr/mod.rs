@@ -18,6 +18,8 @@
 #[cfg(test)]
 mod comments_tests;
 #[cfg(test)]
+mod deploys_tests;
+#[cfg(test)]
 mod gh_runner_tests;
 #[cfg(test)]
 mod incident_tests;
@@ -26,6 +28,7 @@ mod poll_tests;
 
 mod add;
 mod cancel;
+mod deploys;
 pub mod comments;
 mod edit;
 mod feedback;
