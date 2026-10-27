@@ -106,7 +106,7 @@ fn migrated_empty() -> (tempfile::TempDir, Store) {
     let (dir, home) = crate::store::tests::tmp_home();
     let mut store = Store::open(&home, 5000).unwrap();
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-    let head = FIXTURE.split(concat!("  INSERT INTO", " jobs")).next().unwrap();
+    let head = FIXTURE.split("  INSERT\u{20}INTO jobs").next().unwrap();
     write(&mut store, head).unwrap();
     (dir, store)
 }

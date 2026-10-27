@@ -28,6 +28,7 @@ CREATE TABLE jobs_new (
   tests               TEXT CHECK (tests IS NULL OR (json_valid(tests) AND json_type(tests) = 'array' AND json_array_length(tests) >= 1)),            -- a `test` Job's named tests (Spec); guarded by jobs_locked, in no fingerprint
   test_files          TEXT CHECK (test_files IS NULL OR (json_valid(test_files) AND json_type(test_files) = 'array' AND json_array_length(test_files) >= 1)),  -- the files that hold them (Spec); the guard of §7.5
   test_approved       TEXT CHECK (test_approved IS NULL OR (json_valid(test_approved) AND json_type(test_approved) = 'array')),                      -- an `impl` Job's approved red-test paths; NOT Locked: `job approve-tests` changes it after the lock
+  resources           TEXT CHECK (resources IS NULL OR (json_valid(resources) AND json_type(resources) = 'array' AND json_array_length(resources) >= 1)),  -- the exclusive resources the Job's run needs (Spec); named migration `job-resources`, an ADD COLUMN, so last; a Locked field
   UNIQUE (plan, key),
   FOREIGN KEY (plan, pr) REFERENCES prs(plan, key),
   CHECK (status <> 'draft' OR fingerprint IS NULL),
@@ -39,8 +40,8 @@ CREATE TABLE jobs_new (
   CHECK ((cancel_reason IS NULL) = (cancel_requested_at IS NULL)),
   CHECK (status <> 'cancelled' OR cancel_reason IS NOT NULL)
 ) STRICT;
-INSERT INTO jobs_new (seq, plan, pr, review, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, urgent, kind, tests, test_files, test_approved)
-  SELECT seq, plan, pr, review, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, urgent, kind, tests, test_files, test_approved
+INSERT INTO jobs_new (seq, plan, pr, review, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, urgent, kind, tests, test_files, test_approved, resources)
+  SELECT seq, plan, pr, review, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, urgent, kind, tests, test_files, test_approved, resources
   FROM jobs ORDER BY seq;
 DROP TABLE jobs;
 ALTER TABLE jobs_new RENAME TO jobs;
@@ -74,7 +75,7 @@ WHEN (NEW.kind <> 'test' AND (NEW.tests IS NOT NULL OR NEW.test_files IS NOT NUL
 BEGIN SELECT RAISE(ABORT, 'spec_invalid'); END;
 
 -- Created last: SQLite fires the newest trigger first, and `job_locked` must win over `spec_invalid` as before.
-CREATE TRIGGER jobs_locked BEFORE UPDATE OF title, tier, goal, context, touches, acceptance, out_of_scope, plan, key, pr, review, kind, tests, test_files ON jobs
+CREATE TRIGGER jobs_locked BEFORE UPDATE OF title, tier, goal, context, touches, acceptance, out_of_scope, plan, key, pr, review, kind, tests, test_files, resources ON jobs
 WHEN OLD.status <> 'draft'
  AND NOT (OLD.status = 'queued'
           AND OLD.kind NOT IN ('open', 'update')
