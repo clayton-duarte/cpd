@@ -57,8 +57,8 @@ pub(crate) fn home_with(merge_state: &str) -> (tempfile::TempDir, CpdHome) {
     std::fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
     let sql = format!(
-        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, merge_state, created_at, merged_at, changed_at)
-         VALUES ('acme/api', 3, '{URL}', 'Title 3', 0, 'open', 'none', 'passed', '{merge_state}', '2026-01-03T00:00:00.000Z', NULL, '2026-01-09T00:00:00.000Z');
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, merge_state, base_ref, default_branch, created_at, merged_at, changed_at)
+         VALUES ('acme/api', 3, '{URL}', 'Title 3', 0, 'open', 'none', 'passed', '{merge_state}', 'main', 'main', '2026-01-03T00:00:00.000Z', NULL, '2026-01-09T00:00:00.000Z');
          INSERT INTO inbox_items (kind, urgency, subject, label, url, opened_at)
          VALUES ('pr-ready', 'yellow', 'pr:acme/api#3', 'api#3 ready', '{URL}', '2026-01-01T00:00:00.000Z');"
     );

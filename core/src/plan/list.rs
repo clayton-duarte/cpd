@@ -103,6 +103,9 @@ fn pr_row(r: &Row) -> rusqlite::Result<(String, Value)> {
             // Not read here: `to_json` shows neither (`plan show`'s `feedback_open` is its own read).
             updated_at: None,
             feedback: None,
+            // Likewise not shown.
+            base_ref: None,
+            default_branch: None,
         }
         .to_json(),
     };

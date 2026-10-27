@@ -3136,7 +3136,7 @@ fn an_owned_row_a_search_misses_is_read_and_an_open_answer_with_the_same_values_
     assert_eq!(fx.pull_requests(), [("acme/pay".to_owned(), 812)]);
     let calls = fx.gh_calls();
     assert!(is_search(&calls[0]) && is_lookup(&calls[1]) && calls.len() == 2, "{calls:?}");
-    assert!(calls[1][3].contains(r#"p0: repository(owner: "acme", name: "pay") { pullRequest(number: 812) { repository { nameWithOwner } number url"#), "{}", calls[1][3]);
+    assert!(calls[1][3].contains(r#"p0: repository(owner: "acme", name: "pay") { pullRequest(number: 812) { repository { nameWithOwner defaultBranchRef { name } } number url"#), "{}", calls[1][3]);
     assert!(calls[1][3].contains("viewerDidAuthor viewerLatestReviewRequest { id } }"), "{}", calls[1][3]);
 }
 

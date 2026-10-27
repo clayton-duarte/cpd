@@ -1011,6 +1011,7 @@ fn an_open_pull_request_is_clean_only_when_its_merge_state_is_clean() {
     let (_fx, mut store) = fixture();
     let clean = |store: &mut Store| read::widgets(store, 3, 0).unwrap().prs.iter().find(|p| p.number == 7).unwrap().clean;
     assert!(!clean(&mut store), "a fresh row reads `unknown`");
+    sql(&mut store, "UPDATE pull_requests SET base_ref = 'main', default_branch = 'main' WHERE number = 7");
     for (merge_state, want) in [("clean", true), ("blocked", false), ("unstable", false), ("unknown", false)] {
         sql(&mut store, &format!("UPDATE pull_requests SET merge_state = '{merge_state}' WHERE number = 7"));
         assert_eq!(clean(&mut store), want, "{merge_state}");

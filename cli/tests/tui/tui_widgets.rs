@@ -931,7 +931,7 @@ fn a_refused_session_open_is_logged_and_draws_no_note() {
 fn the_merge_icon_is_drawn_and_hit_only_on_clean_pull_requests() {
     let fx = Fx::new();
     let mut store = prs_store(&fx.env);
-    sql(&mut store, "UPDATE pull_requests SET merge_state = 'clean' WHERE number IN (9, 20); UPDATE pull_requests SET merge_state = 'blocked' WHERE number = 4;");
+    sql(&mut store, "UPDATE pull_requests SET base_ref = 'main', default_branch = 'main'; UPDATE pull_requests SET merge_state = 'clean' WHERE number IN (9, 20); UPDATE pull_requests SET merge_state = 'blocked' WHERE number = 4;");
     let w = read::widgets(&mut store, 3, 0).unwrap();
     assert_eq!(w.prs.iter().map(|p| (p.number, p.clean)).collect::<Vec<_>>(), [(4, false), (9, true), (20, true)]);
     let mut terminal = Terminal::new(TestBackend::new(46, 25)).unwrap();
@@ -1013,7 +1013,8 @@ fn clean_prs(env: &TestEnv) {
     let mut store = prs_store(env);
     sql(
         &mut store,
-        "UPDATE pull_requests SET merge_state = 'clean' WHERE number IN (9, 20);
+        "UPDATE pull_requests SET base_ref = 'main', default_branch = 'main';
+         UPDATE pull_requests SET merge_state = 'clean' WHERE number IN (9, 20);
          UPDATE pull_requests SET merge_state = 'blocked' WHERE number = 4;",
     );
     sql(&mut store, &moved("2026-01-04T00:00:00.000Z", "mine", "parked"));

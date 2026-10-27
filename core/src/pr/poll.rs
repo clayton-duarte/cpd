@@ -168,7 +168,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     }
 
     // The owned PRs whose pull request a search lists with a base other than the PR's `base`.
-    let follows = env.store.read(|conn| follows(conn, &owned, &search.bases))?;
+    let follows = env.store.read(|conn| follows(conn, &owned, &search.prs))?;
 
     let dirty = !follows.is_empty() || env.store.read(|conn| {
         for listed in &seen {
@@ -301,12 +301,12 @@ fn read_of<'a>(reads: &'a [Read], listed: &Listed) -> Option<&'a Read> {
 }
 
 /// Each `open` PR of `owned` whose pull request a search lists (as `OPEN`) with a `baseRefName` that is not the PR's
-/// `base` (§7.6 step 6): a repoint by GitHub, or a base retargeted by hand. A PR with no entry in `bases` is not followed.
-fn follows(conn: &rusqlite::Connection, owned: &[Owned], bases: &[((String, i64), String)]) -> Result<Vec<Follow>, CpdError> {
+/// `base` (§7.6 step 6): a repoint by GitHub, or a base retargeted by hand. A PR whose listing has no base is not followed.
+fn follows(conn: &rusqlite::Connection, owned: &[Owned], listed: &[Listed]) -> Result<Vec<Follow>, CpdError> {
     let mut stored = conn.prepare("SELECT base FROM prs WHERE plan = ?1 AND key = ?2 AND status = 'open'")?;
     let mut found = Vec::new();
     for (plan, key, row) in owned {
-        let Some((_, to)) = bases.iter().find(|((repo, number), _)| (repo, number) == (&row.repo, &row.number)) else { continue };
+        let Some(to) = listed.iter().find(|l| (&l.pr.repo, l.pr.number) == (&row.repo, row.number)).and_then(|l| l.pr.base_ref.as_ref()) else { continue };
         let from: Option<String> = stored.query_row([plan.as_str(), key.as_str()], |r| r.get(0)).optional()?;
         if let Some(from) = from.filter(|from| from != to) {
             found.push(Follow { plan: plan.clone(), pr: key.clone(), from, to: to.clone(), number: row.number, url: row.url.clone() });

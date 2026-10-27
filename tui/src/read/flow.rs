@@ -147,7 +147,7 @@ pub struct Pull {
     pub url: String,
     /// `pull_requests.mergeable = 'conflicting'` as of the last poll; `unknown` is not a conflict.
     pub conflicting: bool,
-    /// `pull_requests.merge_state = 'clean'` (GitHub's mergeStateStatus CLEAN): the PR is ready to merge; its `open` is yellow.
+    /// The PR is ready to merge (pro-d118: `cpd_core::pr::pulls::ready_to_merge_sql`, not GitHub's CLEAN alone); its `open` is yellow.
     pub clean: bool,
     /// The Plan's Lead Session has `state = 'working'` (contract §3.6), read with the rest: the title shows the Lead's
     /// working dot beside the state (hs-d335).
@@ -318,14 +318,15 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
         let (pr, need) = row?;
         needs.entry(pr).or_default().push(id("PR key", &need, PrKey::parse)?);
     }
-    let mut stmt = conn.prepare(
+    let ready = cpd_core::pr::pulls::ready_to_merge_sql("q");
+    let mut stmt = conn.prepare(&format!(
         "SELECT r.key, r.repo, r.base, r.status, r.pr_number, q.state, q.url, q.mergeable,
-                COALESCE(q.merge_state = 'clean', 0), COALESCE(q.draft, 0),
+                {ready}, COALESCE(q.draft, 0),
                 (SELECT j.status FROM jobs j WHERE j.plan = r.plan AND j.pr = r.key AND j.kind = 'update'
                     AND j.status IN ('queued', 'running') ORDER BY j.status = 'running' DESC LIMIT 1)
            FROM prs r LEFT JOIN pull_requests q ON q.id = r.pull_request
           WHERE r.plan = ?1 ORDER BY r.key",
-    )?;
+    ))?;
     let mut rows = stmt.query([plan.as_str()])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {

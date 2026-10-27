@@ -8,6 +8,7 @@ use crate::palette::{self, Meaning};
 pub struct PrFacts {
     pub state: PrState,
     pub draft: bool,
+    /// Ready to merge (pro-d118: open, not draft, merge_state clean, base is the default branch), not GitHub's CLEAN alone.
     pub clean: bool,
     pub conflicting: bool,
     pub owned: bool,

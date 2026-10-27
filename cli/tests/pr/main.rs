@@ -32,5 +32,6 @@ mod pr_reply;
 mod pr_review;
 mod pr;
 mod pr_start;
+mod pr_stacked_ready;
 mod pr_view;
 mod repo_hooks;
