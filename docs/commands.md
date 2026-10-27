@@ -39,6 +39,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 26. [`gate`](#26-gate)
 27. [`prune`](#27-prune)
 28. [`tag` and `version`](#28-tag-and-version)
+29. [`janitor`](#29-janitor)
 
 ## 1. Conventions
 
