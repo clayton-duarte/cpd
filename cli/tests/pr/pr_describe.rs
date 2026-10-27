@@ -23,7 +23,9 @@ impl Poll {
 
     /// Runs `sql` on the Plan's rows.
     fn exec(&self, sql: &str) {
-        self.store().write("fixture", |tx| Ok(tx.execute_batch(sql)?)).unwrap();
+        // `prs_head_ref_fixed` refuses any later `head_ref` change (contract §4.4): this test database drops it to adopt a PR.
+        let drop = if sql.contains("head_ref") { "DROP TRIGGER prs_head_ref_fixed;" } else { "" };
+        self.store().write("fixture", |tx| Ok(tx.execute_batch(&format!("{drop}{sql}"))?)).unwrap();
     }
 }
 
