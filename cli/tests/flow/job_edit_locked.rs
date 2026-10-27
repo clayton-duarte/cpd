@@ -187,6 +187,7 @@ fn the_new_spec_is_checked_as_a_drafts_is() {
     assert_eq!(e["details"]["missing"], json!(["nope/x.rs"]), "{e}");
     assert_eq!(writes(&fx), before);
     assert_eq!(job_row(&fx.env, "pl", "a", "goal"), "New goal.");
+    drop(fx);
 
     // A `test` Job keeps `tests` and `test_files`.
     let fx = Fx::new();
