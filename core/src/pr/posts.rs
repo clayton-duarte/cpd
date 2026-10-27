@@ -104,8 +104,13 @@ mod tests {
         store
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at, merged_at)
-                     VALUES ('pay', ?1, '/r', 'main', ?2, 'cpd/pay', cpd_txn(), 't', ?3)",
+                    "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+                     VALUES ('a/b', (SELECT count(*) + 1 FROM pull_requests), 'u', 't', 0, 'open', 'none', 'none', 't', 't')",
+                    [],
+                )?;
+                tx.execute(
+                    "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, pr_number, pr_url, pr_opened_at, pull_request, merged_at)
+                     VALUES ('pay', ?1, '/r', 'main', ?2, 'cpd/pay/' || ?1, IIF(?2 IN ('waiting', 'cancelled'), NULL, '/r/lead'), cpd_txn(), 't', IIF(?2 IN ('waiting', 'cancelled'), NULL, 't'), 7, 'u', 't', IIF(?2 IN ('open', 'merged'), (SELECT max(id) FROM pull_requests), NULL), NULLIF(?3, ''))",
                     rusqlite::params![key, status, merged_at],
                 )?;
                 let post = PostRecord {
