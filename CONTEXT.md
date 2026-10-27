@@ -285,7 +285,7 @@ What a Policy is resolved for: an owner, or an owner and a repo name (`Owner(log
 _Avoid_: scope, selector, context
 
 **Resource** (pro-d74, pro-d92):
-Anything that has a limited number of slots available for concurrent use, declared in a policy file at host, owner or repo level (`[resources.<name>]`, contract §8.3 "The `resources` domain"), such as the one port an e2e run needs. A Job takes a slot through its Spec's `resources` and its Attempt holds it until it ends; a human takes one with `cpd resource run`. Each slot is a kernel `flock` released when its tenant dies. Nothing declared means no lock and no limit.
+Anything that has a limited number of slots available for concurrent use, declared in a policy file at host, owner or repo level (`[resources.<name>]`, contract §8.3 "The `resources` domain"), such as the one port an e2e run needs. A Job takes a slot through its Spec's `resources` and its Attempt holds it until it ends; a human takes one with `cpd resource run`. Each slot is a kernel `flock` released when its tenant dies. Nothing declared means no lock and no limit. The built-in `workers` is the host's Worker slots, its tenants the Attempts not `ended` (contract §8.3).
 _Avoid_: lock, mutex, semaphore
 
 **Slot** (pro-d92):
