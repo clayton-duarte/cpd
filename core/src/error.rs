@@ -506,6 +506,7 @@ mod tests {
             (ErrorCode::ShapeIncomplete, 3),
             (ErrorCode::TestsUnconfigured, 3),
             (ErrorCode::TestFilesMissing, 3),
+            (ErrorCode::ResourceUndeclared, 3),
             (ErrorCode::TestsBuildFailed, 3),
             (ErrorCode::TestsNotRed, 3),
             (ErrorCode::TestsFailed, 3),

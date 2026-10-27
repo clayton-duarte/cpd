@@ -299,6 +299,9 @@ fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool, ope
             out.extend(["#### Tests".to_owned(), String::new(), strings(tests).iter().map(|t| format!("- {}", code(t))).collect::<Vec<_>>().join("\n"), String::new()]);
             out.extend(["#### Test files".to_owned(), String::new(), strings(files).iter().map(|t| format!("- {}", code(t))).collect::<Vec<_>>().join("\n"), String::new()]);
         }
+        if let Some(resources) = &j.resources {
+            out.extend(["#### Resources".to_owned(), String::new(), strings(resources).iter().map(|t| format!("- {}", code(t))).collect::<Vec<_>>().join("\n"), String::new()]);
+        }
     }
     if let Some(open) = &placeholder {
         out.extend([
@@ -511,6 +514,7 @@ mod tests {
             tests: None,
             test_files: None,
             test_approved: None,
+            resources: None,
             urgent: false,
             fingerprint: None,
             retry_tier: None,

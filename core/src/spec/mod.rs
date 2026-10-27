@@ -251,6 +251,7 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
         ("touches", Value::from(input.touches.to_vec())),
         ("acceptance", Value::from(input.acceptance.to_vec())),
         ("out_of_scope", Value::from(input.out_of_scope.to_vec())),
+        ("resources", Value::from(input.resources.to_vec())),
         ("quick_check", Value::from(quick_check)),
         ("protected", Value::from(protected.iter().map(|p| p.to_string()).collect::<Vec<_>>())),
         ("previous", Value::from(previous)),

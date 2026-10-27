@@ -160,6 +160,7 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
     let all = crate::plan::jobs::load(conn, &target.plan)?;
     let guard = crate::job::guard::of(&all, job);
     let (own_tests, own_files) = crate::job::guard::own(job);
+    let resources = crate::job::guard::resources(job);
     let kind = match job.kind.as_str() {
         "work" => JobKind::Work,
         "docs" => JobKind::Docs,
@@ -183,7 +184,7 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
             touches: &touches,
             acceptance: &acceptance,
             out_of_scope: &out_of_scope,
-            resources: &[],
+            resources: &resources,
             quick_check: &quick_check,
             protected: &protected,
             previous: &previous,

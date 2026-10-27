@@ -13,6 +13,7 @@ use super::{
     plan_phase, sorted_needs,
 };
 use crate::error::{CpdError, ErrorCode};
+use crate::home::CpdHome;
 use crate::events::{NewEvent, append};
 use crate::ids::{JobKey, PlanId};
 use crate::output::Output;
@@ -69,10 +70,11 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     };
     let key = args.key;
 
-    let decision = env.store.read(|conn| decide(conn, &plan, &key, &edits))?;
+    let home = env.home.clone();
+    let decision = env.store.read(|conn| decide(conn, &home, &plan, &key, &edits))?;
     let (job, fields, already) = match decision {
         Decision::Already(job) => (job, Vec::new(), true),
-        Decision::Update { .. } => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, &edits)? {
+        Decision::Update { .. } => env.store.write(COMMAND, |tx| match decide(tx, &home, &plan, &key, &edits)? {
             Decision::Already(job) => Ok((job, Vec::new(), true)),
             Decision::Update { before, after, fields } => {
                 update(tx, &plan, &before, &after)?;
@@ -89,7 +91,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     Ok(Output::success(out))
 }
 
-fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Result<Decision, CpdError> {
+fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits: &Edits) -> Result<Decision, CpdError> {
     plan_phase(conn, plan)?;
     let all = jobs::load(conn, plan)?;
     let before = find(&all, plan, key)?;
@@ -123,12 +125,14 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
     }
     if let Some(spec) = &edits.spec {
         spec.check_kind(&after.kind)?;
+        spec.check_resources_allowed(after.review)?;
         // The Spec names no primary checkout of a PR of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
         spec.check_primary_roots(&super::add::primary_roots(&load_prs(conn, plan)?), &std::env::home_dir().unwrap_or_default())?;
         spec.check_files_relative()?;
         after.spec = Some(spec.stored());
         after.tests = spec.tests.as_ref().map(|t| json!(t));
         after.test_files = spec.test_files.as_ref().map(|t| json!(t));
+        after.resources = spec.resources.as_ref().map(|t| json!(t));
     }
     // The Spec fits the kind (§5.2): a `test` Job with a Spec has `tests` and `test_files`, every other kind neither.
     if edits.kind.is_some() && after.kind != before.kind {
@@ -160,6 +164,10 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
         if let Some(pr) = prs.iter().find(|p| p.key.as_str() == after.pr) {
             super::add::check_touches(pr, &spec.touches)?;
         }
+    }
+    if edits.spec.is_some() || moved {
+        let names: Option<Vec<String>> = after.resources.as_ref().and_then(|r| serde_json::from_value(r.clone()).ok());
+        super::add::check_resources_declared(conn, home, plan, &after.pr, key.as_str(), names.as_deref())?;
     }
     if moved || after.kind != before.kind {
         check_shape_allows(&load_prs(conn, plan)?, plan, &after.pr, &after.kind, after.review)?;
@@ -227,7 +235,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
 }
 
 /// The Tier and Spec columns (`tests` and `test_files` of a `test` Job with them) as stored, in column order: `None` is null (a stub).
-fn columns(job: &Job) -> [(&'static str, Option<String>); 8] {
+fn columns(job: &Job) -> [(&'static str, Option<String>); 9] {
     let spec = job.spec.as_ref();
     [
         ("tier", job.tier.clone()),
@@ -238,6 +246,7 @@ fn columns(job: &Job) -> [(&'static str, Option<String>); 8] {
         ("out_of_scope", spec.map(|s| s.out_of_scope.to_string())),
         ("tests", job.tests.as_ref().map(|t| t.to_string())),
         ("test_files", job.test_files.as_ref().map(|t| t.to_string())),
+        ("resources", job.resources.as_ref().map(|t| t.to_string())),
     ]
 }
 

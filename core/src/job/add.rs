@@ -16,7 +16,8 @@ use super::{
 };
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
-use crate::ids::{JobKey, PlanId};
+use crate::home::CpdHome;
+use crate::ids::{JobKey, PlanId, PrKey};
 use crate::output::Output;
 use crate::args::PrArg;
 use crate::plan::fingerprint::load_prs;
@@ -63,6 +64,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let spec = args.spec.as_deref().map(spec::read).transpose()?;
     if let Some(spec) = &spec {
         spec.check_kind(&kind)?;
+        spec.check_resources_allowed(args.review)?;
     }
     let mut env = Env::open()?;
     if let Some(tier) = args.tier {
@@ -86,10 +88,11 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         kind,
     };
 
-    let decision = env.store.read(|conn| decide(conn, &plan, &wanted))?;
+    let home = env.home.clone();
+    let decision = env.store.read(|conn| decide(conn, &home, &plan, &wanted))?;
     let (job, already) = match decision {
         Decision::Already(job) => (job, true),
-        Decision::Insert(_) => env.store.write(COMMAND, |tx| match decide(tx, &plan, &wanted)? {
+        Decision::Insert(_) => env.store.write(COMMAND, |tx| match decide(tx, &home, &plan, &wanted)? {
             Decision::Already(job) => Ok((job, true)),
             Decision::Insert(job) => {
                 insert(tx, &plan, &job, wanted.review)?;
@@ -135,7 +138,7 @@ fn require_tier_and_spec(args: &AddArgs) -> Result<(), CpdError> {
     Err(CpdError::new(ErrorCode::Usage, format!("{} required for {why}: only a stub draft (--draft) may leave them out.", missing.join(" and "))))
 }
 
-fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision, CpdError> {
+fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> Result<Decision, CpdError> {
     let phase = plan_phase(conn, plan)?;
     if phase == "grounding" || (phase == "done" && !wanted.draft) {
         return Err(CpdError::new(
@@ -167,6 +170,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         kind: wanted.kind.clone(),
         tests: wanted.spec.as_ref().and_then(|s| s.tests.as_ref()).map(|t| json!(t)),
         test_files: wanted.spec.as_ref().and_then(|s| s.test_files.as_ref()).map(|t| json!(t)),
+        resources: wanted.spec.as_ref().and_then(|s| s.resources.as_ref()).map(|r| json!(r)),
         test_approved: None,
         urgent: wanted.urgent,
         fingerprint: None,
@@ -193,6 +197,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
     if let Some(spec) = &wanted.spec {
         spec.check_primary_roots(&primary_roots(&prs), &std::env::home_dir().unwrap_or_default())?;
         spec.check_files_relative()?;
+        check_resources_declared(conn, home, plan, &job.pr, &job.key, spec.resources.as_deref())?;
     }
     // A review Job's `touches` is informational (commands.md §5.1).
     if let (Some(spec), false) = (&wanted.spec, wanted.review) {
@@ -208,6 +213,38 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         job.fingerprint = Some(locked_fingerprint(&job));
     }
     Ok(Decision::Insert(job))
+}
+
+/// Every resource of a Spec is declared by the policy of the PR's repo (`resource_undeclared`, commands.md §5.1):
+/// the first one that is not fails, with the names the repo declares and the file that declares them.
+pub(super) fn check_resources_declared(conn: &Connection, home: &CpdHome, plan: &PlanId, pr: &str, job: &str, resources: Option<&[String]>) -> Result<(), CpdError> {
+    let Some(resources) = resources else { return Ok(()) };
+    let key = PrKey::parse(pr)?;
+    let declared = crate::pr::policy_of_pr(conn, home, plan, &key)?.resources.names;
+    let Some(missing) = resources.iter().find(|r| !declared.contains(r)) else { return Ok(()) };
+    let (owner, name): (String, Option<String>) = conn.query_row(
+        "SELECT c.owner, r.name FROM prs r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context WHERE r.plan = ?1 AND r.key = ?2",
+        [plan.as_str(), pr],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let owner = crate::ids::OwnerLogin::parse(&owner)?;
+    let file = match name {
+        Some(name) => crate::policy::repo_path(home, &owner, &crate::ids::RepoName::parse(&name)?),
+        None => crate::policy::policy_dir(home).join(owner.as_str()).join("owner.toml"),
+    };
+    Err(CpdError::new(
+        ErrorCode::ResourceUndeclared,
+        format!(
+            "Job {job} takes the resource {missing}, which the policy of PR {pr} does not declare ({}). Declare it as [resources.{missing}] in {}, or take one of the declared names.",
+            if declared.is_empty() { "none are declared".to_owned() } else { declared.join(", ") },
+            file.display()
+        ),
+    )
+    .with("job", job)
+    .with("pr", pr)
+    .with("resource", missing.as_str())
+    .with("declared", declared.clone())
+    .with("file", file.display().to_string()))
 }
 
 /// A `queued` Job may not need a `draft` (§5.1): it could start before its need
@@ -251,11 +288,11 @@ fn review_needs(all: &[Job], plan: &PlanId, pr: &str, key: &str) -> Result<Vec<S
     Ok(needs)
 }
 
-/// The Locked fields (§2.2: the Spec, `title`, `tier`, `pr`, `kind`, `tests`, `test_files`) and the needs; `review` is
+/// The Locked fields (§2.2: the Spec, `title`, `tier`, `pr`, `kind`, `tests`, `test_files`, `resources`) and the needs; `review` is
 /// compared by the caller.
 fn same_locked_fields(a: &Job, b: &Job) -> bool {
-    (&a.pr, &a.title, &a.tier, &a.spec, &a.needs, &a.kind, &a.tests, &a.test_files)
-        == (&b.pr, &b.title, &b.tier, &b.spec, &b.needs, &b.kind, &b.tests, &b.test_files)
+    (&a.pr, &a.title, &a.tier, &a.spec, &a.needs, &a.kind, &a.tests, &a.test_files, &a.resources)
+        == (&b.pr, &b.title, &b.tier, &b.spec, &b.needs, &b.kind, &b.tests, &b.test_files, &b.resources)
 }
 
 fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(), CpdError> {
@@ -263,8 +300,8 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(),
     let spec = job.spec.as_ref();
     tx.execute(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                           status, appended, fingerprint, review, urgent, kind, tests, test_files, created_txn, created_at)
-         VALUES (?1, ?13, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?14, ?15, ?16, ?17, ?18, cpd_txn(),
+                           status, appended, fingerprint, review, urgent, kind, tests, test_files, resources, created_txn, created_at)
+         VALUES (?1, ?13, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?14, ?15, ?16, ?17, ?18, ?19, cpd_txn(),
                  (SELECT at FROM txns WHERE id = cpd_txn()))",
         rusqlite::params![
             plan.as_str(),
@@ -285,6 +322,7 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(),
             job.kind,
             array(job.tests.as_ref()),
             array(job.test_files.as_ref()),
+            array(job.resources.as_ref()),
         ],
     )?;
     for need in &job.needs {
