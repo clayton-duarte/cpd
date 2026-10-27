@@ -6,6 +6,7 @@ mod common;
 
 mod events;
 mod home;
+mod pr_posts;
 mod scripted;
 mod store;
 mod store_local_needs;
