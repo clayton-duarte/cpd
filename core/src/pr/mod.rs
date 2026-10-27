@@ -33,6 +33,7 @@ mod gh;
 mod merge;
 mod open;
 pub(crate) mod poll;
+pub mod posts;
 pub mod pulls;
 mod push;
 mod reply;
