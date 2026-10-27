@@ -417,7 +417,7 @@ pub fn inline_comments(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<V
 /// The fields of a pull request, as the search and the lookup both select them.
 macro_rules! pr_fields {
     () => {
-        "repository { nameWithOwner } number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision \
+        "repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision \
          mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
     };
 }
@@ -454,6 +454,10 @@ pub struct PolledPr {
     /// GitHub's `updatedAt`: when it moves, the pull request's comments are read again (`read_comments`).
     pub updated_at: String,
     pub merged_at: Option<String>,
+    /// The base branch (`baseRefName`); `None` when the reply has none (a test's fake `gh`).
+    pub base_ref: Option<String>,
+    /// The repo's default branch (`defaultBranchRef.name`); `None` when GitHub has none.
+    pub default_branch: Option<String>,
 }
 
 /// Which of the poll's two searches listed a pull request: what the row's
@@ -489,10 +493,6 @@ pub struct Rate {
 pub struct Search {
     pub issue_count: u32,
     pub prs: Vec<Listed>,
-    /// The base branch (`baseRefName`) each pull request of `prs` targets, by `(repo, number)`: what the poll's
-    /// base follow compares with the PR's `base` (§7.6 step 6). It is not stored in `pull_requests`. A pull request
-    /// whose reply has no `baseRefName` has no entry, so nothing is followed for it.
-    pub bases: Vec<((String, i64), String)>,
     pub rate: Rate,
 }
 
@@ -535,7 +535,14 @@ struct RawRate {
 }
 
 #[derive(Deserialize)]
+struct RawBranch {
+    name: String,
+}
+
+#[derive(Deserialize)]
 struct RawRepoName {
+    #[serde(rename = "defaultBranchRef", default)]
+    default_branch_ref: Option<RawBranch>,
     #[serde(rename = "nameWithOwner")]
     name_with_owner: String,
 }
@@ -658,6 +665,8 @@ impl Reply<'_> {
         let rollup = raw.commits.nodes.first().and_then(|n| n.commit.as_ref()).and_then(|c| c.rollup.as_ref());
         Ok(PolledPr {
             repo: raw.repository.name_with_owner,
+            default_branch: raw.repository.default_branch_ref.map(|b| b.name),
+            base_ref: raw.base_ref,
             number: raw.number,
             url: raw.url,
             title: raw.title,
@@ -775,15 +784,9 @@ fn parse_search(reply: &Reply) -> Result<Search, CpdError> {
     };
     let issue_count = authored.issue_count + requested.issue_count;
     let mut prs: Vec<Listed> = Vec::new();
-    let mut bases: Vec<((String, i64), String)> = Vec::new();
     for (nodes, is_authored) in [(authored.nodes, true), (requested.nodes, false)] {
         for raw in nodes {
-            let base = raw.base_ref.clone();
             let pr = reply.polled(raw)?;
-            let key = (pr.repo.clone(), pr.number);
-            if let Some(base) = base.filter(|_| !bases.iter().any(|(k, _)| *k == key)) {
-                bases.push((key, base));
-            }
             let at = match prs.iter().position(|l| (&l.pr.repo, l.pr.number) == (&pr.repo, pr.number)) {
                 Some(at) => at,
                 None => {
@@ -799,7 +802,7 @@ fn parse_search(reply: &Reply) -> Result<Search, CpdError> {
             }
         }
     }
-    Ok(Search { issue_count, prs, bases, rate: Rate { cost: rate.cost, remaining: rate.remaining, reset_at: rate.reset_at } })
+    Ok(Search { issue_count, prs, rate: Rate { cost: rate.cost, remaining: rate.remaining, reset_at: rate.reset_at } })
 }
 
 /// `owner/name` with each part of `[A-Za-z0-9_.-]+`: nothing else reaches a query text.
@@ -1126,10 +1129,10 @@ mod tests {
         assert_eq!(
             SEARCH_QUERY,
             "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { \
-             issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt updatedAt mergedAt \
+             issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt \
              baseRefName reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
              reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { \
-             issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt updatedAt mergedAt \
+             issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt \
              baseRefName reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
              rateLimit { cost remaining resetAt } }"
         );
@@ -1155,17 +1158,20 @@ mod tests {
     }
 
     #[test]
-    fn a_search_reports_each_pull_requests_base_branch_once_and_none_when_the_reply_has_none() {
-        let based = |node: String, base: &str| node.replace(r#""mergedAt":null"#, &format!(r#""baseRefName":"{base}","mergedAt":null"#));
+    fn a_search_reports_each_pull_requests_base_and_default_branch_and_none_when_the_reply_has_none() {
+        let based = |node: String, base: &str| {
+            node.replace(r#""mergedAt":null"#, &format!(r#""baseRefName":"{base}","mergedAt":null"#))
+                .replace(r#"{"nameWithOwner":"o/a"}"#, r#"{"nameWithOwner":"o/a","defaultBranchRef":{"name":"main"}}"#)
+        };
         let body = format!(
-            r#"{{"data":{{"search":{{"issueCount":2,"nodes":[{},{}]}},"reviewRequests":{{"issueCount":1,"nodes":[{}]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#,
-            based(pr("o/a", 1, false, "OPEN", "null"), "main"),
+            r#"{{"data":{{"search":{{"issueCount":2,"nodes":[{},{}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#,
+            based(pr("o/a", 1, false, "OPEN", "null"), "feature"),
             pr("o/a", 2, false, "OPEN", "null"),
-            based(pr("o/a", 1, false, "OPEN", "null"), "main"),
         );
         let found = search(&reply(&body, 0)).unwrap();
-        assert_eq!(found.prs.len(), 2);
-        assert_eq!(found.bases, [(("o/a".to_owned(), 1), "main".to_owned())]);
+        let [a, b] = &found.prs.iter().map(|l| &l.pr).collect::<Vec<_>>()[..] else { panic!("{:?}", found.prs) };
+        assert_eq!((a.base_ref.as_deref(), a.default_branch.as_deref()), (Some("feature"), Some("main")));
+        assert_eq!((b.base_ref.as_deref(), b.default_branch.as_deref()), (None, None));
     }
 
     #[test]
@@ -1325,7 +1331,7 @@ mod tests {
         let direct = lookup_query(&prs, true).unwrap();
         assert!(!plain.contains("viewer"));
         assert_eq!(direct.matches(" viewerDidAuthor viewerLatestReviewRequest { id } } }").count(), 2);
-        assert!(direct.starts_with("query { p0: repository(owner: \"o\", name: \"a\") { pullRequest(number: 7) { repository { nameWithOwner }"));
+        assert!(direct.starts_with("query { p0: repository(owner: \"o\", name: \"a\") { pullRequest(number: 7) { repository { nameWithOwner defaultBranchRef { name } }"));
         assert_eq!(direct.replace(" viewerDidAuthor viewerLatestReviewRequest { id }", ""), plain);
     }
 

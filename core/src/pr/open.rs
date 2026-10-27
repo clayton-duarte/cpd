@@ -245,8 +245,8 @@ fn opened_row(lead: &Path, pr: &PrRow, existing: Option<PrRef>, stored_title: &s
         CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", found.url))
             .with("url", found.url.as_str())
     })?;
-    let (created_at, updated_at) = match gh::lookup(&*Ports::current().runner, lead, &[(repo.clone(), found.number)])?.into_iter().next().flatten() {
-        Some(looked_up) => (looked_up.created_at, looked_up.updated_at),
+    let (created_at, updated_at, base_ref, default_branch) = match gh::lookup(&*Ports::current().runner, lead, &[(repo.clone(), found.number)])?.into_iter().next().flatten() {
+        Some(looked_up) => (looked_up.created_at, looked_up.updated_at, looked_up.base_ref, looked_up.default_branch),
         None => {
             return Err(CpdError::new(ErrorCode::GhFailed, format!("gh cannot find pull request {repo}#{}, which it just opened.", found.number))
                 .with("url", found.url.as_str()));
@@ -266,6 +266,8 @@ fn opened_row(lead: &Path, pr: &PrRow, existing: Option<PrRef>, stored_title: &s
         created_at,
         updated_at,
         merged_at: None,
+        base_ref,
+        default_branch,
     })
 }
 
@@ -658,6 +660,8 @@ mod tests {
             created_at: "2026-10-20T10:00:00Z".into(),
             updated_at: "2026-10-20T10:00:00Z".into(),
             merged_at: merged_at.map(str::to_owned),
+            base_ref: None,
+            default_branch: None,
         }
     }
 

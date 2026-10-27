@@ -545,16 +545,15 @@ fn pull_request_conditions(
     Ok(out)
 }
 
-/// `pr-ready` (hs-d481, hs-d525): GitHub would merge the pull request now. It is open, not a draft, authored, its merge state is
-/// clean (unstable and has_hooks are not: `pr merge` refuses them), and its review decision is approved or none. Checks and
-/// `pr.feedback.checks` are not read.
+/// `pr-ready` (hs-d481, hs-d525, pro-d118): the pull request is ready to merge (`pulls::ready_to_merge_sql`: open, not a draft,
+/// merge state clean, base the repo's default branch; a stacked PR or an unknown base is not), authored, and its review decision
+/// is approved or none. Checks and `pr.feedback.checks` are not read.
 fn pr_ready(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     pull_request_conditions(
         conn,
         Kind::PrReady,
         Urgency::Yellow,
-        "r.authored = 1 AND r.draft = 0 AND r.merge_state IN ('clean')
-         AND r.review_decision IN ('approved', 'none')",
+        &format!("r.authored = 1 AND r.state = 'open' AND {} = 1 AND r.review_decision IN ('approved', 'none')", crate::pr::pulls::ready_to_merge_sql("r")),
         |name, n| format!("{name}#{n} ready to merge"),
     )
 }

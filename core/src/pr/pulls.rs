@@ -39,10 +39,24 @@ pub struct PullRequest {
     pub updated_at: Option<String>,
     /// The open feedback items at that read; `None` = never read.
     pub feedback: Option<Vec<Item>>,
+    /// The base branch at the last poll; `None` = not polled since `pr-base` (unknown).
+    pub base_ref: Option<String>,
+    /// The repo's default branch at the last poll; `None` = unknown.
+    pub default_branch: Option<String>,
+}
+
+/// The expression "ready to merge" (pro-d118) over the `pull_requests` row aliased `alias`: 1 or 0, never NULL. The
+/// pull request is open, not a draft, its merge state is clean and its base is the repo's default branch; an unknown
+/// (NULL) base or default branch is not ready. The one definition: every reader uses it.
+pub fn ready_to_merge_sql(alias: &str) -> String {
+    format!(
+        "COALESCE({alias}.state = 'open' AND {alias}.draft = 0 AND {alias}.merge_state = 'clean' \
+         AND {alias}.base_ref IS NOT NULL AND {alias}.base_ref = {alias}.default_branch, 0)"
+    )
 }
 
 const COLUMNS: &str = "id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, \
-                       mergeable, merge_state, authored, review_requested, updated_at, feedback";
+                       mergeable, merge_state, authored, review_requested, updated_at, feedback, base_ref, default_branch";
 
 /// The items a `feedback` column holds: parsed once, here.
 fn feedback_of(text: Option<String>) -> rusqlite::Result<Option<Vec<Item>>> {
@@ -75,6 +89,8 @@ impl PullRequest {
             review_requested: r.get(15)?,
             updated_at: r.get(16)?,
             feedback: feedback_of(r.get(17)?)?,
+            base_ref: r.get(18)?,
+            default_branch: r.get(19)?,
         })
     }
 
@@ -145,6 +161,8 @@ impl PullRequest {
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone().unwrap_or_default(),
             merged_at: self.merged_at.clone(),
+            base_ref: self.base_ref.clone(),
+            default_branch: self.default_branch.clone(),
         })
     }
 }
@@ -197,6 +215,8 @@ pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, PrKey, PullRe
                 review_requested: r.get(17)?,
                 updated_at: r.get(18)?,
                 feedback: feedback_of(r.get(19)?)?,
+                base_ref: r.get(20)?,
+                default_branch: r.get(21)?,
             };
             Ok((plan, key, pull))
         })?
@@ -247,7 +267,7 @@ pub(super) fn upsert(tx: &WriteTxn<'_>, listed: &Listed, read: Option<&Read>) ->
     tx.execute(
         "UPDATE pull_requests SET url = ?1, title = ?2, draft = ?3, state = ?4, review_decision = ?5, checks = ?6,
                 merged_at = ?7, changed_at = ?8, mergeable = ?9, merge_state = ?10, authored = ?11,
-                review_requested = ?12, updated_at = ?13, feedback = ?14 WHERE id = ?15",
+                review_requested = ?12, updated_at = ?13, feedback = ?14, base_ref = ?15, default_branch = ?16 WHERE id = ?17",
         rusqlite::params![
             polled.url,
             polled.title,
@@ -263,6 +283,8 @@ pub(super) fn upsert(tx: &WriteTxn<'_>, listed: &Listed, read: Option<&Read>) ->
             membership.review_requested,
             updated_at,
             feedback,
+            polled.base_ref,
+            polled.default_branch,
             before.id
         ],
     )?;
@@ -283,8 +305,8 @@ fn insert(tx: &WriteTxn<'_>, polled: &PolledPr, membership: Membership, read: Op
     let at = txn_time(tx)?;
     tx.execute(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at,
-                                    mergeable, merge_state, authored, review_requested, updated_at, feedback)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                                    mergeable, merge_state, authored, review_requested, updated_at, feedback, base_ref, default_branch)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         rusqlite::params![
             polled.repo,
             polled.number,
@@ -302,7 +324,9 @@ fn insert(tx: &WriteTxn<'_>, polled: &PolledPr, membership: Membership, read: Op
             membership.authored,
             membership.review_requested,
             read.map(|r| r.updated_at.as_str()),
-            read.map(|r| feedback_text(&r.items))
+            read.map(|r| feedback_text(&r.items)),
+            polled.base_ref,
+            polled.default_branch
         ],
     )?;
     load(tx, tx.last_insert_rowid())
@@ -558,6 +582,8 @@ mod tests {
             created_at: "2026-01-01T00:00:00.000Z".into(),
             updated_at: "2026-01-02T00:00:00Z".into(),
             merged_at: None,
+            base_ref: None,
+            default_branch: None,
         }
     }
 
