@@ -149,6 +149,7 @@ mod tests {
             closed_at: None,
             snoozed_until: None,
             dismissed_at: None,
+            claimed_at: None,
         }
     }
 

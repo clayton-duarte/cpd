@@ -15,7 +15,7 @@ Within your area you may add files (`<crate>/src/<area>/foo.rs`, declared in you
 | Directory | Package (library / binary) | Holds |
 |---|---|---|
 | `core/` | `cpd-core` (library `cpd_core`) | every area of the module map below except `tui`, `watch` and `doctor`, and the shared modules (`args`, `error`, `home`, `ids`, `output`). `core/src/lib.rs` is the crate root: it declares every module, once. |
-| `engine/` | `cpd-engine` (library `cpd_engine`) | the engine and the health check: the areas `watch` (`watch`, engine steps E1–E11, commands.md §12) and `doctor` (`doctor`, §14.1), in `engine/src/watch/` and `engine/src/doctor/`. It depends on `cpd-core` and uses its public items (the store, events, config, host, session and the shared modules). `engine/src/lib.rs` is its crate root. |
+| `engine/` | `cpd-engine` (library `cpd_engine`) | the engine and the health check: the areas `watch` (`watch`, engine steps E1–E15, commands.md §12) and `doctor` (`doctor`, §14.1), in `engine/src/watch/` and `engine/src/doctor/`. It depends on `cpd-core` and uses its public items (the store, events, config, host, session and the shared modules). `engine/src/lib.rs` is its crate root. |
 | `tui/` | `cpd-tui` (library `cpd_tui`) | the whole cockpit (`tui`, `tui view`, commands.md §13): `tui/src/lib.rs`, the views and the read model (`tui/src/read/`). It uses `cpd_core` for the store, events, host and the shared modules. It does not depend on `cpd-engine`. |
 | `cli/` | `cpd` (binary `cpd`) | `cli/src/main.rs`, which only calls `main_with`, and `cli/src/cli.rs`: the root `Command` enum, `run` and `main_with`. Also `cli/tests/`, the binary-driven integration tests: one test binary per area, `cli/tests/<area>/` (the area table under Tests). |
 
@@ -30,6 +30,7 @@ Within your area you may add files (`<crate>/src/<area>/foo.rs`, declared in you
 | `store` | rs-store | none | §4.1–§4.5 |
 | `events` | rs-events | `events list`, `events follow` (§11) | §5 |
 | `config` | rs-config | `config`, `tiers` (§14.2, §14.3) | §8, §9 |
+| `models` | rs-models | `models refresh`, `models show` (§14.5) | §1.4, §3.7 E15, §8.2 |
 | `git` | rs-git | none | §7.1–§7.3, §7.5 |
 | `host` | rs-host | none | §6 |
 | `context` | rs-context | `context …` (§3) | §2.2, §4.6 |
@@ -124,7 +125,7 @@ Target contract (ADR 0013): tests are in-process, with fakes behind traits for t
   |---|---|
   | `engine` | `watch*`, `doctor`, `write_executable` |
   | `pr` | `pr*`, `merge`, `git*`, `repo_hooks` |
-  | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `config`, `repo_config`, `repo_cmds`, `secret*`, `host_repair`, `gate` |
+  | `flow` | `plan*`, `job*`, `attempt`, `feedback*`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `config`, `repo_config`, `repo_cmds`, `secret*`, `models*`, `host_repair`, `gate` |
   | `session` | `session*`, `host`, `board`, `host_pill`, `mcp_attach` |
   | `store` | `store*`, `events`, `home`, `scripted` |
   | `tui` | `tui*`, `inbox*`, `bare` |
@@ -457,6 +458,16 @@ Two installs at once: each builds its own `pi.<id>` and `pi.link.<pid>` (`<pid>`
 What a running pi sees: the path `pi` resolves to the old or the new version, complete, at every instant (except the one-time migration window). A Session started during the swap loads one of them whole. A running adapter keeps its loaded modules, and files it reads later through its old real path stay until two installs have passed. Its reload poll watches the installed path `pi` (a symlink; `stat` follows it): the identity (`dev:ino:mtimeMs`) changes at the rename, and a missing path stays "not a change" (the migration window). `adapterDir()` in `pi/lib/reload.ts` is `dirname(dirname(import.meta.url))`, which is the real directory `pi.<id>` if Node or pi resolves the link (unverified; the rule does not depend on it), so: **when the directory's name matches `pi.<id>` or `pi.legacy`, the adapter watches its sibling `pi`; otherwise (the checkout's `pi/`, the tests) its own directory.**
 
 The tests run `cpd install` in-process on a temporary `HOME` with: no `pi`; a `pi` symlink; a real `pi/` directory (the migration: `pi` is a symlink to a complete `pi.<id>` afterwards, `pi.legacy` holds the old files; a failing step 4, a rename the test makes fail by a read-only `share/`, restores `pi/`); a regular file (refused, nothing replaced); two installs one after another (only the current and the displaced version remain); a live-pid `pi.tmp.<pid>` (kept: `FakeSpawn` says the pid is alive) and a dead one (removed); a version modified a minute ago (kept; `ManualClock`), and one modified two hours before (removed); and, for the adapter, `adapterDir()` and the reload identity over a temporary `share/` with a `pi.<id>` and a `pi` link swapped by `rename`, in `pi/test`. The `python3` cases (a `python3` without `renameat2`, a missing `python3`, a `python3` whose `os.replace` fails) have no counterpart: the dependency is gone, and the test names that carried it keep their other assertions. A process that polls `pi/package.json` during a symlink swap never sees it missing; during the migration it sees it missing in a tiny fraction of its polls (the window is two renames of one process, not a process start-up).
+
+### Scripts run through the adapter link
+
+A pi/lib script the engine or a command runs as a script (`node <adapter>/lib/models-list.ts`, `node <adapter>/lib/slack-channel.ts`; docs/commands.md §14.5 and §21.6) is reached through the symlink `pi`, so its main guard is `if (import.meta.main) { ... }`. Never use `process.argv[1]` compared with `import.meta.url` or `import.meta.filename`: Node resolves the symlink in `import.meta.url` and not in `argv[1]`, so main silently does nothing and exits 0 (Plan main-guard; Plan slack-main #493 fixed one script, and models-list.ts from #492 had the same defect). `pi/test/script-main.test.ts` pins it: no source under pi/ (outside node_modules) mentions `process.argv[1]` or compares `import.meta.url` to anything, every pi/lib script that runs at top level uses `import.meta.main`, and models-list.ts runs main through a symlink to its script and through a symlink to its directory and does not run main when imported.
+
+```typescript
+if (import.meta.main) {
+  // ... main code ...
+}
+```
 
 ## The install's engine order
 

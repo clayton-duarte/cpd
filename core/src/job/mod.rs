@@ -25,7 +25,7 @@ mod show;
 mod spec;
 mod urgent;
 
-pub(crate) use retry::retried_since_last_start;
+pub(crate) use retry::{retried_since_last_start, retries_pending};
 
 use std::path::PathBuf;
 
@@ -301,12 +301,29 @@ fn kinds_allowed(shape: &str) -> &'static [&'static str] {
 }
 
 /// The PR's stored shape allows a Job of `kind` while the PR is `waiting` or `dispatch`, else `shape_violation`
-/// (§5.1). A review Job (kind `work`) is allowed in every shape; an `open` PR is not checked: a feedback fix is
-/// whatever it is.
+/// (§5.1). A review Job (kind `work`) is allowed in every shape; an `open` PR allows only `work`.
 fn check_shape_allows(prs: &[PrRow], plan: &PlanId, pr: &str, kind: &str, review: bool) -> Result<(), CpdError> {
     let Some(row) = prs.iter().find(|p| p.key.as_str() == pr) else { return Ok(()) };
     let allowed = kinds_allowed(&row.shape);
-    if review || !matches!(row.status.as_str(), "waiting" | "dispatch") || allowed.contains(&kind) {
+    if review {
+        return Ok(());
+    }
+    if row.status == "open" {
+        if kind == "work" {
+            return Ok(());
+        }
+        return Err(CpdError::new(
+            ErrorCode::ShapeViolation,
+            format!("PR {pr} has opened: a feedback fix is one work Job, not {kind}."),
+        )
+        .with("plan", plan.as_str())
+        .with("pr", pr)
+        .with("status", "open")
+        .with("shape", row.shape.as_str())
+        .with("kind", kind)
+        .with("allowed", ["work"]));
+    }
+    if !matches!(row.status.as_str(), "waiting" | "dispatch") || allowed.contains(&kind) {
         return Ok(());
     }
     Err(CpdError::new(

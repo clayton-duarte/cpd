@@ -16,7 +16,7 @@ use toml::{Table, Value};
 use super::tier::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::ids::MachineName;
+use crate::ids::{ContextId, MachineName};
 
 /// Where a leaf key's value came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -181,6 +181,8 @@ pub struct Watch {
     pub pr_poll_seconds: u32,
     /// E11 reads the team channel this long after its previous read ended (§3.7, §8.2).
     pub team_review_seconds: u32,
+    /// E15 reads the model lists again this long after the newest `polled_at` of `run/models-<provider>.json` (§3.7, §8.2).
+    pub models_discovery_seconds: u32,
     /// The same `error` Event (step and code) is appended at most once per this (§3.7).
     pub error_repeat_seconds: u32,
     /// E5 raises an `error` once the same `gh` call of the poll has failed with an HTTP 5xx or a timeout this long (§3.7, §8.2).
@@ -195,6 +197,8 @@ pub struct Inbox {
     pub team_channel: String,
     /// The User's Slack user id; set when `team_channel` is.
     pub slack_user_id: String,
+    /// The Context whose Manager `cpd inbox claim` tells to review a claimed pull request; `""` refuses the claim (§8.2, §21.7).
+    pub review_context: String,
     /// GitHub logins whose reviews do not count as a human's (hermes `BOT_REVIEWERS`).
     pub bot_reviewers: Vec<String>,
 }
@@ -325,6 +329,7 @@ impl Config {
             tick_seconds: r.get("watch.tick_seconds", TickSeconds(5000), TickSeconds::parse)?,
             pr_poll_seconds: positive(&mut r, "watch.pr_poll_seconds", 5)?,
             team_review_seconds: positive(&mut r, "watch.team_review_seconds", 1800)?,
+            models_discovery_seconds: positive(&mut r, "watch.models_discovery_seconds", 604_800)?,
             error_repeat_seconds: positive(&mut r, "watch.error_repeat_seconds", 600)?,
             pr_poll_transient_minutes: positive(&mut r, "watch.pr_poll_transient_minutes", 10)?,
         };
@@ -338,6 +343,10 @@ impl Config {
             stuck_job_minutes: positive(&mut r, "inbox.stuck_job_minutes", 10)?,
             team_channel: r.get("inbox.team_channel", String::new(), slack_id('C'))?,
             slack_user_id: r.get("inbox.slack_user_id", String::new(), slack_id('U'))?,
+            review_context: r.get("inbox.review_context", String::new(), |v| {
+                let id = text_of(&v)?;
+                if id.is_empty() { Ok(String::new()) } else { ContextId::parse(id).map(|c| c.as_str().to_owned()).map_err(|e| e.to_string()) }
+            })?,
             bot_reviewers: r.get("inbox.bot_reviewers", DEFAULT_BOT_REVIEWERS.map(str::to_owned).to_vec(), |v| match v {
                 Value::Array(items) => items.iter().map(|i| non_empty(text_of(i)?)).collect(),
                 other => Err(format!("must be an array of text, not {}", other.type_str())),

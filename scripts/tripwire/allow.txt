@@ -61,4 +61,3 @@ cpd-tui pace_tests::  # m-units: unit tests that may start a real tmux
 cpd-tui plan::  # m-units: unit tests that may start a real tmux
 cpd-tui tree::  # m-units: unit tests that may start a real tmux
 cpd-tui widgets::  # m-units: unit tests that may start a real tmux
-cpd-tui worker::  # m-units: unit tests that may start a real tmux

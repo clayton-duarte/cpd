@@ -94,11 +94,11 @@ pub(super) fn live(config_extra: &str) -> Live {
 }
 
 impl Live {
-    fn runner(&self) -> FakeRunner {
+    pub(super) fn runner(&self) -> FakeRunner {
         (*self.fx.fakes.runner).clone()
     }
 
-    fn fixture(&self, sql: &str) {
+    pub(super) fn fixture(&self, sql: &str) {
         fixture(&self.fx.env, sql);
     }
 
@@ -133,7 +133,7 @@ impl Live {
         self.fx.git(&self.repo, &["rev-parse", "refs/heads/cpd/pay/repo"])
     }
 
-    fn remote(&self, branch: &str) -> String {
+    pub(super) fn remote(&self, branch: &str) -> String {
         self.fx.git(&self.origin, &["rev-parse", &format!("refs/heads/{branch}")])
     }
 
@@ -161,7 +161,7 @@ impl Live {
     }
 
     /// What the Gates noted: `<command> head=<sha>`, one per run of a hook, in order.
-    fn gate_runs(&self) -> Vec<String> {
+    pub(super) fn gate_runs(&self) -> Vec<String> {
         self.hooks.runs.lock().unwrap().iter().map(|r| format!("{} head={}", r.command, r.head)).collect()
     }
 
@@ -192,12 +192,12 @@ impl Live {
     }
 
     /// `gh`'s calls that are not the poll's or a lookup's: `pr list`, `pr create`.
-    fn gh_pr_calls(&self) -> Vec<Vec<String>> {
+    pub(super) fn gh_pr_calls(&self) -> Vec<Vec<String>> {
         self.fx.calls("gh").into_iter().map(|c| c.args).filter(|a| a[0] == "pr").collect()
     }
 
     /// The Events of `kind` of Plan `pay`: `(txn, data)`, in order.
-    fn plan_events(&self, kind: &str) -> Vec<(i64, Value)> {
+    pub(super) fn plan_events(&self, kind: &str) -> Vec<(i64, Value)> {
         store(&self.fx.env)
             .read(|c| {
                 let mut stmt = c.prepare("SELECT txn, data FROM events WHERE plan = 'pay' AND kind = ?1 ORDER BY id")?;
@@ -309,14 +309,14 @@ impl Live {
 }
 
 /// What `attempt submit` answered the Worker.
-fn submit(live: &Live, id: &str) -> Value {
+pub(super) fn submit(live: &Live, id: &str) -> Value {
     // The environment of the Worker's window: its Plan and its Attempt.
     let r = live.fx.cpd_with(&live.worktree(id), &["attempt", "submit", id], &[("CPD_PLAN", PLAN), ("CPD_ATTEMPT", id)]).json();
     r
 }
 
 /// A Worker that did nothing: it submits the Lead Branch as it is.
-fn submit_only(live: &Live, id: &str) -> Value {
+pub(super) fn submit_only(live: &Live, id: &str) -> Value {
     submit(live, id)
 }
 
@@ -332,7 +332,7 @@ fn merge_the_base_and_submit(live: &Live, id: &str) -> Value {
 /// PR `repo` as `pr start` leaves it, with a bare `origin` that holds `main` and the Lead Branch as the lock pushed it, the policy
 /// both Gates `local` (`[gate] merge` and `pr`, contract §8.3) with a `pre-commit` and a `pre-merge` hook that note the commit they run on, Job `api` merged (its commit `api.txt` is on
 /// the Lead Branch, **not pushed**), and the PR's `open` Job `open-repo` queued. `gh` is the test's to script.
-fn open_live() -> Live {
+pub(super) fn open_live() -> Live {
     let live = live("");
     live.fx.env.owner_policy("acme", "[gate]\nmerge = \"local\"\npr = \"local\"\n");
     let merged = live.commit(&live.lead, "api.txt", "api\n", "api");
@@ -345,7 +345,7 @@ fn open_live() -> Live {
 }
 
 /// The same with the pull request already open (812, as `pr open` leaves it), the Plan in `deploy`, and no `open` Job.
-fn open_pr_live() -> Live {
+pub(super) fn open_pr_live() -> Live {
     let live = open_live();
     live.fixture(&format!(
         "UPDATE jobs SET status = 'cancelled', cancel_reason = 'opened', cancel_requested_at = 't' WHERE key = 'open-repo';
@@ -573,67 +573,6 @@ fn an_update_job_with_a_conflicting_base_fails_its_merge_until_the_next_attempt_
     assert!(live.plan_events("pr-opened").is_empty());
     let merged: Vec<Value> = live.plan_events("job-merged").into_iter().map(|e| e.1).filter(|d| d["kind"] == "update").collect();
     assert_eq!(merged.len(), 1, "{merged:?}");
-}
-
-/// A feedback fix Job on an open PR reaches the remote through the update path (hs-d497): `job add` queues the PR's `update` Job in its own
-/// transaction (once, however many fixes are added; `reason` `feedback`), which is Ready only when the fixes have merged, runs both Gates
-/// at its merge (no slot) on the Lead Branch and pushes it. No `pr rebase` or `pr push` is run by anyone.
-#[test]
-fn a_feedback_fix_job_on_an_open_pr_reaches_the_remote_through_the_update_job() {
-    let live = open_pr_live();
-    let spec = live.fx.env.root().join("fix-spec.json");
-    fs::write(&spec, r#"{"goal": "Fix it.", "context": "The checks failed.", "touches": ["fix.txt"], "acceptance": ["ok"], "out_of_scope": []}"#).unwrap();
-    let add = |key: &str| live.fx.cpd(&["job", "add", key, "--title", "Fix the checks", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--pr", "repo", "--plan", "pay"]).ok();
-    assert_eq!(add("fix")["job"]["status"], "queued");
-    assert_eq!(add("fix2")["job"]["status"], "queued");
-
-    // The Job `job add` queued: one, `up-repo`, from `job add`, for the feedback.
-    let update: Vec<(String, String)> = store(&live.fx.env)
-        .read(|c| {
-            let mut stmt = c.prepare("SELECT key, status FROM jobs WHERE kind = 'update' ORDER BY key")?;
-            Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
-        })
-        .unwrap();
-    assert_eq!(update, [("up-repo".to_owned(), "queued".to_owned())]);
-    let added: Vec<Value> = live.plan_events("job-added").into_iter().map(|e| e.1).filter(|d| d["kind"] == "update").collect();
-    assert_eq!(added.len(), 1, "{added:?}");
-    assert_eq!((&added[0]["by"], &added[0]["reason"], &added[0]["pr"]), (&json!("job add"), &json!("feedback"), &json!("repo")));
-    // It waits for the fixes: not Ready while they are not merged.
-    common::refused(&live.dispatch("up-repo"), "job_not_ready", 3);
-
-    // The merges of the fixes push best-effort (R35); make those pushes fail, as they do when origin is unreachable, so that what reaches
-    // the pull request is the update Job's.
-    let blocked = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let flag = blocked.clone();
-    live.runner().on("git", move |c| flag.load(std::sync::atomic::Ordering::SeqCst) && c.args.iter().any(|a| a == "push"), Reply::exit(1, "", "remote: nope\n"));
-    for key in ["fix", "fix2"] {
-        live.run_job(key, |live, id| {
-            live.commit(&live.worktree(id), &format!("{key}.txt"), "fixed\n", key);
-            submit(live, id)
-        });
-    }
-    let lead = live.lead_sha();
-    assert!(live.lead.join("fix.txt").exists() && live.lead.join("fix2.txt").exists());
-    assert_ne!(live.remote("cpd/pay/repo"), lead, "the fixes' own pushes failed: the remote lacks them");
-    blocked.store(false, std::sync::atomic::Ordering::SeqCst);
-    let before = live.gate_runs();
-    let before_dirs = live.gate_dirs().len();
-
-    let (attempt, submitted) = live.run_job("up-repo", submit_only);
-
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
-    assert_eq!(submitted["ok"], true, "{submitted}");
-    assert_eq!(live.lead_sha(), lead, "nothing to merge: the base did not move");
-    assert_eq!(live.remote("cpd/pay/repo"), lead);
-    assert_eq!(
-        live.gate_runs(),
-        [before, vec![format!("make quick head={lead}"), format!("make test head={lead}")]].concat(),
-        "both Gates ran on the Lead tip, at the update Job's merge"
-    );
-    let worktree = live.canonical_worktree("up-repo-a1");
-    assert_eq!(live.gate_dirs()[before_dirs..], [worktree.clone(), worktree], "in its Attempt worktree");
-    live.assert_no_slot_and_no_gate_worktree();
-    assert!(live.gh_pr_calls().is_empty());
 }
 
 /// The newest pull request of the Lead Branch is already `merged` on GitHub and cpd never recorded it (§7.7 submit step 1, §7.4 step 8b): the `open`

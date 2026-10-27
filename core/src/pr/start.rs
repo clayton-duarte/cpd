@@ -61,20 +61,21 @@ macro_rules! needs_unmerged {
         "n.plan = r.plan AND n.pr = r.key AND q.plan = n.plan AND q.key = n.needs AND q.status <> 'merged'"
     };
 }
-/// The base PR of `r` (§2.2 "The base PR": the PR of its repo whose Lead Branch is its base) has not started.
-macro_rules! base_pr_waiting {
+/// The base PR of `r` (§2.2 "The base PR": the PR of its repo whose Lead Branch is its base) has not opened: it is
+/// `waiting` or `dispatch` (the implied need; a `merged` one is unstacked first).
+macro_rules! base_pr_not_open {
     () => {
-        "b.plan = r.plan AND b.repo = r.repo AND b.lead_branch = r.base AND b.status = 'waiting'"
+        "b.plan = r.plan AND b.repo = r.repo AND b.lead_branch = r.base AND b.status IN ('waiting', 'dispatch')"
     };
 }
 
 /// E7's condition over `prs r`: every need `merged` and the base PR, when the PR is
-/// stacked, started (`dispatch`, `open`; a `merged` one is not waited for).
+/// stacked, its base PR `open` (the implied need; a `merged` one is not waited for).
 pub const READY: &str = concat!(
     "NOT EXISTS (SELECT 1 FROM pr_needs n, prs q WHERE ",
     needs_unmerged!(),
     ") AND NOT EXISTS (SELECT 1 FROM prs b WHERE ",
-    base_pr_waiting!(),
+    base_pr_not_open!(),
     ")"
 );
 
@@ -83,7 +84,7 @@ pub const READY: &str = concat!(
 pub struct NotReady {
     /// The needs that are not `merged`, as keys.
     pub needs: Vec<String>,
-    /// The base PR as `<plan>/<key>` when it has not started.
+    /// The base PR as `<plan>/<key>` when it has not opened.
     pub base_pr: Option<String>,
 }
 
@@ -102,7 +103,7 @@ fn not_ready(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<
     let needs = stmt
         .query_map([plan.as_str(), key.as_str()], |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut stmt = conn.prepare(concat!("SELECT b.plan, b.key FROM prs r, prs b WHERE r.plan = ?1 AND r.key = ?2 AND ", base_pr_waiting!()))?;
+    let mut stmt = conn.prepare(concat!("SELECT b.plan, b.key FROM prs r, prs b WHERE r.plan = ?1 AND r.key = ?2 AND ", base_pr_not_open!()))?;
     let base_pr = stmt
         .query_map([plan.as_str(), key.as_str()], |r| Ok(format!("{}/{}", r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?
@@ -453,7 +454,7 @@ pub(super) fn run(args: StartArgs) -> Result<Output, CpdError> {
             why.push(format!("needs {}, which {} not merged yet", held.needs.join(", "), if held.needs.len() == 1 { "is" } else { "are" }));
         }
         if let Some(base_pr) = &held.base_pr {
-            why.push(format!("is stacked on {base_pr}, which has not started yet"));
+            why.push(format!("is stacked on {base_pr}, which has not opened yet"));
         }
         let mut error = CpdError::new(ErrorCode::PrNotReady, format!("PR {key} of Plan {plan} {}.", why.join(" and ")))
             .with("plan", plan.as_str())

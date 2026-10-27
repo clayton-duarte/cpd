@@ -54,14 +54,14 @@ const VIEW: &str = r#"{
 
 const INLINE: &str = r#"[{"id": 1893, "user": {"login": "reviewer"}, "path": "src/payout.rs", "body": "This retry never backs off."}]"#;
 
-struct Pay {
-    fx: Fx,
+pub(super) struct Pay {
+    pub(super) fx: Fx,
     home: CpdHome,
     gh: Arc<Gh>,
 }
 
 /// Plan `pay` with one PR `repo` in `status`; its Lead worktree is a plain directory (the fake `gh` ignores it).
-fn fx(status: &str) -> Pay {
+pub(super) fn fx(status: &str) -> Pay {
     let fx = Fx::with_ports();
     let env = &fx.env;
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
@@ -95,7 +95,7 @@ fn fx(status: &str) -> Pay {
 }
 
 impl Pay {
-    fn store(&self) -> Store {
+    pub(super) fn store(&self) -> Store {
         Store::open(&self.home, 5000).unwrap()
     }
 
@@ -133,7 +133,7 @@ fn view_prints_the_checks_reviews_comments_and_inline_comments() {
                 {"name": "ci/old", "conclusion": "SUCCESS"}],
             "reviews": [{"id": "PRR_1", "author": "reviewer", "state": "CHANGES_REQUESTED", "body": "Please add a test."}],
             "comments": [{"id": "IC_1", "author": "reviewer", "body": "Thanks for the fix."}],
-            "inline_comments": [{"id": "1893", "author": "reviewer", "path": "src/payout.rs", "body": "This retry never backs off."}]})
+            "inline_comments": [{"id": "1893", "author": "reviewer", "path": "src/payout.rs", "body": "This retry never backs off."}], "feedback": null})
     );
     let gh = fx.gh_calls();
     assert_eq!(gh[0][..3], ["pr", "view", "812"]);

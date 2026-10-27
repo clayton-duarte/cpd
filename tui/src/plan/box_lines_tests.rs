@@ -37,6 +37,7 @@ fn job(pr: &str, key: &str, status: JobStatus, tier: Option<&str>, needs: &[&str
     JobNode {
         status,
         tier: tier.map(|t| Tier::parse(t).unwrap()),
+        shown_tier: tier.map(|t| Tier::parse(t).unwrap()),
         needs: needs.iter().map(|n| JobKey::parse(n).unwrap()).collect(),
         ..sample_job(pr, key)
     }
@@ -107,7 +108,7 @@ fn joins(buf: &Buffer, boxes: &[Rect], from: usize, to: usize, to_pr: &PrNode) -
     let (f, t) = (boxes[from], boxes[to]);
     let start = f.x + (f.width - 1) / 2;
     let goal = landing(t, to_pr);
-    let stand = |key: &str, x: u16, y: u16| Pill { key: key.into(), rect: Rect::new(x, y, 1, 1), column: 0 };
+    let stand = |key: &str, x: u16, y: u16| Pill { key: key.into(), rect: Rect::new(x, y, 1, 1) };
     let pills = [stand("from", start - 1, f.bottom() - 1), stand("to", goal + 1, t.y)];
     reaches(&clean, &pills, "from", "to")
 }

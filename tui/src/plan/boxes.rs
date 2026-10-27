@@ -4,9 +4,9 @@
 //! the PRs' needs (the PRs not merged below the merged ones, [`levels`]), one row of boxes per level, each need a plain box-drawing line from the needed box's bottom border to the needing
 //! box's top border, where it ends in a `┴` (no arrowhead; hs-d638; R3, R4 of plan-lines).
 //!
-//! In: the PRs and the Jobs. Out: [`Boxes`], one [`Chart`] of the whole canvas of boxes, so the scrolling and the clicks
-//! work on it as on one chart (the pills' rectangles are on the whole buffer), and the row of boxes of each of its
-//! columns, so the selection moves ←→ within a row of boxes and ↑↓ across rows ([`Boxes::step`]). The arrows are
+//! In: the PRs and the Jobs. Out: [`Boxes`], one [`Chart`] of the whole canvas of boxes, so the scrolling
+//! works on it as on one chart (the pills' rectangles are on the whole buffer), and the row of boxes of each of its
+//! columns. The arrows are
 //! routed as the chart's lines are, turned a quarter: one horizontal run per gap between rows of boxes, a need that
 //! skips rows riding a column free of boxes.
 
@@ -22,7 +22,7 @@ use ratatui::{
 
 use cpd_core::plan::Phase;
 
-use super::flow::{self, Chart, Dir, Mask, Pill, free_row, glyph};
+use super::flow::{self, Chart, Mask, Pill, free_row, glyph};
 use crate::buffer::copy_cells;
 use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
 use crate::link::{CUE, Link, Links};
@@ -55,11 +55,9 @@ const EXIT: &str = "┬";
 /// A need line's end on the needing box's top border, after the title when the title covers the middle column.
 const LAND: &str = "┴";
 
-/// The canvas of boxes: the chart of all of them, and the row of boxes (the level, [`levels`]) of each of its columns.
+/// The canvas of boxes: the chart of all of them.
 pub struct Boxes {
     pub chart: Chart,
-    /// Indexed by the chart's columns.
-    pub row_of: Vec<usize>,
     /// The links drawn in the box titles (pro-d60), on the canvas as [`layout`] drew it: `links_origin` is where that
     /// canvas's corner now is (the margin [`Boxes::with_margin`] added), so a cell of the chart is looked up less it.
     pub links: Links,
@@ -322,24 +320,17 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         pills.extend(chart.pills.iter().map(|p| Pill {
             key: p.key.clone(),
             rect: Rect { x: p.rect.x + body[i].0, y: p.rect.y + body[i].1, ..p.rect },
-            column: 0, // set below
         }));
     }
     let mut columns: Vec<Vec<usize>> = Vec::new();
-    let mut row_of: Vec<usize> = Vec::new();
-    for (l, r) in rows.iter().enumerate() {
+    for r in &rows {
         for &i in r {
             for column in &charts[i].columns {
-                let column: Vec<usize> = column.iter().map(|&p| base[i] + p).collect();
-                for &p in &column {
-                    pills[p].column = columns.len();
-                }
-                columns.push(column);
-                row_of.push(l);
+                columns.push(column.iter().map(|&p| base[i] + p).collect());
             }
         }
     }
-    Boxes { chart: Chart { buf, pills, columns }, row_of, links, links_origin: (0, 0) }
+    Boxes { chart: Chart { buf, pills, columns }, links, links_origin: (0, 0) }
 }
 
 impl Boxes {
@@ -347,31 +338,6 @@ impl Boxes {
     pub fn with_margin(self, margin: Margin) -> Boxes {
         let links_origin = (self.links_origin.0 + margin.horizontal, self.links_origin.1 + margin.vertical);
         Boxes { chart: self.chart.with_margin(margin), links_origin, ..self }
-    }
-
-    /// The neighbour of pill `from`: as [`Chart::step`] within a row of boxes (←→ cross into the neighbouring box), and
-    /// ↑↓ at the top or bottom of a box's column cross to the nearest pill (by column, then by row) of the nearest row
-    /// of boxes above or below that has one. Stays put at an edge.
-    pub fn step(&self, from: usize, dir: Dir) -> usize {
-        let pills = &self.chart.pills;
-        let row = |i: usize| self.row_of[pills[i].column];
-        let to = self.chart.step(from, dir);
-        if to != from && row(to) == row(from) {
-            return to;
-        }
-        let rows = (0..pills.len()).map(row);
-        let target = match dir {
-            Dir::Up => rows.filter(|&r| r < row(from)).max(),
-            Dir::Down => rows.filter(|&r| r > row(from)).min(),
-            Dir::Left | Dir::Right => None,
-        };
-        let Some(target) = target else { return from };
-        // twice the centre column of a pill, so it is whole
-        let centre = |i: usize| 2 * pills[i].rect.x + pills[i].rect.width;
-        (0..pills.len())
-            .filter(|&i| row(i) == target)
-            .min_by_key(|&i| (centre(i).abs_diff(centre(from)), pills[i].rect.y.abs_diff(pills[from].rect.y)))
-            .unwrap_or(from)
     }
 }
 
@@ -381,7 +347,6 @@ mod tests {
     use ratatui::style::Modifier;
 
     use super::*;
-    use crate::plan::flow::{Dir, Selection};
     use crate::test_text::rows;
     use crate::read::PrState;
     use cpd_core::config::Tier;
@@ -415,6 +380,7 @@ mod tests {
             needs: needs.iter().map(|n| JobKey::parse(n).unwrap()).collect(),
             appended: false,
             retry_tier: None,
+            shown_tier: Some(Tier::parse("S1").unwrap()),
             failed_cause: None,
             cancel_reason: None,
             merged_sha: None,
@@ -530,7 +496,6 @@ mod tests {
         let rect = |key: &str| c.pills.iter().find(|p| p.key == key).unwrap().rect;
         assert!(rect("a").x < rect("z").x && rect("a").y == rect("z").y, "alpha left of zed");
         assert_eq!(c.columns, [vec![1], vec![0]], "alpha's column first");
-        assert_eq!(b.row_of, [0, 0]);
         snap(c, "
 ╭─ alpha · alpha-repo 󱦰 main · dispatch ─╮ ╭─ zed · zed-repo 󱦰 main · dispatch ─╮
 │ 󰝦 a│S1                               │ │ 󰝦 z│S1                           │
@@ -830,81 +795,23 @@ mod tests {
     }
 
     #[test]
-    fn left_and_right_cross_boxes_within_a_row_of_boxes_only() {
+    fn boxes_in_a_row_have_their_columns_side_by_side() {
         // api and docs side by side; web below them
         let prs = [pr("api", &[]), pr("docs", &[]), pr("web", &["api"])];
         let jobs = [job("api", "a", &[]), job("api", "b", &["a"]), job("docs", "d", &[]), job("web", "w", &[])];
         let b = layout(&prs, &jobs, &NeedsUser::default(), 0);
         let at = |key: &str| at(&b.chart, key);
         assert_eq!(b.chart.columns, [vec![at("a")], vec![at("b")], vec![at("d")], vec![at("w")]]);
-        assert_eq!(b.row_of, [0, 0, 0, 1]);
-        assert_eq!(b.step(at("b"), Dir::Right), at("d"), "into the next box");
-        assert_eq!(b.step(at("d"), Dir::Left), at("b"), "back into the previous one");
-        assert_eq!(b.step(at("d"), Dir::Right), at("d"), "not into the next row of boxes");
-        assert_eq!(b.step(at("w"), Dir::Left), at("w"), "nor into the previous one");
-        // a pill is found where it is drawn
         let r = b.chart.pills[at("w")].rect;
-        assert_eq!(b.chart.pill_at(r.x, r.y), Some(at("w")));
         assert_eq!(b.chart.buf[(r.x + 1, r.y)].symbol(), crate::palette::QUEUED);
         assert_eq!((b.chart.buf[(r.x, r.y)].symbol(), b.chart.buf[(r.right() - 1, r.y)].symbol()), ("\u{e0b6}", "\u{e0b4}"), "the caps are on the whole pill's rectangle");
-    }
-
-    #[test]
-    fn up_and_down_move_within_a_box_then_cross_to_the_nearest_pill_of_the_next_row_of_boxes() {
-        // api: a, then b and c stacked; docs: d; web (below both): w, then x; e2e (below web): e
-        let prs = [pr("api", &[]), pr("docs", &[]), pr("e2e", &["web"]), pr("web", &["api", "docs"])];
-        let jobs = [
-            job("api", "a", &[]),
-            job("api", "b", &["a"]),
-            job("api", "c", &["a"]),
-            job("docs", "d", &[]),
-            job("web", "w", &[]),
-            job("web", "x", &["w"]),
-            job("e2e", "e", &[]),
-        ];
-        let b = layout(&prs, &jobs, &NeedsUser::default(), 0);
-        let at = |key: &str| at(&b.chart, key);
-        assert_eq!((b.step(at("b"), Dir::Down), b.step(at("c"), Dir::Up)), (at("c"), at("b")), "within a box's column");
-        // down from the bottom of a box: the nearest pill below by column
-        assert_eq!(b.step(at("c"), Dir::Down), at("x"));
-        assert_eq!(b.step(at("a"), Dir::Down), at("w"));
-        assert_eq!(b.step(at("w"), Dir::Down), at("e"));
-        // up from the top of a box: the nearest by column, then the lowest of a stack
-        assert_eq!(b.step(at("x"), Dir::Up), at("c"));
-        assert_eq!(b.step(at("e"), Dir::Up), at("w"));
-        // at the top and the bottom rows, it stays
-        assert_eq!((b.step(at("d"), Dir::Up), b.step(at("e"), Dir::Down)), (at("d"), at("e")));
-    }
-
-    #[test]
-    fn the_view_s_arrow_keys_cross_rows_of_boxes_and_scroll_to_the_selection() {
-        let prs = [pr("api", &[]), pr("web", &["api"])];
-        let b = layout(&prs, &[job("api", "a", &[]), job("web", "w", &[])], &NeedsUser::default(), 0).with_margin(Margin { horizontal: 2, vertical: 1 });
-        let mut s = Selection::default();
-        crate::plan::arrow(&mut s, &b, Dir::Down); // the first arrow selects the first pill
-        assert_eq!((s.key.as_deref(), s.follow), (Some("a"), true));
-        crate::plan::arrow(&mut s, &b, Dir::Down);
-        assert_eq!((s.key.as_deref(), s.follow), (Some("w"), true));
-        // a window of 4 rows at the top scrolls down to show w's row
-        let w = b.chart.pills[at(&b.chart, "w")].rect;
-        let (_, oy) = b.chart.scroll_to(at(&b.chart, "w"), (0, 0), (40, 4));
-        assert!(oy <= w.y && w.y < oy + 4, "w at row {} in a window from {oy}", w.y);
-        assert_eq!(b.chart.pill_at(w.x, w.y), Some(at(&b.chart, "w")), "clicks find it on the canvas");
-    }
-
-    #[test]
-    fn up_and_down_skip_a_row_of_boxes_with_no_jobs() {
-        let prs = [pr("a", &[]), pr("b", &["a"]), pr("c", &["b"])];
-        let b = layout(&prs, &[job("a", "x", &[]), job("c", "z", &[])], &NeedsUser::default(), 0);
-        let at = |key: &str| at(&b.chart, key);
-        assert_eq!((b.step(at("x"), Dir::Down), b.step(at("z"), Dir::Up)), (at("z"), at("x")));
     }
 
     /// The pane's body of `w`×`h` cells showing the margined chart of one empty PR at `scroll`, one row per string.
     fn body(w: u16, h: u16, scroll: (u16, u16)) -> Vec<String> {
         let c = layout(&[pr("api", &[])], &[], &NeedsUser::default(), 0).chart.with_margin(Margin { horizontal: 2, vertical: 1 });
         let mut dst = Buffer::empty(Rect::new(0, 0, w, h));
-        c.blit(&mut dst, Rect::new(0, 0, w, h), scroll, None);
+        c.blit(&mut dst, Rect::new(0, 0, w, h), scroll);
         (0..h).map(|y| (0..w).map(|x| dst[(x, y)].symbol()).collect()).collect()
     }
 

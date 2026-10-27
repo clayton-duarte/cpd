@@ -357,7 +357,10 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
         }
         if ["dependencies", "pr_needs", "pull_requests"].contains(&table) {
             let del = sql_of(&format!("{table}_hist_del"));
-            for column in &columns {
+            // `pull_requests_hist_del` is hand-written and owned by its migrations (§4.5 K4): `pr-comments` is additive, so it
+            // cannot rewrite it (two additive migrations that did would not commute) and its columns are not in it.
+            let added_by_additive = ["updated_at", "feedback"];
+            for column in columns.iter().filter(|c| table != "pull_requests" || !added_by_additive.contains(&c.as_str())) {
                 assert!(del.contains(&format!("'{column}', OLD.{column}")), "{table}_hist_del lacks {column}");
             }
         }

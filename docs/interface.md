@@ -72,6 +72,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd pr rebase` | Rebase the Lead Branch onto the base and push; --continue or --abort a rebase stopped at a conflict (§9.3) | Lead | |
 | `cpd pr push` | Gate, then push the Lead Branch as it is, without a rebase (§9.9) | Lead | |
 | `cpd pr view` | Show the PR's checks, reviews and comments (§9.8) | Lead | |
+| `cpd pr reply` | Reply to an open feedback item of the PR's pull request as the User, with the cpd marker; never resolves a thread | Lead | |
 | `cpd pr merge` | Squash-merge a clean pull request on GitHub and delete its branch (§9.10) | | yes |
 | `cpd review` | Plannotator sessions a Session has open (hs-d496) | | |
 | `cpd review open` | Record an open plannotator session | Lead, Manager | |
@@ -112,13 +113,13 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd inbox show` | Show one item (§21.2) | | |
 | `cpd inbox snooze` | Hide an item for a while (§21.3) | | |
 | `cpd inbox dismiss` | Hide an item for the rest of its life (§21.4) | | |
+| `cpd inbox claim` | Hand a review-requested item to the review Context's Manager (§21.7) | | |
 | `cpd watch` | The engine, one per machine (commands.md §12) | Lead | |
 | `cpd tui` | Build the cockpit and start the engine (commands.md §13) | | |
 | `cpd tui view` | A view in a cockpit pane (internal; owns its terminal) (§13.2) | internal | |
 | `cpd tui view tree` | The session tree (left) | internal | |
 | `cpd tui view plan` | The Plan of the Lead in the chat slot (centre top) | internal | |
 | `cpd tui view widgets` | The Dispatch column (right) | internal | |
-| `cpd tui view worker` | An Attempt's Worker, read-only (beside the chat) | internal | |
 | `cpd tui view history` | An archived Session's history, read-only (the chat slot) | internal | |
 | `cpd tui view legend` | The key legend (opened by `?` in the Dispatch column, in a tmux popup) | internal | |
 | `cpd tui view logs` | The Event log (opened by the StatusBar's logs button and by an Inbox item, in a tmux popup) | internal | |
@@ -134,6 +135,9 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
 | `cpd tiers` | Print the Tiers and their valid efforts (commands.md §14.3) | Lead | |
+| `cpd models` | The model lists pi can offer (commands.md §14.5) | | |
+| `cpd models refresh` | Read the model lists pi can offer now (§14.5) | Manager, Lead | |
+| `cpd models show` | Print the cached model lists (§14.5) | Manager, Lead | |
 | `cpd install` | Install the cpd built from a checkout (commands.md §14.4) | | |
 | `cpd secret` | Secrets in 1Password through op (commands.md §24) | | |
 | `cpd secret get` | Get one field of an item (§24.1) | Lead, Manager, Worker | |

@@ -198,7 +198,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv, cwd: string, 
   }
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Node's `import.meta.main` is true through the adapter symlink (docs/implementing.md, 'Scripts run through the adapter link')
+if (import.meta.main) {
   const { value, exit } = await main(process.argv.slice(2), process.env, process.cwd());
   // pi's modules may leave timers behind: leave once the answer is flushed.
   process.stdout.write(JSON.stringify(value) + "\n", () => process.exit(exit));

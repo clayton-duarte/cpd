@@ -1,4 +1,4 @@
-//! The wrapped, scrolled body of the Worker and history views ([`Scroller`]), and the wrapping it draws with
+//! The wrapped, scrolled body of the history view ([`Scroller`]), and the wrapping it draws with
 //! ([`wrap`]). The scroll position is the dialog kit's [`Scroll`], the one scroll module of the views (tui-G1, hs-d297);
 //! the Event log scrolls with it too.
 

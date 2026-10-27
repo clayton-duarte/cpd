@@ -5,14 +5,19 @@
 use std::collections::BTreeMap;
 
 
-use super::gh::View;
+use super::gh::{Check, View};
 use super::pulls::{PullRequest, Reason};
 use crate::events::NewEvent;
 
 /// The PR's current checks: name (a CheckRun's `name`, a StatusContext's `context`) → conclusion (else state).
 pub(super) fn current_checks(view: &View) -> BTreeMap<String, String> {
+    checks_map(view.checks.iter().flatten())
+}
+
+/// [`current_checks`] of any list of checks.
+pub(super) fn checks_map<'a>(list: impl IntoIterator<Item = &'a Check>) -> BTreeMap<String, String> {
     let mut checks = BTreeMap::new();
-    for c in view.checks.iter().flatten() {
+    for c in list {
         let Some(name) = c.name.clone().or_else(|| c.context.clone()) else { continue };
         let conclusion = c.conclusion.clone().filter(|s| !s.is_empty()).or_else(|| c.state.clone()).unwrap_or_default();
         checks.insert(name, conclusion);
@@ -24,15 +29,18 @@ fn phrase(reason: Reason) -> &'static str {
     match reason {
         Reason::ChecksFailed => "checks failed",
         Reason::ChangesRequested => "changes requested",
+        Reason::Comments => "comments",
         Reason::Closed => "closed without a merge",
     }
 }
 
-/// The Event's `text`, written for the Lead (§5.1).
-pub(super) fn text(plan: &str, key: &str, number: i64, reasons: &[Reason]) -> String {
+/// The Event's `text`, written for the Lead (§5.1). `comments` is the number of new and of open feedback items: it is
+/// stated when `comments` is a reason.
+pub(super) fn text(plan: &str, key: &str, number: i64, reasons: &[Reason], comments: (usize, usize)) -> String {
     let why: Vec<&str> = reasons.iter().map(|r| phrase(*r)).collect();
+    let counts = if reasons.contains(&Reason::Comments) { format!(" {} new and {} open review comments.", comments.0, comments.1) } else { String::new() };
     format!(
-        "PR {key} (#{number}) of Plan {plan} needs attention: {}. Read the details with cpd pr view --plan {plan} --pr {key}.",
+        "PR {key} (#{number}) of Plan {plan} needs attention: {}.{counts} Read the details with cpd pr view --plan {plan} --pr {key}.",
         why.join(", ")
     )
 }
@@ -93,18 +101,20 @@ mod tests {
         assert_eq!(summary(vec![("a", "success")]), ChecksSummary::Passed);
         assert_eq!(summary(vec![("a", "SUCCESS"), ("b", "")]), ChecksSummary::Pending);
         assert_eq!(summary(vec![("a", "SKIPPED"), ("b", "queued"), ("c", "startup_failure")]), ChecksSummary::Failed);
+        assert_eq!(summary(vec![("a", "CANCELLED"), ("b", "SUCCESS")]), ChecksSummary::Passed);
+        assert_eq!(summary(vec![("a", "CANCELLED"), ("b", "")]), ChecksSummary::Pending);
     }
 
     #[test]
     fn the_text_names_every_reason_and_the_command() {
         let all = [Reason::ChecksFailed, Reason::ChangesRequested, Reason::Closed];
         assert_eq!(
-            text("pay", "api", 7, &all),
+            text("pay", "api", 7, &all, (0, 0)),
             "PR api (#7) of Plan pay needs attention: checks failed, changes requested, closed without a merge. \
              Read the details with cpd pr view --plan pay --pr api."
         );
-        assert!(text("pay", "api", 7, &all[..1]).contains("needs attention: checks failed. Read"));
-        assert!(text("pay", "api", 7, &all[2..]).contains("needs attention: closed without a merge. Read"));
+        assert!(text("pay", "api", 7, &all[..1], (0, 0)).contains("needs attention: checks failed. Read"));
+        assert!(text("pay", "api", 7, &all[2..], (0, 0)).contains("needs attention: closed without a merge. Read"));
     }
 
     /// The `data` of the Event.
@@ -130,6 +140,8 @@ mod tests {
             merge_state: merge_state.into(),
             authored: true,
             review_requested: false,
+            updated_at: None,
+            feedback: None,
         }
     }
 
