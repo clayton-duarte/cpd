@@ -39,6 +39,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 26. [`gate`](#26-gate)
 27. [`prune`](#27-prune)
 28. [`tag` and `version`](#28-tag-and-version)
+29. [`resource`](#29-resource)
 
 ## 1. Conventions
 
@@ -155,6 +156,8 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `adopt_taken` | 3 | `pr add --adopt`: a PR of any Plan with the same repo and head branch is `waiting`, `dispatch` or `open`; `details` is `{head_ref, plan, pr}` |
 | `adopt_foreign` | 3 | `pr add --adopt`: the pull request's author is not the User and `--confirm-author` is missing or differs (case-insensitively); the message tells the Lead to ask the User first; `details` is `{number, url, author, user, confirm: "--confirm-author <author>"}` |
 | `pr_adopted` | 3 | `pr edit --repo` or `--base` on an adopted PR (§9.5): the repo and the base come from the pull request; `details` is `{pr, flag}` |
+| `resource_undeclared` | 3 | `job add` or `job edit --spec` (§5.1, §5.2), `job dispatch` (§5.5) or `resource run` (§29) named a resource the PR's repo policy does not declare (contract §8.3 "The `resources` domain"); `details` `{job, pr, resource, declared, file}` (`resource run`: `{resource, repo, declared, file}`), `declared` the sorted declared names, `file` the repo policy file's path whether or not it exists. Engine E3 raises it as one `error` Event for a queued Job whose name the policy no longer declares (contract §3.7) |
+| `resource_busy` | 3 | `job dispatch` (§5.5) or `resource run` (§29) found a resource held by another holder; `details` `{job, resource, holder}` (`resource run`: `{resource, repo, holder, waited_minutes}`), `holder` the holder record of contract §1.4. Engine E3 never raises it: the Job stays `queued` and E3 tries again at the next tick (contract §3.7) |
 | `kind_reserved` | 3 | `job add --kind open` or `update` (§5.1): cpd adds those Jobs, never the Lead (contract §2.2 "Job kinds"); `details.kind` |
 | `test_job_required` | 3 | an `impl` Job that is not a draft, or a Plan review or lock over one (§5.1, §4.6, §4.8), needs no `test` Job of its PR; `details.jobs` lists the `impl` Jobs |
 | `tests_unconfigured` | 3 | `pr add --shape tdd` (§9.4), `job add --kind test` or `impl` (§5.1) or a `test` or `impl` Job's submit (§6.1) found that the PR's repo policy has no `[test-commands]` (no repo file, or a file without the table; contract §7.7); the message names `--shape docs`, `--shape config` and the table |
@@ -226,6 +229,8 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd pr reply` (§9.8a) | Lead | no | no |
 | `cpd tag` (§26.1) | Lead | no | no |
 | `cpd version sync` (§26.2) | Lead | no | no |
+| `cpd resource list` (§29) | Manager, Lead, Worker | no | no |
+| `cpd resource run` (§29) | Manager, Lead, Worker | no | no |
 
 `context new` gains `--owner` (§3.1), and `pr add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `pr add` gains `--shape` (§9.4), hs-d340 and hs-d341.
 
@@ -877,7 +882,7 @@ cpd plan render [--plan <id>]
 
 Effects: writes `run/<plan>/plan.md` and `run/<plan>/summary.md` (§1.4), nothing else. Content of `plan.md`, kept from cpd 1 §11 `plan render` and grouped by PR (R34): title, Context and phase; a table of the PRs that are not `merged`, with key, repo, base and needs, each row muted and marked `cancelled` when the PR is `cancelled` (hs-d518), with its `status` and `cancel_reason` or `superseded by <ref>` when the Event carries `superseded_by`; and, when there are two or more, a Mermaid `graph LR` of their needs (cancelled PRs not in the graph, hs-d518); then the section `## Overlaps` (below); then one section per PR that is not `cancelled` (hs-d518), in the order of the needs graph (ties by key), headed `PR <key>`, with its repo, base and needs, a table of its Jobs with key, title, Tier, status, needs and touches, each row muted and marked `cancelled` when the Job is `cancelled` (hs-d518), with its `status` and `cancel_reason` (hs-d518), a Mermaid `graph TD` of its Jobs' Dependencies (cancelled Jobs not in the graph), and one subsection per Job that is not `cancelled` (hs-d518) with its Spec. **Waiting display** (hs-d521): a Job or PR table row whose status is `waiting` (display only, hs-d523) shows the blockers as `waiting on <keys>` in its status column or as a separate line (hs-d521); in the Mermaid graph (hs-d518), a cancelled PR is omitted, and in the render's graph of needs a cancelled PR appears neither as a node nor in edges; in the per-PR Job graph, cancelled Jobs do not appear. **The open Job's placeholder** (hs-d497): a PR that has not started has no `open` Job yet (engine E4 adds it at the start), so the render shows one for each such PR, as the last row of its Jobs table and as the last Job section: key `open-<pr>`, title `Open the pull request: <PR title>`, Tier `open_tier` (contract §8.2), status `—` (not a Job yet), needs `every other Job of the PR`, and, in place of the Spec, `Added by cpd when the PR starts: merges the base only on a conflict, runs the Gate, pushes and opens the pull request ready.` It is not a row, is in no fingerprint and no Mermaid graph, and is shown in every phase until the PR starts (once the PR has started the real `open` Job is shown as any Job, with its derived needs, contract §3.2). A Job's section is under its PR only. In a phase after `plan`, the Jobs that are not `draft` are Locked context: the render shows them as such, and marks every `draft` Job **under review** except a `draft` `open` Job, which cpd added and the Lead does not review: it is shown as context, never `**under review**` (hs-d573) (in its table row and its section), because a review in these phases covers exactly the drafts (§4.6; User, hs-d173, hs-d174, hs-d179). In phase `plan` every Job is a draft and nothing is marked. A **stub draft** (no Tier or no Spec, §5.1) is shown as it is, visibly incomplete: `Tier: —` in its table row and section when it has no Tier, and `Spec: not written yet` in place of its Spec subsection's goal, context, touches, acceptance and out of scope when it has none. GitHub-flavoured Markdown only: tables, code and Mermaid, no footnotes, no raw HTML (t4). It also writes the **Plan summary**, `run/<plan>/summary.md` (below, hs-d502). Output: the path, `summary` (the path of the summary), the plan fingerprint (§2.3: Jobs, PRs and the outline when set), the number of `draft` Jobs (`draft_jobs`, not counting a `draft` `open` Job: it is not under review, hs-d573), the number of PRs that are not `cancelled` and the overlaps.
 
-**Kinds** (hs-d340, hs-d341). A Job's `kind` is a column of its row in the PR's table, and a line of its section when it is not `work`; a `test` Job's section lists its `tests` and `test_files`. The PR's `open` Job, once the PR has started, is a Job of its PR like any other, with its derived needs (contract §3.2); before the start it does not exist, so the review of a Plan shows the template's Jobs and the `open` Job as `plan render`'s placeholder (§4.5, hs-d497), the one every PR will get.
+**Kinds** (hs-d340, hs-d341). A Job's `kind` is a column of its row in the PR's table, and a line of its section when it is not `work`; a `test` Job's section lists its `tests` and `test_files`, and a Job's section lists its `resources` with the Spec when it has any. The PR's `open` Job, once the PR has started, is a Job of its PR like any other, with its derived needs (contract §3.2); before the start it does not exist, so the review of a Plan shows the template's Jobs and the `open` Job as `plan render`'s placeholder (§4.5, hs-d497), the one every PR will get.
 
 **Overlaps** (B4-A3, hs-d78, hs-d172, hs-n201): the warning that another Plan is working on the same files. It is made here and so in the Plan review (§4.6), and nowhere else: `job add` does not warn. It looks at **open work** only, on both sides: the Jobs that are not `cancelled` (`draft`, `queued`, `running`, `failed`, or `merged` on its Lead Branch) of PRs that are not `merged` and not `cancelled`. A Job of a `merged` PR is on its base already and cannot clash with anyone's work any more, so the Jobs of this Plan's `merged` PRs are not checked. For each PR of this Plan that is not `merged` and not `cancelled`, every **other** active Plan (any Context; its phase is not `done` and it is not archived) is looked at when it has a PR in the same repo (the same `prs.repo` realpath as stored) that is not `merged` and not `cancelled`. A Job of that PR overlaps a Job of this PR when a path in the `touches` of the one overlaps a path in the `touches` of the other. Two paths overlap when they are equal, or when one is a directory (ends with `/`) that contains the other. Nothing else is compared (no globs, no normalisation). A Plan's own Jobs are never listed. The warning is only that: nothing is refused and no state changes.
 
@@ -1289,6 +1294,14 @@ Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except 
 
 Both are required for a `test` Job that is not a stub, and refused for every other kind (`spec_invalid`, exit 2, with the JSON path in `details`). An `impl` Job names no tests: its tests are the union of its test Jobs' (contract §2.2 "Job kinds").
 
+**The optional `resources` Spec field** (contract §2.2): a list of one or more distinct names, each matching `^[a-z][a-z0-9-]{0,31}$`; absent means none. It names the repo-declared exclusive resources (contract §8.3 "The `resources` domain") the Job's Attempts hold while they run:
+
+```json
+{"goal": "…", "context": "…", "touches": ["e2e/"], "acceptance": ["…"], "out_of_scope": [], "resources": ["e2e-port"]}
+```
+
+Allowed on kinds `work`, `docs`, `test` and `impl`; on a review Job it is `spec_invalid` (exit 2, JSON path `$.resources`), and `open` and `update` Jobs take none (their Spec is cpd's). It is Locked with the Job, guarded by `jobs_locked` and in no fingerprint. An empty list, a repeated name or a name that does not match: `spec_invalid` with its JSON path.
+
 **Tier flag** (`--tier`): `^(O|S|H)([0-5])$` or exactly `GX`. `G0`–`G5` are `tier_invalid` (exit 2, `details.tier`), before any catalog check, with the message `invalid Tier "G0": G has no effort, write GX (hs-d562).` A Tier from the pattern with an effort the letter's model supports (§9) is valid; otherwise `tier_invalid` (exit 2), with `details.efforts` listing the valid ones. **For a Job's Tier, the rule of pro-d53 applies next** (the User's decision, 2026-10-26; contract §9 "Tier rules"): a Worker uses only H0–H4 and S0–S3, so the Tier must be `H0`–`H4` or `S0`–`S3`, else `tier_not_allowed` (exit 2, `details` `{tier, allowed: "H0-H4, S0-S3", rule: "pro-d53"}`), message `Tier <T> is not allowed for a Worker: Workers use only the Tiers H0-H4, S0-S3, to keep cost down (pro-d53, hs-d554)`. `job add`, `job edit`, `job retry` and `job dispatch` apply it, after `tier_invalid`; a stub draft's Tier is checked too. A store that already holds a Job on a refused Tier is not rewritten: §5.5 and contract §9 ("Stored Jobs and Plans") say what happens to it.
 
 ### 5.1 `job add`
@@ -1328,6 +1341,8 @@ cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--pr <key
 | the Spec file has `tests` and `test_files` exactly when the kind is `test` and the Job is not a stub (§5); `--review` with a kind other than `work` | `spec_invalid`; `usage` | 2 |
 | every string of the Spec (each field, each `touches` entry, each `acceptance` item, and their `test` and `test_files` for a test Job) names only repo-relative paths, not the primary checkout of any PR's repo (contract §8.3); a match is a substring ending at the end of the string or before a non-letter, non-digit, `.`, `_` or `-` character; `details: {path, primary, pr}` names the JSON path, the root realpath (or `~`/`$HOME` prefix), and the PR | `spec_invalid` | 2 |
 | `--tier` is a Tier a Worker may have: `H0`–`H4` or `S0`–`S3` (§5, pro-d53, hs-d554; an `O` Tier, any `S` outside `S0`–`S3`, or effort 5 is refused; a Tier that is not valid at all: `tier_invalid`) | `tier_not_allowed` | 2 |
+| the Spec's `resources` is valid for the kind (§5: not on a review Job, JSON path `$.resources`) | `spec_invalid` | 2 |
+| every name in the Spec's `resources` is declared by the PR's repo policy (contract §8.3 "The `resources` domain"); `details` `{job, pr, resource, declared, file}`. A stub draft has no Spec and no check; `plan review` and `plan lock` do not check again | `resource_undeclared` | 3 |
 
 ### A Spec names no primary checkout
 
@@ -1335,7 +1350,7 @@ A Spec must name only repo-relative paths. A Worker works in its own worktree (c
 
 **A stub draft** stores `tier` and the Spec fields `goal`, `context`, `touches`, `acceptance` and `out_of_scope` as null for what was not given (a given `--spec` sets all five; `--tier` sets the Tier), and its `job-added` Event has `tier: null` when it has none. A draft that lacks its Spec or its Tier is **incomplete**: it is never queued or run (contract §3.2), a Plan review of it is refused `draft_incomplete` (§4.6) and so is `plan lock` (§4.8). `needs` and `pr` work as for any draft.
 
-Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `kind` (`work` by default); `tests` and `test_files` from the Spec file of a `test` Job; `review` = 1 with `--review`; `urgent` = 1 with `--urgent` (else 0); `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = draft`, `appended = 1`, no fingerprint, with `--draft` in any later phase; `status = queued`, `appended = 1`, fingerprint stored, in a later phase without `--draft`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, kind, status, appended, tier, needs, review, urgent}`. A Job appended to a PR keeps the PR's `open` Job waiting until it is `merged` or `cancelled`: that Job's Ready rule counts every Job of the PR (contract §3.2). (Before hs-d340 the add also re-armed `all-merged`; that step and Event are retired, contract §3.7 E4.) No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); an appended draft is not Ready at all until its review is approved; one of an `open` PR (a `work` Job, above) reaches its pull request by its own merge (contract §3.8 "Updating"): **no `update` Job is queued**, no PR Gate runs. `pr push` (§9.9) is the repair after a `push_failed`, and `pr rebase` (§9.3) the repair for the rest. A review Job (`--review`) holds the PR's `open` Job through a stub fix draft the Lead registers with it (`job add <key> --title <t> --draft`, a title only; contract §2.2 "Review Job"): the draft keeps the `open` Job from being Ready until the Lead completes or cancels it.
+Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `kind` (`work` by default); `tests` and `test_files` from the Spec file of a `test` Job; `resources` from the Spec file (null when absent); `review` = 1 with `--review`; `urgent` = 1 with `--urgent` (else 0); `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = draft`, `appended = 1`, no fingerprint, with `--draft` in any later phase; `status = queued`, `appended = 1`, fingerprint stored, in a later phase without `--draft`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, kind, status, appended, tier, needs, review, urgent}`. A Job appended to a PR keeps the PR's `open` Job waiting until it is `merged` or `cancelled`: that Job's Ready rule counts every Job of the PR (contract §3.2). (Before hs-d340 the add also re-armed `all-merged`; that step and Event are retired, contract §3.7 E4.) No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); an appended draft is not Ready at all until its review is approved; one of an `open` PR (a `work` Job, above) reaches its pull request by its own merge (contract §3.8 "Updating"): **no `update` Job is queued**, no PR Gate runs. `pr push` (§9.9) is the repair after a `push_failed`, and `pr rebase` (§9.3) the repair for the rest. A review Job (`--review`) holds the PR's `open` Job through a stub fix draft the Lead registers with it (`job add <key> --title <t> --draft`, a title only; contract §2.2 "Review Job"): the draft keeps the `open` Job from being Ready until the Lead completes or cancels it.
 
 ```json
 {"ok": true, "job": {"key": "api-schema", "pr": "api", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": false}}
@@ -1367,6 +1382,8 @@ A draft is editable in **every phase** (User, hs-d173, hs-d174, hs-d179), includ
 | the new needs make no cycle | `dependency_cycle` | 3 |
 | with `--spec`: every `touches` entry is checked as in `job add` (§5.1), against the tree the Job will start from (contract §2.1, hs-d512); `details: {missing: [entries], tree: <ref>}` | `touches_missing` | 3 |
 | with `--spec`: the Spec names only repo-relative paths, not the primary checkout of any PR's repo (§5.1 "A Spec names no primary checkout"); `details: {path, primary, pr}` | `spec_invalid` | 2 |
+| with `--spec`: the Spec's `resources` is valid for the kind (§5) | `spec_invalid` | 2 |
+| with `--spec`, or with `--pr` for a Job that has `resources`: every name is declared by the (new) PR's repo policy, as in `job add` (§5.1); `details` `{job, pr, resource, declared, file}` | `resource_undeclared` | 3 |
 
 Effects: **rows**, one transaction: the changed `jobs` columns; `dependencies` rows deleted and inserted to match (§4.4 allows deletion only for `draft`); with `--pr`, in the order §4.4 states: delete the old Dependencies, update `pr`, insert the new ones. **Event** `job-edited` `{fields: [name]}`, listing only the fields whose value changed (`pr` among them).
 
@@ -1432,6 +1449,8 @@ Starts one Ready Job now: the same step as engine E3 (cpd 1 §11, kept).
 | its fingerprint matches | `locked_job_tampered` | 3 |
 | the driver lock is free (§3.4 step 1) | `cas_lost` | 3 |
 | a linear Attempt of the Job's PR is live (pro-d52, contract §3.7 E3 item 1) | `cas_lost` | 3 |
+| every resource of the Job's Spec is still declared by the PR's repo policy (contract §3.4 "Resources of a Job"); `details` `{job, pr, resource, declared, file}` | `resource_undeclared` | 3 |
+| every resource of the Job's Spec is free: the starter takes them all or none, in name order, after the driver lock and before the Attempt row exists; `details` `{job, resource, holder}`. It changes nothing: no Attempt, and the Job stays `queued` | `resource_busy` | 3 |
 | fewer than `concurrency` Attempts are not `ended` (an urgent Job: fewer than `concurrency + 1`, contract §3.7) | `no_slot` | 3 |
 | the Job's Tier for the Attempt is one a Worker may have (§5, pro-d53, hs-d554): a Job stored on a Tier outside the range before the rule is not started here, as engine E3 does not start it and raises one `error` Event per such Job (contract §3.7 E3) | `tier_not_allowed` | 2 |
 
@@ -1461,7 +1480,7 @@ cpd job list [--status <status>] [--plan <id>]
 cpd job show <key> [--plan <id>]
 ```
 
-Effects: none. Output: every field of the Job (§2.2; `review: true` for a review Job, B2; `urgent`, a boolean; `kind`, and `tests`, `test_files` and `test_approved` where the kind has them; the `needs` of an `open` or `update` Job is the derived list of contract §3.2), `needs`, `needed_by`, and every Attempt with all its fields (`check_tail`, `metrics`) and its Escalations (cpd 1 §11, kept).
+Effects: none. Output: every field of the Job (§2.2; `review: true` for a review Job, B2; `urgent`, a boolean; `kind`, and `tests`, `test_files` and `test_approved` where the kind has them; `resources`, the Spec's list (null when it has none); `waiting_for`, present only for a `queued` Job that lists resources: an array of `{"resource":"<name>","holder":{…}}` for each of its resources held right now, `holder` the holder record of contract §1.4 (`[]` when none is held; the key is absent for every other Job); the `needs` of an `open` or `update` Job is the derived list of contract §3.2), `needs`, `needed_by`, and every Attempt with all its fields (`check_tail`, `metrics`) and its Escalations (cpd 1 §11, kept).
 
 ```json
 {"ok": true, "job": {"key": "worker", "pr": "api", "status": "failed", "failed_cause": "timed_out", "tier": "S2", "review": false, "urgent": false, "fingerprint": "9f…", "retry_tier": null, "…": "…"}, "needs": ["api-schema"], "needed_by": ["ui"],
@@ -4073,7 +4092,7 @@ Decision (User, 2026-10-26 11:53 EDT, relayed by the Lead of Plan preco-home-but
 
 **A command that does not exit within 30 seconds** (a dev server, a watcher, a long build) runs in the background: its own process group, its output in the log `/tmp/cpd-<plan>/<name>.log`, its process group id in `/tmp/cpd-<plan>/<name>.pid` (`<plan>` the Plan's id, `<name>` a short name), because the adapter refuses a bash call that waits over the bound (§15.11) and a foreground one would hold the User's conversation. The Lead then tells the User, in one message, the URL or port, the log path and how to stop it.
 
-**Nothing is left orphaned:** the Lead stops what it started (the process group, so the children end too) when the User says they are done, when the User asks it to stop, and at `plan-done` if it still runs.
+**A dev server that holds a repo's declared resource** (for example the port an e2e run needs, `cpd resource list`, §29) is started with the prefix `cpd resource run <name> --`, so the resource is held while it runs and a Job that lists it waits instead of failing on the port. **Nothing is left orphaned:** the Lead stops what it started (the process group, so the children end too) when the User says they are done, when the User asks it to stop, and at `plan-done` if it still runs.
 
 **Where it runs.** Where the User says; for a Plan's branch, in the PR's Lead worktree (`lead_worktree` of `cpd plan show`).
 
@@ -4091,6 +4110,7 @@ Rendered by the driver at A3 to `run/<plan>/specs/<attempt>.md` from a template 
 | Who you are | Attempt `<n>` of Job `<job>` (`<title>`) in Plan `<plan>` (was "Workflow"); attempt id, Tier, worktree path |
 | Rules | work only in this worktree and touch only the listed files; commit your work; before submitting, run the quick check yourself: the commands of `pre-commit` from the PR's policy (`[hooks]`, contract §7.3), listed verbatim, or, when the policy has no `pre-commit` hook, the line `This repo defines no quick check.` (change: cpd 1 said `./verify.sh`; R20: no fallback to `pre-merge`); never edit the protected paths, listed: `.cpd/` and each entry of the PR's `protected.paths` (§7.5; change: cpd 1 hard-coded `verify.sh`); never ask the User anything; tear down everything it started before it submits (private tmux servers, background processes, temporary homes, a `cpd watch` it started; hs-d34, hs-d39); if continuing would require guessing, `cpd ask <attempt> "<question>"`, which blocks until the Lead answers (change: no `--wf`, the pane has `CPD_PLAN`); one blocker at a time; commit a skeleton within 10 minutes, then at least every 20 minutes; run only commands that exit: `timeout` around every test and measurement, no synthetic benchmarks, never `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run` or any other command that does not exit (hs-n97, hs-n107); run only the tests the change touches, never the full suite (the Gate's); do not stop until you have submitted |
 | Job | Goal, Context, Files you may touch (`touches`), Acceptance, Out of scope (or "Nothing is listed. Still do only what the Goal and Acceptance require.") |
+| Resources | only when the Job's Spec lists `resources`: a line naming each resource the Attempt holds until it ends, and that `cpd resource run <name> -- <command>` run in the Attempt takes nothing more and runs the command at once (§29) |
 | Previous Attempts | only when the Job has ended Attempts: for each, number, Tier, outcome and cause, and what explains it: the conflicting files (`merge_conflict`), the failed Gate's hook and log (`gate_failed`, `gate_error`), or one sentence for every other cause (change: cpd 1 showed only feedback) |
 | Answers already given | new: every `answered` Escalation of earlier Attempts, question and answer, so a Worker does not ask again |
 | Finish | `cpd attempt submit <attempt>`; on success stop at once; on a refusal, what each code means: `wrong_worktree` (run it from the worktree), `dirty_tree`, `no_commits`, `gate_tampered` (revert the protected paths), `check_failed` (fix, commit, submit again; the tail is in `details`), `check_error` (the check could not run: ask the Lead), `attempt_not_running` (the Attempt was stopped: stop) |
@@ -4529,7 +4549,7 @@ Prints the resolved policy of one key: every domain with its value and its sourc
 
 Effects: none. One read transaction for the key's rows, then the compiled default and the key's files, read in order (`policy/host.toml` when it exists, `policy/<owner>/owner.toml`, `policy/<owner>/<repo>.toml` for a `Repo` key when it exists: the file is optional), each parsed once. No subprocess. `check_file_names`: the file `host.toml` is the machine scope; a directory whose name is a valid owner login must contain only `owner.toml` and files with valid repo names ending in `.toml`, else `policy_invalid` (§8.3).
 
-Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Session's role (`manager`, `lead` or `worker`) with no flag, else null; `files`, the realpath of each file read in order (machine, owner, repo), only the files that exist (a repo without a file has no repo scope and prints the owner's policy); and `policy`, one entry per domain of contract §8.3, in its table's order, each with `source`, `audience` (the roles its `text` reaches), `keys` (its typed keys, each with its `value` and `source`; `{}` for a domain that has none) and `text`. The three repo-only domains (contract §8.3) print like the others: `audience` `[]`, `text` `""`, `source` `default` or `repo:<path>`; the `keys` of `hooks` are `pre-start`, `pre-commit` and `pre-merge`, each `value` a list of blocks, each block a list of `{"name": <string or null>, "command": <string>}` (`[]` when the hook is not set); of `test-commands`, `build`, `run` and `list` (a string, or null when not set); of `protected`, `paths` (a list of strings, `[]` by default). A domain's `source` is `default`, `machine:<path>`, `owner:<path>` or `repo:<path>`; a typed key left out of a set domain has its domain's source followed by ` (key default)`, and its value is cpd's default (contract §8.3 "Precedence and replace"). The adapter keeps the domains whose `audience` holds `role` and whose `text` is not empty.
+Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Session's role (`manager`, `lead` or `worker`) with no flag, else null; `files`, the realpath of each file read in order (machine, owner, repo), only the files that exist (a repo without a file has no repo scope and prints the owner's policy); and `policy`, one entry per domain of contract §8.3, in its table's order, each with `source`, `audience` (the roles its `text` reaches), `keys` (its typed keys, each with its `value` and `source`; `{}` for a domain that has none) and `text`. The four repo-only domains (contract §8.3) print like the others: `audience` `[]`, `text` `""`, `source` `default` or `repo:<path>`; the `keys` of `hooks` are `pre-start`, `pre-commit` and `pre-merge`, each `value` a list of blocks, each block a list of `{"name": <string or null>, "command": <string>}` (`[]` when the hook is not set); of `test-commands`, `build`, `run` and `list` (a string, or null when not set); of `protected`, `paths` (a list of strings, `[]` by default); of `resources`, one key `names`, the declared resource names, sorted (`[]` and source `default` when none is declared). A domain's `source` is `default`, `machine:<path>`, `owner:<path>` or `repo:<path>`; a typed key left out of a set domain has its domain's source followed by ` (key default)`, and its value is cpd's default (contract §8.3 "Precedence and replace"). The adapter keeps the domains whose `audience` holds `role` and whose `text` is not empty.
 
 ```json
 {"ok": true, "key": {"owner": "clayton-duarte", "repo": "cpd"}, "role": "worker",
@@ -4553,7 +4573,8 @@ Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Ses
                       "pre-merge": {"value": [], "source": "repo:/home/clayton/.cpd/policy/clayton-duarte/cpd.toml"}}, "text": ""},
    "test-commands": {"source": "default", "audience": [],
                      "keys": {"build": {"value": null, "source": "default"}, "run": {"value": null, "source": "default"}, "list": {"value": null, "source": "default"}}, "text": ""},
-   "protected": {"source": "default", "audience": [], "keys": {"paths": {"value": [], "source": "default"}}, "text": ""}}}
+   "protected": {"source": "default", "audience": [], "keys": {"paths": {"value": [], "source": "default"}}, "text": ""},
+   "resources": {"source": "default", "audience": [], "keys": {"names": {"value": [], "source": "default"}}, "text": ""}}}
 ```
 
 **The machine object.** Every form of the command (`--pr`, `--context`, `--owner`, `--owner --repo` and no flag) also carries a top-level `machine` object, because every form reads the machine file (`$CPD_HOME/policy/host.toml`, contract §8.3; it is also a full policy scope, read as the "Effects" above say, and the `mcp` table is the only part this object reports): `{"name": "<machine>", "mcp": {"source", "servers"}}`. `name` is the config key `machine`; `source` is `default` or `machine:<realpath>` (contract §8.3 "MCP servers of the machine scope"); `servers` maps each server name to its entry with the keys as written in the file (a key left out is absent; an entry carries `headers`, a table of header name to literal value, when the file sets it). An invalid machine file is `policy_invalid`, with the same exit and `details` (`file`, `key`) as an invalid owner file, and fails every form. `markdown` gains a section `## Machine <name>` listing each server's name, `url` and `exposure`, or `No MCP servers.`. Example, on machine `pro`, `machine` only:
@@ -5165,3 +5186,58 @@ Idempotent in effect: running it again appends another Event, and the adapter re
 #### Signing in
 
 A server that uses OAuth needs the User to sign in once on the machine (pro-d10): in that Session's pi with `/mcp login <name>`, or from a shell with `pi mcp login <name>`. The shell form works while the user-level `~/.pi/agent/mcp.json` has an entry with the same name and URL, because pi keys the credential by server name and URL. Tokens live in pi's own `mcp-auth.json`; cpd never reads or writes one (hs-d107, pro-d4). A running Session uses new credentials on its next turn (pi's rule), and an attached server that needs a sign-in shows pi's own "requires sign-in" report.
+
+## 29. `resource`
+
+Repo-declared exclusive resources (contract §8.3 "The `resources` domain", §1.4 "The resource locks and the holder record", §3.4 "Resources of a Job"; Plan `repo-lock`). Both commands derive the repo from the **current directory**: the git worktree that contains it, its `origin` keyed as `pr add` does (`repo_unkeyed`, exit 1, when it cannot), then that repo's policy (the owner and policy refusals of any resolve: `owner_unconfirmed`, `policy_invalid`). A directory outside a git worktree is `usage` (exit 2). The files are in contract §1.4; no command releases another holder's resource.
+
+### 29.1 `resource list`
+
+```
+cpd resource list
+```
+
+Effects: none. Output: `repo` (`<owner>/<name>`) and `resources`, one entry per declared resource sorted by name (`[]` when none is declared): `name`, `held` (a boolean) and `holder` (the holder record of contract §1.4 when held, else null), each read with the shared try-lock probe of contract §1.4.
+
+```json
+{"ok": true, "repo": "clayton-duarte/card-dashboard", "resources": [{"name": "e2e-port", "held": true, "holder": {"by": "command", "pid": 4242, "command": "npm run dev", "session": "9f1c…", "attempt": null, "at": "2026-10-26T21:40:00.000Z"}}]}
+```
+
+Idempotent: yes; it only reads.
+
+### 29.2 `resource run`
+
+```
+cpd resource run <name> [--wait <minutes>] -- <command> [<arg>...]
+```
+
+Takes the resource, then runs the command holding it. The resource is the one a human takes (the User, or a Lead running a command the User asked for, §15.20).
+
+| Argument | Meaning |
+|---|---|
+| `<name>` | a resource the repo's policy declares |
+| `--wait <minutes>` | a positive integer; absent means 0. Tries again every second until the minutes have passed, by the Ports' clock (so tests never sleep) |
+| `-- <command> [<arg>...]` | the command and its arguments, run from the current directory with the current environment, never through a shell |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| a command follows `--`; `--wait` is a positive integer | `usage` | 2 |
+| the directory is in a git worktree whose `origin` can be keyed | `repo_unkeyed` | 1 |
+| the repo's policy resolves | `owner_unconfirmed`, `policy_invalid`, … | 1 |
+| `<name>` is declared; `details` `{resource, repo, declared, file}` | `resource_undeclared` | 3 |
+| the resource is free, taking it by a non-blocking exclusive try-lock, tried again every second for `--wait` minutes; `details` `{resource, repo, holder, waited_minutes}` (`holder` as in `resource list`; `waited_minutes` the minutes given, 0 when absent). The command never starts | `resource_busy` | 3 |
+| the command can be executed (after the lock is held; the process and the lock are gone together) | `spawn_failed` | 1 |
+
+Effects: after it holds the lock it writes the command holder record (contract §1.4: `pid` its own process id, `command` the argv joined by single spaces, `session` from `CPD_SESSION` and `attempt` from `CPD_ATTEMPT`, null when unset), then **replaces itself with the command** (`exec`):
+
+- the command keeps the process id (the record's `pid`), the stdio and the signals;
+- it inherits the lock descriptor, so the resource stays held for as long as the command or any descendant that keeps the descriptor lives, which is what a dev server on a port needs;
+- a signal to the process or to its group (`kill -TERM -- -<pgid>`) stops both the command and the hold;
+- the command's output is the output: `run` prints no JSON value once it has exec-ed (a command that owns its terminal, contract §1.2), and the exit status is the command's;
+- if the exec fails, `spawn_failed` (exit 1) and the lock goes with the process.
+
+**Re-entrant for an Attempt that holds the resource.** When `CPD_ATTEMPT` is set and the held lock's record is `by: attempt` with that attempt id, `run` takes nothing and execs the command at once: the Attempt already holds the resource and must not wait on itself.
+
+**Hooks.** A repo may write `cpd resource run <name> --` in a hook command (contract §7.3); hooks run without `CPD_*` variables, so `CPD_HOME` is the default. The Gate and the hooks take no resource by themselves.
+
+Idempotent: no. A second run while the first holds the resource is `resource_busy`.
