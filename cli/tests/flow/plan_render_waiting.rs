@@ -58,10 +58,23 @@ fn stacked_pr_keeps_waiting_on_its_base_pr_while_it_is_started_and_not_open() {
     assert!(web.contains("waiting on"), "{web}");
     assert!(links(web, "api"), "a link to the base PR: {web}");
     // once the base PR is open it blocks nothing
-    fx.env.sql("UPDATE prs SET status = 'open' WHERE plan = 'pay' AND key = 'api'");
+    fx.env.sql(
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+         VALUES ('acme/api', 7, 'https://github.com/acme/api/pull/7', 'Add api', 0, 'open', 'none', 'none', 't', NULL, 't');
+         UPDATE prs SET status = 'open', pr_number = 7, pr_url = 'https://github.com/acme/api/pull/7', pr_opened_at = 't',
+                pull_request = (SELECT id FROM pull_requests WHERE number = 7) WHERE plan = 'pay' AND key = 'api';",
+    );
     let (_, text) = render(&fx);
     let web = row(&text, "web");
     assert!(!web.contains("waiting on"), "{web}");
+}
+
+/// `alpha`, stacked on `zeta` and in `zeta`'s repo (contract §2.2: the base PR is in the same Plan and repo).
+fn stacked_alpha(env: &crate::common::TestEnv) {
+    env.sql(
+        "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, created_txn, created_at)
+         VALUES ('pay', 'alpha', '/r/zeta', 'alpha', 'cpd/pay/zeta', 'waiting', 'cpd/pay/alpha', cpd_txn(), 't');",
+    );
 }
 
 /// `plan render` of `pay` with `web` (key `alpha`) after `zeta`: stacked on it, or needing it (stored); the PR table's
@@ -71,7 +84,7 @@ fn needs_cell_edges_and_order(stacked: bool) -> (String, Vec<String>, Vec<String
     pr(&fx.env, "zeta", "dispatch", "main", &[]);
     job(&fx.env, "zeta", "z", "queued", &[]);
     if stacked {
-        pr(&fx.env, "alpha", "waiting", "cpd/pay/zeta", &[]);
+        stacked_alpha(&fx.env);
     } else {
         pr(&fx.env, "alpha", "waiting", "main", &["zeta"]);
     }
@@ -99,7 +112,7 @@ fn stacked_pr_lists_its_base_pr_among_its_needs_and_follows_it_in_the_order() {
     // derived, not stored: `plan show` keeps the stored needs and the base PR
     let fx = fx();
     pr(&fx.env, "zeta", "dispatch", "main", &[]);
-    pr(&fx.env, "alpha", "waiting", "cpd/pay/zeta", &[]);
+    stacked_alpha(&fx.env);
     let show = fx.cpd(&["plan", "show", "--plan", "pay"]).ok();
     let alpha = show["prs"].as_array().unwrap().iter().find(|p| p["key"] == "alpha").unwrap_or_else(|| panic!("{show}"));
     assert_eq!(alpha["needs"], serde_json::json!([]), "{show}");
