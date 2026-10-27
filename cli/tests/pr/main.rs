@@ -23,6 +23,7 @@ mod pr_open;
 mod pr_post;
 mod pr_post_flow;
 mod pr_push;
+mod pr_reaction_queue;
 mod pr_rebase_running;
 mod pr_reply;
 mod pr;

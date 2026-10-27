@@ -39,6 +39,7 @@ mod merge;
 mod open;
 pub(crate) mod poll;
 pub mod posts;
+pub mod reactions;
 mod post;
 mod postable;
 pub mod pulls;
