@@ -2479,8 +2479,7 @@ fn e5_polls_with_the_engines_recorded_executable_not_the_one_on_path() {
 #[test]
 fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_same_tick() {
     let fx = polling("");
-    // The clean-up of the merged `repo` keeps a Lead worktree with commits not on origin (and raises an `error`): give
-    // the repo an `origin` that has them, so the only `error` this test could see is E5's or E7's own.
+    // The Lead worktree has commits: give the repo an `origin` that has them, so the only `error` this test could see is E5's or E7's own.
     let repo = fx.keyed_repo("pay").canonicalize().unwrap();
     let origin = fx.env.root().join("repos/origin.git");
     fx.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);

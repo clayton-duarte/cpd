@@ -1,0 +1,332 @@
+//! `cpd janitor` (commands.md §29, contract §7.2), in process on `Fakes`: the git is the in-process `Universe`
+//! behind a `GitRoute`, tmux and `gh` are scripted on the runner, the store is a migrated database in a temp dir.
+//! No test starts a process, runs real git, sleeps or reads the wall clock. The [`Rig`] is also the one of
+//! `pr/poll_tests.rs`.
+
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use serde_json::Value;
+use tempfile::TempDir;
+
+use crate::env::Env;
+use crate::fakes::git::{GitRoute, Head, Repo, Universe};
+use crate::git::{attempt_worktree_path, pr_lead_worktree_path};
+use crate::home::CpdHome;
+use crate::host::runner::Reply;
+use crate::ids::{AttemptId, PlanId, PrKey};
+use crate::janitor;
+use crate::output::Output;
+use crate::ports::{Fakes, Ports};
+use crate::store::Store;
+
+/// A PR the rig stores, with its two worktrees: the Lead worktree on the Lead Branch and one parallel Attempt's.
+pub(crate) struct Pr {
+    pub(crate) key: &'static str,
+    pub(crate) status: &'static str,
+    pub(crate) lead: PathBuf,
+    pub(crate) lead_branch: String,
+    pub(crate) attempt: PathBuf,
+    pub(crate) attempt_branch: String,
+    pub(crate) attempt_id: String,
+}
+
+impl Pr {
+    /// The aside directory of a failed removal of the Lead worktree (contract §7.2).
+    pub(crate) fn aside(&self) -> PathBuf {
+        let mut name = self.lead.clone().into_os_string();
+        name.push(".removing");
+        PathBuf::from(name)
+    }
+}
+
+/// Plan `pay` in one repo `pay` whose `origin/main` is its only commit, with the PRs added by [`Rig::pr`].
+pub(crate) struct Rig {
+    pub(crate) tmp: TempDir,
+    pub(crate) fakes: Fakes,
+    pub(crate) universe: Arc<Mutex<Universe>>,
+    pub(crate) repo: Repo,
+    pub(crate) home: CpdHome,
+    pub(crate) prs: Vec<Pr>,
+    number: i64,
+    /// The Attempts [`Rig::pr`] stores next are `running`, not `ended`.
+    pub(crate) running: bool,
+}
+
+impl Rig {
+    pub(crate) fn new() -> Rig {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let fakes = Fakes::new();
+        let mut universe = Universe::new(fakes.clock.clone());
+        universe.set_global("user.name", "cpd test");
+        universe.set_global("user.email", "test@cpd.invalid");
+        let universe = Arc::new(Mutex::new(universe));
+        let route = Arc::new(GitRoute::new(universe.clone()));
+        let _ = (*fakes.runner).clone().with_git(&route);
+        // No tmux server: `list-panes` and every other call fail as tmux does without one.
+        let _ = (*fakes.runner).clone().on("tmux", |_| true, Reply::exit(1, "", "no server running on /tmp/tmux-0/s\n"));
+        let repo = Repo::init(&universe, &root.join("pay"));
+        repo.write("f.txt", "base\n");
+        repo.commit("base");
+        repo.keyed("pay");
+        let home = CpdHome::resolve(Some(root.join("cpd").into_os_string()), None).unwrap();
+        std::fs::create_dir_all(home.config().parent().unwrap()).unwrap();
+        std::fs::write(home.config(), "version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"s\"\n").unwrap();
+        let rig = Rig { tmp, fakes, universe, repo, home, prs: Vec::new(), number: 800, running: false };
+        rig.sql(
+            "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
+             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+               VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
+             INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+               VALUES ('pay', 'ctx', 'Pay the bills', 'deploy', 'lead1', 't', 't');",
+        );
+        rig
+    }
+
+    /// Runs `sql` on the store, in one transaction.
+    pub(crate) fn sql(&self, sql: &str) {
+        let mut store = Store::open(&self.home, 5000).unwrap();
+        store
+            .write("fixture", |tx| {
+                tx.execute_batch(sql)?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    /// PR `key` with status `open`, `merged` or `cancelled`: its Lead worktree (clean, pushed) on its Lead Branch and one
+    /// ended parallel Attempt `<key>-a1` with its worktree and branch. A cancelled PR's row has no `lead_worktree`,
+    /// as `pr cancel` leaves it; its Lead worktree is the path contract §7.1 names.
+    pub(crate) fn pr(&mut self, key: &'static str, status: &'static str) -> &Pr {
+        let plan = PlanId::parse("pay").unwrap();
+        let lead_branch = format!("cpd/pay/{key}");
+        let lead = pr_lead_worktree_path(self.repo.dir(), &plan, &PrKey::parse(key).unwrap(), &lead_branch).unwrap();
+        let attempt_id = format!("{key}-a1");
+        let attempt_branch = format!("cpd/pay--{attempt_id}");
+        let attempt = attempt_worktree_path(self.repo.dir(), &plan, &AttemptId::parse(&attempt_id).unwrap()).unwrap();
+        self.repo.branch(&lead_branch);
+        self.repo.branch(&attempt_branch);
+        {
+            let mut u = self.universe.lock().unwrap();
+            u.add_worktree(self.repo.id(), &lead, Head::Branch(lead_branch.clone()));
+            u.add_worktree(self.repo.id(), &attempt, Head::Branch(attempt_branch.clone()));
+        }
+        self.number += 1;
+        let n = self.number;
+        let repo = self.repo.dir().display();
+        let (pull, lead_column, stamps) = match status {
+            "cancelled" => (String::new(), "NULL".to_owned(), "NULL, NULL, NULL, NULL, NULL".to_owned()),
+            _ => {
+                let merged = if status == "merged" { "'t'" } else { "NULL" };
+                let state = if status == "merged" { "merged" } else { "open" };
+                (
+                    format!(
+                        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                           VALUES ('acme/pay', {n}, 'https://github.com/acme/pay/pull/{n}', 'PR {n}', 0, '{state}', 'none', 'none', 'opened', {merged}, 'opened');"
+                    ),
+                    format!("'{}'", lead.display()),
+                    format!("'t', {n}, 'https://github.com/acme/pay/pull/{n}', 'opened', (SELECT id FROM pull_requests WHERE number = {n})"),
+                )
+            }
+        };
+        let merged_at = if status == "merged" { "'t'" } else { "NULL" };
+        let attempt_state = if self.running { "'running', NULL, NULL" } else { "'ended', 'failed', 'crashed'" };
+        let ended_at = if self.running { "NULL" } else { "'t'" };
+        self.sql(&format!(
+            "{pull}
+             INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+                              pr_number, pr_url, pr_opened_at, pull_request, merged_at)
+               VALUES ('pay', '{key}', '{repo}', 'pay', 'main', '{status}', '{lead_branch}', {lead_column}, cpd_txn(), 't', {stamps}, {merged_at});
+             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                               status, appended, fingerprint, cancel_reason, cancel_requested_at, created_txn, created_at)
+               VALUES ('pay', '{key}', '{key}', 'B', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'cancelled', 0, '{fp}', 'no', 't', cpd_txn(), 't');
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, started_at, ended_at)
+               VALUES ('pay', '{attempt_id}', '{key}', 1, 'S2', 'ladder', {attempt_state}, '{attempt_branch}', '{aw}', 'sha', 't', {ended_at});",
+            fp = "f".repeat(64),
+            aw = attempt.display(),
+        ));
+        self.prs.push(Pr { key, status: if status == "merged" { "merged" } else if status == "cancelled" { "cancelled" } else { "open" }, lead, lead_branch, attempt, attempt_branch, attempt_id });
+        self.prs.last().unwrap()
+    }
+
+    /// Whether the local branch exists in the repo.
+    pub(crate) fn branch_exists(&self, branch: &str) -> bool {
+        self.universe.lock().unwrap().ref_oid(self.repo.id(), &format!("refs/heads/{branch}")).is_some()
+    }
+
+    /// Whether the repo still registers a worktree at `path`.
+    pub(crate) fn registered(&self, path: &Path) -> bool {
+        self.universe.lock().unwrap().worktrees(self.repo.id()).iter().any(|w| w.path == path)
+    }
+
+    /// Everything of the PR still on disk or in git: `(lead directory, lead registration, lead branch, attempt
+    /// directory, attempt registration, attempt branch)`.
+    pub(crate) fn left(&self, pr: &Pr) -> [bool; 6] {
+        [
+            pr.lead.exists(),
+            self.registered(&pr.lead),
+            self.branch_exists(&pr.lead_branch),
+            pr.attempt.exists(),
+            self.registered(&pr.attempt),
+            self.branch_exists(&pr.attempt_branch),
+        ]
+    }
+
+    /// The `error` Events of the store as `(text, data)`, in order.
+    pub(crate) fn errors(&self) -> Vec<(String, Value)> {
+        let mut store = Store::open(&self.home, 5000).unwrap();
+        store
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT text, data FROM events WHERE kind = 'error' ORDER BY id")?;
+                let rows = stmt
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, serde_json::from_str(&r.get::<_, String>(1)?).unwrap())))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .unwrap()
+    }
+
+    /// One janitor pass on the fake ports.
+    pub(crate) fn pass(&self) -> Output {
+        let mut env = Env::open_home_with(&self.fakes.ports, self.home.clone()).unwrap();
+        Ports::scope(&self.fakes.ports, || janitor::pass(&mut env)).unwrap()
+    }
+}
+
+fn fields(output: Output) -> serde_json::Map<String, Value> {
+    match output {
+        Output::Success(map) => map,
+        Output::Owned => panic!("the janitor prints its own envelope"),
+    }
+}
+
+/// The `outcomes` of a pass, as `(pr, outcome)`.
+fn outcomes(output: Output) -> Vec<(String, String)> {
+    let map = fields(output);
+    map["outcomes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a pass that ran has outcomes: {map:?}"))
+        .iter()
+        .map(|o| (o["pr"].as_str().unwrap().to_owned(), o["outcome"].as_str().unwrap().to_owned()))
+        .collect()
+}
+
+#[test]
+fn janitor_pass_removes_cancelled_and_merged_pr_worktrees_and_branches() {
+    let mut rig = Rig::new();
+    rig.pr("api", "merged");
+    rig.pr("web", "cancelled");
+    let outcomes = outcomes(rig.pass());
+    for pr in &rig.prs {
+        assert_eq!(rig.left(pr), [false; 6], "{} PR {}: every worktree, registration and local branch is gone", pr.status, pr.key);
+        assert!(outcomes.iter().any(|(key, _)| key == pr.key), "an outcome for PR {}: {outcomes:?}", pr.key);
+    }
+    assert!(outcomes.iter().all(|(_, outcome)| outcome == "removed"), "{outcomes:?}");
+    assert_eq!(rig.errors(), Vec::new(), "no Event");
+}
+
+#[test]
+fn janitor_pass_skips_a_pr_whose_attempt_is_still_running() {
+    let mut rig = Rig::new();
+    rig.running = true;
+    rig.pr("api", "merged");
+    rig.running = false;
+    rig.pr("web", "cancelled");
+    rig.pr("lock", "cancelled");
+    // The driver of `web-a1` is alive: the lock file of the Attempt is held.
+    std::fs::create_dir_all(rig.home.locks_dir()).unwrap();
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(rig.home.attempt_lock(&PlanId::parse("pay").unwrap(), &AttemptId::parse("web-a1").unwrap()))
+        .unwrap();
+    assert!(crate::lock::try_lock(&held).unwrap());
+    let outcomes = outcomes(rig.pass());
+    for key in ["api", "web"] {
+        let pr = rig.prs.iter().find(|p| p.key == key).unwrap();
+        assert_eq!(rig.left(pr), [true; 6], "PR {key} is untouched");
+        assert!(outcomes.contains(&(key.to_owned(), "pending".to_owned())), "PR {key} is pending: {outcomes:?}");
+    }
+    let idle = rig.prs.iter().find(|p| p.key == "lock").unwrap();
+    assert_eq!(rig.left(idle), [false; 6], "an idle PR is cleaned in the same pass");
+    assert_eq!(rig.errors(), Vec::new(), "no Event");
+}
+
+fn dirty_lead_is_kept_untouched(status: &'static str, other: &str) {
+    let mut rig = Rig::new();
+    rig.pr("api", status);
+    let pr = &rig.prs[0];
+    std::fs::write(pr.lead.join("dirty.txt"), "the Lead's own change\n").unwrap();
+    let outcomes = outcomes(rig.pass());
+    let pr = &rig.prs[0];
+    assert!(pr.lead.join("dirty.txt").exists(), "the dirty worktree is unchanged");
+    assert_eq!((rig.registered(&pr.lead), rig.branch_exists(&pr.lead_branch), pr.aside().exists()), (true, true, false));
+    assert!(outcomes.contains(&("api".to_owned(), "kept".to_owned())), "{outcomes:?}");
+    let errors = rig.errors();
+    assert_eq!(errors.len(), 1, "one Event: {errors:?}");
+    let (text, data) = &errors[0];
+    assert_eq!(data["code"], "cleanup_failed");
+    assert!(text.contains(status) && !text.contains(other), "the text names the status {status}, never {other}: {text}");
+    assert!(text.contains("untouched"), "{text}");
+    assert!(text.contains(&pr.lead.display().to_string()), "{text}");
+    assert_eq!(data["details"]["status"], status);
+    assert_eq!(data["details"]["outcome"], "kept");
+    assert_eq!(data["details"]["path"], pr.lead.display().to_string());
+}
+
+#[test]
+fn janitor_pass_says_kept_untouched_for_a_dirty_lead_worktree_of_a_cancelled_pr() {
+    dirty_lead_is_kept_untouched("cancelled", "merged");
+}
+
+#[test]
+fn janitor_pass_says_kept_untouched_for_a_dirty_lead_worktree_of_a_merged_pr() {
+    dirty_lead_is_kept_untouched("merged", "cancelled");
+}
+
+#[test]
+fn janitor_pass_reports_a_kept_worktree_once() {
+    let mut rig = Rig::new();
+    rig.pr("api", "cancelled");
+    std::fs::write(rig.prs[0].lead.join("dirty.txt"), "wip\n").unwrap();
+    rig.pass();
+    assert_eq!(rig.errors().len(), 1, "the first pass reports it");
+    let second = outcomes(rig.pass());
+    assert!(second.contains(&("api".to_owned(), "kept".to_owned())), "the second pass still sees it: {second:?}");
+    assert_eq!(rig.errors().len(), 1, "a later pass retries silently");
+}
+
+#[test]
+fn janitor_pass_finishes_what_a_killed_pass_left() {
+    let mut rig = Rig::new();
+    rig.pr("api", "merged");
+    let pr = &rig.prs[0];
+    // A pass killed after the rename: the path is gone, the aside is the marker, the registration and branch remain.
+    std::fs::rename(&pr.lead, pr.aside()).unwrap();
+    assert!(rig.registered(&pr.lead) && rig.branch_exists(&pr.lead_branch));
+    let outcomes = outcomes(rig.pass());
+    let pr = &rig.prs[0];
+    assert_eq!((pr.lead.exists(), pr.aside().exists(), rig.registered(&pr.lead), rig.branch_exists(&pr.lead_branch)), (false, false, false, false));
+    assert!(outcomes.iter().all(|(_, outcome)| outcome == "removed") && !outcomes.is_empty(), "{outcomes:?}");
+    assert_eq!(rig.errors(), Vec::new(), "no Event");
+}
+
+#[test]
+fn janitor_pass_while_another_holds_the_lock_does_nothing() {
+    let mut rig = Rig::new();
+    rig.pr("api", "merged");
+    rig.pr("web", "cancelled");
+    std::fs::create_dir_all(rig.home.locks_dir()).unwrap();
+    let held = std::fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(rig.home.locks_dir().join("janitor.lock")).unwrap();
+    assert!(crate::lock::try_lock(&held).unwrap());
+    assert!(janitor::running(&rig.home).unwrap(), "the probe sees the held lock");
+    let map = fields(rig.pass());
+    assert_eq!(map.get("skipped"), Some(&Value::from("running")), "{map:?}");
+    assert!(!map.contains_key("outcomes"), "{map:?}");
+    for pr in &rig.prs {
+        assert_eq!(rig.left(pr), [true; 6], "PR {} is untouched", pr.key);
+    }
+    assert_eq!(rig.errors(), Vec::new(), "no Event");
+}
