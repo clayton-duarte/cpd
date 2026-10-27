@@ -30,6 +30,8 @@ pub struct Event {
 pub struct Selection {
     filter: Filter,
     kinds: Vec<Kind>,
+    /// A follower of a Lead or another Session never gets an adapter `error` (it names its Session: it would get its own error back); `events list` does.
+    follower: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -38,9 +40,9 @@ enum Filter {
     Plan(PlanId),
     Context(ContextId),
     /// A Session that is its Plan's `lead_session` (amendment 7): its Plan, its
-    /// Context's Events about no Plan (but not an adapter `error`, which is the Manager's alone, hs-d573), and itself.
+    /// Context's Events about no Plan, and itself; an adapter `error` of another Session is not among them (it is the Manager's), nor, for its follower, its own.
     Lead { session: SessionId, plan: PlanId, context: ContextId },
-    /// Any other Session (a Worker, a side fork, a Manager): Events addressed to itself.
+    /// Any other Session (a Worker, a side fork, a Manager): Events addressed to itself; its follower never gets an adapter `error`.
     Session(SessionId),
 }
 
@@ -84,7 +86,13 @@ impl Selection {
             }
             _ => unreachable!("--plan, --context and --session are exclusive on the command line"),
         };
-        Ok(Selection { filter, kinds })
+        Ok(Selection { filter, kinds, follower: false })
+    }
+
+    /// The selection as `events follow` reads it.
+    pub fn following(mut self) -> Selection {
+        self.follower = true;
+        self
     }
 
     /// Up to `limit` matching Events with `after < id` (and `id <= up_to` when
@@ -117,6 +125,9 @@ impl Selection {
                 sql.push_str(" AND session = ?");
                 params.push(text(session.as_str()));
             }
+        }
+        if self.follower && matches!(self.filter, Filter::Lead { .. } | Filter::Session(_)) {
+            sql.push_str(" AND NOT (kind = 'error' AND json_extract(data, '$.source') = 'adapter')");
         }
         if !self.kinds.is_empty() {
             sql.push_str(&format!(" AND kind IN ({})", vec!["?"; self.kinds.len()].join(", ")));

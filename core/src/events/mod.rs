@@ -138,7 +138,7 @@ pub fn follow_loop(
     };
     let Scope { plan, context, session } = args.scope;
     let (selection, mut cursor, until) = store.read(|conn| {
-        let selection = Selection::resolve(conn, plan, context, session, args.kinds)?;
+        let selection = Selection::resolve(conn, plan, context, session, args.kinds)?.following();
         let highest = highest_id(conn)?;
         let cursor = match args.since {
             Some(since) if since > highest => {
