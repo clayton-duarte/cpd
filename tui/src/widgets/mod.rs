@@ -428,7 +428,7 @@ fn show<B: Backend>(
                         menu = drawn.rows.iter().find(|r| r.area.contains(at)).map(|row| PrMenu { menu: Menu::new(row.items(), at), row: row.clone() });
                     }
                     // a left click on the Inbox's toggle row folds or unfolds it, on an item row jumps to its cause
-                    Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) && drawn.inbox.contains(Position::new(m.column, m.row)) => {
+                    Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) && drawn.inbox.contains(Position::new(m.column, m.row)) && drawn.links.at(Position::new(m.column, m.row)).is_none() => {
                         match drawn.inbox_shape.hit(m.row - drawn.inbox.y) {
                             Some(InboxHit::Toggle) => {
                                 inbox_expanded = !inbox_expanded;

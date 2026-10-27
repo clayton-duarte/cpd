@@ -61,6 +61,11 @@ pub fn item_row(glyph: &str, label: &str, age: &str) -> String {
     format!(" │ {glyph} {label}{}{age}", " ".repeat(W - 8 - label.chars().count() - age.chars().count()))
 }
 
+/// [`item_row`] of a link kind: the label is followed by a space and the link cue, and the age keeps its column.
+pub fn linked_item_row(glyph: &str, label: &str, age: &str) -> String {
+    item_row(glyph, &format!("{label} {}", cpd_tui::link::CUE), age)
+}
+
 /// A scroll cue row of the Inbox list: ` │` and the cue right-aligned to column `W - 4`.
 pub fn cue_row(arrow: char, n: usize) -> String {
     format!(" │{:>w$}", format!("{arrow} {n} more"), w = W - 5)

@@ -68,8 +68,8 @@ Find its id with `cpd session list --role manager --context <c>` (`<c>` is your 
 
 Three ways to communicate are distinct:
 
-- **Message** (`cpd session send`): only to unblock another agent, with `--unblocks "<reason>"`. A message always wakes an idle agent; send sparingly. No broadcasts, no FYI, no acks.
-- **Board** (`cpd board post --to <session>`): for information another agent needs at its next turn. A board post does not wake; it arrives when the agent's turn starts.
+- **Message** (`cpd session send <id> "<text>" --unblocks "<reason>"`): for anything that needs another agent to act or that unblocks it: an escalated bug, a request for a Plan or a split, anything the User asks you to escalate, an answer to a question. It always wakes an idle agent; send sparingly; no broadcasts, no acks.
+- **Board** (`cpd board post --to <session>`): information only (FYI) that the agent reads at its next turn; a board post never wakes, so never use it to ask the Manager (or a Lead) to act.
 - **Record** (`cpd context decide`, `cpd context note`): facts and rules for everyone. Written to the Context, records live as long as the Context and reach all agents at their turn start.
 
 ## A command the User asks for
@@ -170,7 +170,7 @@ cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --pr <key>
 
 - **Size:** an Attempt gets `attempt_minutes` (the configured value); the timeout is that configured value, not a fixed one. Size a Job to fit well inside it (about 150 turns), including worktree setup and dependency install. Split anything larger.
 - **Every PR needs at least one Job.**
-- **Tier:** `S1` for coding, `H3` for docs. A Job's Tier is `H0`–`H4` or `S0`–`S3` only, `tier_not_allowed` otherwise (pro-d53); no `O`.
+- **Tier:** `S1` for coding, `H3` for docs. A Job's Tier is `H0`–`H3` or `S0`–`S3` only, `tier_not_allowed` otherwise (pro-d82); no `O`.
 - **Acceptance names targeted tests:** the test files or modules of what the Job changes plus its new tests, never a full unfiltered run (the whole workspace, `npm test` of everything). The full suite is the Gate's, run by the PR's open Job.
 - **Complete and guess-free:** a fresh Worker with only this Spec must finish without asking. If you cannot fill a field without guessing, return to [Clarifying](#clarifying).
 - **Repo-relative paths only:** a Spec never names the path of a repo's primary checkout (not `/home/<user>/projects/<repo>`, not `~/projects/<repo>`, not `$HOME/...`); `touches` and every path in the text are relative to the repo, because the Worker works in its own worktree; to point at the latest main write `git fetch origin` then `git show origin/main:<path>`; `cpd job add` and `cpd job edit` refuse such a Spec with `spec_invalid`.

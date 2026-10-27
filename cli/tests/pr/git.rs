@@ -1265,3 +1265,234 @@ fn any_other_worktree_list_failure_is_git_failed_at_once() {
     assert_eq!(error.details()["exit"], 128);
     assert!(error.details()["stderr"].as_str().unwrap().contains("bad config"), "{error:?}");
 }
+
+// ------------------------------------------------ removal of a Lead worktree (DESIGN 4): whole or untouched
+//
+// `remove_merged_lead` runs on the git route of the `Fx` (real files, written by the fake git). A `Stopper` stands for
+// the deadline kill: it makes the n-th git call of the removal fail, and `git worktree remove` of the Lead worktree
+// first deletes about half of its files (git deletes in place, so a kill inside it leaves a partial tree).
+
+const TRACKED: [&str; 6] = ["README.md", "a.txt", "b.txt", "dir/c.txt", "dir/d.txt", "dir/e.txt"];
+
+/// A [`Runner`] over `inner` that fails the `stop`-th git call it sees (exit 137, as a kill), and counts them.
+struct Stopper {
+    inner: Arc<dyn cpd_core::host::runner::Runner>,
+    stop: usize,
+    seen: Mutex<usize>,
+    lead: PathBuf,
+}
+
+impl Stopper {
+    fn calls(&self) -> usize {
+        *self.seen.lock().unwrap()
+    }
+
+    fn kill(&self, call: &Call) -> Option<std::process::Output> {
+        if call.program.rsplit('/').next() != Some("git") {
+            return None;
+        }
+        let mut seen = self.seen.lock().unwrap();
+        *seen += 1;
+        if *seen != self.stop {
+            return None;
+        }
+        let removes_lead = call.args.windows(2).any(|w| w == ["worktree", "remove"]) && call.args.iter().any(|a| Path::new(a) == self.lead);
+        if removes_lead {
+            let mut files: Vec<PathBuf> = TRACKED.iter().map(|f| self.lead.join(f)).collect();
+            files.truncate(TRACKED.len() / 2);
+            for file in files {
+                let _ = fs::remove_file(file);
+            }
+        }
+        use std::os::unix::process::ExitStatusExt;
+        Some(std::process::Output { status: std::process::ExitStatus::from_raw(137 << 8), stdout: Vec::new(), stderr: b"killed\n".to_vec() })
+    }
+}
+
+impl cpd_core::host::runner::Runner for Stopper {
+    fn output(&self, cmd: &mut std::process::Command, tool: &str, deadline: Duration) -> Result<std::process::Output, cpd_core::host::deadline::Failed> {
+        let call = Call {
+            tool: tool.to_owned(),
+            program: cmd.get_program().to_string_lossy().into_owned(),
+            args: cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect(),
+            envs: Vec::new(),
+            cwd: cmd.get_current_dir().map(Path::to_path_buf),
+            deadline,
+            stdin: None,
+            stderr_to: None,
+        };
+        match self.kill(&call) {
+            Some(out) => Ok(out),
+            None => self.inner.output(cmd, tool, deadline),
+        }
+    }
+    fn output_unbounded(&self, cmd: &mut std::process::Command, tool: &str) -> std::io::Result<std::process::Output> {
+        self.inner.output_unbounded(cmd, tool)
+    }
+    fn run(&self, call: &Call) -> Result<std::process::Output, cpd_core::host::deadline::Failed> {
+        match self.kill(call) {
+            Some(out) => Ok(out),
+            None => self.inner.run(call),
+        }
+    }
+}
+
+/// A merged PR's Lead worktree `<root>/<dir>/pay.pay-4521` of a repo `name`, clean, on its Lead Branch, with the six
+/// `TRACKED` files. Returns `(repo, path, head)`; `head` is the PR's recorded head (the commits are not on any origin).
+fn lead_to_remove(fx: &Fx, name: &str, dir: &str) -> (PathBuf, PathBuf, String) {
+    let repo = fx.git_repo(name);
+    for file in &TRACKED[1..] {
+        fx.commit_file(&repo, file, &format!("{file}\n"), &format!("add {file}"));
+    }
+    let parent = fx.env.root().join(dir);
+    fs::create_dir_all(&parent).unwrap();
+    let path = parent.join("pay.pay-4521");
+    fx.git(&repo, &["worktree", "add", "-q", "-b", &lead_branch(&plan()), path.to_str().unwrap()]);
+    let head = fx.git(&path, &["rev-parse", "HEAD"]);
+    (repo, path, head)
+}
+
+fn removing(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap().to_os_string();
+    name.push(".removing");
+    path.with_file_name(name)
+}
+
+/// `path` with the symlinks of its directory resolved (the file itself may be gone).
+fn resolved(path: &Path) -> PathBuf {
+    path.parent().and_then(|p| p.canonicalize().ok()).map_or_else(|| path.to_path_buf(), |p| p.join(path.file_name().unwrap()))
+}
+
+fn registered(fx: &Fx, repo: &Path, path: &Path) -> bool {
+    let want = resolved(path);
+    fx.git(repo, &["worktree", "list", "--porcelain"]).lines().any(|l| l.strip_prefix("worktree ").is_some_and(|p| resolved(Path::new(p)) == want))
+}
+
+fn branch_exists(fx: &Fx, repo: &Path) -> bool {
+    !fx.git(repo, &["branch", "--list", &lead_branch(&plan())]).is_empty()
+}
+
+/// Every file under `dir` with its bytes, sorted.
+fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    fn walk(dir: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
+        let mut entries: Vec<_> = fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).collect();
+        entries.sort();
+        for entry in entries {
+            if entry.is_dir() {
+                walk(&entry, out);
+            } else {
+                out.push((entry.clone(), fs::read(&entry).unwrap()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, &mut out);
+    out
+}
+
+fn remove_lead(fx: &Fx, repo: &Path, path: &Path, head: &str) -> Result<cpd_core::git::LeadRemoval, cpd_core::error::CpdError> {
+    fx.scoped(|| cpd_core::git::remove_merged_lead(repo, path, &lead_branch(&plan()), || Some(head.to_owned())))
+}
+
+#[test]
+fn lead_removal_stopped_after_any_step_leaves_the_worktree_whole_or_gone() {
+    let fx = Fx::with_ports();
+    for n in 1.. {
+        let (repo, path, head) = lead_to_remove(&fx, &format!("pay{n}"), &format!("n{n}"));
+        let stopper = Arc::new(Stopper { inner: fx.fakes.ports.runner.clone(), stop: n, seen: Mutex::new(0), lead: path.clone() });
+        let ports = Ports { runner: stopper.clone(), ..fx.fakes.ports.clone() };
+
+        let _ = Ports::scope(&ports, || cpd_core::git::remove_merged_lead(&repo, &path, &lead_branch(&plan()), || Some(head.clone())));
+
+        if stopper.calls() < n {
+            assert!(n > 3, "the removal made only {} git calls", stopper.calls());
+            break;
+        }
+        if path.exists() {
+            for file in TRACKED {
+                assert!(path.join(file).exists(), "stop at git call {n}: {file} is missing from the worktree that still exists");
+            }
+            assert!(registered(&fx, &repo, &path), "stop at git call {n}: the worktree that still exists is not registered");
+            assert_eq!(fx.git(&path, &["branch", "--show-current"]), lead_branch(&plan()), "stop at git call {n}");
+        }
+    }
+}
+
+#[test]
+fn lead_removal_after_a_stop_is_finished_by_the_next_call() {
+    let fx = Fx::with_ports();
+    let (repo, path, head) = lead_to_remove(&fx, "pay", "wt");
+    // The state a stop after the rename leaves: `<path>` absent, `<path>.removing` the marker, registration and branch there.
+    fs::rename(&path, removing(&path)).unwrap();
+    assert!(registered(&fx, &repo, &path) && branch_exists(&fx, &repo));
+
+    remove_lead(&fx, &repo, &path, &head).unwrap();
+
+    assert!(!path.exists());
+    assert!(!removing(&path).exists(), "the marker is deleted");
+    assert!(!registered(&fx, &repo, &path), "the registration is dropped");
+    assert!(!branch_exists(&fx, &repo), "the Lead Branch is deleted");
+
+    let before = (fx.git(&repo, &["worktree", "list", "--porcelain"]), fx.git(&repo, &["branch", "--list"]));
+    let again = remove_lead(&fx, &repo, &path, &head).expect("a third call is not an error");
+    assert_eq!(again, cpd_core::git::LeadRemoval::Removed);
+    assert_eq!(before, (fx.git(&repo, &["worktree", "list", "--porcelain"]), fx.git(&repo, &["branch", "--list"])));
+    assert!(!path.exists() && !removing(&path).exists());
+}
+
+#[test]
+fn lead_removal_keeps_a_dirty_or_unpushed_worktree_untouched_without_renaming() {
+    use cpd_core::git::{Kept, LeadRemoval};
+    let fx = Fx::with_ports();
+
+    // Dirty: an uncommitted change and an untracked file.
+    let (repo, path, head) = lead_to_remove(&fx, "dirty", "d");
+    fs::write(path.join("a.txt"), "changed\n").unwrap();
+    fs::write(path.join("new.txt"), "new\n").unwrap();
+    let before = snapshot(&path);
+    let kept = remove_lead(&fx, &repo, &path, &head).unwrap();
+    assert_eq!(kept, LeadRemoval::Kept(Kept::Dirty));
+    assert_eq!(snapshot(&path), before);
+    assert!(!removing(&path).exists());
+    assert!(registered(&fx, &repo, &path) && branch_exists(&fx, &repo));
+
+    // Unpushed: a non-merge commit that is not on origin, and no recorded head that accepts it.
+    let (repo, path, _) = lead_to_remove(&fx, "unpushed", "u");
+    fx.commit_file(&path, "local.txt", "local\n", "local work");
+    let before = snapshot(&path);
+    let kept = fx.scoped(|| cpd_core::git::remove_merged_lead(&repo, &path, &lead_branch(&plan()), || None)).unwrap();
+    assert_eq!(kept, LeadRemoval::Kept(Kept::Unpushed));
+    assert_eq!(snapshot(&path), before);
+    assert!(!removing(&path).exists());
+    assert!(registered(&fx, &repo, &path) && branch_exists(&fx, &repo));
+}
+
+#[test]
+fn lead_removal_with_a_failing_rename_is_kept_untouched() {
+    use std::os::unix::fs::PermissionsExt;
+    /// Gives the directory its mode back on drop, so the env removes it, also when an assertion fails.
+    struct Restore(PathBuf, fs::Permissions);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, self.1.clone());
+        }
+    }
+    let fx = Fx::with_ports();
+    let (repo, path, head) = lead_to_remove(&fx, "pay", "ro");
+    let parent = path.parent().unwrap().to_path_buf();
+    let before = snapshot(&path);
+    let mode = fs::metadata(&parent).unwrap().permissions();
+    let _restore = Restore(parent.clone(), mode.clone());
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let result = remove_lead(&fx, &repo, &path, &head);
+
+    fs::set_permissions(&parent, mode).unwrap();
+    match result.expect("a failing rename is kept, not an error") {
+        cpd_core::git::LeadRemoval::Kept(cpd_core::git::Kept::Rename(reason)) => assert!(!reason.is_empty(), "the error is the reason"),
+        other => panic!("expected kept with the rename error, got {other:?}"),
+    }
+    assert_eq!(snapshot(&path), before);
+    assert!(!removing(&path).exists());
+    assert!(registered(&fx, &repo, &path) && branch_exists(&fx, &repo));
+}

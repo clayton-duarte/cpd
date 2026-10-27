@@ -122,7 +122,7 @@ pub enum Action {
     /// that is no `cpd` command.
     CopyId(String),
     /// `tmux set-buffer -w -- <url>`: a click on an item that only has a link (no Plan to open); the
-    /// click says nothing (the label is an OSC 8 link the terminal's modifier-click opens).
+    /// click says nothing (the label is a `Link` whose click opens the page).
     CopyUrl(String),
     /// `session resume <id>` (§10.17): a click on a `loop-guard` item, in the background with no dialog.
     #[allow(dead_code)] // stub: the click that builds it is not written yet

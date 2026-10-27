@@ -129,12 +129,12 @@ pub(crate) fn sections() -> Vec<Section> {
             ]
         })
         .collect();
-    // the failed pill turns through the 28 moon phases, red, while the Plan's Lead works (hs-d586)
+    // the failed pill turns through the 28 moon phases, red, while one of its Jobs is being worked on (pro-d88)
     let failed = palette::JOB_LEGEND.iter().position(|(_, status, _)| *status == JobStatus::Failed).expect("the legend lists failed");
     jobs.insert(
         failed + 1,
         vec![
-            plain("red loader: a failed Job, its Lead working"),
+            plain("red loader: a failed Job being worked on"),
             Line::from(palette::SPINNER.iter().map(|m| Span::styled(*m, palette::fg_clickable(palette::Meaning::Failed))).collect::<Vec<_>>()),
         ],
     );
@@ -166,7 +166,7 @@ pub(crate) fn sections() -> Vec<Section> {
         rows: vec![
             vec![plain(palette::NEEDS_YOU), plain("the Session needs you (colour below)")],
             vec![frames, plain("the Lead is working, dispatch (a Session with no Plan too) (one frame every 50 ms)")],
-            vec![fixing, plain("the Lead is working on a Plan with a failed Job (one frame every 50 ms)")],
+            vec![fixing, plain("a Plan's failed Job is being worked on (one frame every 50 ms)")],
             vec![dot(Dot::Waiting, 0), plain("waiting: an agent waits for another agent (a Worker for its Lead), not for you")],
             vec![dot(Dot::Idle, 0), plain("idle, nothing needed")],
             vec![dot(Dot::Stopped, 0), plain("pi stopped")],
