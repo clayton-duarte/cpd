@@ -27,6 +27,7 @@ mod poll_tests;
 mod add;
 mod cancel;
 pub mod comments;
+mod describe;
 mod edit;
 mod feedback;
 mod gh;
@@ -72,6 +73,8 @@ pub enum Command {
     Add(AddArgs),
     /// Change a waiting PR before the lock (§9.5)
     Edit(EditArgs),
+    /// Store the PR's description, which becomes the pull request body (§9.5a)
+    Describe(DescribeArgs),
     /// Remove a PR from the Plan before the lock; after it, end a PR with nothing to open, or whose work another PR carried (`--superseded-by`) (§9.6)
     Cancel(CancelArgs),
     /// Start a waiting PR whose needs are merged, after a failed start (§9.7)
@@ -176,6 +179,18 @@ pub struct EditArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct DescribeArgs {
+    /// The PR key
+    #[arg(long = "pr", value_name = "key")]
+    key: PrKey,
+    /// The description: a path to a UTF-8 file, or - for stdin
+    #[arg(long, value_name = "path")]
+    file: PathBuf,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct CancelArgs {
     /// The PR key
     #[arg(value_name = "key")]
@@ -201,6 +216,7 @@ pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdE
     match command {
         Command::Add(args) => add::add(args),
         Command::Edit(args) => edit::edit(args),
+        Command::Describe(args) => describe::describe(args),
         Command::Cancel(args) => cancel::cancel(args),
         Command::Start(args) => start::run(args),
         Command::Open(args) => open::open(args),

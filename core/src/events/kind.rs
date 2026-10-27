@@ -97,6 +97,7 @@ kinds! {
     PrFeedback = "pr-feedback",
     PrAdded = "pr-added",
     PrEdited = "pr-edited",
+    PrDescribed = "pr-described",
     PrCancelled = "pr-cancelled",
     PrStarted = "pr-started",
     PrBaseChanged = "pr-base-changed",
@@ -173,6 +174,7 @@ impl Kind {
             PrFeedback => spec([Y, Y, N, N, N], &["pr", "number", "url", "state", "checks", "review_decision", "mergeable", "merge_state", "conflict", "reasons"], &[]),
             PrAdded => spec([Y, Y, N, N, N], &["pr", "repo", "base", "needs", "appended"], &["title", "head_ref", "author"]),
             PrEdited => spec([Y, Y, N, N, N], &["pr", "fields"], &[]),
+            PrDescribed => spec([Y, Y, N, N, N], &["pr"], &[]),
             PrCancelled => spec([Y, Y, N, N, N], &["pr"], &["superseded_by"]),
             PrStarted => spec(
                 [Y, Y, N, N, N],
