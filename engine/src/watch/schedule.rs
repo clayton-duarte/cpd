@@ -144,7 +144,8 @@ pub(super) fn run(engine: &mut Engine) {
             }
             let key = JobKey::parse(&k)?;
             // Its driver could not be started the last times: wait before the next try.
-            if !backing_off_with(conn, &plan, &key, &*clock)? {
+            // Its latest Attempt ended provider_error less than 30 s ago: the Job stays queued (pro-d102).
+            if !backing_off_with(conn, &plan, &key, &*clock)? && !super::provider_hold::holding_with(conn, &plan, &key, &*clock)? {
                 ready.push((plan, key, urgent));
             }
         }
