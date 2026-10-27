@@ -105,3 +105,38 @@ test("run as a script it prints one JSON line", () => {
   assert.equal(out.ok, false);
   assert.equal(out.error.code, "slack_helper_failed");
 });
+
+const REFUSED = ["invalid_name", "bad_timestamp", "message_not_found", "channel_not_found", "is_archived", "thread_locked", "not_reactable", "too_many_emoji", "too_many_reactions", "no_item_specified"];
+const failedWith = (name: string) => new Refusal("slack_failed", `slack_add_reaction returned an error: execution_failed: ${name}`);
+
+test("addReaction maps each permanent Slack refusal to slack_refused with its reason", async () => {
+  for (const name of REFUSED) {
+    await assert.rejects(addReaction(fake(failedWith(name)).call, CHANNEL, TS, EMOJI), (e: Refusal) => {
+      assert.equal(e.code, "slack_refused", name);
+      assert.equal((e.details as any).reason, name);
+      return true;
+    });
+  }
+});
+
+test("addReaction keeps slack_failed for transient and unknown Slack errors", async () => {
+  for (const name of ["ratelimited", "internal_error", "missing_scope", "not_in_channel", "timed out after 30000ms", "no slack name here", "not_invalid_named"]) {
+    await assert.rejects(addReaction(fake(failedWith(name)).call, CHANNEL, TS, EMOJI), (e: Refusal) => {
+      assert.equal(e.code, "slack_failed", name);
+      return true;
+    });
+  }
+  const out = await addReaction(fake(failedWith("already_reacted")).call, CHANNEL, TS, EMOJI);
+  assert.equal(out.already, true);
+});
+
+test("main prints slack_refused with the reason for invalid_name", async () => {
+  const f = fake(failedWith("invalid_name"));
+  const open = (async () => ({ call: f.call, close: async () => {} })) as any;
+  const r = await main(ARGS, ENV, "/cwd", open);
+  assert.equal(r.exit, 1);
+  const v = r.value as any;
+  assert.equal(v.ok, false);
+  assert.equal(v.error.code, "slack_refused");
+  assert.equal(v.error.details.reason, "invalid_name");
+});

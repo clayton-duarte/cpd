@@ -132,3 +132,47 @@ fn pr_view_reads_reacted_at_from_the_queue() {
     let out = pay.fx.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok();
     assert_eq!(out["post"]["reacted_at"], "fresh", "the row of (channel, ts, the post's reaction), not pr_posts.reacted_at: {out}");
 }
+
+#[test]
+fn a_merge_queues_its_reaction_linked_to_the_pr() {
+    let fx = fixture(Some(Some("git-merged")));
+    merge(&fx);
+    let env = &fx.env;
+    let row: serde_json::Value = serde_json::from_str(&env.query::<String>("SELECT json_object('emoji', emoji, 'plan', plan, 'pr', pr) FROM slack_reactions")).unwrap();
+    assert_eq!(row, json!({"emoji": "git-merged", "plan": "pay-1", "pr": "api"}), "the row names the PR whose merge it is");
+    assert_eq!(queued(env), 1);
+
+    let none = fixture(Some(None));
+    merge(&none);
+    assert_eq!(queued(&none.env), 0, "a post with no reaction queues no row");
+    assert_eq!(none.env.query::<i64>("SELECT count(*) FROM pragma_table_info('slack_reactions') WHERE name = 'plan'"), 1, "the table has plan");
+}
+
+#[test]
+fn pr_view_reads_the_reaction_from_the_row_of_the_pr_and_shows_its_refusal() {
+    let pay = super::pr_view::fx("open");
+    let env = &pay.fx.env;
+    env.sql(&format!(
+        "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction)
+         VALUES ('pay', 'repo', '{CHANNEL}', '{TS}', 'https://acme.slack.com/archives/{CHANNEL}/p1793040197490209', 'opened', 'git-merge');"
+    ));
+    let view = || pay.fx.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok();
+
+    let out = view();
+    assert_eq!(out["post"]["reaction"], "git-merge", "no queue row yet: pr_posts.reaction: {out}");
+    assert!(out["post"]["refusal"].is_null(), "{out}");
+
+    env.sql(&format!(
+        "INSERT INTO slack_reactions (channel, ts, emoji, queued_at, reacted_at, plan, pr) VALUES ('{CHANNEL}', '{TS}', 'git-merged', 'q', 'fresh', 'pay', 'repo');"
+    ));
+    let out = view();
+    assert_eq!(out["post"]["reaction"], "git-merged", "the emoji of the row, not of the post: {out}");
+    assert_eq!(out["post"]["reacted_at"], "fresh", "{out}");
+    assert!(out["post"]["refusal"].is_null(), "{out}");
+
+    env.sql("UPDATE slack_reactions SET reacted_at = NULL, refused_at = 'r', refusal = 'invalid_name';");
+    let out = view();
+    assert_eq!(out["post"]["reaction"], "git-merged", "{out}");
+    assert!(out["post"]["reacted_at"].is_null(), "{out}");
+    assert_eq!(out["post"]["refusal"], "invalid_name", "{out}");
+}
