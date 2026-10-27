@@ -97,4 +97,22 @@ Sampled every 1 s during the cells: the highest `ps` %CPU of any single `rustc` 
 
 ## Gate matrix
 
-Attempt `cap-gate-a1`. Skeleton: cells (default,1), (4,1), (default,3), (4,3) are being measured; n=2 is left out for time.
+Attempt `cap-gate-a1`. Not measured: the Worker adapter refuses `npm run verify` (a Worker runs only the tests its change touches), and the Lead confirmed it cannot lift the refusal. No Gate was run, so there is no exit status, wall time, build share, LEAK-FAIL count or peak load for the cells (default,1), (4,1), (default,3), (4,3). n=2 was left out for time.
+
+| cap | n | exit status | wall (s) | build share (s) | LEAK-FAIL | load before | noisy |
+|---|---|---|---|---|---|---|---|
+| default | 1 | not measured | not measured | not measured | not measured | not measured | not measured |
+| 4 | 1 | not measured | not measured | not measured | not measured | not measured | not measured |
+| default | 3 | not measured | not measured | not measured | not measured | not measured | not measured |
+| 4 | 3 | not measured | not measured | not measured | not measured | not measured | not measured |
+
+## Decision
+
+- `CAP = 4` for the final `.cargo/config.toml`: `jobs = 4`. Its `-N` form for 14 CPUs is `-10` (I infer from `-4` giving 10 jobs; `-10` was not measured).
+- Use the number `4`: it is the same on every machine; `-N` scales with the CPU count, and `-N` with N not smaller than the CPU count clamps to 1 job (measured, Negative jobs).
+- Evidence is the build matrices only (dev, release), all noisy cells:
+  - Lone dev build: 98.4 s at cap 4 against 112.8 s at `default`; not slower.
+  - n=3 dev peak load: 66.0 at cap 4 against 93.5-100.7 at `default` (-29% to -34%); total 148.5 s against 153.1-154.7 s. Release n=3: peak load 55.4 against 106.4 (-48%), total 134.6 s against 105.9 s (+27%).
+  - One rustc at cap 4 peaked at 386.9 % CPU against 440.5 % at `default` (the 790 % case was not reproduced).
+- LEAK-FAIL counts old against new: not measured. Gate wall at n=3 old against new: not measured. The cap bounds only the build; whether the tests part of a Gate is unchanged was not measured.
+- Against capping: the release build at n=3 is 27% slower; walls of noisy cells (load before 20-50 on 14 cores) may hide small differences, so the lone-build gain is not distinguishable from `default`; no Gate-level number supports or refutes capping. The case for it is lower peak load at n=3.
