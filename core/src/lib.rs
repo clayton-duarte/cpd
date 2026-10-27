@@ -45,6 +45,7 @@ pub mod pr;
 pub mod prune;
 pub mod review;
 pub mod secret;
+pub mod slack;
 pub mod session;
 pub mod spec;
 pub mod store;

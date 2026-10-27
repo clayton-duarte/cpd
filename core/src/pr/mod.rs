@@ -34,6 +34,8 @@ mod merge;
 mod open;
 pub(crate) mod poll;
 pub mod posts;
+mod post;
+mod postable;
 pub mod pulls;
 mod push;
 mod reply;
@@ -88,6 +90,8 @@ pub enum Command {
     View(Args),
     /// Reply to an open feedback item of the PR's pull request as the User, with the cpd marker; never resolves a thread
     Reply(reply::ReplyArgs),
+    /// Post the PR's pull request to Slack for review (§9.8b)
+    Post(post::PostArgs),
     /// Squash-merge a clean pull request on GitHub and delete its branch (§9.10)
     Merge(merge::MergeArgs),
 }
@@ -209,6 +213,7 @@ pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdE
         Command::Push(args) => push::push(args),
         Command::View(args) => view::view(ports, args),
         Command::Reply(args) => reply::reply(ports, args),
+        Command::Post(args) => post::post(ports, args),
         Command::Merge(args) => merge::merge(ports, args),
     }
 }
