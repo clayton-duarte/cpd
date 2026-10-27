@@ -412,21 +412,23 @@ fn config_refuses_each_bad_file_with_its_key_path() {
     }
 }
 
-/// pro-d53: `open_tier` is a Worker Tier: H0-H4 or S0-S3 (`cpd config` reads only the file, no catalog, so H4 loads).
+/// pro-d82: `open_tier` is a Worker Tier: H0-H3 or S0-S3.
 #[test]
 fn config_accepts_an_open_tier_in_the_worker_range() {
     let fx = Fx::new();
-    for tier in ["H0", "H1", "H2", "H3", "H4", "S0", "S1", "S2", "S3"] {
+    for tier in ["H0", "H1", "H2", "H3", "S0", "S1", "S2", "S3"] {
         let ok = config_with(&fx, &format!("version = 1\nmachine = \"hs\"\nopen_tier = \"{tier}\"\n")).ok();
         assert_eq!(ok["config"]["open_tier"], tier);
     }
+    // The range ends at H3: H4 is not part of it.
+    assert_eq!(config_with(&fx, "version = 1\nmachine = \"hs\"\nopen_tier = \"H4\"\n").error()["code"], "config_invalid");
 }
 
-/// pro-d53 (hs-d554 for the cost reason): `open_tier` outside H0-H4, S0-S3 is refused.
+/// pro-d82 (hs-d554 for the cost reason): `open_tier` outside H0-H3, S0-S3 is refused.
 #[test]
 fn config_refuses_an_open_tier_outside_the_worker_range() {
     let fx = Fx::new();
-    for tier in ["H5", "S4", "S5", "O2"] {
+    for tier in ["H4", "H5", "S4", "S5", "O2"] {
         let run = config_with(&fx, &format!("version = 1\nmachine = \"hs\"\nopen_tier = \"{tier}\"\n"));
         let err = run.error();
         assert_eq!(run.exit, 1, "{tier}");

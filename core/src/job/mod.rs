@@ -220,7 +220,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 impl Env {
     /// `tier_invalid` (exit 2, `details.efforts`) unless the Tier's effort is
     /// one pi supports for its model (§9); then `tier_not_allowed` (exit 2)
-    /// unless a Worker may have it: H0-H4 or S0-S3 (pro-d53, hs-d554).
+    /// unless a Worker may have it: H0-H3 or S0-S3 (pro-d82, hs-d554).
     ///
     /// The models are those of the Job's PR repo key (contract §8.3 "Models" (5)): `pr` is the PR the Job is
     /// (or is about to be) on, `None` for the PR the existing Job `job` is on.
