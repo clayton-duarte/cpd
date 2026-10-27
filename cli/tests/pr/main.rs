@@ -6,6 +6,7 @@ mod common;
 
 mod git;
 mod git_guard;
+mod git_lead_branch;
 mod merge;
 mod pr_adopt_add;
 mod pr_adopt_life;

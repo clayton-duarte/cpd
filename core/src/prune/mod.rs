@@ -16,6 +16,8 @@ use crate::store::Store;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod lead_branch_tests;
 
 /// `cpd prune [--apply] [--drop <lead-branch>]... <repo>...`
 #[derive(ClapArgs, Debug, Clone, PartialEq, Eq)]
