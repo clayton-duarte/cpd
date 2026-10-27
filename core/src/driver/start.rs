@@ -121,7 +121,7 @@ pub fn start_with_allocation(
     key: &JobKey,
     allocation: Option<Allocation>,
 ) -> Result<Started, CpdError> {
-    let next = store.read(|conn| decide(conn, ctx.catalog, plan, key, allocation))?;
+    let next = store.read(|conn| decide(conn, ctx.home, ctx.catalog, plan, key, allocation))?;
     // A name the repo policy no longer declares refuses the start before any lock is taken (§3.4 "Resources of a Job").
     let (wanted, pools) = store.read(|conn| {
         let wanted = resource::wanted(conn, plan, key.as_str())?;
@@ -172,7 +172,7 @@ pub fn start_with_allocation(
     }
     let identities: Vec<String> = if first { pools.iter().map(resource::identity).collect() } else { Vec::new() };
     store.write(ctx.command, |tx| {
-        if decide(tx, ctx.catalog, plan, key, allocation)? != next {
+        if decide(tx, ctx.home, ctx.catalog, plan, key, allocation)? != next {
             return Err(CpdError::new(ErrorCode::CasLost, format!("Job {key} changed while its Attempt was being started: try again."))
                 .with("plan", plan.as_str())
                 .with("job", key.as_str()));
@@ -233,7 +233,7 @@ pub fn start_with_allocation(
 /// Decides the next Attempt of Job `key`, refusing a Job that is not Ready or
 /// does not match its fingerprint. `allocation` is E3's derived linear vs parallel choice (`None`: derive it from the
 /// PR's live Attempts).
-fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey, allocation: Option<Allocation>) -> Result<Next, CpdError> {
+fn decide(conn: &Connection, home: &CpdHome, catalog: &Catalog, plan: &PlanId, key: &JobKey, allocation: Option<Allocation>) -> Result<Next, CpdError> {
     let found: Option<String> =
         conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
     let phase = found.ok_or_else(|| CpdError::plan_not_found(plan))?;
@@ -251,7 +251,9 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey, all
     )?;
     require_ready(&all, job, plan, &phase, &pr_status)?;
     if job.kind == "open" {
-        crate::pr::stored_description_of(conn, plan, &crate::ids::PrKey::parse(&job.pr).map_err(|e| CpdError::bad_row(format!("Job {key} has the PR key {:?}: {e}", job.pr)))?)?;
+        let pr = crate::ids::PrKey::parse(&job.pr).map_err(|e| CpdError::bad_row(format!("Job {key} has the PR key {:?}: {e}", job.pr)))?;
+        crate::pr::stored_description_of(conn, plan, &pr)?;
+        crate::pr::jira_required_of(conn, home, plan, &pr)?;
     }
     let found = locked_fingerprint(job);
     if job.fingerprint.as_deref() != Some(found.as_str()) {
