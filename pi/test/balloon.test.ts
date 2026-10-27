@@ -36,16 +36,17 @@ const plain = (rows: string[]) => rows.map(bare);
 test("a user balloon is the template with the tail at the bottom right", async () => {
 	const rows = await draw(["user prompt"], "user", 19);
 	assert.deepEqual(plain(rows), [
-		"   ╭─────────────╮",
-		"   │ user prompt │",
-		"   ╰────────────╮│",
-		"                ╰╯",
+		"    ╭─────────────╮",
+		"    │ user prompt │",
+		"    ╰────────────╮│",
+		"                 ╰╯",
 	]);
 });
 
 test("an agent balloon is the mirrored template with the tail at the bottom left", async () => {
 	const rows = await draw(["agent reply"], "agent", 19, TIME_MS);
 	assert.deepEqual(plain(rows), [
+		"",
 		"╭─────────────╮",
 		"│ agent reply │",
 		agentTail(15),
@@ -55,21 +56,22 @@ test("an agent balloon is the mirrored template with the tail at the bottom left
 
 test("the agent balloon omits the time when the corner is too small for it", async () => {
 	const rows = await draw(["one"], "agent", 19, TIME_MS);
-	assert.deepEqual(plain(rows), ["╭─────╮", "│ one │", "│╭────╯", "╰╯"]);
+	assert.deepEqual(plain(rows), ["", "╭─────╮", "│ one │", "│╭────╯", "╰╯"]);
 });
 
 test("the balloon is the longest row plus two padding columns and two borders wide", async () => {
 	const rows = ["fix the build", "then ship it"];
 	const user = plain(await draw(rows, "user", 24));
 	assert.deepEqual(user, [
-		"      ╭───────────────╮",
-		"      │ fix the build │",
-		"      │ then ship it  │",
-		"      ╰──────────────╮│",
-		"                     ╰╯",
+		"       ╭───────────────╮",
+		"       │ fix the build │",
+		"       │ then ship it  │",
+		"       ╰──────────────╮│",
+		"                      ╰╯",
 	]);
 	const agent = plain(await draw(rows, "agent", 24));
 	assert.deepEqual(agent, [
+		"",
 		"╭───────────────╮",
 		"│ fix the build │",
 		"│ then ship it  │",
@@ -80,17 +82,18 @@ test("the balloon is the longest row plus two padding columns and two borders wi
 	assert.deepEqual(plain(await draw(rows, "agent", 80)), agent);
 });
 
-test("a user balloon ends one column before the pane's edge and an agent balloon starts in the second column", async () => {
+test("a user balloon ends in the pane's last column and an agent balloon starts in the first column under a blank row", async () => {
 	for (const width of [15, 24, 60]) {
 		const user = plain(await draw(["hello"], "user", width));
 		assert.equal(user.length, 4);
-		for (const row of user) assert.equal(row.length, width - 1, `user row ${JSON.stringify(row)} ends in column ${width}`);
+		for (const row of user) assert.equal(row.length, width, `user row ${JSON.stringify(row)} ends in column ${width}`);
 		assert.equal(user[0]!.trim().length, 9);
-		assert.equal(user[0]![width - 2], "╮");
+		assert.equal(user[0]![width - 1], "╮");
 		const agent = plain(await draw(["hello"], "agent", width));
-		assert.equal(agent[0]![0], "╭");
-		assert.equal(agent[1]![0], "│");
-		assert.equal(agent[3]![0], "╰");
+		assert.equal(agent[0], "");
+		assert.equal(agent[1]![0], "╭");
+		assert.equal(agent[2]![0], "│");
+		assert.equal(agent[4]![0], "╰");
 	}
 });
 
@@ -102,7 +105,8 @@ test("every row of a multi-line balloon keeps the right wall in one column", asy
 	for (const row of user.slice(0, 1 + rows.length + 1)) assert.equal(row[wall], row.trim().at(-1), row);
 	for (const row of user.slice(1, 1 + rows.length)) assert.equal(row[wall], "│", row);
 	const agent = plain(await draw(rows, "agent", 40));
-	const bodies = agent.slice(1, 1 + rows.length);
+	assert.equal(agent[0], "", "the agent's blank top-margin row");
+	const bodies = agent.slice(2, 2 + rows.length);
 	for (const row of bodies) assert.equal(row.length, 22, row);
 	for (const row of bodies) assert.ok(row.startsWith("│") && row.endsWith("│"), row);
 });
@@ -138,11 +142,12 @@ test("wide characters and styled text keep the wall aligned", async () => {
 	const rows = ["漢字漢字", "\x1b[1mbold\x1b[22m text", "ab"];
 	for (const side of ["user", "agent"] as const) {
 		const out = await draw(rows, side, 30);
-		const body = out.slice(1, 1 + rows.length);
+		const top = side === "agent" ? 1 : 0;
+		const body = out.slice(top + 1, top + 1 + rows.length);
 		const widths = body.map(visibleWidth);
 		assert.equal(new Set(widths).size, 1, `${side}: ${widths}`);
 		for (const row of body) assert.ok(bare(row).trimEnd().endsWith("│"), row);
-		assert.equal(visibleWidth(out[0]!), side === "user" ? 29 : 13, "longest row 9 columns + 4, less the outer margins");
+		assert.equal(visibleWidth(out[top]!), side === "user" ? 30 : 13, "longest row 9 columns + 4; the user's row ends in the pane's last column");
 	}
 });
 
@@ -165,7 +170,9 @@ test("the dango theme no longer inverts the user's input", () => {
 	assert.equal(theme.colors.userMessageText, 7);
 });
 
-// ---- pi's own components ----
+// ---- pi's own components, under fold status (the harness default): the earlier geometry (one column of right margin
+// for the user, no blank row above the agent's) holds there; test/chat-margins.test.ts and balloon-margins.test.ts
+// pin the compact toggle rows ----
 
 const ZONE_A = "\x1b]133;A\x07";
 const ZONE_BC = "\x1b]133;B\x07\x1b]133;C\x07";

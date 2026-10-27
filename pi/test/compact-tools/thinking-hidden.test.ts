@@ -20,11 +20,11 @@ const RIGHT = "\uE0B4";
 const plain = (line: string) => line.replace(/\x1b\][^\x07]*\x07/gu, "").replace(/\x1b\[[0-9;]*m/gu, "").trim();
 const rows = (lines: string[]) => lines.map(plain).filter((line) => line !== "");
 const NERD = { expand: "\u{F0B26}", collapse: "\u{F0B2C}" };
-const TEXT = "The user wants the pill to expand, so I will look at how the title is built.\n\nThen decide what the fold should hold.";
+const TEXT = "The user wants the pill to expand, so I will look at how the title is built here.\n\nThen decide what the fold should hold.";
 const EXPANDED = [
 	`╭─${LEFT}Thinking…${RIGHT}`,
-	"│ The user wants the pill to expand, so I will look at how the title is",
-	"│ built.",
+	"│ The user wants the pill to expand, so I will look at how the title is built",
+	"│ here.",
 	"│",
 	"│ Then decide what the fold should hold.",
 	"╰\u{F0B2C} collapse · 03:11",
