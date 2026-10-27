@@ -280,9 +280,17 @@ _Avoid_: visibility, permission
 What a Policy is resolved for: an owner, or an owner and a repo name (`Owner(login) | Repo(login, name)`). cpd derives it from the one row a consumer acts on: a Context, its Manager and its Leads use the Context's owner; a PR, its Workers and the commands on it use the PR's repo. Never a machine, a path or a cwd.
 _Avoid_: scope, selector, context
 
-**Resource** (new, pro-d74):
-A named exclusive thing of a repo, declared in its repo policy file (`[resources.<name>]`, contract §8.3 "The `resources` domain"), that one holder at a time may use, such as the one port an e2e run needs. A Job takes it through its Spec's `resources` and its Attempt holds it until it ends; a human takes it with `cpd resource run`. The lock is per repo on one machine, a kernel `flock` released when its holder dies. A repo that declares none has no lock and no limit.
-_Avoid_: slot, lock, mutex, semaphore
+**Resource** (pro-d74, pro-d92):
+Anything that has a limited number of slots available for concurrent use, declared in a policy file at host, owner or repo level (`[resources.<name>]`, contract §8.3 "The `resources` domain"), such as the one port an e2e run needs. A Job takes a slot through its Spec's `resources` and its Attempt holds it until it ends; a human takes one with `cpd resource run`. Each slot is a kernel `flock` released when its tenant dies. Nothing declared means no lock and no limit.
+_Avoid_: lock, mutex, semaphore
+
+**Slot** (pro-d92):
+The number of available concurrent units of a determined resource: one concurrent unit of it. Contract §1.4 "The resource locks and the holder record".
+_Avoid_: lock, seat
+
+**Tenant** (pro-d92):
+The Job or user occupying a resource slot. Its holder record names it (contract §1.4).
+_Avoid_: holder, owner
 
 **Machine policy** (changed, pro-d1):
 The machine Scope's file, `$CPD_HOME/policy/host.toml` (contract §8.3), which dotfiles render per machine: its `[model]` table first, then the machine's `cpd.policy` text (its `[mcp.servers.*]`). Besides Domains it may hold an `[mcp]` table, the MCP servers the machine may use, which only a machine file may have; `[mcp]` is not a Domain and takes no part in a Policy key.
