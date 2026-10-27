@@ -1,0 +1,9 @@
+[build]
+# Deviation from the default (one job per logical CPU): 4 jobs. Concurrent full
+# builds from several Gates and Workers saturated the machine (load 30.8 on 14
+# cores). Measured in docs/research/build-cap.md: a lone Gate costs about 5 %
+# more (282 s against 267 s); with 3 Gates at once each Gate's wall drops from
+# about 590 s to about 436 s and the peak 1-minute load from 151 to 51.
+# Override for one run, no edit: `CARGO_BUILD_JOBS=<n>` or `cargo build -j <n>`
+# (both win over this file; scripts/cargo.sh passes the environment through).
+jobs = 4
