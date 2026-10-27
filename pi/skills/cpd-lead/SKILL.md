@@ -352,6 +352,8 @@ Once the open Job's submit passes, cpd pushes the Lead Branch and opens the pull
 
 The PR's reviewers and CI, as the owner's policy says, review each PR on GitHub. The engine polls every open PR and sends `pr-feedback` with its key. You may run `cpd pr poll` right after `cpd pr open` or whenever you need the current status.
 
+When the PR is ready (CI green, review comments addressed), ask the User if they want the PR posted for external review. Post only with `cpd pr post --pr <key>` when the User says yes (the refusals tell you what is missing: no second post of the same PR, no post of a draft or a PR with pending comments). Never post with Slack tools by hand.
+
 ### Addressing
 
 1. Diagnose with `cpd pr view --pr <key>`, and read a failing check's log with `gh run view <run-id> --log-failed`. Decide; do not append noise. A failing check that is a schedule block (a date or day rule such as Danger's 'NO DEPLOYS ON FRIDAYS' or the label 'No Merges on Friday', which clears by itself at a time) is not addressable: raise no fix Job, and tell the User once what it is and when it clears. Judge it from the check's log, never from its name alone (a 'Run Danger' step also fails for real reasons).
