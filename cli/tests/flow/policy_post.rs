@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 
 const ALL: &str = "[pr.post]\nenabled = true\nchannel = \"C02JU6C2Z1D\"\ntemplate = \":git-pr-open: {{ title }}:\\n{{ url }}\"\nmerged_reaction = \"git-merge\"\n";
 
-fn world(owner: &str) -> Fx {
+pub(super) fn world(owner: &str) -> Fx {
     let fx = Fx::new();
     fx.env.write_config("version = 1\nmachine = \"pro\"\n");
     write(&fx, "acme/owner.toml", owner);
@@ -19,17 +19,17 @@ fn world(owner: &str) -> Fx {
     fx
 }
 
-fn write(fx: &Fx, rel: &str, text: &str) {
+pub(super) fn write(fx: &Fx, rel: &str, text: &str) {
     let path = fx.env.cpd_home().join("policy").join(rel);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, text).unwrap();
 }
 
-fn real(fx: &Fx, rel: &str) -> String {
+pub(super) fn real(fx: &Fx, rel: &str) -> String {
     fs::canonicalize(fx.env.cpd_home().join("policy").join(rel)).unwrap().display().to_string()
 }
 
-fn show(fx: &Fx, repo: bool) -> Run {
+pub(super) fn show(fx: &Fx, repo: bool) -> Run {
     let mut args = vec!["policy", "show", "--owner", "acme"];
     if repo {
         args.extend(["--repo", "r"]);
@@ -44,7 +44,7 @@ fn invalid(key: &str, value: &str) {
     assert_eq!(error["details"]["key"], format!("pr.post.{key}"), "{value}: {error}");
 }
 
-fn keys(out: &Value) -> &Value {
+pub(super) fn keys(out: &Value) -> &Value {
     &out["policy"]["pr"]["keys"]
 }
 
