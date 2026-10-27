@@ -12,7 +12,10 @@ use crate::attempt::ledger::{self, Cause, End, Ladder, Stage};
 use super::lock::{RESOURCE_FDS_ENV, Starter};
 use crate::resource::{self, Held, Holder, Take};
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
-use std::os::fd::BorrowedFd;
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+
+/// The lowest descriptor number a resource lock is handed to the driver on.
+const HAND_OVER_MIN: i32 = 100;
 use crate::config::{Catalog, Config, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -191,7 +194,7 @@ pub fn start_with_allocation(
     })?;
 
     // §3.4 step 2: spawn the driver with the lock as fd 3.
-    let spawned = spawn(ports, ctx.home, plan, &next.attempt, &lock, held.as_ref());
+    let spawned = spawn(ports, ctx.home, plan, &next.attempt, &lock, held);
     let pid = match spawned {
         Ok(pid) => pid,
         Err(e) => {
@@ -206,13 +209,11 @@ pub fn start_with_allocation(
                 ledger::end(tx, &target, &End::Failed { cause: Cause::Crashed, detail: detail.clone() }, None, &ladder, Stage::Driver)
             })?;
             drop(lock);
-            drop(held);
             return Err(error);
         }
     };
     // §3.4 step 3: close our copy without unlocking; the driver holds it now.
     drop(lock);
-    drop(held);
     // A data write, no Event. The driver may already have ended the Attempt.
     store.write(ctx.command, |tx| {
         tx.execute(
@@ -424,7 +425,7 @@ fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &N
 /// Spawns `cpd attempt run <attempt> --plan <plan>` detached (`setsid`), with
 /// the lock as fd 3, stdin from `/dev/null`, and stdout and stderr appended to
 /// `run/<plan>/logs/attempt-<attempt>.log`, through `ports.spawn`. Returns its pid.
-fn spawn(ports: &Ports, home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock: &Starter, held: Option<&Held>) -> Result<u32, String> {
+fn spawn(ports: &Ports, home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock: &Starter, held: Option<Held>) -> Result<u32, String> {
     // The path recorded at process start: the live path of the file is `(deleted)` after an install.
     let exe = ports.spawn.self_exe().map_err(|e| e.to_string())?;
     let log_path = home.driver_log(plan, attempt);
@@ -435,19 +436,24 @@ fn spawn(ports: &Ports, home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock
     if !exe.exists() {
         return Err(format!("cannot run {}: no such file", exe.display()));
     }
-    // The resource locks go to the driver at the numbers they have here, not close-on-exec; it learns them from the
-    // environment and makes them close-on-exec again (A1).
+    // The resource locks go to the driver as copies of the same open file descriptions, numbered from `HAND_OVER_MIN` up:
+    // clear of the numbers the starter's own files take, and not close-on-exec. The driver learns the numbers from the
+    // environment and makes them close-on-exec again (A1). The starter's own descriptors close here; the copies close
+    // when this function returns, after the spawn.
     let mut env_set = vec![("CPD_HOME".to_owned(), home.root().display().to_string())];
+    let mut handed: Vec<OwnedFd> = Vec::new();
     if let Some(held) = held {
-        let mut fds = Vec::new();
         for name in held.names() {
             let fd = held.fd(name).expect("a name of the held resources");
             // SAFETY: `held` owns the descriptor for the whole call.
             let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-            fcntl(borrowed, FcntlArg::F_SETFD(FdFlag::empty())).map_err(|e| format!("cannot hand over the resource {name}: {e}"))?;
-            fds.push(fd.to_string());
+            let copy = fcntl(borrowed, FcntlArg::F_DUPFD(HAND_OVER_MIN)).map_err(|e| format!("cannot hand over the resource {name}: {e}"))?;
+            // SAFETY: `F_DUPFD` returned a new descriptor that nothing else owns.
+            handed.push(unsafe { OwnedFd::from_raw_fd(copy) });
         }
-        env_set.push((RESOURCE_FDS_ENV.to_owned(), fds.join(",")));
+        drop(held);
+        let numbers: Vec<String> = handed.iter().map(|fd| fd.as_raw_fd().to_string()).collect();
+        env_set.push((RESOURCE_FDS_ENV.to_owned(), numbers.join(",")));
     }
     // hs-d528: nice and ionice exec (`idle`), so the recorded pid is the driver's.
     let launch = Launch {
@@ -465,5 +471,6 @@ fn spawn(ports: &Ports, home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock
     };
     // The real `Spawn` reaps the child on a thread, if this process outlives it (the engine); detached otherwise.
     let pid = ports.spawn.spawn(&launch).map_err(|e| format!("cannot run {}: {e}", exe.display()))?;
+    drop(handed);
     Ok(pid.0)
 }

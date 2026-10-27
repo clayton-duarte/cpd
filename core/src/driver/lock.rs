@@ -337,6 +337,24 @@ mod tests {
     }
 
     #[test]
+    fn the_resource_locks_the_starter_handed_over_are_made_close_on_exec_and_a_closed_one_is_refused() {
+        let (dir, home, plan, attempt) = home();
+        let mut held = Inherited { _file: lock_file(&home, &plan, &attempt), resources: Vec::new() };
+        let resource = File::create(dir.path().join("resource.lock")).unwrap();
+        fcntl(&resource, FcntlArg::F_SETFD(FdFlag::empty())).unwrap();
+        let fd = resource.into_raw_fd();
+
+        held.take_resources(&fd.to_string(), &home, &plan, &attempt).unwrap();
+
+        assert_eq!(held.resources.len(), 1);
+        assert!(FdFlag::from_bits_truncate(fcntl(&held.resources[0], FcntlArg::F_GETFD).unwrap()).contains(FdFlag::FD_CLOEXEC));
+        held.keep_across_exec().unwrap();
+        assert!(!FdFlag::from_bits_truncate(fcntl(&held.resources[0], FcntlArg::F_GETFD).unwrap()).contains(FdFlag::FD_CLOEXEC));
+        let refused = held.take_resources("9999", &home, &plan, &attempt).unwrap_err();
+        assert_eq!(refused.code(), ErrorCode::DriverLockMissing);
+    }
+
+    #[test]
     fn a_descriptor_that_is_not_open_is_refused() {
         let (_dir, home, plan, attempt) = home();
         lock_file(&home, &plan, &attempt);
