@@ -1438,3 +1438,37 @@ fn with_no_engine_the_snapshot_leads_with_engine_down_and_while_a_process_holds_
     drop(engine);
     assert!(!read::tree(&mut store).unwrap().engine_running);
 }
+
+#[test]
+fn the_flow_gives_a_stacked_pr_its_base_pr_as_a_need_and_as_its_blocker_until_it_opens() {
+    let (_fx, mut store) = fixture();
+    // `stk` is stacked on `zeta` (its base is `zeta`'s Lead Branch) and stores a need on `mid`, which has merged
+    sql(
+        &mut store,
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+         VALUES ('acme/mid', 91, 'https://github.com/acme/mid/pull/91', 'Mid', 0, 'merged', 'none', 'none',
+                 '2026-01-05T00:00:00.000Z', '2026-01-06T00:00:00.000Z', '2026-01-06T00:00:00.000Z'),
+                ('acme/zeta', 92, 'https://github.com/acme/zeta/pull/92', 'Zeta', 0, 'open', 'none', 'none',
+                 '2026-01-05T00:00:00.000Z', NULL, '2026-01-06T00:00:00.000Z');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, pr_number, pull_request, pr_url, pr_opened_at, merged_at, created_txn, created_at)
+         VALUES ('ship', 'mid', '/r/mid', 'main', 'merged', 'cpd/ship/mid', '/wt/mid', '2026-01-02T00:00:00.000Z', 91, (SELECT id FROM pull_requests WHERE number = 91), 'https://github.com/acme/mid/pull/91', '2026-01-02T00:00:00.000Z', '2026-01-03T00:00:00.000Z', cpd_txn(), '2026-01-02T00:00:00.000Z');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+         VALUES ('ship', 'zeta', '/r/zeta', 'main', 'dispatch', 'cpd/ship/zeta', '/wt/zeta', '2026-01-02T00:00:00.000Z', cpd_txn(), '2026-01-02T00:00:00.000Z');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         VALUES ('ship', 'stk', '/r/stk', 'cpd/ship/zeta', 'waiting', 'cpd/ship/stk', cpd_txn(), '2026-01-02T00:00:00.000Z');
+         INSERT INTO pr_needs (plan, pr, needs) VALUES ('ship', 'stk', 'mid');",
+    );
+    let stk = |store: &mut Store| {
+        let node = read::plan_boxes(store, &plan("ship")).unwrap().prs.into_iter().find(|p| p.key.as_str() == "stk").unwrap();
+        (node.needs.iter().map(|n| n.as_str().to_string()).collect::<Vec<_>>(), node.waiting_on)
+    };
+    let (needs, waiting_on) = stk(&mut store);
+    assert_eq!(needs, ["mid", "zeta"], "the base PR is a need, sorted with the stored ones");
+    assert_eq!(waiting_on, ["ship/zeta"], "the base PR has started and not opened: it blocks");
+    sql(&mut store, "UPDATE prs SET status = 'waiting', started_at = NULL, lead_worktree = NULL WHERE plan = 'ship' AND key = 'zeta'");
+    assert_eq!(stk(&mut store).1, ["ship/zeta"], "a base PR that is waiting blocks");
+    sql(&mut store, "UPDATE prs SET status = 'open', pr_number = 92, pull_request = (SELECT id FROM pull_requests WHERE number = 92), pr_url = 'https://github.com/acme/zeta/pull/92', pr_opened_at = '2026-01-02T00:00:00.000Z', started_at = '2026-01-02T00:00:00.000Z', lead_worktree = '/wt/zeta' WHERE plan = 'ship' AND key = 'zeta'");
+    let (needs, waiting_on) = stk(&mut store);
+    assert_eq!(needs, ["mid", "zeta"], "an open base PR is still listed");
+    assert!(waiting_on.is_empty(), "an open base PR blocks nothing: {waiting_on:?}");
+}
