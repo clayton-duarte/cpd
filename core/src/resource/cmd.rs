@@ -20,10 +20,10 @@ pub struct RunArgs {
     /// A resource the repo's policy declares
     pub name: String,
     /// Try again every second for this many minutes [default: 0]
-    #[arg(long, value_name = "minutes", value_parser = clap::value_parser!(u64).range(1..))]
+    #[arg(long, value_name = "minutes")]
     pub wait: Option<u64>,
     /// The command and its arguments, after `--`
-    #[arg(last = true, required = true, value_name = "command")]
+    #[arg(last = true, value_name = "command")]
     pub command: Vec<String>,
 }
 
