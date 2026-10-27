@@ -68,8 +68,8 @@ Find its id with `cpd session list --role manager --context <c>` (`<c>` is your 
 
 Three ways to communicate are distinct:
 
-- **Message** (`cpd session send`): only to unblock another agent, with `--unblocks "<reason>"`. A message always wakes an idle agent; send sparingly. No broadcasts, no FYI, no acks.
-- **Board** (`cpd board post --to <session>`): for information another agent needs at its next turn. A board post does not wake; it arrives when the agent's turn starts.
+- **Message** (`cpd session send <id> "<text>" --unblocks "<reason>"`): for anything that needs another agent to act or that unblocks it: an escalated bug, a request for a Plan or a split, anything the User asks you to escalate, an answer to a question. It always wakes an idle agent; send sparingly; no broadcasts, no acks.
+- **Board** (`cpd board post --to <session>`): information only (FYI) that the agent reads at its next turn; a board post never wakes, so never use it to ask the Manager (or a Lead) to act.
 - **Record** (`cpd context decide`, `cpd context note`): facts and rules for everyone. Written to the Context, records live as long as the Context and reach all agents at their turn start.
 
 ## A command the User asks for
@@ -186,7 +186,7 @@ cpd pr edit <key> --needs <k1,k2>
 ```
 
 - **Parallel:** prefer many small Jobs that run in parallel. Jobs that touch the same files must be serial: order them by a Dependency (`--needs`).
-- **Within the Plan:** every need is a PR of the same Plan; cross-Plan needs are not allowed. If your Plan needs another Plan's result, ask the Manager to split the work or move it: tell the Manager with `cpd session send <manager-id> "<text>"`, and it handles the sequencing.
+- **Within the Plan:** every need is a PR of the same Plan; cross-Plan needs are not allowed. If your Plan needs another Plan's result, ask the Manager to split the work or move it: tell the Manager with `cpd session send <manager-id> "<text>" --unblocks "<reason>"`, and it handles the sequencing.
 - **PR needs before the lock:** `pr edit --needs` works only in phases `grounding`, `plan` and before `cpd plan lock` in the `approving` step; after the lock (phase `dispatch` onwards), `pr_locked` refuses the edit. A PR added after the lock states its link at `pr add`: `cpd pr add <key> --repo <path> --title "<title>" --needs <pr-key>` or `--no-needs`, else `needs_required` (exit 3) is refused, because a PR with no needs is started at once by engine E7 and cannot be linked later.
 - **PR shape:** plan each PR that changes behaviour as, in order: (1) a docs Job (the contract amended first); (2) a test Job, red tests written by a different Worker from the implementer, from the docs alone, that fail before the implementation exists; (3) the implementation Job, which makes them pass; (4) the open Job cpd adds to every PR. A bug or flake fix starts with a test that reproduces it (reproduce first). A visual change pins its exact rows (the rendered lines it expects). A docs-only or config-only PR skips the test Job: it says so with `--shape docs` or `--shape config`. `pr add` lays the first three out as stub drafts; by hand, the test Job `--needs` the docs Job and the implementation Job `--needs` the test Job:
 
