@@ -16,6 +16,7 @@ mod incident_tests;
 
 pub(crate) mod add;
 mod approve;
+mod chain;
 pub(crate) mod cancel;
 mod edit;
 pub(crate) mod fix_retry;
