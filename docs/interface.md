@@ -80,6 +80,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd review open` | Record an open plannotator session | Lead, Manager | |
 | `cpd review close` | Close one or every open plannotator session | Lead, Manager | |
 | `cpd review list` | List the open plannotator sessions of a Session | Lead, Manager | |
+| `cpd review submit` | Post a GitHub review (APPROVE or REQUEST_CHANGES) and, with --slack, queue its reaction (§31.1) | Lead, Manager | |
 | `cpd policy` | Policies (commands.md §22) | | |
 | `cpd policy show` | Show the resolved policy of a key (§22.1) | Lead, Manager, Worker | |
 | `cpd mcp` | MCP servers (commands.md §24) | | |

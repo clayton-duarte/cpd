@@ -396,6 +396,34 @@ pub fn merge_pr(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64, head: 
     run_on(runner, cwd, &args).map(drop)
 }
 
+/// `gh api --method POST repos/<repo>/pulls/<number>/reviews --input -` with `body` on stdin: GitHub's create-review
+/// call; its answer's stdout. A non-zero exit, a signal and a timeout (60 s) are `gh_failed`.
+pub fn post_review(runner: &dyn Runner, repo: &str, number: &str, body: Vec<u8>) -> Result<String, CpdError> {
+    let endpoint = format!("repos/{repo}/pulls/{number}/reviews");
+    let args = ["api", "--method", "POST", endpoint.as_str(), "--input", "-"];
+    let call = Call {
+        tool: "gh".to_owned(),
+        program: "gh".to_owned(),
+        args: args.iter().map(|a| (*a).to_owned()).collect(),
+        envs: vec![("GH_PROMPT_DISABLED".to_owned(), Some("1".to_owned())), ("NO_COLOR".to_owned(), Some("1".to_owned()))],
+        cwd: Some(Path::new(".").to_path_buf()),
+        deadline: TIMEOUT,
+        stdin: Some(body),
+        stderr_to: None,
+    };
+    let out = match runner.run(&call) {
+        Ok(out) => out,
+        Err(Failed::Timeout(_)) => return Err(killed(&args, TIMEOUT, "")),
+        Err(Failed::Io(e)) => return Err(failed(&args, format!("Cannot run gh: {e}."), None, &e.to_string())),
+    };
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    match out.status.code() {
+        Some(0) => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
+        Some(code) => Err(failed(&args, format!("gh api exited {code}."), Some(code), &stderr)),
+        None => Err(failed(&args, "gh api was killed by a signal.".to_owned(), None, &stderr)),
+    }
+}
+
 /// Inline review comments, which `gh pr view` does not list. `{owner}/{repo}`
 /// are filled in by `gh` from `cwd`'s repo. Every page is read: `gh` 2.45 has no
 /// `--slurp`, so `--paginate` prints the pages as consecutive JSON arrays.

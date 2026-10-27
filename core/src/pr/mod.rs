@@ -36,6 +36,7 @@ mod feedback;
 mod gh;
 pub(crate) use gh::head_ref_oid;
 mod merge;
+pub mod review;
 mod open;
 pub(crate) mod poll;
 pub mod posts;
