@@ -6,11 +6,11 @@
 - cargo 1.99.1; sccache off (`RUSTC_WRAPPER=` empty).
 - Build: `scripts/cargo.sh nextest run --workspace --no-run`, cold, own `CARGO_TARGET_DIR` per build.
 - Commit measured: 9d075593.
-- Rows labelled `Attempt 1 of cap-dev0` were measured there and copied as they are; rows from this Job (`cap-dev-a1`) are marked so.
+- Rows labelled `Attempt 1 of cap-m1` were measured there and copied as they are; rows from this Job (`cap-dev-a1`) are marked so.
 
 ## Negative jobs
 
-Attempt 1 of cap-dev0: 30 independent tiny crates built cold, peak concurrent `rustc` sampled every 0.1 s (about +-1).
+Attempt 1 of cap-m1: 30 independent tiny crates built cold, peak concurrent `rustc` sampled every 0.1 s (about +-1).
 
 | setting | peak concurrent rustc |
 |---|---|
@@ -25,7 +25,7 @@ Reading: `jobs = -4` behaves like `jobs = 10` (logical CPUs minus 4), in the con
 
 ## Dev build matrix
 
-Rows 1-12: Attempt 1 of cap-dev0. Rows 13-18: this Job (`cap-dev-a1`), same method; the `foreign procs before` of these rows is the count at the first check, `noisy` means foreign processes were still running after the 5-minute wait, and the label rows read `(cap, n)`. A `noisy` cell had foreign cargo, rustc or nextest processes running; the peak summed CPU column is a saturated 1400 in every row, so it carries no information.
+Rows 1-12: Attempt 1 of cap-m1. Rows 13-18: this Job (`cap-dev-a1`), same method; the `foreign procs before` of these rows is the count at the first check, `noisy` means foreign processes were still running after the 5-minute wait, and the label rows read `(cap, n)`. A `noisy` cell had foreign cargo, rustc or nextest processes running; the peak summed CPU column is a saturated 1400 in every row, so it carries no information.
 
 | cap | n | per-build wall (s) | cell total (s) | peak load | peak summed CPU % | load before | load after | foreign procs before | noisy |
 |---|---|---|---|---|---|---|---|---|---|
@@ -97,14 +97,16 @@ Sampled every 1 s during the cells: the highest `ps` %CPU of any single `rustc` 
 
 ## Gate matrix
 
-Attempt `cap-gate-a1`. Not measured: the Worker adapter refuses `npm run verify` (a Worker runs only the tests its change touches), and the Lead confirmed it cannot lift the refusal. No Gate was run, so there is no exit status, wall time, build share, LEAK-FAIL count or peak load for the cells (default,1), (4,1), (default,3), (4,3). n=2 was left out for time.
+Attempt `cap-gate-a1`. The Worker of this Job could not run `npm run verify` (the adapter refuses it; a Worker runs only the tests its change touches). The Lead ran the Gate matrix on commit 976c60b4, one run per cell, on the Apple M4 Pro (14 logical CPUs). Per cell: `timeout 1500 npm run verify` in the Lead's worktree, `RUSTC_WRAPPER=` (sccache off), `CARGO_BUILD_JOBS` unset for `default` and `4` for the cap, one Gate run per cell. `npm ci` was done before the clock started. Before each cell the script waited up to 5 minutes for foreign cargo, rustc and nextest processes: none ran in any cell. `build part` is the time until nextest printed `Starting 5535 tests across 17 binaries`. Every Gate ran 5535 tests, 5535 passed, 5 skipped. The cells ran in the order default/1, 4/1, default/3, 4/3. The script and logs are kept by the Lead outside the repo. n=2 was not run.
 
-| cap | n | exit status | wall (s) | build share (s) | LEAK-FAIL | load before | noisy |
-|---|---|---|---|---|---|---|---|
-| default | 1 | not measured | not measured | not measured | not measured | not measured | not measured |
-| 4 | 1 | not measured | not measured | not measured | not measured | not measured | not measured |
-| default | 3 | not measured | not measured | not measured | not measured | not measured | not measured |
-| 4 | 3 | not measured | not measured | not measured | not measured | not measured | not measured |
+| cap | Gates at once | exit | wall per Gate (s) | build part (s) | LEAK-FAIL | cell wall (s) | peak load (1 min) | load before | foreign procs | noisy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| default | 1 | 0 | 266.9 | 100.8 | 0 | 266.9 | 34.3 | 7.85 | 0 | - |
+| 4 | 1 | 0 | 281.6 | 130.8 | 0 | 281.6 | 17.6 | 11.14 | 0 | - |
+| default | 3 | 0, 0, 0 | 597.2, 587.2, 597.2 | 207.6, 212.6, 212.6 | 0, 0, 0 | 597.2 | 151.4 | 10.08 | 0 | - |
+| 4 | 3 | 0, 0, 0 | 440.9, 430.9, 440.9 | 172.6, 162.6, 172.6 | 0, 0, 0 | 440.9 | 50.5 | 18.01 | 0 | - |
+
+One Gate alone is 5.5 % slower with the cap (281.6 s against 266.9 s) and its build part is 30 s longer (130.8 s against 100.8 s); with 3 Gates at once the cap is 26 % faster per Gate (about 436 s on average against about 594 s: cell wall 440.9 s against 597.2 s), the build part is 20 % shorter (about 169 s against about 211 s) and the peak 1-minute load is a third (50.5 against 151.4); three capped Gates at once (440.9 s) finish before three uncapped ones (597.2 s) and before three capped Gates run one after another (about 3 x 282 = 845 s, computed, not measured). No Gate leaked (LEAK-FAIL 0 in all 8). One run per cell with no repeats: the 1-Gate difference (15 s) is within what noise could be (I infer; the Workers' dev cells repeated within 1 %, but the Gate was not repeated); the 3-Gate difference (157 s, 26 %) and the load difference are large.
 
 ## Decision
 
@@ -114,5 +116,6 @@ Attempt `cap-gate-a1`. Not measured: the Worker adapter refuses `npm run verify`
   - Lone dev build: 98.4 s at cap 4 against 112.8 s at `default`; not slower.
   - n=3 dev peak load: 66.0 at cap 4 against 93.5-100.7 at `default` (-29% to -34%); total 148.5 s against 153.1-154.7 s. Release n=3: peak load 55.4 against 106.4 (-48%), total 134.6 s against 105.9 s (+27%).
   - One rustc at cap 4 peaked at 386.9 % CPU against 440.5 % at `default` (the 790 % case was not reproduced).
-- LEAK-FAIL counts old against new: not measured. Gate wall at n=3 old against new: not measured. The cap bounds only the build; whether the tests part of a Gate is unchanged was not measured.
-- Against capping: the release build at n=3 is 27% slower; walls of noisy cells (load before 20-50 on 14 cores) may hide small differences, so the lone-build gain is not distinguishable from `default`; no Gate-level number supports or refutes capping. The case for it is lower peak load at n=3.
+- LEAK-FAIL counts old against new: 0 and 0. Gate wall at n=3 old against new: about 594 s (cell 597.2 s) against about 436 s (cell 440.9 s). Lone Gate 266.9 s against 281.6 s; peak load 151.4 against 50.5.
+- Applied: .cargo/config.toml, [build] jobs = 4 (Context decision pro-d116).
+- Against capping: the release build at n=3 is 27% slower; walls of noisy cells (load before 20-50 on 14 cores) may hide small differences, so the lone-build gain is not distinguishable from `default`. The lone Gate costs about 5 %, one run per cell. The case for it is lower peak load at n=3.
