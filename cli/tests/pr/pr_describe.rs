@@ -23,9 +23,14 @@ impl Poll {
 
     /// Runs `sql` on the Plan's rows.
     fn exec(&self, sql: &str) {
-        // `prs_head_ref_fixed` refuses any later `head_ref` change (contract §4.4): this test database drops it to adopt a PR.
-        let drop = if sql.contains("head_ref") { "DROP TRIGGER prs_head_ref_fixed;" } else { "" };
-        self.store().write("fixture", |tx| Ok(tx.execute_batch(&format!("{drop}{sql}"))?)).unwrap();
+        // `prs_head_ref_fixed` refuses any later `head_ref` change (contract §4.4): this test database drops it to adopt a PR, then
+        // puts it back as the migration has it, so the schema check of the next `cpd` still passes.
+        let (drop, restore) = if sql.contains("head_ref") {
+            ("DROP TRIGGER prs_head_ref_fixed;", "CREATE TRIGGER prs_head_ref_fixed BEFORE UPDATE OF head_ref ON prs\nBEGIN SELECT RAISE(ABORT, 'pr_locked'); END;")
+        } else {
+            ("", "")
+        };
+        self.store().write("fixture", |tx| Ok(tx.execute_batch(&format!("{drop}{sql};{restore}"))?)).unwrap();
     }
 }
 
