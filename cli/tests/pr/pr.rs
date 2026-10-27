@@ -244,7 +244,7 @@ fn seed_web(mut store: Store, repo: &Path, lead: &Path, sha: &str, state: Web) {
         .unwrap();
 }
 
-fn code(run: &Run) -> (String, i32) {
+pub(super) fn code(run: &Run) -> (String, i32) {
     (run.error()["code"].as_str().unwrap().to_owned(), run.exit)
 }
 
@@ -1230,7 +1230,7 @@ pub(super) struct Poll {
     home: CpdHome,
     repo: PathBuf,
     origin: PathBuf,
-    lead: PathBuf,
+    pub(super) lead: PathBuf,
     merged_sha: String,
     /// What the lock pushed to the Lead Branch on origin (R35, §7.2): the base.
     lock_pushed: String,
@@ -1409,25 +1409,25 @@ impl Poll {
     }
 
     /// The Lead Branch tip.
-    fn lead_sha(&self) -> String {
+    pub(super) fn lead_sha(&self) -> String {
         self.git(&self.repo, &["rev-parse", &format!("refs/heads/{}", self.branch)])
     }
 
     /// Sets the `[hooks]` of the repo `acme/pay`'s policy file to `toml` (`pre-merge = "cmd"` lines), and commits an
     /// empty commit on the Lead Branch.
-    fn hooks(&self, toml: &str) {
+    pub(super) fn hooks(&self, toml: &str) {
         self.env.repo_policy("acme", "pay", &format!("[hooks]\n{toml}"));
         self.git(&self.lead, &["commit", "-q", "--allow-empty", "-m", "hooks"]);
     }
 
     /// The tip of `branch` on `origin`, if it has one.
-    fn remote_branch(&self, branch: &str) -> Option<String> {
+    pub(super) fn remote_branch(&self, branch: &str) -> Option<String> {
         let out = self.git(&self.origin, &["for-each-ref", "--format=%(objectname)", &format!("refs/heads/{branch}")]);
         (!out.is_empty()).then_some(out)
     }
 
     /// Moves `main` on `origin` (through the main checkout) with a commit writing `path`.
-    fn advance_base(&self, path: &str, content: &str) -> String {
+    pub(super) fn advance_base(&self, path: &str, content: &str) -> String {
         self.commit_file(&self.repo, path, content, &format!("base {path}"));
         self.git(&self.repo, &["push", "-q", "origin", "main"]);
         self.git(&self.repo, &["rev-parse", "HEAD"])
@@ -3179,7 +3179,7 @@ fn improvements_are_stored_and_tell_nobody() {
 // `sh` handler: what the other process did meanwhile, it does when the Gate runs.
 
 /// The Plan in `phase`, as the old full fixture left it: where the PR is open, its Lead Branch is pushed (`-u`).
-fn rebase_fx(phase: &str) -> Poll {
+pub(super) fn rebase_fx(phase: &str) -> Poll {
     let fx = poll_fx(phase);
     if phase == "deploy" {
         fx.git(&fx.lead, &["push", "-q", "-u", "origin", &fx.branch]);
@@ -3189,7 +3189,7 @@ fn rebase_fx(phase: &str) -> Poll {
 
 impl Poll {
     /// The Gate's `pre-merge = "git rev-parse HEAD"`: the HEAD of the directory the hook runs in.
-    fn sh_prints_head(&self) {
+    pub(super) fn sh_prints_head(&self) {
         let ports = self.fakes.ports.clone();
         self.sh(move |call| {
             assert_eq!(call.args[1], "git rev-parse HEAD", "the only hook of the test");
@@ -3256,7 +3256,7 @@ fn rebase_with_the_base_unmoved_only_gates_and_pushes() {
 impl Poll {
     /// The Lead Branch commits `README.md` as `lead` and pushes; the base then commits it as `base`.
     /// Returns the Lead Branch's tip.
-    fn conflicting(&self, lead: &[&str]) -> String {
+    pub(super) fn conflicting(&self, lead: &[&str]) -> String {
         for text in lead {
             fs::write(self.lead.join("README.md"), format!("{text}\n")).unwrap();
             self.git(&self.lead, &["add", "-A"]);
@@ -3268,11 +3268,11 @@ impl Poll {
     }
 
     /// `cpd pr rebase --plan pay <flag>`.
-    fn rebase(&self, flag: &str) -> Run {
+    pub(super) fn rebase(&self, flag: &str) -> Run {
         self.cpd(&["pr", "rebase", "--plan", "pay", flag])
     }
 
-    fn rebasing(&self) -> bool {
+    pub(super) fn rebasing(&self) -> bool {
         ["rebase-merge", "rebase-apply"].iter().any(|name| {
             let path = self.git(&self.lead, &["rev-parse", "--path-format=absolute", "--git-path", name]);
             Path::new(&path).exists()
@@ -3280,7 +3280,7 @@ impl Poll {
     }
 
     /// Resolves `README.md` in the Lead worktree and stages it, as the Lead does.
-    fn resolve(&self, text: &str) {
+    pub(super) fn resolve(&self, text: &str) {
         fs::write(self.lead.join("README.md"), format!("{text}\n")).unwrap();
         self.git(&self.lead, &["add", "README.md"]);
     }
