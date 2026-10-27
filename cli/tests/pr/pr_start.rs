@@ -810,11 +810,58 @@ fn stacked_on_a1(fx: &Fx, repo: &Repo) -> String {
     head(fx, &a1, "HEAD")
 }
 
+/// `stacked_on_a1`, then `a1` is `open` (its pull request exists): `b1` may start. Returns a1's commit.
+fn stacked_on_open_a1(fx: &Fx, repo: &Repo) -> String {
+    let tip = stacked_on_a1(fx, repo);
+    fx.env.sql(&Fx::opened_sql("a1"));
+    tip
+}
+
+#[test]
+fn pr_start_refuses_a_stacked_pr_whose_base_pr_is_started_but_not_open() {
+    let fx = fx();
+    let repo = fx.repo("pay");
+    let tip = stacked_on_a1(&fx, &repo);
+    assert_eq!(fx.pr_status("a1"), "dispatch");
+
+    let error = refused(&fx.start("b1"), "pr_not_ready", 3);
+
+    assert_eq!((&error["details"]["pr"], &error["details"]["base_pr"], &error["details"]["needs"]), (&json!("b1"), &json!("pay/a1"), &json!([])));
+    assert_eq!(fx.pr_status("b1"), "waiting");
+    assert!(!fx.lead_path(&repo.path, "b1").exists());
+    assert_eq!(fx.git(&repo.path, &["branch", "--list", "cpd/pay/b1"]), "");
+    assert!(fx.events("pr-started").iter().all(|e| e["data"]["pr"] != "b1"));
+
+    fx.env.sql(&Fx::opened_sql("a1"));
+    fx.start("b1").ok();
+    assert_eq!(fx.git(&fx.lead_path(&repo.path, "b1"), &["rev-parse", "HEAD"]), tip);
+    assert_eq!(fx.pr_status("b1"), "dispatch");
+}
+
+#[test]
+fn e7_holds_a_stacked_pr_until_its_base_pr_is_open_and_then_starts_it_from_the_base_head() {
+    let fx = fx();
+    let repo = fx.repo("pay");
+    let tip = stacked_on_a1(&fx, &repo);
+    fx.engine_routes();
+
+    fx.engine_ticks(2);
+    assert_eq!(fx.pr_status("b1"), "waiting", "pay/a1 is not open");
+    assert!(fx.events("pr-started").iter().all(|e| e["data"]["pr"] != "b1"));
+
+    fx.env.sql(&Fx::opened_sql("a1"));
+    fx.engine_until(|look| look.status("b1") == "dispatch");
+
+    assert_eq!(fx.git(&fx.lead_path(&repo.path, "b1"), &["rev-parse", "HEAD"]), tip);
+    let started: Vec<Value> = fx.events("pr-started").into_iter().filter(|e| e["data"]["pr"] == "b1").collect();
+    assert_eq!((started.len(), &started[0]["data"]["by"]), (1, &json!("engine")));
+}
+
 #[test]
 fn pr_start_cuts_a_stacked_pr_from_the_base_prs_lead_branch_head() {
     let fx = fx();
     let repo = fx.repo("pay");
-    let tip = stacked_on_a1(&fx, &repo);
+    let tip = stacked_on_open_a1(&fx, &repo);
     // `main` moves on, so cutting from `origin/main` would show.
     fx.land_on_origin(&repo, "main moves on");
 
@@ -845,7 +892,7 @@ fn pr_start_cuts_a_stacked_pr_from_the_base_prs_lead_branch_head() {
 fn a_stacked_pr_starts_from_the_local_base_branch_when_the_base_prs_branch_is_not_on_origin() {
     let fx = fx();
     let repo = fx.repo("pay");
-    let tip = stacked_on_a1(&fx, &repo);
+    let tip = stacked_on_open_a1(&fx, &repo);
     // a1's push failed at its start, say: origin has no such branch.
     fx.git(&repo.path, &["push", "-q", "origin", "--delete", "cpd/pay/a1"]);
 
@@ -860,7 +907,7 @@ fn a_stacked_pr_starts_from_the_local_base_branch_when_the_base_prs_branch_is_no
 fn a_stacked_pr_starts_from_origin_when_the_base_prs_local_branch_is_gone_and_fails_when_both_are() {
     let fx = fx();
     let repo = fx.repo("pay");
-    stacked_on_a1(&fx, &repo);
+    stacked_on_open_a1(&fx, &repo);
     let a1 = fx.lead_path(&repo.path, "a1");
     let on_origin = remote_branch(&fx, &repo.path, "cpd/pay/a1").split('\t').next().unwrap().to_owned();
     fx.git(&repo.path, &["worktree", "remove", "--force", a1.to_str().unwrap()]);
@@ -901,6 +948,9 @@ fn pr_start_refuses_a_stacked_pr_whose_base_pr_has_not_started() {
     // a1 starts (a0 merged): b1 may.
     fx.merged("a0");
     fx.start("a1").ok();
+    // a1 started but is not open: b1 still waits.
+    refused(&fx.start("b1"), "pr_not_ready", 3);
+    fx.env.sql(&Fx::opened_sql("a1"));
     assert_eq!(fx.start("b1").ok()["pr"]["status"], "dispatch");
 }
 
@@ -945,7 +995,7 @@ fn e7_holds_a_pr_for_a_need_of_another_plan_until_it_is_merged() {
 }
 
 #[test]
-fn e7_starts_a_stacked_pr_in_the_tick_after_its_base_pr_started_and_not_before() {
+fn e7_starts_a_stacked_pr_once_its_base_pr_is_open_and_not_before() {
     let fx = fx();
     let repo = fx.repo("pay");
     fx.add("a0", &repo.path, &[]);
@@ -955,15 +1005,21 @@ fn e7_starts_a_stacked_pr_in_the_tick_after_its_base_pr_started_and_not_before()
     fx.add_with("b1", &repo.path, &["--base", "pay/a1", "--no-needs"]);
     fx.engine_routes();
 
-    // a1 waits for a0, and b1 for a1 to start: nothing starts.
+    // a1 waits for a0, and b1 for a1 to open: nothing starts.
     fx.engine_ticks(2);
     assert_eq!((fx.pr_status("a1"), fx.pr_status("b1")), ("waiting".to_owned(), "waiting".to_owned()));
     assert!(fx.events("pr-started").is_empty());
 
-    // a0 merges: E7 starts a1, and b1 from a1's Lead Branch.
+    // a0 merges: E7 starts a1, but b1 waits: a1 is started, not open.
     let tip = fx.land_on_origin(&repo, "what a0 merged");
     fx.env.sql(&(Fx::opened_sql("a0") + &Fx::merge_sql("a0")));
-    fx.engine_until(|look| look.status("a1") == "dispatch" && look.status("b1") == "dispatch");
+    fx.engine_until(|look| look.status("a1") == "dispatch");
+    fx.engine_ticks(2);
+    assert_eq!(fx.pr_status("b1"), "waiting");
+
+    // a1 opens: E7 starts b1 from a1's Lead Branch.
+    fx.env.sql(&Fx::opened_sql("a1"));
+    fx.engine_until(|look| look.status("b1") == "dispatch");
 
     let a1 = fx.lead_path(&repo.path, "a1");
     assert_eq!(fx.git(&a1, &["rev-parse", "HEAD"]), tip);
