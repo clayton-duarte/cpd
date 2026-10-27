@@ -190,6 +190,7 @@ error_codes! {
     OutlineIncomplete = "outline_incomplete" => Refused,
     NeedsUnknown = "needs_unknown" => Refused,
     NeedsUnavailable = "needs_unavailable" => Refused,
+    AttemptRunning = "attempt_running" => Refused,
     NeedsRequired = "needs_required" => Refused,
     JobLocked = "job_locked" => Refused,
     ResourceUndeclared = "resource_undeclared" => Refused,

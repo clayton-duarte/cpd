@@ -31,10 +31,10 @@ impl Poll {
     }
 
     /// The refused run of `pr rebase` changed nothing: the Lead Branch and the remote as they were, no `git`, `gh` or Gate call.
-    fn assert_untouched_since(&self, tip: &str, remote: Option<String>, git_calls: usize) {
+    fn assert_untouched_since(&self, tip: &str, remote: Option<String>, git_calls: usize, after: usize) {
         assert_eq!(self.lead_sha(), tip);
         assert_eq!(self.remote_branch("cpd/pay"), remote);
-        assert_eq!(self.calls("git").len(), git_calls, "checked before the fetch");
+        assert_eq!(after, git_calls, "checked before the fetch");
         assert!(self.gh_calls().is_empty());
         assert_eq!(self.gate_log(), "");
     }
@@ -50,11 +50,12 @@ fn refused(fx: &Poll, flag: Option<&str>, jobs: serde_json::Value, attempts: ser
         None => fx.pr("rebase"),
     };
 
+    let after = fx.calls("git").len();
     assert_eq!(code(&run), ("attempt_running".into(), 3));
     let error = run.error();
     assert_eq!(error["details"], json!({"pr": "repo", "jobs": jobs, "attempts": attempts}));
     assert!(error["message"].as_str().unwrap().contains("steer"), "{}", error["message"]);
-    fx.assert_untouched_since(&tip, remote, git_calls);
+    fx.assert_untouched_since(&tip, remote, git_calls, after);
 }
 
 #[test]
@@ -103,12 +104,13 @@ fn refused_continue(fx: &Poll) {
     let git_calls = fx.calls("git").len();
 
     let run = fx.rebase("--continue");
+    let after = fx.calls("git").len();
 
     assert_eq!(code(&run), ("attempt_running".into(), 3));
     assert_eq!(run.error()["details"], json!({"pr": "repo", "jobs": ["fix"], "attempts": ["fix-a1"]}));
     // The rebase still waits, resolved but not continued.
     assert!(fx.rebasing());
-    fx.assert_untouched_since(&tip, remote, git_calls);
+    fx.assert_untouched_since(&tip, remote, git_calls, after);
 }
 
 /// Regression pin, not a listed red test: `--abort` is never refused, it is how a stopped rebase is given up.
