@@ -1,6 +1,6 @@
 /**
- * Tool and command rows (docs/contract.md sections 6.1.1 and 6.9, hs-d557 items 3 and 5): every row starts
- * with one space; the head is ` ╭─` and the pill with no dot; body rows ` │ `, closing row ` ╰`; lead and
+ * Tool and command rows (docs/contract.md sections 6.1.1 and 6.9, hs-d557 items 3 and 5): no row starts with a margin
+ * space (the rail is in column 0); the head is `╭─` and the pill with no dot; body rows `│ `, closing row `╰`; lead and
  * rails are 8, the toggle is 7, pills use only 0-7. Indexed SGR only.
  */
 import assert from "node:assert/strict";
@@ -14,7 +14,7 @@ const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
 const LEFT = "\uE0B6";
 const RIGHT = "\uE0B4";
-const HEAD = " \u256D\u2500"; // " ╭─"
+const HEAD = "\u256D\u2500"; // "╭─"
 
 let sequence = 0;
 
@@ -92,12 +92,12 @@ test("head, body and closing rows of an expanded tool row share one column", asy
 	const lines = await rowLines("done", true);
 	assert.ok(lines.length >= 3, JSON.stringify(lines.map(plain)));
 	const rows = lines.map(plain);
-	assert.ok(rows.every((row) => row.startsWith(" ")), `one leading space: ${JSON.stringify(rows)}`);
+	assert.ok(rows.every((row) => !row.startsWith(" ")), `no leading space: ${JSON.stringify(rows)}`);
 	assert.ok(rows[0]!.startsWith(`${HEAD}${LEFT}`), JSON.stringify(rows[0]));
 	const close = rows[rows.length - 1]!;
-	assert.ok(close.startsWith(" \u2570"), `closing row ${JSON.stringify(close)}`);
-	for (const body of rows.slice(1, -1)) assert.ok(body.startsWith(" \u2502 "), `body row ${JSON.stringify(body)}`);
-	// The glyph of every row sits in column 1.
+	assert.ok(close.startsWith("\u2570"), `closing row ${JSON.stringify(close)}`);
+	for (const body of rows.slice(1, -1)) assert.ok(body.startsWith("\u2502 "), `body row ${JSON.stringify(body)}`);
+	// The glyph of every row sits in column 0.
 	assert.equal(rows[0]!.indexOf("\u256D"), close.indexOf("\u2570"));
 });
 
@@ -108,7 +108,7 @@ test("a grouped command row has the same head and no dot", async () => {
 	assert.match(head, /bash.*Run date \+ \d+ more steps/u);
 	assert.ok(!/\u2981/u.test(lines.join("")), "no dot glyph U+2981");
 	const close = plain(lines[lines.length - 1]!);
-	assert.ok(close.startsWith(" \u2570"), `closing row ${JSON.stringify(close)}`);
+	assert.ok(close.startsWith("\u2570"), `closing row ${JSON.stringify(close)}`);
 	assert.equal(head.indexOf("\u256D"), close.indexOf("\u2570"), "head and closing row share a column");
 });
 
@@ -116,11 +116,11 @@ test("lead and rails are 8 and the toggle is 7 on every tool row", async () => {
 	for (const expanded of [false, true]) {
 		const lines = await rowLines("done", expanded);
 		const head = lines[0]!;
-		assert.ok(/\x1b\[90m ?\u256D\u2500/u.test(head), `lead " ╭─" in 8: ${JSON.stringify(head)}`);
+		assert.ok(/\x1b\[90m\u256D\u2500/u.test(head), `lead "╭─" in 8: ${JSON.stringify(head)}`);
 		for (const line of lines.slice(1)) {
 			const glyph = plain(line).trimStart()[0];
 			if (glyph === "\u2502" || glyph === "\u2570") {
-				assert.ok(line.includes(`\x1b[90m${glyph}`) || line.includes(`\x1b[90m ${glyph}`), `${glyph} in 8: ${JSON.stringify(line)}`);
+				assert.ok(line.includes(`\x1b[90m${glyph}`), `${glyph} in 8: ${JSON.stringify(line)}`);
 			}
 		}
 		const close = lines.find((line) => /[\u{F0B26}\u{F0B2C}]/u.test(line))!;
