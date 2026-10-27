@@ -16,7 +16,7 @@ use super::lock::WatchLock;
 use super::log::Log;
 use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, archive, archive_leads, distill, escalations, host_alert, inbox, liveness, models, open, pr, restart, schedule, sleep, team, titles, wake, workers};
+use super::{SOURCE, archive, archive_leads, distill, escalations, host_alert, inbox, janitor, liveness, models, open, pr, restart, schedule, sleep, team, titles, wake, workers};
 use cpd_core::clock::{self, Clock};
 use cpd_core::config::{Catalog, Config, load_catalog_with};
 use cpd_core::policy::model::{Models, models_of_attempt, models_of_job};
@@ -167,10 +167,10 @@ impl Engine {
         Ok(catalog)
     }
 
-    /// One tick: the tmux restart's drain, the `@cpd_workers` step, the `@cpd_host_alert` step, then E1–E5, E7–E11, E12–E15 (§3.7; E6 is removed), each reporting its own failures.
+    /// One tick: the tmux restart's drain, the `@cpd_workers` step, the `@cpd_host_alert` step, then E1–E5, E7–E11, E12–E16 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalogs.clear();
-        let steps: [fn(&mut Engine); 18] = [
+        let steps: [fn(&mut Engine); 19] = [
             restart::drain,
             workers::run,
             host_alert::run,
@@ -189,6 +189,7 @@ impl Engine {
             archive::run,
             sleep::run,
             archive_leads::run,
+            janitor::run,
         ];
         for step in steps {
             if stopping() {

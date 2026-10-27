@@ -183,6 +183,8 @@ pub struct Watch {
     pub team_review_seconds: u32,
     /// E15 reads the model lists again this long after the newest `polled_at` of `run/models-<provider>.json` (§3.7, §8.2).
     pub models_discovery_seconds: u32,
+    /// E16 starts a `cpd janitor` pass this often (§3.7, §8.2). STUB: wrong default, no validation.
+    pub janitor_minutes: u32,
     /// The same `error` Event (step and code) is appended at most once per this (§3.7).
     pub error_repeat_seconds: u32,
     /// E5 raises an `error` once the same `gh` call of the poll has failed with an HTTP 5xx or a timeout this long (§3.7, §8.2).
@@ -328,6 +330,7 @@ impl Config {
             pr_poll_seconds: positive(&mut r, "watch.pr_poll_seconds", 5)?,
             team_review_seconds: positive(&mut r, "watch.team_review_seconds", 1800)?,
             models_discovery_seconds: positive(&mut r, "watch.models_discovery_seconds", 604_800)?,
+            janitor_minutes: r.get("watch.janitor_minutes", 1, |v| int(v, 0, u32::MAX))?,
             error_repeat_seconds: positive(&mut r, "watch.error_repeat_seconds", 600)?,
             pr_poll_transient_minutes: positive(&mut r, "watch.pr_poll_transient_minutes", 10)?,
         };

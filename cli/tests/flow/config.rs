@@ -74,7 +74,7 @@ fn config_defaults_context_distill_tier_to_gx() {
                 "sleep_seconds": 3600,
                 "archive_sleep_seconds": 86400
             },
-            "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "team_review_seconds": 1800, "models_discovery_seconds": 604800, "error_repeat_seconds": 600, "pr_poll_transient_minutes": 10},
+            "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "team_review_seconds": 1800, "models_discovery_seconds": 604800, "janitor_minutes": 60, "error_repeat_seconds": 600, "pr_poll_transient_minutes": 10},
             "inbox": {
                 "stuck_job_minutes": 10,
                 "team_channel": "",
@@ -240,6 +240,7 @@ tick_seconds = 1
 pr_poll_seconds = 1
 team_review_seconds = 1
 models_discovery_seconds = 1
+janitor_minutes = 1
 pr_poll_transient_minutes = 1
 error_repeat_seconds = 1
 [inbox]
@@ -1169,4 +1170,26 @@ fn config_migrate_on_a_missing_file_is_config_missing() {
     let err = run.error();
     assert_eq!(err["code"], "config_missing", "{err}");
     assert_eq!(err["details"]["path"], path.to_str().unwrap(), "{err}");
+}
+
+/// Contract §8.2: `watch.janitor_minutes` is 60 unless the file says otherwise.
+#[test]
+fn watch_janitor_minutes_defaults_to_60() {
+    let fx = Fx::new();
+    let out = config_with(&fx, MINIMAL).ok();
+    assert_eq!(out["config"]["watch"]["janitor_minutes"], 60);
+    assert_eq!(out["sources"]["watch.janitor_minutes"], "default");
+}
+
+/// Contract §8.2: `watch.janitor_minutes` is at least 1, else `config_invalid` with `details.key`.
+#[test]
+fn watch_janitor_minutes_below_1_is_config_invalid() {
+    let fx = Fx::new();
+    for value in ["0", "-1"] {
+        let run = config_with(&fx, &format!("{MINIMAL}[watch]\njanitor_minutes = {value}\n"));
+        let err = run.error();
+        assert_eq!(run.exit, 1, "{value}");
+        assert_eq!(err["code"], "config_invalid", "{value}: {err}");
+        assert_eq!(err["details"]["key"], "watch.janitor_minutes", "{value}: {err}");
+    }
 }

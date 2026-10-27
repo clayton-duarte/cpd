@@ -27,6 +27,7 @@ mod ensure;
 mod escalations;
 pub mod host_alert;
 mod inbox;
+mod janitor;
 mod liveness;
 mod lock;
 mod log;
@@ -45,6 +46,8 @@ mod workers;
 mod local_time_tests;
 #[cfg(test)]
 mod incident_tests;
+#[cfg(test)]
+mod janitor_tests;
 #[cfg(test)]
 mod inbox_tests;
 #[cfg(test)]
