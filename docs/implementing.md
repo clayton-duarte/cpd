@@ -578,6 +578,15 @@ The `dev` profile builds with `debug = 0` (no debuginfo), and `test` inherits it
 - **Not measured**: level 2; the full suite (the Gate's run is the number for it); sccache on (it saves CPU in the dependency phase at every level, `docs/research/build-cycle.md`). One run of `cpd::engine` + `cpd::flow` at level 1 failed one test at load 34-50 (the test's name was not kept); two reruns at load 40-42 passed (unverified: a load flake).
 - **Another level for one session**, no edit: `--config 'profile.dev.package."*".opt-level=3'` (what the measurement used), with a `CARGO_TARGET_DIR` of its own, since a different setting rebuilds the dependencies.
 
+## Build jobs
+
+- **Set**: `.cargo/config.toml`, `[build] jobs = 4`. Deviation from the default (one job per logical CPU): concurrent full builds from Gates and Workers saturated the machine (load 30.8 on 14 cores). A plain number, not a relative `-N`, so it is the same on every machine.
+- **Lone Gate**: about 5 % slower (282 s against 267 s).
+- **3 Gates at once**: each Gate's wall about 590 s down to about 436 s.
+- **Peak 1-minute load** with 3 Gates: 151 down to 51. Findings: `docs/research/build-cap.md`.
+- **Not touched**: nextest `test-threads = 4` in `.config/nextest.toml`, test slots, sccache.
+- **Another value for one run**, no edit: `CARGO_BUILD_JOBS=<n>` or `cargo build -j <n>`; both win over the file.
+
 ## The version string
 
 `cpd --version`'s `version` is `<semantic version>-<commit>` (commands.md §1.2), where the semantic version `0.<protocol>.<migrations>` is derived from `PROTOCOL` in `core/src/events/kind.rs` and the count of `.sql` files in `core/src/store/migrations/` (docs/versioning.md). The Cargo.toml version is derived and checked: a test fails when it differs (contract §4.5; `scripts/sync-version.sh`, a thin `exec cpd version sync [--print]`, rewrites it from kind.rs and the directory; commands.md §26.2).
