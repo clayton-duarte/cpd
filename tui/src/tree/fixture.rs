@@ -67,6 +67,7 @@ pub fn plan(id: &str, context: &str, phase: Phase, counts: [usize; 6], mut lead:
             all_merged_at: None,
             done_at: None,
             archived_at: None,
+            fixing: false,
         },
         sessions,
     }

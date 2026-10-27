@@ -164,7 +164,7 @@ fn node(key: &str, status: JobStatus, tier: Option<&str>, needs: &[&str]) -> Job
 }
 
 fn chart_of(nodes: &[JobNode]) -> Chart {
-    flow::layout(&flow::flow_jobs(nodes, false), 0)
+    flow::layout(&flow::flow_jobs(nodes, &[]), 0)
 }
 
 /// A pill as drawn: caps, icon, key, `pad` blanks, the bar and the tier.
@@ -298,7 +298,7 @@ fn every_job_line_of_a_sweep_of_small_plans_touches_what_it_joins() {
                         node(keys[k], status, Some("S1"), &n)
                     })
                     .collect();
-                let flow = flow::flow_jobs(&nodes, false);
+                let flow = flow::flow_jobs(&nodes, &[]);
                 let c = flow::layout(&flow, 0);
                 layouts += 1;
                 let case = format!("keys {keys:?}, needs {needs:06b}, cancelled {cancelled:04b}");

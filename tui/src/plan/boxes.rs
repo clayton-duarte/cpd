@@ -196,7 +196,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
     LAYOUTS.with(|n| n.set(n.get() + 1));
     let charts: Vec<Chart> = prs
         .iter()
-        .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key), needs_user.lead_working), frame))
+        .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key), &needs_user.worked_on), frame))
         .collect();
     // the tree's rule: the Plan has a failed Job
     let plan_failed = jobs.iter().any(|j| j.status == JobStatus::Failed);
@@ -505,7 +505,7 @@ mod tests {
     fn one_pr_is_one_box_and_its_chart_is_the_single_chart_inside() {
         let jobs = [job("api", "a", &[]), job("api", "b", &[]), job("api", "c", &["a", "b"])];
         let c = layout(&[pr("api", &[])], &jobs, &NeedsUser::default(), 0).chart;
-        let single = flow::layout(&flow::flow_jobs(&jobs, false), 0);
+        let single = flow::layout(&flow::flow_jobs(&jobs, &[]), 0);
         let rows: Vec<String> = text(&c).lines().map(str::to_owned).collect();
         assert_eq!(rows.len(), single.buf.area.height as usize + 2);
         for (y, want) in text(&single).lines().enumerate() {

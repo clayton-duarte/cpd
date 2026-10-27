@@ -77,6 +77,8 @@ mod phase_dot_tests;
 mod zone_tests;
 #[cfg(test)]
 mod phase_dot_views_tests;
+#[cfg(test)]
+mod worked_on_tests;
 pub mod trace;
 #[cfg(test)]
 mod trace_tests;

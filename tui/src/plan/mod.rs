@@ -70,10 +70,10 @@ const MARGIN: Margin = Margin { horizontal: 2, vertical: 1 };
 /// ([`spacing::MARGIN_X`]) each side and one row; Pulse and the message row keep `MARGIN`.
 pub(crate) const CHART_MARGIN: Margin = Margin::new(spacing::MARGIN_X, 1);
 
-/// Whether a spinner is on screen for `jobs` of a Plan: a running Job's pill (hs-d586: also a failed one while the Lead works,
-/// `needs_user.lead_working`).
+/// Whether a spinner is on screen for `jobs` of a Plan: a running Job's pill (hs-d586: also a failed one being worked on,
+/// `needs_user.worked_on`).
 pub(crate) fn spins(jobs: &[read::JobNode], needs_user: &read::NeedsUser) -> bool {
-    jobs.iter().any(|j| matches!(flow::Live::of(j, needs_user.lead_working), flow::Live::Running | flow::Live::FailedWorked))
+    jobs.iter().any(|j| matches!(flow::Live::of(j, needs_user.worked_on.contains(&j.key)), flow::Live::Running | flow::Live::FailedWorked))
 }
 
 /// What the pane shows when a Lead is in the chat slot.

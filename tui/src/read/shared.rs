@@ -326,6 +326,8 @@ pub struct PlanHead {
     pub done_at: Option<String>,
     /// When it was archived (contract §4.5); archived Plans are in the model.
     pub archived_at: Option<String>,
+    /// The Plan has a failed Job being worked on (pro-d88): its Lead's dot is the red loader.
+    pub fixing: bool,
 }
 
 impl PlanHead {
@@ -423,6 +425,7 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
             all_merged_at: r.get(13)?,
             done_at: r.get(14)?,
             archived_at: r.get(15)?,
+            fixing: false,
             phase,
             pr,
             id: plan,

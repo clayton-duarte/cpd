@@ -51,8 +51,13 @@ fn job(key: &str, status: JobStatus) -> JobNode {
     }
 }
 
+/// What `plan_boxes` gives a Plan whose failed Jobs `a` and `b` are being worked on (pro-d88).
 fn working() -> NeedsUser {
-    NeedsUser { lead_working: true, ..NeedsUser::default() }
+    NeedsUser { lead_working: true, worked_on: vec![key("a"), key("b")], ..NeedsUser::default() }
+}
+
+fn key(k: &str) -> JobKey {
+    JobKey::parse(k).unwrap()
 }
 
 /// The icon cell's glyph and the pill's colours, for each Job of `jobs`, at `frame`.
@@ -92,7 +97,7 @@ fn a_failed_pill_is_red_with_the_close_circle_when_its_lead_is_not_working() {
 #[test]
 fn a_failed_pill_turns_through_the_28_moon_alt_phases_while_its_lead_works() {
     let jobs = [job("a", JobStatus::Failed)];
-    let stuck = NeedsUser { stuck_jobs: vec![jobs[0].key.clone()], lead_working: true, ..NeedsUser::default() };
+    let stuck = NeedsUser { stuck_jobs: vec![jobs[0].key.clone()], lead_working: true, worked_on: vec![key("a")], ..NeedsUser::default() };
     for needs in [working(), stuck] {
         for frame in 0..30 {
             assert_eq!(pills(&jobs, &needs, frame), [(MOONS[frame % 28].to_owned(), red_pill())], "frame {frame}");
@@ -118,6 +123,52 @@ fn the_plan_view_redraws_every_frame_for_a_failed_pill_while_the_lead_works() {
     assert!(!crate::plan::spins(&failed, &NeedsUser::default()), "its Lead is not working: static");
     let cancelled = [job("a", JobStatus::Cancelled)];
     assert!(!crate::plan::spins(&cancelled, &working()), "a cancelled pill never turns");
+}
+
+#[test]
+fn a_failed_pill_turns_by_its_own_job_not_by_its_plans() {
+    let jobs = [job("a", JobStatus::Failed), job("b", JobStatus::Failed)];
+    let needs = NeedsUser { worked_on: vec![key("a")], ..NeedsUser::default() };
+    for frame in 0..30 {
+        let got = pills(&jobs, &needs, frame);
+        assert_eq!(got[0], (MOONS[frame % 28].to_owned(), red_pill()), "a turns, frame {frame}");
+        assert_eq!(got[1], (CLOSE_CIRCLE.to_owned(), red_pill()), "b stays still, red, frame {frame}");
+    }
+}
+
+#[test]
+fn a_failed_pill_stays_still_when_nothing_works_on_it() {
+    let jobs = [job("a", JobStatus::Failed)];
+    let needs = NeedsUser { lead_working: true, ..NeedsUser::default() };
+    for frame in 0..8 {
+        assert_eq!(pills(&jobs, &needs, frame), [(CLOSE_CIRCLE.to_owned(), red_pill())], "frame {frame}");
+    }
+}
+
+#[test]
+fn the_plan_view_redraws_every_frame_for_a_failed_pill_being_worked_on() {
+    let failed = [job("a", JobStatus::Failed)];
+    let worked = NeedsUser { worked_on: vec![key("a")], ..NeedsUser::default() };
+    assert!(crate::plan::spins(&failed, &worked));
+    let idle_lead_working = NeedsUser { lead_working: true, ..NeedsUser::default() };
+    assert!(!crate::plan::spins(&failed, &idle_lead_working), "an empty worked_on is static even with the Lead working");
+    let cancelled = [job("a", JobStatus::Cancelled)];
+    assert!(!crate::plan::spins(&cancelled, &worked), "a cancelled pill never turns");
+}
+
+#[test]
+fn the_legend_names_the_failed_loader_a_failed_job_being_worked_on() {
+    let sections = legend::sections();
+    let texts = |s: &legend::Section| -> Vec<String> {
+        s.rows.iter().flatten().map(|l| l.spans.iter().map(|sp| sp.content.to_string()).collect::<String>()).collect()
+    };
+    let jobs = sections.iter().find(|s| s.title.contains("Job")).expect("a Jobs section");
+    let dots = sections.iter().find(|s| s.title == "Session Dots").expect("the Session Dots section");
+    let (jobs, dots) = (texts(jobs), texts(dots));
+    assert!(jobs.iter().any(|t| t == "red loader: a failed Job being worked on"), "Jobs rows: {jobs:?}");
+    assert!(!jobs.iter().any(|t| t == "red loader: a failed Job, its Lead working"), "the old Jobs text is gone");
+    assert!(dots.iter().any(|t| t == "a Plan's failed Job is being worked on (one frame every 50 ms)"), "Dots rows: {dots:?}");
+    assert!(!dots.iter().any(|t| t.starts_with("the Lead is working on a Plan with a failed Job")), "the old Dots text is gone");
 }
 
 #[test]

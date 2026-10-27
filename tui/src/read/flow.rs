@@ -68,6 +68,8 @@ pub struct NeedsUser {
     pub lead_working: bool,
     /// The phase of the Plan its Lead works in (`None`: no Plan, or not a Lead). Read from the Plan by dot-impl-views.
     pub lead_phase: Option<Phase>,
+    /// The Plan's failed Jobs being worked on (pro-d88), sorted: their pills turn.
+    pub worked_on: Vec<JobKey>,
 }
 
 impl NeedsUser {
@@ -82,6 +84,7 @@ impl NeedsUser {
             lead_dialog: visible.iter().any(|i| i.kind == Kind::Dialog && i.session.as_ref() == Some(lead)),
             lead_working,
             lead_phase,
+            worked_on: Vec::new(),
         }
     }
 }
