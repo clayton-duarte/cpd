@@ -1464,9 +1464,17 @@ fn the_flow_gives_a_stacked_pr_its_base_pr_as_a_need_and_as_its_blocker_until_it
     };
     let (needs, waiting_on) = stk(&mut store);
     assert_eq!(needs, ["mid", "zeta"], "the base PR is a need, sorted with the stored ones");
-    assert_eq!(waiting_on, ["ship/zeta"], "the base PR has started and not opened: it blocks");
-    sql(&mut store, "UPDATE prs SET status = 'waiting', started_at = NULL, lead_worktree = NULL WHERE plan = 'ship' AND key = 'zeta'");
-    assert_eq!(stk(&mut store).1, ["ship/zeta"], "a base PR that is waiting blocks");
+    assert_eq!(waiting_on, ["zeta"], "the base PR has started and not opened: it blocks");
+    // a base PR that is waiting blocks: `stk2` is stacked on `wb`, which has not started
+    sql(
+        &mut store,
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         VALUES ('ship', 'wb', '/r/wb', 'main', 'waiting', 'cpd/ship/wb', cpd_txn(), '2026-01-02T00:00:00.000Z');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         VALUES ('ship', 'stk2', '/r/wb', 'cpd/ship/wb', 'waiting', 'cpd/ship/stk2', cpd_txn(), '2026-01-02T00:00:00.000Z');",
+    );
+    let node = read::plan_boxes(&mut store, &plan("ship")).unwrap().prs.into_iter().find(|p| p.key.as_str() == "stk2").unwrap();
+    assert_eq!(node.waiting_on, ["wb"], "a base PR that is waiting blocks");
     sql(&mut store, "UPDATE prs SET status = 'open', pr_number = 92, pull_request = (SELECT id FROM pull_requests WHERE number = 92), pr_url = 'https://github.com/acme/zeta/pull/92', pr_opened_at = '2026-01-02T00:00:00.000Z', started_at = '2026-01-02T00:00:00.000Z', lead_worktree = '/wt/zeta' WHERE plan = 'ship' AND key = 'zeta'");
     let (needs, waiting_on) = stk(&mut store);
     assert_eq!(needs, ["mid", "zeta"], "an open base PR is still listed");
