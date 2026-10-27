@@ -167,7 +167,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `needs_required` | 3 | `pr add` in phase `dispatch` found neither `--needs` nor `--no-needs` for a PR that is not stacked (pro-d46); a PR added after the lock with no needs is started at once and cannot be linked later; for a stacked PR, the base PR is its link; `details` `{plan, pr, phase}` |
 | `adopt_not_open` | 3 | `pr add --adopt` (§9.4): the pull request's `state` is not `OPEN`; `details` is `{number, url, state}` |
 | `adopt_fork` | 3 | `pr add --adopt`: the pull request is from a fork (`isCrossRepository`); cpd cannot push to a fork; `details` is `{number, url}` |
-| `adopt_cpd_branch` | 3 | `pr add --adopt`: the head branch starts with `cpd/`, so it is a cpd pull request; `details` is `{number, head_ref}` |
+| `adopt_cpd_branch` | 3 | `pr add --adopt`: the head branch equals the stored `lead_branch` of any PR of that repo; `details` is `{number, head_ref}` |
 | `adopt_taken` | 3 | `pr add --adopt`: a PR of any Plan with the same repo and head branch is `waiting`, `dispatch` or `open`; `details` is `{head_ref, plan, pr}` |
 | `adopt_foreign` | 3 | `pr add --adopt`: the pull request's author is not the User and `--confirm-author` is missing or differs (case-insensitively); the message tells the Lead to ask the User first; `details` is `{number, url, author, user, confirm: "--confirm-author <author>"}` |
 | `pr_adopted` | 3 | `pr edit --repo` or `--base` on an adopted PR (§9.5): the repo and the base come from the pull request; `details` is `{pr, flag}` |
@@ -543,7 +543,7 @@ Output: `plans`, every Plan of the Context that is not `done` and not archived, 
 {"ok": true, "context": "building-cpd",
  "plans": [{"id": "pay-4521", "title": "Retry failed payments", "phase": "dispatch", "lead_session": "596d007f-…",
             "prs": [{"key": "api", "repo": "/home/clayton/projects/api", "base": "main", "status": "dispatch",
-                     "lead_branch": "cpd/pay-4521/api", "pull_request": {"number": 212, "url": "https://github.com/acme/api/pull/212", "state": "OPEN"},
+                     "lead_branch": "pay-4521/api", "pull_request": {"number": 212, "url": "https://github.com/acme/api/pull/212", "state": "OPEN"},
                      "jobs": [{"key": "retry-core", "status": "merged", "title": "Retry policy", "touches": ["src/retry.rs"]},
                               {"key": "retry-cli", "status": "waiting", "title": "Retry flag", "touches": ["src/cli.rs", "docs/commands.md"], "waiting_on": ["retry-core"]}]},
                     {"key": "old", "repo": "/home/clayton/projects/api", "base": "main", "status": "cancelled", "pull_request": null,
@@ -667,7 +667,7 @@ Plans already deleted are not checked. Effects, with `--yes` only (**without it,
    Every `DELETE` writes a `history` row with the whole old row (§4.4); the tombstones are `update` rows. They stay, and the tamper check stays clean (contract §2.2). Last, in the same transaction, **one `context-deleted` Event** is appended, with the counts; it is never deleted by this delete.
 2. **Session files** (after commit): every Session's file, the Leads' included; files that do not exist are skipped.
 3. **Run files** (after commit): `$CPD_HOME/run/<plan>/` of each Plan and `$CPD_HOME/run/context-digests/<context>/`, with the summaries, renders, reviews, messages, specs, logs and distill artifacts under them.
-4. **Worktrees and local branches** (after commit): `rm -rf` every Attempt worktree and PR Lead worktree, each with its `target/` (this, with the run files, is where the disk comes from: the database file does not shrink); then `git branch -D cpd/<plan>/<key>` and `git branch -D cpd/<plan>--<attempt>` from their repos (not on the remote), then the directories of step 3. The paths come from the live rows when the transaction commits, and on a rerun from their `before` copies in `history`.
+4. **Worktrees and local branches** (after commit): `rm -rf` every Attempt worktree and PR Lead worktree, each with its `target/` (this, with the run files, is where the disk comes from: the database file does not shrink); then the stored `lead_branch` of each PR and `cpd/<plan>--<attempt>` from their repos (not on the remote), then the directories of step 3. The paths come from the live rows when the transaction commits, and on a rerun from their `before` copies in `history`.
 
 **Rerun.** The rows go in one transaction and steps 2–4 after it, so a crash leaves a tombstoned Context with files on disk. A rerun with `--yes` on a deleted Context writes **nothing** to the store (no row, no Event), finishes whatever file step is left (a missing file, directory or branch is not an error) and returns `"already": true`. A preview of a deleted Context returns `"already": true` and what is left on disk, not the counts of the first preview, which only the Event keeps.
 
@@ -856,10 +856,10 @@ Output: every field of the Plan (§2.2), `outline` included (hs-d502: the outlin
 ```json
 {"ok": true,
  "plan": {"id": "cpd2", "context": "building-cpd", "title": "cpd in Rust", "jira": null, "phase": "dispatch", "lead_session": "596d007f-…", "created_at": "…", "locked_at": "…", "done_at": null, "archived_at": null, "outline": null},
- "prs": [{"key": "cpd", "repo": "/home/clayton/projects/cpd", "base": "main", "base_pr": null, "needs": [], "status": "dispatch", "lead_branch": "cpd/cpd2/cpd", "lead_worktree": "/home/clayton/projects/cpd.cpd2.cpd",
+ "prs": [{"key": "cpd", "repo": "/home/clayton/projects/cpd", "base": "main", "base_pr": null, "needs": [], "status": "dispatch", "lead_branch": "cpd2/cpd", "lead_worktree": "/home/clayton/projects/cpd.cpd2.cpd",
           "pr": null, "pull_request": null, "all_merged_at": null, "start_failed_at": null,
           "created_at": "…", "started_at": "…", "merged_at": null, "jobs": ["contract-core", "contract-commands"]},
-         {"key": "web", "repo": "/home/clayton/projects/web", "base": "main", "base_pr": null, "needs": ["cpd"], "status": "waiting", "lead_branch": "cpd/cpd2/web", "lead_worktree": null,
+         {"key": "web", "repo": "/home/clayton/projects/web", "base": "main", "base_pr": null, "needs": ["cpd"], "status": "waiting", "lead_branch": "cpd2/web", "lead_worktree": null,
           "pr": null, "pull_request": null, "all_merged_at": null, "start_failed_at": null,
           "created_at": "…", "started_at": null, "merged_at": null, "jobs": ["web-client"]}],
  "jobs": [{"key": "contract-commands", "pr": "cpd", "title": "cpd 2 contract: every command", "status": "running", "tier": "S3", "appended": false, "review": false, "needs": ["contract-core"], "fingerprint": "9f…", "retry_tier": null,
@@ -1072,7 +1072,7 @@ cpd plan lock [--plan <id>]
 | at least one PR is not `cancelled`, and each such PR has at least one `draft` Job; `details.prs` lists the empty PRs (none at all: `details.next` = `cpd pr add`) | `pr_empty` | 3 |
 | the Dependency graph of the draft Jobs is acyclic, and so is the graph of the PRs' needs and base PRs (`details.cycle`, qualified references) | `dependency_cycle` | 3 |
 | for each PR with no needs and no base PR: its workflow worktree path does not exist, except a leftover of an interrupted lock (a worktree of the PR's repo on its Lead Branch), which is removed first; `details.pr` names the PR | `worktree_exists` | 3 |
-| for each PR with no needs and no base PR: its Lead Branch does not exist in its repo, except that leftover's branch, and neither does `cpd/<plan>` when the Lead Branch is `cpd/<plan>/<key>` (§2.1); `details.pr` | `branch_exists` | 3 |
+| for each PR with no needs and no base PR: its Lead Branch and its parent path do not exist in its repo, except a leftover of an interrupted start (§2.1); `details.pr` | `branch_exists` | 3 |
 | for each PR with no needs and no base PR: `origin/<lead branch>` does not exist, or it does not conflict with `origin/<base>` (`git merge-tree`, §7.2, hs-d490; `details.files` the conflicted paths); a repo with no `origin` has no remote check; `details.pr` | `branch_exists` | 3 |
 | for each PR with no needs and no base PR: `pre-start` passed in its new workflow worktree (§7.3); `details.pr`, `details.tail`, `details.log` | `setup_failed` | 1 |
 
@@ -1086,8 +1086,8 @@ Effects (§3.1, §3.8, §7.2; R34, A8): every PR's `draft` Jobs are approved at 
 
 ```json
 {"ok": true, "plan": "pay-4521", "phase": "dispatch", "jobs": ["api-schema", "worker", "ui"],
- "prs": [{"key": "api", "status": "dispatch", "needs": [], "lead_branch": "cpd/pay-4521/api", "lead_worktree": "/home/clayton/projects/pay.pay-4521.api", "base_sha": "4b825dc…", "reused": false, "pushed": true},
-         {"key": "ui", "status": "waiting", "needs": ["api"], "lead_branch": "cpd/pay-4521/ui", "lead_worktree": null, "base_sha": null, "reused": null, "pushed": null}],
+ "prs": [{"key": "api", "status": "dispatch", "needs": [], "lead_branch": "pay-4521/api", "lead_worktree": "/home/clayton/projects/pay.pay-4521.api", "base_sha": "4b825dc…", "reused": false, "pushed": true},
+         {"key": "ui", "status": "waiting", "needs": ["api"], "lead_branch": "pay-4521/ui", "lead_worktree": null, "base_sha": null, "reused": null, "pushed": null}],
  "watch": {"started": true, "pane": "%3"}}
 ```
 
@@ -1278,7 +1278,7 @@ Effects, with `--yes` only (**without it, no rows or files are written**):
    Every `DELETE` writes a `history` row with the whole old row (§4.4); the tombstone is an `update` row. They stay, and the tamper check stays clean (contract §2.2). Last, in the same transaction, **one `plan-deleted` Event** is appended, with the counts; it is never deleted by this delete. The Plan's `pull_requests` rows are no Plan's: the poll deletes them once no PR points to them (§7.6 step 5).
 2. **Session files** (after commit): every Session's file, the Lead's included; files that do not exist are skipped.
 3. **Run files** (after commit): everything under `$CPD_HOME/run/<plan>/`: summaries, renders, reviews, messages, specs, logs and distill artifacts.
-4. **Worktrees and local branches** (after commit): `rm -rf` every Attempt worktree and PR Lead worktree, each with its `target/` (this, with the run files, is where the disk comes from: the database file does not shrink); then `git branch -D cpd/<plan>/<key>` and `git branch -D cpd/<plan>--<attempt>` from their repos (not on the remote), then the directory of step 3. The paths come from the live rows when the transaction commits, and on a rerun from their `before` copies in `history`.
+4. **Worktrees and local branches** (after commit): `rm -rf` every Attempt worktree and PR Lead worktree, each with its `target/` (this, with the run files, is where the disk comes from: the database file does not shrink); then the stored `lead_branch` of each PR and `cpd/<plan>--<attempt>` from their repos (not on the remote), then the directory of step 3. The paths come from the live rows when the transaction commits, and on a rerun from their `before` copies in `history`.
 
 **Rerun.** The rows go in one transaction and steps 2–4 after it, so a crash leaves a tombstoned Plan with files on disk. A rerun with `--yes` on a deleted Plan writes **nothing** to the store (no row, no Event), finishes whatever file step is left (a missing file, directory or branch is not an error) and returns `"already": true`. A preview of a deleted Plan returns `"already": true` and what is left on disk, not the counts of the first preview, which only the Event keeps.
 
@@ -1931,8 +1931,7 @@ Effects: no lock; guard U and the lease as `pr rebase` (the snapshot `S` is the 
 cpd pr add <key> --repo <path> --title <text> [--adopt <number> [--confirm-author <login>]] [--shape <tdd|docs|config>] [--base <branch> | --base <plan>/<key>] [--needs <r1,r2> | --no-needs] [--plan <id>]
 ```
 
-Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `deploy` and `done` it is **appended**, like `job add`, and engine E7 starts it once its needs are `merged` (at once when it has none—stated with `--no-needs`—unless it is appended after the lock, when one flag is required, pro-d46). In `deploy` and `done` it also **moves the Plan back to `dispatch`** (hs-d87: a merged PR can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review of the PR itself, D4; the Jobs added to it as drafts are reviewed, §4.6). A follow-up PR is registered at once, even when it cannot run yet (hs-d239, hs-d241): `pr add <key> --repo … --needs …`, then one stub draft per planned Job (`job add --draft --title …`, §5.1). When the Plan has a `merged` PR on the legacy Lead Branch `cpd/<plan>`, it first **moves that branch** to `cpd/<plan>/<that PR's key>` (below).
-Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `deploy` and `done` it is **appended**, like `job add`, and engine E7 starts it once its needs are `merged` (at once when it has none, §3.7). In `deploy` and `done` it also **moves the Plan back to `dispatch`** (hs-d87: a merged PR can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review of the PR itself, D4; the Jobs added to it as drafts are reviewed, §4.6). A follow-up PR is registered at once, even when it cannot run yet (hs-d239, hs-d241): `pr add <key> --repo … --needs …`, then one stub draft per planned Job (`job add --draft --title …`, §5.1). With `--adopt` it adopts an existing pull request whose head branch is not `cpd/<plan>/<key>`: cpd works it like a Plan (Jobs that address review comments and failing CI checks) and pushes to the pull request's own head branch, never a second pull request (pro-n8). When the Plan has a `merged` PR on the legacy Lead Branch `cpd/<plan>`, it first **moves that branch** to `cpd/<plan>/<that PR's key>` (below).
+Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `deploy` and `done` it is **appended**, like `job add`, and engine E7 starts it once its needs are `merged` (at once when it has none, §3.7). In `deploy` and `done` it also **moves the Plan back to `dispatch`** (hs-d87: a merged PR can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review of the PR itself, D4; the Jobs added to it as drafts are reviewed, §4.6). A follow-up PR is registered at once, even when it cannot run yet (hs-d239, hs-d241): `pr add <key> --repo … --needs …`, then one stub draft per planned Job (`job add --draft --title …`, §5.1). With `--adopt` it adopts an existing pull request whose head branch does not equal the stored `lead_branch` of any PR of that repo: cpd works it like a Plan (Jobs that address review comments and failing CI checks) and pushes to the pull request's own head branch, never a second pull request (pro-n8).
 
 | Flag | Meaning |
 |---|---|
@@ -1972,17 +1971,16 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 | in phase `dispatch`, one of `--needs` or `--no-needs` is required; an existing PR key is compared first (`already` when the flags match, else `pr_exists`), so a rerun is never refused (idempotence, pro-d46) | `needs_required` | 3 |
 | (`--adopt`) the pull request's state is `OPEN`; `details` is `{number, url, state}` | `adopt_not_open` | 3 |
 | (`--adopt`) it is not from a fork (`isCrossRepository` false); `details` is `{number, url}` | `adopt_fork` | 3 |
-| (`--adopt`) its head branch does not start with `cpd/`; `details` is `{number, head_ref}` | `adopt_cpd_branch` | 3 |
+| (`--adopt`) its head branch does not equal the stored `lead_branch` of any PR of that repo; `details` is `{number, head_ref}` | `adopt_cpd_branch` | 3 |
 | (`--adopt`) no PR of any Plan with the same repo and head_ref is `waiting`, `dispatch` or `open`; `details` is `{head_ref, plan, pr}` | `adopt_taken` | 3 |
 | (`--adopt`) its author is the User, or `--confirm-author` equals the author's login (case-insensitively); `details` is `{number, url, author, user, confirm: "--confirm-author <author>"}`; the message tells the Lead to ask the User first (pro-n4) | `adopt_foreign` | 3 |
 | no PR of the Plan has this key, `cancelled` ones included, unless its repo, base, title, shape, head_ref and needs equal the resolved flags, the default needs included (then `already`) | `pr_exists` | 3 |
 | every need is a PR of the Plan; `details.needs` lists the unknown keys | `needs_unknown` | 3 |
 | no need is `cancelled`; `details.needs` lists them | `needs_unavailable` | 3 |
 | the graph of PR needs and base PRs stays acyclic across every Plan (a PR stacked on `B` cannot be needed, directly or not, by `B`: it would wait for `B` to start while `B` waits for it to merge); `details.cycle` lists the references | `dependency_cycle` | 3 |
-| `refs/heads/cpd/<plan>/<key>` does not exist in the repo, and neither does `refs/heads/cpd/<plan>`, except the legacy branch of a PR of the Plan that is `merged` (moved below); `details.branch` names it | `branch_exists` | 3 |
+| the Lead Branch `<plan>/<key>` and its parent path `<plan>` do not exist in the repo (except a leftover of an interrupted start); `details.branch` names it | `branch_exists` | 3 |
 | (`--shape tdd`) the PR's repo policy has `[test-commands]` (contract §7.7; none when there is no repo file or the file lacks the table); the message names `--shape docs`, `--shape config` and the table | `tests_unconfigured` | 3 |
 | none of the Job keys the shape lays out exists in the Plan; `details.jobs` | `job_key_exists` | 3 |
-| the legacy move's `git push origin --delete cpd/<plan>` succeeds; `details`: `branch`, `repo`, `stderr` | `push_failed` | 1 |
 
 The five `adopt_*` rows are checked in the order above, after every other check of this command, with nothing written. `--confirm-author` without `--adopt` is `usage`.
 
@@ -1994,24 +1992,19 @@ Any phase is allowed: `grounding`, `plan`, `dispatch`, `deploy` and `done`, so n
 
 **The repo's key** (contract §8.3, hs-d288). `pr add` parses the repo's `origin` once, at the boundary: `git -C <repo> remote get-url origin`, which must be `https://github.com/<owner>/<name>` or `git@github.com:<owner>/<name>`, each with or without `.git`, `<owner>` and `<name>` valid by contract §2.1 (stored lowercased). Nothing else is accepted: no `origin`, another host, or an SSH host alias (`git@github-work:<work-owner>/x.git`) is `repo_unkeyed`; cpd never asks the network to resolve one. `<owner>` must be the Context's (`owner_mismatch`): one GitHub owner per Context, and a Plan may span several repos of it. The PR stores `<name>` only; its owner is the Context's.
 
-**The legacy move** (contract §3.8, D3, hs-d118). Every Plan locked before R34 stored `prs.lead_branch = 'cpd/<plan>'`, and git cannot hold both `cpd/<plan>` and `cpd/<plan>/<key>`. When a PR of the Plan has `lead_branch = cpd/<plan>` and status `merged`, `pr add` does, before the insert and in this order, with `<k>` that PR's key:
-1. `git -C <repo> branch -m cpd/<plan> cpd/<plan>/<k>`, when `refs/heads/cpd/<plan>` exists (a worktree that has it checked out follows the rename; unverified on git 2.43);
-2. `git -C <repo> push origin --delete cpd/<plan>`, when the repo has `origin` and `git ls-remote --heads origin cpd/<plan>` lists it; a failure is `push_failed` and the database is unchanged;
-3. in the transaction of the insert below, `UPDATE prs SET lead_branch = 'cpd/<plan>/<k>'` for that PR.
+**Legacy Lead Branches** (superseded by pro-d112, migration `lead-branch-name`). A PR created before the migration keeps its stored `lead_branch` name unchanged; nothing is renamed on disk or on the remote (A3).
 
-A legacy branch of a PR that is not `merged` still refuses `branch_exists`.
-
-Effects: **rows**, one transaction: in `deploy` or `done`, `plans` (`phase = dispatch`, `done_at = null`); `prs` (`status = waiting`, `repo`, `name`, `base` (the base PR's `lead_branch` when stacked), `title`, `shape`, `lead_branch = cpd/<plan>/<key>` (with `--adopt`, the local branch of the Lead worktree; and `head_ref`, the pull request's head branch, set here only: the trigger `prs_head_ref_fixed` refuses any later change with `pr_locked`, and the partial unique index `prs_head_ref_live` allows one live PR per repo and head), `created_txn`, `created_at`; `lead_worktree` null); one `pr_needs` row per need; the legacy PR's `lead_branch` update (step 3); and the shape's stub drafts (below). **Events**, in this order: in `deploy` or `done`, `plan-phase` `{from: "deploy"|"done", to: "dispatch"}`; then `pr-added` `{pr, repo, base, base_pr, title, needs, appended, head_ref, author}` (`head_ref` and `author` null for a cpd PR), `appended` true in phases `dispatch`, `deploy` and `done`; then one `job-added` (`kind`, `status` `draft`) per stub draft. Engine E7 then starts the PR like any appended PR (at once when it has no needs). No tmux and no other git write: the Lead Branch and Lead worktree are created when the PR starts (§3.8, §7.2).
+Effects: **rows**, one transaction: in `deploy` or `done`, `plans` (`phase = dispatch`, `done_at = null`); `prs` (`status = waiting`, `repo`, `name`, `base` (the base PR's `lead_branch` when stacked), `title`, `shape`, `lead_branch = <plan>/<key>` (with `--adopt`, the local branch of the Lead worktree; and `head_ref`, the pull request's head branch, set here only: the trigger `prs_head_ref_fixed` refuses any later change with `pr_locked`, and the partial unique index `prs_head_ref_live` allows one live PR per repo and head), `created_txn`, `created_at`; `lead_worktree` null); one `pr_needs` row per need; and the shape's stub drafts (below). **Events**, in this order: in `deploy` or `done`, `plan-phase` `{from: "deploy"|"done", to: "dispatch"}`; then `pr-added` `{pr, repo, base, base_pr, title, needs, appended, head_ref, author}` (`head_ref` and `author` null for a cpd PR), `appended` true in phases `dispatch`, `deploy` and `done`; then one `job-added` (`kind`, `status` `draft`) per stub draft. Engine E7 then starts the PR like any appended PR (at once when it has no needs). No tmux and no other git write: the Lead Branch and Lead worktree are created when the PR starts (§3.8, §7.2).
 
 ```json
-{"ok": true, "pr": {"key": "web", "repo": "/home/clayton/projects/web", "name": "web", "base": "main", "base_pr": null, "title": "Add the web client", "needs": ["api"], "status": "waiting", "lead_branch": "cpd/pay-4521/web", "head_ref": null, "appended": false, "jobs": ["web-docs", "web-tests", "web-impl"]}}
+{"ok": true, "pr": {"key": "web", "repo": "/home/clayton/projects/web", "name": "web", "base": "main", "base_pr": null, "title": "Add the web client", "needs": ["api"], "status": "waiting", "lead_branch": "pay-4521/web", "head_ref": null, "appended": false, "jobs": ["web-docs", "web-tests", "web-impl"]}}
 ```
 
-An adopted pull request (`--adopt 3748`): the same object with `"head_ref": "feat/EEC-3238/review-submit-polish"`, `"base": "main"`, `"lead_branch": "cpd/pay-4521/card"`; `plan show` (§4) carries `head_ref` in its PR objects too.
+An adopted pull request (`--adopt 3748`): the same object with `"head_ref": "feat/EEC-3238/review-submit-polish"`, `"base": "main"`, `"lead_branch": "pay-4521/card"`; `plan show` (§4) carries `head_ref` in its PR objects too.
 
-A PR stacked on a PR of its Plan, needing another (`--base pay-1/api --needs schema`): `"base": "cpd/pay-1/api", "base_pr": "pay-1/api", "needs": ["schema"]`.
+A PR stacked on a PR of its Plan, needing another (`--base pay-1/api --needs schema`): `"base": "pay-1/api", "base_pr": "pay-1/api", "needs": ["schema"]`.
 
-Idempotent: yes, as stated; the same flags again, `--adopt` included, are `already` (the comparison includes head_ref); every step of the legacy move is too (A3): a rerun after a crash between the local rename and the transaction finds `cpd/<plan>/<k>` and no `cpd/<plan>`, skips what is done and completes. The comparison uses the resolved repo and base (a base PR by its Lead Branch) and needs (as references), so a rerun without `--base` matches a PR whose base was defaulted to the same branch.
+Idempotent: yes, as stated; the same flags again, `--adopt` included, are `already` (the comparison includes head_ref). The comparison uses the resolved repo and base (a base PR by its Lead Branch) and needs (as references), so a rerun without `--base` matches a PR whose base was defaulted to the same branch.
 
 ### 9.5 `pr edit`
 
@@ -2042,7 +2035,7 @@ Changes a `waiting` PR before the lock (A13), and, with `--title`, a PR's title 
 | no need is `cancelled` | `needs_unavailable` | 3 |
 | the graph of PR needs and base PRs stays acyclic across every Plan; `details.cycle` lists the references | `dependency_cycle` | 3 |
 | with `--repo`: no PR of the Plan is stacked on this PR (it has no dependents by base); `details.prs` lists them | `pr_in_use` | 3 |
-| with `--repo`: neither `refs/heads/cpd/<plan>/<key>` nor `refs/heads/cpd/<plan>` exists in the new repo | `branch_exists` | 3 |
+| with `--repo`: the PR's Lead Branch and its parent path do not exist in the new repo | `branch_exists` | 3 |
 | with `--title` and an open pull request: the `gh api -X PATCH` succeeds; `details` is `{argv, exit, stderr}` | `gh_failed` | 1 |
 
 Effects: **rows**, one transaction: the changed `prs` columns (`name` with `repo`; `base`, a base PR's Lead Branch when stacked; `title`); `pr_needs` rows deleted and inserted to match (§4.4 allows deletion only in `grounding` and `plan`). **Event** `pr-edited` `{pr, fields: [name]}`, listing only the fields whose value changed (`repo`, `base`, `needs`, `title`). The plan fingerprint changes with `repo`, `base` and `needs`, never with `title` (§2.3). With `--title` and an open pull request, the GitHub update runs before the transaction, and a failure writes nothing.
@@ -2114,7 +2107,7 @@ Effects, **`open`** (contract §3.8): **rows**, one transaction: the PR `status 
 An `open` PR given up, `phase` after the command:
 
 ```json
-{"ok": true, "pr": {"key": "api", "status": "cancelled"}, "phase": "deploy", "released": {"number": 116, "url": "https://github.com/acme/pay/pull/116", "lead_worktree": "/home/me/projects/pay.pay-4521.api", "lead_branch": "cpd/pay-4521/api"}}
+{"ok": true, "pr": {"key": "api", "status": "cancelled"}, "phase": "deploy", "released": {"number": 116, "url": "https://github.com/acme/pay/pull/116", "lead_worktree": "/home/me/projects/pay.pay-4521.api", "lead_branch": "pay-4521/api"}}
 ```
 
 Idempotent: yes, as stated.
@@ -2127,7 +2120,7 @@ cpd pr start <key> [--plan <id>]
 
 Starts a `waiting` PR whose needs are all `merged` and whose base PR, if it has one, is `open` (A9, §3.8, hs-d324): the Lead's retry after engine E7 failed to start it (the `error` Event with code `pr_start_failed`), once the cause is fixed. It does what E7 does.
 
-**An adopted PR** (`head_ref` set, §9.4; the same for E7 and `plan lock`'s start): the Lead worktree path is as always; `git fetch origin <head_ref>` runs (a failure is `pr_start_failed` with `step` `remote`) and the local branch `cpd/<plan>/<key>` is cut from `origin/<head_ref>`. There is no conflict check against the base (a conflict with the base is the `update` Job's), nothing is pushed at the start (no `cpd/...` branch ever appears on `origin`), and the User's own local branch of the head's name is never read or touched.
+**An adopted PR** (`head_ref` set, §9.4; the same for E7 and `plan lock`'s start): the Lead worktree path is as always; `git fetch origin <head_ref>` runs (a failure is `pr_start_failed` with `step` `remote`) and the local branch `<plan>/<key>` is cut from `origin/<head_ref>`. There is no conflict check against the base (a conflict with the base is the `update` Job's), nothing is pushed at the start, and the User's own local branch of the head's name is never read or touched.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -2135,7 +2128,7 @@ Starts a `waiting` PR whose needs are all `merged` and whose base PR, if it has 
 | the PR is `waiting` (`dispatch`, `open` or `merged`: `already`; `cancelled`) | `illegal_transition` | 3 |
 | every need is `merged` (`details.needs` lists those that are not, as keys), and the base PR, if the PR is stacked, is `open` (`details.base_pr` is its reference when it has not opened); a `merged` base PR is not a refusal: the PR is unstacked first (below) | `pr_not_ready` | 3 |
 | its workflow worktree path does not exist, except a leftover of an interrupted start (a worktree of the PR's repo on its Lead Branch), which is removed first | `worktree_exists` | 3 |
-| its Lead Branch does not exist in its repo, except that leftover's branch, and neither does `cpd/<plan>` when the Lead Branch is `cpd/<plan>/<key>` (§2.1) | `branch_exists` | 3 |
+| its Lead Branch and its parent path do not exist in its repo, except a leftover of an interrupted start (§2.1) | `branch_exists` | 3 |
 | `origin/<lead branch>` does not exist, or it does not conflict with `origin/<base>` (§7.2, hs-d490) | `branch_exists` | 3 |
 | the worktree, the remote check and `pre-start` succeeded; `details` is `{pr, step, tail?, log?}`, as in `pr_start_failed` | `setup_failed` | 1 |
 
@@ -2145,7 +2138,7 @@ Effects (§3.8 "The start", §7.2):
 - **Rows**, one transaction, with a compare-and-swap on `status = 'waiting'`: `status = dispatch`, `lead_worktree` (the workflow worktree), `started_at`, `start_failed_at = null`. **Event** `pr-started` `{pr, repo, base, lead_branch, lead_worktree, base_sha, reused, pushed, by: "pr start"}`. The PR's `queued` Jobs are now Ready (§3.2) and engine E3 schedules them.
 
 ```json
-{"ok": true, "pr": {"key": "ui", "status": "dispatch", "lead_branch": "cpd/pay-4521/ui", "lead_worktree": "/home/clayton/projects/pay.pay-4521.ui", "base_sha": "9c1e7a2…", "reused": false, "pushed": true}}
+{"ok": true, "pr": {"key": "ui", "status": "dispatch", "lead_branch": "pay-4521/ui", "lead_worktree": "/home/clayton/projects/pay.pay-4521.ui", "base_sha": "9c1e7a2…", "reused": false, "pushed": true}}
 ```
 
 Idempotent: yes, as stated; a PR that E7 started meanwhile returns `"already": true`.
@@ -5325,15 +5318,15 @@ keep   active       the branch is protected (also with --drop)
 keep   dirty        `git status --porcelain` is not empty (untracked files included)
 remove dropped      the Lead Branch L is one of the --drop values (merged or not)
 remove              HEAD is an ancestor of origin/main
-remove              a merged PR P has a head branch equal to L or starting with `L/`, or,
-                    when L is `cpd/<plan>/<key>` (a legacy Lead Branch renamed locally),
-                    equal to `cpd/<plan>`; HEAD is an ancestor of P's head commit, and P
-                    reached main (its base is main, or the base is the head of a merged PR
-                    that reached main, at most 5 levels)
+remove              a merged PR P has a head branch equal to L, starting with `L/`, or,
+                    for an Attempt branch of Plan `<plan>`, starting with `<plan>/` (A6);
+                    HEAD is an ancestor of P's head commit, and P reached main (its base
+                    is main, or the base is the head of a merged PR that reached main,
+                    at most 5 levels)
 keep   not merged   otherwise
 ```
 
-L is the branch, or for a branch containing `--` the part before the first `--`. A detached HEAD has no L. Removal deletes the worktree and its local branch, never a remote branch.
+L is the branch itself, except an Attempt branch `cpd/<plan>--<attempt>` (it starts with `cpd/` and its remaining text has no `/`), whose L is `cpd/<plan>` (the text before the first `--`), so a key containing `--` is never cut. A detached HEAD has no L. Removal deletes the worktree and its local branch, never a remote branch.
 
 Effects per repo: `git fetch origin`, `gh pr list --state merged --limit 500` of the repo's `origin` slug, `git worktree list --porcelain`; with `--apply`, for each removal `git worktree remove --force`, `git branch -D` (only when no other worktree has the branch) and finally `git worktree prune`.
 
@@ -5341,7 +5334,7 @@ Output: one line per worktree, `keep <path> (<branch|detached>): <reason>`, `rem
 
 Exit codes: 0 unless a command failed; a failure is printed and the run goes on, exit 1 at the end. 2: usage, or the protected set could not be read.
 
-Tests: in-process on `Fakes` (`FakeRunner` git and gh routes, a temp store), the names of the old `cli/tests/tooling/prune_script.rs` kept: `a_failed_command_is_reported_and_exits_non_zero`, `keeps_what_cpd_still_runs`, `matches_a_legacy_lead_branch_renamed_locally`, `drop_removes_clean_unmerged_worktrees_of_the_named_lead_branch`, and `a_failing_cpd_exits_2_and_removes_nothing` (now: an unreadable store). The command is listed in `cli/tests/tooling/interface.rs`.
+Tests: in-process on `Fakes` (`FakeRunner` git and gh routes, a temp store), the names of the old `cli/tests/tooling/prune_script.rs` kept: `a_failed_command_is_reported_and_exits_non_zero`, `keeps_what_cpd_still_runs`, `matches_a_legacy_lead_branch_renamed_locally`, `drop_removes_clean_unmerged_worktrees_of_the_named_lead_branch`, and `a_failing_cpd_exits_2_and_removes_nothing` (now: an unreadable store); new test names: `prune_matches_a_parallel_attempt_to_a_merged_plan_slash_key_pr` and `prune_keeps_a_key_with_a_double_dash_whole`. The command is listed in `cli/tests/tooling/interface.rs`.
 ## 23. `tag` and `version`
 
 The release plumbing of docs/versioning.md, in Rust over `Ports` (`Runner` for git, std `fs` for files). `scripts/tag-version.sh` and `scripts/sync-version.sh` are thin: each is `exec cpd tag` / `exec cpd version sync "$@"` and keeps only what must exist before cpd does. Their old exec tests are replaced by in-process tests on `Fakes` (a `FakeRunner` git route; a temp dir for the files), and `scripts/check-portable.sh` still guards the two scripts.
