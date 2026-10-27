@@ -51,7 +51,7 @@ Put these in the `context` of every Spec (they are a Worker's only rules):
 
 ## Dependencies
 
-- Add `--needs <k1,k2>` when a Job changes files another Job changes, imports what another Job produces, or tests another Job's behaviour. The exception is the PR shape's red tests: they come first, `--needs` only the docs Job, and the implementation `--needs` them (an implementation Job must need a test Job of its PR, `test_job_required`; a `--kind verify` Job must need an implementation Job of its PR, `impl_job_required`). A PR's open and update Jobs are cpd's and have no Dependencies: the open Job waits for every other Job of its PR by its own rule, so nothing needs it. A Job starts only after its Dependencies are Merged and branches from the Lead Branch that contains them.
+- Add `--needs <k1,k2>` when a Job changes files another Job changes, imports what another Job produces, or tests another Job's behaviour. The exception is the PR shape's red tests: they come first, `--needs` only the docs Job, and the implementation `--needs` them (an implementation Job must need a test Job of its PR, `test_job_required`; a `--kind verify` Job must need an implementation Job of its PR, `impl_job_required`). A feedback fix Job needs nothing: cpd chains it after the PR's open Job and every previous fix of the same round, so a failed fix must be retried or cancelled before the next is added (`needs_unavailable`). A PR's open and update Jobs are cpd's and have no Dependencies: the open Job waits for every other Job of its PR by its own rule, so nothing needs it. A Job starts only after its Dependencies are Merged and branches from the Lead Branch that contains them.
 - Jobs with disjoint `touches` and no data flow between them need no Dependency. Shared files such as lockfiles, `package.json`, config and index or route registries count as shared.
 - Dependencies cannot form a cycle (`dependency_cycle`), cannot name an unknown Job (`needs_unknown`) and cannot name a cancelled or failed Job (`needs_unavailable`).
 
@@ -67,7 +67,7 @@ Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku), `G` (gem
 
 ## A feedback fix Job
 
-On an open PR a fix is one `work` Job (`--tier S1`, no `--kind`, no `--draft`): its Spec carries the comment text, file and line, the failing log lines and the exact fix, and, when behaviour changes, an acceptance item naming the test the Worker writes first in the same Job. Its merge pushes the pull request ([Addressing](../SKILL.md#addressing)).
+On an open PR a feedback round is ONE `work` Job per round (all the round's fixes in one Spec; `--tier S1`, no `--kind`, no `--draft`, no `--needs` for the chain): cpd chains it after the PR's open Job and previous fixes. The Job's Spec carries the comment text, file and line, the failing log lines and the exact fix, and, when behaviour changes, an acceptance item naming the test the Worker writes first in the same Job. A failed fix must be retried or cancelled before the next is added (`needs_unavailable`). Its merge pushes the pull request ([Addressing](../SKILL.md#addressing)). The PR body or title is never a Job: write it with `cpd pr describe --pr <key> --file <body.md>` (Plan pr-template).
 
 ## Test Jobs
 
