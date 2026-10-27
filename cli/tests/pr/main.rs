@@ -27,5 +27,6 @@ mod pr_rebase_running;
 mod pr_reply;
 mod pr;
 mod pr_start;
+mod pr_stacked_ready;
 mod pr_view;
 mod repo_hooks;

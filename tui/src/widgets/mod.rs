@@ -33,6 +33,8 @@ mod inbox_width_tests;
 mod kinds_tests;
 #[cfg(test)]
 mod needs_tests;
+#[cfg(test)]
+mod stacked_ready_tests;
 pub(crate) mod host;
 pub(crate) mod inbox;
 pub mod legend;

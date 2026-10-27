@@ -38,6 +38,8 @@ mod pulse;
 #[cfg(test)]
 mod pulse_tests;
 mod shared;
+#[cfg(test)]
+pub(crate) mod stacked_ready_tests;
 mod tree;
 mod widgets;
 pub mod watch;

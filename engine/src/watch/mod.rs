@@ -56,6 +56,8 @@ mod janitor_tests;
 #[cfg(test)]
 mod inbox_tests;
 #[cfg(test)]
+mod stacked_ready_tests;
+#[cfg(test)]
 mod open_tests;
 #[cfg(test)]
 mod archive_leads_tests;
