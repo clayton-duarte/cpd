@@ -62,7 +62,13 @@ Rows 1-12: Attempt 1 of cap-dev0. Rows 13-18: this Job (`cap-dev-a1`), same meth
 
 Attempt `cap-rel-a1`. Build: `CPD_COMMIT=measure scripts/cargo.sh build --release --locked -p cpd`, cold, own `CARGO_TARGET_DIR`, `RUSTC_WRAPPER=` empty, `timeout 900`. Caps: `default`, 4 (CAP from cap-dev) and 2 (the next lower cap).
 
-Cells not yet measured.
+Foreign procs before is the count after the wait (up to 5 minutes); `noisy` means foreign cargo, rustc or nextest processes still ran. Peak summed CPU is `ps` %CPU of all processes, sampled every 1 s.
+
+| cap | n | per-build wall (s) | cell total (s) | peak load | peak summed CPU % | load before | load after | foreign procs before | noisy |
+|---|---|---|---|---|---|---|---|---|---|
+| default | 1 | 103.5 | 103.5 | 55.10 | 1164.8 | 42.83 | 49.64 | 8 | noisy |
+| 4 | 1 | 68.6 | 68.6 | 31.25 | 789.5 | 25.78 | 31.05 | 8 | noisy |
+| 2 | 1 | 117.4 | 117.4 | 21.23 | 962.3 | 11.79 | 16.90 | 0 | - |
 
 ## One rustc's threads
 
