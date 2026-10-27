@@ -164,6 +164,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `illegal_transition` | 3 | a transition not in §3, refused by the command or by a trigger |
 | `locked_job_tampered` | 3 | a Locked Job's fingerprint does not match (§2.3) |
 | `pr_title_required` | 3 | `pr open` found a PR with no stored title, one that existed before migration `pr-title` (contract §7.6, hs-d285); the message says to run `cpd pr edit <key> --title "<text>"` |
+| `jira_required` | 3 | `pr open`, the open Job's start (§5.5, contract §3.2) or its merge found a PR whose policy sets `pr.jira_required` and whose stored `jira` is null, the PR not adopted (`head_ref` null) (pro-d127, §9.4, §9.5); the message says to run `cpd pr edit <key> --jira <KEY>`; `details` is `{plan, pr}` |
 | `needs_required` | 3 | `pr add` in phase `dispatch` found neither `--needs` nor `--no-needs` for a PR that is not stacked (pro-d46); a PR added after the lock with no needs is started at once and cannot be linked later; for a stacked PR, the base PR is its link; `details` `{plan, pr, phase}` |
 | `adopt_not_open` | 3 | `pr add --adopt` (§9.4): the pull request's `state` is not `OPEN`; `details` is `{number, url, state}` |
 | `adopt_fork` | 3 | `pr add --adopt`: the pull request is from a fork (`isCrossRepository`); cpd cannot push to a fork; `details` is `{number, url}` |
@@ -211,7 +212,7 @@ The `$CPD_HOME` layout is §1.4. Commands in this file write files the contract'
 
 ### 1.5 Text arguments
 
-Free text (Job `--title`, `--reason`, Context record text, questions and answers) is one argument, 1 to 20 000 characters, with no NUL; else `usage`. Context and Plan titles (`--title` of `context new`, `context rename`, `plan new`, `plan rename`) are 1–200 characters with no control characters, else `usage` (exit 2). Names (`--name`, `session rename`) are 1–80 characters with no control characters, else `invalid_name` (exit 2) (cpd 1 §11 `session rename`, kept). Files given by path (`--spec`, `--brief-file`, `--feedback-file`, `--message-file`) must be readable UTF-8, else `file_unreadable` (exit 2). A PR's title (`--title` of `pr add` and `pr edit`, hs-d285) is 1–72 characters on one line, with no control character; else `usage`.
+Free text (Job `--title`, `--reason`, Context record text, questions and answers) is one argument, 1 to 20 000 characters, with no NUL; else `usage`. Context and Plan titles (`--title` of `context new`, `context rename`, `plan new`, `plan rename`) are 1–200 characters with no control characters, else `usage` (exit 2). Names (`--name`, `session rename`) are 1–80 characters with no control characters, else `invalid_name` (exit 2) (cpd 1 §11 `session rename`, kept). Files given by path (`--spec`, `--brief-file`, `--feedback-file`, `--message-file`) must be readable UTF-8, else `file_unreadable` (exit 2). A PR's title (`--title` of `pr add` and `pr edit`, hs-d285) is 1–72 characters on one line, with no control character; else `usage`. A PR's Jira ticket (`--jira` of `pr add` and `pr edit`) is a Jira key matching `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage`.
 
 ## 2. Command index
 
@@ -1467,6 +1468,7 @@ Starts one Ready Job now: the same step as engine E3 (cpd 1 §11, kept).
 |---|---|---|
 | the Job is Ready (§3.2) | `job_not_ready` | 3 |
 | an `open` Job's PR has a stored `description` and, if not adopted (`head_ref` null), is treated as not Ready: the Job is not started; the same refusal at engine E3 as for `tier_not_allowed`, one `error` Event, the Job starts at the first tick after the description is stored (§9.5a); an `update` Job and an adopted PR's open Job need none | `description_required` | 3 |
+| an `open` Job's PR's policy sets `pr.jira_required` and the PR has no stored `jira`, and, if not adopted (`head_ref` null), is treated as not Ready: the Job is not started; the same refusal at engine E3 as for `tier_not_allowed`, one `error` Event, the Job starts at the first tick after `cpd pr edit <key> --jira <KEY>` (§9.5); an `update` Job and an adopted PR's open Job need none (pro-d127) | `jira_required` | 3 |
 | its fingerprint matches | `locked_job_tampered` | 3 |
 | the driver lock is free (§3.4 step 1) | `cas_lost` | 3 |
 | a linear Attempt of the Job's PR is live (pro-d52, contract §3.7 E3 item 1) | `cas_lost` | 3 |
@@ -1587,7 +1589,7 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 | (kind `test`) the repo's `run` of the named tests exits non-zero: they fail, for a reason other than a build error | `tests_not_red` | 3 |
 | (kind `impl`) the repo's `run` of the derived tests exits zero | `tests_failed` | 3 |
 | (kinds `test`, `impl`) the commands ran (not killed, not `hook_invalid`) | `tests_error` | 1 |
-| (kind `open`) the PR has a stored title; the newest pull request of the Lead Branch is not closed without a merge (`details.number`, `details.url`) | `pr_title_required`; `pr_closed` | 3 |
+| (kind `open`) the PR has a stored title; the PR has a stored `jira` when its policy sets `pr.jira_required` (an adopted PR is exempt, §9.5); the newest pull request of the Lead Branch is not closed without a merge (`details.number`, `details.url`) | `pr_title_required`; `jira_required`; `pr_closed` | 3 |
 | (kind `update`) the PR is `open` | `illegal_transition` | 3 |
 | (kinds `open`, `update`) the PR's policy resolves (contract §8.3): its Context has an owner | `owner_unset` | 3 |
 | its owner has a policy file; its policy files are valid | `owner_unconfirmed`, `policy_invalid` | 1 |
@@ -1750,6 +1752,7 @@ cpd pr open [--pr <key>] [--plan <id>]
 | every Job of the PR but its `open` and `update` Jobs `merged` or `cancelled`, at least one `merged` | `jobs_not_done` | 3 |
 | the PR has a stored title (hs-d285): a PR that existed before migration `pr-title` has none, and there is no fallback to the Plan's title. The message says to run `cpd pr edit <key> --title "<text>"`. Checked before the Gate | `pr_title_required` | 3 |
 | the PR has a stored description (§9.5a): a PR without one is refused until the Lead runs `cpd pr describe --pr <key> --file <body.md>`. The message says the same. Checked before the Gate | `description_required` | 3 |
+| the PR's policy sets `pr.jira_required` (B4, pro-d127) and the PR has a stored `jira` (§9.4), unless the PR is adopted (`head_ref` set, exempt as for the description); the message says to run `cpd pr edit <key> --jira <KEY>`, then open it again. Checked before the Gate, after the description | `jira_required` | 3 |
 | the newest pull request of the Lead Branch is not closed without a merge (a merged one is adopted, below); `details.number`, `details.url` | `pr_closed` | 3 |
 | **stacked** (the PR's base PR, contract §2.2, is not `merged`: a merged one was unstacked first, below): the base PR's Lead Branch, `<base>`, is on the remote (`git ls-remote --exit-code --heads origin <base>`), checked before the fetch and the Gate; `details` is `{pr, base, base_pr}` (hs-d324) | `base_not_found` | 4 |
 | after `git fetch origin <base>`, G (the Lead Branch's head, read once: the commit that is gated, pushed and opened) does not conflict with `origin/<base>` (`git merge-tree --write-tree --name-only`; checked before the Gate, with `gate.merge` and `gate.pr` are `none` as with `local`; hs-d490, contract §7.6 step 1). A base that merely moved ahead is no refusal. `details` is `{pr, base, base_sha, sha, files, next}`, `sha` = G, `files` the conflicted paths, `next` = `["git -C <lead worktree> merge --no-edit origin/<base>", "cpd pr open --pr <key>"]` | `base_conflict` | 3 |
@@ -1929,7 +1932,7 @@ Effects: no lock; guard U and the lease as `pr rebase` (the snapshot `S` is the 
 ### 9.4 `pr add`
 
 ```
-cpd pr add <key> --repo <path> --title <text> [--adopt <number> [--confirm-author <login>]] [--shape <tdd|docs|config>] [--base <branch> | --base <plan>/<key>] [--needs <r1,r2> | --no-needs] [--plan <id>]
+cpd pr add <key> --repo <path> --title <text> [--jira <KEY>] [--adopt <number> [--confirm-author <login>]] [--shape <tdd|docs|config>] [--base <branch> | --base <plan>/<key>] [--needs <r1,r2> | --no-needs] [--plan <id>]
 ```
 
 Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `deploy` and `done` it is **appended**, like `job add`, and engine E7 starts it once its needs are `merged` (at once when it has none, §3.7). In `deploy` and `done` it also **moves the Plan back to `dispatch`** (hs-d87: a merged PR can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review of the PR itself, D4; the Jobs added to it as drafts are reviewed, §4.6). A follow-up PR is registered at once, even when it cannot run yet (hs-d239, hs-d241): `pr add <key> --repo … --needs …`, then one stub draft per planned Job (`job add --draft --title …`, §5.1). With `--adopt` it adopts an existing pull request whose head branch does not equal the stored `lead_branch` of any PR of that repo: cpd works it like a Plan (Jobs that address review comments and failing CI checks) and pushes to the pull request's own head branch, never a second pull request (pro-n8).
@@ -1944,6 +1947,7 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 | `--needs <r1,r2>` | PR references (contract §2.2): keys of other PRs of the Plan (`<plan>/<key>` of the Plan itself is read as the bare key; another Plan's is refused `pr_other_plan`, hs-d522), that must be `merged` before this one starts, comma-separated, no duplicates (`usage`). Default: in `grounding` and `plan` none; in `dispatch` none: one flag is required (`needs_required`, pro-d46); in `deploy` or `done` every `merged` PR of the Plan |
 | `--no-needs` | no needs, the way a PR with no needs is stated in `dispatch` when the default does not apply; exclusive with `--needs` (`usage`); in `grounding`, `plan`, `deploy` or `done` it changes the default to explicitly none |
 | `--title <text>` | required (hs-d285): the PR's own title, which names its change and becomes the pull request's title and then the squash commit's subject on `main`. 1–72 characters, one line, no control characters, else `usage` (§1.5). `pr add` is the only place a PR is created. Under `--adopt` it is a local label (it names the stub Jobs): cpd never sends it to GitHub, the pull request keeps its own title |
+| `--jira <KEY>` | optional (pro-d127, B1): the PR's own Jira ticket, a key matching `^[A-Z][A-Z0-9]+-[0-9]+$` (else `usage`, exit 2, as `context new --jira`). One ticket per PR: the Plan's `jira` never fills it. Set here or by `pr edit <key> --jira <KEY>` (§9.5); needed before the PR opens when its owner's policy sets `pr.jira_required` (§9.1, §5.5) |
 | `--adopt <number>` | adopt the existing pull request `<number>` of `--repo`'s `origin` (below). The PR's base is the pull request's `baseRefName` (it must exist as `origin/<base>`: `base_not_found`) and its head is `head_ref`, stored in `prs.head_ref` |
 | `--confirm-author <login>` | the pull request's author, when it is not the User (`adopt_foreign`); accepted and does nothing when the author is the User. Needs `--adopt` |
 | `--base <branch>` | exclusive with `--adopt` (`usage`, exit 2: the base is the pull request's). The branch the pull request targets; default the repo's `origin` HEAD branch, else `main` (cpd 1 §11 `workflow init`, kept) |
@@ -1968,14 +1972,14 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 | the base PR is in the same repo as this PR (the same realpath); `details` is `{pr, repo, base_repo}` | `base_pr_other_repo` | 3 |
 | a PR of an archived Plan is referenced only as a `merged` need; `details` is `{plan, next}`, `next` the `cpd plan unarchive` command | `archived` | 3 |
 | the base PR is not also in `--needs` (a need is merged before this PR starts, a base PR is the implied need met when it is `open`) | `usage` | 2 |
-| no PR of the Plan has this key, `cancelled` ones included, unless its repo, base, title, shape and needs equal the resolved flags, the default needs included (then `already`) | `pr_exists` | 3 |
+| no PR of the Plan has this key, `cancelled` ones included, unless its repo, base, title, shape, needs and `jira` (compared only when `--jira` is given) equal the resolved flags, the default needs included (then `already`) | `pr_exists` | 3 |
 | in phase `dispatch`, one of `--needs` or `--no-needs` is required; an existing PR key is compared first (`already` when the flags match, else `pr_exists`), so a rerun is never refused (idempotence, pro-d46) | `needs_required` | 3 |
 | (`--adopt`) the pull request's state is `OPEN`; `details` is `{number, url, state}` | `adopt_not_open` | 3 |
 | (`--adopt`) it is not from a fork (`isCrossRepository` false); `details` is `{number, url}` | `adopt_fork` | 3 |
 | (`--adopt`) its head branch does not equal the stored `lead_branch` of any PR of that repo; `details` is `{number, head_ref}` | `adopt_cpd_branch` | 3 |
 | (`--adopt`) no PR of any Plan with the same repo and head_ref is `waiting`, `dispatch` or `open`; `details` is `{head_ref, plan, pr}` | `adopt_taken` | 3 |
 | (`--adopt`) its author is the User, or `--confirm-author` equals the author's login (case-insensitively); `details` is `{number, url, author, user, confirm: "--confirm-author <author>"}`; the message tells the Lead to ask the User first (pro-n4) | `adopt_foreign` | 3 |
-| no PR of the Plan has this key, `cancelled` ones included, unless its repo, base, title, shape, head_ref and needs equal the resolved flags, the default needs included (then `already`) | `pr_exists` | 3 |
+| no PR of the Plan has this key, `cancelled` ones included, unless its repo, base, title, shape, head_ref, needs and `jira` (compared only when `--jira` is given) equal the resolved flags, the default needs included (then `already`) | `pr_exists` | 3 |
 | every need is a PR of the Plan; `details.needs` lists the unknown keys | `needs_unknown` | 3 |
 | no need is `cancelled`; `details.needs` lists them | `needs_unavailable` | 3 |
 | the graph of PR needs and base PRs stays acyclic across every Plan (a PR stacked on `B` cannot be needed, directly or not, by `B`: it would wait for `B` to start while `B` waits for it to merge); `details.cycle` lists the references | `dependency_cycle` | 3 |
@@ -1995,17 +1999,17 @@ Any phase is allowed: `grounding`, `plan`, `dispatch`, `deploy` and `done`, so n
 
 **Legacy Lead Branches** (superseded by pro-d112, migration `lead-branch-name`). A PR created before the migration keeps its stored `lead_branch` name unchanged; nothing is renamed on disk or on the remote (A3).
 
-Effects: **rows**, one transaction: in `deploy` or `done`, `plans` (`phase = dispatch`, `done_at = null`); `prs` (`status = waiting`, `repo`, `name`, `base` (the base PR's `lead_branch` when stacked), `title`, `shape`, `lead_branch = <plan>/<key>` (with `--adopt`, the local branch of the Lead worktree; and `head_ref`, the pull request's head branch, set here only: the trigger `prs_head_ref_fixed` refuses any later change with `pr_locked`, and the partial unique index `prs_head_ref_live` allows one live PR per repo and head), `created_txn`, `created_at`; `lead_worktree` null); one `pr_needs` row per need; and the shape's stub drafts (below). **Events**, in this order: in `deploy` or `done`, `plan-phase` `{from: "deploy"|"done", to: "dispatch"}`; then `pr-added` `{pr, repo, base, base_pr, title, needs, appended, head_ref, author}` (`head_ref` and `author` null for a cpd PR), `appended` true in phases `dispatch`, `deploy` and `done`; then one `job-added` (`kind`, `status` `draft`) per stub draft. Engine E7 then starts the PR like any appended PR (at once when it has no needs). No tmux and no other git write: the Lead Branch and Lead worktree are created when the PR starts (§3.8, §7.2).
+Effects: **rows**, one transaction: in `deploy` or `done`, `plans` (`phase = dispatch`, `done_at = null`); `prs` (`status = waiting`, `repo`, `name`, `base` (the base PR's `lead_branch` when stacked), `title`, `jira` (null without `--jira`), `shape`, `lead_branch = <plan>/<key>` (with `--adopt`, the local branch of the Lead worktree; and `head_ref`, the pull request's head branch, set here only: the trigger `prs_head_ref_fixed` refuses any later change with `pr_locked`, and the partial unique index `prs_head_ref_live` allows one live PR per repo and head), `created_txn`, `created_at`; `lead_worktree` null); one `pr_needs` row per need; and the shape's stub drafts (below). **Events**, in this order: in `deploy` or `done`, `plan-phase` `{from: "deploy"|"done", to: "dispatch"}`; then `pr-added` `{pr, repo, base, base_pr, title, needs, appended, head_ref, author}` (`head_ref` and `author` null for a cpd PR), `appended` true in phases `dispatch`, `deploy` and `done`; then one `job-added` (`kind`, `status` `draft`) per stub draft. Engine E7 then starts the PR like any appended PR (at once when it has no needs). No tmux and no other git write: the Lead Branch and Lead worktree are created when the PR starts (§3.8, §7.2).
 
 ```json
-{"ok": true, "pr": {"key": "web", "repo": "/home/clayton/projects/web", "name": "web", "base": "main", "base_pr": null, "title": "Add the web client", "needs": ["api"], "status": "waiting", "lead_branch": "pay-4521/web", "head_ref": null, "appended": false, "jobs": ["web-docs", "web-tests", "web-impl"]}}
+{"ok": true, "pr": {"key": "web", "repo": "/home/clayton/projects/web", "name": "web", "base": "main", "base_pr": null, "title": "Add the web client", "jira": null, "needs": ["api"], "status": "waiting", "lead_branch": "pay-4521/web", "head_ref": null, "appended": false, "jobs": ["web-docs", "web-tests", "web-impl"]}}
 ```
 
 An adopted pull request (`--adopt 3748`): the same object with `"head_ref": "feat/EEC-3238/review-submit-polish"`, `"base": "main"`, `"lead_branch": "pay-4521/card"`; `plan show` (§4) carries `head_ref` in its PR objects too.
 
 A PR stacked on a PR of its Plan, needing another (`--base pay-1/api --needs schema`): `"base": "pay-1/api", "base_pr": "pay-1/api", "needs": ["schema"]`.
 
-Idempotent: yes, as stated; the same flags again, `--adopt` included, are `already` (the comparison includes head_ref). The comparison uses the resolved repo and base (a base PR by its Lead Branch) and needs (as references), so a rerun without `--base` matches a PR whose base was defaulted to the same branch.
+Idempotent: yes, as stated; the same flags again, `--adopt` included, are `already` (the comparison includes head_ref, and `--jira` when it is given). The comparison uses the resolved repo and base (a base PR by its Lead Branch) and needs (as references), so a rerun without `--base` matches a PR whose base was defaulted to the same branch.
 
 ### 9.5 `pr edit`
 
