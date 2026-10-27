@@ -50,7 +50,7 @@ Put these in the `context` of every Spec (they are a Worker's only rules):
 
 ## Dependencies
 
-- Add `--needs <k1,k2>` when a Job changes files another Job changes, imports what another Job produces, or tests another Job's behaviour. The exception is the PR shape's red tests: they come first, `--needs` only the docs Job, and the implementation `--needs` them (an implementation Job must need a test Job of its PR, `test_job_required`). A PR's open and update Jobs are cpd's and have no Dependencies: the open Job waits for every other Job of its PR by its own rule, so nothing needs it. A Job starts only after its Dependencies are Merged and branches from the Lead Branch that contains them.
+- Add `--needs <k1,k2>` when a Job changes files another Job changes, imports what another Job produces, or tests another Job's behaviour. The exception is the PR shape's red tests: they come first, `--needs` only the docs Job, and the implementation `--needs` them (an implementation Job must need a test Job of its PR, `test_job_required`; a `--kind verify` Job must need an implementation Job of its PR, `impl_job_required`). A PR's open and update Jobs are cpd's and have no Dependencies: the open Job waits for every other Job of its PR by its own rule, so nothing needs it. A Job starts only after its Dependencies are Merged and branches from the Lead Branch that contains them.
 - Jobs with disjoint `touches` and no data flow between them need no Dependency. Shared files such as lockfiles, `package.json`, config and index or route registries count as shared.
 - Dependencies cannot form a cycle (`dependency_cycle`), cannot name an unknown Job (`needs_unknown`) and cannot name a cancelled or failed Job (`needs_unavailable`).
 
@@ -70,7 +70,7 @@ On an open PR a fix is one `work` Job (`--tier S1`, no `--kind`, no `--draft`): 
 
 ## Test Jobs
 
-A PR that changes behaviour has a test Job and an implementation Job after its docs Job ([the PR's shape](../SKILL.md#dividing)). A different Worker writes each, so the tests are not fitted to the code.
+A PR that changes behaviour has a test Job and an implementation Job after its docs Job, and, for an end-to-end or other check that changes no product behaviour, a `verify` Job after the implementation Job (plain Spec, no `tests`) ([the PR's shape](../SKILL.md#dividing)). A different Worker writes each, so the tests are not fitted to the code.
 
 - **A test Job's spec file** has two more fields, both required once the Job is not a stub, and refused for every other kind: `tests`, the named tests (one or more distinct one-line strings, the names the repo's test command takes), and `test_files`, the files that hold them (repo-relative paths or, ending in `/`, directory prefixes; no `..`, no leading `/`). Name the tests exactly: with no `list` command below, a name that matches no test can read as a red test. Its `touches` includes those files and the stubs that make the branch build.
 
