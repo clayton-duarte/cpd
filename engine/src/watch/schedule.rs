@@ -12,7 +12,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use cpd_core::clock::Clock;
-use cpd_core::driver::schedule::{Pool, Ready, schedule};
+use cpd_core::driver::schedule::{Pool, Ready, legacy_start};
 use cpd_core::driver::{self, Allocation, StartCtx};
 use cpd_core::resource;
 use cpd_core::error::{CpdError, ErrorCode};
@@ -152,9 +152,10 @@ fn pick(conn: &Connection, home: &cpd_core::home::CpdHome, concurrency: u32, rea
                 }
             }
         }
-        jobs.push(Ready { id: u32::try_from(i).expect("few Ready Jobs"), urgent: *urgent, needs });
+        let id = u32::try_from(i).expect("few Ready Jobs");
+        jobs.push(Ready { id, urgent: *urgent, skipped: None, seq: id, tenant: false, needs });
     }
-    Ok(schedule(&pools, &jobs).start.into_iter().map(|id| id as usize).collect())
+    Ok(legacy_start(&pools, &jobs).into_iter().map(|id| id as usize).collect())
 }
 
 pub(super) fn run(engine: &mut Engine) {

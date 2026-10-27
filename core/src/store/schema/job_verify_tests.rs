@@ -72,7 +72,7 @@ fn table_rows(store: &mut Store, table: &str) -> Vec<Value> {
         .unwrap()
 }
 
-/// `(name, sql)` of the triggers on `jobs`, whitespace and comments normalised.
+/// `(name, sql)` of the triggers on `jobs`, whitespace and comments normalised, without the `skipped_n` of `job-tenancy`, which sorts after this migration.
 fn jobs_triggers(store: &mut Store) -> Vec<(String, String)> {
     store
         .read(|c: &Connection| {
@@ -82,7 +82,9 @@ fn jobs_triggers(store: &mut Store) -> Vec<(String, String)> {
                 .into_iter()
                 .map(|(name, sql)| {
                     let code: Vec<&str> = sql.lines().map(|l| l.split("--").next().unwrap_or_default()).collect();
-                    (name, code.join(" ").split_whitespace().collect::<Vec<_>>().join(" ").replace(" ,", ",").replace(" )", ")"))
+                    (name, code.join(" ").split_whitespace().collect::<Vec<_>>().join(" ").replace(" ,", ",").replace(" )", ")").replace(", 'skipped_n', OLD.skipped_n", "").replace(", 'skipped_n', NEW.skipped_n", "")
+                        .replace(" UNION ALL SELECT 'skipped_n', OLD.skipped_n WHERE OLD.skipped_n IS NOT NEW.skipped_n", "")
+                        .replace(" UNION ALL SELECT 'skipped_n', NEW.skipped_n WHERE OLD.skipped_n IS NOT NEW.skipped_n", ""))
                 })
                 .collect())
         })
@@ -133,7 +135,14 @@ fn the_migration_keeps_every_job_dependency_and_attempt_row() {
     let mut store = Store::open(&home, 5000).unwrap();
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     for (table, want) in ["jobs", "dependencies", "attempts"].iter().zip(before) {
-        assert_eq!(table_rows(&mut store, table), want, "every row of {table}, column for column (`seq` kept)");
+        let mut after = table_rows(&mut store, table);
+        for row in &mut after {
+            // `skipped_n` is the column of `job-tenancy`, which sorts after this migration: null in every row.
+            if let Some(row) = row.as_object_mut().filter(|_| *table == "jobs") {
+                assert_eq!(row.remove("skipped_n"), Some(Value::Null));
+            }
+        }
+        assert_eq!(after, want, "every row of {table}, column for column (`seq` kept)");
     }
     assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
 }

@@ -1791,7 +1791,7 @@ fn converts_keeping_every_row_and_id(n: usize) {
         // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
         assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(crate::events::Kind::ALL.len()));
         assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
-        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(24)); // 17, `plannotator_reviews`, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans` and `pr_posts`
+        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(25)); // 17, `plannotator_reviews`, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts` and `job_pools`
         let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
         assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
         assert_eq!(txns_after.len(), txns_before.len() + 1);
@@ -1820,6 +1820,8 @@ fn converts_keeping_every_row_and_id(n: usize) {
         assert_eq!(rows_after.remove("plannotator_reviews"), Some(Vec::new()));
         assert_eq!(rows_after.remove("board_posts"), Some(Vec::new()));
         assert_eq!(rows_after.remove("pr_posts"), Some(Vec::new()));
+        // `job-tenancy` made `job_pools`, and it is empty.
+        assert_eq!(rows_after.remove("job_pools"), Some(Vec::new()));
         // `curation` made two tables, and they are empty.
         assert_eq!(rows_after.remove("record_retirements"), Some(Vec::new()));
         assert_eq!(rows_after.remove("record_curations"), Some(Vec::new()));
@@ -2998,7 +3000,7 @@ fn job_kinds_keeps_every_job_and_pr_as_work_and_free_and_matches_a_fresh_store()
     assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-job-kinds")));
     assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
 
-    // Every Job is `work` with the other columns null (`resources` of `job-resources` too) and every PR is `free`: the rows are as they were, plus those.
+    // Every Job is `work` with the other columns null (`resources` of `job-resources` and `skipped_n` of `job-tenancy` too) and every PR is `free`: the rows are as they were, plus those.
     let after = dump(&connection(&home.db()));
     let strip = |rows: &[String], added: usize, default: &str| -> Vec<String> {
         rows.iter()
@@ -3011,7 +3013,7 @@ fn job_kinds_keeps_every_job_and_pr_as_work_and_free_and_matches_a_fresh_store()
             })
             .collect()
     };
-    assert_eq!(strip(&after["jobs"], 5, "work"), before["jobs"]);
+    assert_eq!(strip(&after["jobs"], 6, "work"), before["jobs"]);
     // `prs` gained `shape` (`free`), then `pr-adopt` `head_ref` and `pr-description` `description`, both null.
     assert_eq!(strip(&after["prs"], 3, "free"), before["prs"]);
     assert_eq!(count(&mut store, "SELECT count(*) FROM jobs WHERE status = 'merged'"), 1);
