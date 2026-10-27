@@ -1176,11 +1176,11 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
     assert_eq!(
         out,
         json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["a", "b"],
-               "prs": [{"key": "pay", "status": "dispatch", "needs": [], "lead_branch": "cpd/pay/pay", "lead_worktree": worktree.display().to_string(),
+               "prs": [{"key": "pay", "status": "dispatch", "needs": [], "lead_branch": "pay/pay", "lead_worktree": worktree.display().to_string(),
                         "base_sha": head, "reused": false, "pushed": false}],
                "watch": {"started": true, "pane": "%9"}})
     );
-    assert_eq!(fx.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay/pay");
+    assert_eq!(fx.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "pay/pay");
     assert_eq!(inproc::watch_calls(&fx), vec![vec!["watch".to_owned(), "--ensure".to_owned()]]);
 
     let shown = inproc::show(&fx, "pay");
@@ -1233,11 +1233,11 @@ fn lock_creates_and_pushes_the_lead_branch_when_the_remote_has_none() {
     let out = fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
     assert_eq!((&out["prs"][0]["base_sha"], &out["prs"][0]["pushed"], &out["prs"][0]["reused"]), (&json!(head), &json!(true), &json!(false)));
-    assert_eq!(fx.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{head}\trefs/heads/cpd/pay/pay"));
+    assert_eq!(fx.git(&repo, &["ls-remote", "--heads", "origin", "pay/pay"]), format!("{head}\trefs/heads/pay/pay"));
     // No upstream: nothing in the shared .git/config (hs-d243 G1).
     let config = fx.git_output(&repo, &["config", "--get-regexp", r"^branch\."]);
     assert_eq!(String::from_utf8(config.stdout).unwrap(), "");
-    assert_eq!(fx.git(&origin, &["rev-parse", "cpd/pay/pay"]), head);
+    assert_eq!(fx.git(&origin, &["rev-parse", "pay/pay"]), head);
     assert!(inproc::events(&fx, "error").is_empty());
 }
 
@@ -1250,21 +1250,21 @@ fn lock_reuses_a_remote_lead_branch_that_contains_the_base() {
     // A commit only the remote has, on top of the base.
     fx.git(&repo, &["commit", "-q", "--allow-empty", "-m", "only on the remote"]);
     let remote_tip = fx.git(&repo, &["rev-parse", "HEAD"]);
-    fx.git(&repo, &["push", "-q", "origin", "HEAD:refs/heads/cpd/pay/pay"]);
+    fx.git(&repo, &["push", "-q", "origin", "HEAD:refs/heads/pay/pay"]);
     fx.git(&repo, &["reset", "-q", "--hard", "HEAD~1"]);
-    assert_eq!(fx.git(&repo, &["branch", "--list", "cpd/pay/pay"]), "");
+    assert_eq!(fx.git(&repo, &["branch", "--list", "pay/pay"]), "");
 
     let out = fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
     let worktree = repo.parent().unwrap().canonicalize().unwrap().join("pay.pay.pay");
     assert_eq!((&out["prs"][0]["base_sha"], &out["prs"][0]["reused"], &out["prs"][0]["pushed"]), (&json!(remote_tip), &json!(true), &json!(false)));
     assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD"]), remote_tip);
-    assert_eq!(fx.git(&repo, &["rev-parse", "refs/heads/cpd/pay/pay"]), remote_tip);
-    assert_eq!(fx.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{remote_tip}\trefs/heads/cpd/pay/pay"));
+    assert_eq!(fx.git(&repo, &["rev-parse", "refs/heads/pay/pay"]), remote_tip);
+    assert_eq!(fx.git(&repo, &["ls-remote", "--heads", "origin", "pay/pay"]), format!("{remote_tip}\trefs/heads/pay/pay"));
     assert!(inproc::events(&fx, "error").is_empty());
 }
 
-/// `cpd/pay/pay` is on the remote one commit past the old `main`, writing `clash.txt`; then `main` moves on, writing
+/// `pay/pay` is on the remote one commit past the old `main`, writing `clash.txt`; then `main` moves on, writing
 /// `clash.txt` differently (`conflicting`, so the branch conflicts with it) or `moved.txt` (so it only lacks it).
 /// Returns the branch's tip.
 fn remote_lead_branch_then_main_moves(fx: &Fx, repo: &Path, conflicting: bool) -> String {
@@ -1275,7 +1275,7 @@ fn remote_lead_branch_then_main_moves(fx: &Fx, repo: &Path, conflicting: bool) -
     };
     write("clash.txt", "the branch's\n", "the branch");
     let tip = fx.git(repo, &["rev-parse", "HEAD"]);
-    fx.git(repo, &["push", "-q", "origin", "HEAD:refs/heads/cpd/pay/pay"]);
+    fx.git(repo, &["push", "-q", "origin", "HEAD:refs/heads/pay/pay"]);
     fx.git(repo, &["reset", "-q", "--hard", "HEAD~1"]);
     let (path, content) = if conflicting { ("clash.txt", "main's\n") } else { ("moved.txt", "main moved\n") };
     write(path, content, "main moves on");
@@ -1294,11 +1294,11 @@ fn lock_refuses_a_remote_lead_branch_that_conflicts_with_its_base_and_reuses_one
 
     let error = refused(&fx.cpd(&["plan", "lock", "--plan", "pay"]), "branch_exists", 3);
 
-    assert_eq!((&error["details"]["branch"], &error["details"]["pr"]), (&json!("cpd/pay/pay"), &json!("pay")));
+    assert_eq!((&error["details"]["branch"], &error["details"]["pr"]), (&json!("pay/pay"), &json!("pay")));
     assert_eq!(error["details"]["files"], json!(["clash.txt"]));
-    assert_eq!(fx.git(&repo, &["branch", "--list", "cpd/pay/pay"]), "");
+    assert_eq!(fx.git(&repo, &["branch", "--list", "pay/pay"]), "");
     assert!(!repo.parent().unwrap().join("pay.pay.pay").exists());
-    assert_eq!(fx.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{remote_branch}\trefs/heads/cpd/pay/pay"));
+    assert_eq!(fx.git(&repo, &["ls-remote", "--heads", "origin", "pay/pay"]), format!("{remote_branch}\trefs/heads/pay/pay"));
     assert_eq!(inproc::show(&fx, "pay")["plan"]["phase"], "plan");
     assert!(inproc::watch_calls(&fx).is_empty());
 }
@@ -1314,7 +1314,7 @@ fn lock_reuses_a_remote_lead_branch_that_lacks_a_base_that_merely_moved_ahead() 
     let out = fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
     assert_eq!((&out["prs"][0]["reused"], &out["prs"][0]["pushed"]), (&json!(true), &json!(false)));
-    assert_eq!(fx.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{remote_branch}\trefs/heads/cpd/pay/pay"));
+    assert_eq!(fx.git(&repo, &["ls-remote", "--heads", "origin", "pay/pay"]), format!("{remote_branch}\trefs/heads/pay/pay"));
     assert_eq!(inproc::show(&fx, "pay")["plan"]["phase"], "dispatch");
 }
 
@@ -1342,7 +1342,7 @@ fn a_push_failure_at_lock_still_locks_and_appends_one_push_failed_error() {
 
     assert_eq!(out["phase"], "dispatch");
     assert_eq!(inproc::show(&fx, "pay")["plan"]["phase"], "dispatch");
-    assert_eq!(fx.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), "");
+    assert_eq!(fx.git(&repo, &["ls-remote", "--heads", "origin", "pay/pay"]), "");
     let errors = inproc::events(&fx, "error");
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!(errors[0]["data"]["code"], "push_failed");
@@ -1411,9 +1411,9 @@ fn lock_refusals_change_nothing() {
     fs::create_dir_all(&path).unwrap();
     refused(&lock(), "worktree_exists", 3);
     fs::remove_dir(&path).unwrap();
-    fx.git(&repo, &["branch", "cpd/pay/pay"]);
+    fx.git(&repo, &["branch", "pay/pay"]);
     refused(&lock(), "branch_exists", 3);
-    fx.git(&repo, &["branch", "-D", "cpd/pay/pay"]);
+    fx.git(&repo, &["branch", "-D", "pay/pay"]);
 
     // pre-start fails: the worktree and branch are removed.
     fx.env.repo_policy("acme", "pay", "[hooks]\npre-start = \"echo setting up; exit 3\"\n");
@@ -1423,7 +1423,7 @@ fn lock_refusals_change_nothing() {
     assert_eq!(error["details"]["log"], home(&fx.env).root().join("run/pay/logs/lead-pay.pre-start.log").display().to_string());
     assert_eq!((&error["details"]["pr"], &error["details"]["step"]), (&json!("pay"), &json!("pre-start")));
     assert!(!path.exists());
-    assert_eq!(fx.git(&repo, &["branch", "--list", "cpd/pay/pay"]), "");
+    assert_eq!(fx.git(&repo, &["branch", "--list", "pay/pay"]), "");
 
     assert_eq!(inproc::show(&fx, "pay")["plan"]["phase"], "plan");
     assert_eq!(inproc::show(&fx, "pay")["counts"]["draft"], 2);

@@ -26,7 +26,7 @@ pub struct World {
 
 impl World {
     pub fn lead_branch(&self) -> String {
-        format!("cpd/{}/api", self.plan)
+        format!("{}/api", self.plan)
     }
 
     pub fn attempt_branch(&self) -> String {
