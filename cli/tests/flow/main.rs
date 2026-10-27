@@ -21,6 +21,7 @@ mod context_reindex;
 mod context_search;
 mod context;
 mod driver_idle;
+mod driver_desc_gate;
 mod driver_open;
 mod driver_provider_error;
 mod driver_resources;

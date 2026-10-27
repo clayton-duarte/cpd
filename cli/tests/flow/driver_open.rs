@@ -112,7 +112,7 @@ impl Live {
         self.value(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
     }
 
-    fn phase(&self) -> String {
+    pub(super) fn phase(&self) -> String {
         self.value("SELECT phase FROM plans WHERE id = 'pay'")
     }
 
@@ -184,7 +184,7 @@ impl Live {
     }
 
     /// The fake `gh`: no pull request of the branch yet, `pr create` answers [`PR_URL`], and the lookup of the pull request answers it.
-    fn gh_creates(&self) {
+    pub(super) fn gh_creates(&self) {
         self.runner()
             .on("gh", |c| c.args[..2] == ["pr", "list"], Reply::ok("[]"))
             .on("gh", |c| c.args[..2] == ["pr", "create"], Reply::ok(PR_URL))
@@ -210,7 +210,7 @@ impl Live {
     }
 
     /// `pr` of the open PR or the PR that is `dispatch`: `(status, pr_number, pr_opened_at)`.
-    fn pr_row(&self) -> (String, Option<i64>, Option<String>) {
+    pub(super) fn pr_row(&self) -> (String, Option<i64>, Option<String>) {
         store(&self.fx.env)
             .read(|c| Ok(c.query_row("SELECT status, pr_number, pr_opened_at FROM prs WHERE plan = 'pay' AND key = 'repo'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
             .unwrap()
@@ -231,7 +231,7 @@ impl Live {
     }
 
     /// Job `key` of PR `repo` as cpd adds an `open` or `update` Job: `appended`, no Dependencies, `queued` with its fingerprint.
-    fn add_cpd_job(&self, key: &str, kind: &str) {
+    pub(super) fn add_cpd_job(&self, key: &str, kind: &str) {
         self.fixture(&format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
              VALUES ('pay', 'repo', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');"
