@@ -527,7 +527,7 @@ pub fn pr_state(state: PrState) -> Meaning {
     }
 }
 
-/// Meaning of an open pull request's `open` word: yellow only when it is `clean`, ready to merge (hs-d534), else colourless.
+/// Meaning of an open pull request's `open` word: yellow only when it is `clean`, ready to merge (hs-d534, pro-d118), else colourless.
 pub fn pr_open(clean: bool) -> Meaning {
     if clean { Meaning::Review } else { Meaning::NotStarted }
 }
