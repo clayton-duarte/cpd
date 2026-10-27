@@ -356,6 +356,16 @@ The PR's reviewers and CI, as the owner's policy says, review each PR on GitHub.
 
 When the PR is ready (CI green, review comments addressed), ask the User if they want the PR posted for external review. Post only with `cpd pr post --pr <key>` when the User says yes (the refusals tell you what is missing: no second post of the same PR, no post of a draft or a PR with pending comments). Never post with Slack tools by hand.
 
+### Posting for review
+
+For an owner whose `cpd policy show --pr <key>` has `pr.post.enabled` true:
+
+1. On `ready_to_post` ask the User with `ask_user_question` whether to post this PR for peer review to the team channel (name the PR, its title and its link). Only on a yes run `cpd pr post --pr <key>` and give the User the link it prints. On a no record it (`cpd context note`: PR <key> is not posted, the User said no) and ask again only when the User does. Never post without the yes. A refusal of `cpd pr post` names what is missing: answer the bot comments, wait for CI, run `cpd pr poll` and try again.
+
+2. A posted PR is reviewed by peers: `changes_requested` is addressed at once (one `work` Job per cohesive fix; see [Addressing](#addressing)). `comments` on a posted PR: when a person's open item does not request changes, ask the User with `ask_user_question` before any Job or reply (address it, reply only, or leave it), then act as [Review comments](#review-comments) says.
+
+3. On `approved`, try to merge: `cpd pr merge <owner>/<repo>#<n>` (from the Event's `url`). When it refuses, tell the User why in one line and stop: no retry loop.
+
 ### Addressing
 
 1. Diagnose with `cpd pr view --pr <key>`, and read a failing check's log with `gh run view <run-id> --log-failed`. Decide; do not append noise. A failing check that is a schedule block (a date or day rule such as Danger's 'NO DEPLOYS ON FRIDAYS' or the label 'No Merges on Friday', which clears by itself at a time) is not addressable: raise no fix Job, and tell the User once what it is and when it clears. Judge it from the check's log, never from its name alone (a 'Run Danger' step also fails for real reasons).
@@ -370,7 +380,7 @@ When the PR is ready (CI green, review comments addressed), ask the User if they
 
 ### Review comments
 
-`pr-feedback` with reason `comments` means the PR has open feedback items (what a person said and nobody has answered: a review thread, an issue comment, a review with a body).
+`pr-feedback` with reason `comments` means the PR has open feedback items (what a person said and nobody has answered: a review thread, an issue comment, a review with a body). For a posted PR, see [Posting for review](#posting-for-review) (handle comments on a posted PR there).
 
 1. Read them with `cpd pr view --pr <key>`: its `feedback` list holds each item's `id`, `kind`, `author`, `path`, `url` and `excerpt`.
 2. For each item, either fix it (append a `work` Job, as in [Addressing](#addressing)) or decide not to.
