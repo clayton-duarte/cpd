@@ -112,6 +112,10 @@ impl Rig {
             u.add_worktree(self.repo.id(), &lead, Head::Branch(lead_branch.clone()));
             u.add_worktree(self.repo.id(), &attempt, Head::Branch(attempt_branch.clone()));
         }
+        // `add_worktree` makes an empty directory: write the tracked file so that both worktrees are clean.
+        for dir in [&lead, &attempt] {
+            std::fs::write(dir.join("f.txt"), "base\n").unwrap();
+        }
         self.number += 1;
         let n = self.number;
         let repo = self.repo.dir().display();
