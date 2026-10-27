@@ -1724,16 +1724,16 @@ fn fixture_error(env: &TestEnv, sql: &str) -> String {
     store(env).write("fixture", |tx| exec(tx, sql)).unwrap_err().to_string()
 }
 
-// ---------- Tier rules (pro-d53, hs-d554): Workers use only H0-H4 and S0-S3 ----------
+// ---------- Tier rules (pro-d82, hs-d554): Workers use only H0-H3 and S0-S3 ----------
 
-/// The refusal of pro-d53 (hs-d554 for the cost reason): `tier_not_allowed`, exit 2, naming the rule, its reason and the allowed range.
+/// The refusal of pro-d82 (hs-d554 for the cost reason): `tier_not_allowed`, exit 2, naming the rule, its reason and the allowed range.
 fn not_allowed(run: &Run, tier: &str) {
     let e = refused(run, "tier_not_allowed", 2);
     assert_eq!(e["details"]["tier"], tier, "{run:?}");
-    assert_eq!(e["details"]["allowed"], "H0-H4, S0-S3", "{run:?}");
-    assert_eq!(e["details"]["rule"], "pro-d53", "{run:?}");
+    assert_eq!(e["details"]["allowed"], "H0-H3, S0-S3", "{run:?}");
+    assert_eq!(e["details"]["rule"], "pro-d82", "{run:?}");
     let message = e["message"].as_str().unwrap();
-    for part in ["pro-d53", "hs-d554", "cost", "H0-H4, S0-S3"] {
+    for part in ["pro-d82", "hs-d554", "cost", "H0-H3, S0-S3"] {
         assert!(message.contains(part), "`{part}` missing from: {message}");
     }
 }
@@ -1744,11 +1744,11 @@ fn add_refuses_a_tier_outside_the_worker_range_and_writes_nothing() {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
-    for tier in ["O1", "O3", "S4", "S5"] {
+    for tier in ["H4", "O1", "O3", "S4", "S5"] {
         not_allowed(&job_add(&fx, "pl", "k", tier, &[]), tier);
     }
     // A stub draft's Tier is checked too.
-    for tier in ["O1", "O3", "S4", "S5"] {
+    for tier in ["H4", "O1", "O3", "S4", "S5"] {
         not_allowed(&stub_add(&fx, "pl", "k", &["--tier", tier]), tier);
     }
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, rows));
@@ -1780,7 +1780,7 @@ fn edit_refuses_a_tier_outside_the_worker_range_and_writes_nothing() {
     let fx = Fx::new();
     drafted(&fx);
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    for tier in ["O1", "O3", "S4", "S5"] {
+    for tier in ["H4", "O1", "O3", "S4", "S5"] {
         not_allowed(&job(&fx, &["edit", "b", "--tier", tier], "pl"), tier);
         not_allowed(&job(&fx, &["edit", "b", "--tier", tier, "--title", "New"], "pl"), tier);
     }
@@ -1829,12 +1829,32 @@ fn retry_refuses_a_tier_outside_the_worker_range_checks_it_first_and_writes_noth
     engine(&fx.env, "pl", "a", "failed");
     engine(&fx.env, "pl", "c", "running");
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    for tier in ["O1", "O3", "O5", "S4", "S5"] {
+    for tier in ["H4", "O1", "O3", "O5", "S4", "S5"] {
         not_allowed(&job(&fx, &["retry", "a", "--tier", tier], "pl"), tier);
     }
     // Checked first: a Job that is not failed still gets the Tier refusal.
     not_allowed(&job(&fx, &["retry", "c", "--tier", "O4"], "pl"), "O4");
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(job_row(&fx.env, "pl", "a", "status"), "failed");
+    assert_eq!(job_row(&fx.env, "pl", "a", "retry_tier"), Value::Null);
+}
+
+/// pro-d82: H4 is refused as tier_not_allowed even when the catalog has H4 (the catalog check passes, the Worker range does not).
+#[test]
+fn add_edit_and_retry_refuse_h4_even_when_the_catalog_has_h4() {
+    let fx = Fx::new();
+    drafted(&fx);
+    job_add(&fx, "pl", "c", "S2", &[]).ok();
+    lock(&fx.env, "pl");
+    engine(&fx.env, "pl", "a", "failed");
+    fixture(&fx.env, "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';");
+    let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
+    not_allowed(&job_add(&fx, "pl", "k", "H4", &[]), "H4");
+    not_allowed(&stub_add(&fx, "pl", "k", &["--tier", "H4"]), "H4");
+    not_allowed(&job(&fx, &["edit", "b", "--tier", "H4"], "pl"), "H4");
+    not_allowed(&job(&fx, &["retry", "a", "--tier", "H4"], "pl"), "H4");
+    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, rows));
+    assert_eq!(job_row(&fx.env, "pl", "b", "tier"), "S2");
     assert_eq!(job_row(&fx.env, "pl", "a", "status"), "failed");
     assert_eq!(job_row(&fx.env, "pl", "a", "retry_tier"), Value::Null);
 }
