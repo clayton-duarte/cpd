@@ -164,7 +164,11 @@ export class EditorBoxController {
 	private stopInput: (() => void) | undefined;
 
 	/** `margins`: whether the pane draws the chat margins (compact style, fold `toggle`); read at every render. */
-	constructor(private readonly margins: () => boolean = () => true) {}
+	private readonly margins: () => boolean;
+
+	constructor(margins: () => boolean = () => true) {
+		this.margins = margins;
+	}
 
 	bind(ctx: ExtensionContext, startup: boolean): void {
 		this.release();
