@@ -1680,7 +1680,7 @@ CREATE TABLE plannotator_reviews (
   CHECK ((closed_at IS NULL) = (ended IS NULL))
 ) STRICT, WITHOUT ROWID;
 
--- ---------- PR posts (pro-d64, pro-d65, pro-d117; Plan pr-post; migration pr-posts, then pr-auto-merge) ----------
+-- ---------- PR posts (pro-d64, pro-d65, pro-d117; Plan pr-post; migration pr-posts, then pr-auto-merge, which adds the last two columns with ALTER TABLE ADD COLUMN; the CHECK tying them is the auto_merge column's own) ----------
 CREATE TABLE pr_posts (
   plan        TEXT NOT NULL REFERENCES plans(id),
   pr          TEXT NOT NULL,
@@ -1690,12 +1690,11 @@ CREATE TABLE pr_posts (
   posted_at   TEXT NOT NULL,
   reaction    TEXT CHECK (reaction IS NULL OR length(reaction) BETWEEN 1 AND 100),
   reacted_at  TEXT,
-  auto_merge  TEXT NOT NULL DEFAULT 'none' CHECK (auto_merge IN ('none','pending','enabled','refused')),
   auto_merge_at TEXT,
+  auto_merge  TEXT NOT NULL DEFAULT 'none' CHECK (auto_merge IN ('none','pending','enabled','refused') AND ((auto_merge IN ('enabled','refused')) = (auto_merge_at IS NOT NULL))),
   PRIMARY KEY (plan, pr),
   FOREIGN KEY (plan, pr) REFERENCES prs(plan, key),
-  CHECK (reaction IS NOT NULL OR reacted_at IS NULL),
-  CHECK ((auto_merge IN ('enabled','refused')) = (auto_merge_at IS NOT NULL))
+  CHECK (reaction IS NOT NULL OR reacted_at IS NULL)
 ) STRICT;
 
 -- ---------- Message board (hs-d514) ----------
