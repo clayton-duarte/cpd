@@ -1028,6 +1028,52 @@ fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
     assert_eq!(fx.cpd(&["tiers"]).ok()["pi_version"], "1.3.0");
 }
 
+/// pro-d26 (Plan bifrost, PR catfp; commands.md §14.3): the cache is keyed by the fingerprint of `<agentDir>/models.json` too. The
+/// agent directory of [`install_pi`] is the test root. `cpd doctor`'s `tiers` check asks pi each time and never reads the cache, so
+/// the command that needs the fingerprint is `cpd tiers`, and every Lead and Worker launch through the same `load`.
+#[test]
+fn tiers_sees_a_models_json_changed_under_the_same_pi_version() {
+    let fx = tiers_fx(TIERS_MODELS);
+    let models_json = fx.env.root().join("models.json");
+    fs::write(&models_json, r#"{"thinkingLevelMap": {"minimal": null}}"#).unwrap();
+    fx.fake_once("node", levels(r#"{"O":["off","low"],"S":["off","low","medium","high"],"H":["off"],"G":["off"]}"#));
+    let first = fx.cpd(&["tiers"]).ok();
+    assert_eq!(first["tiers"]["S"]["efforts"], json!([0, 1, 2, 3]));
+
+    // The same pi version and the same models: only the file pi reads changed (Sonnet gains xhigh and max).
+    fs::write(&models_json, r#"{"thinkingLevelMap": {"minimal": null, "xhigh": "xhigh", "max": "max"}}"#).unwrap();
+    fx.fake_once("node", levels(r#"{"O":["off","low"],"S":["off","low","medium","high","xhigh","max"],"H":["off"],"G":["off"]}"#));
+    let second = fx.cpd(&["tiers"]).ok();
+    assert_eq!(second["pi_version"], "1.2.0");
+    assert_eq!(second["tiers"]["S"]["efforts"], json!([0, 1, 2, 3, 4, 5]), "the changed models.json is seen");
+    assert_eq!(fx.calls("node").len(), 2);
+    // Append-only: the first bytes' rows stay beside the second's.
+    let rows = cached_rows(&fx.env);
+    assert_eq!(rows.len(), 6, "{rows:?}");
+    assert!(rows.contains(&row("1.2.0", "S", "p/m-sonnet", "[0,1,2,3]")), "{rows:?}");
+    assert!(rows.contains(&row("1.2.0", "S", "p/m-sonnet", "[0,1,2,3,4,5]")), "{rows:?}");
+
+    // Unchanged bytes are a hit: node has no reply left.
+    assert_eq!(fx.cpd(&["tiers"]).ok()["tiers"]["S"]["efforts"], json!([0, 1, 2, 3, 4, 5]));
+    assert_eq!(fx.calls("node").len(), 2);
+}
+
+/// An unreadable `models.json` (a directory in its place) is `catalog_failed` with the path, and nothing is cached.
+#[test]
+fn tiers_with_an_unreadable_models_json_is_catalog_failed_with_its_path() {
+    let fx = tiers_fx(TIERS_MODELS);
+    let models_json = fx.env.root().join("models.json");
+    fs::create_dir(&models_json).unwrap();
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    let run = fx.cpd(&["tiers"]);
+    let err = run.error();
+    assert_eq!(err["code"], "catalog_failed");
+    assert_eq!(run.exit, 1);
+    assert!(err["details"].to_string().contains(models_json.canonicalize().unwrap().to_str().unwrap()), "{err}");
+    assert!(fx.calls("node").is_empty(), "no fallback: pi was not asked");
+    assert_eq!(cached_rows(&fx.env), []);
+}
+
 #[test]
 fn tiers_refreshes_the_cache_when_a_configured_model_changes() {
     let fx = tiers_fx(TIERS_MODELS);

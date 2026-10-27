@@ -225,6 +225,10 @@ pub fn read_with(runner: &dyn Runner, pi: &PiInstall, models: &Models, deadline:
 }
 
 #[cfg(test)]
+#[path = "catalog_cache_tests.rs"]
+mod cache_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
