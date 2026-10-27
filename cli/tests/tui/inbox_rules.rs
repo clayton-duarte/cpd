@@ -114,6 +114,7 @@ fn no_engine_error_item_opens_and_one_an_older_engine_opened_closes() {
         session: None,
         record: None,
         event: Some(event),
+        opened_at: None,
     };
     let at = "2026-01-01T00:00:00.000Z";
     assert_eq!(reconcile(&mut store, &[old], at).unwrap().opened.len(), 1, "the row an older engine wrote");

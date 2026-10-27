@@ -48,3 +48,6 @@ G = "github-copilot/gemini-3.8-flash"
 paths = []
 
 [resources]
+
+[deploys]
+workflows = []

@@ -232,6 +232,26 @@ impl HasText for Resources {
     }
 }
 
+/// The `deploys` domain (repo scope only, no `text`): the workflow files whose runs waiting for approval are deploys.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Deploys {
+    pub workflows: Vec<String>,
+}
+
+impl HasText for Deploys {
+    fn text(&self) -> &str {
+        ""
+    }
+}
+
+/// What a scope file's `[deploys]` table sets.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeploysSet {
+    pub workflows: Option<Vec<String>>,
+}
+
 /// A resource name: `^[a-z][a-z0-9-]{0,31}$`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ResourceName(String);
@@ -415,6 +435,7 @@ pub const BUILD: &str = "build";
 pub const RUN: &str = "run";
 pub const LIST: &str = "list";
 pub const PATHS: &str = "paths";
+pub const WORKFLOWS: &str = "workflows";
 
 fn left_out<const N: usize>(keys: [(&'static str, bool); N]) -> Vec<&'static str> {
     keys.into_iter().filter_map(|(name, out)| out.then_some(name)).collect()
@@ -472,6 +493,46 @@ impl Set for ProtectedSet {
 
     fn complete(&self) -> Option<Protected> {
         Some(Protected { paths: self.paths.clone()? })
+    }
+}
+
+impl Set for DeploysSet {
+    type Value = Deploys;
+
+    fn fill(&self, base: &Deploys) -> (Deploys, Vec<&'static str>) {
+        let workflows = self.workflows.as_ref().map_or_else(|| base.workflows.clone(), |w| sorted(w));
+        (Deploys { workflows }, left_out([(WORKFLOWS, self.workflows.is_none())]))
+    }
+
+    fn complete(&self) -> Option<Deploys> {
+        Some(Deploys { workflows: sorted(self.workflows.as_ref()?) })
+    }
+}
+
+fn sorted(names: &[String]) -> Vec<String> {
+    let mut names = names.to_vec();
+    names.sort();
+    names
+}
+
+impl DeploysSet {
+    /// Why the workflow names are not valid: each matches `^[A-Za-z0-9][A-Za-z0-9._-]*\.ya?ml$`, none twice.
+    pub(super) fn check(&self) -> Result<(), String> {
+        let names = self.workflows.as_deref().unwrap_or_default();
+        for (i, name) in names.iter().enumerate() {
+            let stem = name.strip_suffix(".yml").or_else(|| name.strip_suffix(".yaml"));
+            let ok = stem.is_some_and(|s| {
+                s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+                    && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            });
+            if !ok {
+                return Err(format!("workflow name `{name}` must match ^[A-Za-z0-9][A-Za-z0-9._-]*\\.ya?ml$"));
+            }
+            if names[..i].contains(name) {
+                return Err(format!("workflow `{name}` is listed twice"));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -689,6 +750,7 @@ domains! {
     test_commands = "test-commands", TestCommands, [], [Repo], Option<RepoTests>, TestCommandsSet;
     protected, Protected, [], [Repo], Protected, ProtectedSet;
     resources, Resources, [], [Machine, Owner, Repo], Resources, ResourcesSet;
+    deploys, Deploys, [], [Repo], Deploys, DeploysSet;
 }
 
 impl Sources {

@@ -18,6 +18,8 @@
 
 pub(crate) mod column;
 #[cfg(test)]
+mod deploy_tests;
+#[cfg(test)]
 mod draw_tests;
 #[cfg(test)]
 mod column_link_tests;

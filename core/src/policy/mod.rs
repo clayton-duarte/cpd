@@ -23,7 +23,7 @@ use crate::ids::{ContextId, OwnerLogin, RepoName};
 use crate::session::Role;
 
 pub use domain::{
-    audience, Checks, Declared, Domain, DomainSource, Feedback, Gate, GateAlias, Gates, Policy, Post, PostSet, Pr, ResourceScope, Resources, Scope, Source, Sources,
+    audience, Checks, Declared, Deploys, Domain, DomainSource, Feedback, Gate, GateAlias, Gates, Policy, Post, PostSet, Pr, ResourceScope, Resources, Scope, Source, Sources,
     Text,
 };
 /// The `policy` commands (commands.md §22).
@@ -43,6 +43,7 @@ pub fn run(command: Command) -> Result<crate::output::Output, CpdError> {
 pub use machine::{name_ok, load_machine, parse_machine, Exposure, Machine, MachineSource, McpOauth, McpServer};
 pub use show::KeyArgs;
 pub use origin::{parse_origin, repo_key};
+pub use exposure::ScopeKind;
 pub use load::{load_scope_file, parse_scope, policy_invalid};
 pub use post::render_post;
 pub use known::known_owners;
@@ -192,6 +193,10 @@ pub fn owner_in_use(context: &ContextId, owner: &OwnerLogin, prs: &[String]) -> 
 #[cfg(test)]
 #[path = "resources_tests.rs"]
 mod resources_tests;
+
+#[cfg(test)]
+#[path = "deploys_tests.rs"]
+mod deploys_tests;
 
 #[cfg(test)]
 mod tests {

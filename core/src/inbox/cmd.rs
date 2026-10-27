@@ -475,6 +475,7 @@ mod tests {
             session: None,
             record: None,
             event: None,
+            opened_at: None,
         }
     }
 
