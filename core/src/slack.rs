@@ -18,11 +18,18 @@ const TAIL_LINES: usize = 20;
 pub fn call(config: &Config, script: &str, args: &[(&str, &str)], stdin: Option<Vec<u8>>, deadline: Duration) -> Result<Call, CpdError> {
     let pi = locate_pi()?;
     let adapter = config.pi_adapter_dir()?;
+    let adapter = std::fs::canonicalize(&adapter).map_err(|e| {
+        CpdError::new(ErrorCode::AdapterMissing, format!("Cannot resolve the pi adapter {}: {e}.", adapter.display()))
+            .with("path", adapter.display().to_string())
+    })?;
     build(&node(), &adapter, &pi.coding_agent_entry, &pi.agent_dir, config_home()?, script, args, stdin, deadline)
 }
 
 fn config_home() -> Result<std::path::PathBuf, CpdError> {
-    Ok(crate::home::CpdHome::from_env()?.root().to_path_buf())
+    let root = crate::home::CpdHome::from_env()?.root().to_path_buf();
+    std::fs::canonicalize(&root).map_err(|e| {
+        CpdError::new(ErrorCode::ConfigInvalid, format!("Cannot resolve CPD_HOME {}: {e}.", root.display())).with("path", root.display().to_string())
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

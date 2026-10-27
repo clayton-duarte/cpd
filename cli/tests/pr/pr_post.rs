@@ -44,12 +44,17 @@ fn human_item() -> Value {
 /// The baseline of the Plan's one PR (its Context owned by `acme`, its repo named `pay`, the owner's policy as `setup`
 /// says, the stored row ready to post) and the helper answering [`OK`].
 fn post(setup: Setup) -> Pay {
+    post_with_node(setup, Reply::ok(&format!("{OK}\n")))
+}
+
+/// [`post`] with the helper answering `node` (the first scripted rule is the one that answers, so it is set once, here).
+fn post_with_node(setup: Setup, node: Reply) -> Pay {
     let pay = fx(setup.status);
     let env = &pay.fx.env;
     let adapter = env.root().join("adapter");
     fs::create_dir_all(&adapter).unwrap();
     fs::write(adapter.join("package.json"), "{}").unwrap();
-    let inbox = if setup.machine_channel { "[inbox]\nteam_channel = \"C0MACHINE1\"\n" } else { "" };
+    let inbox = if setup.machine_channel { "[inbox]\nteam_channel = \"C0MACHINE1\"\nslack_user_id = \"U0USER001\"\n" } else { "" };
     env.write_config(&format!(
         "version = 1\nmachine = \"t\"\npi_adapter = \"{}\"\n{inbox}[tmux]\nsocket = \"{}\"\n",
         adapter.display(),
@@ -66,7 +71,7 @@ fn post(setup: Setup) -> Pay {
            WHERE number = 812;"
     );
     pay.store().write("fixture", |tx| tx.execute_batch(&sql).map_err(Into::into)).unwrap();
-    pay.fx.fake_node(Reply::ok(&format!("{OK}\n")));
+    pay.fx.fake_node(node);
     pay
 }
 
@@ -185,9 +190,11 @@ fn calls_the_helper_with_the_pi_entry_and_the_channel_and_no_gh() {
 
 #[test]
 fn falls_back_to_the_config_team_channel_and_the_default_template() {
-    let pay = post(Setup { post: Some(String::new()), ..Setup::baseline() });
+    let pay = post_with_node(
+        Setup { post: Some(String::new()), ..Setup::baseline() },
+        Reply::ok(&format!("{}\n", OK.replace("C0POLICY1", "C0MACHINE1"))),
+    );
     pay.set("title = 'Pay the bills', url = 'https://github.com/acme/pay/pull/812'");
-    pay.fx.fake_node(Reply::ok(&format!("{}\n", OK.replace("C0POLICY1", "C0MACHINE1"))));
 
     let out = pay.post_cmd().ok();
 
@@ -300,7 +307,8 @@ fn a_pull_request_whose_comments_were_never_read_is_not_ready() {
 fn a_closed_or_merged_pull_request_is_not_open() {
     for state in ["closed", "merged"] {
         let pay = post(Setup::baseline());
-        pay.set(&format!("state = '{state}'"));
+        let merged_at = if state == "merged" { ", merged_at = '2026-01-01T00:00:00.000Z'" } else { "" };
+        pay.set(&format!("state = '{state}'{merged_at}"));
 
         let error = pay.refuses("pr_not_ready", 3);
 
@@ -317,6 +325,7 @@ fn open_human_comments_and_the_feedback_checks_policy_do_not_change_readiness() 
 
     assert_eq!(pay.node_calls(), 1);
     assert_eq!(pay.posts().len(), 1);
+    drop(pay);
 
     let relaxed = post(Setup::baseline());
     relaxed.fx.env.repo_policy("acme", "owner", "[pr.post]\nenabled = true\nchannel = \"C0POLICY1\"\n[pr.feedback]\nchecks = \"none\"\n");
@@ -327,8 +336,7 @@ fn open_human_comments_and_the_feedback_checks_policy_do_not_change_readiness() 
 
 #[test]
 fn slack_not_signed_in_records_nothing() {
-    let pay = post(Setup::baseline());
-    pay.fx.fake_node(Reply::exit(3, &format!("{AUTH}\n"), ""));
+    let pay = post_with_node(Setup::baseline(), Reply::exit(3, &format!("{AUTH}\n"), ""));
 
     let error = refused(&pay.post_cmd(), "slack_auth", 3);
 
@@ -338,8 +346,7 @@ fn slack_not_signed_in_records_nothing() {
 
 #[test]
 fn a_helper_that_prints_nothing_is_spawn_failed() {
-    let pay = post(Setup::baseline());
-    pay.fx.fake_node(Reply::exit(1, "", ""));
+    let pay = post_with_node(Setup::baseline(), Reply::exit(1, "", ""));
 
     refused(&pay.post_cmd(), "spawn_failed", 1);
 
@@ -368,6 +375,7 @@ fn the_post_records_the_reaction_the_owner_chose() {
     assert_eq!(out["post"]["reacted_at"], Value::Null);
     let posts = pay.posts();
     assert_eq!((&posts[0]["reaction"], &posts[0]["reacted_at"]), (&json!("git-merge"), &Value::Null));
+    drop(pay);
 
     let plain = post(Setup::baseline());
     plain.post_cmd().ok();
