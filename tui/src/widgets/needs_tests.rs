@@ -14,6 +14,7 @@ fn pr(working: bool) -> read::OpenPr {
         clean: false,
         active: false,
         lead: Some(SessionId::parse("l-a").unwrap()),
+        jira: None,
         lead_working: working,
         plan_failed: false,
         plan_phase: None,

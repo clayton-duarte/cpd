@@ -102,6 +102,8 @@ pub struct OpenPr {
     /// The Lead of the owner: `plans.lead_session` of the Plan of the `prs` row that points to this pull request (the most
     /// recently created Plan when several do). `None` when no Plan owns it.
     pub lead: Option<SessionId>,
+    /// The Jira key of the owner's `prs` row (the same Plan `lead` comes from); `None` when no Plan owns it or it has none.
+    pub jira: Option<String>,
     /// The owner's Lead Session has `state = 'working'` (contract §3.6): the row shows the Lead's working dot (hs-d335).
     /// False when no Plan owns it.
     pub lead_working: bool,
@@ -242,6 +244,8 @@ fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
                             FROM prs r JOIN plans p ON p.id = r.plan
                            WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1), 0),
                 (SELECT p.phase FROM prs r JOIN plans p ON p.id = r.plan
+                  WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1),
+                (SELECT r.jira FROM prs r JOIN plans p ON p.id = r.plan
                   WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1)
            FROM pull_requests q WHERE q.state = 'open' AND q.authored = 1 ORDER BY q.created_at, q.repo, q.number",
     ))?;
@@ -267,6 +271,7 @@ fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
             clean: r.get(8)?,
             active: r.get(9)?,
             lead: r.get::<_, Option<String>>(10)?.map(|lead| id("Session id", &lead, SessionId::parse)).transpose()?,
+            jira: r.get(15)?,
             lead_working: r.get(11)?,
             plan_failed: r.get(13)?,
             plan_phase: r

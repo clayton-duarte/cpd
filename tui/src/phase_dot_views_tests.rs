@@ -145,6 +145,7 @@ fn open_pr(lead_working: bool, plan_failed: bool, plan_phase: Option<Phase>) -> 
         clean: false,
         active: false,
         lead: Some(SessionId::parse("l-a").unwrap()),
+        jira: None,
         lead_working,
         plan_failed,
         plan_phase,

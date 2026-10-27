@@ -1333,8 +1333,8 @@ fn a_jira_key_that_does_not_fit_the_free_gap_is_left_out_and_the_name_is_not_cut
     let w = read::widgets(&mut ticketed(&fx.env, "ABC-123"), 3, 0).unwrap();
     // The key is 7 wide: it needs a gap of 2 + 7 + 1 = 10, so a pane of 13 + 10 + 1 = 24 columns is the narrowest that draws it.
     assert_eq!(mine_line(&w, 24), format!("{MINE}  ABC-123 {CUE}"), "gap == 2 + width + 1: exactly one space before the arrow");
-    // One column less (gap 9) and down to the pane that holds the name and the arrow only (gap 0): nothing, and the name whole.
-    for width in 14..=23 {
+    // One column less (gap 9) and down to width 15, the narrowest pane that keeps the name whole with the arrow (gap 1): nothing, and the name whole.
+    for width in 15..=23 {
         assert_eq!(mine_line(&w, width), first_line(MINE, width as usize), "width {width}");
     }
 }

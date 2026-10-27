@@ -29,6 +29,7 @@ fn open_pr(title: &str) -> OpenPr {
         clean: true,
         active: false,
         lead: Some(SessionId::parse("l-a").unwrap()),
+        jira: None,
         lead_working: false,
         plan_failed: false,
         plan_phase: None,
