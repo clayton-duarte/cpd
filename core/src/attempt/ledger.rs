@@ -170,6 +170,8 @@ causes! {
     GateFailed = "gate_failed",
     /// The merge Gate could not be judged: killed, at the timeout, or hook_invalid (§7.4 step 6).
     GateError = "gate_error",
+    /// A5: pi stopped on a provider error ("Connection error.", "Request timed out.", HTTP 5xx): a retry cause, not a ladder cause.
+    ProviderError = "provider_error",
 }
 
 /// What `attempts.cause` stores (§3.4): `merged`, `cancel_requested` or the [`Cause`] of a failed Attempt.
@@ -524,7 +526,7 @@ mod tests {
     #[test]
     fn every_cause_is_listed_and_reads_back() {
         use super::{Cause, Stored};
-        assert_eq!(Cause::ALL.len(), 10);
+        assert_eq!(Cause::ALL.len(), 11);
         for cause in Cause::ALL {
             assert_eq!(Cause::parse(cause.as_str()), Some(*cause));
             assert_eq!(Stored::parse(cause.as_str()), Some(Stored::Failed(*cause)));

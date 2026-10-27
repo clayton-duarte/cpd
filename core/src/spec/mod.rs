@@ -65,6 +65,7 @@ fn explanation(cause: Stored, evidence: &Evidence) -> String {
             Cause::NoSubmit => "The Worker went idle twice without running `cpd attempt submit`, even after a nudge.".to_owned(),
             Cause::MergeConflict if files.is_empty() => "Rebasing it onto the newer Lead Branch conflicted.".to_owned(),
             Cause::MergeConflict => "Rebasing it onto the newer Lead Branch conflicted in these files:".to_owned(),
+            Cause::ProviderError => "pi stopped on a provider error.".to_owned(),
             Cause::CasLost => "The Lead Branch kept moving, so the merge could not be completed.".to_owned(),
             Cause::DirtyTarget => "The Lead worktree was not clean when the merge ran.".to_owned(),
             Cause::Tampered => "Its diff touched a protected path.".to_owned(),
