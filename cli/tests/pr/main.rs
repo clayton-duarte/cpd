@@ -26,6 +26,7 @@ mod pr_push;
 mod pr_reaction_queue;
 mod pr_rebase_running;
 mod pr_reply;
+mod pr_review;
 mod pr;
 mod pr_start;
 mod pr_view;

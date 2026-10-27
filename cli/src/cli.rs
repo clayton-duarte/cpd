@@ -60,7 +60,7 @@ pub enum Command {
     Pr(pr::Command),
     /// Plannotator sessions a Session has open (hs-d496)
     #[command(subcommand)]
-    Review(review::Command),
+    Review(ReviewCommand),
     /// Policies (commands.md §22)
     #[command(subcommand)]
     Policy(policy::Command),
@@ -169,6 +169,15 @@ fn run_scoped(ports: &Ports, argv: impl IntoIterator<Item = OsString>, terminal:
     }
 }
 
+/// `cpd review`: the plannotator sessions (hs-d496) and the GitHub review (commands.md §31.1), one word, two owners.
+#[derive(clap::Subcommand, Debug)]
+pub enum ReviewCommand {
+    #[command(flatten)]
+    Sessions(review::Command),
+    #[command(flatten)]
+    Submit(pr::review::Command),
+}
+
 fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
     match command {
         Command::Context(c) => context::run(c),
@@ -179,7 +188,8 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Answer(a) => ask::answer(a),
         Command::Board(c) => board::run(c),
         Command::Pr(c) => pr::run(ports, c),
-        Command::Review(c) => review::run(c),
+        Command::Review(ReviewCommand::Sessions(c)) => review::run(c),
+        Command::Review(ReviewCommand::Submit(c)) => pr::review::run(ports, c),
         Command::Policy(c) => policy::run(c),
         Command::Mcp(c) => mcp::run(c),
         Command::Session(c) => session::run(c),

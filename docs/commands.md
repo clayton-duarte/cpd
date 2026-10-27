@@ -5587,3 +5587,53 @@ Effects: after it holds a slot it writes the command holder record (contract §1
 **Hooks.** A repo may write `cpd resource run <name> --` in a hook command (contract §7.3); hooks run without `CPD_*` variables, so `CPD_HOME` is the default. The Gate and the hooks take no resource by themselves.
 
 Idempotent: no. A run while every slot is held is `resource_busy`.
+
+## 31. `review`
+
+Reviews on GitHub, posted by cpd commands (§2.2; pro-d107, pro-d108, pro-d110).
+
+### 31.1 `review submit`
+
+```
+cpd review submit --pr <url | owner/repo#n> --event APPROVE|REQUEST_CHANGES --input <review.json> [--slack <channel>/<ts>]
+```
+
+Posts a GitHub review and, with `--slack`, queues a reaction to a Slack message (the same mechanism as `pr merge`, §21.9). **Callers:** the Lead, the Manager; not the cockpit or other agent roles. It takes a pull request URL or PullRef form, like `pr merge` (§9.10).
+
+Steps:
+
+1. Validate arguments: `--event` must be exactly `APPROVE` or `REQUEST_CHANGES`. `--input` is a file holding the review body as a JSON object (GitHub's REST `POST /repos/{owner}/{repo}/pulls/{n}/reviews` body), containing `body` (optional string), `commit_id` (optional), and `comments[]` (optional array of `{path, line, side, body}`). When a file is unreadable, not JSON, carries its own `event` key, or is not an object, refuse `usage` (exit 2). With `--slack`, `<channel>/<ts>` must match the pattern `^C[A-Z0-9]{8,}$/^[0-9]{10}\.[0-9]{6}$` or refuse `usage` (exit 2).
+2. Post the review to GitHub: `gh api --method POST repos/<owner>/<repo>/pulls/<n>/reviews --input -`, with the review JSON on stdin, with `"event"` added from `--event`. GitHub's failures are relayed as `gh_failed` (exit 1, `details.stderr` the tail). cpd checks no content: no refusal for failed checks, a stale `commit_id`, out-of-diff comments, or empty body (GitHub enforces). An answer without `id` or `html_url` is `gh_failed` with message "review may have been posted; check the pull request".
+3. On success, and only with `--slack`, queue the reaction: one store transaction calls `cpd_core::pr::reactions::queue(tx, channel, ts, emoji)` with emoji `github-check-mark` for APPROVE, `github-changes-requested` for REQUEST_CHANGES. A store failure after GitHub accepted is that error with `details.review` added: the review stands.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--event` is exactly `APPROVE` or `REQUEST_CHANGES` | `usage` | 2 |
+| `--input` file is readable, is JSON, is an object, and has no `event` key | `usage` | 2 |
+| `--slack`, if present, matches `^C[A-Z0-9]{8,}$/^[0-9]{10}\.[0-9]{6}$` | `usage` | 2 |
+| the pull request can be read | `gh_failed` | 1 |
+| the review is posted; `details` has `stderr`, the `id` and `html_url` on success | `gh_failed` | 1 |
+
+Effects:
+
+- Posts a GitHub review on the pull request with the given event and body.
+- If `--slack` is provided, queues a reaction to the Slack message in the store after the review is posted (§21.9).
+- The review verdict does not remove the Claim's :eyes: (A5).
+
+Output:
+
+```json
+{"ok": true, "review": {"id": 123456, "url": "https://github.com/<owner>/<repo>/pull/<n>#pullrequestreview-123456", "state": "APPROVED"}, "reaction": null}
+```
+
+With `--slack`:
+
+```json
+{"ok": true, "review": {"id": 123456, "url": "https://github.com/<owner>/<repo>/pull/<n>#pullrequestreview-123456", "state": "APPROVED"}, "reaction": {"channel": "C123ABC45", "ts": "1234567890.123456", "emoji": "github-check-mark", "already": false}}
+```
+
+**Not idempotent** (A4): a rerun posts a second review. The queue row (with `--slack`) is unique per `channel+ts+emoji`, so the same reaction is queued once and placed once by the engine's slack-react step (§21.9).
+
+**What it does not do** (pro-d108): cpd checks no content of the review and no state of the pull request. No refusal for failed or pending checks, a stale `commit_id`, comments outside the diff, an empty body, or any other condition. GitHub's own refusal is relayed. Review skill rules (FR4) and COMMENT reviews are out of scope.
+
+See §21.9 for the queue and the reaction step.
