@@ -190,6 +190,10 @@ _Avoid_: PR watcher, PR sync
 One open thing a person said on a pull request a Plan owns: a review thread, an issue comment or a review with a body, not yet answered with a `cpd pr reply` (whose last line is the marker `<!-- cpd:reply -->`). The PR poll stores them and wakes the Lead (`pr-feedback`, reason `comments`); the Lead fixes or declines each and answers it; cpd never resolves a thread, and an open item blocks nothing. Defined once in `docs/contract.md` §2.2 "Feedback item".
 _Avoid_: review comment (the word for what a reviewer wrote, not for the open thing cpd tracks), notification
 
+**PR post** (new, pro-d64, pro-d65, pro-d66):
+One message announcing a PR for review in Slack. The Lead calls `cpd pr post` when the PR is ready (open, green CI, no unaddressed bot comments) and the User says yes; one post per PR. The owner's policy configures the Slack channel, message template, and an optional emoji to react with after the merge. Defined once in `docs/contract.md` §2.2 "PR post".
+_Avoid_: Slack announcement, PR announcement
+
 ## Roles
 
 **User**:
