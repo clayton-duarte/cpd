@@ -30,16 +30,25 @@ fn world(policy: &str) -> (Fx, PathBuf) {
     (fx, repo)
 }
 
+/// Slot `slot` of the repo pool `name` of `acme/cpd` (contract §1.4).
+fn slot_path(fx: &Fx, name: &str, slot: u8) -> PathBuf {
+    fx.env.cpd_home().join(format!("locks/resource.repo.acme.cpd.{name}.{slot}.lock"))
+}
+
 fn lock_path(fx: &Fx, name: &str) -> PathBuf {
-    fx.env.cpd_home().join(format!("locks/resource-acme--cpd--{name}.lock"))
+    slot_path(fx, name, 1)
 }
 
 /// Holds `name` as another process would: its own open file description, with `record` in the file.
 fn hold(fx: &Fx, name: &str, record: &str) -> File {
-    let path = lock_path(fx, name);
+    hold_slot(fx, &slot_path(fx, name, 1), record)
+}
+
+fn hold_slot(_fx: &Fx, path: &Path, record: &str) -> File {
+    let path = path.to_path_buf();
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
-    assert!(lock::try_lock(&file).unwrap(), "the test could not take {name}");
+    assert!(lock::try_lock(&file).unwrap(), "the test could not take {}", path.display());
     fs::write(&path, record).unwrap();
     file
 }
@@ -60,8 +69,12 @@ fn run_args<'a>(name: &'a str, rest: &[&'a str]) -> Vec<&'a str> {
 type Seen = Arc<Mutex<Vec<(bool, String)>>>;
 
 fn watch_exec(fx: &Fx, name: &str) -> Seen {
+    watch_exec_slot(fx, name, 1)
+}
+
+fn watch_exec_slot(fx: &Fx, name: &str, slot: u8) -> Seen {
     let seen: Seen = Arc::default();
-    let (path, sink) = (lock_path(fx, name), seen.clone());
+    let (path, sink) = (slot_path(fx, name, slot), seen.clone());
     fx.fakes.spawn.on_exec(move |_| {
         sink.lock().unwrap().push((is_held(&path), fs::read_to_string(&path).unwrap_or_default()));
     });
@@ -108,17 +121,42 @@ fn resource_run_holds_the_lock_and_writes_its_record_when_it_execs_the_command()
 }
 
 #[test]
-fn resource_run_is_busy_while_another_holds_it_and_nothing_is_exec_ed() {
-    let (fx, repo) = world("[resources.e2e-port]\n");
-    let _holder = hold(&fx, "e2e-port", COMMAND_RECORD);
+fn resource_run_takes_a_free_slot_while_another_slot_is_held() {
+    let (fx, repo) = world("[resources.e2e-port]\nslots = 2\n");
+    let _first = hold(&fx, "e2e-port", COMMAND_RECORD);
+    let seen = watch_exec_slot(&fx, "e2e-port", 2);
+
+    let _ = fx.cpd_with(&repo, &run_args("e2e-port", &["--", "npm", "run", "dev"]), &[("CPD_SESSION", "s1")]);
+
+    assert_eq!(fx.fakes.spawn.execs().len(), 1, "the command is exec-ed on the free slot");
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    let (held, content) = &seen[0];
+    assert!(held, "slot 2 is held when the command is exec-ed");
+    let record: Value = serde_json::from_str(content).unwrap_or_else(|e| panic!("the record {content:?} is not JSON: {e}"));
+    assert_eq!((&record["by"], &record["command"]), (&json!("command"), &json!("npm run dev")));
+    assert_eq!(fs::read_to_string(slot_path(&fx, "e2e-port", 1)).unwrap(), COMMAND_RECORD, "slot 1 is left as it was");
+}
+
+#[test]
+fn resource_run_is_busy_with_every_holder_when_all_slots_are_held() {
+    let (fx, repo) = world("[resources.e2e-port]\nslots = 2\n");
+    let _first = hold(&fx, "e2e-port", COMMAND_RECORD);
+    let _second = hold_slot(&fx, &slot_path(&fx, "e2e-port", 2), ATTEMPT_RECORD);
 
     let run = fx.cpd_in(&repo, &run_args("e2e-port", &["--", "npm", "test"]));
 
     let error = refused(&run, "resource_busy", 3);
-    assert_eq!(error["details"]["resource"], "e2e-port");
-    assert_eq!(error["details"]["repo"], "acme/cpd");
-    assert_eq!(error["details"]["holder"], serde_json::from_str::<Value>(COMMAND_RECORD).unwrap());
-    assert_eq!(error["details"]["waited_minutes"], 0);
+    let details = &error["details"];
+    assert_eq!(details["resource"], "e2e-port");
+    assert_eq!(details["repo"], "acme/cpd");
+    assert_eq!(
+        details["holders"],
+        json!([serde_json::from_str::<Value>(COMMAND_RECORD).unwrap(), serde_json::from_str::<Value>(ATTEMPT_RECORD).unwrap()]),
+        "the holder records of every slot, in slot order"
+    );
+    assert_eq!(details["waited_minutes"], 0);
+    assert!(details.get("holder").is_none(), "{details}");
     assert!(fx.fakes.spawn.execs().is_empty());
 }
 
@@ -148,7 +186,6 @@ fn resource_run_wait_that_runs_out_is_busy_with_waited_minutes() {
 
     let error = refused(&run, "resource_busy", 3);
     assert_eq!(error["details"]["waited_minutes"], 2);
-    assert_eq!(error["details"]["holder"], serde_json::from_str::<Value>(COMMAND_RECORD).unwrap());
     assert!(fx.fakes.clock.elapsed() >= Duration::from_secs(120), "the two minutes passed on the Ports' clock");
     assert!(fx.fakes.spawn.execs().is_empty());
 }
@@ -202,20 +239,31 @@ fn resource_run_a_directory_without_a_keyable_origin_is_repo_unkeyed() {
 }
 
 #[test]
-fn resource_list_shows_declared_resources_with_their_holders() {
-    let (fx, repo) = world("[resources.e2e-port]\n\n[resources.db]\n");
-    let _holder = hold(&fx, "e2e-port", COMMAND_RECORD);
+fn resource_list_shows_each_slot_with_its_holder_and_the_scope() {
+    let (fx, repo) = world("[resources.e2e-port]\nslots = 3\n\n[resources.db]\n");
+    fs::write(fx.env.cpd_home().join("policy/host.toml"), "[resources.shared-port]\nslots = 2\n").unwrap();
+    fs::write(fx.env.cpd_home().join("policy/acme/owner.toml"), "[resources.staging]\n").unwrap();
+    let _first = hold(&fx, "e2e-port", COMMAND_RECORD);
+    let _third = hold_slot(&fx, &slot_path(&fx, "e2e-port", 3), ATTEMPT_RECORD);
     // A record left in the file of a free lock is no holder.
     drop(hold(&fx, "db", COMMAND_RECORD));
+    let host_slot = fx.env.cpd_home().join("locks/resource.host.shared-port.2.lock");
+    let _host = hold_slot(&fx, &host_slot, COMMAND_RECORD);
 
     let out = fx.cpd_in(&repo, &["resource", "list"]).ok();
 
+    let command: Value = serde_json::from_str(COMMAND_RECORD).unwrap();
+    let attempt: Value = serde_json::from_str(ATTEMPT_RECORD).unwrap();
     assert_eq!(out["repo"], "acme/cpd");
     assert_eq!(
         out["resources"],
         json!([
-            {"name": "db", "held": false, "holder": null},
-            {"name": "e2e-port", "held": true, "holder": serde_json::from_str::<Value>(COMMAND_RECORD).unwrap()},
+            {"name": "db", "scope": "repo", "slots": 1, "free": 1, "holders": [{"slot": 1, "holder": null}]},
+            {"name": "e2e-port", "scope": "repo", "slots": 3, "free": 1,
+             "holders": [{"slot": 1, "holder": command}, {"slot": 2, "holder": null}, {"slot": 3, "holder": attempt}]},
+            {"name": "shared-port", "scope": "host", "slots": 2, "free": 1,
+             "holders": [{"slot": 1, "holder": null}, {"slot": 2, "holder": command}]},
+            {"name": "staging", "scope": "owner", "slots": 1, "free": 1, "holders": [{"slot": 1, "holder": null}]},
         ])
     );
 }

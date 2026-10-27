@@ -134,12 +134,15 @@ pub fn start_with_allocation(
 ) -> Result<Started, CpdError> {
     let next = store.read(|conn| decide(conn, ctx.catalog, plan, key, allocation))?;
     // A name the repo policy no longer declares refuses the start before any lock is taken (§3.4 "Resources of a Job").
-    let wanted = store.read(|conn| {
+    let (wanted, pools) = store.read(|conn| {
         let wanted = resource::wanted(conn, plan, key.as_str())?;
+        let mut pools = Vec::new();
         if let Some(w) = &wanted {
             crate::job::add::check_resources_declared(conn, ctx.home, plan, &w.pr, key.as_str(), Some(&w.names))?;
+            let policy = crate::pr::policy_of_pr(conn, ctx.home, plan, &crate::ids::PrKey::parse(&w.pr)?)?;
+            pools = resource::pools_of(&policy.resources, &w.owner, &w.repo).into_iter().filter(|p| w.names.iter().any(|n| n == p.name())).collect();
         }
-        Ok(wanted)
+        Ok((wanted, pools))
     })?;
     // §3.4 step 1: the lock before the transaction that inserts the Attempt.
     let lock = Starter::take(ctx.home, plan, &next.attempt)?;
@@ -153,20 +156,19 @@ pub fn start_with_allocation(
                 attempt: next.attempt.to_string(),
                 at: crate::clock::timestamp(ports.clock.utc()),
             };
-            let names: Vec<&str> = w.names.iter().map(String::as_str).collect();
-            match resource::take(ctx.home, &w.owner, &w.repo, &names, &holder)? {
+            match resource::take(ctx.home, &pools, &holder)? {
                 Take::Held(held) => Some(held),
-                Take::Busy { resource, holder } => {
+                Take::Busy { resource, holders } => {
                     // Nothing changes: the driver lock file made for an Attempt that will not exist goes too.
                     drop(lock);
                     super::lock::remove(ctx.home, plan, &next.attempt)?;
                     return Err(CpdError::new(
                         ErrorCode::ResourceBusy,
-                        format!("Job {key} cannot start: the resource {resource} of {}/{} is held by another holder.", w.owner, w.repo),
+                        format!("Job {key} cannot start: the resource {resource} of {}/{} has no free slot.", w.owner, w.repo),
                     )
                     .with("job", key.as_str())
                     .with("resource", resource)
-                    .with("holder", serde_json::to_value(holder).expect("a holder serialises")));
+                    .with("holders", serde_json::to_value(holders).expect("a holder serialises")));
                 }
             }
         }

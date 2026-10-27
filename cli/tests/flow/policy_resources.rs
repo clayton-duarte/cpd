@@ -40,3 +40,30 @@ fn resource_decl_policy_show_lists_the_declared_names_sorted() {
     let out = fx.cpd(&["policy", "show", "--pr", "named", "--plan", "pl"]).ok();
     assert_eq!(out["policy"]["resources"]["keys"]["names"], json!({"value": [], "source": "default"}));
 }
+
+#[test]
+fn policy_show_resources_lists_names_with_scope_slots_and_source() {
+    let fx = world("[resources.staging]\nslots = 3\n\n[resources.okta-port]\n");
+    let home = fx.env.cpd_home();
+    fs::write(home.join("policy/host.toml"), "[resources.shared-port]\nslots = 2\n").unwrap();
+    fs::write(home.join("policy/acme/owner.toml"), "[resources.staging]\n").unwrap();
+    let real = |rel: &str| fs::canonicalize(home.join(rel)).unwrap().display().to_string();
+    let (host, repo) = (real("policy/host.toml"), real("policy/acme/cpd.toml"));
+
+    let out = fx.cpd(&["policy", "show", "--pr", "named", "--plan", "pl"]).ok();
+
+    let domain = &out["policy"]["resources"];
+    assert_eq!(domain["keys"]["names"], json!({"value": ["okta-port", "shared-port", "staging"], "source": format!("repo:{repo}")}));
+    assert_eq!(
+        domain["keys"]["declared"],
+        json!({
+            "value": [
+                {"name": "okta-port", "scope": "repo", "slots": 1, "source": repo},
+                {"name": "shared-port", "scope": "host", "slots": 2, "source": host},
+                {"name": "staging", "scope": "repo", "slots": 3, "source": repo},
+            ],
+            "source": format!("repo:{repo}")
+        })
+    );
+    assert_eq!(domain["source"], format!("repo:{repo}"));
+}
