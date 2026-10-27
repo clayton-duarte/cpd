@@ -77,7 +77,14 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
         .with("status", target.status));
     }
     let review = store.read(|conn| crate::job::find(&crate::plan::jobs::load(conn, plan)?, plan, &target.job).map(|j| j.review))?;
-    let Stepped { end, stale, push, pulled } = if review { review_steps(store, &target)? } else { steps(store, ctx.home, ctx.config, &target)? };
+    let stepped = if review { review_steps(store, &target) } else { steps(store, ctx.home, ctx.config, &target) };
+    let Stepped { end, stale, push, pulled } = match stepped {
+        Ok(s) => s,
+        Err(e) if is_cpd_kind(&target) && is_refusal(e.code()) => {
+            Stepped::ends(End::Failed { cause: Failure::GateError, detail: format!("{}: {}", e.code().as_str(), e.message()) })
+        }
+        Err(e) => return Err(e),
+    };
     let metrics = (ctx.metrics)(&target);
     let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
     let pr = crate::ids::PrKey::parse(&target.pr).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", target.job, target.pr)))?;
@@ -252,7 +259,10 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
         // 6. The Gates (hs-d679), while the Attempt is still `merging`. An `open` or `update` Job's base check
         // runs first, so nothing is pushed or opened when it refuses.
         if cpd_kind {
-            let (pr, _, _) = pr_of_job(store, target)?;
+            if target.kind == "open" {
+                pr_of_job(store, target)?;
+            }
+            let pr = pr_row(store, target)?;
             let again = format!("cpd attempt submit {}", target.id);
             match store.read(|conn| crate::pr::base_check(conn, &target.plan, repo, &target.worktree, &pr, submitted, &again)) {
                 Ok(()) => {}
@@ -430,33 +440,37 @@ fn run_gate(home: &CpdHome, config: &Config, target: &Attempt, hook: Hook, pipel
     }
 }
 
-/// The PR of the Attempt's Job, its stored title and description, the pull request's body (§7.6 `pr open` step 3), read once.
-fn pr_of_job(store: &mut Store, target: &Attempt) -> Result<(crate::plan::PrRow, String, Option<String>), CpdError> {
+/// The PR row of the Attempt's Job: all the base check and the merged-on-GitHub check need.
+fn pr_row(store: &mut Store, target: &Attempt) -> Result<crate::plan::PrRow, CpdError> {
     store.read(|conn| {
         let prs = crate::plan::fingerprint::load_prs(conn, &target.plan)?;
-        let pr = prs
-            .into_iter()
-            .find(|p| p.key.as_str() == target.pr)
-            .ok_or_else(|| CpdError::bad_row(format!("Plan {} has no PR {}", target.plan, target.pr)))?;
-        let title = pr.title.clone().ok_or_else(|| {
-            CpdError::new(
-                ErrorCode::PrTitleRequired,
-                format!("PR {} of Plan {} has no title: run cpd pr edit {} --title \"<text>\" (1-72 characters).", pr.key, target.plan, pr.key),
-            )
-            .with("plan", target.plan.as_str())
-            .with("pr", pr.key.as_str())
-        })?;
-        let description: Option<String> = conn.query_row("SELECT description FROM prs WHERE plan = ?1 AND key = ?2", [target.plan.as_str(), target.pr.as_str()], |r| r.get(0))?;
-        if description.is_none() && pr.head_ref.is_none() {
-            return Err(crate::pr::description_required(&target.plan, &pr.key));
-        }
-        Ok((pr, title, description))
+        prs.into_iter().find(|p| p.key.as_str() == target.pr).ok_or_else(|| CpdError::bad_row(format!("Plan {} has no PR {}", target.plan, target.pr)))
     })
+}
+
+/// The PR of the Attempt's Job with its stored title and description, the pull request's body (§7.6 `pr open` step 3).
+fn pr_of_job(store: &mut Store, target: &Attempt) -> Result<(crate::plan::PrRow, String, Option<String>), CpdError> {
+    let pr = pr_row(store, target)?;
+    let title = pr.title.clone().ok_or_else(|| {
+        CpdError::new(
+            ErrorCode::PrTitleRequired,
+            format!("PR {} of Plan {} has no title: run cpd pr edit {} --title \"<text>\" (1-72 characters).", pr.key, target.plan, pr.key),
+        )
+        .with("plan", target.plan.as_str())
+        .with("pr", pr.key.as_str())
+    })?;
+    let description = store.read(|conn| crate::pr::stored_description_of(conn, &target.plan, &pr.key))?;
+    Ok((pr, title, description))
+}
+
+/// The refusals of an `open` or `update` Job's merge that end the Attempt `gate_error` instead of leaving it `merging`.
+fn is_refusal(code: ErrorCode) -> bool {
+    matches!(code, ErrorCode::PrTitleRequired | ErrorCode::DescriptionRequired | ErrorCode::BaseNotFound)
 }
 
 /// Whether the newest pull request of the PR's Lead Branch is already merged on GitHub: the `open` Job adopts it (§7.7 submit step 1).
 fn pull_request_is_merged(store: &mut Store, target: &Attempt) -> Result<bool, CpdError> {
-    let (pr, _, _) = pr_of_job(store, target)?;
+    let pr = pr_row(store, target)?;
     crate::pr::is_merged_on_github(&target.lead_worktree, &pr)
 }
 

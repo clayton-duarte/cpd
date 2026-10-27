@@ -250,6 +250,9 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey, all
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     require_ready(&all, job, plan, &phase, &pr_status)?;
+    if job.kind == "open" {
+        crate::pr::stored_description_of(conn, plan, &crate::ids::PrKey::parse(&job.pr).map_err(|e| CpdError::bad_row(format!("Job {key} has the PR key {:?}: {e}", job.pr)))?)?;
+    }
     let found = locked_fingerprint(job);
     if job.fingerprint.as_deref() != Some(found.as_str()) {
         return Err(CpdError::new(ErrorCode::LockedJobTampered, format!("Job {key} does not match its Locked-Job fingerprint."))

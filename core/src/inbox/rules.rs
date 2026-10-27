@@ -12,6 +12,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::model::{Condition, Kind, Urgency, open_items};
+use super::models;
 use super::team::{self, GhPr, Lookup, Memo, Post, Status};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
@@ -77,6 +78,7 @@ pub fn conditions_with(
     all.extend(store.read(|conn| pr_ready(conn))?);
     all.extend(store.read(|conn| curate(conn, floor))?);
     all.extend(review_requested(store, home, now, team)?);
+    all.extend(models_changed(store, home, now)?);
     all.extend(deploys(store, home)?);
     Ok(all)
 }
@@ -637,6 +639,53 @@ fn kept_review_items(store: &mut Store, why: Option<&CpdError>) -> Result<Vec<Co
             urgency: Urgency::Red,
             subject: format!("error:E8/team-review/{code}"),
             label: format!("team review: {code}"),
+            url: None,
+            context: None,
+            plan: None,
+            job: None,
+            session: None,
+            record: None,
+            event: None,
+            opened_at: None,
+        });
+    }
+    Ok(out)
+}
+
+/// `models-changed`: each provider file whose `changes.at` is within [`models::WINDOW`] and whose announced part is not empty.
+/// A provider with no readable file (missing, not `version` 1) keeps its open items as they are.
+fn models_changed(store: &mut Store, home: &CpdHome, now: OffsetDateTime) -> Result<Vec<Condition>, CpdError> {
+    let reads = crate::models::read_all(home)?;
+    let readable: Vec<&str> = reads
+        .iter()
+        .filter_map(|r| match r {
+            crate::models::Read::Good(f) => Some(f.provider.as_str()),
+            crate::models::Read::Unparseable { .. } => None,
+        })
+        .collect();
+    let mut out: Vec<Condition> = store
+        .read(open_items)?
+        .iter()
+        .filter(|i| i.kind == Kind::ModelsChanged)
+        .filter(|i| models::parse_subject(&i.subject).is_some_and(|(provider, _)| !readable.contains(&provider)))
+        .map(Condition::from)
+        .collect();
+    let cutoff = now - models::WINDOW;
+    for read in &reads {
+        let crate::models::Read::Good(file) = read else { continue };
+        let Some(changes) = &file.changes else { continue };
+        if !OffsetDateTime::parse(&changes.at, &Rfc3339).is_ok_and(|at| at >= cutoff) {
+            continue;
+        }
+        let (new, gone) = models::announced(&file.provider, changes);
+        if new.is_empty() && gone.is_empty() {
+            continue;
+        }
+        out.push(Condition {
+            kind: Kind::ModelsChanged,
+            urgency: Urgency::Cyan,
+            subject: models::subject(&file.provider, &changes.at),
+            label: models::label(&file.provider, new.len(), gone.len()),
             url: None,
             context: None,
             plan: None,

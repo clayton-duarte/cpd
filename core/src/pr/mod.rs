@@ -72,7 +72,7 @@ use crate::plan::PrRow;
 use row::PlanPrs;
 
 pub use gh::close_pr;
-pub use open::{Pulled, description_required, base_check, is_merged_on_github, pull_request, record as record_pull, submit_checks};
+pub use open::{Pulled, description_required, stored_description_of, base_check, is_merged_on_github, pull_request, record as record_pull, submit_checks};
 #[cfg(test)]
 pub(crate) use rebase::{in_progress_with, rebase_onto_with, unresolved_with};
 

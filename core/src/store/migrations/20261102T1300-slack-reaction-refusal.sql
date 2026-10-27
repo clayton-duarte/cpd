@@ -1,4 +1,5 @@
--- cpd-migration: additive
+-- cpd-migration: breaking after 73
+-- Breaking: the backfill UPDATEs existing slack_reactions rows (contract §4.5 A1).
 -- The reaction queue's link to its PR and its refusal (Plan merged-emoji; contract §4.4 `slack_reactions`): `plan` and `pr` name
 -- the PR whose merge the reaction is (both NULL for any other), `refused_at` and `refusal` park a reaction Slack refused
 -- (both NULL or both set; never with `reacted_at`). Each CHECK sits on the later column of its pair.

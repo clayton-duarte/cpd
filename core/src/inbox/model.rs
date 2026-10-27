@@ -40,6 +40,8 @@ pub enum Kind {
     CurateDocs,
     /// A Lead or Manager blocked by the loop guard (hs-d552, hs-d571); always red.
     LoopGuard,
+    /// A provider's model list changed (pro-d13, pro-d16); always cyan, about the machine: no Context, Plan, Job or Session.
+    ModelsChanged,
     /// A workflow run waits for the User's approval (pro-d100): one entry of `run/deploy-runs.json`.
     Deploy,
 }
@@ -63,13 +65,14 @@ impl Kind {
             Kind::CurateRetire => "curate-retire",
             Kind::CurateDocs => "curate-docs",
             Kind::LoopGuard => "loop-guard",
+            Kind::ModelsChanged => "models-changed",
             Kind::Deploy => "deploy",
         }
     }
 
     pub fn parse(s: &str) -> Option<Kind> {
         use Kind::*;
-        [Dialog, PlanReview, ReviewWaiting, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested, CurateRetire, CurateDocs, LoopGuard, Deploy]
+        [Dialog, PlanReview, ReviewWaiting, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested, CurateRetire, CurateDocs, LoopGuard, ModelsChanged, Deploy]
             .into_iter()
             .find(|k| k.as_str() == s)
     }

@@ -127,3 +127,12 @@ fn a_reaction_that_is_not_an_emoji_name_is_policy_invalid() {
 fn enabled_that_is_not_a_boolean_is_policy_invalid() {
     invalid("enabled", "\"yes\"");
 }
+
+#[test]
+fn a_machine_file_with_a_post_table_is_policy_invalid() {
+    let fx = world("");
+    write(&fx, "host.toml", "[pr.post]\nenabled = true\n");
+    let error = refused(&show(&fx, false), "policy_invalid", 1);
+    assert_eq!(error["details"]["key"], "pr.post", "{error}");
+    assert_eq!(error["details"]["file"], real(&fx, "host.toml"), "{error}");
+}
