@@ -90,6 +90,7 @@ fn previous(conn: &Connection, target: &Target) -> Result<Vec<Previous>, CpdErro
                 Stored::Failed(Cause::GateFailed | Cause::GateError) => {
                     Evidence::Gate(crate::merge::parse_gate_detail(&end_detail(conn, target, &id)?))
                 }
+                Stored::Failed(Cause::ProviderError) => Evidence::Message(end_detail(conn, target, &id)?),
                 _ => Evidence::None,
             };
             Ok(Previous {
@@ -464,6 +465,25 @@ pub fn metrics(dirs: &PiDirs, session: Option<&SessionId>) -> Option<Value> {
 /// messages of `file`; None while it cannot be parsed (a line being written).
 pub fn last_stop(file: &Path) -> Option<(Option<String>, u64)> {
     metrics::parse_file(file).ok().map(|m| (m.stop_reason, m.turns))
+}
+
+/// The last assistant message's `errorMessage` of `file`; None when it has none.
+pub fn last_error(file: &Path) -> Option<String> {
+    metrics::last_error_message(file)
+}
+
+/// Whether a pi `errorMessage` is a provider error (decision pro-d102): exactly "Connection error." or "Request timed
+/// out.", or a leading HTTP 5xx status (a 3-digit code 500-599 followed by a space or the end of the message).
+pub fn is_provider_error(error_message: &str) -> bool {
+    if matches!(error_message, "Connection error." | "Request timed out.") {
+        return true;
+    }
+    let bytes = error_message.as_bytes();
+    bytes.len() >= 3
+        && bytes[0] == b'5'
+        && bytes[1].is_ascii_digit()
+        && bytes[2].is_ascii_digit()
+        && bytes.get(3).is_none_or(|b| *b == b' ')
 }
 
 #[cfg(test)]

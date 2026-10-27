@@ -42,6 +42,8 @@ pub enum Evidence {
     Files(Vec<String>),
     /// `gate_failed` or `gate_error`: the failed Gate's hook and log, when the detail names them.
     Gate(Option<(Hook, PathBuf)>),
+    /// `provider_error`: the end Event's detail, `pi stopped on a provider error: "<errorMessage>".`
+    Message(String),
 }
 
 /// One sentence saying what happened; it ends with a colon when a list item follows (the files or the Gate's log).
@@ -65,6 +67,13 @@ fn explanation(cause: Stored, evidence: &Evidence) -> String {
             Cause::NoSubmit => "The Worker went idle twice without running `cpd attempt submit`, even after a nudge.".to_owned(),
             Cause::MergeConflict if files.is_empty() => "Rebasing it onto the newer Lead Branch conflicted.".to_owned(),
             Cause::MergeConflict => "Rebasing it onto the newer Lead Branch conflicted in these files:".to_owned(),
+            Cause::ProviderError => {
+                let said = match evidence {
+                    Evidence::Message(message) => message.as_str(),
+                    _ => "pi stopped on a provider error.",
+                };
+                format!("{said} The provider was down or unreachable; the Job was retried at the same Tier.")
+            }
             Cause::CasLost => "The Lead Branch kept moving, so the merge could not be completed.".to_owned(),
             Cause::DirtyTarget => "The Lead worktree was not clean when the merge ran.".to_owned(),
             Cause::Tampered => "Its diff touched a protected path.".to_owned(),
@@ -204,7 +213,7 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
         .iter()
         .map(|p| {
             let items: Vec<String> = match &p.evidence {
-                Evidence::None | Evidence::Gate(None) => Vec::new(),
+                Evidence::None | Evidence::Gate(None) | Evidence::Message(_) => Vec::new(),
                 Evidence::Files(files) => files.clone(),
                 Evidence::Gate(Some((_, log))) => vec![log.display().to_string()],
             };
