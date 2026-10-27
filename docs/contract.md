@@ -1496,6 +1496,8 @@ CREATE TABLE attempts (
                                          'cas_lost', 'dirty_target', 'tampered',
                                          'gate_failed', 'gate_error', 'provider_error')),
   branch           TEXT NOT NULL CHECK (branch = 'cpd/' || plan || '--' || id
+                                        OR substr(branch, 1, length(plan || '/')) = plan || '/'
+                                        OR branch = 'cpd/' || plan
                                         OR substr(branch, 1, length('cpd/' || plan || '/')) = 'cpd/' || plan || '/'),
   worktree         TEXT NOT NULL,
   base_sha         TEXT,
@@ -1873,15 +1875,11 @@ WHEN OLD.status <> 'draft'
 BEGIN SELECT RAISE(ABORT, 'job_locked'); END;
 
 -- R34: a PR's identity, repo and base are Locked once its Plan is locked; needs only at the PR's own insert (pr add in dispatch)
--- migration 5 (hs-d118): one exception, the legacy Lead Branch of a merged PR moves to `cpd/<plan>/<key>` (pr add, §3.8)
+-- migration 5 (hs-d118) had one exception, the move of a merged PR's `cpd/<plan>` to `cpd/<plan>/<key>`; migration `lead-branch-name` (pro-d113 A3) removed it
 -- migration `stacked-prs` (hs-d324, hs-d325): a second, the follow of `base` alone: on an `open` PR (the poll sets it to what GitHub says, §3.8 "Stacked PRs" step 8), or on a PR that is stacked, i.e. whose `base` is the `lead_branch` of a PR of its repo (the unstack of a merged base PR, step 7); never the PR's identity, repo or Lead Branch
 -- hs-d285: `title` is not in the column list: editing it is allowed in every phase and never fires this trigger
 CREATE TRIGGER prs_locked BEFORE UPDATE OF plan, key, repo, base, lead_branch ON prs
 WHEN (SELECT phase FROM plans WHERE id = OLD.plan) NOT IN ('grounding', 'plan')
- AND NOT (OLD.status = 'merged'
-          AND NEW.plan IS OLD.plan AND NEW.key IS OLD.key AND NEW.repo IS OLD.repo AND NEW.base IS OLD.base
-          AND OLD.lead_branch = 'cpd/' || OLD.plan
-          AND NEW.lead_branch = 'cpd/' || OLD.plan || '/' || OLD.key)
  AND NOT (OLD.status IN ('waiting', 'dispatch', 'open')
           AND NEW.plan IS OLD.plan AND NEW.key IS OLD.key AND NEW.repo IS OLD.repo AND NEW.lead_branch IS OLD.lead_branch
           AND NEW.base IS NOT OLD.base
