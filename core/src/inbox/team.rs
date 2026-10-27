@@ -33,6 +33,8 @@ const GITHUB_DEADLINE: Duration = Duration::from_secs(15);
 #[derive(Debug, Deserialize)]
 pub struct Cache {
     pub version: u32,
+    /// The Slack channel id the posts were read from.
+    pub channel: String,
     pub posts: Vec<Post>,
 }
 
@@ -43,6 +45,8 @@ pub struct Post {
     pub number: u64,
     /// Slack's timestamp, seconds.
     pub ts: f64,
+    /// Slack's timestamp as text, the post's id in its channel.
+    pub ts_raw: String,
     pub primary: bool,
     pub reactions: Vec<String>,
     /// `Some` when Slack shows someone took it (`slack_claim`).
@@ -73,6 +77,13 @@ pub fn read_cache(home: &CpdHome) -> Result<Option<Cache>, CpdError> {
         return Err(bad(&path, format!("{} has version {}, not 1.", path.display(), cache.version)));
     }
     Ok(Some(cache))
+}
+
+impl Cache {
+    /// The primary post of pull request `repo#number`: the newest by `ts`.
+    pub fn primary_post(&self, repo: &str, number: u64) -> Option<&Post> {
+        self.posts.iter().filter(|p| p.primary && p.repo == repo && p.number == number).max_by(|a, b| a.ts.total_cmp(&b.ts))
+    }
 }
 
 fn bad(path: &std::path::Path, message: String) -> CpdError {
@@ -304,7 +315,7 @@ mod tests {
     }
 
     fn post() -> Post {
-        Post { repo: "acme/pay".to_owned(), number: 1, ts: 0.0, primary: true, reactions: Vec::new(), claim: None, eyes_me: None, thread_tags_me: false }
+        Post { repo: "acme/pay".to_owned(), number: 1, ts: 0.0, ts_raw: String::new(), primary: true, reactions: Vec::new(), claim: None, eyes_me: None, thread_tags_me: false }
     }
 
     fn claimed(mut p: Post, eyes_me: Option<bool>) -> Post {

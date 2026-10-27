@@ -15,7 +15,9 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::host::deadline::Failed;
 use crate::host::runner::{NO_DEADLINE, Runner};
-use crate::ids::ContextId;
+use super::team;
+use crate::ids::{ContextId, SessionId};
+use crate::session;
 use crate::output::Output;
 use crate::ports::Ports;
 
@@ -29,6 +31,8 @@ pub enum Command {
     Snooze(SnoozeArgs),
     /// Hide an item for the rest of its life (§21.4)
     Dismiss(DismissArgs),
+    /// Hand a review-requested item to the review Context's Manager (§21.7)
+    Claim(DismissArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -94,6 +98,7 @@ pub fn run_with(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Show(args) => show(ports, args),
         Command::Snooze(args) => snooze(ports, args),
         Command::Dismiss(args) => dismiss(ports, args),
+        Command::Claim(args) => claim(ports, args),
     }
 }
 
@@ -133,6 +138,7 @@ fn item_json(item: &Item, now: OffsetDateTime) -> Result<Value, CpdError> {
         "closed_at": item.closed_at,
         "snoozed_until": item.snoozed_until,
         "dismissed_at": item.dismissed_at,
+        "claimed_at": item.claimed_at,
         "age_seconds": (until - opened).whole_seconds(),
     }))
 }
@@ -156,6 +162,7 @@ fn engine_down(now: OffsetDateTime) -> Value {
         "closed_at": null,
         "snoozed_until": null,
         "dismissed_at": null,
+        "claimed_at": null,
         "age_seconds": 0,
     })
 }
@@ -193,7 +200,15 @@ fn list(ports: &Ports, args: ListArgs) -> Result<Output, CpdError> {
         Ok((open, visible, closed, events::highest_id(conn)?, manager))
     })?;
     let is_visible = |item: &Item| visible.iter().any(|v| v.id == item.id);
-    let hidden = |item: &Item| if item.dismissed_at.is_some() { "dismissed" } else { "snoozed" };
+    let hidden = |item: &Item| {
+        if item.dismissed_at.is_some() {
+            "dismissed"
+        } else if item.claimed_at.is_some() {
+            "claimed"
+        } else {
+            "snoozed"
+        }
+    };
 
     let mut items = Vec::new();
     // An absent engine with no live Manager is an open item with no Context: neither `--closed` nor `--context` lists it.
@@ -219,7 +234,7 @@ fn list(ports: &Ports, args: ListArgs) -> Result<Output, CpdError> {
     Ok(Output::success(json!({
         "engine": {"running": running},
         "items": items,
-        "hidden": {"snoozed": count("snoozed"), "dismissed": count("dismissed")},
+        "hidden": {"snoozed": count("snoozed"), "dismissed": count("dismissed"), "claimed": count("claimed")},
         "events_cursor": cursor,
     })))
 }
@@ -341,6 +356,82 @@ fn dismiss(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
         fields["already"] = json!(true);
     }
     Ok(Output::success(fields))
+}
+
+/// `inbox claim` (§21.7): the preconditions in order, all before any write; then `claimed_at`, the Event `inbox-claimed` and
+/// the `session-message` to the review Context's Manager in one transaction, and a stopped Manager started after it.
+fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
+    let mut env = Env::open_with(ports)?;
+    let now = ports.clock.utc();
+    let item = env.store.read(|conn| open_item(conn, args.id))?;
+    if item.claimed_at.is_some() {
+        return Ok(Output::success(json!({"already": true, "item": item_json(&item, now)?})));
+    }
+    if item.kind != Kind::ReviewRequested || item.dismissed_at.is_some() {
+        return Err(CpdError::new(
+            ErrorCode::NotClaimable,
+            format!("Inbox item {} is not claimable: only an undismissed review-requested item is.", item.id),
+        )
+        .with("item", item.id)
+        .with("kind", item.kind.as_str()));
+    }
+    let key = "inbox.review_context";
+    let review = &env.config.inbox.review_context;
+    if review.is_empty() {
+        return Err(CpdError::new(ErrorCode::ReviewContextUnset, format!("{key} is not set: there is no Context to claim into."))
+            .with("key", key)
+            .with("next", format!("cpd config set {key} <context>")));
+    }
+    let context = ContextId::parse(review)?;
+    let manager = env.store.read(|conn| {
+        let archived: bool = conn
+            .query_row("SELECT archived_at IS NOT NULL FROM contexts WHERE id = ?1", [context.as_str()], |r| r.get(0))
+            .optional()?
+            .ok_or_else(|| CpdError::new(ErrorCode::ContextNotFound, format!("No Context {context}.")).with("context", context.as_str()))?;
+        if archived {
+            return Err(CpdError::new(ErrorCode::Archived, format!("Context {context} is archived: unarchive it before claiming into it."))
+                .with("context", context.as_str())
+                .with("next", format!("cpd context unarchive {context}")));
+        }
+        let id: Option<String> = conn
+            .query_row(
+                "SELECT id FROM sessions WHERE context = ?1 AND role = 'manager' AND archived_at IS NULL ORDER BY created_at, id LIMIT 1",
+                [context.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        id.ok_or_else(|| CpdError::new(ErrorCode::NoManager, format!("Context {context} has no live Manager.")).with("context", context.as_str()))
+    })?;
+    let manager = SessionId::parse(&manager)?;
+    let missing = || {
+        CpdError::new(ErrorCode::PostNotFound, format!("No Slack post of {} is in the team review cache.", item.subject))
+            .with("item", item.id)
+            .with("subject", item.subject.clone())
+    };
+    let cache = team::read_cache(&env.home)?.ok_or_else(missing)?;
+    let (repo, number) = item
+        .subject
+        .strip_prefix("pr:")
+        .and_then(|s| s.rsplit_once('#'))
+        .and_then(|(repo, n)| Some((repo, n.parse::<u64>().ok()?)))
+        .ok_or_else(missing)?;
+    let post = cache.primary_post(repo, number).ok_or_else(missing)?;
+    let url = item.url.clone().unwrap_or_default();
+    let text = format!(
+        "Please start a review of the pull request {url} in your Context {context}. It was posted in Slack channel {} at {} (the post's ts); the User claimed it from the Inbox.",
+        cache.channel, post.ts_raw
+    );
+    let claimed = timestamp(now);
+    let item = Ports::scope(ports, || {
+        session::send::send_as_user(&mut env, &manager, "inbox claim", &text, &format!("the review of {}", item.label), |tx| {
+            let item = open_item(tx, args.id)?;
+            tx.execute("UPDATE inbox_items SET claimed_at = ?2 WHERE id = ?1", params![item.id, claimed])?;
+            let event = NewEvent::inbox_claimed(format!("Inbox item {} claimed: {}.", item.id, item.label), item.id);
+            events::append(tx, scoped(event, &item))?;
+            model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))
+        })
+    })?;
+    Ok(Output::success(json!({"item": item_json(&item, now)?, "manager": manager.as_str()})))
 }
 
 /// `event` with the links of `item` (§5.2: `context?, plan?, job?, session?`).

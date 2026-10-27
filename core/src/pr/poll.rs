@@ -15,7 +15,7 @@ use super::gh::{self, Listed};
 use super::pulls::{self, Change, Reason};
 use super::row::PlanPrs;
 use super::start::unstack;
-use super::status::PrState;
+use super::status::{ChecksSummary, PrState};
 use super::{Env, PollArgs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{BasePull, NewEvent, append};
@@ -145,6 +145,25 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
         }
     }
     let reads = gh::read_comments(&*env.ports.runner, &root, &due, &env.config.inbox.bot_reviewers)?;
+
+    // The checks of each owned open pull request whose `pr.feedback.checks` is `any` and whose rollup says `failed`
+    // (§7.6 step 3b): GitHub rolls a CANCELLED check up as FAILURE, so one call confirms it, before anything is written.
+    let mut confirm: Vec<(String, i64)> = Vec::new();
+    for listed in &seen {
+        let (repo, number) = (&listed.pr.repo, listed.pr.number);
+        let any = owned.iter().any(|(plan, key, row)| {
+            row.repo == *repo && row.number == number && checks_of(&checks, plan, key) == Some(Checks::Any)
+        });
+        if any && listed.pr.state == PrState::Open && listed.pr.checks == ChecksSummary::Failed && !confirm.contains(&(repo.clone(), number)) {
+            confirm.push((repo.clone(), number));
+        }
+    }
+    let confirmed = gh::read_checks(&*env.ports.runner, &root, &confirm)?;
+    for listed in &mut seen {
+        if let Some(i) = confirm.iter().position(|(repo, number)| *repo == listed.pr.repo && *number == listed.pr.number) {
+            listed.pr.checks = ChecksSummary::of(&confirmed[i]);
+        }
+    }
 
     // The owned PRs whose pull request a search lists with a base other than the PR's `base`.
     let follows = env.store.read(|conn| follows(conn, &owned, &search.bases))?;

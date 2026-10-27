@@ -3,7 +3,8 @@
 //! its `draft`, `queued` and `failed` Jobs cancelled with it in the same transaction, the shape check never applying; and an `open` PR whose pull request is
 //! stored `closed` (hs-d329). The PR keeps its key; before the lock the plan
 //! fingerprint changes, after it the Plan may move on. With `--superseded-by <plan>/<key>` a `dispatch` PR whose
-//! `merged` Jobs were carried by another PR is cancelled too, the Event naming that PR (hs-d301).
+//! `merged` Jobs were carried by another PR is cancelled too, the Event naming that PR (hs-d301). A `dispatch` PR whose merged Jobs are all review
+//! Jobs (which commit nothing) is cancelled without it (pro-d77).
 
 use rusqlite::Connection;
 use serde_json::json;
@@ -191,7 +192,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, superseded: Option<&str
             ErrorCode::PrInUse,
             format!(
                 "PR {key} is in use: a running Job holds it (cancel it with cpd job cancel and wait for it to stop), a merged Job holds it unless --superseded-by \
-                 names the PR that carried its work, and PRs that need it or are stacked on it hold it (edit them away with cpd pr edit) first."
+                 names the PR that carried its work (a merged review Job, which commits nothing, never holds it), and PRs that need it or are stacked on it hold it (edit them away with cpd pr edit) first."
             ),
         )
         .with("plan", plan.as_str())
@@ -227,9 +228,9 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, superseded: Option<&str
                 .with("to", "cancelled"));
         }
     };
-    // Only a `running` Job holds the PR, and a `merged` one unless superseded (its work another PR carried): `draft`, `queued` and `failed` Jobs
+    // Only a `running` Job holds the PR, and a `merged` one unless superseded (its work another PR carried) or a review Job (commits nothing): `draft`, `queued` and `failed` Jobs
     // go with the PR (`cancel_jobs`).
-    let holds = |j: &jobs::Job| j.status == "running" || (j.status == "merged" && superseded.is_none());
+    let holds = |j: &jobs::Job| j.status == "running" || (j.status == "merged" && superseded.is_none() && !j.review);
     let live_jobs: Vec<String> = jobs::load(conn, plan)?.into_iter().filter(|j| j.pr == key.as_str() && holds(j)).map(|j| j.key).collect();
     if !live_jobs.is_empty() || !needing.is_empty() {
         return Err(in_use(live_jobs));

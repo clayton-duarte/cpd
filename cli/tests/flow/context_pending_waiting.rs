@@ -53,3 +53,36 @@ fn markdown_shows_waiting_on_blockers() {
     let web = run.stdout.split("### PR web").nth(1).unwrap_or_else(|| panic!("{}", run.stdout));
     assert!(web.lines().take(4).any(|l| l == "waiting on api"), "{}", run.stdout);
 }
+
+#[test]
+fn pending_names_the_base_pr_of_a_stacked_pr_as_its_blocker_until_it_opens() {
+    let env = env();
+    pr(&env, "api", "waiting", "main", &[]);
+    job(&env, "api", "a", "draft", &[]);
+    // `web` is stacked on `api`: its base is `api`'s Lead Branch, and it stores no need
+    pr(&env, "web", "waiting", "cpd/pay/api", &[]);
+    job(&env, "web", "w", "draft", &[]);
+    let fx = Fx::with(env);
+    // (the JSON `waiting_on` of `web`, whether the markdown says `waiting on api`)
+    let waiting_on = || {
+        let out = fx.cpd(&["context", "pending", "--context", "ctx"]).ok();
+        let prs = out["plans"][0]["prs"].as_array().unwrap();
+        let web = prs.iter().find(|p| p["key"] == "web").unwrap_or_else(|| panic!("{out}"));
+        let md = fx.env.cpd(&["context", "pending", "--context", "ctx", "--markdown"]);
+        assert_eq!(md.exit, 0, "{md:?}");
+        let section = md.stdout.split("### PR web").nth(1).unwrap_or_else(|| panic!("{}", md.stdout));
+        (web.get("waiting_on").cloned(), section.lines().take(4).any(|l| l == "waiting on api"))
+    };
+    // the base PR has not started, then has started and not opened: it is the blocker
+    assert_eq!(waiting_on(), (Some(json!(["api"])), true));
+    fx.env.sql("UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'pay' AND key = 'api'");
+    assert_eq!(waiting_on(), (Some(json!(["api"])), true));
+    // once it is open, it blocks nothing
+    fx.env.sql(
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+         VALUES ('acme/api', 5, 'https://github.com/acme/api/pull/5', 'Api', 0, 'open', 'none', 'none', 't', NULL, 't');
+         UPDATE prs SET status = 'open', pr_number = 5, pr_url = 'https://github.com/acme/api/pull/5', pr_opened_at = 't',
+                        pull_request = (SELECT id FROM pull_requests WHERE number = 5) WHERE plan = 'pay' AND key = 'api'",
+    );
+    assert_eq!(waiting_on(), (None, false));
+}

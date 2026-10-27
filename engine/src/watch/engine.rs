@@ -222,7 +222,7 @@ pub(super) fn incident_holds_plan(conn: &rusqlite::Connection, plan: &PlanId) ->
 }
 
 /// The PRs E7 starts: `waiting` in a Plan in `dispatch`, ready (`start_pr::READY`: every need `merged`, a need of
-/// another Plan too, and the base PR, if any, started), and not marked `start_failed_at` (§3.7). Oldest Plan first,
+/// another Plan too, and the base PR, if any, `open`), and not marked `start_failed_at` (§3.7). Oldest Plan first,
 /// then by key.
 fn startable() -> String {
     format!(
