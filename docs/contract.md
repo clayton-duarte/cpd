@@ -872,6 +872,19 @@ If the insert fails (`no_slot`, `cas_lost`), the starter closes the descriptor a
 
 The concurrency slot is implicit: an Attempt holds one from `starting` until `ended`. E3 and `job dispatch` insert an Attempt only inside a write transaction that counts the Attempts not `ended` on the machine and refuses at `concurrency` (`no_slot`, exit 3); an urgent Job is refused only at `concurrency + 1` (§3.7 E3; `job dispatch` applies the same rule to an urgent Job). This replaces cpd 1's slot files (§9).
 
+### 3.4a Display Tier derivation (pro-d81)
+
+A Job's **displayed Tier** is what users and tools see in the Plan view, the plan render and `context pending`: the Tier is derived from the Job's Attempts and `retry_tier` by this rule, in order:
+
+1. The Tier of the Job's active Attempt (status not `ended`), if one exists.
+2. Else, the `retry_tier` value, **while** a `job retry` has no Attempt since: the Job is `queued` at this Tier (the latest `job-retried` Event of the Job is newer than its latest `attempt-started` Event).
+3. Else, the Tier of the latest (most recent) Attempt of the Job, if one exists.
+4. Else, the Job's `tier` field.
+
+A Job with no Attempts and no `tier` has no displayed Tier (shown as `—` in displays).
+
+**Readers of the displayed Tier:** the Plan view (tui/src/read/flow.rs `job_nodes` calls `core/src/plan/display.rs` `Display::load`), `plan render` (§4.5), and `context pending` (§3.11). The JSON output of `plan show` and `job show` (§4.3, §5.7) remains unchanged: they print `tier` and `retry_tier` as raw field values, not derived.
+
 ### 3.5 Escalation states
 
 | From | To | Moved by | Event |
