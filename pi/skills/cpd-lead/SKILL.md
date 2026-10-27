@@ -277,6 +277,7 @@ Find the cause in the message text or `cpd job show <k>` (it lists Attempts with
 | `timed_out` | The Job is too big or the Worker is stuck: `cpd attempt read <attempt-id>`. Cancel and append smaller Jobs. |
 | `crashed`, `no_submit` (every Attempt of the ladder) | `cpd job retry <k> --tier <T>`, a higher Tier than the last Attempt. If it fails again, change the Spec (cancel and append). |
 | `merge_conflict` (every Attempt of the ladder) | Read the text. Retry if the cause is gone; otherwise cancel and append a Job that accounts for the new Lead Branch HEAD. |
+| `provider_error` (the 3 retries of the same Tier are used up) | `cpd job retry <k> --tier <T>`, the SAME Tier as the last Attempt, once the provider answers again (check with the User if unsure); it never means the Spec or the Tier is wrong. |
 | `setup_failed` | Worktree setup failed (the repo's `pre-start`). Tell the User; retry after they fix it. |
 | `cas_lost` | The Lead Branch moved during the merge: `cpd job retry <k> --tier <T>`, same Tier. |
 | `dirty_target` | The Lead worktree is dirty. Tell the User. Never touch the Lead worktree. |
