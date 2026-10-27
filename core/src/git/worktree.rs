@@ -697,26 +697,30 @@ pub fn remove_merged_attempt(lead_worktree: &Path, path: &Path, branch: &str) ->
 }
 
 /// Why a merged PR's Lead worktree was left alone.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kept {
     /// `git status --porcelain` is not empty (untracked files included).
     Dirty,
     /// `git rev-list HEAD --not --remotes=origin` is not empty, and `HEAD` is not the pull request's recorded head or
     /// an ancestor of it.
     Unpushed,
+    /// The rename of `<path>` to `<path>.removing` failed: the error is the reason (DESIGN 4 (a)). Stub: nothing
+    /// returns it yet.
+    Rename(String),
 }
 
 impl Kept {
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
             Kept::Dirty => "dirty",
             Kept::Unpushed => "unpushed",
+            Kept::Rename(reason) => reason,
         }
     }
 }
 
 /// What [`remove_merged_lead`] did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LeadRemoval {
     /// The worktree and the local Lead Branch are gone (or were).
     Removed,
