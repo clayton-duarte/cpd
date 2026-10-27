@@ -64,6 +64,9 @@ fn parse_scope_of(file: &Path, text: &str, kind: Option<ScopeKind>) -> Result<Sc
             scope.gate = Some(GatesSet { merge: Some(gate), pr: Some(gate), text: None });
         }
     }
+    if let Some(post) = scope.pr.as_ref().and_then(|pr| pr.post.as_ref()) {
+        super::post::check(post).map_err(|(name, why)| policy_invalid(file, Some(&format!("pr.post.{name}")), why))?;
+    }
     if let Some(set) = &scope.test_commands {
         set.commands().map_err(|why| policy_invalid(file, Some("test-commands"), why))?;
     }
