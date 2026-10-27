@@ -386,7 +386,7 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
                 tier: j.tier.as_deref().map(|t| tier(&what, t)).transpose()?,
                 needs: shown_needs(&rows, j).iter().map(|n| id("Job key", n, JobKey::parse)).collect::<Result<_, _>>()?,
                 retry_tier: j.retry_tier.as_deref().map(|t| tier(&what, t)).transpose()?,
-                shown_tier: j.tier.as_deref().map(|t| tier(&what, t)).transpose()?,
+                shown_tier: display.job_tier(j).as_deref().map(|t| tier(&what, t)).transpose()?,
                 attempts: attempts.remove(j.key.as_str()).unwrap_or_default(),
                 seq: j.seq,
                 waiting_on,

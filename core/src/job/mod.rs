@@ -25,7 +25,7 @@ mod show;
 mod spec;
 mod urgent;
 
-pub(crate) use retry::retried_since_last_start;
+pub(crate) use retry::{retried_since_last_start, retries_pending};
 
 use std::path::PathBuf;
 
