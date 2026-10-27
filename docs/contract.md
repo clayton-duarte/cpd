@@ -1693,6 +1693,16 @@ CREATE TABLE pr_posts (
   CHECK (reaction IS NOT NULL OR reacted_at IS NULL)
 ) STRICT;
 
+CREATE TABLE slack_reactions (
+  id          INTEGER PRIMARY KEY,
+  channel     TEXT NOT NULL CHECK (length(channel) BETWEEN 1 AND 20),
+  ts          TEXT NOT NULL CHECK (length(ts) >= 1),
+  emoji       TEXT NOT NULL CHECK (length(emoji) BETWEEN 1 AND 100),
+  queued_at   TEXT NOT NULL,
+  reacted_at  TEXT,
+  UNIQUE (channel, ts, emoji)
+) STRICT;
+
 -- ---------- Message board (hs-d514) ----------
 CREATE TABLE board_posts (
   id        INTEGER PRIMARY KEY,
@@ -2354,6 +2364,8 @@ Turn-start Context updates stay raw records (hs-d147, `commands.md` §15.7). `co
 - **`20261031T1000-deploy-kind`** (pro-d100; Plan `deploy-inbox`, PR `deploy`; made with `scripts/new-migration.sh deploy-kind breaking`; applied after every migration that exists before it): adds `'deploy'` to the `inbox_items.kind` CHECK (§4.4) by rebuilding `inbox_items`, breaking as SQLite cannot alter a CHECK (K4), like the newest migration that rebuilds it (`git grep -l "CREATE TABLE inbox_items_new" core/src/store/migrations`, the one that sorts last): `inbox_items_new` with the §4.4 definition, every row copied with all columns and the primary key kept, the old table dropped, the new one renamed, and `inbox_items_open`, `inbox_items_closed` and the trigger `inbox_items_no_delete` recreated. Nothing else changes. The copy writes no `history` row. The pinned `SCHEMA_HASH` changes (`scripts/repin.sh`, §4.3). Tests: a store before it keeps every row and id and then accepts a `deploy` item and refuses an unknown kind; the schema hash matches that of a fresh store; a binary without it refuses the store (`store_too_new`).
 
 - **`<YYYYMMDDTHHMM>-pr-posts`** (pro-d64, pro-d65; Plan pr-post; made with `scripts/new-migration.sh pr-posts additive`), a named migration declared `additive`. It creates the `pr_posts` table (§4.4) with one `CREATE TABLE` statement and inserts its row into `history_tables` with `no_delete` 1, so the reconcile (K4) generates its history triggers. No existing rows are back-filled.
+
+- **`slack-reactions`** (pro-d107; Plan review-intake, PR `claim`; made with `scripts/new-migration.sh slack-reactions additive`), a named migration declared `additive`. It creates the `slack_reactions` table (§4.4) with one `CREATE TABLE` statement and inserts its row into `history_tables` with `no_delete` 1, so the reconcile (K4) generates its history triggers. It back-fills the queue: for every `pr_posts` row whose `reaction` is not NULL and whose PR is `merged` (in status `merged`), it inserts one queue row with `emoji` = `pr_posts.reaction`, `channel` = `pr_posts.channel`, `ts` = `pr_posts.ts`, `queued_at` = the PR's `merged_at`, `reacted_at` = `pr_posts.reacted_at`, ON CONFLICT DO NOTHING (so posts merged before the upgrade still get their reaction, and if a row was somehow already queued, the old queue row is kept). No new rows are appended for rerun idempotence.
 
 - **`job-tenancy`** (pro-d106; Plan `resource-slots`; made by `scripts/new-migration.sh job-tenancy breaking`; `-- cpd-migration: breaking after <n>`, `n` counting every migration that sorts before it, N3). It creates `job_pools` with its two triggers, `job_pools_first_attempt` and `job_pools_no_update`, and the view `job_tenants` (§4.4), adds `jobs.skipped_n` (`ALTER TABLE jobs ADD COLUMN`, nullable) with the unique partial index `jobs_skipped_n`, and inserts `job_pools` into `history_tables` with `no_delete` 1, so the reconcile (K4) generates its history triggers and `job_pools_no_delete` (with the Plan-delete exception, §4.4). **Breaking**, not additive: a view is no action of the additive test (A1 allows `CREATE TABLE/INDEX/TRIGGER`, `ALTER TABLE` and `INSERT`), and an older binary would start Jobs without writing `job_pools` and so leak the tenancy of every Job it starts, so it must be refused (`store_too_new`, "The window"). **It rewrites no row:** no Job, Attempt or other row is changed, copied or deleted; every Job has `skipped_n` null, and no `job_pools` row is back-filled, so a Job already started before the migration is a tenant of `workers` only (its Attempts say so) and of no Spec pool, a gap that ends with that Job: its Spec pools look free to the starter until it ends. The pinned `SCHEMA_HASH` changes as for any migration (`scripts/repin.sh`, §4.3).
 
