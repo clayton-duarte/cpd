@@ -592,7 +592,7 @@ MCP error -32602: Input validation error: Invalid arguments for tool getJiraIssu
 
 Permanent (caller bug).
 
-**A call without permission**: NOT PROVOKED. The only safe provocation is an issue or site the signed-in user cannot see, and Jira answers both as the unknown-key text above ("does not exist or you do not have permission"), and a cloudId the user did not grant as "isn't explicitly granted by the user". No call with a missing scope was made (the token's scopes could not be removed and no write to another issue was allowed). A real 401/403 shape is therefore unobserved.
+**A call without permission**: NOT PROVOKED. The only safe provocation is an issue or site the signed-in user cannot see, and Jira answers both as the unknown-key text above ("does not exist or you do not have permission"), and a cloudId the user did not grant as "isn't explicitly granted by the user". No call with a missing scope was made (the granted scopes could not be reduced and no write to another issue was allowed). A real 401/403 shape is therefore unobserved.
 
 The `rateLimit` object in the JSON errors carried `limit` values 200 (writes), 350 and 400 (reads) and `remaining` one or two below it.
 
