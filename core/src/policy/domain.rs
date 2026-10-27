@@ -66,11 +66,22 @@ pub struct Feedback {
     pub checks: Checks,
 }
 
+/// `[pr.post]`: posting a PR for review (contract §8.3).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Post {
+    pub enabled: bool,
+    pub channel: String,
+    pub template: String,
+    pub merged_reaction: String,
+}
+
 /// The `pr` domain.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pr {
     pub feedback: Feedback,
+    pub post: Post,
     pub text: String,
 }
 
@@ -88,6 +99,16 @@ pub struct FeedbackSet {
     pub checks: Option<Checks>,
 }
 
+/// What a scope file's `[pr.post]` table sets: a left-out key is `None`.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PostSet {
+    pub enabled: Option<bool>,
+    pub channel: Option<String>,
+    pub template: Option<String>,
+    pub merged_reaction: Option<String>,
+}
+
 /// What a scope file's `[pr]` table sets.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -95,6 +116,7 @@ pub struct PrSet {
     /// The deprecated `[pr] gate` alias; it is converted into the `gate` domain by `parse_scope`.
     pub gate: Option<GateAlias>,
     pub feedback: Option<FeedbackSet>,
+    pub post: Option<PostSet>,
     pub text: Option<String>,
 }
 
@@ -274,6 +296,10 @@ pub trait Set {
 pub const MERGE: &str = "merge";
 pub const GATE_PR: &str = "pr";
 pub const FEEDBACK_CHECKS: &str = "feedback.checks";
+pub const POST_ENABLED: &str = "pr.post.enabled";
+pub const POST_CHANNEL: &str = "pr.post.channel";
+pub const POST_TEMPLATE: &str = "pr.post.template";
+pub const POST_MERGED_REACTION: &str = "pr.post.merged_reaction";
 
 impl Set for GatesSet {
     type Value = Gates;
@@ -300,9 +326,23 @@ impl Set for PrSet {
     /// the `gate` domain of the same file, and an explicit `[gate]` table wins over it.
     fn fill(&self, base: &Pr) -> (Pr, Vec<&'static str>) {
         let checks = self.feedback.as_ref().and_then(|f| f.checks);
-        let left_out = left_out([(FEEDBACK_CHECKS, checks.is_none())]);
+        let post = self.post.as_ref();
+        let left_out = left_out([
+            (FEEDBACK_CHECKS, checks.is_none()),
+            (POST_ENABLED, post.and_then(|p| p.enabled).is_none()),
+            (POST_CHANNEL, post.and_then(|p| p.channel.as_ref()).is_none()),
+            (POST_TEMPLATE, post.and_then(|p| p.template.as_ref()).is_none()),
+            (POST_MERGED_REACTION, post.and_then(|p| p.merged_reaction.as_ref()).is_none()),
+        ]);
+        let pick = |set: Option<String>, base: &str| set.unwrap_or_else(|| base.to_owned());
         let value = Pr {
             feedback: Feedback { checks: checks.unwrap_or(base.feedback.checks) },
+            post: Post {
+                enabled: post.and_then(|p| p.enabled).unwrap_or(base.post.enabled),
+                channel: pick(post.and_then(|p| p.channel.clone()), &base.post.channel),
+                template: pick(post.and_then(|p| p.template.clone()), &base.post.template),
+                merged_reaction: pick(post.and_then(|p| p.merged_reaction.clone()), &base.post.merged_reaction),
+            },
             text: self.text.clone().unwrap_or_else(|| base.text.clone()),
         };
         (value, left_out)
@@ -311,6 +351,15 @@ impl Set for PrSet {
     fn complete(&self) -> Option<Pr> {
         Some(Pr {
             feedback: Feedback { checks: self.feedback.as_ref()?.checks? },
+            post: {
+                let p = self.post.as_ref()?;
+                Post {
+                    enabled: p.enabled?,
+                    channel: p.channel.clone()?,
+                    template: p.template.clone()?,
+                    merged_reaction: p.merged_reaction.clone()?,
+                }
+            },
             text: self.text.clone()?,
         })
     }

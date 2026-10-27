@@ -14,6 +14,7 @@ mod load;
 mod machine;
 pub mod model;
 mod origin;
+mod post;
 mod resolve;
 mod show;
 
@@ -22,7 +23,7 @@ use crate::ids::{ContextId, OwnerLogin, RepoName};
 use crate::session::Role;
 
 pub use domain::{
-    audience, Checks, Domain, DomainSource, Feedback, Gate, GateAlias, Gates, Policy, Pr, Scope, Source, Sources,
+    audience, Checks, Domain, DomainSource, Feedback, Gate, GateAlias, Gates, Policy, Post, PostSet, Pr, Scope, Source, Sources,
     Text,
 };
 /// The `policy` commands (commands.md §22).
@@ -43,6 +44,7 @@ pub use machine::{name_ok, load_machine, parse_machine, Exposure, Machine, Machi
 pub use show::KeyArgs;
 pub use origin::{parse_origin, repo_key};
 pub use load::{load_scope_file, parse_scope, policy_invalid};
+pub use post::render_post;
 pub use known::known_owners;
 pub use resolve::{check_file_names, default_policy, key_of_scope_file, policy_dir, repo_path, resolve, resolve_machine, resolve_unowned_row};
 
@@ -298,7 +300,7 @@ mod tests {
         write(
             &home,
             "acme/owner.toml",
-            "[pr]\nfeedback.checks = \"none\"\ntext = \"owner pr\"\n",
+            "[pr]\nfeedback.checks = \"none\"\ntext = \"owner pr\"\n[pr.post]\nenabled = true\nchannel = \"\"\ntemplate = \"{{ url }}\"\nmerged_reaction = \"\"\n",
         );
         write(&home, "acme/cpd.toml", "[pr]\n");
         let r = resolve(&home, &repo_key("acme", "cpd")).unwrap();
@@ -306,9 +308,12 @@ mod tests {
         assert_eq!(r.policy.pr.text, "", "the text is replaced, not inherited");
         let src = r.sources.get(Domain::Pr);
         assert_eq!(src.source, Source::Repo(real(&home, "acme/cpd.toml")));
-        assert_eq!(src.left_out, ["feedback.checks"]);
+        assert_eq!(
+            src.left_out,
+            ["feedback.checks", "pr.post.enabled", "pr.post.channel", "pr.post.template", "pr.post.merged_reaction"]
+        );
         assert!(src.to_string().ends_with(" (key default)"));
-        // The owner file sets the only typed key: no `(key default)`.
+        // The owner file sets every typed key: no `(key default)`.
         let o = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
         assert_eq!(o.policy.pr.feedback.checks, Checks::None);
         assert!(!o.sources.get(Domain::Pr).key_default());
@@ -498,6 +503,7 @@ mod tests {
     // docs/contract.md is the registry's documentation, and this pins them equal.
 
     struct Row {
+        cell: String,
         domain: String,
         keys: Vec<(String, Option<String>, Vec<String>)>, // key path, default, allowed values
         audience: Vec<String>,
@@ -522,7 +528,7 @@ mod tests {
                 let domain = cells[0].trim_matches('`').to_owned();
                 let keys = parse_keys(&cells[1]);
                 let audience = cells[cells.len() - 1].split(',').map(|r| r.trim().to_owned()).collect();
-                rows.push(Row { domain, keys, audience });
+                rows.push(Row { cell: cells[1].clone(), domain, keys, audience });
             } else if in_table {
                 break;
             }
@@ -556,6 +562,7 @@ mod tests {
                 }
             }
             serde_json::Value::String(s) => out.push((prefix.to_owned(), s.clone())),
+            serde_json::Value::Bool(b) => out.push((prefix.to_owned(), b.to_string())),
             other => panic!("unexpected default value at {prefix}: {other}"),
         }
     }
@@ -598,6 +605,14 @@ mod tests {
                 .map(|(p, v)| (p[row.domain.len() + 1..].to_owned(), v))
                 .collect();
             typed.sort();
+            // A key documented in prose only (no `key = value` span) must still be named in the cell, as `key`.
+            let spanned: Vec<&str> = row.keys.iter().map(|(k, _, _)| k.as_str()).collect();
+            typed.retain(|(k, _)| {
+                spanned.contains(&k.as_str()) || {
+                    assert!(row.cell.contains(&format!("`{k}`")), "{}.{k} is not documented", row.domain);
+                    false
+                }
+            });
             let mut documented: Vec<(String, String)> = row
                 .keys
                 .iter()
@@ -609,7 +624,10 @@ mod tests {
             for (key, _, allowed) in &row.keys {
                 for value in allowed {
                     let mut table = toml::Table::new();
-                    let mut leaf = toml::Value::String(value.clone());
+                    let mut leaf = match value.as_str() {
+                        "true" | "false" => toml::Value::Boolean(value == "true"),
+                        _ => toml::Value::String(value.clone()),
+                    };
                     for part in key.split('.').rev() {
                         leaf = toml::Value::Table(toml::Table::from_iter([(part.to_owned(), leaf)]));
                     }
