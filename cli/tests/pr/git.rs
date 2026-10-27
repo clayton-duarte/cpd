@@ -17,7 +17,7 @@ use cpd_core::host::spawn::{Launch, Pid, Spawn};
 use cpd_core::ports::Ports;
 use cpd_core::git::{
     Operation, Push, Setup, Synced, sync_lead, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_attempt_worktree_with, create_lead_worktree, create_lead_worktree_with,
-    discard_worktree, push_commit, remove_merged_attempt, lead_branch, lead_worktree_path, tamper_check,
+    discard_worktree, push_commit, remove_merged_attempt, legacy_lead_branch, lead_worktree_path, tamper_check,
     touched_protected,
 };
 use cpd_core::home::Hook;
@@ -77,7 +77,7 @@ fn lead_worktree_is_a_sibling_on_cpd_plan_cut_from_the_base() {
     assert_eq!(made.path, repo.parent().unwrap().join("pay.pay-4521"));
     assert_eq!(made.path, lead_worktree_path(&repo, &plan()).unwrap());
     assert_eq!(made.branch, "cpd/pay-4521");
-    assert_eq!(made.branch, lead_branch(&plan()));
+    assert_eq!(made.branch, legacy_lead_branch(&plan()));
     assert_eq!(made.base_sha, main_sha);
     assert_eq!(fx.git(&made.path, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay-4521");
     assert_eq!(fx.git(&made.path, &["rev-parse", "HEAD"]), main_sha);
@@ -1347,7 +1347,7 @@ fn lead_to_remove(fx: &Fx, name: &str, dir: &str) -> (PathBuf, PathBuf, String) 
     let parent = fx.env.root().join(dir);
     fs::create_dir_all(&parent).unwrap();
     let path = parent.join("pay.pay-4521");
-    fx.git(&repo, &["worktree", "add", "-q", "-b", &lead_branch(&plan()), path.to_str().unwrap()]);
+    fx.git(&repo, &["worktree", "add", "-q", "-b", &legacy_lead_branch(&plan()), path.to_str().unwrap()]);
     let head = fx.git(&path, &["rev-parse", "HEAD"]);
     (repo, path, head)
 }
@@ -1369,7 +1369,7 @@ fn registered(fx: &Fx, repo: &Path, path: &Path) -> bool {
 }
 
 fn branch_exists(fx: &Fx, repo: &Path) -> bool {
-    !fx.git(repo, &["branch", "--list", &lead_branch(&plan())]).is_empty()
+    !fx.git(repo, &["branch", "--list", &legacy_lead_branch(&plan())]).is_empty()
 }
 
 /// Every file under `dir` with its bytes, sorted.
@@ -1391,7 +1391,7 @@ fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 }
 
 fn remove_lead(fx: &Fx, repo: &Path, path: &Path, head: &str) -> Result<cpd_core::git::LeadRemoval, cpd_core::error::CpdError> {
-    fx.scoped(|| cpd_core::git::remove_merged_lead(repo, path, &lead_branch(&plan()), || Some(head.to_owned())))
+    fx.scoped(|| cpd_core::git::remove_merged_lead(repo, path, &legacy_lead_branch(&plan()), || Some(head.to_owned())))
 }
 
 #[test]
@@ -1402,7 +1402,7 @@ fn lead_removal_stopped_after_any_step_leaves_the_worktree_whole_or_gone() {
         let stopper = Arc::new(Stopper { inner: fx.fakes.ports.runner.clone(), stop: n, seen: Mutex::new(0), lead: path.clone() });
         let ports = Ports { runner: stopper.clone(), ..fx.fakes.ports.clone() };
 
-        let _ = Ports::scope(&ports, || cpd_core::git::remove_merged_lead(&repo, &path, &lead_branch(&plan()), || Some(head.clone())));
+        let _ = Ports::scope(&ports, || cpd_core::git::remove_merged_lead(&repo, &path, &legacy_lead_branch(&plan()), || Some(head.clone())));
 
         if stopper.calls() < n {
             assert!(n > 3, "the removal made only {} git calls", stopper.calls());
@@ -1413,7 +1413,7 @@ fn lead_removal_stopped_after_any_step_leaves_the_worktree_whole_or_gone() {
                 assert!(path.join(file).exists(), "stop at git call {n}: {file} is missing from the worktree that still exists");
             }
             assert!(registered(&fx, &repo, &path), "stop at git call {n}: the worktree that still exists is not registered");
-            assert_eq!(fx.git(&path, &["branch", "--show-current"]), lead_branch(&plan()), "stop at git call {n}");
+            assert_eq!(fx.git(&path, &["branch", "--show-current"]), legacy_lead_branch(&plan()), "stop at git call {n}");
         }
     }
 }
@@ -1460,7 +1460,7 @@ fn lead_removal_keeps_a_dirty_or_unpushed_worktree_untouched_without_renaming() 
     let (repo, path, _) = lead_to_remove(&fx, "unpushed", "u");
     fx.commit_file(&path, "local.txt", "local\n", "local work");
     let before = snapshot(&path);
-    let kept = fx.scoped(|| cpd_core::git::remove_merged_lead(&repo, &path, &lead_branch(&plan()), || None)).unwrap();
+    let kept = fx.scoped(|| cpd_core::git::remove_merged_lead(&repo, &path, &legacy_lead_branch(&plan()), || None)).unwrap();
     assert_eq!(kept, LeadRemoval::Kept(Kept::Unpushed));
     assert_eq!(snapshot(&path), before);
     assert!(!removing(&path).exists());

@@ -212,10 +212,15 @@ fn reached(prs: &[Merged], base: &str, level: usize) -> bool {
 /// True when a merged PR of the Lead Branch of `branch` contains `head` and reached main.
 fn merged_via_pr(ports: &Ports, repo: &Path, prs: &[Merged], branch: &str, head: &str, failed: &mut Vec<String>) -> bool {
     let lead = lead_of(branch);
+    let attempt_plan = attempt_plan(branch);
     let legacy = lead.strip_prefix("cpd/").and_then(|rest| rest.split_once('/')).map(|(plan, _)| format!("cpd/{plan}"));
     let prefix = format!("{lead}/");
+    let plan_prefix = attempt_plan.map(|plan| format!("{plan}/"));
     for pr in prs {
-        let named = pr.head == lead || pr.head.starts_with(&prefix) || legacy.as_deref() == Some(pr.head.as_str());
+        let named = pr.head == lead
+            || pr.head.starts_with(&prefix)
+            || legacy.as_deref() == Some(pr.head.as_str())
+            || plan_prefix.as_deref().is_some_and(|p| pr.head.starts_with(p));
         if !named || !reached(prs, &pr.base, 0) {
             continue;
         }
@@ -231,9 +236,18 @@ fn merged_via_pr(ports: &Ports, repo: &Path, prs: &[Merged], branch: &str, head:
     false
 }
 
-/// The Lead Branch of `branch`: the part before the first `--`.
+/// The Plan of an Attempt branch `cpd/<plan>--<attempt>` (starts with `cpd/`, the rest has no `/`).
+fn attempt_plan(branch: &str) -> Option<&str> {
+    let rest = branch.strip_prefix("cpd/").filter(|r| !r.contains('/'))?;
+    rest.split_once("--").map(|(plan, _)| plan)
+}
+
+/// The Lead Branch of `branch`: the branch itself, except an Attempt branch, whose Lead Branch is `cpd/<plan>`.
 fn lead_of(branch: &str) -> &str {
-    branch.split_once("--").map_or(branch, |(lead, _)| lead)
+    match attempt_plan(branch) {
+        Some(plan) => &branch[..4 + plan.len()],
+        None => branch,
+    }
 }
 
 fn prune_repo(ports: &Ports, args: &Args, protected: &BTreeSet<String>, repo: &Path, out: &mut Outcome) -> Result<(), String> {
