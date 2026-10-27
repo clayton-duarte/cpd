@@ -1,10 +1,10 @@
 /**
- * The rail end rule (docs/contract.md 6.9, the table of closing rows): every pill head ` ╭─` is, at every instant of
+ * The rail end rule (docs/contract.md 6.9, the table of closing rows): every pill head `╭─` is, at every instant of
  * the row's life, followed by exactly ONE closing row, and it is one of five forms:
- *   1/2  ` ╰󰬦 expand` / ` ╰󰬬 collapse`    the fold's toggle, glyph in 7
- *   3    ` ╰` in 8 + one loader frame in 6    from the row's creation (argument streaming included) until a result
- *   4    ` ╰󰬪` in 8                            a block that cannot fold
- *   5    ` ╰󰬦 choose`, the whole row in 8      `ask_user_question` only, from the start of its execution until its result
+ *   1/2  `╰󰬦 expand` / `╰󰬬 collapse`    the fold's toggle, glyph in 7
+ *   3    `╰` in 8 + one loader frame in 6    from the row's creation (argument streaming included) until a result
+ *   4    `╰󰬪` in 8                            a block that cannot fold
+ *   5    `╰󰬦 choose`, the whole row in 8      `ask_user_question` only, from the start of its execution until its result
  * Rows are driven through Pi's own ToolExecutionComponent in Pi's order (indicator-harness.ts).
  */
 import assert from "node:assert/strict";
@@ -16,10 +16,10 @@ import {
 
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
 const FRAMES = MOON_FRAMES;
-const LOADER = new RegExp(`^ \u2570[${FRAMES.join("")}]$`, "u");
-const TOGGLE = /^ \u2570[\u{F0B26}\u{F0B2C}] (expand|collapse)( · .*)?$/u;
-const TERMINATOR = /^ \u2570\u{F0B2A}$/u;
-const CHOOSE = /^ \u2570\u{F0B26} choose$/u;
+const LOADER = new RegExp(`^\u2570[${FRAMES.join("")}]$`, "u");
+const TOGGLE = /^\u2570[\u{F0B26}\u{F0B2C}] (expand|collapse)( · .*)?$/u;
+const TERMINATOR = /^\u2570\u{F0B2A}$/u;
+const CHOOSE = /^\u2570\u{F0B26} choose$/u;
 const WIDTHS = [40, 100];
 
 type Row = ReturnType<typeof makeRow>;
@@ -58,22 +58,23 @@ function formOf(raw: string): Form | undefined {
 	if (LOADER.test(text)) {
 		const frame = [...text].at(-1)!;
 		const before = raw.slice(0, raw.indexOf(frame));
-		const line = raw.includes("\x1b[90m \u2570") || raw.includes("\x1b[90m\u2570");
+		const line = raw.includes("\x1b[90m\u2570");
 		return line && /\x1b\[36m$/u.test(before) && !raw.includes("\x1b[37m") ? "loader" : undefined;
 	}
 	if (TOGGLE.test(text)) return /\x1b\[37m[^\x1b]*[\u{F0B26}\u{F0B2C}]/u.test(raw) ? "toggle" : undefined;
 	return undefined;
 }
 
-/** The block's rule: it starts with ` ╭─`, its last non-blank row is one of the five forms and is the ONLY ` ╰` row. */
+/** The block's rule: it starts with `╭─`, its last non-blank row is one of the five forms and is the ONLY `╰` row. */
 function closingOf(lines: string[], where: string): Form {
-	assert.ok(plain(lines[0] ?? "").startsWith(" \u256D\u2500"), `${where}: no pill head: ${JSON.stringify(lines.map(plain))}`);
-	const closers = lines.filter((line) => plain(line).startsWith(" \u2570"));
+	assert.ok(plain(lines[0] ?? "").startsWith("\u256D\u2500"), `${where}: no pill head: ${JSON.stringify(lines.map(plain))}`);
+	const closers = lines.filter((line) => plain(line).startsWith("\u2570"));
 	assert.equal(closers.length, 1, `${where}: exactly one closing row, got ${closers.length}: ${JSON.stringify(lines.map(plain))}`);
-	// A toggle's metadata may wrap at a narrow width: its continuation rows are indented and start no rail or head.
-	const at = lines.findIndex((line) => plain(line).startsWith(" \u2570"));
+	// A toggle's metadata may wrap at a narrow width: its continuation rows start in column 0 (no row of a tool block starts
+	// with a margin column, test/chat-margins.test.ts) and start no rail or head.
+	const at = lines.findIndex((line) => plain(line).startsWith("\u2570"));
 	const rest = lines.slice(at + 1);
-	assert.ok(rest.every((line) => /^ {2,}\S/u.test(plain(line))), `${where}: rows after the closing row: ${JSON.stringify(lines.map(plain))}`);
+	assert.ok(rest.every((line) => /^[^\u256D\u2570\u2502 ]/u.test(plain(line))), `${where}: rows after the closing row: ${JSON.stringify(lines.map(plain))}`);
 	const closing = lines[at]!;
 	const form = formOf(closing);
 	assert.ok(form, `${where}: the closing row is not one of the five forms (an open rail): ${JSON.stringify(closing)} in ${JSON.stringify(lines.map(plain))}`);
@@ -216,7 +217,7 @@ test("the closing row is not doubled when the first result arrives", async () =>
 			row.markExecutionStarted();
 			const count = (label: string) => {
 				const lines = drawn(row, 100);
-				assert.equal(lines.filter((line) => plain(line).startsWith(" \u2570")).length, 1, `${kind.key} / ${label}: ${JSON.stringify(lines.map(plain))}`);
+				assert.equal(lines.filter((line) => plain(line).startsWith("\u2570")).length, 1, `${kind.key} / ${label}: ${JSON.stringify(lines.map(plain))}`);
 			};
 			count("started, no result");
 			row.updateResult({ content: [], isError: false } as never, true);
@@ -238,7 +239,7 @@ test("a failed or aborted row closes with its toggle", async () => {
 						const where = `${kind.key} / ${stage} / ${expanded ? "expanded" : "folded"} / ${width}`;
 						const lines = drawn(rowAt(harness, kind, stage, expanded), width);
 						assert.equal(closingOf(lines, where), "toggle", where);
-						assert.match(plain(lines.find((line) => plain(line).startsWith(" \u2570"))!), expanded ? /collapse/u : /expand/u, where);
+						assert.match(plain(lines.find((line) => plain(line).startsWith("\u2570"))!), expanded ? /collapse/u : /expand/u, where);
 					}
 				}
 			}
@@ -271,7 +272,7 @@ test("ask_user_question closes with ╰󰬦 choose in colour 8 from the start of
 				const lines = drawn(rowAt(harness, ask, stage, false), width);
 				assert.equal(closingOf(lines, where), "choose", where);
 				const last = lines.at(-1)!;
-				assert.equal(plain(last), " \u2570\u{F0B26} choose", where);
+				assert.equal(plain(last), "\u2570\u{F0B26} choose", where);
 				assert.ok(!/\x1b\[(37|36|97)m/u.test(last), `${where}: the whole row is colour 8, not clickable: ${JSON.stringify(last)}`);
 			}
 		}

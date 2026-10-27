@@ -51,23 +51,23 @@ mod tests {
     #[test]
     fn the_contract_examples() {
         assert_eq!(next("S2").as_deref(), Some("S3"));
-        assert_eq!(next("H3").as_deref(), Some("S3"));
+        assert_eq!(next("H3").as_deref(), Some("S1"));
         // hs-d554: the ladder ends at S3.
         assert_eq!(next("S3"), None);
         assert_eq!(next("S4"), None);
     }
 
     #[test]
-    fn the_next_model_starts_at_its_lowest_valid_effort_at_or_above() {
+    fn leaving_h_starts_s_at_its_lowest_valid_effort_from_s1() {
         let mut c = catalog();
         c.s = model("sonnet", &[2, 3, 5]);
-        assert_eq!(c.next(t("H3")).unwrap(), Some(t("S3")));
-        c.s = model("sonnet", &[2, 4, 5]);
-        assert_eq!(c.next(t("H3")).unwrap(), None, "S4 is not allowed (hs-d554)");
+        assert_eq!(c.next(t("H3")).unwrap(), Some(t("S2")));
         c.s = model("sonnet", &[0, 1, 2]);
+        assert_eq!(c.next(t("H3")).unwrap(), Some(t("S1")));
+        c.s = model("sonnet", &[2, 4, 5]);
+        assert_eq!(c.next(t("H3")).unwrap(), Some(t("S2")));
+        c.s = model("sonnet", &[4, 5]);
         assert_eq!(c.next(t("H3")).unwrap(), None);
-        c.s = model("sonnet", &[0, 1, 2, 5]);
-        assert_eq!(c.next(t("H3")).unwrap(), None, "S5 is not allowed (hs-d554)");
     }
 
     #[test]
@@ -92,8 +92,8 @@ mod tests {
         assert_eq!(at("S1", 2).as_deref(), Some("S2"));
         assert_eq!(at("S1", 3).as_deref(), Some("S3"));
         assert_eq!(at("S1", 4), None);
-        assert_eq!(at("H3", 2).as_deref(), Some("S3"));
-        assert_eq!(at("H3", 3), None);
+        assert_eq!(at("H3", 2).as_deref(), Some("S1"));
+        assert_eq!(at("H3", 5), None);
         assert_eq!(at("H3", 9), None);
     }
 }
@@ -134,14 +134,14 @@ mod tier_g {
         assert!(!g.is_worker_allowed());
         let err = g.check_worker().unwrap_err();
         assert_eq!(err.code(), ErrorCode::TierNotAllowed);
-        assert_eq!(err.details()["allowed"], "H0-H4, S0-S3");
-        assert_eq!(err.details()["rule"], "pro-d53");
+        assert_eq!(err.details()["allowed"], "H0-H3, S0-S3");
+        assert_eq!(err.details()["rule"], "pro-d82");
     }
 }
 
 #[cfg(test)]
 mod worker_tiers {
-    //! The Worker Tier range and ladder (contract §9, pro-d53).
+    //! The Worker Tier range and ladder (contract §9, pro-d82).
     use super::*;
 
     fn catalog() -> Catalog {
@@ -159,11 +159,11 @@ mod worker_tiers {
     }
 
     #[test]
-    fn worker_range_allows_h0_to_h4_and_s0_to_s3() {
+    fn worker_range_allows_h0_to_h3_and_s0_to_s3() {
         for letter in [Letter::O, Letter::S, Letter::H] {
             for effort in 0..=5 {
                 let tier = Tier::new(letter, effort).unwrap();
-                let expected = matches!(tier.to_string().as_str(), "H0" | "H1" | "H2" | "H3" | "H4" | "S0" | "S1" | "S2" | "S3");
+                let expected = matches!(tier.to_string().as_str(), "H0" | "H1" | "H2" | "H3" | "S0" | "S1" | "S2" | "S3");
                 assert_eq!(tier.is_worker_allowed(), expected, "{tier}");
                 assert_eq!(tier.check_worker().is_ok(), expected, "{tier}");
             }
@@ -171,16 +171,16 @@ mod worker_tiers {
     }
 
     #[test]
-    fn worker_range_refusal_names_the_range_the_rule_and_pro_d53() {
-        for name in ["H5", "S4", "S5", "O3"] {
+    fn worker_range_refusal_names_the_range_the_rule_and_pro_d82() {
+        for name in ["H4", "H5", "S4", "S5", "O3"] {
             let err = t(name).check_worker().unwrap_err();
             assert_eq!(err.code(), ErrorCode::TierNotAllowed, "{name}");
             assert_eq!(err.details()["tier"], name);
-            assert_eq!(err.details()["allowed"], "H0-H4, S0-S3");
-            assert_eq!(err.details()["rule"], "pro-d53");
+            assert_eq!(err.details()["allowed"], "H0-H3, S0-S3");
+            assert_eq!(err.details()["rule"], "pro-d82");
             let m = err.message();
             assert!(m.starts_with(&format!("Tier {name} is not allowed for a Worker")), "{m}");
-            for part in ["pro-d53", "hs-d554", "cost", "H0-H4, S0-S3"] {
+            for part in ["pro-d82", "hs-d554", "cost", "H0-H3, S0-S3"] {
                 assert!(m.contains(part), "{part} in {m}");
             }
         }
@@ -196,12 +196,14 @@ mod worker_tiers {
     }
 
     #[test]
-    fn worker_ladder_steps_h0_to_h3_then_s3_and_gives_s4_s5_o3_none() {
+    fn worker_ladder_steps_h0_to_h3_then_s1_s2_s3_and_gives_s4_s5_o3_none() {
         let c = catalog();
         assert_eq!(c.next(t("H0")).unwrap(), Some(t("H1")));
         assert_eq!(c.next(t("H1")).unwrap(), Some(t("H2")));
         assert_eq!(c.next(t("H2")).unwrap(), Some(t("H3")));
-        assert_eq!(c.next(t("H3")).unwrap(), Some(t("S3")));
+        assert_eq!(c.next(t("H3")).unwrap(), Some(t("S1")));
+        assert_eq!(c.next(t("S1")).unwrap(), Some(t("S2")));
+        assert_eq!(c.next(t("S2")).unwrap(), Some(t("S3")));
         for name in ["S4", "S5", "O3"] {
             assert_eq!(c.next(t(name)).unwrap(), None, "{name}");
         }
@@ -212,19 +214,9 @@ mod worker_tiers {
         let c = catalog();
         let at = |job: &str, n| c.attempt_tier(t(job), n).unwrap();
         assert_eq!(
-            [1, 2, 3, 4, 5, 6].map(|n| at("H0", n)),
-            [Some(t("H0")), Some(t("H1")), Some(t("H2")), Some(t("H3")), Some(t("S3")), None]
+            [1, 2, 3, 4, 5, 6, 7, 8].map(|n| at("H0", n)),
+            [Some(t("H0")), Some(t("H1")), Some(t("H2")), Some(t("H3")), Some(t("S1")), Some(t("S2")), Some(t("S3")), None]
         );
         assert_eq!([1, 2, 3, 4].map(|n| at("S1", n)), [Some(t("S1")), Some(t("S2")), Some(t("S3")), None]);
-    }
-
-    #[test]
-    fn worker_ladder_with_an_h4_catalog_steps_h3_to_h4_and_stops_there() {
-        let mut c = catalog();
-        c.h.efforts = vec![0, 1, 2, 3, 4];
-        assert_eq!(c.next(t("H3")).unwrap(), Some(t("H4")));
-        assert_eq!(c.next(t("H4")).unwrap(), None, "S4 is not allowed");
-        let at = |n| c.attempt_tier(t("H3"), n).unwrap();
-        assert_eq!([1, 2, 3].map(at), [Some(t("H3")), Some(t("H4")), None]);
     }
 }

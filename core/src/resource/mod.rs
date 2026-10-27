@@ -1,5 +1,5 @@
 //! Repo-declared exclusive resources: the lock files and the holder record (contract §1.4, §8.3 "The `resources`
-//! domain") and the commands `cpd resource list` and `cpd resource run` (commands.md §29).
+//! domain") and the commands `cpd resource list` and `cpd resource run` (commands.md §30).
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;

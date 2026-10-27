@@ -73,15 +73,15 @@ impl Live {
         }
     }
 
-    /// `lead_working`: the Plan's Lead is working (a failed Job's pill turns).
-    pub fn of(job: &JobNode, lead_working: bool) -> Live {
+    /// `worked_on`: the failed Job is being worked on (its pill turns).
+    pub fn of(job: &JobNode, worked_on: bool) -> Live {
         match job.status {
             JobStatus::Draft => Live::Draft,
             JobStatus::Queued => Live::Queued,
             JobStatus::Running if job.active_attempt().is_some_and(|a| a.status.is_landing()) => Live::Merging,
             JobStatus::Running => Live::Running,
             JobStatus::Merged => Live::Merged,
-            JobStatus::Failed if lead_working => Live::FailedWorked,
+            JobStatus::Failed if worked_on => Live::FailedWorked,
             JobStatus::Failed => Live::Failed,
             JobStatus::Cancelled => Live::Cancelled,
         }
@@ -105,14 +105,14 @@ pub struct Pill {
     pub rect: Rect,
 }
 
-/// Jobs (one PR's) as the chart draws them, in creation order: a cancelled Job is drawn muted, in its place, with nothing after it; the needs on it, and its own, are not drawn (they count for nothing). `lead_working`: the Plan's Lead is working.
-pub fn flow_jobs<'a>(jobs: impl IntoIterator<Item = &'a JobNode>, lead_working: bool) -> Vec<FlowJob> {
+/// Jobs (one PR's) as the chart draws them, in creation order: a cancelled Job is drawn muted, in its place, with nothing after it; the needs on it, and its own, are not drawn (they count for nothing). `worked_on`: the Plan's failed Jobs being worked on.
+pub fn flow_jobs<'a>(jobs: impl IntoIterator<Item = &'a JobNode>, worked_on: &[JobKey]) -> Vec<FlowJob> {
     let all: Vec<&JobNode> = jobs.into_iter().collect();
     let cancelled = |key: &JobKey| all.iter().any(|j| &j.key == key && j.status == JobStatus::Cancelled);
     all.iter()
         .map(|j| FlowJob {
             key: j.key.to_string(),
-            status: Live::of(j, lead_working),
+            status: Live::of(j, worked_on.contains(&j.key)),
             tier: j.shown_tier,
             needs: if j.status == JobStatus::Cancelled {
                 Vec::new()

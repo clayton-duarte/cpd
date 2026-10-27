@@ -115,3 +115,15 @@ fn anchors() {
         assert_eq!(find(&tree, internal)["internal"], true, "{internal}");
     }
 }
+
+#[test]
+fn janitor_command_is_in_the_help_tree() {
+    let tree = help_tree();
+    let node = tree
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["name"] == "janitor")
+        .expect("`janitor` is a command of the help tree (commands.md §29)");
+    assert!(!is_internal(node), "`janitor` is a runnable command the User calls: {node}");
+}

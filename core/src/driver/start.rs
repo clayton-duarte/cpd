@@ -289,7 +289,7 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey, all
     };
     // hs-n465, hs-d632: a stored or retry Tier the catalog refuses starts at the next valid Worker Tier.
     let tier = if catalog.is_valid(tier) { tier } else { catalog.step_up(tier).unwrap_or(tier) };
-    // pro-d53, hs-d554: a Job stored on a Tier outside H0-H4, S0-S3 is never started (E3 raises one `error` per Job).
+    // pro-d82, hs-d554: a Job stored on a Tier outside H0-H3, S0-S3 is never started (E3 raises one `error` per Job).
     tier.check_worker()?;
     let number = previous.map_or(1, |(n, _, _)| n + 1);
     let attempt = AttemptId::new(key.clone(), NonZeroU32::new(number).expect("numbers start at 1"));

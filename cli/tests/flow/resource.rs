@@ -1,4 +1,4 @@
-//! `cpd resource list` and `cpd resource run` (commands.md §29): in-process on the fakes. The test holds a resource with
+//! `cpd resource list` and `cpd resource run` (commands.md §30): in-process on the fakes. The test holds a resource with
 //! its own open file description of the lock file, as another process would; `run`'s exec is the `FakeSpawn`'s
 //! `exec_keeping`, which records the call and runs a hook while the process "is exec-ed".
 

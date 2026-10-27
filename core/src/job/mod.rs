@@ -24,6 +24,9 @@ mod retry;
 mod show;
 mod spec;
 mod urgent;
+pub mod worked_on;
+#[cfg(test)]
+mod worked_on_tests;
 
 pub(crate) use retry::{retried_since_last_start, retries_pending};
 
@@ -115,7 +118,7 @@ pub struct EditArgs {
     /// The new Tier: <O|S|H><0-5>
     #[arg(long, value_name = "T")]
     tier: Option<Tier>,
-    /// The new Spec file (JSON): it replaces the whole Spec
+    /// The new Spec file (JSON): it replaces the whole Spec; a queued Job with no Attempt takes only this flag
     #[arg(long, value_name = "file")]
     spec: Option<PathBuf>,
     /// The new Dependencies, comma-separated
@@ -217,7 +220,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 impl Env {
     /// `tier_invalid` (exit 2, `details.efforts`) unless the Tier's effort is
     /// one pi supports for its model (§9); then `tier_not_allowed` (exit 2)
-    /// unless a Worker may have it: H0-H4 or S0-S3 (pro-d53, hs-d554).
+    /// unless a Worker may have it: H0-H3 or S0-S3 (pro-d82, hs-d554).
     ///
     /// The models are those of the Job's PR repo key (contract §8.3 "Models" (5)): `pr` is the PR the Job is
     /// (or is about to be) on, `None` for the PR the existing Job `job` is on.

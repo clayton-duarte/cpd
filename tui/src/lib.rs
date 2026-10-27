@@ -23,7 +23,11 @@ pub mod box_widget;
 #[cfg(test)]
 mod box_widget_tests;
 #[cfg(test)]
+mod inbox_link_tests;
+#[cfg(test)]
 mod link_widget_tests;
+#[cfg(test)]
+mod osc_8_guard_tests;
 #[cfg(test)]
 mod guard_tests;
 #[cfg(test)]
@@ -77,6 +81,8 @@ mod phase_dot_tests;
 mod zone_tests;
 #[cfg(test)]
 mod phase_dot_views_tests;
+#[cfg(test)]
+mod worked_on_tests;
 pub mod trace;
 #[cfg(test)]
 mod trace_tests;

@@ -32,6 +32,7 @@ pub mod host_repair_approval;
 pub mod inbox;
 pub mod install;
 pub mod incident;
+pub mod janitor;
 pub mod job;
 pub mod mcp;
 pub mod merge;
@@ -62,6 +63,8 @@ mod ambient_ports_tests;
 mod clock_tests;
 #[cfg(test)]
 mod incident_tests;
+#[cfg(test)]
+mod janitor_tests;
 #[cfg(test)]
 mod loops_ports_tests;
 

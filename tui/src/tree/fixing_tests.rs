@@ -72,5 +72,5 @@ fn the_legend_lists_the_red_loader_after_the_working_one() {
         assert_eq!((c.content.as_ref(), r.content.as_ref()), (MOONS[i], MOONS[i]), "frame {i}");
     }
     let text: String = row[1].spans.iter().map(|s| s.content.as_ref()).collect();
-    assert_eq!(text, "the Lead is working on a Plan with a failed Job (one frame every 50 ms)");
+    assert_eq!(text, "a Plan's failed Job is being worked on (one frame every 50 ms)");
 }

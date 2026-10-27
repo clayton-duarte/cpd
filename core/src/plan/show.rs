@@ -138,6 +138,7 @@ fn current_fingerprint(plan: &PlanRow, jobs: &[Job], prs: &[Value]) -> String {
                 title: p["title"].as_str().map(str::to_owned),
                 shape: text(p, "shape"),
                 head_ref: p["head_ref"].as_str().map(str::to_owned),
+                started_at: p["started_at"].as_str().map(str::to_owned),
             })
             .collect()
     } else {

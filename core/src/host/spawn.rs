@@ -461,6 +461,11 @@ impl FakeSpawn {
         self.table().exec_fails = Some(kind);
     }
 
+    /// `launches` without the engine's `cpd janitor` launch (step E16 starts one on the first tick of every engine start).
+    pub fn launches_but_janitor(&self) -> Vec<Launch> {
+        self.launches().into_iter().filter(|l| l.args != ["janitor"]).collect()
+    }
+
     /// Every `(pid, signal)` that `signal` received, in order.
     pub fn signals(&self) -> Vec<(Pid, Signal)> {
         self.table().signals.clone()

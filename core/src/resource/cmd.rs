@@ -1,4 +1,4 @@
-//! `cpd resource list` and `cpd resource run` (commands.md §29).
+//! `cpd resource list` and `cpd resource run` (commands.md §30).
 
 use serde_json::json;
 
@@ -17,12 +17,12 @@ use crate::output::Output;
 use crate::policy::{PolicyKey, repo_key, repo_path, resolve};
 use crate::ports::Ports;
 
-/// The `resource` commands (commands.md §29).
+/// The `resource` commands (commands.md §30).
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// The repo's declared resources and who holds them (§29.1)
+    /// The repo's declared resources and who holds them (§30.1)
     List,
-    /// Take a resource and run a command holding it (§29.2)
+    /// Take a resource and run a command holding it (§30.2)
     Run(RunArgs),
 }
 

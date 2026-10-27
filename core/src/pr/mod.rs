@@ -30,6 +30,7 @@ pub mod comments;
 mod edit;
 mod feedback;
 mod gh;
+pub(crate) use gh::head_ref_oid;
 mod merge;
 mod open;
 pub(crate) mod poll;

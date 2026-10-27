@@ -44,12 +44,24 @@ pub struct PrRow {
     pub shape: String,
     /// The head branch of the pull request cpd adopted (`prs.head_ref`, pro-n8); null for a cpd PR.
     pub head_ref: Option<String>,
+    /// When the Lead Branch started (`prs.started_at`, ISO with milliseconds); null before `dispatch`.
+    pub started_at: Option<String>,
 }
 
 impl PrRow {
     /// The branch every push, fetch, `gh pr list --head` and merged check names: `head_ref` of an adopted PR, else the Lead Branch.
     pub fn remote_branch(&self) -> &str {
         self.head_ref.as_deref().unwrap_or(&self.lead_branch)
+    }
+
+    /// The instant a GitHub pull request of the head must not predate to be this PR's: the row's start. An adopted PR
+    /// (`head_ref` set) pre-exists its row by design, so it has none. A cpd PR with no `started_at` is a bad row.
+    pub fn bound_since(&self) -> Result<Option<jiff::Timestamp>, CpdError> {
+        if self.head_ref.is_some() {
+            return Ok(None);
+        }
+        let started = self.started_at.as_deref().ok_or_else(|| CpdError::bad_row(format!("PR {} has no started_at", self.key)))?;
+        started.parse().map(Some).map_err(|e| CpdError::bad_row(format!("PR {} has the started_at {started:?}: {e}", self.key)))
     }
 }
 
@@ -71,11 +83,12 @@ impl PrRow {
             title: None,
             shape: "free".to_owned(),
             head_ref: None,
+            started_at: None,
         }
     }
 }
 
-type Raw = (String, String, String, String, Option<String>, String, (Option<i64>, Option<String>, Option<String>), Option<i64>, (Option<String>, Option<String>, String, Option<String>));
+type Raw = (String, String, String, String, Option<String>, String, (Option<i64>, Option<String>, Option<String>), Option<i64>, (Option<String>, Option<String>, String, Option<String>, Option<String>));
 
 /// The needs of every PR of `plan` by PR key, each list sorted, as keys of the Plan (contract §2.2).
 pub fn load_needs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, Vec<String>>, CpdError> {
@@ -93,23 +106,23 @@ pub fn load_needs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, V
 pub fn load_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<PrRow>, CpdError> {
     let mut needs = load_needs(conn, plan)?;
     let mut stmt = conn.prepare(
-        "SELECT key, repo, base, lead_branch, lead_worktree, status, pr_number, pr_url, pr_opened_at, pull_request, name, title, shape, head_ref
+        "SELECT key, repo, base, lead_branch, lead_worktree, status, pr_number, pr_url, pr_opened_at, pull_request, name, title, shape, head_ref, started_at
            FROM prs WHERE plan = ?1 ORDER BY key",
     )?;
     let raw: Vec<Raw> = stmt
         .query_map([plan.as_str()], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, (r.get(6)?, r.get(7)?, r.get(8)?), r.get(9)?, (r.get(10)?, r.get(11)?, r.get(12)?, r.get(13)?)))
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, (r.get(6)?, r.get(7)?, r.get(8)?), r.get(9)?, (r.get(10)?, r.get(11)?, r.get(12)?, r.get(13)?, r.get(14)?)))
         })?
         .collect::<rusqlite::Result<_>>()?;
     raw.into_iter()
-        .map(|(key, repo, base, lead_branch, lead_worktree, status, pull, pull_request, (name, title, shape, head_ref))| {
+        .map(|(key, repo, base, lead_branch, lead_worktree, status, pull, pull_request, (name, title, shape, head_ref, started_at))| {
             let needs = needs.remove(&key).unwrap_or_default();
             let key = PrKey::parse(&key).map_err(|_| CpdError::bad_row(format!("Plan {plan} has a PR key {key:?}")))?;
             let pull = match pull {
                 (Some(number), Some(url), Some(opened_at)) => Some(Pull { number, url, opened_at }),
                 _ => None,
             };
-            Ok(PrRow { key, repo, base, lead_branch, lead_worktree: lead_worktree.map(PathBuf::from), status, needs, pull, pull_request, name, title, shape, head_ref })
+            Ok(PrRow { key, repo, base, lead_branch, lead_worktree: lead_worktree.map(PathBuf::from), status, needs, pull, pull_request, name, title, shape, head_ref, started_at })
         })
         .collect()
 }

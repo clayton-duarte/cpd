@@ -150,12 +150,12 @@ const metadataOf = (statusLines: string[]) => {
 	return line.slice(` ${BOX.plainClose} `.length);
 };
 
-test("the toggle head is ' ╭─' and the pill, with no dot, where status keeps its dot head", async () => {
+test("the toggle head is '╭─' and the pill, with no dot, where status keeps its dot head", async () => {
 	for (const name of ["bash", "read", "web_search"]) {
 		const status = await drawRow(STATUS, name);
 		const toggle = await drawRow(TOGGLE, name);
 		assert.ok(firstLine(status.done).startsWith(" "), name);
-		assert.ok(firstLine(toggle.done).startsWith(` ${BOX.head}\u2500`), `${name}: ${firstLine(toggle.done)}`);
+		assert.ok(firstLine(toggle.done).startsWith(`${BOX.head}\u2500`), `${name}: ${firstLine(toggle.done)}`);
 		assert.ok(!firstLine(toggle.done).includes("\u2981"), `${name}: no dot`);
 	}
 });
@@ -164,29 +164,30 @@ test("a folded row closes with ╰<glyph> expand · <metadata>", async () => {
 	for (const name of ["bash", "read", "grep", "find", "ls", "web_search"]) {
 		const status = await drawRow(STATUS, name);
 		const toggle = await drawRow({ ...TOGGLE, toggle: NERD }, name);
-		assert.equal(lastLine(toggle.done), ` ${BOX.close}${NERD.expand} expand · 03:11 · ${metadataOf(status.done)}`, name);
+		assert.equal(lastLine(toggle.done), `${BOX.close}${NERD.expand} expand · 03:11 · ${metadataOf(status.done)}`, name);
 		assert.equal(toggle.done.filter((line) => line.includes("└")).length, 0, `${name}: no └ left`);
 	}
 });
 
-test("an expanded row closes with ╰<glyph> collapse · <metadata> under its ' │ ' body", async () => {
+test("an expanded row closes with ╰<glyph> collapse · <metadata> under its '│ ' body", async () => {
 	for (const name of ["bash", "read", "web_search"]) {
 		const status = await drawRow(STATUS, name, { expanded: true });
 		const toggle = await drawRow({ ...TOGGLE, toggle: NERD }, name, { expanded: true });
-		assert.equal(lastLine(toggle.done), ` ${BOX.close}${NERD.collapse} collapse · 03:11 · ${metadataOf(status.done)}`, name);
-		const body = (lines: string[]) => lines.filter((line) => line.startsWith(` ${BOX.rail} `));
-		assert.deepEqual(body(toggle.done), body(status.done), `${name}: the body rail is unchanged`);
-		assert.ok(body(toggle.done).length > 0, name);
+		assert.equal(lastLine(toggle.done), `${BOX.close}${NERD.collapse} collapse · 03:11 · ${metadataOf(status.done)}`, name);
+		// The same body rows, the toggle's with no margin column before the rail.
+		const body = (lines: string[], rail: string) => lines.filter((line) => line.startsWith(rail)).map((line) => line.slice(rail.length - 2));
+		assert.deepEqual(body(toggle.done, `${BOX.rail} `), body(status.done, ` ${BOX.rail} `), `${name}: the body rows are unchanged`);
+		assert.ok(body(toggle.done, `${BOX.rail} `).length > 0, name);
 	}
 });
 
 test("the default glyphs are U+F0B26 and U+F0B2C", async () => {
 	const folded = await drawRow(TOGGLE, "read");
-	assert.match(lastLine(folded.done), new RegExp(`^ ${BOX.close}${NERD.expand} expand · 03:11 · Done in `, "u"));
+	assert.match(lastLine(folded.done), new RegExp(`^${BOX.close}${NERD.expand} expand · 03:11 · Done in `, "u"));
 	const expanded = await drawRow(TOGGLE, "read", { expanded: true });
-	assert.match(lastLine(expanded.done), new RegExp(`^ ${BOX.close}${NERD.collapse} collapse · 03:11 · Done in `, "u"));
+	assert.match(lastLine(expanded.done), new RegExp(`^${BOX.close}${NERD.collapse} collapse · 03:11 · Done in `, "u"));
 	const plain = await drawRow({ ...TOGGLE, toggle: PLAIN }, "read");
-	assert.match(lastLine(plain.done), new RegExp(`^ ${BOX.close}${PLAIN.expand} expand · 03:11 · Done in `, "u"), "a file can still ask for ▸ and ▾");
+	assert.match(lastLine(plain.done), new RegExp(`^${BOX.close}${PLAIN.expand} expand · 03:11 · Done in `, "u"), "a file can still ask for ▸ and ▾");
 });
 
 test("a row with no metadata closes with the toggle and the time alone, or the bare toggle when too narrow", async () => {
@@ -201,10 +202,10 @@ test("a row with no metadata closes with the toggle and the time alone, or the b
 		row.updateResult({ content: [], details: undefined, isError: false } as never, false);
 		const lines = row.render(WIDTH).map(plain);
 		const closing = lastLine(lines);
-		assert.equal(closing, ` ${BOX.close}${NERD.expand} expand · 03:11`);
+		assert.equal(closing, `${BOX.close}${NERD.expand} expand · 03:11`);
 		// One column short of the toggle and time: the time is omitted and the row is unchanged.
-		assert.equal(lastLine(row.render(18).map(plain)), ` ${BOX.close}${NERD.expand} expand · 03:11`);
-		assert.equal(lastLine(row.render(17).map(plain)), ` ${BOX.close}${NERD.expand} expand`);
+		assert.equal(lastLine(row.render(19).map(plain)), `${BOX.close}${NERD.expand} expand · 03:11`);
+		assert.equal(lastLine(row.render(18).map(plain)), `${BOX.close}${NERD.expand} expand`);
 	} finally { shutdown(harness); }
 });
 
@@ -215,7 +216,7 @@ test("a failed row closes with ╰<glyph> expand · Failed in …", async () => 
 		const word = expanded ? "collapse" : "expand";
 		const glyph = expanded ? NERD.collapse : NERD.expand;
 		const closing = lastLine(toggle.done);
-		assert.equal(closing, ` ${BOX.close}${glyph} ${word} · 03:11 · ${metadataOf(status.done)}`);
+		assert.equal(closing, `${BOX.close}${glyph} ${word} · 03:11 · ${metadataOf(status.done)}`);
 		assert.match(closing, /· 03:11 · Failed in 0\.300s/u);
 	}
 	const folded = await drawRow(TOGGLE, "bash", { failed: true });
@@ -224,12 +225,12 @@ test("a failed row closes with ╰<glyph> expand · Failed in …", async () => 
 
 test("an edit's closing row carries its diff counts after the toggle", async () => {
 	const toggle = await drawRow({ ...TOGGLE, toggle: NERD }, "edit");
-	assert.match(lastLine(toggle.done), new RegExp(`^ ${BOX.close}${NERD.expand} expand · 03:11 · Done in 0\\.300s \\(\\+1 -1\\)$`, "u"));
+	assert.match(lastLine(toggle.done), new RegExp(`^${BOX.close}${NERD.expand} expand · 03:11 · Done in 0\\.300s \\(\\+1 -1\\)$`, "u"));
 });
 
-test("while a row runs the head wears ' ╭─' with no dot and the closing row is the loader, with no toggle", async () => {
+test("while a row runs the head wears '╭─' with no dot and the closing row is the loader, with no toggle", async () => {
 	const toggle = await drawRow(TOGGLE, "bash");
-	assert.ok(firstLine(toggle.running).startsWith(` ${BOX.head}\u2500`), firstLine(toggle.running));
+	assert.ok(firstLine(toggle.running).startsWith(`${BOX.head}\u2500`), firstLine(toggle.running));
 	assert.ok(!firstLine(toggle.running).includes("\u2981"), "no dot");
 	assert.ok(toggle.running.every((line) => !line.includes("expand") && !line.includes("collapse")), "no toggle while running");
 	assert.equal(toggle.running.filter((line) => line.includes(BOX.close)).length, 1, "the loader's ╰ while running");
@@ -252,7 +253,7 @@ test("with no fold key every compact row is the toggle's; fold: status brings ba
 			const absent = await drawRow({}, name, { expanded });
 			// The running frame carries the loader, which moves with the clock: the finished row is the same.
 			assert.deepEqual(absent.done, (await drawRow(TOGGLE, name, { expanded })).done, name);
-			assert.ok(firstLine(absent.done).startsWith(` ${BOX.head}`), name);
+			assert.ok(firstLine(absent.done).startsWith(BOX.head), name);
 			const status = await drawRow(STATUS, name, { expanded });
 			assert.ok(firstLine(status.done).startsWith(" "), name);
 			assert.match(lastLine(status.done), /^ └ (Done in [0-9.]+s|Failed in )|^ │ /u, name);
