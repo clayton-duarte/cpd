@@ -21,8 +21,8 @@ use cpd_core::session::State;
 use cpd_core::store::Store;
 use nix::fcntl::{Flock, FlockArg};
 use cpd_tui::read::{
-    self, AttemptStatus, Checks, Dot, Engine, EscalationStatus, JobStatus, Origin, Outcome, Place, PlanNode, PrState,
-    ReviewStatus, Target,
+    self, AttemptStatus, Checks, Dot, Engine, JobStatus, Origin, Outcome, Place, PlanNode, PrState,
+    ReviewStatus,
 };
 use rusqlite::Connection;
 
@@ -868,14 +868,7 @@ fn every_read_shows_an_attempt_in_an_open_check_span_as_checking() {
     let held = |id: &str| slots.held.iter().find(|h| h.attempt == attempt(id)).unwrap().status;
     assert_eq!((held("c-a2"), held("b-a1")), (AttemptStatus::Checking, AttemptStatus::Merging));
 
-    let w = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("c-a2"))).unwrap();
-    assert_eq!(w.attempt.unwrap().status, AttemptStatus::Checking);
-    let ended = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("c-a1"))).unwrap();
-    assert_eq!(ended.attempt.unwrap().status, AttemptStatus::Ended);
-
     sql(&mut store, &span("c", "c-a2", "end"));
-    let w = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("c-a2"))).unwrap();
-    assert_eq!(w.attempt.unwrap().status, AttemptStatus::Running);
 }
 
 #[test]
@@ -1287,54 +1280,6 @@ fn the_engine_is_never_running_stopped_or_crashed() {
     assert_eq!(pid, dead, "a watch-started whose process is gone and that no watch-stopped follows");
 }
 
-// ---------- the worker view: attempt show ----------
-
-#[test]
-fn a_worker_is_its_attempt_session_and_escalations() {
-    let (_fx, mut store) = fixture();
-    let w = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("c-a2"))).unwrap();
-    assert_eq!((w.job.title.as_str(), w.job.status), ("Job c", JobStatus::Running));
-    let a = w.attempt.as_ref().unwrap();
-    assert_eq!((a.id.clone(), a.tier, a.origin, a.status, a.outcome, a.cause), (attempt("c-a2"), tier("S3"), Origin::Retry, AttemptStatus::Running, None, None));
-    assert_eq!((a.branch.as_str(), a.worktree.as_str(), a.nudged, a.metrics.is_none()), ("cpd/ship--c-a2", "/w/c-a2", false, true));
-    let session = w.session.as_ref().unwrap();
-    assert_eq!((session.id.as_str(), session.state, session.file.as_deref()), ("w-c2", State::Working, Some("/sessions/w-c2.jsonl")));
-    assert_eq!(w.worker_ref().unwrap().session, session.id);
-    let asked: Vec<(String, EscalationStatus)> = w.escalations.iter().map(|e| (e.id.to_string(), e.status)).collect();
-    assert_eq!(asked, [("c-a2-q1".to_owned(), EscalationStatus::Open)]);
-    assert_eq!(w.events_cursor, last_event(&mut store));
-
-    let by_job = read::worker(&mut store, &plan("ship"), &Target::Job(key("c"))).unwrap();
-    assert_eq!(by_job.attempt.as_ref().map(|a| a.id.clone()), Some(attempt("c-a2")), "a Job's latest Attempt");
-    let ended = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("a-a1"))).unwrap();
-    let done = ended.attempt.as_ref().unwrap();
-    assert_eq!((done.status, done.outcome, done.cause), (AttemptStatus::Ended, Some(Outcome::Merged), Some(Stored::Merged)));
-    assert_eq!((done.merged_sha.as_deref(), ended.session.is_none()), (Some("abc123"), true));
-    assert_eq!((ended.escalations[0].status, ended.escalations[0].answer.as_deref()), (EscalationStatus::Answered, Some("Use v2.")));
-    let merging = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("b-a1"))).unwrap();
-    assert_eq!((merging.attempt.as_ref().unwrap().submitted_sha.as_deref(), merging.attempt.as_ref().unwrap().status), (Some("def456"), AttemptStatus::Merging));
-    let expired = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("e-a1"))).unwrap();
-    assert_eq!(expired.escalations[0].status, EscalationStatus::Expired);
-    assert!(expired.escalations[0].expired_at.is_some());
-}
-
-#[test]
-fn the_latest_attempt_of_a_job_is_the_one_with_the_highest_number_and_a_job_that_never_started_has_none() {
-    let (_fx, mut store) = fixture();
-    let mut latest = |plan_id: &str, job: &str| read::latest_attempt(&mut store, &plan(plan_id), &key(job)).unwrap();
-    assert_eq!(latest("ship", "c"), Some(attempt("c-a2")), "two Attempts: the second");
-    assert_eq!(latest("ship", "e"), Some(attempt("e-a1")), "a failed Job: its failed Attempt");
-    assert_eq!(latest("ship", "d"), None, "queued, never started");
-    assert_eq!(latest("nope", "c"), None);
-}
-
-#[test]
-fn an_unknown_plan_or_attempt_is_not_found() {
-    let (_fx, mut store) = fixture();
-    assert_eq!(read::worker(&mut store, &plan("nope"), &Target::Attempt(attempt("c-a2"))).unwrap_err().code(), ErrorCode::PlanNotFound);
-    assert_eq!(read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("c-a9"))).unwrap_err().code(), ErrorCode::AttemptNotFound);
-}
-
 // ---------- read-only, cheap ----------
 
 fn data_version(conn: &Connection) -> i64 {
@@ -1353,7 +1298,6 @@ fn every_read(store: &mut Store) {
     read::flow(store, &plan("ship")).unwrap();
     read::chat_slot(store).unwrap();
     read::widgets(store, 3, 20).unwrap();
-    read::worker(store, &plan("ship"), &Target::Attempt(attempt("c-a2"))).unwrap();
 }
 
 #[test]
@@ -1435,18 +1379,11 @@ fn statements_run(store: &mut Store, f: impl FnOnce(&mut Store)) -> Vec<String> 
 fn every_read_runs_the_same_statements_on_a_large_store_as_on_a_small_one() {
     let (_fx, mut store) = fixture();
     // The Plans and the Attempt of the small fixture, then of the large store: same reads, ten times the rows.
-    let reads: [(&str, &dyn Fn(&mut Store, bool)); 5] = [
+    let reads: [(&str, &dyn Fn(&mut Store, bool)); 4] = [
         ("tree", &|s, _| drop(read::tree(s).unwrap())),
         ("flow", &|s, large| drop(read::flow(s, &plan(if large { "p3x3" } else { "ship" })).unwrap())),
         ("chat_slot", &|s, _| drop(read::chat_slot(s).unwrap())),
         ("widgets", &|s, _| drop(read::widgets(s, 3, 20).unwrap())),
-        (
-            "worker",
-            &|s, large| {
-                let (p, a) = if large { ("p3x3", "j2-a1") } else { ("ship", "c-a2") };
-                drop(read::worker(s, &plan(p), &Target::Attempt(attempt(a))).unwrap());
-            },
-        ),
     ];
     let run_all = |store: &mut Store, large: bool| -> Vec<Vec<String>> {
         reads
@@ -1500,4 +1437,46 @@ fn with_no_engine_the_snapshot_leads_with_engine_down_and_while_a_process_holds_
     assert_eq!(tree.inbox.iter().map(|i| i.kind).collect::<Vec<_>>(), [Kind::Unread]);
     drop(engine);
     assert!(!read::tree(&mut store).unwrap().engine_running);
+}
+
+#[test]
+fn the_flow_gives_a_stacked_pr_its_base_pr_as_a_need_and_as_its_blocker_until_it_opens() {
+    let (_fx, mut store) = fixture();
+    // `stk` is stacked on `zeta` (its base is `zeta`'s Lead Branch) and stores a need on `mid`, which has merged
+    sql(
+        &mut store,
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+         VALUES ('acme/mid', 91, 'https://github.com/acme/mid/pull/91', 'Mid', 0, 'merged', 'none', 'none',
+                 '2026-01-05T00:00:00.000Z', '2026-01-06T00:00:00.000Z', '2026-01-06T00:00:00.000Z'),
+                ('acme/zeta', 92, 'https://github.com/acme/zeta/pull/92', 'Zeta', 0, 'open', 'none', 'none',
+                 '2026-01-05T00:00:00.000Z', NULL, '2026-01-06T00:00:00.000Z');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, pr_number, pull_request, pr_url, pr_opened_at, merged_at, created_txn, created_at)
+         VALUES ('ship', 'mid', '/r/mid', 'main', 'merged', 'cpd/ship/mid', '/wt/mid', '2026-01-02T00:00:00.000Z', 91, (SELECT id FROM pull_requests WHERE number = 91), 'https://github.com/acme/mid/pull/91', '2026-01-02T00:00:00.000Z', '2026-01-03T00:00:00.000Z', cpd_txn(), '2026-01-02T00:00:00.000Z');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+         VALUES ('ship', 'zeta', '/r/zeta', 'main', 'dispatch', 'cpd/ship/zeta', '/wt/zeta', '2026-01-02T00:00:00.000Z', cpd_txn(), '2026-01-02T00:00:00.000Z');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         VALUES ('ship', 'stk', '/r/stk', 'cpd/ship/zeta', 'waiting', 'cpd/ship/stk', cpd_txn(), '2026-01-02T00:00:00.000Z');
+         INSERT INTO pr_needs (plan, pr, needs) VALUES ('ship', 'stk', 'mid');",
+    );
+    let stk = |store: &mut Store| {
+        let node = read::plan_boxes(store, &plan("ship")).unwrap().prs.into_iter().find(|p| p.key.as_str() == "stk").unwrap();
+        (node.needs.iter().map(|n| n.as_str().to_string()).collect::<Vec<_>>(), node.waiting_on)
+    };
+    let (needs, waiting_on) = stk(&mut store);
+    assert_eq!(needs, ["mid", "zeta"], "the base PR is a need, sorted with the stored ones");
+    assert_eq!(waiting_on, ["zeta"], "the base PR has started and not opened: it blocks");
+    // a base PR that is waiting blocks: `stk2` is stacked on `wb`, which has not started
+    sql(
+        &mut store,
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         VALUES ('ship', 'wb', '/r/wb', 'main', 'waiting', 'cpd/ship/wb', cpd_txn(), '2026-01-02T00:00:00.000Z');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         VALUES ('ship', 'stk2', '/r/wb', 'cpd/ship/wb', 'waiting', 'cpd/ship/stk2', cpd_txn(), '2026-01-02T00:00:00.000Z');",
+    );
+    let node = read::plan_boxes(&mut store, &plan("ship")).unwrap().prs.into_iter().find(|p| p.key.as_str() == "stk2").unwrap();
+    assert_eq!(node.waiting_on, ["wb"], "a base PR that is waiting blocks");
+    sql(&mut store, "UPDATE prs SET status = 'open', pr_number = 92, pull_request = (SELECT id FROM pull_requests WHERE number = 92), pr_url = 'https://github.com/acme/zeta/pull/92', pr_opened_at = '2026-01-02T00:00:00.000Z', started_at = '2026-01-02T00:00:00.000Z', lead_worktree = '/wt/zeta' WHERE plan = 'ship' AND key = 'zeta'");
+    let (needs, waiting_on) = stk(&mut store);
+    assert_eq!(needs, ["mid", "zeta"], "an open base PR is still listed");
+    assert!(waiting_on.is_empty(), "an open base PR blocks nothing: {waiting_on:?}");
 }

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
 
+use common::empty_comments;
 use common::fx::Fx as Kit;
 use cpd_core::git::{Setup, create_attempt_worktree, gate_worktree_path, prepare_lead_worktree, pr_lead_worktree_path};
 use cpd_core::home::CpdHome;
@@ -37,6 +38,7 @@ impl Handler for Gh {
         let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
         match args[..] {
             ["api", "graphql", "-f", query, ..] if query.contains("search(type: ISSUE") => Reply::ok(&answers.search),
+            ["api", "graphql", "-f", query, ..] if query.contains("reviewThreads") => Reply::ok(&empty_comments(query)),
             ["api", "graphql", "-f", query, ..] if query.contains("p0: repository") => Reply::ok(&answers.lookup),
             ["api", "graphql", "-f", query, ..] => Reply::exit(9, "", &format!("unexpected graphql query: {query}\n")),
             ["pr", "view", ..] => match &answers.view {
@@ -53,7 +55,7 @@ pub(crate) fn node(number: i64, state: &str) -> String {
     let merged = if state == "MERGED" { r#""2026-10-14T10:00:00Z""# } else { "null" };
     format!(
         r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":{number},"url":"https://github.com/acme/pay/pull/{number}","title":"PR {number}",
-        "isDraft":false,"state":"{state}","createdAt":"opened","mergedAt":{merged},"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
+        "isDraft":false,"state":"{state}","createdAt":"opened","updatedAt":"U1","mergedAt":{merged},"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
         "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
     )
 }

@@ -512,8 +512,10 @@ fn review_requested(store: &mut Store, home: &CpdHome, now: OffsetDateTime, team
         let none = CpdError::new(ErrorCode::GhFailed, "GitHub could not read any pull request posted in the team channel.");
         return kept_review_items(store, Some(&none));
     }
+    let settled = settled_review_subjects(store)?;
     Ok(posts
         .into_iter()
+        .filter(|post| !settled.contains(&format!("pr:{}#{}", post.repo, post.number)))
         .filter(|post| {
             read(post).is_some_and(|pr| matches!(team::status(post, pr, &lookup.me, team.bot_reviewers), Status::NeedsReview(_)))
         })
@@ -534,6 +536,18 @@ fn review_requested(store: &mut Store, home: &CpdHome, now: OffsetDateTime, team
             }
         })
         .collect())
+}
+
+/// The subjects of the `review-requested` items, open or closed, that a dismissal or a claim settled for good (C1): closed items
+/// are kept, so the history is the memory.
+fn settled_review_subjects(store: &mut Store) -> Result<std::collections::HashSet<String>, CpdError> {
+    store.read(|c| {
+        let mut stmt = c.prepare(
+            "SELECT DISTINCT subject FROM inbox_items WHERE kind = 'review-requested' AND (dismissed_at IS NOT NULL OR claimed_at IS NOT NULL)",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect::<Result<_, _>>().map_err(CpdError::from)
+    })
 }
 
 /// The open `review-requested` items as conditions (nothing changes), and `why` as an `engine-error` when given.

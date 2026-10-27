@@ -337,15 +337,15 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
         let (icon, _m) = palette::job_status(status, merging);
         let (x, y) = find_after(&buf, jobs, name);
         let text = row(&buf, y);
-        let pill_at = text.chars().position(|c| c.to_string() == icon).unwrap() as u16;
-        assert!(pill_at > x, "{name}: the pill follows the name");
+        let pill_col = text.chars().position(|c| c.to_string() == icon).unwrap() as u16;
+        assert!(pill_col > x, "{name}: the pill follows the name");
         let pill = palette::job_pill(status, merging, false);
-        assert_eq!(buf[(pill_at, y)].bg, pill.bg.unwrap(), "{name}: pill");
-        assert_eq!(buf[(pill_at, y)].fg, pill.fg.unwrap(), "{name}: pill text");
+        assert_eq!(buf[(pill_col, y)].bg, pill.bg.unwrap(), "{name}: pill");
+        assert_eq!(buf[(pill_col, y)].fg, pill.fg.unwrap(), "{name}: pill text");
         // the compact pill (hs-d474): no padding inside the caps
         assert!(text.contains(&format!("\u{e0b6}{icon} key│S1\u{e0b4}")), "{name}: {text}");
         // a rounded cap on each end, in the pill's colour on the default background
-        let (left, right) = (pill_at - 1, pill_at + 1 + " key│S1".chars().count() as u16);
+        let (left, right) = (pill_col - 1, pill_col + 1 + " key│S1".chars().count() as u16);
         for (cap_at, glyph) in [(left, "\u{e0b6}"), (right, "\u{e0b4}")] {
             let cap = &buf[(cap_at, y)];
             assert_eq!((cap.symbol(), cap.fg, cap.bg), (glyph, pill.fg.unwrap(), Default::default()), "{name}: cap at {cap_at}: {text}");

@@ -67,6 +67,7 @@ fn every_blue_row_reads_cyan_and_nothing_else_changes_and_the_check_and_the_open
     let want: Vec<Value> = before
         .into_iter()
         .map(|mut r| {
+            r["claimed_at"] = Value::Null; // the column `inbox-claim` adds
             if r["urgency"] == "blue" {
                 r["urgency"] = Value::from("cyan");
             }

@@ -35,7 +35,7 @@ pub(crate) mod host;
 pub(crate) mod inbox;
 pub mod legend;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::path::Path;
@@ -68,8 +68,8 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::Kind;
 use cpd_core::home::CpdHome;
 use cpd_core::host::layout::MAIN_WINDOW;
-use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux, View, chat_slot, view_pane};
-use cpd_core::ids::{AttemptId, PlanId, SessionId};
+use cpd_core::host::{Pane, Tmux, chat_slot};
+use cpd_core::ids::SessionId;
 use cpd_core::session::PROGRAM;
 use cpd_core::output::Output;
 use cpd_core::ports::Ports;
@@ -592,107 +592,6 @@ pub(crate) fn open_lead(run_command: RunCommand, tmux: &Tmux, cockpit: &str, ses
 pub(crate) fn main_panes(tmux: &Tmux, cockpit: &str) -> Result<Vec<Pane>, CpdError> {
     let all = tmux.list_panes()?;
     Ok(all.into_iter().filter(|p| p.session_name == cockpit && p.window_name == MAIN_WINDOW).collect())
-}
-
-/// The pane option holding the Job a Worker pane shows (its border title shows it), so a second click on the same Job
-/// closes it.
-const OPT_JOB: &str = "@cpd_job";
-
-/// The pane option holding the Attempt a Worker pane shows.
-const OPT_ATTEMPT: &str = "@cpd_attempt";
-
-/// The Job a Worker pane shows.
-fn worker_shows(tmux: &Tmux, pane: &PaneId) -> Result<String, CpdError> {
-    let shown = tmux.run(&["display", "-p", "-t", pane.as_str(), &format!("#{{{OPT_JOB}}}")].map(str::to_owned))?;
-    Ok(shown.trim_end_matches('\n').to_owned())
-}
-
-/// `set -p` of the Worker pane's options: the Job and its current Attempt.
-fn mark_worker(tmux: &Tmux, pane: &PaneId, job: &str, attempt: &str) -> Result<(), CpdError> {
-    for (option, value) in [(OPT_JOB, job), (OPT_ATTEMPT, attempt)] {
-        tmux.run(&["set", "-p", "-t", pane.as_str(), option, value].map(str::to_owned))?;
-    }
-    Ok(())
-}
-
-/// The Worker pane's program, in cpd's home: the Attempt form `tui view worker <attempt> --plan <plan>`, or, for a Job with
-/// no Attempt (`attempt` empty), the Job form `tui view worker --job <job> --plan <plan>`.
-fn worker_spawn(home: &CpdHome, plan: &PlanId, job: &str, attempt: &str) -> Spawn {
-    let target: Vec<&str> = if attempt.is_empty() { vec!["--job", job] } else { vec![attempt] };
-    let mut argv: Vec<String> = [PROGRAM, "tui", "view", "worker"].map(str::to_owned).into();
-    argv.extend(target.into_iter().map(str::to_owned));
-    argv.extend(["--plan", plan.as_str()].map(str::to_owned));
-    Spawn {
-        cwd: Some(home.root().to_owned()),
-        env: BTreeMap::from([("CPD_HOME".to_owned(), home.root().display().to_string())]),
-        argv,
-    }
-}
-
-/// Opens the read-only Worker pane beside the chat (`split-window -h -d -l 50%`, so the focus stays) for `job`'s
-/// `attempt` (none: the Job form, `@cpd_attempt` empty), and retargets it (`respawn-pane -k`) when it already shows a Worker. The plan view's pills and the tree's
-/// `job-stuck` click share it.
-pub(crate) fn open_worker(
-    home: &CpdHome,
-    tmux: &Tmux,
-    cockpit: &str,
-    plan: &PlanId,
-    job: &str,
-    attempt: Option<&AttemptId>,
-) -> Result<(), CpdError> {
-    let panes = main_panes(tmux, cockpit)?;
-    let attempt = attempt.map(ToString::to_string).unwrap_or_default();
-    if let Some(pane) = view_pane(&panes, cockpit, View::Worker) {
-        let spawn = worker_spawn(home, plan, job, &attempt);
-        let mut args = ["respawn-pane", "-k", "-t", pane.pane.as_str()].map(str::to_owned).to_vec();
-        if let Some(cwd) = &spawn.cwd {
-            args.extend(["-c".to_owned(), cwd.display().to_string()]);
-        }
-        for (key, value) in &spawn.env {
-            args.extend(["-e".to_owned(), format!("{key}={value}")]);
-        }
-        args.push("--".to_owned());
-        args.extend(spawn.argv);
-        tmux.run(&args)?;
-        return mark_worker(tmux, &pane.pane, job, &attempt);
-    }
-    let Some(chat) = chat_slot(&panes, cockpit) else {
-        return Err(CpdError::new(ErrorCode::TmuxFailed, "There is no chat slot to open the Worker beside."));
-    };
-    let pane = tmux.split_window(&chat.pane, Split::Right, Some("50%"), &worker_spawn(home, plan, job, &attempt))?;
-    tmux.set_pane_view(&pane, View::Worker)?;
-    mark_worker(tmux, &pane, job, &attempt)
-}
-
-/// A click on a pill: [`open_worker`], or closes the Worker pane when it already shows `job`. Returns whether it is open now.
-pub(crate) fn toggle_worker(
-    home: &CpdHome,
-    tmux: &Tmux,
-    cockpit: &str,
-    plan: &PlanId,
-    job: &str,
-    attempt: Option<&AttemptId>,
-) -> Result<bool, CpdError> {
-    let panes = main_panes(tmux, cockpit)?;
-    if let Some(pane) = view_pane(&panes, cockpit, View::Worker) {
-        if worker_shows(tmux, &pane.pane)? == job {
-            tmux.kill_pane(&pane.pane)?;
-            return Ok(false);
-        }
-    }
-    open_worker(home, tmux, cockpit, plan, job, attempt)?;
-    Ok(true)
-}
-
-/// Closes the Worker pane when it shows `job`; any other Worker pane stays.
-pub(crate) fn close_worker(tmux: &Tmux, cockpit: &str, job: &str) -> Result<(), CpdError> {
-    let panes = main_panes(tmux, cockpit)?;
-    if let Some(pane) = view_pane(&panes, cockpit, View::Worker) {
-        if worker_shows(tmux, &pane.pane)? == job {
-            tmux.kill_pane(&pane.pane)?;
-        }
-    }
-    Ok(())
 }
 
 /// What the column draws for a hostname it could not read.

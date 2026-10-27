@@ -137,7 +137,7 @@ impl NewEvent {
     }
 
     /// The `job-added` of a Job cpd adds itself (§5.2, §3.7 E4): an `open` Job (`by` `engine`). It is `queued` (`draft` while a draft of its PR remains) and `appended`, and its
-    /// `needs` is the empty list: its Ready rule is derived (§3.2). `reason` is for an `update` Job (`conflict` or `feedback`).
+    /// `needs` is the empty list: its Ready rule is derived (§3.2). `reason` is for an `update` Job (`conflict`).
     pub fn job_added_by_cpd(text: impl Into<String>, pr: impl Serialize, kind: &str, status: &str, tier: &str, by: &str, reason: Option<&str>) -> NewEvent {
         let mut data = json!({
             "pr": pr, "kind": kind, "status": status, "appended": true, "tier": tier, "needs": [], "review": false, "urgent": false, "by": by,
@@ -460,6 +460,10 @@ impl NewEvent {
         make(Kind::InboxDismissed, text, json!({"item": item}))
     }
 
+    pub fn inbox_claimed(text: impl Into<String>, item: i64) -> NewEvent {
+        make(Kind::InboxClaimed, text, json!({"item": item}))
+    }
+
     pub fn watch_started(text: impl Into<String>, pid: u32) -> NewEvent {
         make(Kind::WatchStarted, text, json!({"pid": pid}))
     }
@@ -591,6 +595,7 @@ mod tests {
             Kind::InboxClosed => vec![NewEvent::inbox_closed(T, 1, s)],
             Kind::InboxSnoozed => vec![NewEvent::inbox_snoozed(T, 1, s)],
             Kind::InboxDismissed => vec![NewEvent::inbox_dismissed(T, 1)],
+            Kind::InboxClaimed => vec![NewEvent::inbox_claimed(T, 1)],
             Kind::WatchStarted => vec![NewEvent::watch_started(T, 1)],
             Kind::WatchStopped => vec![NewEvent::watch_stopped(T, 1)],
             Kind::Error => vec![NewEvent::error(T, s, s, s, serde_json::Value::Null)],

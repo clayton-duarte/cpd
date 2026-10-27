@@ -13,8 +13,8 @@ fn one() -> T {
 #[test]
 fn a_variable_and_a_user_option_expand() {
     let t = one();
-    t.ok(&["set", "-p", "-t", "%0", "@cpd_job", "j"]);
-    assert_eq!(d(&t, "#{window_name}/#{@cpd_job}"), "w/j");
+    t.ok(&["set", "-p", "-t", "%0", "@cpd_history", "j"]);
+    assert_eq!(d(&t, "#{window_name}/#{@cpd_history}"), "w/j");
 }
 
 #[test]

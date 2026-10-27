@@ -356,8 +356,18 @@ pub const DENIED_EXIT: i32 = 97;
 /// `mergeable` and `mergeStateStatus` GitHub reports (`MERGEABLE`/`CLEAN`, `CONFLICTING`/`DIRTY`, `MERGEABLE`/`BEHIND`, ...).
 fn pay_node(mergeable: &str, merge_state: &str) -> String {
     format!(
-        r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":812,"url":"https://github.com/acme/pay/pull/812","title":"Pay the bills","isDraft":false,"state":"OPEN","createdAt":"opened","mergedAt":null,"reviewDecision":null,"mergeable":"{mergeable}","mergeStateStatus":"{merge_state}","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
+        r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":812,"url":"https://github.com/acme/pay/pull/812","title":"Pay the bills","isDraft":false,"state":"OPEN","createdAt":"opened","updatedAt":"U1","mergedAt":null,"reviewDecision":null,"mergeable":"{mergeable}","mergeStateStatus":"{merge_state}","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
     )
+}
+
+/// The comments read's answer when a test scripted none: an empty read (updatedAt `U1`) of every alias the query names.
+pub fn empty_comments(query: &str) -> String {
+    let empty = serde_json::json!({"totalCount": 0, "pageInfo": {"hasPreviousPage": false, "hasNextPage": false}, "nodes": []});
+    let mut data = serde_json::json!({"viewer": {"login": "me"}});
+    for i in 0..query.matches(": repository(").count() {
+        data[format!("p{i}")] = serde_json::json!({"pullRequest": {"id": format!("PR_{i}"), "updatedAt": "U1", "reviewThreads": empty, "comments": empty, "reviews": empty}});
+    }
+    serde_json::json!({"data": data}).to_string()
 }
 
 /// The PR poll's search answer (commands.md §9.2) for the one pull request a fixture stored, [`pay_node`]: the one thing a test of the

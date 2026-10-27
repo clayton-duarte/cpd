@@ -164,7 +164,7 @@ async function piRuntime(env: NodeJS.ProcessEnv): Promise<{ rt: ListRuntime; piV
   return { rt: await pi.ModelRuntime.create({ allowModelNetwork: false }), piVersion };
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (import.meta.main) {
   let status: number;
   try {
     status = await main({ ...(await piRuntime(process.env)), stdout: process.stdout, stderr: process.stderr });

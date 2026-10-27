@@ -9,7 +9,7 @@ use ratatui::style::Modifier;
 use ratatui::widgets::{Paragraph, Widget};
 use ratatui::Terminal;
 
-use crate::palette::numbered::{C13, C14, C15, C4, C7};
+use crate::palette::numbered::{C15, C4, C5, C6, C7};
 use crate::palette::{self};
 const CAP_L: &str = "\u{e0b6}";
 const CAP_R: &str = "\u{e0b4}";
@@ -80,8 +80,8 @@ fn section_title_pills_are_inverted_with_caps_in_colour_7() {
 }
 
 #[test]
-fn job_pills_are_inverted_bright_with_caps_in_their_colour() {
-    let statuses = [(Live::Running, C14), (Live::Draft, C13), (Live::Queued, C15)];
+fn job_pills_are_inverted_base_with_caps_in_their_colour() {
+    let statuses = [(Live::Running, C6), (Live::Draft, C5), (Live::Queued, C7)];
     let jobs: Vec<FlowJob> = statuses
         .into_iter()
         .map(|(status, _)| status)
@@ -95,7 +95,7 @@ fn job_pills_are_inverted_bright_with_caps_in_their_colour() {
             let cell = &chart.buf[(cap, r.y)];
             assert_eq!((cell.fg, cell.bg), (bg, RESET), "{} cap at {cap}: {cell:?}", p.key);
         }
-        // the icon, the key, `│`, the tier and `aN`: every cell of the body
+        // the icon, the key, `│`, `#n` and the tier: every cell of the body
         for x in r.x + 1..r.right() - 1 {
             let cell = &chart.buf[(x, r.y)];
             assert_eq!((cell.fg, cell.bg), (bg, RESET), "{} body at {x} ({:?}): {cell:?}", p.key, cell.symbol());
