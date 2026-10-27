@@ -11,6 +11,7 @@ mod pr_adopt_add;
 mod pr_adopt_life;
 mod pr_adopt_pub;
 mod pr_adopt_rebase;
+mod pr_lead_branch;
 mod pr_checks;
 mod pr_comments;
 mod pr_view_feedback;
