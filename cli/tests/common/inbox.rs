@@ -156,6 +156,7 @@ pub fn condition(kind: Kind, urgency: Urgency, subject: &str, label: &str) -> Co
         session: None,
         record: None,
         event: None,
+        opened_at: None,
     }
 }
 

@@ -41,6 +41,7 @@ fn snooze() -> (String, Value, Value) {
         session: None,
         record: None,
         event: None,
+        opened_at: None,
     };
     reconcile(&mut store, &[condition], "2026-01-01T00:00:00.000Z").unwrap();
     let clock = ManualClock::new();

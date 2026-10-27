@@ -42,6 +42,7 @@ fn review_request() -> Condition {
         session: None,
         record: None,
         event: None,
+        opened_at: None,
     }
 }
 

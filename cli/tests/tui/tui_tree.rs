@@ -122,6 +122,7 @@ fn condition(kind: Kind, urgency: Urgency, session: &str, plan: Option<&str>, co
         session: Some(SessionId::parse(session).unwrap()),
         record: None,
         event: None,
+        opened_at: None,
     }
 }
 
