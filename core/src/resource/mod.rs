@@ -34,10 +34,21 @@ pub struct Workers {
     pub holders: Vec<Holder>,
 }
 
-/// The Worker slots now: `concurrency` slots, the Attempts not `ended` as tenants. Stub.
+/// The Worker slots now: `concurrency` slots, the Attempts not `ended` as tenants.
 pub fn workers(conn: &rusqlite::Connection, concurrency: u32) -> Result<Workers, CpdError> {
-    let _ = (conn, concurrency);
-    Ok(Workers { slots: 0, holders: Vec::new() })
+    let mut stmt = conn.prepare("SELECT plan, job, id, started_at FROM attempts WHERE status <> 'ended' ORDER BY started_at, id")?;
+    let holders = stmt
+        .query_map([], |r| Ok(Holder::Attempt { plan: r.get(0)?, job: r.get(1)?, attempt: r.get(2)?, at: r.get(3)? }))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(Workers { slots: concurrency, holders })
+}
+
+impl Workers {
+    /// The pool E3 schedules on: `free` = slots no Attempt holds, `urgent_free` = the one beyond, while the Attempts are at most `slots`.
+    pub fn pool(&self) -> crate::driver::schedule::Pool {
+        let active = u32::try_from(self.holders.len()).unwrap_or(u32::MAX);
+        crate::driver::schedule::Pool { free: self.slots.saturating_sub(active), urgent_free: u32::from(active <= self.slots) }
+    }
 }
 
 /// The holder record of a held resource (contract §1.4): what the taker wrote into the lock file.

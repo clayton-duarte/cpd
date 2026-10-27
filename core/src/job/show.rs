@@ -43,6 +43,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let mut env = Env::open()?;
     let home = env.home.clone();
+    let concurrency = env.config.concurrency;
     let (job, review, needed_by, attempts, needs, waiting_for) = env.store.read(|conn| {
         plan_phase(conn, &plan)?;
         let all = jobs::load(conn, &plan)?;
@@ -53,10 +54,15 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         let needed_by = needed_by.into_iter().map(str::to_owned).collect::<Vec<_>>();
         let attempts = attempts(conn, &plan, &job.key)?;
         let review: bool = conn.query_row("SELECT review FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.key.as_str()], |r| r.get(0))?;
-        // §5.7: only a queued Job that lists resources, each of them held right now.
-        let waiting_for = match (job.status.as_str(), crate::resource::wanted(conn, &plan, &job.key)?) {
-            ("queued", Some(wanted)) => {
-                let mut held = Vec::new();
+        // §5.7: only a queued Job, for each resource it needs that has no free slot right now: `workers` first, then its Spec's.
+        let wanted = crate::resource::wanted(conn, &plan, &job.key)?;
+        let waiting_for = if job.status == "queued" {
+            let mut held = Vec::new();
+            let workers = crate::resource::workers(conn, concurrency)?;
+            if workers.pool().free == 0 {
+                held.push(json!({"resource": crate::resource::WORKERS, "scope": "host", "slots": workers.slots, "holders": workers.holders}));
+            }
+            if let Some(wanted) = &wanted {
                 let key = crate::ids::PrKey::parse(&wanted.pr)?;
                 let policy = crate::pr::policy_of_pr(conn, &home, &plan, &key)?;
                 for pool in crate::resource::pools_of(&policy.resources, &wanted.owner, &wanted.repo) {
@@ -69,9 +75,10 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
                         held.push(json!({"resource": pool.name(), "scope": pool.scope(), "slots": pool.slots(), "holders": holders}));
                     }
                 }
-                Some(held)
             }
-            _ => None,
+            (wanted.is_some() || !held.is_empty()).then_some(held)
+        } else {
+            None
         };
         Ok((job, review, needed_by, attempts, needs, waiting_for))
     })?;

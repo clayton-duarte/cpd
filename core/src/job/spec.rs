@@ -204,6 +204,9 @@ fn resources_field(fields: &mut Map<String, Value>) -> Result<Vec<String>, CpdEr
         if !ok {
             return Err(invalid(&format!("$.resources[{i}]"), "must be a resource name, ^[a-z][a-z0-9-]{0,31}$"));
         }
+        if name == crate::resource::WORKERS {
+            return Err(invalid(&format!("$.resources[{i}]"), "`workers` is the built-in resource: the starter takes it, a Spec never lists it"));
+        }
         if names[..i].contains(name) {
             return Err(invalid(&format!("$.resources[{i}]"), "repeats an earlier resource"));
         }
