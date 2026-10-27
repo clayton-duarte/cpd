@@ -637,6 +637,24 @@ mod migrations {
         clone.commit();
         clone.check().unwrap();
     }
+
+    /// pro-d120: the one-off exception: the breaking 20261031T1000-deploy-kind may be renamed
+    /// forward to 20261102T0900-deploy-kind when only its first line changes.
+    #[test]
+    fn the_frozen_check_passes_on_the_one_off_forward_rename_of_deploy_kind() {
+        let clone = Clone::new();
+        let body: String = (0..20).map(|i| format!("SELECT {i} FROM jobs;\n")).collect();
+        let old = clone.migrations().join("20261031T1000-deploy-kind.sql");
+        fs::write(&old, format!("-- cpd-migration: breaking after 63\n{body}")).unwrap();
+        clone.commit();
+        // The file is on the base: main now holds it.
+        clone.git(&["push", "--quiet", "origin", "branch:main"]);
+        let new = clone.migrations().join("20261102T0900-deploy-kind.sql");
+        fs::rename(&old, &new).unwrap();
+        fs::write(&new, format!("-- cpd-migration: breaking after 66\n{body}")).unwrap();
+        clone.commit();
+        clone.check().unwrap();
+    }
 }
 
 /// Everything that is not one of those allowances still fails: an edit, a delete, and a

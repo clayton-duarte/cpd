@@ -14,6 +14,9 @@
 # stays byte-identical. A forward rename (to a newer name) of a migration that
 # already exists on <base> is refused (hs-d704, hs-n531): only a migration the PR
 # itself adds may be renumbered forward before it lands (the O3 renumber, hs-d661).
+# One named one-off (decision pro-d120, Plan mig-order): 20261031T1000-deploy-kind.sql
+# was never applied by any store and sorted before the applied pr-description, so
+# it may be renamed forward, header-only, to a newer name.
 # An edit, a delete, a rename of a legacy or additive migration and a body change
 # all stay refused.
 #
@@ -66,6 +69,10 @@ while IFS='	' read -r status old new; do
           && allowed_header_only "$old" "$new"; then
           continue
         fi
+        # The one-off forward rename (pro-d120).
+        if [ "$old" = "${dir}20261031T1000-deploy-kind.sql" ] && allowed_header_only "$old" "$new"; then
+          continue
+        fi
       elif allowed_header_only "$old" "$new"; then
         # The old path is not on the base: a migration this PR adds may be renumbered.
         continue
@@ -90,6 +97,6 @@ EOF
 if [ -n "$bad" ]; then
   echo "migrations frozen check failed: $dir files that exist on $base were changed (M modified, D deleted, R renamed):" >&2
   printf '%s' "$bad" >&2
-  echo "A migration on main is never edited, renumbered or deleted. A breaking migration on main may only be restored to an older name a live store applied, and its first line (the \`breaking after <n>\` header) may be corrected, when every line after the first is byte-identical (contract §4.5 N5/O3). A forward rename of a migration on main is refused (hs-d704): only a migration this PR adds may be renumbered to a newer name before it lands. Otherwise restore it and put the change in a new migration (scripts/new-migration.sh)." >&2
+  echo "A migration on main is never edited, renumbered or deleted. A breaking migration on main may only be restored to an older name a live store applied, and its first line (the \`breaking after <n>\` header) may be corrected, when every line after the first is byte-identical (contract §4.5 N5/O3). A forward rename of a migration on main is refused (hs-d704), except the one-off 20261031T1000-deploy-kind (pro-d120): only a migration this PR adds may be renumbered to a newer name before it lands. Otherwise restore it and put the change in a new migration (scripts/new-migration.sh)." >&2
   exit 1
 fi
