@@ -38,3 +38,20 @@ fn resource_spec_the_worker_spec_names_the_resources_it_holds() {
     let none = text(&[]);
     assert!(!none.to_lowercase().contains("resource"), "a Job with none says nothing of resources:\n{none}");
 }
+
+/// A Spec file's text whose `resources` is `resources`.
+fn spec_file(resources: &str) -> String {
+    format!(r#"{{"goal": "Do it.", "context": "", "touches": ["a"], "acceptance": ["b"], "out_of_scope": [], "resources": {resources}}}"#)
+}
+
+#[test]
+fn workers_in_a_spec_is_spec_invalid() {
+    // The starter takes `workers` itself: a Spec never lists it (contract §8.3), alone or with others, at `$.resources`.
+    for listed in [r#"["workers"]"#, r#"["e2e-port", "workers"]"#] {
+        let err = crate::job::spec::parse(&spec_file(listed)).expect_err(&format!("{listed} is spec_invalid"));
+        assert_eq!(err.code(), crate::error::ErrorCode::SpecInvalid, "{listed}");
+        let path = err.details()["path"].as_str().unwrap_or_default();
+        assert!(path.starts_with("$.resources"), "{listed}: {path}");
+    }
+    crate::job::spec::parse(&spec_file(r#"["e2e-port"]"#)).expect("another name stays valid");
+}

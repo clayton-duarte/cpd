@@ -20,6 +20,37 @@ pub use cmd::{Command, run};
 #[cfg(test)]
 mod tests;
 
+/// The reserved name of the built-in resource: the host's Worker slots (contract §8.3 "The built-in resource `workers`").
+pub const WORKERS: &str = "workers";
+
+/// The built-in resource `workers` as `cpd resource list` and `job show` read it: a host pool of `concurrency` slots, whose
+/// tenants are the Attempts not `ended`. It has no lock file: the Ledger is the record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Workers {
+    /// The config's `concurrency`.
+    pub slots: u32,
+    /// One record per Attempt not `ended`, `{by: attempt}`, in start order (`started_at`, then Attempt id); `at` is its `started_at`.
+    /// More than `slots` while an urgent Job holds the slot beyond.
+    pub holders: Vec<Holder>,
+}
+
+/// The Worker slots now: `concurrency` slots, the Attempts not `ended` as tenants.
+pub fn workers(conn: &rusqlite::Connection, concurrency: u32) -> Result<Workers, CpdError> {
+    let mut stmt = conn.prepare("SELECT plan, job, id, started_at FROM attempts WHERE status <> 'ended' ORDER BY started_at, id")?;
+    let holders = stmt
+        .query_map([], |r| Ok(Holder::Attempt { plan: r.get(0)?, job: r.get(1)?, attempt: r.get(2)?, at: r.get(3)? }))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(Workers { slots: concurrency, holders })
+}
+
+impl Workers {
+    /// The pool E3 schedules on: `free` = slots no Attempt holds, `urgent_free` = the one beyond, while the Attempts are at most `slots`.
+    pub fn pool(&self) -> crate::driver::schedule::Pool {
+        let active = u32::try_from(self.holders.len()).unwrap_or(u32::MAX);
+        crate::driver::schedule::Pool { free: self.slots.saturating_sub(active), urgent_free: u32::from(active <= self.slots) }
+    }
+}
+
 /// The holder record of a held resource (contract §1.4): what the taker wrote into the lock file.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "by", rename_all = "lowercase")]

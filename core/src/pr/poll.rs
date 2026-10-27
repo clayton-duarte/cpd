@@ -12,7 +12,8 @@ use serde_json::{Value, json};
 use super::comments::{self, Read};
 use super::feedback;
 use super::gh::{self, Listed};
-use super::pulls::{self, Change, Reason};
+use super::posts;
+use super::pulls::{self, Change, PostFacts, Reason};
 use super::row::PlanPrs;
 use super::start::unstack;
 use super::status::{ChecksSummary, PrState};
@@ -87,11 +88,11 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     let owned = env.store.read(pulls::owned_open)?;
     // Each owned PR's `pr.feedback.checks`, resolved before anything is written (§8.3). A PR whose policy does not
     // resolve is told nothing and reported below; the poll goes on for the others (§7.6).
-    let mut checks = Vec::new();
+    let mut checks: Vec<Resolved> = Vec::new();
     let mut unresolved = Vec::new();
     for (plan, key, row) in &owned {
         match super::pr_policy_resolved(&mut env, plan, key, crate::policy::resolve)? {
-            Ok(policy) => checks.push((plan.clone(), key.clone(), policy.pr.feedback.checks)),
+            Ok(policy) => checks.push(Resolved { plan: plan.clone(), key: key.clone(), checks: policy.pr.feedback.checks, post_enabled: policy.pr.post.enabled }),
             Err(error) => unresolved.push(Unresolved { plan: plan.clone(), pr: key.clone(), number: row.number, error }),
         }
     }
@@ -152,7 +153,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     for listed in &seen {
         let (repo, number) = (&listed.pr.repo, listed.pr.number);
         let any = owned.iter().any(|(plan, key, row)| {
-            row.repo == *repo && row.number == number && checks_of(&checks, plan, key) == Some(Checks::Any)
+            row.repo == *repo && row.number == number && checks_of(&checks, plan, key).is_some_and(|r| r.checks == Checks::Any)
         });
         if any && listed.pr.state == PrState::Open && listed.pr.checks == ChecksSummary::Failed && !confirm.contains(&(repo.clone(), number)) {
             confirm.push((repo.clone(), number));
@@ -242,7 +243,7 @@ fn apply(
     seen: &[Listed],
     reads: &[Read],
     owned: &[Owned],
-    checks: &[(PlanId, PrKey, Checks)],
+    checks: &[Resolved],
     follows: &[Follow],
     open_tier: Tier,
 ) -> Result<Outcome, CpdError> {
@@ -275,8 +276,8 @@ fn apply(
                 }
                 crate::incident::end_if_until_pr_merged(tx)?;
                 unstack_stacked_on(tx, plan, key)?;
-            } else if let Some(checks) = checks_of(checks, plan, key) {
-                if tell(tx, plan, key, checks, &change)? {
+            } else if let Some(resolved) = checks_of(checks, plan, key) {
+                if tell(tx, plan, key, resolved, &change)? {
                     out.feedback.push((plan.clone(), key.clone()));
                 }
                 if let Some(job) = update_for_conflict(tx, plan, key, &change, open_tier)? {
@@ -343,8 +344,16 @@ fn follow_base(tx: &WriteTxn<'_>, follow: &Follow) -> Result<Value, CpdError> {
 }
 
 /// The PR's resolved `pr.feedback.checks`; `None` when its policy did not resolve: it is told nothing.
-fn checks_of(checks: &[(PlanId, PrKey, Checks)], plan: &PlanId, key: &PrKey) -> Option<Checks> {
-    checks.iter().find(|(p, k, _)| p == plan && k == key).map(|(_, _, c)| *c)
+fn checks_of<'a>(checks: &'a [Resolved], plan: &PlanId, key: &PrKey) -> Option<&'a Resolved> {
+    checks.iter().find(|r| &r.plan == plan && &r.key == key)
+}
+
+/// What the poll resolved of an owned PR's policy: `pr.feedback.checks` and `pr.post.enabled`.
+struct Resolved {
+    plan: PlanId,
+    key: PrKey,
+    checks: Checks,
+    post_enabled: bool,
 }
 
 /// One `error` Event for each PR whose policy did not resolve (§7.6): `source` `pr poll`, the resolve error's `code`,
@@ -394,10 +403,11 @@ fn report_unresolved(env: &mut Env, unresolved: &[Unresolved]) -> Result<(), Cpd
 }
 
 /// D7: `pr-feedback` to the Plan, when the change needs its attention.
-fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, checks: Checks, change: &Change) -> Result<bool, CpdError> {
+fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, resolved: &Resolved, change: &Change) -> Result<bool, CpdError> {
     let open = change.after.feedback.as_deref().unwrap_or_default();
     let new = comments::new_items(change.before.as_ref().and_then(|b| b.feedback.as_deref()), open);
-    let reasons: Vec<Reason> = pulls::attention(change.before.as_ref(), &change.after, checks, &new);
+    let post = PostFacts { enabled: resolved.post_enabled, posted: posts::find(tx, plan.as_str(), key.as_str())?.is_some() };
+    let reasons: Vec<Reason> = pulls::attention(change.before.as_ref(), &change.after, resolved.checks, &new, post);
     if reasons.is_empty() {
         return Ok(false);
     }

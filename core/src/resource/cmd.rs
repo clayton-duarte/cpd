@@ -83,6 +83,9 @@ pub fn run(ports: &Ports, command: Command) -> Result<Output, CpdError> {
 fn list(ports: &Ports) -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     let (_, repo) = here(ports, &home)?;
+    let mut env = crate::env::Env::open_home_with(ports, home.clone())?;
+    let concurrency = env.config.concurrency;
+    let workers = env.store.read(|conn| super::workers(conn, concurrency))?;
     let mut resources = Vec::new();
     for name in &repo.declared {
         let pool = repo.pool(name);
@@ -91,6 +94,12 @@ fn list(ports: &Ports) -> Result<Output, CpdError> {
         let holders: Vec<_> = slots.into_iter().map(|(slot, holder)| json!({"slot": slot, "holder": holder})).collect();
         resources.push(json!({"name": name, "scope": pool.scope(), "slots": pool.slots(), "free": free, "holders": holders}));
     }
+    // The built-in `workers`: host scope, one holder per Attempt not `ended`, in the name order with the declared ones.
+    let held: Vec<_> = workers.holders.iter().enumerate().map(|(i, h)| json!({"slot": i + 1, "holder": h})).collect();
+    let free = workers.slots.saturating_sub(u32::try_from(workers.holders.len()).unwrap_or(u32::MAX));
+    let entry = json!({"name": super::WORKERS, "scope": "host", "slots": workers.slots, "free": free, "holders": held});
+    let at = resources.iter().position(|r| r["name"].as_str().is_some_and(|n| n > super::WORKERS)).unwrap_or(resources.len());
+    resources.insert(at, entry);
     Ok(Output::success(json!({"repo": repo.label(), "resources": resources})))
 }
 
@@ -100,6 +109,9 @@ fn run_command(ports: &Ports, args: RunArgs) -> Result<Output, CpdError> {
     }
     if args.wait == Some(0) {
         return Err(usage("cpd resource run: --wait is a positive number of minutes."));
+    }
+    if args.name == super::WORKERS {
+        return Err(usage("cpd resource run: `workers` is the built-in resource, taken only by the starter of an Attempt."));
     }
     let home = CpdHome::from_env()?;
     let (cwd, repo) = here(ports, &home)?;

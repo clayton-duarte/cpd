@@ -29,6 +29,7 @@ mod escalations;
 pub mod host_alert;
 mod inbox;
 mod janitor;
+mod react;
 mod liveness;
 mod lock;
 mod log;

@@ -319,3 +319,55 @@ fn resource_slot_lock_is_free_again_when_its_holder_dies() {
     assert_eq!(took(&w, &[pool.clone()], &attempt()).slot("e2e-port"), Some(1));
     drop(second);
 }
+
+/// A store with Plan `pay` and its Attempts: `a-a1` running, `b-a1` starting, `c-a1` running, `d-a1` ended (all four of different Jobs).
+fn store_with_attempts() -> (tempfile::TempDir, crate::store::Store) {
+    let dir = tempfile::tempdir().unwrap();
+    let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
+    let mut store = crate::store::Store::open(&home, 5000).unwrap();
+    let fingerprint = "f".repeat(64);
+    let mut sql = String::from(
+        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'working', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+           VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+           VALUES ('pay', 'api', '/r', 'main', 'dispatch', 'cpd/pay', '/w', cpd_txn(), 't', 't');",
+    );
+    for (job, status, at) in [("a", "running", "2026-10-26T21:40:00.000Z"), ("b", "starting", "2026-10-26T21:41:00.000Z"), ("c", "running", "2026-10-26T21:42:00.000Z"), ("d", "ended", "2026-10-26T21:43:00.000Z")] {
+        let (job_status, ended) = if status == "ended" { ("failed", ", outcome, cause, ended_at") } else { ("running", "") };
+        let cause = if status == "ended" { "'crashed'" } else { "NULL" };
+        let ended_values = if status == "ended" { ", 'failed', 'crashed', 't'" } else { "" };
+        sql += &format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, failed_cause, appended, fingerprint, created_txn, created_at)
+               VALUES ('pay', 'api', '{job}', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{job_status}', {cause}, 0, '{fingerprint}', cpd_txn(), 't');
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at{ended})
+               VALUES ('pay', '{job}-a1', '{job}', 1, 'S2', 'ladder', '{status}', 'cpd/pay--{job}-a1', '/w', '{at}'{ended_values});"
+        );
+    }
+    store.write("fixture", |tx| { tx.execute_batch(&sql)?; Ok(()) }).unwrap();
+    (dir, store)
+}
+
+#[test]
+fn workers_is_a_host_resource_with_concurrency_slots_and_attempts_as_tenants() {
+    let (dir, mut store) = store_with_attempts();
+
+    let pool = store.read(|conn| workers(conn, 3)).unwrap();
+
+    assert_eq!(WORKERS, "workers");
+    assert_eq!(pool.slots, 3, "slots = concurrency");
+    let tenant = |job: &str, at: &str| Holder::Attempt { plan: "pay".to_owned(), job: job.to_owned(), attempt: format!("{job}-a1"), at: at.to_owned() };
+    assert_eq!(
+        pool.holders,
+        [tenant("a", "2026-10-26T21:40:00.000Z"), tenant("b", "2026-10-26T21:41:00.000Z"), tenant("c", "2026-10-26T21:42:00.000Z")],
+        "every Attempt not `ended`, in start order, and no other"
+    );
+    // The slots follow the config, the tenants do not.
+    assert_eq!(store.read(|conn| workers(conn, 1)).unwrap().slots, 1);
+    assert_eq!(store.read(|conn| workers(conn, 1)).unwrap().holders.len(), 3, "an urgent Job's slot beyond concurrency is a tenant too");
+    // No lock file: the Ledger is the record.
+    let locks = dir.path().join("locks");
+    assert!(!locks.exists() || fs::read_dir(&locks).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().contains("workers")));
+}

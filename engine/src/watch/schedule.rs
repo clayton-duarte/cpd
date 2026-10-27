@@ -1,6 +1,6 @@
 //! E3, scheduling (contract §3.2, §3.4, §3.7): each Ready Job, urgent ones
-//! first, then in `jobs.seq` order across all Plans, while a slot is free (an
-//! urgent Job may take one beyond `concurrency`), is started by the starter
+//! first, then in `jobs.seq` order across all Plans, is walked by the pure scheduler (`driver::schedule`: pools of slots,
+//! `workers` included, and the earmarks of blocked Jobs); each Job it names is started by the starter
 //! `job dispatch` uses: fingerprint, driver lock, Attempt, driver.
 
 use super::SOURCE;
@@ -12,10 +12,12 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use cpd_core::clock::Clock;
+use cpd_core::driver::schedule::{Pool, Ready, schedule};
 use cpd_core::driver::{self, Allocation, StartCtx};
+use cpd_core::resource;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::host::limit::limit;
-use cpd_core::ids::{JobKey, PlanId};
+use cpd_core::ids::{JobKey, PlanId, PrKey};
 
 /// The longest back-off after Attempts whose driver never started (§3.7 E3).
 const BACKOFF_CAP_SECONDS: u64 = 300;
@@ -121,6 +123,40 @@ fn allocations(conn: &Connection, ready: &[(PlanId, JobKey)]) -> Result<Vec<Opti
     Ok(out)
 }
 
+/// The indices of the Jobs of `ready` E3 starts this tick: one call of the pure [`schedule`], the pools being `workers` (the
+/// Attempts not `ended` against `concurrency`) and each resource the Jobs' Specs list (a probe per slot). The starter then takes the
+/// real locks, all or none; a take that loses a race leaves the Job queued for the next tick.
+fn pick(conn: &Connection, home: &cpd_core::home::CpdHome, concurrency: u32, ready: &[(PlanId, JobKey, bool, Allocation)]) -> Result<Vec<usize>, CpdError> {
+    let mut pools = vec![resource::workers(conn, concurrency)?.pool()];
+    let mut declared: Vec<Option<resource::Pool>> = vec![None];
+    let mut jobs = Vec::with_capacity(ready.len());
+    for (i, (plan, key, urgent, _)) in ready.iter().enumerate() {
+        let mut needs = vec![0];
+        if let Some(wanted) = resource::wanted(conn, plan, key.as_str())? {
+            // A name the policy does not resolve fails in the starter, which reports it.
+            if let Ok(policy) = PrKey::parse(&wanted.pr).and_then(|pr| cpd_core::pr::policy_of_pr(conn, home, plan, &pr)) {
+                for pool in resource::pools_of(&policy.resources, &wanted.owner, &wanted.repo) {
+                    if !wanted.names.iter().any(|n| n == pool.name()) {
+                        continue;
+                    }
+                    let at = match declared.iter().position(|d| d.as_ref() == Some(&pool)) {
+                        Some(at) => at,
+                        None => {
+                            let free = resource::holders(home, &pool)?.iter().filter(|h| h.is_none()).count();
+                            pools.push(Pool { free: u32::try_from(free).expect("at most 64"), urgent_free: 0 });
+                            declared.push(Some(pool));
+                            pools.len() - 1
+                        }
+                    };
+                    needs.push(at);
+                }
+            }
+        }
+        jobs.push(Ready { id: u32::try_from(i).expect("few Ready Jobs"), urgent: *urgent, needs });
+    }
+    Ok(schedule(&pools, &jobs).start.into_iter().map(|id| id as usize).collect())
+}
+
 pub(super) fn run(engine: &mut Engine) {
     // A tmux restart is pending: no new Attempt until it has run; running ones finish (§3.7 E3).
     match restart::holding(&engine.home) {
@@ -134,7 +170,6 @@ pub(super) fn run(engine: &mut Engine) {
         let rows = stmt
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, bool>(2)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        let active: i64 = conn.query_row("SELECT count(*) FROM attempts WHERE status <> 'ended'", [], |r| r.get(0))?;
         let mut ready = Vec::new();
         for (p, k, urgent) in rows {
             let plan = PlanId::parse(&p)?;
@@ -149,64 +184,85 @@ pub(super) fn run(engine: &mut Engine) {
                 ready.push((plan, key, urgent));
             }
         }
-        Ok((ready, active))
+        Ok(ready)
     });
     let ready = match ready {
-        Ok((ready, active)) => {
+        Ok(ready) => {
             engine.clear(Step::E3, &About::Machine);
-            // Only an urgent Job may take the slot beyond `concurrency` (§3.7 E3).
-            if active >= driver::slot_limit(engine.config.concurrency, true) {
-                return;
-            }
-            let full = active >= driver::slot_limit(engine.config.concurrency, false);
-            ready.into_iter().filter(|(_, _, urgent)| *urgent || !full).map(|(plan, key, _)| (plan, key)).collect::<Vec<_>>()
+            ready
         }
         Err(e) => return engine.fail(Step::E3, About::Machine, &e),
     };
     if ready.is_empty() {
         return;
     }
-    let allocations = match engine.store.read(|conn| allocations(conn, &ready)) {
+    let allocations = match engine.store.read(|conn| allocations(conn, &ready.iter().map(|(p, k, _)| (p.clone(), k.clone())).collect::<Vec<_>>())) {
         Ok(allocations) => allocations,
         Err(e) => return engine.fail(Step::E3, About::Machine, &e),
     };
-    for ((plan, key), allocation) in ready.into_iter().zip(allocations) {
-        // Held: a live linear Attempt of its PR keeps the workflow worktree; the Job stays queued, no Event.
-        let Some(allocation) = allocation else { continue };
-        let about = About::Job(plan.clone(), key.clone());
-        // The Job's PR repo key sets its models: one catalog per distinct `[model]` table, a key that does not resolve fails its Job.
-        let catalog = match engine.catalog_of_job(&plan, key.as_str()) {
-            Ok(catalog) => catalog,
-            Err(e) => {
-                engine.fail(Step::E3, about, &e);
-                continue;
-            }
+    // A Job held by a live linear Attempt of its PR stays queued, no Event, and earmarks nothing.
+    let ready: Vec<_> = ready.into_iter().zip(allocations).filter_map(|((p, k, u), a)| a.map(|a| (p, k, u, a))).collect();
+    let (home, concurrency) = (engine.home.clone(), engine.config.concurrency);
+    let mut remaining = ready;
+    // The walk names the Jobs to start. A start that fails (a tier outside the Worker range, a tampered Job, a lost race)
+    // takes no slot, so it must not hold one back from the Jobs behind it: the walk runs again without the Jobs tried.
+    loop {
+        let starts = match engine.store.read(|conn| pick(conn, &home, concurrency, &remaining)) {
+            Ok(starts) => starts,
+            Err(e) => return engine.fail(Step::E3, About::Machine, &e),
         };
-        let ctx = StartCtx { home: &engine.home, config: &engine.config, catalog: &catalog, command: SOURCE };
-        match driver::start_with_allocation(&engine.ports, &mut engine.store, &ctx, &plan, &key, Some(allocation)) {
-            Ok(started) => {
-                engine.log.line(&format!(
-                    "E3: started {} of Plan {plan} at Tier {} ({}), driver pid {}",
-                    started.attempt,
-                    started.tier,
-                    started.origin.as_str(),
-                    started.pid
-                ));
-                engine.clear(Step::E3, &about);
+        let mut tried = Vec::new();
+        let mut failed = false;
+        for &i in &starts {
+            tried.push(i);
+            let (plan, key, _, allocation) = remaining[i].clone();
+            let about = About::Job(plan.clone(), key.clone());
+            // The Job's PR repo key sets its models: one catalog per distinct `[model]` table, a key that does not resolve fails its Job.
+            let catalog = match engine.catalog_of_job(&plan, key.as_str()) {
+                Ok(catalog) => catalog,
+                Err(e) => {
+                    engine.fail(Step::E3, about, &e);
+                    failed = true;
+                    break;
+                }
+            };
+            let ctx = StartCtx { home: &engine.home, config: &engine.config, catalog: &catalog, command: SOURCE };
+            match driver::start_with_allocation(&engine.ports, &mut engine.store, &ctx, &plan, &key, Some(allocation)) {
+                Ok(started) => {
+                    engine.log.line(&format!(
+                        "E3: started {} of Plan {plan} at Tier {} ({}), driver pid {}",
+                        started.attempt,
+                        started.tier,
+                        started.origin.as_str(),
+                        started.pid
+                    ));
+                    engine.clear(Step::E3, &about);
+                    continue;
+                }
+                // Every slot is taken: the next tick tries again.
+                Err(e) if e.code() == ErrorCode::NoSlot => return,
+                // A resource of the Job is held: it stays queued, no Attempt, no back-off, no Event; the next tick tries again
+                // (§3.7 E3 "Resources").
+                Err(e) if e.code() == ErrorCode::ResourceBusy => {
+                    engine.log.line(&format!("E3: Job {key} of Plan {plan} waits: {}", e.message()));
+                }
+                // The Job changed since it was read (another starter, a cancel): decided again next tick.
+                Err(e) if matches!(e.code(), ErrorCode::CasLost | ErrorCode::JobNotReady) => {
+                    engine.log.line(&format!("E3: skipped Job {key} of Plan {plan}: {}", e.message()));
+                }
+                Err(e) => engine.fail(Step::E3, about, &e),
             }
-            // Every slot is taken: the next tick tries again.
-            Err(e) if e.code() == ErrorCode::NoSlot => break,
-            // A resource of the Job is held: it stays queued, no Attempt, no back-off, no Event; the next tick tries again
-            // (§3.7 E3 "Resources").
-            Err(e) if e.code() == ErrorCode::ResourceBusy => {
-                engine.log.line(&format!("E3: Job {key} of Plan {plan} waits: {}", e.message()));
-            }
-            // The Job changed since it was read (another starter, a cancel): decided again next tick.
-            Err(e) if matches!(e.code(), ErrorCode::CasLost | ErrorCode::JobNotReady) => {
-                engine.log.line(&format!("E3: skipped Job {key} of Plan {plan}: {}", e.message()));
-            }
-            Err(e) => engine.fail(Step::E3, about, &e),
+            failed = true;
+            break;
         }
+        if !failed {
+            return;
+        }
+        let mut at = 0;
+        remaining.retain(|_| {
+            at += 1;
+            !tried.contains(&(at - 1))
+        });
     }
 }
 

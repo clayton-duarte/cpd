@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use super::spec::{self, Spec};
 use super::{
     AddArgs, Env, check_kind_not_reserved, check_needs_available, check_needs_known, check_needs_same_pr, check_pr_live, check_shape_allows,
-    check_test_job_required, plan_phase, sorted_needs,
+    check_impl_job_required, check_test_job_required, plan_phase, sorted_needs,
 };
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
@@ -206,6 +206,9 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
     }
     check_needs_known(&all, plan, &job.needs)?;
     check_needs_same_pr(&all, plan, &job.pr, &job.needs)?;
+    if !draft {
+        check_impl_job_required(&all, plan, &job)?;
+    }
     check_needs_available(&all, plan, &job.needs)?;
     if !draft {
         check_test_job_required(&all, plan, &job)?;

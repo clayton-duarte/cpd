@@ -167,6 +167,7 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
         "docs" => JobKind::Docs,
         "test" => JobKind::Test { tests: &own_tests, test_files: &own_files },
         "impl" => JobKind::Impl { test_jobs: &guard.jobs, tests: &guard.tests, guarded: &guard.files, approved: &guard.approved },
+        "verify" => JobKind::Verify,
         "open" => JobKind::Open,
         "update" => JobKind::Update,
         other => return Err(bad(format!("kind {other:?} of Job {}", job.key))),

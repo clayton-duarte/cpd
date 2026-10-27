@@ -185,3 +185,15 @@ fn resource_resolution_narrower_declaration_wins_per_name() {
     let both = resolve_levels("[resources.x]\nslots = 5\n", "[resources.x]\n", None).unwrap();
     assert_eq!(declared(&both), [entry("x", ResourceScope::Owner, 1, "owner.toml")]);
 }
+
+#[test]
+fn workers_name_in_a_policy_file_is_policy_invalid() {
+    // `workers` is the built-in resource (contract §8.3): reserved at every level, `details.key` `resources.workers`.
+    assert_eq!(invalid_key("[resources.workers]\n"), serde_json::json!("resources.workers"));
+    assert_eq!(invalid_key("[resources.workers]\nslots = 2\n"), serde_json::json!("resources.workers"));
+    for (host, owner) in [("[resources.workers]\n", ""), ("", "[resources.workers]\n")] {
+        let err = resolve_levels(host, owner, Some("")).expect_err("a host or owner file may not declare `workers` either");
+        assert_eq!(err.code(), ErrorCode::PolicyInvalid);
+        assert_eq!(err.details()["key"], "resources.workers");
+    }
+}
