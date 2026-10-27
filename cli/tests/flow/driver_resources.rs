@@ -243,7 +243,7 @@ fn resource_hold_a_held_resource_refuses_the_start_with_resource_busy_and_takes_
     // No Attempt row, no driver, and the holder's record is left as it was.
     assert_eq!(w.attempts(), 0);
     assert_eq!(w.status(JOB), "queued");
-    assert_eq!(w.fx.fakes.spawn.launches(), []);
+    assert_eq!(w.fx.fakes.spawn.launches_but_janitor(), []);
     assert_eq!(fs::read_to_string(w.lock("e2e-port")).unwrap(), COMMAND_RECORD);
 }
 
@@ -303,7 +303,7 @@ fn resource_hold_job_dispatch_refuses_resource_busy_and_changes_nothing() {
     assert_eq!(w.fx.env.query::<i64>("SELECT count(*) FROM events"), events);
     assert_eq!(w.status(JOB), "queued");
     assert_eq!(w.attempts(), 0);
-    assert_eq!(w.fx.fakes.spawn.launches(), []);
+    assert_eq!(w.fx.fakes.spawn.launches_but_janitor(), []);
     // Free once the holder lets go: the same command now starts the Job.
     drop(_other);
     assert_eq!(w.dispatch(JOB).ok()["attempt"], "api-a1");

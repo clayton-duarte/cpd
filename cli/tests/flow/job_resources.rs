@@ -9,7 +9,7 @@ use common::fx::Fx;
 use common::{Run, refused};
 use serde_json::{Value, json};
 
-use super::job::{events, fixture, plan, setup};
+use super::job::{events, fixture, lock, plan, setup};
 
 /// Plan `pl` in phase `plan`, its PR `repo` named `cpd` of owner `acme`, whose policy declares `e2e-port`.
 fn world() -> Fx {
@@ -120,4 +120,21 @@ fn resource_spec_the_fingerprint_ignores_resources() {
     fx.cpd(&["job", "edit", "a", "--spec", &spec, "--plan", "pl"]).ok();
     assert_eq!(shown(&fx, "a")["resources"], json!(["e2e-port"]), "the edit stored the resources");
     assert_eq!(fingerprint(), before);
+}
+
+#[test]
+fn resource_spec_job_edit_of_a_queued_job_checks_and_stores_resources() {
+    let fx = world();
+    add(&fx, "a", None, &[]).ok();
+    lock(&fx.env, "pl");
+    let edit = |resources: Value| {
+        let spec = spec_with(&fx, Some(resources));
+        fx.cpd(&["job", "edit", "a", "--spec", &spec, "--plan", "pl"])
+    };
+    edit(json!(["e2e-port"])).ok();
+    assert_eq!(shown(&fx, "a")["status"], "queued");
+    assert_eq!(shown(&fx, "a")["resources"], json!(["e2e-port"]));
+    let details = refused(&edit(json!(["gpu"])), "resource_undeclared", 3)["details"].clone();
+    assert_eq!((details["job"].as_str(), details["resource"].as_str()), (Some("a"), Some("gpu")));
+    assert_eq!(shown(&fx, "a")["resources"], json!(["e2e-port"]), "the refused edit stored nothing");
 }

@@ -104,7 +104,7 @@ fn resource_hold_e3_keeps_a_job_queued_while_its_resource_is_held() {
     // No Attempt, no driver, no Worker slot used, and E3 raises nothing: `resource_busy` is never an `error` Event.
     assert_eq!(status(&fx, "api"), "queued");
     assert_eq!(attempts(&fx), 0);
-    assert_eq!(fx.fakes.spawn.launches(), []);
+    assert_eq!(fx.fakes.spawn.launches_but_janitor(), []);
     assert_eq!(started(&fx), Vec::<String>::new());
     assert_eq!(all_errors(&fx), 0);
 }
@@ -139,7 +139,7 @@ fn resource_hold_e3_starts_the_job_when_the_holder_ends() {
 
     assert_eq!(started(&fx), ["api"]);
     assert_eq!(status(&fx, "api"), "running");
-    assert_eq!(fx.fakes.spawn.launches().len(), 1);
+    assert_eq!(fx.fakes.spawn.launches_but_janitor().len(), 1);
 }
 
 #[test]
@@ -195,7 +195,7 @@ fn resource_hold_e3_raises_resource_undeclared_once_and_leaves_the_job_queued() 
     assert_eq!(raised.len(), 1, "once until it clears: {raised:?}");
     assert_eq!(status(&fx, "api"), "queued");
     assert_eq!(attempts(&fx), 0);
-    assert_eq!(fx.fakes.spawn.launches(), []);
+    assert_eq!(fx.fakes.spawn.launches_but_janitor(), []);
 
     // It clears when the policy declares the name again: the Job starts.
     fx.env.repo_policy("acme", "pay", "[resources.e2e-port]\n[resources.gone]\n");
