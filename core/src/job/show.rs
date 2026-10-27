@@ -63,8 +63,10 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
                     if !wanted.names.iter().any(|n| n == pool.name()) {
                         continue;
                     }
-                    if let Some(holder) = crate::resource::holders(&home, &pool)?.remove(0) {
-                        held.push(json!({"resource": pool.name(), "holder": holder}));
+                    let holders = crate::resource::holders(&home, &pool)?;
+                    // Only a resource with no free slot is waited for.
+                    if holders.iter().all(Option::is_some) {
+                        held.push(json!({"resource": pool.name(), "scope": pool.scope(), "slots": pool.slots(), "holders": holders}));
                     }
                 }
                 Some(held)

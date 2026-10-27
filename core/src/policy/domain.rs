@@ -175,7 +175,8 @@ impl HasText for Protected {
     }
 }
 
-/// The `resources` domain (repo scope only, no `text`): the declared exclusive resource names, sorted.
+/// The `resources` domain (any scope, no `text`): the visible resources, resolved per name over host, owner and repo
+/// (contract §8.3 "The `resources` domain"); `names` is sorted.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Resources {
@@ -213,6 +214,12 @@ impl HasText for Resources {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ResourceName(String);
 
+impl ResourceName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 impl<'de> Deserialize<'de> for ResourceName {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let name = String::deserialize(d)?;
@@ -224,14 +231,14 @@ impl<'de> Deserialize<'de> for ResourceName {
     }
 }
 
-/// One declared resource: an empty table.
+/// One declared resource: a table with `slots` (`1..=64`, default 1; the range is checked by the loader).
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceDecl {
     pub slots: Option<i64>,
 }
 
-/// What a scope file's `[resources]` table sets: one empty table per resource name.
+/// What a scope file's `[resources]` table sets: one table per resource name.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(transparent)]
 pub struct ResourcesSet(pub std::collections::BTreeMap<ResourceName, ResourceDecl>);
@@ -431,6 +438,26 @@ impl Set for ResourcesSet {
     }
 }
 
+/// The visible resources of `layers` (most specific first): the union per name, the narrowest declaration of a name
+/// wins whole (contract §8.3 "The `resources` domain").
+pub(super) fn resources_union(layers: &[(Source, &Scope)]) -> Resources {
+    let mut by_name = std::collections::BTreeMap::new();
+    for (source, scope) in layers.iter().rev() {
+        let (level, path) = match source {
+            Source::Machine(p) => (ResourceScope::Host, p),
+            Source::Owner(p) => (ResourceScope::Owner, p),
+            Source::Repo(p) => (ResourceScope::Repo, p),
+            Source::Default | Source::DefaultNoOwnerFile => continue,
+        };
+        let Some(set) = &scope.resources else { continue };
+        for (name, decl) in &set.0 {
+            let slots = decl.slots.map_or(1, |n| u8::try_from(n).expect("the loader checked slots to 1..=64"));
+            by_name.insert(name.0.clone(), Declared { name: name.0.clone(), scope: level, slots, source: path.display().to_string() });
+        }
+    }
+    Resources { names: by_name.keys().cloned().collect(), declared: by_name.into_values().collect() }
+}
+
 /// Where a domain's value came from (contract §8.3 "Model").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Source {
@@ -572,7 +599,7 @@ macro_rules! domains {
         /// Reads `layers` (most specific first) over `default`, per domain.
         pub(super) fn merge(default: &Policy, layers: &[(Source, &Scope)]) -> super::Resolved {
             let mut sources = Sources::all(Source::Default);
-            let policy = Policy {
+            let mut policy = Policy {
                 $($field: match layers.iter().find_map(|(src, scope)| scope.$field.as_ref().map(|set| (src, set))) {
                     Some((src, set)) => {
                         let (value, left_out) = set.fill(&default.$field);
@@ -583,6 +610,7 @@ macro_rules! domains {
                     None => default.$field.clone(),
                 },)+
             };
+            policy.resources = resources_union(layers);
             let warnings = layers
                 .iter()
                 .filter_map(|(src, scope)| {
@@ -611,7 +639,7 @@ domains! {
     hooks, Hooks, [], [Repo], Hooks, HooksSet;
     test_commands = "test-commands", TestCommands, [], [Repo], Option<RepoTests>, TestCommandsSet;
     protected, Protected, [], [Repo], Protected, ProtectedSet;
-    resources, Resources, [], [Repo], Resources, ResourcesSet;
+    resources, Resources, [], [Machine, Owner, Repo], Resources, ResourcesSet;
 }
 
 impl Sources {

@@ -158,17 +158,17 @@ pub fn start_with_allocation(
             };
             match resource::take(ctx.home, &pools, &holder)? {
                 Take::Held(held) => Some(held),
-                Take::Busy { resource, mut holders } => {
+                Take::Busy { resource, holders } => {
                     // Nothing changes: the driver lock file made for an Attempt that will not exist goes too.
                     drop(lock);
                     super::lock::remove(ctx.home, plan, &next.attempt)?;
                     return Err(CpdError::new(
                         ErrorCode::ResourceBusy,
-                        format!("Job {key} cannot start: the resource {resource} of {}/{} is held by another holder.", w.owner, w.repo),
+                        format!("Job {key} cannot start: the resource {resource} of {}/{} has no free slot.", w.owner, w.repo),
                     )
                     .with("job", key.as_str())
                     .with("resource", resource)
-                    .with("holder", serde_json::to_value(holders.remove(0)).expect("a holder serialises")));
+                    .with("holders", serde_json::to_value(holders).expect("a holder serialises")));
                 }
             }
         }

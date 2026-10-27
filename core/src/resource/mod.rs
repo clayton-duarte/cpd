@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::{OwnerLogin, PlanId, RepoName};
-use crate::policy::Declared;
+use crate::policy::{Declared, ResourceScope};
 use crate::lock;
 
 pub mod cmd;
@@ -44,11 +44,24 @@ pub enum Pool {
 }
 
 impl Pool {
-    /// The pool of the resource `declared` for the repo `owner/repo`.
+    /// The pool of the resource `declared` for the repo `owner/repo`: the declaring level owns it.
     pub fn of(declared: &Declared, owner: &OwnerLogin, repo: &RepoName) -> Pool {
-        // STUB: every pool is the repo's, with one slot.
-        let _ = declared.scope;
-        Pool::Repo { owner: owner.clone(), repo: repo.clone(), name: declared.name.clone(), slots: 1 }
+        let name = declared.name.clone();
+        let slots = declared.slots;
+        match declared.scope {
+            ResourceScope::Host => Pool::Host { name, slots },
+            ResourceScope::Owner => Pool::Owner { owner: owner.clone(), name, slots },
+            ResourceScope::Repo => Pool::Repo { owner: owner.clone(), repo: repo.clone(), name, slots },
+        }
+    }
+
+    /// The declaring level, which owns the pool.
+    pub fn scope(&self) -> ResourceScope {
+        match self {
+            Pool::Host { .. } => ResourceScope::Host,
+            Pool::Owner { .. } => ResourceScope::Owner,
+            Pool::Repo { .. } => ResourceScope::Repo,
+        }
     }
 
     pub fn name(&self) -> &str {
@@ -66,12 +79,7 @@ impl Pool {
 
 /// The pools of the resources `resources` declares for the repo `owner/repo`, in name order.
 pub fn pools_of(resources: &crate::policy::Resources, owner: &OwnerLogin, repo: &RepoName) -> Vec<Pool> {
-    // STUB: the names, each a one-slot repo pool.
-    resources
-        .names
-        .iter()
-        .map(|name| Pool::of(&Declared { name: name.clone(), scope: crate::policy::ResourceScope::Repo, slots: 1, source: String::new() }, owner, repo))
-        .collect()
+    resources.declared.iter().map(|d| Pool::of(d, owner, repo)).collect()
 }
 
 /// The slots taken by one [`take`], one per pool: each lock stays held until this is dropped (or the descriptor is handed on).
@@ -104,14 +112,15 @@ pub enum Take {
     Busy { resource: String, holders: Vec<Option<Holder>> },
 }
 
-/// The lock file of slot `slot` (from 1) of `pool` (contract §1.4).
+/// The lock file of slot `slot` (from 1) of `pool` (contract §1.4): `resource.<scope>.<owner>.<repo>.<name>.<slot>.lock`
+/// (only the parts the scope has). Injective: the scope word comes first, and an owner login, a resource name and a slot
+/// never contain a dot, so the owner is the first part after the scope, the slot and the name the last two, and the repo
+/// (which may contain dots) is what lies between.
 pub fn lock_path(home: &CpdHome, pool: &Pool, slot: u8) -> PathBuf {
-    // STUB: the slot is not in the name.
-    let _ = slot;
     let file = match pool {
-        Pool::Host { name, .. } => format!("resource.host.{name}.1.lock"),
-        Pool::Owner { owner, name, .. } => format!("resource.owner.{owner}.{name}.1.lock"),
-        Pool::Repo { owner, repo, name, .. } => format!("resource.repo.{owner}.{repo}.{name}.1.lock"),
+        Pool::Host { name, .. } => format!("resource.host.{name}.{slot}.lock"),
+        Pool::Owner { owner, name, .. } => format!("resource.owner.{owner}.{name}.{slot}.lock"),
+        Pool::Repo { owner, repo, name, .. } => format!("resource.repo.{owner}.{repo}.{name}.{slot}.lock"),
     };
     home.locks_dir().join(file)
 }
@@ -135,22 +144,26 @@ pub fn take(home: &CpdHome, pools: &[Pool], holder: &Holder) -> Result<Take, Cpd
     fs::create_dir_all(home.locks_dir()).map_err(|e| lock_failed(&home.locks_dir(), e))?;
     let mut files = Vec::new();
     for pool in sorted {
-        // STUB: only slot 1 is tried.
-        let path = lock_path(home, pool, 1);
-        let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(|e| lock_failed(&path, e))?;
-        if lock::try_lock(&file).map_err(|e| lock_failed(&path, e))? {
-            files.push((pool.name().to_owned(), 1, file));
-        } else {
-            return Ok(Take::Busy { resource: pool.name().to_owned(), holders: holders(home, pool)? });
+        let mut taken = None;
+        for slot in 1..=pool.slots() {
+            let path = lock_path(home, pool, slot);
+            let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(|e| lock_failed(&path, e))?;
+            if lock::try_lock(&file).map_err(|e| lock_failed(&path, e))? {
+                taken = Some((slot, file));
+                break;
+            }
         }
+        let Some((slot, file)) = taken else {
+            return Ok(Take::Busy { resource: pool.name().to_owned(), holders: holders(home, pool)? });
+        };
+        files.push((pool.name().to_owned(), slot, file, pool));
     }
     let record = serde_json::to_string(holder).expect("a holder serialises");
-    for (name, _, file) in &mut files {
-        let pool = pools.iter().find(|p| p.name() == name).expect("a pool of the call");
-        let path = lock_path(home, pool, 1);
+    for (_, slot, file, pool) in &mut files {
+        let path = lock_path(home, pool, *slot);
         file.set_len(0).and_then(|()| file.write_all(record.as_bytes())).map_err(|e| lock_failed(&path, e))?;
     }
-    Ok(Take::Held(Held { files }))
+    Ok(Take::Held(Held { files: files.into_iter().map(|(n, s, f, _)| (n, s, f)).collect() }))
 }
 
 /// The resources a Job's Spec lists and the repo they belong to.
@@ -184,16 +197,19 @@ pub fn wanted(conn: &rusqlite::Connection, plan: &PlanId, key: &str) -> Result<O
 
 /// The holders of the slots of `pool`, in slot order: `None` for a free slot (whatever its file still holds), else its record.
 pub fn holders(home: &CpdHome, pool: &Pool) -> Result<Vec<Option<Holder>>, CpdError> {
-    // STUB: only slot 1 is read.
-    let path = lock_path(home, pool, 1);
+    (1..=pool.slots()).map(|slot| holder_of_slot(home, pool, slot)).collect()
+}
+
+fn holder_of_slot(home: &CpdHome, pool: &Pool, slot: u8) -> Result<Option<Holder>, CpdError> {
+    let path = lock_path(home, pool, slot);
     let file = match File::open(&path) {
         Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![None]),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(lock_failed(&path, e)),
     };
     // A shared try-lock, released at once (dropped): refused only while an exclusive one is held.
     if lock::shared(&file).map_err(|e| lock_failed(&path, e))? {
-        return Ok(vec![None]);
+        return Ok(None);
     }
-    Ok(vec![Some(parse(&fs::read_to_string(&path).unwrap_or_default()))])
+    Ok(Some(parse(&fs::read_to_string(&path).unwrap_or_default())))
 }
