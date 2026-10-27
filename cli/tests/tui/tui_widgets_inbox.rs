@@ -253,7 +253,7 @@ fn a_pr_ready_item_whose_merge_runs_shows_the_spinner() {
     let busy = common::inbox::linked_item_row(&glyph, ready, "5m");
     assert_eq!(screen[screen.len() - 5..screen.len() - 2], [pill(2), red.clone(), busy], "the other items keep their tier glyph: {screen:?}");
     // stale: the tier glyph is back
-    let white = common::inbox::linked_item_row(palette::TIER_WHITE, ready, "5m");
+    let white = common::inbox::linked_item_row(palette::ITEM_PR_READY, ready, "5m");
     frame_with(&frames, at, "the tier glyph back", |screen| screen.contains(&white));
 }
 

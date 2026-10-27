@@ -16,7 +16,7 @@ fn the_blue_tier_glyph_is_f0368_in_bright_blue_12() {
     let span = palette::tier_span(Urgency::Blue);
     assert_eq!(span.content, BLUE);
     assert_eq!(span.style.fg, Some(Color::LightBlue), "bright blue (12): a clickable Inbox row");
-    assert_eq!(palette::item_span(Kind::ReviewRequested, Urgency::Blue), span);
+    assert_eq!(palette::item_span(Kind::ReviewRequested, Urgency::Blue), ratatui::text::Span::styled("\u{F12F2}", span.style));
     for other in [Urgency::Cyan, Urgency::Yellow] {
         let o = palette::tier_span(other);
         assert!(o.content != span.content, "{other:?} glyph differs");
