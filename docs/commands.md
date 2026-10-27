@@ -2276,7 +2276,7 @@ Effects: no lock and no R first (hs-d243, §7.4): `G = rev-parse refs/heads/<lea
 cpd pr merge <owner>/<repo>#<n>
 ```
 
-Merges a pull request on GitHub: the Deploy column's merge button (§13.2; hs-d272, hs-d273, hs-d274). **Callers:** the User, through the cockpit (`cockpit` true); none of the agent roles, and no guard against them calling it (hs-d248). It takes a pull request, not a Plan's PR key: it needs no Plan or Context, and `<owner>/<repo>#<n>` is the form the Deploy column shows. Per-owner merge rules (repo-policy, hs-d263) are later.
+Merges a pull request on GitHub: the Deploy column's merge button (§13.2; hs-d272, hs-d273, hs-d274), or the Lead after a peer approves a posted PR (pro-d64, §9.10). **Callers:** the User, through the cockpit (`cockpit` true); the Lead, after a `pr-feedback` with reason `approved` of a posted PR; none of the other agent roles, and no guard against them calling it (hs-d248). It takes a pull request, not a Plan's PR key: it needs no Plan or Context, and `<owner>/<repo>#<n>` is the form the Deploy column shows. Per-owner merge rules (repo-policy, hs-d263) are later.
 
 Steps:
 

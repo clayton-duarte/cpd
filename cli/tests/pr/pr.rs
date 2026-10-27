@@ -1552,7 +1552,7 @@ fn merge_state(node: String, mergeable: &str, merge_state: &str) -> String {
 
 /// `node`, as a direct read (the lookup) answers it for the viewer: whether the viewer `did_author` it and whether a review
 /// is `requested` of them (`viewerLatestReviewRequest` is `{"id":"RR_1"}` or null). The search ignores both fields.
-fn viewer(node: String, did_author: bool, requested: bool) -> String {
+pub(super) fn viewer(node: String, did_author: bool, requested: bool) -> String {
     let request = if requested { r#"{"id":"RR_1"}"# } else { "null" };
     node.replace(
         r#""viewerDidAuthor":true,"viewerLatestReviewRequest":null"#,
@@ -1637,7 +1637,7 @@ impl Poll {
     }
 
     /// What the fake `gh`'s lookup answers.
-    fn lookup(&self, nodes: &[Option<String>]) {
+    pub(super) fn lookup(&self, nodes: &[Option<String>]) {
         self.lookup_raw(&lookup_answer(nodes));
     }
 
