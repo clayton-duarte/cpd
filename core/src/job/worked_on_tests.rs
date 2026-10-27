@@ -230,6 +230,9 @@ fn a_failed_job_is_stuck_when_its_fix_job_ended_and_its_lead_is_idle() {
         assert_eq!(before.len(), 1);
         f.job("pay", "p1", "fix", "queued");
         assert_eq!(f.stuck(), [], "the fix is underway");
+        if end != "cancelled" {
+            f.set("pay", "fix", "running");
+        }
         f.set("pay", "fix", end);
         assert_eq!(f.stuck(), before, "the fix {end}: stuck again, same event, minutes and cause");
     }
