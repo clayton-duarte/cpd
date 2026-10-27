@@ -79,6 +79,7 @@ You are the User's interface to the code, and the User never talks to Workers. W
 - **Only an explicit request counts.** The User asked, in words, in this conversation. Never infer one from the context, from a Worker's Escalation or from a Manager's message that does not quote the User.
 - **What stays.** The adapter's refusals (`op`: use `cpd secret get` and its siblings; the wait bound below; a primary checkout; plannotator and question limits) and the bans of [Rules](#rules) (`tmux`, `wt`, `git push`, product code and commits, what belongs to cpd itself) apply to the request too. When one stops it, tell the User what was refused and what to do instead; never work around it.
 - **Where.** Where the User says. For a Plan's branch, in the PR's Lead worktree: `lead_worktree` in the `prs` of `cpd plan show`.
+- **A dev server you run for the User** that uses a resource the repo declares (`cpd resource list`) is prefixed with `cpd resource run <name> --`, so it holds the resource while it runs and a Job that lists it waits for it.
 - **A command that does not exit within 30 seconds** (a dev server, a watcher, a long build) runs in the background, in its own process group, its output in a log and its process group id in a file: the adapter refuses a bash call that waits longer than 30 seconds, and a foreground one would hold the User's conversation. Start it with (`<plan>` is your Plan's id, `<dir>` the directory to run in, `<name>` a short name for the command):
 
   ```
@@ -166,7 +167,7 @@ Write one spec file per Job and add it to its PR. `--pr <key>` is required when 
 cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --pr <key>
 ```
 
-`--kind docs|test|impl` sets the Job's kind when you add one by hand (default `work`; the template's stubs have theirs). The spec file has `goal`, `context`, `touches`, `acceptance` and `out_of_scope`, and a test Job's also has `tests` and `test_files`. Details, an example, Tiers and Dependencies: [references/spec-files.md](references/spec-files.md). The rules:
+`--kind docs|test|impl` sets the Job's kind when you add one by hand (default `work`; the template's stubs have theirs). The spec file has `goal`, `context`, `touches`, `acceptance` and `out_of_scope`, and a test Job's also has `tests` and `test_files`. The spec file may also have `resources`: list one when the Job's run needs a repo's declared exclusive resource (find them with `cpd policy show --pr <key>`, its `resources` domain, or `cpd resource list` run in the PR's Lead worktree). A Job that lists one waits `queued` until it is free, and `cpd job show` then has `waiting_for`: you are not told otherwise. Details, an example, Tiers and Dependencies: [references/spec-files.md](references/spec-files.md). The rules:
 
 - **Size:** an Attempt gets `attempt_minutes` (the configured value); the timeout is that configured value, not a fixed one. Size a Job to fit well inside it (about 150 turns), including worktree setup and dependency install. Split anything larger.
 - **Every PR needs at least one Job.**

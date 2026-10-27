@@ -14,7 +14,7 @@
 #[cfg(test)]
 mod incident_tests;
 
-mod add;
+pub(crate) mod add;
 mod approve;
 pub(crate) mod cancel;
 mod edit;

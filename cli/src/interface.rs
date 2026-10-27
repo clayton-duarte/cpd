@@ -125,6 +125,8 @@ pub const TABLE: &[Entry] = &[
     ("test run", &[Manager, Lead, Worker], false),
     ("test list", &[Manager, Lead, Worker], false),
     ("test build", &[Manager, Lead, Worker], false),
+    ("resource list", &[Manager, Lead, Worker], false),
+    ("resource run", &[Manager, Lead, Worker], false),
     ("prune", &[], false),
     ("janitor", &[], false),
     ("tag", &[Lead], false),
