@@ -1597,7 +1597,7 @@ fn the_stored_shape_decides_the_kinds_a_waiting_pr_may_have() {
     let tests = test_spec_file(&fx.env, "tests.json", json!(["t::one"]), json!(["tests/t.rs"]));
     let spec_of = |kind: &str| if kind == "test" { tests.clone() } else { spec.clone() };
     let allowed = |shape: &str| match shape {
-        "tdd" => vec!["docs", "test", "impl"],
+        "tdd" => vec!["docs", "test", "impl", "verify"],
         "docs" => vec!["docs"],
         "config" => vec!["work"],
         _ => unreachable!(),

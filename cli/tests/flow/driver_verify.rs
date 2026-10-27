@@ -18,12 +18,15 @@ fn a_verify_job_runs_and_merges_like_a_docs_job() {
     live.fx.git(&live.lead, &["commit", "-q", "--allow-empty", "-m", "hooks"]);
     // The PR is `tdd`; its impl Job `build` is merged (its commit is on the Lead Branch); the first Job `api` is not wanted.
     let merged = live.commit(&live.lead, "build.txt", "build\n", "build");
+    let fp = "0".repeat(64);
     live.fixture(&format!(
-        "UPDATE prs SET shape = 'tdd' WHERE key = 'repo';
+        "DROP TRIGGER prs_shape_fixed;
+         UPDATE prs SET shape = 'tdd' WHERE key = 'repo';
          UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE key = 'api';
-         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
-         VALUES ('pay', 'repo', 'build', 'Build', 'S2', 'Build.', 'Because.', '[\"build.txt\"]', '[\"it works\"]', '[]', 'merged', 0, 'impl', cpd_txn(), 't');
-         UPDATE jobs SET merged_sha = '{merged}' WHERE key = 'build';"
+         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, merged_sha, created_txn, created_at)
+         VALUES ('pay', 'repo', 'build', 'Build', 'S2', 'Build.', 'Because.', '[\"build.txt\"]', '[\"it works\"]', '[]', 'merged', 0, 'impl', '{fp}', '{merged}', cpd_txn(), 't');
+         CREATE TRIGGER prs_shape_fixed BEFORE UPDATE OF shape ON prs
+BEGIN SELECT RAISE(ABORT, 'pr_locked'); END;"
     ));
     let spec = live.fx.env.root().join("verify-spec.json");
     fs::write(&spec, r#"{"goal": "Check it end to end.", "context": "The PR is built.", "touches": ["e2e/"], "acceptance": ["e2e passes"], "out_of_scope": []}"#).unwrap();

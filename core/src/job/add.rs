@@ -201,10 +201,12 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
     }
     check_needs_known(&all, plan, &job.needs)?;
     check_needs_same_pr(&all, plan, &job.pr, &job.needs)?;
+    if !draft {
+        check_impl_job_required(&all, plan, &job)?;
+    }
     check_needs_available(&all, plan, &job.needs)?;
     if !draft {
         check_test_job_required(&all, plan, &job)?;
-        check_impl_job_required(&all, plan, &job)?;
         check_needs_not_draft(&all, plan, &job)?;
         job.fingerprint = Some(locked_fingerprint(&job));
     }

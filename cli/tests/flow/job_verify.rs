@@ -75,7 +75,7 @@ fn a_verify_job_that_needs_no_impl_job_of_its_pr_is_refused() {
     assert!(jobs.contains(&json!("i")), "{jobs:?}");
     assert_eq!(writes(&fx), before, "a refusal wrote");
     // Needing the live impl Job is enough.
-    assert_eq!(verify(&fx, "v", &["i2", "i"], "api", false).ok()["job"]["status"], "queued");
+    assert_eq!(verify(&fx, "v", &["i"], "api", false).ok()["job"]["status"], "queued");
 }
 
 #[test]
@@ -95,7 +95,7 @@ fn a_plan_review_and_a_lock_refuse_a_draft_verify_job_without_an_impl_need() {
     // A missing test Job is refused first: an impl draft that needs no test Job of its PR.
     add_needing(&fx, "pl", "i2", "impl", &["d"], "api").ok();
     let e = refused(&review(&fx, "pl"), "test_job_required", 3);
-    assert_eq!(e["details"]["jobs"], json!(["t"]));
+    assert_eq!(e["details"]["jobs"], json!(["i2"]));
     refused(&plan_lock(&fx, "pl"), "test_job_required", 3);
     job(&fx, &["edit", "i2", "--needs", "t"], "pl").ok();
     refused(&review(&fx, "pl"), "impl_job_required", 3);

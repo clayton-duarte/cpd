@@ -73,12 +73,16 @@ pub(super) fn check(plan: &PlanId, prs: &[PrRow], jobs: &[Job]) -> Result<(), Cp
     if !unneeding.is_empty() {
         unneeding.sort_by(|a, b| a.key.cmp(&b.key));
         let keys: Vec<&str> = unneeding.iter().map(|j| j.key.as_str()).collect();
+        let first = unneeding[0];
+        let mut impls: Vec<&str> = jobs.iter().filter(|j| j.pr == first.pr && j.kind == "impl" && j.status != "cancelled").map(|j| j.key.as_str()).collect();
+        impls.sort();
         return Err(CpdError::new(
             ErrorCode::ImplJobRequired,
             format!("The verify Jobs {} must each need an impl Job of their PR: they check the code those Jobs build. Add the dependency with cpd job edit <key> --needs.", keys.join(", ")),
         )
         .with("plan", plan.as_str())
-        .with("jobs", keys));
+        .with("job", first.key.as_str())
+        .with("jobs", impls));
     }
     let mut ordered: Vec<&PrRow> = prs.iter().collect();
     ordered.sort_by(|a, b| a.key.cmp(&b.key));
