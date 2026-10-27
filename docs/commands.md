@@ -148,7 +148,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `illegal_transition` | 3 | a transition not in §3, refused by the command or by a trigger |
 | `locked_job_tampered` | 3 | a Locked Job's fingerprint does not match (§2.3) |
 | `pr_title_required` | 3 | `pr open` found a PR with no stored title, one that existed before migration `pr-title` (contract §7.6, hs-d285); the message says to run `cpd pr edit <key> --title "<text>"` |
-| `needs_required` | 3 | `pr add` in phase `dispatch` found neither `--needs` nor `--no-needs` (pro-d46); a PR added after the lock with no needs is started at once and cannot be linked later; `details` `{plan, pr, phase}` |
+| `needs_required` | 3 | `pr add` in phase `dispatch` found neither `--needs` nor `--no-needs` for a PR that is not stacked (pro-d46); a PR added after the lock with no needs is started at once and cannot be linked later; for a stacked PR, the base PR is its link; `details` `{plan, pr, phase}` |
 | `adopt_not_open` | 3 | `pr add --adopt` (§9.4): the pull request's `state` is not `OPEN`; `details` is `{number, url, state}` |
 | `adopt_fork` | 3 | `pr add --adopt`: the pull request is from a fork (`isCrossRepository`); cpd cannot push to a fork; `details` is `{number, url}` |
 | `adopt_cpd_branch` | 3 | `pr add --adopt`: the head branch starts with `cpd/`, so it is a cpd pull request; `details` is `{number, head_ref}` |
