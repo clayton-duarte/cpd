@@ -1466,6 +1466,7 @@ Starts one Ready Job now: the same step as engine E3 (cpd 1 §11, kept).
 | Precondition | Code | Exit |
 |---|---|---|
 | the Job is Ready (§3.2) | `job_not_ready` | 3 |
+| an `open` Job's PR has a stored `description` and, if not adopted (`head_ref` null), is treated as not Ready: the Job is not started; the same refusal at engine E3 as for `tier_not_allowed`, one `error` Event, the Job starts at the first tick after the description is stored (§9.5a); an `update` Job and an adopted PR's open Job need none | `description_required` | 3 |
 | its fingerprint matches | `locked_job_tampered` | 3 |
 | the driver lock is free (§3.4 step 1) | `cas_lost` | 3 |
 | a linear Attempt of the Job's PR is live (pro-d52, contract §3.7 E3 item 1) | `cas_lost` | 3 |
@@ -2052,7 +2053,7 @@ Idempotent: yes; when no value changes it writes nothing and returns `"already":
 cpd pr describe --pr <key> --file <path> [--plan <id>]
 ```
 
-Stores the PR's description, verbatim, which becomes the pull request body (the description is required before `pr open`). The `--file` argument is a filesystem path or `-` for stdin; the file must be readable UTF-8, else `file_unreadable` (exit 2). The description is stored non-empty after trimming and at most 65536 characters; else `description_invalid` (exit 3). The command is allowed in **every phase and every PR status but `merged` and `cancelled`** (a PR that is over; like `pr edit --title`, §9.5). When the PR has an **open** pull request, the command also updates it on GitHub with `gh pr edit <number> --body-file -`, piping the stored description; a failing GitHub update is `gh_failed` and leaves the stored description unchanged. An **adopted** PR (`head_ref` set, §9.4) is refused `pr_adopted` (exit 3; its pull request's body is the Lead's to fill, so `describe` on it is disallowed), checked first.
+Stores the PR's description, verbatim, which becomes the pull request body (the description is required before `pr open`). The `--file` argument is a filesystem path or `-` for stdin; the file must be readable UTF-8, else `file_unreadable` (exit 2). The description is stored non-empty after trimming and at most 65536 characters; else `description_invalid` (exit 3). The command is allowed in **every phase and every PR status but `merged` and `cancelled`** (a PR that is over; like `pr edit --title`, §9.5). When the PR has an **open** pull request, the command also updates it on GitHub with `gh pr edit <number> --body-file -`, piping the stored description; a failing GitHub update is `gh_failed` and leaves the stored description unchanged. An **adopted** PR (`head_ref` set, §9.4) is refused `pr_adopted` (exit 3; its pull request's body is the Lead's to fill, so `describe` on it is disallowed), checked first. The PR's open Job does not start until the description is stored.
 
 | Precondition | Code | Exit |
 |---|---|---|
