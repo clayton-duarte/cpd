@@ -134,8 +134,10 @@ fn close_menu_item_runs_session_close_at_once() {
     assert_eq!(resolve(pick(&mut view, 8, 9, "Close"), &stub), Ok(words(&["session", "close", "f-idle"])));
     assert_eq!(stub.opened(), Vec::<String>::new(), "no popup");
     // the Session in the chat slot is still refused, in a `text` dialog
-    let mut view = View::new(sample(), true);
-    assert_eq!(pick(&mut view, 8, 6, "Close"), Effect::Text { title: "Close Session".into(), text: IN_CHAT_SLOT.into() });
+    let mut tree = sample();
+    tree.contexts[0].plans[0].sessions[1].place = crate::read::Place::Chat;
+    let mut view = View::new(tree, true);
+    assert_eq!(pick(&mut view, 8, 9, "Close"), Effect::Text { title: "Close Session".into(), text: IN_CHAT_SLOT.into() });
 }
 
 #[test]
