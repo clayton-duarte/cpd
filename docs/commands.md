@@ -1301,8 +1301,8 @@ Both are required for a `test` Job that is not a stub, and refused for every oth
 ### 5.1 `job add`
 
 ```
-cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--kind <docs|test|impl>] [--needs <k1,k2> | --review] [--draft] [--urgent] [--plan <id>]
-cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--pr <key>] [--kind <docs|test|impl>] [--needs <k1,k2>] [--plan <id>]
+cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--kind <work|docs|test|impl|verify>] [--needs <k1,k2> | --review] [--draft] [--urgent] [--plan <id>]
+cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--pr <key>] [--kind <work|docs|test|impl|verify>] [--needs <k1,k2>] [--plan <id>]
 ```
 
 `--tier` and `--spec` are required, except with `--draft`: a **stub draft** (hs-d241, R1) needs only `--title`; either or both of `--tier` and `--spec` may be given too. A Job that is not a draft, and a `--review` Job, still needs both (`usage`, exit 2). The Lead registers planned work with a stub the moment it is planned (hs-d239) and completes it later with `cpd job edit <key> --tier <T> --spec <file>` (§5.2). A follow-up PR is added the same way: `pr add <key> --repo … --needs …` (§9.4) plus stub drafts in it.
