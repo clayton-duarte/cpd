@@ -3123,8 +3123,21 @@ fn kind_tests_and_test_files_are_locked_with_the_job_and_test_approved_is_not() 
     for key in ["impl-draft", "test-draft"] {
         write(&mut store, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = '{key}'")).unwrap();
     }
-    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET tests = '[\"a\"]' WHERE key = 'test-draft'")), "job_locked");
-    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET test_files = '[\"a\"]' WHERE key = 'test-draft'")), "job_locked");
+    // `tests` and `test_files` are Spec columns: they change while the queued Job has no Attempt, and are Locked once it has one.
+    write(&mut store, "UPDATE jobs SET tests = '[\"a\"]' WHERE key = 'test-draft'").unwrap();
+    write(&mut store, "UPDATE jobs SET test_files = '[\"a\"]' WHERE key = 'test-draft'").unwrap();
+    write(
+        &mut store,
+        "UPDATE jobs SET status = 'running' WHERE key = 'test-draft';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+           VALUES ('pl', 'test-draft-a1', 'test-draft', 1, 'S2', 'ladder', 'running', 'cpd/pl--test-draft-a1', '/w', 't');
+         UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'test-draft-a1';
+         UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'test-draft';
+         UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE key = 'test-draft';",
+    )
+    .unwrap();
+    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET tests = '[\"b\"]' WHERE key = 'test-draft'")), "job_locked");
+    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET test_files = '[\"b\"]' WHERE key = 'test-draft'")), "job_locked");
     // `test_approved` changes after the lock: that is what `job approve-tests` does.
     write(&mut store, "UPDATE jobs SET test_approved = '[\"tests/t.rs\"]' WHERE key = 'impl-draft'").unwrap();
     assert_eq!(rows(&mut store, "SELECT test_approved FROM jobs WHERE key = 'impl-draft'"), vec![serde_json::json!(["[\"tests/t.rs\"]"])]);

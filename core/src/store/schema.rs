@@ -869,4 +869,6 @@ mod tests;
 #[cfg(test)]
 mod blue_tests;
 #[cfg(test)]
+mod job_edit_tests;
+#[cfg(test)]
 mod cyan_tests;

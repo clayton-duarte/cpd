@@ -25,7 +25,7 @@ pub(super) fn store(env: &TestEnv) -> Store {
     Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
 }
 
-fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
+pub(super) fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
     Ok(())
 }
@@ -108,11 +108,11 @@ pub(super) fn plan(env: &TestEnv, id: &str, phase: &str) {
     fixture(env, &sql);
 }
 
-fn spec_json() -> Value {
+pub(super) fn spec_json() -> Value {
     json!({"goal": "Do it.", "context": "Because.", "touches": ["src/a.rs"], "acceptance": ["cargo test"], "out_of_scope": ["Everything else."]})
 }
 
-fn write_spec(env: &TestEnv, name: &str, text: &str) -> String {
+pub(super) fn write_spec(env: &TestEnv, name: &str, text: &str) -> String {
     let path: PathBuf = env.root().join(name);
     fs::write(&path, text).unwrap();
     path.to_str().unwrap().to_owned()
@@ -133,7 +133,7 @@ pub(super) fn job_add(fx: &Fx, plan: &str, key: &str, tier: &str, needs: &[&str]
     fx.cpd(&args)
 }
 
-fn job(env: &Fx, args: &[&str], plan: &str) -> Run {
+pub(super) fn job(env: &Fx, args: &[&str], plan: &str) -> Run {
     let mut all = vec!["job"];
     all.extend(args);
     all.extend(["--plan", plan]);
@@ -149,7 +149,7 @@ pub(super) fn count(env: &TestEnv, table: &str) -> i64 {
 }
 
 /// A Plan `p` in phase `plan` with draft Jobs `a` and `b` (needs `a`).
-fn drafted(fx: &Fx) {
+pub(super) fn drafted(fx: &Fx) {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     job_add(fx, "pl", "a", "S2", &[]).ok();
@@ -176,7 +176,7 @@ pub(super) fn lock(env: &TestEnv, plan_id: &str) {
 }
 
 /// Moves the queued Job `key` to `status` the way the engine would.
-fn engine(env: &TestEnv, plan_id: &str, key: &str, status: &str) {
+pub(super) fn engine(env: &TestEnv, plan_id: &str, key: &str, status: &str) {
     let attempt = format!("INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
         VALUES ('{plan_id}', '{key}-a1', '{key}', 1, 'S2', 'ladder', 'running', 'cpd/{plan_id}--{key}-a1', '/w', 't');");
     let ended = |outcome: &str, cause: &str| {
@@ -203,7 +203,7 @@ fn engine(env: &TestEnv, plan_id: &str, key: &str, status: &str) {
     fixture(env, &sql);
 }
 
-fn job_row(env: &TestEnv, plan_id: &str, key: &str, column: &str) -> Value {
+pub(super) fn job_row(env: &TestEnv, plan_id: &str, key: &str, column: &str) -> Value {
     store(env)
         .read(|conn| {
             Ok(conn.query_row(
@@ -493,7 +493,7 @@ fn a_locked_job_cannot_be_edited_by_the_command_or_by_the_database() {
     }
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
     // The trigger of §4.4 refuses the same writes.
-    let result = store(&fx.env).write("fixture", |tx| exec(tx, "UPDATE jobs SET goal = 'Else.' WHERE key = 'a';"));
+    let result = store(&fx.env).write("fixture", |tx| exec(tx, "UPDATE jobs SET title = 'Else.' WHERE key = 'a';"));
     assert_eq!(result.unwrap_err().code(), cpd_core::error::ErrorCode::JobLocked);
     let result = store(&fx.env).write("fixture", |tx| exec(tx, "DELETE FROM dependencies WHERE job = 'b';"));
     assert_eq!(result.unwrap_err().code(), cpd_core::error::ErrorCode::JobLocked);
@@ -2065,7 +2065,7 @@ fn job_cancel_checks_no_shape_for_a_pr_that_is_not_tdd_or_that_has_opened() {
 }
 
 /// A Plan `pl` locked with the test Job `t` (`tests/t.rs`, `tests/more/`) and the impl Job `i` that needs it, both queued.
-fn locked_tdd(fx: &Fx) {
+pub(super) fn locked_tdd(fx: &Fx) {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     let tests = test_spec_file(&fx.env, "t.json", json!(["t::one"]), json!(["tests/t.rs", "tests/more/"]));
@@ -2073,7 +2073,7 @@ fn locked_tdd(fx: &Fx) {
     add_needing(fx, "pl", "i", "impl", &["t"], "repo").ok();
 }
 
-fn approve(fx: &Fx, args: &[&str]) -> Run {
+pub(super) fn approve(fx: &Fx, args: &[&str]) -> Run {
     let mut all = vec!["job", "approve-tests"];
     all.extend(args);
     all.extend(["--plan", "pl"]);
@@ -2119,7 +2119,7 @@ fn approve_tests_records_the_paths_the_impl_job_may_change_and_tells_the_event()
 }
 
 /// The Locked-Job fingerprint of Job `key` of Plan `pl`, recomputed.
-fn locked_fingerprint_of(env: &TestEnv, key: &str) -> String {
+pub(super) fn locked_fingerprint_of(env: &TestEnv, key: &str) -> String {
     let id = PlanId::parse("pl").unwrap();
     let all = store(env).read(|conn| jobs::load(conn, &id)).unwrap();
     locked_fingerprint(all.iter().find(|j| j.key == key).unwrap())
@@ -2165,7 +2165,7 @@ fn approve_tests_refuses_what_it_cannot_approve_and_writes_nothing() {
 
 /// Plan `pl` in `plan`, whose PR's repo is a repo of the fake git (a real directory, its objects in the `Universe`)
 /// with `src/a.rs` on `main` (the tree a Job of the unstarted PR starts from).
-fn touches_fx() -> Fx {
+pub(super) fn touches_fx() -> Fx {
     let fx = Fx::with_ports();
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
@@ -2176,7 +2176,7 @@ fn touches_fx() -> Fx {
 }
 
 /// `job add <key> --spec` of a Spec whose `touches` are `touches`, into Plan `pl`.
-fn add_touching(fx: &Fx, key: &str, touches: &[&str]) -> Run {
+pub(super) fn add_touching(fx: &Fx, key: &str, touches: &[&str]) -> Run {
     let mut spec = spec_json();
     spec["touches"] = json!(touches);
     let spec = write_spec(&fx.env, &format!("{key}.json"), &spec.to_string());
