@@ -156,6 +156,9 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd test run` | Run the named tests (§26.2) | Manager, Lead, Worker | |
 | `cpd test list` | Exit 0 only when that one test exists (§26.3) | Manager, Lead, Worker | |
 | `cpd test build` | Compile the Rust tests and typecheck the TypeScript (§26.3) | Manager, Lead, Worker | |
+| `cpd resource` | Repo-declared exclusive resources (commands.md §29) | | |
+| `cpd resource list` | The repo's declared resources and who holds them (§29.1) | Manager, Lead, Worker | |
+| `cpd resource run` | Take a resource and run a command holding it (§29.2) | Manager, Lead, Worker | |
 | `cpd prune` | Remove the leftover worktrees whose work is on origin/main (commands.md §26) | | |
 | `cpd tag` | Tag the commit that set the workspace version (commands.md §26.1) | Lead | |
 | `cpd version` | The release plumbing (commands.md §26.2) | | |
