@@ -12,6 +12,7 @@ use crate::ids::{JobKey, PlanId};
 use crate::output::Output;
 use crate::plan::jobs::{self, Job};
 use crate::plan::locked_fingerprint;
+use crate::store::WriteTxn;
 
 const COMMAND: &str = "job retry";
 
@@ -33,12 +34,8 @@ pub(super) fn retry(args: RetryArgs) -> Result<Output, CpdError> {
         Decision::Queue(_) => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, &tier)? {
             Decision::Already => Ok(true),
             Decision::Queue(job) => {
-                tx.execute(
-                    "UPDATE jobs SET status = 'queued', retry_tier = ?3, failed_cause = NULL WHERE plan = ?1 AND key = ?2",
-                    [plan.as_str(), job.key.as_str(), tier.as_str()],
-                )?;
                 let text = format!("Job {key} of Plan {plan} is queued again at Tier {tier}. Next: cpd job show {key} --plan {plan}");
-                append(tx, NewEvent::job_retried(text, &tier).plan(plan.clone()).job(key.clone()))?;
+                requeue(tx, &plan, &key, &tier, text)?;
                 Ok(false)
             }
         })?,
@@ -48,6 +45,16 @@ pub(super) fn retry(args: RetryArgs) -> Result<Output, CpdError> {
         out["already"] = json!(true);
     }
     Ok(Output::success(out))
+}
+
+/// Requeues failed Job `key` at `tier` and appends its `job-retried` Event with `text`. Shared by `job retry` and the engine's retry after a fix.
+pub(crate) fn requeue(tx: &WriteTxn<'_>, plan: &PlanId, key: &JobKey, tier: &str, text: String) -> Result<(), CpdError> {
+    tx.execute(
+        "UPDATE jobs SET status = 'queued', retry_tier = ?3, failed_cause = NULL WHERE plan = ?1 AND key = ?2",
+        [plan.as_str(), key.as_str(), tier],
+    )?;
+    append(tx, NewEvent::job_retried(text, tier).plan(plan.clone()).job(key.clone()))?;
+    Ok(())
 }
 
 fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, tier: &str) -> Result<Decision, CpdError> {

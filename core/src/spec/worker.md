@@ -132,6 +132,12 @@ Do not do any of these:
 Nothing is listed. Still do only what the Goal and Acceptance require.
 {% endif %}
 
+{% if resources %}
+### Resources
+
+This Attempt holds these exclusive resources: {% for item in resources %}`{{ item }}`{% if not loop.last %}, {% endif %}{% endfor %}. No other Job and no `cpd resource run` can take them until this Attempt ends.
+
+{% endif %}
 {% if previous %}
 ## Previous Attempts
 

@@ -45,6 +45,11 @@ pub fn of(jobs: &[Job], job: &Job) -> Guard {
     guard
 }
 
+/// The exclusive resources the Job takes (its Spec's `resources`); empty when none.
+pub fn resources(job: &Job) -> Vec<String> {
+    texts(job.resources.as_ref())
+}
+
 /// A `test` Job's own named tests and files, as [`Guard`] holds a derived set.
 pub fn own(job: &Job) -> (Vec<String>, Vec<String>) {
     (texts(job.tests.as_ref()), texts(job.test_files.as_ref()))
@@ -71,6 +76,7 @@ mod tests {
             tests: None,
             test_files: None,
             test_approved: None,
+            resources: None,
             urgent: false,
             fingerprint: None,
             retry_tier: None,

@@ -42,7 +42,8 @@ fn attempt_counts(conn: &Connection, plan: &PlanId) -> Result<Vec<(String, i64)>
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (job, review, needed_by, attempts, needs) = env.store.read(|conn| {
+    let home = env.home.clone();
+    let (job, review, needed_by, attempts, needs, waiting_for) = env.store.read(|conn| {
         plan_phase(conn, &plan)?;
         let all = jobs::load(conn, &plan)?;
         let job = find(&all, &plan, &args.key)?.clone();
@@ -52,12 +53,28 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         let needed_by = needed_by.into_iter().map(str::to_owned).collect::<Vec<_>>();
         let attempts = attempts(conn, &plan, &job.key)?;
         let review: bool = conn.query_row("SELECT review FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.key.as_str()], |r| r.get(0))?;
-        Ok((job, review, needed_by, attempts, needs))
+        // §5.7: only a queued Job that lists resources, each of them held right now.
+        let waiting_for = match (job.status.as_str(), crate::resource::wanted(conn, &plan, &job.key)?) {
+            ("queued", Some(wanted)) => {
+                let mut held = Vec::new();
+                for name in &wanted.names {
+                    if let Some(holder) = crate::resource::read(&home, &wanted.owner, &wanted.repo, name)? {
+                        held.push(json!({"resource": name, "holder": holder}));
+                    }
+                }
+                Some(held)
+            }
+            _ => None,
+        };
+        Ok((job, review, needed_by, attempts, needs, waiting_for))
     })?;
     let tamper = jobs::tampered(&plan, std::slice::from_ref(&job));
     let mut fields = job.to_json();
     fields["review"] = json!(review);
     fields["needs"] = json!(needs);
+    if let Some(waiting_for) = waiting_for {
+        fields["waiting_for"] = json!(waiting_for);
+    }
     Ok(Output::success(json!({
         "job": fields, "needs": needs, "needed_by": needed_by, "attempts": attempts, "tamper": tamper,
     })))
