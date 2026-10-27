@@ -83,7 +83,11 @@ fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
         Outcome::Refused(why) => Some(why.split_whitespace().collect::<Vec<_>>().join(" ")),
         Outcome::Failed(e) => {
             engine.auto_merge.last_end = Some(engine.ports.clock.now());
-            engine.fail(Step::E18, about, Failure::from(&e));
+            let mut failure = Failure::from(&e);
+            if let Some(stderr) = failure.details["stderr"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                failure.message = format!("{} {stderr}", failure.message);
+            }
+            engine.fail(Step::E18, about, failure);
             return;
         }
     };
