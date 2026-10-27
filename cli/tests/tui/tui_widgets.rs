@@ -1302,3 +1302,68 @@ fn a_click_on_a_pr_rows_cue_runs_open_with_that_rows_url_and_nothing_else() {
     let opened: Vec<_> = fx.calls("open").into_iter().map(|c| c.args).collect();
     assert_eq!(opened, [["https://github.com/acme/web/pull/4"]]);
 }
+
+// ---------- the PR's Jira ticket on the first line ----------
+
+/// `prs_store` with the ticket `key` set on the PR of the Plan `mine` (`acme/repo#20`, the name ` acme/repo#20`, 13 columns).
+fn ticketed(env: &TestEnv, key: &str) -> Store {
+    let mut store = prs_store(env);
+    sql(&mut store, &format!("UPDATE prs SET jira = '{key}' WHERE plan = 'mine';"));
+    store
+}
+
+const MINE: &str = " acme/repo#20";
+
+/// The first line of the owned PR on a pane of `width` columns.
+fn mine_line(w: &Widgets, width: u16) -> String {
+    let buf = render(width, 25, w);
+    row(&buf, find(&buf, "acme/repo#20").1)
+}
+
+#[test]
+fn an_owned_pr_with_a_jira_key_draws_it_after_its_name_on_the_first_line() {
+    let fx = Fx::new();
+    let w = read::widgets(&mut ticketed(&fx.env, "ABC-123"), 3, 0).unwrap();
+    assert_eq!(mine_line(&w, 46), first_line(&format!("{MINE}  ABC-123"), 46));
+}
+
+#[test]
+fn a_jira_key_that_does_not_fit_the_free_gap_is_left_out_and_the_name_is_not_cut() {
+    let fx = Fx::new();
+    let w = read::widgets(&mut ticketed(&fx.env, "ABC-123"), 3, 0).unwrap();
+    // The key is 7 wide: it needs a gap of 2 + 7 + 1 = 10, so a pane of 13 + 10 + 1 = 24 columns is the narrowest that draws it.
+    assert_eq!(mine_line(&w, 24), format!("{MINE}  ABC-123 {CUE}"), "gap == 2 + width + 1: exactly one space before the arrow");
+    // One column less (gap 9) and down to the pane that holds the name and the arrow only (gap 0): nothing, and the name whole.
+    for width in 14..=23 {
+        assert_eq!(mine_line(&w, width), first_line(MINE, width as usize), "width {width}");
+    }
+}
+
+#[test]
+fn the_jira_key_of_a_pr_row_is_drawn_in_muted_text() {
+    let fx = Fx::new();
+    let mut store = ticketed(&fx.env, "ABC-123");
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    assert!(w.prs.iter().any(|p| p.active));
+    // The active row: the key is in the block like every span, the name stays bold.
+    let buf = render(46, 25, &w);
+    let (x, y) = find(&buf, "ABC-123");
+    for dx in 0..7 {
+        let cell = &buf[(x + dx, y)];
+        assert!(cell.fg == palette::selected().fg.unwrap() && cell.modifier.contains(Modifier::REVERSED), "active key cell {dx}");
+    }
+    assert!(buf[find(&buf, "acme/repo#20")].modifier.contains(Modifier::BOLD));
+    // The chat slot moves to `bare`: the PR is no longer active and its key is muted.
+    sql(&mut store, &moved("2026-01-04T00:00:00.000Z", "bare", "chat"));
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    assert!(w.prs.iter().all(|p| !p.active));
+    let buf = render(46, 25, &w);
+    let (x, y) = find(&buf, "ABC-123");
+    for dx in 0..7 {
+        let cell = &buf[(x + dx, y)];
+        assert_eq!(cell.fg, palette::muted_text().fg.unwrap(), "key cell {dx}");
+        assert!(!cell.modifier.contains(Modifier::REVERSED));
+    }
+    let name = &buf[find(&buf, "acme/repo#20")];
+    assert!(name.modifier.contains(Modifier::BOLD) && name.fg != palette::muted_text().fg.unwrap());
+}
