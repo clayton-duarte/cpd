@@ -61,6 +61,10 @@ fn tier_catalog_migration_puts_models_sha_in_the_primary_key_in_the_documented_o
     assert_eq!(key, ["pi_version", "models_sha", "letter", "model"]);
     let not_null: i64 = count(&mut store, "SELECT \"notnull\" FROM pragma_table_info('tier_catalog') WHERE name = 'models_sha'");
     assert_eq!(not_null, 1, "models_sha is NOT NULL");
+    let default: String = store
+        .read(|c| Ok(c.query_row("SELECT dflt_value FROM pragma_table_info('tier_catalog') WHERE name = 'models_sha'", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(default, "''", "models_sha DEFAULT '' means exactly: no models.json");
 }
 
 #[test]

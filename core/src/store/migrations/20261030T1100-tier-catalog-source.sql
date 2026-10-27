@@ -3,9 +3,11 @@
 -- hex SHA-256 of its bytes, `''` when the file does not exist. The primary key is (pi_version, models_sha, letter, model).
 -- It is a cache, so the table is rebuilt EMPTY: the rows are recomputed by the next `cpd tiers`. `history_tables` still lists
 -- `tier_catalog`, so the history triggers and `tier_catalog_no_delete` are derived again (K4), as `blue-tier` rebuilt `inbox_items`.
+-- DEFAULT '' means exactly `no models.json` (its fingerprint); cache::write still sets the column explicitly, code never relies on
+-- the default. It exists so rows seeded by raw SQL with the old column list (an agent dir with no models.json) stay valid.
 CREATE TABLE tier_catalog_new (
   pi_version TEXT NOT NULL,
-  models_sha TEXT NOT NULL,
+  models_sha TEXT NOT NULL DEFAULT '',
   letter     TEXT NOT NULL CHECK (letter IN ('O', 'S', 'H')),
   model      TEXT NOT NULL,
   efforts    TEXT NOT NULL CHECK (json_valid(efforts) AND json_type(efforts) = 'array'),

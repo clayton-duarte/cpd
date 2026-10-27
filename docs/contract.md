@@ -1585,7 +1585,7 @@ CREATE INDEX board_posts_delivery ON board_posts(to_session, read_at);   -- quer
 -- models_sha: lowercase hex SHA-256 of the bytes of <agentDir>/models.json, '' when that file does not exist.
 CREATE TABLE tier_catalog (
   pi_version TEXT NOT NULL,
-  models_sha TEXT NOT NULL,
+  models_sha TEXT NOT NULL DEFAULT '',
   letter     TEXT NOT NULL CHECK (letter IN ('O', 'S', 'H')),
   model      TEXT NOT NULL,
   efforts    TEXT NOT NULL CHECK (json_valid(efforts) AND json_type(efforts) = 'array'),
@@ -2211,7 +2211,7 @@ Turn-start Context updates stay raw records (hs-d147, `commands.md` §15.7). `co
 - **`<YYYYMMDDTHHMM>-cyan-tier`** (pro-d16, which refines hs-d570; made with `scripts/new-migration.sh cyan-tier breaking`), declared `breaking after <n>`, `<n>` counted as for `review-waiting`. It renames the stored Inbox tier `blue` to `cyan` by rebuilding `inbox_items` (SQLite cannot alter a CHECK constraint, so the rebuild is breaking, K4), as `blue-tier` and `review-waiting` rebuilt it: `inbox_items_new` with the §4.4 definition whose `urgency` check is `IN ('red', 'yellow', 'magenta', 'blue', 'cyan', 'white')`, every row copied with all columns and the primary key kept, `urgency` `blue` copied as `cyan` (open and closed rows alike), the old table dropped, the new one renamed, and `inbox_items_open` (the open-item unique index), `inbox_items_closed` and the trigger `inbox_items_no_delete` recreated. Nothing else changes: no kind, glyph or position in the order. The copy writes no `history` row. The pinned `SCHEMA_HASH` changes as for any migration (`scripts/repin.sh`, §4.3). Tests: a store before it with open and closed `blue` items keeps every row and id, each now `cyan`; after it accepts a `cyan` item and refuses a `blue` one; the schema hash matches that of a fresh store; a binary without it refuses the store (`store_too_new`).
 
 - **`20261030T1000-inbox-claim`** (lasting dismissal and claim, Plan review-intake, PR `claim`), additive or breaking as C2 says. The claim: adds `inbox_items.claimed_at` (TEXT, null, a time; `CHECK (claimed_at IS NULL OR kind = 'review-requested')`) and the Event kind `inbox-claimed` (`INSERT INTO event_kinds (name) VALUES ('inbox-claimed');`, one statement, as `event-session-retiered`). Additive when SQLite accepts the ADD COLUMN with its CHECK; otherwise breaks `inbox_items` by rebuild like `blue-tier`, starting from the newest shape on origin/main (`git grep -l "CREATE TABLE inbox_items_new" origin/main -- core/src/store/migrations`, the one that sorts last).
-- **`20261030T1100-tier-catalog-source`** (pro-d26, Plan bifrost, PR `catfp`; `-- cpd-migration: breaking after 58`): `tier_catalog` is rebuilt **empty** with `models_sha TEXT NOT NULL` and the primary key `(pi_version, models_sha, letter, model)` (§4.4, §9): it is a cache, so the next `cpd tiers` recomputes the rows. `history_tables` still lists it, so the history triggers and `tier_catalog_no_delete` are derived again (K4).
+- **`20261030T1100-tier-catalog-source`** (pro-d26, Plan bifrost, PR `catfp`; `-- cpd-migration: breaking after 58`): `tier_catalog` is rebuilt **empty** with `models_sha TEXT NOT NULL DEFAULT ''` (the default means exactly `no models.json`; `cache::write` sets the column explicitly) and the primary key `(pi_version, models_sha, letter, model)` (§4.4, §9): it is a cache, so the next `cpd tiers` recomputes the rows. `history_tables` still lists it, so the history triggers and `tier_catalog_no_delete` are derived again (K4).
 
 ## 5. Events
 

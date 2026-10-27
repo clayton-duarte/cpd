@@ -1758,6 +1758,12 @@ fn converts_keeping_every_row_and_id(n: usize) {
     assert_eq!(violations, 0, "version {n}: foreign_key_check");
     for (table, ids) in &ids_before {
         let after = rowids(&conn, table);
+        if table == "tier_catalog" {
+            // Migration `20261030T1100-tier-catalog-source` rebuilds tier_catalog EMPTY: it is a cache, recomputed by the next
+            // `cpd tiers`, so it is the one table conversion does not keep.
+            assert!(after.is_empty(), "version {n}: tier_catalog is empty after conversion (a cache, rebuilt by tier-catalog-source)");
+            continue;
+        }
         assert!(ids.iter().all(|id| after.contains(id)), "version {n}: {table} lost a row id");
     }
     let recorded: Vec<(String, String, i64, i64)> = conn
