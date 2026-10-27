@@ -16,7 +16,7 @@ use super::lock::WatchLock;
 use super::log::Log;
 use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, archive, archive_leads, distill, escalations, host_alert, inbox, janitor, liveness, models, open, pr, restart, schedule, sleep, team, titles, wake, workers};
+use super::{SOURCE, archive, archive_leads, distill, escalations, host_alert, inbox, janitor, liveness, models, open, pr, react, restart, schedule, sleep, team, titles, wake, workers};
 use cpd_core::clock::{self, Clock};
 use cpd_core::config::{Catalog, Config, load_catalog_with};
 use cpd_core::policy::model::{Models, models_of_attempt, models_of_job};
@@ -76,6 +76,8 @@ pub(super) struct Engine {
     pub titles: titles::Runs,
     /// E11: the helper's run in flight and when the last one ended.
     pub team: team::State,
+    /// E17: the merge reaction's run in flight and when the last one ended.
+    pub react: react::State,
     /// E15: the helper's run in flight and when the last one ended.
     pub models: models::State,
     /// E16: when this engine last started a `cpd janitor` pass (`None` before the first, in this engine's life).
@@ -122,6 +124,7 @@ impl Engine {
             distill_started: HashMap::new(),
             titles: titles::Runs::default(),
             team: team::State::default(),
+            react: react::State::default(),
             models: models::State::default(),
             janitor_started: None,
             restart_started: None,
@@ -173,7 +176,7 @@ impl Engine {
     /// One tick: the tmux restart's drain, the `@cpd_workers` step, the `@cpd_host_alert` step, then E1–E5, E7–E11, E12–E16 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalogs.clear();
-        let steps: [fn(&mut Engine); 19] = [
+        let steps: [fn(&mut Engine); 20] = [
             restart::drain,
             workers::run,
             host_alert::run,
@@ -188,6 +191,7 @@ impl Engine {
             distill::run,
             titles::run,
             team::run,
+            react::run,
             models::run,
             archive::run,
             sleep::run,
@@ -208,7 +212,7 @@ impl Engine {
 /// E8, E12 and E13 run as usual. E3 starts only a Job of an incident Plan or an urgent one ([`schedule`]);
 /// E4 and E7 act per PR ([`incident_holds_plan`]).
 pub(super) fn incident_holds(engine: &mut Engine, step: Step) -> bool {
-    if !matches!(step, Step::E9 | Step::E10 | Step::E11 | Step::E16) {
+    if !matches!(step, Step::E9 | Step::E10 | Step::E11 | Step::E16 | Step::E17) {
         return false;
     }
     engine.store.read(|conn| Ok(cpd_core::incident::is_on(conn))).unwrap_or(false)
