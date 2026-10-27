@@ -227,6 +227,8 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context retire` (§3.16, internal) | none | yes | yes |
 | `cpd context docs` (§3.17, internal) | none | yes | yes |
 | `cpd pr reply` (§9.8a) | Lead | no | no |
+| `cpd session switch-failed` (§10.18a, internal) | none | no | yes |
+| `cpd session switched` (§10.18b, internal) | none | no | yes |
 | `cpd tag` (§26.1) | Lead | no | no |
 | `cpd version sync` (§26.2) | Lead | no | no |
 
