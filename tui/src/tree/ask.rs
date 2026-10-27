@@ -1,6 +1,6 @@
 //! What the tree asks in a dialog popup (the dialog kit, `crate::dialog`; hs-d295, hs-d297) before it runs a command:
-//! an `input` for `n` (the new Plan's id) and for the menu's `…` items (rename, fork, new Plan, new Context), and a
-//! `confirm` for `x` and the menu's Close and Archive. The tree has no inline prompt row. Pure but for the dialogs
+//! an `input` for `n` (the new Plan's id) and for the menu's `…` items (rename, fork, new Plan), one `form` for New
+//! Context… and a `confirm` for Delete only: Close, Archive and `x` run at once (pro-d111, pro-d114). The tree has no inline prompt row. Pure but for the dialogs
 //! themselves, which a [`Dialogs`] opens: the view returns a [`Question`], the caller [asks](Question::ask) it and runs
 //! the [`Action`] the answer makes, if any.
 //!
@@ -23,28 +23,10 @@ pub enum Ask {
     RenameSession(SessionId),
     /// `Fork…` and `New session…`: the name of a Session forked from `source`.
     Fork { source: SessionId },
-    /// The title of a new Context; its id is derived against the ids `taken`. `owners` are the owner policies of the
-    /// instance (at least one): the owner is always asked next, in a `select` popup of them.
-    NewContext { taken: Vec<String>, owners: Vec<String> },
     /// The title of a new Plan in `context` (R34 A12: no repo; the Plan's PRs name theirs).
     NewPlan { context: ContextId, taken: Vec<String> },
     /// `n`: the id of a new Plan in `context`, forked from the Session `label`.
     NamedPlan { context: ContextId, label: String },
-}
-
-/// The last row of the owner select: the owner is typed in an input, not among the known ones.
-pub(crate) const ANOTHER_OWNER: &str = "Another owner…";
-
-/// The label of the confirm popup's yes button for an unknown owner.
-pub(crate) const USE_FALLBACK: &str = "Use clayton-duarte's policy";
-
-/// The check of the typed owner login: the login lowercased, or why it is refused (a GitHub login, 1-39 characters).
-pub(crate) fn check_login(text: &str) -> Result<String, String> {
-    let ok = !text.is_empty()
-        && text.chars().count() <= 39
-        && !text.starts_with('-')
-        && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
-    if ok { Ok(text.to_ascii_lowercase()) } else { Err(format!("{text:?} is not a GitHub login.")) }
 }
 
 /// The refusal of a title no id can be derived from.
@@ -54,7 +36,7 @@ impl Ask {
     /// The question above the field: the former prompt's label.
     fn prompt(&self) -> String {
         match self {
-            Ask::RenameContext(_) | Ask::RenamePlan(_) | Ask::NewContext { .. } | Ask::NewPlan { .. } => "Title:".into(),
+            Ask::RenameContext(_) | Ask::RenamePlan(_) | Ask::NewPlan { .. } => "Title:".into(),
             Ask::RenameSession(_) | Ask::Fork { .. } => "Name:".into(),
             Ask::NamedPlan { label, .. } => format!("Fork {label} into a new Plan, name:"),
         }
@@ -62,25 +44,20 @@ impl Ask {
 
     fn validator(&self) -> Validator {
         match self {
-            Ask::RenameContext(_) | Ask::RenamePlan(_) | Ask::NewContext { .. } | Ask::NewPlan { .. } => Validator::Title,
+            Ask::RenameContext(_) | Ask::RenamePlan(_) | Ask::NewPlan { .. } => Validator::Title,
             Ask::RenameSession(_) | Ask::Fork { .. } => Validator::Name,
             Ask::NamedPlan { .. } => Validator::PlanId,
         }
     }
 
-    /// The command for the `text` the popup accepted, or a further question; or why it is refused after all.
-    fn answer(&self, text: String) -> Result<Step, String> {
+    /// The command for the `text` the popup accepted, or why it is refused after all.
+    fn answer(&self, text: String) -> Result<Action, String> {
         let refuse = |e: CpdError| e.message().to_owned();
-        Ok(Step::Run(match self {
+        Ok(match self {
             Ask::RenameContext(id) => Action::RenameContext { id: id.clone(), title: text },
             Ask::RenamePlan(id) => Action::RenamePlan { id: id.clone(), title: text },
             Ask::RenameSession(id) => Action::RenameSession { id: id.clone(), name: text },
             Ask::Fork { source } => Action::Fork { source: source.clone(), name: text },
-            Ask::NewContext { taken, owners } => {
-                let id = slug::derive(&text, CONTEXT_MAX, |id| taken.iter().any(|t| t == id)).ok_or(NO_ID)?;
-                let id = ContextId::parse(&id).map_err(refuse)?;
-                return Ok(Step::Owner { id, title: text, owners: owners.clone() });
-            }
             Ask::NewPlan { context, taken } => {
                 let id = slug::derive(&text, PLAN_MAX, |id| taken.iter().any(|t| t == id)).ok_or(NO_ID)?;
                 Action::NewPlan { context: context.clone(), id: PlanId::parse(&id).map_err(refuse)?, title: text }
@@ -90,15 +67,8 @@ impl Ask {
                 let title = id.to_string();
                 Action::NewPlan { context: context.clone(), id, title }
             }
-        }))
+        })
     }
-}
-
-/// What the text accepted for an [`Ask`] leads to.
-enum Step {
-    Run(Action),
-    /// The owner of the new Context `id` titled `title`, chosen in a `select` popup of `owners`.
-    Owner { id: ContextId, title: String, owners: Vec<String> },
 }
 
 /// A popup the tree opens before it runs a command.
@@ -106,8 +76,9 @@ enum Step {
 pub enum Question {
     /// An `input` popup titled `title`, starting with `initial`; its text goes to `ask`'s command.
     Input { title: &'static str, ask: Ask, initial: String },
-    /// A `confirm` popup, `[<yes_label>] [Cancel]`; `then` runs when confirmed.
-    Confirm { title: &'static str, text: String, yes_label: &'static str, then: Action },
+    /// New Context…: ONE `form` popup, the title and the owner among `owners` (the owner policies of the instance, at
+    /// least one); the id is derived against the ids `taken`.
+    NewContext { taken: Vec<String>, owners: Vec<String> },
     /// A `confirm` popup `[Delete] [Cancel]` listing what the delete of `what` (`label` is the row's) removes: the list
     /// is the command's own preview, so it is asked first ([`Dialogs::preview`]); `plan delete <id> --yes` runs when
     /// confirmed.
@@ -122,34 +93,16 @@ pub trait Dialogs {
     /// Whether a `confirm` popup was confirmed.
     fn confirm(&self, title: &str, text: &str, yes_label: &str) -> Result<bool, CpdError>;
     /// The option chosen in a `select` popup; `None` when cancelled.
+    #[allow(dead_code)] // the tree has no select now (pro-d114); the dialog kit's kind stays
     fn select(&self, title: &str, prompt: &str, options: &[String]) -> Result<Option<String>, CpdError>;
     /// The `(title, option)` of a `form` popup: a text box labelled `input_label` and a radio list of `options` labelled
     /// `select_label`; `None` when cancelled.
-    #[allow(dead_code)] // the tree's New Context… (Job dlg-impl)
-    fn form(&self, _title: &str, _input_label: &str, _select_label: &str, _options: &[String]) -> Result<Option<(String, String)>, CpdError> {
-        unimplemented!("the form popup (skeleton of Job dlg-tests)")
-    }
+    fn form(&self, title: &str, input_label: &str, select_label: &str, options: &[String]) -> Result<Option<(String, String)>, CpdError>;
     /// What the delete of `what` would remove: the reply of the command without `--yes`, or why it is refused.
     fn preview(&self, what: &Deletable) -> Result<Value, String>;
 }
 
 impl Question {
-    /// `Close <label>? pi stops; the session file stays`, preceded by `<label> is working.` (the former prompt's words).
-    pub fn close(id: SessionId, label: &str, working: bool) -> Question {
-        let warning = if working { format!("{label} is working. ") } else { String::new() };
-        Question::Confirm {
-            title: "Close",
-            text: format!("{warning}Close {label}? pi stops; the session file stays"),
-            yes_label: "Close",
-            then: Action::Close(id),
-        }
-    }
-
-    /// `Archive <label>?` (hs-d297); `then` is the archive, with the step that frees the chat slot when it needs one.
-    pub fn archive(label: &str, then: Action) -> Question {
-        Question::Confirm { title: "Archive", text: format!("Archive {label}?"), yes_label: "Archive", then }
-    }
-
     /// `Delete <label>?`, with the counts of the preview.
     pub fn delete(what: Deletable, label: &str) -> Question {
         Question::Delete { what, label: label.to_owned() }
@@ -162,7 +115,8 @@ impl Question {
     /// The title of the popup: what the dialog is about, and what a failure after it is said to be about.
     pub fn title(&self) -> &'static str {
         match self {
-            Question::Input { title, .. } | Question::Confirm { title, .. } => title,
+            Question::Input { title, .. } => title,
+            Question::NewContext { .. } => "New Context",
             Question::Delete { .. } => "Delete",
         }
     }
@@ -174,27 +128,14 @@ impl Question {
         match self {
             Question::Input { title, ask, initial } => {
                 let Some(text) = dialogs.input(title, &ask.prompt(), &initial, ask.validator()).map_err(failed)? else { return Ok(None) };
-                match ask.answer(text)? {
-                    Step::Run(action) => Ok(Some(action)),
-                    Step::Owner { id, title: name, owners } => {
-                        let mut options = owners.clone();
-                        options.push(ANOTHER_OWNER.to_owned());
-                        let Some(owner) = dialogs.select(title, "Owner:", &options).map_err(failed)? else { return Ok(None) };
-                        if owner != ANOTHER_OWNER {
-                            return Ok(Some(Action::NewContext { id, title: name, owner, confirm_fallback: false }));
-                        }
-                        let Some(typed) = dialogs.input(title, "Owner login:", "", Validator::Name).map_err(failed)? else { return Ok(None) };
-                        let owner = check_login(&typed)?;
-                        if owners.contains(&owner) {
-                            return Ok(Some(Action::NewContext { id, title: name, owner, confirm_fallback: false }));
-                        }
-                        let text = format!("{owner} has no policy. cpd will use clayton-duarte's policy for it and link {owner}.toml to it.");
-                        let yes = dialogs.confirm(title, &text, USE_FALLBACK).map_err(failed)?;
-                        Ok(yes.then_some(Action::NewContext { id, title: name, owner, confirm_fallback: true }))
-                    }
-                }
+                ask.answer(text).map(Some)
             }
-            Question::Confirm { title, text, yes_label, then } => Ok(dialogs.confirm(title, &text, yes_label).map_err(failed)?.then_some(then)),
+            Question::NewContext { taken, owners } => {
+                let Some((title, owner)) = dialogs.form("New Context", "Title: ", "Owner:", &owners).map_err(failed)? else { return Ok(None) };
+                let id = slug::derive(&title, CONTEXT_MAX, |id| taken.iter().any(|t| t == id)).ok_or(NO_ID)?;
+                let id = ContextId::parse(&id).map_err(|e| e.message().to_owned())?;
+                Ok(Some(Action::NewContext { id, title, owner }))
+            }
             Question::Delete { what, label } => {
                 let preview = dialogs.preview(&what)?;
                 let text = delete_text(&label, &what, &preview);
@@ -232,19 +173,20 @@ mod tests {
         opened: RefCell<Vec<String>>,
         text: Option<&'static str>,
         yes: bool,
+        form: Option<(&'static str, &'static str)>,
     }
 
     impl Stub {
         fn typing(text: &'static str) -> Stub {
-            Stub { opened: RefCell::default(), text: Some(text), yes: false }
+            Stub { opened: RefCell::default(), text: Some(text), yes: false, form: None }
         }
 
         fn cancelling() -> Stub {
-            Stub { opened: RefCell::default(), text: None, yes: false }
+            Stub { opened: RefCell::default(), text: None, yes: false, form: None }
         }
 
         fn confirming(yes: bool) -> Stub {
-            Stub { opened: RefCell::default(), text: None, yes }
+            Stub { opened: RefCell::default(), text: None, yes, form: None }
         }
     }
 
@@ -262,6 +204,11 @@ mod tests {
         fn select(&self, title: &str, prompt: &str, options: &[String]) -> Result<Option<String>, CpdError> {
             self.opened.borrow_mut().push(format!("select {title} | {prompt} | {}", options.join(", ")));
             Ok(self.text.map(|_| options[0].clone()))
+        }
+
+        fn form(&self, title: &str, input_label: &str, select_label: &str, options: &[String]) -> Result<Option<(String, String)>, CpdError> {
+            self.opened.borrow_mut().push(format!("form {title} | {input_label} | {select_label} | {}", options.join(", ")));
+            Ok(self.form.map(|(t, o)| (t.to_owned(), o.to_owned())))
         }
 
         fn preview(&self, _: &Deletable) -> Result<Value, String> {
@@ -309,7 +256,6 @@ mod tests {
         };
         assert_eq!(label(Ask::RenameContext(cpd()), "Rename", "Alpha"), ["input Rename | Title: | Alpha | title"]);
         assert_eq!(label(Ask::RenamePlan(PlanId::parse("ship").unwrap()), "Rename", "Ship"), ["input Rename | Title: | Ship | title"]);
-        assert_eq!(label(Ask::NewContext { taken: vec![], owners: vec!["o".into()] }, "New Context", ""), ["input New Context | Title: |  | title"]);
         assert_eq!(label(Ask::NewPlan { context: cpd(), taken: vec![] }, "New Plan", ""), ["input New Plan | Title: |  | title"]);
         assert_eq!(label(Ask::RenameSession(sid()), "Rename", "ship"), ["input Rename | Name: | ship | name"]);
         assert_eq!(label(Ask::Fork { source: sid() }, "Fork", "ship (fork)"), ["input Fork | Name: | ship (fork) | name"]);
@@ -319,15 +265,18 @@ mod tests {
 
     #[test]
     fn a_cancelled_input_runs_nothing() {
-        for ask in [Ask::RenameContext(cpd()), Ask::Fork { source: sid() }, Ask::NewContext { taken: vec![], owners: vec!["o".into()] }, Ask::NamedPlan { context: cpd(), label: "x".into() }] {
+        for ask in [Ask::RenameContext(cpd()), Ask::Fork { source: sid() }, Ask::NamedPlan { context: cpd(), label: "x".into() }] {
             assert_eq!(input(ask, "x").ask(&Stub::cancelling()), Ok(None));
         }
     }
 
     #[test]
     fn new_context_derives_its_id_from_the_title_against_the_taken_ones() {
-        let run = |ids: &[&str]| input(Ask::NewContext { taken: taken(ids), owners: vec!["o".into()] }, "").ask(&Stub::typing("Building cpd!"));
-        let new = |id: &str| Ok(Some(Action::NewContext { id: ContextId::parse(id).unwrap(), title: "Building cpd!".into(), owner: "o".into(), confirm_fallback: false }));
+        let run = |ids: &[&str]| {
+            let stub = Stub { form: Some(("Building cpd!", "o")), ..Stub::cancelling() };
+            Question::NewContext { taken: taken(ids), owners: vec!["o".into()] }.ask(&stub)
+        };
+        let new = |id: &str| Ok(Some(Action::NewContext { id: ContextId::parse(id).unwrap(), title: "Building cpd!".into(), owner: "o".into() }));
         assert_eq!(run(&[]), new("building-cpd"));
         assert_eq!(run(&["building-cpd"]), new("building-cpd-2"));
         assert_eq!(run(&["building-cpd", "building-cpd-2"]), new("building-cpd-3"));
@@ -343,7 +292,8 @@ mod tests {
     #[test]
     fn a_title_with_no_id_in_it_is_refused_with_its_reason() {
         for title in ["123", "!"] {
-            assert_eq!(input(Ask::NewContext { taken: vec![], owners: vec!["o".into()] }, "").ask(&Stub::typing(title)), Err(NO_ID.to_owned()), "{title}");
+            let stub = Stub { form: Some((title, "o")), ..Stub::cancelling() };
+            assert_eq!(Question::NewContext { taken: vec![], owners: vec!["o".into()] }.ask(&stub), Err(NO_ID.to_owned()), "{title}");
             assert_eq!(input(Ask::NewPlan { context: cpd(), taken: vec![] }, "").ask(&Stub::typing(title)), Err(NO_ID.to_owned()), "{title}");
         }
     }
@@ -355,31 +305,6 @@ mod tests {
         assert_eq!(input(ask.clone(), "").ask(&Stub::typing("my-plan")), Ok(Some(run)));
         let refusal = PlanId::parse("my plan").unwrap_err().message().to_owned();
         assert_eq!(input(ask, "").ask(&Stub::typing("my plan")), Err(refusal), "the popup refuses it first; this is the second check");
-    }
-
-    #[test]
-    fn a_confirm_runs_its_action_only_when_confirmed() {
-        let close = || Question::close(sid(), "cpd-ui", false);
-        assert_eq!(close().ask(&Stub::confirming(true)), Ok(Some(Action::Close(sid()))));
-        assert_eq!(close().ask(&Stub::confirming(false)), Ok(None));
-        let archive = || Question::archive("Plan ship", Action::Archive { subject: super::super::actions::Subject::Session(sid()), free: None });
-        assert!(matches!(archive().ask(&Stub::confirming(true)), Ok(Some(Action::Archive { .. }))));
-        assert_eq!(archive().ask(&Stub::confirming(false)), Ok(None));
-    }
-
-    #[test]
-    fn the_confirmations_are_the_former_prompts_texts_with_their_buttons() {
-        let text = |q: Question| {
-            let stub = Stub::confirming(false);
-            assert_eq!(q.ask(&stub), Ok(None));
-            stub.opened.into_inner()
-        };
-        assert_eq!(text(Question::close(sid(), "cpd-ui", false)), ["confirm Close | Close cpd-ui? pi stops; the session file stays | Close"]);
-        assert_eq!(
-            text(Question::close(sid(), "cpd-ui", true)),
-            ["confirm Close | cpd-ui is working. Close cpd-ui? pi stops; the session file stays | Close"]
-        );
-        assert_eq!(text(Question::archive("Plan ship", Action::Park)), ["confirm Archive | Archive Plan ship? | Archive"]);
     }
 
     #[test]
@@ -411,12 +336,15 @@ mod tests {
             fn select(&self, _: &str, _: &str, _: &[String]) -> Result<Option<String>, CpdError> {
                 unreachable!("no select in this test")
             }
+            fn form(&self, _: &str, _: &str, _: &str, _: &[String]) -> Result<Option<(String, String)>, CpdError> {
+                Err(CpdError::new(cpd_core::error::ErrorCode::TmuxFailed, "No tmux client is attached to the cockpit."))
+            }
             fn preview(&self, _: &Deletable) -> Result<Value, String> {
                 Err("refused".to_owned())
             }
         }
         let why = "No tmux client is attached to the cockpit.".to_owned();
         assert_eq!(input(Ask::Fork { source: sid() }, "").ask(&Failing), Err(why.clone()));
-        assert_eq!(Question::close(sid(), "x", false).ask(&Failing), Err(why));
+        assert_eq!(Question::NewContext { taken: vec![], owners: vec!["o".into()] }.ask(&Failing), Err(why));
     }
 }

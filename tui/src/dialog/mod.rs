@@ -1,13 +1,13 @@
-//! The dialog kit (commands.md §13.2, "The dialog kit"; hs-d295, hs-d297): every cockpit confirmation and input is a
-//! tmux popup running `cpd tui view dialog <confirm|input|text> …`, built on this module. The popup holds no caller
+//! The dialog kit (commands.md §13.2, "The dialog kit"; hs-d295, hs-d297): every cockpit confirmation (Delete's only, pro-d111), choice and input is a
+//! tmux popup running `cpd tui view dialog <confirm|input|text|checklist|select|form> …`, built on this module. The popup holds no caller
 //! logic: it draws, takes the keys and clicks, and on close writes its [`Outcome`] to the file `--out` named. The
 //! caller opens the popup with `display-popup -E`, which returns when the popup closes, reads the outcome and runs
 //! its own commands.
 //!
-//! - [`confirm`], [`input`] and [`text`]: the openers a caller in another module uses;
+//! - [`confirm`], [`input`], [`select`], [`form`], [`checklist`] and [`text`]: the openers a caller in another module uses;
 //! - [`scroll`]: the scrolling (↑↓, j/k, PgUp/PgDn, the wheel), which the logs and legend popups reuse;
 //! - [`validate`]: the closed set of `input` checks, passed by name;
-//! - [`view`]: the drawing and the input of the kinds, in the `merge` popup's style.
+//! - [`view`]: the drawing and the input of the kinds, in the kit's own style.
 
 pub(crate) mod scroll;
 pub(crate) mod validate;
@@ -53,7 +53,7 @@ use validate::Validator;
 pub use view::{Dialog, Mode};
 use view::{CANCEL, Field, REFUSAL_ROWS, Row, wrap};
 
-/// `cpd tui view dialog <confirm|input|text> …`.
+/// `cpd tui view dialog <confirm|input|text|checklist|select|form> …`.
 #[derive(clap::Args, Debug)]
 pub struct Args {
     #[command(subcommand)]
@@ -237,7 +237,7 @@ impl Kind {
                 (a.common, dialog)
             }
             Kind::Form(a) => {
-                // skeleton (Job dlg-tests): the options are not checked yet
+                check_options(&a.options)?;
                 let dialog = Dialog::form(a.common.title.clone(), a.input_label, a.select_label, a.options);
                 (a.common, dialog)
             }
@@ -320,7 +320,7 @@ fn read_outcome(path: &Path) -> Result<Outcome, CpdError> {
     let _ = std::fs::remove_file(path);
     let json = read.map_err(|e| bad(e.to_string()))?;
     let outcome: Outcome = serde_json::from_str(&json).map_err(|e| bad(e.to_string()))?;
-    if !outcome.confirmed && outcome.value.is_some() {
+    if !outcome.confirmed && (outcome.value.is_some() || outcome.choice.is_some()) {
         return Err(bad("a cancelled dialog has a value".into()));
     }
     Ok(outcome)
@@ -434,7 +434,6 @@ fn ask_with<T>(
 }
 
 /// A question with two buttons, `[<yes_label>]` and `[Cancel]`, in a popup. Whether it was confirmed.
-#[allow(dead_code)] // the tree's Close, Archive and `x` (Job kit-tree)
 pub(crate) fn confirm(tmux: &Tmux, title: &str, text: &str, yes_label: &str) -> Result<bool, CpdError> {
     let fields = [("text", text), ("yes-label", yes_label)];
     let size = |client, title: &str| {
@@ -458,8 +457,28 @@ pub(crate) fn input(tmux: &Tmux, title: &str, prompt: &str, initial: &str, valid
     }
 }
 
+/// A text box labelled `input_label` and a radio list of `options` labelled `select_label`, in one popup. The typed title
+/// (trimmed, 1 to 200 characters) and the option chosen; `None` when the User cancelled.
+pub(crate) fn form(tmux: &Tmux, title: &str, input_label: &str, select_label: &str, options: &[String]) -> Result<Option<(String, String)>, CpdError> {
+    let mut fields = vec![("input-label", input_label), ("select-label", select_label)];
+    fields.extend(options.iter().map(|o| ("option", o.as_str())));
+    let natural = widest(select_label).max(options.iter().map(|o| 4 + o.chars().count()).max().unwrap_or(0)).max(widest(input_label) + 5);
+    let size = |client, title: &str| {
+        popup_size(client, title, natural, |width| {
+            let tw = width - 4 * spacing::PAD_X as usize;
+            Validator::Title.max_len() / tw + 1 + 2 + REFUSAL_ROWS + 1 + options.len()
+        })
+    };
+    let outcome = ask(tmux, On::Newest, title, "form", &fields, size)?;
+    match (outcome.confirmed, outcome.value, outcome.choice) {
+        (false, _, _) => Ok(None),
+        (true, Some(value), Some(choice)) => Ok(Some((value, choice))),
+        _ => Err(CpdError::new(ErrorCode::Internal, "The form dialog confirmed with no title or no owner.")),
+    }
+}
+
 /// A radio list of `options` in a popup, under the question `prompt`. The option chosen, `None` when the User cancelled.
-#[allow(dead_code)] // the tree's New Context… (Job tui-nc)
+#[allow(dead_code)] // the tree's New Context… was its one caller, now the `form` (pro-d114)
 pub(crate) fn select(tmux: &Tmux, title: &str, prompt: &str, options: &[String]) -> Result<Option<String>, CpdError> {
     let mut fields = vec![("prompt", prompt)];
     fields.extend(options.iter().map(|o| ("option", o.as_str())));
