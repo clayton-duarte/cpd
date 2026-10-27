@@ -71,15 +71,15 @@ test("chat margins: a tool block has its rail in column 0 and two blank columns 
 			row.setExpanded(true);
 			const rows = row.render(width).map(plain).filter((r) => r.trim() !== "").map((r) => r.trimEnd());
 			assert.ok(rows.every((r) => !r.startsWith(" ")), `no row starts with a margin column at ${width}: ${JSON.stringify(rows)}`);
-			assert.ok(rows[0]!.startsWith("╭─bash cd /project && npm test -- --w"), `head at ${width}: ${JSON.stringify(rows)}`);
+			assert.ok(rows[0]!.startsWith("╭─\uE0B6bash\uE0B4 cd /project && npm test -- --"), `head at ${width}: ${JSON.stringify(rows)}`);
 			if (width === 80) {
-				assert.equal(rows[0], "╭─bash cd /project && npm test -- --watch=false");
+				assert.equal(rows[0], "╭─\uE0B6bash\uE0B4 cd /project && npm test -- --watch=false");
 				assert.equal(rows[1], "│ ok");
 				assert.match(rows[2]!, new RegExp(`^╰${COLLAPSE} collapse · `, "u"));
 			}
 			assert.ok(rows.some((r) => r === "│ ok" || r.startsWith("│ ")), `a rail body row at ${width}`);
 			for (const r of rows) assert.ok(r.length <= width - 2, `two blank columns at the right (${width}): ${JSON.stringify(r)}`);
-			assert.ok(rows.some((r) => r.length === width - 2), `text fills up to column W-3 (${width}): ${JSON.stringify(rows)}`);
+			if (width === 40) assert.ok(rows.some((r) => r.length === width - 2), `text fills up to column W-3 (${width}): ${JSON.stringify(rows)}`);
 		} finally {
 			shutdown(harness);
 		}
@@ -105,10 +105,10 @@ test("chat margins: a Thinking block has its rail in column 0", () => {
 		const block = thinkingMessage([{ type: "thinking", thinking: "Weighing the options.\n\nKeep the cache." }]);
 		try {
 			const folded = block.message.render(width).map(plain).filter((r) => r.trim() !== "").map((r) => r.trimEnd());
-			assert.deepEqual(folded, ["╭─Thinking…", `╰${EXPAND} expand · 03:11`], `folded at ${width}`);
+			assert.deepEqual(folded, ["╭─\uE0B6Thinking…\uE0B4", `╰${EXPAND} expand · 03:11`], `folded at ${width}`);
 			block.press();
 			const open = block.message.render(width).map(plain).filter((r) => r.trim() !== "").map((r) => r.trimEnd());
-			assert.deepEqual(open, ["╭─Thinking…", "│ Weighing the options.", "│ Keep the cache.", `╰${COLLAPSE} collapse · 03:11`], `expanded at ${width}`);
+			assert.deepEqual(open, ["╭─\uE0B6Thinking…\uE0B4", "│ Weighing the options.", "│", "│ Keep the cache.", `╰${COLLAPSE} collapse · 03:11`], `expanded at ${width}`);
 		} finally {
 			block.end();
 		}

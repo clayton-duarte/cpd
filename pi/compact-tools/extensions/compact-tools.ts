@@ -343,7 +343,7 @@ function renderControls(
 				const available = Math.max(1, width - prefixWidth);
 				const showTime = time !== undefined && timeWidth <= available;
 				const text = paint(TEXT, label) + (showTime && time !== undefined ? chrome(" · ") + chrome(time) : "") + metadata;
-				return prefixedSentence(text, firstPrefix, "  ", true).render(width);
+				return prefixedSentence(text, firstPrefix, "", true).render(width);
 			},
 			invalidate() {},
 		};
