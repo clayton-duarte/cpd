@@ -3260,17 +3260,7 @@ A view in a pane never exits on a key: the `pane-died` hook (§6.1) starts a vie
 ╰────────────────────────────────────────╯
 ```
 
-`merge` (title `merge`, three body rows with `<owner>/<repo>#<n>` in bold, a blank row, `method: squash`, 60 × 8; hs-d621):
-```
-╭─[merge]─────────────────────────────────────────────────╮
-│                                                          │
-│ clayton-duarte/cpd#321                                   │
-│ Moon loader v2: 28 moon_alt phases at 50 ms in pi and…   │
-│ method: squash                                           │
-│                                                          │
-│ [Merge]                                         [Cancel] │
-╰─────────────────────────────────────────────────╯
-```
+
 
 - **The input box** (contract §6.1.1). The prompt is the box's label (trailing whitespace, then one trailing `:`, then trailing whitespace trimmed again; `Title: ` gives `Title`). There is no prompt row: the prompt moved into the box's top border. The box is always focused (border 12). The box starts on popup row 2 and is `W - 2` cells wide, with the refusal rows directly under it (up to 2, colour 8, a leading space, cut at `W - 4`; the frame and rows are "The frame and its rows" above), and its label pill follows the border's colour (12 here, focused). When the text needs more rows than available, the box shows consecutive rows from `start = max(0, cursor row + 1 - avail)` where `avail = max(H - 5 - 2 - REFUSAL_ROWS, 1)` and cursor row is `cursor / tw` (`tw = (W - 2) - 6`, `W` the popup's width; contract §6.1.1), the body being `H - 5` rows. The popup is sized so the box always fits the validator's longest accepted value (Plan id 24, title 200, name 80): `input_popup_size(client, title, prompt, initial, validator)` in `tui/src/dialog/mod.rs` computes the inside width and the height `body + 5` and caps both by the client (width minus 2, at least 1; height; no more `adds 2`; contract §6.1.1 has the worked sizes).
 - **Validation** (`input`). The caller passes the check by name, from a closed set: `plan-id` (the Plan id of the `n` key, contract §2.1), `title` (`Title`, 1–200 characters) and `name` (`Name`, 1–80 characters). A refused value shows its reason **inside the popup**, which stays open, and the User keeps typing; only an accepted value is written to the result file.
