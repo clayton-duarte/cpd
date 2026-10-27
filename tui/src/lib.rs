@@ -130,6 +130,8 @@ pub mod widgets;
 pub mod view_ports;
 #[cfg(test)]
 mod view_ports_tests;
+#[cfg(test)]
+mod merge_at_once_tests;
 
 pub use runner::{Capture, ViewError, run_view, run_view_on};
 
