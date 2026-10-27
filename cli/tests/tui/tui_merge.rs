@@ -1,11 +1,8 @@
-//! The `merge` view (commands.md §13.2; hs-d273, hs-d473) in this process on `Fx::with_ports`: the dialog's text, the keys and
-//! the clicks that confirm or cancel (`merge::show_with` over scripted input), and what the confirm starts (`merge::finish`
-//! on the fake tmux: one `run-shell -b`, whose `sh -c` the `FakeRunner` records). The merge action itself (`cpd tui action
-//! merge`, and the `pr merge` and `pr poll` it runs) and the view's refusals run through `run_with`: `gh` is a `Handler`
-//! route of the `FakeRunner` that answers `pr view`, `pr merge` and the poll, and notes whether the merge marker exists at
-//! each of its calls (no child process, no polling). The confirm closes the popup at once and starts `cpd tui action merge
-//! <ref> --client <name>` in the background: that action runs `pr merge` and then the poll, and opens the cockpit's one
-//! failure dialog when the merge fails.
+//! The merge action (commands.md §13.2; hs-d273, hs-d473; pro-d111) in this process on `Fx::with_ports`: `cpd tui action merge`,
+//! and the `pr merge` and `pr poll` it runs, through `run_with`: `gh` is a `Handler` route of the `FakeRunner` that answers `pr
+//! view`, `pr merge` and the poll, and notes whether the merge marker exists at each of its calls (no child process, no
+//! polling). The click starts `cpd tui action merge <ref> --client <name>` in the background: that action runs `pr merge`
+//! and then the poll, and opens the cockpit's one failure dialog when the merge fails.
 
 use crate::common;
 
@@ -14,19 +11,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use common::fx::Fx;
-use common::screen::{Keys, SharedBackend, ch, key, left_click};
 use common::TestEnv;
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, Handler, Reply};
-use cpd_core::host::Tmux;
 use cpd_core::host::spawn::{Launch, Pid, Spawn};
 use cpd_core::store::Store;
-use cpd_tui::merge::{self, Action, Pull};
-use cpd_tui::view_ports::Ctx;
-use ratatui::crossterm::event::{Event, KeyCode};
-use ratatui::Terminal;
-use ratatui::backend::TestBackend;
 
 const REF: &str = "o/r#7";
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -104,156 +94,6 @@ fn args_of(fx: &Fx, program: &str) -> Vec<Vec<String>> {
 fn merge_log(env: &TestEnv) -> Vec<String> {
     let text = fs::read_to_string(env.cpd_home().join("run/tui/merge.log")).unwrap_or_default();
     text.lines().map(|l| l.split_once(' ').expect("a time stamp, a space, the line").1.to_owned()).collect()
-}
-
-/// A pill: its label between the caps U+E0B6 and U+E0B4.
-fn pill(label: &str) -> String {
-    format!("\u{E0B6}{label}\u{E0B4}")
-}
-
-/// A row of the dialog's frame, 58 wide inside the bars.
-fn inside(text: &str) -> String {
-    format!("│{text:<58}│")
-}
-
-fn has(rows: &[String], text: &str) -> bool {
-    rows.iter().any(|l| l.contains(text))
-}
-
-// ---------- the dialog, before the confirm (unchanged) ----------
-
-/// The dialog of `arg` as the view draws it in the 60x8 popup, over the store of `fx`: its rows, each without trailing blanks.
-fn dialog_rows(fx: &Fx, arg: &str) -> Vec<String> {
-    let mut store = fx.env.store();
-    let mut terminal = Terminal::new(TestBackend::new(60, 8)).unwrap();
-    terminal.draw(|f| merge::draw_dialog(&mut store, f, arg).unwrap()).unwrap();
-    let buf = terminal.backend().buffer();
-    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()).collect()
-}
-
-#[test]
-fn a_pull_request_the_store_does_not_have_shows_no_title() {
-    let fx = Fx::new();
-    seed(&fx.env);
-    let rows = dialog_rows(&fx, "o/r#8");
-    assert_eq!(rows[2..5], [inside(" o/r#8"), inside(""), inside(" method: squash")]);
-}
-
-#[test]
-fn the_view_needs_a_terminal_a_pull_request_reference_and_a_client() {
-    let fx = fx();
-    let run = fx.cpd_without_a_terminal(&["tui", "view", "merge", REF, "--client", CLIENT]);
-    assert_eq!((run.exit, run.error()["code"].as_str()), (3, Some("not_a_terminal")), "{run:?}");
-    for bad in [
-        &["tui", "view", "merge", "--client", CLIENT][..],
-        &["tui", "view", "merge", "o/r", "--client", CLIENT],
-        &["tui", "view", "merge", "o/r#0", "--client", CLIENT],
-        &["tui", "view", "merge", REF],
-    ] {
-        assert_eq!(fx.cpd(bad).exit, 2, "{bad:?}");
-    }
-}
-
-// ---------- the popup that opens it, and the confirm ----------
-
-/// The command the confirm gives `run-shell -b`: `cpd tui action merge <ref> --client <client>`, its words quoted for the shell,
-/// its stderr dropped, every `#` doubled: `run-shell` expands formats (the real tmux turns `##` back into `#`, the fake does not),
-/// so the command reaches `cpd` as the action's own argv.
-const START: &str = "cpd tui action merge 'o/r##7' --client '/dev/pts/9' 2>/dev/null";
-
-/// The popup's view, `cpd tui view merge o/r#7 --client /dev/pts/9`, in this process on the 60x8 popup: `events` are what the
-/// User does. What it answered, and the rows of its last frame; the whole script was taken.
-fn answer(fx: &Fx, events: Vec<Event>) -> (Action, Vec<String>) {
-    let backend = SharedBackend::new(60, 8);
-    let mut keys = Keys::script(events);
-    let mut ctx = Ctx::new(&fx.fakes.ports, backend.terminal(), &mut keys);
-    let action = merge::show_with(&mut ctx, &Pull::parse(REF).unwrap(), Some("Add the thing")).unwrap();
-    drop(ctx);
-    assert_eq!(keys.remaining(), 0, "the view ended at the first answer");
-    (action, backend.screen().rows())
-}
-
-/// The cockpit's tmux server on the fake of `fx` and the client [`CLIENT`] (120 x 30) attached to it.
-fn attach(fx: &Fx) {
-    assert!(fx.tmux(&["new-session", "-d", "-s", "cockpit", "-x", "120", "-y", "30"]).status.success());
-    fx.tmux_route.fake().add_client(CLIENT, 120, 30);
-}
-
-/// What the view does with its answer: `finish` on the tmux of `fx`.
-fn finish(fx: &Fx, action: Action) {
-    let tmux = Tmux::new(fx.env.tmux_socket()).with_runner(fx.fakes.runner.weak());
-    merge::finish(&tmux, &Pull::parse(REF).unwrap(), CLIENT, action).unwrap();
-}
-
-#[test]
-fn the_popup_on_a_client_closes_at_once_on_the_confirm_while_gh_is_merging() {
-    let fx = fx();
-    gh_route(&fx, Poll::Merged);
-    // `run-shell -b` hands the command to `sh -c`: its record is what tmux would start in the background
-    fx.fake("sh", Reply::ok(""));
-    attach(&fx);
-    // what the opener runs: the popup on the client, over the cockpit
-    let popup = merge::popup_args(CLIENT, (120, 30), REF);
-    assert!(fx.tmux(&popup.iter().map(String::as_str).collect::<Vec<_>>()).status.success());
-    let popups = fx.tmux_state().unwrap().popups();
-    let [opened] = &popups[..] else { panic!("{popups:?}") };
-    assert_eq!(opened.last().unwrap(), &format!("cpd tui view merge 'o/r#7' --client '{CLIENT}'"), "{opened:?}");
-    let (action, rows) = answer(&fx, vec![ch('y')]);
-    assert!(has(&rows, &pill("Merge")) && has(&rows, "method: squash"), "the merge popup: {rows:?}");
-
-    // the view is gone with the confirm, and `gh` has not been called: the merge is the background run's
-    finish(&fx, action);
-    assert_eq!(action, Action::Merge);
-    assert_eq!(args_of(&fx, "gh"), Vec::<Vec<String>>::new(), "the poll waits for the merge");
-    let started = naming(args_of(&fx, "tmux"), "run-shell");
-    let [started] = &started[..] else { panic!("{:?}", args_of(&fx, "tmux")) };
-    assert_eq!(started.last().unwrap(), START);
-
-    // the background run: the merge, then the poll
-    act(&fx, CLIENT);
-    let order = order_of(args_of(&fx, "gh"));
-    assert_eq!(order[..3], ["pr view", "pr merge", "pr view"], "{order:?}");
-    assert!(order.len() > 3 && order[3..].iter().all(|c| c == "api graphql"), "the poll ran after the merge: {order:?}");
-    assert!(fx.tmux_state().unwrap().popups().len() == 1, "a success opens no dialog: {:?}", fx.tmux_state().unwrap().popups());
-    assert_eq!(merge_log(&fx.env), Vec::<String>::new());
-}
-
-#[test]
-fn the_confirm_closes_the_view_at_once_and_the_merge_then_the_poll_run_in_the_background() {
-    for (how, events) in [("y", vec![ch('y')]), ("Enter", vec![key(KeyCode::Enter)]), ("click", vec![left_click(4, 6)])] {
-        let fx = fx();
-        gh_route(&fx, Poll::Merged);
-        fx.fake("sh", Reply::ok(""));
-        attach(&fx);
-        let (action, rows) = answer(&fx, events);
-        assert!(has(&rows, &pill("Merge")), "{how}: the dialog: {rows:?}");
-
-        // the view is gone with the confirm, before any `gh` call: `gh pr merge` is the background run's
-        finish(&fx, action);
-        assert_eq!(action, Action::Merge, "{how}");
-        assert_eq!(args_of(&fx, "gh"), Vec::<Vec<String>>::new(), "{how}: the poll waits for the merge");
-        // the view started the background run with run-shell, and the command line reached `cpd` unchanged
-        let started = naming(args_of(&fx, "tmux"), "run-shell");
-        assert_eq!(started.len(), 1, "{how}: {:?}", args_of(&fx, "tmux"));
-        assert!(started[0].iter().any(|a| a == "-b"), "{how}: in the background");
-        assert_eq!(started[0].last().unwrap(), START, "{how}");
-
-        // the background run: `pr merge`, then the poll
-        act(&fx, CLIENT);
-        assert_eq!(
-            merges_of(args_of(&fx, "gh")),
-            [["pr", "merge", "7", "--repo", "o/r", "--squash", "--delete-branch", "--match-head-commit", SHA].map(str::to_owned)],
-            "{how}"
-        );
-        let order = order_of(args_of(&fx, "gh"));
-        assert_eq!(order[..3], ["pr view", "pr merge", "pr view"], "{how}: {order:?}");
-        assert!(order.len() > 3 && order[3..].iter().all(|c| c == "api graphql"), "{how}: the poll ran after the merge: {order:?}");
-        // a success says nothing: no dialog, no message, no log line
-        let tmux = args_of(&fx, "tmux");
-        assert!(naming(tmux.clone(), "display-popup").is_empty(), "{how}: {tmux:?}");
-        assert!(naming(tmux.clone(), "display-message").is_empty(), "{how}: {tmux:?}");
-        assert_eq!(merge_log(&fx.env), Vec::<String>::new(), "{how}");
-    }
 }
 
 // ---------- the action: what it runs, and what a failure does ----------

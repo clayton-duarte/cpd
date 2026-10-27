@@ -128,15 +128,15 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd tui view history` | An archived Session's history, read-only (the chat slot) | internal | |
 | `cpd tui view legend` | The key legend (opened by `?` in the Dispatch column, in a tmux popup) | internal | |
 | `cpd tui view logs` | The Event log (opened by the StatusBar's logs button and by an Inbox item, in a tmux popup) | internal | |
-| `cpd tui view merge` | The merge confirmation of a pull request (opened by the Deploy column's merge icon, in a tmux popup) | internal | |
 | `cpd tui view dialog` | A dialog of the kit: `confirm`, `input`, `text`, `checklist` or `select` (opened by the cockpit's actions, in a tmux popup) | internal | |
 | `cpd tui view dialog confirm` | A question with two buttons | internal | |
 | `cpd tui view dialog input` | A labelled text box that grows with its text | internal | |
 | `cpd tui view dialog text` | Scrollable read-only text | internal | |
 | `cpd tui view dialog checklist` | Entries to tick, with `[Approve]` and `[Later]`; the outcome is `{approved, ticked, unticked}` | internal | |
 | `cpd tui view dialog select` | A radio list of options, with `[OK]` and `[Cancel]`; the outcome is `{confirmed, value}` | internal | |
+| `cpd tui view dialog form` | A labelled text box and a labelled radio list, with `[OK]` and `[Cancel]`; the outcome is `{confirmed, value, choice}` | internal | |
 | `cpd tui view chat` | The chat slot's placeholder | internal | |
-| `cpd tui action` | A click on a StatusBar button, or the merge popup's confirm (internal; prints nothing) (§13.2) | internal | |
+| `cpd tui action` | A click on a StatusBar button, or a merge started at once (internal; prints nothing) (§13.2) | internal | |
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
 | `cpd tiers` | Print the Tiers and their valid efforts (commands.md §14.3) | Lead | |
