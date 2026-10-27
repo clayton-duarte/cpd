@@ -77,14 +77,75 @@ pub fn conditions_with(
     all.extend(store.read(|conn| pr_ready(conn))?);
     all.extend(store.read(|conn| curate(conn, floor))?);
     all.extend(review_requested(store, home, now, team)?);
-    all.extend(deploys(home)?);
+    all.extend(deploys(store, home)?);
     Ok(all)
 }
 
-/// `deploy` (contract §2.2 "The deploy rule"): one condition per run of `run/deploy-runs.json`.
-// STUB (red tests): no condition yet.
-fn deploys(_home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
-    Ok(Vec::new())
+/// `deploy` (contract §2.2 "The deploy rule"): one condition per run of `run/deploy-runs.json`, written by the PR poll.
+/// A missing file is no run; a file that is not that JSON is no run either, as E8 reads an unreadable `team-review.json`
+/// as "unknown": the open items stay as they are, and one `engine-error` condition says why.
+fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
+    #[derive(serde::Deserialize)]
+    struct Cache {
+        version: u32,
+        runs: Vec<Run>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Run {
+        repo: String,
+        run_id: u64,
+        environment: String,
+        title: String,
+        url: String,
+        created_at: String,
+    }
+    let path = home.run_dir().join("deploy-runs.json");
+    let read = match std::fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str::<Cache>(&text)
+            .map_err(|e| format!("{} is not a deploy cache: {e}.", path.display()))
+            .and_then(|c| if c.version == 1 { Ok(c) } else { Err(format!("{} has version {}, not 1.", path.display(), c.version)) }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => Err(format!("Cannot read {}: {e}.", path.display())),
+    };
+    match read {
+        Ok(cache) => Ok(cache
+            .runs
+            .into_iter()
+            .map(|r| Condition {
+                kind: Kind::Deploy,
+                urgency: Urgency::Yellow,
+                subject: format!("deploy:{}#{}", r.repo, r.run_id),
+                label: format!("{} deploy {}: {}", r.repo, r.environment, r.title),
+                url: Some(r.url),
+                context: None,
+                plan: None,
+                job: None,
+                session: None,
+                record: None,
+                event: None,
+                opened_at: Some(r.created_at),
+            })
+            .collect()),
+        Err(message) => {
+            let mut out: Vec<Condition> = store.read(open_items)?.iter().filter(|i| i.kind == Kind::Deploy).map(Condition::from).collect();
+            out.push(Condition {
+                kind: Kind::EngineError,
+                urgency: Urgency::Red,
+                subject: format!("error:E8/deploy-runs/{}", ErrorCode::StoreFailed.as_str()),
+                label: format!("deploy runs: {}", ErrorCode::StoreFailed.as_str()),
+                url: None,
+                context: None,
+                plan: None,
+                job: None,
+                session: None,
+                record: None,
+                event: None,
+                opened_at: None,
+            });
+            let _ = message;
+            Ok(out)
+        }
+    }
 }
 
 /// A stored value that does not parse: the database was written outside cpd.
@@ -179,6 +240,7 @@ fn seat_condition(seat: Seat, kind: Kind, urgency: Urgency, label: String) -> Co
         session: Some(seat.session),
         record: None,
         event: seat.event,
+        opened_at: None,
     }
 }
 
@@ -256,6 +318,7 @@ fn review_waiting(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
                 session: Some(seat.session.clone()),
                 record: None,
                 event: None,
+                opened_at: None,
             });
         }
     }
@@ -296,6 +359,7 @@ fn curate(conn: &Connection, floor: u32) -> Result<Vec<Condition>, CpdError> {
                 session: None,
                 record: None,
                 event: None,
+                opened_at: None,
             });
         }
     }
@@ -336,6 +400,7 @@ fn plan_reviews(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
             session: Some(id("Session id", &lead, SessionId::parse)?),
             record: None,
             event: None,
+            opened_at: None,
         });
     }
     Ok(out)
@@ -474,6 +539,7 @@ fn pull_request_conditions(
             session: lead.as_deref().map(|s| id("Session id", s, SessionId::parse)).transpose()?,
             record: None,
             event: None,
+            opened_at: None,
         });
     }
     Ok(out)
@@ -543,6 +609,7 @@ fn review_requested(store: &mut Store, home: &CpdHome, now: OffsetDateTime, team
                 session: None,
                 record: None,
                 event: None,
+                opened_at: None,
             }
         })
         .collect())
@@ -578,6 +645,7 @@ fn kept_review_items(store: &mut Store, why: Option<&CpdError>) -> Result<Vec<Co
             session: None,
             record: None,
             event: None,
+            opened_at: None,
         });
     }
     Ok(out)

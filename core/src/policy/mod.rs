@@ -43,6 +43,7 @@ pub fn run(command: Command) -> Result<crate::output::Output, CpdError> {
 pub use machine::{name_ok, load_machine, parse_machine, Exposure, Machine, MachineSource, McpOauth, McpServer};
 pub use show::KeyArgs;
 pub use origin::{parse_origin, repo_key};
+pub use exposure::ScopeKind;
 pub use load::{load_scope_file, parse_scope, policy_invalid};
 pub use post::render_post;
 pub use known::known_owners;

@@ -43,6 +43,7 @@ fn condition(kind: Kind, urgency: Urgency, session: &str, context: &str) -> Cond
         session: Some(SessionId::parse(session).unwrap()),
         record: None,
         event: None,
+        opened_at: None,
     }
 }
 

@@ -122,6 +122,8 @@ pub struct Condition {
     pub record: Option<RecordId>,
     /// The Event that caused it (§2.2).
     pub event: Option<i64>,
+    /// When the item opens at, when not now: a `deploy` item's age counts from when its run began waiting.
+    pub opened_at: Option<String>,
 }
 
 impl Condition {
@@ -173,6 +175,7 @@ impl From<&Item> for Condition {
             session: item.session.clone(),
             record: item.record.clone(),
             event: item.event,
+            opened_at: None,
         }
     }
 }
@@ -393,7 +396,7 @@ pub fn reconcile(store: &mut Store, conditions: &[Condition], now: &str) -> Resu
                     c.session.as_ref().map(SessionId::as_str),
                     c.record.as_ref().map(RecordId::to_string),
                     c.event,
-                    now,
+                    c.opened_at.as_deref().unwrap_or(now),
                 ],
             )?;
             let id = tx.last_insert_rowid();
@@ -472,6 +475,7 @@ mod tests {
             session: None,
             record: None,
             event: None,
+            opened_at: None,
         }
     }
 
@@ -519,6 +523,7 @@ mod tests {
             context: Some(ContextId::parse("ctx").unwrap()),
             session: Some(SessionId::parse("s1").unwrap()),
             event: Some(1),
+            opened_at: None,
             url: Some("http://x".into()),
             label: "inbox asks you".into(),
             ..dialog("session:s1", Urgency::Magenta)

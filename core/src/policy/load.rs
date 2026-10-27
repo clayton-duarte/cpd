@@ -70,6 +70,9 @@ fn parse_scope_of(file: &Path, text: &str, kind: Option<ScopeKind>) -> Result<Sc
     if let Some(set) = &scope.test_commands {
         set.commands().map_err(|why| policy_invalid(file, Some("test-commands"), why))?;
     }
+    if let Some(set) = &scope.deploys {
+        set.check().map_err(|why| policy_invalid(file, Some("deploys.workflows"), why))?;
+    }
     Ok(scope)
 }
 

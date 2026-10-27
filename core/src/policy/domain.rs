@@ -469,13 +469,40 @@ impl Set for ProtectedSet {
 impl Set for DeploysSet {
     type Value = Deploys;
 
-    // STUB (red tests): the names are neither validated, sorted nor read.
-    fn fill(&self, _base: &Deploys) -> (Deploys, Vec<&'static str>) {
-        (Deploys::default(), left_out([(WORKFLOWS, self.workflows.is_none())]))
+    fn fill(&self, base: &Deploys) -> (Deploys, Vec<&'static str>) {
+        let workflows = self.workflows.as_ref().map_or_else(|| base.workflows.clone(), |w| sorted(w));
+        (Deploys { workflows }, left_out([(WORKFLOWS, self.workflows.is_none())]))
     }
 
     fn complete(&self) -> Option<Deploys> {
-        Some(Deploys { workflows: self.workflows.clone()? })
+        Some(Deploys { workflows: sorted(self.workflows.as_ref()?) })
+    }
+}
+
+fn sorted(names: &[String]) -> Vec<String> {
+    let mut names = names.to_vec();
+    names.sort();
+    names
+}
+
+impl DeploysSet {
+    /// Why the workflow names are not valid: each matches `^[A-Za-z0-9][A-Za-z0-9._-]*\.ya?ml$`, none twice.
+    pub(super) fn check(&self) -> Result<(), String> {
+        let names = self.workflows.as_deref().unwrap_or_default();
+        for (i, name) in names.iter().enumerate() {
+            let stem = name.strip_suffix(".yml").or_else(|| name.strip_suffix(".yaml"));
+            let ok = stem.is_some_and(|s| {
+                s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+                    && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            });
+            if !ok {
+                return Err(format!("workflow name `{name}` must match ^[A-Za-z0-9][A-Za-z0-9._-]*\\.ya?ml$"));
+            }
+            if names[..i].contains(name) {
+                return Err(format!("workflow `{name}` is listed twice"));
+            }
+        }
+        Ok(())
     }
 }
 
