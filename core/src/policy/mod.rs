@@ -305,7 +305,7 @@ mod tests {
         write(
             &home,
             "acme/owner.toml",
-            "[pr]\nfeedback.checks = \"none\"\ntext = \"owner pr\"\n[pr.post]\nenabled = true\nchannel = \"\"\ntemplate = \"{{ url }}\"\nmerged_reaction = \"\"\n",
+            "[pr]\nfeedback.checks = \"none\"\njira_required = true\ntext = \"owner pr\"\n[pr.post]\nenabled = true\nchannel = \"\"\ntemplate = \"{{ url }}\"\nmerged_reaction = \"\"\n",
         );
         write(&home, "acme/cpd.toml", "[pr]\n");
         let r = resolve(&home, &repo_key("acme", "cpd")).unwrap();
@@ -315,7 +315,7 @@ mod tests {
         assert_eq!(src.source, Source::Repo(real(&home, "acme/cpd.toml")));
         assert_eq!(
             src.left_out,
-            ["feedback.checks", "pr.post.enabled", "pr.post.channel", "pr.post.template", "pr.post.merged_reaction"]
+            ["feedback.checks", "pr.post.enabled", "pr.post.channel", "pr.post.template", "pr.post.merged_reaction", "pr.jira_required"]
         );
         assert!(src.to_string().ends_with(" (key default)"));
         // The owner file sets every typed key: no `(key default)`.

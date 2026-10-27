@@ -29,6 +29,7 @@ fn an_owner_file_sets_jira_required_and_a_repo_file_overrides_it() {
 fn jira_required_refuses_a_value_that_is_not_a_boolean() {
     let ok = world("[pr]\njira_required = true\n");
     show(&ok, false).ok();
+    drop(ok);
     let fx = world("[pr]\njira_required = \"yes\"\n");
     let error = refused(&show(&fx, false), "policy_invalid", 1);
     assert_eq!(error["details"]["key"], "pr.jira_required", "{error}");
