@@ -817,6 +817,8 @@ mod lines_tests;
 mod box_lines_tests;
 #[cfg(test)]
 mod needs_tests;
+#[cfg(test)]
+mod chain_tests;
 
 #[cfg(test)]
 mod tests {

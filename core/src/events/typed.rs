@@ -253,6 +253,10 @@ impl NewEvent {
         make(Kind::PrEdited, text, json!({"pr": pr, "fields": fields}))
     }
 
+    pub fn pr_described(text: impl Into<String>, pr: impl Serialize) -> NewEvent {
+        make(Kind::PrDescribed, text, json!({"pr": pr}))
+    }
+
     pub fn pr_cancelled(text: impl Into<String>, pr: impl Serialize) -> NewEvent {
         make(Kind::PrCancelled, text, json!({"pr": pr}))
     }
@@ -558,6 +562,7 @@ mod tests {
             Kind::PrFeedback => vec![NewEvent::pr_feedback(T, s, n, s, s, s, s, s, s, b, &[s])],
             Kind::PrAdded => vec![NewEvent::pr_added(T, s, s, s, s, None, None, [s], b)],
             Kind::PrEdited => vec![NewEvent::pr_edited(T, s, [s])],
+            Kind::PrDescribed => vec![NewEvent::pr_described(T, s)],
             Kind::PrCancelled => vec![NewEvent::pr_cancelled(T, s), NewEvent::pr_cancelled_superseded(T, s, s)],
             Kind::PrStarted => vec![NewEvent::pr_started(T, s, s, s, s, s, s, b, b, s)],
             Kind::PrBaseChanged => vec![

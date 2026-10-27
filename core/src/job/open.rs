@@ -267,7 +267,12 @@ pub fn shown_needs(all: &[Job], job: &Job) -> Vec<String> {
     if !matches!(job.kind.as_str(), "open" | "update") {
         return job.needs.clone();
     }
-    let mut keys: Vec<String> = others(all, job).filter(|j| j.status != "cancelled").map(|j| j.key.clone()).collect();
+    // A Job chained after the merged open Job (it needs it, directly or not) is no need of it: that would be a cycle.
+    let mut after: std::collections::BTreeSet<&str> = std::collections::BTreeSet::from([job.key.as_str()]);
+    while let Some(next) = all.iter().find(|j| !after.contains(j.key.as_str()) && j.needs.iter().any(|n| after.contains(n.as_str()))) {
+        after.insert(next.key.as_str());
+    }
+    let mut keys: Vec<String> = others(all, job).filter(|j| j.status != "cancelled" && !after.contains(j.key.as_str())).map(|j| j.key.clone()).collect();
     keys.sort();
     keys
 }
@@ -372,5 +377,16 @@ mod tests {
         let all = [job("z", "a", "work", "merged"), job("gone", "a", "work", "cancelled"), job("b", "a", "work", "queued"), job("x", "b", "work", "queued"), open.clone()];
         assert_eq!(shown_needs(&all, &open), ["b", "z"]);
         assert_eq!(shown_needs(&all, &all[0]), ["unused"], "any other kind shows its Dependency rows");
+    }
+
+    #[test]
+    fn a_merged_open_job_does_not_show_the_jobs_chained_after_it_as_needs() {
+        let open = job("open-a", "a", "open", "merged");
+        let mut fix1 = job("fix1", "a", "work", "merged");
+        fix1.needs = vec!["open-a".into()];
+        let mut fix2 = job("fix2", "a", "work", "queued");
+        fix2.needs = vec!["fix1".into()];
+        let early = job("early", "a", "work", "merged");
+        assert_eq!(shown_needs(&[early, fix1, fix2, open.clone()], &open), ["early"]);
     }
 }
