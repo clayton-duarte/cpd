@@ -14,6 +14,7 @@ mod session_first_message;
 mod session_reload;
 mod session_resume;
 mod session_retier;
+mod session_switch;
 mod session;
 mod session_report;
 mod session_send;
