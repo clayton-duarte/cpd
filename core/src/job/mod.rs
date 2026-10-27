@@ -288,7 +288,7 @@ fn check_kind_not_reserved(kind: &str) -> Result<(), CpdError> {
     if matches!(kind, "open" | "update") {
         return Err(CpdError::new(
             ErrorCode::KindReserved,
-            format!("The kind {kind} is cpd's: it adds the open Job when a PR starts and the update Job for a PR that needs one. Use docs, test, impl or work."),
+            format!("The kind {kind} is cpd's: it adds the open Job when a PR starts and the update Job for a PR that needs one. Use docs, test, impl, verify or work."),
         )
         .with("kind", kind));
     }
@@ -299,10 +299,10 @@ fn check_kind_not_reserved(kind: &str) -> Result<(), CpdError> {
 /// template, `docs` and `config` their one, `free` (a PR before migration `job-kinds`) every kind the Lead adds.
 fn kinds_allowed(shape: &str) -> &'static [&'static str] {
     match shape {
-        "tdd" => &["docs", "test", "impl"],
+        "tdd" => &["docs", "test", "impl", "verify"],
         "docs" => &["docs"],
         "config" => &["work"],
-        _ => &["work", "docs", "test", "impl"],
+        _ => &["work", "docs", "test", "impl", "verify"],
     }
 }
 
@@ -356,6 +356,21 @@ fn check_test_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(),
     .with("plan", plan.as_str())
     .with("job", job.key.as_str())
     .with("jobs", tests))
+}
+
+/// A `verify` Job that is not a draft needs at least one `impl` Job of its PR (`impl_job_required`, §5.1).
+fn check_impl_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(), CpdError> {
+    let impls: Vec<&str> = jobs.iter().filter(|j| j.pr == job.pr && j.kind == "impl" && j.status != "cancelled").map(|j| j.key.as_str()).collect();
+    if job.kind != "verify" || job.needs.iter().any(|n| impls.contains(&n.as_str())) {
+        return Ok(());
+    }
+    Err(CpdError::new(
+        ErrorCode::ImplJobRequired,
+        format!("The verify Job {} must need an impl Job of its PR {}: it checks the code those Jobs build.", job.key, job.pr),
+    )
+    .with("plan", plan.as_str())
+    .with("job", job.key.as_str())
+    .with("jobs", impls))
 }
 
 /// No key of `needs` is a `cancelled` or `failed` Job, nor an `open` or `update` Job, which nothing waits for
