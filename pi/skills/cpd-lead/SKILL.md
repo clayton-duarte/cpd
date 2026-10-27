@@ -368,7 +368,7 @@ When the PR is ready (CI green, review comments addressed), ask the User if they
 For an owner whose `cpd policy show --pr <key>` has `pr.post.enabled` true:
 
 1. On `ready_to_post` ask the User with `ask_user_question` whether to post this PR for peer review to the team channel (name the PR, its title and its link). Only on a yes run `cpd pr post --pr <key>` and give the User the link it prints. On a no record it (`cpd context note`: PR <key> is not posted, the User said no) and ask again only when the User does. Never post without the yes. A refusal of `cpd pr post` names what is missing: answer the bot comments, wait for CI, run `cpd pr poll` and try again.
-   - The post also turns on GitHub squash auto-merge for the PR (pro-d117). When you see the output's `auto_merge.state`, tell the User: `enabled` = will merge when checks pass; `deferred` = the PR is stacked, will merge after it is unstacked and checks pass; `not_allowed` = the repo does not allow auto-merge; `refused` or `failed` = GitHub or the engine failed, report it in one line. Never run `gh pr merge --auto` by hand.
+   - The post also turns on GitHub squash auto-merge for the PR (pro-d117): see `auto_merge.state` in the output (`commands.md` §9.8b). A stacked PR's auto-merge request waits until the PR is unstacked. Never run `gh pr merge --auto` by hand.
 
 2. A posted PR is reviewed by peers: `changes_requested` is addressed at once (one `work` Job per cohesive fix; see [Addressing](#addressing)). `comments` on a posted PR: when a person's open item does not request changes, ask the User with `ask_user_question` before any Job or reply (address it, reply only, or leave it), then act as [Review comments](#review-comments) says.
 
