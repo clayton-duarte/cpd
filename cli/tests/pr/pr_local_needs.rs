@@ -111,7 +111,7 @@ fn needs_and_base_pr_of_the_same_plan_still_work() {
     let fx = fx();
     fx.add("pay-1", "web", &["--needs", "api"]).ok();
     let out = fx.add("pay-1", "ui", &["--base", "pay-1/api"]).ok();
-    assert_eq!(out["pr"]["base"], "cpd/pay-1/api", "{out}");
+    assert_eq!(out["pr"]["base"], "pay-1/api", "{out}");
     fx.edit("pay-1", &["web", "--needs", "api"]).ok();
     assert_eq!(fx.fx.env.query::<String>("SELECT group_concat(needs) FROM pr_needs WHERE pr = 'web'"), "api");
     let columns: Value = fx.fx.env.query::<String>("SELECT json_group_array(name) FROM pragma_table_info('pr_needs')").parse().unwrap();
