@@ -38,10 +38,13 @@ fn stacked_ready_poll_stores_base_ref_and_default_branch() {
     fx.poll();
     assert_eq!(stored(&fx, 812), some("main", "main"));
     assert_eq!(stored(&fx, 900), some("cpd/pay", "main"));
-    // No call beyond today's: the one search.
+    // No call beyond today's: the one search carries both fields, and no per-PR lookup is made. (The comments read of
+    // the owned PR, whose `updated_at` is NULL, is baseline: §7.6 step 3a.)
     let calls = fx.gh_calls();
-    assert_eq!(calls.len(), 1, "{calls:?}");
-    assert!(calls[0][3].contains("defaultBranchRef { name }"), "{}", calls[0][3]);
+    let carrying: Vec<_> = calls.iter().filter(|c| c[3].contains("defaultBranchRef { name }")).collect();
+    assert_eq!(carrying.len(), 1, "{calls:?}");
+    assert!(carrying[0][3].contains("search(type: ISSUE"), "{}", carrying[0][3]);
+    assert!(calls.iter().all(|c| !c[3].contains("pullRequest(number: 812) { repository")), "no lookup: {calls:?}");
 }
 
 #[test]
