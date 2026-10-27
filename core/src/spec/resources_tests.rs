@@ -1,4 +1,4 @@
-//! The Worker Spec says which exclusive resources its Attempt holds (commands.md §16.1).
+//! The Worker Spec says which resources its Attempt holds a slot of (commands.md §16.1; slots: contract §8.3).
 
 use std::path::Path;
 

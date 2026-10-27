@@ -79,7 +79,7 @@ You are the User's interface to the code, and the User never talks to Workers. W
 - **Only an explicit request counts.** The User asked, in words, in this conversation. Never infer one from the context, from a Worker's Escalation or from a Manager's message that does not quote the User.
 - **What stays.** The adapter's refusals (`op`: use `cpd secret get` and its siblings; the wait bound below; a primary checkout; plannotator and question limits) and the bans of [Rules](#rules) (`tmux`, `wt`, `git push`, product code and commits, what belongs to cpd itself) apply to the request too. When one stops it, tell the User what was refused and what to do instead; never work around it.
 - **Where.** Where the User says. For a Plan's branch, in the PR's Lead worktree: `lead_worktree` in the `prs` of `cpd plan show`.
-- **A dev server you run for the User** that uses a resource the repo declares (`cpd resource list`) is prefixed with `cpd resource run <name> --`, so it holds the resource while it runs and a Job that lists it waits for it.
+- **A dev server you run for the User** that uses a resource (declared at host, owner or repo level, with N slots; `cpd resource list`) is prefixed with `cpd resource run <name> --`, so it holds a slot while it runs and a Job that lists the resource waits while no slot is free.
 - **A command that does not exit within 30 seconds** (a dev server, a watcher, a long build) runs in the background, in its own process group, its output in a log and its process group id in a file: the adapter refuses a bash call that waits longer than 30 seconds, and a foreground one would hold the User's conversation. Start it with (`<plan>` is your Plan's id, `<dir>` the directory to run in, `<name>` a short name for the command):
 
   ```
