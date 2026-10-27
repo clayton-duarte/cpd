@@ -356,7 +356,15 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
         out.push(PrNode {
             waiting_on: row.map(|p| display.pr_blockers(p)).unwrap_or_default(),
             superseded_by: display.superseded_by(&key).map(str::to_owned),
-            needs: needs.remove(&key).unwrap_or_default(),
+            needs: {
+                let mut n = needs.remove(&key).unwrap_or_default();
+                // the implied need: the base PR of the Plan (a base PR of another Plan has no node here)
+                if let Some(base) = row.and_then(|p| display.pr_needs(p).into_iter().find(|b| !p.needs.contains(b))).filter(|b| !b.contains('/')) {
+                    n.push(id("PR key", &base, PrKey::parse)?);
+                    n.sort();
+                }
+                n
+            },
             key: id("PR key", &key, PrKey::parse)?,
             repo_name,
             base,

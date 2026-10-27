@@ -97,6 +97,17 @@ impl Display {
         blockers
     }
 
+    /// The PRs `pr` needs as the views show them: its stored needs, then its base PR (the implied need, derived, never stored).
+    pub fn pr_needs(&self, pr: &PrRow) -> Vec<String> {
+        let mut needs = pr.needs.clone();
+        if let Some(base) = self.bases.get(pr.key.as_str()) {
+            if !needs.contains(base) {
+                needs.push(base.clone());
+            }
+        }
+        needs
+    }
+
     /// What the PR that has not started cannot start until, sorted (PR references): the PRs it needs that are not `merged`, and
     /// its base PR when that has not started. Empty when it can start, and for a PR that has started.
     pub fn pr_blockers(&self, pr: &PrRow) -> Vec<String> {
@@ -105,7 +116,8 @@ impl Display {
         }
         let mut blockers: Vec<String> =
             pr.needs.iter().filter(|n| self.statuses.get(*n).is_none_or(|s| !matches!(s.as_str(), "merged" | "cancelled"))).cloned().collect();
-        if let Some(base) = self.bases.get(pr.key.as_str()).filter(|b| self.statuses.get(*b).is_some_and(|s| s == "waiting")) {
+        // the implied need (contract §2.2): met when the base PR is `open` or `merged`
+        if let Some(base) = self.bases.get(pr.key.as_str()).filter(|b| self.statuses.get(*b).is_some_and(|s| matches!(s.as_str(), "waiting" | "dispatch"))) {
             blockers.push(base.clone());
         }
         blockers.sort();

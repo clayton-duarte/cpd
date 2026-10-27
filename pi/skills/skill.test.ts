@@ -543,6 +543,13 @@ test("both skills describe a stacked PR: gh pr edit --base, then cpd pr push", (
   }
 });
 
+test("cpd-lead: a stacked PR waits for its base PR to open, --base needs neither --needs nor --no-needs, and a draft is no parking place", () => {
+  const text = skillFiles("cpd-lead")[0]!.text;
+  assert.match(text, /waiting.*base PR is open/, "cpd-lead: stacked PR waits for base PR to open");
+  assert.match(text, /needs neither flag/, "cpd-lead: --base needs neither flag");
+  assert.match(text, /draft.*never.*parking place/, "cpd-lead: draft is no parking place");
+});
+
 test("urgent Jobs: both skills state the flag, the command and the explicit-request rule", () => {
   for (const skill of ["cpd-lead", "cpd-manager"]) {
     const text = skillFiles(skill)[0]!.text;
