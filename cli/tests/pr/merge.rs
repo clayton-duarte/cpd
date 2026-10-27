@@ -105,8 +105,8 @@ fn build(config_extra: &str, with_origin: bool) -> (Fx, PathBuf) {
             exec(
                 tx,
                 &format!(
-                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at)
-                       VALUES ('pay', 'repo', '{repo}', 'repo', 'main', 'dispatch', 'cpd/pay', '{lead}', 'Charge the card', cpd_txn(), 't', 't');",
+                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, created_txn, created_at, started_at)
+                       VALUES ('pay', 'repo', '{repo}', 'repo', 'main', 'dispatch', 'cpd/pay', '{lead}', 'Charge the card', 'A description', cpd_txn(), 't', 't');",
                     repo = fx.repo.display(),
                     lead = fx.lead.display()
                 ),
@@ -306,8 +306,8 @@ impl Fx {
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at)
-                     VALUES ('pay', ?1, ?2, ?1, 'main', 'dispatch', ?3, ?4, 'A title', ?5, 't', 't')",
+                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, created_txn, created_at, started_at)
+                     VALUES ('pay', ?1, ?2, ?1, 'main', 'dispatch', ?3, ?4, 'A title', 'A description', ?5, 't', 't')",
                     params![key, repo.to_str().unwrap(), branch, path.to_str().unwrap(), tx.id()],
                 )?;
                 Ok(())
@@ -330,8 +330,8 @@ impl Fx {
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at)
-                     VALUES ('pay', ?1, ?2, ?1, ?3, 'dispatch', ?4, ?5, 'A title', ?6, 't', 't')",
+                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, created_txn, created_at, started_at)
+                     VALUES ('pay', ?1, ?2, ?1, ?3, 'dispatch', ?4, ?5, 'A title', 'A description', ?6, 't', 't')",
                     params![key, repo.to_str().unwrap(), base_pr.branch, branch, path.to_str().unwrap(), tx.id()],
                 )?;
                 Ok(())

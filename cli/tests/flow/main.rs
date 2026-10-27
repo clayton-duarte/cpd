@@ -32,6 +32,7 @@ mod host_repair;
 mod job;
 mod job_resources;
 mod job_edit_locked;
+mod job_chain;
 mod job_fix;
 mod job_verify;
 mod driver_verify;

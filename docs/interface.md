@@ -65,6 +65,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd pr` | Pull requests (commands.md §9) | | |
 | `cpd pr add` | Add a PR to the Plan (§9.4) | Lead | |
 | `cpd pr edit` | Change a waiting PR before the lock (§9.5) | Lead | |
+| `cpd pr describe` | Store the PR's description, which becomes the pull request body (§9.5a) | Lead | |
 | `cpd pr cancel` | Remove a PR from the Plan before the lock; after it, end a PR with nothing to open, or whose work another PR carried (`--superseded-by`) (§9.6) | Lead | |
 | `cpd pr start` | Start a waiting PR whose needs are merged, after a failed start (§9.7) | Lead | |
 | `cpd pr open` | Push the Lead Branch and open the PR, refused only when it conflicts with its base, never as a draft (§9.1) | Lead | |

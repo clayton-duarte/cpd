@@ -153,7 +153,16 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
     check_pr_live(&prs, plan, &pr)?;
     check_shape_allows(&prs, plan, &pr, &wanted.kind, wanted.review)?;
     let all = jobs::load(conn, plan)?;
-    let needs = if wanted.review { review_needs(&all, plan, &pr, wanted.key.as_str())? } else { wanted.needs.clone() };
+    let needs = if wanted.review {
+        review_needs(&all, plan, &pr, wanted.key.as_str())?
+    } else {
+        let pr_status = &prs.iter().find(|p| p.key.as_str() == pr).expect("check_pr_live found the PR").status;
+        let mut needs = wanted.needs.clone();
+        needs.extend(super::chain::leaves(&all, plan, &pr, pr_status, wanted.key.as_str())?.unwrap_or_default());
+        needs.sort();
+        needs.dedup();
+        needs
+    };
     let appended = phase != "plan";
     // In phase `plan` every Job is a draft; after it, only with `--draft`.
     let draft = !appended || wanted.draft;
@@ -209,7 +218,8 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
     if !draft {
         check_impl_job_required(&all, plan, &job)?;
     }
-    check_needs_available(&all, plan, &job.needs)?;
+    // Only the chain may need the merged open Job: what was named by hand is checked alone.
+    check_needs_available(&all, plan, if wanted.review { &job.needs } else { &wanted.needs })?;
     if !draft {
         check_test_job_required(&all, plan, &job)?;
         check_needs_not_draft(&all, plan, &job)?;
