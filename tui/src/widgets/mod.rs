@@ -4,9 +4,9 @@
 //! the reader thread when the store committed (the watcher) or the safety poll is due, at most one read per frame; the
 //! CPU, GPU and memory % are sampled every [`SAMPLE_EVERY`], since they are no Event. It draws when a read result, the
 //! CPU, GPU and memory, the error, the size, a click or the wheel changed, and at each frame while a spinner turns. It makes no write of
-//! its own, but for what a click on an owned PR row asks of `cpd session open`, the merge popup a click on a merge
-//! icon opens, and what a click or the menu of an Inbox item runs (commands.md §13.2, pro-d55). A right click on a PR row
-//! opens its menu ([`crate::menu`]: Merge, Copy Link, Go to Lead), on an Inbox item its menu (Claim on a `review-requested` row only, Snooze 15 min, Snooze 1 h,
+//! its own, but for what a click on an owned PR row asks of `cpd session open`, the merge a click on a merge
+//! icon starts at once, and what a click or the menu of an Inbox item runs (commands.md §13.2, pro-d55). A right click on a PR row
+//! opens its menu ([`crate::menu`]: Merge, Copy Link, Go to Lead), on an Inbox item its menu (Merge on a `pr-ready` row whose pull request is clean, Claim on a `review-requested` row only, Snooze 15 min, Snooze 1 h,
 //! Snooze until tomorrow 09:00, Dismiss); a menu then takes every key and click until it closes. Otherwise it has no key;
 //! mouse capture is on, for the clicks and the wheel over the PRs and the Inbox sections.
 //!
@@ -307,8 +307,7 @@ fn pick(item: PrItem, row: &PrRow, opener: &Opener) -> (&'static str, Result<(),
 
 /// Draws and follows, for as long as the process runs: no key ends it. A failed read keeps what is on screen and shows its error in the last row, until a read
 /// succeeds ([`kept`]). The wheel over the PRs section scrolls it by one pull request per notch. A left click on an owned
-/// PR row (not on its `󱆭` or its merge icon) opens its Lead in the chat slot; a left click on a merge icon opens the merge
-/// popup; a failure is the error dialog and a line of the log (commands.md §17 "No notes"). A right click on a PR row
+/// PR row (not on its `󱆭` or its merge icon) opens its Lead in the chat slot; a left click on a merge icon starts the merge at once; a failure is the error dialog and a line of the log (commands.md §17 "No notes"). A right click on a PR row
 /// opens its menu, which takes every key and click until it closes.
 fn show<B: Backend>(
     ctx: &mut Ctx<B>,

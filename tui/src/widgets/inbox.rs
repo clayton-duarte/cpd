@@ -7,8 +7,7 @@
 //! column's split gives it (the PRs have two thirds, hs-d307; [`super::draw`]) and its items scroll inside the cap, with right-aligned `▲ <n> more` / `▼ <n> more` cue rows
 //! (`dialog::scroll::cue`, [`Shape`]).
 //!
-//! A click on an item row jumps to its cause ([`jump`]): a command, the merge popup of
-//! its pull request, or the copy of its `url`. The label of a link kind with a `url` is a `Link` widget (`crate::link`): a click on it opens the page
+//! A click on an item row jumps to its cause ([`jump`]): a command or the copy of its `url` (a `pr-ready` row has none: its menu has Merge). The label of a link kind with a `url` is a `Link` widget (`crate::link`): a click on it opens the page
 //! instead. Everything here is pure but [`draw`], which only writes to the frame.
 
 use ratatui::Frame;
