@@ -37,6 +37,7 @@ fn job(pr: &str, key: &str, status: JobStatus, tier: Option<&str>, needs: &[&str
     JobNode {
         status,
         tier: tier.map(|t| Tier::parse(t).unwrap()),
+        shown_tier: tier.map(|t| Tier::parse(t).unwrap()),
         needs: needs.iter().map(|n| JobKey::parse(n).unwrap()).collect(),
         ..sample_job(pr, key)
     }

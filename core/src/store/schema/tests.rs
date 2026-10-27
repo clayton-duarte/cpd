@@ -1758,6 +1758,12 @@ fn converts_keeping_every_row_and_id(n: usize) {
     assert_eq!(violations, 0, "version {n}: foreign_key_check");
     for (table, ids) in &ids_before {
         let after = rowids(&conn, table);
+        if table == "tier_catalog" {
+            // Migration `20261030T1100-tier-catalog-source` rebuilds tier_catalog EMPTY: it is a cache, recomputed by the next
+            // `cpd tiers`, so it is the one table conversion does not keep.
+            assert!(after.is_empty(), "version {n}: tier_catalog is empty after conversion (a cache, rebuilt by tier-catalog-source)");
+            continue;
+        }
         assert!(ids.iter().all(|id| after.contains(id)), "version {n}: {table} lost a row id");
     }
     let recorded: Vec<(String, String, i64, i64)> = conn
@@ -1820,6 +1826,9 @@ fn converts_keeping_every_row_and_id(n: usize) {
         assert_eq!(rows_after.remove("incident"), Some(Vec::new()));
         // `incident-plans` made another, and it is empty too.
         assert_eq!(rows_after.remove("incident_plans"), Some(Vec::new()));
+        // `tier-catalog-source` rebuilds tier_catalog EMPTY (a cache, recomputed by the next `cpd tiers`): the one table conversion drops.
+        assert_eq!(rows_after.remove("tier_catalog"), Some(Vec::new()));
+        assert!(rows_before.remove("tier_catalog").is_some_and(|r| !r.is_empty()), "the legacy tier_catalog row was seeded");
         let (history_before, history_after) = (rows_before.remove("history").unwrap(), rows_after.remove("history").unwrap());
         assert_eq!(history_after[..history_before.len()], history_before[..]);
         assert!(history_after[history_before.len()..].iter().all(|r| r.contains("\"update\"")), "{history_after:?}");
@@ -2876,8 +2885,8 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
     assert_eq!(rows(&mut store, "SELECT name FROM event_kinds WHERE name = 'pr-base-changed'"), vec![serde_json::json!(["pr-base-changed"])]);
-    // this migration's one kind, the two of `plannotator-reviews`, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`: the later migrations that add Event kinds
-    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2 + 3 + 1 + 2 + 1 + 1])]);
+    // this migration's one kind, the two of `plannotator-reviews`, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`, the one of `inbox-claim`: the later migrations that add Event kinds
+    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2 + 3 + 1 + 2 + 1 + 1 + 1])]);
 }
 
 // ---------- named migration session-titles ----------

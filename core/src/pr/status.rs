@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use crate::error::{CpdError, ErrorCode};
 
-/// Check conclusions that count as failing (cpd 1 §13, kept).
-const FAILING: [&str; 6] = ["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"];
+/// Check conclusions that count as failing. CANCELLED is neither failing nor pending (a cancelled run is no failure).
+const FAILING: [&str; 5] = ["FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"];
 
 pub(super) fn failing(conclusion: &str) -> bool {
     FAILING.contains(&conclusion.to_ascii_uppercase().as_str())

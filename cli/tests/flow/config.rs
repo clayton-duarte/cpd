@@ -79,7 +79,8 @@ fn config_defaults_context_distill_tier_to_gx() {
                 "stuck_job_minutes": 10,
                 "team_channel": "",
                 "slack_user_id": "",
-                "bot_reviewers": ["mission-lane-claude-code-assistant", "github-actions", "copilot-pull-request-reviewer"]
+                "bot_reviewers": ["mission-lane-claude-code-assistant", "github-actions", "copilot-pull-request-reviewer"],
+                "review_context": ""
             },
             "events": {"poll_ms": 200},
             "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}
@@ -136,7 +137,7 @@ fn config_takes_the_team_review_keys() {
     )
     .ok();
     assert_eq!(shown["config"]["watch"]["team_review_seconds"], 900);
-    assert_eq!(shown["config"]["inbox"], json!({"stuck_job_minutes": 10, "team_channel": "C02JU6C2Z1D", "slack_user_id": "U04DB4MTUMR", "bot_reviewers": ["ci-bot"]}));
+    assert_eq!(shown["config"]["inbox"], json!({"stuck_job_minutes": 10, "team_channel": "C02JU6C2Z1D", "slack_user_id": "U04DB4MTUMR", "bot_reviewers": ["ci-bot"], "review_context": ""}));
     assert_eq!(shown["sources"]["inbox.team_channel"], "file");
     assert_eq!(shown["sources"]["watch.team_review_seconds"], "file");
 }
@@ -247,6 +248,7 @@ stuck_job_minutes = 1
 team_channel = "C1"
 slack_user_id = "U1"
 bot_reviewers = ["a"]
+review_context = "eec-codereview"
 [events]
 poll_ms = 20
 [tmux]
@@ -1028,6 +1030,52 @@ fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
 
     // And the new version is warm: node has no reply left, a call of it would be unscripted.
     assert_eq!(fx.cpd(&["tiers"]).ok()["pi_version"], "1.3.0");
+}
+
+/// pro-d26 (Plan bifrost, PR catfp; commands.md §14.3): the cache is keyed by the fingerprint of `<agentDir>/models.json` too. The
+/// agent directory of [`install_pi`] is the test root. `cpd doctor`'s `tiers` check asks pi each time and never reads the cache, so
+/// the command that needs the fingerprint is `cpd tiers`, and every Lead and Worker launch through the same `load`.
+#[test]
+fn tiers_sees_a_models_json_changed_under_the_same_pi_version() {
+    let fx = tiers_fx(TIERS_MODELS);
+    let models_json = fx.env.root().join("models.json");
+    fs::write(&models_json, r#"{"thinkingLevelMap": {"minimal": null}}"#).unwrap();
+    fx.fake_once("node", levels(r#"{"O":["off","low"],"S":["off","low","medium","high"],"H":["off"],"G":["off"]}"#));
+    let first = fx.cpd(&["tiers"]).ok();
+    assert_eq!(first["tiers"]["S"]["efforts"], json!([0, 1, 2, 3]));
+
+    // The same pi version and the same models: only the file pi reads changed (Sonnet gains xhigh and max).
+    fs::write(&models_json, r#"{"thinkingLevelMap": {"minimal": null, "xhigh": "xhigh", "max": "max"}}"#).unwrap();
+    fx.fake_once("node", levels(r#"{"O":["off","low"],"S":["off","low","medium","high","xhigh","max"],"H":["off"],"G":["off"]}"#));
+    let second = fx.cpd(&["tiers"]).ok();
+    assert_eq!(second["pi_version"], "1.2.0");
+    assert_eq!(second["tiers"]["S"]["efforts"], json!([0, 1, 2, 3, 4, 5]), "the changed models.json is seen");
+    assert_eq!(fx.calls("node").len(), 2);
+    // Append-only: the first bytes' rows stay beside the second's.
+    let rows = cached_rows(&fx.env);
+    assert_eq!(rows.len(), 6, "{rows:?}");
+    assert!(rows.contains(&row("1.2.0", "S", "p/m-sonnet", "[0,1,2,3]")), "{rows:?}");
+    assert!(rows.contains(&row("1.2.0", "S", "p/m-sonnet", "[0,1,2,3,4,5]")), "{rows:?}");
+
+    // Unchanged bytes are a hit: node has no reply left.
+    assert_eq!(fx.cpd(&["tiers"]).ok()["tiers"]["S"]["efforts"], json!([0, 1, 2, 3, 4, 5]));
+    assert_eq!(fx.calls("node").len(), 2);
+}
+
+/// An unreadable `models.json` (a directory in its place) is `catalog_failed` with the path, and nothing is cached.
+#[test]
+fn tiers_with_an_unreadable_models_json_is_catalog_failed_with_its_path() {
+    let fx = tiers_fx(TIERS_MODELS);
+    let models_json = fx.env.root().join("models.json");
+    fs::create_dir(&models_json).unwrap();
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    let run = fx.cpd(&["tiers"]);
+    let err = run.error();
+    assert_eq!(err["code"], "catalog_failed");
+    assert_eq!(run.exit, 1);
+    assert!(err["details"].to_string().contains(models_json.canonicalize().unwrap().to_str().unwrap()), "{err}");
+    assert!(fx.calls("node").is_empty(), "no fallback: pi was not asked");
+    assert_eq!(cached_rows(&fx.env), []);
 }
 
 #[test]
