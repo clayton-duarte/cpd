@@ -65,14 +65,23 @@ fn rename_of(row: &Row<'_>) -> Option<Question> {
 /// A refusal the User must see: the `(title, text)` of its `text` dialog.
 type Refusal = (&'static str, &'static str);
 
-/// What `x` and the menu's Close do on `row`: the confirmation, or the refusal (the Session is in the chat slot);
+/// What `x` and the menu's Close do on `row`: the close, or the refusal (the Session is in the chat slot);
 /// nothing on a row with no Session.
-fn close_of(row: Row<'_>) -> Option<Result<Question, Refusal>> {
+fn close_of(row: Row<'_>) -> Option<Result<Action, Refusal>> {
     let session = row.session()?;
     if session.is_active() {
         return Some(Err(("Close Session", IN_CHAT_SLOT)));
     }
-    Some(Ok(Question::close(session.id.clone(), &row.label(), session.state == State::Working)))
+    Some(Ok(Action::Close(session.id.clone())))
+}
+
+/// The effect of `x` and the menu's Close: the command at once, or the refusal in a `text` dialog.
+fn close_effect(closed: Option<Result<Action, Refusal>>) -> Effect {
+    match closed {
+        Some(Ok(action)) => Effect::Run(action),
+        Some(Err((title, text))) => Effect::text(title, text),
+        None => Effect::None,
+    }
 }
 
 /// The object an archive command of the row names: the Context, the Plan, or the fork; none for a toggle row.
@@ -139,7 +148,7 @@ pub struct View {
     /// footer (commands.md §17 "No notes", rule (b)).
     pub error: Option<String>,
     /// `$CPD_HOME/policy`: the tree whose known owners (`<owner>/owner.toml`) New Context… chooses the owner from (none when the home is unresolved).
-    policy_dir: Option<PathBuf>,
+    pub(crate) policy_dir: Option<PathBuf>,
     /// The engine's downtime now: since when `locks/watch.lock` has been read free on every snapshot, and whether the
     /// Managers were told of it (view state only).
     down: Option<Down>,
@@ -302,8 +311,7 @@ impl View {
                 }
             }
             KeyCode::Char('x') => {
-                let asked = self.cursor_row().and_then(close_of);
-                return self.ask(asked);
+                return close_effect(self.cursor_row().and_then(close_of));
             }
             KeyCode::Char('?') => return Effect::Legend,
             // the first arrow after a click only shows the cursor again where it was (the first Session when there is none)
@@ -378,17 +386,17 @@ impl View {
                 return Effect::text("New Context", NO_OWNER_POLICY);
             }
             let taken = self.tree.contexts.iter().map(|c| c.id.to_string()).collect();
-            return Effect::Ask(Question::input("New Context", Ask::NewContext { taken, owners }, String::new()));
+            return Effect::Ask(Question::NewContext { taken, owners });
         }
         // the row may be gone, with a snapshot taken while the menu was open
         let Some(row) = rows::row(&self.tree, &menu.path) else { return Effect::None };
         match item {
             Item::Open => row.session().map_or(Effect::None, |s| Effect::Run(Action::Open(s.id.clone()))),
-            Item::Close => self.ask(close_of(row)),
+            Item::Close => close_effect(close_of(row)),
             Item::Archive => {
                 let Some(subject) = subject_of(&row) else { return Effect::None };
                 match self.free_for(&row, &menu.path) {
-                    Some(free) => Effect::Ask(Question::archive(&row.label(), Action::Archive { subject, free })),
+                    Some(free) => Effect::Run(Action::Archive { subject, free }),
                     None => Effect::None,
                 }
             }
@@ -736,30 +744,14 @@ mod tests {
             fn select(&self, _: &str, _: &str, options: &[String]) -> Result<Option<String>, cpd_core::error::CpdError> {
                 Ok(self.0.map(|_| options[0].clone()))
             }
+            fn form(&self, _: &str, _: &str, _: &str, _: &[String]) -> Result<Option<(String, String)>, cpd_core::error::CpdError> {
+                unreachable!("no form in these tests")
+            }
             fn preview(&self, _: &Deletable) -> Result<serde_json::Value, String> {
                 Ok(serde_json::json!({}))
             }
         }
         question.ask(&Answer(text))
-    }
-
-    #[test]
-    fn x_opens_a_confirm_popup_and_closes_only_when_it_is_confirmed() {
-        let mut view = on(&["alpha", "sketch"]);
-        let question = asked(press(&mut view, KeyCode::Char('x')));
-        assert_eq!(question, Question::close(sid("l-sketch"), "Sketch", false));
-        assert_eq!(answered(question.clone(), Some("")), Ok(Some(Action::Close(sid("l-sketch")))));
-        assert_eq!(answered(question, None), Ok(None), "a cancel runs nothing");
-    }
-
-    #[test]
-    fn x_warns_first_when_the_session_is_working() {
-        let mut tree = sample();
-        tree.contexts[0].plans[0].sessions[1].state = State::Working;
-        let mut view = View::new(tree, true);
-        press(&mut view, KeyCode::Down);
-        view.state.select(vec!["alpha".into(), "f-idle".into()]);
-        assert_eq!(asked(press(&mut view, KeyCode::Char('x'))), Question::close(sid("f-idle"), "ship fork", true));
     }
 
     #[test]
@@ -1260,49 +1252,33 @@ mod tests {
         Effect::Run(Action::Archive { subject, free: None })
     }
 
-    /// The effect of an Archive pick: a confirm popup, `Archive <label>?` with `[Archive]`, which runs the archive only
-    /// when confirmed; here as the `Run` it makes when it is.
-    fn confirmed(effect: Effect) -> Effect {
-        let Effect::Ask(Question::Confirm { title, text, yes_label, then }) = effect else { return effect };
-        assert_eq!((title, yes_label), ("Archive", "Archive"));
-        assert!(text.starts_with("Archive ") && text.ends_with('?'), "{text}");
-        Effect::Run(then)
-    }
-
     #[test]
-    fn archive_asks_to_confirm_in_a_popup_and_runs_only_when_it_is_confirmed() {
+    fn archive_runs_at_once_on_its_menu_click() {
         let mut view = View::new(sample(), true);
         drawn(&mut view, 44, 16);
         right_click(&mut view, 8, 5); // the fork `f-blocked`, which is not in the chat slot
         for _ in 0..5 {
             press(&mut view, KeyCode::Down);
         }
-        let question = asked(press(&mut view, KeyCode::Enter));
-        assert_eq!(
-            question,
-            Question::archive("ship review", Action::Archive { subject: Subject::Session(sid("f-blocked")), free: None }),
-            "the question is `Archive <label>?`"
-        );
-        assert_eq!(answered(question.clone(), None), Ok(None), "a cancel runs nothing");
-        assert_eq!(answered(question, Some("")), Ok(Some(Action::Archive { subject: Subject::Session(sid("f-blocked")), free: None })));
+        assert_eq!(press(&mut view, KeyCode::Enter), archive_of(Subject::Session(sid("f-blocked"))));
         assert!(view.menu.is_none());
         // a click picks it as well
         right_click(&mut view, 8, 5);
         let effect = view.mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 10, row: 11, modifiers: KeyModifiers::NONE });
-        assert_eq!(confirmed(effect), archive_of(Subject::Session(sid("f-blocked"))));
+        assert_eq!(effect, archive_of(Subject::Session(sid("f-blocked"))));
         // a Plan and a Context name their own objects: `sketch` and `beta` hold no Lead of the chat slot
         drawn(&mut view, 44, 16);
         right_click(&mut view, 8, 7);
         for _ in 0..3 {
             press(&mut view, KeyCode::Down);
         }
-        assert_eq!(confirmed(press(&mut view, KeyCode::Enter)), archive_of(Subject::Plan(PlanId::parse("sketch").unwrap())));
+        assert_eq!(press(&mut view, KeyCode::Enter), archive_of(Subject::Plan(PlanId::parse("sketch").unwrap())));
         drawn(&mut view, 44, 16);
         right_click(&mut view, 5, 1);
         for _ in 0..3 {
             press(&mut view, KeyCode::Down);
         }
-        assert_eq!(confirmed(press(&mut view, KeyCode::Enter)), archive_of(Subject::Context(ContextId::parse("beta").unwrap())));
+        assert_eq!(press(&mut view, KeyCode::Enter), archive_of(Subject::Context(ContextId::parse("beta").unwrap())));
     }
 
     /// Archive of the row at (`column`, `row`) of `tree`: the menu's last item, picked with Enter.
@@ -1313,7 +1289,7 @@ mod tests {
         for _ in 0..5 {
             press(&mut view, KeyCode::Down);
         }
-        confirmed(press(&mut view, KeyCode::Enter))
+        press(&mut view, KeyCode::Enter)
     }
 
     fn freed(subject: Subject, free: Free) -> Effect {
@@ -1391,17 +1367,14 @@ mod tests {
     }
 
     #[test]
-    fn close_in_the_menu_asks_as_x_does_and_refuses_the_session_in_the_chat_slot() {
+    fn close_in_the_menu_runs_at_once_as_x_does_and_refuses_the_session_in_the_chat_slot() {
         let mut view = View::new(sample(), true);
         drawn(&mut view, 44, 16);
         right_click(&mut view, 8, 9);
         for _ in 0..4 {
             press(&mut view, KeyCode::Down);
         }
-        let question = asked(press(&mut view, KeyCode::Enter));
-        assert_eq!(question, Question::close(sid("f-idle"), "ship fork", false));
-        assert_eq!(answered(question.clone(), Some("")), Ok(Some(Action::Close(sid("f-idle")))));
-        assert_eq!(answered(question, None), Ok(None), "a cancel runs nothing");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Close(sid("f-idle"))));
         // the Lead in the chat slot: the same refusal as `x`
         let mut tree = sample();
         tree.contexts[0].plans[0].sessions[1].place = crate::read::Place::Chat;
@@ -1559,33 +1532,6 @@ mod tests {
             Effect::text("New Context", "No owner policy: add $CPD_HOME/policy/<owner>/owner.toml"),
             "no input popup opens"
         );
-    }
-
-    #[test]
-    fn new_context_opens_an_input_popup_for_a_title_and_derives_the_id() {
-        let (mut view, _dir) = owned(sample(), &["clayton-duarte/owner.toml"]);
-        let question = popup_at(&mut view, 8, 15, 0);
-        let Question::Input { title, ref ask, ref initial } = question else { panic!("an input") };
-        assert_eq!((title, initial.as_str()), ("New Context", ""));
-        assert!(matches!(ask, Ask::NewContext { taken, owners } if taken == &["alpha", "beta", "gamma"] && owners == &["clayton-duarte"]), "{ask:?}");
-        assert_eq!(
-            answered(question.clone(), Some("Building cpd!")),
-            Ok(Some(Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into(), owner: "clayton-duarte".into(), confirm_fallback: false }))
-        );
-        assert_eq!(answered(question, None), Ok(None), "a cancel runs nothing");
-        // a taken id (also of an archived Context) gets `-2`, then `-3`
-        view.refresh(archived());
-        let question = popup_at(&mut view, 8, 18, 0);
-        assert_eq!(
-            answered(question.clone(), Some("Alpha")),
-            Ok(Some(Action::NewContext { id: ContextId::parse("alpha-2").unwrap(), title: "Alpha".into(), owner: "clayton-duarte".into(), confirm_fallback: false }))
-        );
-        assert_eq!(
-            answered(question.clone(), Some("zeta")),
-            Ok(Some(Action::NewContext { id: ContextId::parse("zeta-2").unwrap(), title: "zeta".into(), owner: "clayton-duarte".into(), confirm_fallback: false }))
-        );
-        // a title that no id is made of is refused, with its reason
-        assert!(answered(question, Some("2024")).unwrap_err().starts_with("A title needs at least two letters"));
     }
 
     #[test]

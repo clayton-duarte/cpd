@@ -415,6 +415,11 @@ impl Dialogs {
         self.answer(&serde_json::json!({"confirmed": true, "value": text}));
     }
 
+    /// The next `form` popups accept the title `text` and the owner `choice`.
+    pub fn fill(&self, text: &str, choice: &str) {
+        self.answer(&serde_json::json!({"confirmed": true, "value": text, "choice": choice}));
+    }
+
     /// Every popup opened so far: the command each ran, without its `--out` (a temporary file).
     pub fn popups(&self) -> Vec<String> {
         self.raw().iter().map(|p| without_out(p.last().expect("a popup has a command"))).collect()

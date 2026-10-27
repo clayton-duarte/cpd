@@ -5,6 +5,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use super::*;
+use cpd_core::output::Output;
 
 thread_local! {
     /// The home whose store the fake `pr poll` writes to, and whether it sets the row merged.

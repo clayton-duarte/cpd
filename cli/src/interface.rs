@@ -82,6 +82,7 @@ pub const TABLE: &[Entry] = &[
     ("review open", &[Lead, Manager], false),
     ("review close", &[Lead, Manager], false),
     ("review list", &[Lead, Manager], false),
+    ("review submit", &[Lead, Manager], false),
     ("policy show", &[Lead, Manager, Worker], false),
     ("mcp attach", &[Manager, Lead, Worker], false),
     ("session list", &[Lead, Manager], false),

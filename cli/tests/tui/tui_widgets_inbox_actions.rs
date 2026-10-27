@@ -315,7 +315,7 @@ fn a_click_on_a_review_requested_item_copies_its_url() {
 }
 
 #[test]
-fn a_click_on_a_pr_ready_item_opens_the_merge_popup() {
+fn a_plain_click_on_a_pr_ready_item_does_nothing() {
     let fx = rig(vec![Condition {
         plan: None,
         ..linked(Kind::PrReady, Urgency::White, "pr:acme/api#3", "acme/api#3 ready", None, Some("https://x.io/ready"))
@@ -324,12 +324,10 @@ fn a_click_on_a_pr_ready_item_opens_the_merge_popup() {
     cockpit(&fx);
     let screen = first_rows(&fx);
     run(&fx, vec![click_glyph_of(&screen, "acme/api#3 ready")]);
-    let popups = popups(&fx);
-    let [popup] = &popups[..] else { panic!("{popups:?}") };
-    assert_eq!(popup.last().unwrap(), &format!("cpd tui view merge 'acme/api#3' --client '{CLIENT}'"), "{popup:?}");
-    let at = popup.iter().position(|a| a == "display-popup").unwrap();
-    assert_eq!(popup[at + 1..at + 5], ["-E", "-B", "-c", CLIENT], "{popup:?}");
-    assert_eq!(cpd_calls(&fx), Vec::<Vec<String>>::new(), "the popup runs the merge, not the view");
+    assert_eq!(popups(&fx), Vec::<Vec<String>>::new(), "no popup (pro-d111)");
+    let shells: Vec<_> = fx.calls("tmux").into_iter().filter(|c| c.args.iter().any(|a| a == "run-shell")).collect();
+    assert!(shells.is_empty(), "no merge starts: {shells:?}");
+    assert_eq!(cpd_calls(&fx), Vec::<Vec<String>>::new());
 }
 
 #[test]

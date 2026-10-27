@@ -1790,6 +1790,7 @@ fn converts_keeping_every_row_and_id(n: usize) {
         // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
         assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(crate::events::Kind::ALL.len()));
         assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
+        assert_eq!(rows_after.remove("slack_reactions").map(|r| r.len()), Some(0)); // `slack-reactions`: a new empty table
         assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(25)); // 17, `plannotator_reviews`, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts` and `job_pools`
         let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
         assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
@@ -3807,4 +3808,84 @@ fn tenancy_workers_tenants_are_the_jobs_with_an_attempt_not_merged_or_cancelled(
     )
     .unwrap();
     assert_eq!(workers(&mut store), 0, "merged: no tenant");
+}
+
+// ---------- the Slack reaction queue (pro-d107; migration `slack-reactions`; contract §4.4 `slack_reactions`, §4.5) ----------
+
+/// A store as every migration before `slack-reactions` leaves it, holding four PRs of Plan `pay` and their posts:
+/// `a` merged, reaction, reacted; `b` merged, reaction, not reacted; `c` open, reaction; `d` merged, no reaction.
+fn before_slack_reactions() -> (tempfile::TempDir, crate::home::CpdHome, Vec<Named>) {
+    let (dir, home) = crate::store::tests::tmp_home();
+    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-slack-reactions")).collect();
+    assert!(earlier.len() < NAMED.len(), "slack-reactions is a built-in migration");
+    let mut store = crate::store::tests::open_named(&home, &earlier).unwrap();
+    let pr = |key: &str, number: u32, state: &str, merged_at: &str, reaction: &str, reacted_at: &str| {
+        format!(
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+               VALUES ('acme/pay', {number}, 'https://github.com/acme/pay/pull/{number}', 'PR {key}', 0, '{state}', 'none', 'none', 't', {merged_at}, 't');
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
+               VALUES ('pay', '{key}', '/nowhere', 'main', '{state}', 'cpd/pay/{key}', '/nowhere/lead', {number}, 'https://github.com/acme/pay/pull/{number}', 't',
+                       (SELECT id FROM pull_requests WHERE number = {number}), cpd_txn(), 't', 't', {merged_at});
+             INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at)
+               VALUES ('pay', '{key}', 'C0POST', '1793040000.00000{number}', 'https://acme.slack.com/p{number}', 't', {reaction}, {reacted_at});"
+        )
+    };
+    let sql = format!(
+        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('pay-lead', 'lead', 'ctx', 'pay', 'Lead pay', '/', 'O3', 'stopped', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+           VALUES ('pay', 'ctx', 'Pay', 'deploy', 'pay-lead', 't', 't');
+         {}{}{}{}",
+        pr("a", 1, "merged", "'2026-10-01T10:00:00.000Z'", "'git-merge'", "'2026-10-01T10:05:00.000Z'"),
+        pr("b", 2, "merged", "'2026-10-02T10:00:00.000Z'", "'git-merge'", "NULL"),
+        pr("c", 3, "open", "NULL", "'git-merge'", "NULL"),
+        pr("d", 4, "merged", "'2026-10-04T10:00:00.000Z'", "NULL", "NULL"),
+    );
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(&sql)?;
+            Ok::<(), CpdError>(())
+        })
+        .unwrap();
+    drop(store);
+    (dir, home, earlier)
+}
+
+fn queue_rows(store: &mut Store) -> Vec<String> {
+    store
+        .read(|c| {
+            let mut stmt = c.prepare("SELECT json_object('channel', channel, 'ts', ts, 'emoji', emoji, 'queued_at', queued_at, 'reacted_at', reacted_at) FROM slack_reactions ORDER BY id")?;
+            Ok(stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .unwrap()
+}
+
+#[test]
+fn a_database_with_merged_posts_migrates_to_slack_reactions_copying_them() {
+    let (_dir, home, _earlier) = before_slack_reactions();
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    let rows: Vec<Value> = queue_rows(&mut store).iter().map(|r| serde_json::from_str(r).unwrap()).collect();
+    assert_eq!(
+        rows,
+        [
+            serde_json::json!({"channel": "C0POST", "ts": "1793040000.000001", "emoji": "git-merge", "queued_at": "2026-10-01T10:00:00.000Z", "reacted_at": "2026-10-01T10:05:00.000Z"}),
+            serde_json::json!({"channel": "C0POST", "ts": "1793040000.000002", "emoji": "git-merge", "queued_at": "2026-10-02T10:00:00.000Z", "reacted_at": null}),
+        ],
+        "only the merged posts with a reaction are copied: queued_at is the PR's merged_at, reacted_at the post's"
+    );
+}
+
+#[test]
+fn slack_reactions_refuses_a_second_row_for_one_channel_ts_and_emoji() {
+    let (_dir, home, _earlier) = before_slack_reactions();
+    let mut store = Store::open(&home, 5000).unwrap();
+    let insert = |emoji: &str, ts: &str| format!("INSERT INTO slack_reactions (channel, ts, emoji, queued_at) VALUES ('C0POST', '{ts}', '{emoji}', 'q');");
+    store.write("fixture", |tx| Ok::<(), CpdError>(tx.execute_batch(&insert("eyes", "1793040000.000001"))?)).unwrap();
+    let refused = store.write("fixture", |tx| Ok::<(), CpdError>(tx.execute_batch(&insert("eyes", "1793040000.000001"))?));
+    assert!(refused.is_err(), "the same (channel, ts, emoji) twice");
+    // Another emoji, or another post, is another row.
+    store.write("fixture", |tx| Ok::<(), CpdError>(tx.execute_batch(&insert("white_check_mark", "1793040000.000001"))?)).unwrap();
+    store.write("fixture", |tx| Ok::<(), CpdError>(tx.execute_batch(&insert("eyes", "1793040000.000009"))?)).unwrap();
 }

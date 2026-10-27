@@ -43,7 +43,7 @@ impl Hit {
     }
 }
 
-/// A merge icon on the screen: a click on `area` (one cell) opens the merge popup for `pull`, `<owner>/<repo>#<n>`.
+/// A merge icon on the screen: a click on `area` (one cell) starts the merge of `pull`, `<owner>/<repo>#<n>`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MergeIcon {
     pub area: Rect,
@@ -53,7 +53,7 @@ pub struct MergeIcon {
 /// An entry of a PR row's right-click menu (commands.md §13.2, hs-d296).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrItem {
-    /// The `merge` popup: only on a row that shows the merge icon.
+    /// The merge, at once: only on a row that shows the merge icon.
     Merge,
     /// A merge of this pull request is running (hs-d495): the `Merge` entry, shown with the spinner and not selectable.
     Merging,
@@ -336,7 +336,7 @@ pub fn draw(
             lead: pr.lead.clone(),
         });
         let icon = arrow_x.filter(|_| pr.clean).map(|x| Position::new(x, y + 1));
-        // The spinner is no merge icon: a click on it opens no popup.
+        // The spinner is no merge icon: a click on it starts no merge.
         if let Some(at) = icon.filter(|_| !pr.merging) {
             icons.push(MergeIcon { area: Rect::new(at.x, at.y, 1, 1), pull: format!("{}#{}", pr.repo, pr.number) });
         }
@@ -951,7 +951,7 @@ mod tests {
     #[test]
     fn a_click_on_the_spinner_does_nothing_it_is_no_merge_icon_and_not_the_owners_row_either() {
         let (_, d) = at_frame(30, 20, &[merging(7, Some("l-a")), merging(8, None)], 0, 3);
-        assert_eq!(d.icons, [], "no merge icon to click: the popup of a running merge does not open");
+        assert_eq!(d.icons, [], "no merge icon to click: a running merge does not start again");
         let [hit] = &d.hits[..] else { panic!("{:?}", d.hits) };
         assert!(!hit.contains(Position::new(29, 7)), "nor does the click on the spinner open the Lead");
         assert!(hit.contains(Position::new(28, 7)), "the rest of the owned row still does");
