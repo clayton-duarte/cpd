@@ -1,5 +1,5 @@
 //! The engine's loop (contract §3.7; commands.md §12): `locks/watch.lock`,
-//! `watch-started`, then E1–E5, E7–E11, E12–E15 (E6 was removed) every
+//! `watch-started`, then E1–E5, E7–E11, E12–E16 (E6 was removed) every
 //! `tick_seconds` until SIGTERM, SIGINT or SIGHUP, then `watch-stopped`.
 
 use std::collections::HashMap;
@@ -78,6 +78,8 @@ pub(super) struct Engine {
     pub team: team::State,
     /// E15: the helper's run in flight and when the last one ended.
     pub models: models::State,
+    /// E16: when this engine last started a `cpd janitor` pass (`None` before the first, in this engine's life).
+    pub janitor_started: Option<std::time::Instant>,
     /// When the engine last started the detached tmux restart (contract §6.1).
     pub restart_started: Option<Instant>,
     /// The detached runs whose pid file the engine removes when it sees them end ([`super::sweep_detached`]).
@@ -121,6 +123,7 @@ impl Engine {
             titles: titles::Runs::default(),
             team: team::State::default(),
             models: models::State::default(),
+            janitor_started: None,
             restart_started: None,
             detached: Vec::new(),
         }
@@ -205,7 +208,7 @@ impl Engine {
 /// E8, E12 and E13 run as usual. E3 starts only a Job of an incident Plan or an urgent one ([`schedule`]);
 /// E4 and E7 act per PR ([`incident_holds_plan`]).
 pub(super) fn incident_holds(engine: &mut Engine, step: Step) -> bool {
-    if !matches!(step, Step::E9 | Step::E10 | Step::E11) {
+    if !matches!(step, Step::E9 | Step::E10 | Step::E11 | Step::E16) {
         return false;
     }
     engine.store.read(|conn| Ok(cpd_core::incident::is_on(conn))).unwrap_or(false)
