@@ -35,6 +35,7 @@ mod log;
 mod models;
 mod poll_run;
 mod pr;
+mod provider_hold;
 mod report;
 pub mod restart;
 mod schedule;
@@ -71,6 +72,8 @@ mod incident_option_tests;
 mod runner_tests;
 #[cfg(test)]
 mod ports_tests;
+#[cfg(test)]
+mod provider_hold_tests;
 
 use std::fs;
 use std::io;
