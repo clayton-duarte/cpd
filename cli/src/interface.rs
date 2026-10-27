@@ -77,7 +77,7 @@ pub const TABLE: &[Entry] = &[
     ("pr view", &[Lead], false),
     ("pr reply", &[Lead], false),
     ("pr post", &[Lead], false),
-    ("pr merge", &[], true),
+    ("pr merge", &[Lead], true),
     ("review open", &[Lead, Manager], false),
     ("review close", &[Lead, Manager], false),
     ("review list", &[Lead, Manager], false),
