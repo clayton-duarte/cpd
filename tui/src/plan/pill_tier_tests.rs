@@ -50,7 +50,7 @@ fn reported_store() -> (tempfile::TempDir, Store) {
 
 /// The cells of the first pill of `jobs`, cap to cap.
 fn pill_cells(jobs: &[read::JobNode]) -> String {
-    let c = layout(&flow_jobs(jobs, false), 0);
+    let c = layout(&flow_jobs(jobs, &[]), 0);
     let r = c.pills[0].rect;
     (r.x..r.right()).map(|x| c.buf[(x, r.y)].symbol()).collect()
 }

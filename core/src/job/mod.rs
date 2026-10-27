@@ -24,6 +24,9 @@ mod retry;
 mod show;
 mod spec;
 mod urgent;
+pub mod worked_on;
+#[cfg(test)]
+mod worked_on_tests;
 
 pub(crate) use retry::{retried_since_last_start, retries_pending};
 

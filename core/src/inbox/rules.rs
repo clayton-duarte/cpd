@@ -17,6 +17,7 @@ use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::addr::review_host;
+use crate::job::worked_on::failed_worked_on;
 use crate::ids::{ContextId, JobKey, PlanId, PrKey, SessionId};
 use crate::plan::Phase;
 use crate::ports::Ports;
@@ -351,17 +352,17 @@ pub struct StuckJob {
 }
 
 /// The stuck Jobs, oldest failure first: a Job is `failed`, its latest `job-failed` Event is at least `stuck_after` old, and
-/// its Plan's Lead is not `working` (audit Q1: a working Lead is handling the failure; the Job is stuck from the next tick
-/// after it stops). Read only: E8 tells the Manager.
+/// it is not being worked on (pro-d88, [`failed_worked_on`]: the Job is stuck from the next tick after
+/// that stops). Read only: E8 tells the Manager.
 pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration) -> Result<Vec<StuckJob>, CpdError> {
     store.read(|conn| {
+        let worked_on = failed_worked_on(conn, None)?;
         let mut stmt = conn.prepare(
             "SELECT j.plan, j.pr, j.key, p.context, e.id, e.at, j.failed_cause
                FROM jobs j
                JOIN plans p ON p.id = j.plan
                JOIN events e ON e.id = (SELECT max(f.id) FROM events f WHERE f.plan = j.plan AND f.job = j.key AND f.kind = 'job-failed')
-               JOIN sessions l ON l.id = p.lead_session
-              WHERE j.status = 'failed' AND l.state <> 'working'
+              WHERE j.status = 'failed'
               ORDER BY e.id",
         )?;
         let mut rows = stmt.query([])?;
@@ -373,10 +374,14 @@ pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration)
             if age < stuck_after {
                 continue;
             }
+            let (plan, job) = (id("Plan id", &plan, PlanId::parse)?, id("Job key", &key, JobKey::parse)?);
+            if worked_on.contains(&(plan.clone(), job.clone())) {
+                continue;
+            }
             out.push(StuckJob {
-                plan: id("Plan id", &plan, PlanId::parse)?,
+                plan,
                 pr: id("PR key", &pr, PrKey::parse)?,
-                job: id("Job key", &key, JobKey::parse)?,
+                job,
                 context: id("Context id", &context, ContextId::parse)?,
                 event,
                 minutes: age.whole_minutes(),
