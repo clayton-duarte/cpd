@@ -21,6 +21,7 @@ mod pr_needs_required;
 mod pr_open;
 mod pr_post;
 mod pr_push;
+mod pr_rebase_running;
 mod pr_reply;
 mod pr;
 mod pr_start;
