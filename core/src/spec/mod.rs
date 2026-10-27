@@ -113,6 +113,7 @@ pub enum JobKind<'a> {
     Test { tests: &'a [String], test_files: &'a [String] },
     /// An `impl` Job's derived tests, the guarded files and the paths the Lead approved, and the keys of the `test` Jobs it needs.
     Impl { test_jobs: &'a [String], tests: &'a [String], guarded: &'a [String], approved: &'a [String] },
+    Verify,
     Open,
     Update,
 }
@@ -124,6 +125,7 @@ impl JobKind<'_> {
             JobKind::Docs => "docs",
             JobKind::Test { .. } => "test",
             JobKind::Impl { .. } => "impl",
+            JobKind::Verify => "verify",
             JobKind::Open => "open",
             JobKind::Update => "update",
         }

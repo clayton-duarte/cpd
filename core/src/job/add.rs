@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use super::spec::{self, Spec};
 use super::{
     AddArgs, Env, check_kind_not_reserved, check_needs_available, check_needs_known, check_needs_same_pr, check_pr_live, check_shape_allows,
-    check_test_job_required, plan_phase, sorted_needs,
+    check_impl_job_required, check_test_job_required, plan_phase, sorted_needs,
 };
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
@@ -204,6 +204,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
     check_needs_available(&all, plan, &job.needs)?;
     if !draft {
         check_test_job_required(&all, plan, &job)?;
+        check_impl_job_required(&all, plan, &job)?;
         check_needs_not_draft(&all, plan, &job)?;
         job.fingerprint = Some(locked_fingerprint(&job));
     }
