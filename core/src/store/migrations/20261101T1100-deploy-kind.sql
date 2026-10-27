@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 63
+-- cpd-migration: breaking after 67
 -- pro-d100: the Inbox kind `deploy` (a GitHub Actions run that waits for the User's approval); `inbox_items` is rebuilt as `blue-tier` rebuilt it.
 CREATE TABLE inbox_items_new (
   id            INTEGER PRIMARY KEY,
