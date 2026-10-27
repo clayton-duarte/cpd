@@ -728,21 +728,25 @@ pub enum LeadRemoval {
     Kept(Kept),
 }
 
-/// Removes the Lead worktree of a merged PR and its local Lead Branch (contract
-/// §7.2, hs-d142). A worktree with uncommitted changes or commits not on
-/// `origin` is kept untouched, unless `HEAD` is the pull request's head commit or an ancestor of it (`recorded_head`,
-/// called only when `rev-list` is not empty (merge commits do not count, hygiene.md 8a) and `None` when GitHub's answer is unavailable; after a squash merge the
-/// head branch is deleted and `origin/<branch>` pruned, so the PR's own commits look unpushed); the check is `git --no-optional-locks status`,
-/// which takes no `index.lock` (hs-d243). Otherwise `git -C <repo> worktree remove` (no
-/// `--force`: git does not count ignored files as changes) and `git -C <repo>
-/// branch -D`, because a squash merge never makes the branch an ancestor.
-/// Idempotent for what is already gone.
+/// Removes the Lead worktree of a merged or cancelled PR and its local Lead Branch, whole or not at all (DESIGN 4). A
+/// worktree with uncommitted changes or commits not on `origin` is kept untouched, unless `HEAD` is the pull request's
+/// head commit or an ancestor of it (`recorded_head`, called only when `rev-list` is not empty (merge commits do not
+/// count, hygiene.md 8a) and `None` when GitHub's answer is unavailable; after a squash merge the head branch is
+/// deleted and `origin/<branch>` pruned, so the PR's own commits look unpushed); the check is
+/// `git --no-optional-locks status`, which takes no `index.lock` (hs-d243). Otherwise, in this order: (a) rename
+/// `<path>` to `<path>.removing` (atomic; a failing rename leaves everything untouched and is `Kept(Rename)`), (b)
+/// `git worktree prune`, (c) `git branch -D` when the branch exists, (d) delete `<path>.removing`. A stop leaves the
+/// worktree whole (before a) or `<path>` absent with `<path>.removing` as the marker. A call that finds `<path>` absent
+/// runs (b), (c), (d) again; every step is idempotent.
 pub fn remove_merged_lead(
     repo: &Path,
     path: &Path,
     branch: &str,
     recorded_head: impl FnOnce() -> Option<String>,
 ) -> Result<LeadRemoval, CpdError> {
+    let mut name = path.file_name().ok_or_else(|| CpdError::new(ErrorCode::GitFailed, format!("{} has no file name", path.display())))?.to_os_string();
+    name.push(".removing");
+    let aside = path.with_file_name(name);
     if path.exists() {
         if !ok(path, &["--no-optional-locks", "status", "--porcelain"])?.trim().is_empty() {
             return Ok(LeadRemoval::Kept(Kept::Dirty));
@@ -750,11 +754,17 @@ pub fn remove_merged_lead(
         if has_unpushed_work(path, recorded_head)? {
             return Ok(LeadRemoval::Kept(Kept::Unpushed));
         }
-    } else {
-        // A leftover registration of a directory that is gone would keep the branch checked out.
-        ok(repo, &["worktree", "prune"])?;
+        if let Err(e) = std::fs::rename(path, &aside) {
+            return Ok(LeadRemoval::Kept(Kept::Rename(e.to_string())));
+        }
     }
-    remove(repo, path, branch, false, true)?;
+    ok(repo, &["worktree", "prune"])?;
+    if branch_exists(repo, branch)? {
+        ok(repo, &["branch", "-D", branch])?;
+    }
+    if aside.exists() {
+        std::fs::remove_dir_all(&aside).map_err(|e| CpdError::new(ErrorCode::GitFailed, format!("remove {}: {e}", aside.display())))?;
+    }
     Ok(LeadRemoval::Removed)
 }
 
