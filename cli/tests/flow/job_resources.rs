@@ -21,6 +21,13 @@ fn world() -> Fx {
     fx
 }
 
+/// The host file and the owner file `acme` declare `shared-port` and `staging`; the repo file declares `e2e-port`.
+fn declared_at_three_levels(fx: &Fx) {
+    let home = fx.env.cpd_home();
+    fs::write(home.join("policy/host.toml"), "[resources.shared-port]\nslots = 2\n").unwrap();
+    fs::write(home.join("policy/acme/owner.toml"), "[resources.staging]\n").unwrap();
+}
+
 fn spec_with(fx: &Fx, resources: Option<Value>) -> String {
     let mut spec = json!({"goal": "Do it.", "context": "Because.", "touches": ["src/a.rs"], "acceptance": ["cargo test"], "out_of_scope": []});
     if let Some(r) = resources {
@@ -137,4 +144,32 @@ fn resource_spec_job_edit_of_a_queued_job_checks_and_stores_resources() {
     let details = refused(&edit(json!(["gpu"])), "resource_undeclared", 3)["details"].clone();
     assert_eq!((details["job"].as_str(), details["resource"].as_str()), (Some("a"), Some("gpu")));
     assert_eq!(shown(&fx, "a")["resources"], json!(["e2e-port"]), "the refused edit stored nothing");
+}
+
+#[test]
+fn job_add_accepts_a_resource_declared_at_host_or_owner_level() {
+    let fx = world();
+    declared_at_three_levels(&fx);
+
+    add(&fx, "a", Some(json!(["e2e-port", "shared-port", "staging"])), &[]).ok();
+
+    assert_eq!(shown(&fx, "a")["resources"], json!(["e2e-port", "shared-port", "staging"]));
+    let spec = spec_with(&fx, Some(json!(["staging"])));
+    add(&fx, "b", None, &[]).ok();
+    fx.cpd(&["job", "edit", "b", "--spec", &spec, "--plan", "pl"]).ok();
+    assert_eq!(shown(&fx, "b")["resources"], json!(["staging"]));
+}
+
+#[test]
+fn job_add_refuses_a_resource_visible_at_no_level_with_the_visible_names() {
+    let fx = world();
+    declared_at_three_levels(&fx);
+
+    let run = add(&fx, "a", Some(json!(["shared-port", "gpu"])), &[]);
+
+    let details = refused(&run, "resource_undeclared", 3)["details"].clone();
+    assert_eq!((details["job"].as_str(), details["pr"].as_str(), details["resource"].as_str()), (Some("a"), Some("repo"), Some("gpu")));
+    assert_eq!(details["declared"], json!(["e2e-port", "shared-port", "staging"]), "the union over host, owner and repo");
+    assert!(details["file"].as_str().unwrap().ends_with("policy/acme/cpd.toml"), "{details}");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs"), 0);
 }
