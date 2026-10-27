@@ -235,7 +235,10 @@ fn the_tree_animates_a_working_dot_of_every_phase() {
     for s in tree.contexts.iter_mut().flat_map(|c| &mut c.plans).flat_map(|p| &mut p.sessions) {
         s.archived_at = Some("2026-02-01T00:00:00.000Z".into());
     }
-    assert!(!View::new(tree, true).animated(), "an archived working dot never turns");
+    for c in &mut tree.contexts {
+        c.dot = Dot::Stopped;
+    }
+    assert!(!View::new(tree, true).animated(), "an archived Session working dot never turns");
 }
 
 /// The spans of a row's first cell.

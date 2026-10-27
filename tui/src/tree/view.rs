@@ -184,11 +184,14 @@ impl View {
         view
     }
 
-    /// A working dot is in the snapshot: the spinner turns, so the pane is redrawn with the clock. (A dot
-    /// of an archived Session never turns; one scrolled or folded out of sight counts, the cost being a redraw.)
+    /// Names every dot the tree draws as a spinner: a Plan's Sessions and a Context row's Manager dot, so the pane is
+    /// redrawn with the clock. (Archived or asleep rows never turn; one scrolled or folded out of sight counts, the
+    /// cost being a redraw.)
     pub fn animated(&self) -> bool {
+        let turns = |dot: Dot| matches!(dot, Dot::Working(_) | Dot::Fixing);
         let mut sessions = self.tree.contexts.iter().flat_map(|c| &c.plans).flat_map(|p| &p.sessions);
-        sessions.any(|s| matches!(s.dot, Dot::Working(_) | Dot::Fixing) && !s.is_archived())
+        sessions.any(|s| turns(s.dot) && !s.is_archived())
+            || self.tree.contexts.iter().any(|c| turns(c.dot) && !c.is_archived() && !c.manager_asleep)
     }
 
     /// A new snapshot: keep the cursor on its Session.
