@@ -15,6 +15,7 @@ mod pr_checks;
 mod pr_comments;
 mod pr_view_feedback;
 mod pr_crud;
+mod pr_describe;
 mod pr_local_needs;
 mod pr_merge;
 mod pr_needs_required;
