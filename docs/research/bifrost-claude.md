@@ -171,6 +171,7 @@ Accepted and effective values, per model (verified by the runs above and by the 
 
 - Opus: `{"minimal": null, "xhigh": "xhigh", "max": "max"}` (`low`, `medium`, `high` map to themselves; `minimal: null` hides `minimal`; `xhigh` and `max` must be present or `getSupportedThinkingLevels` omits them, `models.js` line 687, inferred from reading it).
 - Sonnet and Haiku: `{"minimal": null}`; `xhigh` and `max` are absent so pi offers `off, low, medium, high` (the gateway would accept `xhigh`/`max` for Sonnet but cpd's Tier ranges stop at high).
+  - **Erratum, 2026-10-26 (pro-d26):** the premise "cpd's Tier ranges stop at high" is false. cpd's `lead_tier` is S4, github-copilot's Sonnet 5.5 takes efforts 0-5, and the gateway accepts `xhigh` and `max` for Sonnet (200, same C2). Sonnet's map is now `{"minimal": null, "xhigh": "xhigh", "max": "max"}`; Haiku stays `{"minimal": null}` (H0-H3). The measurements above and the C5 catalog output below (S as `off..high`) are left as measured; they reflect the old Sonnet map.
 - On the Anthropic route Haiku has no adaptive thinking: pi turns `low/medium/high` into `budget_tokens`; no map entry is needed. Opus and Sonnet need `"compat": {"forceAdaptiveThinking": true}` there, otherwise pi would send `budget_tokens` (inferred from `anthropic-messages.js` `streamSimple`; the sweeps used the compat and the request shape above is verified).
 
 The catalog check on exactly these maps is in C5.

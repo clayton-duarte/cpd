@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 58
+-- cpd-migration: breaking after 59
 -- pro-d79: the Spec of a queued Job with no Attempt may change (ADR-0014); `jobs_locked` is replaced, no table changes.
 DROP TRIGGER jobs_locked;
 CREATE TRIGGER jobs_locked BEFORE UPDATE OF title, tier, goal, context, touches, acceptance, out_of_scope, plan, key, pr, review, kind, tests, test_files ON jobs

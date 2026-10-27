@@ -3410,7 +3410,7 @@ Kept from cpd 1 §7 and §11; output of §9.
 
 It opens the store (the catalog cache), so it waits out a migration in progress (hs-n278; contract §4.2): one line on stderr, the one JSON value at the end, and `lock_timeout` only past `MIGRATION_WAIT_CEILING`.
 
-Effects: when `install/current-version` differs from the cached `pi_version`, one transaction inserting `tier_catalog` rows (a cache: no Event). No tmux, no git.
+Effects: the cache is keyed by `install/current-version` and the fingerprint of `<agentDir>/models.json` (`models_sha`: lowercase hex SHA-256 of its bytes, `""` when the file does not exist; any other read error is `catalog_failed` with the path in `details`), so the key is `(pi_version, models_sha, letter, model)` (pro-d26, Plan bifrost, PR catfp; contract §4.4, §9). When either differs from the cached rows, one transaction inserting `tier_catalog` rows (append-only; old rows stay) (a cache: no Event). No tmux, no git.
 
 ```json
 {"ok": true, "pi_version": "1.2.0", "tiers": {"O": {"model": "github-copilot/claude-opus-5.5", "efforts": [0, 1, 2, 3, 4, 5]}, "S": {"model": "github-copilot/claude-sonnet-5.5", "efforts": [0, 1, 2, 3, 4, 5]}, "H": {"model": "github-copilot/claude-haiku-4.5", "efforts": [0, 1, 2, 3]}, "G": {"model": "github-copilot/gemini-3.8-flash", "efforts": []}}}
