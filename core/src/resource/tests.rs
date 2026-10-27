@@ -273,12 +273,13 @@ fn resource_take_gets_the_lowest_free_slot_and_is_busy_only_when_every_slot_is_h
     // A pool whose slots were lowered keeps the held slots held and offers none above the count.
     let lowered = slotted(&w, "e2e-port", 2);
     drop(first);
-    assert_eq!(took(&w, &[lowered.clone()], &command(5)).slot("e2e-port"), Some(1));
+    let five = took(&w, &[lowered.clone()], &command(5));
+    assert_eq!(five.slot("e2e-port"), Some(1));
     match take(&w.home, &[lowered.clone()], &command(6)).unwrap() {
         Take::Busy { holders, .. } => assert_eq!(holders.len(), 2),
         Take::Held(_) => panic!("slot 3 is above the count and is never offered"),
     }
-    drop((third, again));
+    drop((third, again, five));
 }
 
 #[test]

@@ -24,7 +24,9 @@ fn world() -> Fx {
 /// The host file and the owner file `acme` declare `shared-port` and `staging`; the repo file declares `e2e-port`.
 fn declared_at_three_levels(fx: &Fx) {
     let home = fx.env.cpd_home();
-    fs::write(home.join("policy/host.toml"), "[resources.shared-port]\nslots = 2\n").unwrap();
+    let host = home.join("policy/host.toml");
+    let held = fs::read_to_string(&host).unwrap_or_default();
+    fs::write(&host, format!("{held}[resources.shared-port]\nslots = 2\n")).unwrap();
     fs::write(home.join("policy/acme/owner.toml"), "[resources.staging]\n").unwrap();
 }
 
@@ -154,8 +156,8 @@ fn job_add_accepts_a_resource_declared_at_host_or_owner_level() {
     add(&fx, "a", Some(json!(["e2e-port", "shared-port", "staging"])), &[]).ok();
 
     assert_eq!(shown(&fx, "a")["resources"], json!(["e2e-port", "shared-port", "staging"]));
-    let spec = spec_with(&fx, Some(json!(["staging"])));
     add(&fx, "b", None, &[]).ok();
+    let spec = spec_with(&fx, Some(json!(["staging"])));
     fx.cpd(&["job", "edit", "b", "--spec", &spec, "--plan", "pl"]).ok();
     assert_eq!(shown(&fx, "b")["resources"], json!(["staging"]));
 }
