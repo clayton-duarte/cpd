@@ -338,6 +338,7 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pulled: &Pulled) -> R
         if merged == 0 {
             return Err(cas_lost(id, key));
         }
+        super::reactions::queue_merge(tx, id.as_str(), key.as_str())?;
         let text = format!("PR {key} (#{number}) of Plan {id} is merged.");
         append(tx, NewEvent::pr_merged(text, key, number, url, merged_at.as_deref()).plan(id.clone()))?;
     } else {

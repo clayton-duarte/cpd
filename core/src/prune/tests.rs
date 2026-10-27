@@ -20,21 +20,21 @@ use crate::store::Store;
 
 /// A repo `work` on `main` whose `origin` is the GitHub repo `acme/work` (a bare repo of the Universe behind
 /// an `insteadOf`), both at the same commit; an empty store; a `gh` that lists no merged PR.
-struct Fixture {
-    tmp: TempDir,
-    fakes: Fakes,
-    universe: Arc<Mutex<Universe>>,
-    route: Arc<GitRoute>,
-    home: CpdHome,
-    repo: Repo,
-    origin: Repo,
-    worktrees: usize,
+pub(super) struct Fixture {
+    pub(super) tmp: TempDir,
+    pub(super) fakes: Fakes,
+    pub(super) universe: Arc<Mutex<Universe>>,
+    pub(super) route: Arc<GitRoute>,
+    pub(super) home: CpdHome,
+    pub(super) repo: Repo,
+    pub(super) origin: Repo,
+    pub(super) worktrees: usize,
 }
 
-const NO_PRS: &str = "[]";
+pub(super) const NO_PRS: &str = "[]";
 
 impl Fixture {
-    fn new() -> Fixture {
+    pub(super) fn new() -> Fixture {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
         let fakes = Fakes::new();
@@ -63,7 +63,7 @@ impl Fixture {
     }
 
     /// `gh pr list` answers `json` (exit 0).
-    fn merged_prs(&self, json: &str) {
+    pub(super) fn merged_prs(&self, json: &str) {
         let _ = (*self.fakes.runner).clone().on("gh", |c| c.args.starts_with(&["pr".to_owned(), "list".to_owned()]), Reply::ok(json));
     }
 
@@ -73,7 +73,7 @@ impl Fixture {
     }
 
     /// The store of the home with `sql` run on it.
-    fn store(&self, sql: &str) {
+    pub(super) fn store(&self, sql: &str) {
         let mut store = Store::open(&self.home, 5000).unwrap();
         store
             .write("fixture", |tx| {
@@ -84,7 +84,7 @@ impl Fixture {
     }
 
     /// `git -C <dir> <args>` through the runner; must exit 0; stdout.
-    fn git(&self, dir: &Path, args: &[&str]) -> String {
+    pub(super) fn git(&self, dir: &Path, args: &[&str]) -> String {
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(dir).args(args);
         let out = self.fakes.ports.runner.output(&mut cmd, "git", Duration::from_secs(60)).expect("the fake git answers");
@@ -93,7 +93,7 @@ impl Fixture {
     }
 
     /// A worktree `wt-<dir>` of the repo on the new branch `branch` from `start`, with one commit in `file`.
-    fn worktree(&mut self, dir: &str, branch: &str, start: &str, file: Option<&str>) -> PathBuf {
+    pub(super) fn worktree(&mut self, dir: &str, branch: &str, start: &str, file: Option<&str>) -> PathBuf {
         self.worktrees += 1;
         let wt = self.tmp.path().canonicalize().unwrap().join(format!("wt-{dir}"));
         self.git(self.repo.dir(), &["worktree", "add", "-q", "--no-track", "-b", branch, wt.to_str().unwrap(), start]);
@@ -105,11 +105,11 @@ impl Fixture {
         wt
     }
 
-    fn head(&self, wt: &Path) -> String {
+    pub(super) fn head(&self, wt: &Path) -> String {
         self.git(wt, &["rev-parse", "HEAD"])
     }
 
-    fn prune(&self, flags: &[&str]) -> Outcome {
+    pub(super) fn prune(&self, flags: &[&str]) -> Outcome {
         let mut args = Args { apply: false, drop: Vec::new(), repos: vec![self.repo.dir().to_path_buf()] };
         let mut it = flags.iter();
         while let Some(flag) = it.next() {
@@ -126,7 +126,7 @@ impl Fixture {
         outcome
     }
 
-    fn run(&self, apply: bool) -> Outcome {
+    pub(super) fn run(&self, apply: bool) -> Outcome {
         self.prune(if apply { &["--apply"] } else { &[] })
     }
 
@@ -136,7 +136,7 @@ impl Fixture {
     }
 
     /// The local branches of the repo.
-    fn branches(&self) -> BTreeSet<String> {
+    pub(super) fn branches(&self) -> BTreeSet<String> {
         let u = self.universe.lock().unwrap();
         u.refs(self.repo.id(), "refs/heads/").into_iter().map(|(name, _)| name.trim_start_matches("refs/heads/").to_owned()).collect()
     }
@@ -159,11 +159,11 @@ impl Fixture {
     }
 }
 
-fn lines(text: &str) -> BTreeSet<String> {
+pub(super) fn lines(text: &str) -> BTreeSet<String> {
     text.lines().map(str::to_owned).collect()
 }
 
-fn set(items: &[&str]) -> BTreeSet<String> {
+pub(super) fn set(items: &[&str]) -> BTreeSet<String> {
     items.iter().map(|s| (*s).to_owned()).collect()
 }
 

@@ -1,9 +1,13 @@
 //! `pr post` (commands.md §9.8b): posts the PR's stored pull request to Slack through the helper and records it in
-//! `pr_posts`. It makes no GitHub call and appends no Event. No lock: two simultaneous runs could both send, and the
-//! second's insert then fails as `already_posted`.
+//! `pr_posts`, then turns on squash auto-merge for the pull request on GitHub (`auto_merge`: deferred while the PR is
+//! stacked; its outcome never undoes or fails the post). It appends no Event. No lock: two simultaneous runs could both
+//! send, and the second's insert then fails as `already_posted`.
+
+use std::path::Path;
 
 use serde_json::{Value, json};
 
+use super::auto_merge::{self, Outcome};
 use super::postable::unready;
 use super::posts::{self, PostRecord};
 use super::{Env, pr_policy};
@@ -11,6 +15,7 @@ use crate::args::{PlanArg, PrArg};
 use crate::clock::timestamp;
 use crate::error::{CpdError, ErrorCode};
 use crate::host::deadline::Failed;
+use crate::ids::{PlanId, PrKey};
 use crate::output::Output;
 use crate::ports::Ports;
 use crate::slack;
@@ -113,6 +118,8 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
         posted_at: timestamp(env.ports.clock.utc()),
         reaction: Some(policy.pr.post.merged_reaction.clone()).filter(|r| !r.is_empty()),
         reacted_at: None,
+        auto_merge: "pending".to_owned(),
+        auto_merge_at: None,
     };
     // (j)
     let stored = env.store.write("pr post", |tx| posts::insert(tx, id.as_str(), key.as_str(), &record));
@@ -135,10 +142,46 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
             .with("ts", record.ts.as_str()));
         }
     }
+    let merge = request_auto_merge(&mut env, &id, &key, &pull.repo, pull.number)?;
     Ok(Output::success(json!({
         "plan": id, "pr": key, "number": pull.number, "url": pull.url,
-        "post": record_json(&record), "message": message,
+        "post": record_json(&record), "message": message, "auto_merge": merge,
     })))
+}
+
+/// The GitHub attempt, after the post is stored: `{state, reason}` (commands.md §9.8b). A stacked PR makes no call.
+fn request_auto_merge(env: &mut Env, id: &PlanId, key: &PrKey, repo: &str, number: i64) -> Result<Value, CpdError> {
+    let stacked = env.store.read(|conn| auto_merge::stacked(conn, id.as_str(), key.as_str()))?;
+    if stacked {
+        return Ok(state("deferred", Some("the PR is stacked on another PR's branch: the request waits until it is unstacked")));
+    }
+    let outcome = auto_merge::attempt(&*env.ports.runner, Path::new("."), repo, number);
+    let (stored, reported) = match outcome {
+        Outcome::Enabled => (Some("enabled"), state("enabled", None)),
+        Outcome::NotAllowed => (Some("none"), state("not_allowed", Some("the repo does not allow auto-merge"))),
+        Outcome::Refused(why) => (Some("refused"), state("refused", Some(&why))),
+        Outcome::Failed(e) => (None, state("failed", Some(e.message()))),
+    };
+    if let Some(stored) = stored {
+        env.store
+            .write("pr post", |tx| posts::set_auto_merge(tx, id.as_str(), key.as_str(), stored))
+            .map_err(|e| {
+                CpdError::new(
+                    ErrorCode::StoreFailed,
+                    format!("The message WAS posted but recording its auto-merge outcome failed: {}", e.message()),
+                )
+            })?;
+    }
+    Ok(reported)
+}
+
+fn state(state: &str, reason: Option<&str>) -> Value {
+    json!({"state": state, "reason": reason.map(one_line)})
+}
+
+/// A reason on one line.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn already_posted(key: &crate::ids::PrKey, done: &PostRecord) -> CpdError {

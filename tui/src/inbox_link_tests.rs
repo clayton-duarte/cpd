@@ -268,8 +268,8 @@ fn a_kind_that_is_no_link_draws_no_cue_and_opens_nothing() {
 }
 
 #[test]
-fn a_link_kind_item_with_no_url_draws_no_link_and_its_click_jumps_as_before() {
-    // a `pr-ready` item with no url jumps to its merge popup (a tmux call); the one beside it, with a url, is the control
+fn a_link_kind_item_with_no_url_draws_no_link_and_its_click_does_nothing() {
+    // a `pr-ready` item with no url: a plain click does nothing (pro-d111); the one beside it, with a url, is the control
     let (_dir, home) = home_with(&[
         seed("pr-ready", "pr:acme/api#3", "api#3 ready", None),
         seed("review-requested", "review-requested:acme/api#12", "api#12 failing", Some(URL)),
@@ -281,5 +281,5 @@ fn a_link_kind_item_with_no_url_draws_no_link_and_its_click_jumps_as_before() {
     let before = run(&home, vec![]).tmux.len();
     let seen = run(&home, vec![click(x, y)]);
     assert!(seen.opened.is_empty(), "no page opens: {:?}", seen.opened);
-    assert!(seen.tmux.len() > before, "the click on its label jumps: the merge popup runs through tmux: {:?}", seen.tmux);
+    assert_eq!(seen.tmux.len(), before, "the click on its label runs nothing: {:?}", seen.tmux);
 }

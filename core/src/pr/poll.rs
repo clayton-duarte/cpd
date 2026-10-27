@@ -449,6 +449,7 @@ pub(super) fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::P
     if moved == 0 {
         return Err(cas_lost(id, key));
     }
+    super::reactions::queue_merge(tx, id.as_str(), key.as_str())?;
     let text = format!("PR {key} (#{}) of Plan {id} is merged.", pull.number);
     append(tx, NewEvent::pr_merged(text, key, pull.number, &pull.url, pull.merged_at.as_deref()).plan(id.clone()))?;
     // The last PR to merge ends the Plan (§3.1).

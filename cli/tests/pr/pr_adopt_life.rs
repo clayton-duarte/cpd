@@ -122,16 +122,16 @@ impl Fx {
     }
 
     fn lead_sha(&self) -> String {
-        self.git(&self.repo, &["rev-parse", "refs/heads/cpd/pay/web"])
+        self.git(&self.repo, &["rev-parse", "refs/heads/pay/web"])
     }
 
     fn remote_head(&self) -> String {
         self.git(&self.origin, &["rev-parse", "refs/heads/feat/x"])
     }
 
-    /// The branches `origin` holds under `cpd/`.
+    /// The branches `origin` holds under `pay/`.
     fn remote_cpd_branches(&self) -> String {
-        self.git(&self.origin, &["branch", "--list", "cpd/*"])
+        self.git(&self.origin, &["branch", "--list", "pay/*"])
     }
 
     /// PR `web` `open`, with its pull request, as `pr open` leaves it.
@@ -226,11 +226,11 @@ fn start_cuts_the_lead_branch_from_the_remote_head_and_pushes_nothing() {
 
     let run = fx.start();
 
-    assert_eq!(fx.remote_cpd_branches(), "", "no cpd/* branch ever appears on origin");
+    assert_eq!(fx.remote_cpd_branches(), "", "no pay/* branch ever appears on origin");
     assert_eq!(fx.git(&fx.repo, &["branch", "--list", "feat/x"]), "", "the User's own local branch is never made");
     run.ok();
     assert_eq!(fx.lead_sha(), fx.head, "the Lead Branch is origin/feat/x's commit");
-    assert_eq!(fx.git(&fx.lead(), &["symbolic-ref", "--short", "HEAD"]), "cpd/pay/web");
+    assert_eq!(fx.git(&fx.lead(), &["symbolic-ref", "--short", "HEAD"]), "pay/web");
     assert_eq!(fx.git(&fx.lead(), &["rev-parse", "HEAD"]), fx.head);
 }
 
@@ -274,7 +274,7 @@ fn an_update_jobs_merge_pushes_to_the_head_branch() {
     assert_eq!(fx.lead_sha(), sha, "the Lead Branch fast-forwarded");
     assert_ne!(sha, fx.head);
     assert_eq!(fx.remote_head(), sha, "origin/feat/x is the new tip");
-    assert_eq!(fx.remote_cpd_branches(), "", "origin still has no cpd/* branch");
+    assert_eq!(fx.remote_cpd_branches(), "", "origin still has no pay/* branch");
     assert!(fx.errors().iter().all(|e| e["data"]["code"] != "push_failed"), "{:?}", fx.errors());
 }
 

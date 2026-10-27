@@ -193,12 +193,12 @@ fn add_creates_a_waiting_pr_with_its_event_and_no_git_write() {
     assert_eq!(
         out["pr"],
         json!({"key": "api", "repo": fx.pay.display().to_string(), "name": "pay", "base": "main", "base_pr": null, "title": "Change api", "needs": [], "status": "waiting",
-               "lead_branch": "cpd/pay-1/api", "appended": false, "shape": "config", "head_ref": null, "jobs": ["api-config", "open-api"]})
+               "lead_branch": "pay-1/api", "appended": false, "shape": "config", "head_ref": null, "jobs": ["api-config", "open-api"]})
     );
     assert!(out.get("already").is_none());
     let out = fx.add("web", &fx.web, &["--base", "main", "--needs", "api"]).ok();
     assert_eq!(out["pr"]["needs"], json!(["api"]));
-    assert_eq!(out["pr"]["lead_branch"], "cpd/pay-1/web");
+    assert_eq!(out["pr"]["lead_branch"], "pay-1/web");
 
     let row: (String, String, String, Option<String>, String) = fx
         .store()
@@ -210,7 +210,7 @@ fn add_creates_a_waiting_pr_with_its_event_and_no_git_write() {
             )?)
         })
         .unwrap();
-    assert_eq!(row, ("waiting".into(), fx.web.display().to_string(), "cpd/pay-1/web".into(), None, "main".into()));
+    assert_eq!(row, ("waiting".into(), fx.web.display().to_string(), "pay-1/web".into(), None, "main".into()));
     assert_eq!(fx.needs("web"), "api");
     assert_eq!(fx.git(&fx.pay, &["branch", "--list"]), branches, "no git write");
 
@@ -505,7 +505,7 @@ fn add_again_with_the_resolved_flags_is_already_and_writes_nothing() {
     let writes = fx.writes();
     let out = fx.add("web", &fx.web, &["--needs", "api"]).ok();
     assert_eq!((out["already"].clone(), out["pr"]["key"].clone()), (json!(true), json!("web")));
-    assert_eq!(out["pr"]["lead_branch"], "cpd/pay-1/web");
+    assert_eq!(out["pr"]["lead_branch"], "pay-1/web");
     // The default base is `main`: saying so is the same.
     assert_eq!(fx.add("web", &fx.web, &["--base", "main", "--needs", "api"]).ok()["already"], true);
     assert_eq!(fx.writes(), writes);
@@ -621,13 +621,14 @@ fn add_refusals_write_nothing() {
     // A cancelled PR keeps its key.
     fx.refused(&fx.add("gone", &fx.pay, &[]), "pr_exists", 3, writes);
 
-    fx.git(&fx.web, &["branch", "cpd/pay-1/web"]);
+    fx.git(&fx.web, &["branch", "pay-1/web"]);
     let error = fx.refused(&fx.add("web", &fx.web, &[]), "branch_exists", 3, writes);
-    assert_eq!(error["details"]["branch"], "cpd/pay-1/web");
-    fx.git(&fx.web, &["branch", "-D", "cpd/pay-1/web"]);
-    fx.git(&fx.web, &["branch", "cpd/pay-1"]);
+    assert_eq!(error["details"]["branch"], "pay-1/web");
+    fx.git(&fx.web, &["branch", "-D", "pay-1/web"]);
+    fx.git(&fx.web, &["branch", "pay-1"]);
     let error = fx.refused(&fx.add("web", &fx.web, &[]), "branch_exists", 3, writes);
-    assert_eq!(error["details"]["branch"], "cpd/pay-1");
+    assert_eq!(error["details"]["branch"], "pay-1");
+    fx.git(&fx.web, &["branch", "-D", "pay-1"]);
 
     fx.refused(&fx.cpd(&["pr", "add", "web", "--repo", web, "--title", "T"]), "plan_required", 2, writes);
     let run = fx.cpd(&["pr", "add", "web", "--repo", web, "--title", "T", "--plan", "nope"]);
@@ -709,66 +710,6 @@ fn legacy(status: &str) -> Legacy {
         lead.display()
     ));
     Legacy { fx, origin, lead, sha }
-}
-
-#[test]
-fn add_moves_the_legacy_lead_branch_of_a_merged_pr() {
-    let Legacy { fx, origin, lead, sha } = legacy("merged");
-    let out = fx.add("fix", &fx.pay, &["--no-needs"]).ok();
-    assert_eq!(out["pr"]["lead_branch"], "cpd/pay-1/fix");
-
-    assert_eq!(fx.git(&fx.pay, &["rev-parse", "refs/heads/cpd/pay-1/old"]), sha);
-    assert_eq!(fx.git(&fx.pay, &["branch", "--list", "cpd/pay-1"]), "", "gone locally");
-    assert_eq!(fx.git(&origin, &["branch", "--list", "cpd/pay-1*"]), "", "gone on origin");
-    assert_eq!(fx.git(&lead, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay-1/old", "the worktree follows");
-    let branches: Vec<String> =
-        fx.env.query::<String>("SELECT group_concat(key || '=' || lead_branch) FROM (SELECT * FROM prs ORDER BY key)").split(',').map(str::to_owned).collect();
-    assert_eq!(branches, ["fix=cpd/pay-1/fix", "old=cpd/pay-1/old"]);
-    assert_eq!(fx.env.query::<String>("SELECT phase FROM plans"), "dispatch");
-
-    // A second PR finds nothing to move.
-    fx.add("more", &fx.pay, &["--no-needs"]).ok();
-}
-
-#[test]
-fn add_completes_a_legacy_move_that_stopped_after_the_rename() {
-    let Legacy { fx, origin, sha, .. } = legacy("merged");
-    fx.git(&fx.pay, &["branch", "-m", "cpd/pay-1", "cpd/pay-1/old"]);
-    assert_ne!(fx.git(&origin, &["branch", "--list", "cpd/pay-1"]), "");
-
-    fx.add("fix", &fx.pay, &[]).ok();
-    assert_eq!(fx.git(&origin, &["branch", "--list", "cpd/pay-1*"]), "");
-    assert_eq!(fx.git(&fx.pay, &["rev-parse", "refs/heads/cpd/pay-1/old"]), sha);
-    assert_eq!(fx.env.query::<String>("SELECT lead_branch FROM prs WHERE key = 'old'"), "cpd/pay-1/old");
-}
-
-#[test]
-fn add_refuses_push_failed_when_origin_will_not_delete_and_writes_nothing() {
-    let Legacy { fx, .. } = legacy("merged");
-    // The origin's `pre-receive` hook declines the delete (git's own, on the remote: scripted, not a script in a repo).
-    let declined = "remote: no\nTo origin\n ! [remote rejected] cpd/pay-1 (pre-receive hook declined)\nerror: failed to push some refs to 'origin'\n";
-    let _ = (*fx.fakes.runner).clone().once(
-        "git",
-        |call: &Call| call.args.windows(3).any(|w| w == ["push", "origin", "--delete"]),
-        Reply::exit(1, "", declined),
-    );
-    let writes = fx.writes();
-    let error = fx.refused(&fx.add("fix", &fx.pay, &[]), "push_failed", 1, writes);
-    assert_eq!(error["details"]["branch"], "cpd/pay-1");
-    assert_eq!(error["details"]["repo"], fx.pay.display().to_string());
-    assert!(error["details"]["stderr"].as_str().is_some_and(|s| s.contains("no")), "{error}");
-    assert_eq!(fx.env.query::<String>("SELECT lead_branch FROM prs WHERE key = 'old'"), "cpd/pay-1");
-    assert_eq!(fx.env.query::<String>("SELECT phase FROM plans"), "done");
-}
-
-#[test]
-fn add_keeps_refusing_the_legacy_lead_branch_of_a_pr_that_is_not_merged() {
-    let Legacy { fx, origin, lead, .. } = legacy("open");
-    let writes = fx.writes();
-    let error = fx.refused(&fx.add("fix", &fx.pay, &[]), "branch_exists", 3, writes);
-    assert_eq!(error["details"]["branch"], "cpd/pay-1");
-    assert_eq!(fx.git(&lead, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay-1");
-    assert_ne!(fx.git(&origin, &["branch", "--list", "cpd/pay-1"]), "");
 }
 
 // ---------- pr edit ----------
@@ -864,13 +805,13 @@ fn edit_refusals_write_nothing() {
     let cycle = error["details"]["cycle"].as_array().unwrap();
     assert_eq!((cycle.first(), cycle.len()), (cycle.last(), 4), "{cycle:?}");
 
-    fx.git(&fx.pay, &["branch", "cpd/pay-1/web"]);
+    fx.git(&fx.pay, &["branch", "pay-1/web"]);
     let error = fx.refused(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap(), "--base", "main"]), "branch_exists", 3, writes);
-    assert_eq!(error["details"]["branch"], "cpd/pay-1/web");
-    fx.git(&fx.pay, &["branch", "-D", "cpd/pay-1/web"]);
-    fx.git(&fx.pay, &["branch", "cpd/pay-1"]);
+    assert_eq!(error["details"]["branch"], "pay-1/web");
+    fx.git(&fx.pay, &["branch", "-D", "pay-1/web"]);
+    fx.git(&fx.pay, &["branch", "pay-1"]);
     let error = fx.refused(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap(), "--base", "main"]), "branch_exists", 3, writes);
-    assert_eq!(error["details"]["branch"], "cpd/pay-1");
+    assert_eq!(error["details"]["branch"], "pay-1");
 }
 
 #[test]
@@ -1424,16 +1365,16 @@ fn add_stacks_on_a_pr_of_its_own_plan_and_a_branch_that_is_a_lead_branch_is_stac
     let error = fx.refused(&out, "usage", 2, fx.writes());
     assert!(error["message"].as_str().unwrap().contains("api"), "{error}");
     let out = fx.add("web", &fx.pay, &["--base", "pay-1/api"]).ok();
-    assert_eq!((out["pr"]["base"].clone(), out["pr"]["base_pr"].clone()), (json!("cpd/pay-1/api"), json!("pay-1/api")));
+    assert_eq!((out["pr"]["base"].clone(), out["pr"]["base_pr"].clone()), (json!("pay-1/api"), json!("pay-1/api")));
     // Its Lead Branch, given as a branch (it exists in the repo), is the derivation of §2.2 all the same: the refusals apply.
-    fx.git(&fx.pay, &["branch", "cpd/pay-1/api"]);
-    fx.git(&fx.pay, &["update-ref", "refs/remotes/origin/cpd/pay-1/api", "cpd/pay-1/api"]);
-    let out = fx.add("ui", &fx.pay, &["--base", "cpd/pay-1/api"]).ok();
+    fx.git(&fx.pay, &["branch", "pay-1/api"]);
+    fx.git(&fx.pay, &["update-ref", "refs/remotes/origin/pay-1/api", "pay-1/api"]);
+    let out = fx.add("ui", &fx.pay, &["--base", "pay-1/api"]).ok();
     assert_eq!(out["pr"]["base_pr"], "pay-1/api");
     fx.pr(&["cancel", "ui"]).ok();
     fx.pr(&["cancel", "web"]).ok();
     fx.pr(&["cancel", "api"]).ok();
-    fx.refused(&fx.add("late", &fx.pay, &["--base", "cpd/pay-1/api"]), "base_pr_unavailable", 3, fx.writes());
+    fx.refused(&fx.add("late", &fx.pay, &["--base", "pay-1/api"]), "base_pr_unavailable", 3, fx.writes());
 }
 
 #[test]
@@ -1521,7 +1462,7 @@ fn edit_stacks_and_unstacks_and_a_pr_something_is_stacked_on_keeps_its_repo() {
 
     let out = fx.pr(&["edit", "web", "--base", "pay-1/api", "--needs", "schema"]).ok();
     assert_eq!(out["fields"], json!(["base", "needs"]));
-    assert_eq!(fx.shown("pay-1", "web"), json!(["cpd/pay-1/api", "pay-1/api", ["schema"]]));
+    assert_eq!(fx.shown("pay-1", "web"), json!(["pay-1/api", "pay-1/api", ["schema"]]));
     assert_eq!(fx.needs("web"), "schema");
     assert_eq!(fx.events("pr-edited").last().unwrap()["data"]["fields"], json!(["base", "needs"]));
     // The same again is `already`; a branch unstacks it.
@@ -1539,7 +1480,7 @@ fn edit_stacks_and_unstacks_and_a_pr_something_is_stacked_on_keeps_its_repo() {
     fx.refused(&fx.pr(&["edit", "web", "--needs", "api"]), "usage", 2, writes);
     fx.refused(&fx.pr(&["edit", "web", "--needs", "ghost"]), "needs_unknown", 3, writes);
     // A new repo is checked against its base PR: a stacked PR cannot move away from it.
-    fx.git(&fx.web, &["branch", "cpd/pay-1/api"]);
+    fx.git(&fx.web, &["branch", "pay-1/api"]);
     fx.refused(&fx.pr(&["edit", "web", "--repo", fx.web.to_str().unwrap(), "--base", "pay-1/api"]), "base_pr_other_repo", 3, writes);
 
     // A PR that another PR is stacked on keeps its repo.

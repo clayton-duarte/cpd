@@ -1,7 +1,8 @@
-//! Engine step E16, the merge reaction (contract §3.7 E16; commands.md §21.8, §21.9; Plan pr-post, decision pro-d64 step 7):
-//! after a PR that was posted in Slack has merged, the engine runs the helper `pi/lib/slack-react.ts` once, detached, to
-//! add the owner's emoji to the post, and then sets the row's `reacted_at`. A failure leaves `reacted_at` NULL, is
-//! reported once per code and tried again `watch.error_repeat_seconds` after the failed run's end.
+//! Engine step E17, the Slack reaction queue (commands.md §21.8, §21.9; decisions pro-d64 step 7, pro-d107, pro-d110):
+//! the engine runs the helper `pi/lib/slack-react.ts` once, detached, for the oldest `slack_reactions` row whose
+//! `reacted_at` is NULL, and then sets that row's `reacted_at`. A failure leaves `reacted_at` NULL, is reported once per
+//! code and the row is tried again `watch.error_repeat_seconds` after the failed run's end; one row that keeps failing
+//! never blocks the rows behind it.
 //!
 //! In-process, on virtual time, like `watch_team.rs`: the engine runs on the `Fx`'s `ManualClock`, `FakeRunner` and
 //! `FakeSpawn`, the helper is the `node` route of the `FakeRunner` (the real one is `pi/test/slack-react.test.ts`). No
@@ -10,7 +11,7 @@
 //!
 //! The helper runs on a thread of its own and answers when its thread is scheduled, not when the engine ticks: a test
 //! never counts on a tick for an answer, it runs the engine until the row or the Event it checks is there. Every test that
-//! says "nothing runs" has a control: a post that must be reacted to, so that the silence is shown after the step proved
+//! says "nothing runs" has a control: a row that must be reacted to, so that the silence is shown after the step proved
 //! it is alive.
 
 use crate::common;
@@ -61,6 +62,8 @@ struct Gate {
 /// call. The first call waits for its gate when there is one.
 struct Node {
     says: Mutex<String>,
+    /// The `--ts` values the helper answers [`AUTH`] for, whatever `says` holds.
+    fails: Mutex<Vec<String>>,
     seen: Mutex<Vec<Call>>,
     gate: Mutex<Option<Gate>>,
 }
@@ -74,7 +77,8 @@ impl Handler for Node {
                 return Reply::exit(70, "", "the gate of the helper never opened");
             }
         }
-        let answer = self.says.lock().unwrap().clone();
+        let ts = call.args.iter().position(|a| a == "--ts").map(|at| call.args[at + 1].clone());
+        let answer = if ts.is_some_and(|ts| self.fails.lock().unwrap().contains(&ts)) { AUTH.to_owned() } else { self.says.lock().unwrap().clone() };
         let (status, json) = answer.split_once(' ').expect("an answer is `<exit> <json>`");
         Reply::exit(status.parse().expect("the exit status is a number"), &format!("{json}\n"), "")
     }
@@ -106,12 +110,12 @@ impl Probe {
         Connection::open_with_flags(self.home.join("cpd.db"), OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap()
     }
 
-    /// The `reacted_at` of PR `pr`'s post.
-    fn reacted_at(&self, pr: &str) -> Option<String> {
-        self.store().query_row("SELECT reacted_at FROM pr_posts WHERE plan = 'pay' AND pr = ?1", [pr], |r| r.get(0)).unwrap()
+    /// The `reacted_at` of the queue row of the post at `ts`.
+    fn reacted_at(&self, ts: &str) -> Option<String> {
+        self.store().query_row("SELECT reacted_at FROM slack_reactions WHERE ts = ?1", [ts], |r| r.get(0)).unwrap()
     }
 
-    /// The data of every `error` Event but those of `gh` (E8's one lookup is not E16's).
+    /// The data of every `error` Event but those of `gh` (E8's one lookup is not E17's).
     fn errors(&self) -> Vec<Value> {
         let conn = self.store();
         let mut stmt = conn.prepare("SELECT data FROM events WHERE kind = 'error' ORDER BY id").unwrap();
@@ -159,7 +163,7 @@ fn react(repeat: u32) -> React {
     fx.engine_routes();
     fx.install_pi();
     fx.fake_gh(Reply::ok(r#"{"data":{"viewer":{"login":"clayton-duarte"}}}"#));
-    let node = Arc::new(Node { says: Mutex::new(OK.to_owned()), seen: Mutex::new(Vec::new()), gate: Mutex::new(None) });
+    let node = Arc::new(Node { says: Mutex::new(OK.to_owned()), fails: Mutex::new(Vec::new()), seen: Mutex::new(Vec::new()), gate: Mutex::new(None) });
     let _ = (*fx.fakes.runner).clone().route("node", node.clone());
     let now = fx.stamp_ago(0);
     fx.env.sql(&format!(
@@ -175,6 +179,11 @@ fn react(repeat: u32) -> React {
 impl React {
     fn probe(&self) -> Probe {
         Probe { home: self.fx.env.cpd_home(), node: self.node.clone(), clock: (*self.fx.fakes.clock).clone() }
+    }
+
+    /// One row of the queue, queued last: the post at `ts` of [`CHANNEL`], `emoji`.
+    fn queue(&self, ts: &str, emoji: &str) {
+        self.fx.env.sql(&queue_sql(ts, emoji));
     }
 
     /// PR `key` of Plan `pay`, pull request number `number`: merged `merged_ago` seconds ago, or open.
@@ -209,6 +218,10 @@ fn pr_sql(fx: &Fx, key: &str, number: u32, merged_ago: Option<i64>) -> String {
     )
 }
 
+fn queue_sql(ts: &str, emoji: &str) -> String {
+    format!("INSERT INTO slack_reactions (channel, ts, emoji, queued_at) VALUES ('{CHANNEL}', '{ts}', '{emoji}', 't');")
+}
+
 fn post_sql(key: &str, ts: &str, reaction: Option<&str>) -> String {
     let reaction = reaction.map_or("NULL".to_owned(), |r| format!("'{r}'"));
     format!(
@@ -229,12 +242,13 @@ fn then_ticks(ticks: usize, mut cond: impl FnMut(&Probe) -> bool + Send + 'stati
     }
 }
 
+const TS2: &str = "1793040002.000002";
+
 #[test]
-fn a_merged_posted_pr_gets_its_reaction_and_reacted_at() {
+fn a_queued_reaction_is_reacted_to_and_gets_reacted_at() {
     let t = react(LONG);
-    t.pr("repo", 7, Some(3600));
-    t.post("repo", TS, Some(EMOJI));
-    t.run(then_ticks(3, |p| p.reacted_at("repo").is_some()));
+    t.queue(TS, EMOJI);
+    t.run(then_ticks(3, |p| p.reacted_at(TS).is_some()));
     let p = t.probe();
 
     let calls = p.calls();
@@ -265,46 +279,22 @@ fn a_merged_posted_pr_gets_its_reaction_and_reacted_at() {
     assert_eq!(calls[0].stdin, None, "no stdin");
     assert_eq!(calls[0].deadline, Duration::from_secs(120));
 
-    let at = p.reacted_at("repo").unwrap();
+    let at = p.reacted_at(TS).unwrap();
     assert!(at.ends_with('Z'), "{at}");
     assert_eq!(p.errors(), Vec::<Value>::new());
     assert_eq!(p.events_but_errors(), Vec::<String>::new(), "a success appends no Event");
 }
 
 #[test]
-fn an_open_pr_or_a_post_without_a_reaction_is_left_alone() {
-    let t = react(LONG);
-    // Left alone: an open PR with a reaction, a merged PR whose post wants none, a merged PR already reacted to.
-    t.pr("open", 1, None);
-    t.post("open", "1793040001.000001", Some(EMOJI));
-    t.pr("plain", 2, Some(7200));
-    t.post("plain", "1793040002.000002", None);
-    t.pr("done", 3, Some(7200));
-    t.post("done", "1793040003.000003", Some(EMOJI));
-    t.fx.env.sql("UPDATE pr_posts SET reacted_at = 'earlier' WHERE pr = 'done';");
-    // The control: a merged PR whose post wants one, merged the latest of the four.
-    t.pr("go", 4, Some(60));
-    t.post("go", TS, Some(EMOJI));
-    t.run(then_ticks(3, |p| p.reacted_at("go").is_some()));
-    let p = t.probe();
-
-    assert_eq!(p.ts_called(), [TS], "only the control's post is reacted to");
-    assert_eq!(p.reacted_at("open"), None);
-    assert_eq!(p.reacted_at("plain"), None);
-    assert_eq!(p.reacted_at("done").as_deref(), Some("earlier"), "an earlier reaction is not touched");
-}
-
-#[test]
 fn an_already_reacted_answer_counts_as_done() {
     let t = react(LONG);
     t.probe().says(ALREADY);
-    t.pr("repo", 7, Some(3600));
-    t.post("repo", TS, Some(EMOJI));
-    t.run(then_ticks(3, |p| p.reacted_at("repo").is_some()));
+    t.queue(TS, EMOJI);
+    t.run(then_ticks(3, |p| p.reacted_at(TS).is_some()));
     let p = t.probe();
 
     assert_eq!(p.calls().len(), 1);
-    assert!(p.reacted_at("repo").is_some());
+    assert!(p.reacted_at(TS).is_some());
     assert_eq!(p.errors(), Vec::<Value>::new());
 }
 
@@ -312,9 +302,8 @@ fn an_already_reacted_answer_counts_as_done() {
 fn a_failed_helper_leaves_the_row_and_reports_one_error_per_code() {
     let t = react(LONG);
     t.probe().says(AUTH);
-    t.pr("repo", 7, Some(3600));
-    t.post("repo", TS, Some(EMOJI));
-    // The first run fails; its error is reported. Once the repeat period has passed the same post is tried again and
+    t.queue(TS, EMOJI);
+    // The first run fails; its error is reported. Once the repeat period has passed the same row is tried again and
     // fails with the same code: no second Event.
     let mut skipped = false;
     let mut tail = then_ticks(5, |p| p.calls().len() >= 2);
@@ -330,7 +319,7 @@ fn a_failed_helper_leaves_the_row_and_reports_one_error_per_code() {
     });
     let p = t.probe();
 
-    assert_eq!(p.reacted_at("repo"), None, "a failure leaves reacted_at NULL");
+    assert_eq!(p.reacted_at(TS), None, "a failure leaves reacted_at NULL");
     let errors = p.errors();
     assert_eq!(errors.len(), 1, "one Event per code: {errors:?}");
     assert_eq!(errors[0]["code"], "slack_auth");
@@ -343,16 +332,15 @@ fn a_failed_helper_leaves_the_row_and_reports_one_error_per_code() {
 }
 
 #[test]
-fn a_failed_post_is_tried_again_only_after_the_repeat_period_and_then_succeeds() {
+fn a_failed_row_is_tried_again_only_after_the_repeat_period() {
     const REPEAT: u32 = 600;
     let t = react(REPEAT);
     t.probe().says(AUTH);
-    t.pr("repo", 7, Some(3600));
-    t.post("repo", TS, Some(EMOJI));
+    t.queue(TS, EMOJI);
     // The first run fails (its Event is the signal that its end was seen). Then 500 s pass and three ticks: below the
-    // period, no call. Then the node is signed in and 200 s pass: the period is over, one call, the same post.
+    // period, no call. Then the node is signed in and 200 s pass: the period is over, one call, the same row.
     let (mut failed_at, mut again) = (None, false);
-    let mut tail = then_ticks(3, |p| p.reacted_at("repo").is_some());
+    let mut tail = then_ticks(3, |p| p.reacted_at(TS).is_some());
     let seen = Arc::new(Mutex::new(None));
     let record = seen.clone();
     t.run(move |p, nap| {
@@ -377,19 +365,33 @@ fn a_failed_post_is_tried_again_only_after_the_repeat_period_and_then_succeeds()
     let p = t.probe();
 
     assert_eq!(seen.lock().unwrap().take(), Some(1), "500 s after the failed run's end is not 600 s: no call");
-    assert_eq!(p.ts_called(), [TS, TS], "after the period the same post is tried again, once");
-    assert!(p.reacted_at("repo").is_some(), "and it succeeds");
+    assert_eq!(p.ts_called(), [TS, TS], "after the period the same row is tried again, once");
+    assert!(p.reacted_at(TS).is_some(), "and it succeeds");
     assert_eq!(p.errors().len(), 1, "the one failure is the only Event: {:?}", p.errors());
 }
 
 #[test]
-fn posts_are_reacted_to_one_at_a_time_oldest_merge_first() {
+fn a_row_that_keeps_failing_does_not_block_the_rows_behind_it() {
     let t = react(LONG);
-    // The key order is the reverse of the merge order, and the one merged later is inserted first.
-    t.pr("alpha", 1, Some(3600));
-    t.post("alpha", "1793040001.000001", Some(EMOJI));
-    t.pr("zeta", 2, Some(10_800));
-    t.post("zeta", "1793040002.000002", Some(EMOJI));
+    // The helper fails for the first row only; the row behind it is fine.
+    t.node.fails.lock().unwrap().push(TS.to_owned());
+    t.queue(TS, EMOJI);
+    t.queue(TS2, "eyes");
+    t.run(then_ticks(5, |p| p.reacted_at(TS2).is_some()));
+    let p = t.probe();
+
+    assert_eq!(p.ts_called(), [TS, TS2], "the failed row once, then the row behind it, and no retry within the period");
+    assert_eq!(p.reacted_at(TS), None, "the failing row stays queued");
+    assert!(p.reacted_at(TS2).is_some(), "the row behind it is reacted to");
+    assert_eq!(p.errors().len(), 1, "one Event for the one code: {:?}", p.errors());
+}
+
+#[test]
+fn queued_reactions_are_reacted_to_oldest_first_one_at_a_time() {
+    let t = react(LONG);
+    // The queue order is the id order, not the order of the ts: the first queued is the later post.
+    t.queue(TS2, "eyes");
+    t.queue("1793040001.000001", EMOJI);
     // The first run is held in flight while the engine ticks on.
     let (entered_tx, entered) = channel();
     let (open_tx, open) = channel();
@@ -407,20 +409,19 @@ fn posts_are_reacted_to_one_at_a_time_oldest_merge_first() {
             open_tx.send(()).unwrap();
             opened = true;
         }
-        opened && p.reacted_at("alpha").is_some() && p.reacted_at("zeta").is_some()
+        opened && p.reacted_at(TS2).is_some() && p.reacted_at("1793040001.000001").is_some()
     });
     let p = t.probe();
 
-    assert_eq!(during.lock().unwrap().take().unwrap(), ["1793040002.000002"], "one at a time: the oldest merge, and no second run while it is in flight");
-    assert_eq!(p.ts_called(), ["1793040002.000002", "1793040001.000001"], "the second run is for the other, with no wait");
+    assert_eq!(during.lock().unwrap().take().unwrap(), [TS2], "one at a time: the oldest row, and no second run while it is in flight");
+    assert_eq!(p.ts_called(), [TS2, "1793040001.000001"], "the second run is for the other, with no wait");
     assert_eq!(p.errors(), Vec::<Value>::new());
 }
 
 #[test]
 fn incident_mode_holds_the_step() {
     let t = react(LONG);
-    t.pr("repo", 7, Some(3600));
-    t.post("repo", TS, Some(EMOJI));
+    t.queue(TS, EMOJI);
     t.fx.env.sql(&format!(
         "INSERT INTO incident (id, started_at, started_by, reason, started_txn) VALUES (1, '{}', 'pay-lead', 'why', cpd_txn());
          INSERT INTO incident_plans (plan, started_txn) VALUES ('pay', cpd_txn());",
@@ -430,11 +431,11 @@ fn incident_mode_holds_the_step() {
     let held = Arc::new(Mutex::new(None));
     let record = held.clone();
     let mut over = false;
-    let mut tail = then_ticks(3, |p| p.reacted_at("repo").is_some());
+    let mut tail = then_ticks(3, |p| p.reacted_at(TS).is_some());
     t.run(move |p, nap| {
         if !over {
             if nap >= 5 * NAPS_PER_TICK {
-                *record.lock().unwrap() = Some((p.calls().len(), p.reacted_at("repo")));
+                *record.lock().unwrap() = Some((p.calls().len(), p.reacted_at(TS)));
                 p.write("DELETE FROM incident_plans; DELETE FROM incident;");
                 over = true;
             }
@@ -446,33 +447,29 @@ fn incident_mode_holds_the_step() {
 
     assert_eq!(held.lock().unwrap().take(), Some((0, None)), "while incident mode is on: no helper call, no row written");
     assert_eq!(p.calls().len(), 1, "off again: it runs");
-    assert!(p.reacted_at("repo").is_some());
+    assert!(p.reacted_at(TS).is_some());
 }
 
 #[test]
-fn nothing_runs_and_nothing_is_reported_when_no_post_waits() {
+fn nothing_runs_and_nothing_is_reported_when_nothing_is_queued() {
     let t = react(LONG);
-    // No post waits: a merged PR with no post, a merged post already reacted to, an open PR with a post that wants one.
+    // Nothing waits: a merged post with a reaction that was never queued (only the queue is read, never `pr_posts`), and
+    // a queue row already reacted to.
     t.pr("bare", 1, Some(7200));
-    t.pr("done", 2, Some(7200));
-    t.post("done", "1793040002.000002", Some(EMOJI));
-    t.fx.env.sql("UPDATE pr_posts SET reacted_at = 'earlier' WHERE pr = 'done';");
-    t.pr("open", 3, None);
-    t.post("open", "1793040003.000003", Some(EMOJI));
-    // Five ticks of nothing; then a PR whose post waits merges (the poll saw it, or `pr merge` did): the step is alive.
+    t.post("bare", "1793040001.000001", Some(EMOJI));
+    t.queue("1793040002.000002", EMOJI);
+    t.fx.env.sql("UPDATE slack_reactions SET reacted_at = 'earlier';");
+    // Five ticks of nothing; then a row is queued: the step is alive.
     let quiet = Arc::new(Mutex::new(None));
     let record = quiet.clone();
-    let mut merged = false;
-    let mut tail = then_ticks(3, |p| p.reacted_at("open").is_some());
+    let mut queued = false;
+    let mut tail = then_ticks(3, |p| p.reacted_at(TS).is_some());
     t.run(move |p, nap| {
-        if !merged {
+        if !queued {
             if nap >= 5 * NAPS_PER_TICK {
                 *record.lock().unwrap() = Some((p.calls().len(), p.errors(), p.events_but_errors()));
-                p.write(
-                    "UPDATE prs SET status = 'merged', merged_at = 't' WHERE key = 'open';
-                     UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE number = 3;",
-                );
-                merged = true;
+                p.write(&queue_sql(TS, EMOJI));
+                queued = true;
             }
             return false;
         }
@@ -481,8 +478,8 @@ fn nothing_runs_and_nothing_is_reported_when_no_post_waits() {
     let p = t.probe();
 
     let (calls, errors, events) = quiet.lock().unwrap().take().expect("five ticks passed");
-    assert_eq!((calls, errors, events), (0, Vec::<Value>::new(), Vec::<String>::new()), "no candidate: no helper, no Event");
-    assert_eq!(p.ts_called(), ["1793040003.000003"], "a post that waits after the merge is the only one reacted to");
-    assert_eq!(p.reacted_at("done").as_deref(), Some("earlier"));
+    assert_eq!((calls, errors, events), (0, Vec::<Value>::new(), Vec::<String>::new()), "nothing due: no helper, no Event");
+    assert_eq!(p.ts_called(), [TS], "the row queued after the quiet ticks is the only one reacted to");
+    assert_eq!(p.reacted_at("1793040002.000002").as_deref(), Some("earlier"), "an earlier reaction is not touched");
     assert_eq!(p.errors(), Vec::<Value>::new());
 }
