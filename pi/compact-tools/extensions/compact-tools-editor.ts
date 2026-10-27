@@ -1,7 +1,7 @@
 /**
  * The input widget: pi-tui's Editor drawn as a rounded box in the Dango palette (docs/contract.md 6.1.1, 6.9
- * "The input widget"). Every row is a margin space, the wall or corner, one padding space, the text, one padding
- * space, the wall or corner, a margin space; the text starts at column 3. The border is one colour by state: cyan 6
+ * "The input widget"). Every row is the wall or corner, one padding space, the text, one padding space, the wall or
+ * corner, with no margin column; the box spans the pane and the text starts at column 2. The border is one colour by state: cyan 6
  * while the agent works, else bright blue 12 while the terminal pane has focus, else 15. The pane counts as focused from a focus-in
  * report, a key the editor takes or a left-button press in it; only a focus-out report unfocuses it (6.9). Pi's own `borderColor`
  * (thinking level, bash mode) is ignored. Indexed SGR only.
@@ -16,8 +16,8 @@ import { LOADER_FRAMES } from "./compact-tools-loader.ts";
 
 const STATE_KEY = Symbol.for("pi-compact-tools.editor.state");
 const WIDGET_KEY = "compact-tools-editor";
-/** Margin + wall + padding on each side. */
-const SIDE = 3;
+/** Wall + padding on each side. */
+const SIDE = 2;
 /** Narrower than this the box has no room for text and pi's own rows are kept. */
 const MIN_WIDTH = SIDE * 2 + 2;
 const FOCUS_IN = "\x1b[I";
@@ -86,7 +86,7 @@ function boxRows(editor: EditorLike, width: number, original: (width: number) =>
 	if (width < MIN_WIDTH) return original(width);
 	const textWidth = width - SIDE * 2;
 	const { paddingX, borderColor, workingStatusIndicator } = editor;
-	// Pi's rows are drawn plain at the text width; the box adds the border, the walls and the margins.
+	// Pi's rows are drawn plain at the text width; the box adds the border and the walls.
 	editor.paddingX = 0;
 	editor.borderColor = (text) => text;
 	// Without the status the editor's own top border is the plain one (with the scroll label).
@@ -101,7 +101,7 @@ function boxRows(editor: EditorLike, width: number, original: (width: number) =>
 	const index = borderIndex(editor);
 	const ink = (text: string) => paint(index, text);
 	const bodyCount = editor.renderedVisibleLineCount;
-	const inner = width - 4;
+	const inner = width - 2;
 	const out: string[] = [];
 	const words = state().words;
 	const hidden = editor.scrollOffset;
@@ -118,12 +118,12 @@ function boxRows(editor: EditorLike, width: number, original: (width: number) =>
 				tail = `${"─".repeat(rest - visibleWidth(scroll) - 1)}${scroll}─`;
 				rest = 0;
 			}
-			top = ` ${ink("╭─")}${block}${ink(`${tail || "─".repeat(rest)}╮`)} `;
+			top = `${ink("╭─")}${block}${ink(`${tail || "─".repeat(rest)}╮`)}`;
 		}
 	}
-	out.push(top ?? ` ${ink(`╭─${rows[0]}─╮`)} `);
-	for (let i = 1; i <= bodyCount; i++) out.push(` ${ink("│")} ${rows[i]} ${ink("│")} `);
-	out.push(` ${ink(`╰─${rows[bodyCount + 1]}─╯`)} `);
+	out.push(top ?? ink(`╭─${rows[0]}─╮`));
+	for (let i = 1; i <= bodyCount; i++) out.push(`${ink("│")} ${rows[i]} ${ink("│")}`);
+	out.push(ink(`╰─${rows[bodyCount + 1]}─╯`));
 	for (const row of rows.slice(bodyCount + 2)) out.push(`${" ".repeat(SIDE)}${row}${" ".repeat(SIDE)}`);
 	return out;
 }

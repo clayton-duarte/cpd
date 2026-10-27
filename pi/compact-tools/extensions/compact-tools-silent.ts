@@ -64,7 +64,7 @@ type MarkdownLike = Renderable & { paddingX?: number; paddingY?: number; invalid
 
 /**
  * A message's text rows as a balloon (docs/contract.md section 6.9). Pi's own padding columns and rows of the
- * Markdown are dropped for the render, so the text wraps at `width - 8` and the balloon adds the only margins.
+ * Markdown are dropped for the render, so the text wraps at `width - 8` (the agent) or `width - 7` (the user) and the balloon adds the only gaps.
  */
 function balloonOf(child: MarkdownLike, side: BalloonSide, width: number, at?: number): string[] {
 	if (width < MIN_BALLOON_WIDTH) return child.render(width);
@@ -74,7 +74,7 @@ function balloonOf(child: MarkdownLike, side: BalloonSide, width: number, at?: n
 	child.invalidate?.();
 	let rows: string[];
 	try {
-		rows = child.render(width - 8);
+		rows = child.render(width - (side === "agent" ? 8 : 7));
 	} finally {
 		child.paddingX = paddingX;
 		child.paddingY = paddingY;
@@ -305,15 +305,16 @@ function publishOverrides(): void {
 		assistant: (component: AssistantLike, width, render) => {
 			const paint = painter();
 			// Each text block is a balloon (the mentions painter runs before boxing); the other children
-			// (Thinking, spacers, errors) are painted as before. Pi's leading spacer goes when a balloon follows.
+			// (Thinking, spacers, errors) are painted as before. Pi's spacer goes when a balloon follows.
 			const boxed = (target: AssistantLike, next: Render): string[] => {
 				const container = target.contentContainer;
 				if (!container) return next(width);
-				const leading = container.children?.[0];
-				const dropLeading = isKind(leading, Spacer) && isKind(container.children?.[1], Markdown);
+				// A spacer right before a text block goes: the balloon's own blank top row is the one gap.
+				const kids = container.children ?? [];
+				const dropped = new Set(kids.filter((child, i) => isKind(child, Spacer) && isKind(kids[i + 1], Markdown)));
 				return withChildren(container, (child) => {
 					if (isKind(child, Markdown)) return rowsOf((w) => balloonOf(child, "agent", w, (target as { lastMessage?: { timestamp?: number } }).lastMessage?.timestamp));
-					if (child === leading && dropLeading) return rowsOf(() => []);
+					if (dropped.has(child)) return rowsOf(() => []);
 					return paint ? paintedChild(child, paint) : child;
 				}, () => next(width));
 			};

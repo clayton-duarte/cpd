@@ -2,18 +2,18 @@
  * fold: "toggle", closing row; see docs/contract.md section 6.9.
  *
  * renderControls (the closing row), with fold "toggle", compact style:
- *   running           " ╰" in 8 and ONE frame of the cockpit loader in 6 (compact-tools-loader.ts), nothing after it,
+ *   running           "╰" in 8 and ONE frame of the cockpit loader in 6 (compact-tools-loader.ts), nothing after it,
  *                     redrawn as the frame changes. fold "status" and the other styles keep " └ ".
- *   has a result      " ╰" + glyph + " " + label, then " · " + metadata when there is any.
+ *   has a result      "╰" + glyph + " " + label, then " · " + metadata when there is any.
  *                     glyph/label: toggle.expand + " expand" while folded,
  *                                  toggle.collapse + " collapse" while expanded.
  *                     metadata is today's text, unchanged: "Done in 0.3s", "Done in 0.3s (12 lines)",
  *                     "Done in 0.3s (+3 -1)" for an edit, "Failed in 0.3s · <reason>", plus the
  *                     nested summary after another " · ". With no duration and no summary there is
- *                     no metadata and no " · ": the row is just " ╰▸ expand".
+ *                     no metadata and no " · ": the row is just "╰▸ expand".
  *   Toggle and " · " are chrome-painted; the label follows the same painter as the toggle.
  * The row is drawn whether folded or expanded; the body lines between head and closing row keep
- * the " │ " rail. A folded row shows head and closing row only.
+ * the "│ " rail. The rail is in column 0 and the text ends two columns short of the pane's right edge. A folded row shows head and closing row only.
  */
 import { realpathSync } from "node:fs";
 import type {
@@ -69,7 +69,7 @@ import { CODEX_BULLET, CODEX_INDENT } from "./compact-tools-codex.ts";
 import { NestedCallSummaries } from "./compact-tools-nested.ts";
 import { renderCodexCall, renderCodexResult } from "./compact-tools-codex-rows.ts";
 import { ToolGroupController } from "./compact-tools-grouping.ts";
-import { chrome, ink, paint, paintIndicator, statusPill, TEXT } from "./compact-tools-indices.ts";
+import { chrome, ink, paint, paintIndicator, RAIL_TOGGLE, statusPill, TEXT, TOGGLE_RESERVE } from "./compact-tools-indices.ts";
 import { EditorBoxController } from "./compact-tools-editor.ts";
 import { CursorController } from "./compact-tools-cursor.ts";
 import { ProgressController } from "./compact-tools-progress.ts";
@@ -129,6 +129,12 @@ function isClaude(): boolean {
 function foldToggles(): boolean {
 	return runtime.config.fold === "toggle" && runtime.config.style === "compact";
 }
+
+/** The compact body rail: in column 0 under fold "toggle"; fold "status" keeps upstream's leading space. */
+const compactRail = (): string => chrome(foldToggles() ? RAIL_TOGGLE : " │ ");
+
+/** The blank columns a compact row keeps at the right: two under fold "toggle", upstream's none or three under "status". */
+const toggleReserve = (): number => foldToggles() ? TOGGLE_RESERVE : 0;
 
 /**
  * The branch of the session being drawn, read when a restored row resolves its
@@ -247,15 +253,15 @@ class LoaderContainer extends CachedContainer {
 
 /** The closing row of a running row: the line in 8 and the loader's current frame in 6. */
 export function loaderRow(): Component {
-	return { render: () => [chrome(" ╰") + loaderFrame()], invalidate() {} };
+	return { render: () => [chrome("╰") + loaderFrame()], invalidate() {} };
 }
 
 /** The one tool whose row closes with `choose` while its question is open (pi's own name; @juicesharp/rpiv-ask-user-question). */
 const ASK_USER_QUESTION = "ask_user_question";
 /** Closing row 5: the whole row in 8, because it is not clickable. */
-const CHOOSE_ROW = " ╰\u{F0B26} choose";
+const CHOOSE_ROW = "╰\u{F0B26} choose";
 /** Closing row 4: a block that cannot fold. */
-const TERMINATOR_ROW = " ╰\u{F0B2A}";
+const TERMINATOR_ROW = "╰\u{F0B2A}";
 
 /** What closes a row that has no result to fold: `choose` while ask_user_question's widget is open, else the loader. */
 function pendingKey(name: string, ctx: RenderContext): string {
@@ -327,16 +333,17 @@ function renderControls(
 		const bare = !isError && !duration && !nestedSummary && !state.resultLineSummary && !changes;
 		const time = rowTime(state, toolCallId);
 		const metadata = bare ? "" : chrome(" · ") + details;
-		const firstPrefix = chrome(" ╰") + paint(TEXT, state.expanded ? collapse : expand);
+		const firstPrefix = chrome("╰") + paint(TEXT, state.expanded ? collapse : expand);
 		const prefixWidth = visibleWidth(firstPrefix);
 		// A time that does not fit on the toggle's line is omitted, not wrapped (hs-d637).
 		const timeWidth = visibleWidth(label) + " · ".length + 5;
 		return {
-			render: (width) => {
+			render: (outer) => {
+				const width = Math.max(1, outer - TOGGLE_RESERVE);
 				const available = Math.max(1, width - prefixWidth);
 				const showTime = time !== undefined && timeWidth <= available;
 				const text = paint(TEXT, label) + (showTime && time !== undefined ? chrome(" · ") + chrome(time) : "") + metadata;
-				return prefixedSentence(text, firstPrefix, "   ", true).render(width);
+				return prefixedSentence(text, firstPrefix, "  ", true).render(width);
 			},
 			invalidate() {},
 		};
@@ -394,9 +401,9 @@ function renderRowCallContent(name: string, args: ToolArgs, theme: Theme, ctx: R
 		const summary = kind === "file" ? getCallDetails(name, args) : summarizeCustomArguments(args);
 		details = summary ? styleMultiline(summary, (line) => ink("toolOutput", line)) : undefined;
 	}
-	const container = new LiveCallContainer(indicator, (dot) => renderToolCall(dot, details, theme, undefined, foldToggles() ? chrome(" ╭─") : undefined), closing);
+	const container = new LiveCallContainer(indicator, (dot) => renderToolCall(dot, details, theme, compactRail(), foldToggles() ? chrome("╭─") : undefined, toggleReserve()), closing);
 	const extra = kind === "file" ? getArgumentDetails(name, args) : kind === "custom" && state.expanded ? args : {};
-	if (Object.keys(extra).length > 0) container.addChild(renderArguments(extra, theme));
+	if (Object.keys(extra).length > 0) container.addChild(foldToggles() ? atContentWidth(renderArguments(extra, theme, compactRail())) : renderArguments(extra, theme));
 	if (closing) container.addChild(closing.row);
 	return new WithinWidth(container);
 }
@@ -440,7 +447,7 @@ function renderRowBody(
 	theme: Theme,
 	isError: boolean,
 	author: AuthorResultRenderer | undefined,
-	rail?: string,
+	rail: string | undefined = compactRail(),
 ): Component | undefined {
 	if (!author && rowKind(name) !== "custom") return renderFileBody(name, args, result, output, expanded, theme, isError, rail);
 	if (author) {
@@ -601,7 +608,8 @@ function renderRowResult(
 		const pending = pendingRow(name, ctx);
 		if (state.expanded || state.preview) {
 			const body = renderRowBody(name, ctx.args, result, output, state.expanded === true, theme, ctx.isError, author);
-			if (body) container.addChild(atContentWidth(state.expanded ? body : limitComponentLines(body, runtime.config.previewLines, theme)));
+			if (body) container.addChild(atContentWidth(state.expanded ? body : limitComponentLines(body, runtime.config.previewLines, theme,
+				(omitted) => compactRail() + ink("toolOutput", `… ${omitted} more ${omitted === 1 ? "line" : "lines"}`))));
 		}
 		// A failed row whose output is hidden gets its reason on the status line. When
 		// the output shows, it already says why, and repeating it only doubles the error.
@@ -639,9 +647,9 @@ function renderRowResult(
 	};
 }
 
-/** A rail fold's body ends at column W-4: the margin, rail and blank before it, and three blank columns after (a box's content width, W-6). */
+/** A rail fold's body ends at column W-3: the rail and blank before it, and two blank columns after (a box's content width, W-4); fold "status" keeps its three. */
 function atContentWidth(body: Component): Component {
-	return { render: (width) => body.render(Math.max(1, width - 3)), invalidate: () => body.invalidate?.() };
+	return { render: (width) => body.render(Math.max(1, width - (foldToggles() ? TOGGLE_RESERVE : 3))), invalidate: () => body.invalidate?.() };
 }
 
 /**

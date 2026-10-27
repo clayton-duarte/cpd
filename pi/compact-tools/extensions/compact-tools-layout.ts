@@ -1,8 +1,9 @@
 /*
  * fold: "toggle", head half; see docs/contract.md section 6.9.
  *
- * renderToolCall: with fold "toggle" the first line's prefix is "╭" (chrome-painted) instead of
- * " "; today's " " stays under fold "status". Continuation lines keep " │ ". The head is "╭" for
+ * renderToolCall: with fold "toggle" the first line's prefix is "╭─" (chrome-painted) instead of
+ * " "; today's " " stays under fold "status". Continuation lines are "│ " (toggle) or " │ " (status); `reserve`
+ * is the blank columns kept at the right (2 under toggle). The head is "╭" for
  * every tool row: read, write, edit, bash, powershell, grep, find, ls, custom tools (including
  * MCP and codemode), in every state (running, done, failed, folded, expanded).
  */
@@ -253,11 +254,12 @@ export function renderToolCall(
 	theme: Theme,
 	continuationPrefix = chrome(" │ "),
 	firstPrefix = " ",
+	reserve = 0,
 ): Component {
 	const text = details ? `${title} ${details}` : title;
 	const prefixWidth = visibleWidth(continuationPrefix);
 	return new CachedComponent((width) => {
-		const lines = hardWrapTextWithAnsi(text, width - prefixWidth);
+		const lines = hardWrapTextWithAnsi(text, width - prefixWidth - reserve);
 		return lines.map((line, index) => `${index === 0 ? firstPrefix : continuationPrefix}${line}`);
 	});
 }
