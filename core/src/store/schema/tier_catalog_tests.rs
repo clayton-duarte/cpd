@@ -59,7 +59,7 @@ fn tier_catalog_migration_puts_models_sha_in_the_primary_key_in_the_documented_o
         keyed.into_iter().map(|(n, _)| n.as_str()).collect()
     };
     assert_eq!(key, ["pi_version", "models_sha", "letter", "model"]);
-    let not_null: i64 = count(&mut store, "SELECT notnull FROM pragma_table_info('tier_catalog') WHERE name = 'models_sha'");
+    let not_null: i64 = count(&mut store, "SELECT \"notnull\" FROM pragma_table_info('tier_catalog') WHERE name = 'models_sha'");
     assert_eq!(not_null, 1, "models_sha is NOT NULL");
 }
 
