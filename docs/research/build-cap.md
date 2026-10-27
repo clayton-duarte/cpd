@@ -58,6 +58,14 @@ Rows 1-12: Attempt 1 of cap-dev0. Rows 13-18: this Job (`cap-dev-a1`), same meth
 - Cap 4 is the only cap that costs a lone build little (98.4 s, no slower than `default`) and clearly lowers peak load at n=3 (66.0 against 93.5-100.7, -29% to -34%); I infer its n=2 result (202.3 s, load before 34, 6 foreign processes) is foreign load, because its n=3 cell (not noisy) had 148.5 s. Cap 2 is clearly too slow.
 - `CAP = 4`; for 14 CPUs the `-N` form is `-10` (I infer from `-4` giving 10 jobs; `-10` itself was not measured). Reason: a lone build is not slower than `default` and three concurrent builds peak at 66 load instead of about 97.
 
+### Release
+
+- Lone build, cap 4 against `default` 103.5 s: 68.6 s (-34%, both cells noisy, load before 25.8 and 42.8; I infer the gain is foreign load, not the cap). Cap 2: 117.4 s (+13%).
+- n=3 total against `default` 105.9 s: cap 4 is 134.6 s (+27%), cap 2 is 107.8 s (+2%).
+- n=3 peak load against `default` 106.4: cap 4 is 55.4 (-48%), cap 2 is 33.3 (-69%).
+- Cap 4 buys about half the peak load at n=3 and costs about 27% in wall there; a lone build is not slower. Cap 4 also suits the release build.
+- Cap 2 was not slower at n=3 (107.8 s) though its lone build was 117.4 s; load before differed (11.8 lone, 33.3 at n=3, `default` 18.2-42.8), so I infer foreign load swamps small differences and the release graph is mostly one long rustc; not a conclusion.
+
 ## Release build matrix
 
 Attempt `cap-rel-a1`. Build: `CPD_COMMIT=measure scripts/cargo.sh build --release --locked -p cpd`, cold, own `CARGO_TARGET_DIR`, `RUSTC_WRAPPER=` empty, `timeout 900`. Caps: `default`, 4 (CAP from cap-dev) and 2 (the next lower cap).
@@ -69,7 +77,20 @@ Foreign procs before is the count after the wait (up to 5 minutes); `noisy` mean
 | default | 1 | 103.5 | 103.5 | 55.10 | 1164.8 | 42.83 | 49.64 | 8 | noisy |
 | 4 | 1 | 68.6 | 68.6 | 31.25 | 789.5 | 25.78 | 31.05 | 8 | noisy |
 | 2 | 1 | 117.4 | 117.4 | 21.23 | 962.3 | 11.79 | 16.90 | 0 | - |
+| default | 3 | 105.9,105.8,105.9 | 105.9 | 106.37 | 1169 | 18.19 | 100.66 | 4 | noisy |
+| 4 | 3 | 133.5,133.4,134.6 | 134.6 | 55.44 | 1322.7 | 26.40 | 55.44 | 2 | noisy |
+| 2 | 3 | 107.6,107.6,107.8 | 107.8 | 33.29 | 912 | 33.29 | 14.37 | 0 | - |
 
 ## One rustc's threads
 
-Not yet measured.
+Sampled every 1 s during the cells: the highest `ps` %CPU of any single `rustc` whose command line carries the build's target dir, and the number of such `rustc` processes. The n=1 cells are the asked ones; the n=3 cells are the same sampling over three builds (rustc count is then summed over the three builds, the %CPU is still one process). %CPU is macOS `ps`, a decayed average, so I infer it lags the instant value.
+
+| cap | n | peak single-rustc %CPU | peak rustc count |
+|---|---|---|---|
+| default | 1 | 440.5 | 15 |
+| 4 | 1 | 386.9 | 4 |
+| 2 | 1 | 198.1 | 2 |
+| 2 | 3 | 199.3 | 6 |
+
+- At `default` one rustc peaked at 440.5 % CPU (not the 790 % seen before) with 15 rustc processes at once. At cap 4 it peaked at 386.9 % with 4 rustc, at cap 2 at 198.1 % with 2.
+- Single-rustc peak falls with the cap (440.5, 386.9, 198.1 for default, 4, 2): the cap 2 peak is near 2 cores and the cap 4 peak below 4. So here `CARGO_BUILD_JOBS` bounded one rustc's CPU too, not only the number of rustc processes. I infer, unverified, that its codegen threads take cargo's jobserver tokens (the cap-2 number fits that; the 790 % case was not reproduced, so cap 4 against it was not measured).
