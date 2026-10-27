@@ -664,25 +664,15 @@ fn the_flock_shim_holds_the_lock_across_exec_and_n_fails_fast_while_it_is_held()
     assert!(shim.is_file(), "write_flock_shim wrote no {}", shim.display());
     let lock = dir.join("lock");
     let marker = dir.join("held");
-    // A stub `touch` first on the holder's PATH: the forked straggler. It creates the marker, then blocks on the
-    // holder's stdin (a builtin `read`, so it forks nothing) until the test drops the write end.
-    let stubs = dir.join("stubs");
-    std::fs::create_dir_all(&stubs).unwrap();
-    common::write_executable(&stubs.join("touch"), "#!/bin/sh\n: > \"$1\"\nread -r _\n");
-    let mut path = std::ffi::OsString::from(&stubs);
-    path.push(":");
-    path.push(std::env::var_os("PATH").unwrap_or_default());
+    // The holder forks no child (`:` is a builtin, then `exec`): the shim's lock fd is inherited by children, so a
+    // forked `touch` could still hold the lock after the holder is killed and waited.
     let mut holder = common::spawn(
         env.command(&shim)
-            .env("PATH", path)
-            .stdin(std::process::Stdio::piped())
             .arg(&lock)
             .args(["sh", "-c"])
-            .arg(format!("touch '{}'; exec sleep 60", marker.display())),
+            .arg(format!(": > '{}'; exec sleep 60", marker.display())),
     )
     .expect("spawn the shim");
-    // Kept open to the end of the test (also on a failing assertion, by unwinding): the stub then sees EOF and exits.
-    let _straggler_gate = holder.stdin.take().expect("stdin is piped");
     common::wait_until("the command to run under the lock", || marker.exists());
     let second = common::output(env.command(&shim).arg("-n").arg(&lock).arg("true")).expect("run the second shim");
     assert_eq!(second.status.code(), Some(1), "-n exits 1 at once while the lock is held");
