@@ -272,6 +272,8 @@ export class Fixture {
     for (const [key, answer] of Object.entries(answers())) this.respond(key, answer); // the same answers as pi-check's fake (answers.ts)
     this.respond("board-take", { ok: true, session: ID, taken: [] }); // a Lead or Manager takes its board posts at every turn start (commands.md §15.7)
     this.respond("events-list", { ok: true, events: [], next: 0 });
+    this.respond("session-switch-failed", { ok: true }); // the adapter records a failed model switch (commands.md §10.16)
+    this.respond("session-switched", { ok: true }); // and a successful one
     this.respond("session-report", { ok: true, event: "4823" }); // a Lead's adapter reports its errors to the Manager (commands.md §10.18)
   }
 

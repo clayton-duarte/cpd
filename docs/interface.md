@@ -100,6 +100,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd session first-message` | Render a Lead's or Manager's first message now and write its file (adapter) (§10.15) | internal | |
 | `cpd session retitle` | Write a Lead's or Manager's dynamic title with a one-shot pi (engine E10) (§10.14) | internal | |
 | `cpd session report` | Report an adapter error to the Manager (pi adapter) (§10.18) | internal | |
+| `cpd session switch-failed` | Record a failed model switch (pi adapter) (§10.18a) | internal | |
+| `cpd session switched` | Record a successful model switch (pi adapter) (§10.18b) | internal | |
 | `cpd session run` | The program in every Lead pane (internal; owns its terminal) (§10.8) | internal | |
 | `cpd events` | Events (commands.md §11) | | |
 | `cpd events list` | List Events (§11.1) | Manager | |

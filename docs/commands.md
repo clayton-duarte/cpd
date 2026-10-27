@@ -231,6 +231,8 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context retire` (§3.16, internal) | none | yes | yes |
 | `cpd context docs` (§3.17, internal) | none | yes | yes |
 | `cpd pr reply` (§9.8a) | Lead | no | no |
+| `cpd session switch-failed` (§10.18a, internal) | none | no | yes |
+| `cpd session switched` (§10.18b, internal) | none | no | yes |
 | `cpd tag` (§26.1) | Lead | no | no |
 | `cpd version sync` (§26.2) | Lead | no | no |
 | `cpd resource list` (§30) | Manager, Lead, Worker | no | no |
@@ -2286,12 +2288,14 @@ Effects: none; one read transaction.
 cpd session show [<id>]
 ```
 
-`<id>` defaults to the selected Session (`CPD_SESSION`); it accepts the short forms of §1.3. Output: the fields of `session list` plus `created_at`, `registered_event` (the id of its `session-registered` Event, the pi adapter's first cursor, §15.2), `model` and `thinking` (the row's `tier` as pi is told it, below: hs-d506), `loop_guard_turns` (the config value, for every Session) and, for a Plan's Lead, `open_escalations` (ids). Effects: none.
+`<id>` defaults to the selected Session (`CPD_SESSION`); it accepts the short forms of §1.3. Output: the fields of `session list` plus `created_at`, `registered_event` (the id of its `session-registered` Event, the pi adapter's first cursor, §15.2), `model` and `thinking` (the row's `tier` as pi is told it, below: hs-d506), `loop_guard_turns` (the config value, for every Session), `switch` (null or a failed switch record, below), and, for a Plan's Lead, `open_escalations` (ids). Effects: none.
 
 `model` is from the policy's `[model]` table for the key of the row's `tier` (contract §8.3, §9) (`<provider>/<model-id>`), and `thinking` is the level of the tier's digit (`off`, `low`, `medium`, `high`, `xhigh`, `max`, contract §9): the two halves of the `--model <model>:<thinking>` argument `session run` passes (§10.8), computed by the one function both use. The models are read at each call, so a policy edit shows at once.
 
+`switch` (DEFECT 2) is null when the Session's last model switch succeeded or has not been attempted; otherwise it is `{tier, code, message, at, next}` where `tier` is the `tier` the switch tried, `code` and `message` are from the adapter error, `at` is the RFC 3339 UTC time, and `next` is the exact `cpd session run <id>` command that relaunches this Session's pi so it starts on the current `tier` (taken from contract §6.5, §10.4, §10.8 as they stand at the time `switch` is read; the docs Job picks and cites it).
+
 ```json
-{"ok": true, "session": {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "idle", "state_label": null, "place": "chat", "tmux_pane": "%12", "file": "…", "forked_from": null, "plan_lead": true, "tier": "O3", "model": "github-copilot/claude-opus-5.5", "thinking": "high", "loop_guard_turns": 20, "cwd": "/home/clayton/projects/cpd", "title": null, "titled_at": null, "created_at": "…", "registered_event": 40117},
+{"ok": true, "session": {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "idle", "state_label": null, "place": "chat", "tmux_pane": "%12", "file": "…", "forked_from": null, "plan_lead": true, "tier": "O3", "model": "github-copilot/claude-opus-5.5", "thinking": "high", "loop_guard_turns": 20, "switch": null, "cwd": "/home/clayton/projects/cpd", "title": null, "titled_at": null, "created_at": "…", "registered_event": 40117},
  "open_escalations": ["contract-commands-a1-q1"]}
 ```
 
@@ -2437,7 +2441,7 @@ Before it starts pi (steps 1–3) every pi a `session run` starts, a Lead's and 
 
 **Adapter watchdog** (hs-d141; contract §6.7 "Adapter watchdog"). While pi is alive, the wrapper checks the Session's state at every poll (2 s). When the state has been `stopped` for more than **60 s** (a constant of the wrapper, not a config key; measured from the `session-state` Event that set it, so a state the wrapper itself set after a pi exit does not count while pi is not running), it restarts pi on the session file: `SIGTERM`, wait (`SIGKILL` after `timeouts.pi_stop_seconds`, as for a reload), then step 1. In one transaction before the restart it appends one `error` Event `{source: "session run", code: "adapter_missing", message, details: {session, state_since, seconds}}` with `session` = this Session (and its `plan`, `context`), which the new adapter delivers once it follows (§15.3). It applies to every Lead and Manager, whatever the place and whatever the idle rules of the reload; a `stopped` that ends (`idle`) before 60 s is the adapter's own reload and is never touched. After the restart the 60 s start again; a broken install loops once per 60 s with one `error` Event per restart (no cap: each is a visible fact, and a repaired install ends it).
 
-The first message is the file `plan new` or `session fork` wrote (§1.4); for a Manager, `run/<context>/manager-message.md` (§3.10); none when resumed. Before it starts pi it writes the `git` wrapper `$CPD_HOME/bin/git` if it is missing or different (idempotent) and puts `$CPD_HOME/bin` first on pi's `PATH` (contract §6.5, hs-d310). It is passed as `@<path>` (its absolute path). While pi runs, it watches for the session file (§6.5) and records `sessions.file` once it appears (a data write, no Event). When pi exits it runs `session state stopped` if the adapter did not, prints `pi exited. Press Enter to resume <name> here.` and resumes on Enter, except after a quit by the User (below).
+The first message is the file `plan new` or `session fork` wrote (§1.4); for a Manager, `run/<context>/manager-message.md` (§3.10); none when resumed. Before it starts pi it writes the `git` wrapper `$CPD_HOME/bin/git` if it is missing or different (idempotent) and puts `$CPD_HOME/bin` first on pi's `PATH` (contract §6.5, hs-d310). It is passed as `@<path>` (its absolute path). In the same transaction it clears `switch_failed` (DEFECT 2: pi now runs the row's current Tier, so any earlier failed switch is stale). While pi runs, it watches for the session file (§6.5) and records `sessions.file` once it appears (a data write, no Event). When pi exits it runs `session state stopped` if the adapter did not, prints `pi exited. Press Enter to resume <name> here.` and resumes on Enter, except after a quit by the User (below).
 
 **Auto-archive on the User's quit** (hs-d91, hs-d122). pi exits with status 0 on the User's `/quit` and Ctrl+D (pi 1.2.0, `interactive-mode.js`: `shutdown()` ends in `process.exit(0)`; verified by reading it). The wrapper tells that quit from its own: when pi exits with status 0 and the wrapper did not cause the exit (it sent no reload `SIGTERM`), the User quit. Then, in this order:
 1. If the Lead is in the chat slot, `session park` it first (§10.5), so the placeholder takes the slot.
@@ -2685,12 +2689,12 @@ Exactly one of the two: neither, or both, is `usage` (exit 2).
 `--all` refuses nothing for a Session it passes over: archived Sessions and Workers are not part of it and are not listed.
 
 **Effects**, one transaction for the whole command:
-- **Rows:** for each selected Session whose `tier` differs from its target, `sessions.tier` = the target (the store's history trigger records the old row).
+- **Rows:** for each selected Session whose `tier` differs from its target, `sessions.tier` = the target (the store's history trigger records the old row) and `sessions.switch_failed = NULL` (DEFECT 2: a new target is a new attempt; any earlier failed switch is stale).
 - **Event** `session-retiered` `{from, to}` for each such Session, one each, addressed to it (`session` set, with its `context` and `plan` when it has one), appended in the same transaction. `from` and `to` are Tier strings (`O3`, `O2`). `text`: `Session <id> moved from O3 to O2.`
 - A Session already on its target is **unchanged**: no row write, no Event. When no Session changes, nothing is written at all.
 - **No tmux call and no pi restart.** A running pi switches itself (below); a Session with no pi keeps the new `tier` for its next start (§10.8).
 
-**The adapter's switch** (contract §5.3, §6.5; commands §15.3 `session-retiered`). The Event reaches the adapter of the Session it names. **At the Session's next idle** (right away when it already is) the adapter reads `cpd session show` for the Session's `model` and `thinking` (§10.2), finds the model in pi's registry (`ctx.modelRegistry.find(<provider>, <model-id>)`, the provider being the part of `model` before its first `/`) and calls `pi.setModel(<that model>)` and `pi.setThinkingLevel(<thinking>)`, once per change and never while the Session works, waits or is blocked: no turn is interrupted and nothing is restarted, and the conversation stays whole (docs: pi 1.3.0 `extensions.md`, `ExtensionAPI.setModel` "for the current session without changing the configured default"). Several Events before one idle make one switch, to what the row says at that idle.
+**The adapter's switch** (contract §5.3, §6.5; commands §15.3 `session-retiered`). The Event reaches the adapter of the Session it names. **At the Session's next idle** (right away when it already is) the adapter reads `cpd session show` for the Session's `model` and `thinking` (§10.2), finds the model in pi's registry (`ctx.modelRegistry.find(<provider>, <model-id>)`, the provider being the part of `model` before its first `/`) and calls `pi.setModel(<that model>)` and `pi.setThinkingLevel(<thinking>)`, once per change and never while the Session works, waits or is blocked: no turn is interrupted and nothing is restarted, and the conversation stays whole (docs: pi 1.3.0 `extensions.md`, `ExtensionAPI.setModel` "for the current session without changing the configured default"). Several Events before one idle make one switch, to what the row says at that idle. When the model is not found, `setModel` throws or answers false (DEFECT 2), the adapter runs `cpd session switch-failed --code model_unavailable --message "<text>"` in addition to its existing error report (§10.18); after `setModel` accepts and the thinking level is set it runs `cpd session switched`, so `session show` clears the failed switch record and the Lead sees success.
 
 ```json
 {"ok": true, "retiered": [
@@ -2723,13 +2727,66 @@ Reports an adapter error to the Manager (hs-d573, M4): the adapter of a Lead run
 |---|---|---|
 | the Session exists | `session_not_found` | 4 |
 
-Effects: **Rows**, one transaction: `events` (one `error` Event, source `adapter`; context = the Session's Context; **plan null and session null** so no Lead's follower, which follows its Plan's Events and those addressed to it, ever receives it back; data `{source: "adapter", code, message, details}` with `details` = the given object plus `{what, session, plan}`; text `cpd adapter: <what>: <code>: <message>`). Not idempotent by design: every call appends an Event.
+Effects: **Rows**, one transaction: `events` (one `error` Event, source `adapter`; context = the Session's Context; **session = the reporting Session, plan null** (DEFECT 1: so the Manager can identify which Session failed; the follower rule of §11.2 excludes adapter-source errors from any Session's follower, so a Lead does not see its own adapter errors); data `{source: "adapter", code, message, details}` with `details` = the given object plus `{what, session, plan}`; text `cpd adapter: <what>: <code>: <message>`). Not idempotent by design: every call appends an Event.
 
 Output:
 
 ```json
 {"ok": true, "event": "4823"}
 ```
+
+### 10.18a `session switch-failed` (internal)
+
+```
+cpd session switch-failed --code <code> --message <text> [--session <id>]
+```
+
+Records a failed model switch (DEFECT 2): the adapter of a Lead runs this when `setModel` fails (the three `unavailable` paths), to record the failure for the Lead to see in `session show` and to help it relaunch pi.
+
+| Flag | Meaning |
+|---|---|
+| `--code <code>` | error code (the adapter's code): `^[a-z][a-z0-9_]{0,63}$`, else `usage` |
+| `--message <text>` | error message (1–2000 characters), else `usage` |
+| `--session <id>` | the Session whose switch failed; default `CPD_SESSION` (§1.3) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session exists | `session_not_found` | 4 |
+| it is a `lead` or a `manager`, never a Worker | `not_a_lead` | 3 |
+
+Effects: **Rows**, one transaction: `sessions.switch_failed = {tier, code, message, at}`, where `tier` is the row's current `tier`, `code` and `message` are the given values, and `at` is the current RFC 3339 UTC time. No Event. Idempotent: yes; rerunning with the same or different code/message overwrites the existing `switch_failed` (the latest failure stands).
+
+Output:
+
+```json
+{"ok": true, "session": "596d007f-…"}
+```
+
+### 10.18b `session switched` (internal)
+
+```
+cpd session switched [--session <id>]
+```
+
+Records a successful model switch (DEFECT 2): the adapter of a Lead runs this after `setModel` accepts and the thinking level is set, to clear the failure record.
+
+| Flag | Meaning |
+|---|---|
+| `--session <id>` | the Session whose switch succeeded; default `CPD_SESSION` (§1.3) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session exists | `session_not_found` | 4 |
+| it is a `lead` or a `manager`, never a Worker | `not_a_lead` | 3 |
+
+Effects: **Rows**, one transaction: `sessions.switch_failed = NULL`. No Event. Idempotent: yes; rerunning does nothing when `switch_failed` is already null.
+
+Output:
+
+```json
+{"ok": true, "session": "596d007f-…"}
+```
+
 
 ### 10.17 `session resume`
 
@@ -2877,6 +2934,8 @@ cpd events follow [--plan <id> | --context <id> | --session <id>] [--kind <kind>
 ```
 
 §5.4, normative: one Event per line, in id order; without `--since`, only Events committed after it starts; polling `PRAGMA data_version` every `events.poll_ms`; ends on EPIPE, on kill, or when its stdout is closed (`POLLHUP` or `POLLERR` on fd 1, checked at each poll, so an idle stream whose reader is gone still ends), with exit 0, or with `--until-idle` once it has printed everything committed when it started.
+
+**Adapter-source error Events** (DEFECT 1): a Lead's follower (`--session` with a Lead Session) and any other Session's follower (`--session` with any non-Lead Session) skip `error` Events whose `data.source` is `adapter`, so a Session does not see its own adapter error. The Manager can read all Events (no `--session` filter applied, or `--context` filter), including adapter-source errors with their `session` field naming which Session failed.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -3518,7 +3577,7 @@ The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays
 - **The empty last row** (User, hs-d567; contract §6.1 "The blank row", Q2-Q3): in its `session_start` handler (`pi/lib/adapter.ts`), the adapter calls `ctx.ui.setStatus("cpd-pad", "")` (`ctx.mode` `tui`; it knows nothing of the chat slot, so a parked pane has the extra empty row too). pi's footer draws one more line, empty, when its extension statuses are not empty, so pi's last row is empty; a `/reload` runs `session_start` again and sets it again, and a resize needs nothing (verified in real pi, contract §6.1 evidence). The key `cpd-pad` is ours; another extension's status text would share the line.
 - **Identity:** `CPD_SESSION` must equal `ctx.sessionManager.getSessionId()`. If not, the adapter delivers one error message (below) and stays inactive: it would otherwise report another Session's state.
 - **Calls:** one-shot commands through `pi.exec("cpd", args)`, whose stdout is parsed as the JSON envelope at the boundary (a non-JSON stdout, or `ok: false`, is an error with the code). Each call passes a timeout of 30 s and the abort signal of the adapter's run (aborted at `session_shutdown`); a call that times out or is aborted is reported like a failed call (the error delivery below, code `tool_timeout` for a timeout). The follower is a child process (`node:child_process` `spawn`, argv, stdin `/dev/null`) read line by line.
-- **Errors** (hs-d552; the adapter-only codes `protocol_mismatch` and `mcp_register_failed` are delivered by this rule, contract §1.2) for a **Manager** or **Worker**: delivered to the Session as `pi.sendMessage({customType: "cpd", content: "cpd adapter: <what>: <code>: <message>", display: true, details: {kind: "error", code, …}}, {triggerTurn: false, deliverAs: "followUp"})`: no turn started, shown as a follow-up. An error identical to the last one shown in this Session (same `what` and `code`) is not shown again until a different error has been shown; one memory per Session, cleared at reload. For a **Lead** (hs-d573 cause A): one line appended to the adapter log `$CPD_HOME/run/adapter/<session>.log` (15.6 'Log'): `<time> error: <what>: <code>: <message>`, and reported to the Manager with `cpd session report` (§10.18), once per (`what`, `code`) by memory (`host.report`): the same error again is neither logged again nor reported again until a different one has been. If the report itself fails, that is one log line (`<time> report failed: <code>: <message>`), never delivered and never reported again (no recursion); the next different error tries again. The adapter never throws into pi.
+- **Errors** (hs-d552; the adapter-only codes `protocol_mismatch` and `mcp_register_failed` are delivered by this rule, contract §1.2) for a **Manager** or **Worker**: delivered to the Session as `pi.sendMessage({customType: "cpd", content: "cpd adapter: <what>: <code>: <message>", display: true, details: {kind: "error", code, …}}, {triggerTurn: false, deliverAs: "followUp"})`: no turn started, shown as a follow-up. An error identical to the last one shown in this Session (same `what` and `code`) is not shown again until a different error has been shown; one memory per Session, cleared at reload. For a **Lead** (hs-d573 cause A): one line appended to the adapter log `$CPD_HOME/run/adapter/<session>.log` (15.6 'Log'): `<time> error: <what>: <code>: <message>`, and reported to the Manager with `cpd session report` (§10.18), once per (`what`, `code`) by memory (`host.report`): the same error again is neither logged again nor reported again until a different one has been. The Manager's error Event carries `session` = the reporting Session (DEFECT 1: so the Manager can see which Session failed), and `plan` = null, so the Lead does not receive its own error back (§11.2). If the report itself fails, that is one log line (`<time> report failed: <code>: <message>`), never delivered and never reported again (no recursion); the next different error tries again. The adapter never throws into pi.
 
 ### 15.2 Start-up and the cursor
 
