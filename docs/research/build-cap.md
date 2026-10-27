@@ -94,3 +94,7 @@ Sampled every 1 s during the cells: the highest `ps` %CPU of any single `rustc` 
 
 - At `default` one rustc peaked at 440.5 % CPU (not the 790 % seen before) with 15 rustc processes at once. At cap 4 it peaked at 386.9 % with 4 rustc, at cap 2 at 198.1 % with 2.
 - Single-rustc peak falls with the cap (440.5, 386.9, 198.1 for default, 4, 2): the cap 2 peak is near 2 cores and the cap 4 peak below 4. So here `CARGO_BUILD_JOBS` bounded one rustc's CPU too, not only the number of rustc processes. I infer, unverified, that its codegen threads take cargo's jobserver tokens (the cap-2 number fits that; the 790 % case was not reproduced, so cap 4 against it was not measured).
+
+## Gate matrix
+
+Attempt `cap-gate-a1`. Skeleton: cells (default,1), (4,1), (default,3), (4,3) are being measured; n=2 is left out for time.
