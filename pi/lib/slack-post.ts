@@ -1,9 +1,8 @@
-// The Slack send helper of `cpd pr post` (docs/commands.md §21.7).
+// The Slack send helper of `cpd pr post` (docs/commands.md §21.8).
 //
 //   node pi/lib/slack-post.ts --coding-agent <…/pi-coding-agent/dist/index.js> --channel <C…>   (message on stdin)
 //
 // Posts one message through pi's own MCP client and sign-in; prints one JSON line.
-import { realpathSync } from "node:fs";
 import { connect, parseArgs, Refusal, type CallTool } from "./slack-channel.ts";
 
 export const MESSAGE_LIMIT = 5000;
@@ -55,7 +54,8 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-if (process.argv[1] !== undefined && realpathSync(process.argv[1]) === realpathSync(import.meta.filename)) {
+// Node's `import.meta.main` is true through the adapter symlink (docs/implementing.md, 'Scripts run through the adapter link')
+if (import.meta.main) {
   const { value, exit } = await main(process.argv.slice(2), process.env, process.cwd(), await readStdin());
   process.stdout.write(JSON.stringify(value) + "\n", () => process.exit(exit));
 }

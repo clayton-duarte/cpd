@@ -43,6 +43,7 @@ fn job(key: &str, status: JobStatus) -> JobNode {
         needs: Vec::new(),
         appended: false,
         retry_tier: None,
+        shown_tier: Some(Tier::parse("S1").unwrap()),
         failed_cause: None,
         cancel_reason: None,
         merged_sha: None,

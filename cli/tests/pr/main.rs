@@ -11,6 +11,7 @@ mod pr_adopt_add;
 mod pr_adopt_life;
 mod pr_adopt_pub;
 mod pr_adopt_rebase;
+mod pr_checks;
 mod pr_cleanup;
 mod pr_cleanup_cancel;
 mod pr_comments;

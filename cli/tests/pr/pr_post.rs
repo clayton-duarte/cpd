@@ -1,4 +1,4 @@
-//! `pr post` (commands.md §9.8b, §21.7): posts a PR's stored pull request to Slack through the helper (`node`, a scripted
+//! `pr post` (commands.md §9.8b, §21.8): posts a PR's stored pull request to Slack through the helper (`node`, a scripted
 //! fake here) and records it in `pr_posts`. The command makes no GitHub call: `gh` is the fake that must never be called.
 
 use std::fs;

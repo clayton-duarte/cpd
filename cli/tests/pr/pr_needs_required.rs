@@ -81,3 +81,24 @@ fn pr_add_rerun_in_dispatch_without_a_flag_is_already() {
     f.add("fix", &other, &["--no-needs"]).ok();
     assert_eq!(f.add("fix", &other, &[]).ok()["already"], true);
 }
+
+/// A stacked PR (`--base` names a PR of the Plan in its repo, or that PR's Lead Branch) needs neither flag: its base is its link.
+fn assert_stacked_add_needs_no_flag(base: &str) {
+    let f = added("dispatch");
+    let out = f.add("fix", &f.repo, &["--base", base]).ok();
+    assert_eq!(out["pr"]["needs"], json!([]), "{out}");
+    assert_eq!(out["pr"]["base_pr"], "pay/repo", "{out}");
+    assert_eq!(out["pr"]["status"], "waiting", "{out}");
+    assert!(f.needs_of("fix").is_empty());
+}
+
+#[test]
+fn pr_add_in_dispatch_needs_neither_flag_for_a_stacked_pr() {
+    assert_stacked_add_needs_no_flag("pay/repo");
+}
+
+#[test]
+fn pr_add_in_dispatch_needs_neither_flag_for_a_pr_based_on_another_prs_lead_branch() {
+    // The Lead Branch of PR `repo` in the fixture is `cpd/pay`.
+    assert_stacked_add_needs_no_flag("cpd/pay");
+}

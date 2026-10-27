@@ -188,6 +188,8 @@ pub struct JobNode {
     /// Added after the Plan was locked (PR feedback).
     pub appended: bool,
     pub retry_tier: Option<Tier>,
+    /// The Tier the Job is shown at (the pill, `plan render`): one derivation in `Display::job_tier`.
+    pub shown_tier: Option<Tier>,
     pub failed_cause: Option<String>,
     pub cancel_reason: Option<String>,
     pub merged_sha: Option<String>,
@@ -356,7 +358,15 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
         out.push(PrNode {
             waiting_on: row.map(|p| display.pr_blockers(p)).unwrap_or_default(),
             superseded_by: display.superseded_by(&key).map(str::to_owned),
-            needs: needs.remove(&key).unwrap_or_default(),
+            needs: {
+                let mut n = needs.remove(&key).unwrap_or_default();
+                // the implied need: the base PR of the Plan (a base PR of another Plan has no node here)
+                if let Some(base) = row.and_then(|p| display.pr_needs(p).into_iter().find(|b| !p.needs.contains(b))).filter(|b| !b.contains('/')) {
+                    n.push(id("PR key", &base, PrKey::parse)?);
+                    n.sort();
+                }
+                n
+            },
             key: id("PR key", &key, PrKey::parse)?,
             repo_name,
             base,
@@ -384,6 +394,7 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
                 tier: j.tier.as_deref().map(|t| tier(&what, t)).transpose()?,
                 needs: shown_needs(&rows, j).iter().map(|n| id("Job key", n, JobKey::parse)).collect::<Result<_, _>>()?,
                 retry_tier: j.retry_tier.as_deref().map(|t| tier(&what, t)).transpose()?,
+                shown_tier: display.job_tier(j).as_deref().map(|t| tier(&what, t)).transpose()?,
                 attempts: attempts.remove(j.key.as_str()).unwrap_or_default(),
                 seq: j.seq,
                 waiting_on,

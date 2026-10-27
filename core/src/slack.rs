@@ -1,4 +1,4 @@
-//! The Slack helpers' seam (commands.md §21.7): [`call`] builds the process that runs a helper of the pi adapter
+//! The Slack helpers' seam (commands.md §21.8): [`call`] builds the process that runs a helper of the pi adapter
 //! (`lib/<script>`) on pi's own MCP client, [`answer`] reads the one JSON line it prints. Shared by `pr post` and `pr react`.
 
 use std::process::Output;
