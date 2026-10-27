@@ -57,11 +57,11 @@ fn usage(message: impl Into<String>) -> CpdError {
 
 fn here(ports: &Ports, home: &CpdHome) -> Result<(PathBuf, Repo), CpdError> {
     let cwd = std::env::current_dir().map_err(|e| usage(format!("Cannot read the current directory: {e}.")))?;
-    let top = crate::git::run::run_with(&*ports.runner, &cwd, &["rev-parse", "--show-toplevel"])?;
+    let top = crate::git::run::run_with(&*ports.runner, &cwd, &["rev-parse", "--git-common-dir"])?;
     if top.code != 0 {
         return Err(usage(format!("cpd resource: {} is not in a git worktree.", cwd.display())));
     }
-    let (owner, name) = repo_key(Path::new(top.stdout.trim()))?;
+    let (owner, name) = repo_key(&cwd)?;
     let mut declared = resolve(home, &PolicyKey::Repo(owner.clone(), name.clone()))?.policy.resources.names;
     declared.sort();
     Ok((cwd, Repo { owner, name, declared }))
@@ -127,7 +127,7 @@ fn run_command(ports: &Ports, args: RunArgs) -> Result<Output, CpdError> {
     {
         let path = lock_path(&home, &repo.owner, &repo.name, &args.name);
         let file = std::fs::File::open(&path).map_err(|e| lock_failed(&path, e))?;
-        return exec(ports, &launch, &std::os::fd::AsRawFd::as_raw_fd(&file), &args.name);
+        return exec(ports, &launch, std::os::fd::AsRawFd::as_raw_fd(&file), &args.name);
     }
 
     let holder = Holder::Command {
@@ -159,7 +159,7 @@ fn run_command(ports: &Ports, args: RunArgs) -> Result<Output, CpdError> {
         }
     };
     let fd = held.fd(&args.name).expect("the resource was taken");
-    exec(ports, &launch, &fd, &args.name)
+    exec(ports, &launch, fd, &args.name)
 }
 
 fn lock_failed(path: &Path, e: impl std::fmt::Display) -> CpdError {
@@ -169,14 +169,15 @@ fn lock_failed(path: &Path, e: impl std::fmt::Display) -> CpdError {
 
 /// Leaves `fd` (and only it) inheritable, then replaces this process with the command. Returns only when that
 /// failed (or on a fake that returns).
-fn exec(ports: &Ports, launch: &Launch, fd: &RawFd, name: &str) -> Result<Output, CpdError> {
+fn exec(ports: &Ports, launch: &Launch, fd: RawFd, name: &str) -> Result<Output, CpdError> {
     // SAFETY: `fd` is open for the whole call: its owner is the caller's `Held` or `File`.
-    let borrowed = unsafe { BorrowedFd::borrow_raw(*fd) };
+    let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
     let flags = fcntl(borrowed, FcntlArg::F_GETFD).map_err(|e| usage(format!("Cannot read the lock descriptor flags: {e}.")))?;
     let flags = FdFlag::from_bits_truncate(flags) & !FdFlag::FD_CLOEXEC;
     fcntl(borrowed, FcntlArg::F_SETFD(flags)).map_err(|e| usage(format!("Cannot keep the lock descriptor across exec: {e}.")))?;
-    match ports.spawn.exec_keeping(launch, *fd) {
-        Ok(()) => Ok(Output::Owned),
+    match ports.spawn.exec_keeping(launch, fd) {
+        // The real exec never returns: an `Ok` is a fake, which answers like any command.
+        Ok(()) => Ok(Output::success(json!({"resource": name}))),
         Err(e) => Err(CpdError::new(
             ErrorCode::SpawnFailed,
             format!("Cannot run {} holding the resource {name}: {e}.", launch.program),
