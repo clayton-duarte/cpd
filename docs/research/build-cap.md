@@ -45,7 +45,7 @@ Rows 1-12: Attempt 1 of cap-dev0. A `noisy` cell had foreign cargo, rustc or nex
 | (4, 3) | 3 | 147.5,148.5,145.8 | 148.5 | 66.0 | 1072 | 53.81 | 49.47 | 19 | - |
 | (2, 3) | 3 | 254.9,277.8,267.6 | 277.8 | 62.4 | 1065 | 38.26 | 45.74 | 6 | noisy |
 | repeat (default, 1) | 1 | 112.8 | 112.8 | 65.6 | 1072 | 48.17 | 48.65 | 2 | noisy |
-| repeat (default, 3) | | not measured yet | | | | | | | |
+| repeat (default, 3) | 3 | 151.1,151.9,153.1 | 153.1 | 93.5 | 1132 | 23.89 | 50.53 | 5 | - |
 | repeat (7, 3) | | not measured yet | | | | | | | |
 
 ## Reading
