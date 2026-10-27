@@ -59,15 +59,15 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     let feedback = env.store.read(|conn| crate::pr::pulls::load(conn, row))?.feedback;
     let post = env.store.read(|conn| {
         let Some(p) = super::posts::find(conn, id.as_str(), pr.key.as_str())? else { return Ok(None) };
-        // `reacted_at` is the queue row's (channel, ts, reaction); null while there is none or it waits.
-        let reacted_at: Option<String> = match &p.reaction {
-            Some(emoji) => conn
-                .query_row("SELECT reacted_at FROM slack_reactions WHERE channel = ?1 AND ts = ?2 AND emoji = ?3", [&p.channel, &p.ts, emoji], |r| r.get(0))
-                .optional()?
-                .flatten(),
-            None => None,
+        // The queue row of the PR's merge reaction (at most one): its emoji is the last attempted, `reacted_at` and `refusal` are its.
+        let row: Option<(String, Option<String>, Option<String>)> = conn
+            .query_row("SELECT emoji, reacted_at, refusal FROM slack_reactions WHERE plan = ?1 AND pr = ?2", [id.as_str(), pr.key.as_str()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .optional()?;
+        let (reaction, reacted_at, refusal) = match row {
+            Some((emoji, reacted_at, refusal)) => (Some(emoji), reacted_at, refusal),
+            None => (p.reaction.clone(), None, None),
         };
-        Ok(Some(json!({"channel": p.channel, "ts": p.ts, "link": p.link, "posted_at": p.posted_at, "reaction": p.reaction, "reacted_at": reacted_at})))
+        Ok(Some(json!({"channel": p.channel, "ts": p.ts, "link": p.link, "posted_at": p.posted_at, "reaction": reaction, "reacted_at": reacted_at, "refusal": refusal})))
     })?;
     Ok(Output::success(json!({
         "plan": id,

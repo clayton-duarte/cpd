@@ -258,6 +258,6 @@ fn view_prints_the_post_of_a_posted_pr() {
 
     assert_eq!(
         out["post"],
-        json!({"channel": "C02JU6C2Z1D", "ts": "1793040197.490209", "link": link, "posted_at": "opened", "reaction": "git-merge", "reacted_at": null})
+        json!({"channel": "C02JU6C2Z1D", "ts": "1793040197.490209", "link": link, "posted_at": "opened", "reaction": "git-merge", "reacted_at": null, "refusal": null})
     );
 }
