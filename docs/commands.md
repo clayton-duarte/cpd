@@ -1496,7 +1496,7 @@ cpd job list [--status <status>] [--plan <id>]
 cpd job show <key> [--plan <id>]
 ```
 
-Effects: none. Output: every field of the Job (§2.2; `review: true` for a review Job, B2; `urgent`, a boolean; `kind`, and `tests`, `test_files` and `test_approved` where the kind has them; `resources`, the Spec's list (null when it has none); `waiting_for`, present only for a `queued` Job that lists resources: an array of `{"resource":"<name>","scope":"host"|"owner"|"repo","slots":<n>,"holders":[…]}` for each of its resources that has no free slot right now, `scope` and `slots` those of the resolved declaration (contract §8.3) and `holders` the holder records of contract §1.4 of every slot, in slot order (`[]` when every resource has a free slot; the key is absent for every other Job); the `needs` of an `open` or `update` Job is the derived list of contract §3.2), `needs`, `needed_by`, and every Attempt with all its fields (`check_tail`, `metrics`) and its Escalations (cpd 1 §11, kept).
+Effects: none. Output: every field of the Job (§2.2; `review: true` for a review Job, B2; `urgent`, a boolean; `kind`, and `tests`, `test_files` and `test_approved` where the kind has them; `resources`, the Spec's list (null when it has none); `waiting_for`, present only for a `queued` Job that lists resources, or whose Ready turn finds no free Worker slot (it then has the entry for `workers`, contract §8.3): an array of `{"resource":"<name>","scope":"host"|"owner"|"repo","slots":<n>,"holders":[…]}` for each of its resources that has no free slot right now, `scope` and `slots` those of the resolved declaration (contract §8.3) and `holders` the holder records of contract §1.4 of every slot, in slot order (`[]` when every resource has a free slot; the key is absent for every other Job); the `needs` of an `open` or `update` Job is the derived list of contract §3.2), `needs`, `needed_by`, and every Attempt with all its fields (`check_tail`, `metrics`) and its Escalations (cpd 1 §11, kept).
 
 ```json
 {"ok": true, "job": {"key": "worker", "pr": "api", "status": "failed", "failed_cause": "timed_out", "tier": "S2", "review": false, "urgent": false, "fingerprint": "9f…", "retry_tier": null, "…": "…"}, "needs": ["api-schema"], "needed_by": ["ui"],
@@ -5515,7 +5515,7 @@ Resources with slots, declared at host, owner or repo level (contract §8.3 "The
 cpd resource list
 ```
 
-Effects: none. Output: `repo` (`<owner>/<name>`) and `resources`, one entry per visible resource sorted by name (`[]` when none is declared): `name`; `scope` (`host`, `owner` or `repo`, the declaring level, contract §8.3); `slots`; `free`, the count of free slots; and `holders`, an array of `{slot, holder}` for every slot from 1 to `slots` in slot order, `holder` the holder record of contract §1.4 when the slot is held, else null. Each slot is read with the shared try-lock probe of contract §1.4. It replaces `held` and `holder`.
+Effects: none. Output: `repo` (`<owner>/<name>`) and `resources`, one entry per visible resource sorted by name (`[]` when none is declared): `name`; `scope` (`host`, `owner` or `repo`, the declaring level, contract §8.3); `slots`; `free`, the count of free slots; and `holders`, an array of `{slot, holder}` for every slot from 1 to `slots` in slot order, `holder` the holder record of contract §1.4 when the slot is held, else null. Each slot is read with the shared try-lock probe of contract §1.4. It replaces `held` and `holder`. The list includes the built-in `workers` (contract §8.3): `scope` `host`, `slots` = `concurrency`, and `holders` one `{slot, holder}` per Attempt not `ended`, `holder` the shape `{by:"attempt", plan, job, attempt, at}`.
 
 ```json
 {"ok": true, "repo": "clayton-duarte/card-dashboard", "resources": [
@@ -5535,7 +5535,7 @@ Takes a slot of the resource, then runs the command holding it. The resource is 
 
 | Argument | Meaning |
 |---|---|
-| `<name>` | a resource visible to the repo: declared by the host, owner or repo policy |
+| `<name>` | a resource visible to the repo: declared by the host, owner or repo policy; `workers` is reserved and refused `usage` (exit 2) |
 | `--wait <minutes>` | a positive integer; absent means 0. Tries again every second until the minutes have passed, by the Ports' clock (so tests never sleep) |
 | `-- <command> [<arg>...]` | the command and its arguments, run from the current directory with the current environment, never through a shell |
 

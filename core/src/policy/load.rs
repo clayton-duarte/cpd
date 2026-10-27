@@ -66,6 +66,9 @@ fn parse_scope_of(file: &Path, text: &str, kind: Option<ScopeKind>) -> Result<Sc
     }
     if let Some(set) = &scope.resources {
         for (name, decl) in &set.0 {
+            if name.as_str() == crate::resource::WORKERS {
+                return Err(policy_invalid(file, Some("resources.workers"), "`workers` is the built-in resource and cannot be declared"));
+            }
             if decl.slots.is_some_and(|n| !(1..=64).contains(&n)) {
                 return Err(policy_invalid(file, Some(&format!("resources.{}.slots", name.as_str())), "`slots` is a whole number from 1 to 64"));
             }

@@ -39,12 +39,6 @@ pub struct StartCtx<'a> {
     pub command: &'a str,
 }
 
-/// How many Attempts may be not `ended` for the Attempt about to start: `concurrency`,
-/// and one more for an urgent Job (§3.7 E3).
-pub fn slot_limit(concurrency: u32, urgent: bool) -> i64 {
-    i64::from(concurrency) + i64::from(urgent)
-}
-
 /// How an Attempt came to be (§2.2 Attempt `origin`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Origin {
@@ -179,11 +173,13 @@ pub fn start_with_allocation(
                 .with("plan", plan.as_str())
                 .with("job", key.as_str()));
         }
-        let active: i64 = tx.query_row("SELECT count(*) FROM attempts WHERE status <> 'ended'", [], |r| r.get(0))?;
+        let workers = resource::workers(tx, ctx.config.concurrency)?;
         // An urgent Job may start one Attempt beyond `concurrency` (§3.7 E3).
         let urgent: bool = tx.query_row("SELECT urgent FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
-        let limit = slot_limit(ctx.config.concurrency, urgent);
-        if active >= limit {
+        // The `workers` pool, the one rule E3 schedules by (§3.7 E3): a free slot, or for an urgent Job the one beyond.
+        let pool = workers.pool();
+        if pool.free + if urgent { pool.urgent_free } else { 0 } == 0 {
+            let (active, limit) = (workers.holders.len(), ctx.config.concurrency + u32::from(urgent));
             return Err(CpdError::new(
                 ErrorCode::NoSlot,
                 format!("{active} Attempts are running, the limit is {limit} (concurrency {}): wait for one to end.", ctx.config.concurrency),

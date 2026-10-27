@@ -25,7 +25,7 @@ pub mod guard;
 pub mod open;
 mod retry;
 mod show;
-mod spec;
+pub(crate) mod spec;
 mod urgent;
 pub mod worked_on;
 #[cfg(test)]

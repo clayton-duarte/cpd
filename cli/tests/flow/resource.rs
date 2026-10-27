@@ -238,6 +238,11 @@ fn resource_run_a_directory_without_a_keyable_origin_is_repo_unkeyed() {
     assert!(fx.fakes.spawn.execs().is_empty());
 }
 
+/// The `resources` of a `resource list` without the built-in `workers`, which every repo has (tested on its own).
+fn declared_only(out: &Value) -> Value {
+    Value::Array(out["resources"].as_array().unwrap().iter().filter(|r| r["name"] != "workers").cloned().collect())
+}
+
 #[test]
 fn resource_list_shows_each_slot_with_its_holder_and_the_scope() {
     let (fx, repo) = world("[resources.e2e-port]\nslots = 3\n\n[resources.db]\n");
@@ -256,7 +261,7 @@ fn resource_list_shows_each_slot_with_its_holder_and_the_scope() {
     let attempt: Value = serde_json::from_str(ATTEMPT_RECORD).unwrap();
     assert_eq!(out["repo"], "acme/cpd");
     assert_eq!(
-        out["resources"],
+        declared_only(&out),
         json!([
             {"name": "db", "scope": "repo", "slots": 1, "free": 1, "holders": [{"slot": 1, "holder": null}]},
             {"name": "e2e-port", "scope": "repo", "slots": 3, "free": 1,
@@ -275,5 +280,54 @@ fn resource_list_with_none_declared_is_empty() {
     let out = fx.cpd_in(&repo, &["resource", "list"]).ok();
 
     assert_eq!(out["repo"], "acme/cpd");
-    assert_eq!(out["resources"], json!([]));
+    assert_eq!(declared_only(&out), json!([]));
+}
+
+#[test]
+fn resource_run_refuses_workers_as_usage() {
+    let (fx, repo) = world("[resources.e2e-port]\n");
+
+    let run = fx.cpd_in(&repo, &run_args("workers", &["--", "npm", "test"]));
+
+    // `workers` is the built-in resource, taken only by the starter: a human never takes a Worker slot (commands.md §30.2).
+    refused(&run, "usage", 2);
+    assert!(fx.fakes.spawn.execs().is_empty());
+    assert!(!fx.env.cpd_home().join("locks").exists() || fs::read_dir(fx.env.cpd_home().join("locks")).unwrap().next().is_none());
+}
+
+#[test]
+fn resource_list_shows_workers_with_the_running_attempts() {
+    let (fx, repo) = world("[resources.e2e-port]\n");
+    // Concurrency 3, two Attempts not ended (one `starting`, one `running`) and one that ended: Plan `pl`'s Jobs `a`, `b` and `c`.
+    super::job::setup(&fx.env);
+    fs::write(fx.env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\nconcurrency = 3\n").unwrap();
+    super::job::plan(&fx.env, "pl", "dispatch");
+    let fingerprint = "f".repeat(64);
+    let mut sql = String::new();
+    for (job, status, at) in [("a", "running", "2026-10-26T21:40:00.000Z"), ("b", "starting", "2026-10-26T21:41:00.000Z"), ("c", "ended", "2026-10-26T21:42:00.000Z")] {
+        let (job_status, cause, ended, ended_values) =
+            if status == "ended" { ("failed", "'crashed'", ", outcome, cause, ended_at", ", 'failed', 'crashed', 't'") } else { ("running", "NULL", "", "") };
+        sql += &format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, failed_cause, appended, fingerprint, created_txn, created_at)
+               VALUES ('pl', 'repo', '{job}', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{job_status}', {cause}, 0, '{fingerprint}', cpd_txn(), 't');
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at{ended})
+               VALUES ('pl', '{job}-a1', '{job}', 1, 'S2', 'ladder', '{status}', 'cpd/pl--{job}-a1', '/w', '{at}'{ended_values});"
+        );
+    }
+    super::job::fixture(&fx.env, &sql);
+
+    let out = fx.cpd_in(&repo, &["resource", "list"]).ok();
+
+    // The built-in `workers` is listed with the declared resources, sorted by name (commands.md §30.1): host scope, `concurrency`
+    // slots, one holder `{slot, holder}` per Attempt not ended, `holder` the shape `{by: "attempt", plan, job, attempt, at}`.
+    let resources = out["resources"].as_array().unwrap();
+    assert_eq!(resources.iter().map(|r| r["name"].as_str().unwrap()).collect::<Vec<_>>(), ["e2e-port", "workers"], "{out}");
+    let workers = &resources[1];
+    assert_eq!((&workers["scope"], &workers["slots"], &workers["free"]), (&json!("host"), &json!(3), &json!(1)), "{workers}");
+    let holders = workers["holders"].as_array().unwrap();
+    assert_eq!(holders.len(), 2, "one per Attempt not ended: {workers}");
+    for (i, (job, at)) in [("a", "2026-10-26T21:40:00.000Z"), ("b", "2026-10-26T21:41:00.000Z")].into_iter().enumerate() {
+        assert_eq!(holders[i]["slot"], i + 1);
+        assert_eq!(holders[i]["holder"], json!({"by": "attempt", "plan": "pl", "job": job, "attempt": format!("{job}-a1"), "at": at}));
+    }
 }

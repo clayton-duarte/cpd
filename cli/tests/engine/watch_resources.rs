@@ -22,8 +22,13 @@ const POLICY: &str = "[resources.e2e-port]\n[resources.db]\n";
 /// The engine in-process for E3: Plan `pay` (PR `repo` of the repo `acme/pay`, whose policy file is `policy`), one slot
 /// (`concurrency = 1`, `retry_cap = 0`). The drivers are launches of the `FakeSpawn`, whose `self_exe` is a file that exists.
 fn engine(policy: &str) -> Fx {
+    engine_with(policy, 1)
+}
+
+/// [`engine`] with `concurrency` Worker slots.
+fn engine_with(policy: &str, concurrency: u32) -> Fx {
     let fx = Fx::with_ports();
-    fx.engine_config("concurrency = 1\nretry_cap = 0\n");
+    fx.engine_config(&format!("concurrency = {concurrency}\nretry_cap = 0\n"));
     fx.engine_routes();
     fx.env.sql("INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');");
     fx.engine_plan();
@@ -120,8 +125,9 @@ fn resource_hold_e3_keeps_a_job_queued_while_its_resource_is_held() {
 
 #[test]
 fn resource_hold_e3_starts_the_next_ready_job_past_a_held_one() {
-    let fx = engine(POLICY);
-    // `api` is older and held; `web` lists a free resource and `ui` lists none; there is one slot.
+    // Three Worker slots: the blocked `api` holds one back (contract §3.7 E3 reservation), the others are free.
+    let fx = engine_with(POLICY, 3);
+    // `api` is older and held; `web` lists a free resource and `ui` lists none.
     add(&fx, "api", &["e2e-port"], "");
     add(&fx, "web", &["db"], "");
     add(&fx, "ui", &[], "");
@@ -129,9 +135,9 @@ fn resource_hold_e3_starts_the_next_ready_job_past_a_held_one() {
 
     fx.watch_first_tick().unwrap();
 
-    assert_eq!(started(&fx), ["web"]);
-    assert_eq!((status(&fx, "api"), status(&fx, "web"), status(&fx, "ui")), ("queued".into(), "running".into(), "queued".into()));
-    assert_eq!(attempts(&fx), 1);
+    assert_eq!(started(&fx), ["web", "ui"]);
+    assert_eq!((status(&fx, "api"), status(&fx, "web"), status(&fx, "ui")), ("queued".into(), "running".into(), "running".into()));
+    assert_eq!(attempts(&fx), 2);
 }
 
 #[test]
@@ -249,4 +255,57 @@ fn job_starts_when_one_of_two_slots_is_free() {
     let record: Value = serde_json::from_str(&fs::read_to_string(fx.env.cpd_home().join("locks/resource.repo.acme.pay.e2e-port.2.lock")).unwrap()).unwrap();
     assert_eq!((record["by"].as_str(), record["job"].as_str()), (Some("attempt"), Some("api")));
     assert_eq!(fs::read_to_string(fx.env.cpd_home().join("locks/resource.repo.acme.pay.e2e-port.1.lock")).unwrap(), COMMAND_RECORD);
+}
+
+#[test]
+fn watch_blocked_job_keeps_the_freed_slot_from_a_lower_job() {
+    // Three Worker slots. `big` (older) needs `e2e-port` and `db`; `small` needs `e2e-port` alone. Both resources are held.
+    let fx = engine_with(POLICY, 3);
+    add(&fx, "big", &["e2e-port", "db"], "");
+    add(&fx, "small", &["e2e-port"], "");
+    let port = hold(&fx, "e2e-port", COMMAND_RECORD);
+    let db = hold(&fx, "db", COMMAND_RECORD);
+    fx.watch_ticks(2).unwrap();
+    assert_eq!(started(&fx), Vec::<String>::new());
+
+    // `e2e-port` is freed. `big` still lacks `db`; the slot is earmarked for it (held back), so `small` does not take it.
+    drop(port);
+    fx.watch_first_tick().unwrap();
+    assert_eq!(started(&fx), Vec::<String>::new(), "the freed slot is kept for the Job ahead");
+    assert_eq!((status(&fx, "big"), status(&fx, "small")), ("queued".into(), "queued".into()));
+    assert_eq!((attempts(&fx), all_errors(&fx)), (0, 0));
+
+    // `db` is freed: `big` takes both resources and starts; `small` waits for `e2e-port` in its turn.
+    drop(db);
+    fx.watch_first_tick().unwrap();
+    assert_eq!(started(&fx), ["big"]);
+    assert_eq!((status(&fx, "big"), status(&fx, "small")), ("running".into(), "queued".into()));
+}
+
+#[test]
+fn watch_job_waits_queued_with_no_attempt_and_no_back_off_while_blocked() {
+    // One Worker slot, taken by a running Attempt: `api` is Ready but blocked on `workers`.
+    let fx = engine("");
+    let busy = fx.live_driver("busy-a1");
+    fx.add_running("busy", "running", &fx.stamp_ago(60_000));
+    add(&fx, "api", &[], "");
+
+    fx.watch_ticks(3).unwrap();
+
+    assert_eq!(status(&fx, "api"), "queued");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 0, "a blocked Job has no Attempt");
+    assert_eq!(all_errors(&fx), 0);
+    let shown = fx.cpd(&["job", "show", "api", "--plan", PLAN]).ok();
+    let waiting = shown["job"]["waiting_for"].as_array().unwrap_or_else(|| panic!("`api` waits for workers: {shown}"));
+    assert_eq!(waiting.iter().map(|w| w["resource"].as_str().unwrap()).collect::<Vec<_>>(), ["workers"]);
+
+    // A long wait, longer than the longest back-off (300 s), and then the slot ends: the next tick starts it, no back-off delays it.
+    fx.advance(std::time::Duration::from_secs(600));
+    fx.env.quiet_models(fx.fakes.clock.utc());
+    fx.watch_first_tick().unwrap();
+    assert_eq!(attempts(&fx), 1, "still only the running Attempt: the wait counted nothing");
+    drop(busy);
+    fx.watch_first_tick().unwrap();
+    assert_eq!(started(&fx), ["api"]);
+    assert_eq!(status(&fx, "api"), "running");
 }
