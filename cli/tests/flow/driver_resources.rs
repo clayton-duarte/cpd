@@ -328,3 +328,22 @@ fn resource_hold_job_show_has_no_waiting_for_on_other_jobs() {
         assert!(!job.as_object().unwrap().contains_key("waiting_for"), "{key}: {job}");
     }
 }
+
+#[test]
+fn resource_run_and_the_starter_cannot_both_take_the_last_slot() {
+    // One slot of `e2e-port`. The starter takes it for `api`: a tenant in the database (its `job_pools` row commits with the
+    // Attempt), with no lock file. A `resource run` after it finds no free slot, and is refused with the Job as the holder.
+    let w = world("[resources.e2e-port]\n", &["e2e-port"]);
+    assert_eq!(w.dispatch(JOB).ok()["attempt"], "api-a1");
+    let rows = w.fx.env.query::<i64>("SELECT count(*) FROM job_pools WHERE plan = 'pay' AND job = 'api' AND pool = 'repo:acme/pay:e2e-port'");
+    assert_eq!(rows, 1, "the starter's row, in the transaction of the Attempt");
+
+    let repo = w.fx.keyed_repo("pay");
+    let run = w.fx.cpd_in(&repo, &["resource", "run", "e2e-port", "--", "npm", "test"]);
+
+    let error = refused(&run, "resource_busy", 3);
+    let holders = error["details"]["holders"].as_array().unwrap_or_else(|| panic!("{error}"));
+    assert_eq!(holders.len(), 1, "{error}");
+    assert_eq!((&holders[0]["slot"], &holders[0]["holder"]["by"], &holders[0]["holder"]["job"]), (&Value::Null, &json!("attempt"), &json!("api")));
+    assert!(w.fx.fakes.spawn.execs().is_empty(), "the command never started");
+}

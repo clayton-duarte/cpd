@@ -371,3 +371,33 @@ fn workers_is_a_host_resource_with_concurrency_slots_and_attempts_as_tenants() {
     let locks = dir.path().join("locks");
     assert!(!locks.exists() || fs::read_dir(&locks).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().contains("workers")));
 }
+
+#[test]
+fn resource_run_takes_a_slot_only_when_job_tenants_plus_commands_are_below_slots() {
+    // The free slots of a pool of 2 are `slots` minus the Job tenants (the database, no slot file) minus the held command slots.
+    let (dir, mut store) = store_with_attempts();
+    let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
+    let pool = Pool::Repo { owner: OwnerLogin::parse("acme").unwrap(), repo: RepoName::parse("cpd").unwrap(), name: "e2e-port".to_owned(), slots: 2 };
+    let elsewhere = Pool::Repo { owner: OwnerLogin::parse("acme").unwrap(), repo: RepoName::parse("other").unwrap(), name: "e2e-port".to_owned(), slots: 2 };
+    let free = |store: &mut crate::store::Store, pool: &Pool| store.read(|conn| free_slots(conn, &home, pool)).unwrap();
+    assert_eq!(free(&mut store, &pool), 2, "nobody holds it");
+
+    // Job `a` is a tenant of the pool: one slot, with no lock file.
+    store.write("fixture", |tx| { tx.execute_batch("INSERT INTO job_pools (plan, job, pool) VALUES ('pay', 'a', 'repo:acme/cpd:e2e-port');")?; Ok(()) }).unwrap();
+    assert_eq!(free(&mut store, &pool), 1, "one Job tenant");
+    assert_eq!(free(&mut store, &elsewhere), 2, "the pool of another repo is another pool");
+    assert!(!lock_path(&home, &pool, 1).exists(), "a Job takes no lock file");
+
+    // A command holds slot 1: no slot is free.
+    fs::create_dir_all(home.locks_dir()).unwrap();
+    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(lock_path(&home, &pool, 1)).unwrap();
+    assert!(lock::try_lock(&file).unwrap());
+    assert_eq!(free(&mut store, &pool), 0, "one Job tenant and one command are the two slots");
+
+    // The command ends: the slot is free again; a pool whose slots are lowered below what is taken is never negative.
+    drop(file);
+    assert_eq!(free(&mut store, &pool), 1);
+    let one = Pool::Repo { owner: OwnerLogin::parse("acme").unwrap(), repo: RepoName::parse("cpd").unwrap(), name: "e2e-port".to_owned(), slots: 1 };
+    store.write("fixture", |tx| { tx.execute_batch("INSERT INTO job_pools (plan, job, pool) VALUES ('pay', 'b', 'repo:acme/cpd:e2e-port');")?; Ok(()) }).unwrap();
+    assert_eq!(free(&mut store, &one), 0, "two tenants of a pool of one: never below 0");
+}

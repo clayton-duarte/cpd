@@ -397,23 +397,3 @@ fn watch_job_waits_queued_with_no_attempt_and_no_back_off_while_skipped() {
     fx.watch_first_tick().unwrap();
     assert_eq!(started(&fx), ["api"], "`busy` merged: its worker is free in the next tick");
 }
-
-#[test]
-fn resource_run_and_the_starter_cannot_both_take_the_last_slot() {
-    // One slot of `e2e-port`. The starter takes it for `api` (a tenant in the database, no lock file); a `resource run` after it
-    // finds no free slot, and is refused with the Job as the holder, which has no slot number.
-    let fx = engine(POLICY);
-    add(&fx, "api", &["e2e-port"], "");
-    fx.watch_first_tick().unwrap();
-    assert_eq!(started(&fx), ["api"]);
-    assert_eq!(fx.env.query::<i64>(&format!("SELECT count(*) FROM job_pools WHERE job = 'api' AND pool = '{PORT_POOL}'")), 1, "the starter's row");
-
-    let repo = fx.keyed_repo("pay");
-    let run = fx.cpd_in(&repo, &["resource", "run", "e2e-port", "--", "npm", "test"]);
-
-    let error = crate::common::refused(&run, "resource_busy", 3);
-    let holders = error["details"]["holders"].as_array().unwrap_or_else(|| panic!("{error}"));
-    assert_eq!(holders.len(), 1, "{error}");
-    assert_eq!((&holders[0]["slot"], &holders[0]["holder"]["by"], &holders[0]["holder"]["job"]), (&Value::Null, &json!("attempt"), &json!("api")));
-    assert!(fx.fakes.spawn.execs().is_empty(), "the command never started");
-}

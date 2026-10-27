@@ -113,6 +113,16 @@ pub fn pools_of(resources: &crate::policy::Resources, owner: &OwnerLogin, repo: 
     resources.declared.iter().map(|d| Pool::of(d, owner, repo)).collect()
 }
 
+/// The free slots of `pool` (contract §1.4 "The free slots of a pool"): its `slots` minus the Job tenants of the pool (the rows of
+/// the view `job_tenants` whose `pool` is the pool's identity text, `host:<name>`, `owner:<login>:<name>` or
+/// `repo:<owner>/<repo>:<name>`) minus the held command slot files of the pool, never below 0. The starter and `resource run`
+/// both decide with it, under the pool's guard.
+///
+/// STUB of the test Job `tenancy-tests`: it counts nothing and returns the pool's `slots`.
+pub fn free_slots(_conn: &rusqlite::Connection, _home: &CpdHome, pool: &Pool) -> Result<u32, CpdError> {
+    Ok(u32::from(pool.slots()))
+}
+
 /// The slots taken by one [`take`], one per pool: each lock stays held until this is dropped (or the descriptor is handed on).
 #[derive(Debug)]
 pub struct Held {
