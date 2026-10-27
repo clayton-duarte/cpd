@@ -968,6 +968,31 @@ fn watch_cpd_workers_option_counts_are_unchanged_with_workers_as_a_resource() {
     assert_eq!((&holders[0]["by"], &holders[0]["job"], &holders[0]["attempt"]), (&json!("attempt"), &json!("run"), &json!("run-a1")));
 }
 
+#[test]
+fn watch_cpd_workers_option_counts_tenant_jobs_including_a_failed_one() {
+    // `N` is the occupancy of the `workers` pool as the starter counts it (contract §3.4 "Tenancy"): the tenant Jobs, so a `failed`
+    // Job whose Attempt ended still counts, and the option and the starter agree. Three slots (the default), one running Job and
+    // one failed Job: 2/3.
+    let fx = engine_on_tmux();
+    fx.tmux_server();
+    let _lock = fx.live_driver("run-a1");
+    fx.add_running("run", "running", &ago_in(&fx, 1));
+    fx.add_job(
+        "bad",
+        &[],
+        "UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = 'bad';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, started_at, ended_at)
+           VALUES ('pay', 'bad-a1', 'bad', 1, 'S2', 'ladder', 'ended', 'failed', 'timed_out', 'cpd/pay--bad-a1', '/w', 't', 't');
+         UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE plan = 'pay' AND key = 'bad';",
+    );
+
+    fx.watch_ticks(OVER_ONE_TICK).unwrap();
+
+    assert_eq!(fx.tmux_option("@cpd_workers"), "workers 2/3 · 0 waiting · 1 queued");
+    assert_eq!(fx.tmux_option("@cpd_workers_short"), "2/3·0·1");
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
 // ---------- E1 ----------
 
 #[test]
