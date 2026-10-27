@@ -61,7 +61,7 @@ Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku), `G` (gem
 
 | Work | Tier | Why |
 |---|---|---|
-| Coding, tests, refactors | `S1` | The User's default. Start low: ladder retries are `crashed`, `no_submit`, `merge_conflict`, each raising effort by one on the next Attempt, up to `retry_cap` retries (default 2, so 3 Attempts). A provider error retries the same Tier up to 3 times first and uses no try. |
+| Coding, tests, refactors | `S1` | The User's default. Start low: each failed Attempt that the ladder retries (`crashed`, `no_submit`, `merge_conflict`) raises effort by one on the next Attempt, up to `retry_cap` retries (default 2, so 3 Attempts). A provider error retries the same Tier up to 3 times first and uses no try. |
 | Docs, config, mechanical edits | `H3` | Cheap and enough. |
 | A PR's open and update Jobs | `open_tier` (default `S1`) | cpd sets it, you never choose it; if one fails, retry higher with `cpd job retry <k> --tier <T>`. |
 
