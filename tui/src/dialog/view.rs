@@ -43,6 +43,9 @@ pub enum Mode {
     Checklist { rows: Vec<Row>, ticked: Vec<bool>, cursor: usize },
     /// A radio list: the prompt, then one row per option, with the `OK` and `Cancel` buttons. `cursor` is an option.
     Select { options: Vec<String>, cursor: usize },
+    /// A text box labelled `input_label`, then a radio list labelled `select_label`, with the `OK` and `Cancel` buttons
+    /// (pro-d114). `list` is whether the radio list has the focus (else the box); `refused` is why the last accept was refused.
+    Form { input_label: String, select_label: String, options: Vec<String>, cursor: usize, field: Field, list: bool, refused: Option<String> },
 }
 
 /// One row of a `checklist`: the `--items` file is a JSON array of these.
@@ -243,6 +246,12 @@ impl Dialog {
         Dialog { title, text, mode, scroll: Scroll::default(), area: Rect::default() }
     }
 
+    /// A `form`: a text box labelled `input_label` and a radio list of `options` labelled `select_label`.
+    pub(crate) fn form(title: String, input_label: String, select_label: String, options: Vec<String>) -> Dialog {
+        let mode = Mode::Form { input_label, select_label, options, cursor: 0, field: Field::new(""), list: false, refused: None };
+        Dialog::new(title, String::new(), mode)
+    }
+
     /// The buttons' labels, the confirming one first.
     fn labels(&self) -> Vec<String> {
         match &self.mode {
@@ -250,7 +259,7 @@ impl Dialog {
             Mode::Input { .. } => vec![OK.to_owned(), CANCEL.to_owned()],
             Mode::Text => vec![CLOSE.to_owned()],
             Mode::Checklist { .. } => vec![APPROVE.to_owned(), LATER.to_owned()],
-            Mode::Select { .. } => vec![OK.to_owned(), CANCEL.to_owned()],
+            Mode::Select { .. } | Mode::Form { .. } => vec![OK.to_owned(), CANCEL.to_owned()],
         }
     }
 
@@ -342,7 +351,7 @@ impl Dialog {
         self.area = area;
         let body = parts_in(area).body;
         match self.mode {
-            Mode::Input { .. } => self.scroll = Scroll::default(),
+            Mode::Input { .. } | Mode::Form { .. } => self.scroll = Scroll::default(),
             _ => self.scroll.resize(self.rows(body).len(), usize::from(body.height)),
         }
     }
@@ -386,6 +395,27 @@ impl Dialog {
                         let line = Line::from(Span::styled(format!(" {}", cut(text, content)), palette::note()));
                         Paragraph::new(line).render(wide(usize::from(height) + n), buf);
                     }
+                }
+            }
+            Mode::Form { input_label, select_label, options, cursor, field, list, refused } => {
+                let (chars, at) = field.parts();
+                let box_width = usize::from(parts.body.width);
+                let (start, shown) = form_box(chars, at, box_width, parts.body.height, options.len());
+                let height = u16::try_from(shown + 2).unwrap_or(u16::MAX);
+                let wall = Rect::new(parts.body.x, parts.body.y, parts.body.width, height).intersection(parts.body);
+                input_box::boxed(&label(input_label), chars, at, !*list, start, box_width).render(wall, buf);
+                if let Some(why) = refused {
+                    for (n, text) in wrap(why, content).iter().take(REFUSAL_ROWS).enumerate() {
+                        let line = Line::from(Span::styled(format!(" {}", cut(text, content)), palette::note()));
+                        Paragraph::new(line).render(wide(usize::from(height) + n), buf);
+                    }
+                }
+                let list_at = usize::from(height) + REFUSAL_ROWS;
+                Paragraph::new(cut(select_label, content)).style(palette::read_only_text()).render(row(list_at), buf);
+                for (n, o) in options.iter().enumerate() {
+                    let style = if n == *cursor { palette::selected() } else { palette::read_only_text() };
+                    let text = cut(&format!("({}) {o}", if n == *cursor { 'x' } else { ' ' }), content);
+                    Paragraph::new(text).style(style).render(row(list_at + 1 + n), buf);
                 }
             }
             Mode::Checklist { cursor, .. } => {
@@ -444,6 +474,13 @@ impl Dialog {
                 }
             },
             Mode::Select { options, cursor } => Some(Outcome::value(options[*cursor].clone())),
+            Mode::Form { options, cursor, field, refused, .. } => match Validator::Title.check(&field.text()) {
+                Ok(value) => Some(Outcome::form(value, options[*cursor].clone())),
+                Err(why) => {
+                    *refused = Some(why);
+                    None
+                }
+            },
             _ => Some(Outcome::confirmed()),
         }
     }
@@ -464,6 +501,23 @@ impl Dialog {
                     None
                 }
             };
+        }
+        if let Mode::Form { options, cursor, field, list, refused, .. } = &mut self.mode {
+            match (key.code, *list) {
+                (KeyCode::Esc, _) => return Some(Outcome::cancelled()),
+                (KeyCode::Enter, _) => return self.confirm(),
+                (KeyCode::Tab, _) => *list = !*list,
+                (KeyCode::Char('q'), true) => return Some(Outcome::cancelled()),
+                (KeyCode::Up | KeyCode::Char('k'), true) => *cursor = cursor.saturating_sub(1),
+                (KeyCode::Down | KeyCode::Char('j'), true) => *cursor = (*cursor + 1).min(options.len() - 1),
+                (_, true) => {}
+                (_, false) => {
+                    if field.key(key) == Some(Edit::Text) {
+                        *refused = None;
+                    }
+                }
+            }
+            return None;
         }
         if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
             return None;
@@ -541,6 +595,21 @@ impl Dialog {
             }
             return None;
         }
+        if let (Mode::Form { options, cursor, field, list, .. }, true) = (&mut self.mode, body.contains(at)) {
+            let (chars, text_at) = field.parts();
+            let (_, shown) = form_box(chars, text_at, usize::from(body.width), body.height, options.len());
+            let below = usize::from(at.y - body.y).checked_sub(shown + 2 + REFUSAL_ROWS);
+            match below {
+                None => *list = false,
+                Some(n) => {
+                    *list = true;
+                    if let Some(n) = n.checked_sub(1).filter(|n| *n < options.len()) {
+                        *cursor = n;
+                    }
+                }
+            }
+            return None;
+        }
         if matches!(self.mode, Mode::Select { .. }) && body.contains(at) {
             let n = (self.scroll.offset() + usize::from(at.y - body.y)).checked_sub(self.prompt_rows(usize::from(body.width)).len());
             if let (Some(n), Mode::Select { options, cursor }) = (n, &mut self.mode) {
@@ -555,6 +624,15 @@ impl Dialog {
             _ => Some(Outcome::cancelled()),
         }
     }
+}
+
+/// The box of a `form` in a body `width` x `height` with `options` below it: the first text row shown and how many rows
+/// the box shows. The room left by the box, its refusal rows, the list's label and its options is the box's.
+fn form_box(chars: &[char], cursor: usize, width: usize, height: u16, options: usize) -> (usize, usize) {
+    let avail = usize::from(height).saturating_sub(2 + REFUSAL_ROWS + 1 + options).max(1);
+    let tw = input_box::text_width(width);
+    let (cursor_row, _) = input_box::cursor_at(chars, cursor, tw);
+    (( cursor_row + 1).saturating_sub(avail), avail.min(input_box::wrapped_rows(chars, cursor, tw)))
 }
 
 /// The body of the dialog's frame (the one widget of all four kinds).
