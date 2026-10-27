@@ -547,7 +547,7 @@ A hidden (snoozed, dismissed or claimed) item fills no dot and is not counted. W
 | Kind | Condition (subject) | Urgency | Label (`<who>`: the tree's label of the Session: its Plan id, `<plan>·<suffix>` for a fork, the Context id for a Manager) |
 |---|---|---|---|
 | `dialog` | a Lead, side fork or Manager Session (never a Worker) is `blocked` with a label other than `φ: plan review` and `φ: loop guard` (the Session); a Lead that waits for a Worker's answer is `waiting`, not `blocked` (§3.6), so it is no dialog | red when its Plan is in `dispatch` or `pr`; magenta in `grounding`, `plan`, `done` or with no Plan | `<who> asks you` |
-| `plan-review` | the Plan's latest Plan review is `pending` (the review) | magenta | `<plan> plan review: <review title>` (hs-d291); `<plan> plan review` for a review with no title. Its `url` is present only while the Plan's Lead Session has an open `plannotator_reviews` row of kind `plan` (contract §4.4, hs-d502), and is null otherwise (hs-d502: no OSC 8 link and a click opens the Lead, copies nothing) |
+| `plan-review` | the Plan's latest Plan review is `pending` (the review) | magenta | `<plan> plan review: <review title>` (hs-d291); `<plan> plan review` for a review with no title. Its `url` is present only while the Plan's Lead Session has an open `plannotator_reviews` row of kind `plan` (contract §4.4, hs-d502), and is null otherwise; when present, the label is drawn as a `Link` widget and a plain left click opens the url; when absent, the label draws with no link and a click jumps to the Lead (pro-d60, hs-d502) |
 | `review-waiting` | the Lead's pi or the Context's Manager has an open plannotator session tracked in `plannotator_reviews` (hs-d496, hs-d264): a row in `plannotator_reviews` whose Session is neither archived nor `stopped` (the session); a raw plannotator call that skips tracking is refused as `askguard` is (§5.3, commands.md §15). Open until the session ends (`decided` or `lost`) or the Session is archived or `stopped` | magenta | `<who> review: <subject>` (the `subject` of the row, 1–200 chars) |
 | `unread` | a Lead, side fork or Manager Session is `idle`, not in the chat slot, and its latest `session-state` Event from `working`, `waiting` or `blocked` to `idle` **with `data.reply` true** is newer than its latest `session-moved` with `place: chat` (the Session); only a finished turn that answered a message the User wrote to that Session is a reply (hs-d278, refining hs-d242): a turn started by an engine Event or by another Session's message (the Manager, a Lead, a Worker) is not, and a later turn that is not a reply does not hide an unread reply; a start or reload (`stopped` → `idle`) is not a finished turn (hs-d242) | white | `<who> replied` |
 | `job-stuck` | **no longer opened** (hs-d318, the User's confirmation 2026-10-19, after hs-d303's rule, *blocked means it needs the human*): a failed Job that nobody has retried or cancelled is the Manager's to handle first, so E8 computes no `job-stuck` condition, and the engine sends the stuck Job to the Context's live Manager as a message instead (§3.7 "A stuck Job"). The kind stays in the type and in the `inbox_items` check for the rows an older engine opened: such a row closes at the next reconcile, as any item whose condition no longer holds, is read as before until then (§17), and has no click (commands.md §13.2) | red | `<plan>/<job> failed` (an old row's) |
@@ -2570,7 +2570,7 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 
 **The terminal theme** (hs-d594). The Dango theme of the dotfiles' Ghostty config is v3 since hs-d594, with background #1c1a20, foreground #d8d2cc, index 0 bamboo #5a504a for lines and sticks, and the cpd and pi palettes mapped to indices 1-15. The old Dango v1 theme (background #2d2522, foreground #c8bfb9) stays selectable as `Dango v1` in Ghostty. cpd names indices only, never colours by value, and uses the theme's own foreground. Index 0 is the theme's own: the cockpit and pi never draw it as text.
 
-**The elements.** One row per coloured element of the cockpit (the inventory of `docs/research/colour-audit.md`, decided by hs-d534). *Interactive* is whether the element is part of a hit target (click, key, or a terminal modifier-click on an OSC 8 link). For a block, *Colour* gives the foreground (the block's colour), the text inverted, and the caps; for text it gives the foreground; a mark inside a blue block inherits the inversion.
+**The elements.** One row per coloured element of the cockpit (the inventory of `docs/research/colour-audit.md`, decided by hs-d534). *Interactive* is whether the element is part of a hit target (click or key). For a block, *Colour* gives the foreground (the block's colour), the text inverted, and the caps; for text it gives the foreground; a mark inside a blue block inherits the inversion.
 
 | Element | Interactive | Colour | Where |
 |---|---|---|---|
@@ -2618,7 +2618,7 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | Row branch `│` | no | fg 8 | palette: muted |
 | Tier glyph: red / yellow / magenta / cyan / white | yes (part of the item's row) | fg 9 / 11 / 13 / 14 / 15 | palette: bright meaning (pro-d16: the notice tier is cyan) |
 | Merge spinner in the glyph cell (an item's PR merge runs) | part of the row | fg 11 | palette: bright meaning |
-| Item label (also when it is an OSC 8 link) | yes | fg 15 | palette: clickable text |
+| Item label (the `Link` widget text for the four link kinds: `plan-review`, `review-waiting`, `pr-ready`, `review-requested`) | yes | fg 15 | palette: clickable text |
 | Age (`42s`, `5m`) | no | fg 8 | palette: muted |
 | Keyboard cursor on an item row | yes | block: 4 inverted | `palette::selected()` |
 | Closing toggle `╰󰬦 expand` / `╰󰬬 collapse` | yes | fg 7 | palette: read-only text |
@@ -2747,7 +2747,6 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | tmux message line (`display-message`, a failed status-button click) | no | tmux's own default: a yellow block with text 0, which is the palette's yellow (a refusal) by look; cpd sets no `message-style` | tmux default |
 | tmux copy and view mode highlight | yes | block: 4 inverted | `mode-style`, §6.1 |
 | Link widget (the `󱆭` cells and titled text, Deploy column and Plan view) | yes (plain left click) | the colour of the cell they sit on; cpd uses `palette::clickable_text()` for the cue (pro-d60) | `tui/src/link.rs` |
-| OSC 8 links (the `󱆭` cells and link labels, Inbox only) | yes (modifier-click) | the colour of the cell they sit on; cpd adds none | `tui/src/link.rs` |
 
 **The exact formats** (`core/src/host/tmux.rs`; tests pin them). `\u{e0b6}` and `\u{e0b4}` are the caps U+E0B6 and U+E0B4. Inside a `#{?…}` branch a comma would split the branch, so each `#[…]` there holds one attribute.
 
