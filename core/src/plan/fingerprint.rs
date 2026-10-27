@@ -96,6 +96,7 @@ mod tests {
             tests: None,
             test_files: None,
             test_approved: None,
+            resources: None,
             urgent: false,
             fingerprint: None,
             retry_tier: None,

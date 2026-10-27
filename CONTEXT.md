@@ -190,6 +190,10 @@ _Avoid_: PR watcher, PR sync
 One open thing a person said on a pull request a Plan owns: a review thread, an issue comment or a review with a body, not yet answered with a `cpd pr reply` (whose last line is the marker `<!-- cpd:reply -->`). The PR poll stores them and wakes the Lead (`pr-feedback`, reason `comments`); the Lead fixes or declines each and answers it; cpd never resolves a thread, and an open item blocks nothing. Defined once in `docs/contract.md` §2.2 "Feedback item".
 _Avoid_: review comment (the word for what a reviewer wrote, not for the open thing cpd tracks), notification
 
+**PR post** (new, pro-d64, pro-d65, pro-d66):
+One message announcing a PR for review in Slack. The Lead calls `cpd pr post` when the PR is ready (open, green CI, no unaddressed bot comments) and the User says yes; one post per PR. The owner's policy configures the Slack channel, message template, and an optional emoji to react with after the merge. Defined once in `docs/contract.md` §2.2 "PR post".
+_Avoid_: Slack announcement, PR announcement
+
 ## Roles
 
 **User**:
@@ -279,6 +283,10 @@ _Avoid_: visibility, permission
 **Policy key** (new, hs-d288):
 What a Policy is resolved for: an owner, or an owner and a repo name (`Owner(login) | Repo(login, name)`). cpd derives it from the one row a consumer acts on: a Context, its Manager and its Leads use the Context's owner; a PR, its Workers and the commands on it use the PR's repo. Never a machine, a path or a cwd.
 _Avoid_: scope, selector, context
+
+**Resource** (new, pro-d74):
+A named exclusive thing of a repo, declared in its repo policy file (`[resources.<name>]`, contract §8.3 "The `resources` domain"), that one holder at a time may use, such as the one port an e2e run needs. A Job takes it through its Spec's `resources` and its Attempt holds it until it ends; a human takes it with `cpd resource run`. The lock is per repo on one machine, a kernel `flock` released when its holder dies. A repo that declares none has no lock and no limit.
+_Avoid_: slot, lock, mutex, semaphore
 
 **Machine policy** (changed, pro-d1):
 The machine Scope's file, `$CPD_HOME/policy/host.toml` (contract §8.3), which dotfiles render per machine: its `[model]` table first, then the machine's `cpd.policy` text (its `[mcp.servers.*]`). Besides Domains it may hold an `[mcp]` table, the MCP servers the machine may use, which only a machine file may have; `[mcp]` is not a Domain and takes no part in a Policy key.

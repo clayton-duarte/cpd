@@ -425,6 +425,10 @@ pub fn end_opened(
         return Err(cas_lost("The Job's status"));
     }
     events::append(tx, event.plan(attempt.plan.clone()).job(attempt.job.clone()).attempt(attempt.id.clone()))?;
+    // pro-d89: a merge that is not an `open` or `update` Job's own requeues the failed `open`/`update` Jobs of its PR that it fixes.
+    if matches!(end, End::Merged { .. }) && attempt.kind != "open" && attempt.kind != "update" {
+        crate::job::fix_retry::retry_after_fix(tx, &attempt.plan, &attempt.job)?;
+    }
     // The transaction that makes the Job `cancelled` also fails or cancels its dependents (contract §3.2 "Cancel", hs-d647).
     if matches!(end, End::Cancelled) {
         let reason = cancel_request(tx, &attempt.plan, &attempt.job)?.unwrap_or_default();

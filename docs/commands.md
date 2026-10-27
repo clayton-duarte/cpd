@@ -40,6 +40,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 27. [`prune`](#27-prune)
 28. [`tag` and `version`](#28-tag-and-version)
 29. [`janitor`](#29-janitor)
+30. [`resource`](#30-resource)
 
 ## 1. Conventions
 
@@ -100,7 +101,7 @@ Every `--help` prints `{"ok": true, "help": "<clap's text>"}`. The root help (`c
   | 4 | a **bare id prefix of at least 4 characters** | the Session, of any Plan or none, whose id starts with it |
 
   Matching is exact and case-sensitive, over every Session, archived ones included (so `session unarchive` and `session history` can name them). A form that matches nothing falls through to the next; when none matches, `session_not_found` (exit 4). A form (3) or (4) that matches **more than one** Session is `session_ambiguous` (exit 3) with `details.candidates`, the matching ids, and is never resolved by guessing. A value outside §2.1's input pattern is `invalid_session_id` (exit 2); one that is valid but shorter than 4 characters and no Plan id or form (3) is `session_not_found`. Output always carries the full id.
-- **PR** (R34, §1.3): `--pr <key>`, within the selected Plan, used by `job add`, `pr open`, `pr rebase`, `pr push`, `pr view` and `pr reply`. It may be omitted when the Plan has exactly one PR that is not `cancelled`, which is then selected; with two or more, `pr_required` (exit 2); with none, `pr_required` too, its message naming `cpd pr add`. A key that is not one of the Plan's PRs is `pr_not_found` (exit 4). Exceptions, stated at each command: `pr poll` has no `--pr`, it polls every open pull request of the User (§9.2, hs-d96), and `job edit --pr` changes the Job's PR, so omitting it changes nothing (§5.2). `pr add`, `pr edit`, `pr cancel` and `pr start` take the key as their positional argument.
+- **PR** (R34, §1.3): `--pr <key>`, within the selected Plan, used by `job add`, `pr open`, `pr rebase`, `pr push`, `pr view`, `pr reply` and `pr post`. It may be omitted when the Plan has exactly one PR that is not `cancelled`, which is then selected; with two or more, `pr_required` (exit 2); with none, `pr_required` too, its message naming `cpd pr add`. A key that is not one of the Plan's PRs is `pr_not_found` (exit 4). Exceptions, stated at each command: `pr poll` has no `--pr`, it polls every open pull request of the User (§9.2, hs-d96), and `job edit --pr` changes the Job's PR, so omitting it changes nothing (§5.2). `pr add`, `pr edit`, `pr cancel` and `pr start` take the key as their positional argument.
 - **Job, Attempt, Escalation, Plan review:** a positional id, within the selected Plan (§2.1).
 
 Common refusals, which apply to every command and are not repeated in the sections below:
@@ -122,6 +123,11 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `pr_not_open` | 3 | `pr reply` (§9.8a) found the PR not `open`; `details` is `{pr, status}` (pro-d68) |
 | `feedback_not_found` | 3 | `pr reply` (§9.8a): `--to` is the `id` of no item in the PR's stored list; `details` is `{pr, to, open: [ids]}`; nothing is posted (pro-d68) |
 | `pr_not_closed` | 3 | `pr cancel` (§9.6) found the `open` PR's pull request not stored `closed`; `details` is `{pr, number, url, state}`, the stored row's `state` (`open` or `merged`) (hs-d329) |
+| `already_posted` | 3 | `pr post` (§9.8b) found a `pr_posts` row for the PR; `details` is `{pr, channel, ts, link, posted_at}` (pro-d65) |
+| `post_disabled` | 3 | `pr post` (§9.8b) found `policy.pr.post.enabled` is false; `details` is `{pr, key: "pr.post.enabled"}` |
+| `not_authored` | 3 | `pr post` (§9.8b) found the stored pull request is not `authored`; `details` is `{pr, number}` |
+| `post_unconfigured` | 3 | `pr post` (§9.8b) found no channel configured; `details` is `{keys: ["pr.post.channel", "inbox.team_channel"]}` |
+| `pr_not_ready` | 3 | `pr post` (§9.8b) found `postable::unready(&row)` is not empty; `details` is `{pr, number, url, reasons: [<as_str of each>, …]}`, the Unready reasons being `not_open`, `draft`, `conflicting`, `changes_requested`, `checks_failed`, `checks_pending`, `comments_unread`, `bot_comments` (pro-d64, contract §2.2, §8.3) |
 | `base_pr_unknown`, `base_pr_unavailable`, `base_pr_other_repo`, `pr_other_plan` | 3 | `pr add` or `pr edit` (§9.4, §9.5) found a bad PR reference in `--base <plan>/<key>` or `--needs`: no such PR; a base PR that is `cancelled` or `merged`; a base PR of another repo; a PR of another Plan (contract §2.2 "Validation of a reference", hs-d522); `details` as at §9.4 |
 | `stacked_rebase` | 3 | `pr rebase` (§9.3) found the PR stacked on a base PR; `details` is `{pr, base, base_pr, next}` (contract §3.8 "Stacked PRs" step 4, hs-d325) |
 | `invalid_context_id`, `invalid_plan_id`, `invalid_pr_id`, `invalid_job_id`, `invalid_attempt_id`, `invalid_escalation_id`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id` | 2 | an id does not match §2.1 |
@@ -143,9 +149,13 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `review_context_unset` | 3 | `inbox claim` (§21.7): config `inbox.review_context` is unset (C5) |
 | `post_not_found` | 3 | `inbox claim` (§21.7): the team review cache holds no primary post of the pull request (C4) |
 | `not_loop_guarded` | 3 | `session resume` (§10.17): the Session is not a `lead` or a `manager`, or is archived, or is not `blocked` with label `φ: loop guard`; `details` `{state, label}` |
-| `slack_auth` | 3 | the team review helper found no usable Slack sign-in in pi's MCP credentials (§21.6); the message says to run `pi mcp login slack` |
-| `slack_not_configured` | 3 | there is no `slack` server in `~/.pi/agent/mcp.json` (§21.6); the message says to run `pi mcp add slack --url https://mcp.slack.com/mcp --exposure hidden` |
-| `slack_failed`, `slack_unparseable`, `slack_helper_failed` | 1 | the helper could not read the channel, read a payload with no messages in it, or could not load pi's MCP modules (§21.6). Also the code of the engine's E11 `error` Event (contract §3.7) |
+| `slack_auth` | 3 | a Slack helper (§21.6, §21.7) found no usable Slack sign-in in pi's MCP credentials; the message says to run `pi mcp login slack` |
+| `slack_not_configured` | 3 | a Slack helper (§21.6, §21.7) found no `slack` server in `~/.pi/agent/mcp.json`; the message says to run `pi mcp add slack --url https://mcp.slack.com/mcp --exposure hidden` |
+| `slack_failed` | 1 | a Slack helper (§21.6, §21.7) could not read the channel (E11), send a message (pr post), or timed out; check the channel before retrying |
+| `slack_unparseable` | 1 | a Slack helper (§21.6, §21.7) received an invalid payload (E11), response (post), or no messages (E11). Also the code of the engine's E11 `error` Event (contract §3.7) |
+| `slack_helper_failed` | 1 | a Slack helper (§21.6, §21.7) could not load pi's MCP modules or other failure inside it. Also the code of the engine's E11 `error` Event (contract §3.7) |
+| `spawn_failed` | 1 | a Slack helper (§21.6, §21.7) could not be started as a child process; `details` are `{argv, exit, stdout, stderr}` |
+| `store_failed` | 1 | a write command failed on SQLite (contract §4.5); for `pr post` (§9.8b) means the message WAS posted and the link is in `details` |
 | `archive_blocked` | 3 | `context archive`, `plan archive` or `session archive` found a live object (contract §2.2 "Archived"); `details.blockers` lists each, `details.next` says what to do |
 | `archived` | 3 | the object (or its Context or Plan) is archived and the command does not work on archived objects; `details.next` is the unarchive command |
 | `cas_lost` | 3 | a compare-and-swap found the state changed since it was read (§4.2); rerun the command |
@@ -159,6 +169,8 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `adopt_taken` | 3 | `pr add --adopt`: a PR of any Plan with the same repo and head branch is `waiting`, `dispatch` or `open`; `details` is `{head_ref, plan, pr}` |
 | `adopt_foreign` | 3 | `pr add --adopt`: the pull request's author is not the User and `--confirm-author` is missing or differs (case-insensitively); the message tells the Lead to ask the User first; `details` is `{number, url, author, user, confirm: "--confirm-author <author>"}` |
 | `pr_adopted` | 3 | `pr edit --repo` or `--base` on an adopted PR (§9.5): the repo and the base come from the pull request; `details` is `{pr, flag}` |
+| `resource_undeclared` | 3 | `job add` or `job edit --spec` (§5.1, §5.2), `job dispatch` (§5.5) or `resource run` (§30) named a resource the PR's repo policy does not declare (contract §8.3 "The `resources` domain"); `details` `{job, pr, resource, declared, file}` (`resource run`: `{resource, repo, declared, file}`), `declared` the sorted declared names, `file` the repo policy file's path whether or not it exists. Engine E3 raises it as one `error` Event for a queued Job whose name the policy no longer declares (contract §3.7) |
+| `resource_busy` | 3 | `job dispatch` (§5.5) or `resource run` (§30) found a resource held by another holder; `details` `{job, resource, holder}` (`resource run`: `{resource, repo, holder, waited_minutes}`), `holder` the holder record of contract §1.4. Engine E3 never raises it: the Job stays `queued` and E3 tries again at the next tick (contract §3.7) |
 | `kind_reserved` | 3 | `job add --kind open` or `update` (§5.1): cpd adds those Jobs, never the Lead (contract §2.2 "Job kinds"); `details.kind` |
 | `test_job_required` | 3 | an `impl` Job that is not a draft, or a Plan review or lock over one (§5.1, §4.6, §4.8), needs no `test` Job of its PR; `details.jobs` lists the `impl` Jobs |
 | `tests_unconfigured` | 3 | `pr add --shape tdd` (§9.4), `job add --kind test` or `impl` (§5.1) or a `test` or `impl` Job's submit (§6.1) found that the PR's repo policy has no `[test-commands]` (no repo file, or a file without the table; contract §7.7); the message names `--shape docs`, `--shape config` and the table |
@@ -229,8 +241,13 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context retire` (§3.16, internal) | none | yes | yes |
 | `cpd context docs` (§3.17, internal) | none | yes | yes |
 | `cpd pr reply` (§9.8a) | Lead | no | no |
+| `cpd pr post` (§9.8b) | Lead | no | no |
+| `cpd session switch-failed` (§10.18a, internal) | none | no | yes |
+| `cpd session switched` (§10.18b, internal) | none | no | yes |
 | `cpd tag` (§26.1) | Lead | no | no |
 | `cpd version sync` (§26.2) | Lead | no | no |
+| `cpd resource list` (§30) | Manager, Lead, Worker | no | no |
+| `cpd resource run` (§30) | Manager, Lead, Worker | no | no |
 
 `context new` gains `--owner` (§3.1), and `pr add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `pr add` gains `--shape` (§9.4), hs-d340 and hs-d341.
 
@@ -882,7 +899,7 @@ cpd plan render [--plan <id>]
 
 Effects: writes `run/<plan>/plan.md` and `run/<plan>/summary.md` (§1.4), nothing else. Content of `plan.md`, kept from cpd 1 §11 `plan render` and grouped by PR (R34): title, Context and phase; a table of the PRs that are not `merged`, with key, repo, base and needs, each row muted and marked `cancelled` when the PR is `cancelled` (hs-d518), with its `status` and `cancel_reason` or `superseded by <ref>` when the Event carries `superseded_by`; and, when there are two or more, a Mermaid `graph LR` of their needs (cancelled PRs not in the graph, hs-d518); then the section `## Overlaps` (below); then one section per PR that is not `cancelled` (hs-d518), in the order of the needs graph (ties by key), headed `PR <key>`, with its repo, base and needs, a table of its Jobs with key, title, Tier, status, needs and touches, each row muted and marked `cancelled` when the Job is `cancelled` (hs-d518), with its `status` and `cancel_reason` (hs-d518), a Mermaid `graph TD` of its Jobs' Dependencies (cancelled Jobs not in the graph), and one subsection per Job that is not `cancelled` (hs-d518) with its Spec. The Tier column and each Job section's `Tier:` line show the Tier the Job is displayed at (contract §3.4a): the active Attempt's Tier, or `retry_tier` while queued at it after `job retry`, or the latest Attempt's Tier, or the stored `tier`. The `open` Job placeholder keeps `open_tier`. **Waiting display** (hs-d521): a Job or PR table row whose status is `waiting` (display only, hs-d523) shows the blockers as `waiting on <keys>` in its status column or as a separate line (hs-d521); in the Mermaid graph (hs-d518), a cancelled PR is omitted, and in the render's graph of needs a cancelled PR appears neither as a node nor in edges; in the per-PR Job graph, cancelled Jobs do not appear. **The open Job's placeholder** (hs-d497): a PR that has not started has no `open` Job yet (engine E4 adds it at the start), so the render shows one for each such PR, as the last row of its Jobs table and as the last Job section: key `open-<pr>`, title `Open the pull request: <PR title>`, Tier `open_tier` (contract §8.2), status `—` (not a Job yet), needs `every other Job of the PR`, and, in place of the Spec, `Added by cpd when the PR starts: merges the base only on a conflict, runs the Gate, pushes and opens the pull request ready.` It is not a row, is in no fingerprint and no Mermaid graph, and is shown in every phase until the PR starts (once the PR has started the real `open` Job is shown as any Job, with its derived needs, contract §3.2). A Job's section is under its PR only. In a phase after `plan`, the Jobs that are not `draft` are Locked context: the render shows them as such, and marks every `draft` Job **under review** except a `draft` `open` Job, which cpd added and the Lead does not review: it is shown as context, never `**under review**` (hs-d573) (in its table row and its section), because a review in these phases covers exactly the drafts (§4.6; User, hs-d173, hs-d174, hs-d179). In phase `plan` every Job is a draft and nothing is marked. A **stub draft** (no Tier or no Spec, §5.1) is shown as it is, visibly incomplete: `Tier: —` in its table row and section when it has no Tier, and `Spec: not written yet` in place of its Spec subsection's goal, context, touches, acceptance and out of scope when it has none. GitHub-flavoured Markdown only: tables, code and Mermaid, no footnotes, no raw HTML (t4). It also writes the **Plan summary**, `run/<plan>/summary.md` (below, hs-d502). Output: the path, `summary` (the path of the summary), the plan fingerprint (§2.3: Jobs, PRs and the outline when set), the number of `draft` Jobs (`draft_jobs`, not counting a `draft` `open` Job: it is not under review, hs-d573), the number of PRs that are not `cancelled` and the overlaps.
 
-**Kinds** (hs-d340, hs-d341). A Job's `kind` is a column of its row in the PR's table, and a line of its section when it is not `work`; a `test` Job's section lists its `tests` and `test_files`. The PR's `open` Job, once the PR has started, is a Job of its PR like any other, with its derived needs (contract §3.2); before the start it does not exist, so the review of a Plan shows the template's Jobs and the `open` Job as `plan render`'s placeholder (§4.5, hs-d497), the one every PR will get.
+**Kinds** (hs-d340, hs-d341). A Job's `kind` is a column of its row in the PR's table, and a line of its section when it is not `work`; a `test` Job's section lists its `tests` and `test_files`, and a Job's section lists its `resources` with the Spec when it has any. The PR's `open` Job, once the PR has started, is a Job of its PR like any other, with its derived needs (contract §3.2); before the start it does not exist, so the review of a Plan shows the template's Jobs and the `open` Job as `plan render`'s placeholder (§4.5, hs-d497), the one every PR will get.
 
 **Overlaps** (B4-A3, hs-d78, hs-d172, hs-n201): the warning that another Plan is working on the same files. It is made here and so in the Plan review (§4.6), and nowhere else: `job add` does not warn. It looks at **open work** only, on both sides: the Jobs that are not `cancelled` (`draft`, `queued`, `running`, `failed`, or `merged` on its Lead Branch) of PRs that are not `merged` and not `cancelled`. A Job of a `merged` PR is on its base already and cannot clash with anyone's work any more, so the Jobs of this Plan's `merged` PRs are not checked. For each PR of this Plan that is not `merged` and not `cancelled`, every **other** active Plan (any Context; its phase is not `done` and it is not archived) is looked at when it has a PR in the same repo (the same `prs.repo` realpath as stored) that is not `merged` and not `cancelled`. A Job of that PR overlaps a Job of this PR when a path in the `touches` of the one overlaps a path in the `touches` of the other. Two paths overlap when they are equal, or when one is a directory (ends with `/`) that contains the other. Nothing else is compared (no globs, no normalisation). A Plan's own Jobs are never listed. The warning is only that: nothing is refused and no state changes.
 
@@ -1296,6 +1313,8 @@ Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except 
 
 Both are required for a `test` Job that is not a stub, and refused for every other kind (`spec_invalid`, exit 2, with the JSON path in `details`). An `impl` Job names no tests: its tests are the union of its test Jobs' (contract §2.2 "Job kinds").
 
+**The optional `resources` Spec field** (contract §2.2): a list of one or more distinct names, each matching `^[a-z][a-z0-9-]{0,31}$`; absent means none. It names the repo-declared exclusive resources (contract §8.3 "The `resources` domain") the Job's Attempts hold while they run:
+
 **Tier flag** (`--tier`): `^(O|S|H)([0-5])$` or exactly `GX`. `G0`–`G5` are `tier_invalid` (exit 2, `details.tier`), before any catalog check, with the message `invalid Tier "G0": G has no effort, write GX (hs-d562).` A Tier from the pattern with an effort the letter's model supports (§9) is valid; otherwise `tier_invalid` (exit 2), with `details.efforts` listing the valid ones. **For a Job's Tier, the rule of pro-d82 applies next** (the User's decision, 2026-10-26; contract §9 "Tier rules"): a Worker uses only H0–H3 and S0–S3, so the Tier must be `H0`–`H3` or `S0`–`S3`, else `tier_not_allowed` (exit 2, `details` `{tier, allowed: "H0-H3, S0-S3", rule: "pro-d82"}`), message `Tier <T> is not allowed for a Worker: Workers use only the Tiers H0-H3, S0-S3, to keep cost down (pro-d82, hs-d554)`. `job add`, `job edit`, `job retry` and `job dispatch` apply it, after `tier_invalid`; a stub draft's Tier is checked too. A store that already holds a Job on a refused Tier is not rewritten: §5.5 and contract §9 ("Stored Jobs and Plans") say what happens to it.
 
 ### 5.1 `job add`
@@ -1336,6 +1355,8 @@ cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--pr <key
 | the Spec file has `tests` and `test_files` exactly when the kind is `test` and the Job is not a stub (§5); `--review` with a kind other than `work` | `spec_invalid`; `usage` | 2 |
 | every string of the Spec (each field, each `touches` entry, each `acceptance` item, and their `test` and `test_files` for a test Job) names only repo-relative paths, not the primary checkout of any PR's repo (contract §8.3); a match is a substring ending at the end of the string or before a non-letter, non-digit, `.`, `_` or `-` character; `details: {path, primary, pr}` names the JSON path, the root realpath (or `~`/`$HOME` prefix), and the PR | `spec_invalid` | 2 |
 | `--tier` is a Tier a Worker may have: `H0`–`H3` or `S0`–`S3` (§5, pro-d82, hs-d554; an `O` Tier, any `S` outside `S0`–`S3`, `H4`, or effort 5 is refused; a Tier that is not valid at all: `tier_invalid`) | `tier_not_allowed` | 2 |
+| the Spec's `resources` is valid for the kind (§5: not on a review Job, JSON path `$.resources`) | `spec_invalid` | 2 |
+| every name in the Spec's `resources` is declared by the PR's repo policy (contract §8.3 "The `resources` domain"); `details` `{job, pr, resource, declared, file}`. A stub draft has no Spec and no check; `plan review` and `plan lock` do not check again | `resource_undeclared` | 3 |
 
 ### A Spec names no primary checkout
 
@@ -1343,7 +1364,7 @@ A Spec must name only repo-relative paths. A Worker works in its own worktree (c
 
 **A stub draft** stores `tier` and the Spec fields `goal`, `context`, `touches`, `acceptance` and `out_of_scope` as null for what was not given (a given `--spec` sets all five; `--tier` sets the Tier), and its `job-added` Event has `tier: null` when it has none. A draft that lacks its Spec or its Tier is **incomplete**: it is never queued or run (contract §3.2), a Plan review of it is refused `draft_incomplete` (§4.6) and so is `plan lock` (§4.8). `needs` and `pr` work as for any draft.
 
-Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `kind` (`work` by default); `tests` and `test_files` from the Spec file of a `test` Job; `review` = 1 with `--review`; `urgent` = 1 with `--urgent` (else 0); `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = draft`, `appended = 1`, no fingerprint, with `--draft` in any later phase; `status = queued`, `appended = 1`, fingerprint stored, in a later phase without `--draft`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, kind, status, appended, tier, needs, review, urgent}`. A Job appended to a PR keeps the PR's `open` Job waiting until it is `merged` or `cancelled`: that Job's Ready rule counts every Job of the PR (contract §3.2). (Before hs-d340 the add also re-armed `all-merged`; that step and Event are retired, contract §3.7 E4.) No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); an appended draft is not Ready at all until its review is approved; one of an `open` PR (a `work` Job, above) reaches its pull request by its own merge (contract §3.8 "Updating"): **no `update` Job is queued**, no PR Gate runs. `pr push` (§9.9) is the repair after a `push_failed`, and `pr rebase` (§9.3) the repair for the rest. A review Job (`--review`) holds the PR's `open` Job through a stub fix draft the Lead registers with it (`job add <key> --title <t> --draft`, a title only; contract §2.2 "Review Job"): the draft keeps the `open` Job from being Ready until the Lead completes or cancels it.
+Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `kind` (`work` by default); `tests` and `test_files` from the Spec file of a `test` Job; `resources` from the Spec file (null when absent); `review` = 1 with `--review`; `urgent` = 1 with `--urgent` (else 0); `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = draft`, `appended = 1`, no fingerprint, with `--draft` in any later phase; `status = queued`, `appended = 1`, fingerprint stored, in a later phase without `--draft`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, kind, status, appended, tier, needs, review, urgent}`. A Job appended to a PR keeps the PR's `open` Job waiting until it is `merged` or `cancelled`: that Job's Ready rule counts every Job of the PR (contract §3.2). (Before hs-d340 the add also re-armed `all-merged`; that step and Event are retired, contract §3.7 E4.) No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); an appended draft is not Ready at all until its review is approved; one of an `open` PR (a `work` Job, above) reaches its pull request by its own merge (contract §3.8 "Updating"): **no `update` Job is queued**, no PR Gate runs. `pr push` (§9.9) is the repair after a `push_failed`, and `pr rebase` (§9.3) the repair for the rest. A review Job (`--review`) holds the PR's `open` Job through a stub fix draft the Lead registers with it (`job add <key> --title <t> --draft`, a title only; contract §2.2 "Review Job"): the draft keeps the `open` Job from being Ready until the Lead completes or cancels it.
 
 ```json
 {"ok": true, "job": {"key": "api-schema", "pr": "api", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": false}}
@@ -1377,6 +1398,8 @@ A draft is editable in **every phase** (User, hs-d173, hs-d174, hs-d179), includ
 | the new needs make no cycle | `dependency_cycle` | 3 |
 | with `--spec`: every `touches` entry is checked as in `job add` (§5.1), against the tree the Job will start from (contract §2.1, hs-d512); `details: {missing: [entries], tree: <ref>}` | `touches_missing` | 3 |
 | with `--spec`: the Spec names only repo-relative paths, not the primary checkout of any PR's repo (§5.1 "A Spec names no primary checkout"); `details: {path, primary, pr}` | `spec_invalid` | 2 |
+| with `--spec`: the Spec's `resources` is valid for the kind (§5) | `spec_invalid` | 2 |
+| with `--spec`, or with `--pr` for a Job that has `resources`: every name is declared by the (new) PR's repo policy, as in `job add` (§5.1); `details` `{job, pr, resource, declared, file}` | `resource_undeclared` | 3 |
 
 Effects: **rows**, one transaction: the changed `jobs` columns; `dependencies` rows deleted and inserted to match (§4.4 allows deletion only for `draft`); with `--pr`, in the order §4.4 states: delete the old Dependencies, update `pr`, insert the new ones. **Event** `job-edited` `{fields: [name]}`, listing only the fields whose value changed (`pr` among them).
 
@@ -1426,7 +1449,7 @@ Effects: **rows**, one transaction: `status = queued`, `retry_tier = <T>`, `fail
 {"ok": true, "job": "worker", "status": "queued", "tier": "S4"}
 ```
 
-Idempotent: yes, as stated.
+Idempotent: yes, as stated. (The engine also retries a `failed` open or update Job of the same PR when its fix merges, contract §3.2 "Engine auto-retry on fix merge" (pro-d89); a Lead normally retries only when no fix is needed or when a fix did not restart the Job.)
 
 ### 5.5 `job dispatch`
 
@@ -1442,6 +1465,8 @@ Starts one Ready Job now: the same step as engine E3 (cpd 1 §11, kept).
 | its fingerprint matches | `locked_job_tampered` | 3 |
 | the driver lock is free (§3.4 step 1) | `cas_lost` | 3 |
 | a linear Attempt of the Job's PR is live (pro-d52, contract §3.7 E3 item 1) | `cas_lost` | 3 |
+| every resource of the Job's Spec is still declared by the PR's repo policy (contract §3.4 "Resources of a Job"); `details` `{job, pr, resource, declared, file}` | `resource_undeclared` | 3 |
+| every resource of the Job's Spec is free: the starter takes them all or none, in name order, after the driver lock and before the Attempt row exists; `details` `{job, resource, holder}`. It changes nothing: no Attempt, and the Job stays `queued` | `resource_busy` | 3 |
 | fewer than `concurrency` Attempts are not `ended` (an urgent Job: fewer than `concurrency + 1`, contract §3.7) | `no_slot` | 3 |
 | the Job's Tier for the Attempt is one a Worker may have (§5, pro-d53, hs-d554): a Job stored on a Tier outside the range before the rule is not started here, as engine E3 does not start it and raises one `error` Event per such Job (contract §3.7 E3) | `tier_not_allowed` | 2 |
 
@@ -1471,7 +1496,7 @@ cpd job list [--status <status>] [--plan <id>]
 cpd job show <key> [--plan <id>]
 ```
 
-Effects: none. Output: every field of the Job (§2.2; `review: true` for a review Job, B2; `urgent`, a boolean; `kind`, and `tests`, `test_files` and `test_approved` where the kind has them; the `needs` of an `open` or `update` Job is the derived list of contract §3.2), `needs`, `needed_by`, and every Attempt with all its fields (`check_tail`, `metrics`) and its Escalations (cpd 1 §11, kept).
+Effects: none. Output: every field of the Job (§2.2; `review: true` for a review Job, B2; `urgent`, a boolean; `kind`, and `tests`, `test_files` and `test_approved` where the kind has them; `resources`, the Spec's list (null when it has none); `waiting_for`, present only for a `queued` Job that lists resources: an array of `{"resource":"<name>","holder":{…}}` for each of its resources held right now, `holder` the holder record of contract §1.4 (`[]` when none is held; the key is absent for every other Job); the `needs` of an `open` or `update` Job is the derived list of contract §3.2), `needs`, `needed_by`, and every Attempt with all its fields (`check_tail`, `metrics`) and its Escalations (cpd 1 §11, kept).
 
 ```json
 {"ok": true, "job": {"key": "worker", "pr": "api", "status": "failed", "failed_cause": "timed_out", "tier": "S2", "review": false, "urgent": false, "fingerprint": "9f…", "retry_tier": null, "…": "…"}, "needs": ["api-schema"], "needed_by": ["ui"],
@@ -1697,7 +1722,7 @@ Idempotent: no; §3.5 refuses `answer` on an Escalation that is not `open`, so a
 
 ## 9. `pr`
 
-A Plan's PRs (R34, §2.2 PR, §3.8) and their pull requests, through `gh` (§7.6). `gh` failures are `gh_failed` (exit 1) with its stderr tail. Every command here works on **one PR**: `pr open`, `pr rebase`, `pr push`, `pr view` and `pr reply` select it by `--pr <key>` (§1.3: omitted, the Plan's one PR that is not `cancelled`); `pr add`, `pr edit`, `pr cancel` and `pr start` (§9.4–§9.7) take its key as their argument; `pr poll` has no `--pr`: it polls every open pull request of the User. `<repo>`, `<base>`, `<lead branch>` and `<lead worktree>` are the selected PR's (§7); `gh` runs with cwd = its Lead worktree, so it addresses the PR's repo.
+A Plan's PRs (R34, §2.2 PR, §3.8) and their pull requests, through `gh` (§7.6). `gh` failures are `gh_failed` (exit 1) with its stderr tail. Every command here works on **one PR**: `pr open`, `pr rebase`, `pr push`, `pr view`, `pr reply` and `pr post` select it by `--pr <key>` (§1.3: omitted, the Plan's one PR that is not `cancelled`); `pr add`, `pr edit`, `pr cancel` and `pr start` (§9.4–§9.7) take its key as their argument; `pr poll` has no `--pr`: it polls every open pull request of the User. `<repo>`, `<base>`, `<lead branch>` and `<lead worktree>` are the selected PR's (§7); `gh` runs with cwd = its Lead worktree, so it addresses the PR's repo.
 
 ### 9.1 `pr open`
 
@@ -2112,7 +2137,7 @@ The detail behind a `pr-feedback` (hs-d98, D10; contract §7.6): the checks, rev
 
 Effects: **gh**, in the PR's Lead worktree: `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url,baseRefName` and `gh api repos/{owner}/{repo}/pulls/<n>/comments`. No rows, no Event.
 
-Output: `plan`; `pr`, the PR's `key`, `number`, `url`, `title`, `base` (the pull request's base branch on GitHub, `baseRefName`), `base_pr` (the base PR as `<plan>/<key>`, derived from the PR's stored `base`, or null: it differs from `base` only until the poll has followed a repoint, contract §3.8 "Stacked PRs" step 8), `state` (`open`, `closed` or `merged`), `review_decision` and `checks` (`none`, `passed`, `pending` or `failed`; the per-check mapping of contract §7.6 step 3b: FAILURE, TIMED_OUT, ACTION_REQUIRED, STARTUP_FAILURE, ERROR are failing; CANCELLED is not; pending checks never fail); `checks`, one entry for each check, `{name, conclusion, url?}` (includes CANCELLED and pending checks with their conclusions unmodified, mapping applies to the summary only); `reviews`, `{id, author, state, body}`; `comments`, `{id, author, body}`; `inline_comments`, the pull request's review comments, `{id, author, path, body}`; and `feedback` (pro-d68), the row's stored list of open feedback items (contract §2.2 "Feedback item"; null when the poll never read it), which is what `pr reply --to` names. `reviews`, `comments` and `inline_comments` are as before and list everything, a bot's included.
+Output: `plan`; `pr`, the PR's `key`, `number`, `url`, `title`, `base` (the pull request's base branch on GitHub, `baseRefName`), `base_pr` (the base PR as `<plan>/<key>`, derived from the PR's stored `base`, or null: it differs from `base` only until the poll has followed a repoint, contract §3.8 "Stacked PRs" step 8), `state` (`open`, `closed` or `merged`), `review_decision` and `checks` (`none`, `passed`, `pending` or `failed`; the per-check mapping of contract §7.6 step 3b: FAILURE, TIMED_OUT, ACTION_REQUIRED, STARTUP_FAILURE, ERROR are failing; CANCELLED is not; pending checks never fail); `checks`, one entry for each check, `{name, conclusion, url?}` (includes CANCELLED and pending checks with their conclusions unmodified, mapping applies to the summary only); `reviews`, `{id, author, state, body}`; `comments`, `{id, author, body}`; `inline_comments`, the pull request's review comments, `{id, author, path, body}`; `feedback` (pro-d68), the row's stored list of open feedback items (contract §2.2 "Feedback item"; null when the poll never read it), which is what `pr reply --to` names; and `post` (pro-d65, contract §2.2), null for an unposted PR, else `{channel, ts, link, posted_at, reaction, reacted_at}`. `reviews`, `comments` and `inline_comments` are as before and list everything, a bot's included.
 
 ```json
 {"ok": true, "plan": "pay-4521",
@@ -2120,7 +2145,8 @@ Output: `plan`; `pr`, the PR's `key`, `number`, `url`, `title`, `base` (the pull
  "checks": [{"name": "ci/test", "conclusion": "FAILURE", "url": "https://github.com/acme/pay/actions/runs/1"}, {"name": "ci/lint", "conclusion": "SUCCESS"}],
  "reviews": [{"id": "PRR_kwDO…", "author": "reviewer", "state": "CHANGES_REQUESTED", "body": "Please add a test."}],
  "comments": [{"id": "IC_kwDO…", "author": "reviewer", "body": "Thanks for the fix."}],
- "inline_comments": [{"id": "1893", "author": "reviewer", "path": "src/payout.rs", "body": "This retry never backs off."}]}
+ "inline_comments": [{"id": "1893", "author": "reviewer", "path": "src/payout.rs", "body": "This retry never backs off."}],
+ "post": null}
 ```
 
 Idempotent: yes (a read).
@@ -2156,6 +2182,57 @@ Output: `{"ok": true, "replied": {"pr", "to", "url"}}`, `url` the posted comment
 ```
 
 Idempotent: no (every run posts a comment).
+
+### 9.8b `pr post`
+
+```
+cpd pr post [--pr <key>] [--plan <id>]
+```
+
+Posts a PR's pull request to Slack for review, so an agent never calls Slack tools by hand (pro-d64, pro-d65). **Callers:** Lead; not cockpit, not internal (§2). The Lead asks the User and posts only on the User's yes. A PR may be posted only once; a second attempt is refused `already_posted`. The command makes NO GitHub call: it reads the stored `pull_requests` row of the PR (the poll keeps it, every `watch.pr_poll_seconds`; `cpd pr poll` makes it fresh).
+
+| Flag | Meaning |
+|---|---|
+| `--pr <key>` | the PR to post, selected by §1.3's rule: required when the Plan has two or more PRs that are not `cancelled`, defaulted to the one when it has one |
+
+Check order; the first failure refuses, and then nothing is sent and nothing is written:
+
+1. the PR's status is not `open` (`details` `{pr, status}`) → `pr_not_open` (exit 3)
+2. a `pr_posts` row exists for the PR (`details` `{pr, channel, ts, link, posted_at}`) → `already_posted` (exit 3)
+3. the owner's policy resolves for the PR (`policy_invalid`, `owner_unset`, `owner_unconfirmed`, contract §8.3 "Validation") → refusal with listed exit codes (1 or 3)
+4. `policy.pr.post.enabled` is false (`details` `{pr, key: "pr.post.enabled"}`) → `post_disabled` (exit 3)
+5. the stored pull request is not `authored` (`details` `{pr, number}`) → `not_authored` (exit 3)
+6. the channel is `policy.pr.post.channel` when not empty, else the machine config's `inbox.team_channel` when not empty, else (`details` `{keys: ["pr.post.channel", "inbox.team_channel"]}`) → `post_unconfigured` (exit 3)
+7. `postable::unready(&row)` (contract §2.2, §8.3, the eight Unready reasons: `not_open`, `draft`, `conflicting`, `changes_requested`, `checks_failed`, `checks_pending`, `comments_unread`, `bot_comments`) is not empty (`details` `{pr, number, url, reasons: [<as_str of each>]}`) → `pr_not_ready` (exit 3)
+
+| Refusal | Exit | Details |
+|---|---|---|
+| `pr_not_open` | 3 | `{pr, status}` |
+| `already_posted` | 3 | `{pr, channel, ts, link, posted_at}` |
+| `policy_invalid` | 1 | `{key: "pr.post.*", …}` as contract §8.3 |
+| `owner_unset` | 3 | contract §8.3 |
+| `owner_unconfirmed` | 1 | contract §8.3 |
+| `post_disabled` | 3 | `{pr, key: "pr.post.enabled"}` |
+| `not_authored` | 3 | `{pr, number}` |
+| `post_unconfigured` | 3 | `{keys: ["pr.post.channel", "inbox.team_channel"]}` |
+| `pr_not_ready` | 3 | `{pr, number, url, reasons: ["draft", "changes_requested", …]}` |
+| `slack_auth` | 3 | the Slack sign-in in pi's MCP credentials is missing or invalid (§21.7); run `pi mcp login slack` |
+| `slack_not_configured` | 3 | no `slack` server in `~/.pi/agent/mcp.json` (§21.7); run `pi mcp add slack --url https://mcp.slack.com/mcp --exposure hidden` |
+| `slack_failed` | 1 | the helper could not send the message (timeout, network, Slack service failure) (§21.7); check the channel to see if the message was posted |
+| `slack_unparseable` | 1 | the helper's response is not the expected JSON (§21.7); the message may have been posted |
+| `slack_helper_failed` | 1 | the helper could not load pi's MCP modules (§21.7) |
+| `spawn_failed` | 1 | the helper could not be started |
+| `store_failed` | 1 | the store write after a sent message failed (§21.7, D5); the message WAS posted to the channel and the link is in `details` |
+
+Effects: **Slack**, through the helper (§21.7), one `slack_send_message` call with the rendered message from `policy.pr.post.template` (contract §8.3). Rows: one `pr_posts` row (contract §4.4); the only later write is `reacted_at` (PR `react`). Events: none (contract §5.1). Limits: a crash between Slack's answer and the row can post twice on a rerun; a timeout leaves the outcome unknown, check the channel; two simultaneous runs of the same PR could both send and the second's insert fails as `already_posted` (documented, not guarded); the stored row is up to `watch.pr_poll_seconds` old, `cpd pr poll` first makes it fresh, and a PR the poll never read for comments is `comments_unread`.
+
+Output: `{"ok":true,"plan":<id>,"pr":<key>,"number":<n>,"url":<the pull request's url>,"post":{"channel":"C…","ts":"1793040197.490209","link":"https://missionlane.slack.com/archives/C…/p1793040197490209","posted_at":<time>,"reaction":<emoji name or null>,"reacted_at":null},"message":<rendered text>}`.
+
+```json
+{"ok": true, "plan": "pay-4521", "pr": "api", "number": 813, "url": "https://github.com/acme/pay/pull/813", "post": {"channel": "C02JU6C2Z1D", "ts": "1793040197.490209", "link": "https://missionlane.slack.com/archives/C02JU6C2Z1D/p1793040197490209", "posted_at": "2026-10-26T21:36:37.490209Z", "reaction": "git-merge", "reacted_at": null}, "message": "Retry failed payouts (api)\nhttps://github.com/acme/pay/pull/813"}
+```
+
+Idempotent: no (every run tries to post).
 
 ### 9.9 `pr push`
 
@@ -2277,12 +2354,14 @@ Effects: none; one read transaction.
 cpd session show [<id>]
 ```
 
-`<id>` defaults to the selected Session (`CPD_SESSION`); it accepts the short forms of §1.3. Output: the fields of `session list` plus `created_at`, `registered_event` (the id of its `session-registered` Event, the pi adapter's first cursor, §15.2), `model` and `thinking` (the row's `tier` as pi is told it, below: hs-d506), `loop_guard_turns` (the config value, for every Session) and, for a Plan's Lead, `open_escalations` (ids). Effects: none.
+`<id>` defaults to the selected Session (`CPD_SESSION`); it accepts the short forms of §1.3. Output: the fields of `session list` plus `created_at`, `registered_event` (the id of its `session-registered` Event, the pi adapter's first cursor, §15.2), `model` and `thinking` (the row's `tier` as pi is told it, below: hs-d506), `loop_guard_turns` (the config value, for every Session), `switch` (null or a failed switch record, below), and, for a Plan's Lead, `open_escalations` (ids). Effects: none.
 
 `model` is from the policy's `[model]` table for the key of the row's `tier` (contract §8.3, §9) (`<provider>/<model-id>`), and `thinking` is the level of the tier's digit (`off`, `low`, `medium`, `high`, `xhigh`, `max`, contract §9): the two halves of the `--model <model>:<thinking>` argument `session run` passes (§10.8), computed by the one function both use. The models are read at each call, so a policy edit shows at once.
 
+`switch` (DEFECT 2) is null when the Session's last model switch succeeded or has not been attempted; otherwise it is `{tier, code, message, at, next}` where `tier` is the `tier` the switch tried, `code` and `message` are from the adapter error, `at` is the RFC 3339 UTC time, and `next` is the exact `cpd session run <id>` command that relaunches this Session's pi so it starts on the current `tier` (taken from contract §6.5, §10.4, §10.8 as they stand at the time `switch` is read; the docs Job picks and cites it).
+
 ```json
-{"ok": true, "session": {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "idle", "state_label": null, "place": "chat", "tmux_pane": "%12", "file": "…", "forked_from": null, "plan_lead": true, "tier": "O3", "model": "github-copilot/claude-opus-5.5", "thinking": "high", "loop_guard_turns": 20, "cwd": "/home/clayton/projects/cpd", "title": null, "titled_at": null, "created_at": "…", "registered_event": 40117},
+{"ok": true, "session": {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "idle", "state_label": null, "place": "chat", "tmux_pane": "%12", "file": "…", "forked_from": null, "plan_lead": true, "tier": "O3", "model": "github-copilot/claude-opus-5.5", "thinking": "high", "loop_guard_turns": 20, "switch": null, "cwd": "/home/clayton/projects/cpd", "title": null, "titled_at": null, "created_at": "…", "registered_event": 40117},
  "open_escalations": ["contract-commands-a1-q1"]}
 ```
 
@@ -2428,7 +2507,7 @@ Before it starts pi (steps 1–3) every pi a `session run` starts, a Lead's and 
 
 **Adapter watchdog** (hs-d141; contract §6.7 "Adapter watchdog"). While pi is alive, the wrapper checks the Session's state at every poll (2 s). When the state has been `stopped` for more than **60 s** (a constant of the wrapper, not a config key; measured from the `session-state` Event that set it, so a state the wrapper itself set after a pi exit does not count while pi is not running), it restarts pi on the session file: `SIGTERM`, wait (`SIGKILL` after `timeouts.pi_stop_seconds`, as for a reload), then step 1. In one transaction before the restart it appends one `error` Event `{source: "session run", code: "adapter_missing", message, details: {session, state_since, seconds}}` with `session` = this Session (and its `plan`, `context`), which the new adapter delivers once it follows (§15.3). It applies to every Lead and Manager, whatever the place and whatever the idle rules of the reload; a `stopped` that ends (`idle`) before 60 s is the adapter's own reload and is never touched. After the restart the 60 s start again; a broken install loops once per 60 s with one `error` Event per restart (no cap: each is a visible fact, and a repaired install ends it).
 
-The first message is the file `plan new` or `session fork` wrote (§1.4); for a Manager, `run/<context>/manager-message.md` (§3.10); none when resumed. Before it starts pi it writes the `git` wrapper `$CPD_HOME/bin/git` if it is missing or different (idempotent) and puts `$CPD_HOME/bin` first on pi's `PATH` (contract §6.5, hs-d310). It is passed as `@<path>` (its absolute path). While pi runs, it watches for the session file (§6.5) and records `sessions.file` once it appears (a data write, no Event). When pi exits it runs `session state stopped` if the adapter did not, prints `pi exited. Press Enter to resume <name> here.` and resumes on Enter, except after a quit by the User (below).
+The first message is the file `plan new` or `session fork` wrote (§1.4); for a Manager, `run/<context>/manager-message.md` (§3.10); none when resumed. Before it starts pi it writes the `git` wrapper `$CPD_HOME/bin/git` if it is missing or different (idempotent) and puts `$CPD_HOME/bin` first on pi's `PATH` (contract §6.5, hs-d310). It is passed as `@<path>` (its absolute path). In the same transaction it clears `switch_failed` (DEFECT 2: pi now runs the row's current Tier, so any earlier failed switch is stale). While pi runs, it watches for the session file (§6.5) and records `sessions.file` once it appears (a data write, no Event). When pi exits it runs `session state stopped` if the adapter did not, prints `pi exited. Press Enter to resume <name> here.` and resumes on Enter, except after a quit by the User (below).
 
 **Auto-archive on the User's quit** (hs-d91, hs-d122). pi exits with status 0 on the User's `/quit` and Ctrl+D (pi 1.2.0, `interactive-mode.js`: `shutdown()` ends in `process.exit(0)`; verified by reading it). The wrapper tells that quit from its own: when pi exits with status 0 and the wrapper did not cause the exit (it sent no reload `SIGTERM`), the User quit. Then, in this order:
 1. If the Lead is in the chat slot, `session park` it first (§10.5), so the placeholder takes the slot.
@@ -2676,12 +2755,12 @@ Exactly one of the two: neither, or both, is `usage` (exit 2).
 `--all` refuses nothing for a Session it passes over: archived Sessions and Workers are not part of it and are not listed.
 
 **Effects**, one transaction for the whole command:
-- **Rows:** for each selected Session whose `tier` differs from its target, `sessions.tier` = the target (the store's history trigger records the old row).
+- **Rows:** for each selected Session whose `tier` differs from its target, `sessions.tier` = the target (the store's history trigger records the old row) and `sessions.switch_failed = NULL` (DEFECT 2: a new target is a new attempt; any earlier failed switch is stale).
 - **Event** `session-retiered` `{from, to}` for each such Session, one each, addressed to it (`session` set, with its `context` and `plan` when it has one), appended in the same transaction. `from` and `to` are Tier strings (`O3`, `O2`). `text`: `Session <id> moved from O3 to O2.`
 - A Session already on its target is **unchanged**: no row write, no Event. When no Session changes, nothing is written at all.
 - **No tmux call and no pi restart.** A running pi switches itself (below); a Session with no pi keeps the new `tier` for its next start (§10.8).
 
-**The adapter's switch** (contract §5.3, §6.5; commands §15.3 `session-retiered`). The Event reaches the adapter of the Session it names. **At the Session's next idle** (right away when it already is) the adapter reads `cpd session show` for the Session's `model` and `thinking` (§10.2), finds the model in pi's registry (`ctx.modelRegistry.find(<provider>, <model-id>)`, the provider being the part of `model` before its first `/`) and calls `pi.setModel(<that model>)` and `pi.setThinkingLevel(<thinking>)`, once per change and never while the Session works, waits or is blocked: no turn is interrupted and nothing is restarted, and the conversation stays whole (docs: pi 1.3.0 `extensions.md`, `ExtensionAPI.setModel` "for the current session without changing the configured default"). Several Events before one idle make one switch, to what the row says at that idle.
+**The adapter's switch** (contract §5.3, §6.5; commands §15.3 `session-retiered`). The Event reaches the adapter of the Session it names. **At the Session's next idle** (right away when it already is) the adapter reads `cpd session show` for the Session's `model` and `thinking` (§10.2), finds the model in pi's registry (`ctx.modelRegistry.find(<provider>, <model-id>)`, the provider being the part of `model` before its first `/`) and calls `pi.setModel(<that model>)` and `pi.setThinkingLevel(<thinking>)`, once per change and never while the Session works, waits or is blocked: no turn is interrupted and nothing is restarted, and the conversation stays whole (docs: pi 1.3.0 `extensions.md`, `ExtensionAPI.setModel` "for the current session without changing the configured default"). Several Events before one idle make one switch, to what the row says at that idle. When the model is not found, `setModel` throws or answers false (DEFECT 2), the adapter runs `cpd session switch-failed --code model_unavailable --message "<text>"` in addition to its existing error report (§10.18); after `setModel` accepts and the thinking level is set it runs `cpd session switched`, so `session show` clears the failed switch record and the Lead sees success.
 
 ```json
 {"ok": true, "retiered": [
@@ -2714,13 +2793,66 @@ Reports an adapter error to the Manager (hs-d573, M4): the adapter of a Lead run
 |---|---|---|
 | the Session exists | `session_not_found` | 4 |
 
-Effects: **Rows**, one transaction: `events` (one `error` Event, source `adapter`; context = the Session's Context; **plan null and session null** so no Lead's follower, which follows its Plan's Events and those addressed to it, ever receives it back; data `{source: "adapter", code, message, details}` with `details` = the given object plus `{what, session, plan}`; text `cpd adapter: <what>: <code>: <message>`). Not idempotent by design: every call appends an Event.
+Effects: **Rows**, one transaction: `events` (one `error` Event, source `adapter`; context = the Session's Context; **session = the reporting Session, plan null** (DEFECT 1: so the Manager can identify which Session failed; the follower rule of §11.2 excludes adapter-source errors from any Session's follower, so a Lead does not see its own adapter errors); data `{source: "adapter", code, message, details}` with `details` = the given object plus `{what, session, plan}`; text `cpd adapter: <what>: <code>: <message>`). Not idempotent by design: every call appends an Event.
 
 Output:
 
 ```json
 {"ok": true, "event": "4823"}
 ```
+
+### 10.18a `session switch-failed` (internal)
+
+```
+cpd session switch-failed --code <code> --message <text> [--session <id>]
+```
+
+Records a failed model switch (DEFECT 2): the adapter of a Lead runs this when `setModel` fails (the three `unavailable` paths), to record the failure for the Lead to see in `session show` and to help it relaunch pi.
+
+| Flag | Meaning |
+|---|---|
+| `--code <code>` | error code (the adapter's code): `^[a-z][a-z0-9_]{0,63}$`, else `usage` |
+| `--message <text>` | error message (1–2000 characters), else `usage` |
+| `--session <id>` | the Session whose switch failed; default `CPD_SESSION` (§1.3) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session exists | `session_not_found` | 4 |
+| it is a `lead` or a `manager`, never a Worker | `not_a_lead` | 3 |
+
+Effects: **Rows**, one transaction: `sessions.switch_failed = {tier, code, message, at}`, where `tier` is the row's current `tier`, `code` and `message` are the given values, and `at` is the current RFC 3339 UTC time. No Event. Idempotent: yes; rerunning with the same or different code/message overwrites the existing `switch_failed` (the latest failure stands).
+
+Output:
+
+```json
+{"ok": true, "session": "596d007f-…"}
+```
+
+### 10.18b `session switched` (internal)
+
+```
+cpd session switched [--session <id>]
+```
+
+Records a successful model switch (DEFECT 2): the adapter of a Lead runs this after `setModel` accepts and the thinking level is set, to clear the failure record.
+
+| Flag | Meaning |
+|---|---|
+| `--session <id>` | the Session whose switch succeeded; default `CPD_SESSION` (§1.3) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session exists | `session_not_found` | 4 |
+| it is a `lead` or a `manager`, never a Worker | `not_a_lead` | 3 |
+
+Effects: **Rows**, one transaction: `sessions.switch_failed = NULL`. No Event. Idempotent: yes; rerunning does nothing when `switch_failed` is already null.
+
+Output:
+
+```json
+{"ok": true, "session": "596d007f-…"}
+```
+
 
 ### 10.17 `session resume`
 
@@ -2868,6 +3000,8 @@ cpd events follow [--plan <id> | --context <id> | --session <id>] [--kind <kind>
 ```
 
 §5.4, normative: one Event per line, in id order; without `--since`, only Events committed after it starts; polling `PRAGMA data_version` every `events.poll_ms`; ends on EPIPE, on kill, or when its stdout is closed (`POLLHUP` or `POLLERR` on fd 1, checked at each poll, so an idle stream whose reader is gone still ends), with exit 0, or with `--until-idle` once it has printed everything committed when it started.
+
+**Adapter-source error Events** (DEFECT 1): a Lead's follower (`--session` with a Lead Session) and any other Session's follower (`--session` with any non-Lead Session) skip `error` Events whose `data.source` is `adapter`, so a Session does not see its own adapter error. The Manager can read all Events (no `--session` filter applied, or `--context` filter), including adapter-source errors with their `session` field naming which Session failed.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -3509,7 +3643,7 @@ The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays
 - **The empty last row** (User, hs-d567; contract §6.1 "The blank row", Q2-Q3): in its `session_start` handler (`pi/lib/adapter.ts`), the adapter calls `ctx.ui.setStatus("cpd-pad", "")` (`ctx.mode` `tui`; it knows nothing of the chat slot, so a parked pane has the extra empty row too). pi's footer draws one more line, empty, when its extension statuses are not empty, so pi's last row is empty; a `/reload` runs `session_start` again and sets it again, and a resize needs nothing (verified in real pi, contract §6.1 evidence). The key `cpd-pad` is ours; another extension's status text would share the line.
 - **Identity:** `CPD_SESSION` must equal `ctx.sessionManager.getSessionId()`. If not, the adapter delivers one error message (below) and stays inactive: it would otherwise report another Session's state.
 - **Calls:** one-shot commands through `pi.exec("cpd", args)`, whose stdout is parsed as the JSON envelope at the boundary (a non-JSON stdout, or `ok: false`, is an error with the code). Each call passes a timeout of 30 s and the abort signal of the adapter's run (aborted at `session_shutdown`); a call that times out or is aborted is reported like a failed call (the error delivery below, code `tool_timeout` for a timeout). The follower is a child process (`node:child_process` `spawn`, argv, stdin `/dev/null`) read line by line.
-- **Errors** (hs-d552; the adapter-only codes `protocol_mismatch` and `mcp_register_failed` are delivered by this rule, contract §1.2) for a **Manager** or **Worker**: delivered to the Session as `pi.sendMessage({customType: "cpd", content: "cpd adapter: <what>: <code>: <message>", display: true, details: {kind: "error", code, …}}, {triggerTurn: false, deliverAs: "followUp"})`: no turn started, shown as a follow-up. An error identical to the last one shown in this Session (same `what` and `code`) is not shown again until a different error has been shown; one memory per Session, cleared at reload. For a **Lead** (hs-d573 cause A): one line appended to the adapter log `$CPD_HOME/run/adapter/<session>.log` (15.6 'Log'): `<time> error: <what>: <code>: <message>`, and reported to the Manager with `cpd session report` (§10.18), once per (`what`, `code`) by memory (`host.report`): the same error again is neither logged again nor reported again until a different one has been. If the report itself fails, that is one log line (`<time> report failed: <code>: <message>`), never delivered and never reported again (no recursion); the next different error tries again. The adapter never throws into pi.
+- **Errors** (hs-d552; the adapter-only codes `protocol_mismatch` and `mcp_register_failed` are delivered by this rule, contract §1.2) for a **Manager** or **Worker**: delivered to the Session as `pi.sendMessage({customType: "cpd", content: "cpd adapter: <what>: <code>: <message>", display: true, details: {kind: "error", code, …}}, {triggerTurn: false, deliverAs: "followUp"})`: no turn started, shown as a follow-up. An error identical to the last one shown in this Session (same `what` and `code`) is not shown again until a different error has been shown; one memory per Session, cleared at reload. For a **Lead** (hs-d573 cause A): one line appended to the adapter log `$CPD_HOME/run/adapter/<session>.log` (15.6 'Log'): `<time> error: <what>: <code>: <message>`, and reported to the Manager with `cpd session report` (§10.18), once per (`what`, `code`) by memory (`host.report`): the same error again is neither logged again nor reported again until a different one has been. The Manager's error Event carries `session` = the reporting Session (DEFECT 1: so the Manager can see which Session failed), and `plan` = null, so the Lead does not receive its own error back (§11.2). If the report itself fails, that is one log line (`<time> report failed: <code>: <message>`), never delivered and never reported again (no recursion); the next different error tries again. The adapter never throws into pi.
 
 ### 15.2 Start-up and the cursor
 
@@ -4085,7 +4219,7 @@ Decision (User, 2026-10-26 11:53 EDT, relayed by the Lead of Plan preco-home-but
 
 **A command that does not exit within 30 seconds** (a dev server, a watcher, a long build) runs in the background: its own process group, its output in the log `/tmp/cpd-<plan>/<name>.log`, its process group id in `/tmp/cpd-<plan>/<name>.pid` (`<plan>` the Plan's id, `<name>` a short name), because the adapter refuses a bash call that waits over the bound (§15.11) and a foreground one would hold the User's conversation. The Lead then tells the User, in one message, the URL or port, the log path and how to stop it.
 
-**Nothing is left orphaned:** the Lead stops what it started (the process group, so the children end too) when the User says they are done, when the User asks it to stop, and at `plan-done` if it still runs.
+**A dev server that holds a repo's declared resource** (for example the port an e2e run needs, `cpd resource list`, §30) is started with the prefix `cpd resource run <name> --`, so the resource is held while it runs and a Job that lists it waits instead of failing on the port. **Nothing is left orphaned:** the Lead stops what it started (the process group, so the children end too) when the User says they are done, when the User asks it to stop, and at `plan-done` if it still runs.
 
 **Where it runs.** Where the User says; for a Plan's branch, in the PR's Lead worktree (`lead_worktree` of `cpd plan show`).
 
@@ -4103,6 +4237,7 @@ Rendered by the driver at A3 to `run/<plan>/specs/<attempt>.md` from a template 
 | Who you are | Attempt `<n>` of Job `<job>` (`<title>`) in Plan `<plan>` (was "Workflow"); attempt id, Tier, worktree path |
 | Rules | work only in this worktree and touch only the listed files; commit your work; before submitting, run the quick check yourself: the commands of `pre-commit` from the PR's policy (`[hooks]`, contract §7.3), listed verbatim, or, when the policy has no `pre-commit` hook, the line `This repo defines no quick check.` (change: cpd 1 said `./verify.sh`; R20: no fallback to `pre-merge`); never edit the protected paths, listed: `.cpd/` and each entry of the PR's `protected.paths` (§7.5; change: cpd 1 hard-coded `verify.sh`); never ask the User anything; tear down everything it started before it submits (private tmux servers, background processes, temporary homes, a `cpd watch` it started; hs-d34, hs-d39); if continuing would require guessing, `cpd ask <attempt> "<question>"`, which blocks until the Lead answers (change: no `--wf`, the pane has `CPD_PLAN`); one blocker at a time; commit a skeleton within 10 minutes, then at least every 20 minutes; run only commands that exit: `timeout` around every test and measurement, no synthetic benchmarks, never `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run` or any other command that does not exit (hs-n97, hs-n107); run only the tests the change touches, never the full suite (the Gate's); do not stop until you have submitted |
 | Job | Goal, Context, Files you may touch (`touches`), Acceptance, Out of scope (or "Nothing is listed. Still do only what the Goal and Acceptance require.") |
+| Resources | only when the Job's Spec lists `resources`: a line naming each resource the Attempt holds until it ends, and that `cpd resource run <name> -- <command>` run in the Attempt takes nothing more and runs the command at once (§29) |
 | Previous Attempts | only when the Job has ended Attempts: for each, number, Tier, outcome and cause, and what explains it: the conflicting files (`merge_conflict`), the failed Gate's hook and log (`gate_failed`, `gate_error`), or one sentence for every other cause (change: cpd 1 showed only feedback) |
 | Answers already given | new: every `answered` Escalation of earlier Attempts, question and answer, so a Worker does not ask again |
 | Finish | `cpd attempt submit <attempt>`; on success stop at once; on a refusal, what each code means: `wrong_worktree` (run it from the worktree), `dirty_tree`, `no_commits`, `gate_tampered` (revert the protected paths), `check_failed` (fix, commit, submit again; the tail is in `details`), `check_error` (the check could not run: ask the Lead), `attempt_not_running` (the Attempt was stopped: stop) |
@@ -4503,7 +4638,7 @@ Output, one JSON value on stdout (contract §1.2), progress on stderr:
 
 A helper that exits 0 and prints no result is not one of these refusals: E11 reports it as `spawn_failed`, whose message is `<argv> exited 0 but printed no result.` (any other exit with no result keeps `<argv> printed no result.`) and whose `details` are `{argv, exit, stdout, stderr}`, the last two the tail of what the child printed.
 
-Writes nothing: no file, no Slack message, no reaction (hermes' `post_message`, `add_reaction` and `mark_merged` are not ported). The `:eyes:` reaction is not placed (C7, §21.7: it awaits a writable Slack integration). The credential is read and refreshed inside pi's modules; the helper holds no token.
+Writes nothing: no file, no Slack message, no reaction (hermes' `post_message`, `add_reaction` and `mark_merged` are not ported); the message and the reaction are done by the later helpers `slack-post.ts` (§21.8) and `slack-react.ts`. The `:eyes:` reaction is not placed (C7, §21.7: it awaits a writable Slack integration). The credential is read and refreshed inside pi's modules; the helper holds no token.
 
 **The helper is no Session** (contract §6.11): `--no-mcp` and `cpd mcp attach` (§24.1) do not reach it. It keeps reading the `slack` entry of `<agentDir>/mcp.json`, which therefore stays until a later Plan moves the helper (pro-d10).
 
@@ -4529,6 +4664,42 @@ cpd inbox claim <id>
 Effects, one transaction: **rows** `inbox_items.claimed_at` = now; **Event** `inbox-claimed` `{item}` (C4); one `session-message` Event to the Context's Manager (C4), worded to ask the Manager to start a review of the pull request, containing the URL and the Slack post's channel and `ts_raw`. Output: `{"ok": true, "item": {…, "claimed_at": "…"}, "manager": "<session id>"}` (C4).
 
 Idempotent: yes. An item already claimed returns `"already": true` and writes nothing, with no Event.
+
+### 21.8 The helper `slack-post.ts`
+
+`pi/lib/slack-post.ts` in cpd's `pi/` package, beside `slack-channel.ts` (§21.6 contract §8 `pi_adapter`). Not a cpd command: `pr post` (§9.8b) runs it, and later (PR `react`) `slack-react.ts` runs the same way. It calls the Slack MCP server's tools **through pi's own MCP client and token store**, so cpd has no HTTP client and never reads, copies or logs the credential.
+
+```
+node <adapter>/lib/slack-post.ts --coding-agent <…/@earendil-works/pi-coding-agent/dist/index.js> --channel <C…>
+```
+
+Environment: `PI_CODING_AGENT_DIR` (the agent directory of the pi release, contract §9); `CPD_HOME`, `CPD_PLAN`, `CPD_SESSION` and `CPD_ATTEMPT` are passed; others from the caller are removed. cwd is `$CPD_HOME`; the helper hands it to the connection. Constants in the helper, each with its source: tool `slack_send_message`, server entry `slack` of `<agentDir>/mcp.json` (the global file only; a project file is never read), `unfurl_app_links: true`, message size 1 to 5000 bytes (UTF-8), 30 s for the send call (contrast hermes' 45 s read).
+
+**Entry.** The helper answers only when it is the script `node` was started with, same as `slack-channel.ts` (§21.6).
+
+What it does:
+1. **Loads pi's modules** by file URL from the directory of `--coding-agent`, reuses `connect`, `Refusal` and `CallTool` from `slack-channel.ts` and its `McpServerConnection`. A failure is `slack_helper_failed`.
+2. **Reads stdin** (UTF-8, up to 5000 bytes): the message text; no message or over 5000 is `usage` and nothing is sent.
+3. **Sends the message**: `callTool("slack_send_message", {channel_id, message, unfurl_app_links: true})` with a 30 s deadline. Not signed in is `slack_auth`. A timeout, `isError`, or any other failure is `slack_failed`.
+4. **Reads the answer** and validates it: the real tool answers `{"message_link":"…","message_context":{"message_ts":"<ts>","channel_id":"<C…>"}}`. An invalid result, or a channel_id that does not match the channel asked, is `slack_unparseable` with `details.message` that may have been posted, check the channel.
+
+Output, one JSON value on stdout (contract §1.2):
+
+```json
+{"ok": true, "channel": "C02JU6C2Z1D", "ts": "1793040197.490209", "link": "https://missionlane.slack.com/archives/C02JU6C2Z1D/p1793040197490209"}
+```
+
+| Failure | Code | Exit |
+|---|---|---|
+| no `--channel`, or stdin over 5000 bytes, or empty | `usage` | 2 |
+| the `slack` server is not in `<agentDir>/mcp.json` | `slack_not_configured` | 3 |
+| Slack needs a sign-in (step 3) | `slack_auth` | 3 |
+| the send timed out or failed (step 3) | `slack_failed` | 1 |
+| the answer is not the expected JSON, or channel_id does not match | `slack_unparseable` | 1 |
+| pi's modules did not load (step 1) | `slack_helper_failed` | 1 |
+| the helper could not be started | `spawn_failed` | 1 |
+
+Writes one Slack message and nothing else. The credential is read and refreshed inside pi's modules; the helper holds no token. The caller (§9.8b) writes the `pr_posts` row after a successful send.
 
 ## 22. `policy`
 
@@ -4562,7 +4733,7 @@ Prints the resolved policy of one key: every domain with its value and its sourc
 
 Effects: none. One read transaction for the key's rows, then the compiled default and the key's files, read in order (`policy/host.toml` when it exists, `policy/<owner>/owner.toml`, `policy/<owner>/<repo>.toml` for a `Repo` key when it exists: the file is optional), each parsed once. No subprocess. `check_file_names`: the file `host.toml` is the machine scope; a directory whose name is a valid owner login must contain only `owner.toml` and files with valid repo names ending in `.toml`, else `policy_invalid` (§8.3).
 
-Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Session's role (`manager`, `lead` or `worker`) with no flag, else null; `files`, the realpath of each file read in order (machine, owner, repo), only the files that exist (a repo without a file has no repo scope and prints the owner's policy); and `policy`, one entry per domain of contract §8.3, in its table's order, each with `source`, `audience` (the roles its `text` reaches), `keys` (its typed keys, each with its `value` and `source`; `{}` for a domain that has none) and `text`. The three repo-only domains (contract §8.3) print like the others: `audience` `[]`, `text` `""`, `source` `default` or `repo:<path>`; the `keys` of `hooks` are `pre-start`, `pre-commit` and `pre-merge`, each `value` a list of blocks, each block a list of `{"name": <string or null>, "command": <string>}` (`[]` when the hook is not set); of `test-commands`, `build`, `run` and `list` (a string, or null when not set); of `protected`, `paths` (a list of strings, `[]` by default). A domain's `source` is `default`, `machine:<path>`, `owner:<path>` or `repo:<path>`; a typed key left out of a set domain has its domain's source followed by ` (key default)`, and its value is cpd's default (contract §8.3 "Precedence and replace"). The adapter keeps the domains whose `audience` holds `role` and whose `text` is not empty.
+Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Session's role (`manager`, `lead` or `worker`) with no flag, else null; `files`, the realpath of each file read in order (machine, owner, repo), only the files that exist (a repo without a file has no repo scope and prints the owner's policy); and `policy`, one entry per domain of contract §8.3, in its table's order, each with `source`, `audience` (the roles its `text` reaches), `keys` (its typed keys, each with its `value` and `source`; `{}` for a domain that has none) and `text`. The four repo-only domains (contract §8.3) print like the others: `audience` `[]`, `text` `""`, `source` `default` or `repo:<path>`; the `keys` of `hooks` are `pre-start`, `pre-commit` and `pre-merge`, each `value` a list of blocks, each block a list of `{"name": <string or null>, "command": <string>}` (`[]` when the hook is not set); of `test-commands`, `build`, `run` and `list` (a string, or null when not set); of `protected`, `paths` (a list of strings, `[]` by default); of `resources`, one key `names`, the declared resource names, sorted (`[]` and source `default` when none is declared). A domain's `source` is `default`, `machine:<path>`, `owner:<path>` or `repo:<path>`; a typed key left out of a set domain has its domain's source followed by ` (key default)`, and its value is cpd's default (contract §8.3 "Precedence and replace"). The adapter keeps the domains whose `audience` holds `role` and whose `text` is not empty.
 
 ```json
 {"ok": true, "key": {"owner": "clayton-duarte", "repo": "cpd"}, "role": "worker",
@@ -4586,7 +4757,8 @@ Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Ses
                       "pre-merge": {"value": [], "source": "repo:/home/clayton/.cpd/policy/clayton-duarte/cpd.toml"}}, "text": ""},
    "test-commands": {"source": "default", "audience": [],
                      "keys": {"build": {"value": null, "source": "default"}, "run": {"value": null, "source": "default"}, "list": {"value": null, "source": "default"}}, "text": ""},
-   "protected": {"source": "default", "audience": [], "keys": {"paths": {"value": [], "source": "default"}}, "text": ""}}}
+   "protected": {"source": "default", "audience": [], "keys": {"paths": {"value": [], "source": "default"}}, "text": ""},
+   "resources": {"source": "default", "audience": [], "keys": {"names": {"value": [], "source": "default"}}, "text": ""}}}
 ```
 
 **The machine object.** Every form of the command (`--pr`, `--context`, `--owner`, `--owner --repo` and no flag) also carries a top-level `machine` object, because every form reads the machine file (`$CPD_HOME/policy/host.toml`, contract §8.3; it is also a full policy scope, read as the "Effects" above say, and the `mcp` table is the only part this object reports): `{"name": "<machine>", "mcp": {"source", "servers"}}`. `name` is the config key `machine`; `source` is `default` or `machine:<realpath>` (contract §8.3 "MCP servers of the machine scope"); `servers` maps each server name to its entry with the keys as written in the file (a key left out is absent; an entry carries `headers`, a table of header name to literal value, when the file sets it). An invalid machine file is `policy_invalid`, with the same exit and `details` (`file`, `key`) as an invalid owner file, and fails every form. `markdown` gains a section `## Machine <name>` listing each server's name, `url` and `exposure`, or `No MCP servers.`. Example, on machine `pro`, `machine` only:
@@ -5283,3 +5455,57 @@ Each Event also has `details`: `{plan, pr, status, outcome, path, reason}`.
 
 Idempotent: yes; rerunning with nothing to clean prints `ok` with an empty outcomes list and writes nothing; rerunning after a `kept` or `failed` path retries (may succeed on rerun if the worktree was cleaned by hand; `kept` paths remain `kept`, as they are not idle yet or always dirty).
 
+## 30. `resource`
+
+Repo-declared exclusive resources (contract §8.3 "The `resources` domain", §1.4 "The resource locks and the holder record", §3.4 "Resources of a Job"; Plan `repo-lock`). Both commands derive the repo from the **current directory**: the git worktree that contains it, its `origin` keyed as `pr add` does (`repo_unkeyed`, exit 1, when it cannot), then that repo's policy (the owner and policy refusals of any resolve: `owner_unconfirmed`, `policy_invalid`). A directory outside a git worktree is `usage` (exit 2). The files are in contract §1.4; no command releases another holder's resource.
+
+### 30.1 `resource list`
+
+```
+cpd resource list
+```
+
+Effects: none. Output: `repo` (`<owner>/<name>`) and `resources`, one entry per declared resource sorted by name (`[]` when none is declared): `name`, `held` (a boolean) and `holder` (the holder record of contract §1.4 when held, else null), each read with the shared try-lock probe of contract §1.4.
+
+```json
+{"ok": true, "repo": "clayton-duarte/card-dashboard", "resources": [{"name": "e2e-port", "held": true, "holder": {"by": "command", "pid": 4242, "command": "npm run dev", "session": "9f1c…", "attempt": null, "at": "2026-10-26T21:40:00.000Z"}}]}
+```
+
+Idempotent: yes; it only reads.
+
+### 30.2 `resource run`
+
+```
+cpd resource run <name> [--wait <minutes>] -- <command> [<arg>...]
+```
+
+Takes the resource, then runs the command holding it. The resource is the one a human takes (the User, or a Lead running a command the User asked for, §15.20).
+
+| Argument | Meaning |
+|---|---|
+| `<name>` | a resource the repo's policy declares |
+| `--wait <minutes>` | a positive integer; absent means 0. Tries again every second until the minutes have passed, by the Ports' clock (so tests never sleep) |
+| `-- <command> [<arg>...]` | the command and its arguments, run from the current directory with the current environment, never through a shell |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| a command follows `--`; `--wait` is a positive integer | `usage` | 2 |
+| the directory is in a git worktree whose `origin` can be keyed | `repo_unkeyed` | 1 |
+| the repo's policy resolves | `owner_unconfirmed`, `policy_invalid`, … | 1 |
+| `<name>` is declared; `details` `{resource, repo, declared, file}` | `resource_undeclared` | 3 |
+| the resource is free, taking it by a non-blocking exclusive try-lock, tried again every second for `--wait` minutes; `details` `{resource, repo, holder, waited_minutes}` (`holder` as in `resource list`; `waited_minutes` the minutes given, 0 when absent). The command never starts | `resource_busy` | 3 |
+| the command can be executed (after the lock is held; the process and the lock are gone together) | `spawn_failed` | 1 |
+
+Effects: after it holds the lock it writes the command holder record (contract §1.4: `pid` its own process id, `command` the argv joined by single spaces, `session` from `CPD_SESSION` and `attempt` from `CPD_ATTEMPT`, null when unset), then **replaces itself with the command** (`exec`):
+
+- the command keeps the process id (the record's `pid`), the stdio and the signals;
+- it inherits the lock descriptor, so the resource stays held for as long as the command or any descendant that keeps the descriptor lives, which is what a dev server on a port needs;
+- a signal to the process or to its group (`kill -TERM -- -<pgid>`) stops both the command and the hold;
+- the command's output is the output: `run` prints no JSON value once it has exec-ed (a command that owns its terminal, contract §1.2), and the exit status is the command's;
+- if the exec fails, `spawn_failed` (exit 1) and the lock goes with the process.
+
+**Re-entrant for an Attempt that holds the resource.** When `CPD_ATTEMPT` is set and the held lock's record is `by: attempt` with that attempt id, `run` takes nothing and execs the command at once: the Attempt already holds the resource and must not wait on itself.
+
+**Hooks.** A repo may write `cpd resource run <name> --` in a hook command (contract §7.3); hooks run without `CPD_*` variables, so `CPD_HOME` is the default. The Gate and the hooks take no resource by themselves.
+
+Idempotent: no. A second run while the first holds the resource is `resource_busy`.

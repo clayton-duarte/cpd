@@ -8,20 +8,34 @@ use rusqlite::Connection;
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{JobKey, PlanId};
 
+/// SQL: Job `newer` was created after the latest `job-failed` Event of Job `failed` (both are table aliases of `jobs`).
+pub(crate) fn created_after_failure(newer: &str, failed: &str) -> String {
+    format!(
+        "{newer}.created_txn > (SELECT max(e.txn) FROM events e
+                                 WHERE e.plan = {failed}.plan AND e.job = {failed}.key AND e.kind = 'job-failed')"
+    )
+}
+
+/// SQL, clause (b): a `queued` or `running` Job of the PR of Job `failed` (a `jobs` alias) was created after its failure.
+pub(crate) fn queued_or_running_after_failure(failed: &str) -> String {
+    format!(
+        "EXISTS (SELECT 1 FROM jobs f
+                  WHERE f.plan = {failed}.plan AND f.pr = {failed}.pr AND f.status IN ('queued', 'running') AND {})",
+        created_after_failure("f", failed)
+    )
+}
+
 /// The failed Jobs for which the pro-d88 rule holds, of one Plan (`Some`) or of every Plan (`None`). Read only.
 pub fn failed_worked_on(conn: &Connection, plan: Option<&PlanId>) -> Result<BTreeSet<(PlanId, JobKey)>, CpdError> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT j.plan, j.key
            FROM jobs j
            JOIN plans p ON p.id = j.plan
            JOIN sessions l ON l.id = p.lead_session
           WHERE j.status = 'failed' AND (?1 IS NULL OR j.plan = ?1)
-            AND (l.state = 'working' OR EXISTS (
-                 SELECT 1 FROM jobs f
-                  WHERE f.plan = j.plan AND f.pr = j.pr AND f.status IN ('queued', 'running')
-                    AND f.created_txn > (SELECT max(e.txn) FROM events e
-                                          WHERE e.plan = j.plan AND e.job = j.key AND e.kind = 'job-failed')))",
-    )?;
+            AND (l.state = 'working' OR {})",
+        queued_or_running_after_failure("j")
+    ))?;
     let mut rows = stmt.query([plan.map(PlanId::as_str)])?;
     let mut out = BTreeSet::new();
     while let Some(row) = rows.next()? {

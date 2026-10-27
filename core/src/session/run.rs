@@ -172,6 +172,11 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
 fn launch_pi(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<(PiProc, Option<Watched>)>, CpdError> {
     // `None`: a fork whose source can never become idle reached the end of input (main #60, hs-d196).
     let Some(start) = start(env, dirs, row)? else { return Ok(None) };
+    // pi now runs the row's Tier: an earlier failed switch is stale (commands.md §10.8).
+    env.store.write("session run", |tx| {
+        tx.execute("UPDATE sessions SET switch_failed = NULL WHERE id = ?1 AND switch_failed IS NOT NULL", [row.id.as_str()])?;
+        Ok(())
+    })?;
     let candidates = pi::lead_candidates(&env.config.pi_adapter_dir()?, &env.config.lead_pi_packages);
     let extensions = pi::extensions_to_pass(&candidates, Path::new(&row.cwd), dirs, &mut std::io::stderr());
     // The port is the configured range, whatever the environment holds; the host is the review host (§6.5).

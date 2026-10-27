@@ -73,6 +73,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd pr push` | Gate, then push the Lead Branch as it is, without a rebase (§9.9) | Lead | |
 | `cpd pr view` | Show the PR's checks, reviews and comments (§9.8) | Lead | |
 | `cpd pr reply` | Reply to an open feedback item of the PR's pull request as the User, with the cpd marker; never resolves a thread | Lead | |
+| `cpd pr post` | Post the PR's pull request to Slack for review (§9.8b) | Lead | |
 | `cpd pr merge` | Squash-merge a clean pull request on GitHub and delete its branch (§9.10) | | yes |
 | `cpd review` | Plannotator sessions a Session has open (hs-d496) | | |
 | `cpd review open` | Record an open plannotator session | Lead, Manager | |
@@ -100,6 +101,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd session first-message` | Render a Lead's or Manager's first message now and write its file (adapter) (§10.15) | internal | |
 | `cpd session retitle` | Write a Lead's or Manager's dynamic title with a one-shot pi (engine E10) (§10.14) | internal | |
 | `cpd session report` | Report an adapter error to the Manager (pi adapter) (§10.18) | internal | |
+| `cpd session switch-failed` | Record a failed model switch (pi adapter) (§10.18a) | internal | |
+| `cpd session switched` | Record a successful model switch (pi adapter) (§10.18b) | internal | |
 | `cpd session run` | The program in every Lead pane (internal; owns its terminal) (§10.8) | internal | |
 | `cpd events` | Events (commands.md §11) | | |
 | `cpd events list` | List Events (§11.1) | Manager | |
@@ -157,6 +160,9 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd test run` | Run the named tests (§26.2) | Manager, Lead, Worker | |
 | `cpd test list` | Exit 0 only when that one test exists (§26.3) | Manager, Lead, Worker | |
 | `cpd test build` | Compile the Rust tests and typecheck the TypeScript (§26.3) | Manager, Lead, Worker | |
+| `cpd resource` | Repo-declared exclusive resources (commands.md §30) | | |
+| `cpd resource list` | The repo's declared resources and who holds them (§30.1) | Manager, Lead, Worker | |
+| `cpd resource run` | Take a resource and run a command holding it (§30.2) | Manager, Lead, Worker | |
 | `cpd prune` | Remove the leftover worktrees whose work is on origin/main (commands.md §26) | | |
 | `cpd janitor` | Remove the worktrees and branches of merged and cancelled PRs (commands.md §29) | | |
 | `cpd tag` | Tag the commit that set the workspace version (commands.md §26.1) | Lead | |

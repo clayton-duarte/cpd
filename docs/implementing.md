@@ -125,7 +125,7 @@ Target contract (ADR 0013): tests are in-process, with fakes behind traits for t
   |---|---|
   | `engine` | `watch*`, `doctor`, `write_executable` |
   | `pr` | `pr*`, `merge`, `git*`, `repo_hooks` |
-  | `flow` | `plan*`, `job*`, `attempt`, `feedback*`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `config`, `repo_config`, `repo_cmds`, `secret*`, `models*`, `host_repair`, `gate` |
+  | `flow` | `plan*`, `job*`, `attempt`, `feedback*`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `resource*`, `config`, `repo_config`, `repo_cmds`, `secret*`, `models*`, `host_repair`, `gate` |
   | `session` | `session*`, `host`, `board`, `host_pill`, `mcp_attach` |
   | `store` | `store*`, `events`, `home`, `scripted` |
   | `tui` | `tui*`, `inbox*`, `bare` |
@@ -461,7 +461,7 @@ The tests run `cpd install` in-process on a temporary `HOME` with: no `pi`; a `p
 
 ### Scripts run through the adapter link
 
-A pi/lib script the engine or a command runs as a script (`node <adapter>/lib/models-list.ts`, `node <adapter>/lib/slack-channel.ts`; docs/commands.md §14.5 and §21.6) is reached through the symlink `pi`, so its main guard is `if (import.meta.main) { ... }`. Never use `process.argv[1]` compared with `import.meta.url` or `import.meta.filename`: Node resolves the symlink in `import.meta.url` and not in `argv[1]`, so main silently does nothing and exits 0 (Plan main-guard; Plan slack-main #493 fixed one script, and models-list.ts from #492 had the same defect). `pi/test/script-main.test.ts` pins it: no source under pi/ (outside node_modules) mentions `process.argv[1]` or compares `import.meta.url` to anything, every pi/lib script that runs at top level uses `import.meta.main`, and models-list.ts runs main through a symlink to its script and through a symlink to its directory and does not run main when imported.
+A pi/lib script the engine or a command runs as a script (`node <adapter>/lib/models-list.ts`, `node <adapter>/lib/slack-channel.ts`, `node <adapter>/lib/slack-post.ts`; docs/commands.md §14.5 and §21.6) is reached through the symlink `pi`, so its main guard is `if (import.meta.main) { ... }`. Never use `process.argv[1]` compared with `import.meta.url` or `import.meta.filename`: Node resolves the symlink in `import.meta.url` and not in `argv[1]`, so main silently does nothing and exits 0 (Plan main-guard; Plan slack-main #493 fixed one script, and models-list.ts from #492 had the same defect). `pi/test/script-main.test.ts` pins it: no source under pi/ (outside node_modules) mentions `process.argv[1]` or compares `import.meta.url` to anything, every pi/lib script that runs at top level uses `import.meta.main`, and models-list.ts runs main through a symlink to its script and through a symlink to its directory and does not run main when imported.
 
 ```typescript
 if (import.meta.main) {

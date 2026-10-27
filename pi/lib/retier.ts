@@ -44,7 +44,11 @@ async function apply(host: Host, r: Run): Promise<void> {
     r.retierDue = true; // the Session started working while the row was read: the switch is still owed, at its next idle
     return;
   }
-  const unavailable = (why: string) => host.deliver("model switch", new CpdError("model_unavailable", `${model}:${thinking}: ${why}`), { model, thinking });
+  const unavailable = async (why: string) => {
+    const text = `${model}:${thinking}: ${why}`;
+    host.deliver("model switch", new CpdError("model_unavailable", text), { model, thinking });
+    await record(host, r, ["switch-failed", "--code", "model_unavailable", "--message", text]);
+  };
   const slash = model.indexOf("/");
   const found = slash > 0 ? host.ctx?.modelRegistry.find(model.slice(0, slash), model.slice(slash + 1)) : undefined;
   if (found === undefined) return unavailable("pi has no such model");
@@ -56,4 +60,14 @@ async function apply(host: Host, r: Run): Promise<void> {
   }
   if (!accepted) return unavailable("pi has no authentication for its provider");
   host.pi.setThinkingLevel(thinking as Parameters<Host["pi"]["setThinkingLevel"]>[0]);
+  await record(host, r, ["switched"]);
+}
+
+/** `cpd session switch-failed` / `switched` (commands.md §10.18a/b): the row learns what pi did. A failed call is an adapter error, never thrown. */
+async function record(host: Host, r: Run, sub: string[]): Promise<void> {
+  try {
+    await host.call(["session", ...sub, "--session", r.id]);
+  } catch (e) {
+    if (host.run === r) host.deliver("model switch", e);
+  }
 }
