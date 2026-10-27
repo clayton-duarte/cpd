@@ -1748,6 +1748,7 @@ cpd pr open [--pr <key>] [--plan <id>]
 | the PR has no `open` Job that is `draft`, `queued` or `running`; `details.job` (hs-d340, hs-d573) | `open_job_live` | 3 |
 | every Job of the PR but its `open` and `update` Jobs `merged` or `cancelled`, at least one `merged` | `jobs_not_done` | 3 |
 | the PR has a stored title (hs-d285): a PR that existed before migration `pr-title` has none, and there is no fallback to the Plan's title. The message says to run `cpd pr edit <key> --title "<text>"`. Checked before the Gate | `pr_title_required` | 3 |
+| the PR has a stored description (§9.5a): a PR without one is refused until the Lead runs `cpd pr describe --pr <key> --file <body.md>`. The message says the same. Checked before the Gate | `description_required` | 3 |
 | the newest pull request of the Lead Branch is not closed without a merge (a merged one is adopted, below); `details.number`, `details.url` | `pr_closed` | 3 |
 | **stacked** (the PR's base PR, contract §2.2, is not `merged`: a merged one was unstacked first, below): the base PR's Lead Branch, `<base>`, is on the remote (`git ls-remote --exit-code --heads origin <base>`), checked before the fetch and the Gate; `details` is `{pr, base, base_pr}` (hs-d324) | `base_not_found` | 4 |
 | after `git fetch origin <base>`, G (the Lead Branch's head, read once: the commit that is gated, pushed and opened) does not conflict with `origin/<base>` (`git merge-tree --write-tree --name-only`; checked before the Gate, with `gate.merge` and `gate.pr` are `none` as with `local`; hs-d490, contract §7.6 step 1). A base that merely moved ahead is no refusal. `details` is `{pr, base, base_sha, sha, files, next}`, `sha` = G, `files` the conflicted paths, `next` = `["git -C <lead worktree> merge --no-edit origin/<base>", "cpd pr open --pr <key>"]` | `base_conflict` | 3 |
@@ -1769,14 +1770,15 @@ The Lead worktree's local changes refuse nothing: the Gate does not run there (h
 **An adopted PR** (`head_ref` set, §9.4): the pull request is found by `gh pr list --head <head_ref> --state all`, the Gate runs as above, and rule P pushes to `refs/heads/<head_ref>`, plain, never forced; `gh pr create` is never run, the pull request that exists is adopted (its own title kept). `push_rejected` (§9.9) names `cpd pr rebase` (the catch-up, §9.3) as the next step. Steps 0 and 3 and the merged check name `<head_ref>`, not the Lead Branch.
 
 Effects:
-- **Title** (hs-d285): the pull request is titled with the PR's stored title, passed through the one seam in `core/src/pr/` that turns it into the GitHub title (unchanged today; hs-d277 may change it later). The PR body's `# <title>` line uses the same title. The title no longer comes from the Plan's title, and a Plan with several PRs no longer gets ` (<key>)` appended.
+- **Title** (hs-d285): the pull request is titled with the PR's stored title, passed through the one seam in `core/src/pr/` that turns it into the GitHub title (unchanged today; hs-d277 may change it later). The title no longer comes from the Plan's title, and a Plan with several PRs no longer gets ` (<key>)` appended.
+- **Body** (§9.5a): the pull request body is the PR's stored description, verbatim, set by `cpd pr describe`.
 - **No lock** (hs-d243, contract §7): merges into the PR go on during the command; no R first (an unrecorded merge leaves its Job `running`, which `jobs_not_done` refuses).
 - **Adopting a merged pull request** (before the Gate; contract §7.6 `pr open` step 0): `gh pr list --head <lead branch> --state all --json number,url,state`, the newest decides. When it is `MERGED`, the Gate and the push are skipped (hs-d267 forbids skipping the Gate only when *opening* a pull request where `gate.pr` is `local`, hs-d292): one transaction records the pull request (its `pull_requests` row, `state` `merged`; the PR's `pr_number`, `pr_url`, `pull_request`) and moves the PR `dispatch → open → merged` exactly as `pr poll` does when it sees a merge: `pr-merged` (no `pr-opened`); `plan-phase` `dispatch → deploy` when every PR that is not `cancelled` is then `open` or `merged`, and `plan-done` (`deploy → done`) when every one is `merged`. Before the `plan-done` Event, every pending review of the Plan is closed `superseded`, reason "Plan review r<k> of Plan P is superseded: the Plan is done." The next `pr poll` cleans up the merged PR's worktrees. The output carries `"adopted": "merged"`. When it is `CLOSED` without a merge the command is refused `pr_closed` (reopen it on GitHub, or move the work to a new branch); when it is `OPEN`, it is adopted after the Gate and the push, as below.
 - **Conflict check** (contract §7.6 step 1, hs-d490): `git -C <repo> fetch origin <base>` (no `origin`: skipped, `refs/heads/<base>` used), `B = rev-parse origin/<base>` read once, `G = rev-parse refs/heads/<lead branch>` read once, then `git merge-tree --write-tree --name-only B G`; exit 1 is `base_conflict` with nothing run, pushed or written, any other failure `git_failed`. No ancestry test: a base that moved ahead is not a refusal and starts no Gate. It also applies to the adoption of an open pull request, not to a merged one. B is not fetched again after the Gate.
 - **Hooks:** with `gate.pr` is `local` (contract §8.3, hs-d292), the Gate runs in the Lead worktree at G: `pre-start` (output `run/<plan>/logs/pr-<key>.pre-start.log`), then `pre-merge` from the PR's policy (output `run/<plan>/logs/pr-<key>.pre-merge.log`), with the template variable `branch` = the Lead Branch. With `ci`, none. On `gate_failed` or `gate_error` nothing is pushed, no row is written and the PR stays `dispatch`: the Lead appends fix Jobs to it (`job add --pr <key>`) and runs `pr open --pr <key>` again once they are Merged (hs-d679, hs-d680).
 - **Re-read:** after the Gate the PR is read again; when it is no longer `dispatch` (a concurrent `pr open` opened it), the first precondition answers (`already`) and nothing is pushed.
 - **git:** rule P (contract §7.4): `git -C <lead worktree> push --porcelain origin G:refs/heads/<lead branch>` (no `-u`). The Lead Branch is usually on the remote already: the PR's start pushed it and every merge pushed it (§7.2, §7.4, R35), so this push is normally a no-op, and it pushes again what an earlier `push_failed` left behind. A rejection when the remote tip already contains G (a merge during the Gate pushed a descendant) is a success with `pushed` false; any other git failure is `git_failed`.
-- **gh:** the lookup above (`--state all --json number,url,state,createdAt`, only considering pull requests whose `createdAt` is at or after the row's `prs.started_at`, except for an adopted PR); when it found an open pull request (an earlier run died before its transaction) that one is adopted; else `gh pr create --base <base> --head <lead branch> --title <title> --body <summary>` (never `--draft`). When `gh pr create` fails, the `gh pr list` lookup runs again with the same filter and a pull request it finds (a concurrent `pr open` created it) is adopted; otherwise the failure stands. `<title>` is the PR's stored title (Title, above); `<summary>` is the table of the PR's own Jobs and its Merged commits (cpd 1 §11, kept).
+- **gh:** the lookup above (`--state all --json number,url,state,createdAt`, only considering pull requests whose `createdAt` is at or after the row's `prs.started_at`, except for an adopted PR); when it found an open pull request (an earlier run died before its transaction) that one is adopted; else `gh pr create --base <base> --head <lead branch> --title <title> --body <description>` (never `--draft`). When `gh pr create` fails, the `gh pr list` lookup runs again with the same filter and a pull request it finds (a concurrent `pr open` created it) is adopted; otherwise the failure stands. `<title>` is the PR's stored title (Title, above); `<description>` is the PR's stored description (§9.5a), verbatim.
 - **Rows**, one transaction, with a compare-and-swap on the PR's `status = 'dispatch'`: the `pull_requests` row of the pull request (inserted from `gh`'s URL, `repo`, `number`, `url`, the title given to `gh`, `draft` 0, `state` `open`, `review_decision` and `checks` `none`, `mergeable` and `merge_state` `unknown`; kept as it is when the poll stored it first; hs-d96, D6), then the PR `status = open`, `pr_number`, `pr_url`, `pr_opened_at`, `pull_request` (the row's id). **Event** `pr-opened` `{pr, number, url}`. When every PR that is not `cancelled` is now `open` or `merged` (A10), the same transaction sets `plans.phase = deploy` and appends `plan-phase` `{from: "dispatch", to: "deploy", prs: [{key, number, url}]}` (§3.1); otherwise the Plan stays in `dispatch`.
 
 `phase` is the Plan's phase after the command.
@@ -2049,6 +2051,30 @@ Effects: **rows**, one transaction: the changed `prs` columns (`name` with `repo
 ```
 
 Idempotent: yes; when no value changes it writes nothing and returns `"already": true`.
+
+### 9.5a `pr describe`
+
+```
+cpd pr describe --pr <key> --file <path> [--plan <id>]
+```
+
+Stores the PR's description, verbatim, which becomes the pull request body (the description is required before `pr open`). The `--file` argument is a filesystem path or `-` for stdin; the file must be readable UTF-8, else `file_unreadable` (exit 2). The description is stored non-empty after trimming and at most 65536 characters; else `description_invalid` (exit 3). The command is allowed in **every phase and every PR status but `merged` and `cancelled`** (a PR that is over; like `pr edit --title`, §9.5). When the PR has an **open** pull request, the command also updates it on GitHub with `gh pr edit <number> --body-file -`, piping the stored description; a failing GitHub update is `gh_failed` and leaves the stored description unchanged. An **adopted** PR (`head_ref` set, §9.4) is refused `pr_adopted` (exit 3; its pull request's body is the Lead's to fill, so `describe` on it is disallowed), checked first.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the PR is not `merged` or `cancelled` | `pr_ended` | 3 |
+| the PR is not adopted when it has an open pull request; `details.pr` | `pr_adopted` | 3 |
+| `--file` is readable UTF-8 | `file_unreadable` | 2 |
+| the description, trimmed, is non-empty and at most 65536 characters | `description_invalid` | 3 |
+| with an open pull request: the `gh pr edit` call succeeds; `details` is `{argv, exit, stderr}` | `gh_failed` | 1 |
+
+Effects: **rows**, one transaction: the PR's stored `description` column (inserted or updated, the description verbatim). **Event** `pr-described` `{pr}` only when the description changed (idempotent). With an open pull request, the GitHub update runs before the transaction, and a failure writes nothing.
+
+```json
+{"ok": true, "pr": {"key": "api", "status": "dispatch"}}
+```
+
+Idempotent: yes; when the description is unchanged it returns `"already": true` and writes nothing.
 
 ### 9.6 `pr cancel`
 

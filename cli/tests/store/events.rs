@@ -234,6 +234,7 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("pr-feedback", "cp", "", &["pr", "number", "url", "state", "checks", "review_decision", "mergeable", "merge_state", "conflict", "reasons"], &[]),
     ("pr-added", "cp", "", &["pr", "repo", "base", "needs", "appended"], &[]),
     ("pr-edited", "cp", "", &["pr", "fields"], &[]),
+    ("pr-described", "cp", "", &["pr"], &[]),
     ("pr-cancelled", "cp", "", &["pr"], &["superseded_by"]),
     ("pr-started", "cp", "", &["pr", "repo", "base", "lead_branch", "lead_worktree", "base_sha", "reused", "pushed", "by"], &[]),
     ("pr-base-changed", "cp", "", &["pr", "from", "to", "from_pr", "to_pr", "by"], &["number", "url"]),
