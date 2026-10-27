@@ -85,7 +85,12 @@ impl Fixture {
 
     fn set(&mut self, key: &str, status: &str) {
         let sha = if status == "merged" { "'abc'" } else { "NULL" };
-        self.sql(&format!("UPDATE jobs SET status = '{status}', merged_sha = {sha} WHERE plan = 'pay' AND key = '{key}'"));
+        let cause = if status == "failed" { "'crashed'" } else { "NULL" };
+        if status == "merged" {
+            // queued -> running -> merged: the schema allows no queued -> merged
+            self.sql(&format!("UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = '{key}'"));
+        }
+        self.sql(&format!("UPDATE jobs SET status = '{status}', merged_sha = {sha}, failed_cause = {cause} WHERE plan = 'pay' AND key = '{key}'"));
     }
 
     /// `j-c` (p3), `j-a` (p1) and `j-b` (p2) fail, in that order; then `f-a` (p1) is queued and `f-c` (p3) runs.

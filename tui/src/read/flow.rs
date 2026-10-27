@@ -13,6 +13,7 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::highest_id;
 use cpd_core::inbox::model::{Item, Kind};
 use cpd_core::job::open::shown_needs;
+use cpd_core::job::worked_on::failed_worked_on;
 use cpd_core::ids::{AttemptId, ContextId, EscalationId, JobKey, PlanId, PrKey, SessionId};
 use cpd_core::plan::display::Display;
 use cpd_core::plan::fingerprint::load_prs;
@@ -74,7 +75,7 @@ pub struct NeedsUser {
 
 impl NeedsUser {
     /// Of the `visible` items (not snoozed, not dismissed) of `plan`, whose Lead is `lead` and whose phase is `lead_phase`.
-    fn of(visible: &[Item], plan: &PlanId, lead: &SessionId, lead_working: bool, lead_phase: Option<Phase>) -> NeedsUser {
+    fn of(visible: &[Item], plan: &PlanId, lead: &SessionId, lead_working: bool, lead_phase: Option<Phase>, worked_on: Vec<JobKey>) -> NeedsUser {
         NeedsUser {
             stuck_jobs: visible
                 .iter()
@@ -84,7 +85,7 @@ impl NeedsUser {
             lead_dialog: visible.iter().any(|i| i.kind == Kind::Dialog && i.session.as_ref() == Some(lead)),
             lead_working,
             lead_phase,
-            worked_on: Vec::new(),
+            worked_on,
         }
     }
 }
@@ -285,8 +286,15 @@ pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdErro
             .ok_or_else(|| plan_not_found(plan))?;
         let phase = Phase::parse(&phase).ok_or_else(|| bad_row(format!("Plan {plan} has phase {phase:?}")))?;
         let now: String = conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?;
-        let needs_user =
-            NeedsUser::of(&visible_items(conn, &now)?, plan, &id("Session id", &lead, SessionId::parse)?, lead_working, Some(phase));
+        let worked_on = failed_worked_on(conn, Some(plan))?.into_iter().map(|(_, job)| job).collect(); // a BTreeSet: sorted
+        let needs_user = NeedsUser::of(
+            &visible_items(conn, &now)?,
+            plan,
+            &id("Session id", &lead, SessionId::parse)?,
+            lead_working,
+            Some(phase),
+            worked_on,
+        );
         Ok(PlanBoxes {
             needs_user,
             context: id("Context id", &context, ContextId::parse)?,
