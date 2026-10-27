@@ -20,7 +20,7 @@ fn now() -> OffsetDateTime {
 fn rows_with(label: &str) -> Vec<String> {
     let items = [item(1, Kind::PrFailing, Urgency::Red, label, "2026-01-02T23:55:00.000Z")];
     let mut terminal = Terminal::new(TestBackend::new(43, 16)).unwrap();
-    terminal.draw(|f| draw(f, Rect::new(0, 0, 43, 16), &items, Shape::new(1, false), None, now(), &|_| None)).unwrap();
+    terminal.draw(|f| { draw(f, Rect::new(0, 0, 43, 16), &items, Shape::new(1, false), None, now(), &|_| None); }).unwrap();
     text_rows(terminal.backend().buffer())
 }
 

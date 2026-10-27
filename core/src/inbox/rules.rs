@@ -18,6 +18,7 @@ use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::addr::review_host;
+use crate::job::worked_on::failed_worked_on;
 use crate::ids::{ContextId, JobKey, PlanId, PrKey, SessionId};
 use crate::plan::Phase;
 use crate::ports::Ports;
@@ -78,7 +79,75 @@ pub fn conditions_with(
     all.extend(store.read(|conn| curate(conn, floor))?);
     all.extend(review_requested(store, home, now, team)?);
     all.extend(models_changed(store, home, now)?);
+    all.extend(deploys(store, home)?);
     Ok(all)
+}
+
+/// `deploy` (contract §2.2 "The deploy rule"): one condition per run of `run/deploy-runs.json`, written by the PR poll.
+/// A missing file is no run; a file that is not that JSON is no run either, as E8 reads an unreadable `team-review.json`
+/// as "unknown": the open items stay as they are, and one `engine-error` condition says why.
+fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
+    #[derive(serde::Deserialize)]
+    struct Cache {
+        version: u32,
+        runs: Vec<Run>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Run {
+        repo: String,
+        run_id: u64,
+        environment: String,
+        title: String,
+        url: String,
+        created_at: String,
+    }
+    let path = home.run_dir().join("deploy-runs.json");
+    let read = match std::fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str::<Cache>(&text)
+            .map_err(|e| format!("{} is not a deploy cache: {e}.", path.display()))
+            .and_then(|c| if c.version == 1 { Ok(c) } else { Err(format!("{} has version {}, not 1.", path.display(), c.version)) }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => Err(format!("Cannot read {}: {e}.", path.display())),
+    };
+    match read {
+        Ok(cache) => Ok(cache
+            .runs
+            .into_iter()
+            .map(|r| Condition {
+                kind: Kind::Deploy,
+                urgency: Urgency::Yellow,
+                subject: format!("deploy:{}#{}", r.repo, r.run_id),
+                label: format!("{} deploy {}: {}", r.repo, r.environment, r.title),
+                url: Some(r.url),
+                context: None,
+                plan: None,
+                job: None,
+                session: None,
+                record: None,
+                event: None,
+                opened_at: Some(r.created_at),
+            })
+            .collect()),
+        Err(message) => {
+            let mut out: Vec<Condition> = store.read(open_items)?.iter().filter(|i| i.kind == Kind::Deploy).map(Condition::from).collect();
+            out.push(Condition {
+                kind: Kind::EngineError,
+                urgency: Urgency::Red,
+                subject: format!("error:E8/deploy-runs/{}", ErrorCode::StoreFailed.as_str()),
+                label: format!("deploy runs: {}", ErrorCode::StoreFailed.as_str()),
+                url: None,
+                context: None,
+                plan: None,
+                job: None,
+                session: None,
+                record: None,
+                event: None,
+                opened_at: None,
+            });
+            let _ = message;
+            Ok(out)
+        }
+    }
 }
 
 /// A stored value that does not parse: the database was written outside cpd.
@@ -173,6 +242,7 @@ fn seat_condition(seat: Seat, kind: Kind, urgency: Urgency, label: String) -> Co
         session: Some(seat.session),
         record: None,
         event: seat.event,
+        opened_at: None,
     }
 }
 
@@ -250,6 +320,7 @@ fn review_waiting(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
                 session: Some(seat.session.clone()),
                 record: None,
                 event: None,
+                opened_at: None,
             });
         }
     }
@@ -290,6 +361,7 @@ fn curate(conn: &Connection, floor: u32) -> Result<Vec<Condition>, CpdError> {
                 session: None,
                 record: None,
                 event: None,
+                opened_at: None,
             });
         }
     }
@@ -330,6 +402,7 @@ fn plan_reviews(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
             session: Some(id("Session id", &lead, SessionId::parse)?),
             record: None,
             event: None,
+            opened_at: None,
         });
     }
     Ok(out)
@@ -353,17 +426,17 @@ pub struct StuckJob {
 }
 
 /// The stuck Jobs, oldest failure first: a Job is `failed`, its latest `job-failed` Event is at least `stuck_after` old, and
-/// its Plan's Lead is not `working` (audit Q1: a working Lead is handling the failure; the Job is stuck from the next tick
-/// after it stops). Read only: E8 tells the Manager.
+/// it is not being worked on (pro-d88, [`failed_worked_on`]: the Job is stuck from the next tick after
+/// that stops). Read only: E8 tells the Manager.
 pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration) -> Result<Vec<StuckJob>, CpdError> {
     store.read(|conn| {
+        let worked_on = failed_worked_on(conn, None)?;
         let mut stmt = conn.prepare(
             "SELECT j.plan, j.pr, j.key, p.context, e.id, e.at, j.failed_cause
                FROM jobs j
                JOIN plans p ON p.id = j.plan
                JOIN events e ON e.id = (SELECT max(f.id) FROM events f WHERE f.plan = j.plan AND f.job = j.key AND f.kind = 'job-failed')
-               JOIN sessions l ON l.id = p.lead_session
-              WHERE j.status = 'failed' AND l.state <> 'working'
+              WHERE j.status = 'failed'
               ORDER BY e.id",
         )?;
         let mut rows = stmt.query([])?;
@@ -375,10 +448,14 @@ pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration)
             if age < stuck_after {
                 continue;
             }
+            let (plan, job) = (id("Plan id", &plan, PlanId::parse)?, id("Job key", &key, JobKey::parse)?);
+            if worked_on.contains(&(plan.clone(), job.clone())) {
+                continue;
+            }
             out.push(StuckJob {
-                plan: id("Plan id", &plan, PlanId::parse)?,
+                plan,
                 pr: id("PR key", &pr, PrKey::parse)?,
-                job: id("Job key", &key, JobKey::parse)?,
+                job,
                 context: id("Context id", &context, ContextId::parse)?,
                 event,
                 minutes: age.whole_minutes(),
@@ -464,21 +541,21 @@ fn pull_request_conditions(
             session: lead.as_deref().map(|s| id("Session id", s, SessionId::parse)).transpose()?,
             record: None,
             event: None,
+            opened_at: None,
         });
     }
     Ok(out)
 }
 
-/// `pr-ready` (hs-d481, hs-d525): GitHub would merge the pull request now. It is open, not a draft, authored, its merge state is
-/// clean (unstable and has_hooks are not: `pr merge` refuses them), and its review decision is approved or none. Checks and
-/// `pr.feedback.checks` are not read.
+/// `pr-ready` (hs-d481, hs-d525, pro-d118): the pull request is ready to merge (`pulls::ready_to_merge_sql`: open, not a draft,
+/// merge state clean, base the repo's default branch; a stacked PR or an unknown base is not), authored, and its review decision
+/// is approved or none. Checks and `pr.feedback.checks` are not read.
 fn pr_ready(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     pull_request_conditions(
         conn,
         Kind::PrReady,
         Urgency::Yellow,
-        "r.authored = 1 AND r.draft = 0 AND r.merge_state IN ('clean')
-         AND r.review_decision IN ('approved', 'none')",
+        &format!("r.authored = 1 AND r.state = 'open' AND {} = 1 AND r.review_decision IN ('approved', 'none')", crate::pr::pulls::ready_to_merge_sql("r")),
         |name, n| format!("{name}#{n} ready to merge"),
     )
 }
@@ -533,6 +610,7 @@ fn review_requested(store: &mut Store, home: &CpdHome, now: OffsetDateTime, team
                 session: None,
                 record: None,
                 event: None,
+                opened_at: None,
             }
         })
         .collect())
@@ -568,6 +646,7 @@ fn kept_review_items(store: &mut Store, why: Option<&CpdError>) -> Result<Vec<Co
             session: None,
             record: None,
             event: None,
+            opened_at: None,
         });
     }
     Ok(out)
@@ -614,6 +693,7 @@ fn models_changed(store: &mut Store, home: &CpdHome, now: OffsetDateTime) -> Res
             session: None,
             record: None,
             event: None,
+            opened_at: None,
         });
     }
     Ok(out)
@@ -1257,9 +1337,9 @@ mod tests {
         };
         f.sql(&format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at,
-                                        mergeable, authored, review_requested, merge_state)
+                                        mergeable, authored, review_requested, merge_state, base_ref, default_branch)
              VALUES ('acme/shop', {n}, 'https://github.com/acme/shop/pull/{n}', 'T', 0, 'open', '{review}', '{checks}', '{T}', '{T}',
-                     '{mergeable}', 1, 0, '{merge_state}');"
+                     '{mergeable}', 1, 0, '{merge_state}', 'main', 'main');"
         ));
     }
 

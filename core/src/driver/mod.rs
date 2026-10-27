@@ -5,12 +5,16 @@
 //! - `lock`: the driver lock, taken by the starter and inherited as fd 3;
 //! - `run`: the driver itself, A1–A9;
 //! - `worker`: the Worker Spec, the Worker's pane, its session file;
+//! - [`schedule`]: E3's queue walk, a pure function;
 //! - `stall`: A4's stall rule, the kill of a Worker's idle tool call.
 
 pub mod lock;
 #[cfg(test)]
 pub(crate) mod ports_tests;
 mod run;
+pub mod schedule;
+#[cfg(test)]
+mod schedule_tests;
 pub(crate) mod stall;
 mod start;
 pub mod worker;
@@ -25,7 +29,7 @@ use crate::ids::{AttemptId, JobKey};
 use crate::output::Output;
 use crate::ports::Ports;
 
-pub use start::{Allocation, Origin, StartCtx, Started, pr_has_live_linear, slot_limit, start, start_with, start_with_allocation};
+pub use start::{Allocation, Origin, StartCtx, Started, pr_has_live_linear, start, start_with, start_with_allocation};
 
 /// The arguments of `cpd attempt run` (commands.md §6.4).
 #[derive(clap::Args, Debug)]

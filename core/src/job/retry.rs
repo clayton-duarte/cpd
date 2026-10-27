@@ -1,5 +1,7 @@
 //! `job retry` (commands.md §5.4): `failed → queued` at a Tier the Lead chooses.
 
+use std::collections::BTreeSet;
+
 use rusqlite::Connection;
 use serde_json::json;
 
@@ -10,6 +12,7 @@ use crate::ids::{JobKey, PlanId};
 use crate::output::Output;
 use crate::plan::jobs::{self, Job};
 use crate::plan::locked_fingerprint;
+use crate::store::WriteTxn;
 
 const COMMAND: &str = "job retry";
 
@@ -31,12 +34,8 @@ pub(super) fn retry(args: RetryArgs) -> Result<Output, CpdError> {
         Decision::Queue(_) => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, &tier)? {
             Decision::Already => Ok(true),
             Decision::Queue(job) => {
-                tx.execute(
-                    "UPDATE jobs SET status = 'queued', retry_tier = ?3, failed_cause = NULL WHERE plan = ?1 AND key = ?2",
-                    [plan.as_str(), job.key.as_str(), tier.as_str()],
-                )?;
                 let text = format!("Job {key} of Plan {plan} is queued again at Tier {tier}. Next: cpd job show {key} --plan {plan}");
-                append(tx, NewEvent::job_retried(text, &tier).plan(plan.clone()).job(key.clone()))?;
+                requeue(tx, &plan, &key, &tier, text)?;
                 Ok(false)
             }
         })?,
@@ -46,6 +45,16 @@ pub(super) fn retry(args: RetryArgs) -> Result<Output, CpdError> {
         out["already"] = json!(true);
     }
     Ok(Output::success(out))
+}
+
+/// Requeues failed Job `key` at `tier` and appends its `job-retried` Event with `text`. Shared by `job retry` and the engine's retry after a fix.
+pub(crate) fn requeue(tx: &WriteTxn<'_>, plan: &PlanId, key: &JobKey, tier: &str, text: String) -> Result<(), CpdError> {
+    tx.execute(
+        "UPDATE jobs SET status = 'queued', retry_tier = ?3, failed_cause = NULL WHERE plan = ?1 AND key = ?2",
+        [plan.as_str(), key.as_str(), tier],
+    )?;
+    append(tx, NewEvent::job_retried(text, tier).plan(plan.clone()).job(key.clone()))?;
+    Ok(())
 }
 
 fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, tier: &str) -> Result<Decision, CpdError> {
@@ -79,19 +88,18 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, tier: &str) -> Result<
     Ok(Decision::Queue(job.clone()))
 }
 
-/// The Job's latest `job-retried` Event is newer than its latest
-/// `attempt-started`: no Attempt has begun since the retry.
+/// The Jobs of `plan` with a retry pending, by key: the Job's latest `job-retried` Event is newer than its latest
+/// `attempt-started`, so no Attempt has begun since the retry. The one source of that rule.
+pub(crate) fn retries_pending(conn: &Connection, plan: &PlanId) -> Result<BTreeSet<String>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT job FROM events WHERE plan = ?1 AND job IS NOT NULL AND kind IN ('job-retried', 'attempt-started')
+          GROUP BY job HAVING max(CASE WHEN kind = 'job-retried' THEN id END) > coalesce(max(CASE WHEN kind = 'attempt-started' THEN id END), 0)",
+    )?;
+    let keys = stmt.query_map([plan.as_str()], |r| r.get::<_, String>(0))?.collect::<Result<_, _>>()?;
+    Ok(keys)
+}
+
+/// No Attempt has begun since the Job's latest retry: see [`retries_pending`].
 pub(crate) fn retried_since_last_start(conn: &Connection, plan: &PlanId, key: &JobKey) -> Result<bool, CpdError> {
-    let latest = |kind: &str| -> Result<Option<i64>, CpdError> {
-        Ok(conn.query_row(
-            "SELECT max(id) FROM events WHERE plan = ?1 AND job = ?2 AND kind = ?3",
-            [plan.as_str(), key.as_str(), kind],
-            |r| r.get(0),
-        )?)
-    };
-    Ok(match (latest("job-retried")?, latest("attempt-started")?) {
-        (None, _) => false,
-        (Some(_), None) => true,
-        (Some(retried), Some(started)) => started < retried,
-    })
+    Ok(retries_pending(conn, plan)?.contains(key.as_str()))
 }

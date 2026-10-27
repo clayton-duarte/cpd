@@ -57,6 +57,7 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
     let pr = require_open(&mut env, &plan, &args)?.clone();
     let key = pr.key.clone();
     env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
+    refuse_running(&mut env, &id, &key)?;
     let policy = pr_policy(&mut env, &id, &key)?;
     let lead = pr.lead(&id)?.clone();
     let repo = std::path::Path::new(&pr.repo);
@@ -151,6 +152,31 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
     push_rebased(&mut env, &args, &id, &pr, &old, &new, &lease)
 }
 
+/// A running Attempt of any Job of the PR refuses `attempt_running`: that Worker does the rebase, steered by the Lead.
+fn refuse_running(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+    let running: Vec<(String, String)> = env.store.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT j.key, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+              WHERE a.plan = ?1 AND j.pr = ?2 AND a.status = 'running' ORDER BY j.key, a.id",
+        )?;
+        let rows = stmt.query_map([plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })?;
+    if running.is_empty() {
+        return Ok(());
+    }
+    let mut jobs: Vec<String> = running.iter().map(|(j, _)| j.clone()).collect();
+    jobs.dedup();
+    let attempts: Vec<String> = running.into_iter().map(|(_, a)| a).collect();
+    Err(CpdError::new(
+        ErrorCode::AttemptRunning,
+        format!("Job {} of PR {key} has a running Attempt: steer that Worker to do the rebase (message it with `cpd session send`) instead.", jobs.join(", ")),
+    )
+    .with("pr", key.as_str())
+    .with("jobs", jobs)
+    .with("attempts", attempts))
+}
+
 /// `pr rebase --continue` (contract §7.6 C0–C6): the stopped rebase finished, then the Gate and the push.
 fn resume(args: Args) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
@@ -161,6 +187,7 @@ fn resume(args: Args) -> Result<Output, CpdError> {
     let pr = require_open(&mut env, &plan, &args)?.clone();
     let key = pr.key.clone();
     env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
+    refuse_running(&mut env, &id, &key)?;
     let policy = pr_policy(&mut env, &id, &key)?;
     let lead = pr.lead(&id)?.clone();
     let repo = Path::new(&pr.repo);

@@ -32,6 +32,7 @@ pub mod host_repair_approval;
 pub mod inbox;
 pub mod install;
 pub mod incident;
+pub mod janitor;
 pub mod job;
 pub mod mcp;
 pub mod merge;
@@ -42,9 +43,11 @@ pub mod policy;
 pub mod pill;
 pub mod ports;
 pub mod pr;
+pub mod resource;
 pub mod prune;
 pub mod review;
 pub mod secret;
+pub mod slack;
 pub mod session;
 pub mod spec;
 pub mod store;
@@ -61,6 +64,8 @@ mod ambient_ports_tests;
 mod clock_tests;
 #[cfg(test)]
 mod incident_tests;
+#[cfg(test)]
+mod janitor_tests;
 #[cfg(test)]
 mod loops_ports_tests;
 

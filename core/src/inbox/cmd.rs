@@ -359,7 +359,9 @@ fn dismiss(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
 }
 
 /// `inbox claim` (§21.7): the preconditions in order, all before any write; then `claimed_at`, the Event `inbox-claimed` and
-/// the `session-message` to the review Context's Manager in one transaction, and a stopped Manager started after it.
+/// the `session-message` to the review Context's Manager and the `eyes` reaction queued on the PR's Slack post (the cache's
+/// channel and the post's `ts_raw`) in one transaction, and a stopped Manager started after it. An already claimed item and a
+/// refusal queue nothing.
 fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
     let mut env = Env::open_with(ports)?;
     let now = ports.clock.utc();
@@ -422,12 +424,14 @@ fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
         cache.channel, post.ts_raw
     );
     let claimed = timestamp(now);
+    let (channel, ts_raw) = (cache.channel.clone(), post.ts_raw.clone());
     let item = Ports::scope(ports, || {
         session::send::send_as_user(&mut env, &manager, "inbox claim", &text, &format!("the review of {}", item.label), |tx| {
             let item = open_item(tx, args.id)?;
             tx.execute("UPDATE inbox_items SET claimed_at = ?2 WHERE id = ?1", params![item.id, claimed])?;
             let event = NewEvent::inbox_claimed(format!("Inbox item {} claimed: {}.", item.id, item.label), item.id);
             events::append(tx, scoped(event, &item))?;
+            crate::pr::reactions::queue(tx, &channel, &ts_raw, "eyes")?;
             model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))
         })
     })?;
@@ -475,6 +479,7 @@ mod tests {
             session: None,
             record: None,
             event: None,
+            opened_at: None,
         }
     }
 

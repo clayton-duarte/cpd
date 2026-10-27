@@ -15,8 +15,8 @@ use crate::host::runner::Runner;
 use crate::ports::Ports;
 use crate::ids::{AttemptId, PlanId, PrKey};
 
-/// The Lead Branch of a Plan: `cpd/<plan>`.
-pub fn lead_branch(plan: &PlanId) -> String {
+/// The LEGACY Lead Branch of a Plan: `cpd/<plan>` (a PR made before R34 keeps it; a new PR's is `<plan>/<key>`).
+pub fn legacy_lead_branch(plan: &PlanId) -> String {
     format!("cpd/{plan}")
 }
 
@@ -55,7 +55,7 @@ pub fn lead_worktree_path(repo: &Path, plan: &PlanId) -> Result<PathBuf, CpdErro
 /// A PR made by migration 4 keeps the Lead Branch `cpd/<plan>` and with it the
 /// worktree `<repo-parent>/<repo-name>.<plan>` it had.
 pub fn pr_lead_worktree_path(repo: &Path, plan: &PlanId, key: &PrKey, lead_branch_name: &str) -> Result<PathBuf, CpdError> {
-    if lead_branch_name == lead_branch(plan) {
+    if lead_branch_name == legacy_lead_branch(plan) {
         lead_worktree_path(repo, plan)
     } else {
         sibling(repo, &format!("{plan}.{key}"))
@@ -575,8 +575,10 @@ pub fn prepare_pr_lead_worktree(
         return Err(in_worktree(error));
     }
     let mut clashes = vec![branch.to_owned()];
-    if branch != lead_branch(plan) {
-        clashes.push(lead_branch(plan));
+    if branch != legacy_lead_branch(plan)
+        && let Some((parent, _)) = branch.rsplit_once('/')
+    {
+        clashes.push(parent.to_owned());
     }
     for clash in clashes {
         if branch_exists(repo, &clash).map_err(in_worktree)? {
@@ -617,7 +619,7 @@ pub fn prepare_pr_lead_worktree(
     Ok(Prepared { path: path.to_path_buf(), branch: branch.to_owned(), base_sha, remote })
 }
 
-/// Creates the Lead worktree of a Plan's Lead Branch `cpd/<plan>` and runs
+/// Creates the Lead worktree of a Plan's legacy Lead Branch `cpd/<plan>` and runs
 /// `pre-start` in it (contract §7.2 for a PR made by migration 4), then pushes
 /// a new branch (R35). A failed push does not fail it: see [`Created`].
 pub fn create_lead_worktree(repo: &Path, plan: &PlanId, base: &str, setup: &Setup) -> Result<Created, CpdError> {
@@ -627,24 +629,21 @@ pub fn create_lead_worktree(repo: &Path, plan: &PlanId, base: &str, setup: &Setu
 /// [`create_lead_worktree`] running `pre_start`, the policy's `hooks.pre-start`; the one above runs no hook.
 pub fn create_lead_worktree_with(repo: &Path, plan: &PlanId, base: &str, setup: &Setup, pre_start: &Pipeline) -> Result<Created, CpdError> {
     let path = lead_worktree_path(repo, plan)?;
-    let prepared = prepare_pr_lead_worktree(repo, plan, &path, &lead_branch(plan), base, Cut::Base, setup, pre_start).map_err(|f| f.error)?;
+    let prepared = prepare_pr_lead_worktree(repo, plan, &path, &legacy_lead_branch(plan), base, Cut::Base, setup, pre_start).map_err(|f| f.error)?;
     // The remote is touched only after `pre-start` has passed.
     let push_failed = prepared.push().err();
     Ok(Created { path: prepared.path, branch: prepared.branch, base_sha: prepared.base_sha, push_failed })
 }
 
-/// The Lead Branch of the PR whose Lead worktree is `lead_worktree` (R34 A5):
-/// the branch checked out there, which must be `cpd/<plan>` (a PR migrated from
-/// cpd 2's first schema) or `cpd/<plan>/<key>`. A detached HEAD or any other
-/// branch is `setup_failed`; there is no fallback to `cpd/<plan>`.
+/// The Lead Branch of the PR whose Lead worktree is `lead_worktree`: the branch checked out there, whatever its
+/// name (the stored lead_branch is the caller's). A detached HEAD is `setup_failed`.
 fn checked_out_lead_branch(lead_worktree: &Path, plan: &PlanId) -> Result<String, CpdError> {
     let fail = |why: String| {
         CpdError::new(ErrorCode::SetupFailed, format!("The Lead worktree {} has no Lead Branch of Plan {plan}: {why}.", lead_worktree.display()))
             .with("lead_worktree", lead_worktree.to_string_lossy().into_owned())
     };
     match super::run::current_branch(lead_worktree)? {
-        Some(branch) if branch == lead_branch(plan) || branch.starts_with(&format!("{}/", lead_branch(plan))) => Ok(branch),
-        Some(branch) => Err(fail(format!("it is on {branch}"))),
+        Some(branch) => Ok(branch),
         None => Err(fail("its HEAD is detached".to_owned())),
     }
 }
@@ -697,26 +696,30 @@ pub fn remove_merged_attempt(lead_worktree: &Path, path: &Path, branch: &str) ->
 }
 
 /// Why a merged PR's Lead worktree was left alone.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kept {
     /// `git status --porcelain` is not empty (untracked files included).
     Dirty,
     /// `git rev-list HEAD --not --remotes=origin` is not empty, and `HEAD` is not the pull request's recorded head or
     /// an ancestor of it.
     Unpushed,
+    /// The rename of `<path>` to `<path>.removing` failed: the error is the reason (DESIGN 4 (a)). Stub: nothing
+    /// returns it yet.
+    Rename(String),
 }
 
 impl Kept {
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
             Kept::Dirty => "dirty",
             Kept::Unpushed => "unpushed",
+            Kept::Rename(reason) => reason,
         }
     }
 }
 
 /// What [`remove_merged_lead`] did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LeadRemoval {
     /// The worktree and the local Lead Branch are gone (or were).
     Removed,
@@ -724,21 +727,25 @@ pub enum LeadRemoval {
     Kept(Kept),
 }
 
-/// Removes the Lead worktree of a merged PR and its local Lead Branch (contract
-/// §7.2, hs-d142). A worktree with uncommitted changes or commits not on
-/// `origin` is kept untouched, unless `HEAD` is the pull request's head commit or an ancestor of it (`recorded_head`,
-/// called only when `rev-list` is not empty (merge commits do not count, hygiene.md 8a) and `None` when GitHub's answer is unavailable; after a squash merge the
-/// head branch is deleted and `origin/<branch>` pruned, so the PR's own commits look unpushed); the check is `git --no-optional-locks status`,
-/// which takes no `index.lock` (hs-d243). Otherwise `git -C <repo> worktree remove` (no
-/// `--force`: git does not count ignored files as changes) and `git -C <repo>
-/// branch -D`, because a squash merge never makes the branch an ancestor.
-/// Idempotent for what is already gone.
+/// Removes the Lead worktree of a merged or cancelled PR and its local Lead Branch, whole or not at all (DESIGN 4). A
+/// worktree with uncommitted changes or commits not on `origin` is kept untouched, unless `HEAD` is the pull request's
+/// head commit or an ancestor of it (`recorded_head`, called only when `rev-list` is not empty (merge commits do not
+/// count, hygiene.md 8a) and `None` when GitHub's answer is unavailable; after a squash merge the head branch is
+/// deleted and `origin/<branch>` pruned, so the PR's own commits look unpushed); the check is
+/// `git --no-optional-locks status`, which takes no `index.lock` (hs-d243). Otherwise, in this order: (a) rename
+/// `<path>` to `<path>.removing` (atomic; a failing rename leaves everything untouched and is `Kept(Rename)`), (b)
+/// `git worktree prune`, (c) `git branch -D` when the branch exists, (d) delete `<path>.removing`. A stop leaves the
+/// worktree whole (before a) or `<path>` absent with `<path>.removing` as the marker. A call that finds `<path>` absent
+/// runs (b), (c), (d) again; every step is idempotent.
 pub fn remove_merged_lead(
     repo: &Path,
     path: &Path,
     branch: &str,
     recorded_head: impl FnOnce() -> Option<String>,
 ) -> Result<LeadRemoval, CpdError> {
+    let mut name = path.file_name().ok_or_else(|| CpdError::new(ErrorCode::GitFailed, format!("{} has no file name", path.display())))?.to_os_string();
+    name.push(".removing");
+    let aside = path.with_file_name(name);
     if path.exists() {
         if !ok(path, &["--no-optional-locks", "status", "--porcelain"])?.trim().is_empty() {
             return Ok(LeadRemoval::Kept(Kept::Dirty));
@@ -746,11 +753,17 @@ pub fn remove_merged_lead(
         if has_unpushed_work(path, recorded_head)? {
             return Ok(LeadRemoval::Kept(Kept::Unpushed));
         }
-    } else {
-        // A leftover registration of a directory that is gone would keep the branch checked out.
-        ok(repo, &["worktree", "prune"])?;
+        if let Err(e) = std::fs::rename(path, &aside) {
+            return Ok(LeadRemoval::Kept(Kept::Rename(e.to_string())));
+        }
     }
-    remove(repo, path, branch, false, true)?;
+    ok(repo, &["worktree", "prune"])?;
+    if branch_exists(repo, branch)? {
+        ok(repo, &["branch", "-D", branch])?;
+    }
+    if aside.exists() {
+        std::fs::remove_dir_all(&aside).map_err(|e| CpdError::new(ErrorCode::GitFailed, format!("remove {}: {e}", aside.display())))?;
+    }
     Ok(LeadRemoval::Removed)
 }
 

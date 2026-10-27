@@ -103,6 +103,22 @@ struct Cost {
     total: f64,
 }
 
+/// The `errorMessage` of the LAST assistant message of the session file `path`; None when that message has none, when
+/// there is no assistant message, or while the file cannot be read or a line cannot be parsed (a line being written).
+pub fn last_error_message(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut last = None;
+    for line in text.lines().filter(|l| !l.is_empty()) {
+        let value: Value = serde_json::from_str(line).ok()?;
+        if value.get("type").and_then(Value::as_str) == Some("message")
+            && value.pointer("/message/role").and_then(Value::as_str) == Some("assistant")
+        {
+            last = value.pointer("/message/errorMessage").and_then(Value::as_str).map(str::to_owned);
+        }
+    }
+    last
+}
+
 /// Parses the session file at `path`. `file_unreadable` when it cannot be read as
 /// UTF-8 text, `session_malformed` (with `path` and `line`) when a line is not a
 /// session entry.

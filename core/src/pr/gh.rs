@@ -16,7 +16,7 @@ use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecisio
 use crate::git::{TAIL_LINES, tail};
 use crate::host::limit::limit;
 use crate::host::deadline::Failed;
-use crate::host::runner::Runner;
+use crate::host::runner::{Call, Runner};
 use crate::ports::Ports;
 
 /// A `gh` call that takes longer than this is killed (`gh_failed`).
@@ -201,13 +201,27 @@ pub struct HeadPr {
     pub number: i64,
     pub url: String,
     pub state: HeadState,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
 }
 
-/// The newest (highest number) pull request whose head is `head`, in any state, if any.
-pub fn head_pr(cwd: &Path, head: &str) -> Result<Option<HeadPr>, CpdError> {
-    let args = ["pr", "list", "--head", head, "--state", "all", "--json", "number,url,state"];
+/// The newest (highest number) pull request whose head is `head`, in any state, created at or after `since`, if any. A pull
+/// request older than `since` (the row's start) is not the row's and is not seen, whatever its state; `None` (an adopted PR)
+/// sees every pull request. Both times are compared as instants.
+pub fn head_pr(cwd: &Path, head: &str, since: Option<jiff::Timestamp>) -> Result<Option<HeadPr>, CpdError> {
+    let args = ["pr", "list", "--head", head, "--state", "all", "--json", "number,url,state,createdAt"];
     let found: Vec<HeadPr> = parse(&args, &run(cwd, &args)?)?;
-    Ok(found.into_iter().max_by_key(|f| f.number))
+    let mut kept = Vec::new();
+    for f in found {
+        if let Some(since) = since {
+            let created: jiff::Timestamp = f.created_at.parse().map_err(|e| failed(&args, format!("gh printed the createdAt {:?} of pull request #{}: {e}", f.created_at, f.number), Some(0), ""))?;
+            if created < since {
+                continue;
+            }
+        }
+        kept.push(f);
+    }
+    Ok(kept.into_iter().max_by_key(|f| f.number))
 }
 
 /// The pull request `pr add --adopt` reads (`gh pr view <n> --json number,url,state,isCrossRepository,headRefName,baseRefName,author`)
@@ -312,6 +326,33 @@ pub fn retitle_pr(cwd: &Path, repo: &str, number: i64, title: &str) -> Result<()
     run(cwd, &["api", "-X", "PATCH", &endpoint, "-f", &field]).map(drop)
 }
 
+/// `gh pr edit <number> --body-file -` with `body` on stdin: replaces the pull request's body.
+pub fn describe_pr(cwd: &Path, number: i64, body: &str) -> Result<(), CpdError> {
+    let n = number.to_string();
+    let args = ["pr", "edit", &n, "--body-file", "-"];
+    let call = Call {
+        tool: "gh".to_owned(),
+        program: "gh".to_owned(),
+        args: args.iter().map(|a| (*a).to_owned()).collect(),
+        envs: vec![("GH_PROMPT_DISABLED".to_owned(), Some("1".to_owned())), ("NO_COLOR".to_owned(), Some("1".to_owned()))],
+        cwd: Some(cwd.to_path_buf()),
+        deadline: TIMEOUT,
+        stdin: Some(body.as_bytes().to_vec()),
+        stderr_to: None,
+    };
+    let out = match Ports::current().runner.run(&call) {
+        Ok(out) => out,
+        Err(Failed::Timeout(_)) => return Err(killed(&args, TIMEOUT, "")),
+        Err(Failed::Io(e)) => return Err(failed(&args, format!("Cannot run gh: {e}."), None, &e.to_string())),
+    };
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    match out.status.code() {
+        Some(0) => Ok(()),
+        Some(code) => Err(failed(&args, format!("gh {} exited {code}.", args[0]), Some(code), &stderr)),
+        None => Err(failed(&args, format!("gh {} was killed by a signal.", args[0]), None, &stderr)),
+    }
+}
+
 /// `gh pr view <n> --repo <repo> --json state,mergeStateStatus,headRefOid,title,mergedAt`: what `pr merge` re-checks (`title` is selected, as the docs say, and not kept).
 #[derive(Debug, Deserialize)]
 pub struct MergeView {
@@ -355,6 +396,34 @@ pub fn merge_pr(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64, head: 
     run_on(runner, cwd, &args).map(drop)
 }
 
+/// `gh api --method POST repos/<repo>/pulls/<number>/reviews --input -` with `body` on stdin: GitHub's create-review
+/// call; its answer's stdout. A non-zero exit, a signal and a timeout (60 s) are `gh_failed`.
+pub fn post_review(runner: &dyn Runner, repo: &str, number: &str, body: Vec<u8>) -> Result<String, CpdError> {
+    let endpoint = format!("repos/{repo}/pulls/{number}/reviews");
+    let args = ["api", "--method", "POST", endpoint.as_str(), "--input", "-"];
+    let call = Call {
+        tool: "gh".to_owned(),
+        program: "gh".to_owned(),
+        args: args.iter().map(|a| (*a).to_owned()).collect(),
+        envs: vec![("GH_PROMPT_DISABLED".to_owned(), Some("1".to_owned())), ("NO_COLOR".to_owned(), Some("1".to_owned()))],
+        cwd: Some(Path::new(".").to_path_buf()),
+        deadline: TIMEOUT,
+        stdin: Some(body),
+        stderr_to: None,
+    };
+    let out = match runner.run(&call) {
+        Ok(out) => out,
+        Err(Failed::Timeout(_)) => return Err(killed(&args, TIMEOUT, "")),
+        Err(Failed::Io(e)) => return Err(failed(&args, format!("Cannot run gh: {e}."), None, &e.to_string())),
+    };
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    match out.status.code() {
+        Some(0) => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
+        Some(code) => Err(failed(&args, format!("gh api exited {code}."), Some(code), &stderr)),
+        None => Err(failed(&args, "gh api was killed by a signal.".to_owned(), None, &stderr)),
+    }
+}
+
 /// Inline review comments, which `gh pr view` does not list. `{owner}/{repo}`
 /// are filled in by `gh` from `cwd`'s repo. Every page is read: `gh` 2.45 has no
 /// `--slurp`, so `--paginate` prints the pages as consecutive JSON arrays.
@@ -376,7 +445,7 @@ pub fn inline_comments(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<V
 /// The fields of a pull request, as the search and the lookup both select them.
 macro_rules! pr_fields {
     () => {
-        "repository { nameWithOwner } number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision \
+        "repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision \
          mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
     };
 }
@@ -413,6 +482,10 @@ pub struct PolledPr {
     /// GitHub's `updatedAt`: when it moves, the pull request's comments are read again (`read_comments`).
     pub updated_at: String,
     pub merged_at: Option<String>,
+    /// The base branch (`baseRefName`); `None` when the reply has none (a test's fake `gh`).
+    pub base_ref: Option<String>,
+    /// The repo's default branch (`defaultBranchRef.name`); `None` when GitHub has none.
+    pub default_branch: Option<String>,
 }
 
 /// Which of the poll's two searches listed a pull request: what the row's
@@ -448,10 +521,6 @@ pub struct Rate {
 pub struct Search {
     pub issue_count: u32,
     pub prs: Vec<Listed>,
-    /// The base branch (`baseRefName`) each pull request of `prs` targets, by `(repo, number)`: what the poll's
-    /// base follow compares with the PR's `base` (§7.6 step 6). It is not stored in `pull_requests`. A pull request
-    /// whose reply has no `baseRefName` has no entry, so nothing is followed for it.
-    pub bases: Vec<((String, i64), String)>,
     pub rate: Rate,
 }
 
@@ -494,7 +563,14 @@ struct RawRate {
 }
 
 #[derive(Deserialize)]
+struct RawBranch {
+    name: String,
+}
+
+#[derive(Deserialize)]
 struct RawRepoName {
+    #[serde(rename = "defaultBranchRef", default)]
+    default_branch_ref: Option<RawBranch>,
     #[serde(rename = "nameWithOwner")]
     name_with_owner: String,
 }
@@ -617,6 +693,8 @@ impl Reply<'_> {
         let rollup = raw.commits.nodes.first().and_then(|n| n.commit.as_ref()).and_then(|c| c.rollup.as_ref());
         Ok(PolledPr {
             repo: raw.repository.name_with_owner,
+            default_branch: raw.repository.default_branch_ref.map(|b| b.name),
+            base_ref: raw.base_ref,
             number: raw.number,
             url: raw.url,
             title: raw.title,
@@ -713,6 +791,79 @@ fn posted(runner: &dyn Runner, cwd: &Path, query: &str, vars: &[(&str, &str)], p
         .ok_or_else(|| reply.fail(format!("gh api graphql answered without data{pointer}.")))
 }
 
+/// What the read query of `pr post`'s auto-merge found (commands.md §9.8b).
+#[derive(Debug, PartialEq, Eq)]
+pub struct AutoMergeRead {
+    /// The repo allows auto-merge (`autoMergeAllowed`).
+    pub allowed: bool,
+    /// The pull request's GraphQL node id.
+    pub id: String,
+    /// The pull request already has an auto-merge request (`autoMergeRequest` is set).
+    pub requested: bool,
+}
+
+#[derive(Deserialize)]
+struct RawAutoRead {
+    repository: RawAutoRepo,
+}
+
+#[derive(Deserialize)]
+struct RawAutoRepo {
+    #[serde(rename = "autoMergeAllowed")]
+    allowed: bool,
+    #[serde(rename = "pullRequest")]
+    pull_request: Option<RawAutoPull>,
+}
+
+#[derive(Deserialize)]
+struct RawAutoPull {
+    id: String,
+    #[serde(rename = "autoMergeRequest")]
+    request: Option<Value>,
+}
+
+/// The ONE read of `pr post`'s auto-merge: whether the repo allows it, the pull request's node id and whether it has a request.
+pub fn auto_merge_read(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) -> Result<AutoMergeRead, CpdError> {
+    let (owner, name) = repo_parts(repo)
+        .ok_or_else(|| CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo.")).with("repo", repo))?;
+    let query = format!(
+        "query {{ repository(owner: \"{owner}\", name: \"{name}\") {{ autoMergeAllowed pullRequest(number: {number}) {{ id autoMergeRequest {{ enabledAt }} }} }} }}"
+    );
+    let (args, out) = graphql_with(runner, cwd, &query, &[])?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let reply = Reply { args: &refs, out: &out };
+    if out.exit != Some(0) {
+        return Err(reply.fail(format!("gh {} exited {}.", refs[0], out.exit.map_or("with a signal".to_owned(), |c| c.to_string()))));
+    }
+    let (data, errors): (RawAutoRead, _) = reply.envelope()?;
+    if let Some(first) = errors.first() {
+        return Err(reply.fail(format!("gh api graphql answered with errors: {}", first.message.as_deref().unwrap_or("(no message)"))));
+    }
+    let pull = data.repository.pull_request.ok_or_else(|| reply.fail(format!("GitHub has no pull request {repo}#{number}.")))?;
+    Ok(AutoMergeRead { allowed: data.repository.allowed, id: pull.id, requested: pull.request.is_some() })
+}
+
+/// Turns on squash auto-merge for the pull request whose node id is `pull` (`enablePullRequestAutoMerge`, never `gh pr merge`).
+/// `Ok(Err(message))` is GitHub's refusal (GraphQL `errors`); a `gh` that failed or printed no usable answer is `gh_failed`.
+pub fn enable_auto_merge(runner: &dyn Runner, cwd: &Path, pull: &str) -> Result<Result<(), String>, CpdError> {
+    let query = "mutation($pull: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $pull, mergeMethod: SQUASH}) { pullRequest { autoMergeRequest { enabledAt } } } }";
+    let (args, out) = graphql_with(runner, cwd, query, &[("pull", pull)])?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let reply = Reply { args: &refs, out: &out };
+    let body: Option<Envelope<Value>> = serde_json::from_str(&out.stdout).ok();
+    if let Some(first) = body.as_ref().and_then(|b| b.errors.as_ref()).and_then(|e| e.first()) {
+        return Ok(Err(first.message.clone().unwrap_or_else(|| "(no message)".to_owned())));
+    }
+    if out.exit != Some(0) {
+        return Err(reply.fail(format!("gh {} exited {}.", refs[0], out.exit.map_or("with a signal".to_owned(), |c| c.to_string()))));
+    }
+    let (data, _): (Value, _) = reply.envelope()?;
+    match data.pointer("/enablePullRequestAutoMerge/pullRequest/autoMergeRequest/enabledAt").and_then(Value::as_str) {
+        Some(_) => Ok(Ok(())),
+        None => Err(reply.fail("gh api graphql answered without an auto-merge request.".to_owned())),
+    }
+}
+
 /// The User's open pull requests (`SEARCH_QUERY`), 15 s at most. A response with
 /// `errors`, without `data` or without JSON is `gh_failed`, never "no PRs".
 pub fn search_open(runner: &dyn Runner, cwd: &Path) -> Result<Search, CpdError> {
@@ -734,15 +885,9 @@ fn parse_search(reply: &Reply) -> Result<Search, CpdError> {
     };
     let issue_count = authored.issue_count + requested.issue_count;
     let mut prs: Vec<Listed> = Vec::new();
-    let mut bases: Vec<((String, i64), String)> = Vec::new();
     for (nodes, is_authored) in [(authored.nodes, true), (requested.nodes, false)] {
         for raw in nodes {
-            let base = raw.base_ref.clone();
             let pr = reply.polled(raw)?;
-            let key = (pr.repo.clone(), pr.number);
-            if let Some(base) = base.filter(|_| !bases.iter().any(|(k, _)| *k == key)) {
-                bases.push((key, base));
-            }
             let at = match prs.iter().position(|l| (&l.pr.repo, l.pr.number) == (&pr.repo, pr.number)) {
                 Some(at) => at,
                 None => {
@@ -758,7 +903,7 @@ fn parse_search(reply: &Reply) -> Result<Search, CpdError> {
             }
         }
     }
-    Ok(Search { issue_count, prs, bases, rate: Rate { cost: rate.cost, remaining: rate.remaining, reset_at: rate.reset_at } })
+    Ok(Search { issue_count, prs, rate: Rate { cost: rate.cost, remaining: rate.remaining, reset_at: rate.reset_at } })
 }
 
 /// `owner/name` with each part of `[A-Za-z0-9_.-]+`: nothing else reaches a query text.
@@ -1085,10 +1230,10 @@ mod tests {
         assert_eq!(
             SEARCH_QUERY,
             "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { \
-             issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt updatedAt mergedAt \
+             issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt \
              baseRefName reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
              reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { \
-             issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt updatedAt mergedAt \
+             issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt \
              baseRefName reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
              rateLimit { cost remaining resetAt } }"
         );
@@ -1114,17 +1259,20 @@ mod tests {
     }
 
     #[test]
-    fn a_search_reports_each_pull_requests_base_branch_once_and_none_when_the_reply_has_none() {
-        let based = |node: String, base: &str| node.replace(r#""mergedAt":null"#, &format!(r#""baseRefName":"{base}","mergedAt":null"#));
+    fn a_search_reports_each_pull_requests_base_and_default_branch_and_none_when_the_reply_has_none() {
+        let based = |node: String, base: &str| {
+            node.replace(r#""mergedAt":null"#, &format!(r#""baseRefName":"{base}","mergedAt":null"#))
+                .replace(r#"{"nameWithOwner":"o/a"}"#, r#"{"nameWithOwner":"o/a","defaultBranchRef":{"name":"main"}}"#)
+        };
         let body = format!(
-            r#"{{"data":{{"search":{{"issueCount":2,"nodes":[{},{}]}},"reviewRequests":{{"issueCount":1,"nodes":[{}]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#,
-            based(pr("o/a", 1, false, "OPEN", "null"), "main"),
+            r#"{{"data":{{"search":{{"issueCount":2,"nodes":[{},{}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#,
+            based(pr("o/a", 1, false, "OPEN", "null"), "feature"),
             pr("o/a", 2, false, "OPEN", "null"),
-            based(pr("o/a", 1, false, "OPEN", "null"), "main"),
         );
         let found = search(&reply(&body, 0)).unwrap();
-        assert_eq!(found.prs.len(), 2);
-        assert_eq!(found.bases, [(("o/a".to_owned(), 1), "main".to_owned())]);
+        let [a, b] = &found.prs.iter().map(|l| &l.pr).collect::<Vec<_>>()[..] else { panic!("{:?}", found.prs) };
+        assert_eq!((a.base_ref.as_deref(), a.default_branch.as_deref()), (Some("feature"), Some("main")));
+        assert_eq!((b.base_ref.as_deref(), b.default_branch.as_deref()), (None, None));
     }
 
     #[test]
@@ -1284,7 +1432,7 @@ mod tests {
         let direct = lookup_query(&prs, true).unwrap();
         assert!(!plain.contains("viewer"));
         assert_eq!(direct.matches(" viewerDidAuthor viewerLatestReviewRequest { id } } }").count(), 2);
-        assert!(direct.starts_with("query { p0: repository(owner: \"o\", name: \"a\") { pullRequest(number: 7) { repository { nameWithOwner }"));
+        assert!(direct.starts_with("query { p0: repository(owner: \"o\", name: \"a\") { pullRequest(number: 7) { repository { nameWithOwner defaultBranchRef { name } }"));
         assert_eq!(direct.replace(" viewerDidAuthor viewerLatestReviewRequest { id }", ""), plain);
     }
 

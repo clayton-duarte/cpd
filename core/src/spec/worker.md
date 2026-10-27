@@ -132,6 +132,12 @@ Do not do any of these:
 Nothing is listed. Still do only what the Goal and Acceptance require.
 {% endif %}
 
+{% if resources %}
+### Resources
+
+This Attempt holds these exclusive resources: {% for item in resources %}`{{ item }}`{% if not loop.last %}, {% endif %}{% endfor %}. No other Job and no `cpd resource run` can take them until this Attempt ends.
+
+{% endif %}
 {% if previous %}
 ## Previous Attempts
 
@@ -203,7 +209,7 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `base_conflict`: the Lead Branch conflicts with its base (`details.files`). Merge the base, resolve, commit, then submit again.
 - `lead_branch_moved`: a Job merged into the Lead Branch since you began. Merge it (`details.next`), then submit again.
 {% if kind == "open" %}
-- `pr_title_required`, `pr_closed`: ask the Lead.
+- `pr_title_required`, `description_required`, `pr_closed`: ask the Lead.
 {% else %}
 - `illegal_transition`: the PR is not open. Ask the Lead.
 {% endif %}

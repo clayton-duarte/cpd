@@ -21,7 +21,7 @@ fn usage(message: String) -> CpdError {
 
 /// 1 to 2000 characters (`--what`, `--message`).
 #[derive(Clone, Debug)]
-pub struct Short(String);
+pub struct Short(pub(super) String);
 
 impl FromStr for Short {
     type Err = CpdError;
@@ -36,7 +36,7 @@ impl FromStr for Short {
 
 /// `^[a-z][a-z0-9_]{0,63}$`.
 #[derive(Clone, Debug)]
-pub struct Code(String);
+pub struct Code(pub(super) String);
 
 impl FromStr for Code {
     type Err = CpdError;
@@ -78,7 +78,7 @@ pub(super) fn report(args: ReportArgs) -> Result<Output, CpdError> {
         details.insert("session".into(), json!(session.id));
         details.insert("plan".into(), json!(session.plan));
         let text = format!("φ adapter: {}: {}: {}", what.0, code.0, message.0);
-        let event = NewEvent::error(text, "adapter", &code.0, &message.0, Value::Object(details)).context(session.context.clone());
+        let event = NewEvent::error(text, "adapter", &code.0, &message.0, Value::Object(details)).context(session.context.clone()).session(session.id.clone());
         append(tx, event)
     })?;
     Ok(Output::success(json!({"event": event})))

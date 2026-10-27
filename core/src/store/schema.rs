@@ -110,7 +110,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "c286d487cbcfc92452066295088a9b91dd7ab0da73df0de64d53b9634e13f558";
+pub const SCHEMA_HASH: &str = "08dd7518fe7ebf202baef4f24eeabb1b71108f07b79e6996c16633bf64c73423";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -453,7 +453,7 @@ fn delete_owner(table: &str) -> Option<String> {
         )
     };
     Some(match table {
-        "prs" | "pr_needs" | "plan_reviews" | "jobs" | "dependencies" | "attempts" | "escalations" => plan_deleted("OLD.plan"),
+        "prs" | "pr_posts" | "job_pools" | "pr_needs" | "plan_reviews" | "jobs" | "dependencies" | "attempts" | "escalations" => plan_deleted("OLD.plan"),
         "context_records" | "record_retirements" | "record_curations" => context_deleted("OLD.context"),
         "events" | "inbox_items" | "sessions" => plan_row(),
         "plannotator_reviews" => session_row("session"),
@@ -869,8 +869,18 @@ mod tests;
 #[cfg(test)]
 mod blue_tests;
 #[cfg(test)]
+mod job_verify_tests;
+#[cfg(test)]
+mod job_edit_tests;
+#[cfg(test)]
 mod cyan_tests;
 #[cfg(test)]
 mod models_notice_tests;
 #[cfg(test)]
 mod claim_tests;
+#[cfg(test)]
+mod tier_catalog_tests;
+#[cfg(test)]
+mod deploy_tests;
+#[cfg(test)]
+mod lead_branch_tests;

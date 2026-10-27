@@ -163,8 +163,8 @@ function renderThinkingSections(
 			// fold: "toggle": summary is folded, detail is expanded; only a section with detail has a toggle.
 			const controlLines = toggle
 				? detail.length === 0 ? [] : view === "detail"
-					? toggleRow(styleControlPrefix, toggle.collapse, "collapse", sectionControls, availableWidth, options.time)
-					: toggleRow(styleControlPrefix, toggle.expand, "expand", undefined, availableWidth, options.time)
+					? toggleRow(styleControlPrefix, toggle.collapse, "collapse", sectionControls, availableWidth - 2, options.time)
+					: toggleRow(styleControlPrefix, toggle.expand, "expand", undefined, availableWidth - 2, options.time)
 				: sectionControls
 				? wrapTextWithAnsi(sectionControls, Math.max(1, availableWidth - 2)).map(
 						(line, index) => `${index === 0 ? styleControlPrefix("└ ") : "  "}${line}`,
@@ -196,7 +196,7 @@ const bound: ThinkingCycleController[] = [];
 type ThinkingMessage = {
 	hideThinkingBlock: boolean;
 	thinkingVisibilityOverrides: Map<number, boolean>;
-	contentContainer: { children: Array<{ child?: { defaultTextStyle?: { italic?: boolean }; theme?: { italic: (text: string) => string; code?: (text: string) => string; highlightCode?: (code: string, lang?: string) => string[] }; text?: string; setText?: (text: string) => void } }> };
+	contentContainer: { children: Array<{ child?: { defaultTextStyle?: { italic?: boolean }; theme?: { italic: (text: string) => string; code?: (text: string) => string; highlightCode?: (code: string, lang?: string) => string[] }; text?: string; paddingX?: number; setText?: (text: string) => void } }> };
 	updateContent(message: unknown, isStreaming?: boolean): void;
 };
 
@@ -243,6 +243,8 @@ function thinkingBehavior(self: ThinkingMessage, args: any[], original: (...args
 			};
 		}
 		if (child.defaultTextStyle?.italic) child.defaultTextStyle = { ...child.defaultTextStyle, italic: false };
+		// The block has no horizontal margin: the rail is in column 0 (docs/contract.md 6.9; pi's outputPad is dropped).
+		if (owner.folds() && child.paddingX !== undefined) child.paddingX = 0;
 	}
 	if (clicked) owner.refresh();
 	return result;
@@ -257,8 +259,11 @@ export class ThinkingCycleController {
 	private refreshThinking: (() => void) | undefined;
 	/** The Unix-ms timestamp of the assistant message the wrapper last saw, for the toggle row's `HH:MM` (hs-d637). */
 	private at: number | undefined;
+	/** Fold "toggle" draws the block: its rows take the whole width, with no padding column of pi's own. */
+	readonly folds: () => boolean;
 
 	constructor(pi: ExtensionAPI, enabled: () => boolean = () => true, toggle: () => ToggleGlyphs | undefined = () => undefined) {
+		this.folds = () => enabled() && toggle() !== undefined;
 		const transformer = (markdown: string, context: { messageType: string; availableWidth: number }): string => {
 			// Off also applies before session_start, during transcript reconstruction
 			// and HTML exports. Do not summarize or restyle native thinking there.

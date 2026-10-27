@@ -616,6 +616,8 @@ fn view_fx() -> Fx {
     for probe in ["sysctl", "ioreg"] {
         fx.fake(probe, Reply::exit(1, "", ""));
     }
+    // `run-shell -b` hands the merge to `sh -c`: the record is what tmux would start in the background
+    fx.fake("sh", Reply::ok(""));
     fx
 }
 
@@ -682,6 +684,12 @@ impl Seen {
     /// The argv (`display-popup` first) of every popup the fake server opened.
     fn popups(&self) -> Vec<Vec<String>> {
         self.probe.state().popups()
+    }
+
+    /// The command of every `run-shell` the product sent to tmux: the merges it started at once (pro-d111).
+    fn merges(&self) -> Vec<String> {
+        let calls = self.runner.calls().into_iter().filter(|c| c.program.rsplit('/').next() == Some("tmux"));
+        calls.map(|c| c.args).filter(|args| args.iter().any(|a| a == "run-shell")).map(|args| args.last().unwrap().clone()).collect()
     }
 
     /// The arguments of every `set-buffer` the product sent to tmux.
@@ -923,7 +931,7 @@ fn a_refused_session_open_is_logged_and_draws_no_note() {
 fn the_merge_icon_is_drawn_and_hit_only_on_clean_pull_requests() {
     let fx = Fx::new();
     let mut store = prs_store(&fx.env);
-    sql(&mut store, "UPDATE pull_requests SET merge_state = 'clean' WHERE number IN (9, 20); UPDATE pull_requests SET merge_state = 'blocked' WHERE number = 4;");
+    sql(&mut store, "UPDATE pull_requests SET base_ref = 'main', default_branch = 'main'; UPDATE pull_requests SET merge_state = 'clean' WHERE number IN (9, 20); UPDATE pull_requests SET merge_state = 'blocked' WHERE number = 4;");
     let w = read::widgets(&mut store, 3, 0).unwrap();
     assert_eq!(w.prs.iter().map(|p| (p.number, p.clean)).collect::<Vec<_>>(), [(4, false), (9, true), (20, true)]);
     let mut terminal = Terminal::new(TestBackend::new(46, 25)).unwrap();
@@ -944,7 +952,7 @@ fn the_merge_icon_is_drawn_and_hit_only_on_clean_pull_requests() {
 }
 
 #[test]
-fn a_clean_pr_shows_the_merge_icon_and_a_click_on_it_opens_the_popup_not_the_lead() {
+fn a_clean_pr_shows_the_merge_icon_and_a_click_on_it_merges_at_once_not_the_lead() {
     const ICON: char = '\u{F062D}';
     let fx = view_fx();
     // `acme/repo#20` (owned by `mine`) and `acme/repo#9` (no owner) are clean, `acme/web#4` is blocked.
@@ -968,17 +976,16 @@ fn a_clean_pr_shows_the_merge_icon_and_a_click_on_it_opens_the_popup_not_the_lea
         }
         assert_eq!(shown.iter().filter(|r| r.contains(ICON)).count(), 2, "{shown:#?}");
     });
-    // The unowned row's icon, then the owned row's: each opens its popup and neither runs `session open`. The redraws after both
-    // clicks (a commit, the time): no third popup opens.
+    // The unowned row's icon, then the owned row's: each starts its merge and neither runs `session open`. The redraws after both
+    // clicks (a commit, the time): no third merge starts.
     let signals = vec![click(WIDTH - 1, second_line(" acme/repo#9")), click(WIDTH - 1, second_line(" acme/repo#20")), Signal::Commit, Signal::Due, gone()];
     show(&fx, signals, &steps);
-    let popups = seen.popups();
-    assert_eq!(popups.len(), 2, "{popups:?}");
-    for (popup, pull) in popups.iter().zip(["acme/repo#9", "acme/repo#20"]) {
-        let at = popup.iter().position(|a| a == "display-popup").unwrap();
-        assert_eq!(popup.last().unwrap(), &format!("cpd tui view merge '{pull}' --client '{CLIENT}'"), "{popup:?}");
-        assert_eq!(popup[at + 1..at + 5], ["-E", "-B", "-c", CLIENT], "{popup:?}");
+    let merges = seen.merges();
+    assert_eq!(merges.len(), 2, "{merges:?}");
+    for (command, pull) in merges.iter().zip(["acme/repo##9", "acme/repo##20"]) {
+        assert_eq!(command, &format!("cpd tui action merge '{pull}' --client '{CLIENT}' 2>/dev/null"));
     }
+    assert!(seen.popups().is_empty(), "no popup opens: {:?}", seen.popups());
     assert_eq!(seen.moved_events(), before, "no `session open` ran");
     assert_eq!(seen.focused_session(), "1||widgets", "the focus did not move");
 }
@@ -1006,7 +1013,8 @@ fn clean_prs(env: &TestEnv) {
     let mut store = prs_store(env);
     sql(
         &mut store,
-        "UPDATE pull_requests SET merge_state = 'clean' WHERE number IN (9, 20);
+        "UPDATE pull_requests SET base_ref = 'main', default_branch = 'main';
+         UPDATE pull_requests SET merge_state = 'clean' WHERE number IN (9, 20);
          UPDATE pull_requests SET merge_state = 'blocked' WHERE number = 4;",
     );
     sql(&mut store, &moved("2026-01-04T00:00:00.000Z", "mine", "parked"));
@@ -1090,7 +1098,7 @@ fn copy_link_puts_the_url_in_tmuxs_buffer_with_set_buffer_w_and_says_nothing() {
 }
 
 #[test]
-fn merge_in_the_menu_opens_the_same_popup_as_the_merge_icon() {
+fn merge_in_the_menu_merges_at_once_as_the_merge_icon_does() {
     let fx = view_fx();
     clean_prs(&fx.env);
     cockpit(&fx);
@@ -1100,11 +1108,9 @@ fn merge_in_the_menu_opens_the_same_popup_as_the_merge_icon() {
         .at("the PRs", |s| s.contains("acme/repo#20"), |_| {})
         .at("the menu", |s| menu_labels(&s.shown_rows()) == ["Merge", "Copy Link"], |_| {});
     show(&fx, vec![rclick(3, nine), key(KeyCode::Enter), gone()], &steps);
-    let popups = Seen::of(&fx).popups();
-    let [popup] = &popups[..] else { panic!("{popups:?}") };
-    let at = popup.iter().position(|a| a == "display-popup").unwrap();
-    assert_eq!(popup.last().unwrap(), &format!("cpd tui view merge 'acme/repo#9' --client '{CLIENT}'"), "{popup:?}");
-    assert_eq!(popup[at + 1..at + 5], ["-E", "-B", "-c", CLIENT], "{popup:?}");
+    let seen = Seen::of(&fx);
+    assert_eq!(seen.merges(), [format!("cpd tui action merge 'acme/repo##9' --client '{CLIENT}' 2>/dev/null")]);
+    assert!(seen.popups().is_empty(), "no popup opens: {:?}", seen.popups());
 }
 
 // ---------- a merge in progress (hs-d495): the marker, the spinner and no click ----------
@@ -1158,14 +1164,13 @@ fn a_live_merge_marker_shows_the_spinner_for_that_pull_request_alone_and_it_cann
         })
         // A click on the spinner does nothing: no popup, no Lead (no `session open`)
         .next("the click on the spinner", move |_| {
-            assert_eq!(sees_none.popups(), Vec::<Vec<String>>::new());
+            assert_eq!(sees_none.merges(), Vec::<String>::new());
             assert_eq!(sees_none.moved_events(), before, "no `session open` ran");
         })
-        // The icon of the stale one opens its popup, as ever: a positive signal that the click on the spinner was handled first
+        // The icon of the stale one starts its merge, as ever: a positive signal that the click on the spinner was handled first
         .next("the click on the stale one's icon", move |_| {
-            let popups = sees_one.popups();
-            assert_eq!(popups.len(), 1, "{popups:?}");
-            assert_eq!(popups[0].last().unwrap(), &format!("cpd tui view merge 'acme/repo#20' --client '{CLIENT}'"));
+            let merges = sees_one.merges();
+            assert_eq!(merges, [format!("cpd tui action merge 'acme/repo##20' --client '{CLIENT}' 2>/dev/null")]);
         })
         // The menu of #9: Merge is shown with the spinner and cannot be selected; the stale one's menu is as ever
         .at("the menu of #9", |s| menu_labels(&s.shown_rows()).len() == 2, |screen| {
@@ -1176,12 +1181,12 @@ fn a_live_merge_marker_shows_the_spinner_for_that_pull_request_alone_and_it_cann
         // Copy Link's Down and Enter is the positive signal that the Enter on Merge was handled before it
         .at("the menu closed", |s| the_menu_is_closed(&s.shown_rows()), move |_| {
             assert_eq!(copies.copies().len(), 1, "the copy: {:?}", copies.copies());
-            assert_eq!(popups.popups().len(), 1, "Enter on the busy Merge opened no popup: {:?}", popups.popups());
+            assert_eq!(popups.merges().len(), 1, "Enter on the busy Merge started no merge: {:?}", popups.merges());
         })
         .at("the menu of #20", |s| !menu_labels(&s.shown_rows()).is_empty(), |screen| {
             assert_eq!(menu_labels(&screen.shown_rows()), ["Merge", "Copy Link", "Go to Lead"], "the stale marker changes nothing");
         })
-        // The merge ends (the action removes its marker): the icon is back, and its click opens the popup
+        // The merge ends (the action removes its marker): the icon is back, and its click starts the merge
         .at("the menu closed again", |s| the_menu_is_closed(&s.shown_rows()), {
             let (home, clock) = (home.clone(), clock.clone());
             move |_| {
@@ -1191,9 +1196,9 @@ fn a_live_merge_marker_shows_the_spinner_for_that_pull_request_alone_and_it_cann
         })
         .at("the icon of #9 back", |s| has_icon(&s.shown_rows(), " acme/repo#9") && !spinning(&s.shown_rows(), " acme/repo#9"), |_| {})
         .next("the click on the icon of #9", move |_| {
-            let popups = sees_two.popups();
-            assert_eq!(popups.len(), 2, "{popups:?}");
-            assert_eq!(popups[1].last().unwrap(), &format!("cpd tui view merge 'acme/repo#9' --client '{CLIENT}'"));
+            let merges = sees_two.merges();
+            assert_eq!(merges.len(), 2, "{merges:?}");
+            assert_eq!(merges[1], format!("cpd tui action merge 'acme/repo##9' --client '{CLIENT}' 2>/dev/null"));
         });
     let signals = vec![
         Signal::Due,
@@ -1226,11 +1231,10 @@ fn a_view_started_while_a_merge_runs_shows_its_spinner_at_once_on_the_owned_row_
     let steps = Steps::new().at("the spinner of #20", |s| spinning(&s.shown_rows(), " acme/repo#20"), |screen| {
         assert!(has_icon(&screen.shown_rows(), " acme/repo#9"), "only #20 merges: {:?}", screen.shown_rows());
     });
-    // the owned row's click on the spinner opens neither the popup nor the Lead; the redraws that follow add none
+    // the owned row's click on the spinner starts no merge and opens no Lead; the redraws that follow add none
     show(&fx, vec![click(WIDTH - 1, twenty + 1), click(WIDTH - 1, nine + 1), Signal::Commit, Signal::Due, gone()], &steps);
-    let popups = seen.popups();
-    assert_eq!(popups.len(), 1, "{popups:?}");
-    assert_eq!(popups[0].last().unwrap(), &format!("cpd tui view merge 'acme/repo#9' --client '{CLIENT}'"));
+    let merges = seen.merges();
+    assert_eq!(merges, [format!("cpd tui action merge 'acme/repo##9' --client '{CLIENT}' 2>/dev/null")]);
     assert_eq!(seen.moved_events(), before, "no `session open` ran");
 }
 

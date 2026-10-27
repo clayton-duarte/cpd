@@ -129,12 +129,12 @@ pub(crate) fn sections() -> Vec<Section> {
             ]
         })
         .collect();
-    // the failed pill turns through the 28 moon phases, red, while the Plan's Lead works (hs-d586)
+    // the failed pill turns through the 28 moon phases, red, while one of its Jobs is being worked on (pro-d88)
     let failed = palette::JOB_LEGEND.iter().position(|(_, status, _)| *status == JobStatus::Failed).expect("the legend lists failed");
     jobs.insert(
         failed + 1,
         vec![
-            plain("red loader: a failed Job, its Lead working"),
+            plain("red loader: a failed Job being worked on"),
             Line::from(palette::SPINNER.iter().map(|m| Span::styled(*m, palette::fg_clickable(palette::Meaning::Failed))).collect::<Vec<_>>()),
         ],
     );
@@ -166,7 +166,7 @@ pub(crate) fn sections() -> Vec<Section> {
         rows: vec![
             vec![plain(palette::NEEDS_YOU), plain("the Session needs you (colour below)")],
             vec![frames, plain("the Lead is working, dispatch (a Session with no Plan too) (one frame every 50 ms)")],
-            vec![fixing, plain("the Lead is working on a Plan with a failed Job (one frame every 50 ms)")],
+            vec![fixing, plain("a Plan's failed Job is being worked on (one frame every 50 ms)")],
             vec![dot(Dot::Waiting, 0), plain("waiting: an agent waits for another agent (a Worker for its Lead), not for you")],
             vec![dot(Dot::Idle, 0), plain("idle, nothing needed")],
             vec![dot(Dot::Stopped, 0), plain("pi stopped")],
@@ -222,6 +222,9 @@ pub(crate) fn sections() -> Vec<Section> {
             vec![Line::from(Span::styled(palette::ITEM_DOCS, palette::fg_clickable(Meaning::Notice))), plain("a documentation candidate")],
             vec![Line::from(Span::styled(palette::ITEM_RETIRE, palette::fg_clickable(Meaning::Notice))), plain("a record to retire")],
             tier(Urgency::White, "an unread reply"),
+            vec![Line::from(Span::styled(palette::ITEM_DEPLOY, palette::fg_clickable(Meaning::Review))), plain("a deploy waits for your approval")],
+            vec![Line::from(Span::styled(palette::ITEM_PR_READY, palette::fg_clickable(Meaning::Review))), plain("a pull request of yours is ready to merge")],
+            vec![Line::from(Span::styled(palette::ITEM_REVIEW_REQUESTED, palette::fg_clickable(Meaning::External))), plain("a review asked of you")],
         ],
     };
     let pulse = Section {
@@ -656,14 +659,17 @@ mod tests {
                 "\u{F0653}", "a documentation candidate",
                 "\u{F116E}", "a record to retire",
                 "\u{F0366}", "an unread reply",
+                "\u{F15A9}", "a deploy waits for your approval",
+                "\u{F12F4}", "a pull request of yours is ready to merge",
+                "\u{F12F2}", "a review asked of you",
             ]
         );
         let colours: Vec<_> = inbox.rows.iter().map(|r| r[0].spans[0].style.fg).collect();
         let c = |m| Some(palette::color_clickable(m));
         assert_eq!(
             colours,
-            [c(Meaning::Failed), c(Meaning::Review), c(Meaning::Planning), c(Meaning::External), c(Meaning::Notice), c(Meaning::Notice), c(Meaning::Notice), c(Meaning::NotStarted)],
-            "red, yellow, magenta, blue, cyan (three lines: the tier and the two curate kinds), white"
+            [c(Meaning::Failed), c(Meaning::Review), c(Meaning::Planning), c(Meaning::External), c(Meaning::Notice), c(Meaning::Notice), c(Meaning::Notice), c(Meaning::NotStarted), c(Meaning::Review), c(Meaning::Review), c(Meaning::External)],
+            "red, yellow, magenta, blue, cyan (three lines: the tier and the two curate kinds), white, then the deploy, pr-ready and review-requested lines"
         );
         let dots = all.iter().position(|s| s.title == "Session Dots" || s.title == "Session dots").unwrap();
         let pulse = all.iter().position(|s| s.title == "Pulse").unwrap();

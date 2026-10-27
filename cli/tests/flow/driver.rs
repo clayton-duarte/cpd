@@ -93,8 +93,8 @@ pub(super) fn seed_rows(env: &TestEnv, repo: &Path, lead: &Path) {
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
-           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', 'dispatch', 'cpd/pay/repo', '{lead}', '{PR_TITLE}', 'config', cpd_txn(), 't', 't');",
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at)
+           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', 'dispatch', 'cpd/pay/repo', '{lead}', '{PR_TITLE}', 'A description', 'config', cpd_txn(), 't', 't');",
             repo = repo.display(),
             lead = lead.display()
         ),

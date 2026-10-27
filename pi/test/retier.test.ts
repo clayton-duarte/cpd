@@ -97,6 +97,24 @@ test("a Manager switches too", async (t) => {
   assert.deepEqual([f.pi.modelsSet, f.pi.thinkingSet], [[{ provider: "p", id: "opus" }], ["xhigh"]]);
 });
 
+/** The `cpd session switch-failed` and `cpd session switched` calls that started (commands.md §10.16), in order. */
+const switchCalls = (f: Fixture, sub: "switch-failed" | "switched") => f.argvs().filter((a) => a[0] === "session" && a[1] === sub);
+const flag = (argv: string[], name: string) => argv[argv.indexOf(name) + 1];
+
+/** The failed switch was recorded once, with the text the adapter reports, and `switched` never ran. */
+function assertRecorded(f: Fixture, why: RegExp) {
+  const calls = switchCalls(f, "switch-failed");
+  assert.equal(calls.length, 1, "switch-failed runs exactly once");
+  const argv = calls[0]!;
+  assert.equal(flag(argv, "--code"), "model_unavailable");
+  assert.equal(flag(argv, "--session"), ID);
+  const message = flag(argv, "--message");
+  assert.match(message, /p\/opus/, "the message names the model");
+  assert.match(message, why);
+  assert.equal(message, adapterErrors(f)[0]!.message.content.replace(/^φ adapter: model switch: model_unavailable: /, ""), "the same text the adapter reports");
+  assert.deepEqual(switchCalls(f, "switched"), [], "switched never runs after a failure");
+}
+
 test("a model pi cannot find is one error message and sets nothing, not even the level", async (t) => {
   const f = await started(t);
   f.pi.knownModels.clear();
@@ -105,6 +123,7 @@ test("a model pi cannot find is one error message and sets nothing, not even the
   assert.equal(e.code, "model_unavailable");
   await f.drain();
   assert.deepEqual([f.pi.modelsSet, f.pi.thinkingSet, adapterErrors(f).length], [[], [], 1]);
+  assertRecorded(f, /./);
 });
 
 test("a setModel that answers false (no authentication) is one error message and sets no level", async (t) => {
@@ -115,6 +134,53 @@ test("a setModel that answers false (no authentication) is one error message and
   assert.equal(e.code, "model_unavailable");
   await f.drain();
   assert.deepEqual([f.pi.thinkingSet, adapterErrors(f).length], [[], 1]);
+  assertRecorded(f, /no authentication/);
+});
+
+test("a setModel that throws records the failed switch once", async (t) => {
+  const f = await started(t);
+  f.pi.setModel = async () => {
+    throw new Error("provider exploded");
+  };
+  f.emit(retiered(200));
+  const e = await waitFor("an error", () => adapterErrors(f)[0], WAIT);
+  assert.equal(e.code, "model_unavailable");
+  await f.drain();
+  assert.deepEqual([f.pi.thinkingSet, adapterErrors(f).length], [[], 1]);
+  assertRecorded(f, /provider exploded/);
+});
+
+test("a successful switch runs switched after the model and level are set", async (t) => {
+  const f = await started(t);
+  f.emit(retiered(200));
+  await waitFor("switched", () => switchCalls(f, "switched").length > 0, WAIT);
+  await f.drain();
+  assert.deepEqual([f.pi.modelsSet, f.pi.thinkingSet], [[{ provider: "p", id: "opus" }], ["medium"]]);
+  assert.deepEqual(switchCalls(f, "switched"), [["session", "switched", "--session", ID]]);
+  assert.deepEqual(switchCalls(f, "switch-failed"), []);
+  assert.deepEqual(adapterErrors(f), []);
+});
+
+test("a failed session show records nothing", async (t) => {
+  const f = await started(t);
+  f.respond("session-show", { ok: false, error: { code: "session_not_found", message: "no" } }, { exit: 4 });
+  f.emit(retiered(200));
+  await f.drain();
+  await f.quiet();
+  assert.deepEqual([f.pi.modelsSet, f.pi.thinkingSet], [[], []]);
+  assert.deepEqual([switchCalls(f, "switch-failed"), switchCalls(f, "switched")], [[], []], "the process state is unknown: nothing is recorded");
+
+  // A later switch that works is the only one recorded.
+  f.respond("session-show", shownO2());
+  f.emit(retiered(201));
+  await waitFor("switched", () => switchCalls(f, "switched").length > 0, WAIT);
+  await f.quiet();
+  assert.deepEqual(switchCalls(f, "switched"), [["session", "switched", "--session", ID]]);
+  assert.deepEqual(switchCalls(f, "switch-failed"), []);
+});
+
+test("the protocol is exactly one past the base", () => {
+  assert.equal(PROTOCOL, 17, "pr-described raised it to 17; the commands the adapter runs grew it earlier (contract §5.2)");
 });
 
 test("the protocol was raised past 8 and session-retiered is a known kind delivered as no message", () => {

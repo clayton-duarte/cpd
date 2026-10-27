@@ -61,6 +61,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     require_no_open_job_live(&mut env, &id, &key)?;
     require_jobs_done(&mut env, &plan, &key)?;
     stored_title(&mut env, &id, &key)?;
+    stored_description(&mut env, &id, &key)?;
 
     // `pr open` no longer opens the pull request itself: it adds and queues the PR's opener, whose submit runs the
     // Gate, pushes and opens the pull request (contract §7.6, §7.7). The write transaction decides again so two
@@ -159,19 +160,16 @@ fn require_no_conflict(repo: &Path, worktree: &Path, pr: &PrRow, base_sha: &str,
     .with("next", json!([format!("git -C {} merge --no-edit {remote}", worktree.display()), again])))
 }
 
-/// The open pull request of the PR's head, adopted when it exists (an earlier run
-/// died before its transaction), else `gh pr create`. When the create fails, the
-/// lookup runs again and adopts what it finds (a concurrent `pr open` of the PR
-/// created it, §7.6 step 3); otherwise the failure stands.
-/// The open pull request step 0 found, else a new one; when `gh pr create` fails, the Lead Branch's pull request is
-/// looked up again and adopted if it is open now (another `pr open` of the PR created it).
-fn find_or_create(lead: &Path, pr: &PrRow, existing: Option<PrRef>, title: &str, list: &[jobs::Job]) -> Result<PrRef, CpdError> {
+/// The open pull request step 0 found, else a new one; when `gh pr create` fails, the head's pull request created at or after the
+/// PR's start (an adopted PR: any) is looked up again and adopted if it is open now (another `pr open` of the PR created it).
+fn find_or_create(lead: &Path, pr: &PrRow, existing: Option<PrRef>, title: &str, description: Option<&str>) -> Result<PrRef, CpdError> {
     if let Some(found) = existing {
         return Ok(found);
     }
-    match gh::create_pr(lead, &pr.base, pr.remote_branch(), title, &summary(title, list)) {
+    match gh::create_pr(lead, &pr.base, pr.remote_branch(), title, description.unwrap_or_default()) {
         Ok(created) => Ok(created),
-        Err(failed) => gh::head_pr(lead, pr.remote_branch())
+        Err(failed) => pr.bound_since()
+            .and_then(|since| gh::head_pr(lead, pr.remote_branch(), since))
             .ok()
             .flatten()
             .filter(|h| h.state == HeadState::Open)
@@ -205,22 +203,22 @@ impl Pulled {
 }
 
 /// The pull request of PR `pr`'s Lead Branch for an `open` Job's merge (§7.4 step 8b), `pr open`'s steps 0 and 3 (§7.6): the newest pull
-/// request of the branch in any state decides, `gh pr list --head <lead branch> --state all`. `MERGED` is adopted as it is; `CLOSED` is
+/// request of the branch created at or after the PR's start (`prs.started_at`; an adopted PR has no such bound) decides, in any state, `gh pr list --head <lead branch> --state all`; an older one is not the PR's and is ignored. `MERGED` is adopted as it is; `CLOSED` is
 /// `pr_closed`; an `OPEN` one is adopted, and with none one is created, never a draft (hs-d329), through the one seam from the stored
-/// title to GitHub's. `lead` is the PR's Lead worktree, so `gh` addresses its repo; `list` the PR's Jobs, for the body.
-pub fn pull_request(lead: &Path, pr: &PrRow, stored_title: &str, list: &[jobs::Job]) -> Result<Pulled, CpdError> {
-    match gh::head_pr(lead, pr.remote_branch())? {
+/// title to GitHub's. `lead` is the PR's Lead worktree, so `gh` addresses its repo; `description` the PR's stored description (§9.5a), the body verbatim.
+pub fn pull_request(lead: &Path, pr: &PrRow, stored_title: &str, description: Option<&str>) -> Result<Pulled, CpdError> {
+    match gh::head_pr(lead, pr.remote_branch(), pr.bound_since()?)? {
         Some(head) if head.state == HeadState::Merged => Ok(Pulled { row: merged_row(lead, &head)?, merged: true }),
         Some(head) if head.state == HeadState::Closed => Err(closed(&pr.key, pr.remote_branch(), &head)),
-        Some(head) => Ok(Pulled { row: opened_row(lead, pr, Some(PrRef { number: head.number, url: head.url }), stored_title, list)?, merged: false }),
-        None => Ok(Pulled { row: opened_row(lead, pr, None, stored_title, list)?, merged: false }),
+        Some(head) => Ok(Pulled { row: opened_row(lead, pr, Some(PrRef { number: head.number, url: head.url }), stored_title, description)?, merged: false }),
+        None => Ok(Pulled { row: opened_row(lead, pr, None, stored_title, description)?, merged: false }),
     }
 }
 
 /// Whether the newest pull request of the Lead Branch is already `merged` on GitHub and never recorded (§7.6 `pr open` step 0, §7.7 submit
 /// step 1): an `open` Job adopts it, with no Gate and no push.
-pub fn is_merged_on_github(lead: &Path, branch: &str) -> Result<bool, CpdError> {
-    Ok(gh::head_pr(lead, branch)?.is_some_and(|head| head.state == HeadState::Merged))
+pub fn is_merged_on_github(lead: &Path, pr: &PrRow) -> Result<bool, CpdError> {
+    Ok(gh::head_pr(lead, pr.remote_branch(), pr.bound_since()?)?.is_some_and(|head| head.state == HeadState::Merged))
 }
 
 /// `pr_closed` (exit 3): the newest pull request of the Lead Branch is closed without a merge (§7.6 `pr open` step 0, §7.7 submit check 1).
@@ -240,15 +238,15 @@ pub fn closed(key: &PrKey, branch: &str, head: &gh::HeadPr) -> CpdError {
 /// The row of the open pull request `existing` (an earlier run died before its transaction), else of a new one: `gh pr create`
 /// (never `--draft`), and when that fails the Lead Branch's pull request is looked up again ([`find_or_create`]). GitHub's creation time is
 /// read by the poller's own lookup, which a pull request it cannot find fails as `gh_failed`; a rerun adopts the one created.
-fn opened_row(lead: &Path, pr: &PrRow, existing: Option<PrRef>, stored_title: &str, list: &[jobs::Job]) -> Result<PolledPr, CpdError> {
+fn opened_row(lead: &Path, pr: &PrRow, existing: Option<PrRef>, stored_title: &str, description: Option<&str>) -> Result<PolledPr, CpdError> {
     let title = github_title(stored_title);
-    let found = find_or_create(lead, pr, existing, &title, list)?;
+    let found = find_or_create(lead, pr, existing, &title, description)?;
     let (repo, _) = pulls::parse_url(&found.url).ok_or_else(|| {
         CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", found.url))
             .with("url", found.url.as_str())
     })?;
-    let (created_at, updated_at) = match gh::lookup(&*Ports::current().runner, lead, &[(repo.clone(), found.number)])?.into_iter().next().flatten() {
-        Some(looked_up) => (looked_up.created_at, looked_up.updated_at),
+    let (created_at, updated_at, base_ref, default_branch) = match gh::lookup(&*Ports::current().runner, lead, &[(repo.clone(), found.number)])?.into_iter().next().flatten() {
+        Some(looked_up) => (looked_up.created_at, looked_up.updated_at, looked_up.base_ref, looked_up.default_branch),
         None => {
             return Err(CpdError::new(ErrorCode::GhFailed, format!("gh cannot find pull request {repo}#{}, which it just opened.", found.number))
                 .with("url", found.url.as_str()));
@@ -268,6 +266,8 @@ fn opened_row(lead: &Path, pr: &PrRow, existing: Option<PrRef>, stored_title: &s
         created_at,
         updated_at,
         merged_at: None,
+        base_ref,
+        default_branch,
     })
 }
 
@@ -338,6 +338,7 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pulled: &Pulled) -> R
         if merged == 0 {
             return Err(cas_lost(id, key));
         }
+        super::reactions::queue_merge(tx, id.as_str(), key.as_str())?;
         let text = format!("PR {key} (#{number}) of Plan {id} is merged.");
         append(tx, NewEvent::pr_merged(text, key, number, url, merged_at.as_deref()).plan(id.clone()))?;
     } else {
@@ -402,7 +403,8 @@ pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jo
     let mut adopting = false;
     if job.kind == "open" {
         stored_title(env, plan, &key)?;
-        if let Some(head) = gh::head_pr(&lead, pr.remote_branch())? {
+        stored_description(env, plan, &key)?;
+        if let Some(head) = gh::head_pr(&lead, pr.remote_branch(), pr.bound_since()?)? {
             match head.state {
                 HeadState::Closed => return Err(closed(&key, pr.remote_branch(), &head).with("plan", plan.as_str())),
                 HeadState::Merged => adopting = true,
@@ -581,28 +583,32 @@ fn stored_title(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<String, Cpd
     })
 }
 
+/// The PR's stored description (§9.5a), which a cpd PR must have (`description_required`): the body of its pull request. An
+/// adopted PR (`head_ref` set) keeps the body of its own pull request and needs none.
+fn stored_description(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Option<String>, CpdError> {
+    let (stored, adopted): (Option<String>, bool) = env.store.read(|conn| {
+        Ok(conn.query_row("SELECT description, head_ref IS NOT NULL FROM prs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?)
+    })?;
+    if stored.is_none() && !adopted {
+        return Err(description_required(plan, key));
+    }
+    Ok(stored)
+}
+
+/// `description_required` (exit 3): the PR has no stored description.
+pub fn description_required(plan: &PlanId, key: &PrKey) -> CpdError {
+    CpdError::new(
+        ErrorCode::DescriptionRequired,
+        format!("PR {key} of Plan {plan} has no description: write it (the repo's pull request template, else ## What and why / ## How / ## Acceptance criteria / ## Out of scope and follow-ups / ## Links), run cpd pr describe --pr {key} --file <body.md>, then open it again."),
+    )
+    .with("plan", plan.as_str())
+    .with("pr", key.as_str())
+}
+
 /// The seam from a PR's stored title to the title of its pull request on GitHub: the one place a per-owner format
-/// (hs-d277, repo-policy) would change it. Today it is unchanged. `gh pr create` and the body's `# <title>` both use it.
+/// (hs-d277, repo-policy) would change it. Today it is unchanged. `gh pr create` uses it.
 fn github_title(stored: &str) -> String {
     stored.to_owned()
-}
-
-/// A table cell: one line, no `|`.
-fn cell(text: &str) -> String {
-    text.replace('|', "\\|").split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// The PR body: the title, the PR's Jobs table with each Job's Merged commit, and the generator line.
-fn summary(title: &str, list: &[jobs::Job]) -> String {
-    let mut lines = vec![format!("# {title}"), String::new(), "| Job | Title | Status | Merged commit |".to_owned(), "| --- | --- | --- | --- |".to_owned()];
-    for j in list {
-        let sha = j.merged_sha.as_deref().map_or("-".to_owned(), |s| format!("`{s}`"));
-        lines.push(format!("| {} | {} | {} | {sha} |", cell(&j.key), cell(&j.title), j.status));
-    }
-    lines.push(String::new());
-    lines.push("Generated by cpd".to_owned());
-    lines.push(String::new());
-    lines.join("\n")
 }
 
 #[cfg(test)]
@@ -655,6 +661,8 @@ mod tests {
             created_at: "2026-10-20T10:00:00Z".into(),
             updated_at: "2026-10-20T10:00:00Z".into(),
             merged_at: merged_at.map(str::to_owned),
+            base_ref: None,
+            default_branch: None,
         }
     }
 

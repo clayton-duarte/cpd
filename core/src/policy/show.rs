@@ -7,7 +7,10 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
 
 use super::resolve::{machine_path, owner_path, repo_path};
-use super::domain::{BUILD, FEEDBACK_CHECKS, GATE_PR, LIST, MERGE, PATHS, PRE_COMMIT, PRE_MERGE, PRE_START, RUN};
+use super::domain::{
+    BUILD, FEEDBACK_CHECKS, GATE_PR, LIST, MERGE, PATHS, POST_CHANNEL, POST_ENABLED, POST_MERGED_REACTION, POST_TEMPLATE, PRE_COMMIT,
+    PRE_MERGE, PRE_START, RUN, WORKFLOWS,
+};
 use super::{audience, check_file_names, load_machine, resolve, Domain, DomainSource, Machine, PolicyKey};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -195,7 +198,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
 /// The typed keys of `domain` with value and source; a key the winning file leaves out has
 /// the domain's source followed by ` (key default)` (contract §8.3 "Precedence and replace").
 /// The left-out keys come from [`super::domain::Set::fill`], so no file is read again.
-fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &DomainSource) -> Value {
+pub(super) fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &DomainSource) -> Value {
     fn value(v: &impl serde::Serialize) -> Value {
         serde_json::to_value(v).expect("a policy value serializes")
     }
@@ -204,7 +207,16 @@ fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &DomainSource)
             let g = &resolved.policy.gate;
             vec![(MERGE, value(&g.merge)), (GATE_PR, value(&g.pr))]
         }
-        Domain::Pr => vec![(FEEDBACK_CHECKS, value(&resolved.policy.pr.feedback.checks))],
+        Domain::Pr => {
+            let pr = &resolved.policy.pr;
+            vec![
+                (FEEDBACK_CHECKS, value(&pr.feedback.checks)),
+                (POST_ENABLED, value(&pr.post.enabled)),
+                (POST_CHANNEL, value(&pr.post.channel)),
+                (POST_TEMPLATE, value(&pr.post.template)),
+                (POST_MERGED_REACTION, value(&pr.post.merged_reaction)),
+            ]
+        }
         Domain::Hooks => {
             let h = &resolved.policy.hooks;
             vec![(PRE_START, value(&h.pre_start)), (PRE_COMMIT, value(&h.pre_commit)), (PRE_MERGE, value(&h.pre_merge))]
@@ -222,6 +234,8 @@ fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &DomainSource)
             vec![("O", value(&m.o)), ("S", value(&m.s)), ("H", value(&m.h)), ("G", value(&m.g))]
         }
         Domain::Protected => vec![(PATHS, value(&resolved.policy.protected.paths))],
+        Domain::Resources => vec![("names", value(&resolved.policy.resources.names)), ("declared", value(&resolved.policy.resources.declared))],
+        Domain::Deploys => vec![(WORKFLOWS, value(&resolved.policy.deploys.workflows))],
         _ => Vec::new(),
     };
     let mut keys = Map::new();

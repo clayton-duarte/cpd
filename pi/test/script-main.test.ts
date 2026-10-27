@@ -29,7 +29,7 @@ test("no source under pi/ decides main by comparing argv[1] with the module's ur
 });
 
 test("every pi/lib script that runs at top level decides main with import.meta.main", () => {
-  for (const f of ["models-list.ts", "slack-channel.ts"]) {
+  for (const f of ["models-list.ts", "slack-channel.ts", "slack-post.ts"]) {
     assert.ok(readFileSync(join(piDir, "lib", f), "utf8").includes("if (import.meta.main)"), f);
   }
 });

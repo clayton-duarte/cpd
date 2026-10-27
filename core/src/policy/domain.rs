@@ -66,11 +66,22 @@ pub struct Feedback {
     pub checks: Checks,
 }
 
+/// `[pr.post]`: posting a PR for review (contract §8.3).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Post {
+    pub enabled: bool,
+    pub channel: String,
+    pub template: String,
+    pub merged_reaction: String,
+}
+
 /// The `pr` domain.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pr {
     pub feedback: Feedback,
+    pub post: Post,
     pub text: String,
 }
 
@@ -88,6 +99,16 @@ pub struct FeedbackSet {
     pub checks: Option<Checks>,
 }
 
+/// What a scope file's `[pr.post]` table sets: a left-out key is `None`.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PostSet {
+    pub enabled: Option<bool>,
+    pub channel: Option<String>,
+    pub template: Option<String>,
+    pub merged_reaction: Option<String>,
+}
+
 /// What a scope file's `[pr]` table sets.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -95,6 +116,7 @@ pub struct PrSet {
     /// The deprecated `[pr] gate` alias; it is converted into the `gate` domain by `parse_scope`.
     pub gate: Option<GateAlias>,
     pub feedback: Option<FeedbackSet>,
+    pub post: Option<PostSet>,
     pub text: Option<String>,
 }
 
@@ -175,6 +197,94 @@ impl HasText for Protected {
     }
 }
 
+/// The `resources` domain (any scope, no `text`): the visible resources, resolved per name over host, owner and repo
+/// (contract §8.3 "The `resources` domain"); `names` is sorted.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Resources {
+    pub names: Vec<String>,
+    /// One per visible name, sorted by name (contract §8.3 "The `resources` domain").
+    #[serde(default)]
+    pub declared: Vec<Declared>,
+}
+
+/// The level of the file that declares a resource: it owns the resource's pool (contract §8.3, D2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResourceScope {
+    Host,
+    Owner,
+    Repo,
+}
+
+/// A resource as declared: its name, the declaring level, its slots (`1..=64`) and the declaring file's path.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Declared {
+    pub name: String,
+    pub scope: ResourceScope,
+    pub slots: u8,
+    pub source: String,
+}
+
+impl HasText for Resources {
+    fn text(&self) -> &str {
+        ""
+    }
+}
+
+/// The `deploys` domain (repo scope only, no `text`): the workflow files whose runs waiting for approval are deploys.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Deploys {
+    pub workflows: Vec<String>,
+}
+
+impl HasText for Deploys {
+    fn text(&self) -> &str {
+        ""
+    }
+}
+
+/// What a scope file's `[deploys]` table sets.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeploysSet {
+    pub workflows: Option<Vec<String>>,
+}
+
+/// A resource name: `^[a-z][a-z0-9-]{0,31}$`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ResourceName(String);
+
+impl ResourceName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ResourceName {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(d)?;
+        let mut chars = name.chars();
+        let ok = chars.next().is_some_and(|c| c.is_ascii_lowercase())
+            && name.len() <= 32
+            && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if ok { Ok(ResourceName(name)) } else { Err(serde::de::Error::custom(format!("`{name}` is not a resource name (^[a-z][a-z0-9-]{{0,31}}$)"))) }
+    }
+}
+
+/// One declared resource: a table with `slots` (`1..=64`, default 1; the range is checked by the loader).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceDecl {
+    pub slots: Option<i64>,
+}
+
+/// What a scope file's `[resources]` table sets: one table per resource name.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct ResourcesSet(pub std::collections::BTreeMap<ResourceName, ResourceDecl>);
+
 /// What a scope file's `[hooks]` table sets. It is not read from a value (`toml::Table` sorts keys, and a
 /// block's commands keep file order): the loader reads it from the file text (`load::parse_scope`).
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -236,6 +346,10 @@ pub trait Set {
 pub const MERGE: &str = "merge";
 pub const GATE_PR: &str = "pr";
 pub const FEEDBACK_CHECKS: &str = "feedback.checks";
+pub const POST_ENABLED: &str = "pr.post.enabled";
+pub const POST_CHANNEL: &str = "pr.post.channel";
+pub const POST_TEMPLATE: &str = "pr.post.template";
+pub const POST_MERGED_REACTION: &str = "pr.post.merged_reaction";
 
 impl Set for GatesSet {
     type Value = Gates;
@@ -262,9 +376,23 @@ impl Set for PrSet {
     /// the `gate` domain of the same file, and an explicit `[gate]` table wins over it.
     fn fill(&self, base: &Pr) -> (Pr, Vec<&'static str>) {
         let checks = self.feedback.as_ref().and_then(|f| f.checks);
-        let left_out = left_out([(FEEDBACK_CHECKS, checks.is_none())]);
+        let post = self.post.as_ref();
+        let left_out = left_out([
+            (FEEDBACK_CHECKS, checks.is_none()),
+            (POST_ENABLED, post.and_then(|p| p.enabled).is_none()),
+            (POST_CHANNEL, post.and_then(|p| p.channel.as_ref()).is_none()),
+            (POST_TEMPLATE, post.and_then(|p| p.template.as_ref()).is_none()),
+            (POST_MERGED_REACTION, post.and_then(|p| p.merged_reaction.as_ref()).is_none()),
+        ]);
+        let pick = |set: Option<String>, base: &str| set.unwrap_or_else(|| base.to_owned());
         let value = Pr {
             feedback: Feedback { checks: checks.unwrap_or(base.feedback.checks) },
+            post: Post {
+                enabled: post.and_then(|p| p.enabled).unwrap_or(base.post.enabled),
+                channel: pick(post.and_then(|p| p.channel.clone()), &base.post.channel),
+                template: pick(post.and_then(|p| p.template.clone()), &base.post.template),
+                merged_reaction: pick(post.and_then(|p| p.merged_reaction.clone()), &base.post.merged_reaction),
+            },
             text: self.text.clone().unwrap_or_else(|| base.text.clone()),
         };
         (value, left_out)
@@ -273,6 +401,15 @@ impl Set for PrSet {
     fn complete(&self) -> Option<Pr> {
         Some(Pr {
             feedback: Feedback { checks: self.feedback.as_ref()?.checks? },
+            post: {
+                let p = self.post.as_ref()?;
+                Post {
+                    enabled: p.enabled?,
+                    channel: p.channel.clone()?,
+                    template: p.template.clone()?,
+                    merged_reaction: p.merged_reaction.clone()?,
+                }
+            },
             text: self.text.clone()?,
         })
     }
@@ -298,6 +435,7 @@ pub const BUILD: &str = "build";
 pub const RUN: &str = "run";
 pub const LIST: &str = "list";
 pub const PATHS: &str = "paths";
+pub const WORKFLOWS: &str = "workflows";
 
 fn left_out<const N: usize>(keys: [(&'static str, bool); N]) -> Vec<&'static str> {
     keys.into_iter().filter_map(|(name, out)| out.then_some(name)).collect()
@@ -356,6 +494,78 @@ impl Set for ProtectedSet {
     fn complete(&self) -> Option<Protected> {
         Some(Protected { paths: self.paths.clone()? })
     }
+}
+
+impl Set for DeploysSet {
+    type Value = Deploys;
+
+    fn fill(&self, base: &Deploys) -> (Deploys, Vec<&'static str>) {
+        let workflows = self.workflows.as_ref().map_or_else(|| base.workflows.clone(), |w| sorted(w));
+        (Deploys { workflows }, left_out([(WORKFLOWS, self.workflows.is_none())]))
+    }
+
+    fn complete(&self) -> Option<Deploys> {
+        Some(Deploys { workflows: sorted(self.workflows.as_ref()?) })
+    }
+}
+
+fn sorted(names: &[String]) -> Vec<String> {
+    let mut names = names.to_vec();
+    names.sort();
+    names
+}
+
+impl DeploysSet {
+    /// Why the workflow names are not valid: each matches `^[A-Za-z0-9][A-Za-z0-9._-]*\.ya?ml$`, none twice.
+    pub(super) fn check(&self) -> Result<(), String> {
+        let names = self.workflows.as_deref().unwrap_or_default();
+        for (i, name) in names.iter().enumerate() {
+            let stem = name.strip_suffix(".yml").or_else(|| name.strip_suffix(".yaml"));
+            let ok = stem.is_some_and(|s| {
+                s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+                    && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            });
+            if !ok {
+                return Err(format!("workflow name `{name}` must match ^[A-Za-z0-9][A-Za-z0-9._-]*\\.ya?ml$"));
+            }
+            if names[..i].contains(name) {
+                return Err(format!("workflow `{name}` is listed twice"));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Set for ResourcesSet {
+    type Value = Resources;
+
+    fn fill(&self, _base: &Resources) -> (Resources, Vec<&'static str>) {
+        (Resources { names: self.0.keys().map(|n| n.0.clone()).collect(), declared: Vec::new() }, Vec::new())
+    }
+
+    fn complete(&self) -> Option<Resources> {
+        Some(Resources { names: self.0.keys().map(|n| n.0.clone()).collect(), declared: Vec::new() })
+    }
+}
+
+/// The visible resources of `layers` (most specific first): the union per name, the narrowest declaration of a name
+/// wins whole (contract §8.3 "The `resources` domain").
+pub(super) fn resources_union(layers: &[(Source, &Scope)]) -> Resources {
+    let mut by_name = std::collections::BTreeMap::new();
+    for (source, scope) in layers.iter().rev() {
+        let (level, path) = match source {
+            Source::Machine(p) => (ResourceScope::Host, p),
+            Source::Owner(p) => (ResourceScope::Owner, p),
+            Source::Repo(p) => (ResourceScope::Repo, p),
+            Source::Default | Source::DefaultNoOwnerFile => continue,
+        };
+        let Some(set) = &scope.resources else { continue };
+        for (name, decl) in &set.0 {
+            let slots = decl.slots.map_or(1, |n| u8::try_from(n).expect("the loader checked slots to 1..=64"));
+            by_name.insert(name.0.clone(), Declared { name: name.0.clone(), scope: level, slots, source: path.display().to_string() });
+        }
+    }
+    Resources { names: by_name.keys().cloned().collect(), declared: by_name.into_values().collect() }
 }
 
 /// Where a domain's value came from (contract §8.3 "Model").
@@ -499,7 +709,7 @@ macro_rules! domains {
         /// Reads `layers` (most specific first) over `default`, per domain.
         pub(super) fn merge(default: &Policy, layers: &[(Source, &Scope)]) -> super::Resolved {
             let mut sources = Sources::all(Source::Default);
-            let policy = Policy {
+            let mut policy = Policy {
                 $($field: match layers.iter().find_map(|(src, scope)| scope.$field.as_ref().map(|set| (src, set))) {
                     Some((src, set)) => {
                         let (value, left_out) = set.fill(&default.$field);
@@ -510,6 +720,7 @@ macro_rules! domains {
                     None => default.$field.clone(),
                 },)+
             };
+            policy.resources = resources_union(layers);
             let warnings = layers
                 .iter()
                 .filter_map(|(src, scope)| {
@@ -538,6 +749,8 @@ domains! {
     hooks, Hooks, [], [Repo], Hooks, HooksSet;
     test_commands = "test-commands", TestCommands, [], [Repo], Option<RepoTests>, TestCommandsSet;
     protected, Protected, [], [Repo], Protected, ProtectedSet;
+    resources, Resources, [], [Machine, Owner, Repo], Resources, ResourcesSet;
+    deploys, Deploys, [], [Repo], Deploys, DeploysSet;
 }
 
 impl Sources {

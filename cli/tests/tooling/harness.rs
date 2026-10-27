@@ -664,8 +664,13 @@ fn the_flock_shim_holds_the_lock_across_exec_and_n_fails_fast_while_it_is_held()
     assert!(shim.is_file(), "write_flock_shim wrote no {}", shim.display());
     let lock = dir.join("lock");
     let marker = dir.join("held");
+    // The holder forks no child (`:` is a builtin, then `exec`): the shim's lock fd is inherited by children, so a
+    // forked `touch` could still hold the lock after the holder is killed and waited.
     let mut holder = common::spawn(
-        env.command(&shim).arg(&lock).args(["sh", "-c"]).arg(format!("touch '{}'; exec sleep 60", marker.display())),
+        env.command(&shim)
+            .arg(&lock)
+            .args(["sh", "-c"])
+            .arg(format!(": > '{}'; exec sleep 60", marker.display())),
     )
     .expect("spawn the shim");
     common::wait_until("the command to run under the lock", || marker.exists());
@@ -673,8 +678,13 @@ fn the_flock_shim_holds_the_lock_across_exec_and_n_fails_fast_while_it_is_held()
     assert_eq!(second.status.code(), Some(1), "-n exits 1 at once while the lock is held");
     holder.kill().unwrap();
     holder.wait().unwrap();
-    let third = common::output(env.command(&shim).arg("-n").arg(&lock).arg("true")).expect("run the third shim");
-    assert_eq!(third.status.code(), Some(0), "-n runs the command once the lock is free");
+    // Evidence: standalone repro (no child), ~1% of runs exit 1 right after kill+wait, gone after 1-3 retries.
+    common::wait_until("the kernel to drop the flock a moment after the killed holder is reaped (observed on macOS, ~1%)", || {
+        let third = common::output(env.command(&shim).arg("-n").arg(&lock).arg("true")).expect("run the third shim");
+        let code = third.status.code();
+        assert!(matches!(code, Some(0) | Some(1)), "-n exits 0 (lock free) or 1 (held), not {code:?}");
+        code == Some(0)
+    });
     let bad = common::output(env.command(&shim).arg("-w").arg("1").arg(&lock).arg("true")).expect("run the shim with another option");
     assert_eq!(bad.status.code(), Some(64), "any other option exits 64");
 }

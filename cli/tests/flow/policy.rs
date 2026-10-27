@@ -94,7 +94,7 @@ fn the_output_has_exactly_the_documented_fields() {
     assert_eq!(out["role"], Value::Null);
     let mut domains: Vec<&str> = out["policy"].as_object().unwrap().keys().map(String::as_str).collect();
     domains.sort_unstable();
-    assert_eq!(domains, ["code", "deploy", "gate", "hooks", "instructions", "model", "monitor", "pr", "protected", "test-commands", "tests"]);
+    assert_eq!(domains, ["code", "deploy", "deploys", "gate", "hooks", "instructions", "model", "monitor", "pr", "protected", "resources", "test-commands", "tests"]);
     for (name, domain) in out["policy"].as_object().unwrap() {
         let mut fields: Vec<&str> = domain.as_object().unwrap().keys().map(String::as_str).collect();
         fields.sort_unstable();
@@ -106,7 +106,7 @@ fn the_output_has_exactly_the_documented_fields() {
     assert_eq!(out["policy"]["deploy"]["keys"], json!({}));
     let mut keys: Vec<&str> = out["policy"]["pr"]["keys"].as_object().unwrap().keys().map(String::as_str).collect();
     keys.sort_unstable();
-    assert_eq!(keys, ["feedback.checks"]);
+    assert_eq!(keys, ["feedback.checks", "pr.post.channel", "pr.post.enabled", "pr.post.merged_reaction", "pr.post.template"]);
     let mut gate: Vec<&str> = out["policy"]["gate"]["keys"].as_object().unwrap().keys().map(String::as_str).collect();
     gate.sort_unstable();
     assert_eq!(gate, ["merge", "pr"]);

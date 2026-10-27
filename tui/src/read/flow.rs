@@ -13,6 +13,7 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::highest_id;
 use cpd_core::inbox::model::{Item, Kind};
 use cpd_core::job::open::shown_needs;
+use cpd_core::job::worked_on::failed_worked_on;
 use cpd_core::ids::{AttemptId, ContextId, EscalationId, JobKey, PlanId, PrKey, SessionId};
 use cpd_core::plan::display::Display;
 use cpd_core::plan::fingerprint::load_prs;
@@ -68,11 +69,13 @@ pub struct NeedsUser {
     pub lead_working: bool,
     /// The phase of the Plan its Lead works in (`None`: no Plan, or not a Lead). Read from the Plan by dot-impl-views.
     pub lead_phase: Option<Phase>,
+    /// The Plan's failed Jobs being worked on (pro-d88), sorted: their pills turn.
+    pub worked_on: Vec<JobKey>,
 }
 
 impl NeedsUser {
     /// Of the `visible` items (not snoozed, not dismissed) of `plan`, whose Lead is `lead` and whose phase is `lead_phase`.
-    fn of(visible: &[Item], plan: &PlanId, lead: &SessionId, lead_working: bool, lead_phase: Option<Phase>) -> NeedsUser {
+    fn of(visible: &[Item], plan: &PlanId, lead: &SessionId, lead_working: bool, lead_phase: Option<Phase>, worked_on: Vec<JobKey>) -> NeedsUser {
         NeedsUser {
             stuck_jobs: visible
                 .iter()
@@ -82,6 +85,7 @@ impl NeedsUser {
             lead_dialog: visible.iter().any(|i| i.kind == Kind::Dialog && i.session.as_ref() == Some(lead)),
             lead_working,
             lead_phase,
+            worked_on,
         }
     }
 }
@@ -143,7 +147,7 @@ pub struct Pull {
     pub url: String,
     /// `pull_requests.mergeable = 'conflicting'` as of the last poll; `unknown` is not a conflict.
     pub conflicting: bool,
-    /// `pull_requests.merge_state = 'clean'` (GitHub's mergeStateStatus CLEAN): the PR is ready to merge; its `open` is yellow.
+    /// The PR is ready to merge (pro-d118: `cpd_core::pr::pulls::ready_to_merge_sql`, not GitHub's CLEAN alone); its `open` is yellow.
     pub clean: bool,
     /// The Plan's Lead Session has `state = 'working'` (contract §3.6), read with the rest: the title shows the Lead's
     /// working dot beside the state (hs-d335).
@@ -188,6 +192,8 @@ pub struct JobNode {
     /// Added after the Plan was locked (PR feedback).
     pub appended: bool,
     pub retry_tier: Option<Tier>,
+    /// The Tier the Job is shown at (the pill, `plan render`): one derivation in `Display::job_tier`.
+    pub shown_tier: Option<Tier>,
     pub failed_cause: Option<String>,
     pub cancel_reason: Option<String>,
     pub merged_sha: Option<String>,
@@ -282,8 +288,15 @@ pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdErro
             .ok_or_else(|| plan_not_found(plan))?;
         let phase = Phase::parse(&phase).ok_or_else(|| bad_row(format!("Plan {plan} has phase {phase:?}")))?;
         let now: String = conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?;
-        let needs_user =
-            NeedsUser::of(&visible_items(conn, &now)?, plan, &id("Session id", &lead, SessionId::parse)?, lead_working, Some(phase));
+        let worked_on = failed_worked_on(conn, Some(plan))?.into_iter().map(|(_, job)| job).collect(); // a BTreeSet: sorted
+        let needs_user = NeedsUser::of(
+            &visible_items(conn, &now)?,
+            plan,
+            &id("Session id", &lead, SessionId::parse)?,
+            lead_working,
+            Some(phase),
+            worked_on,
+        );
         Ok(PlanBoxes {
             needs_user,
             context: id("Context id", &context, ContextId::parse)?,
@@ -305,14 +318,15 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
         let (pr, need) = row?;
         needs.entry(pr).or_default().push(id("PR key", &need, PrKey::parse)?);
     }
-    let mut stmt = conn.prepare(
+    let ready = cpd_core::pr::pulls::ready_to_merge_sql("q");
+    let mut stmt = conn.prepare(&format!(
         "SELECT r.key, r.repo, r.base, r.status, r.pr_number, q.state, q.url, q.mergeable,
-                COALESCE(q.merge_state = 'clean', 0), COALESCE(q.draft, 0),
+                {ready}, COALESCE(q.draft, 0),
                 (SELECT j.status FROM jobs j WHERE j.plan = r.plan AND j.pr = r.key AND j.kind = 'update'
                     AND j.status IN ('queued', 'running') ORDER BY j.status = 'running' DESC LIMIT 1)
            FROM prs r LEFT JOIN pull_requests q ON q.id = r.pull_request
           WHERE r.plan = ?1 ORDER BY r.key",
-    )?;
+    ))?;
     let mut rows = stmt.query([plan.as_str()])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
@@ -392,6 +406,7 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
                 tier: j.tier.as_deref().map(|t| tier(&what, t)).transpose()?,
                 needs: shown_needs(&rows, j).iter().map(|n| id("Job key", n, JobKey::parse)).collect::<Result<_, _>>()?,
                 retry_tier: j.retry_tier.as_deref().map(|t| tier(&what, t)).transpose()?,
+                shown_tier: display.job_tier(j).as_deref().map(|t| tier(&what, t)).transpose()?,
                 attempts: attempts.remove(j.key.as_str()).unwrap_or_default(),
                 seq: j.seq,
                 waiting_on,

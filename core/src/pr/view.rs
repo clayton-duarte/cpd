@@ -2,6 +2,7 @@
 //! of one PR's pull request, which the poller does not store. Read-only: no
 //! write transaction, no Event.
 
+use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use super::feedback::current_checks;
@@ -56,6 +57,18 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
 
     let row = pr.pull_request.expect("an open or merged PR has its pull_request row (prs CHECK)");
     let feedback = env.store.read(|conn| crate::pr::pulls::load(conn, row))?.feedback;
+    let post = env.store.read(|conn| {
+        let Some(p) = super::posts::find(conn, id.as_str(), pr.key.as_str())? else { return Ok(None) };
+        // `reacted_at` is the queue row's (channel, ts, reaction); null while there is none or it waits.
+        let reacted_at: Option<String> = match &p.reaction {
+            Some(emoji) => conn
+                .query_row("SELECT reacted_at FROM slack_reactions WHERE channel = ?1 AND ts = ?2 AND emoji = ?3", [&p.channel, &p.ts, emoji], |r| r.get(0))
+                .optional()?
+                .flatten(),
+            None => None,
+        };
+        Ok(Some(json!({"channel": p.channel, "ts": p.ts, "link": p.link, "posted_at": p.posted_at, "reaction": p.reaction, "reacted_at": reacted_at})))
+    })?;
     Ok(Output::success(json!({
         "plan": id,
         "pr": {
@@ -67,5 +80,6 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         "comments": comments,
         "inline_comments": inline_comments,
         "feedback": feedback,
+        "post": post,
     })))
 }

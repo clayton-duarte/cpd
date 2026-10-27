@@ -122,16 +122,16 @@ impl Fx {
     }
 
     fn lead_sha(&self) -> String {
-        self.git(&self.repo, &["rev-parse", "refs/heads/cpd/pay/web"])
+        self.git(&self.repo, &["rev-parse", "refs/heads/pay/web"])
     }
 
     fn remote_head(&self) -> String {
         self.git(&self.origin, &["rev-parse", "refs/heads/feat/x"])
     }
 
-    /// The branches `origin` holds under `cpd/`.
+    /// The branches `origin` holds under `pay/`.
     fn remote_cpd_branches(&self) -> String {
-        self.git(&self.origin, &["branch", "--list", "cpd/*"])
+        self.git(&self.origin, &["branch", "--list", "pay/*"])
     }
 
     /// PR `web` `open`, with its pull request, as `pr open` leaves it.
@@ -226,11 +226,11 @@ fn start_cuts_the_lead_branch_from_the_remote_head_and_pushes_nothing() {
 
     let run = fx.start();
 
-    assert_eq!(fx.remote_cpd_branches(), "", "no cpd/* branch ever appears on origin");
+    assert_eq!(fx.remote_cpd_branches(), "", "no pay/* branch ever appears on origin");
     assert_eq!(fx.git(&fx.repo, &["branch", "--list", "feat/x"]), "", "the User's own local branch is never made");
     run.ok();
     assert_eq!(fx.lead_sha(), fx.head, "the Lead Branch is origin/feat/x's commit");
-    assert_eq!(fx.git(&fx.lead(), &["symbolic-ref", "--short", "HEAD"]), "cpd/pay/web");
+    assert_eq!(fx.git(&fx.lead(), &["symbolic-ref", "--short", "HEAD"]), "pay/web");
     assert_eq!(fx.git(&fx.lead(), &["rev-parse", "HEAD"]), fx.head);
 }
 
@@ -274,7 +274,7 @@ fn an_update_jobs_merge_pushes_to_the_head_branch() {
     assert_eq!(fx.lead_sha(), sha, "the Lead Branch fast-forwarded");
     assert_ne!(sha, fx.head);
     assert_eq!(fx.remote_head(), sha, "origin/feat/x is the new tip");
-    assert_eq!(fx.remote_cpd_branches(), "", "origin still has no cpd/* branch");
+    assert_eq!(fx.remote_cpd_branches(), "", "origin still has no pay/* branch");
     assert!(fx.errors().iter().all(|e| e["data"]["code"] != "push_failed"), "{:?}", fx.errors());
 }
 
@@ -282,7 +282,7 @@ fn an_update_jobs_merge_pushes_to_the_head_branch() {
 fn a_pull_request_merged_on_github_is_found_by_the_head_branch() {
     let fx = fx(false);
     fx.start().ok();
-    fs::write(fx.env.root().join("list.json"), json!([{"number": 7, "url": URL, "state": "MERGED"}]).to_string()).unwrap();
+    fs::write(fx.env.root().join("list.json"), json!([{"number": 7, "url": URL, "state": "MERGED", "createdAt": "2099-01-01T00:00:00Z"}]).to_string()).unwrap();
     let node = json!({"repository": {"nameWithOwner": "acme/pay"}, "number": 7, "url": URL, "title": "Polish", "isDraft": false, "state": "MERGED",
         "createdAt": "opened","updatedAt":"U1", "mergedAt": "2026-10-14T10:00:00Z", "reviewDecision": null, "mergeable": "UNKNOWN", "mergeStateStatus": "UNKNOWN",
         "viewerDidAuthor": true, "viewerLatestReviewRequest": null, "commits": {"nodes": [{"commit": {"statusCheckRollup": null}}]}});

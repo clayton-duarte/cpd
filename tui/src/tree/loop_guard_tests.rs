@@ -37,6 +37,7 @@ fn tripped(kind: Kind) -> Env {
         session: Some(SessionId::parse("l-sketch").unwrap()),
         record: None,
         event: None,
+        opened_at: None,
     };
     reconcile(&mut env.store(), &[item], "2026-01-03T00:00:00.000Z").expect("the store holds the item");
     env

@@ -13,6 +13,12 @@ text = ""
 [pr.feedback]
 checks = "any"
 
+[pr.post]
+enabled = false
+channel = ""
+template = "{{ title }}\n{{ url }}"
+merged_reaction = ""
+
 [deploy]
 text = ""
 
@@ -40,3 +46,8 @@ G = "github-copilot/gemini-3.8-flash"
 
 [protected]
 paths = []
+
+[resources]
+
+[deploys]
+workflows = []

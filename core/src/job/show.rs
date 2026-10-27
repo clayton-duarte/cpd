@@ -42,7 +42,9 @@ fn attempt_counts(conn: &Connection, plan: &PlanId) -> Result<Vec<(String, i64)>
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (job, review, needed_by, attempts, needs) = env.store.read(|conn| {
+    let home = env.home.clone();
+    let concurrency = env.config.concurrency;
+    let (job, review, needed_by, attempts, needs, waiting_for) = env.store.read(|conn| {
         plan_phase(conn, &plan)?;
         let all = jobs::load(conn, &plan)?;
         let job = find(&all, &plan, &args.key)?.clone();
@@ -52,12 +54,49 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         let needed_by = needed_by.into_iter().map(str::to_owned).collect::<Vec<_>>();
         let attempts = attempts(conn, &plan, &job.key)?;
         let review: bool = conn.query_row("SELECT review FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.key.as_str()], |r| r.get(0))?;
-        Ok((job, review, needed_by, attempts, needs))
+        // §5.7: only a queued Job that is not a tenant, for each resource it needs that has no free slot right now: `workers` first, then its Spec's.
+        let wanted = crate::resource::wanted(conn, &plan, &job.key)?;
+        let tenant: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM job_tenants WHERE plan = ?1 AND job = ?2 AND pool = 'workers')",
+            [plan.as_str(), job.key.as_str()],
+            |r| r.get(0),
+        )?;
+        let waiting_for = if job.status == "queued" && !tenant {
+            let mut held = Vec::new();
+            let workers = crate::resource::workers(conn, concurrency)?;
+            if workers.pool().free == 0 {
+                held.push(json!({"resource": crate::resource::WORKERS, "scope": "host", "slots": workers.slots, "holders": workers.holders}));
+            }
+            if let Some(wanted) = &wanted {
+                let key = crate::ids::PrKey::parse(&wanted.pr)?;
+                let policy = crate::pr::policy_of_pr(conn, &home, &plan, &key)?;
+                for pool in crate::resource::pools_of(&policy.resources, &wanted.owner, &wanted.repo) {
+                    if !wanted.names.iter().any(|n| n == pool.name()) {
+                        continue;
+                    }
+                    // Only a resource with no free slot is waited for.
+                    if crate::resource::free_slots(conn, &home, &pool)? == 0 {
+                        let holders: Vec<_> = crate::resource::occupants(conn, &home, &pool)?
+                            .into_iter()
+                            .map(|(slot, holder)| json!({"slot": slot, "holder": holder}))
+                            .collect();
+                        held.push(json!({"resource": pool.name(), "scope": pool.scope(), "slots": pool.slots(), "holders": holders}));
+                    }
+                }
+            }
+            (wanted.is_some() || !held.is_empty()).then_some(held)
+        } else {
+            None
+        };
+        Ok((job, review, needed_by, attempts, needs, waiting_for))
     })?;
     let tamper = jobs::tampered(&plan, std::slice::from_ref(&job));
     let mut fields = job.to_json();
     fields["review"] = json!(review);
     fields["needs"] = json!(needs);
+    if let Some(waiting_for) = waiting_for {
+        fields["waiting_for"] = json!(waiting_for);
+    }
     Ok(Output::success(json!({
         "job": fields, "needs": needs, "needed_by": needed_by, "attempts": attempts, "tamper": tamper,
     })))

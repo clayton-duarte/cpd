@@ -10,6 +10,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::attempt::ledger::{self, Cause, End, Ladder, Stage};
 use super::lock::Starter;
+use crate::resource;
 use crate::config::{Catalog, Config, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -31,12 +32,6 @@ pub struct StartCtx<'a> {
     pub catalog: &'a Catalog,
     /// The caller, as `txns.command`: `job dispatch` or `watch`.
     pub command: &'a str,
-}
-
-/// How many Attempts may be not `ended` for the Attempt about to start: `concurrency`,
-/// and one more for an urgent Job (§3.7 E3).
-pub fn slot_limit(concurrency: u32, urgent: bool) -> i64 {
-    i64::from(concurrency) + i64::from(urgent)
 }
 
 /// How an Attempt came to be (§2.2 Attempt `origin`).
@@ -127,29 +122,81 @@ pub fn start_with_allocation(
     allocation: Option<Allocation>,
 ) -> Result<Started, CpdError> {
     let next = store.read(|conn| decide(conn, ctx.catalog, plan, key, allocation))?;
+    // A name the repo policy no longer declares refuses the start before any lock is taken (§3.4 "Resources of a Job").
+    let (wanted, pools) = store.read(|conn| {
+        let wanted = resource::wanted(conn, plan, key.as_str())?;
+        let mut pools = Vec::new();
+        if let Some(w) = &wanted {
+            crate::job::add::check_resources_declared(conn, ctx.home, plan, &w.pr, key.as_str(), Some(&w.names))?;
+            let policy = crate::pr::policy_of_pr(conn, ctx.home, plan, &crate::ids::PrKey::parse(&w.pr)?)?;
+            pools = resource::pools_of(&policy.resources, &w.owner, &w.repo).into_iter().filter(|p| w.names.iter().any(|n| n == p.name())).collect();
+        }
+        Ok((wanted, pools))
+    })?;
     // §3.4 step 1: the lock before the transaction that inserts the Attempt.
     let lock = Starter::take(ctx.home, plan, &next.attempt)?;
+    // The Job's pools (contract §3.4 "Resources of a Job"): a Job that is not yet a tenant takes the guard of each pool, in name order,
+    // and finds every pool with a free slot, or none is taken. A Job already a tenant (a retry) competes for none. The guards
+    // are held until the Attempt row and the `job_pools` rows have committed: the commit is the moment the Job becomes the tenant.
+    let first = next.attempt.number().get() == 1;
+    let mut guarded: Vec<(&resource::Pool, resource::Guard)> = Vec::new();
+    if first {
+        let mut sorted: Vec<&resource::Pool> = pools.iter().collect();
+        sorted.sort_by(|a, b| (a.name(), resource::identity(a)).cmp(&(b.name(), resource::identity(b))));
+        for pool in sorted {
+            guarded.push((pool, resource::Guard::take(ctx.home, pool)?));
+        }
+        let full = store.read(|conn| {
+            for (pool, _) in &guarded {
+                if resource::free_slots(conn, ctx.home, pool)? == 0 {
+                    return Ok(Some((pool.name().to_owned(), resource::occupants(conn, ctx.home, pool)?)));
+                }
+            }
+            Ok(None)
+        })?;
+        if let Some((name, occupants)) = full {
+            // Nothing changes: the driver lock file made for an Attempt that will not exist goes too.
+            drop(guarded);
+            drop(lock);
+            super::lock::remove(ctx.home, plan, &next.attempt)?;
+            let holders: Vec<serde_json::Value> = occupants.into_iter().map(|(slot, holder)| serde_json::json!({"slot": slot, "holder": holder})).collect();
+            let w = wanted.as_ref().expect("a Job with pools lists resources");
+            return Err(CpdError::new(
+                ErrorCode::ResourceBusy,
+                format!("Job {key} cannot start: the resource {name} of {}/{} has no free slot.", w.owner, w.repo),
+            )
+            .with("job", key.as_str())
+            .with("resource", name)
+            .with("holders", holders));
+        }
+    }
+    let identities: Vec<String> = if first { pools.iter().map(resource::identity).collect() } else { Vec::new() };
     store.write(ctx.command, |tx| {
         if decide(tx, ctx.catalog, plan, key, allocation)? != next {
             return Err(CpdError::new(ErrorCode::CasLost, format!("Job {key} changed while its Attempt was being started: try again."))
                 .with("plan", plan.as_str())
                 .with("job", key.as_str()));
         }
-        let active: i64 = tx.query_row("SELECT count(*) FROM attempts WHERE status <> 'ended'", [], |r| r.get(0))?;
-        // An urgent Job may start one Attempt beyond `concurrency` (§3.7 E3).
-        let urgent: bool = tx.query_row("SELECT urgent FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
-        let limit = slot_limit(ctx.config.concurrency, urgent);
-        if active >= limit {
-            return Err(CpdError::new(
-                ErrorCode::NoSlot,
-                format!("{active} Attempts are running, the limit is {limit} (concurrency {}): wait for one to end.", ctx.config.concurrency),
-            )
-            .with("active", active)
-            .with("concurrency", ctx.config.concurrency)
-            .with("urgent", urgent));
+        // An urgent Job may start one Attempt beyond `concurrency` (§3.7 E3). A Job already a tenant of `workers` takes no slot.
+        if first {
+            let workers = resource::workers(tx, ctx.config.concurrency)?;
+            let urgent: bool = tx.query_row("SELECT urgent FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
+            // The `workers` pool, the one rule E3 schedules by (§3.7 E3): a free slot, or for an urgent Job the one beyond.
+            let pool = workers.pool();
+            if pool.free + if urgent { pool.urgent_free } else { 0 } == 0 {
+                let (active, limit) = (workers.holders.len(), ctx.config.concurrency + u32::from(urgent));
+                return Err(CpdError::new(
+                    ErrorCode::NoSlot,
+                    format!("{active} Attempts are running, the limit is {limit} (concurrency {}): wait for one to end.", ctx.config.concurrency),
+                )
+                .with("active", active)
+                .with("concurrency", ctx.config.concurrency)
+                .with("urgent", urgent));
+            }
         }
-        insert(tx, plan, key, &next)
+        insert(tx, plan, key, &next, &identities)
     })?;
+    drop(guarded);
 
     // §3.4 step 2: spawn the driver with the lock as fd 3.
     let spawned = spawn(ports, ctx.home, plan, &next.attempt, &lock);
@@ -214,11 +261,11 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey, all
 
     let bad = |what: String| CpdError::new(ErrorCode::StoreFailed, format!("The Ledger holds an invalid value: {what}."));
     // `never_started`: the previous Attempt's driver never started (`driver_pid` null, §3.4).
-    let previous: Option<(u32, String, bool)> = conn
+    let previous: Option<(u32, String, bool, bool)> = conn
         .query_row(
-            "SELECT number, tier, driver_pid IS NULL FROM attempts WHERE plan = ?1 AND job = ?2 ORDER BY number DESC LIMIT 1",
+            "SELECT number, tier, driver_pid IS NULL, cause IS 'provider_error' FROM attempts WHERE plan = ?1 AND job = ?2 ORDER BY number DESC LIMIT 1",
             params![plan.as_str(), key.as_str()],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()?;
     let retry = match &job.retry_tier {
@@ -231,10 +278,10 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey, all
             let tier = job.require_tier()?;
             (Tier::parse(tier).map_err(|_| bad(format!("tier {tier:?} of Job {key}")))?, Origin::Ladder)
         }
-        (None, Some((number, tier, never_started))) => {
+        (None, Some((number, tier, never_started, provider_error))) => {
             let last = Tier::parse(tier).map_err(|_| bad(format!("tier {tier:?} of Attempt {key}-a{number}")))?;
-            if *never_started || !catalog.is_valid(last) {
-                // The ledger queued the Job at that Tier again: the Attempt was not a try.
+            if *never_started || *provider_error || !catalog.is_valid(last) {
+                // The ledger queued the Job at that Tier again: the Attempt was not a try (a provider error never raises the Tier, pro-d102).
                 // A Tier the catalog refuses is left as is here: step_up below raises it.
                 (last, Origin::Ladder)
             } else {
@@ -247,9 +294,9 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey, all
     };
     // hs-n465, hs-d632: a stored or retry Tier the catalog refuses starts at the next valid Worker Tier.
     let tier = if catalog.is_valid(tier) { tier } else { catalog.step_up(tier).unwrap_or(tier) };
-    // pro-d53, hs-d554: a Job stored on a Tier outside H0-H4, S0-S3 is never started (E3 raises one `error` per Job).
+    // pro-d82, hs-d554: a Job stored on a Tier outside H0-H3, S0-S3 is never started (E3 raises one `error` per Job).
     tier.check_worker()?;
-    let number = previous.map_or(1, |(n, _, _)| n + 1);
+    let number = previous.map_or(1, |(n, ..)| n + 1);
     let attempt = AttemptId::new(key.clone(), NonZeroU32::new(number).expect("numbers start at 1"));
     // A linear Attempt (hs-d680, pro-d52) is the PR's only live Attempt for its whole life: it runs in the PR's one
     // workflow worktree on the Lead Branch, which a parallel Attempt's merge would move under it. Counted here, inside
@@ -342,7 +389,7 @@ fn require_ready(all: &[Job], job: &Job, plan: &PlanId, phase: &str, pr_status: 
 }
 
 /// The `starting` Attempt and its Job `running`, with `attempt-started`.
-fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &Next) -> Result<(), CpdError> {
+fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &Next, pools: &[String]) -> Result<(), CpdError> {
     let worktree = next.worktree.to_str().ok_or_else(|| {
         CpdError::new(ErrorCode::GitFailed, "The Attempt's worktree path is not valid UTF-8.")
             .with("path", next.worktree.to_string_lossy().into_owned())
@@ -362,8 +409,13 @@ fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &N
             worktree
         ],
     )?;
+    // The Job's pools commit with its first Attempt: from this commit it is their tenant (contract §3.4 "Tenancy").
+    for pool in pools {
+        tx.execute("INSERT INTO job_pools (plan, job, pool) VALUES (?1, ?2, ?3)", params![plan.as_str(), key.as_str(), pool])?;
+    }
+    // The Job starts: its skip, if E3 recorded one, is cleared (contract §3.7 E3 "The skip order").
     let moved = tx.execute(
-        "UPDATE jobs SET status = 'running' WHERE plan = ?1 AND key = ?2 AND status = 'queued'",
+        "UPDATE jobs SET status = 'running', skipped_n = NULL WHERE plan = ?1 AND key = ?2 AND status = 'queued'",
         params![plan.as_str(), key.as_str()],
     )?;
     if moved == 0 {
@@ -394,11 +446,12 @@ fn spawn(ports: &Ports, home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock
     if !exe.exists() {
         return Err(format!("cannot run {}: no such file", exe.display()));
     }
+    let env_set = vec![("CPD_HOME".to_owned(), home.root().display().to_string())];
     // hs-d528: nice and ionice exec (`idle`), so the recorded pid is the driver's.
     let launch = Launch {
         program: exe.display().to_string(),
         args: ["attempt", "run", &attempt.to_string(), "--plan", plan.as_str()].map(str::to_owned).to_vec(),
-        env_set: vec![("CPD_HOME".to_owned(), home.root().display().to_string())],
+        env_set,
         // The caller's own identity is not the driver's.
         env_remove: ["CPD_PLAN", "CPD_SESSION", "CPD_ATTEMPT", "TMUX", "TMUX_PANE"].map(str::to_owned).to_vec(),
         cwd: Some(home.root().to_path_buf()),

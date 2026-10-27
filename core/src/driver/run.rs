@@ -110,13 +110,15 @@ enum Decision {
     NoSubmit,
     /// pi stopped with this `stopReason`: the Attempt ends `crashed`.
     Crashed(String),
+    /// pi stopped on a provider error (the `errorMessage`): the Attempt ends `provider_error`.
+    ProviderError(String),
 }
 
 /// A5's judgement, pure. `state` is the Session's state; `last_stop` the last
 /// assistant message's `stopReason` and `turns` the count of assistant messages
-/// (both read from the session file only when `state` is `idle`); `nudged` is
+/// (both read from the session file only when `state` is `idle`), `error_message` the last one's `errorMessage`; `nudged` is
 /// the turn count when the Worker was nudged, None when it was not.
-fn judge(state: &str, last_stop: Option<&str>, turns: u64, nudged: Option<u64>) -> Decision {
+fn judge(state: &str, last_stop: Option<&str>, error_message: Option<&str>, turns: u64, nudged: Option<u64>) -> Decision {
     if state != "idle" {
         return Decision::Wait;
     }
@@ -125,6 +127,9 @@ fn judge(state: &str, last_stop: Option<&str>, turns: u64, nudged: Option<u64>) 
         (Some("stop"), Some(at)) if turns > at => Decision::NoSubmit,
         // Mid-turn, no assistant message yet, or nudged and no new turn since.
         (Some("stop") | Some("toolUse") | None, _) => Decision::Wait,
+        (Some("error"), _) if error_message.is_some_and(worker::is_provider_error) => {
+            Decision::ProviderError(error_message.unwrap_or_default().to_owned())
+        }
         (Some(other), _) => Decision::Crashed(other.to_owned()),
     }
 }
@@ -589,18 +594,19 @@ impl Driver {
             // Idle is read from the Session state and confirmed from the file (A5).
             let state: String =
                 self.store.read(|conn| Ok(conn.query_row("SELECT state FROM sessions WHERE id = ?1", [session.as_str()], |r| r.get(0))?))?;
-            let (stop, turns) = if state == "idle" {
-                let Some(read) = worker::last_stop(&file) else { continue };
-                read
+            let (stop, turns, error) = if state == "idle" {
+                let Some((stop, turns)) = worker::last_stop(&file) else { continue };
+                let error = if stop.as_deref() == Some("error") { worker::last_error(&file) } else { None };
+                (stop, turns, error)
             } else {
-                (None, 0)
+                (None, 0, None)
             };
             // An Attempt nudged by a driver that left (a reload) has its baseline in the Event;
             // one nudged before the Event carried it takes the first idle count seen.
             if state == "idle" && now.nudged {
                 nudged_at.get_or_insert(turns);
             }
-            match judge(&state, stop.as_deref(), turns, nudged_at.filter(|_| now.nudged)) {
+            match judge(&state, stop.as_deref(), error.as_deref(), turns, nudged_at.filter(|_| now.nudged)) {
                 Decision::Wait => {}
                 Decision::Nudge => {
                     if self.nudge(&now, session, turns)? {
@@ -610,6 +616,10 @@ impl Driver {
                 Decision::NoSubmit => {
                     let detail = "The Worker went idle twice without submitting, once after a nudge.".to_owned();
                     return self.end(&now, End::Failed { cause: Cause::NoSubmit, detail }, dirs);
+                }
+                Decision::ProviderError(message) => {
+                    let detail = format!("pi stopped on a provider error: \"{message}\".");
+                    return self.end(&now, End::Failed { cause: Cause::ProviderError, detail }, dirs);
                 }
                 Decision::Crashed(reason) => {
                     let detail = format!("pi stopped with stopReason {reason}.");
@@ -877,24 +887,28 @@ mod tests {
     #[test]
     fn a5_judges_the_worker_by_state_stop_reason_turns_and_nudge() {
         use Decision::*;
-        let table: &[(&str, Option<&str>, u64, Option<u64>, Decision)] = &[
-            ("working", Some("stop"), 3, None, Wait),
-            ("working", Some("stop"), 5, Some(3), Wait),
-            ("working", Some("error"), 3, None, Wait),
-            ("stopped", Some("stop"), 3, None, Wait),
-            ("idle", None, 0, None, Wait),
-            ("idle", Some("toolUse"), 3, None, Wait),
-            ("idle", Some("toolUse"), 5, Some(3), Wait),
-            ("idle", Some("stop"), 3, None, Nudge),
-            ("idle", Some("stop"), 0, None, Nudge),
-            ("idle", Some("stop"), 3, Some(3), Wait),
-            ("idle", Some("stop"), 2, Some(3), Wait),
-            ("idle", Some("stop"), 4, Some(3), NoSubmit),
-            ("idle", Some("error"), 3, None, Crashed("error".to_owned())),
-            ("idle", Some("aborted"), 3, Some(3), Crashed("aborted".to_owned())),
+        let table: &[(&str, Option<&str>, Option<&str>, u64, Option<u64>, Decision)] = &[
+            ("working", Some("stop"), None, 3, None, Wait),
+            ("working", Some("stop"), None, 5, Some(3), Wait),
+            ("working", Some("error"), None, 3, None, Wait),
+            ("stopped", Some("stop"), None, 3, None, Wait),
+            ("idle", None, None, 0, None, Wait),
+            ("idle", Some("toolUse"), None, 3, None, Wait),
+            ("idle", Some("toolUse"), None, 5, Some(3), Wait),
+            ("idle", Some("stop"), None, 3, None, Nudge),
+            ("idle", Some("stop"), None, 0, None, Nudge),
+            ("idle", Some("stop"), None, 3, Some(3), Wait),
+            ("idle", Some("stop"), None, 2, Some(3), Wait),
+            ("idle", Some("stop"), None, 4, Some(3), NoSubmit),
+            ("idle", Some("error"), None, 3, None, Crashed("error".to_owned())),
+            ("idle", Some("aborted"), None, 3, Some(3), Crashed("aborted".to_owned())),
+            ("idle", Some("error"), Some("Connection error."), 3, None, ProviderError("Connection error.".to_owned())),
+            ("idle", Some("error"), Some("503 no available server\n"), 3, Some(3), ProviderError("503 no available server\n".to_owned())),
+            ("idle", Some("error"), Some("404 404 page not found"), 3, None, Crashed("error".to_owned())),
+            ("idle", Some("aborted"), Some("Connection error."), 3, None, Crashed("aborted".to_owned())),
         ];
-        for (state, stop, turns, nudged, want) in table {
-            assert_eq!(judge(state, *stop, *turns, *nudged), *want, "{state} {stop:?} turns {turns} nudged {nudged:?}");
+        for (state, stop, error, turns, nudged, want) in table {
+            assert_eq!(judge(state, *stop, *error, *turns, *nudged), *want, "{state} {stop:?} {error:?} turns {turns} nudged {nudged:?}");
         }
     }
 

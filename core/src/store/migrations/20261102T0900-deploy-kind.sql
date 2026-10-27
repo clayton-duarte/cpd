@@ -1,8 +1,8 @@
--- cpd-migration: breaking after 58
--- pro-d13, pro-d16: the Inbox kind `models-changed`; `inbox_items` is rebuilt as `blue-tier` rebuilt it, carrying `claimed_at` (`inbox-claim`).
+-- cpd-migration: breaking after 68
+-- pro-d100: the Inbox kind `deploy` (a GitHub Actions run that waits for the User's approval); `inbox_items` is rebuilt as `blue-tier` rebuilt it.
 CREATE TABLE inbox_items_new (
   id            INTEGER PRIMARY KEY,
-  kind          TEXT NOT NULL CHECK (kind IN ('dialog', 'plan-review', 'review-waiting', 'unread', 'job-stuck', 'engine-error', 'question', 'pr-failing', 'pr-changes', 'pr-ready', 'review-requested', 'curate-retire', 'curate-docs', 'loop-guard', 'models-changed')),
+  kind          TEXT NOT NULL CHECK (kind IN ('dialog', 'plan-review', 'review-waiting', 'unread', 'job-stuck', 'engine-error', 'question', 'pr-failing', 'pr-changes', 'pr-ready', 'review-requested', 'curate-retire', 'curate-docs', 'loop-guard', 'deploy')),
   urgency       TEXT NOT NULL CHECK (urgency IN ('red', 'yellow', 'magenta', 'blue', 'cyan', 'white')),
   subject       TEXT NOT NULL CHECK (length(subject) >= 1),
   context       TEXT REFERENCES contexts(id),

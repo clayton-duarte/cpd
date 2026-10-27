@@ -393,6 +393,7 @@ fn condition(kind: Kind, urgency: Urgency, session: Option<&str>, plan: Option<&
         session: session.map(self::session),
         record: None,
         event: None,
+        opened_at: None,
     }
 }
 
@@ -416,7 +417,7 @@ fn a_plan_carries_its_stuck_jobs_and_whether_its_lead_asks_the_user() {
     let needs = |store: &mut Store, p: &str| read::plan_boxes(store, &plan(p)).unwrap().needs_user;
     assert_eq!(
         needs(&mut store, "ship"),
-        read::NeedsUser { lead_working: true, lead_phase: Some(Phase::Dispatch), ..Default::default() },
+        read::NeedsUser { lead_working: true, lead_phase: Some(Phase::Dispatch), worked_on: vec![key("e")], ..Default::default() },
         "no item: an agent handles everything"
     );
 
@@ -436,12 +437,12 @@ fn a_plan_carries_its_stuck_jobs_and_whether_its_lead_asks_the_user() {
     );
     assert_eq!(
         needs(&mut store, "ship"),
-        read::NeedsUser { stuck_jobs: vec![key("e")], lead_dialog: false, lead_working: true, lead_phase: Some(Phase::Dispatch) },
+        read::NeedsUser { stuck_jobs: vec![key("e")], lead_dialog: false, lead_working: true, lead_phase: Some(Phase::Dispatch), worked_on: vec![key("e")] },
         "a fork's dialog is not the Lead's"
     );
     assert_eq!(
         needs(&mut store, "sketch"),
-        read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: true, lead_working: false, lead_phase: Some(Phase::Plan) }
+        read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: true, lead_working: false, lead_phase: Some(Phase::Plan), worked_on: vec![] }
     );
     assert_eq!(
         needs(&mut store, "rel"),
@@ -453,7 +454,7 @@ fn a_plan_carries_its_stuck_jobs_and_whether_its_lead_asks_the_user() {
     sql(&mut store, "UPDATE inbox_items SET snoozed_until = '2999-01-01T00:00:00.000Z' WHERE subject = 'session:l-sketch';");
     assert_eq!(
         needs(&mut store, "sketch"),
-        read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: false, lead_working: false, lead_phase: Some(Phase::Plan) }
+        read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: false, lead_working: false, lead_phase: Some(Phase::Plan), worked_on: vec![] }
     );
 }
 
@@ -1010,6 +1011,7 @@ fn an_open_pull_request_is_clean_only_when_its_merge_state_is_clean() {
     let (_fx, mut store) = fixture();
     let clean = |store: &mut Store| read::widgets(store, 3, 0).unwrap().prs.iter().find(|p| p.number == 7).unwrap().clean;
     assert!(!clean(&mut store), "a fresh row reads `unknown`");
+    sql(&mut store, "UPDATE pull_requests SET base_ref = 'main', default_branch = 'main' WHERE number = 7");
     for (merge_state, want) in [("clean", true), ("blocked", false), ("unstable", false), ("unknown", false)] {
         sql(&mut store, &format!("UPDATE pull_requests SET merge_state = '{merge_state}' WHERE number = 7"));
         assert_eq!(clean(&mut store), want, "{merge_state}");

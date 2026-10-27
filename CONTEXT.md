@@ -117,7 +117,7 @@ A self-contained unit of work defined by a Spec, executable by a fresh agent ses
 _Avoid_: card, task, step
 
 **Job kind** (new, hs-d340, hs-d341):
-What a Job is for, and so which checks its submit runs: `work` (the default: any Job, as before), `docs` (the contract amended first), `test` (red tests, written from the docs by a Worker other than the implementer, with stubs so the branch builds; its Spec names its `tests` and the `test_files` that hold them), `impl` (makes the tests of the test Jobs it needs pass, and may not change their files unless the Lead approved the path with `job approve-tests`), and `open` and `update`, which only cpd adds. A PR's shape (`pr add --shape tdd|docs|config`, stored and enforced) lays out its kinds: `tdd` is docs, tests, impl; `docs` and `config` have no test Job. A repo needs `[test-commands]` in its repo policy file before its PRs can be `tdd`.
+What a Job is for, and so which checks its submit runs: `work` (the default: any Job, as before), `docs` (the contract amended first), `test` (red tests, written from the docs by a Worker other than the implementer, with stubs so the branch builds; its Spec names its `tests` and the `test_files` that hold them), `impl` (makes the tests of the test Jobs it needs pass, and may not change their files unless the Lead approved the path with `job approve-tests`), `verify` (adds checks: end-to-end, smoke, load, contract; changes no product behaviour; a label like `docs`, with no Spec section of its own and no check at submit beyond the quick check; the Lead adds it by hand, it needs an `impl` Job of its PR, and a `tdd` or `free` PR allows it), and `open` and `update`, which only cpd adds. A PR's shape (`pr add --shape tdd|docs|config`, stored and enforced) lays out its kinds: `tdd` is docs, tests, impl; `docs` and `config` have no test Job. A repo needs `[test-commands]` in its repo policy file before its PRs can be `tdd`.
 _Avoid_: type, category, role
 
 **Open Job** (new, hs-d340):
@@ -153,7 +153,7 @@ A Job the User has not approved yet. The engine never runs it, and it is editabl
 _Avoid_: proposed, pending Job
 
 **Locked**:
-The state of every Job that is not a draft: its Spec, Tier and Dependencies can no longer change; it can only be re-attempted or cancelled, and new Jobs can be appended. A Job is Locked when the Plan is locked, or, if it was added as a draft later, when the review that covers it is approved.
+The state of every Job that is not a draft: its title, Tier, PR, kind and Dependencies can no longer change, and its Spec can change only while the Job is queued and has no Attempt, when the Lead corrects it with `job edit --spec` (no Plan review; the old text stays in the history); it can otherwise only be re-attempted or cancelled, and new Jobs can be appended. A Job is Locked when the Plan is locked, or, if it was added as a draft later, when the review that covers it is approved.
 _Avoid_: frozen, final
 
 ## Runtime
@@ -189,6 +189,10 @@ _Avoid_: PR watcher, PR sync
 **Feedback item** (new, pro-d68):
 One open thing a person said on a pull request a Plan owns: a review thread, an issue comment or a review with a body, not yet answered with a `cpd pr reply` (whose last line is the marker `<!-- cpd:reply -->`). The PR poll stores them and wakes the Lead (`pr-feedback`, reason `comments`); the Lead fixes or declines each and answers it; cpd never resolves a thread, and an open item blocks nothing. Defined once in `docs/contract.md` §2.2 "Feedback item".
 _Avoid_: review comment (the word for what a reviewer wrote, not for the open thing cpd tracks), notification
+
+**PR post** (new, pro-d64, pro-d65, pro-d66, pro-d117):
+One message announcing a PR for review in Slack. The Lead calls `cpd pr post` when the PR is ready (open, green CI, no unaddressed bot comments) and the User says yes; one post per PR. The owner's policy configures the Slack channel, message template, and an optional emoji to react with after the merge. The post also turns on GitHub squash auto-merge (pro-d117): the PR merges when checks pass unless it is stacked (base PR not yet merged), in which case the request waits. Defined once in `docs/contract.md` §2.2 "PR post".
+_Avoid_: Slack announcement, PR announcement
 
 ## Roles
 
@@ -279,6 +283,20 @@ _Avoid_: visibility, permission
 **Policy key** (new, hs-d288):
 What a Policy is resolved for: an owner, or an owner and a repo name (`Owner(login) | Repo(login, name)`). cpd derives it from the one row a consumer acts on: a Context, its Manager and its Leads use the Context's owner; a PR, its Workers and the commands on it use the PR's repo. Never a machine, a path or a cwd.
 _Avoid_: scope, selector, context
+
+**Resource** (pro-d74, pro-d92):
+Anything that has a limited number of slots available for concurrent use, declared in a policy file at host, owner or repo level (`[resources.<name>]`, contract §8.3 "The `resources` domain"), such as the one port an e2e run needs. A Job takes a slot through its Spec's `resources` and is its tenant from its first Attempt until it is merged or cancelled; a human takes one with `cpd resource run`, which holds a kernel `flock` released when the command dies. Nothing declared means no limit. The built-in `workers` is the host's Worker slots, its tenants the Jobs with a live Attempt (contract §3.4 "Tenancy").
+_Avoid_: lock, mutex, semaphore
+
+**Slot** (pro-d92):
+The number of available concurrent units of a determined resource: one concurrent unit of it. Contract §1.4 "The resource locks and the holder record".
+_Avoid_: lock, seat
+
+**Tenant** (pro-d92, pro-d106):
+The Job or user occupying a resource slot. A Job is a tenant from its first Attempt until it is merged or cancelled (a failed Job keeps all its resources); the Ledger records it, so it is derived by a join. A command's holder record names it (contract §1.4, §3.4 "Tenancy").
+
+**Skipped** (pro-d106):
+A Ready Job that E3 could not start for want of a pool. Nothing is reserved for it; it keeps its place in the order urgent > skipped > queue, first skipped first served (contract §3.7 E3).
 
 **Machine policy** (changed, pro-d1):
 The machine Scope's file, `$CPD_HOME/policy/host.toml` (contract §8.3), which dotfiles render per machine: its `[model]` table first, then the machine's `cpd.policy` text (its `[mcp.servers.*]`). Besides Domains it may hold an `[mcp]` table, the MCP servers the machine may use, which only a machine file may have; `[mcp]` is not a Domain and takes no part in a Policy key.

@@ -155,9 +155,15 @@ impl Inherited {
     }
 
     fn set_flags(&self, flags: FdFlag) -> Result<(), CpdError> {
-        fcntl(&self._file, FcntlArg::F_SETFD(flags)).map(drop).map_err(|e| {
-            CpdError::new(ErrorCode::DriverLockMissing, format!("Cannot change close-on-exec on the driver lock (fd 3): {e}."))
-        })
+        for file in std::iter::once(&self._file) {
+            fcntl(file, FcntlArg::F_SETFD(flags)).map(drop).map_err(|e| {
+                CpdError::new(
+                    ErrorCode::DriverLockMissing,
+                    format!("Cannot change close-on-exec on a lock the driver holds (fd {}): {e}.", file.as_raw_fd()),
+                )
+            })?;
+        }
+        Ok(())
     }
 }
 

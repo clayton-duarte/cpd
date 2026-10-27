@@ -16,10 +16,28 @@ const URL: &str = "https://github.com/acme/pay/pull/812";
 
 /// The fake `gh`, in-process: `fail`, when set, makes every call fail; else `pr view` and `api` answer with their texts.
 #[derive(Default)]
-struct Gh {
+pub(super) struct Gh {
     fail: Mutex<Option<String>>,
     /// The second page of inline comments, when set.
     inline2: Mutex<Option<String>>,
+    /// How GitHub answers the auto-merge calls of `pr post` (commands.md §9.8b).
+    pub(super) auto: Mutex<AutoMerge>,
+}
+
+/// GitHub's side of squash auto-merge: the read query `autoMergeAllowed ... autoMergeRequest` and the mutation
+/// `enablePullRequestAutoMerge`.
+pub(super) struct AutoMerge {
+    pub(super) allowed: bool,
+    /// The pull request already has an auto-merge request.
+    pub(super) already: bool,
+    /// GitHub's error message for the mutation, when it refuses.
+    pub(super) refuse: Option<String>,
+}
+
+impl Default for AutoMerge {
+    fn default() -> Self {
+        AutoMerge { allowed: true, already: false, refuse: None }
+    }
 }
 
 impl Handler for Gh {
@@ -28,6 +46,30 @@ impl Handler for Gh {
             return Reply::exit(1, "", fail);
         }
         let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
+        if args[..2] == ["api", "graphql"] {
+            let auto = self.auto.lock().unwrap();
+            let text = args.join(" ");
+            if text.contains("enablePullRequestAutoMerge") {
+                return match &auto.refuse {
+                    Some(message) => Reply::exit(
+                        1,
+                        &format!("{}\n", json!({"data": {"enablePullRequestAutoMerge": null}, "errors": [{"message": message}]})),
+                        &format!("gh: {message}\n"),
+                    ),
+                    None => Reply::ok(&format!(
+                        "{}\n",
+                        json!({"data": {"enablePullRequestAutoMerge": {"pullRequest": {"autoMergeRequest": {"enabledAt": "2026-10-27T18:00:00Z"}}}}})
+                    )),
+                };
+            }
+            if text.contains("autoMergeAllowed") {
+                let request = if auto.already { json!({"enabledAt": "2026-10-27T17:00:00Z"}) } else { serde_json::Value::Null };
+                return Reply::ok(&format!(
+                    "{}\n",
+                    json!({"data": {"repository": {"autoMergeAllowed": auto.allowed, "pullRequest": {"id": "PR_812", "autoMergeRequest": request}}}})
+                ));
+            }
+        }
         match args[..2] {
             ["pr", "view"] => Reply::ok(VIEW),
             ["api", endpoint] if endpoint.starts_with("repos/{owner}/{repo}/pulls/812/comments") => {
@@ -57,7 +99,7 @@ const INLINE: &str = r#"[{"id": 1893, "user": {"login": "reviewer"}, "path": "sr
 pub(super) struct Pay {
     pub(super) fx: Fx,
     home: CpdHome,
-    gh: Arc<Gh>,
+    pub(super) gh: Arc<Gh>,
 }
 
 /// Plan `pay` with one PR `repo` in `status`; its Lead worktree is a plain directory (the fake `gh` ignores it).
@@ -107,7 +149,7 @@ impl Pay {
         *self.gh.inline2.lock().unwrap() = Some(format!("{text}\n"));
     }
 
-    fn gh_fails(&self, stderr: &str) {
+    pub(super) fn gh_fails(&self, stderr: &str) {
         *self.gh.fail.lock().unwrap() = Some(format!("{stderr}\n"));
     }
 
@@ -133,7 +175,7 @@ fn view_prints_the_checks_reviews_comments_and_inline_comments() {
                 {"name": "ci/old", "conclusion": "SUCCESS"}],
             "reviews": [{"id": "PRR_1", "author": "reviewer", "state": "CHANGES_REQUESTED", "body": "Please add a test."}],
             "comments": [{"id": "IC_1", "author": "reviewer", "body": "Thanks for the fix."}],
-            "inline_comments": [{"id": "1893", "author": "reviewer", "path": "src/payout.rs", "body": "This retry never backs off."}], "feedback": null})
+            "inline_comments": [{"id": "1893", "author": "reviewer", "path": "src/payout.rs", "body": "This retry never backs off."}], "feedback": null, "post": null})
     );
     let gh = fx.gh_calls();
     assert_eq!(gh[0][..3], ["pr", "view", "812"]);
@@ -195,4 +237,27 @@ fn view_reports_a_failing_gh_as_gh_failed() {
     assert_eq!(details["argv"].as_array().unwrap()[..3], [json!("gh"), json!("pr"), json!("view")]);
     assert!(details["stderr"].as_str().unwrap().contains("bad credentials"), "{details}");
     assert_eq!(fx.count("txns"), txns);
+}
+
+#[test]
+fn view_prints_the_post_of_a_posted_pr() {
+    let fx = fx("open");
+    let link = "https://missionlane.slack.com/archives/C02JU6C2Z1D/p1793040197490209";
+    let mut store = fx.store();
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(&format!(
+                "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at)
+                 VALUES ('pay', 'repo', 'C02JU6C2Z1D', '1793040197.490209', '{link}', 'opened', 'git-merge', NULL)"
+            ))
+            .map_err(Into::into)
+        })
+        .unwrap();
+
+    let out = fx.fx.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok();
+
+    assert_eq!(
+        out["post"],
+        json!({"channel": "C02JU6C2Z1D", "ts": "1793040197.490209", "link": link, "posted_at": "opened", "reaction": "git-merge", "reacted_at": null})
+    );
 }

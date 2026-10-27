@@ -27,15 +27,15 @@ const WIDTHS = [40, 80];
 // No spaces: a row is filled to the very cell where the component wraps or cuts.
 const long = "abcdefghij".repeat(30);
 
-/** Every body row starts with `prefix` + text, and its last cell is at column W-3 at most. */
-function checkBody(rows: string[], width: number, where: string, prefix = "│ "): void {
-	const body = rows.map(plain).filter((r) => /^ ?│/u.test(r) && r.slice(2).trim() !== "");
+/** Every body row starts with `prefix` + text, and has at most `cells` cells (the cpd message fold keeps W-3; the compact rows W-2). */
+function checkBody(rows: string[], width: number, where: string, prefix = "│ ", cells = width - 3): void {
+	const body = rows.map(plain).filter((r) => /^│/u.test(r) && r.slice(2).trim() !== "");
 	assert.ok(body.length >= 2, `body rows in ${where}: ${JSON.stringify(rows.map(plain))}`);
 	for (const r of body) {
 		assert.ok(r.startsWith(prefix), `rail, blank: ${JSON.stringify(r)} in ${where}`);
-		assert.ok(r.trimEnd().length <= width - 3, `ends at column W-3 (${width}): ${JSON.stringify(r)} (${r.trimEnd().length}) in ${where}`);
+		assert.ok(r.trimEnd().length <= cells, `ends at cell ${cells} (${width}): ${JSON.stringify(r)} (${r.trimEnd().length}) in ${where}`);
 	}
-	assert.equal(Math.max(...body.map((r) => r.trimEnd().length)), width - 3, `text fills up to column W-3 (${width}) in ${where}: ${JSON.stringify(body)}`);
+	assert.equal(Math.max(...body.map((r) => r.trimEnd().length)), cells, `text fills up to cell ${cells} (${width}) in ${where}: ${JSON.stringify(body)}`);
 }
 
 test("a cpd message fold wraps its body at the content width of a box", () => {
@@ -49,7 +49,7 @@ test("a cpd message fold wraps its body at the content width of a box", () => {
 		}
 });
 
-test("a tool row fold keeps three blank columns after its text", async () => {
+test("a tool row fold keeps two blank columns after its text", async () => {
 	for (const width of WIDTHS) {
 		const harness = await loadExtension({ style: "compact", fold: "toggle" }, { defaults: true });
 		try {
@@ -65,7 +65,7 @@ test("a tool row fold keeps three blank columns after its text", async () => {
 			row.updateResult({ ...text(`${long}\n${long}`), isError: false } as never, false);
 			row.setExpanded(true);
 			const rows = row.render(width).filter((l) => plain(l).trim() !== "");
-			checkBody(rows, width, `bash at ${width}`, " │ ");
+			checkBody(rows, width, `bash at ${width}`, "│ ", width - 2);
 		} finally {
 			shutdown(harness);
 		}
@@ -75,7 +75,7 @@ test("a tool row fold keeps three blank columns after its text", async () => {
 const NERD = { expand: "\u{F0B26}", collapse: "\u{F0B2C}" };
 const SOURCE = `Weighing the options.\n\n${long}\n\nKeep the cache.`;
 
-/** The expanded block as the host draws it: Pi's Markdown component (paddingX = outputPad 1) calling the transformer, at pane width W. */
+/** The expanded block as the host draws it: Pi's Markdown component (paddingX 0: the fold drops outputPad) calling the transformer, at pane width W. */
 function expandedThinking(width: number): string[] {
 	let transform: ((markdown: string, context: unknown) => string) | undefined;
 	let input: ((data: string) => unknown) | undefined;
@@ -85,7 +85,7 @@ function expandedThinking(width: number): string[] {
 		ui: { theme, setHiddenThinkingLabel: () => {}, onTerminalInput: (h: typeof input) => { input = h; return () => {}; } },
 	} as unknown as ExtensionContext);
 	try {
-		const draw = () => new Markdown(SOURCE, 1, 0, getMarkdownTheme(), undefined, {
+		const draw = () => new Markdown(SOURCE, 0, 0, getMarkdownTheme(), undefined, {
 			transform: (markdown: string, availableWidth: number) =>
 				transform!(markdown, { messageType: "assistant-thinking", isStreaming: false, availableWidth }),
 		}).render(width);
@@ -102,7 +102,7 @@ test("the Thinking fold has no blank rail row between its head and its first bod
 		const rows = expandedThinking(width).map(plain);
 		const head = rows.findIndex((r) => r.includes("Thinking…"));
 		assert.ok(head >= 0, JSON.stringify(rows));
-		assert.match(rows[head + 1]!, /^ ?│ \S/u, `the row under the head is the first body row at ${width}: ${JSON.stringify(rows)}`);
+		assert.match(rows[head + 1]!, /^│ \S/u, `the row under the head is the first body row at ${width}: ${JSON.stringify(rows)}`);
 		assert.ok(rows[head + 1]!.includes("Weighing the options."), JSON.stringify(rows));
 	}
 });
@@ -110,6 +110,6 @@ test("the Thinking fold has no blank rail row between its head and its first bod
 test("the Thinking fold wraps its body at the content width of a box", () => {
 	for (const width of WIDTHS) {
 		const rows = expandedThinking(width).filter((l) => plain(l).trim() !== "");
-		checkBody(rows, width, `Thinking at ${width}`, " │ ");
+		checkBody(rows, width, `Thinking at ${width}`, "│ ", width - 2);
 	}
 });

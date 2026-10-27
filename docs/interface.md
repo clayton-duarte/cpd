@@ -65,6 +65,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd pr` | Pull requests (commands.md §9) | | |
 | `cpd pr add` | Add a PR to the Plan (§9.4) | Lead | |
 | `cpd pr edit` | Change a waiting PR before the lock (§9.5) | Lead | |
+| `cpd pr describe` | Store the PR's description, which becomes the pull request body (§9.5a) | Lead | |
 | `cpd pr cancel` | Remove a PR from the Plan before the lock; after it, end a PR with nothing to open, or whose work another PR carried (`--superseded-by`) (§9.6) | Lead | |
 | `cpd pr start` | Start a waiting PR whose needs are merged, after a failed start (§9.7) | Lead | |
 | `cpd pr open` | Push the Lead Branch and open the PR, refused only when it conflicts with its base, never as a draft (§9.1) | Lead | |
@@ -73,11 +74,13 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd pr push` | Gate, then push the Lead Branch as it is, without a rebase (§9.9) | Lead | |
 | `cpd pr view` | Show the PR's checks, reviews and comments (§9.8) | Lead | |
 | `cpd pr reply` | Reply to an open feedback item of the PR's pull request as the User, with the cpd marker; never resolves a thread | Lead | |
-| `cpd pr merge` | Squash-merge a clean pull request on GitHub and delete its branch (§9.10) | | yes |
+| `cpd pr post` | Post the PR's pull request to Slack for review (§9.8b) | Lead | |
+| `cpd pr merge` | Squash-merge a clean pull request on GitHub and delete its branch (§9.10) | Lead | yes |
 | `cpd review` | Plannotator sessions a Session has open (hs-d496) | | |
 | `cpd review open` | Record an open plannotator session | Lead, Manager | |
 | `cpd review close` | Close one or every open plannotator session | Lead, Manager | |
 | `cpd review list` | List the open plannotator sessions of a Session | Lead, Manager | |
+| `cpd review submit` | Post a GitHub review (APPROVE or REQUEST_CHANGES) and, with --slack, queue its reaction (§31.1) | Lead, Manager | |
 | `cpd policy` | Policies (commands.md §22) | | |
 | `cpd policy show` | Show the resolved policy of a key (§22.1) | Lead, Manager, Worker | |
 | `cpd mcp` | MCP servers (commands.md §24) | | |
@@ -100,6 +103,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd session first-message` | Render a Lead's or Manager's first message now and write its file (adapter) (§10.15) | internal | |
 | `cpd session retitle` | Write a Lead's or Manager's dynamic title with a one-shot pi (engine E10) (§10.14) | internal | |
 | `cpd session report` | Report an adapter error to the Manager (pi adapter) (§10.18) | internal | |
+| `cpd session switch-failed` | Record a failed model switch (pi adapter) (§10.18a) | internal | |
+| `cpd session switched` | Record a successful model switch (pi adapter) (§10.18b) | internal | |
 | `cpd session run` | The program in every Lead pane (internal; owns its terminal) (§10.8) | internal | |
 | `cpd events` | Events (commands.md §11) | | |
 | `cpd events list` | List Events (§11.1) | Manager | |
@@ -123,15 +128,15 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd tui view history` | An archived Session's history, read-only (the chat slot) | internal | |
 | `cpd tui view legend` | The key legend (opened by `?` in the Dispatch column, in a tmux popup) | internal | |
 | `cpd tui view logs` | The Event log (opened by the StatusBar's logs button and by an Inbox item, in a tmux popup) | internal | |
-| `cpd tui view merge` | The merge confirmation of a pull request (opened by the Deploy column's merge icon, in a tmux popup) | internal | |
 | `cpd tui view dialog` | A dialog of the kit: `confirm`, `input`, `text`, `checklist` or `select` (opened by the cockpit's actions, in a tmux popup) | internal | |
 | `cpd tui view dialog confirm` | A question with two buttons | internal | |
 | `cpd tui view dialog input` | A labelled text box that grows with its text | internal | |
 | `cpd tui view dialog text` | Scrollable read-only text | internal | |
 | `cpd tui view dialog checklist` | Entries to tick, with `[Approve]` and `[Later]`; the outcome is `{approved, ticked, unticked}` | internal | |
 | `cpd tui view dialog select` | A radio list of options, with `[OK]` and `[Cancel]`; the outcome is `{confirmed, value}` | internal | |
+| `cpd tui view dialog form` | A labelled text box and a labelled radio list, with `[OK]` and `[Cancel]`; the outcome is `{confirmed, value, choice}` | internal | |
 | `cpd tui view chat` | The chat slot's placeholder | internal | |
-| `cpd tui action` | A click on a StatusBar button, or the merge popup's confirm (internal; prints nothing) (§13.2) | internal | |
+| `cpd tui action` | A click on a StatusBar button, or a merge started at once (internal; prints nothing) (§13.2) | internal | |
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
 | `cpd tiers` | Print the Tiers and their valid efforts (commands.md §14.3) | Lead | |
@@ -157,7 +162,11 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd test run` | Run the named tests (§26.2) | Manager, Lead, Worker | |
 | `cpd test list` | Exit 0 only when that one test exists (§26.3) | Manager, Lead, Worker | |
 | `cpd test build` | Compile the Rust tests and typecheck the TypeScript (§26.3) | Manager, Lead, Worker | |
+| `cpd resource` | Repo-declared exclusive resources (commands.md §30) | | |
+| `cpd resource list` | The repo's declared resources and who holds them (§30.1) | Manager, Lead, Worker | |
+| `cpd resource run` | Take a resource and run a command holding it (§30.2) | Manager, Lead, Worker | |
 | `cpd prune` | Remove the leftover worktrees whose work is on origin/main (commands.md §26) | | |
+| `cpd janitor` | Remove the worktrees and branches of merged and cancelled PRs (commands.md §29) | | |
 | `cpd tag` | Tag the commit that set the workspace version (commands.md §26.1) | Lead | |
 | `cpd version` | The release plumbing (commands.md §26.2) | | |
 | `cpd version sync` | Write the version derived from PROTOCOL and the migrations into Cargo.toml and Cargo.lock (commands.md §26.2) | Lead | |

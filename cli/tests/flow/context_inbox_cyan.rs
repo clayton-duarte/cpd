@@ -64,6 +64,7 @@ fn plain(kind: Kind, urgency: Urgency, subject: &str) -> Condition {
         session: None,
         record: None,
         event: None,
+        opened_at: None,
     }
 }
 

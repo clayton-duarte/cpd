@@ -14,18 +14,25 @@
 #[cfg(test)]
 mod incident_tests;
 
-mod add;
+pub(crate) mod add;
 mod approve;
+mod chain;
 pub(crate) mod cancel;
 mod edit;
+pub(crate) mod fix_retry;
+#[cfg(test)]
+mod fix_retry_tests;
 pub mod guard;
 pub mod open;
 mod retry;
 mod show;
-mod spec;
+pub(crate) mod spec;
 mod urgent;
+pub mod worked_on;
+#[cfg(test)]
+mod worked_on_tests;
 
-pub(crate) use retry::retried_since_last_start;
+pub(crate) use retry::{retried_since_last_start, retries_pending};
 
 use std::path::PathBuf;
 
@@ -115,7 +122,7 @@ pub struct EditArgs {
     /// The new Tier: <O|S|H><0-5>
     #[arg(long, value_name = "T")]
     tier: Option<Tier>,
-    /// The new Spec file (JSON): it replaces the whole Spec
+    /// The new Spec file (JSON): it replaces the whole Spec; a queued Job with no Attempt takes only this flag
     #[arg(long, value_name = "file")]
     spec: Option<PathBuf>,
     /// The new Dependencies, comma-separated
@@ -217,7 +224,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 impl Env {
     /// `tier_invalid` (exit 2, `details.efforts`) unless the Tier's effort is
     /// one pi supports for its model (§9); then `tier_not_allowed` (exit 2)
-    /// unless a Worker may have it: H0-H4 or S0-S3 (pro-d53, hs-d554).
+    /// unless a Worker may have it: H0-H3 or S0-S3 (pro-d82, hs-d554).
     ///
     /// The models are those of the Job's PR repo key (contract §8.3 "Models" (5)): `pr` is the PR the Job is
     /// (or is about to be) on, `None` for the PR the existing Job `job` is on.
@@ -282,7 +289,7 @@ fn check_kind_not_reserved(kind: &str) -> Result<(), CpdError> {
     if matches!(kind, "open" | "update") {
         return Err(CpdError::new(
             ErrorCode::KindReserved,
-            format!("The kind {kind} is cpd's: it adds the open Job when a PR starts and the update Job for a PR that needs one. Use docs, test, impl or work."),
+            format!("The kind {kind} is cpd's: it adds the open Job when a PR starts and the update Job for a PR that needs one. Use docs, test, impl, verify or work."),
         )
         .with("kind", kind));
     }
@@ -293,10 +300,10 @@ fn check_kind_not_reserved(kind: &str) -> Result<(), CpdError> {
 /// template, `docs` and `config` their one, `free` (a PR before migration `job-kinds`) every kind the Lead adds.
 fn kinds_allowed(shape: &str) -> &'static [&'static str] {
     match shape {
-        "tdd" => &["docs", "test", "impl"],
+        "tdd" => &["docs", "test", "impl", "verify"],
         "docs" => &["docs"],
         "config" => &["work"],
-        _ => &["work", "docs", "test", "impl"],
+        _ => &["work", "docs", "test", "impl", "verify"],
     }
 }
 
@@ -350,6 +357,21 @@ fn check_test_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(),
     .with("plan", plan.as_str())
     .with("job", job.key.as_str())
     .with("jobs", tests))
+}
+
+/// A `verify` Job that is not a draft needs at least one `impl` Job of its PR (`impl_job_required`, §5.1).
+fn check_impl_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(), CpdError> {
+    let impls: Vec<&str> = jobs.iter().filter(|j| j.pr == job.pr && j.kind == "impl" && j.status != "cancelled").map(|j| j.key.as_str()).collect();
+    if job.kind != "verify" || job.needs.iter().any(|n| impls.contains(&n.as_str())) {
+        return Ok(());
+    }
+    Err(CpdError::new(
+        ErrorCode::ImplJobRequired,
+        format!("The verify Job {} must need an impl Job of its PR {}: it checks the code those Jobs build.", job.key, job.pr),
+    )
+    .with("plan", plan.as_str())
+    .with("job", job.key.as_str())
+    .with("jobs", impls))
 }
 
 /// No key of `needs` is a `cancelled` or `failed` Job, nor an `open` or `update` Job, which nothing waits for

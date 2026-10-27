@@ -26,6 +26,7 @@ const KINDS: &[(&str, &str)] = &[
     ("curate-retire", "cyan"),
     ("curate-docs", "cyan"),
     ("loop-guard", "red"),
+    ("deploy", "yellow"),
 ];
 
 /// A store as every migration before `models-changed` leaves it, with one open row of every kind, a closed row and a dismissed

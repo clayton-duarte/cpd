@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 15;
+pub const PROTOCOL: u32 = 17;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -97,6 +97,7 @@ kinds! {
     PrFeedback = "pr-feedback",
     PrAdded = "pr-added",
     PrEdited = "pr-edited",
+    PrDescribed = "pr-described",
     PrCancelled = "pr-cancelled",
     PrStarted = "pr-started",
     PrBaseChanged = "pr-base-changed",
@@ -173,6 +174,7 @@ impl Kind {
             PrFeedback => spec([Y, Y, N, N, N], &["pr", "number", "url", "state", "checks", "review_decision", "mergeable", "merge_state", "conflict", "reasons"], &[]),
             PrAdded => spec([Y, Y, N, N, N], &["pr", "repo", "base", "needs", "appended"], &["title", "head_ref", "author"]),
             PrEdited => spec([Y, Y, N, N, N], &["pr", "fields"], &[]),
+            PrDescribed => spec([Y, Y, N, N, N], &["pr"], &[]),
             PrCancelled => spec([Y, Y, N, N, N], &["pr"], &["superseded_by"]),
             PrStarted => spec(
                 [Y, Y, N, N, N],
@@ -249,8 +251,8 @@ mod tests {
 
     /// hs-d496 (two review kinds: 8), hs-d506 (`session-retiered`: 9), hs-d502 (`plan-outlined`: 10), hs-d571 (`session-resumed`: 12), hs-d573 (`session report`: 13), hs-d634 (the incident kinds: 14) and pro-d8 (`mcp-attached`: 15).
     #[test]
-    fn the_protocol_is_15_with_the_mcp_attached_kind() {
-        assert_eq!(PROTOCOL, 15);
+    fn the_protocol_is_17_with_the_pr_described_kind() {
+        assert_eq!(PROTOCOL, 17);
     }
 
     #[test]

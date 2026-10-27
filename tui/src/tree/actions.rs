@@ -97,9 +97,7 @@ pub enum Action {
     /// The Lead forks the Context's grounded Lead (R15).
     NewPlan { context: ContextId, id: PlanId, title: String },
     /// `context new <id> --title=<title> --owner=<login>` (§3.1): New Context….
-    /// With `confirm_fallback` the argv gains `--confirm-fallback` last (the User confirmed clayton-duarte's policy for
-    /// an unknown owner).
-    NewContext { id: ContextId, title: String, owner: String, confirm_fallback: bool },
+    NewContext { id: ContextId, title: String, owner: String },
     /// `context rename <id> --title=<title>` (§3.7).
     RenameContext { id: ContextId, title: String },
     /// `plan rename --plan=<id> --title=<title>` (§4.9).
@@ -108,9 +106,9 @@ pub enum Action {
     RenameSession { id: SessionId, name: String },
     /// `session fork <source> --name=<name>` (§10.3): Fork… and New session….
     Fork { source: SessionId, name: String },
-    /// `session close <id>` (§10.9): `x` and the menu's Close, after their `confirm` popup.
+    /// `session close <id>` (§10.9): `x` and the menu's Close, at once.
     Close(SessionId),
-    /// `context|plan|session archive` (§3.8, §4.10, §10.10): the menu's Archive, after its `confirm` popup and after
+    /// `context|plan|session archive` (§3.8, §4.10, §10.10): the menu's Archive, at once, after
     /// `free` when the archived Lead holds the chat slot.
     Archive { subject: Subject, free: Option<Free> },
     /// `context|plan|session unarchive` (§3.9, §4.11, §10.11): the menu's Unarchive.
@@ -122,7 +120,7 @@ pub enum Action {
     /// that is no `cpd` command.
     CopyId(String),
     /// `tmux set-buffer -w -- <url>`: a click on an item that only has a link (no Plan to open); the
-    /// click says nothing (the label is an OSC 8 link the terminal's modifier-click opens).
+    /// click says nothing (the label is a `Link` whose click opens the page).
     CopyUrl(String),
     /// `session resume <id>` (§10.17): a click on a `loop-guard` item, in the background with no dialog.
     #[allow(dead_code)] // stub: the click that builds it is not written yet
@@ -155,12 +153,8 @@ impl Action {
                 argv.extend([format!("--context={context}"), format!("--title={title}"), "--by-user".into()]);
                 argv
             }
-            Action::NewContext { id, title, owner, confirm_fallback } => {
-                let mut argv = vec!["context".into(), "new".into(), id.to_string(), format!("--title={title}"), format!("--owner={owner}")];
-                if *confirm_fallback {
-                    argv.push("--confirm-fallback".into());
-                }
-                argv
+            Action::NewContext { id, title, owner } => {
+                vec!["context".into(), "new".into(), id.to_string(), format!("--title={title}"), format!("--owner={owner}")]
             }
             Action::RenameContext { id, title } => vec!["context".into(), "rename".into(), id.to_string(), format!("--title={title}")],
             Action::RenamePlan { id, title } => vec!["plan".into(), "rename".into(), format!("--plan={id}"), format!("--title={title}")],
@@ -405,6 +399,10 @@ impl Dialogs for Runner {
         dialog::select(&self.tmux, title, prompt, options)
     }
 
+    fn form(&self, title: &str, input_label: &str, select_label: &str, options: &[String]) -> Result<Option<(String, String)>, CpdError> {
+        dialog::form(&self.tmux, title, input_label, select_label, options)
+    }
+
     fn preview(&self, what: &Deletable) -> Result<Value, String> {
         self.command(&Action::Delete { what: what.clone(), yes: false })
     }
@@ -550,7 +548,6 @@ mod tests {
                     id: ContextId::parse("building-cpd").unwrap(),
                     title: "Building cpd!".into(),
                     owner: "clayton-duarte".into(),
-                    confirm_fallback: false,
                 },
                 vec!["context", "new", "building-cpd", "--title=Building cpd!", "--owner=clayton-duarte"],
             ),
@@ -640,7 +637,7 @@ mod tests {
         assert_eq!(close.done(&json!({"ok": true, "already": true})), "session is already gone");
         let new = Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay").unwrap(), title: "Pay".into() };
         assert_eq!(new.done(&json!({"ok": true})), "forking pay in window park-pay");
-        let context = Action::NewContext { id: ContextId::parse("alpha").unwrap(), title: "Alpha".into(), owner: "o".into(), confirm_fallback: false };
+        let context = Action::NewContext { id: ContextId::parse("alpha").unwrap(), title: "Alpha".into(), owner: "o".into() };
         assert_eq!(context.done(&json!({"ok": true})), "created alpha");
         let rename = Action::RenameSession { id: sid("f-idle"), name: "x".into() };
         assert_eq!(rename.done(&json!({"ok": true, "name": "x"})), "renamed");

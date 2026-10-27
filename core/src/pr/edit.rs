@@ -88,7 +88,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
         Decision::Already(pr) => (pr, Vec::new(), true),
         Decision::Update { before, after, fields } => {
             if after.repo != before.repo {
-                no_branch_clash(repo.as_deref().expect("the repo changed, so it was given"), &plan, &key)?;
+                no_branch_clash(repo.as_deref().expect("the repo changed, so it was given"), &plan, &before.lead_branch)?;
             }
             if let Some(title) = edits.title.as_deref().filter(|_| fields.contains(&"title")) {
                 retitle_open_pull_request(&mut env, &plan, &key, title)?;

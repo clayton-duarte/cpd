@@ -26,7 +26,7 @@ pub struct World {
 
 impl World {
     pub fn lead_branch(&self) -> String {
-        format!("cpd/{}/api", self.plan)
+        format!("{}/api", self.plan)
     }
 
     pub fn attempt_branch(&self) -> String {
@@ -303,4 +303,26 @@ fn tamper_check_stays_clean_after_a_delete() {
     fx.cpd(&["context", "note", "After the delete.", "--context", "ctx"]).ok();
     let again = fx.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Again"]);
     assert_ne!(again.exit, 0, "a deleted id is never reused: {again:?}");
+}
+
+#[test]
+fn deleting_a_plan_deletes_its_pr_posts() {
+    let fx = Fx::with_ports();
+    base(&fx);
+    world(&fx, "pay");
+    world(&fx, "other");
+    let post = |plan: &str| {
+        format!(
+            "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at)
+             VALUES ('{plan}', 'api', 'C02JU6C2Z1D', '1793040197.490209', 'https://missionlane.slack.com/archives/C02JU6C2Z1D/p1793040197490209', 't', NULL, NULL)"
+        )
+    };
+    fixture(&fx, &format!("{}; {};", post("pay"), post("other")));
+    archive(&fx, "pay");
+
+    fx.cpd(&["plan", "delete", "pay", "--yes"]).ok();
+
+    assert_eq!(count(&fx, "SELECT count(*) FROM pr_posts WHERE plan = 'pay'"), 0);
+    assert_eq!(count(&fx, "SELECT count(*) FROM pr_posts WHERE plan = 'other'"), 1, "another Plan's post stays");
+    assert_eq!(plan_rows(&fx, "pay"), 0, "the Plan's other rows go as before");
 }

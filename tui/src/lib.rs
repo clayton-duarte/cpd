@@ -4,14 +4,14 @@
 //!
 //! - [`cockpit`]: `cpd tui [--attach] [--respawn]` (§13.1), reset-layout and
 //!   `cpd tui action`, what a click on a StatusBar button runs (the StatusBar
-//!   is tmux's status line, contract §6.1) and the `merge` popup's confirm starts;
+//!   is tmux's status line, contract §6.1) and the merges the icon and the menus start;
 //! - [`chat`]: the chat slot's placeholder (amendment 2);
 //! - [`widgets`]: the Dispatch column and the key legend (`tui view legend`), with the shared [`palette`];
 //! - [`logs`]: the Event log, a popup of the StatusBar (R36);
 //! - [`history`]: an archived Session's pi file, read-only, in the chat slot;
 //! - [`menu`]: the right-click menu the tree and the Deploy column share;
-//! - [`merge`]: the merge confirmation, a popup of the Deploy column's merge icon, and the merge it starts in the background;
-//! - [`dialog`]: the dialog kit (confirm, input and scrollable text), the popups of the tree and the StatusBar;
+//! - [`merge`]: the merge the Deploy column's merge icon and the menus start at once, in the background;
+//! - [`dialog`]: the dialog kit (confirm for Delete, input, select, form, checklist and scrollable text), the popups of the tree and the StatusBar;
 //! - [`fold`]: the one widget every block that folds is drawn by (the tree's Contexts and archived groups, the Inbox's toggle);
 //! - [`section`]: the one helper every in-pane section title is drawn by;
 //! - [`tree`], [`plan`]: the other views of §13.2.
@@ -23,7 +23,11 @@ pub mod box_widget;
 #[cfg(test)]
 mod box_widget_tests;
 #[cfg(test)]
+mod inbox_link_tests;
+#[cfg(test)]
 mod link_widget_tests;
+#[cfg(test)]
+mod osc_8_guard_tests;
 #[cfg(test)]
 mod guard_tests;
 #[cfg(test)]
@@ -77,6 +81,8 @@ mod phase_dot_tests;
 mod zone_tests;
 #[cfg(test)]
 mod phase_dot_views_tests;
+#[cfg(test)]
+mod worked_on_tests;
 pub mod trace;
 #[cfg(test)]
 mod trace_tests;
@@ -124,6 +130,8 @@ pub mod widgets;
 pub mod view_ports;
 #[cfg(test)]
 mod view_ports_tests;
+#[cfg(test)]
+mod merge_at_once_tests;
 
 pub use runner::{Capture, ViewError, run_view, run_view_on};
 
@@ -191,7 +199,7 @@ pub enum Command {
     /// A view in a cockpit pane (internal; owns its terminal) (§13.2)
     #[command(hide = true, subcommand)]
     View(View),
-    /// A click on a StatusBar button, or the merge popup's confirm (internal; prints nothing) (§13.2)
+    /// A click on a StatusBar button, or a merge started at once (internal; prints nothing) (§13.2)
     #[command(hide = true)]
     Action(ActionArgs),
 }
@@ -199,7 +207,7 @@ pub enum Command {
 /// `cpd tui action <reset|legend|logs|host|incident> --client <name>`, `cpd tui action merge <owner>/<repo>#<n> --client <name>`.
 #[derive(clap::Args, Debug)]
 pub struct ActionArgs {
-    /// `reset`, `legend`, `logs`, `host` or `incident`: the button's range; or `merge`, the `merge` popup's confirm. Optional and free
+    /// `reset`, `legend`, `logs`, `host` or `incident`: the button's range; or `merge`, a merge started at once. Optional and free
     /// text, so that any value, an empty `#{mouse_status_range}` included, reaches the command and fails with
     /// `display-message`, never a usage error on stdout
     pub action: Option<String>,
@@ -226,8 +234,6 @@ pub enum View {
     Legend,
     /// The Event log (opened by the StatusBar's logs button and by an Inbox item, in a tmux popup)
     Logs(logs::Args),
-    /// The merge confirmation of a pull request (opened by the Deploy column's merge icon, in a tmux popup)
-    Merge(merge::Args),
     /// A dialog of the kit: `confirm`, `input`, `text`, `checklist` or `select` (opened by the cockpit's actions, in a tmux popup)
     Dialog(dialog::Args),
     /// The chat slot's placeholder
@@ -246,7 +252,6 @@ pub fn run_with(ports: &Ports, args: Args, version: &str, run_command: RunComman
             View::History(args) => history::run(ports, args),
             View::Legend => widgets::legend::run(ports),
             View::Logs(args) => logs::run(ports, args),
-            View::Merge(args) => merge::run(ports, args),
             View::Dialog(args) => dialog::run(ports, args),
             View::Chat => chat::run(),
         }),

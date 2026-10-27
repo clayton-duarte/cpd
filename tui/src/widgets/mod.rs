@@ -4,9 +4,9 @@
 //! the reader thread when the store committed (the watcher) or the safety poll is due, at most one read per frame; the
 //! CPU, GPU and memory % are sampled every [`SAMPLE_EVERY`], since they are no Event. It draws when a read result, the
 //! CPU, GPU and memory, the error, the size, a click or the wheel changed, and at each frame while a spinner turns. It makes no write of
-//! its own, but for what a click on an owned PR row asks of `cpd session open`, the merge popup a click on a merge
-//! icon opens, and what a click or the menu of an Inbox item runs (commands.md §13.2, pro-d55). A right click on a PR row
-//! opens its menu ([`crate::menu`]: Merge, Copy Link, Go to Lead), on an Inbox item its menu (Snooze 15 min, Snooze 1 h,
+//! its own, but for what a click on an owned PR row asks of `cpd session open`, the merge a click on a merge
+//! icon starts at once, and what a click or the menu of an Inbox item runs (commands.md §13.2, pro-d55). A right click on a PR row
+//! opens its menu ([`crate::menu`]: Merge, Copy Link, Go to Lead), on an Inbox item its menu (Merge on a `pr-ready` row whose pull request is clean, Claim on a `review-requested` row only, Snooze 15 min, Snooze 1 h,
 //! Snooze until tomorrow 09:00, Dismiss); a menu then takes every key and click until it closes. Otherwise it has no key;
 //! mouse capture is on, for the clicks and the wheel over the PRs and the Inbox sections.
 //!
@@ -17,6 +17,8 @@
 //! - the colours and icons are [`crate::palette`]'s.
 
 pub(crate) mod column;
+#[cfg(test)]
+mod deploy_tests;
 #[cfg(test)]
 mod draw_tests;
 #[cfg(test)]
@@ -31,6 +33,8 @@ mod inbox_width_tests;
 mod kinds_tests;
 #[cfg(test)]
 mod needs_tests;
+#[cfg(test)]
+mod stacked_ready_tests;
 pub(crate) mod host;
 pub(crate) mod inbox;
 pub mod legend;
@@ -55,7 +59,7 @@ use super::viewlog::ViewLog;
 use super::menu::{Menu, Outcome};
 use super::read::{self, OpenPr};
 use super::tree::actions::{self, Failed};
-use inbox::{Choice, Hit as InboxHit, Jump};
+use inbox::{Entry as InboxEntry, Hit as InboxHit, Jump};
 use cpd_core::clock;
 use cpd_core::inbox::model::{self, Item};
 use crate::menu::Entry;
@@ -189,6 +193,7 @@ const KINDS: &[Kind] = &[
     Kind::InboxClosed,
     Kind::InboxSnoozed,
     Kind::InboxDismissed,
+    Kind::InboxClaimed,
 ];
 
 /// The area the Deploy column's right-click menu is clamped in and hit-tested against: the pane less a blank column on
@@ -226,8 +231,10 @@ struct Opener<'a> {
 
 /// The right-click menu of an Inbox item, while it is open: its entries and the item it is about.
 struct InboxMenu {
-    menu: Menu<Choice>,
+    menu: Menu<InboxEntry>,
     id: i64,
+    /// The item's pull request, `<owner>/<repo>#<n>`, when it has one (`pr-ready`).
+    pull: Option<String>,
 }
 
 /// What an open menu does with `event`: it takes every key and click.
@@ -242,20 +249,15 @@ fn drive<E: Entry>(menu: &mut Menu<E>, pane: Rect, event: &Event) -> Outcome<E> 
 impl Opener<'_> {
     /// A left click on `item`: its jump ([`inbox::click`]), run on the tree's runner; a failure is the error dialog and a
     /// line of the log. The Sessions are read as of `now` (contract §1.3 text).
-    fn jump(&self, item: &Item, merging: &BTreeSet<String>, now: &str) {
+    fn jump(&self, item: &Item, now: &str) {
         let tree = match self.runner.tree(now) {
             Ok(tree) => tree,
             Err(why) => return dialog::report_why(self.tmux, self.log, "Inbox", why),
         };
-        match inbox::click(&tree, item, merging) {
+        match inbox::click(&tree, item) {
             None => {}
             Some(Jump::Run(action)) => self.said(self.runner.run(&action)),
             Some(Jump::Steps(steps)) => self.said(self.runner.run_all(&steps)),
-            Some(Jump::Merge(pull)) => {
-                if let Err(e) = crate::merge::open(self.tmux, &pull.to_string()) {
-                    dialog::report(self.tmux, self.log, "Merge Pull Request", &e);
-                }
-            }
             Some(Jump::Models(provider, at)) => {
                 let shown = inbox::models_body(self.home, &provider, &at).map_err(|e| format!("{}: {}", e.code(), e.message()));
                 match shown {
@@ -285,7 +287,7 @@ impl Opener<'_> {
     }
 
     /// The entry `choice` of the menu of the item `id`: `inbox snooze` or `inbox dismiss`, through `run_command`.
-    fn choose(&self, choice: Choice, id: i64) {
+    fn choose(&self, choice: inbox::Choice, id: i64) {
         let argv = choice.argv(id);
         let words = argv.join(" ");
         let all = std::iter::once(PROGRAM.to_owned()).chain(argv).map(std::ffi::OsString::from).collect();
@@ -305,7 +307,7 @@ struct PrMenu {
 /// A success says nothing (commands.md §17 "No notes").
 fn pick(item: PrItem, row: &PrRow, opener: &Opener) -> (&'static str, Result<(), CpdError>) {
     match item {
-        PrItem::Merge => ("Merge Pull Request", crate::merge::open(opener.tmux, &row.pull)),
+        PrItem::Merge => ("Merge Pull Request", crate::merge::start(opener.tmux, &row.pull)),
         PrItem::Merging => ("Merge Pull Request", Ok(())),
         PrItem::CopyLink => {
             ("Copy Link", opener.tmux.run(&["set-buffer", "-w", "--", row.url.as_str()].map(str::to_owned)).map(drop))
@@ -319,8 +321,7 @@ fn pick(item: PrItem, row: &PrRow, opener: &Opener) -> (&'static str, Result<(),
 
 /// Draws and follows, for as long as the process runs: no key ends it. A failed read keeps what is on screen and shows its error in the last row, until a read
 /// succeeds ([`kept`]). The wheel over the PRs section scrolls it by one pull request per notch. A left click on an owned
-/// PR row (not on its `󱆭` or its merge icon) opens its Lead in the chat slot; a left click on a merge icon opens the merge
-/// popup; a failure is the error dialog and a line of the log (commands.md §17 "No notes"). A right click on a PR row
+/// PR row (not on its `󱆭` or its merge icon) opens its Lead in the chat slot; a left click on a merge icon starts the merge at once; a failure is the error dialog and a line of the log (commands.md §17 "No notes"). A right click on a PR row
 /// opens its menu, which takes every key and click until it closes.
 fn show<B: Backend>(
     ctx: &mut Ctx<B>,
@@ -367,7 +368,11 @@ fn show<B: Backend>(
             drawn_second = second;
             ctx.draw(|f| {
                 pane = f.area();
-                last = Some(draw(f, pane, &prs, &machine, scroll, frame, &inbox, (inbox_expanded, inbox_scroll), ports.clock.utc(), &merging));
+                // an open Inbox menu is drawn over the labels: a link piece (2 cells, forced width) under its border would swallow
+                // the border's cell, so while it is open the labels are drawn without their OSC 8 links
+                let unlinked: Vec<model::Item> = inbox_menu.iter().flat_map(|_| inbox.iter().cloned().map(|i| model::Item { url: None, ..i })).collect();
+                let shown = if inbox_menu.is_some() { &unlinked } else { &inbox };
+                last = Some(draw(f, pane, &prs, &machine, scroll, frame, shown, (inbox_expanded, inbox_scroll), ports.clock.utc(), &merging));
                 if let Some(error) = error.as_ref().or(watch_failure.as_ref()) {
                     draw_error(f, pane, error);
                 }
@@ -399,9 +404,17 @@ fn show<B: Backend>(
                 match drive(&mut open.menu, pane, &event) {
                     Outcome::Stay => {}
                     Outcome::Close => inbox_menu = None,
-                    Outcome::Pick(choice) => {
-                        let InboxMenu { id, .. } = inbox_menu.take().expect("the menu was open");
-                        opener.choose(choice, id);
+                    Outcome::Pick(entry) => {
+                        let InboxMenu { id, pull, .. } = inbox_menu.take().expect("the menu was open");
+                        match (entry, pull) {
+                            (InboxEntry::Choice(choice), _) => opener.choose(choice, id),
+                            (InboxEntry::Merge, Some(pull)) => {
+                                if let Err(e) = crate::merge::start(opener.tmux, &pull) {
+                                    dialog::report(opener.tmux, opener.log, "Merge Pull Request", &e);
+                                }
+                            }
+                            (InboxEntry::Merge | InboxEntry::Merging, _) => {}
+                        }
                         schedule.force(); // the Inbox shows the result on the next read
                     }
                 }
@@ -426,7 +439,11 @@ fn show<B: Backend>(
                             let item = &inbox[i];
                             if item.kind != model::Kind::EngineDown {
                                 let at = Position::new(m.column, m.row);
-                                inbox_menu = Some(InboxMenu { menu: Menu::new(Choice::ALL.to_vec(), at), id: item.id });
+                                // Merge: a `pr-ready` item whose pull request is clean, the Deploy column's merge rule (pro-d111)
+                                let pull = inbox::Pull::from_subject(&item.subject).map(|p| p.to_string()).filter(|_| item.kind == model::Kind::PrReady);
+                                let clean = pull.as_ref().is_some_and(|p| prs.iter().any(|r| r.clean && format!("{}#{}", r.repo, r.number) == *p));
+                                let merge = clean.then(|| inbox::merges(&merging, item));
+                                inbox_menu = Some(InboxMenu { menu: Menu::new(InboxEntry::entries(item.kind, merge), at), id: item.id, pull });
                             }
                         }
                     }
@@ -435,14 +452,14 @@ fn show<B: Backend>(
                         menu = drawn.rows.iter().find(|r| r.area.contains(at)).map(|row| PrMenu { menu: Menu::new(row.items(), at), row: row.clone() });
                     }
                     // a left click on the Inbox's toggle row folds or unfolds it, on an item row jumps to its cause
-                    Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) && drawn.inbox.contains(Position::new(m.column, m.row)) => {
+                    Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) && drawn.inbox.contains(Position::new(m.column, m.row)) && drawn.links.at(Position::new(m.column, m.row)).is_none() => {
                         match drawn.inbox_shape.hit(m.row - drawn.inbox.y) {
                             Some(InboxHit::Toggle) => {
                                 inbox_expanded = !inbox_expanded;
                                 inbox_scroll = 0;
                             }
                             Some(InboxHit::Item(i)) => {
-                                opener.jump(&inbox[i], &merging, &clock::timestamp(ports.clock.utc()));
+                                opener.jump(&inbox[i], &clock::timestamp(ports.clock.utc()));
                                 schedule.force(); // the result shows on the next read
                             }
                             Some(InboxHit::Header) | None => {}
@@ -453,7 +470,7 @@ fn show<B: Backend>(
                         let result = if let Some(url) = drawn.links.at(at) {
                             Some(("Open Link", crate::link::open_url(&*ports.runner, url)))
                         } else if let Some(icon) = drawn.icons.iter().find(|i| i.area.contains(at)) {
-                            Some(("Merge Pull Request", crate::merge::open(opener.tmux, &icon.pull)))
+                            Some(("Merge Pull Request", crate::merge::start(opener.tmux, &icon.pull)))
                         } else {
                             drawn.hits.iter().find(|h| h.contains(at)).map(|hit| {
                                 ("Go to Lead", open_lead(opener.run_command, opener.tmux, opener.cockpit, &hit.lead))

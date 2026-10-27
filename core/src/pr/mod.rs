@@ -18,6 +18,8 @@
 #[cfg(test)]
 mod comments_tests;
 #[cfg(test)]
+mod deploys_tests;
+#[cfg(test)]
 mod gh_runner_tests;
 #[cfg(test)]
 mod incident_tests;
@@ -25,14 +27,23 @@ mod incident_tests;
 mod poll_tests;
 
 mod add;
+pub mod auto_merge;
 mod cancel;
+mod deploys;
 pub mod comments;
+mod describe;
 mod edit;
 mod feedback;
 mod gh;
+pub(crate) use gh::head_ref_oid;
 mod merge;
+pub mod review;
 mod open;
 pub(crate) mod poll;
+pub mod posts;
+pub mod reactions;
+mod post;
+mod postable;
 pub mod pulls;
 mod push;
 mod reply;
@@ -61,7 +72,7 @@ use crate::plan::PrRow;
 use row::PlanPrs;
 
 pub use gh::close_pr;
-pub use open::{Pulled, base_check, is_merged_on_github, pull_request, record as record_pull, submit_checks};
+pub use open::{Pulled, description_required, base_check, is_merged_on_github, pull_request, record as record_pull, submit_checks};
 #[cfg(test)]
 pub(crate) use rebase::{in_progress_with, rebase_onto_with, unresolved_with};
 
@@ -71,6 +82,8 @@ pub enum Command {
     Add(AddArgs),
     /// Change a waiting PR before the lock (§9.5)
     Edit(EditArgs),
+    /// Store the PR's description, which becomes the pull request body (§9.5a)
+    Describe(DescribeArgs),
     /// Remove a PR from the Plan before the lock; after it, end a PR with nothing to open, or whose work another PR carried (`--superseded-by`) (§9.6)
     Cancel(CancelArgs),
     /// Start a waiting PR whose needs are merged, after a failed start (§9.7)
@@ -87,6 +100,8 @@ pub enum Command {
     View(Args),
     /// Reply to an open feedback item of the PR's pull request as the User, with the cpd marker; never resolves a thread
     Reply(reply::ReplyArgs),
+    /// Post the PR's pull request to Slack for review (§9.8b)
+    Post(post::PostArgs),
     /// Squash-merge a clean pull request on GitHub and delete its branch (§9.10)
     Merge(merge::MergeArgs),
 }
@@ -175,6 +190,18 @@ pub struct EditArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct DescribeArgs {
+    /// The PR key
+    #[arg(long = "pr", value_name = "key")]
+    key: PrKey,
+    /// The description: a path to a UTF-8 file, or - for stdin
+    #[arg(long, value_name = "path")]
+    file: PathBuf,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct CancelArgs {
     /// The PR key
     #[arg(value_name = "key")]
@@ -200,6 +227,7 @@ pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdE
     match command {
         Command::Add(args) => add::add(args),
         Command::Edit(args) => edit::edit(args),
+        Command::Describe(args) => describe::describe(args),
         Command::Cancel(args) => cancel::cancel(args),
         Command::Start(args) => start::run(args),
         Command::Open(args) => open::open(args),
@@ -208,6 +236,7 @@ pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdE
         Command::Push(args) => push::push(args),
         Command::View(args) => view::view(ports, args),
         Command::Reply(args) => reply::reply(ports, args),
+        Command::Post(args) => post::post(ports, args),
         Command::Merge(args) => merge::merge(ports, args),
     }
 }

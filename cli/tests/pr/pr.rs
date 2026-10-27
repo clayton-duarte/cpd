@@ -36,6 +36,9 @@ const TITLE: &str = "Add the payment webhook";
 const REPO_TITLE: &str = "Charge the card at checkout";
 const WEB_PR_TITLE: &str = "Show the receipt";
 
+/// The stored description of PR `repo` and of PR `web` (pro-d93..pro-d96): the pull request body `pr open` gives to GitHub, verbatim.
+pub(super) const DESCRIPTION: &str = "## What and why\n\nCharge the card at checkout.\n\n## Acceptance criteria\n\n- [ ] the card is charged\n";
+
 const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
 
 pub(super) fn plan() -> PlanId {
@@ -74,8 +77,9 @@ fn seed_pay(mut store: Store, phase: &str, job: &str, branch: &str, repo: &Path,
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', {locked}, {done});
          {pull_request}
-         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{columns})
-           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', '{status}', '{branch}', {worktree}, '{REPO_TITLE}', 'config', cpd_txn(), 't', {locked}{values});",
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at{columns})
+           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', '{status}', '{branch}', {worktree}, '{REPO_TITLE}', '{DESCRIPTION}', 'config', cpd_txn(), 't', {started}{values});",
+        started = if locked == "NULL" { "NULL" } else { "'2026-10-27T09:00:00.000Z'" },
         repo = repo.display(),
         branch = branch,
     );
@@ -218,8 +222,8 @@ fn seed_web(mut store: Store, repo: &Path, lead: &Path, sha: &str, state: Web) {
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
                 "{row}
-                 INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{open_columns})
-                   VALUES ('pay', 'web', '{repo}', 'web', 'main', '{status}', 'cpd/pay/web', {worktree}, '{WEB_PR_TITLE}', 'config', cpd_txn(), 't', {started}{open_values});
+                 INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at{open_columns})
+                   VALUES ('pay', 'web', '{repo}', 'web', 'main', '{status}', 'cpd/pay/web', {worktree}, '{WEB_PR_TITLE}', '{DESCRIPTION}', 'config', cpd_txn(), 't', {started}{open_values});
                  {needs}",
                 repo = repo.display(),
                 row = if matches!(state, Web::Open) {
@@ -243,7 +247,7 @@ fn seed_web(mut store: Store, repo: &Path, lead: &Path, sha: &str, state: Web) {
         .unwrap();
 }
 
-fn code(run: &Run) -> (String, i32) {
+pub(super) fn code(run: &Run) -> (String, i32) {
     (run.error()["code"].as_str().unwrap().to_owned(), run.exit)
 }
 
@@ -303,7 +307,7 @@ fn job_spec(fx: &Poll, key: &str) -> (String, String, Value, Value, Value) {
 }
 
 /// `(key, status)` of every `open` Job of Plan `pay`, by key.
-fn open_jobs(fx: &Poll) -> Vec<(String, String)> {
+pub(super) fn open_jobs(fx: &Poll) -> Vec<(String, String)> {
     fx.store()
         .read(|c| {
             let mut stmt = c.prepare("SELECT key, status FROM jobs WHERE plan = 'pay' AND kind = 'open' ORDER BY key")?;
@@ -506,7 +510,13 @@ fn rebase_with_gate_ci_runs_no_gate_and_pushes() {
 
 /// `gh pr list` answering one pull request of the Lead Branch in `state`.
 fn list_of(state: &str) -> Reply {
-    Reply::ok(&format!("[{{\"number\": 812, \"url\": \"{URL}\", \"state\": \"{state}\"}}]\n"))
+    list_created(812, state, "2026-10-28T10:00:00Z")
+}
+
+/// `gh pr list` answering one pull request `number` of the Lead Branch in `state`, created at `created` (the PR row started 2026-10-27).
+fn list_created(number: i64, state: &str, created: &str) -> Reply {
+    let url = format!("https://github.com/acme/pay/pull/{number}");
+    Reply::ok(&format!("[{{\"number\": {number}, \"url\": \"{url}\", \"state\": \"{state}\", \"createdAt\": \"{created}\"}}]\n"))
 }
 
 /// A fixture of phase `dispatch` whose `pre-merge` hook leaves a marker file when it runs; and that marker.
@@ -563,16 +573,13 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
     assert_eq!(fx.remote_branch("cpd/pay"), Some(tip.clone()));
     let config = fx.git_output(&fx.repo, &["config", "--get-regexp", "^branch\\."]);
     assert!(config.stdout.is_empty(), "{}", String::from_utf8_lossy(&config.stdout));
-    // gh: look for an existing PR (twice: before the Gate's push, and to open it), then create it with the Jobs table as its body.
+    // gh: look for an existing PR (twice: before the Gate's push, and to open it), then create it with the stored description as its body.
     let calls = fx.gh_calls();
-    let list = ["pr", "list", "--head", "cpd/pay", "--state", "all", "--json", "number,url,state"];
+    let list = ["pr", "list", "--head", "cpd/pay", "--state", "all", "--json", "number,url,state,createdAt"];
     assert_eq!(calls[0], list);
     assert_eq!(calls[1], list);
     assert_eq!(calls[2][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", REPO_TITLE]);
-    let body = &calls[2][9];
-    assert_eq!(calls[2][8], "--body");
-    assert!(body.contains("| api | The \\| API | merged | `"), "{body}");
-    assert!(body.contains(&fx.merged_sha), "{body}");
+    assert_eq!(calls[2][8..], ["--body", DESCRIPTION]);
     // Rows and the Event, in one transaction.
     let row = fx.plan_row();
     assert_eq!((row.0.as_str(), row.1, row.2.as_deref()), ("deploy", Some(812), Some(URL)));
@@ -605,6 +612,58 @@ fn open_fails_loud_when_gh_cannot_find_the_pull_request_it_created() {
     let End::Failed { detail, .. } = end else { panic!("{end:?}") };
     assert!(detail.contains("gh_failed"), "{detail}");
     assert_eq!(fx.plan_row().0, "dispatch");
+}
+
+/// The pull request #265 of the Lead Branch, created 2026-10-22, before the PR row started (2026-10-27): not the row's.
+fn old_pull_request(state: &str) -> Reply {
+    list_created(265, state, "2026-10-22T08:00:00Z")
+}
+
+#[test]
+fn open_ignores_a_merged_pull_request_created_before_the_pr_started() {
+    let fx = poll_fx("dispatch");
+    fx.gh.list.set(old_pull_request("MERGED"));
+    let (attempt, _, tip) = fx.submitted_opener();
+
+    let end = fx.merge(&attempt);
+
+    assert_eq!(end, End::Merged { sha: tip });
+    assert_eq!(fx.gh_calls().iter().filter(|c| c[1] == "create").count(), 1, "{:?}", fx.gh_calls());
+    let row = fx.plan_row();
+    assert_eq!((row.0.as_str(), row.1), ("deploy", Some(812)));
+    let status: String = fx.store().read(|c| Ok(c.query_row("SELECT status FROM prs WHERE plan = 'pay' AND key = 'repo'", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(status, "open");
+    assert!(fx.events("pr-merged").is_empty());
+}
+
+#[test]
+fn open_ignores_a_closed_pull_request_created_before_the_pr_started() {
+    let fx = poll_fx("dispatch");
+    fx.gh.list.set(old_pull_request("CLOSED"));
+    let (attempt, _, tip) = fx.submitted_opener();
+
+    let end = fx.merge(&attempt);
+
+    assert_eq!(end, End::Merged { sha: tip });
+    assert_eq!(fx.gh_calls().iter().filter(|c| c[1] == "create").count(), 1, "{:?}", fx.gh_calls());
+    assert_eq!(fx.plan_row().1, Some(812));
+    assert!(fx.events("pr-closed").is_empty());
+}
+
+#[test]
+fn open_does_not_adopt_an_open_pull_request_created_before_the_pr_started() {
+    let fx = poll_fx("dispatch");
+    fx.gh.list.set(old_pull_request("OPEN"));
+    fx.gh.create.set(Reply::exit(1, "", "a pull request for branch cpd/pay already exists\n"));
+    let (attempt, _, _) = fx.submitted_opener();
+
+    let end = fx.merge(&attempt);
+
+    let End::Failed { detail, .. } = end else { panic!("{end:?}") };
+    assert!(detail.contains("gh_failed"), "{detail}");
+    assert!(fx.gh_calls().iter().any(|c| c[1] == "create"), "{:?}", fx.gh_calls());
+    let row = fx.plan_row();
+    assert_eq!((row.0.as_str(), row.1), ("dispatch", None));
 }
 
 #[test]
@@ -1103,6 +1162,8 @@ pub(super) struct Gh {
     list: Seq,
     /// `gh pr create`.
     create: Seq,
+    /// `gh pr edit` (`pr describe` of an open pull request).
+    edit: Seq,
     fail: Mutex<Option<String>>,
     /// The comments read (pr-comments): what it answers; None is an empty read of every pull request the query names.
     pub(super) comments: Mutex<Option<String>>,
@@ -1141,6 +1202,7 @@ impl Handler for Gh {
         match args[..] {
             ["pr", "list", ..] => self.list.get(),
             ["pr", "create", ..] => self.create.get(),
+            ["pr", "edit", ..] => self.edit.get(),
             ["api", "graphql", "-f", query, ..] if query.contains("search(type: ISSUE") => self.search.get(),
             ["api", "graphql", "-f", query, ..] if query.contains("reviewThreads") => match &*self.comments.lock().unwrap() {
                 Some(text) => Reply::ok(&format!("{text}\n")),
@@ -1171,7 +1233,7 @@ pub(super) struct Poll {
     home: CpdHome,
     repo: PathBuf,
     origin: PathBuf,
-    lead: PathBuf,
+    pub(super) lead: PathBuf,
     merged_sha: String,
     /// What the lock pushed to the Lead Branch on origin (R35, §7.2): the base.
     lock_pushed: String,
@@ -1242,6 +1304,7 @@ fn poll_fx_branch(phase: &str, config_extra: &str, job: &str, branch: &str) -> P
         // `pr open` reads `createdAt` of the pull request it just opened (store-W5).
         list: Seq::new(Reply::ok("[]\n")),
         create: Seq::new(Reply::ok(&format!("{URL}\n"))),
+        edit: Seq::new(Reply::ok("")),
         lookup: Slot::new(if phase == "dispatch" { Reply::ok(&format!("{}\n", lookup_answer(&[Some(pay("OPEN", None, None))]))) } else { Reply::ok("{\"data\":{}}\n") }),
         fail: Mutex::new(None),
         comments: Mutex::new(None),
@@ -1269,6 +1332,11 @@ impl Poll {
     /// What the fake `gh` answers to the lookup, as the text of its stdout.
     fn lookup_raw(&self, text: &str) {
         self.gh.lookup.set(Reply::ok(&format!("{text}\n")));
+    }
+
+    /// From now on `gh pr edit` fails with `text` on stderr.
+    pub(super) fn fail_edit(&self, text: &str) {
+        self.gh.edit.set(Reply::exit(1, "", &format!("{text}\n")));
     }
 
     /// Makes every call of the fake `gh` fail with `text` on stderr.
@@ -1350,25 +1418,25 @@ impl Poll {
     }
 
     /// The Lead Branch tip.
-    fn lead_sha(&self) -> String {
+    pub(super) fn lead_sha(&self) -> String {
         self.git(&self.repo, &["rev-parse", &format!("refs/heads/{}", self.branch)])
     }
 
     /// Sets the `[hooks]` of the repo `acme/pay`'s policy file to `toml` (`pre-merge = "cmd"` lines), and commits an
     /// empty commit on the Lead Branch.
-    fn hooks(&self, toml: &str) {
+    pub(super) fn hooks(&self, toml: &str) {
         self.env.repo_policy("acme", "pay", &format!("[hooks]\n{toml}"));
         self.git(&self.lead, &["commit", "-q", "--allow-empty", "-m", "hooks"]);
     }
 
     /// The tip of `branch` on `origin`, if it has one.
-    fn remote_branch(&self, branch: &str) -> Option<String> {
+    pub(super) fn remote_branch(&self, branch: &str) -> Option<String> {
         let out = self.git(&self.origin, &["for-each-ref", "--format=%(objectname)", &format!("refs/heads/{branch}")]);
         (!out.is_empty()).then_some(out)
     }
 
     /// Moves `main` on `origin` (through the main checkout) with a commit writing `path`.
-    fn advance_base(&self, path: &str, content: &str) -> String {
+    pub(super) fn advance_base(&self, path: &str, content: &str) -> String {
         self.commit_file(&self.repo, path, content, &format!("base {path}"));
         self.git(&self.repo, &["push", "-q", "origin", "main"]);
         self.git(&self.repo, &["rev-parse", "HEAD"])
@@ -1405,7 +1473,7 @@ impl Poll {
     /// The PR's opener running, its Attempt `open-repo-a1` `merging` as `attempt submit` leaves it: its worktree is cut from the
     /// Lead Branch and the opener makes no commit (the branch fits its base as it is), so it submits the Lead tip. Returns the
     /// Attempt, its worktree and that tip.
-    fn submitted_opener(&self) -> (AttemptId, PathBuf, String) {
+    pub(super) fn submitted_opener(&self) -> (AttemptId, PathBuf, String) {
         let attempt = AttemptId::parse(OPENER_ATTEMPT).unwrap();
         let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("opener.log") };
         let made = self.scoped(|| create_attempt_worktree(&self.repo, &self.lead, &plan(), &attempt, &setup)).unwrap();
@@ -1426,7 +1494,7 @@ impl Poll {
     }
 
     /// Driver step A8 for `attempt`, in this process, as `attempt run` runs it: the opener's Gate, push and pull request.
-    fn merge(&self, attempt: &AttemptId) -> End {
+    pub(super) fn merge(&self, attempt: &AttemptId) -> End {
         let config = Config::load(&self.home).unwrap();
         let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };
         let catalog = Catalog { pi_version: "1.2.0".to_owned(), o: model("p/opus"), s: model("p/sonnet"), h: model("p/haiku"), g: TierModel { model: "p/gemini".to_owned(), efforts: vec![] } };
@@ -1493,7 +1561,7 @@ fn merge_state(node: String, mergeable: &str, merge_state: &str) -> String {
 
 /// `node`, as a direct read (the lookup) answers it for the viewer: whether the viewer `did_author` it and whether a review
 /// is `requested` of them (`viewerLatestReviewRequest` is `{"id":"RR_1"}` or null). The search ignores both fields.
-fn viewer(node: String, did_author: bool, requested: bool) -> String {
+pub(super) fn viewer(node: String, did_author: bool, requested: bool) -> String {
     let request = if requested { r#"{"id":"RR_1"}"# } else { "null" };
     node.replace(
         r#""viewerDidAuthor":true,"viewerLatestReviewRequest":null"#,
@@ -1578,7 +1646,7 @@ impl Poll {
     }
 
     /// What the fake `gh`'s lookup answers.
-    fn lookup(&self, nodes: &[Option<String>]) {
+    pub(super) fn lookup(&self, nodes: &[Option<String>]) {
         self.lookup_raw(&lookup_answer(nodes));
     }
 
@@ -2279,21 +2347,6 @@ fn a_failed_direct_read_fails_the_poll_and_writes_nothing() {
     assert_eq!((fx.txns(), fx.event_count(), fx.memberships()), (txns, events, rows));
     assert_eq!(fx.pull_request_history("delete", None), 0);
     assert_eq!(fx.widget_prs(), [("acme/pay".to_owned(), 901)]);
-}
-
-#[test]
-fn poll_with_a_done_plan_reruns_its_clean_up() {
-    let fx = poll_fx("done");
-    let (worktree, branch) = kept_attempt(&fx);
-    fx.search(&[]);
-
-    let out = fx.poll();
-
-    assert_eq!(out["done"], json!([]));
-    assert_eq!(out["prs"][0]["status"], "merged");
-    assert!(!worktree.exists());
-    assert_eq!(fx.git(&fx.repo, &["branch", "--list", &branch]), "");
-    assert!(fx.lead.exists());
 }
 
 #[test]
@@ -3028,8 +3081,7 @@ fn an_owned_pull_request_that_left_the_search_and_is_closed_is_told_to_the_plan_
 fn an_owned_pull_request_that_left_the_search_and_is_merged_takes_the_merged_path() {
     let fx = poll_fx("deploy");
     let (worktree, branch) = kept_attempt(&fx);
-    // The Lead Branch is pushed and clean, as a merged PR's is: its clean-up removes the worktree, which unpushed work would keep.
-    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
+        fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
     let started = fx.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "pay--b-a1", "cat"]);
     assert!(started.status.success(), "{started:?}");
     assert!(fx.tmux(&["new-window", "-d", "-t", "cpd-work", "-n", "other-plan", "cat"]).status.success());
@@ -3053,13 +3105,13 @@ fn an_owned_pull_request_that_left_the_search_and_is_merged_takes_the_merged_pat
     assert_eq!(merged.len(), 1);
     assert_eq!(merged[0].1, json!({"pr": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}));
     assert!(fx.events("pr-feedback").is_empty());
-    // The Attempt's worktree and branch and the Lead's (pushed, clean) are gone, the Attempt's window is killed.
-    assert!(!worktree.exists());
-    assert_eq!(fx.git(&fx.repo, &["branch", "--list", &branch]), "");
-    assert!(!fx.lead.exists());
-    assert_eq!(fx.git(&fx.repo, &["branch", "--list", "cpd/pay"]), "");
+    // The poll cleans nothing (commands.md §9.2): the Attempt's worktree and branch, the Lead's, and the windows stay for `cpd janitor`.
+    assert!(worktree.exists());
+    assert_ne!(fx.git(&fx.repo, &["branch", "--list", &branch]), "");
+    assert!(fx.lead.exists());
+    assert_ne!(fx.git(&fx.repo, &["branch", "--list", "cpd/pay"]), "");
     let windows = fx.window_names();
-    assert!(!windows.contains("pay--b-a1") && windows.contains("cpd-work:other-plan"), "{windows}");
+    assert!(windows.contains("pay--b-a1") && windows.contains("cpd-work:other-plan"), "{windows}");
 
     // Done: a rerun polls again and finds nothing new.
     let txns = fx.txns();
@@ -3084,7 +3136,7 @@ fn an_owned_row_a_search_misses_is_read_and_an_open_answer_with_the_same_values_
     assert_eq!(fx.pull_requests(), [("acme/pay".to_owned(), 812)]);
     let calls = fx.gh_calls();
     assert!(is_search(&calls[0]) && is_lookup(&calls[1]) && calls.len() == 2, "{calls:?}");
-    assert!(calls[1][3].contains(r#"p0: repository(owner: "acme", name: "pay") { pullRequest(number: 812) { repository { nameWithOwner } number url"#), "{}", calls[1][3]);
+    assert!(calls[1][3].contains(r#"p0: repository(owner: "acme", name: "pay") { pullRequest(number: 812) { repository { nameWithOwner defaultBranchRef { name } } number url"#), "{}", calls[1][3]);
     assert!(calls[1][3].contains("viewerDidAuthor viewerLatestReviewRequest { id } }"), "{}", calls[1][3]);
 }
 
@@ -3136,7 +3188,7 @@ fn improvements_are_stored_and_tell_nobody() {
 // `sh` handler: what the other process did meanwhile, it does when the Gate runs.
 
 /// The Plan in `phase`, as the old full fixture left it: where the PR is open, its Lead Branch is pushed (`-u`).
-fn rebase_fx(phase: &str) -> Poll {
+pub(super) fn rebase_fx(phase: &str) -> Poll {
     let fx = poll_fx(phase);
     if phase == "deploy" {
         fx.git(&fx.lead, &["push", "-q", "-u", "origin", &fx.branch]);
@@ -3146,7 +3198,7 @@ fn rebase_fx(phase: &str) -> Poll {
 
 impl Poll {
     /// The Gate's `pre-merge = "git rev-parse HEAD"`: the HEAD of the directory the hook runs in.
-    fn sh_prints_head(&self) {
+    pub(super) fn sh_prints_head(&self) {
         let ports = self.fakes.ports.clone();
         self.sh(move |call| {
             assert_eq!(call.args[1], "git rev-parse HEAD", "the only hook of the test");
@@ -3213,7 +3265,7 @@ fn rebase_with_the_base_unmoved_only_gates_and_pushes() {
 impl Poll {
     /// The Lead Branch commits `README.md` as `lead` and pushes; the base then commits it as `base`.
     /// Returns the Lead Branch's tip.
-    fn conflicting(&self, lead: &[&str]) -> String {
+    pub(super) fn conflicting(&self, lead: &[&str]) -> String {
         for text in lead {
             fs::write(self.lead.join("README.md"), format!("{text}\n")).unwrap();
             self.git(&self.lead, &["add", "-A"]);
@@ -3225,11 +3277,11 @@ impl Poll {
     }
 
     /// `cpd pr rebase --plan pay <flag>`.
-    fn rebase(&self, flag: &str) -> Run {
+    pub(super) fn rebase(&self, flag: &str) -> Run {
         self.cpd(&["pr", "rebase", "--plan", "pay", flag])
     }
 
-    fn rebasing(&self) -> bool {
+    pub(super) fn rebasing(&self) -> bool {
         ["rebase-merge", "rebase-apply"].iter().any(|name| {
             let path = self.git(&self.lead, &["rev-parse", "--path-format=absolute", "--git-path", name]);
             Path::new(&path).exists()
@@ -3237,7 +3289,7 @@ impl Poll {
     }
 
     /// Resolves `README.md` in the Lead worktree and stages it, as the Lead does.
-    fn resolve(&self, text: &str) {
+    pub(super) fn resolve(&self, text: &str) {
         fs::write(self.lead.join("README.md"), format!("{text}\n")).unwrap();
         self.git(&self.lead, &["add", "README.md"]);
     }

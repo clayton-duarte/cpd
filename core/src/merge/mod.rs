@@ -430,8 +430,8 @@ fn run_gate(home: &CpdHome, config: &Config, target: &Attempt, hook: Hook, pipel
     }
 }
 
-/// The PR of the Attempt's Job, its stored title and the Jobs of the PR the pull request's body lists (§7.6 `pr open` step 3), read once.
-fn pr_of_job(store: &mut Store, target: &Attempt) -> Result<(crate::plan::PrRow, String, Vec<crate::plan::jobs::Job>), CpdError> {
+/// The PR of the Attempt's Job, its stored title and description, the pull request's body (§7.6 `pr open` step 3), read once.
+fn pr_of_job(store: &mut Store, target: &Attempt) -> Result<(crate::plan::PrRow, String, Option<String>), CpdError> {
     store.read(|conn| {
         let prs = crate::plan::fingerprint::load_prs(conn, &target.plan)?;
         let pr = prs
@@ -446,24 +446,24 @@ fn pr_of_job(store: &mut Store, target: &Attempt) -> Result<(crate::plan::PrRow,
             .with("plan", target.plan.as_str())
             .with("pr", pr.key.as_str())
         })?;
-        let jobs = crate::plan::jobs::load(conn, &target.plan)?
-            .into_iter()
-            .filter(|j| j.pr == target.pr && !matches!(j.kind.as_str(), "open" | "update"))
-            .collect();
-        Ok((pr, title, jobs))
+        let description: Option<String> = conn.query_row("SELECT description FROM prs WHERE plan = ?1 AND key = ?2", [target.plan.as_str(), target.pr.as_str()], |r| r.get(0))?;
+        if description.is_none() && pr.head_ref.is_none() {
+            return Err(crate::pr::description_required(&target.plan, &pr.key));
+        }
+        Ok((pr, title, description))
     })
 }
 
 /// Whether the newest pull request of the PR's Lead Branch is already merged on GitHub: the `open` Job adopts it (§7.7 submit step 1).
 fn pull_request_is_merged(store: &mut Store, target: &Attempt) -> Result<bool, CpdError> {
     let (pr, _, _) = pr_of_job(store, target)?;
-    crate::pr::is_merged_on_github(&target.lead_worktree, pr.remote_branch())
+    crate::pr::is_merged_on_github(&target.lead_worktree, &pr)
 }
 
 /// Step 8b (§7.4): the pull request of the Lead Branch, created or adopted, as `pr open` steps 0 and 3 do it (never `--draft`).
 fn open_pull_request(store: &mut Store, target: &Attempt) -> Result<crate::pr::Pulled, CpdError> {
-    let (pr, title, jobs) = pr_of_job(store, target)?;
-    crate::pr::pull_request(&target.lead_worktree, &pr, &title, &jobs)
+    let (pr, title, description) = pr_of_job(store, target)?;
+    crate::pr::pull_request(&target.lead_worktree, &pr, &title, description.as_deref())
 }
 
 /// Step 8's and R2's push of `sha`: to the PR's remote branch, and skipped for an adopted PR that has not opened unless the Job is an `open` or

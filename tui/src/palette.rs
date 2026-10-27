@@ -433,6 +433,13 @@ pub const TIER_YELLOW: &str = "\u{F069A}";
 /// Red: a blocker only the User can clear.
 pub const TIER_RED: &str = "\u{F0362}";
 
+/// The glyph of a `deploy` item, U+F15A9 (yellow tier).
+pub const ITEM_DEPLOY: &str = "\u{F15A9}";
+/// The glyph of a `pr-ready` item, U+F12F4 (yellow tier).
+pub const ITEM_PR_READY: &str = "\u{F12F4}";
+/// The glyph of a `review-requested` item, U+F12F2 (blue tier).
+pub const ITEM_REVIEW_REQUESTED: &str = "\u{F12F2}";
+
 /// The tier glyph of `urgency`, in the bright colour of its urgency (the Inbox row is clickable; the colours of the tree's dots).
 pub fn tier_span(urgency: Urgency) -> Span<'static> {
     let (glyph, meaning) = match urgency {
@@ -453,6 +460,9 @@ pub fn item_span(kind: cpd_core::inbox::model::Kind, urgency: Urgency) -> Span<'
     match kind {
         Item::CurateDocs => Span::styled(ITEM_DOCS, fg_clickable(Meaning::Notice)),
         Item::CurateRetire => Span::styled(ITEM_RETIRE, fg_clickable(Meaning::Notice)),
+        Item::Deploy => Span::styled(ITEM_DEPLOY, fg_clickable(Meaning::Review)),
+        Item::PrReady => Span::styled(ITEM_PR_READY, fg_clickable(Meaning::Review)),
+        Item::ReviewRequested => Span::styled(ITEM_REVIEW_REQUESTED, fg_clickable(Meaning::External)),
         _ => tier_span(urgency),
     }
 }
@@ -517,7 +527,7 @@ pub fn pr_state(state: PrState) -> Meaning {
     }
 }
 
-/// Meaning of an open pull request's `open` word: yellow only when it is `clean`, ready to merge (hs-d534), else colourless.
+/// Meaning of an open pull request's `open` word: yellow only when it is `clean`, ready to merge (hs-d534, pro-d118), else colourless.
 pub fn pr_open(clean: bool) -> Meaning {
     if clean { Meaning::Review } else { Meaning::NotStarted }
 }

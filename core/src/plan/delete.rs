@@ -355,7 +355,7 @@ pub(crate) fn tombstone(tx: &Connection, table: &str, id: &str) -> Result<(), Cp
 /// A Plan's rows once it is tombstoned, in an order that keeps the foreign keys whole. The Lead's Session row stays
 /// (`plans.lead_session` references it), as do the Context's records.
 pub(crate) fn delete_rows(tx: &Connection, plan: &PlanId) -> Result<(), CpdError> {
-    const STATEMENTS: [&str; 12] = [
+    const STATEMENTS: [&str; 14] = [
         "DELETE FROM plannotator_reviews WHERE session IN (SELECT id FROM sessions WHERE plan = ?1)",
         "DELETE FROM board_posts WHERE to_session IN (SELECT id FROM sessions WHERE plan = ?1)",
         "DELETE FROM inbox_items WHERE plan = ?1",
@@ -363,8 +363,10 @@ pub(crate) fn delete_rows(tx: &Connection, plan: &PlanId) -> Result<(), CpdError
         "DELETE FROM escalations WHERE plan = ?1",
         "DELETE FROM attempts WHERE plan = ?1",
         "DELETE FROM dependencies WHERE plan = ?1",
+        "DELETE FROM job_pools WHERE plan = ?1",
         "DELETE FROM jobs WHERE plan = ?1",
         "DELETE FROM pr_needs WHERE plan = ?1",
+        "DELETE FROM pr_posts WHERE plan = ?1",
         "DELETE FROM prs WHERE plan = ?1",
         "DELETE FROM plan_reviews WHERE plan = ?1",
         "DELETE FROM sessions WHERE plan = ?1 AND id <> (SELECT lead_session FROM plans WHERE id = ?1)",

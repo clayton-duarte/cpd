@@ -658,7 +658,7 @@ fn plans_phase_allows_deploy_and_done_back_to_dispatch_and_refuses_the_other_bac
 }
 
 #[test]
-fn prs_locked_allows_only_the_legacy_lead_branch_rename_of_a_merged_pr() {
+fn prs_locked_refuses_every_lead_branch_rename_even_of_a_merged_pr() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = migrated_4(&dir);
     for sql in [
@@ -680,10 +680,8 @@ fn prs_locked_allows_only_the_legacy_lead_branch_rename_of_a_merged_pr() {
         assert_eq!(err.code(), ErrorCode::PrLocked, "{sql}: {err:?}");
         assert_eq!(err.exit().code(), 3);
     }
-    write(&mut store, "UPDATE prs SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'").unwrap();
-    assert_eq!(rows(&mut store, "SELECT lead_branch FROM prs WHERE plan = 'dn'"), vec![serde_json::json!(["cpd/dn/web"])]);
-    // And back is not allowed.
-    let err = refused(&mut store, "UPDATE prs SET lead_branch = 'cpd/dn' WHERE plan = 'dn'");
+    // `lead-branch-name` (pro-d113 A3) removed the exception: the rename itself is refused too.
+    let err = refused(&mut store, "UPDATE prs SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'");
     assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
 }
 
@@ -961,13 +959,13 @@ fn migration_6_keeps_migration_5s_triggers_on_prs() {
         }
     }
     let locked = &after.iter().find(|(name, _)| name == "prs_locked").unwrap().1;
-    assert!(locked.contains("OLD.status = 'merged'"), "migration 5's prs_locked: {locked}");
+    assert!(!locked.contains("OLD.status = 'merged'"), "`lead-branch-name` dropped migration 5's exception: {locked}");
     let status = &after.iter().find(|(name, _)| name == "prs_status").unwrap().1;
     assert!(status.contains("'waiting>cancelled', 'dispatch>cancelled', 'open>cancelled'"), "prs_status: {status}");
 }
 
 #[test]
-fn after_migration_6_prs_locked_still_allows_only_the_legacy_lead_branch_rename_of_a_merged_pr() {
+fn after_migration_6_prs_locked_refuses_the_legacy_lead_branch_rename_of_a_merged_pr() {
     let dir = tempfile::tempdir().unwrap();
     let (mut store, _) = migrated_5(&dir);
     for sql in [
@@ -979,8 +977,9 @@ fn after_migration_6_prs_locked_still_allows_only_the_legacy_lead_branch_rename_
         let err = refused(&mut store, sql);
         assert_eq!(err.code(), ErrorCode::PrLocked, "{sql}: {err:?}");
     }
-    write(&mut store, "UPDATE prs SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'").unwrap();
-    assert_eq!(rows(&mut store, "SELECT lead_branch FROM prs WHERE plan = 'dn'"), vec![serde_json::json!(["cpd/dn/web"])]);
+    // `lead-branch-name` (pro-d113 A3) removed the exception: the rename itself is refused too.
+    let err = refused(&mut store, "UPDATE prs SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'");
+    assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
 }
 
 // ---------- migration 12 (the Inbox) ----------
@@ -1758,6 +1757,12 @@ fn converts_keeping_every_row_and_id(n: usize) {
     assert_eq!(violations, 0, "version {n}: foreign_key_check");
     for (table, ids) in &ids_before {
         let after = rowids(&conn, table);
+        if table == "tier_catalog" {
+            // Migration `20261030T1100-tier-catalog-source` rebuilds tier_catalog EMPTY: it is a cache, recomputed by the next
+            // `cpd tiers`, so it is the one table conversion does not keep.
+            assert!(after.is_empty(), "version {n}: tier_catalog is empty after conversion (a cache, rebuilt by tier-catalog-source)");
+            continue;
+        }
         assert!(ids.iter().all(|id| after.contains(id)), "version {n}: {table} lost a row id");
     }
     let recorded: Vec<(String, String, i64, i64)> = conn
@@ -1785,7 +1790,8 @@ fn converts_keeping_every_row_and_id(n: usize) {
         // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
         assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(crate::events::Kind::ALL.len()));
         assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
-        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(23)); // 17, `plannotator_reviews`, `board_posts`, `record_retirements`, `record_curations`, `incident` and `incident_plans`
+        assert_eq!(rows_after.remove("slack_reactions").map(|r| r.len()), Some(0)); // `slack-reactions`: a new empty table
+        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(25)); // 17, `plannotator_reviews`, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts` and `job_pools`
         let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
         assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
         assert_eq!(txns_after.len(), txns_before.len() + 1);
@@ -1813,6 +1819,9 @@ fn converts_keeping_every_row_and_id(n: usize) {
         // `plannotator-reviews` made a table, and it is empty.
         assert_eq!(rows_after.remove("plannotator_reviews"), Some(Vec::new()));
         assert_eq!(rows_after.remove("board_posts"), Some(Vec::new()));
+        assert_eq!(rows_after.remove("pr_posts"), Some(Vec::new()));
+        // `job-tenancy` made `job_pools`, and it is empty.
+        assert_eq!(rows_after.remove("job_pools"), Some(Vec::new()));
         // `curation` made two tables, and they are empty.
         assert_eq!(rows_after.remove("record_retirements"), Some(Vec::new()));
         assert_eq!(rows_after.remove("record_curations"), Some(Vec::new()));
@@ -1820,6 +1829,9 @@ fn converts_keeping_every_row_and_id(n: usize) {
         assert_eq!(rows_after.remove("incident"), Some(Vec::new()));
         // `incident-plans` made another, and it is empty too.
         assert_eq!(rows_after.remove("incident_plans"), Some(Vec::new()));
+        // `tier-catalog-source` rebuilds tier_catalog EMPTY (a cache, recomputed by the next `cpd tiers`): the one table conversion drops.
+        assert_eq!(rows_after.remove("tier_catalog"), Some(Vec::new()));
+        assert!(rows_before.remove("tier_catalog").is_some_and(|r| !r.is_empty()), "the legacy tier_catalog row was seeded");
         let (history_before, history_after) = (rows_before.remove("history").unwrap(), rows_after.remove("history").unwrap());
         assert_eq!(history_after[..history_before.len()], history_before[..]);
         assert!(history_after[history_before.len()..].iter().all(|r| r.contains("\"update\"")), "{history_after:?}");
@@ -2137,12 +2149,13 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
     assert_eq!(store.schema_mismatch(), None);
     assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-waiting-state")));
     let conn = connection(&home.db());
-    // `asleep_at` is a later migration's column (`session-asleep`), null on every row; so is `by_user` (`session-by-user`), 0.
+    // `asleep_at` is a later migration's column (`session-asleep`), null on every row; so is `by_user` (`session-by-user`), 0, and `switch_failed` (`switch-failed`), null.
     let after: Vec<Value> = session_rows(&conn)
         .into_iter()
         .map(|mut row| {
             assert_eq!(row.as_object_mut().unwrap().remove("asleep_at"), Some(Value::Null));
             assert_eq!(row.as_object_mut().unwrap().remove("by_user"), Some(Value::from(0)));
+            assert_eq!(row.as_object_mut().unwrap().remove("switch_failed"), Some(Value::Null));
             row
         })
         .collect();
@@ -2208,11 +2221,12 @@ fn session_title_length_keeps_every_session_and_title_and_raises_the_limit_to_20
     assert_eq!(store.schema_mismatch(), None);
     assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-session-title-length")));
     let conn = connection(&home.db());
-    // `by_user` is a later migration's column (`session-by-user`), 0 on every row.
+    // `by_user` is a later migration's column (`session-by-user`), 0 on every row; `switch_failed` (`switch-failed`), null.
     let after: Vec<Value> = session_rows(&conn)
         .into_iter()
         .map(|mut row| {
             assert_eq!(row.as_object_mut().unwrap().remove("by_user"), Some(Value::from(0)));
+            assert_eq!(row.as_object_mut().unwrap().remove("switch_failed"), Some(Value::Null));
             row
         })
         .collect();
@@ -2766,11 +2780,12 @@ fn stacked_prs_keeps_every_pr_and_need() {
         vec![serde_json::json!(["pl", "b", "c"])]
     );
     let after = dump(&connection(&home.db()));
-    // `job-kinds` added `prs.shape`, `free` in every row, and `pr-adopt` `prs.head_ref` after it, null in every row.
+    // `job-kinds` added `prs.shape`, `free` in every row, and `pr-adopt` `prs.head_ref` after it, null in every row, `pr-description` `prs.description` after them, null in every row.
     let without_shape: Vec<String> = after["prs"]
         .iter()
         .map(|row| {
             let mut cells: Vec<serde_json::Value> = serde_json::from_str(row).unwrap();
+            assert_eq!(cells.pop(), Some(serde_json::Value::Null));
             assert_eq!(cells.pop(), Some(serde_json::Value::Null));
             assert_eq!(cells.pop(), Some(serde_json::json!("free")));
             serde_json::Value::from(cells).to_string()
@@ -2876,8 +2891,8 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
     assert_eq!(rows(&mut store, "SELECT name FROM event_kinds WHERE name = 'pr-base-changed'"), vec![serde_json::json!(["pr-base-changed"])]);
-    // this migration's one kind, the two of `plannotator-reviews`, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`, the one of `inbox-claim`: the later migrations that add Event kinds
-    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2 + 3 + 1 + 2 + 1 + 1 + 1])]);
+    // this migration's one kind, the two of `plannotator-reviews`, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`, the one of `inbox-claim`, the one of `pr-description`: the later migrations that add Event kinds
+    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2 + 3 + 1 + 2 + 1 + 1 + 1 + 1])]);
 }
 
 // ---------- named migration session-titles ----------
@@ -2985,7 +3000,7 @@ fn job_kinds_keeps_every_job_and_pr_as_work_and_free_and_matches_a_fresh_store()
     assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-job-kinds")));
     assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
 
-    // Every Job is `work` with the other columns null and every PR is `free`: the rows are as they were, plus those.
+    // Every Job is `work` with the other columns null (`resources` of `job-resources` and `skipped_n` of `job-tenancy` too) and every PR is `free`: the rows are as they were, plus those.
     let after = dump(&connection(&home.db()));
     let strip = |rows: &[String], added: usize, default: &str| -> Vec<String> {
         rows.iter()
@@ -2998,8 +3013,9 @@ fn job_kinds_keeps_every_job_and_pr_as_work_and_free_and_matches_a_fresh_store()
             })
             .collect()
     };
-    assert_eq!(strip(&after["jobs"], 4, "work"), before["jobs"]);
-    assert_eq!(strip(&after["prs"], 2, "free"), before["prs"]);
+    assert_eq!(strip(&after["jobs"], 6, "work"), before["jobs"]);
+    // `prs` gained `shape` (`free`), then `pr-adopt` `head_ref` and `pr-description` `description`, both null.
+    assert_eq!(strip(&after["prs"], 3, "free"), before["prs"]);
     assert_eq!(count(&mut store, "SELECT count(*) FROM jobs WHERE status = 'merged'"), 1);
 
     let migrated = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
@@ -3123,8 +3139,21 @@ fn kind_tests_and_test_files_are_locked_with_the_job_and_test_approved_is_not() 
     for key in ["impl-draft", "test-draft"] {
         write(&mut store, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = '{key}'")).unwrap();
     }
-    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET tests = '[\"a\"]' WHERE key = 'test-draft'")), "job_locked");
-    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET test_files = '[\"a\"]' WHERE key = 'test-draft'")), "job_locked");
+    // `tests` and `test_files` are Spec columns: they change while the queued Job has no Attempt, and are Locked once it has one.
+    write(&mut store, "UPDATE jobs SET tests = '[\"a\"]' WHERE key = 'test-draft'").unwrap();
+    write(&mut store, "UPDATE jobs SET test_files = '[\"a\"]' WHERE key = 'test-draft'").unwrap();
+    write(
+        &mut store,
+        "UPDATE jobs SET status = 'running' WHERE key = 'test-draft';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+           VALUES ('pl', 'test-draft-a1', 'test-draft', 1, 'S2', 'ladder', 'running', 'cpd/pl--test-draft-a1', '/w', 't');
+         UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'test-draft-a1';
+         UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'test-draft';
+         UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE key = 'test-draft';",
+    )
+    .unwrap();
+    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET tests = '[\"b\"]' WHERE key = 'test-draft'")), "job_locked");
+    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET test_files = '[\"b\"]' WHERE key = 'test-draft'")), "job_locked");
     // `test_approved` changes after the lock: that is what `job approve-tests` does.
     write(&mut store, "UPDATE jobs SET test_approved = '[\"tests/t.rs\"]' WHERE key = 'impl-draft'").unwrap();
     assert_eq!(rows(&mut store, "SELECT test_approved FROM jobs WHERE key = 'impl-draft'"), vec![serde_json::json!(["[\"tests/t.rs\"]"])]);
@@ -3580,4 +3609,283 @@ fn review_superseded_refuses_a_plan_done_while_a_review_is_pending() {
     write(&mut store, "UPDATE plans SET phase = 'done' WHERE id = 'pc'").unwrap();
     write(&mut store, "UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = 'pc'").unwrap();
     assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
+}
+
+// ---------- resource tenancy (pro-d106; migration `job-tenancy`; contract §3.4 "Tenancy", §4.4 `job_pools` and `job_tenants`) ----------
+
+const TENANCY_FP: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const PORT: &str = "repo:acme/pay:e2e-port";
+
+/// A fully migrated store with Plan `pl` (locked), its PR `a` and one `queued` Job `api` with no Attempt.
+fn tenancy_store() -> (tempfile::TempDir, Store) {
+    let (dir, home) = crate::store::tests::tmp_home();
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    write(
+        &mut store,
+        &format!(
+            "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+               VALUES ('lead', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'idle', 't', 't');
+             INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+               VALUES ('pl', 'ctx', 'Plan', 'dispatch', 'lead', 't', 't');
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+               VALUES ('pl', 'a', '/r', 'main', 'waiting', 'cpd/pl/a', cpd_txn(), 't');
+             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, resources, fingerprint, created_txn, created_at)
+               VALUES ('pl', 'a', 'api', 'T', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'draft', 1, '[\"e2e-port\"]', NULL, cpd_txn(), 't');
+             UPDATE jobs SET status = 'queued', fingerprint = '{TENANCY_FP}' WHERE key = 'api';"
+        ),
+    )
+    .unwrap();
+    (dir, store)
+}
+
+/// The Job's first Attempt, `running`, and its `job_pools` row, in ONE transaction, as the starter writes them.
+const FIRST_ATTEMPT: &str = "UPDATE jobs SET status = 'running' WHERE key = 'api';
+    INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+      VALUES ('pl', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pl--api-a1', '/w', 't');
+    INSERT INTO job_pools (plan, job, pool) VALUES ('pl', 'api', 'repo:acme/pay:e2e-port');";
+
+const END_FAILED: &str = "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'api-a1';";
+
+/// The pools `api` is a tenant of, sorted.
+fn tenancy_of_api(store: &mut Store) -> Vec<String> {
+    rows(store, "SELECT pool FROM job_tenants WHERE plan = 'pl' AND job = 'api' ORDER BY pool")
+        .into_iter()
+        .map(|r| r[0].as_str().unwrap().to_owned())
+        .collect()
+}
+
+fn both() -> Vec<String> {
+    vec![PORT.to_owned(), "workers".to_owned()]
+}
+
+#[test]
+fn tenancy_job_pools_row_is_written_in_the_transaction_of_the_first_attempt() {
+    let (_dir, mut store) = tenancy_store();
+    // A row with no Attempt of the Job, or in a later transaction than the first Attempt's, is refused: a Job is a tenant only
+    // from its first Attempt, and the rows commit with it.
+    let alone = "INSERT INTO job_pools (plan, job, pool) VALUES ('pl', 'api', 'repo:acme/pay:e2e-port')";
+    assert!(write(&mut store, alone).is_err(), "a job_pools row with no Attempt is refused");
+    assert_eq!(count(&mut store, "SELECT count(*) FROM job_pools"), 0);
+
+    write(&mut store, FIRST_ATTEMPT).unwrap();
+    assert_eq!(rows(&mut store, "SELECT plan, job, pool FROM job_pools"), [serde_json::json!(["pl", "api", PORT])]);
+
+    // After the ladder retry (a second Attempt) no row is written: the Job holds its pools already.
+    write(&mut store, &format!("{END_FAILED} UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'api';")).unwrap();
+    write(
+        &mut store,
+        "UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE key = 'api';
+         UPDATE jobs SET status = 'running' WHERE key = 'api';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+           VALUES ('pl', 'api-a2', 'api', 2, 'S2', 'retry', 'running', 'cpd/pl--api-a2', '/w', 't');",
+    )
+    .unwrap();
+    assert!(write(&mut store, "INSERT INTO job_pools (plan, job, pool) VALUES ('pl', 'api', 'host:other')").is_err(), "no row after the first Attempt");
+    // Never updated or deleted.
+    assert!(write(&mut store, "UPDATE job_pools SET pool = 'host:x' WHERE job = 'api'").is_err(), "append only: no update");
+    assert!(write(&mut store, "DELETE FROM job_pools WHERE job = 'api'").is_err(), "append only: no delete");
+    assert_eq!(count(&mut store, "SELECT count(*) FROM job_pools"), 1);
+    // The pool text names its level: `[a-z]*:*`.
+    assert!(write(&mut store, "INSERT INTO job_pools (plan, job, pool) VALUES ('pl', 'api', 'nocolon')").is_err());
+}
+
+#[test]
+fn tenancy_view_lists_a_job_from_its_first_attempt_until_merged_or_cancelled() {
+    let (_dir, mut store) = tenancy_store();
+    assert_eq!(tenancy_of_api(&mut store), Vec::<String>::new(), "a queued Job with no Attempt is no tenant");
+
+    write(&mut store, FIRST_ATTEMPT).unwrap();
+    assert_eq!(tenancy_of_api(&mut store), both(), "`workers` (no row) and the pool of its row, from the first Attempt");
+
+    // Another Job that never had an Attempt, and one with no `job_pools` row (a Job started before the migration): `workers` only.
+    write(
+        &mut store,
+        &format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+               VALUES ('pl', 'a', 'old', 'T', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'draft', 1, NULL, cpd_txn(), 't');
+             UPDATE jobs SET status = 'queued', fingerprint = '{TENANCY_FP}' WHERE key = 'old';
+             UPDATE jobs SET status = 'running' WHERE key = 'old';
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+               VALUES ('pl', 'old-a1', 'old', 1, 'S2', 'ladder', 'running', 'cpd/pl--old-a1', '/w', 't');"
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        rows(&mut store, "SELECT job, pool FROM job_tenants ORDER BY job, pool"),
+        [serde_json::json!(["api", PORT]), serde_json::json!(["api", "workers"]), serde_json::json!(["old", "workers"])]
+    );
+}
+
+#[test]
+fn tenancy_survives_a_failed_job_and_a_ladder_retry() {
+    let (_dir, mut store) = tenancy_store();
+    write(&mut store, FIRST_ATTEMPT).unwrap();
+
+    // The Attempt ends `failed` and the Job is `failed`: it keeps ALL its resources, `workers` included.
+    write(&mut store, &format!("{END_FAILED} UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'api';")).unwrap();
+    assert_eq!(tenancy_of_api(&mut store), both(), "a failed Job keeps its pools and its worker");
+
+    // `queued` again for the next Attempt (a ladder retry, `job retry`): the same.
+    write(&mut store, "UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE key = 'api';").unwrap();
+    assert_eq!(tenancy_of_api(&mut store), both(), "a retried queued Job keeps its pools and its worker");
+
+    // Ended `running` Job -> `queued` after a ladder step, with its Attempt ended too.
+    write(&mut store, "UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'api';").unwrap();
+    assert_eq!(tenancy_of_api(&mut store), both());
+}
+
+#[test]
+fn tenancy_ends_at_once_when_a_job_is_merged() {
+    let (_dir, mut store) = tenancy_store();
+    write(&mut store, FIRST_ATTEMPT).unwrap();
+    assert_eq!(tenancy_of_api(&mut store), both());
+
+    write(
+        &mut store,
+        "UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = 'abc', ended_at = 't' WHERE id = 'api-a1';
+         UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';",
+    )
+    .unwrap();
+
+    assert_eq!(tenancy_of_api(&mut store), Vec::<String>::new(), "free the moment the Job is merged, no timer");
+}
+
+#[test]
+fn tenancy_ends_at_once_when_a_job_is_cancelled_with_no_live_attempt() {
+    let (_dir, mut store) = tenancy_store();
+    write(&mut store, FIRST_ATTEMPT).unwrap();
+    write(&mut store, &format!("{END_FAILED} UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'api';")).unwrap();
+    assert_eq!(tenancy_of_api(&mut store), both(), "failed: held");
+
+    write(&mut store, "UPDATE jobs SET status = 'cancelled', failed_cause = NULL, cancel_reason = 'no longer needed', cancel_requested_at = 't' WHERE key = 'api';").unwrap();
+
+    assert_eq!(tenancy_of_api(&mut store), Vec::<String>::new(), "cancelled with its Attempt ended: free at once");
+}
+
+#[test]
+fn tenancy_of_a_cancelled_job_with_a_live_attempt_ends_with_the_attempt() {
+    let (_dir, mut store) = tenancy_store();
+    write(&mut store, FIRST_ATTEMPT).unwrap();
+
+    write(&mut store, "UPDATE jobs SET status = 'cancelled', cancel_reason = 'no longer needed', cancel_requested_at = 't' WHERE key = 'api';").unwrap();
+    assert_eq!(tenancy_of_api(&mut store), both(), "a cancelled Job whose Attempt is live holds until the Attempt ends");
+
+    write(
+        &mut store,
+        "UPDATE attempts SET status = 'ended', outcome = 'cancelled', cause = 'cancel_requested', ended_at = 't' WHERE id = 'api-a1';",
+    )
+    .unwrap();
+    assert_eq!(tenancy_of_api(&mut store), Vec::<String>::new(), "the Attempt ended: free");
+}
+
+#[test]
+fn tenancy_workers_tenants_are_the_jobs_with_an_attempt_not_merged_or_cancelled() {
+    let (_dir, mut store) = tenancy_store();
+    // `workers` has no row of its own: its tenants are the Jobs with an Attempt, each counted once however many Attempts it had.
+    let workers = |store: &mut Store| count(store, "SELECT count(*) FROM job_tenants WHERE pool = 'workers'");
+    assert_eq!(workers(&mut store), 0, "a Job with no Attempt is no tenant");
+
+    write(&mut store, FIRST_ATTEMPT).unwrap();
+    assert_eq!(workers(&mut store), 1);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM job_pools WHERE pool = 'workers'"), 0, "workers has no job_pools row");
+
+    write(&mut store, &format!("{END_FAILED} UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'api';")).unwrap();
+    write(
+        &mut store,
+        "UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE key = 'api'; UPDATE jobs SET status = 'running' WHERE key = 'api';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+           VALUES ('pl', 'api-a2', 'api', 2, 'S2', 'retry', 'running', 'cpd/pl--api-a2', '/w', 't');",
+    )
+    .unwrap();
+    assert_eq!(workers(&mut store), 1, "two Attempts, one slot");
+
+    write(
+        &mut store,
+        "UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = 'abc', ended_at = 't' WHERE id = 'api-a2';
+         UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';",
+    )
+    .unwrap();
+    assert_eq!(workers(&mut store), 0, "merged: no tenant");
+}
+
+// ---------- the Slack reaction queue (pro-d107; migration `slack-reactions`; contract §4.4 `slack_reactions`, §4.5) ----------
+
+/// A store as every migration before `slack-reactions` leaves it, holding four PRs of Plan `pay` and their posts:
+/// `a` merged, reaction, reacted; `b` merged, reaction, not reacted; `c` open, reaction; `d` merged, no reaction.
+fn before_slack_reactions() -> (tempfile::TempDir, crate::home::CpdHome, Vec<Named>) {
+    let (dir, home) = crate::store::tests::tmp_home();
+    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-slack-reactions")).collect();
+    assert!(earlier.len() < NAMED.len(), "slack-reactions is a built-in migration");
+    let mut store = crate::store::tests::open_named(&home, &earlier).unwrap();
+    let pr = |key: &str, number: u32, state: &str, merged_at: &str, reaction: &str, reacted_at: &str| {
+        format!(
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+               VALUES ('acme/pay', {number}, 'https://github.com/acme/pay/pull/{number}', 'PR {key}', 0, '{state}', 'none', 'none', 't', {merged_at}, 't');
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
+               VALUES ('pay', '{key}', '/nowhere', 'main', '{state}', 'cpd/pay/{key}', '/nowhere/lead', {number}, 'https://github.com/acme/pay/pull/{number}', 't',
+                       (SELECT id FROM pull_requests WHERE number = {number}), cpd_txn(), 't', 't', {merged_at});
+             INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at)
+               VALUES ('pay', '{key}', 'C0POST', '1793040000.00000{number}', 'https://acme.slack.com/p{number}', 't', {reaction}, {reacted_at});"
+        )
+    };
+    let sql = format!(
+        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('pay-lead', 'lead', 'ctx', 'pay', 'Lead pay', '/', 'O3', 'stopped', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+           VALUES ('pay', 'ctx', 'Pay', 'deploy', 'pay-lead', 't', 't');
+         {}{}{}{}",
+        pr("a", 1, "merged", "'2026-10-01T10:00:00.000Z'", "'git-merge'", "'2026-10-01T10:05:00.000Z'"),
+        pr("b", 2, "merged", "'2026-10-02T10:00:00.000Z'", "'git-merge'", "NULL"),
+        pr("c", 3, "open", "NULL", "'git-merge'", "NULL"),
+        pr("d", 4, "merged", "'2026-10-04T10:00:00.000Z'", "NULL", "NULL"),
+    );
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(&sql)?;
+            Ok::<(), CpdError>(())
+        })
+        .unwrap();
+    drop(store);
+    (dir, home, earlier)
+}
+
+fn queue_rows(store: &mut Store) -> Vec<String> {
+    store
+        .read(|c| {
+            let mut stmt = c.prepare("SELECT json_object('channel', channel, 'ts', ts, 'emoji', emoji, 'queued_at', queued_at, 'reacted_at', reacted_at) FROM slack_reactions ORDER BY id")?;
+            Ok(stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .unwrap()
+}
+
+#[test]
+fn a_database_with_merged_posts_migrates_to_slack_reactions_copying_them() {
+    let (_dir, home, _earlier) = before_slack_reactions();
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    let rows: Vec<Value> = queue_rows(&mut store).iter().map(|r| serde_json::from_str(r).unwrap()).collect();
+    assert_eq!(
+        rows,
+        [
+            serde_json::json!({"channel": "C0POST", "ts": "1793040000.000001", "emoji": "git-merge", "queued_at": "2026-10-01T10:00:00.000Z", "reacted_at": "2026-10-01T10:05:00.000Z"}),
+            serde_json::json!({"channel": "C0POST", "ts": "1793040000.000002", "emoji": "git-merge", "queued_at": "2026-10-02T10:00:00.000Z", "reacted_at": null}),
+        ],
+        "only the merged posts with a reaction are copied: queued_at is the PR's merged_at, reacted_at the post's"
+    );
+}
+
+#[test]
+fn slack_reactions_refuses_a_second_row_for_one_channel_ts_and_emoji() {
+    let (_dir, home, _earlier) = before_slack_reactions();
+    let mut store = Store::open(&home, 5000).unwrap();
+    let insert = |emoji: &str, ts: &str| format!("INSERT INTO slack_reactions (channel, ts, emoji, queued_at) VALUES ('C0POST', '{ts}', '{emoji}', 'q');");
+    store.write("fixture", |tx| Ok::<(), CpdError>(tx.execute_batch(&insert("eyes", "1793040000.000001"))?)).unwrap();
+    let refused = store.write("fixture", |tx| Ok::<(), CpdError>(tx.execute_batch(&insert("eyes", "1793040000.000001"))?));
+    assert!(refused.is_err(), "the same (channel, ts, emoji) twice");
+    // Another emoji, or another post, is another row.
+    store.write("fixture", |tx| Ok::<(), CpdError>(tx.execute_batch(&insert("white_check_mark", "1793040000.000001"))?)).unwrap();
+    store.write("fixture", |tx| Ok::<(), CpdError>(tx.execute_batch(&insert("eyes", "1793040000.000009"))?)).unwrap();
 }

@@ -10,21 +10,19 @@ use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use super::comments::{self, Read};
+use super::deploys;
 use super::feedback;
 use super::gh::{self, Listed};
-use super::pulls::{self, Change, Reason};
+use super::posts;
+use super::pulls::{self, Change, PostFacts, Reason};
 use super::row::PlanPrs;
 use super::start::unstack;
 use super::status::{ChecksSummary, PrState};
 use super::{Env, PollArgs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{BasePull, NewEvent, append};
-use crate::git;
-use crate::home::CpdHome;
 use crate::inbox::model as inbox;
-use crate::host::layout::attempt_window;
-use crate::host::tmux::Tmux;
-use crate::ids::{AttemptId, JobKey, PlanId, PrKey};
+use crate::ids::{JobKey, PlanId, PrKey};
 use crate::config::Tier;
 use crate::job::open::{self, Cause};
 use crate::plan::fingerprint::load_prs;
@@ -91,11 +89,11 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     let owned = env.store.read(pulls::owned_open)?;
     // Each owned PR's `pr.feedback.checks`, resolved before anything is written (§8.3). A PR whose policy does not
     // resolve is told nothing and reported below; the poll goes on for the others (§7.6).
-    let mut checks = Vec::new();
+    let mut checks: Vec<Resolved> = Vec::new();
     let mut unresolved = Vec::new();
     for (plan, key, row) in &owned {
         match super::pr_policy_resolved(&mut env, plan, key, crate::policy::resolve)? {
-            Ok(policy) => checks.push((plan.clone(), key.clone(), policy.pr.feedback.checks)),
+            Ok(policy) => checks.push(Resolved { plan: plan.clone(), key: key.clone(), checks: policy.pr.feedback.checks, post_enabled: policy.pr.post.enabled }),
             Err(error) => unresolved.push(Unresolved { plan: plan.clone(), pr: key.clone(), number: row.number, error }),
         }
     }
@@ -156,7 +154,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     for listed in &seen {
         let (repo, number) = (&listed.pr.repo, listed.pr.number);
         let any = owned.iter().any(|(plan, key, row)| {
-            row.repo == *repo && row.number == number && checks_of(&checks, plan, key) == Some(Checks::Any)
+            row.repo == *repo && row.number == number && checks_of(&checks, plan, key).is_some_and(|r| r.checks == Checks::Any)
         });
         if any && listed.pr.state == PrState::Open && listed.pr.checks == ChecksSummary::Failed && !confirm.contains(&(repo.clone(), number)) {
             confirm.push((repo.clone(), number));
@@ -170,7 +168,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     }
 
     // The owned PRs whose pull request a search lists with a base other than the PR's `base`.
-    let follows = env.store.read(|conn| follows(conn, &owned, &search.bases))?;
+    let follows = env.store.read(|conn| follows(conn, &owned, &search.prs))?;
 
     let dirty = !follows.is_empty() || env.store.read(|conn| {
         for listed in &seen {
@@ -186,9 +184,9 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &reads, &owned, &checks, &follows, open_tier))? } else { Outcome::default() };
 
     report_unresolved(&mut env, &unresolved)?;
+    // After the poll's own rows are written (§7.6 step 8): a failure of the deploy read loses none of them.
+    deploys::read(&*env.ports.runner, &env.home, &crate::clock::now())?;
 
-    // After the transaction: the clean-up of each PR that merged, then the silent retry of the earlier ones.
-    clean_up(&mut env, &outcome.merged)?;
     let printed_prs = match &selected {
         Some(id) => {
             let plan = env.plan(id)?;
@@ -248,7 +246,7 @@ fn apply(
     seen: &[Listed],
     reads: &[Read],
     owned: &[Owned],
-    checks: &[(PlanId, PrKey, Checks)],
+    checks: &[Resolved],
     follows: &[Follow],
     open_tier: Tier,
 ) -> Result<Outcome, CpdError> {
@@ -281,8 +279,8 @@ fn apply(
                 }
                 crate::incident::end_if_until_pr_merged(tx)?;
                 unstack_stacked_on(tx, plan, key)?;
-            } else if let Some(checks) = checks_of(checks, plan, key) {
-                if tell(tx, plan, key, checks, &change)? {
+            } else if let Some(resolved) = checks_of(checks, plan, key) {
+                if tell(tx, plan, key, resolved, &change)? {
                     out.feedback.push((plan.clone(), key.clone()));
                 }
                 if let Some(job) = update_for_conflict(tx, plan, key, &change, open_tier)? {
@@ -303,12 +301,12 @@ fn read_of<'a>(reads: &'a [Read], listed: &Listed) -> Option<&'a Read> {
 }
 
 /// Each `open` PR of `owned` whose pull request a search lists (as `OPEN`) with a `baseRefName` that is not the PR's
-/// `base` (§7.6 step 6): a repoint by GitHub, or a base retargeted by hand. A PR with no entry in `bases` is not followed.
-fn follows(conn: &rusqlite::Connection, owned: &[Owned], bases: &[((String, i64), String)]) -> Result<Vec<Follow>, CpdError> {
+/// `base` (§7.6 step 6): a repoint by GitHub, or a base retargeted by hand. A PR whose listing has no base is not followed.
+fn follows(conn: &rusqlite::Connection, owned: &[Owned], listed: &[Listed]) -> Result<Vec<Follow>, CpdError> {
     let mut stored = conn.prepare("SELECT base FROM prs WHERE plan = ?1 AND key = ?2 AND status = 'open'")?;
     let mut found = Vec::new();
     for (plan, key, row) in owned {
-        let Some((_, to)) = bases.iter().find(|((repo, number), _)| (repo, number) == (&row.repo, &row.number)) else { continue };
+        let Some(to) = listed.iter().find(|l| (&l.pr.repo, l.pr.number) == (&row.repo, row.number)).and_then(|l| l.pr.base_ref.as_ref()) else { continue };
         let from: Option<String> = stored.query_row([plan.as_str(), key.as_str()], |r| r.get(0)).optional()?;
         if let Some(from) = from.filter(|from| from != to) {
             found.push(Follow { plan: plan.clone(), pr: key.clone(), from, to: to.clone(), number: row.number, url: row.url.clone() });
@@ -349,8 +347,16 @@ fn follow_base(tx: &WriteTxn<'_>, follow: &Follow) -> Result<Value, CpdError> {
 }
 
 /// The PR's resolved `pr.feedback.checks`; `None` when its policy did not resolve: it is told nothing.
-fn checks_of(checks: &[(PlanId, PrKey, Checks)], plan: &PlanId, key: &PrKey) -> Option<Checks> {
-    checks.iter().find(|(p, k, _)| p == plan && k == key).map(|(_, _, c)| *c)
+fn checks_of<'a>(checks: &'a [Resolved], plan: &PlanId, key: &PrKey) -> Option<&'a Resolved> {
+    checks.iter().find(|r| &r.plan == plan && &r.key == key)
+}
+
+/// What the poll resolved of an owned PR's policy: `pr.feedback.checks` and `pr.post.enabled`.
+struct Resolved {
+    plan: PlanId,
+    key: PrKey,
+    checks: Checks,
+    post_enabled: bool,
 }
 
 /// One `error` Event for each PR whose policy did not resolve (§7.6): `source` `pr poll`, the resolve error's `code`,
@@ -400,10 +406,11 @@ fn report_unresolved(env: &mut Env, unresolved: &[Unresolved]) -> Result<(), Cpd
 }
 
 /// D7: `pr-feedback` to the Plan, when the change needs its attention.
-fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, checks: Checks, change: &Change) -> Result<bool, CpdError> {
+fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, resolved: &Resolved, change: &Change) -> Result<bool, CpdError> {
     let open = change.after.feedback.as_deref().unwrap_or_default();
     let new = comments::new_items(change.before.as_ref().and_then(|b| b.feedback.as_deref()), open);
-    let reasons: Vec<Reason> = pulls::attention(change.before.as_ref(), &change.after, checks, &new);
+    let post = PostFacts { enabled: resolved.post_enabled, posted: posts::find(tx, plan.as_str(), key.as_str())?.is_some() };
+    let reasons: Vec<Reason> = pulls::attention(change.before.as_ref(), &change.after, resolved.checks, &new, post);
     if reasons.is_empty() {
         return Ok(false);
     }
@@ -442,6 +449,7 @@ pub(super) fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::P
     if moved == 0 {
         return Err(cas_lost(id, key));
     }
+    super::reactions::queue_merge(tx, id.as_str(), key.as_str())?;
     let text = format!("PR {key} (#{}) of Plan {id} is merged.", pull.number);
     append(tx, NewEvent::pr_merged(text, key, pull.number, &pull.url, pull.merged_at.as_deref()).plan(id.clone()))?;
     // The last PR to merge ends the Plan (§3.1).
@@ -515,208 +523,4 @@ fn cas_lost(id: &PlanId, key: &PrKey) -> CpdError {
     CpdError::new(ErrorCode::CasLost, format!("PR {key} of Plan {id} changed while it was being polled: rerun the command."))
         .with("plan", id.as_str())
         .with("pr", key.as_str())
-}
-
-/// A merged PR with what its clean-up removes.
-pub(super) struct Merged {
-    pub(super) plan: PlanId,
-    pub(super) pr: PrKey,
-    pub(super) repo: String,
-    pub(super) lead_branch: String,
-    pub(super) lead_worktree: Option<String>,
-    /// The PR's pull request, `(owner/name, number)`, from its `pull_requests` row (contract §7.2 "The recorded head").
-    pub(super) pull_request: Option<(String, i64)>,
-    pub(super) attempts: Vec<Attempt>,
-    /// Whether this poll reports its failures: it merged in this poll, or it is cancelled and no `cleanup_failed`
-    /// Event of it exists yet (the poll that first sees it).
-    pub(super) fresh: bool,
-}
-
-/// An Attempt of one of the PR's Jobs.
-pub(super) struct Attempt {
-    pub(super) id: AttemptId,
-    pub(super) branch: String,
-    pub(super) worktree: String,
-    pub(super) ended: bool,
-}
-
-impl Merged {
-    /// Whether a path this clean-up removes is still on disk: an Attempt or Lead worktree (contract §7.1).
-    fn on_disk(&self) -> bool {
-        self.lead_worktree.iter().chain(self.attempts.iter().map(|a| &a.worktree)).any(|p| Path::new(p).exists())
-    }
-}
-
-/// A removal that failed or a Lead worktree that was kept: `(path, reason)`.
-type Failure = (String, String);
-
-/// §7.2 (hs-d138, hs-d142): the clean-up of every PR that `just` merged in this poll, which
-/// kills its Attempt windows and appends one `error` Event `cleanup_failed` for each failure
-/// or kept Lead worktree; then, with no Event, the retry of every other `merged` PR that
-/// still has a path on disk. Best effort: only a failure to read or write the store fails it.
-fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
-    let all = env.store.read(|conn| merged_prs_to_clean(conn, just))?;
-    let (fresh, earlier): (Vec<Merged>, Vec<Merged>) = all.into_iter().partition(|m| m.fresh);
-    for merged in earlier.iter().filter(|m| m.on_disk()) {
-        clean_when_idle(&env.home, merged);
-    }
-    if fresh.is_empty() {
-        return Ok(());
-    }
-    let tmux = Tmux::new(env.config.tmux.socket.as_str());
-    let work = env.config.tmux.work_session.as_str();
-    let panes = tmux.list_panes()?;
-    let mut events = Vec::new();
-    for merged in &fresh {
-        let mut failures = Vec::new();
-        for attempt in &merged.attempts {
-            let name = attempt_window(&merged.plan, &attempt.id);
-            for pane in panes.iter().filter(|p| p.session_name == work && p.window_name == name) {
-                if let Err(e) = tmux.kill_window(&pane.window) {
-                    failures.push((attempt.worktree.clone(), reason(&e)));
-                }
-            }
-        }
-        failures.extend(clean_when_idle(&env.home, merged));
-        events.extend(failures.into_iter().map(|(path, reason)| (merged.plan.clone(), merged.pr.clone(), path, reason)));
-    }
-    if events.is_empty() {
-        return Ok(());
-    }
-    env.store.write(COMMAND, |tx| {
-        for (plan, pr, path, reason) in &events {
-            let message = format!("The clean-up of the merged PR {pr} of Plan {plan} did not remove {path}: {reason}");
-            let text = format!("{message} It is retried by every later poll, except a dirty or unpushed Lead worktree, which stays until you deal with it.");
-            let details = json!({"plan": plan, "pr": pr, "path": path, "reason": reason});
-            let event = NewEvent::error(text, COMMAND, ErrorCode::CleanupFailed.as_str(), &message, details);
-            append(tx, event.plan(plan.clone()))?;
-        }
-        Ok(())
-    })
-}
-
-/// Every PR in status `merged` or `cancelled`, with its Attempts. A cancelled PR's row has no `lead_worktree`
-/// (`pr cancel` clears it), so its Lead worktree is the one contract §7.1 names, when that exists and is a worktree
-/// of the repo on the PR's Lead Branch.
-fn merged_prs_to_clean(conn: &rusqlite::Connection, just: &[(PlanId, PrKey)]) -> Result<Vec<Merged>, CpdError> {
-    let mut prs = conn.prepare("SELECT p.plan, p.key, p.repo, p.lead_branch, p.lead_worktree, q.repo, q.number, p.status = 'cancelled'
-           FROM prs p LEFT JOIN pull_requests q ON q.id = p.pull_request WHERE p.status IN ('merged', 'cancelled') ORDER BY p.plan, p.key",
-    )?;
-    let rows = prs
-        .query_map([], |r| {
-            let pull_request = r.get::<_, Option<String>>(5)?.zip(r.get::<_, Option<i64>>(6)?);
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, pull_request, r.get::<_, bool>(7)?))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut attempts = conn.prepare(
-        "SELECT a.id, a.branch, a.worktree, a.status = 'ended' FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-          WHERE j.plan = ?1 AND j.pr = ?2 ORDER BY a.id",
-    )?;
-    let mut found = Vec::new();
-    let mut reported = conn.prepare(
-        "SELECT count(*) FROM events WHERE plan = ?1 AND kind = 'error' AND json_extract(data, '$.code') = 'cleanup_failed'
-            AND json_extract(data, '$.details.pr') = ?2",
-    )?;
-    for (plan, pr, repo, lead_branch, lead_worktree, pull_request, cancelled) in rows {
-        let list = attempts
-            .query_map([&plan, &pr], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, bool>(3)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-            .into_iter()
-            .map(|(id, branch, worktree, ended)| Ok(Attempt { id: AttemptId::parse(&id)?, branch, worktree, ended }))
-            .collect::<Result<Vec<_>, CpdError>>()?;
-        let plan = PlanId::parse(&plan)?;
-        let pr = PrKey::parse(&pr)?;
-        let (lead_worktree, fresh) = if cancelled {
-            let lead = git::pr_lead_worktree_path(Path::new(&repo), &plan, &pr, &lead_branch)
-                .ok()
-                .filter(|path| {
-                    path.exists()
-                        && git::worktree::list(Path::new(&repo)).is_ok_and(|all| {
-                            all.iter().any(|w| w.branch.as_deref() == Some(lead_branch.as_str()) && w.path.canonicalize().ok() == path.canonicalize().ok())
-                        })
-                })
-                .map(|path| path.to_string_lossy().into_owned());
-            let seen: i64 = reported.query_row([plan.as_str(), pr.as_str()], |r| r.get(0))?;
-            (lead, seen == 0)
-        } else {
-            let fresh = just.contains(&(plan.clone(), pr.clone()));
-            (lead_worktree, fresh)
-        };
-        found.push(Merged { plan, pr, repo, lead_branch, lead_worktree, pull_request, attempts: list, fresh });
-    }
-    Ok(found)
-}
-
-/// [`clean`] once the PR is idle (contract §7.2, hs-d243, hs-n124): every Attempt of its
-/// Jobs is `ended` and its driver lock is free, probed without creating the file, since
-/// a driver that just ended its Attempt may still be in A9, removing its worktree. While
-/// it is not, nothing is cleaned and there is no failure: the PR is still on disk, so a
-/// later poll cleans it up. A driver lock that cannot be probed is a failed removal.
-fn clean_when_idle(home: &CpdHome, merged: &Merged) -> Vec<Failure> {
-    for attempt in &merged.attempts {
-        if !attempt.ended {
-            return Vec::new();
-        }
-        match crate::driver::lock::probe(home, &merged.plan, &attempt.id) {
-            Ok(Some(_free)) => {}
-            Ok(None) => return Vec::new(),
-            Err(e) => return vec![(attempt.worktree.clone(), reason(&e))],
-        }
-    }
-    clean(merged)
-}
-
-/// Removes the Attempt worktrees of the PR that are on disk, then its Lead worktree, first
-/// brought up to date by rule S. Each removal runs in the PR's repo, so the order does not
-/// matter; a failure does not stop the others. What it did not remove.
-pub(super) fn clean(merged: &Merged) -> Vec<Failure> {
-    let repo = Path::new(&merged.repo);
-    let mut failures = Vec::new();
-    for attempt in &merged.attempts {
-        // A linear Attempt runs in the workflow worktree on the Lead Branch: `remove_merged_lead` below handles it
-        // (with the dirty/unpushed keep), never `discard_worktree` (hs-d680).
-        if git::worktree::is_linear(&attempt.branch, &merged.lead_branch) {
-            continue;
-        }
-        if Path::new(&attempt.worktree).exists()
-            && let Err(e) = git::discard_worktree(repo, Path::new(&attempt.worktree), &attempt.branch)
-        {
-            failures.push((attempt.worktree.clone(), reason(&e)));
-        }
-    }
-    if let Some(lead) = &merged.lead_worktree {
-        // Rule S first, so a tree a merge left stale is not kept as dirty. Every stop of it is
-        // `lead_worktree_stale` and leaves the worktree as it was: the check below keeps such a
-        // worktree and reports it as `cleanup_failed`, never as `lead_worktree_stale` (§7.2).
-        if Path::new(lead).exists() {
-            match git::sync_lead(Path::new(lead), &merged.lead_branch) {
-                Ok(_) => {}
-                Err(e) if e.code() == ErrorCode::LeadWorktreeStale => {}
-                Err(e) => {
-                    failures.push((lead.clone(), reason(&e)));
-                    return failures;
-                }
-            }
-        }
-        // The pull request's head commit, asked of GitHub only when `HEAD` has commits outside every `origin/*` ref:
-        // a squash merge deletes the head branch, so the PR's own commits look unpushed (contract §7.2).
-        let recorded_head = || {
-            let (gh_repo, number) = merged.pull_request.as_ref()?;
-            super::gh::head_ref_oid(repo, gh_repo, *number).ok()
-        };
-        match git::remove_merged_lead(repo, Path::new(lead), &merged.lead_branch, recorded_head) {
-            Ok(git::LeadRemoval::Removed) => {}
-            Ok(git::LeadRemoval::Kept(why)) => failures.push((lead.clone(), why.as_str().to_owned())),
-            Err(e) => failures.push((lead.clone(), reason(&e))),
-        }
-    }
-    failures
-}
-
-/// git's stderr tail when the error has one, else its message.
-fn reason(error: &CpdError) -> String {
-    match error.details().get("stderr").and_then(Value::as_str) {
-        Some(stderr) if !stderr.trim().is_empty() => stderr.trim().to_owned(),
-        _ => error.message().to_owned(),
-    }
 }

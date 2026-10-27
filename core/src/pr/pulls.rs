@@ -39,10 +39,24 @@ pub struct PullRequest {
     pub updated_at: Option<String>,
     /// The open feedback items at that read; `None` = never read.
     pub feedback: Option<Vec<Item>>,
+    /// The base branch at the last poll; `None` = not polled since `pr-base` (unknown).
+    pub base_ref: Option<String>,
+    /// The repo's default branch at the last poll; `None` = unknown.
+    pub default_branch: Option<String>,
+}
+
+/// The expression "ready to merge" (pro-d118) over the `pull_requests` row aliased `alias`: 1 or 0, never NULL. The
+/// pull request is open, not a draft, its merge state is clean and its base is the repo's default branch; an unknown
+/// (NULL) base or default branch is not ready. The one definition: every reader uses it.
+pub fn ready_to_merge_sql(alias: &str) -> String {
+    format!(
+        "COALESCE({alias}.state = 'open' AND {alias}.draft = 0 AND {alias}.merge_state = 'clean' \
+         AND {alias}.base_ref IS NOT NULL AND {alias}.base_ref = {alias}.default_branch, 0)"
+    )
 }
 
 const COLUMNS: &str = "id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, \
-                       mergeable, merge_state, authored, review_requested, updated_at, feedback";
+                       mergeable, merge_state, authored, review_requested, updated_at, feedback, base_ref, default_branch";
 
 /// The items a `feedback` column holds: parsed once, here.
 fn feedback_of(text: Option<String>) -> rusqlite::Result<Option<Vec<Item>>> {
@@ -75,6 +89,8 @@ impl PullRequest {
             review_requested: r.get(15)?,
             updated_at: r.get(16)?,
             feedback: feedback_of(r.get(17)?)?,
+            base_ref: r.get(18)?,
+            default_branch: r.get(19)?,
         })
     }
 
@@ -145,6 +161,8 @@ impl PullRequest {
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone().unwrap_or_default(),
             merged_at: self.merged_at.clone(),
+            base_ref: self.base_ref.clone(),
+            default_branch: self.default_branch.clone(),
         })
     }
 }
@@ -197,6 +215,8 @@ pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, PrKey, PullRe
                 review_requested: r.get(17)?,
                 updated_at: r.get(18)?,
                 feedback: feedback_of(r.get(19)?)?,
+                base_ref: r.get(20)?,
+                default_branch: r.get(21)?,
             };
             Ok((plan, key, pull))
         })?
@@ -247,7 +267,7 @@ pub(super) fn upsert(tx: &WriteTxn<'_>, listed: &Listed, read: Option<&Read>) ->
     tx.execute(
         "UPDATE pull_requests SET url = ?1, title = ?2, draft = ?3, state = ?4, review_decision = ?5, checks = ?6,
                 merged_at = ?7, changed_at = ?8, mergeable = ?9, merge_state = ?10, authored = ?11,
-                review_requested = ?12, updated_at = ?13, feedback = ?14 WHERE id = ?15",
+                review_requested = ?12, updated_at = ?13, feedback = ?14, base_ref = ?15, default_branch = ?16 WHERE id = ?17",
         rusqlite::params![
             polled.url,
             polled.title,
@@ -263,6 +283,8 @@ pub(super) fn upsert(tx: &WriteTxn<'_>, listed: &Listed, read: Option<&Read>) ->
             membership.review_requested,
             updated_at,
             feedback,
+            polled.base_ref,
+            polled.default_branch,
             before.id
         ],
     )?;
@@ -283,8 +305,8 @@ fn insert(tx: &WriteTxn<'_>, polled: &PolledPr, membership: Membership, read: Op
     let at = txn_time(tx)?;
     tx.execute(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at,
-                                    mergeable, merge_state, authored, review_requested, updated_at, feedback)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                                    mergeable, merge_state, authored, review_requested, updated_at, feedback, base_ref, default_branch)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         rusqlite::params![
             polled.repo,
             polled.number,
@@ -302,7 +324,9 @@ fn insert(tx: &WriteTxn<'_>, polled: &PolledPr, membership: Membership, read: Op
             membership.authored,
             membership.review_requested,
             read.map(|r| r.updated_at.as_str()),
-            read.map(|r| feedback_text(&r.items))
+            read.map(|r| feedback_text(&r.items)),
+            polled.base_ref,
+            polled.default_branch
         ],
     )?;
     load(tx, tx.last_insert_rowid())
@@ -315,6 +339,15 @@ pub(super) enum Reason {
     ChangesRequested,
     Comments,
     Closed,
+    ReadyToPost,
+    Approved,
+}
+
+/// What `attention` needs of the post (pro-d64): the owner's `pr.post.enabled` and whether the PR has a `pr_posts` row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PostFacts {
+    pub enabled: bool,
+    pub posted: bool,
 }
 
 impl Reason {
@@ -325,6 +358,8 @@ impl Reason {
             Reason::ChangesRequested => "changes_requested",
             Reason::Comments => "comments",
             Reason::Closed => "closed",
+            Reason::ReadyToPost => "ready_to_post",
+            Reason::Approved => "approved",
         }
     }
 }
@@ -334,7 +369,7 @@ impl Reason {
 /// else), the state became `closed` from `open`, or the feedback has `new` open items (`comments::new_items`). `before` none is a row first
 /// seen: it counts as no checks, no review and `open`. A conflict is no reason any more (hs-d340): it queues an `update` Job
 /// (`poll::update_for_conflict`). Checks are a reason only when the PR's `pr.feedback.checks` is `any` (§8.3, hs-d292).
-pub(super) fn attention(before: Option<&PullRequest>, after: &PullRequest, checks_policy: Checks, new: &[&Item]) -> Vec<Reason> {
+pub(super) fn attention(before: Option<&PullRequest>, after: &PullRequest, checks_policy: Checks, new: &[&Item], post: PostFacts) -> Vec<Reason> {
     let (checks, review, state) = match before {
         Some(b) => (b.checks.as_str(), b.review_decision.as_str(), b.state.as_str()),
         None => ("none", "none", "open"),
@@ -351,6 +386,16 @@ pub(super) fn attention(before: Option<&PullRequest>, after: &PullRequest, check
     }
     if after.state == "closed" && state == "open" {
         reasons.push(Reason::Closed);
+    }
+    // The post's reasons (pro-d64): only for the User's own pull requests of an owner that enabled posting.
+    if post.enabled && after.authored {
+        let was_ready = before.is_some_and(|b| super::postable::unready(b).is_empty());
+        if !post.posted && super::postable::unready(after).is_empty() && !was_ready {
+            reasons.push(Reason::ReadyToPost);
+        }
+        if post.posted && after.state == "open" && after.review_decision == "approved" && review != "approved" {
+            reasons.push(Reason::Approved);
+        }
     }
     reasons
 }
@@ -370,9 +415,11 @@ mod tests {
     use super::*;
     use crate::policy::Checks;
 
+    const OFF: PostFacts = PostFacts { enabled: false, posted: false };
+
     /// `super::attention` with `pr.feedback.checks` `any`, cpd's default.
     fn attention(before: Option<&PullRequest>, after: &PullRequest) -> Vec<Reason> {
-        super::attention(before, after, Checks::Any, &[])
+        super::attention(before, after, Checks::Any, &[], OFF)
     }
     use crate::home::CpdHome;
     use crate::store::Store;
@@ -397,6 +444,8 @@ mod tests {
             review_requested: false,
             updated_at: None,
             feedback: None,
+            base_ref: None,
+            default_branch: None,
         }
     }
 
@@ -413,9 +462,9 @@ mod tests {
     #[test]
     fn attention_ignores_failing_checks_when_the_policy_is_none_and_keeps_every_other_reason() {
         let open = row("open", "none", "none");
-        assert_eq!(super::attention(Some(&open), &row("open", "none", "failed"), Checks::None, &[]), []);
-        assert_eq!(super::attention(Some(&open), &row("open", "none", "failed"), Checks::Any, &[]), [Reason::ChecksFailed]);
-        let all = super::attention(Some(&row("open", "none", "pending")), &row("closed", "changes_requested", "failed"), Checks::None, &[]);
+        assert_eq!(super::attention(Some(&open), &row("open", "none", "failed"), Checks::None, &[], OFF), []);
+        assert_eq!(super::attention(Some(&open), &row("open", "none", "failed"), Checks::Any, &[], OFF), [Reason::ChecksFailed]);
+        let all = super::attention(Some(&row("open", "none", "pending")), &row("closed", "changes_requested", "failed"), Checks::None, &[], OFF);
         assert_eq!(all, [Reason::ChangesRequested, Reason::Closed]);
     }
 
@@ -424,6 +473,68 @@ mod tests {
         let all = attention(Some(&row("open", "none", "pending")), &row("closed", "changes_requested", "failed"));
         assert_eq!(all, [Reason::ChecksFailed, Reason::ChangesRequested, Reason::Closed]);
         assert_eq!(all.iter().map(|r| r.as_str()).collect::<Vec<_>>(), ["checks_failed", "changes_requested", "closed"]);
+    }
+
+    const ON: PostFacts = PostFacts { enabled: true, posted: false };
+    const POSTED: PostFacts = PostFacts { enabled: true, posted: true };
+
+    fn ready() -> PullRequest {
+        let mut r = row("open", "none", "passed");
+        r.feedback = Some(vec![]);
+        r
+    }
+
+    fn post_reasons(before: Option<&PullRequest>, after: &PullRequest, post: PostFacts) -> Vec<Reason> {
+        super::attention(before, after, Checks::Any, &[], post)
+    }
+
+    fn bot_item() -> Item {
+        Item { id: "1".into(), kind: super::super::comments::Kind::Thread, last: "t".into(), author: "bot".into(), bot: true, path: None, outdated: false, url: "u".into(), excerpt: "e".into() }
+    }
+
+    #[test]
+    fn ready_to_post_fires_from_none_and_after_not_ready_but_not_while_ready() {
+        assert_eq!(post_reasons(None, &ready(), ON), [Reason::ReadyToPost]);
+        let mut pending = ready();
+        pending.checks = "pending".into();
+        assert_eq!(post_reasons(Some(&pending), &ready(), ON), [Reason::ReadyToPost]);
+        let mut unread = ready();
+        unread.feedback = None;
+        assert_eq!(post_reasons(Some(&unread), &ready(), ON), [Reason::ReadyToPost]);
+        let mut later = ready();
+        later.title = "other".into();
+        assert!(post_reasons(Some(&ready()), &later, ON).is_empty(), "no repeat while ready");
+    }
+
+    #[test]
+    fn ready_to_post_needs_the_policy_an_unposted_authored_ready_pr() {
+        assert!(post_reasons(None, &ready(), OFF).is_empty(), "not enabled");
+        assert!(post_reasons(None, &ready(), POSTED).is_empty(), "posted");
+        let mut other = ready();
+        other.authored = false;
+        assert!(post_reasons(None, &other, ON).is_empty(), "not authored");
+        let mut bot = ready();
+        bot.feedback = Some(vec![bot_item()]);
+        assert!(post_reasons(None, &bot, ON).is_empty(), "a bot item is open");
+        let mut closed = ready();
+        closed.state = "closed".into();
+        assert_eq!(post_reasons(None, &closed, ON), [Reason::Closed], "a closed PR is not ready");
+    }
+
+    #[test]
+    fn approved_fires_once_for_a_posted_open_pr() {
+        let mut approved = ready();
+        approved.review_decision = "approved".into();
+        assert_eq!(post_reasons(None, &approved, POSTED), [Reason::Approved]);
+        let mut changes = ready();
+        changes.review_decision = "changes_requested".into();
+        assert_eq!(post_reasons(Some(&changes), &approved, POSTED), [Reason::Approved]);
+        assert!(post_reasons(Some(&approved), &approved, POSTED).is_empty(), "no repeat");
+        assert_eq!(post_reasons(None, &approved, ON), [Reason::ReadyToPost], "unposted: no approved");
+        assert!(post_reasons(None, &approved, OFF).is_empty(), "disabled");
+        let mut closed = approved.clone();
+        closed.state = "closed".into();
+        assert_eq!(post_reasons(None, &closed, POSTED), [Reason::Closed], "closed PR");
     }
 
     fn conflicting(mut row: PullRequest) -> PullRequest {
@@ -473,6 +584,8 @@ mod tests {
             created_at: "2026-01-01T00:00:00.000Z".into(),
             updated_at: "2026-01-02T00:00:00Z".into(),
             merged_at: None,
+            base_ref: None,
+            default_branch: None,
         }
     }
 

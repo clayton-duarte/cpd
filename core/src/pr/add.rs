@@ -15,7 +15,7 @@ use super::{AddArgs, Env, gh, plan_phase};
 use crate::config::Tier;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
-use crate::git::run::{branch_exists, delete_remote_branch, has_origin, ok, remote_has_branch, run};
+use crate::git::run::{branch_exists, has_origin, run};
 use crate::git::worktree::list as worktrees;
 use crate::ids::{JobKey, OwnerLogin, PlanId, PrKey, RepoName};
 use crate::job::open;
@@ -367,12 +367,6 @@ fn find_cycle(start: &String, out: &[String], edges: &BTreeMap<String, Vec<Strin
     None
 }
 
-/// The merged PR whose Lead Branch is the legacy `cpd/<plan>` (contract §3.8, D3).
-struct Legacy {
-    key: String,
-    repo: PathBuf,
-}
-
 pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let needs = if args.no_needs {
@@ -417,19 +411,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         Decision::Already { status, lead_branch, appended, base, base_pr, needs } => (status, lead_branch, appended, base, base_pr, needs, true),
         Decision::Insert { .. } => {
             // git, outside any transaction.
-            let legacy = env.store.read(|conn| legacy_pr(conn, &plan))?;
-            if let Some(legacy) = &legacy {
-                move_legacy_branch(&plan, legacy)?;
-            }
-            // A PR stacked on the PR whose Lead Branch is `cpd/<plan>` is no clash with it: that branch is its base.
-            let stacked_on_legacy = env.store.read(|conn| Ok(base_branch(conn, &wanted.base)? == format!("cpd/{plan}")))?;
-            if stacked_on_legacy {
-                if branch_exists(&repo, &pr_branch(&plan, &wanted.key))? {
-                    no_branch_clash(&repo, &plan, &wanted.key)?;
-                }
-            } else {
-                no_branch_clash(&repo, &plan, &wanted.key)?;
-            }
+            no_branch_clash(&repo, &plan, &pr_branch(&plan, &wanted.key))?;
             env.store.write(COMMAND, |tx| match decide(tx, &plan, &wanted, None)? {
                 Decision::Already { status, lead_branch, appended, base, base_pr, needs } => {
                     Ok((status, lead_branch, appended, base, base_pr, needs, true))
@@ -440,9 +422,6 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                     let key = &wanted.key;
                     if matches!(phase, Phase::Deploy | Phase::Done) {
                         reopen(tx, &plan, phase, key)?;
-                    }
-                    if let Some(legacy) = &legacy {
-                        rename_legacy(tx, &plan, legacy)?;
                     }
                     insert(tx, &plan, &wanted, &base, &needs, &lead_branch)?;
                     let stubs = insert_stubs(tx, &plan, &wanted, appended, open_tier)?;
@@ -610,7 +589,12 @@ fn check_adoptable(conn: &Connection, wanted: &Wanted, adopt: &Adopt) -> Result<
             .with("number", number)
             .with("url", pull.url.as_str()));
     }
-    if pull.head_ref.starts_with("cpd/") {
+    let is_lead_branch: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM prs WHERE repo = ?1 AND lead_branch = ?2)",
+        [wanted.repo.as_str(), pull.head_ref.as_str()],
+        |r| r.get(0),
+    )?;
+    if is_lead_branch {
         return Err(CpdError::new(ErrorCode::AdoptCpdBranch, format!("Pull request #{number} has the head branch {}: it is a cpd pull request.", pull.head_ref))
             .with("number", number)
             .with("head_ref", pull.head_ref.as_str()));
@@ -803,60 +787,24 @@ fn reopen(tx: &WriteTxn<'_>, plan: &PlanId, from: Phase, key: &PrKey) -> Result<
     Ok(())
 }
 
-/// The Plan's `merged` PR on the legacy Lead Branch `cpd/<plan>`, if any (D3). A PR on it that
-/// is not `merged` is not returned: `no_branch_clash` refuses it.
-fn legacy_pr(conn: &Connection, plan: &PlanId) -> Result<Option<Legacy>, CpdError> {
-    use rusqlite::OptionalExtension;
-    let row: Option<(String, String)> = conn
-        .query_row(
-            "SELECT key, repo FROM prs WHERE plan = ?1 AND lead_branch = ?2 AND status = 'merged'",
-            [plan.as_str(), &format!("cpd/{plan}")],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?;
-    Ok(row.map(|(key, repo)| Legacy { key, repo: PathBuf::from(repo) }))
-}
-
-/// D3 steps 1 and 2, in the legacy PR's repo: `git branch -m cpd/<plan> cpd/<plan>/<key>` when
-/// `cpd/<plan>` exists, then `push origin --delete cpd/<plan>` when `origin` has it
-/// (`push_failed`). Each step is skipped when done, so a rerun completes (A3).
-fn move_legacy_branch(plan: &PlanId, legacy: &Legacy) -> Result<(), CpdError> {
-    let old = format!("cpd/{plan}");
-    let new = format!("{old}/{}", legacy.key);
-    let repo = &legacy.repo;
-    if branch_exists(repo, &old)? {
-        ok(repo, &["branch", "-m", &old, &new])?;
-    }
-    if has_origin(repo)? && remote_has_branch(repo, &old)? {
-        delete_remote_branch(repo, &old)?;
-    }
-    Ok(())
-}
-
-/// D3 step 3: the legacy PR's `lead_branch` follows the rename.
-fn rename_legacy(tx: &Connection, plan: &PlanId, legacy: &Legacy) -> Result<(), CpdError> {
-    let moved = tx.execute(
-        "UPDATE prs SET lead_branch = ?3 WHERE plan = ?1 AND key = ?2 AND lead_branch = ?4 AND status = 'merged'",
-        [plan.as_str(), &legacy.key, &format!("cpd/{plan}/{}", legacy.key), &format!("cpd/{plan}")],
-    )?;
-    if moved == 0 {
-        return Err(CpdError::new(ErrorCode::CasLost, format!("PR {} of Plan {plan} changed meanwhile: rerun the command.", legacy.key))
-            .with("plan", plan.as_str())
-            .with("pr", legacy.key.as_str()));
-    }
-    Ok(())
-}
-
-/// The Lead Branch of a PR made now (contract §2.1): `cpd/<plan>/<key>`.
+/// The Lead Branch of a PR made now (contract §2.1): `<plan>/<key>`, without the `cpd/` prefix.
 fn pr_branch(plan: &PlanId, key: &PrKey) -> String {
-    format!("cpd/{plan}/{key}")
+    format!("{plan}/{key}")
 }
 
-/// Neither `cpd/<plan>/<key>` nor `cpd/<plan>` exists in the repo (§2.1: the
-/// second would make the first impossible), else `branch_exists` (exit 3).
-pub(super) fn no_branch_clash(repo: &Path, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
-    for branch in [pr_branch(plan, key), format!("cpd/{plan}")] {
-        if branch_exists(repo, &branch)? {
+/// git's own rule over the Lead Branch `lead_branch` of a PR of `plan` (contract §3.8, pro-d113 A4): neither the branch
+/// nor its parent path exists in the repo, else `branch_exists` (exit 3). The parent path is the branch without its last
+/// `/<segment>` (`<plan>` for `<plan>/<key>`, `cpd/<plan>` for `cpd/<plan>/<key>`): git cannot hold both. The legacy
+/// `cpd/<plan>` has no parent check.
+pub(super) fn no_branch_clash(repo: &Path, plan: &PlanId, lead_branch: &str) -> Result<(), CpdError> {
+    let mut branches = vec![lead_branch];
+    if lead_branch != format!("cpd/{plan}")
+        && let Some((parent, _)) = lead_branch.rsplit_once('/')
+    {
+        branches.push(parent);
+    }
+    for branch in branches {
+        if branch_exists(repo, branch)? {
             return Err(CpdError::new(ErrorCode::BranchExists, format!("Branch {branch} already exists in {}.", repo.display()))
                 .with("branch", branch)
                 .with("repo", repo.display().to_string()));

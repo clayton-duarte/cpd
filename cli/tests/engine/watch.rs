@@ -123,8 +123,8 @@ fn fx(config_extra: &str) -> Fx {
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'stopped', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
-           VALUES ('pay', 'repo', '{repo}', 'main', 'dispatch', 'cpd/pay', '{lead}', '{PR_TITLE}', 'config', cpd_txn(), 't', 't');",
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at)
+           VALUES ('pay', 'repo', '{repo}', 'main', 'dispatch', 'cpd/pay', '{lead}', '{PR_TITLE}', 'A description', 'config', cpd_txn(), 't', 't');",
         repo = fx.repo.display(),
         lead = fx.lead.display()
     ));
@@ -941,6 +941,58 @@ fn the_engine_counts_waiting_and_queued_jobs() {
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
 
+#[test]
+fn watch_cpd_workers_option_counts_are_unchanged_with_workers_as_a_resource() {
+    // Workers are a resource now (contract §8.3), but `@cpd_workers` and the StatusBar keep their meaning and numbers (§6.2): the
+    // same fixture as `the_engine_counts_waiting_and_queued_jobs` gives the same texts, and the Attempts they count are the
+    // tenants `job show` names for `workers`.
+    let fx = engine_on_tmux_with("concurrency = 1");
+    fx.tmux_server();
+    let _lock = fx.live_driver("run-a1");
+    fx.add_running("run", "running", &ago_in(&fx, 1));
+    fx.add_job("free", &[], "");
+    fx.add_job("blocked", &["free"], "");
+
+    fx.watch_ticks(OVER_ONE_TICK).unwrap();
+
+    assert_eq!(fx.tmux_option("@cpd_workers"), "workers 1/1 · 1 waiting · 3 queued");
+    assert_eq!(fx.tmux_option("@cpd_workers_short"), "1/1·1·3");
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+    // The ready Job waits for `workers`, whose one tenant is the one Attempt the `1/1` counts.
+    let shown = fx.cpd(&["job", "show", "free", "--plan", PLAN]).ok();
+    let waiting = shown["job"]["waiting_for"].as_array().unwrap_or_else(|| panic!("`free` waits for workers: {shown}"));
+    assert_eq!(waiting.len(), 1, "{waiting:?}");
+    assert_eq!((&waiting[0]["resource"], &waiting[0]["scope"], &waiting[0]["slots"]), (&json!("workers"), &json!("host"), &json!(1)));
+    let holders = waiting[0]["holders"].as_array().unwrap();
+    assert_eq!(holders.len(), 1);
+    assert_eq!((&holders[0]["by"], &holders[0]["job"], &holders[0]["attempt"]), (&json!("attempt"), &json!("run"), &json!("run-a1")));
+}
+
+#[test]
+fn watch_cpd_workers_option_counts_tenant_jobs_including_a_failed_one() {
+    // `N` is the occupancy of the `workers` pool as the starter counts it (contract §3.4 "Tenancy"): the tenant Jobs, so a `failed`
+    // Job whose Attempt ended still counts, and the option and the starter agree. Three slots (the default), one running Job and
+    // one failed Job: 2/3.
+    let fx = engine_on_tmux();
+    fx.tmux_server();
+    let _lock = fx.live_driver("run-a1");
+    fx.add_running("run", "running", &ago_in(&fx, 1));
+    fx.add_job(
+        "bad",
+        &[],
+        "UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = 'bad';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, started_at, ended_at)
+           VALUES ('pay', 'bad-a1', 'bad', 1, 'S2', 'ladder', 'ended', 'failed', 'timed_out', 'cpd/pay--bad-a1', '/w', 't', 't');
+         UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE plan = 'pay' AND key = 'bad';",
+    );
+
+    fx.watch_ticks(OVER_ONE_TICK).unwrap();
+
+    assert_eq!(fx.tmux_option("@cpd_workers"), "workers 2/3 · 0 waiting · 1 queued");
+    assert_eq!(fx.tmux_option("@cpd_workers_short"), "2/3·0·1");
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
 // ---------- E1 ----------
 
 #[test]
@@ -1045,7 +1097,7 @@ fn e2_removes_the_lock_of_a_dead_driver_it_ends_and_does_not_recreate_it() {
 #[test]
 fn e2_climbs_the_ladder_for_a_dead_driver() {
     let fx = engine_with_plan("concurrency = 1");
-    // A live Attempt holds the only slot, so E3 does not start the next one.
+    // A live Attempt holds the only slot; `api` is a tenant already, so E3 starts its next Attempt at once, competing for nothing.
     let _busy = fx.live_driver("busy-a1");
     fx.add_running("busy", "running", &ago_in(&fx, 1));
     fx.add_running("api", "running", &ago_in(&fx, 1));
@@ -1053,11 +1105,13 @@ fn e2_climbs_the_ladder_for_a_dead_driver() {
     fx.watch_first_tick().unwrap();
 
     assert_eq!(fx.attempt("api-a1").0, "ended");
-    assert_eq!(fx.job_status("api"), "queued");
-    let retry = fx.events("attempt-retry");
+    // The Attempt E2 ended climbs the ladder once; the next one started at once (this engine has no installed binary, so its driver
+    // could not start: its own `attempt-retry`, which is not E2's).
+    let retry: Vec<_> = fx.events("attempt-retry").into_iter().filter(|e| e.2.as_deref() == Some("api-a1")).collect();
     assert_eq!(retry.len(), 1);
     assert_eq!((&retry[0].3["cause"], &retry[0].3["next_tier"]), (&json!("crashed"), &json!("S3")));
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 1);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api' AND number <= 2"), 2);
+    assert_eq!(fx.env.query::<String>("SELECT tier FROM attempts WHERE id = 'api-a2'"), "S3");
 }
 
 /// hs-n465, hs-d632: the catalog refuses the Tier of an Attempt whose driver died (`S2` when
@@ -1067,7 +1121,7 @@ fn e2_climbs_the_ladder_for_a_dead_driver() {
 fn e2_ends_an_attempt_whose_tier_the_catalog_refuses_and_requeues_at_the_next_valid_tier() {
     let fx = engine_with_plan("concurrency = 1");
     fx.env.sql("UPDATE tier_catalog SET efforts = '[0,1,3,5]' WHERE letter = 'S';");
-    // A live Attempt holds the only slot, so E3 does not start the next one after E2 queues `api`.
+    // A live Attempt holds the only slot; `api` is a tenant already, so E3 starts its next Attempt after E2 queues it, competing for nothing.
     let _busy = fx.live_driver("busy-a1");
     fx.add_running("busy", "running", &ago_in(&fx, 1));
     fx.add_running("api", "starting", &ago_in(&fx, 1));
@@ -1075,8 +1129,9 @@ fn e2_ends_an_attempt_whose_tier_the_catalog_refuses_and_requeues_at_the_next_va
     fx.watch_first_tick().unwrap();
 
     assert_ne!(fx.attempt("api-a1").0, "starting", "the Attempt stayed starting");
-    assert_eq!(fx.job_status("api"), "queued");
-    let retry = fx.events("attempt-retry");
+    assert_eq!(fx.env.query::<String>("SELECT tier FROM attempts WHERE id = 'api-a2'"), "S3", "the tenant Job's next Attempt started at once, at S3");
+    // The Attempt E2 ended climbs the ladder once (the next one's driver could not start, with no installed binary: its own `attempt-retry`).
+    let retry: Vec<_> = fx.events("attempt-retry").into_iter().filter(|e| e.2.as_deref() == Some("api-a1")).collect();
     assert_eq!(retry.len(), 1, "{retry:?}");
     assert_eq!(
         (retry[0].1.as_deref(), retry[0].2.as_deref(), &retry[0].3["cause"], &retry[0].3["next_tier"]),
@@ -1453,7 +1508,7 @@ fn e3_one_tick_schedules_a_ready_job_within_the_concurrency() {
     assert_eq!((fx.job_status("web"), fx.job_status("ui")), ("queued".into(), "queued".into()));
     assert!(driver_pid(&fx, "api-a1").is_some());
     // One driver was launched, and its pid is the one stored; it runs until the test says it ended.
-    assert_eq!(fx.fakes.spawn.launches().len(), 1);
+    assert_eq!(fx.fakes.spawn.launches_but_janitor().len(), 1);
     let (_, pid) = driver_launch(&fx, "api-a1");
     // Its driver exits at once with no lock held and no Event: the next tick ends the Attempt crashed.
     fx.fakes.spawn.exit(pid, 1);
@@ -1533,7 +1588,7 @@ fn e3_starts_an_urgent_job_before_an_older_one() {
     let started: Vec<Option<String>> = fx.events("attempt-started").into_iter().map(|e| e.1).collect();
     assert_eq!(started, [Some("hot".to_owned())]);
     assert_eq!((fx.job_status("hot"), fx.job_status("old")), ("running".into(), "queued".into()));
-    assert_eq!(fx.fakes.spawn.launches().len(), 1);
+    assert_eq!(fx.fakes.spawn.launches_but_janitor().len(), 1);
 }
 
 /// An urgent Job may start one Attempt beyond `concurrency`, and no more; the extra slot is never a non-urgent Job's.
@@ -1557,7 +1612,7 @@ fn e3_starts_one_urgent_job_beyond_the_concurrency_and_not_a_second() {
     assert_eq!(started, [Some("hot1".to_owned())]);
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE status <> 'ended'"), 2);
     assert_eq!((fx.job_status("hot1"), fx.job_status("hot2"), fx.job_status("old")), ("running".into(), "queued".into(), "queued".into()));
-    assert_eq!(fx.fakes.spawn.launches().len(), 1);
+    assert_eq!(fx.fakes.spawn.launches_but_janitor().len(), 1);
 }
 
 /// The 00:02Z incident (hs-d151): the file the engine runs from is replaced, then
@@ -1635,7 +1690,7 @@ fn e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off() 
         let retry = &fx.events("attempt-retry")[i];
         assert_eq!((&retry.3["cause"], &retry.3["next_tier"]), (&json!("crashed"), &json!("S2")));
     }
-    assert_eq!(fx.fakes.spawn.launches(), [], "no driver was started");
+    assert_eq!(fx.fakes.spawn.launches_but_janitor(), [], "no driver was started");
 }
 
 /// A started driver resets the back-off, and only Attempts whose driver started use up a try: `web`
@@ -2479,8 +2534,7 @@ fn e5_polls_with_the_engines_recorded_executable_not_the_one_on_path() {
 #[test]
 fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_same_tick() {
     let fx = polling("");
-    // The clean-up of the merged `repo` keeps a Lead worktree with commits not on origin (and raises an `error`): give
-    // the repo an `origin` that has them, so the only `error` this test could see is E5's or E7's own.
+    // The Lead worktree has commits: give the repo an `origin` that has them, so the only `error` this test could see is E5's or E7's own.
     let repo = fx.keyed_repo("pay").canonicalize().unwrap();
     let origin = fx.env.root().join("repos/origin.git");
     fx.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
@@ -2529,7 +2583,7 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "dispatch");
     assert_eq!(fx.count("pr-started"), 1);
     assert!(fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'") < fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-started'"));
-    assert!(!lead.exists(), "the poll that saw the merge cleaned up the Lead worktree");
+    assert!(lead.exists(), "the poll that saw the merge leaves the Lead worktree to the janitor");
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
 
@@ -2742,7 +2796,7 @@ fn e10_runs_at_most_two_retitles_at_once() {
     let children = t.children.clone();
     t.fx.watch_steps(move |nap| {
         if nap == 30 {
-            let started: Vec<String> = spawn.launches().iter().map(|l| l.args[2].clone()).collect();
+            let started: Vec<String> = spawn.launches_but_janitor().iter().map(|l| l.args[2].clone()).collect();
             let logs = fs::read_dir(home.join("run/titles")).unwrap().count();
             *seen.lock().unwrap() = Some((started, logs));
         }
@@ -2780,7 +2834,7 @@ fn e10_skips_a_session_whose_title_lock_is_held_and_counts_held_locks() {
 
     t.run(30);
     assert_eq!(t.fx.calls("pi").len(), 0, "two are held: no place for s3");
-    assert_eq!(t.fx.fakes.spawn.launches(), []);
+    assert_eq!(t.fx.fakes.spawn.launches_but_janitor(), []);
     drop(one);
     // s1 starts in the first tick of this run (one place), and s3 once it has ended.
     t.run(50);

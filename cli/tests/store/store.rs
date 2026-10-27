@@ -251,7 +251,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
         for line in block.lines() {
             let words: Vec<&str> = line.split_whitespace().collect();
             let name = match words.as_slice() {
-                ["CREATE", "TABLE" | "INDEX" | "TRIGGER", name, ..] => name,
+                ["CREATE", "TABLE" | "INDEX" | "TRIGGER" | "VIEW", name, ..] => name,
                 ["CREATE", "UNIQUE", "INDEX", name, ..] => name,
                 _ => continue,
             };
@@ -281,7 +281,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     assert_eq!(found, expected);
     // Every table is STRICT.
     let tables = names(&raw(&env), "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
-    assert_eq!(tables.len(), 27, "§4.4's tables, the three lookup tables and schema_migrations");
+    assert_eq!(tables.len(), 30, "§4.4's tables, the three lookup tables and schema_migrations");
     for table in tables {
         let strict: i64 = raw(&env)
             .query_row("SELECT strict FROM pragma_table_list WHERE name = ?1", [&table], |r| r.get(0))
@@ -357,9 +357,9 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
         }
         if ["dependencies", "pr_needs", "pull_requests"].contains(&table) {
             let del = sql_of(&format!("{table}_hist_del"));
-            // `pull_requests_hist_del` is hand-written and owned by its migrations (§4.5 K4): `pr-comments` is additive, so it
+            // `pull_requests_hist_del` is hand-written and owned by its migrations (§4.5 K4): `pr-comments` and `pr-base` (pro-d118) are additive, so they
             // cannot rewrite it (two additive migrations that did would not commute) and its columns are not in it.
-            let added_by_additive = ["updated_at", "feedback"];
+            let added_by_additive = ["updated_at", "feedback", "base_ref", "default_branch"];
             for column in columns.iter().filter(|c| table != "pull_requests" || !added_by_additive.contains(&c.as_str())) {
                 assert!(del.contains(&format!("'{column}', OLD.{column}")), "{table}_hist_del lacks {column}");
             }

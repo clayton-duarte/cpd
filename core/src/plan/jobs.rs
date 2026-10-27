@@ -14,7 +14,7 @@ use crate::ids::PlanId;
 pub const STATUSES: [&str; 6] = ["draft", "queued", "running", "merged", "failed", "cancelled"];
 
 /// The kinds of Job (`jobs.kind`, §2.2 "Job kinds"): `open` and `update` are cpd's, the others the Lead's.
-pub const KINDS: [&str; 6] = ["work", "docs", "test", "impl", "open", "update"];
+pub const KINDS: [&str; 7] = ["work", "docs", "test", "impl", "verify", "open", "update"];
 
 /// The Spec of a Job (§2.2): all five fields, or none (a stub, below). The
 /// arrays are kept as the JSON values stored, so a fingerprint hashes exactly
@@ -49,6 +49,8 @@ pub struct Job {
     pub tests: Option<Value>,
     /// The files that hold them (`jobs.test_files`, a JSON array): set exactly when `tests` is.
     pub test_files: Option<Value>,
+    /// The exclusive resources the Job takes (`jobs.resources`, a JSON array): Locked with the Job, in no fingerprint.
+    pub resources: Option<Value>,
     /// An `impl` Job's approved red-test paths (`jobs.test_approved`): not a Locked field, in no fingerprint.
     pub test_approved: Option<Value>,
     /// The urgent flag (`jobs.urgent`, §2.2): not a Locked field, in no fingerprint.
@@ -129,6 +131,7 @@ impl Job {
             "appended": self.appended, "review": self.review, "urgent": self.urgent, "needs": self.needs,
             "goal": spec(|s| json!(s.goal)), "context": spec(|s| json!(s.context)), "touches": spec(|s| s.touches.clone()),
             "acceptance": spec(|s| s.acceptance.clone()), "out_of_scope": spec(|s| s.out_of_scope.clone()),
+            "resources": self.resources.clone().unwrap_or_else(|| json!([])),
             "fingerprint": self.fingerprint, "retry_tier": self.retry_tier,
             "cancel_reason": self.cancel_reason, "cancel_requested_at": self.cancel_requested_at,
             "failed_cause": self.failed_cause, "merged_sha": self.merged_sha, "created_at": self.created_at,
@@ -156,7 +159,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT seq, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                 fingerprint, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, review, urgent,
-                kind, tests, test_files, test_approved
+                kind, tests, test_files, test_approved, resources
            FROM jobs WHERE plan = ?1 ORDER BY seq",
     )?;
     let rows = stmt
@@ -168,12 +171,12 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 (r.get::<_, String>(10)?, r.get::<_, bool>(11)?, r.get::<_, Option<String>>(12)?, r.get::<_, Option<String>>(13)?),
                 (r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?, r.get::<_, Option<String>>(16)?),
                 (r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?, r.get::<_, bool>(19)?, r.get::<_, bool>(20)?),
-                (r.get::<_, String>(21)?, r.get::<_, Option<String>>(22)?, r.get::<_, Option<String>>(23)?, r.get::<_, Option<String>>(24)?),
+                (r.get::<_, String>(21)?, r.get::<_, Option<String>>(22)?, r.get::<_, Option<String>>(23)?, r.get::<_, Option<String>>(24)?, r.get::<_, Option<String>>(25)?),
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, review, urgent), (kind, tests, test_files, test_approved))| {
+        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, review, urgent), (kind, tests, test_files, test_approved, resources))| {
             let array = |name: &str, text: &str| -> Result<Value, CpdError> {
                 serde_json::from_str::<Value>(text)
                     .ok()
@@ -197,6 +200,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 tests: optional("tests", tests)?,
                 test_files: optional("test_files", test_files)?,
                 test_approved: optional("test_approved", test_approved)?,
+                resources: optional("resources", resources)?,
                 kind,
                 spec,
                 needs: needs.remove(&key).unwrap_or_default(),
@@ -318,6 +322,7 @@ mod tests {
             kind: "work".into(),
             tests: None,
             test_files: None,
+            resources: None,
             test_approved: None,
             urgent: false,
             fingerprint: None,

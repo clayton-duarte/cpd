@@ -21,7 +21,7 @@ pub enum Dot {
     /// `palette::SPINNER`: the Lead is working; `Some(phase)` is the phase of the Plan it leads, `None` for a Session
     /// that leads no Plan (a fork, a Manager, a Worker), drawn cyan (hs-d622).
     Working(Option<Phase>),
-    /// The red loader: the Plan's Lead is working while its Plan has a failed Job (hs-d581).
+    /// The red loader: the Plan has a failed Job being worked on (pro-d88), whatever its Lead's state.
     Fixing,
     /// `palette::NEEDS_YOU` white: an Inbox item of urgency `white`.
     White,
@@ -63,8 +63,8 @@ impl Dot {
         (self.tier(), std::cmp::Reverse(created_at.to_owned()))
     }
 
-    /// The dot of a working Lead: the red loader when its Plan has a failed Job (hs-d581), else its Plan's phase
-    /// (`None`: no Plan, cyan).
+    /// The dot of a working Lead: the red loader when its Plan has a failed Job being worked on (pro-d88), else its
+    /// Plan's phase (`None`: no Plan, cyan).
     pub fn working(failed: bool, phase: Option<Phase>) -> Dot {
         if failed { Dot::Fixing } else { Dot::Working(phase) }
     }
@@ -80,17 +80,18 @@ impl Dot {
         }
     }
 
-    /// The dot of a Session in `state` whose most urgent open, visible item has urgency `item`. Own state first
-    /// (hs-d183): a working Session shows the spinner whatever its items, so a Lead at work is never yellow, magenta
-    /// or white; any other state shows its most urgent item, else its glyph. `failed` is true for a Plan's own Lead
-    /// whose Plan has a failed Job (hs-d581): working, it shows the red loader, or the red dot when its own item is red.
-    /// `phase` is the phase of the Plan the Session leads (`None` for any other Session); only a working Session uses it.
+    /// The dot of a Session in `state` whose most urgent open, visible item has urgency `item`. `failed` is true for
+    /// a Plan's own Lead whose Plan has a failed Job being worked on (pro-d88, `PlanHead::fixing`) and decides alone:
+    /// the red dot when the item is red, else the red loader, whatever the state. Otherwise own state first
+    /// (hs-d183): a working Session shows the spinner whatever its items; any other state shows its most urgent
+    /// item, else its glyph. `phase` is the phase of the Plan the Session leads (`None` for any other Session); only a
+    /// working Session uses it.
     pub fn of(state: State, item: Option<Urgency>, failed: bool, phase: Option<Phase>) -> Dot {
+        if failed {
+            return if item == Some(Urgency::Red) { Dot::Red } else { Dot::Fixing };
+        }
         if state == State::Working {
-            return match (failed, item) {
-                (true, Some(Urgency::Red)) => Dot::Red,
-                _ => Dot::working(failed, phase),
-            };
+            return Dot::working(false, phase);
         }
         item.and_then(Dot::from_urgency).unwrap_or_else(|| Dot::glyph(state))
     }
@@ -283,7 +284,7 @@ mod tests {
         }
         assert_eq!(Dot::of(State::Working, Some(Urgency::Red), true, None), Dot::Red);
         for state in [State::Idle, State::Waiting, State::Stopped] {
-            assert_eq!(Dot::of(state, None, true, None), Dot::of(state, None, false, None), "{state:?}");
+            assert_eq!(Dot::of(state, None, true, None), Dot::Fixing, "pro-d88: whatever the state, {state:?}");
         }
     }
 

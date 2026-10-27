@@ -31,7 +31,7 @@ const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
 
 const EXPAND = "\u{F0B26}";
 const COLLAPSE = "\u{F0B2C}";
-const HEAD = " \u256D\u2500"; // " ╭─"
+const HEAD = "\u256D\u2500"; // "╭─"
 const CLOSE = "\u2570"; // ╰
 const SEVEN = ["read", "write", "edit", "bash", "grep", "find", "ls"];
 
@@ -108,7 +108,7 @@ test("with no file a compact row opens with ╭ and closes with ╰ U+F0B26 expa
 	for (const name of SEVEN) {
 		const { done } = await draw(name);
 		assert.ok(firstLine(done).startsWith(HEAD), `${name}: ${firstLine(done)}`);
-		assert.match(lastLine(done), new RegExp(`^ ${CLOSE}${EXPAND} expand · 03:11 · Done in 0\\.300s`, "u"), name);
+		assert.match(lastLine(done), new RegExp(`^${CLOSE}${EXPAND} expand · 03:11 · Done in 0\\.300s`, "u"), name);
 		assert.ok(done.every((line) => !line.includes("\u2514")), `${name}: no └ left`);
 	}
 });
@@ -116,8 +116,8 @@ test("with no file a compact row opens with ╭ and closes with ╰ U+F0B26 expa
 test("with no file an expanded row closes with ╰ U+F0B2C collapse · Done in … under its │ body", async () => {
 	for (const name of ["bash", "read", "edit"]) {
 		const { done } = await draw(name, true);
-		assert.match(lastLine(done), new RegExp(`^ ${CLOSE}${COLLAPSE} collapse · 03:11 · Done in 0\\.300s`, "u"), name);
-		assert.ok(done.some((line) => line.startsWith(" \u2502 ")), `${name}: the body rail`);
+		assert.match(lastLine(done), new RegExp(`^${CLOSE}${COLLAPSE} collapse · 03:11 · Done in 0\\.300s`, "u"), name);
+		assert.ok(done.some((line) => line.startsWith("\u2502 ")), `${name}: the body rail`);
 	}
 });
 

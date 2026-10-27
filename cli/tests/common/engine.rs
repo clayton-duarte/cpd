@@ -187,8 +187,8 @@ impl Fx {
                VALUES ('lead1', 'lead', 'ctx', '{PLAN}', 'Lead', '/', 'O3', 'stopped', 't', 't');
              INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                VALUES ('{PLAN}', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
-               VALUES ('{PLAN}', 'repo', '{}', 'main', 'dispatch', '{lead_branch}', '{}', 'Charge the card at checkout', 'config', cpd_txn(), 't', 't');",
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at)
+               VALUES ('{PLAN}', 'repo', '{}', 'main', 'dispatch', '{lead_branch}', '{}', 'Charge the card at checkout', 'A description', 'config', cpd_txn(), 't', 't');",
             repo.display(),
             lead.display()
         ));
@@ -291,8 +291,8 @@ impl Fx {
         let repo = self.env.root().join("pay");
         let lead = self.env.root().join("pay.pay");
         self.env.sql(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
-               VALUES ('{PLAN}', '{key}', '{}', 'main', 'dispatch', 'cpd/{PLAN}/{key}', '{}', '{title}', 'config', cpd_txn(), 't', 't');",
+            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at)
+               VALUES ('{PLAN}', '{key}', '{}', 'main', 'dispatch', 'cpd/{PLAN}/{key}', '{}', '{title}', 'A description', 'config', cpd_txn(), 't', 't');",
             repo.display(),
             lead.display()
         ));

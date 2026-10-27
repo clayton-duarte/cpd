@@ -90,6 +90,7 @@ fn previous(conn: &Connection, target: &Target) -> Result<Vec<Previous>, CpdErro
                 Stored::Failed(Cause::GateFailed | Cause::GateError) => {
                     Evidence::Gate(crate::merge::parse_gate_detail(&end_detail(conn, target, &id)?))
                 }
+                Stored::Failed(Cause::ProviderError) => Evidence::Message(end_detail(conn, target, &id)?),
                 _ => Evidence::None,
             };
             Ok(Previous {
@@ -160,11 +161,13 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
     let all = crate::plan::jobs::load(conn, &target.plan)?;
     let guard = crate::job::guard::of(&all, job);
     let (own_tests, own_files) = crate::job::guard::own(job);
+    let resources = crate::job::guard::resources(job);
     let kind = match job.kind.as_str() {
         "work" => JobKind::Work,
         "docs" => JobKind::Docs,
         "test" => JobKind::Test { tests: &own_tests, test_files: &own_files },
         "impl" => JobKind::Impl { test_jobs: &guard.jobs, tests: &guard.tests, guarded: &guard.files, approved: &guard.approved },
+        "verify" => JobKind::Verify,
         "open" => JobKind::Open,
         "update" => JobKind::Update,
         other => return Err(bad(format!("kind {other:?} of Job {}", job.key))),
@@ -183,6 +186,7 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
             touches: &touches,
             acceptance: &acceptance,
             out_of_scope: &out_of_scope,
+            resources: &resources,
             quick_check: &quick_check,
             protected: &protected,
             previous: &previous,
@@ -461,6 +465,25 @@ pub fn metrics(dirs: &PiDirs, session: Option<&SessionId>) -> Option<Value> {
 /// messages of `file`; None while it cannot be parsed (a line being written).
 pub fn last_stop(file: &Path) -> Option<(Option<String>, u64)> {
     metrics::parse_file(file).ok().map(|m| (m.stop_reason, m.turns))
+}
+
+/// The last assistant message's `errorMessage` of `file`; None when it has none.
+pub fn last_error(file: &Path) -> Option<String> {
+    metrics::last_error_message(file)
+}
+
+/// Whether a pi `errorMessage` is a provider error (decision pro-d102): exactly "Connection error." or "Request timed
+/// out.", or a leading HTTP 5xx status (a 3-digit code 500-599 followed by a space or the end of the message).
+pub fn is_provider_error(error_message: &str) -> bool {
+    if matches!(error_message, "Connection error." | "Request timed out.") {
+        return true;
+    }
+    let bytes = error_message.as_bytes();
+    bytes.len() >= 3
+        && bytes[0] == b'5'
+        && bytes[1].is_ascii_digit()
+        && bytes[2].is_ascii_digit()
+        && bytes.get(3).is_none_or(|b| *b == b' ')
 }
 
 #[cfg(test)]
