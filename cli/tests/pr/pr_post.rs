@@ -382,3 +382,16 @@ fn the_post_records_the_reaction_the_owner_chose() {
     plain.post_cmd().ok();
     assert_eq!(plain.posts()[0]["reaction"], Value::Null);
 }
+
+#[test]
+fn a_host_post_table_cannot_let_an_owner_that_did_not_enable_posting_post() {
+    let pay = post(Setup { post: None, ..Setup::baseline() });
+    let dir = pay.fx.env.cpd_home().join("policy");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("host.toml"), "[pr.post]\nenabled = true\n").unwrap();
+
+    pay.refuses("policy_invalid", 1);
+
+    assert_eq!(pay.node_calls(), 0);
+    assert!(pay.posts().is_empty());
+}

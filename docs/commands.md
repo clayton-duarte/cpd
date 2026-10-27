@@ -2226,7 +2226,7 @@ Check order; the first failure refuses, and then nothing is sent and nothing is 
 1. the PR's status is not `open` (`details` `{pr, status}`) → `pr_not_open` (exit 3)
 2. a `pr_posts` row exists for the PR (`details` `{pr, channel, ts, link, posted_at}`) → `already_posted` (exit 3)
 3. the owner's policy resolves for the PR (`policy_invalid`, `owner_unset`, `owner_unconfirmed`, contract §8.3 "Validation") → refusal with listed exit codes (1 or 3)
-4. `policy.pr.post.enabled` is false (`details` `{pr, key: "pr.post.enabled"}`) → `post_disabled` (exit 3)
+4. `policy.pr.post.enabled` is false (`details` `{pr, key: "pr.post.enabled"}`) → `post_disabled` (exit 3). `pr.post.enabled` is set only by an owner or repo file (contract §8.3 "Key exposure", pro-d126): a machine file with a `pr.post` table makes check 3 fail `policy_invalid` before any post
 5. the stored pull request is not `authored` (`details` `{pr, number}`) → `not_authored` (exit 3)
 6. the channel is `policy.pr.post.channel` when not empty, else the machine config's `inbox.team_channel` when not empty, else (`details` `{keys: ["pr.post.channel", "inbox.team_channel"]}`) → `post_unconfigured` (exit 3)
 7. `postable::unready(&row)` (contract §2.2, §8.3, the eight Unready reasons: `not_open`, `draft`, `conflicting`, `changes_requested`, `checks_failed`, `checks_pending`, `comments_unread`, `bot_comments`) is not empty (`details` `{pr, number, url, reasons: [<as_str of each>]}`) → `pr_not_ready` (exit 3)
@@ -4795,7 +4795,7 @@ Prints the resolved policy of one key: every domain with its value and its sourc
 | the Session, Plan, PR or Context exists | `session_not_found`, `plan_not_found`, `pr_not_found`, `context_not_found` | 4 |
 | the Context (the Session's, the PR's Plan's, or `--context`) has an owner; the message names `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
 | the key's owner has `policy/<owner>/owner.toml`, also when its repo file exists; `details.owner` | `owner_unconfirmed` | 1 |
-| every file the key reads is valid TOML with known domains, keys, types and values, and a valid file name; `details.file`, `details.key` | `policy_invalid` | 1 |
+| every file the key reads is valid TOML with known domains, keys, types and values, and a valid file name; `policy/host.toml` sets no `pr.post` table (pro-d126, contract §8.3 "Key exposure"); `details.file`, `details.key` | `policy_invalid` | 1 |
 
 Effects: none. One read transaction for the key's rows, then the compiled default and the key's files, read in order (`policy/host.toml` when it exists, `policy/<owner>/owner.toml`, `policy/<owner>/<repo>.toml` for a `Repo` key when it exists: the file is optional), each parsed once. No subprocess. `check_file_names`: the file `host.toml` is the machine scope; a directory whose name is a valid owner login must contain only `owner.toml` and files with valid repo names ending in `.toml`, else `policy_invalid` (§8.3).
 

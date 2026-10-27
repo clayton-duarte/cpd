@@ -11,6 +11,9 @@
 //! - [`check_exposed`]: a scope file of `kind` that has a table of a domain not exposed to
 //!   `kind` is `policy_invalid` with `details.file` = `file` and `details.key` = the domain's
 //!   table name; the message names the exposed scopes (contract §8.3 "Exposure rule").
+//! - One key-level row below the domain: the table `pr.post` is exposed to owner and repo only,
+//!   so a machine file with a `pr.post` table, in any spelling and empty included, is
+//!   `policy_invalid` with `details.key` = `pr.post`. The `pr` domain stays exposed to machine.
 
 use std::path::Path;
 
@@ -36,6 +39,10 @@ impl ScopeKind {
     }
 }
 
+/// The table `pr.post` and the scopes it is exposed to, in the order of [`ScopeKind`].
+const PR_POST_KEY: &str = "pr.post";
+const PR_POST_EXPOSURE: &[ScopeKind] = &[ScopeKind::Owner, ScopeKind::Repo];
+
 /// Ok when every table `scope` sets is exposed to `kind`; else `policy_invalid` for `file`.
 pub fn check_exposed(file: &Path, kind: ScopeKind, scope: &Scope) -> Result<(), CpdError> {
     for &domain in Domain::ALL {
@@ -49,6 +56,16 @@ pub fn check_exposed(file: &Path, kind: ScopeKind, scope: &Scope) -> Result<(), 
             );
             return Err(policy_invalid(file, Some(domain.name()), why));
         }
+    }
+    if scope.pr.as_ref().is_some_and(|pr| pr.post.is_some()) && !PR_POST_EXPOSURE.contains(&kind) {
+        let exposed: Vec<&str> = PR_POST_EXPOSURE.iter().map(|k| k.word()).collect();
+        let why = format!(
+            "the table `{}` is exposed to {} only, not a {} file",
+            PR_POST_KEY,
+            exposed.join(", "),
+            kind.word()
+        );
+        return Err(policy_invalid(file, Some(PR_POST_KEY), why));
     }
     Ok(())
 }
