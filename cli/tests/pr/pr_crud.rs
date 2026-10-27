@@ -19,10 +19,10 @@ use serde_json::{Value, json};
 
 /// The in-process env (fake ports, the git route) with its config, repos `pay` and `web`, and Plan `pay-1` in `phase`
 /// with no PR (the Lead's session beside it). It derefs to the [`Fx`] (`cpd`, `git`, `env`, `calls`, ...).
-struct Crud {
-    fx: Fx,
-    pay: PathBuf,
-    web: PathBuf,
+pub(super) struct Crud {
+    pub(super) fx: Fx,
+    pub(super) pay: PathBuf,
+    pub(super) web: PathBuf,
 }
 
 impl Deref for Crud {
@@ -56,7 +56,7 @@ fn plan_sql(phase: &str) -> String {
     )
 }
 
-fn crud(phase: &str) -> Crud {
+pub(super) fn crud(phase: &str) -> Crud {
     let fx = Fx::with_ports();
     // `pr add` of the default shape, `tdd`, needs the repo policy's `[test-commands]`.
     let pay = keyed_repo_with_tests(&fx, "pay");
@@ -72,7 +72,7 @@ impl Crud {
     }
 
     /// `cpd pr <args> --plan pay-1`; see [`Crud::pr_in`].
-    fn pr(&self, args: &[&str]) -> Run {
+    pub(super) fn pr(&self, args: &[&str]) -> Run {
         self.pr_in("pay-1", args)
     }
 
