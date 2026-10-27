@@ -345,6 +345,7 @@ pub fn click(tree: &Tree, item: &Item, merging: &std::collections::BTreeSet<Stri
 /// An entry of an item's right-click menu (commands.md §13.2): the labels are the contract's, exactly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Choice {
+    Claim,
     Snooze15,
     Snooze1h,
     SnoozeTomorrow,
@@ -360,6 +361,7 @@ impl Choice {
         let id = id.to_string();
         let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         match self {
+            Choice::Claim => unimplemented!("Choice::Claim is not wired yet"),
             Choice::Snooze15 => words(&["inbox", "snooze", &id, "15m"]),
             Choice::Snooze1h => words(&["inbox", "snooze", &id, "1h"]),
             Choice::SnoozeTomorrow => words(&["inbox", "snooze", &id, "tomorrow"]),
@@ -371,6 +373,7 @@ impl Choice {
 impl crate::menu::Entry for Choice {
     fn label(self) -> &'static str {
         match self {
+            Choice::Claim => "Claim",
             Choice::Snooze15 => "Snooze 15 min",
             Choice::Snooze1h => "Snooze 1 h",
             Choice::SnoozeTomorrow => "Snooze until tomorrow 09:00",
