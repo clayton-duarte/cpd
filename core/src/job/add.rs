@@ -217,7 +217,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
 
 /// Every resource of a Spec is declared by the policy of the PR's repo (`resource_undeclared`, commands.md §5.1):
 /// the first one that is not fails, with the names the repo declares and the file that declares them.
-pub(super) fn check_resources_declared(conn: &Connection, home: &CpdHome, plan: &PlanId, pr: &str, job: &str, resources: Option<&[String]>) -> Result<(), CpdError> {
+pub(crate) fn check_resources_declared(conn: &Connection, home: &CpdHome, plan: &PlanId, pr: &str, job: &str, resources: Option<&[String]>) -> Result<(), CpdError> {
     let Some(resources) = resources else { return Ok(()) };
     let key = PrKey::parse(pr)?;
     let declared = crate::pr::policy_of_pr(conn, home, plan, &key)?.resources.names;

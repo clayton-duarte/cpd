@@ -25,6 +25,10 @@ use crate::lock;
 /// The descriptor the driver inherits the lock on (§3.4 step 2).
 pub const DRIVER_FD: RawFd = 3;
 
+/// The environment variable that lists, comma separated, the descriptors of the resource locks the starter handed to the
+/// driver besides fd 3 (§3.4 "Resources of a Job"): they stay open at the numbers they had in the starter.
+pub const RESOURCE_FDS_ENV: &str = "CPD_RESOURCE_FDS";
+
 /// The starter's descriptor of a driver lock it holds (§3.4 steps 1–3).
 /// Dropping it closes the descriptor without unlocking: once a driver
 /// inherited it, the driver holds the lock alone.
@@ -139,6 +143,8 @@ pub fn check_span_open(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Re
 #[derive(Debug)]
 pub struct Inherited {
     _file: File,
+    /// The resource locks the Attempt holds (§3.4 "Resources of a Job"): kept open for the driver's whole life.
+    resources: Vec<File>,
 }
 
 impl Inherited {
@@ -155,9 +161,40 @@ impl Inherited {
     }
 
     fn set_flags(&self, flags: FdFlag) -> Result<(), CpdError> {
-        fcntl(&self._file, FcntlArg::F_SETFD(flags)).map(drop).map_err(|e| {
-            CpdError::new(ErrorCode::DriverLockMissing, format!("Cannot change close-on-exec on the driver lock (fd 3): {e}."))
-        })
+        for file in std::iter::once(&self._file).chain(&self.resources) {
+            fcntl(file, FcntlArg::F_SETFD(flags)).map(drop).map_err(|e| {
+                CpdError::new(
+                    ErrorCode::DriverLockMissing,
+                    format!("Cannot change close-on-exec on a lock the driver holds (fd {}): {e}.", file.as_raw_fd()),
+                )
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Takes over the resource locks `list` (the value of [`RESOURCE_FDS_ENV`]) names, and makes each close-on-exec, so
+    /// nothing the driver starts keeps a resource held. An empty list is none.
+    fn take_resources(&mut self, list: &str, home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<(), CpdError> {
+        let missing = |why: String| {
+            CpdError::new(ErrorCode::DriverLockMissing, format!("{RESOURCE_FDS_ENV} {list:?} is not the resources of Attempt {attempt}: {why}."))
+                .with("plan", plan.as_str())
+                .with("attempt", attempt.to_string())
+                .with("lock", home.attempt_lock(plan, attempt).display().to_string())
+        };
+        let mut fds = Vec::new();
+        for item in list.split(',').filter(|i| !i.is_empty()) {
+            let fd: RawFd = item.parse().map_err(|_| missing(format!("{item:?} is not a descriptor")))?;
+            // SAFETY: only probes the descriptor number; nothing is owned yet.
+            fcntl(unsafe { BorrowedFd::borrow_raw(fd) }, FcntlArg::F_GETFD).map_err(|e| missing(format!("fd {fd} is not open ({e})")))?;
+            fds.push(fd);
+        }
+        for fd in fds {
+            // SAFETY: the fd is open and nothing else in this process owns it: the driver calls this before it opens any file.
+            let file = unsafe { File::from_raw_fd(fd) };
+            fcntl(&file, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(|e| missing(format!("cannot set close-on-exec on fd {fd} ({e})")))?;
+            self.resources.push(file);
+        }
+        Ok(())
     }
 }
 
@@ -168,7 +205,11 @@ impl Inherited {
 ///
 /// Call it before the process opens any file, so fd 3 cannot be one of its own.
 pub fn inherited(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<Inherited, CpdError> {
-    inherited_on(DRIVER_FD, home, plan, attempt)
+    let mut held = inherited_on(DRIVER_FD, home, plan, attempt)?;
+    if let Ok(list) = std::env::var(RESOURCE_FDS_ENV) {
+        held.take_resources(&list, home, plan, attempt)?;
+    }
+    Ok(held)
 }
 
 /// [`inherited`] for the descriptor `fd` (the driver's is [`DRIVER_FD`]): a test hands it one that is its own.
@@ -205,7 +246,7 @@ pub(crate) fn inherited_on(fd: RawFd, home: &CpdHome, plan: &PlanId, attempt: &A
         return Err(missing(why));
     }
     fcntl(&file, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(|e| missing(format!("cannot set close-on-exec ({e})")))?;
-    Ok(Inherited { _file: file })
+    Ok(Inherited { _file: file, resources: Vec::new() })
 }
 
 #[cfg(test)]
@@ -258,7 +299,7 @@ mod tests {
     #[test]
     fn keeping_the_lock_across_exec_clears_close_on_exec_and_closing_it_on_exec_sets_it_again() {
         let (_dir, home, plan, attempt) = home();
-        let held = Inherited { _file: lock_file(&home, &plan, &attempt) };
+        let held = Inherited { _file: lock_file(&home, &plan, &attempt), resources: Vec::new() };
         assert!(!flags(&held).contains(FdFlag::FD_CLOEXEC));
 
         held.close_on_exec().unwrap();
