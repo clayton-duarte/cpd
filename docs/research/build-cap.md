@@ -25,7 +25,7 @@ Reading: `jobs = -4` behaves like `jobs = 10` (logical CPUs minus 4), in the con
 
 ## Dev build matrix
 
-Rows 1-12: Attempt 1 of cap-dev0. A `noisy` cell had foreign cargo, rustc or nextest processes running; the peak summed CPU column is a saturated 1400 in every row, so it carries no information.
+Rows 1-12: Attempt 1 of cap-dev0. Rows 13-18: this Job (`cap-dev-a1`), same method; the `foreign procs before` of these rows is the count at the first check, `noisy` means foreign processes were still running after the 5-minute wait, and the label rows read `(cap, n)`. A `noisy` cell had foreign cargo, rustc or nextest processes running; the peak summed CPU column is a saturated 1400 in every row, so it carries no information.
 
 | cap | n | per-build wall (s) | cell total (s) | peak load | peak summed CPU % | load before | load after | foreign procs before | noisy |
 |---|---|---|---|---|---|---|---|---|---|
@@ -46,8 +46,14 @@ Rows 1-12: Attempt 1 of cap-dev0. A `noisy` cell had foreign cargo, rustc or nex
 | (2, 3) | 3 | 254.9,277.8,267.6 | 277.8 | 62.4 | 1065 | 38.26 | 45.74 | 6 | noisy |
 | repeat (default, 1) | 1 | 112.8 | 112.8 | 65.6 | 1072 | 48.17 | 48.65 | 2 | noisy |
 | repeat (default, 3) | 3 | 151.1,151.9,153.1 | 153.1 | 93.5 | 1132 | 23.89 | 50.53 | 5 | - |
-| repeat (7, 3) | | not measured yet | | | | | | | |
+| repeat (7, 3) | 3 | 183.5,182.2,184.9 | 184.9 | 102.6 | 1072 | 45.26 | 71.01 | 2 | noisy |
 
 ## Reading
 
-not written yet
+- Lone build (n=1) against `default` 112.8 s (measured twice, identical): cap 10 -15%, 7 -21%, 4 -13%, 2 +37%; I infer caps 10, 7 and 4 are not distinguishable from `default` or from each other (cells were noisy), only 2 is clearly slower.
+- n=2 total against `default` 109.2 s: 7 is 98.5 s, 10 is 135.3 s, 4 is 202.3 s (noisy, load 34-97), 2 is 260.4 s.
+- n=3 total against `default` 154.7 and 153.1 s: 10 is 173.5 s, 7 is 185.3 and 184.9 s (+20%), 4 is 148.5 s (-3%), 2 is 277.8 s (+80%).
+- n=3 peak load against `default` 100.7 and 93.5: 10 is 81.1, 7 is 82.2 and 102.6, 4 is 66.0, 2 is 62.4.
+- Spread of repeats: wall 154.7/153.1 s (1%), 112.8/112.8 s, 185.3/184.9 s (0.2%), so walls repeat tightly; peak load 82.2/102.6 for cap 7 differs by 25%, so peak-load differences under about 25% mean nothing, and cap 7 at n=3 is not distinguishable from `default` in peak load.
+- Cap 4 is the only cap that costs a lone build little (98.4 s, no slower than `default`) and clearly lowers peak load at n=3 (66.0 against 93.5-100.7, -30% or more); I infer its n=2 result (202.3 s, load before 34, 6 foreign processes) is foreign load, because its n=3 cell (not noisy) had 148.5 s. Cap 2 is clearly too slow.
+- `CAP = 4`; for 14 CPUs the `-N` form is `-10` (I infer from `-4` giving 10 jobs; `-10` itself was not measured). Reason: a lone build is not slower than `default` and three concurrent builds peak at 66 load instead of about 97.
