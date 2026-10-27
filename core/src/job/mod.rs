@@ -18,7 +18,7 @@ mod add;
 mod approve;
 pub(crate) mod cancel;
 mod edit;
-mod fix_retry;
+pub(crate) mod fix_retry;
 #[cfg(test)]
 mod fix_retry_tests;
 pub mod guard;
