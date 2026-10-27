@@ -95,7 +95,7 @@ pub struct OpenPr {
     pub conflicting: bool,
     /// The owning PR's not-ended update Job, if any: a conflict reads `updating` while it is `Some` (hs-d532).
     pub update: Option<super::UpdateState>,
-    /// `pull_requests.merge_state` is `'clean'` (GitHub's mergeStateStatus CLEAN): the merge icon shows (commands.md §13.2).
+    /// The PR is ready to merge (pro-d118: `cpd_core::pr::pulls::ready_to_merge_sql`, not GitHub's CLEAN alone): the merge icon shows (commands.md §13.2).
     pub clean: bool,
     /// A PR of the Plan whose Lead is in the chat slot points to this pull request.
     pub active: bool,
@@ -221,9 +221,10 @@ fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
 /// The `open` pull requests the User wrote (`authored` 1), oldest first. `lead`: the owner's (see [`OpenPr::lead`]). `active`: a PR of the Plan of the chat slot's Lead (the Plan Lead whose latest
 /// `session-moved` says `chat`, the newest when there are several: `chat_slot`'s rule) points to it.
 fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
-    let mut stmt = conn.prepare(
+    let ready = cpd_core::pr::pulls::ready_to_merge_sql("q");
+    let mut stmt = conn.prepare(&format!(
         "SELECT q.repo, q.number, q.title, q.draft, q.checks, q.review_decision, q.url,
-                q.mergeable = 'conflicting', q.merge_state = 'clean',
+                q.mergeable = 'conflicting', {ready},
                 EXISTS (SELECT 1 FROM prs r WHERE r.pull_request = q.id AND r.plan =
                         (SELECT s.plan FROM sessions s
                            JOIN events m ON m.id = (SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-moved')
@@ -243,7 +244,7 @@ fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
                 (SELECT p.phase FROM prs r JOIN plans p ON p.id = r.plan
                   WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1)
            FROM pull_requests q WHERE q.state = 'open' AND q.authored = 1 ORDER BY q.created_at, q.repo, q.number",
-    )?;
+    ))?;
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
