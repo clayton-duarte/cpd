@@ -46,15 +46,6 @@ DROP TABLE jobs;
 ALTER TABLE jobs_new RENAME TO jobs;
 CREATE INDEX jobs_plan_status ON jobs(plan, status);
 
-CREATE TRIGGER jobs_locked BEFORE UPDATE OF title, tier, goal, context, touches, acceptance, out_of_scope, plan, key, pr, review, kind, tests, test_files ON jobs
-WHEN OLD.status <> 'draft'
- AND NOT (OLD.status = 'queued'
-          AND OLD.kind NOT IN ('open', 'update')
-          AND NOT EXISTS (SELECT 1 FROM attempts WHERE plan = OLD.plan AND job = OLD.key)
-          AND NEW.title IS OLD.title AND NEW.tier IS OLD.tier AND NEW.plan IS OLD.plan AND NEW.key IS OLD.key
-          AND NEW.pr IS OLD.pr AND NEW.review IS OLD.review AND NEW.kind IS OLD.kind)
-BEGIN SELECT RAISE(ABORT, 'job_locked'); END;
-
 CREATE TRIGGER jobs_pr_dependencies BEFORE UPDATE OF pr ON jobs
 WHEN OLD.pr <> NEW.pr AND EXISTS (SELECT 1 FROM dependencies WHERE plan = NEW.plan AND (job = NEW.key OR needs = NEW.key))
 BEGIN SELECT RAISE(ABORT, 'needs_other_pr'); END;
@@ -81,3 +72,13 @@ WHEN (NEW.kind <> 'test' AND (NEW.tests IS NOT NULL OR NEW.test_files IS NOT NUL
   OR (NEW.kind <> 'impl' AND NEW.test_approved IS NOT NULL)
   OR (NEW.review = 1 AND NEW.kind <> 'work')
 BEGIN SELECT RAISE(ABORT, 'spec_invalid'); END;
+
+-- Created last: SQLite fires the newest trigger first, and `job_locked` must win over `spec_invalid` as before.
+CREATE TRIGGER jobs_locked BEFORE UPDATE OF title, tier, goal, context, touches, acceptance, out_of_scope, plan, key, pr, review, kind, tests, test_files ON jobs
+WHEN OLD.status <> 'draft'
+ AND NOT (OLD.status = 'queued'
+          AND OLD.kind NOT IN ('open', 'update')
+          AND NOT EXISTS (SELECT 1 FROM attempts WHERE plan = OLD.plan AND job = OLD.key)
+          AND NEW.title IS OLD.title AND NEW.tier IS OLD.tier AND NEW.plan IS OLD.plan AND NEW.key IS OLD.key
+          AND NEW.pr IS OLD.pr AND NEW.review IS OLD.review AND NEW.kind IS OLD.kind)
+BEGIN SELECT RAISE(ABORT, 'job_locked'); END;
