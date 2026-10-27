@@ -68,6 +68,12 @@ pub trait Spawn: Send + Sync {
     fn descendants(&self, root: Pid) -> Vec<Pid>;
     /// Returns only on failure.
     fn exec(&self, l: &Launch) -> io::Error;
+    /// [`Spawn::exec`] that must leave the descriptor `keep` open and inheritable across the exec (`cpd resource run`
+    /// holds its lock on it). The real one returns only on failure, so `Ok` is for a fake that returns.
+    fn exec_keeping(&self, l: &Launch, keep: RawFd) -> io::Result<()> {
+        let _ = keep;
+        Err(self.exec(l))
+    }
     fn stream(&self, l: &Launch) -> io::Result<(Pid, Box<dyn BufRead + Send>)>;
     /// The path of cpd's own executable.
     fn self_exe(&self) -> Result<PathBuf, CpdError>;
@@ -380,7 +386,24 @@ struct Table {
     envs: HashMap<Pid, Vec<(String, String)>>,
     /// The parent of a pid, where a test said so (`FakeSpawn::add_process`).
     parents: HashMap<Pid, Pid>,
+    /// Every `exec_keeping` call.
+    execs: Vec<ExecRecord>,
+    /// Run by `exec_keeping` after it records, before it answers.
+    exec_hook: Option<ExecHook>,
+    /// The failure `exec_keeping` answers, when a test said so.
+    exec_fails: Option<io::ErrorKind>,
 }
+
+/// A call of [`Spawn::exec_keeping`] on the fake: what was exec-ed and the state of the descriptor kept at the call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExecRecord {
+    pub launch: Launch,
+    pub keep: RawFd,
+    /// Whether `keep` was not close-on-exec at the call; `None` when it was not open.
+    pub inheritable: Option<bool>,
+}
+
+type ExecHook = Arc<dyn Fn(&ExecRecord) + Send + Sync>;
 
 impl Table {
     /// Records `l` and hands out the next pid, running.
@@ -421,6 +444,21 @@ impl FakeSpawn {
     /// Every `Launch` that `spawn`, `stream` and `exec` received, in order.
     pub fn launches(&self) -> Vec<Launch> {
         self.table().launches.clone()
+    }
+
+    /// Every call of `exec_keeping`, in order.
+    pub fn execs(&self) -> Vec<ExecRecord> {
+        self.table().execs.clone()
+    }
+
+    /// Runs `hook` inside each `exec_keeping`, after it records and before it answers: the process "is exec-ed" there.
+    pub fn on_exec(&self, hook: impl Fn(&ExecRecord) + Send + Sync + 'static) {
+        self.table().exec_hook = Some(Arc::new(hook));
+    }
+
+    /// Makes `exec_keeping` fail with `kind`.
+    pub fn fail_exec(&self, kind: io::ErrorKind) {
+        self.table().exec_fails = Some(kind);
     }
 
     /// Every `(pid, signal)` that `signal` received, in order.
@@ -555,6 +593,23 @@ impl Spawn for FakeSpawn {
     fn exec(&self, l: &Launch) -> io::Error {
         self.table().launches.push(l.clone());
         io::Error::other("faked exec")
+    }
+
+    fn exec_keeping(&self, l: &Launch, keep: RawFd) -> io::Result<()> {
+        // SAFETY: only probes the descriptor number.
+        let flags = fcntl(unsafe { BorrowedFd::borrow_raw(keep) }, FcntlArg::F_GETFD).ok();
+        let inheritable = flags.map(|f| !FdFlag::from_bits_truncate(f).contains(FdFlag::FD_CLOEXEC));
+        let record = ExecRecord { launch: l.clone(), keep, inheritable };
+        let (hook, fails) = {
+            let mut table = self.table();
+            table.launches.push(l.clone());
+            table.execs.push(record.clone());
+            (table.exec_hook.clone(), table.exec_fails)
+        };
+        if let Some(hook) = hook {
+            hook(&record);
+        }
+        fails.map_or(Ok(()), |kind| Err(io::Error::from(kind)))
     }
 
     fn stream(&self, l: &Launch) -> io::Result<(Pid, Box<dyn BufRead + Send>)> {

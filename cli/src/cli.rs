@@ -14,7 +14,7 @@ use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, mcp, models, plan, policy, pr, prune, review, secret, session, tag, testsel, version_sync};
+use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, mcp, models, plan, policy, pr, prune, resource, review, secret, session, tag, testsel, version_sync};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -106,6 +106,9 @@ pub enum Command {
     /// The tests a change reaches, and named tests (commands.md §27)
     #[command(subcommand)]
     Test(testsel::Command),
+    /// Repo-declared exclusive resources (commands.md §29)
+    #[command(subcommand)]
+    Resource(resource::Command),
     /// Remove the leftover worktrees whose work is on origin/main (commands.md §26)
     Prune(prune::Args),
     /// Tag the commit that set the workspace version (commands.md §26.1)
@@ -192,6 +195,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Host(c) => host::run(c),
         Command::Gate(c) => gate_exit(gate::run(ports, c)),
         Command::Test(c) => transparent_exit(testsel::exec(ports, c)),
+        Command::Resource(c) => resource::run(ports, c),
         Command::Prune(a) => prune::command(a),
         Command::Tag => release_exit(tag::tag(ports, &repo_root()?)),
         Command::Version(VersionCommand::Sync { print }) => release_exit(version_sync::sync(&repo_root()?, print)),
