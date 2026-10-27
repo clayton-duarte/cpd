@@ -277,7 +277,7 @@ The repo scope of a Policy, `$CPD_HOME/policy/<owner>/<repo>.toml`: optional (a 
 
 
 **Exposure** (new, hs-d9, hs-d12):
-The set of Scopes from which a Domain may be set, named in the domain table of contract §8.3. An unexposed Domain in a Scope's file is `policy_invalid`.
+The set of Scopes from which a Domain may be set, named in the domain table of contract §8.3. An unexposed Domain in a Scope's file is `policy_invalid`. One key is exposed below its domain: the table `pr.post` is set in owner and repo files only, never in the machine file (pro-d126).
 _Avoid_: visibility, permission
 
 **Policy key** (new, hs-d288):
