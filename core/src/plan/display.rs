@@ -74,6 +74,11 @@ impl Display {
         display
     }
 
+    /// The Tier the Job `job` is shown at (the Plan view pill, `plan render`): see docs/commands.md 13.2. STUB: the raw `tier`.
+    pub fn job_tier(&self, job: &Job) -> Option<String> {
+        job.tier.clone()
+    }
+
     /// The PR that superseded the cancelled PR `key`, as a reference.
     pub fn superseded_by(&self, key: &str) -> Option<&str> {
         self.superseded.get(key).map(String::as_str)
