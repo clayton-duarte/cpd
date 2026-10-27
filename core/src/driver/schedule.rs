@@ -2,10 +2,6 @@
 //! clock, no files. E3 reads the Ledger and the lock files into [`Pool`]s and [`Ready`] Jobs, calls [`schedule`], and starts
 //! the Jobs it names, in order, each taking all its resources or none. Nothing is reserved: a Job that misses a pool is
 //! SKIPPED, the walk goes on, and the skipped Jobs come back before the queue.
-//!
-//! STUB of the test Job `tenancy-tests`: [`schedule`] starts nothing. [`legacy_start`] is the walk of PR `workers` (without
-//! its earmarks), which the engine still calls so that the engine's tests stay green until the implementing Job swaps the
-//! engine to [`schedule`] and DELETES [`legacy_start`].
 
 /// One pool of slots as E3 sees it at this tick, `workers` included.
 ///
@@ -51,19 +47,23 @@ pub struct Schedule {
 /// Walks `ready` in the order urgent > skipped > queue. A Job that is a tenant starts. Any other Job starts when every pool it
 /// needs has a slot it may take (a non-urgent Job takes `free`, an urgent one `free` then `urgent_free`), taking one slot of
 /// each, all or none; else it is skipped, takes nothing and reserves nothing, and the walk goes on to the next Job.
-pub fn schedule(_pools: &[Pool], _ready: &[Ready]) -> Schedule {
-    Schedule::default()
-}
-
-/// The walk of PR `workers`, kept only for the engine until the implementing Job replaces it with [`schedule`]: the caller's order,
-/// earmarks as before. REMOVE with that swap.
-pub fn legacy_start(pools: &[Pool], ready: &[Ready]) -> Vec<u32> {
+pub fn schedule(pools: &[Pool], ready: &[Ready]) -> Schedule {
+    let mut order: Vec<&Ready> = ready.iter().collect();
+    // Urgent first (by `seq`), then the skipped ones (by skip order), then the rest (by `seq`).
+    order.sort_by_key(|j| match (j.urgent, j.skipped) {
+        (true, _) => (0, 0, j.seq),
+        (false, Some(n)) => (1, n, 0),
+        (false, None) => (2, 0, j.seq),
+    });
     let mut left: Vec<Pool> = pools.to_vec();
-    let mut earmarked = vec![0u32; pools.len()];
-    let mut start = Vec::new();
-    for job in ready {
+    let mut out = Schedule::default();
+    for job in order {
+        if job.tenant {
+            out.start.push(job.id);
+            continue;
+        }
         let may_take = |p: usize, left: &[Pool]| left[p].free + if job.urgent { left[p].urgent_free } else { 0 };
-        if job.needs.iter().all(|&p| may_take(p, &left) > earmarked[p]) {
+        if job.needs.iter().all(|&p| may_take(p, &left) > 0) {
             for &p in &job.needs {
                 if left[p].free > 0 {
                     left[p].free -= 1;
@@ -71,12 +71,10 @@ pub fn legacy_start(pools: &[Pool], ready: &[Ready]) -> Vec<u32> {
                     left[p].urgent_free -= 1;
                 }
             }
-            start.push(job.id);
+            out.start.push(job.id);
         } else {
-            for &p in &job.needs {
-                earmarked[p] += 1;
-            }
+            out.skipped.push(job.id);
         }
     }
-    start
+    out
 }

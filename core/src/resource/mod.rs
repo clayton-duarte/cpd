@@ -24,27 +24,38 @@ mod tests;
 pub const WORKERS: &str = "workers";
 
 /// The built-in resource `workers` as `cpd resource list` and `job show` read it: a host pool of `concurrency` slots, whose
-/// tenants are the Attempts not `ended`. It has no lock file: the Ledger is the record.
+/// tenants are the Jobs of the `job_tenants` view (contract §3.4 "Tenancy"). It has no lock file: the Ledger is the record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Workers {
     /// The config's `concurrency`.
     pub slots: u32,
-    /// One record per Attempt not `ended`, `{by: attempt}`, in start order (`started_at`, then Attempt id); `at` is its `started_at`.
+    /// One record per tenant Job, `{by: attempt}` of its latest Attempt, in start order (`started_at`, then Attempt id).
     /// More than `slots` while an urgent Job holds the slot beyond.
     pub holders: Vec<Holder>,
 }
 
-/// The Worker slots now: `concurrency` slots, the Attempts not `ended` as tenants.
-pub fn workers(conn: &rusqlite::Connection, concurrency: u32) -> Result<Workers, CpdError> {
-    let mut stmt = conn.prepare("SELECT plan, job, id, started_at FROM attempts WHERE status <> 'ended' ORDER BY started_at, id")?;
+/// The Job tenants of the pool whose identity text is `pool` ([`identity`], or [`WORKERS`]), each as the holder of its latest Attempt,
+/// in start order. The one query every reader of the tenancy shares (E3, the starter, `resource list`, `job show`, `@cpd_workers`).
+pub fn tenants(conn: &rusqlite::Connection, pool: &str) -> Result<Vec<Holder>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT a.plan, a.job, a.id, a.started_at FROM job_tenants t
+           JOIN attempts a ON a.plan = t.plan AND a.job = t.job
+            AND a.number = (SELECT max(number) FROM attempts WHERE plan = t.plan AND job = t.job)
+          WHERE t.pool = ?1 ORDER BY a.started_at, a.id",
+    )?;
     let holders = stmt
-        .query_map([], |r| Ok(Holder::Attempt { plan: r.get(0)?, job: r.get(1)?, attempt: r.get(2)?, at: r.get(3)? }))?
+        .query_map([pool], |r| Ok(Holder::Attempt { plan: r.get(0)?, job: r.get(1)?, attempt: r.get(2)?, at: r.get(3)? }))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(Workers { slots: concurrency, holders })
+    Ok(holders)
+}
+
+/// The Worker slots now: `concurrency` slots, the tenant Jobs of `workers` as holders.
+pub fn workers(conn: &rusqlite::Connection, concurrency: u32) -> Result<Workers, CpdError> {
+    Ok(Workers { slots: concurrency, holders: tenants(conn, WORKERS)? })
 }
 
 impl Workers {
-    /// The pool E3 schedules on: `free` = slots no Attempt holds, `urgent_free` = the one beyond, while the Attempts are at most `slots`.
+    /// The pool E3 schedules on: `free` = slots no tenant holds, `urgent_free` = the one beyond, while the tenants are at most `slots`.
     pub fn pool(&self) -> crate::driver::schedule::Pool {
         let active = u32::try_from(self.holders.len()).unwrap_or(u32::MAX);
         crate::driver::schedule::Pool { free: self.slots.saturating_sub(active), urgent_free: u32::from(active <= self.slots) }
@@ -113,14 +124,83 @@ pub fn pools_of(resources: &crate::policy::Resources, owner: &OwnerLogin, repo: 
     resources.declared.iter().map(|d| Pool::of(d, owner, repo)).collect()
 }
 
+/// The text that names `pool` in `job_pools.pool` (contract §3.4 "Resources of a Job" item 3): `host:<name>`, `owner:<login>:<name>`
+/// or `repo:<owner>/<repo>:<name>`. Injective: the first field names the level, and a login, a repo name and a resource name
+/// contain no `:` while a repo name contains no `/`.
+pub fn identity(pool: &Pool) -> String {
+    match pool {
+        Pool::Host { name, .. } => format!("host:{name}"),
+        Pool::Owner { owner, name, .. } => format!("owner:{owner}:{name}"),
+        Pool::Repo { owner, repo, name, .. } => format!("repo:{owner}/{repo}:{name}"),
+    }
+}
+
 /// The free slots of `pool` (contract §1.4 "The free slots of a pool"): its `slots` minus the Job tenants of the pool (the rows of
-/// the view `job_tenants` whose `pool` is the pool's identity text, `host:<name>`, `owner:<login>:<name>` or
-/// `repo:<owner>/<repo>:<name>`) minus the held command slot files of the pool, never below 0. The starter and `resource run`
-/// both decide with it, under the pool's guard.
-///
-/// STUB of the test Job `tenancy-tests`: it counts nothing and returns the pool's `slots`.
-pub fn free_slots(_conn: &rusqlite::Connection, _home: &CpdHome, pool: &Pool) -> Result<u32, CpdError> {
-    Ok(u32::from(pool.slots()))
+/// the view `job_tenants` whose `pool` is its [`identity`]) minus the held command slot files of the pool, never below 0. The
+/// starter and `resource run` both decide with it, under the pool's [`Guard`].
+pub fn free_slots(conn: &rusqlite::Connection, home: &CpdHome, pool: &Pool) -> Result<u32, CpdError> {
+    let jobs = tenants(conn, &identity(pool))?.len();
+    let commands = holders(home, pool)?.iter().filter(|h| h.is_some()).count();
+    let taken = u32::try_from(jobs + commands).unwrap_or(u32::MAX);
+    Ok(u32::from(pool.slots()).saturating_sub(taken))
+}
+
+/// The guard file of `pool` (contract §1.4): `resource-guard.<scope>.<owner>.<repo>.<name>.lock`, only the parts the scope has.
+fn guard_path(home: &CpdHome, pool: &Pool) -> PathBuf {
+    let file = match pool {
+        Pool::Host { name, .. } => format!("resource-guard.host.{name}.lock"),
+        Pool::Owner { owner, name, .. } => format!("resource-guard.owner.{owner}.{name}.lock"),
+        Pool::Repo { owner, repo, name, .. } => format!("resource-guard.repo.{owner}.{repo}.{name}.lock"),
+    };
+    home.locks_dir().join(file)
+}
+
+/// The exclusive guard of one pool, held while a starter or `resource run` decides the free slots and takes one. The file exists
+/// only while held: its taker removes it before the lock drops.
+#[derive(Debug)]
+pub struct Guard {
+    path: PathBuf,
+    _file: File,
+}
+
+impl Guard {
+    /// Waits for the guard of `pool`, which another taker holds only for an instant. After the lock the taker checks that its
+    /// descriptor and the path are the same file (device and inode), else the file was removed under it and it takes again.
+    pub fn take(home: &CpdHome, pool: &Pool) -> Result<Guard, CpdError> {
+        use std::os::unix::fs::MetadataExt;
+        let path = guard_path(home, pool);
+        fs::create_dir_all(home.locks_dir()).map_err(|e| lock_failed(&home.locks_dir(), e))?;
+        loop {
+            let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(|e| lock_failed(&path, e))?;
+            lock::blocking(&file).map_err(|e| lock_failed(&path, e))?;
+            let same = match (file.metadata(), fs::metadata(&path)) {
+                (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),
+                _ => false,
+            };
+            if same {
+                return Ok(Guard { path, _file: file });
+            }
+        }
+    }
+}
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        // Removed while the lock is still held; the lock drops with the descriptor.
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// The Job tenants and held command slots of `pool` as one list for `resource list` and `resource_busy`: the held command slots
+/// first, each with its slot number, then the Job tenants with none.
+pub fn occupants(conn: &rusqlite::Connection, home: &CpdHome, pool: &Pool) -> Result<Vec<(Option<usize>, Holder)>, CpdError> {
+    let mut out: Vec<(Option<usize>, Holder)> = holders(home, pool)?
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, h)| h.map(|h| (Some(i + 1), h)))
+        .collect();
+    out.extend(tenants(conn, &identity(pool))?.into_iter().map(|h| (None, h)));
+    Ok(out)
 }
 
 /// The slots taken by one [`take`], one per pool: each lock stays held until this is dropped (or the descriptor is handed on).

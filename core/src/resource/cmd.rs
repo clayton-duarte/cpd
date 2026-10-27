@@ -3,12 +3,12 @@
 use serde_json::json;
 
 use std::os::fd::{BorrowedFd, RawFd};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
-use super::{Holder, Pool, Take, holders, lock_path, take};
+use super::{Guard, Holder, Pool, Take, free_slots, occupants, take, tenants};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::spawn::Launch;
@@ -89,12 +89,12 @@ fn list(ports: &Ports) -> Result<Output, CpdError> {
     let mut resources = Vec::new();
     for name in &repo.declared {
         let pool = repo.pool(name);
-        let slots: Vec<_> = holders(&home, pool)?.into_iter().enumerate().map(|(i, holder)| (i + 1, holder)).collect();
-        let free = slots.iter().filter(|(_, h)| h.is_none()).count();
-        let holders: Vec<_> = slots.into_iter().map(|(slot, holder)| json!({"slot": slot, "holder": holder})).collect();
+        let held = env.store.read(|conn| occupants(conn, &home, pool))?;
+        let free = u32::from(pool.slots()).saturating_sub(u32::try_from(held.len()).unwrap_or(u32::MAX));
+        let holders: Vec<_> = held.into_iter().map(|(slot, holder)| json!({"slot": slot, "holder": holder})).collect();
         resources.push(json!({"name": name, "scope": pool.scope(), "slots": pool.slots(), "free": free, "holders": holders}));
     }
-    // The built-in `workers`: host scope, one holder per Attempt not `ended`, in the name order with the declared ones.
+    // The built-in `workers`: host scope, one holder per tenant Job, in the name order with the declared ones.
     let held: Vec<_> = workers.holders.iter().enumerate().map(|(i, h)| json!({"slot": i + 1, "holder": h})).collect();
     let free = workers.slots.saturating_sub(u32::try_from(workers.holders.len()).unwrap_or(u32::MAX));
     let entry = json!({"name": super::WORKERS, "scope": "host", "slots": workers.slots, "free": free, "holders": held});
@@ -115,6 +115,7 @@ fn run_command(ports: &Ports, args: RunArgs) -> Result<Output, CpdError> {
     }
     let home = CpdHome::from_env()?;
     let (cwd, repo) = here(ports, &home)?;
+    let mut env = crate::env::Env::open_home_with(ports, home.clone())?;
     if !repo.declared.contains(&args.name) {
         let file = repo_path(&home, &repo.owner, &repo.name);
         return Err(CpdError::new(
@@ -142,16 +143,13 @@ fn run_command(ports: &Ports, args: RunArgs) -> Result<Output, CpdError> {
     let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
     let (session, attempt) = (var("CPD_SESSION"), var("CPD_ATTEMPT"));
 
-    // An Attempt that holds a slot of the resource takes nothing more.
+    // An Attempt whose Job is a tenant of the pool takes nothing more (commands.md §30.2): the Job holds a slot already.
     if let Some(id) = &attempt {
-        let pool = repo.pool(&args.name);
-        let own = holders(&home, pool)?
-            .iter()
-            .position(|h| matches!(h, Some(Holder::Attempt { attempt, .. }) if attempt == id));
-        if let Some(i) = own {
-            let path = lock_path(&home, pool, u8::try_from(i + 1).expect("slots are at most 64"));
-            let file = std::fs::File::open(&path).map_err(|e| lock_failed(&path, e))?;
-            return exec(ports, &launch, std::os::fd::AsRawFd::as_raw_fd(&file), &args.name);
+        let identity = super::identity(repo.pool(&args.name));
+        let own = env.store.read(|conn| Ok(tenants(conn, &identity)?.iter().any(|h| matches!(h, Holder::Attempt { attempt, .. } if attempt == id))))?;
+        if own {
+            let e = ports.spawn.exec(&launch);
+            return Err(spawn_failed(&launch, &args.name, e));
         }
     }
 
@@ -164,18 +162,33 @@ fn run_command(ports: &Ports, args: RunArgs) -> Result<Output, CpdError> {
     };
     let minutes = args.wait.unwrap_or(0);
     let mut tries_left = minutes * 60;
+    let pool = repo.pool(&args.name);
     let held = loop {
-        match take(&home, std::slice::from_ref(repo.pool(&args.name)), &holder)? {
-            Take::Held(held) => break held,
-            Take::Busy { resource, holders } => {
+        // The free count and the take are one step under the pool's guard, as the starter's (contract §1.4).
+        let taken = {
+            let _guard = Guard::take(&home, pool)?;
+            if env.store.read(|conn| free_slots(conn, &home, pool))? > 0 {
+                match take(&home, std::slice::from_ref(pool), &holder)? {
+                    Take::Held(held) => Some(held),
+                    Take::Busy { .. } => None,
+                }
+            } else {
+                None
+            }
+        };
+        match taken {
+            Some(held) => break held,
+            None => {
                 if tries_left == 0 {
+                    let holders = env.store.read(|conn| occupants(conn, &home, pool))?;
+                    let holders: Vec<_> = holders.into_iter().map(|(slot, holder)| json!({"slot": slot, "holder": holder})).collect();
                     return Err(CpdError::new(
                         ErrorCode::ResourceBusy,
-                        format!("The resource {resource} of {} is held by another process.", repo.label()),
+                        format!("The resource {} of {} is held by another process.", args.name, repo.label()),
                     )
-                    .with("resource", resource)
+                    .with("resource", args.name.as_str())
                     .with("repo", repo.label())
-                    .with("holders", serde_json::to_value(holders).expect("a holder serialises"))
+                    .with("holders", holders)
                     .with("waited_minutes", minutes));
                 }
                 tries_left -= 1;
@@ -187,9 +200,9 @@ fn run_command(ports: &Ports, args: RunArgs) -> Result<Output, CpdError> {
     exec(ports, &launch, fd, &args.name)
 }
 
-fn lock_failed(path: &Path, e: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the resource lock {}: {e}.", path.display()))
-        .with("lock", path.display().to_string())
+fn spawn_failed(launch: &Launch, name: &str, e: impl std::fmt::Display) -> CpdError {
+    CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run {} holding the resource {name}: {e}.", launch.program))
+        .with("argv", [vec![launch.program.clone()], launch.args.clone()].concat())
 }
 
 /// Leaves `fd` (and only it) inheritable, then replaces this process with the command. Returns only when that
@@ -203,10 +216,6 @@ fn exec(ports: &Ports, launch: &Launch, fd: RawFd, name: &str) -> Result<Output,
     match ports.spawn.exec_keeping(launch, fd) {
         // The real exec never returns: an `Ok` is a fake, which answers like any command.
         Ok(()) => Ok(Output::success(json!({"resource": name}))),
-        Err(e) => Err(CpdError::new(
-            ErrorCode::SpawnFailed,
-            format!("Cannot run {} holding the resource {name}: {e}.", launch.program),
-        )
-        .with("argv", [vec![launch.program.clone()], launch.args.clone()].concat())),
+        Err(e) => Err(spawn_failed(launch, name, e)),
     }
 }

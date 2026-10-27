@@ -1,8 +1,8 @@
 //! The `@cpd_workers` step (contract §6.1; commands.md §12; User, hs-d149,
 //! hs-d198): the right side of the StatusBar, which tmux's status line cannot
 //! compute: the `workers N/M · W waiting · Q queued` text and its short form `N/M·W·Q`.
-//! Every tick, `N` is the Attempts not `ended` (the slots of the
-//! `widgets` view), `M` is `concurrency`, `W` the Ready Jobs (E3's rule) and
+//! Every tick, `N` is the tenant Jobs of `workers` (the starter's count,
+//! contract §3.4 "Tenancy"), `M` is `concurrency`, `W` the Ready Jobs (E3's rule) and
 //! `Q` the `queued` Jobs; the options are set in one `tmux set` call only
 //! when one of them differs from what was last set (the first tick always
 //! sets them, and so does the first tick after a tmux failure or a missing
@@ -27,8 +27,8 @@ const SHORT: &str = "@cpd_workers_short";
 /// The global option carrying the incident pill's text while incident mode is on (contract §6.1).
 const INCIDENT: &str = "@cpd_incident";
 
-/// The Attempts holding a slot (§3.4): the same query as the `widgets` view's slots.
-const HELD: &str = "SELECT count(*) FROM attempts WHERE status <> 'ended'";
+/// The tenant Jobs of `workers` (§3.4 "Tenancy"): the occupancy the starter counts, a `failed` Job included.
+const HELD: &str = "SELECT count(*) FROM job_tenants WHERE pool = 'workers'";
 
 /// Every `queued` Job, the waiting ones included.
 const QUEUED: &str = "SELECT count(*) FROM jobs WHERE status = 'queued'";
@@ -36,7 +36,7 @@ const QUEUED: &str = "SELECT count(*) FROM jobs WHERE status = 'queued'";
 /// The three numbers of the StatusBar.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(super) struct Counts {
-    /// Attempts not `ended`.
+    /// Tenant Jobs of `workers`.
     pub(super) running: u32,
     /// Config `concurrency`.
     pub(super) limit: u32,

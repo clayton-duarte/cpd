@@ -54,9 +54,14 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         let needed_by = needed_by.into_iter().map(str::to_owned).collect::<Vec<_>>();
         let attempts = attempts(conn, &plan, &job.key)?;
         let review: bool = conn.query_row("SELECT review FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.key.as_str()], |r| r.get(0))?;
-        // §5.7: only a queued Job, for each resource it needs that has no free slot right now: `workers` first, then its Spec's.
+        // §5.7: only a queued Job that is not a tenant, for each resource it needs that has no free slot right now: `workers` first, then its Spec's.
         let wanted = crate::resource::wanted(conn, &plan, &job.key)?;
-        let waiting_for = if job.status == "queued" {
+        let tenant: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM job_tenants WHERE plan = ?1 AND job = ?2 AND pool = 'workers')",
+            [plan.as_str(), job.key.as_str()],
+            |r| r.get(0),
+        )?;
+        let waiting_for = if job.status == "queued" && !tenant {
             let mut held = Vec::new();
             let workers = crate::resource::workers(conn, concurrency)?;
             if workers.pool().free == 0 {
@@ -69,9 +74,12 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
                     if !wanted.names.iter().any(|n| n == pool.name()) {
                         continue;
                     }
-                    let holders = crate::resource::holders(&home, &pool)?;
                     // Only a resource with no free slot is waited for.
-                    if holders.iter().all(Option::is_some) {
+                    if crate::resource::free_slots(conn, &home, &pool)? == 0 {
+                        let holders: Vec<_> = crate::resource::occupants(conn, &home, &pool)?
+                            .into_iter()
+                            .map(|(slot, holder)| json!({"slot": slot, "holder": holder}))
+                            .collect();
                         held.push(json!({"resource": pool.name(), "scope": pool.scope(), "slots": pool.slots(), "holders": holders}));
                     }
                 }

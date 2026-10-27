@@ -5,7 +5,7 @@
 //! - `lock`: the driver lock, taken by the starter and inherited as fd 3;
 //! - `run`: the driver itself, A1–A9;
 //! - `worker`: the Worker Spec, the Worker's pane, its session file;
-//! - [`schedule`]: E3's reservation walk, a pure function;
+//! - [`schedule`]: E3's queue walk, a pure function;
 //! - `stall`: A4's stall rule, the kill of a Worker's idle tool call.
 
 pub mod lock;
