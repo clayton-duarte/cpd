@@ -1142,7 +1142,7 @@ Idempotent: yes; not archived: `"already": true`, nothing written.
 cpd plan cancel [--plan <id>] [--reason <text>]
 ```
 
-Abandons a Plan (E1, hs-d203): cancels every Job that is not merged, closes the Plan's pull requests that are not merged, closes its Lead and its forks, and archives it. cpd never closes an adopted pull request (§9.4) and never deletes its branch: step 5 leaves it open and the output lists it under `left_open`. Branches and worktrees of cancelled PRs are removed by `pr poll` (the same clean-up as merged PRs, §9.2, hs-d517). `--reason` is kept in the Events' `reason`; default `plan cancelled`. The Plan may be in any phase, `done` included (nothing is left to cancel; it is then archived).
+Abandons a Plan (E1, hs-d203): cancels every Job that is not merged, closes the Plan's pull requests that are not merged, closes its Lead and its forks, and archives it. cpd never closes an adopted pull request (§9.4) and never deletes its branch: step 5 leaves it open and the output lists it under `left_open`. Branches and worktrees of cancelled PRs are removed by the next `cpd janitor` pass (§29, pro-d70, pro-d71), every `watch.janitor_minutes` minutes (default 60) or by hand. `--reason` is kept in the Events' `reason`; default `plan cancelled`. The Plan may be in any phase, `done` included (nothing is left to cancel; it is then archived).
 
 | Precondition or failure | Code | Exit |
 |---|---|---|
@@ -1789,7 +1789,7 @@ Effects (contract §7.6 gives the query, the mapping and the caveats):
 - **Starting the PRs that waited for it** (A9): `pr poll` does not start a PR itself. Engine E7, which runs after E5 in the same tick (§3.7), starts every `waiting` PR whose needs are now all `merged`  and whose base PR, if any, has started, from a fresh `fetch origin <base>` (a stacked PR from its base PR's head, §9.7); when `pr poll` was run by hand, the next tick does, or the Lead runs `pr start <key>` (§9.7).
 - **A pull request closed without a merge** (A11, hs-d329): `pr-feedback` with `reasons: ["closed"]`, once; the poll never ends the PR: it stays `open` in cpd, every PR that needs it stays `waiting`, and the Lead decides. A Lead may have closed it itself, to reopen it on GitHub once it is ready again (contract §7.6 "Ready, never a draft"): reopened, the same pull request is in the search again and the poll writes its row `state` `open`, with no Event for the reopening; the PR was `open` throughout. To give it up the Lead runs `pr cancel <key>` (§9.6).
 - **A conflict** (hs-d340, hs-d497; contract §3.7 E5, §7.6 step 6): in the same transaction, for the PR that is `open` and points to the pull request, when `mergeable` becomes `conflicting` (from anything else, once per transition; a moved base with no conflict, `merge_state` `behind` included, queues nothing), the row's `state` is `open`, the Plan is not archived, the PR's policy resolves and the PR has no `update` Job that is `queued` or `running`: one `update` Job is inserted, with the Event `job-added` `{kind: "update", by: "poll", reason}`, `reason` `conflict`. No `pr-feedback`, no Gate here, nothing becomes a draft (hs-d329). A pull request that is a draft anyway is only stored (`draft`, `merge_state` `draft`): no Event.
-- **After a PR is merged or cancelled** (§7.2, hs-d138, hs-d142, hs-d517): for each PR that became `merged` or `cancelled` in this poll, kill that PR's Attempt windows; then, per Attempt of its Jobs whose worktree exists: `git worktree remove --force`, `git branch -D`; then its Lead worktree, first brought up to date by rule S (contract §7.4): kept when dirty (`git --no-optional-locks status --porcelain` not empty, untracked files included) or unpushed (`git rev-list --no-merges HEAD --not --remotes=origin` not empty, **unless** `HEAD` is the pull request's head commit or an ancestor of it: `headRefOid`, read with `gh pr view <n> --repo <owner/repo> --json headRefOid` only then, so a squash-merged PR whose branch GitHub deleted is cleaned up; contract §7.2 "The recorded head and the unpushed rule" — unpushed means non-merge commits of HEAD outside origin/* and the recorded head, so a lone rule-S merge of the base does not keep a merged PR's Lead worktree), else `git worktree remove` and `git -C <repo> branch -D <lead branch>`. No lock (hs-d243, contract §7.2): the removals of a PR wait until the PR is idle, i.e. every Attempt of its Jobs is `ended` and has its driver lock free (probed without creating the file); until then the poll skips that PR's removals with no Event and a later poll cleans it up, because the poll never waits and a merge or an A9 must not lose its worktree (hs-n124). Best effort per item: a failure does not stop the others. Remote branches are never touched. A kept or failed Lead worktree appends one **Event** `error` `{source: "pr poll", code: "cleanup_failed", details: {plan, pr, path, reason}}` (`reason`: `dirty`, `unpushed` or git's stderr tail), only from the poll that saw the merge or cancel. Every later poll retries the merged or cancelled PRs that still have a path on disk, and those retries append no Event. It is per PR, not at `done`; PRs closed unmerged and abandoned Plans are not cleaned up here (G5). A cancelled PR's paths come from contract §7.1's naming rule and lead_worktree is null, so only paths that exist and are worktrees of the repo on the PR's branches are touched.
+- **After a PR is merged or cancelled** (hs-d517, pro-d70, pro-d71): the poll records the status and cleans nothing. The PR's status is the queue (§3.8). `cpd janitor` (§29) removes merged and cancelled PRs' worktrees and branches, every `watch.janitor_minutes` minutes (default 60) or by hand.
 
 Output: `polled`, the number of distinct pull requests in either search; `changed`, one entry for each pull request whose row was inserted or updated; `base_changed`, the `{plan, pr, from, to}` of each PR whose `base` followed GitHub (empty when none); `feedback`, `merged` and `done`, the `{plan, pr}` pairs that got `pr-feedback` or `pr-merged`, and the Plans that became `done` (hs-d565); `update_jobs`, the `{plan, pr, job, reason}` of each `update` Job the poll queued (hs-d340); `rate_limit`, the search's `cost`, `remaining` and `reset_at` (E5 reads it, §3.7); and, only with a Plan, `prs`, one entry for each of its PRs in key order that is not `cancelled`, with its `status` and its `pull_request` row (or null).
 
@@ -2035,9 +2035,9 @@ Three uses (contract §3.8), and a fourth with `--superseded-by`. Before the loc
 
 Every check runs before the first write: a refused `pr cancel` writes nothing (hs-d573).
 
-Effects, **`waiting`** and **`dispatch`**: **rows**, one transaction: the PR `status = cancelled`, and every Job of the PR whose status is `draft`, `queued` or `failed`, of every kind (`docs`, `test`, `impl`, `work`, review, `open`, `update`), cancelled in that transaction with `status = cancelled`, the constant reason `pr cancelled` (also with `--superseded-by`), `failed_cause` cleared and `cancel_requested_at` set (one `job-cancelled` each; a Job already `cancelled` is untouched and gets no Event; one that is `running` is a live Job and refuses `pr_in_use`; contract §3.8, hs-d573); a `dispatch` PR also loses its `lead_worktree` (the workflow worktree) and `started_at` (the table allows neither on a `cancelled` PR). **Worktrees are removed at the next PR poll** (the same clean-up as merged PRs, §9.2 "After a PR is merged or cancelled", hs-d517: idle check, dirty or unpushed kept with one `cleanup_failed` Event from the first poll that sees it, later polls retry silently). **Event** `pr-cancelled` `{pr}`, and `superseded_by` (the superseding PR as a reference: the bare key in the Plan itself, else `<plan>/<key>`) with `--superseded-by`. Before the lock the plan fingerprint changes (§2.3: it covers the PRs that are not `cancelled`). After the lock, when no PR of the Plan is left `waiting` or `dispatch` and one is not `cancelled`, the same transaction moves the Plan as `pr open` and the poll do: `dispatch → deploy` with `plan-phase`, and `deploy → done` with `plan-done` when every PR left is `merged` (§3.1); the output then has `phase`. A Plan whose PRs are all `cancelled` stays in `dispatch`.
+Effects, **`waiting`** and **`dispatch`**: **rows**, one transaction: the PR `status = cancelled`, and every Job of the PR whose status is `draft`, `queued` or `failed`, of every kind (`docs`, `test`, `impl`, `work`, review, `open`, `update`), cancelled in that transaction with `status = cancelled`, the constant reason `pr cancelled` (also with `--superseded-by`), `failed_cause` cleared and `cancel_requested_at` set (one `job-cancelled` each; a Job already `cancelled` is untouched and gets no Event; one that is `running` is a live Job and refuses `pr_in_use`; contract §3.8, hs-d573); a `dispatch` PR also loses its `lead_worktree` (the workflow worktree) and `started_at` (the table allows neither on a `cancelled` PR). **Worktrees and branches are removed by the next `cpd janitor` pass** (every `watch.janitor_minutes` minutes, default 60, or by hand, §29; pro-d70, pro-d71: idle check, dirty or unpushed kept untouched with one `cleanup_failed` Event from the first janitor pass that sees it, later passes retry silently). **Event** `pr-cancelled` `{pr}`, and `superseded_by` (the superseding PR as a reference: the bare key in the Plan itself, else `<plan>/<key>`) with `--superseded-by`. Before the lock the plan fingerprint changes (§2.3: it covers the PRs that are not `cancelled`). After the lock, when no PR of the Plan is left `waiting` or `dispatch` and one is not `cancelled`, the same transaction moves the Plan as `pr open` and the poll do: `dispatch → deploy` with `plan-phase`, and `deploy → done` with `plan-done` when every PR left is `merged` (§3.1); the output then has `phase`. A Plan whose PRs are all `cancelled` stays in `dispatch`.
 
-Effects, **`open`** (contract §3.8): **rows**, one transaction: the PR `status = cancelled` (and its `draft`, `queued` and `failed` Jobs, cancelled as above, in the same transaction; hs-d573), with `lead_worktree` (the workflow worktree), `started_at`, `pr_number`, `pr_url`, `pr_opened_at` and `pull_request` set to null (the table's checks tie them to the status; the old values stay in the history rows). **Events** `pr-cancelled` `{pr}`, its `text` naming the pull request, the workflow worktree and the Lead Branch, which cpd leaves for the Lead to remove by hand; then, when every PR that is not `cancelled` is now `merged` and at least one is, the Plan `deploy → done` with `done_at` and `plan-done` (§3.1); otherwise the phase stays. The plan fingerprint does not change after the lock (§2.3). The output also carries `phase` and `released`, `{number, url, lead_worktree, lead_branch}` as they were.
+Effects, **`open`** (contract §3.8): **rows**, one transaction: the PR `status = cancelled` (and its `draft`, `queued` and `failed` Jobs, cancelled as above, in the same transaction; hs-d573), with `lead_worktree` (the workflow worktree), `started_at`, `pr_number`, `pr_url`, `pr_opened_at` and `pull_request` set to null (the table's checks tie them to the status; the old values stay in the history rows). **Events** `pr-cancelled` `{pr}`, its `text` naming the pull request, the workflow worktree and the Lead Branch, which the next `cpd janitor` pass removes unless the worktree is dirty or unpushed (§29); then, when every PR that is not `cancelled` is now `merged` and at least one is, the Plan `deploy → done` with `done_at` and `plan-done` (§3.1); otherwise the phase stays. The plan fingerprint does not change after the lock (§2.3). The output also carries `phase` and `released`, `{number, url, lead_worktree, lead_branch}` as they were.
 
 ```json
 {"ok": true, "pr": {"key": "web", "status": "cancelled"}, "phase": "done"}
@@ -5166,3 +5166,88 @@ Idempotent in effect: running it again appends another Event, and the adapter re
 #### Signing in
 
 A server that uses OAuth needs the User to sign in once on the machine (pro-d10): in that Session's pi with `/mcp login <name>`, or from a shell with `pi mcp login <name>`. The shell form works while the user-level `~/.pi/agent/mcp.json` has an entry with the same name and URL, because pi keys the credential by server name and URL. Tokens live in pi's own `mcp-auth.json`; cpd never reads or writes one (hs-d107, pro-d4). A running Session uses new credentials on its next turn (pi's rule), and an attached server that needs a sign-in shows pi's own "requires sign-in" report.
+
+## 29. `janitor`
+
+```
+cpd janitor
+```
+
+Removes the worktrees and branches of merged and cancelled PRs (pro-d70, pro-d71). One pass, then exits. It runs once every `watch.janitor_minutes` minutes (config key, default 60) via engine step E16 (§3.7), and may be run by hand. The User calls it, not Leads or Workers (§2).
+
+| Flag | Meaning |
+|---|---|
+| (none) | `cpd janitor` takes no flags |
+
+| Precondition or failure | Code | Exit |
+|---|---|---|
+| the store can be read (as `prune`, §27) | see §27 for store errors | 2 or 1 |
+
+**Effects** (pro-d70, pro-d71, pro-d72; contract §7.1, §7.2):
+
+The pass scans every PR of every Plan (archived included) whose status is `merged` or `cancelled` that still has on disk an Attempt worktree, its Lead worktree, or its aside leftover (a directory `<path>.removing` from a failed removal, §4 below). It does not start a pass when another is running: the lock `locks/janitor.lock` (exclusive, non-blocking) is held by another; it prints `{"ok":true,"skipped":"running"}`, exits 0 and touches nothing.
+
+For each such PR (**pending PR**), in this order:
+
+1. **Idle check**: every Attempt of the PR's Jobs is `ended` and its driver lock is free (probed without creating the file, as `merged_prs_to_clean` does today, contract §7.2). If not, the outcome is `pending`, nothing is touched, no Event for this PR in this pass.
+2. **Kill Attempt windows**: `tmux kill-pane` on every pane of this machine's Attempt windows of the PR's Jobs (as today, `core/src/pr/poll.rs` `clean_up`).
+3. **Discard parallel Attempt worktrees**: per Attempt of the PR's Jobs whose worktree exists on disk (a linear Attempt runs in the Lead worktree): `git worktree remove --force`, `git branch -D` on its branches (as today; contract §7.2).
+4. **Rule S** on the Lead worktree (contract §7.4: fetch, merge base): its local branch stays up to date for the dirty and unpushed check (§4 below).
+5. **Remove the Lead worktree** (§4 below).
+
+**§4. Removal of a Lead worktree** (pro-d72; refusals keep it whole or mark it for retry):
+
+When the Lead worktree is dirty (output of `git --no-optional-locks status --porcelain` not empty, untracked files included) or unpushed (`git rev-list --no-merges HEAD --not --remotes=origin` not empty, **unless** `HEAD` is the pull request's recorded head commit or an ancestor of it, as the poll checks today with `headRefOid`; a squash-merged PR whose branch GitHub deleted is cleaned up; contract §7.2 "The recorded head and the unpushed rule"), the outcome is `kept` with the reason, and nothing is touched. Otherwise, in this order, each step idempotent (a stop at any point leaves the worktree whole or marked for retry):
+
+(a) **Rename**: `<path>` to `<path>.removing` (atomic rename, a sibling in the same directory; PR keys have no dot, so no collision; a failing rename is `kept` with the error as reason).
+(b) **Prune**: `git worktree prune` (the registered directory is gone, so git drops it).
+(c) **Delete branch**: `git branch -D <lead branch>` when it exists.
+(d) **Delete directory**: `std::fs::remove_dir_all(<path>.removing)`.
+
+A stop (kill, crash, failing call) at (a) leaves the worktree whole and untouched. A stop at (b), (c) or (d) leaves the worktree gone (`<path>` absent) with `<path>.removing` as the marker (the directory is present from the rename, empty of tracked files). A pass that finds `<path>` absent and `<path>.removing` present retries (b), (c), (d) again; every step is idempotent. A failure in (b), (c) or (d) is outcome `failed`: the path is gone, and later passes retry (a contract violation: the marker stays; the worktree can never be recovered). Renamed but uncleaned paths show in the log (§5).
+
+**§5. Output and Log**:
+
+One JSON value: `{"ok":true,"outcomes":[...]}` or `{"ok":false,"error":{...}}` (store unreadable only). `outcomes` is one entry per pending PR path scanned (paths of Attempt worktrees, Lead worktrees and aside leftovers), in the order they were found. Each entry:
+
+```json
+{"plan": "pay-4521", "pr": "api", "status": "cancelled", "path": "/home/clayton/projects/pay.pay-4521.api", "outcome": "removed", "reason": null}
+```
+
+or, when not removed:
+
+```json
+{"plan": "pay-4521", "pr": "api", "status": "merged", "path": "/home/clayton/projects/pay.api", "outcome": "kept", "reason": "unpushed"}
+```
+
+or:
+
+```json
+{"plan": "pay-4521", "pr": "api", "status": "merged", "path": "/home/clayton/projects/pay.api.removing", "outcome": "failed", "reason": "permission denied"}
+```
+
+`status` is `cancelled` or `merged`, read from the PR's status in the store. `outcome` is one of: `removed` (the path was deleted whole), `kept` (the path remains untouched, worktree dirty or unpushed), `pending` (the PR is not idle yet), or `failed` (the path was renamed but not fully deleted; the next pass retries). `reason` is present only for `kept` and `failed` (the dirty/unpushed rule, git's stderr tail, or a file error message); it is a short string suitable for an Event.
+
+The pass writes a log to `run/janitor.log`, appended (new lines only, one per pass, format `<timestamp> <pass id> <status>` where `<status>` is `ok`, `locked`, or an error; the file is not parsed, so its format may change). The engine's watch.log reads events from that file (§12 "The watch loop").
+
+**§6. Events**:
+
+One `error` Event `cleanup_failed` per `kept` or `failed` path, only from the first pass that sees it with no `cleanup_failed` Event of that PR yet (later passes retry silently, as `fresh` does today for a cancelled PR; a merged PR now works the same way). Never for `pending` or `removed` paths. **Text** (pro-d72):
+
+- `kept`: `The clean-up of the <status> PR <pr> of Plan <plan> kept <path> untouched: <reason>`
+- `failed` (after rename at step (a) in §4): `The clean-up of the <status> PR <pr> of Plan <plan> removed <path>, but not everything: <reason>. The next janitor pass retries.`
+- `failed` (Attempt worktree discard at step 3 in Effects): `The clean-up of the <status> PR <pr> of Plan <plan> did not remove <path>: <reason>. The next janitor pass retries.`
+
+Each Event also has `details`: `{plan, pr, status, outcome, path, reason}`.
+
+**§7. Exit codes**:
+
+- `0` on success (outcomes list may be empty or contain `pending`, `kept`, `failed` and `removed`).
+- `2` when the store cannot be read (as `prune`, §27: `store_too_new`, `migration_failed`, `migration_changed`, `migration_order`).
+- `1` for other store errors (as `prune`, §27: `store_failed`, `store_tampered`).
+- `1` when a git or tmux call fails unexpectedly (details `{argv, exit, stderr}`); the pass continues for the next PR.
+
+**Tests**: `janitor_pass_removes_cancelled_and_merged_pr_worktrees_and_branches`, `janitor_pass_finishes_what_a_killed_pass_left`, `janitor_command_is_in_the_help_tree`.
+
+Idempotent: yes; rerunning with nothing to clean prints `ok` with an empty outcomes list and writes nothing; rerunning after a `kept` or `failed` path retries (may succeed on rerun if the worktree was cleaned by hand; `kept` paths remain `kept`, as they are not idle yet or always dirty).
+
