@@ -433,11 +433,11 @@ pub const TIER_YELLOW: &str = "\u{F069A}";
 /// Red: a blocker only the User can clear.
 pub const TIER_RED: &str = "\u{F0362}";
 
-/// STUB (red tests of the TUI Job, pro-d100): the glyph of a `deploy` item, U+F15A9 (yellow tier); not used yet.
+/// The glyph of a `deploy` item, U+F15A9 (yellow tier).
 pub const ITEM_DEPLOY: &str = "\u{F15A9}";
-/// STUB: the glyph of a `pr-ready` item, U+F12F4 (yellow tier); not used yet.
+/// The glyph of a `pr-ready` item, U+F12F4 (yellow tier).
 pub const ITEM_PR_READY: &str = "\u{F12F4}";
-/// STUB: the glyph of a `review-requested` item, U+F12F2 (blue tier); not used yet.
+/// The glyph of a `review-requested` item, U+F12F2 (blue tier).
 pub const ITEM_REVIEW_REQUESTED: &str = "\u{F12F2}";
 
 /// The tier glyph of `urgency`, in the bright colour of its urgency (the Inbox row is clickable; the colours of the tree's dots).
@@ -460,6 +460,9 @@ pub fn item_span(kind: cpd_core::inbox::model::Kind, urgency: Urgency) -> Span<'
     match kind {
         Item::CurateDocs => Span::styled(ITEM_DOCS, fg_clickable(Meaning::Notice)),
         Item::CurateRetire => Span::styled(ITEM_RETIRE, fg_clickable(Meaning::Notice)),
+        Item::Deploy => Span::styled(ITEM_DEPLOY, fg_clickable(Meaning::Review)),
+        Item::PrReady => Span::styled(ITEM_PR_READY, fg_clickable(Meaning::Review)),
+        Item::ReviewRequested => Span::styled(ITEM_REVIEW_REQUESTED, fg_clickable(Meaning::External)),
         _ => tier_span(urgency),
     }
 }

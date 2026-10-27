@@ -15,7 +15,7 @@ use super::legend;
 use crate::link::{Links, open_url};
 use crate::palette::{self, Meaning};
 use cpd_core::clock::ManualClock;
-use cpd_core::host::runner::FakeRunner;
+use cpd_core::host::runner::{FakeRunner, Reply};
 use cpd_core::inbox::model::{Item, Kind, Urgency};
 
 const OPENED: &str = "2026-01-01T00:00:00.000Z";
@@ -92,7 +92,7 @@ fn clicking_a_deploy_item_label_opens_its_url() {
         .flat_map(|y| (0..buf.area.width).map(move |x| Position::new(x, y)))
         .find(|p| links.at(*p).is_some());
     let url = at.and_then(|p| links.at(p)).expect("the label is a Link");
-    let runner = FakeRunner::new(ManualClock::new());
+    let runner = FakeRunner::new(ManualClock::new()).on("open", |_| true, Reply::ok(""));
     open_url(&runner, url).unwrap();
     let calls = runner.calls();
     assert_eq!(calls.iter().map(|c| c.args.clone()).collect::<Vec<_>>(), [vec![URL.to_owned()]], "`open <url>`");
