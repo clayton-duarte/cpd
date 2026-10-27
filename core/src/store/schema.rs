@@ -876,3 +876,5 @@ mod cyan_tests;
 mod claim_tests;
 #[cfg(test)]
 mod tier_catalog_tests;
+#[cfg(test)]
+mod deploy_tests;

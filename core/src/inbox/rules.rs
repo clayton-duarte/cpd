@@ -77,7 +77,14 @@ pub fn conditions_with(
     all.extend(store.read(|conn| pr_ready(conn))?);
     all.extend(store.read(|conn| curate(conn, floor))?);
     all.extend(review_requested(store, home, now, team)?);
+    all.extend(deploys(home)?);
     Ok(all)
+}
+
+/// `deploy` (contract §2.2 "The deploy rule"): one condition per run of `run/deploy-runs.json`.
+// STUB (red tests): no condition yet.
+fn deploys(_home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
+    Ok(Vec::new())
 }
 
 /// A stored value that does not parse: the database was written outside cpd.
