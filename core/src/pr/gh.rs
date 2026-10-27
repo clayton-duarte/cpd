@@ -754,6 +754,79 @@ fn posted(runner: &dyn Runner, cwd: &Path, query: &str, vars: &[(&str, &str)], p
         .ok_or_else(|| reply.fail(format!("gh api graphql answered without data{pointer}.")))
 }
 
+/// What the read query of `pr post`'s auto-merge found (commands.md §9.8b).
+#[derive(Debug, PartialEq, Eq)]
+pub struct AutoMergeRead {
+    /// The repo allows auto-merge (`autoMergeAllowed`).
+    pub allowed: bool,
+    /// The pull request's GraphQL node id.
+    pub id: String,
+    /// The pull request already has an auto-merge request (`autoMergeRequest` is set).
+    pub requested: bool,
+}
+
+#[derive(Deserialize)]
+struct RawAutoRead {
+    repository: RawAutoRepo,
+}
+
+#[derive(Deserialize)]
+struct RawAutoRepo {
+    #[serde(rename = "autoMergeAllowed")]
+    allowed: bool,
+    #[serde(rename = "pullRequest")]
+    pull_request: Option<RawAutoPull>,
+}
+
+#[derive(Deserialize)]
+struct RawAutoPull {
+    id: String,
+    #[serde(rename = "autoMergeRequest")]
+    request: Option<Value>,
+}
+
+/// The ONE read of `pr post`'s auto-merge: whether the repo allows it, the pull request's node id and whether it has a request.
+pub fn auto_merge_read(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) -> Result<AutoMergeRead, CpdError> {
+    let (owner, name) = repo_parts(repo)
+        .ok_or_else(|| CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo.")).with("repo", repo))?;
+    let query = format!(
+        "query {{ repository(owner: \"{owner}\", name: \"{name}\") {{ autoMergeAllowed pullRequest(number: {number}) {{ id autoMergeRequest {{ enabledAt }} }} }} }}"
+    );
+    let (args, out) = graphql_with(runner, cwd, &query, &[])?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let reply = Reply { args: &refs, out: &out };
+    if out.exit != Some(0) {
+        return Err(reply.fail(format!("gh {} exited {}.", refs[0], out.exit.map_or("with a signal".to_owned(), |c| c.to_string()))));
+    }
+    let (data, errors): (RawAutoRead, _) = reply.envelope()?;
+    if let Some(first) = errors.first() {
+        return Err(reply.fail(format!("gh api graphql answered with errors: {}", first.message.as_deref().unwrap_or("(no message)"))));
+    }
+    let pull = data.repository.pull_request.ok_or_else(|| reply.fail(format!("GitHub has no pull request {repo}#{number}.")))?;
+    Ok(AutoMergeRead { allowed: data.repository.allowed, id: pull.id, requested: pull.request.is_some() })
+}
+
+/// Turns on squash auto-merge for the pull request whose node id is `pull` (`enablePullRequestAutoMerge`, never `gh pr merge`).
+/// `Ok(Err(message))` is GitHub's refusal (GraphQL `errors`); a `gh` that failed or printed no usable answer is `gh_failed`.
+pub fn enable_auto_merge(runner: &dyn Runner, cwd: &Path, pull: &str) -> Result<Result<(), String>, CpdError> {
+    let query = "mutation($pull: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $pull, mergeMethod: SQUASH}) { pullRequest { autoMergeRequest { enabledAt } } } }";
+    let (args, out) = graphql_with(runner, cwd, query, &[("pull", pull)])?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let reply = Reply { args: &refs, out: &out };
+    let body: Option<Envelope<Value>> = serde_json::from_str(&out.stdout).ok();
+    if let Some(first) = body.as_ref().and_then(|b| b.errors.as_ref()).and_then(|e| e.first()) {
+        return Ok(Err(first.message.clone().unwrap_or_else(|| "(no message)".to_owned())));
+    }
+    if out.exit != Some(0) {
+        return Err(reply.fail(format!("gh {} exited {}.", refs[0], out.exit.map_or("with a signal".to_owned(), |c| c.to_string()))));
+    }
+    let (data, _): (Value, _) = reply.envelope()?;
+    match data.pointer("/enablePullRequestAutoMerge/pullRequest/autoMergeRequest/enabledAt").and_then(Value::as_str) {
+        Some(_) => Ok(Ok(())),
+        None => Err(reply.fail("gh api graphql answered without an auto-merge request.".to_owned())),
+    }
+}
+
 /// The User's open pull requests (`SEARCH_QUERY`), 15 s at most. A response with
 /// `errors`, without `data` or without JSON is `gh_failed`, never "no PRs".
 pub fn search_open(runner: &dyn Runner, cwd: &Path) -> Result<Search, CpdError> {

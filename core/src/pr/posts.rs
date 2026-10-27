@@ -17,27 +17,43 @@ pub struct PostRecord {
     pub reaction: Option<String>,
     /// When the reaction was added; `None` until then.
     pub reacted_at: Option<String>,
+    /// The auto-merge request: `none`, `pending`, `enabled` or `refused` (contract §4.4).
+    pub auto_merge: String,
+    /// When the request became `enabled` or `refused`; `None` before.
+    pub auto_merge_at: Option<String>,
 }
 
 /// The post of PR `pr` of `plan`, if it has one.
 pub fn find(conn: &Connection, plan: &str, pr: &str) -> Result<Option<PostRecord>, CpdError> {
     Ok(conn
         .query_row(
-            "SELECT channel, ts, link, posted_at, reaction, reacted_at FROM pr_posts WHERE plan = ?1 AND pr = ?2",
+            "SELECT channel, ts, link, posted_at, reaction, reacted_at, auto_merge, auto_merge_at FROM pr_posts WHERE plan = ?1 AND pr = ?2",
             [plan, pr],
             |r| {
-                Ok(PostRecord { channel: r.get(0)?, ts: r.get(1)?, link: r.get(2)?, posted_at: r.get(3)?, reaction: r.get(4)?, reacted_at: r.get(5)? })
+                Ok(PostRecord { channel: r.get(0)?, ts: r.get(1)?, link: r.get(2)?, posted_at: r.get(3)?, reaction: r.get(4)?, reacted_at: r.get(5)?, auto_merge: r.get(6)?, auto_merge_at: r.get(7)? })
             },
         )
         .optional()?)
 }
 
-/// Writes the post of PR `pr` of `plan`; `false` when the PR already has one (nothing is written).
+/// Writes the post of PR `pr` of `plan`, its auto-merge request stored as `pending`; `false` when the PR already has one (nothing is written).
 pub fn insert(tx: &WriteTxn<'_>, plan: &str, pr: &str, post: &PostRecord) -> Result<bool, CpdError> {
     let rows = tx.execute(
-        "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at, auto_merge) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending')
          ON CONFLICT (plan, pr) DO NOTHING",
         rusqlite::params![plan, pr, post.channel, post.ts, post.link, post.posted_at, post.reaction, post.reacted_at],
+    )?;
+    Ok(rows == 1)
+}
+
+/// Sets the auto-merge request of a `pending` post to `state` (`enabled`, `refused` or `none`); `enabled` and `refused` set
+/// `auto_merge_at` to the transaction's time. `false` when the post is not `pending` (nothing changed).
+pub fn set_auto_merge(tx: &WriteTxn<'_>, plan: &str, pr: &str, state: &str) -> Result<bool, CpdError> {
+    let rows = tx.execute(
+        "UPDATE pr_posts SET auto_merge = ?3,
+           auto_merge_at = IIF(?3 IN ('enabled', 'refused'), (SELECT at FROM txns WHERE id = cpd_txn()), NULL)
+         WHERE plan = ?1 AND pr = ?2 AND auto_merge = 'pending'",
+        [plan, pr, state],
     )?;
     Ok(rows == 1)
 }
@@ -120,6 +136,8 @@ mod tests {
                     posted_at: "t".into(),
                     reaction: reaction.map(str::to_owned),
                     reacted_at: None,
+                    auto_merge: String::new(),
+                    auto_merge_at: None,
                 };
                 insert(tx, "pay", key, &post)?;
                 Ok(())
@@ -136,6 +154,19 @@ mod tests {
         add(&mut store, "early", "merged", "2026-02-01", Some("git-merge"));
         let next = store.read(next_unreacted).unwrap().unwrap();
         assert_eq!((next.pr.as_str(), next.reaction.as_str(), next.channel.as_str()), ("early", "git-merge", "C0POLICY1"));
+    }
+
+    #[test]
+    fn a_post_starts_pending_and_set_auto_merge_settles_it_once() {
+        let (_dir, mut store) = store();
+        add(&mut store, "a", "open", "", None);
+        let post = store.read(|c| find(c, "pay", "a")).unwrap().unwrap();
+        assert_eq!((post.auto_merge.as_str(), post.auto_merge_at), ("pending", None));
+        assert!(store.write("set", |tx| set_auto_merge(tx, "pay", "a", "enabled")).unwrap());
+        let post = store.read(|c| find(c, "pay", "a")).unwrap().unwrap();
+        assert_eq!(post.auto_merge, "enabled");
+        assert!(post.auto_merge_at.is_some());
+        assert!(!store.write("set", |tx| set_auto_merge(tx, "pay", "a", "refused")).unwrap());
     }
 
     #[test]
