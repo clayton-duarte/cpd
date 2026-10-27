@@ -11,6 +11,7 @@ use crate::plan::jobs::JobSpec;
 
 const FIELDS: [&str; 5] = ["goal", "context", "touches", "acceptance", "out_of_scope"];
 /// The two more of a `test` Job's Spec (contract §2.2 "Job kinds"), refused for every other kind.
+const OPTIONAL_FIELDS: [&str; 1] = ["resources"];
 const TEST_FIELDS: [&str; 2] = ["tests", "test_files"];
 
 /// A Spec as the file gives it, valid.
@@ -25,6 +26,8 @@ pub struct Spec {
     pub tests: Option<Vec<String>>,
     /// `test_files` of a `test` Job: the files that hold them (repo-relative paths or `dir/` prefixes).
     pub test_files: Option<Vec<String>>,
+    /// `resources` of a non-review Job: the names of the repo's declared exclusive resources it takes.
+    pub resources: Option<Vec<String>>,
 }
 
 impl Spec {
@@ -165,12 +168,15 @@ pub fn parse(text: &str) -> Result<Spec, CpdError> {
     let Value::Object(mut fields) = value else {
         return Err(invalid("$", "expected an object"));
     };
-    if let Some(unknown) = fields.keys().find(|k| !FIELDS.contains(&k.as_str()) && !TEST_FIELDS.contains(&k.as_str())) {
+    if let Some(unknown) = fields.keys().find(|k| !FIELDS.contains(&k.as_str()) && !TEST_FIELDS.contains(&k.as_str()) && !OPTIONAL_FIELDS.contains(&k.as_str())) {
         return Err(invalid(&format!("$.{unknown}"), "unknown field"));
     }
     let tests = fields.contains_key("tests").then(|| tests_field(&mut fields)).transpose()?;
     let test_files = fields.contains_key("test_files").then(|| test_files_field(&mut fields)).transpose()?;
+    // Stub: the implementation Job validates `resources` and stores it.
+    let resources = fields.contains_key("resources").then(|| list_field(&mut fields, "resources", false)).transpose()?;
     Ok(Spec {
+        resources,
         tests,
         test_files,
         goal: text_field(&mut fields, "goal", true)?,

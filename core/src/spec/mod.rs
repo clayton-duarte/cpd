@@ -19,6 +19,9 @@ use crate::git::Pipeline;
 use crate::home::{CpdHome, Hook};
 use crate::ids::{AttemptId, EscalationId, PlanId};
 
+#[cfg(test)]
+mod resources_tests;
+
 const TEMPLATE: &str = include_str!("worker.md");
 
 /// What no Attempt may touch, whatever the PR's `protected.paths` say (§7.5).
@@ -150,6 +153,8 @@ pub struct Input<'a> {
     pub touches: &'a [String],
     pub acceptance: &'a [String],
     pub out_of_scope: &'a [String],
+    /// The names of the exclusive resources the Attempt holds (its Job's Spec `resources`); empty when none.
+    pub resources: &'a [String],
     /// The commands of the PR's `hooks.pre-commit`, as [`quick_check`] lists them;
     /// empty when the repo defines none.
     pub quick_check: &'a [String],

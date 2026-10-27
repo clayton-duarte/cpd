@@ -183,6 +183,7 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
             touches: &touches,
             acceptance: &acceptance,
             out_of_scope: &out_of_scope,
+            resources: &[],
             quick_check: &quick_check,
             protected: &protected,
             previous: &previous,

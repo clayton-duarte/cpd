@@ -189,6 +189,7 @@ error_codes! {
     NeedsUnavailable = "needs_unavailable" => Refused,
     NeedsRequired = "needs_required" => Refused,
     JobLocked = "job_locked" => Refused,
+    ResourceUndeclared = "resource_undeclared" => Refused,
     JobMerged = "job_merged" => Refused,
     JobNotFailed = "job_not_failed" => Refused,
     JobNotReady = "job_not_ready" => Refused,
