@@ -1453,7 +1453,7 @@ fn e3_one_tick_schedules_a_ready_job_within_the_concurrency() {
     assert_eq!((fx.job_status("web"), fx.job_status("ui")), ("queued".into(), "queued".into()));
     assert!(driver_pid(&fx, "api-a1").is_some());
     // One driver was launched, and its pid is the one stored; it runs until the test says it ended.
-    assert_eq!(fx.fakes.spawn.launches().len(), 1);
+    assert_eq!(fx.fakes.spawn.launches_but_janitor().len(), 1);
     let (_, pid) = driver_launch(&fx, "api-a1");
     // Its driver exits at once with no lock held and no Event: the next tick ends the Attempt crashed.
     fx.fakes.spawn.exit(pid, 1);
@@ -1533,7 +1533,7 @@ fn e3_starts_an_urgent_job_before_an_older_one() {
     let started: Vec<Option<String>> = fx.events("attempt-started").into_iter().map(|e| e.1).collect();
     assert_eq!(started, [Some("hot".to_owned())]);
     assert_eq!((fx.job_status("hot"), fx.job_status("old")), ("running".into(), "queued".into()));
-    assert_eq!(fx.fakes.spawn.launches().len(), 1);
+    assert_eq!(fx.fakes.spawn.launches_but_janitor().len(), 1);
 }
 
 /// An urgent Job may start one Attempt beyond `concurrency`, and no more; the extra slot is never a non-urgent Job's.
@@ -1557,7 +1557,7 @@ fn e3_starts_one_urgent_job_beyond_the_concurrency_and_not_a_second() {
     assert_eq!(started, [Some("hot1".to_owned())]);
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE status <> 'ended'"), 2);
     assert_eq!((fx.job_status("hot1"), fx.job_status("hot2"), fx.job_status("old")), ("running".into(), "queued".into(), "queued".into()));
-    assert_eq!(fx.fakes.spawn.launches().len(), 1);
+    assert_eq!(fx.fakes.spawn.launches_but_janitor().len(), 1);
 }
 
 /// The 00:02Z incident (hs-d151): the file the engine runs from is replaced, then
@@ -1635,7 +1635,7 @@ fn e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off() 
         let retry = &fx.events("attempt-retry")[i];
         assert_eq!((&retry.3["cause"], &retry.3["next_tier"]), (&json!("crashed"), &json!("S2")));
     }
-    assert_eq!(fx.fakes.spawn.launches(), [], "no driver was started");
+    assert_eq!(fx.fakes.spawn.launches_but_janitor(), [], "no driver was started");
 }
 
 /// A started driver resets the back-off, and only Attempts whose driver started use up a try: `web`
@@ -2528,7 +2528,7 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "dispatch");
     assert_eq!(fx.count("pr-started"), 1);
     assert!(fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'") < fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-started'"));
-    assert!(!lead.exists(), "the poll that saw the merge cleaned up the Lead worktree");
+    assert!(lead.exists(), "the poll that saw the merge leaves the Lead worktree to the janitor");
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
 
@@ -2741,7 +2741,7 @@ fn e10_runs_at_most_two_retitles_at_once() {
     let children = t.children.clone();
     t.fx.watch_steps(move |nap| {
         if nap == 30 {
-            let started: Vec<String> = spawn.launches().iter().map(|l| l.args[2].clone()).collect();
+            let started: Vec<String> = spawn.launches_but_janitor().iter().map(|l| l.args[2].clone()).collect();
             let logs = fs::read_dir(home.join("run/titles")).unwrap().count();
             *seen.lock().unwrap() = Some((started, logs));
         }
@@ -2779,7 +2779,7 @@ fn e10_skips_a_session_whose_title_lock_is_held_and_counts_held_locks() {
 
     t.run(30);
     assert_eq!(t.fx.calls("pi").len(), 0, "two are held: no place for s3");
-    assert_eq!(t.fx.fakes.spawn.launches(), []);
+    assert_eq!(t.fx.fakes.spawn.launches_but_janitor(), []);
     drop(one);
     // s1 starts in the first tick of this run (one place), and s3 once it has ended.
     t.run(50);

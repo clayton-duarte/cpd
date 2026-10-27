@@ -1471,22 +1471,23 @@ fn lead_removal_keeps_a_dirty_or_unpushed_worktree_untouched_without_renaming() 
 fn lead_removal_with_a_failing_rename_is_kept_untouched() {
     use std::os::unix::fs::PermissionsExt;
     /// Gives the directory its mode back on drop, so the env removes it, also when an assertion fails.
-    struct Restore(PathBuf);
+    struct Restore(PathBuf, fs::Permissions);
     impl Drop for Restore {
         fn drop(&mut self) {
-            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+            let _ = fs::set_permissions(&self.0, self.1.clone());
         }
     }
     let fx = Fx::with_ports();
     let (repo, path, head) = lead_to_remove(&fx, "pay", "ro");
     let parent = path.parent().unwrap().to_path_buf();
     let before = snapshot(&path);
-    let _restore = Restore(parent.clone());
+    let mode = fs::metadata(&parent).unwrap().permissions();
+    let _restore = Restore(parent.clone(), mode.clone());
     fs::set_permissions(&parent, fs::Permissions::from_mode(0o555)).unwrap();
 
     let result = remove_lead(&fx, &repo, &path, &head);
 
-    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(&parent, mode).unwrap();
     match result.expect("a failing rename is kept, not an error") {
         cpd_core::git::LeadRemoval::Kept(cpd_core::git::Kept::Rename(reason)) => assert!(!reason.is_empty(), "the error is the reason"),
         other => panic!("expected kept with the rename error, got {other:?}"),
