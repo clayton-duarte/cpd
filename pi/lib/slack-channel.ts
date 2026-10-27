@@ -5,7 +5,6 @@
 // Reads the team channel through pi's own MCP client and token store, so cpd has no HTTP client and never
 // reads, copies or logs the credential (hermes' `slack_fetch.py` did the same through Hermes' storage). Prints one JSON
 // value on stdout, progress on stderr. Writes nothing, to no file and to no Slack channel.
-import { realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { claimedByMe, countMessages, mentionsMe, parseMessages, reactionUsers, unwrap, WINDOW_DAYS, type Post } from "./slack-parse.ts";
@@ -199,8 +198,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv, cwd: string, 
   }
 }
 
-// Node resolves symlinks in import.meta.url, not in argv[1], and the installed adapter path is a symlink.
-if (process.argv[1] !== undefined && realpathSync(process.argv[1]) === realpathSync(import.meta.filename)) {
+// Node's `import.meta.main` is true through the adapter symlink (docs/implementing.md, 'Scripts run through the adapter link')
+if (import.meta.main) {
   const { value, exit } = await main(process.argv.slice(2), process.env, process.cwd());
   // pi's modules may leave timers behind: leave once the answer is flushed.
   process.stdout.write(JSON.stringify(value) + "\n", () => process.exit(exit));
