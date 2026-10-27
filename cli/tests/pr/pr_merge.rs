@@ -171,7 +171,7 @@ fn gh_read_back(fx: &Fx, before: &str, after: &str, graphql: Reply) -> Arc<Gh> {
 /// The GraphQL search answer listing acme/api#7 with `state`, mergeable UNKNOWN, mergeStateStatus CLEAN.
 fn search_listing(state: &str) -> Reply {
     let node = format!(
-        r#"{{"repository":{{"nameWithOwner":"acme/api"}},"number":7,"url":"https://github.com/acme/api/pull/7","title":"Add the thing","isDraft":false,"state":"{state}","createdAt":"t","updatedAt":"U1","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"CLEAN","commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
+        r#"{{"repository":{{"nameWithOwner":"acme/api","defaultBranchRef":{{"name":"main"}}}},"number":7,"url":"https://github.com/acme/api/pull/7","title":"Add the thing","isDraft":false,"state":"{state}","createdAt":"t","updatedAt":"U1","mergedAt":null,"baseRefName":"main","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"CLEAN","commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
     );
     let search = format!(
         r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-22T11:00:00Z"}}}}}}"#
@@ -184,8 +184,8 @@ fn row_with_ready_item(env: &TestEnv) {
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     std::fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
     env.sql(
-        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, merge_state, authored)
-         VALUES ('acme/api', 7, 'https://github.com/acme/api/pull/7', 'Add the thing', 0, 'open', 'none', 'none', 't', 't', 'clean', 1)",
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, merge_state, authored, base_ref, default_branch)
+         VALUES ('acme/api', 7, 'https://github.com/acme/api/pull/7', 'Add the thing', 0, 'open', 'none', 'none', 't', 't', 'clean', 1, 'main', 'main')",
     );
     let mut store = Store::open(&home, 5000).unwrap();
     let found = conditions(&mut store, &home).unwrap();
