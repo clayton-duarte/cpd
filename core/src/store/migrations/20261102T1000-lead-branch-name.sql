@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 68
+-- cpd-migration: breaking after 70
 -- The Lead Branch of a PR is `<plan>/<key>`, without the `cpd/` prefix (contract §2.1, §4.4, decision pro-d112,
 -- assumptions pro-d113 A1-A3). `ALTER TABLE` cannot change a CHECK, so `prs` and `attempts` are rebuilt (the runner
 -- applies a migration with foreign keys off and `legacy_alter_table` on):

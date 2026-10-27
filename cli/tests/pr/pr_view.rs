@@ -16,10 +16,28 @@ const URL: &str = "https://github.com/acme/pay/pull/812";
 
 /// The fake `gh`, in-process: `fail`, when set, makes every call fail; else `pr view` and `api` answer with their texts.
 #[derive(Default)]
-struct Gh {
+pub(super) struct Gh {
     fail: Mutex<Option<String>>,
     /// The second page of inline comments, when set.
     inline2: Mutex<Option<String>>,
+    /// How GitHub answers the auto-merge calls of `pr post` (commands.md §9.8b).
+    pub(super) auto: Mutex<AutoMerge>,
+}
+
+/// GitHub's side of squash auto-merge: the read query `autoMergeAllowed ... autoMergeRequest` and the mutation
+/// `enablePullRequestAutoMerge`.
+pub(super) struct AutoMerge {
+    pub(super) allowed: bool,
+    /// The pull request already has an auto-merge request.
+    pub(super) already: bool,
+    /// GitHub's error message for the mutation, when it refuses.
+    pub(super) refuse: Option<String>,
+}
+
+impl Default for AutoMerge {
+    fn default() -> Self {
+        AutoMerge { allowed: true, already: false, refuse: None }
+    }
 }
 
 impl Handler for Gh {
@@ -28,6 +46,30 @@ impl Handler for Gh {
             return Reply::exit(1, "", fail);
         }
         let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
+        if args[..2] == ["api", "graphql"] {
+            let auto = self.auto.lock().unwrap();
+            let text = args.join(" ");
+            if text.contains("enablePullRequestAutoMerge") {
+                return match &auto.refuse {
+                    Some(message) => Reply::exit(
+                        1,
+                        &format!("{}\n", json!({"data": {"enablePullRequestAutoMerge": null}, "errors": [{"message": message}]})),
+                        &format!("gh: {message}\n"),
+                    ),
+                    None => Reply::ok(&format!(
+                        "{}\n",
+                        json!({"data": {"enablePullRequestAutoMerge": {"pullRequest": {"autoMergeRequest": {"enabledAt": "2026-10-27T18:00:00Z"}}}}})
+                    )),
+                };
+            }
+            if text.contains("autoMergeAllowed") {
+                let request = if auto.already { json!({"enabledAt": "2026-10-27T17:00:00Z"}) } else { serde_json::Value::Null };
+                return Reply::ok(&format!(
+                    "{}\n",
+                    json!({"data": {"repository": {"autoMergeAllowed": auto.allowed, "pullRequest": {"id": "PR_812", "autoMergeRequest": request}}}})
+                ));
+            }
+        }
         match args[..2] {
             ["pr", "view"] => Reply::ok(VIEW),
             ["api", endpoint] if endpoint.starts_with("repos/{owner}/{repo}/pulls/812/comments") => {
@@ -57,7 +99,7 @@ const INLINE: &str = r#"[{"id": 1893, "user": {"login": "reviewer"}, "path": "sr
 pub(super) struct Pay {
     pub(super) fx: Fx,
     home: CpdHome,
-    gh: Arc<Gh>,
+    pub(super) gh: Arc<Gh>,
 }
 
 /// Plan `pay` with one PR `repo` in `status`; its Lead worktree is a plain directory (the fake `gh` ignores it).
@@ -107,7 +149,7 @@ impl Pay {
         *self.gh.inline2.lock().unwrap() = Some(format!("{text}\n"));
     }
 
-    fn gh_fails(&self, stderr: &str) {
+    pub(super) fn gh_fails(&self, stderr: &str) {
         *self.gh.fail.lock().unwrap() = Some(format!("{stderr}\n"));
     }
 

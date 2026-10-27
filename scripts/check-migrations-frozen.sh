@@ -14,6 +14,14 @@
 # stays byte-identical. A forward rename (to a newer name) of a migration that
 # already exists on <base> is refused (hs-d704, hs-n531): only a migration the PR
 # itself adds may be renumbered forward before it lands (the O3 renumber, hs-d661).
+# One named one-off (decision pro-d120, Plan mig-order): 20261031T1000-deploy-kind.sql
+# was never applied by any store and sorted before the applied pr-description, so
+# it may be renamed forward, header-only, to a newer name.
+# The late rule (contract §4.5 O3, decision pro-d122, assumption A5): a breaking
+# migration the PR adds, or renames to a name absent from <base>, must sort
+# bytewise (LC_ALL=C, names without .sql) after every migration name on <base>,
+# else it is refused: a store that applied a later name refuses a breaking
+# migration that sorts before it. Additive migrations may sort anywhere (O2).
 # An edit, a delete, a rename of a legacy or additive migration and a body change
 # all stay refused.
 #
@@ -66,6 +74,10 @@ while IFS='	' read -r status old new; do
           && allowed_header_only "$old" "$new"; then
           continue
         fi
+        # The one-off forward rename (pro-d120).
+        if [ "$old" = "${dir}20261031T1000-deploy-kind.sql" ] && allowed_header_only "$old" "$new"; then
+          continue
+        fi
       elif allowed_header_only "$old" "$new"; then
         # The old path is not on the base: a migration this PR adds may be renumbered.
         continue
@@ -90,6 +102,45 @@ EOF
 if [ -n "$bad" ]; then
   echo "migrations frozen check failed: $dir files that exist on $base were changed (M modified, D deleted, R renamed):" >&2
   printf '%s' "$bad" >&2
-  echo "A migration on main is never edited, renumbered or deleted. A breaking migration on main may only be restored to an older name a live store applied, and its first line (the \`breaking after <n>\` header) may be corrected, when every line after the first is byte-identical (contract §4.5 N5/O3). A forward rename of a migration on main is refused (hs-d704): only a migration this PR adds may be renumbered to a newer name before it lands. Otherwise restore it and put the change in a new migration (scripts/new-migration.sh)." >&2
+  echo "A migration on main is never edited, renumbered or deleted. A breaking migration on main may only be restored to an older name a live store applied, and its first line (the \`breaking after <n>\` header) may be corrected, when every line after the first is byte-identical (contract §4.5 N5/O3). A forward rename of a migration on main is refused (hs-d704), except the one-off 20261031T1000-deploy-kind (pro-d120): only a migration this PR adds may be renumbered to a newer name before it lands. Otherwise restore it and put the change in a new migration (scripts/new-migration.sh)." >&2
+  exit 1
+fi
+
+# The late rule: a new breaking migration must sort after every name on the base.
+basenames=$(git ls-tree --name-only "$base" "$dir" | sed -n 's|^.*/||; s|\.sql$||p' | LC_ALL=C sort)
+added=$(git diff --name-status -M --diff-filter=AR "$mb" HEAD -- "$dir")
+late=
+while IFS='	' read -r status old new; do
+  [ -n "$status" ] || continue
+  case $status in
+    R*)
+      # A rename of a migration on the base is the restore or the one-off, handled above.
+      git cat-file -e "$base:$old" 2>/dev/null && continue
+      path=$new
+      ;;
+    *) path=$old ;;
+  esac
+  case $path in *.sql) ;; *) continue ;; esac
+  git cat-file -e "$base:$path" 2>/dev/null && continue
+  git show "HEAD:$path" | head -n 1 | grep -Eq '^-- cpd-migration: breaking after [0-9]+$' || continue
+  name=${path##*/}
+  name=${name%.sql}
+  after=
+  for b in $basenames; do
+    [ "$b" != "$name" ] || continue
+    if [ "$(printf '%s\n%s\n' "$name" "$b" | LC_ALL=C sort | tail -n 1)" = "$b" ]; then
+      after="$after $b"
+    fi
+  done
+  [ -z "$after" ] || late="$late$name sorts before:$after
+"
+done <<EOF
+$added
+EOF
+
+if [ -n "$late" ]; then
+  echo "migrations frozen check failed: a breaking migration this PR adds sorts before a migration on $base:" >&2
+  printf '%s' "$late" >&2
+  echo "A breaking migration is a barrier (contract §4.5 O3): a store that applied a later name refuses it. git mv it to a timestamp after the newest migration on $base (not scripts/new-migration.sh: it stamps the clock, which may be older), recount its \`breaking after <n>\` as the number of migration files (legacy included) that sort before the new name, and run scripts/repin.sh." >&2
   exit 1
 fi
