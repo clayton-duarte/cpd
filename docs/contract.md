@@ -922,7 +922,7 @@ A Worker that holds a resource while it waits on an Escalation holds it for the 
 
 If the insert fails (`no_slot`, `cas_lost`), the starter closes the descriptor and no Attempt exists. If the spawn fails, the starter ends the Attempt `failed` / `crashed` itself, as E2 would, with `driver_pid` still null (the marker of a driver that never started; §3.4 "Ladder causes"), and then closes the descriptor. E2 probes a lock by opening the file afresh and trying `flock(LOCK_EX | LOCK_NB)`. The lock file is removed when the Attempt ends: by the driver at A9, and by E2 when it ends a dead driver's Attempt. E2's probe never creates the file (it opens without `O_CREAT`): a missing file means no driver.
 
-The concurrency slot is implicit: an Attempt holds one from `starting` until `ended`. E3 and `job dispatch` insert an Attempt only inside a write transaction that counts the Attempts not `ended` on the machine and refuses at `concurrency` (`no_slot`, exit 3); an urgent Job is refused only at `concurrency + 1` (§3.7 E3; `job dispatch` applies the same rule to an urgent Job). This replaces cpd 1's slot files (§9).
+The concurrency slot is implicit: a Job holds one from its first Attempt until it ends ("Tenancy"). E3 and `job dispatch` insert the first Attempt of a Job only inside a write transaction that counts the tenant Jobs of `workers` on the machine and refuses at `concurrency` (`no_slot`, exit 3; a Job that is already a tenant takes no slot); an urgent Job is refused only at `concurrency + 1` (§3.7 E3; `job dispatch` applies the same rule to an urgent Job). This replaces cpd 1's slot files (§9).
 
 ### 3.4a Display Tier derivation (pro-d81)
 

@@ -173,14 +173,14 @@ mod tests {
     fn store() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE attempts (status TEXT);
+            "CREATE TABLE job_tenants (plan TEXT, job TEXT, pool TEXT);
              CREATE TABLE plans (id TEXT, phase TEXT);
              CREATE TABLE prs (plan TEXT, key TEXT, status TEXT);
-             CREATE TABLE jobs (plan TEXT, key TEXT, pr TEXT, status TEXT, seq INTEGER, urgent INTEGER NOT NULL DEFAULT 0, kind TEXT NOT NULL DEFAULT 'work');
+             CREATE TABLE jobs (plan TEXT, key TEXT, pr TEXT, status TEXT, seq INTEGER, skipped_n INTEGER, urgent INTEGER NOT NULL DEFAULT 0, kind TEXT NOT NULL DEFAULT 'work');
              CREATE TABLE dependencies (plan TEXT, job TEXT, needs TEXT);
              INSERT INTO plans (id, phase) VALUES ('pay', 'dispatch');
              INSERT INTO prs (plan, key, status) VALUES ('pay', 'a', 'dispatch'), ('pay', 'w', 'waiting');
-             INSERT INTO attempts (status) VALUES ('starting'), ('ended');
+             INSERT INTO job_tenants (plan, job, pool) VALUES ('pay', 'busy', 'workers'), ('pay', 'busy', 'repo:acme/pay:db');
              -- ready: no Dependency
              INSERT INTO jobs (plan, key, pr, status, seq) VALUES ('pay', 'free', 'a', 'queued', 1);
              -- ready: its only Dependency is merged
