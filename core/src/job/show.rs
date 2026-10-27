@@ -57,9 +57,14 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         let waiting_for = match (job.status.as_str(), crate::resource::wanted(conn, &plan, &job.key)?) {
             ("queued", Some(wanted)) => {
                 let mut held = Vec::new();
-                for name in &wanted.names {
-                    if let Some(holder) = crate::resource::read(&home, &wanted.owner, &wanted.repo, name)? {
-                        held.push(json!({"resource": name, "holder": holder}));
+                let key = crate::ids::PrKey::parse(&wanted.pr)?;
+                let policy = crate::pr::policy_of_pr(conn, &home, &plan, &key)?;
+                for pool in crate::resource::pools_of(&policy.resources, &wanted.owner, &wanted.repo) {
+                    if !wanted.names.iter().any(|n| n == pool.name()) {
+                        continue;
+                    }
+                    if let Some(holder) = crate::resource::holders(&home, &pool)?.remove(0) {
+                        held.push(json!({"resource": pool.name(), "holder": holder}));
                     }
                 }
                 Some(held)

@@ -180,6 +180,27 @@ impl HasText for Protected {
 #[serde(deny_unknown_fields)]
 pub struct Resources {
     pub names: Vec<String>,
+    /// One per visible name, sorted by name (contract §8.3 "The `resources` domain").
+    #[serde(default)]
+    pub declared: Vec<Declared>,
+}
+
+/// The level of the file that declares a resource: it owns the resource's pool (contract §8.3, D2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResourceScope {
+    Host,
+    Owner,
+    Repo,
+}
+
+/// A resource as declared: its name, the declaring level, its slots (`1..=64`) and the declaring file's path.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Declared {
+    pub name: String,
+    pub scope: ResourceScope,
+    pub slots: u8,
+    pub source: String,
 }
 
 impl HasText for Resources {
@@ -206,7 +227,9 @@ impl<'de> Deserialize<'de> for ResourceName {
 /// One declared resource: an empty table.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ResourceDecl {}
+pub struct ResourceDecl {
+    pub slots: Option<i64>,
+}
 
 /// What a scope file's `[resources]` table sets: one empty table per resource name.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -400,11 +423,11 @@ impl Set for ResourcesSet {
     type Value = Resources;
 
     fn fill(&self, _base: &Resources) -> (Resources, Vec<&'static str>) {
-        (Resources { names: self.0.keys().map(|n| n.0.clone()).collect() }, Vec::new())
+        (Resources { names: self.0.keys().map(|n| n.0.clone()).collect(), declared: Vec::new() }, Vec::new())
     }
 
     fn complete(&self) -> Option<Resources> {
-        Some(Resources { names: self.0.keys().map(|n| n.0.clone()).collect() })
+        Some(Resources { names: self.0.keys().map(|n| n.0.clone()).collect(), declared: Vec::new() })
     }
 }
 

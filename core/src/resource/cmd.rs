@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
-use super::{Holder, Take, lock_path, read, take};
+use super::{Holder, Pool, Take, holders, lock_path, take};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::spawn::Launch;
@@ -43,9 +43,14 @@ struct Repo {
     owner: OwnerLogin,
     name: RepoName,
     declared: Vec<String>,
+    pools: Vec<Pool>,
 }
 
 impl Repo {
+    fn pool(&self, name: &str) -> &Pool {
+        self.pools.iter().find(|p| p.name() == name).expect("a declared resource has a pool")
+    }
+
     fn label(&self) -> String {
         format!("{}/{}", self.owner, self.name)
     }
@@ -62,9 +67,11 @@ fn here(ports: &Ports, home: &CpdHome) -> Result<(PathBuf, Repo), CpdError> {
         return Err(usage(format!("cpd resource: {} is not in a git worktree.", cwd.display())));
     }
     let (owner, name) = repo_key(&cwd)?;
-    let mut declared = resolve(home, &PolicyKey::Repo(owner.clone(), name.clone()))?.policy.resources.names;
+    let resources = resolve(home, &PolicyKey::Repo(owner.clone(), name.clone()))?.policy.resources;
+    let mut declared = resources.names.clone();
     declared.sort();
-    Ok((cwd, Repo { owner, name, declared }))
+    let pools = super::pools_of(&resources, &owner, &name);
+    Ok((cwd, Repo { owner, name, declared, pools }))
 }
 
 pub fn run(ports: &Ports, command: Command) -> Result<Output, CpdError> {
@@ -79,7 +86,7 @@ fn list(ports: &Ports) -> Result<Output, CpdError> {
     let (_, repo) = here(ports, &home)?;
     let mut resources = Vec::new();
     for name in &repo.declared {
-        let holder = read(&home, &repo.owner, &repo.name, name)?;
+        let holder = holders(&home, repo.pool(name))?.remove(0);
         resources.push(json!({"name": name, "held": holder.is_some(), "holder": holder}));
     }
     Ok(Output::success(json!({"repo": repo.label(), "resources": resources})))
@@ -123,9 +130,9 @@ fn run_command(ports: &Ports, args: RunArgs) -> Result<Output, CpdError> {
 
     // An Attempt that holds the resource takes nothing more.
     if let Some(id) = &attempt
-        && matches!(read(&home, &repo.owner, &repo.name, &args.name)?, Some(Holder::Attempt { attempt, .. }) if &attempt == id)
+        && matches!(holders(&home, repo.pool(&args.name))?.remove(0), Some(Holder::Attempt { attempt, .. }) if &attempt == id)
     {
-        let path = lock_path(&home, &repo.owner, &repo.name, &args.name);
+        let path = lock_path(&home, repo.pool(&args.name), 1);
         let file = std::fs::File::open(&path).map_err(|e| lock_failed(&path, e))?;
         return exec(ports, &launch, std::os::fd::AsRawFd::as_raw_fd(&file), &args.name);
     }
@@ -140,9 +147,9 @@ fn run_command(ports: &Ports, args: RunArgs) -> Result<Output, CpdError> {
     let minutes = args.wait.unwrap_or(0);
     let mut tries_left = minutes * 60;
     let held = loop {
-        match take(&home, &repo.owner, &repo.name, &[args.name.as_str()], &holder)? {
+        match take(&home, std::slice::from_ref(repo.pool(&args.name)), &holder)? {
             Take::Held(held) => break held,
-            Take::Busy { resource, holder } => {
+            Take::Busy { resource, mut holders } => {
                 if tries_left == 0 {
                     return Err(CpdError::new(
                         ErrorCode::ResourceBusy,
@@ -150,7 +157,7 @@ fn run_command(ports: &Ports, args: RunArgs) -> Result<Output, CpdError> {
                     )
                     .with("resource", resource)
                     .with("repo", repo.label())
-                    .with("holder", serde_json::to_value(holder).expect("a holder serialises"))
+                    .with("holder", serde_json::to_value(holders.remove(0)).expect("a holder serialises"))
                     .with("waited_minutes", minutes));
                 }
                 tries_left -= 1;

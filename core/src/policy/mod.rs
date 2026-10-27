@@ -22,7 +22,7 @@ use crate::ids::{ContextId, OwnerLogin, RepoName};
 use crate::session::Role;
 
 pub use domain::{
-    audience, Checks, Domain, DomainSource, Feedback, Gate, GateAlias, Gates, Policy, Pr, Scope, Source, Sources,
+    audience, Checks, Declared, Domain, DomainSource, Feedback, Gate, GateAlias, Gates, Policy, Pr, ResourceScope, Resources, Scope, Source, Sources,
     Text,
 };
 /// The `policy` commands (commands.md §22).
