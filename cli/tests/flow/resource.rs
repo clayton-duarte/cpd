@@ -14,12 +14,12 @@ use common::refused;
 use cpd_core::lock;
 use serde_json::{Value, json};
 
-const COMMAND_RECORD: &str =
+pub(super) const COMMAND_RECORD: &str =
     r#"{"by":"command","pid":4242,"command":"npm run dev","session":"s9","attempt":null,"at":"2026-10-26T21:40:00.000Z"}"#;
 const ATTEMPT_RECORD: &str = r#"{"by":"attempt","plan":"pl","job":"api","attempt":"api-a1","at":"2026-10-26T21:41:00.000Z"}"#;
 
 /// A repo `acme/cpd` whose policy file is `policy`, in an `Fx` on fake ports.
-fn world(policy: &str) -> (Fx, PathBuf) {
+pub(super) fn world(policy: &str) -> (Fx, PathBuf) {
     let fx = Fx::with_ports();
     let home = fx.env.cpd_home();
     fs::write(home.join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
@@ -31,7 +31,7 @@ fn world(policy: &str) -> (Fx, PathBuf) {
 }
 
 /// Slot `slot` of the repo pool `name` of `acme/cpd` (contract §1.4).
-fn slot_path(fx: &Fx, name: &str, slot: u8) -> PathBuf {
+pub(super) fn slot_path(fx: &Fx, name: &str, slot: u8) -> PathBuf {
     fx.env.cpd_home().join(format!("locks/resource.repo.acme.cpd.{name}.{slot}.lock"))
 }
 
@@ -40,7 +40,7 @@ fn lock_path(fx: &Fx, name: &str) -> PathBuf {
 }
 
 /// Holds `name` as another process would: its own open file description, with `record` in the file.
-fn hold(fx: &Fx, name: &str, record: &str) -> File {
+pub(super) fn hold(fx: &Fx, name: &str, record: &str) -> File {
     hold_slot(fx, &slot_path(fx, name, 1), record)
 }
 
@@ -152,8 +152,11 @@ fn resource_run_is_busy_with_every_holder_when_all_slots_are_held() {
     assert_eq!(details["repo"], "acme/cpd");
     assert_eq!(
         details["holders"],
-        json!([serde_json::from_str::<Value>(COMMAND_RECORD).unwrap(), serde_json::from_str::<Value>(ATTEMPT_RECORD).unwrap()]),
-        "the holder records of every slot, in slot order"
+        json!([
+            {"slot": 1, "holder": serde_json::from_str::<Value>(COMMAND_RECORD).unwrap()},
+            {"slot": 2, "holder": serde_json::from_str::<Value>(ATTEMPT_RECORD).unwrap()},
+        ]),
+        "the holder of every held slot with its slot number, in slot order"
     );
     assert_eq!(details["waited_minutes"], 0);
     assert!(details.get("holder").is_none(), "{details}");
@@ -192,13 +195,16 @@ fn resource_run_wait_that_runs_out_is_busy_with_waited_minutes() {
 
 #[test]
 fn resource_run_execs_at_once_when_its_own_attempt_holds_the_resource() {
-    let (fx, repo) = world("[resources.e2e-port]\n");
-    let _holder = hold(&fx, "e2e-port", ATTEMPT_RECORD);
+    // The Attempt's Job is a tenant of the pool in the Ledger (commands.md 30.2): it holds the one slot already.
+    let (fx, repo) = tenancy_world("[resources.e2e-port]\n");
+    job_tenant(&fx, "api", "repo:acme/cpd:e2e-port", API_AT);
 
     let _ = fx.cpd_with(&repo, &run_args("e2e-port", &["--", "npm", "test"]), &[("CPD_ATTEMPT", "api-a1")]);
 
-    assert_eq!(fx.fakes.spawn.execs().len(), 1, "the Attempt does not wait on itself");
-    assert_eq!(fs::read_to_string(lock_path(&fx, "e2e-port")).unwrap(), ATTEMPT_RECORD, "it takes and writes nothing");
+    let launches = fx.fakes.spawn.launches_but_janitor();
+    assert_eq!(launches.len(), 1, "the Attempt does not wait on itself: the command is exec-ed at once");
+    assert_eq!((launches[0].program.as_str(), launches[0].args.as_slice()), ("npm", ["test".to_owned()].as_slice()));
+    assert!(!lock_path(&fx, "e2e-port").exists(), "it takes and writes nothing");
     assert!(fx.fakes.clock.naps().is_empty());
 }
 
@@ -239,7 +245,7 @@ fn resource_run_a_directory_without_a_keyable_origin_is_repo_unkeyed() {
 }
 
 /// The `resources` of a `resource list` without the built-in `workers`, which every repo has (tested on its own).
-fn declared_only(out: &Value) -> Value {
+pub(super) fn declared_only(out: &Value) -> Value {
     Value::Array(out["resources"].as_array().unwrap().iter().filter(|r| r["name"] != "workers").cloned().collect())
 }
 
@@ -263,13 +269,13 @@ fn resource_list_shows_each_slot_with_its_holder_and_the_scope() {
     assert_eq!(
         declared_only(&out),
         json!([
-            {"name": "db", "scope": "repo", "slots": 1, "free": 1, "holders": [{"slot": 1, "holder": null}]},
+            {"name": "db", "scope": "repo", "slots": 1, "free": 1, "holders": []},
             {"name": "e2e-port", "scope": "repo", "slots": 3, "free": 1,
-             "holders": [{"slot": 1, "holder": command}, {"slot": 2, "holder": null}, {"slot": 3, "holder": attempt}]},
-            {"name": "shared-port", "scope": "host", "slots": 2, "free": 1,
-             "holders": [{"slot": 1, "holder": null}, {"slot": 2, "holder": command}]},
-            {"name": "staging", "scope": "owner", "slots": 1, "free": 1, "holders": [{"slot": 1, "holder": null}]},
-        ])
+             "holders": [{"slot": 1, "holder": command}, {"slot": 3, "holder": attempt}]},
+            {"name": "shared-port", "scope": "host", "slots": 2, "free": 1, "holders": [{"slot": 2, "holder": command}]},
+            {"name": "staging", "scope": "owner", "slots": 1, "free": 1, "holders": []},
+        ]),
+        "the held slots with their holders and no entry for a free slot (commands.md 30.1)"
     );
 }
 
@@ -298,7 +304,7 @@ fn resource_run_refuses_workers_as_usage() {
 #[test]
 fn resource_list_shows_workers_with_the_running_attempts() {
     let (fx, repo) = world("[resources.e2e-port]\n");
-    // Concurrency 3, two Attempts not ended (one `starting`, one `running`) and one that ended: Plan `pl`'s Jobs `a`, `b` and `c`.
+    // Concurrency 3, two Attempts not ended (one `starting`, one `running`) and one that ended with its Job `failed`: Plan `pl`'s Jobs `a`, `b` and `c`.
     super::job::setup(&fx.env);
     fs::write(fx.env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\nconcurrency = 3\n").unwrap();
     super::job::plan(&fx.env, "pl", "dispatch");
@@ -319,15 +325,46 @@ fn resource_list_shows_workers_with_the_running_attempts() {
     let out = fx.cpd_in(&repo, &["resource", "list"]).ok();
 
     // The built-in `workers` is listed with the declared resources, sorted by name (commands.md §30.1): host scope, `concurrency`
-    // slots, one holder `{slot, holder}` per Attempt not ended, `holder` the shape `{by: "attempt", plan, job, attempt, at}`.
+    // slots, one holder `{slot, holder}` per tenant Job (`c` is `failed` with its Attempt ended and keeps its worker, contract §3.4
+    // "Tenancy"), `holder` the shape `{by: "attempt", plan, job, attempt, at}`.
     let resources = out["resources"].as_array().unwrap();
     assert_eq!(resources.iter().map(|r| r["name"].as_str().unwrap()).collect::<Vec<_>>(), ["e2e-port", "workers"], "{out}");
     let workers = &resources[1];
-    assert_eq!((&workers["scope"], &workers["slots"], &workers["free"]), (&json!("host"), &json!(3), &json!(1)), "{workers}");
+    assert_eq!((&workers["scope"], &workers["slots"], &workers["free"]), (&json!("host"), &json!(3), &json!(0)), "{workers}");
     let holders = workers["holders"].as_array().unwrap();
-    assert_eq!(holders.len(), 2, "one per Attempt not ended: {workers}");
-    for (i, (job, at)) in [("a", "2026-10-26T21:40:00.000Z"), ("b", "2026-10-26T21:41:00.000Z")].into_iter().enumerate() {
+    assert_eq!(holders.len(), 3, "one per tenant Job: {workers}");
+    for (i, (job, at)) in [("a", "2026-10-26T21:40:00.000Z"), ("b", "2026-10-26T21:41:00.000Z"), ("c", "2026-10-26T21:42:00.000Z")].into_iter().enumerate() {
         assert_eq!(holders[i]["slot"], i + 1);
         assert_eq!(holders[i]["holder"], json!({"by": "attempt", "plan": "pl", "job": job, "attempt": format!("{job}-a1"), "at": at}));
     }
+}
+
+/// Job `job` of Plan `pl` as a tenant of `pool` (the text of contract §3.4 "Resources of a Job" item 3) with its first Attempt
+/// `running` since `at`: the rows the starter writes in one transaction. Plan `pl` and its PR exist after [`tenancy_world`].
+pub(super) fn job_tenant(fx: &Fx, job: &str, pool: &str, at: &str) {
+    let fingerprint = "f".repeat(64);
+    super::job::fixture(
+        &fx.env,
+        &format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+               VALUES ('pl', 'repo', '{job}', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fingerprint}', cpd_txn(), 't');
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+               VALUES ('pl', '{job}-a1', '{job}', 1, 'S2', 'ladder', 'running', 'cpd/pl--{job}-a1', '/w', '{at}');
+             INSERT INTO job_pools (plan, job, pool) VALUES ('pl', '{job}', '{pool}');"
+        ),
+    );
+}
+
+/// [`world`] with Plan `pl` in `dispatch`, whose Jobs the test adds with [`job_tenant`].
+pub(super) fn tenancy_world(policy: &str) -> (Fx, PathBuf) {
+    let (fx, repo) = world(policy);
+    super::job::setup(&fx.env);
+    super::job::plan(&fx.env, "pl", "dispatch");
+    (fx, repo)
+}
+
+pub(super) const API_AT: &str = "2026-10-26T21:41:00.000Z";
+
+pub(super) fn api_holder() -> Value {
+    json!({"by": "attempt", "plan": "pl", "job": "api", "attempt": "api-a1", "at": API_AT})
 }

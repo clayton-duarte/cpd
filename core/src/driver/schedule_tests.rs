@@ -1,35 +1,96 @@
-//! The scheduler's contract (contract §3.7 E3 "Priority, acquisition and reservation"): the cases of the doc, and the proofs
-//! of no starvation and no deadlock over every small state. Pure: no store, no clock, no randomness.
+//! The scheduler's contract (contract §3.7 E3 "the queue walk", pro-d106): the cases of the doc, and the proofs of the bound on
+//! waiting, of no deadlock and of no idle slot over every small state. Pure: no store, no clock, no randomness.
 
 use std::collections::VecDeque;
 
-use super::schedule::{Earmark, Pool, Ready, schedule};
+use super::schedule::{Pool, Ready, schedule};
 
 fn pool(free: u32) -> Pool {
     Pool { free, urgent_free: 0 }
 }
 
+/// A Job of the queue: its `seq` is its id.
 fn job(id: u32, needs: &[usize]) -> Ready {
-    Ready { id, urgent: false, needs: needs.to_vec() }
+    Ready { id, urgent: false, skipped: None, seq: id, tenant: false, needs: needs.to_vec() }
 }
 
 fn urgent(id: u32, needs: &[usize]) -> Ready {
-    Ready { id, urgent: true, needs: needs.to_vec() }
+    Ready { urgent: true, ..job(id, needs) }
 }
 
-fn mark(job: u32, pool: usize) -> Earmark {
-    Earmark { job, pool }
+/// A Job E3 skipped before, with skip order `n`.
+fn skipped(id: u32, n: u32, needs: &[usize]) -> Ready {
+    Ready { skipped: Some(n), ..job(id, needs) }
+}
+
+/// A Job that is already a tenant: a retry.
+fn tenant(id: u32, needs: &[usize]) -> Ready {
+    Ready { tenant: true, ..job(id, needs) }
 }
 
 #[test]
-fn schedule_starts_every_job_whose_resources_all_have_a_free_slot() {
-    let pools = [pool(2), pool(1)];
-    let ready = [job(1, &[0]), job(2, &[1]), job(3, &[0])];
+fn schedule_orders_urgent_then_skipped_then_queue() {
+    // The caller's order is nothing: the Jobs come in scrambled. Urgent 6 (seq 6), skipped 5 (n 1), queue 1, 2 and 3.
+    let scrambled = [job(2, &[0]), skipped(5, 1, &[0]), job(1, &[0]), urgent(6, &[0]), job(3, &[0])];
 
-    let plan = schedule(&pools, &ready);
+    let plan = schedule(&[pool(3)], &scrambled);
+    assert_eq!(plan.start, [6, 5, 1], "urgent, then skipped, then the queue by seq; three slots");
+    assert_eq!(plan.skipped, [2, 3], "the Jobs that found no slot, in the order of the walk");
 
-    assert_eq!(plan.start, [1, 2, 3]);
-    assert_eq!(plan.earmarks, []);
+    // One slot: the urgent Job takes it; the skipped Job and the queue are skipped, in the order of the walk.
+    let plan = schedule(&[pool(1)], &scrambled);
+    assert_eq!((plan.start, plan.skipped), (vec![6], vec![5, 1, 2, 3]));
+
+    // Two urgent Jobs go by seq among themselves, ahead of the skipped Job.
+    let plan = schedule(&[pool(2)], &[skipped(1, 1, &[0]), urgent(8, &[0]), urgent(7, &[0])]);
+    assert_eq!((plan.start, plan.skipped), (vec![7, 8], vec![1]));
+}
+
+#[test]
+fn schedule_skipped_jobs_keep_first_skipped_first_served_order() {
+    // Skip orders 1, 2, 3 on seqs 3, 1, 2: the skip order wins over the seq.
+    let ready = [skipped(1, 2, &[0]), skipped(2, 3, &[0]), skipped(3, 1, &[0]), job(4, &[0])];
+
+    let plan = schedule(&[pool(2)], &ready);
+    assert_eq!(plan.start, [3, 1], "first skipped, first served");
+    assert_eq!(plan.skipped, [2, 4]);
+
+    // The skipped Job ahead that cannot start does not stop the one after it: it is skipped again, and keeps its place.
+    let plan = schedule(&[pool(1), pool(0)], &[skipped(1, 1, &[0, 1]), skipped(2, 2, &[0]), job(3, &[0])]);
+    assert_eq!((plan.start, plan.skipped), (vec![2], vec![1, 3]));
+}
+
+#[test]
+fn schedule_skips_a_job_that_misses_a_resource_and_reserves_nothing() {
+    // Pool 0 is `workers` (2 free), pool 1 is `okta-port` (none free). Job 1 misses the port: it is skipped, and the two
+    // workers it would take are free for the Jobs behind it, which both start.
+    let plan = schedule(&[pool(2), pool(0)], &[job(1, &[0, 1]), job(2, &[0]), job(3, &[0])]);
+    assert_eq!(plan.start, [2, 3]);
+    assert_eq!(plan.skipped, [1]);
+
+    // Not blocked, not held back: even a Job of the same missing resource behind it is only skipped in its turn.
+    let plan = schedule(&[pool(2), pool(0)], &[job(1, &[0, 1]), job(2, &[0, 1])]);
+    assert_eq!((plan.start, plan.skipped), (vec![], vec![1, 2]));
+
+    // A pool freed after the walk is nobody's: the next walk offers it to the Jobs in order, the skipped one first.
+    let plan = schedule(&[pool(1), pool(1)], &[job(2, &[0]), skipped(1, 1, &[0, 1])]);
+    assert_eq!((plan.start, plan.skipped), (vec![1], vec![2]));
+}
+
+#[test]
+fn schedule_next_job_uses_the_slot_the_skipped_job_does_not_need() {
+    // `workers` 1 free, `a` none, `b` 1 free. Job 1 (a) is skipped; Job 2 takes `workers` and `b`; Job 3 needs `b` and `workers`
+    // and finds neither; Job 4 needs only `a` and is skipped too.
+    let ready = [job(1, &[0, 1]), job(2, &[0, 2]), job(3, &[0, 2]), job(4, &[1])];
+    let plan = schedule(&[pool(1), pool(0), pool(1)], &ready);
+    assert_eq!(plan.start, [2]);
+    assert_eq!(plan.skipped, [1, 3, 4]);
+
+    // Two workers: the second takes the slot of `workers` the skipped Job does not need.
+    let plan = schedule(&[pool(2), pool(0), pool(1)], &ready);
+    assert_eq!((plan.start, plan.skipped), (vec![2], vec![1, 3, 4]), "`b` has one slot: Job 3 lacks it");
+    let plan = schedule(&[pool(2), pool(0), pool(2)], &ready);
+    assert_eq!((plan.start, plan.skipped), (vec![2, 3], vec![1, 4]));
 }
 
 #[test]
@@ -38,187 +99,103 @@ fn schedule_takes_workers_and_the_spec_resources_all_or_none() {
     let ready = [job(1, &[0, 1])];
 
     assert_eq!(schedule(&[pool(1), pool(1)], &ready).start, [1], "both free: it starts");
-    assert_eq!(schedule(&[pool(1), pool(0)], &ready).start, Vec::<u32>::new(), "the resource is full: no Worker slot is taken either");
-    assert_eq!(schedule(&[pool(0), pool(1)], &ready).start, Vec::<u32>::new(), "no Worker slot: the resource is not taken either");
-    // The Worker slot the blocked Job would take is held back (earmarked) from the Job behind it.
-    let behind = [job(1, &[0, 1]), job(2, &[0])];
-    let plan = schedule(&[pool(1), pool(0)], &behind);
-    assert_eq!((plan.start, plan.earmarks), (vec![], vec![mark(1, 0), mark(1, 1), mark(2, 0)]));
+    let plan = schedule(&[pool(1), pool(0)], &ready);
+    assert_eq!((plan.start, plan.skipped), (vec![], vec![1]), "the resource is full: no Worker slot is taken either");
+    let plan = schedule(&[pool(0), pool(1)], &ready);
+    assert_eq!((plan.start, plan.skipped), (vec![], vec![1]), "no Worker slot: the resource is not taken either");
+    // What the skipped Job would have taken stays free for the Job behind it.
+    let plan = schedule(&[pool(1), pool(0)], &[job(1, &[0, 1]), job(2, &[0])]);
+    assert_eq!((plan.start, plan.skipped), (vec![2], vec![1]));
+
+    // Three one-slot pools, three Jobs each needing two of them: only the first fits, and no pool is over-used.
+    let plan = schedule(&[pool(1), pool(1), pool(1)], &[job(1, &[0, 1]), job(2, &[1, 2]), job(3, &[0, 2])]);
+    assert_eq!(plan.start, [1]);
+    assert_eq!(plan.skipped, [2, 3]);
 }
 
 #[test]
-fn schedule_never_starts_a_job_holding_part_of_its_resources() {
-    // Three one-slot pools, three Jobs each needing two of them: only the first fits.
-    let pools = [pool(1), pool(1), pool(1)];
-    let ready = [job(1, &[0, 1]), job(2, &[1, 2]), job(3, &[0, 2])];
-    assert_eq!(schedule(&pools, &ready).start, [1]);
+fn schedule_a_tenant_job_retrying_starts_without_competing() {
+    // Every pool is full, and the retry needs none: it starts and takes nothing.
+    let plan = schedule(&[pool(0), pool(0)], &[tenant(1, &[0, 1])]);
+    assert_eq!((plan.start, plan.skipped), (vec![1], vec![]));
 
-    // Over every pair of Jobs on pools of 1 or 2 slots: what is started never uses more slots than a pool has free.
-    for free in [[1, 1, 1], [1, 2, 1], [2, 1, 2]] {
-        let pools: Vec<Pool> = free.iter().map(|&f| pool(f)).collect();
-        for a in subsets(3) {
-            for b in subsets(3) {
-                for c in subsets(3) {
-                    let ready = [job(1, &a), job(2, &b), job(3, &c)];
-                    let plan = schedule(&pools, &ready);
-                    let mut used = [0u32; 3];
-                    for id in &plan.start {
-                        for &p in &ready[*id as usize - 1].needs {
-                            used[p] += 1;
-                        }
-                    }
-                    for p in 0..3 {
-                        assert!(used[p] <= free[p], "pool {p} of {free:?} over-used by {:?} for {ready:?}", plan.start);
-                    }
-                }
-            }
-        }
-    }
+    // It takes no slot: the Job behind it still finds the one free slot.
+    let plan = schedule(&[pool(1), pool(1)], &[tenant(1, &[0, 1]), job(2, &[0, 1])]);
+    assert_eq!((plan.start, plan.skipped), (vec![1, 2], vec![]));
+
+    // A tenant is never skipped, whatever its place: behind a skipped Job and an urgent one.
+    let plan = schedule(&[pool(0)], &[job(1, &[0]), tenant(2, &[0]), urgent(3, &[0])]);
+    assert_eq!((plan.start, plan.skipped), (vec![2], vec![3, 1]));
 }
 
 #[test]
-fn schedule_lower_job_backfills_slots_the_blocked_job_does_not_need() {
-    // Job 1 needs pools 0 and 1; pool 1 is full. Pool 0 has a spare slot beyond Job 1's, and pool 2 is not Job 1's at all.
-    let pools = [pool(2), pool(0), pool(1)];
-    let plan = schedule(&pools, &[job(1, &[0, 1]), job(2, &[0]), job(3, &[2]), job(4, &[0])]);
-
-    assert_eq!(plan.start, [2, 3], "the spare slot of pool 0 and the pool Job 1 does not need");
-    assert_eq!(plan.earmarks, [mark(1, 0), mark(1, 1), mark(4, 0)]);
-}
-
-#[test]
-fn schedule_blocked_job_earmarks_the_next_freed_slot_of_each_resource_it_lacks() {
-    // Job 1 lacks pools 0 and 1: it earmarks the next slot freed of each. It does not lack pool 2: it holds one free slot of it
-    // back. Every needed pool is earmarked once, in `needs` order (the Job starves otherwise: User, pro-d92).
-    let pools = [pool(0), pool(0), pool(1), pool(1)];
-    let plan = schedule(&pools, &[job(1, &[0, 1, 2]), job(2, &[2]), job(3, &[3])]);
-    assert_eq!(plan.earmarks, [mark(1, 0), mark(1, 1), mark(1, 2), mark(2, 2)]);
-    assert_eq!(plan.start, [3], "pool 3 is not Job 1's; pool 2's one free slot is held back for it");
-
-    // A second Job that lacks the same pool earmarks the next freed slot after the first's: a count per resource.
-    let plan = schedule(&[pool(0)], &[job(1, &[0]), job(2, &[0])]);
-    assert_eq!(plan.earmarks, [mark(1, 0), mark(2, 0)]);
-    assert_eq!(plan.start, Vec::<u32>::new());
-
-    // A pool with more free slots than earmarks still serves a later Job.
-    let plan = schedule(&[pool(2), pool(0)], &[job(1, &[0, 1]), job(2, &[0]), job(3, &[0])]);
-    assert_eq!(plan.start, [2]);
-    assert_eq!(plan.earmarks, [mark(1, 0), mark(1, 1), mark(3, 0)]);
-}
-
-#[test]
-fn schedule_earmarks_follow_the_urgent_then_seq_order() {
-    // The caller's order is the priority (urgent first, then seq): the first of two Jobs for the one free slot gets it,
-    // the other earmarks the next.
-    let pools = [pool(1)];
-    let urgent_first = schedule(&pools, &[urgent(10, &[0]), job(1, &[0])]);
-    assert_eq!((urgent_first.start, urgent_first.earmarks), (vec![10], vec![mark(1, 0)]));
-
-    let seq_order = schedule(&pools, &[job(1, &[0]), job(2, &[0]), job(3, &[0])]);
-    assert_eq!((seq_order.start, seq_order.earmarks), (vec![1], vec![mark(2, 0), mark(3, 0)]));
-
-    // Earmarks come out in priority order: a blocked urgent Job's before a blocked lower Job's.
-    let blocked = schedule(&[pool(0), pool(1)], &[urgent(9, &[0, 1]), job(2, &[0]), job(1, &[1, 0])]);
-    assert_eq!(blocked.earmarks, [mark(9, 0), mark(9, 1), mark(2, 0), mark(1, 1), mark(1, 0)]);
-}
-
-#[test]
-fn schedule_urgent_job_may_take_the_one_slot_beyond_concurrency_and_no_other_job_may() {
+fn schedule_urgent_job_may_take_the_one_worker_beyond_concurrency_and_no_other_job_may() {
     // `workers` with every slot taken and the one beyond free.
     let full = [Pool { free: 0, urgent_free: 1 }];
     let plan = schedule(&full, &[urgent(1, &[0]), job(2, &[0])]);
-    assert_eq!(plan.start, [1]);
-    assert_eq!(plan.earmarks, [mark(2, 0)]);
+    assert_eq!((plan.start, plan.skipped), (vec![1], vec![2]));
 
     let plan = schedule(&full, &[job(1, &[0])]);
-    assert_eq!((plan.start, plan.earmarks), (vec![], vec![mark(1, 0)]), "a non-urgent Job never takes it");
+    assert_eq!((plan.start, plan.skipped), (vec![], vec![1]), "a non-urgent Job never takes it");
 
     // Only one: a second urgent Job waits.
     let plan = schedule(&full, &[urgent(1, &[0]), urgent(2, &[0])]);
-    assert_eq!((plan.start, plan.earmarks), (vec![1], vec![mark(2, 0)]));
+    assert_eq!((plan.start, plan.skipped), (vec![1], vec![2]));
 
-    // A free slot below `concurrency` goes first, then the one beyond.
+    // A free slot below `concurrency` goes first, then the one beyond; a Job of the queue never gets the one beyond.
     let one_free = [Pool { free: 1, urgent_free: 1 }];
     let plan = schedule(&one_free, &[urgent(1, &[0]), urgent(2, &[0]), job(3, &[0])]);
-    assert_eq!((plan.start, plan.earmarks), (vec![1, 2], vec![mark(3, 0)]));
+    assert_eq!((plan.start, plan.skipped), (vec![1, 2], vec![3]));
 
     // The slot beyond is taken with the Job's other resources, all or none.
     let two = [Pool { free: 0, urgent_free: 1 }, pool(0)];
-    assert_eq!(schedule(&two, &[urgent(1, &[0, 1])]).start, Vec::<u32>::new());
+    let plan = schedule(&two, &[urgent(1, &[0, 1])]);
+    assert_eq!((plan.start, plan.skipped), (vec![], vec![1]));
 }
 
-/// A Job that needs pools A and B, with a stream of Jobs each needing A alone: while B is held, A is free and each stream Job
-/// takes it. The Job starts once B is freed, whatever the stream does.
-#[test]
-fn schedule_multi_resource_job_starts_despite_an_endless_stream_of_single_resource_jobs() {
-    const A: usize = 0;
-    const B: usize = 1;
-    const MULTI: u32 = 1;
-    // Tenants end one per step, oldest first. B's holder is the first tenant, A's slot is free at the start.
-    let mut tenants: VecDeque<(u32, Vec<usize>)> = VecDeque::from([(0, vec![B])]);
-    let mut next_stream = 100;
-    let mut started_at = None;
-    for step in 1..=20 {
-        // A tenant ends: B is held, then freed at step 3 (the holder is the oldest tenant while stream Jobs queue behind).
-        if step >= 3 || tenants.len() > 1 {
-            tenants.pop_front();
-        }
-        let used = |p: usize| u32::try_from(tenants.iter().filter(|(_, held)| held.contains(&p)).count()).unwrap();
-        let pools = [pool(1 - used(A)), pool(1 - used(B))];
-        // The multi-resource Job is the oldest (seq order); a new stream Job arrives at every step.
-        let mut ready = vec![job(MULTI, &[A, B])];
-        for _ in 0..3 {
-            ready.push(job(next_stream, &[A]));
-            next_stream += 1;
-        }
-        let plan = schedule(&pools, &ready);
-        for id in &plan.start {
-            let needs = ready.iter().find(|j| j.id == *id).unwrap().needs.clone();
-            tenants.push_back((*id, needs));
-        }
-        if plan.start.contains(&MULTI) {
-            started_at = Some(step);
-            break;
-        }
-    }
-    let step = started_at.expect("the Job needing A and B starts: the stream of Jobs needing A alone does not starve it");
-    assert!(step <= 5, "it starts within the steps B is held plus the stream Job holding A: started at step {step}");
-}
-
-/// A state of the proofs: pools of 1..=2 slots with some slots taken by tenants that are not Jobs (they end one per step), and
-/// Jobs each needing a non-empty subset of the pools.
+/// A state of the proofs. Pool 0 is `workers`; pools `1..` are resources. Every pool has 1..=2 slots. The tenants at the start
+/// are Jobs (each takes one `workers` slot and the resources it lists) and they end one per step. The Jobs each need `workers` and a
+/// non-empty subset of the resources.
 struct State {
     caps: Vec<u32>,
-    taken: Vec<u32>,
+    /// The tenants at the start: the resources each holds (`workers` is implied).
+    tenants: Vec<Vec<usize>>,
     jobs: Vec<Vec<usize>>,
 }
 
-/// Every non-empty subset of `0..pools`, as sorted lists.
-fn subsets(pools: usize) -> Vec<Vec<usize>> {
-    (1..(1u32 << pools)).map(|m| (0..pools).filter(|p| m >> p & 1 == 1).collect()).collect()
+/// Every non-empty subset of the resources `1..=resources`, as sorted lists.
+fn subsets(resources: usize) -> Vec<Vec<usize>> {
+    (1..(1u32 << resources)).map(|m| (1..=resources).filter(|p| m >> (p - 1) & 1 == 1).collect()).collect()
 }
 
-/// Every state of up to 3 pools with 1..=2 slots, any number of them taken, and 1..=4 Jobs. No randomness: a fixed enumeration.
+/// Every state of up to 3 pools (`workers` and 1 or 2 resources) with 1..=2 slots, up to 3 tenants that fit, and 1..=4 Jobs. No
+/// randomness: a fixed enumeration.
 fn states() -> Vec<State> {
     let mut all = Vec::new();
-    for pools in 1..=3usize {
+    for resources in 1..=2usize {
+        let subs = subsets(resources);
+        let mut holds = vec![vec![]];
+        holds.extend(subs.iter().cloned());
         let mut caps_all = vec![vec![]];
-        for _ in 0..pools {
+        for _ in 0..=resources {
             caps_all = caps_all.into_iter().flat_map(|c| (1..=2).map(move |n| [c.clone(), vec![n]].concat())).collect();
         }
-        for caps in caps_all {
-            let mut taken_all = vec![vec![]];
-            for cap in &caps {
-                taken_all = taken_all.into_iter().flat_map(|t| (0..=*cap).map(move |n| [t.clone(), vec![n]].concat())).collect();
-            }
-            let subs = subsets(pools);
-            let mut jobs_all: Vec<Vec<Vec<usize>>> = vec![vec![]];
-            for count in 1..=4 {
-                jobs_all = jobs_all.into_iter().flat_map(|j| subs.iter().map(move |s| [j.clone(), vec![s.clone()]].concat())).collect();
-                for jobs in jobs_all.iter().filter(|j| j.len() == count) {
-                    for taken in &taken_all {
-                        all.push(State { caps: caps.clone(), taken: taken.clone(), jobs: jobs.clone() });
-                    }
+        let mut tenants_all: Vec<Vec<Vec<usize>>> = vec![vec![]];
+        let mut by_count: Vec<Vec<Vec<usize>>> = vec![vec![]];
+        for _ in 0..3 {
+            tenants_all = tenants_all.into_iter().flat_map(|t| holds.iter().map(move |h| [t.clone(), vec![h.clone()]].concat())).collect();
+            by_count.extend(tenants_all.iter().cloned());
+        }
+        let mut jobs_all: Vec<Vec<Vec<usize>>> = vec![vec![]];
+        let mut job_sets = Vec::new();
+        for _ in 1..=4 {
+            jobs_all = jobs_all.into_iter().flat_map(|j| subs.iter().map(move |s| [j.clone(), vec![s.clone()]].concat())).collect();
+            job_sets.extend(jobs_all.iter().cloned());
+        }
+        for caps in &caps_all {
+            for tenants in by_count.iter().filter(|t| fits(caps, t)) {
+                for jobs in &job_sets {
+                    all.push(State { caps: caps.clone(), tenants: tenants.clone(), jobs: jobs.clone() });
                 }
             }
         }
@@ -226,50 +203,75 @@ fn states() -> Vec<State> {
     all
 }
 
-/// One run of a state, a tenant ending per step (the oldest, or the newest when `newest_first`). `on_step` sees the step
-/// (from 1), the tenants after the walk, the waiting Jobs' indices and what the walk started.
-fn run(state: &State, newest_first: bool, mut on_step: impl FnMut(usize, &[(Option<usize>, Vec<usize>)], &[usize], &[usize])) -> Vec<Option<usize>> {
-    // A tenant: the Job it is (None: an outside holder) and the pools it holds.
-    let mut tenants: VecDeque<(Option<usize>, Vec<usize>)> = VecDeque::new();
-    for (p, n) in state.taken.iter().enumerate() {
-        for _ in 0..*n {
-            tenants.push_back((None, vec![p]));
+/// Whether `tenants` fit in `caps` (each takes a `workers` slot and its resources).
+fn fits(caps: &[u32], tenants: &[Vec<usize>]) -> bool {
+    let mut used = vec![0u32; caps.len()];
+    for held in tenants {
+        used[0] += 1;
+        for &p in held {
+            used[p] += 1;
         }
     }
+    used.iter().zip(caps).all(|(u, c)| u <= c)
+}
+
+/// What a step of [`run`] shows `on_step`.
+struct Step<'a> {
+    number: usize,
+    /// The free slots of each pool when the walk began.
+    free: &'a [u32],
+    /// The tenants after the walk: the Job index (None: one of the start) and the pools it holds, `workers` included.
+    tenants: &'a [(Option<usize>, Vec<usize>)],
+    /// The Jobs still waiting after the walk.
+    waiting: &'a [usize],
+    /// The Jobs the walk started.
+    begun: &'a [usize],
+    /// The Jobs the walk reported skipped.
+    reported: &'a [u32],
+}
+
+/// One run of a state: a tenant ends per step (the oldest, or the newest when `newest_first`), no Job arrives, and each step the
+/// freed slots are offered to the walk, whose skip order the run keeps as E3 does (a number above every other, once, cleared at
+/// the start). Returns the step each Job started at (None: never), within a number of steps that is generous.
+fn run(state: &State, newest_first: bool, mut on_step: impl FnMut(&Step)) -> Vec<Option<usize>> {
+    let mut tenants: VecDeque<(Option<usize>, Vec<usize>)> =
+        state.tenants.iter().map(|held| (None, [vec![0], held.clone()].concat())).collect();
     let mut waiting: Vec<usize> = (0..state.jobs.len()).collect();
+    let mut order: Vec<Option<u32>> = vec![None; state.jobs.len()];
+    let mut next_order = 1;
     let mut started: Vec<Option<usize>> = vec![None; state.jobs.len()];
-    let bound = tenants.len() + state.jobs.len() + 1;
-    for step in 0..=bound * 2 + 4 {
+    for step in 0..=(tenants.len() + state.jobs.len()) * 2 + 4 {
         if step > 0 {
             if newest_first { tenants.pop_back() } else { tenants.pop_front() };
         }
-        let pools: Vec<Pool> = state
+        let free: Vec<u32> = state
             .caps
             .iter()
             .enumerate()
-            .map(|(p, cap)| pool(cap - u32::try_from(tenants.iter().filter(|(_, held)| held.contains(&p)).count()).unwrap()))
+            .map(|(p, cap)| cap - u32::try_from(tenants.iter().filter(|(_, held)| held.contains(&p)).count()).unwrap())
             .collect();
-        // No Job arrives: the Ready Jobs are the waiting ones, in their order.
-        let ready: Vec<Ready> = waiting.iter().map(|&i| job(u32::try_from(i).unwrap(), &state.jobs[i])).collect();
+        let pools: Vec<Pool> = free.iter().map(|&f| pool(f)).collect();
+        let ready: Vec<Ready> = waiting
+            .iter()
+            .map(|&i| Ready { skipped: order[i], ..job(u32::try_from(i).unwrap(), &[vec![0], state.jobs[i].clone()].concat()) })
+            .collect();
         let plan = schedule(&pools, &ready);
         let begun: Vec<usize> = plan.start.iter().map(|&id| id as usize).collect();
-        if let Some(&head) = waiting.iter().find(|i| !begun.contains(i)) {
-            for &p in &state.jobs[head] {
-                let taken_by_lower = begun.iter().filter(|&&i| i > head && state.jobs[i].contains(&p)).count();
-                assert!(
-                    taken_by_lower == 0 || pools[p].free as usize > taken_by_lower,
-                    "Job {head}, blocked, lost the free slot of pool {p} to a lower Job: jobs {:?} caps {:?} taken {:?}",
-                    state.jobs, state.caps, state.taken
-                );
+        for &id in &plan.skipped {
+            let i = id as usize;
+            if order[i].is_none() {
+                order[i] = Some(next_order);
+                next_order += 1;
             }
         }
         for &i in &begun {
-            tenants.push_back((Some(i), state.jobs[i].clone()));
+            tenants.push_back((Some(i), [vec![0], state.jobs[i].clone()].concat()));
             started[i] = Some(step);
+            order[i] = None;
         }
         waiting.retain(|i| !begun.contains(i));
         let snapshot: Vec<_> = tenants.iter().cloned().collect();
-        on_step(step, &snapshot, &waiting, &begun);
+        on_step(&Step { number: step, free: &free, tenants: &snapshot, waiting: &waiting, begun: &begun, reported: &plan.skipped });
         if waiting.is_empty() {
             break;
         }
@@ -277,49 +279,87 @@ fn run(state: &State, newest_first: bool, mut on_step: impl FnMut(usize, &[(Opti
     started
 }
 
-/// **No starvation.** No Job arrives, a tenant ends per step (the oldest in one run, the newest in another) and each step the freed slot
-/// is offered to the walk. Every Job starts within `tenants + jobs + resources it needs` steps: the tenants that exist at the start
-/// (each ends within one step of its turn), every Job of the state (each is a tenant at most once; the ones ahead of it must start
-/// first, the ones behind it may backfill and so queue up to end before it, which the order of ending makes count), and one freeing
-/// for each of its own resources. Each walk also keeps the head of the line: the highest Job still waiting never loses a free slot
-/// of a pool it needs to a lower Job (it is what stops two staggered streams from starving a Job that needs both pools).
-#[test]
-fn schedule_no_starvation_in_every_small_state() {
-    let mut checked = 0;
-    for state in states() {
-        let initial: usize = state.taken.iter().map(|&n| n as usize).sum();
-        for newest_first in [false, true] {
-            let started = run(&state, newest_first, |_, _, _, _| {});
-            for (i, needs) in state.jobs.iter().enumerate() {
-                let bound = initial + state.jobs.len() + needs.len();
-                match started[i] {
-                    Some(step) => assert!(step <= bound, "Job {i} started at step {step}, bound {bound}: {:?} caps {:?} taken {:?}", state.jobs, state.caps, state.taken),
-                    None => panic!("Job {i} never started: jobs {:?} caps {:?} taken {:?} (newest_first {newest_first})", state.jobs, state.caps, state.taken),
-                }
-            }
-            checked += 1;
-        }
-    }
-    assert!(checked > 100_000, "the enumeration covers every small state: {checked}");
+fn describe(state: &State, newest_first: bool) -> String {
+    format!("jobs {:?} caps {:?} tenants {:?} (newest_first {newest_first})", state.jobs, state.caps, state.tenants)
 }
 
-/// **No deadlock.** After every walk: when no Job could start and some Job waits, a tenant exists (so a slot will be freed:
-/// progress is possible); and no Job that waits holds a slot (a Job holds all its resources or none), so Jobs never wait on each other.
+/// **The bound on waiting** (contract §3.7 E3). A Job that needs `workers` and ONE other pool starts within
+/// `tenants at the start + Jobs of the state + 1` steps while no new urgent Job arrives: a step ends one tenant, every tenant is
+/// one of the start or a Job that started (once), the skipped Jobs ahead of it are walked first, and the freed slot of its pool
+/// and a worker come together. The bound is stated for a Job of ONE extra resource only: the contract promises no more.
+#[test]
+fn schedule_job_needing_one_extra_resource_starts_when_its_tenant_ends_in_every_small_state() {
+    let mut checked = 0;
+    for state in states() {
+        for newest_first in [false, true] {
+            let started = run(&state, newest_first, |_| {});
+            for (i, needs) in state.jobs.iter().enumerate().filter(|(_, n)| n.len() == 1) {
+                let bound = state.tenants.len() + state.jobs.len() + 1;
+                match started[i] {
+                    Some(step) => assert!(step <= bound, "Job {i} ({needs:?}) started at step {step}, bound {bound}: {}", describe(&state, newest_first)),
+                    None => panic!("Job {i} ({needs:?}) never started: {}", describe(&state, newest_first)),
+                }
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 50_000, "the enumeration covers every small state: {checked}");
+}
+
+/// **No deadlock.** After every walk: when a Job waits and no Job could start, a tenant exists whose end is the way on (a slot
+/// will be freed); no Job that waits is a tenant (it holds nothing, so Jobs never wait on each other); no pool holds more than its
+/// slots; and every Job starts in the end.
 #[test]
 fn schedule_no_deadlock_in_every_small_state() {
     for state in states() {
         for newest_first in [false, true] {
-            run(&state, newest_first, |step, tenants, waiting, begun| {
-                let ctx = format!("step {step}: jobs {:?} caps {:?} taken {:?}", state.jobs, state.caps, state.taken);
-                if begun.is_empty() && !waiting.is_empty() {
-                    assert!(!tenants.is_empty(), "no Job can start, some wait, and no tenant exists: {ctx}");
+            let started = run(&state, newest_first, |step| {
+                let ctx = format!("step {}: {}", step.number, describe(&state, newest_first));
+                if step.begun.is_empty() && !step.waiting.is_empty() {
+                    assert!(!step.tenants.is_empty(), "no Job can start, some wait, and no tenant exists: {ctx}");
                 }
-                for &w in waiting {
-                    assert!(tenants.iter().all(|(who, _)| *who != Some(w)), "waiting Job {w} holds a slot: {ctx}");
+                for &w in step.waiting {
+                    assert!(step.tenants.iter().all(|(who, _)| *who != Some(w)), "waiting Job {w} holds a slot: {ctx}");
                 }
-                // The tenants are only outside holders and Jobs that started: none waits on a Job that waits.
-                let held: usize = tenants.iter().map(|(_, pools)| pools.len()).sum();
-                assert!(held <= state.caps.iter().map(|&c| c as usize).sum::<usize>(), "a pool holds more than its slots: {ctx}");
+                let mut used = vec![0usize; state.caps.len()];
+                for (_, held) in step.tenants {
+                    for &p in held {
+                        used[p] += 1;
+                    }
+                }
+                for (p, cap) in state.caps.iter().enumerate() {
+                    assert!(used[p] <= *cap as usize, "pool {p} holds more than its {cap} slots: {ctx}");
+                }
+            });
+            for (i, at) in started.iter().enumerate() {
+                assert!(at.is_some(), "Job {i} never started: {}", describe(&state, newest_first));
+            }
+        }
+    }
+}
+
+/// **No idle slot.** After every walk no Job is left skipped while every pool it needs has a free slot it may take: for each Job
+/// still waiting, some pool it needs has no slot left after what the walk started. The Jobs the walk reports skipped are exactly
+/// the Jobs that wait.
+#[test]
+fn schedule_leaves_no_free_slot_idle_that_a_walked_job_could_use() {
+    for state in states() {
+        for newest_first in [false, true] {
+            run(&state, newest_first, |step| {
+                let ctx = format!("step {}: {}", step.number, describe(&state, newest_first));
+                let mut left = step.free.to_vec();
+                for &i in step.begun {
+                    for &p in &[vec![0], state.jobs[i].clone()].concat() {
+                        left[p] -= 1;
+                    }
+                }
+                for &w in step.waiting {
+                    let needs = [vec![0], state.jobs[w].clone()].concat();
+                    assert!(needs.iter().any(|&p| left[p] == 0), "Job {w} is left skipped with a free slot in every pool it needs ({left:?}): {ctx}");
+                }
+                let mut reported: Vec<usize> = step.reported.iter().map(|&i| i as usize).collect();
+                reported.sort_unstable();
+                assert_eq!(reported, step.waiting, "the skipped Jobs are the waiting ones: {ctx}");
             });
         }
     }

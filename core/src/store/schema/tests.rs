@@ -1791,7 +1791,7 @@ fn converts_keeping_every_row_and_id(n: usize) {
         // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
         assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(crate::events::Kind::ALL.len()));
         assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
-        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(24)); // 17, `plannotator_reviews`, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans` and `pr_posts`
+        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(25)); // 17, `plannotator_reviews`, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts` and `job_pools`
         let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
         assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
         assert_eq!(txns_after.len(), txns_before.len() + 1);
@@ -1820,6 +1820,8 @@ fn converts_keeping_every_row_and_id(n: usize) {
         assert_eq!(rows_after.remove("plannotator_reviews"), Some(Vec::new()));
         assert_eq!(rows_after.remove("board_posts"), Some(Vec::new()));
         assert_eq!(rows_after.remove("pr_posts"), Some(Vec::new()));
+        // `job-tenancy` made `job_pools`, and it is empty.
+        assert_eq!(rows_after.remove("job_pools"), Some(Vec::new()));
         // `curation` made two tables, and they are empty.
         assert_eq!(rows_after.remove("record_retirements"), Some(Vec::new()));
         assert_eq!(rows_after.remove("record_curations"), Some(Vec::new()));
@@ -2998,7 +3000,7 @@ fn job_kinds_keeps_every_job_and_pr_as_work_and_free_and_matches_a_fresh_store()
     assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-job-kinds")));
     assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
 
-    // Every Job is `work` with the other columns null (`resources` of `job-resources` too) and every PR is `free`: the rows are as they were, plus those.
+    // Every Job is `work` with the other columns null (`resources` of `job-resources` and `skipped_n` of `job-tenancy` too) and every PR is `free`: the rows are as they were, plus those.
     let after = dump(&connection(&home.db()));
     let strip = |rows: &[String], added: usize, default: &str| -> Vec<String> {
         rows.iter()
@@ -3011,7 +3013,7 @@ fn job_kinds_keeps_every_job_and_pr_as_work_and_free_and_matches_a_fresh_store()
             })
             .collect()
     };
-    assert_eq!(strip(&after["jobs"], 5, "work"), before["jobs"]);
+    assert_eq!(strip(&after["jobs"], 6, "work"), before["jobs"]);
     // `prs` gained `shape` (`free`), then `pr-adopt` `head_ref` and `pr-description` `description`, both null.
     assert_eq!(strip(&after["prs"], 3, "free"), before["prs"]);
     assert_eq!(count(&mut store, "SELECT count(*) FROM jobs WHERE status = 'merged'"), 1);
@@ -3607,4 +3609,203 @@ fn review_superseded_refuses_a_plan_done_while_a_review_is_pending() {
     write(&mut store, "UPDATE plans SET phase = 'done' WHERE id = 'pc'").unwrap();
     write(&mut store, "UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = 'pc'").unwrap();
     assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
+}
+
+// ---------- resource tenancy (pro-d106; migration `job-tenancy`; contract §3.4 "Tenancy", §4.4 `job_pools` and `job_tenants`) ----------
+
+const TENANCY_FP: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const PORT: &str = "repo:acme/pay:e2e-port";
+
+/// A fully migrated store with Plan `pl` (locked), its PR `a` and one `queued` Job `api` with no Attempt.
+fn tenancy_store() -> (tempfile::TempDir, Store) {
+    let (dir, home) = crate::store::tests::tmp_home();
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    write(
+        &mut store,
+        &format!(
+            "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+               VALUES ('lead', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'idle', 't', 't');
+             INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+               VALUES ('pl', 'ctx', 'Plan', 'dispatch', 'lead', 't', 't');
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+               VALUES ('pl', 'a', '/r', 'main', 'waiting', 'cpd/pl/a', cpd_txn(), 't');
+             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, resources, fingerprint, created_txn, created_at)
+               VALUES ('pl', 'a', 'api', 'T', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'draft', 1, '[\"e2e-port\"]', NULL, cpd_txn(), 't');
+             UPDATE jobs SET status = 'queued', fingerprint = '{TENANCY_FP}' WHERE key = 'api';"
+        ),
+    )
+    .unwrap();
+    (dir, store)
+}
+
+/// The Job's first Attempt, `running`, and its `job_pools` row, in ONE transaction, as the starter writes them.
+const FIRST_ATTEMPT: &str = "UPDATE jobs SET status = 'running' WHERE key = 'api';
+    INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+      VALUES ('pl', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pl--api-a1', '/w', 't');
+    INSERT INTO job_pools (plan, job, pool) VALUES ('pl', 'api', 'repo:acme/pay:e2e-port');";
+
+const END_FAILED: &str = "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'api-a1';";
+
+/// The pools `api` is a tenant of, sorted.
+fn tenancy_of_api(store: &mut Store) -> Vec<String> {
+    rows(store, "SELECT pool FROM job_tenants WHERE plan = 'pl' AND job = 'api' ORDER BY pool")
+        .into_iter()
+        .map(|r| r[0].as_str().unwrap().to_owned())
+        .collect()
+}
+
+fn both() -> Vec<String> {
+    vec![PORT.to_owned(), "workers".to_owned()]
+}
+
+#[test]
+fn tenancy_job_pools_row_is_written_in_the_transaction_of_the_first_attempt() {
+    let (_dir, mut store) = tenancy_store();
+    // A row with no Attempt of the Job, or in a later transaction than the first Attempt's, is refused: a Job is a tenant only
+    // from its first Attempt, and the rows commit with it.
+    let alone = "INSERT INTO job_pools (plan, job, pool) VALUES ('pl', 'api', 'repo:acme/pay:e2e-port')";
+    assert!(write(&mut store, alone).is_err(), "a job_pools row with no Attempt is refused");
+    assert_eq!(count(&mut store, "SELECT count(*) FROM job_pools"), 0);
+
+    write(&mut store, FIRST_ATTEMPT).unwrap();
+    assert_eq!(rows(&mut store, "SELECT plan, job, pool FROM job_pools"), [serde_json::json!(["pl", "api", PORT])]);
+
+    // After the ladder retry (a second Attempt) no row is written: the Job holds its pools already.
+    write(&mut store, &format!("{END_FAILED} UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'api';")).unwrap();
+    write(
+        &mut store,
+        "UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE key = 'api';
+         UPDATE jobs SET status = 'running' WHERE key = 'api';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+           VALUES ('pl', 'api-a2', 'api', 2, 'S2', 'retry', 'running', 'cpd/pl--api-a2', '/w', 't');",
+    )
+    .unwrap();
+    assert!(write(&mut store, "INSERT INTO job_pools (plan, job, pool) VALUES ('pl', 'api', 'host:other')").is_err(), "no row after the first Attempt");
+    // Never updated or deleted.
+    assert!(write(&mut store, "UPDATE job_pools SET pool = 'host:x' WHERE job = 'api'").is_err(), "append only: no update");
+    assert!(write(&mut store, "DELETE FROM job_pools WHERE job = 'api'").is_err(), "append only: no delete");
+    assert_eq!(count(&mut store, "SELECT count(*) FROM job_pools"), 1);
+    // The pool text names its level: `[a-z]*:*`.
+    assert!(write(&mut store, "INSERT INTO job_pools (plan, job, pool) VALUES ('pl', 'api', 'nocolon')").is_err());
+}
+
+#[test]
+fn tenancy_view_lists_a_job_from_its_first_attempt_until_merged_or_cancelled() {
+    let (_dir, mut store) = tenancy_store();
+    assert_eq!(tenancy_of_api(&mut store), Vec::<String>::new(), "a queued Job with no Attempt is no tenant");
+
+    write(&mut store, FIRST_ATTEMPT).unwrap();
+    assert_eq!(tenancy_of_api(&mut store), both(), "`workers` (no row) and the pool of its row, from the first Attempt");
+
+    // Another Job that never had an Attempt, and one with no `job_pools` row (a Job started before the migration): `workers` only.
+    write(
+        &mut store,
+        &format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+               VALUES ('pl', 'a', 'old', 'T', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'draft', 1, NULL, cpd_txn(), 't');
+             UPDATE jobs SET status = 'queued', fingerprint = '{TENANCY_FP}' WHERE key = 'old';
+             UPDATE jobs SET status = 'running' WHERE key = 'old';
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+               VALUES ('pl', 'old-a1', 'old', 1, 'S2', 'ladder', 'running', 'cpd/pl--old-a1', '/w', 't');"
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        rows(&mut store, "SELECT job, pool FROM job_tenants ORDER BY job, pool"),
+        [serde_json::json!(["api", PORT]), serde_json::json!(["api", "workers"]), serde_json::json!(["old", "workers"])]
+    );
+}
+
+#[test]
+fn tenancy_survives_a_failed_job_and_a_ladder_retry() {
+    let (_dir, mut store) = tenancy_store();
+    write(&mut store, FIRST_ATTEMPT).unwrap();
+
+    // The Attempt ends `failed` and the Job is `failed`: it keeps ALL its resources, `workers` included.
+    write(&mut store, &format!("{END_FAILED} UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'api';")).unwrap();
+    assert_eq!(tenancy_of_api(&mut store), both(), "a failed Job keeps its pools and its worker");
+
+    // `queued` again for the next Attempt (a ladder retry, `job retry`): the same.
+    write(&mut store, "UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE key = 'api';").unwrap();
+    assert_eq!(tenancy_of_api(&mut store), both(), "a retried queued Job keeps its pools and its worker");
+
+    // Ended `running` Job -> `queued` after a ladder step, with its Attempt ended too.
+    write(&mut store, "UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'api';").unwrap();
+    assert_eq!(tenancy_of_api(&mut store), both());
+}
+
+#[test]
+fn tenancy_ends_at_once_when_a_job_is_merged() {
+    let (_dir, mut store) = tenancy_store();
+    write(&mut store, FIRST_ATTEMPT).unwrap();
+    assert_eq!(tenancy_of_api(&mut store), both());
+
+    write(
+        &mut store,
+        "UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = 'abc', ended_at = 't' WHERE id = 'api-a1';
+         UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';",
+    )
+    .unwrap();
+
+    assert_eq!(tenancy_of_api(&mut store), Vec::<String>::new(), "free the moment the Job is merged, no timer");
+}
+
+#[test]
+fn tenancy_ends_at_once_when_a_job_is_cancelled_with_no_live_attempt() {
+    let (_dir, mut store) = tenancy_store();
+    write(&mut store, FIRST_ATTEMPT).unwrap();
+    write(&mut store, &format!("{END_FAILED} UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'api';")).unwrap();
+    assert_eq!(tenancy_of_api(&mut store), both(), "failed: held");
+
+    write(&mut store, "UPDATE jobs SET status = 'cancelled', failed_cause = NULL, cancel_reason = 'no longer needed', cancel_requested_at = 't' WHERE key = 'api';").unwrap();
+
+    assert_eq!(tenancy_of_api(&mut store), Vec::<String>::new(), "cancelled with its Attempt ended: free at once");
+}
+
+#[test]
+fn tenancy_of_a_cancelled_job_with_a_live_attempt_ends_with_the_attempt() {
+    let (_dir, mut store) = tenancy_store();
+    write(&mut store, FIRST_ATTEMPT).unwrap();
+
+    write(&mut store, "UPDATE jobs SET status = 'cancelled', cancel_reason = 'no longer needed', cancel_requested_at = 't' WHERE key = 'api';").unwrap();
+    assert_eq!(tenancy_of_api(&mut store), both(), "a cancelled Job whose Attempt is live holds until the Attempt ends");
+
+    write(
+        &mut store,
+        "UPDATE attempts SET status = 'ended', outcome = 'cancelled', cause = 'cancel_requested', ended_at = 't' WHERE id = 'api-a1';",
+    )
+    .unwrap();
+    assert_eq!(tenancy_of_api(&mut store), Vec::<String>::new(), "the Attempt ended: free");
+}
+
+#[test]
+fn tenancy_workers_tenants_are_the_jobs_with_an_attempt_not_merged_or_cancelled() {
+    let (_dir, mut store) = tenancy_store();
+    // `workers` has no row of its own: its tenants are the Jobs with an Attempt, each counted once however many Attempts it had.
+    let workers = |store: &mut Store| count(store, "SELECT count(*) FROM job_tenants WHERE pool = 'workers'");
+    assert_eq!(workers(&mut store), 0, "a Job with no Attempt is no tenant");
+
+    write(&mut store, FIRST_ATTEMPT).unwrap();
+    assert_eq!(workers(&mut store), 1);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM job_pools WHERE pool = 'workers'"), 0, "workers has no job_pools row");
+
+    write(&mut store, &format!("{END_FAILED} UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'api';")).unwrap();
+    write(
+        &mut store,
+        "UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE key = 'api'; UPDATE jobs SET status = 'running' WHERE key = 'api';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+           VALUES ('pl', 'api-a2', 'api', 2, 'S2', 'retry', 'running', 'cpd/pl--api-a2', '/w', 't');",
+    )
+    .unwrap();
+    assert_eq!(workers(&mut store), 1, "two Attempts, one slot");
+
+    write(
+        &mut store,
+        "UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = 'abc', ended_at = 't' WHERE id = 'api-a2';
+         UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';",
+    )
+    .unwrap();
+    assert_eq!(workers(&mut store), 0, "merged: no tenant");
 }

@@ -320,7 +320,7 @@ fn resource_slot_lock_is_free_again_when_its_holder_dies() {
     drop(second);
 }
 
-/// A store with Plan `pay` and its Attempts: `a-a1` running, `b-a1` starting, `c-a1` running, `d-a1` ended (all four of different Jobs).
+/// A store with Plan `pay` and its Attempts: `a-a1` running, `b-a1` starting, `c-a1` running, `d-a1` ended (all four of different Jobs; `d` is `failed`, so a tenant still).
 fn store_with_attempts() -> (tempfile::TempDir, crate::store::Store) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
@@ -361,13 +361,48 @@ fn workers_is_a_host_resource_with_concurrency_slots_and_attempts_as_tenants() {
     let tenant = |job: &str, at: &str| Holder::Attempt { plan: "pay".to_owned(), job: job.to_owned(), attempt: format!("{job}-a1"), at: at.to_owned() };
     assert_eq!(
         pool.holders,
-        [tenant("a", "2026-10-26T21:40:00.000Z"), tenant("b", "2026-10-26T21:41:00.000Z"), tenant("c", "2026-10-26T21:42:00.000Z")],
-        "every Attempt not `ended`, in start order, and no other"
+        [
+            tenant("a", "2026-10-26T21:40:00.000Z"),
+            tenant("b", "2026-10-26T21:41:00.000Z"),
+            tenant("c", "2026-10-26T21:42:00.000Z"),
+            tenant("d", "2026-10-26T21:43:00.000Z")
+        ],
+        "every tenant Job of `workers` in start order: the `failed` Job `d` keeps its worker though its Attempt ended"
     );
     // The slots follow the config, the tenants do not.
     assert_eq!(store.read(|conn| workers(conn, 1)).unwrap().slots, 1);
-    assert_eq!(store.read(|conn| workers(conn, 1)).unwrap().holders.len(), 3, "an urgent Job's slot beyond concurrency is a tenant too");
+    assert_eq!(store.read(|conn| workers(conn, 1)).unwrap().holders.len(), 4, "an urgent Job's slot beyond concurrency is a tenant too");
     // No lock file: the Ledger is the record.
     let locks = dir.path().join("locks");
     assert!(!locks.exists() || fs::read_dir(&locks).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().contains("workers")));
+}
+
+#[test]
+fn resource_run_takes_a_slot_only_when_job_tenants_plus_commands_are_below_slots() {
+    // The free slots of a pool of 2 are `slots` minus the Job tenants (the database, no slot file) minus the held command slots.
+    let (dir, mut store) = store_with_attempts();
+    let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
+    let pool = Pool::Repo { owner: OwnerLogin::parse("acme").unwrap(), repo: RepoName::parse("cpd").unwrap(), name: "e2e-port".to_owned(), slots: 2 };
+    let elsewhere = Pool::Repo { owner: OwnerLogin::parse("acme").unwrap(), repo: RepoName::parse("other").unwrap(), name: "e2e-port".to_owned(), slots: 2 };
+    let free = |store: &mut crate::store::Store, pool: &Pool| store.read(|conn| free_slots(conn, &home, pool)).unwrap();
+    assert_eq!(free(&mut store, &pool), 2, "nobody holds it");
+
+    // Job `a` is a tenant of the pool: one slot, with no lock file.
+    store.write("fixture", |tx| { tx.execute_batch("INSERT INTO job_pools (plan, job, pool) VALUES ('pay', 'a', 'repo:acme/cpd:e2e-port');")?; Ok(()) }).unwrap();
+    assert_eq!(free(&mut store, &pool), 1, "one Job tenant");
+    assert_eq!(free(&mut store, &elsewhere), 2, "the pool of another repo is another pool");
+    assert!(!lock_path(&home, &pool, 1).exists(), "a Job takes no lock file");
+
+    // A command holds slot 1: no slot is free.
+    fs::create_dir_all(home.locks_dir()).unwrap();
+    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(lock_path(&home, &pool, 1)).unwrap();
+    assert!(lock::try_lock(&file).unwrap());
+    assert_eq!(free(&mut store, &pool), 0, "one Job tenant and one command are the two slots");
+
+    // The command ends: the slot is free again; a pool whose slots are lowered below what is taken is never negative.
+    drop(file);
+    assert_eq!(free(&mut store, &pool), 1);
+    let one = Pool::Repo { owner: OwnerLogin::parse("acme").unwrap(), repo: RepoName::parse("cpd").unwrap(), name: "e2e-port".to_owned(), slots: 1 };
+    store.write("fixture", |tx| { tx.execute_batch("INSERT INTO job_pools (plan, job, pool) VALUES ('pay', 'b', 'repo:acme/cpd:e2e-port');")?; Ok(()) }).unwrap();
+    assert_eq!(free(&mut store, &one), 0, "two tenants of a pool of one: never below 0");
 }

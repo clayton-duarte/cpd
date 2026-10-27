@@ -285,15 +285,18 @@ What a Policy is resolved for: an owner, or an owner and a repo name (`Owner(log
 _Avoid_: scope, selector, context
 
 **Resource** (pro-d74, pro-d92):
-Anything that has a limited number of slots available for concurrent use, declared in a policy file at host, owner or repo level (`[resources.<name>]`, contract §8.3 "The `resources` domain"), such as the one port an e2e run needs. A Job takes a slot through its Spec's `resources` and its Attempt holds it until it ends; a human takes one with `cpd resource run`. Each slot is a kernel `flock` released when its tenant dies. Nothing declared means no lock and no limit. The built-in `workers` is the host's Worker slots, its tenants the Attempts not `ended` (contract §8.3).
+Anything that has a limited number of slots available for concurrent use, declared in a policy file at host, owner or repo level (`[resources.<name>]`, contract §8.3 "The `resources` domain"), such as the one port an e2e run needs. A Job takes a slot through its Spec's `resources` and is its tenant from its first Attempt until it is merged or cancelled; a human takes one with `cpd resource run`, which holds a kernel `flock` released when the command dies. Nothing declared means no limit. The built-in `workers` is the host's Worker slots, its tenants the Jobs with a live Attempt (contract §3.4 "Tenancy").
 _Avoid_: lock, mutex, semaphore
 
 **Slot** (pro-d92):
 The number of available concurrent units of a determined resource: one concurrent unit of it. Contract §1.4 "The resource locks and the holder record".
 _Avoid_: lock, seat
 
-**Tenant** (pro-d92):
-The Job or user occupying a resource slot. Its holder record names it (contract §1.4).
+**Tenant** (pro-d92, pro-d106):
+The Job or user occupying a resource slot. A Job is a tenant from its first Attempt until it is merged or cancelled (a failed Job keeps all its resources); the Ledger records it, so it is derived by a join. A command's holder record names it (contract §1.4, §3.4 "Tenancy").
+
+**Skipped** (pro-d106):
+A Ready Job that E3 could not start for want of a pool. Nothing is reserved for it; it keeps its place in the order urgent > skipped > queue, first skipped first served (contract §3.7 E3).
 
 **Machine policy** (changed, pro-d1):
 The machine Scope's file, `$CPD_HOME/policy/host.toml` (contract §8.3), which dotfiles render per machine: its `[model]` table first, then the machine's `cpd.policy` text (its `[mcp.servers.*]`). Besides Domains it may hold an `[mcp]` table, the MCP servers the machine may use, which only a machine file may have; `[mcp]` is not a Domain and takes no part in a Policy key.

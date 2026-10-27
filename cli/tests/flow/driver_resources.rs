@@ -39,11 +39,6 @@ struct Driverish {
 }
 
 impl Driverish {
-    /// The driver exits: its descriptors close.
-    fn exits(&self) {
-        self.kept.lock().unwrap().clear();
-    }
-
     fn holds(&self) -> usize {
         self.kept.lock().unwrap().len()
     }
@@ -182,10 +177,6 @@ impl World {
         }
     }
 
-    fn record(&self, name: &str) -> Value {
-        serde_json::from_str(&fs::read_to_string(self.lock(name)).unwrap()).unwrap()
-    }
-
     fn txns(&self) -> i64 {
         store(&self.fx.env).read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap()
     }
@@ -204,30 +195,6 @@ impl World {
 }
 
 const BOTH: &str = "[resources.e2e-port]\n[resources.db]\n";
-
-#[test]
-fn resource_hold_the_starter_takes_every_resource_of_the_job_and_writes_the_attempt_record() {
-    let w = world(BOTH, &["db", "e2e-port"]);
-
-    let started = w.dispatch(JOB).ok();
-
-    assert_eq!(started["attempt"], "api-a1");
-    // The starter handed both to the driver: they are held, each with the Attempt's holder record.
-    assert_eq!(w.spawn.holds(), 2);
-    for name in ["db", "e2e-port"] {
-        assert!(w.held(name), "{name} is not held");
-        let record = w.record(name);
-        assert_eq!(
-            (record["by"].as_str(), record["plan"].as_str(), record["job"].as_str(), record["attempt"].as_str()),
-            (Some("attempt"), Some("pay"), Some("api"), Some("api-a1")),
-            "{record}"
-        );
-        let at = record["at"].as_str().unwrap_or_default();
-        assert!(time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).is_ok(), "at {at:?}");
-        assert_eq!(record.as_object().unwrap().len(), 5, "{record}");
-    }
-    assert_eq!(w.attempts(), 1);
-}
 
 #[test]
 fn resource_hold_a_held_resource_refuses_the_start_with_resource_busy_and_takes_nothing() {
@@ -269,26 +236,6 @@ fn resource_hold_taking_is_all_or_none_across_two_resources() {
 }
 
 #[test]
-fn resource_hold_the_driver_holds_the_resources_until_it_exits() {
-    let w = world(BOTH, &["e2e-port"]);
-    w.dispatch(JOB).ok();
-    // The starter has returned and closed its own copies: the driver's descriptors hold the lock, with the record intact.
-    assert!(w.held("e2e-port"));
-    assert_eq!(w.record("e2e-port")["attempt"], "api-a1");
-    // A second taker is refused while the driver lives.
-    let refused_while = File::open(w.lock("e2e-port")).unwrap();
-    assert!(!lock::shared(&refused_while).unwrap());
-    drop(refused_while);
-
-    // The driver exits (the Attempt ended, or it died): the kernel releases the lock, with no call that releases it by name.
-    w.spawn.exits();
-
-    assert!(!w.held("e2e-port"));
-    let file = OpenOptions::new().read(true).write(true).open(w.lock("e2e-port")).unwrap();
-    assert!(lock::try_lock(&file).unwrap(), "the resource is taken again once the driver is gone");
-}
-
-#[test]
 fn resource_hold_job_dispatch_refuses_resource_busy_and_changes_nothing() {
     let w = world(BOTH, &["db", "e2e-port"]);
     let _other = w.hold("db", OTHER_RECORD);
@@ -327,4 +274,23 @@ fn resource_hold_job_show_has_no_waiting_for_on_other_jobs() {
         let job = w.shown(key);
         assert!(!job.as_object().unwrap().contains_key("waiting_for"), "{key}: {job}");
     }
+}
+
+#[test]
+fn resource_run_and_the_starter_cannot_both_take_the_last_slot() {
+    // One slot of `e2e-port`. The starter takes it for `api`: a tenant in the database (its `job_pools` row commits with the
+    // Attempt), with no lock file. A `resource run` after it finds no free slot, and is refused with the Job as the holder.
+    let w = world("[resources.e2e-port]\n", &["e2e-port"]);
+    assert_eq!(w.dispatch(JOB).ok()["attempt"], "api-a1");
+    let rows = w.fx.env.query::<i64>("SELECT count(*) FROM job_pools WHERE plan = 'pay' AND job = 'api' AND pool = 'repo:acme/pay:e2e-port'");
+    assert_eq!(rows, 1, "the starter's row, in the transaction of the Attempt");
+
+    let repo = w.fx.keyed_repo("pay");
+    let run = w.fx.cpd_in(&repo, &["resource", "run", "e2e-port", "--", "npm", "test"]);
+
+    let error = refused(&run, "resource_busy", 3);
+    let holders = error["details"]["holders"].as_array().unwrap_or_else(|| panic!("{error}"));
+    assert_eq!(holders.len(), 1, "{error}");
+    assert_eq!((&holders[0]["slot"], &holders[0]["holder"]["by"], &holders[0]["holder"]["job"]), (&Value::Null, &json!("attempt"), &json!("api")));
+    assert!(w.fx.fakes.spawn.execs().is_empty(), "the command never started");
 }
