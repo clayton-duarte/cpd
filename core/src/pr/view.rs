@@ -72,7 +72,7 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     Ok(Output::success(json!({
         "plan": id,
         "pr": {
-            "key": pr.key, "number": number, "url": view.url, "title": view.title, "state": state.as_str(),
+            "key": pr.key, "number": number, "url": view.url, "title": view.title, "jira": pr.jira, "state": state.as_str(),
             "review_decision": ReviewDecision::of(view.review_decision.as_deref()).as_str(), "checks": summary.as_str(),
         },
         "checks": checks,

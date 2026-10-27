@@ -33,6 +33,7 @@ struct Edits {
     /// The new needs as the sorted references of the Plan (`needs_refs`).
     needs: Option<Vec<String>>,
     title: Option<String>,
+    jira: Option<String>,
 }
 
 impl Edits {
@@ -50,8 +51,8 @@ enum Decision {
 
 pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
-    if args.repo.is_none() && args.base.is_none() && args.needs.is_none() && !args.no_needs && args.title.is_none() {
-        return Err(CpdError::new(ErrorCode::NothingToEdit, "Nothing to edit: pass --repo, --base, --needs, --no-needs or --title."));
+    if args.repo.is_none() && args.base.is_none() && args.needs.is_none() && !args.no_needs && args.title.is_none() && args.jira.is_none() {
+        return Err(CpdError::new(ErrorCode::NothingToEdit, "Nothing to edit: pass --repo, --base, --needs, --no-needs, --title or --jira."));
     }
     let needs = match (&args.needs, args.no_needs) {
         (Some(refs), _) => Some(needs_refs(&plan, refs)?),
@@ -63,7 +64,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
 
     // The phase, the PR and its status first; then git on the new repo and base.
     let wants_others = args.repo.is_some() || args.base.is_some() || needs.is_some();
-    let wants_title = args.title.is_some();
+    let wants_title = args.title.is_some() || args.jira.is_some();
     let stored = env.store.read(|conn| editable_pr(conn, &plan, &key, wants_title, wants_others))?.0;
     if stored.head_ref.is_some()
         && let Some(flag) = [(args.repo.is_some(), "--repo"), (args.base.is_some(), "--base")].iter().find_map(|(given, flag)| given.then_some(*flag))
@@ -81,7 +82,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
         None if repo.is_some() => Some(wanted_base(&in_repo, BaseArg::Branch(Some(stored.base.clone())))?),
         None => None,
     };
-    let edits = Edits { repo: repo.as_ref().map(|r| r.display().to_string()), name, base, needs, title: args.title.map(|t| t.to_string()) };
+    let edits = Edits { repo: repo.as_ref().map(|r| r.display().to_string()), name, base, needs, title: args.title.map(|t| t.to_string()), jira: args.jira.map(|j| j.to_string()) };
 
     let decision = env.store.read(|conn| decide(conn, &plan, &key, &edits))?;
     let (pr, fields, already) = match decision {
@@ -96,7 +97,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
             env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, &edits)? {
                 Decision::Already(pr) => Ok((pr, Vec::new(), true)),
                 Decision::Update { before, after, fields } => {
-                    update(tx, &plan, &before, &after, edits.name.as_ref(), edits.title.as_deref())?;
+                    update(tx, &plan, &before, &after, edits.name.as_ref(), edits.title.as_deref(), edits.jira.as_deref())?;
                     let text = format!("PR {key} of Plan {plan} edited ({}). Next: cpd plan render --plan {plan}", fields.join(", "));
                     append(tx, NewEvent::pr_edited(text, &key, &fields).plan(plan.clone()))?;
                     Ok((after, fields, false))
@@ -134,7 +135,7 @@ fn editable_pr(conn: &Connection, plan: &PlanId, key: &PrKey, title: bool, other
     let prs = load_prs(conn, plan)?;
     let pr = find_pr(&prs, plan, key)?;
     if title && matches!(pr.status.as_str(), "merged" | "cancelled") {
-        return Err(CpdError::new(ErrorCode::PrEnded, format!("PR {key} of Plan {plan} is {}: its title is history.", pr.status))
+        return Err(CpdError::new(ErrorCode::PrEnded, format!("PR {key} of Plan {plan} is {}: its title and ticket are history.", pr.status))
             .with("plan", plan.as_str())
             .with("pr", key.as_str())
             .with("status", pr.status.as_str()));
@@ -157,7 +158,7 @@ fn editable_pr(conn: &Connection, plan: &PlanId, key: &PrKey, title: bool, other
 }
 
 fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Result<Decision, CpdError> {
-    let (before, stored_title) = editable_pr(conn, plan, key, edits.title.is_some(), edits.others())?;
+    let (before, stored_title) = editable_pr(conn, plan, key, edits.title.is_some() || edits.jira.is_some(), edits.others())?;
     let mut after = before.clone();
     if let Some(repo) = &edits.repo {
         after.repo = repo.clone();
@@ -189,11 +190,13 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Resul
         }
     }
     let title_changed = edits.title.as_ref().is_some_and(|t| stored_title.as_ref() != Some(t));
+    let jira_changed = edits.jira.as_ref().is_some_and(|j| before.jira.as_ref() != Some(j));
     let fields: Vec<&'static str> = [
         ("repo", before.repo != after.repo),
         ("base", before.base != after.base),
         ("needs", before.needs != after.needs),
         ("title", title_changed),
+        ("jira", jira_changed),
     ]
     .into_iter()
         .filter_map(|(name, changed)| changed.then_some(name))
@@ -207,11 +210,17 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Resul
 /// Writes the changed `prs` columns, and deletes and inserts `pr_needs` rows
 /// to match (§4.4 allows deletion in `grounding` and `plan`). `title` is the new
 /// title when it was given (a PR that has it already is not touched).
-fn update(tx: &Connection, plan: &PlanId, before: &PrRow, after: &PrRow, name: Option<&RepoName>, title: Option<&str>) -> Result<(), CpdError> {
+fn update(tx: &Connection, plan: &PlanId, before: &PrRow, after: &PrRow, name: Option<&RepoName>, title: Option<&str>, jira: Option<&str>) -> Result<(), CpdError> {
     if let Some(title) = title {
         tx.execute(
             "UPDATE prs SET title = ?1 WHERE plan = ?2 AND key = ?3 AND title IS NOT ?1 AND status NOT IN ('merged', 'cancelled')",
             [title, plan.as_str(), after.key.as_str()],
+        )?;
+    }
+    if let Some(jira) = jira {
+        tx.execute(
+            "UPDATE prs SET jira = ?1 WHERE plan = ?2 AND key = ?3 AND jira IS NOT ?1 AND status NOT IN ('merged', 'cancelled')",
+            [jira, plan.as_str(), after.key.as_str()],
         )?;
     }
     if (&before.repo, &before.base) != (&after.repo, &after.base) {
