@@ -210,6 +210,26 @@ impl HasText for Resources {
     }
 }
 
+/// The `deploys` domain (repo scope only, no `text`): the workflow files whose runs waiting for approval are deploys.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Deploys {
+    pub workflows: Vec<String>,
+}
+
+impl HasText for Deploys {
+    fn text(&self) -> &str {
+        ""
+    }
+}
+
+/// What a scope file's `[deploys]` table sets.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeploysSet {
+    pub workflows: Option<Vec<String>>,
+}
+
 /// A resource name: `^[a-z][a-z0-9-]{0,31}$`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ResourceName(String);
@@ -385,6 +405,7 @@ pub const BUILD: &str = "build";
 pub const RUN: &str = "run";
 pub const LIST: &str = "list";
 pub const PATHS: &str = "paths";
+pub const WORKFLOWS: &str = "workflows";
 
 fn left_out<const N: usize>(keys: [(&'static str, bool); N]) -> Vec<&'static str> {
     keys.into_iter().filter_map(|(name, out)| out.then_some(name)).collect()
@@ -442,6 +463,19 @@ impl Set for ProtectedSet {
 
     fn complete(&self) -> Option<Protected> {
         Some(Protected { paths: self.paths.clone()? })
+    }
+}
+
+impl Set for DeploysSet {
+    type Value = Deploys;
+
+    // STUB (red tests): the names are neither validated, sorted nor read.
+    fn fill(&self, _base: &Deploys) -> (Deploys, Vec<&'static str>) {
+        (Deploys::default(), left_out([(WORKFLOWS, self.workflows.is_none())]))
+    }
+
+    fn complete(&self) -> Option<Deploys> {
+        Some(Deploys { workflows: self.workflows.clone()? })
     }
 }
 
@@ -638,6 +672,7 @@ domains! {
     test_commands = "test-commands", TestCommands, [], [Repo], Option<RepoTests>, TestCommandsSet;
     protected, Protected, [], [Repo], Protected, ProtectedSet;
     resources, Resources, [], [Repo], Resources, ResourcesSet;
+    deploys, Deploys, [], [Repo], Deploys, DeploysSet;
 }
 
 impl Sources {

@@ -23,7 +23,7 @@ use crate::ids::{ContextId, OwnerLogin, RepoName};
 use crate::session::Role;
 
 pub use domain::{
-    audience, Checks, Domain, DomainSource, Feedback, Gate, GateAlias, Gates, Policy, Post, PostSet, Pr, Scope, Source, Sources,
+    audience, Checks, Deploys, Domain, DomainSource, Feedback, Gate, GateAlias, Gates, Policy, Post, PostSet, Pr, Scope, Source, Sources,
     Text,
 };
 /// The `policy` commands (commands.md §22).
@@ -192,6 +192,10 @@ pub fn owner_in_use(context: &ContextId, owner: &OwnerLogin, prs: &[String]) -> 
 #[cfg(test)]
 #[path = "resources_tests.rs"]
 mod resources_tests;
+
+#[cfg(test)]
+#[path = "deploys_tests.rs"]
+mod deploys_tests;
 
 #[cfg(test)]
 mod tests {
