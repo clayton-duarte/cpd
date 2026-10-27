@@ -1420,7 +1420,7 @@ Effects: **rows**, one transaction: `status = queued`, `retry_tier = <T>`, `fail
 {"ok": true, "job": "worker", "status": "queued", "tier": "S4"}
 ```
 
-Idempotent: yes, as stated.
+Idempotent: yes, as stated. (The engine also retries a `failed` open or update Job of the same PR when its fix merges, contract §3.2 "Engine auto-retry on fix merge" (pro-d89); a Lead normally retries only when no fix is needed or when a fix did not restart the Job.)
 
 ### 5.5 `job dispatch`
 
