@@ -153,7 +153,7 @@ A Job the User has not approved yet. The engine never runs it, and it is editabl
 _Avoid_: proposed, pending Job
 
 **Locked**:
-The state of every Job that is not a draft: its Spec, Tier and Dependencies can no longer change; it can only be re-attempted or cancelled, and new Jobs can be appended. A Job is Locked when the Plan is locked, or, if it was added as a draft later, when the review that covers it is approved.
+The state of every Job that is not a draft: its title, Tier, PR, kind and Dependencies can no longer change, and its Spec can change only while the Job is queued and has no Attempt, when the Lead corrects it with `job edit --spec` (no Plan review; the old text stays in the history); it can otherwise only be re-attempted or cancelled, and new Jobs can be appended. A Job is Locked when the Plan is locked, or, if it was added as a draft later, when the review that covers it is approved.
 _Avoid_: frozen, final
 
 ## Runtime

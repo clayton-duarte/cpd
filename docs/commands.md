@@ -1355,6 +1355,8 @@ cpd job edit <key> [--title <text>] [--tier <T>] [--spec <file>] [--pr <key>] [-
 
 **Completing a stub draft** (hs-d241, R1): `cpd job edit <key> --tier <T> --spec <file>` sets the Tier and the Spec of a draft that lacks them (a draft is editable, so this is an ordinary edit; `fields` lists `tier` and `spec`). Once the draft has both, it is complete and a Plan review may approve it (§4.6). The edit changes the plan fingerprint (contract §2.3), which covers a stub as it is.
 
+**A queued Locked Job's Spec** (ADR-0014, User, Context record pro-d79; contract §3.2 "Locked"): `cpd job edit <key> --spec <file>` also works, in any phase after the lock, on a Job that is `queued`, has no Attempt row of any status (not even an ended one) and is not an `open` or `update` Job. `--spec` is the **only** flag such a Job takes: `--title`, `--tier`, `--pr`, `--kind`, `--needs` or `--no-needs` is refused whole with `job_locked` and nothing is written. The Lead only: a Worker (`CPD_ATTEMPT` set) is refused `not_a_lead`. The new Spec is checked as a draft's `--spec` is (`spec_invalid`, the no-primary-checkout rule, `touches_missing`; a `test` Job keeps its `tests` and `test_files`). One write transaction re-reads the Job's status and Attempts, updates the Spec columns, recomputes `jobs.fingerprint` (contract §2.3) and appends one `job-edited` Event whose `fields` lists the changed Spec columns and whose text says it is a Locked Job's edit; the `history` rows keep the old and the new text. There is no Plan review and no User approval: tell the User in chat what you changed. A change that alters nothing writes nothing (`"already": true`).
+
 **`--kind`** (hs-d341) changes a draft's kind, never to `open` or `update` (`kind_reserved`); a Job that is not a draft is Locked. The Spec's `tests` and `test_files` must fit the new kind (`spec_invalid`: a `test` Job that is not a stub has both, every other kind neither), and the rules of §5.1 apply as there (`tests_unconfigured`; `test_job_required` where an `impl` Job stops being a draft, at the review or the lock; `shape_violation` when the PR's shape does not allow the new kind). `fields` lists `kind`.
 
 A draft is editable in **every phase** (User, hs-d173, hs-d174, hs-d179), including one added after the lock, whose review may be pending: the edit changes the fingerprint of the drafts, so the pending review no longer matters (§4.6). `--needs` may name drafts. `--no-needs` removes every Dependency (cpd 1 had no way to). `--pr <key>` moves the draft Job to another PR (R34, A14); it is a field flag, so §1.3's default does not apply: without it the Job keeps its PR. Dependencies stay inside one PR (A7): a Job that changes PR keeps none of its old needs, so give `--needs` with Jobs of the new PR, or `--no-needs`, and no other Job may need it.
@@ -1378,7 +1380,7 @@ Effects: **rows**, one transaction: the changed `jobs` columns; `dependencies` r
 {"ok": true, "job": {"key": "api-schema", "status": "draft"}, "fields": ["tier", "needs"]}
 ```
 
-Idempotent: yes; when no value changes it writes nothing and returns `"already": true`.
+The Event is `job-edited` in both cases. Idempotent: yes; when no value changes it writes nothing and returns `"already": true`.
 
 ### 5.3 `job cancel`
 

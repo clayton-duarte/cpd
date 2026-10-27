@@ -118,7 +118,7 @@ pub struct EditArgs {
     /// The new Tier: <O|S|H><0-5>
     #[arg(long, value_name = "T")]
     tier: Option<Tier>,
-    /// The new Spec file (JSON): it replaces the whole Spec
+    /// The new Spec file (JSON): it replaces the whole Spec; a queued Job with no Attempt takes only this flag
     #[arg(long, value_name = "file")]
     spec: Option<PathBuf>,
     /// The new Dependencies, comma-separated
