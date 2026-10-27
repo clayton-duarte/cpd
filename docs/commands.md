@@ -144,9 +144,13 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `item_not_found` | 4 | `inbox show`, `snooze` or `dismiss` named an Inbox item that does not exist |
 | `item_closed` | 3 | `inbox snooze` or `dismiss` named an Inbox item that is closed (§21) |
 | `not_loop_guarded` | 3 | `session resume` (§10.17): the Session is not a `lead` or a `manager`, or is archived, or is not `blocked` with label `φ: loop guard`; `details` `{state, label}` |
-| `slack_auth` | 3 | the team review helper found no usable Slack sign-in in pi's MCP credentials (§21.6); the message says to run `pi mcp login slack` |
-| `slack_not_configured` | 3 | there is no `slack` server in `~/.pi/agent/mcp.json` (§21.6); the message says to run `pi mcp add slack --url https://mcp.slack.com/mcp --exposure hidden` |
-| `slack_failed`, `slack_unparseable`, `slack_helper_failed` | 1 | the helper could not read the channel, read a payload with no messages in it, or could not load pi's MCP modules (§21.6). Also the code of the engine's E11 `error` Event (contract §3.7) |
+| `slack_auth` | 3 | a Slack helper (§21.6, §21.7) found no usable Slack sign-in in pi's MCP credentials; the message says to run `pi mcp login slack` |
+| `slack_not_configured` | 3 | a Slack helper (§21.6, §21.7) found no `slack` server in `~/.pi/agent/mcp.json`; the message says to run `pi mcp add slack --url https://mcp.slack.com/mcp --exposure hidden` |
+| `slack_failed` | 1 | a Slack helper (§21.6, §21.7) could not read the channel (E11), send a message (pr post), or timed out; check the channel before retrying |
+| `slack_unparseable` | 1 | a Slack helper (§21.6, §21.7) received an invalid payload (E11), response (post), or no messages (E11). Also the code of the engine's E11 `error` Event (contract §3.7) |
+| `slack_helper_failed` | 1 | a Slack helper (§21.6, §21.7) could not load pi's MCP modules or other failure inside it. Also the code of the engine's E11 `error` Event (contract §3.7) |
+| `spawn_failed` | 1 | a Slack helper (§21.6, §21.7) could not be started as a child process; `details` are `{argv, exit, stdout, stderr}` |
+| `store_failed` | 1 | a write command failed on SQLite (contract §4.5); for `pr post` (§9.8b) means the message WAS posted and the link is in `details` |
 | `archive_blocked` | 3 | `context archive`, `plan archive` or `session archive` found a live object (contract §2.2 "Archived"); `details.blockers` lists each, `details.next` says what to do |
 | `archived` | 3 | the object (or its Context or Plan) is archived and the command does not work on archived objects; `details.next` is the unarchive command |
 | `cas_lost` | 3 | a compare-and-swap found the state changed since it was read (§4.2); rerun the command |
