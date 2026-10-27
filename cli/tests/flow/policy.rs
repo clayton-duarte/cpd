@@ -94,7 +94,7 @@ fn the_output_has_exactly_the_documented_fields() {
     assert_eq!(out["role"], Value::Null);
     let mut domains: Vec<&str> = out["policy"].as_object().unwrap().keys().map(String::as_str).collect();
     domains.sort_unstable();
-    assert_eq!(domains, ["code", "deploy", "gate", "hooks", "instructions", "model", "monitor", "pr", "protected", "resources", "test-commands", "tests"]);
+    assert_eq!(domains, ["code", "deploy", "deploys", "gate", "hooks", "instructions", "model", "monitor", "pr", "protected", "resources", "test-commands", "tests"]);
     for (name, domain) in out["policy"].as_object().unwrap() {
         let mut fields: Vec<&str> = domain.as_object().unwrap().keys().map(String::as_str).collect();
         fields.sort_unstable();
