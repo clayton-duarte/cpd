@@ -57,3 +57,13 @@ Rows 1-12: Attempt 1 of cap-dev0. Rows 13-18: this Job (`cap-dev-a1`), same meth
 - Spread of repeats: wall 154.7/153.1 s (1%), 112.8/112.8 s, 185.3/184.9 s (0.2%), so walls repeat tightly; peak load 82.2/102.6 for cap 7 differs by 25%, so peak-load differences under about 25% mean nothing, and cap 7 at n=3 is not distinguishable from `default` in peak load.
 - Cap 4 is the only cap that costs a lone build little (98.4 s, no slower than `default`) and clearly lowers peak load at n=3 (66.0 against 93.5-100.7, -29% to -34%); I infer its n=2 result (202.3 s, load before 34, 6 foreign processes) is foreign load, because its n=3 cell (not noisy) had 148.5 s. Cap 2 is clearly too slow.
 - `CAP = 4`; for 14 CPUs the `-N` form is `-10` (I infer from `-4` giving 10 jobs; `-10` itself was not measured). Reason: a lone build is not slower than `default` and three concurrent builds peak at 66 load instead of about 97.
+
+## Release build matrix
+
+Attempt `cap-rel-a1`. Build: `CPD_COMMIT=measure scripts/cargo.sh build --release --locked -p cpd`, cold, own `CARGO_TARGET_DIR`, `RUSTC_WRAPPER=` empty, `timeout 900`. Caps: `default`, 4 (CAP from cap-dev) and 2 (the next lower cap).
+
+Cells not yet measured.
+
+## One rustc's threads
+
+Not yet measured.
