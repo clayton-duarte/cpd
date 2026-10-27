@@ -22,6 +22,7 @@ mod context_search;
 mod context;
 mod driver_idle;
 mod driver_open;
+mod driver_resources;
 mod feedback_surface;
 mod driver_reload;
 mod driver;

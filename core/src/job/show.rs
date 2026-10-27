@@ -58,6 +58,8 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let mut fields = job.to_json();
     fields["review"] = json!(review);
     fields["needs"] = json!(needs);
+    // Stub: `waiting_for` is not implemented yet; it is wrongly on every Job.
+    fields["waiting_for"] = json!([]);
     Ok(Output::success(json!({
         "job": fields, "needs": needs, "needed_by": needed_by, "attempts": attempts, "tamper": tamper,
     })))
