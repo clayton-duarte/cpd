@@ -3,7 +3,7 @@
 
 use serde_json::{Value, json};
 
-use super::pr::{Poll, Rows, node, poll_fx};
+use super::pr::{Poll, Rows, node, poll_fx, viewer};
 
 const READY_TEXT: &str = "needs attention: ready to post for review";
 
@@ -68,6 +68,10 @@ fn poll(fx: &Poll, updated_at: &str, rollup: &str, review: Option<&str>, threads
     let pull = node("acme/pay", 812, "OPEN", review, Some(rollup))
         .replace(r#""updatedAt":"U1""#, &format!(r#""updatedAt":"{updated_at}""#))
         .replace(r#""mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN""#, r#""mergeable":"MERGEABLE","mergeStateStatus":"CLEAN""#);
+    if listed_as != "authored" {
+        // The row was stored as the User's own: the poll reads it directly, and GitHub says it is review-requested of them.
+        fx.lookup(&[Some(viewer(pull.clone(), false, true))]);
+    }
     let (authored, requested) = if listed_as == "authored" { (vec![pull], vec![]) } else { (vec![], vec![pull]) };
     fx.search_raw(&format!(
         r#"{{"data":{{"search":{{"issueCount":{},"nodes":[{}]}},"reviewRequests":{{"issueCount":{},"nodes":[{}]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}"#,
@@ -139,10 +143,12 @@ fn an_open_bot_comment_keeps_the_pr_from_being_ready_until_it_is_answered() {
 fn an_owner_that_did_not_enable_posting_hears_no_ready_to_post() {
     let control = fixture(Posting::Enabled, false, "any");
     assert_eq!(becomes_ready(&control), told(&[&["ready_to_post"]]), "the positive control");
+    drop(control);
 
     for posting in [Posting::Absent, Posting::Disabled] {
         let fx = fixture(posting, false, "any");
         assert_eq!(becomes_ready(&fx), told(&[]));
+        drop(fx);
     }
 }
 
@@ -150,6 +156,7 @@ fn an_owner_that_did_not_enable_posting_hears_no_ready_to_post() {
 fn a_posted_pr_hears_no_ready_to_post() {
     let control = fixture(Posting::Enabled, false, "any");
     assert_eq!(becomes_ready(&control), told(&[&["ready_to_post"]]), "the positive control");
+    drop(control);
 
     let fx = fixture(Posting::Enabled, true, "any");
     assert_eq!(becomes_ready(&fx), told(&[]));
@@ -159,15 +166,18 @@ fn a_posted_pr_hears_no_ready_to_post() {
 fn a_pull_request_the_user_did_not_author_hears_nothing_of_the_post() {
     let control = fixture(Posting::Enabled, false, "any");
     assert_eq!(becomes_ready(&control), told(&[&["ready_to_post"]]), "the positive control");
+    drop(control);
     let approved = fixture(Posting::Enabled, true, "any");
     step(&approved, "U1", "SUCCESS", None, vec![]);
     step(&approved, "U2", "SUCCESS", Some("APPROVED"), vec![]);
     assert_eq!(reasons(&approved), told(&[&["approved"]]), "the positive control of approved");
+    drop(approved);
 
     let unposted = fixture(Posting::Enabled, false, "any");
     poll(&unposted, "U1", "PENDING", None, vec![], "requested");
     poll(&unposted, "U2", "SUCCESS", None, vec![], "requested");
     assert_eq!(reasons(&unposted), told(&[]));
+    drop(unposted);
 
     let posted = fixture(Posting::Enabled, true, "any");
     poll(&posted, "U1", "SUCCESS", None, vec![], "requested");
@@ -201,17 +211,20 @@ fn an_unposted_pr_or_a_disabled_owner_hears_no_approved() {
     step(&control, "U1", "SUCCESS", None, vec![]);
     step(&control, "U2", "SUCCESS", Some("APPROVED"), vec![]);
     assert_eq!(reasons(&control), told(&[&["approved"]]), "the positive control");
+    drop(control);
 
     let unposted = fixture(Posting::Enabled, false, "any");
     step(&unposted, "U1", "SUCCESS", None, vec![]);
     step(&unposted, "U2", "SUCCESS", Some("APPROVED"), vec![]);
     assert!(!flat(&reasons(&unposted)).contains(&"approved"), "{:?}", reasons(&unposted));
+    drop(unposted);
 
     for posting in [Posting::Absent, Posting::Disabled] {
         let fx = fixture(posting, true, "any");
         step(&fx, "U1", "SUCCESS", None, vec![]);
         step(&fx, "U2", "SUCCESS", Some("APPROVED"), vec![]);
         assert_eq!(reasons(&fx), told(&[]));
+        drop(fx);
     }
 }
 
@@ -224,6 +237,7 @@ fn the_new_reasons_follow_the_old_ones_in_the_documented_order() {
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0].1["reasons"], json!(["comments", "ready_to_post"]));
     assert!(events[0].0.contains("needs attention: comments, ready to post for review."), "{}", events[0].0);
+    drop(fx);
 
     let posted = fixture(Posting::Enabled, true, "any");
     step(&posted, "U1", "SUCCESS", None, vec![]);
