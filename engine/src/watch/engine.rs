@@ -16,7 +16,7 @@ use super::lock::WatchLock;
 use super::log::Log;
 use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, archive, archive_leads, distill, escalations, host_alert, inbox, janitor, liveness, models, open, pr, react, restart, schedule, sleep, team, titles, wake, workers};
+use super::{SOURCE, archive, archive_leads, auto_merge, distill, escalations, host_alert, inbox, janitor, liveness, models, open, pr, react, restart, schedule, sleep, team, titles, wake, workers};
 use cpd_core::clock::{self, Clock};
 use cpd_core::config::{Catalog, Config, load_catalog_with};
 use cpd_core::policy::model::{Models, models_of_attempt, models_of_job};
@@ -78,6 +78,8 @@ pub(super) struct Engine {
     pub team: team::State,
     /// E17: the merge reaction's run in flight and when the last one ended.
     pub react: react::State,
+    /// E18: the auto-merge request's run in flight and when the last one failed.
+    pub auto_merge: auto_merge::State,
     /// E15: the helper's run in flight and when the last one ended.
     pub models: models::State,
     /// E16: when this engine last started a `cpd janitor` pass (`None` before the first, in this engine's life).
@@ -125,6 +127,7 @@ impl Engine {
             titles: titles::Runs::default(),
             team: team::State::default(),
             react: react::State::default(),
+            auto_merge: auto_merge::State::default(),
             models: models::State::default(),
             janitor_started: None,
             restart_started: None,
@@ -192,6 +195,7 @@ impl Engine {
             titles::run,
             team::run,
             react::run,
+            auto_merge::run,
             models::run,
             archive::run,
             sleep::run,
@@ -212,7 +216,7 @@ impl Engine {
 /// E8, E12 and E13 run as usual. E3 starts only a Job of an incident Plan or an urgent one ([`schedule`]);
 /// E4 and E7 act per PR ([`incident_holds_plan`]).
 pub(super) fn incident_holds(engine: &mut Engine, step: Step) -> bool {
-    if !matches!(step, Step::E9 | Step::E10 | Step::E11 | Step::E16 | Step::E17) {
+    if !matches!(step, Step::E9 | Step::E10 | Step::E11 | Step::E16 | Step::E17 | Step::E18) {
         return false;
     }
     engine.store.read(|conn| Ok(cpd_core::incident::is_on(conn))).unwrap_or(false)

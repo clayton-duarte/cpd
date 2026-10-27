@@ -81,6 +81,34 @@ pub fn next_unreacted(conn: &Connection) -> Result<Option<Unreacted>, CpdError> 
         .optional()?)
 }
 
+/// A post whose auto-merge request waits (`pending`) for a PR that can take it now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pending {
+    pub plan: String,
+    pub pr: String,
+    /// The GitHub repo, `owner/name`.
+    pub repo: String,
+    pub number: i64,
+}
+
+/// The oldest-posted `pending` request whose PR is `open`, whose Plan is not archived and not held by incident mode, and
+/// which is not stacked (its `base` is no `prs.lead_branch`; the rule of `auto_merge::stacked`), if any.
+pub fn next_pending(conn: &Connection) -> Result<Option<Pending>, CpdError> {
+    Ok(conn
+        .query_row(
+            "SELECT p.plan, p.pr, q.repo, q.number
+             FROM pr_posts p JOIN prs r ON r.plan = p.plan AND r.key = p.pr
+               JOIN plans l ON l.id = p.plan JOIN pull_requests q ON q.id = r.pull_request
+             WHERE p.auto_merge = 'pending' AND r.status = 'open' AND l.archived_at IS NULL
+               AND (NOT EXISTS (SELECT 1 FROM incident) OR EXISTS (SELECT 1 FROM incident_plans i WHERE i.plan = p.plan))
+               AND NOT EXISTS (SELECT 1 FROM prs b WHERE b.lead_branch = r.base)
+             ORDER BY p.posted_at, p.plan, p.pr LIMIT 1",
+            [],
+            |r| Ok(Pending { plan: r.get(0)?, pr: r.get(1)?, repo: r.get(2)?, number: r.get(3)? }),
+        )
+        .optional()?)
+}
+
 /// Sets `reacted_at` to the transaction's time where it is still NULL; `false` when nothing changed.
 pub fn mark_reacted(tx: &WriteTxn<'_>, plan: &str, pr: &str) -> Result<bool, CpdError> {
     let rows = tx.execute(
