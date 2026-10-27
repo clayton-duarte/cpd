@@ -483,3 +483,274 @@ fn nothing_runs_and_nothing_is_reported_when_nothing_is_queued() {
     assert_eq!(p.reacted_at("1793040002.000002").as_deref(), Some("earlier"), "an earlier reaction is not touched");
     assert_eq!(p.errors(), Vec::<Value>::new());
 }
+
+// ---- E17 and the policy: the emoji of a merge reaction is the PR's policy now; a permanent refusal is parked (pro-d124, pro-d125) ----
+
+/// The helper's refusal answer for Slack's error `reason`.
+fn refused(reason: &str) -> String {
+    format!(
+        r#"1 {{"ok":false,"error":{{"code":"slack_refused","message":"slack_add_reaction returned an error: execution_failed: {reason}","details":{{"tool":"slack_add_reaction","reason":"{reason}"}}}}}}"#
+    )
+}
+
+/// The owner's policy: posting on, the channel, and the merge reaction `emoji` when there is one.
+fn owner_toml(emoji: Option<&str>) -> String {
+    let reaction = emoji.map_or(String::new(), |e| format!("merged_reaction = \"{e}\"\n"));
+    format!("[pr.post]\nenabled = true\nchannel = \"{CHANNEL}\"\n{reaction}")
+}
+
+/// A repo policy file that sets only the merge reaction.
+fn repo_toml(emoji: &str) -> String {
+    format!("[pr.post]\nmerged_reaction = \"{emoji}\"\n")
+}
+
+impl Probe {
+    /// Replaces the policy file `policy/acme/<name>.toml`, as the User's edit: the engine finds it at its next tick.
+    fn policy_file(&self, name: &str, toml: &str) {
+        fs::write(self.home.join("policy/acme").join(format!("{name}.toml")), toml).unwrap();
+    }
+
+    /// The `--emoji` of each call of the helper, in order.
+    fn emojis_called(&self) -> Vec<String> {
+        self.calls().iter().map(|c| c.args[c.args.iter().position(|a| a == "--emoji").expect("--emoji") + 1].clone()).collect()
+    }
+
+    /// `(emoji, reacted_at, refused_at, refusal)` of the queue row of the post at `ts`.
+    fn row(&self, ts: &str) -> (String, Option<String>, Option<String>, Option<String>) {
+        self.store()
+            .query_row("SELECT emoji, reacted_at, refused_at, refusal FROM slack_reactions WHERE ts = ?1", [ts], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+    }
+
+    fn refused_at(&self, ts: &str) -> Option<String> {
+        self.row(ts).2
+    }
+
+    /// Every `error` Event but those of `gh`: its Plan and its data.
+    fn error_events(&self) -> Vec<(Option<String>, Value)> {
+        let conn = self.store();
+        let mut stmt = conn.prepare("SELECT plan, data FROM events WHERE kind = 'error' ORDER BY id").unwrap();
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+        rows.into_iter().map(|(plan, data)| (plan, serde_json::from_str::<Value>(&data).unwrap())).filter(|(_, d)| d["code"].as_str().is_some_and(|c| c != "gh_failed")).collect()
+    }
+}
+
+impl React {
+    /// A merge reaction: the Context owned by `acme`, merged PR `api` (repo name `pay`) with its post at [`TS`] (the stale copy
+    /// `git-merge` of the policy at post time), the queue row linked to it with the emoji `git-merge`, the owner's policy file
+    /// `owner` and the repo's `repo`.
+    fn merge_row(&self, owner: &str, repo: &str) {
+        self.fx.env.owner_policy("acme", owner);
+        self.fx.env.repo_policy("acme", "pay", repo);
+        self.pr("api", 1, Some(7200));
+        self.post("api", TS, Some(EMOJI));
+        self.fx.env.sql(&format!(
+            "UPDATE contexts SET owner = 'acme' WHERE id = 'ctx';
+             UPDATE prs SET name = 'pay' WHERE plan = 'pay' AND key = 'api';
+             INSERT INTO slack_reactions (channel, ts, emoji, queued_at, plan, pr) VALUES ('{CHANNEL}', '{TS}', '{EMOJI}', 't', 'pay', 'api');"
+        ));
+    }
+}
+
+/// The canonical and the plain path of `file` under the home of `p`: the product reports one or the other.
+fn mentions(text: &str, p: &Probe, file: &str) -> bool {
+    let plain = p.home.join("policy/acme").join(file);
+    let canonical = p.home.canonicalize().unwrap().join("policy/acme").join(file);
+    text.contains(plain.to_str().unwrap()) || text.contains(canonical.to_str().unwrap())
+}
+
+#[test]
+fn a_queued_merge_reaction_is_placed_with_the_emoji_the_policy_names_now() {
+    let t = react(LONG);
+    t.merge_row(&owner_toml(Some("git-merged")), "");
+    t.queue(TS2, "eyes");
+    t.run(then_ticks(3, |p| p.reacted_at(TS).is_some() && p.reacted_at(TS2).is_some()));
+    let p = t.probe();
+
+    assert_eq!(p.ts_called(), [TS, TS2]);
+    assert_eq!(p.emojis_called(), ["git-merged", "eyes"], "the merge reaction as the policy names it now, the unlinked one as queued");
+    let (emoji, reacted, refused, refusal) = p.row(TS);
+    assert_eq!((emoji.as_str(), refused, refusal), ("git-merged", None, None));
+    assert!(reacted.is_some());
+    assert_eq!(p.row(TS2).0, "eyes");
+    assert_eq!(p.errors(), Vec::<Value>::new());
+}
+
+/// Runs until the row at [`TS`] is parked and three ticks more.
+fn park(t: &React) -> Probe {
+    t.probe().says(&refused("invalid_name"));
+    t.run(then_ticks(3, |p| p.refused_at(TS).is_some()));
+    t.probe()
+}
+
+#[test]
+fn a_permanent_refusal_parks_the_row_and_reports_one_error_naming_the_emoji_and_the_policy_file() {
+    // (owner file, repo file, the file that sets the key)
+    let cases = [(owner_toml(Some("git-merge")), String::new(), "owner.toml"), (owner_toml(None), repo_toml("git-merge"), "pay.toml")];
+    for (owner, repo, file) in cases {
+        let t = react(LONG);
+        t.merge_row(&owner, &repo);
+        let p = park(&t);
+
+        assert_eq!(p.emojis_called(), ["git-merge"], "{file}: one try, then parked");
+        let (emoji, reacted, refused_at, refusal) = p.row(TS);
+        assert_eq!((emoji.as_str(), reacted, refusal.as_deref()), ("git-merge", None, Some("invalid_name")), "{file}");
+        assert!(refused_at.is_some_and(|at| at.ends_with('Z')), "{file}");
+        let events = p.error_events();
+        assert_eq!(events.len(), 1, "{file}: one Event: {events:?}");
+        let (plan, data) = &events[0];
+        assert_eq!(plan.as_deref(), Some("pay"), "scoped to the Plan");
+        assert_eq!((data["code"].as_str(), data["source"].as_str()), (Some("slack_refused"), Some("watch")));
+        let text = data["message"].as_str().unwrap();
+        assert!(text.contains("git-merge") && text.contains("invalid_name") && mentions(text, &p, file), "{file}: {text}");
+        let d = &data["details"];
+        assert_eq!((d["emoji"].as_str(), d["reason"].as_str(), d["channel"].as_str(), d["ts"].as_str()), (Some("git-merge"), Some("invalid_name"), Some(CHANNEL), Some(TS)));
+        assert_eq!((d["plan"].as_str(), d["pr"].as_str()), (Some("pay"), Some("api")));
+        assert!(d["id"].is_i64(), "{d}");
+        assert!(mentions(d["file"].as_str().unwrap(), &p, file), "{file}: {d}");
+        let items: i64 = p.store().query_row("SELECT count(*) FROM inbox_items", [], |r| r.get(0)).unwrap();
+        assert_eq!(items, 0, "a parked row is not an Inbox item");
+    }
+}
+
+#[test]
+fn a_parked_row_is_not_tried_again_by_a_later_tick_or_a_restarted_engine() {
+    const REPEAT: u32 = 60;
+    let t = react(REPEAT);
+    t.merge_row(&owner_toml(Some("git-merge")), "");
+    park(&t);
+    // The control: a row queued behind the parked one is placed while the parked one is left alone.
+    let p = t.probe();
+    p.says(OK);
+    p.write(&queue_sql(TS2, "eyes"));
+    let mut skipped = false;
+    let mut tail = then_ticks(10, |p| p.reacted_at(TS2).is_some());
+    t.run(move |p, nap| {
+        if !skipped {
+            if p.reacted_at(TS2).is_some() {
+                p.skip(u64::from(REPEAT) * 5);
+                skipped = true;
+            }
+            return false;
+        }
+        tail(p, nap)
+    });
+    assert_eq!(p.ts_called(), [TS, TS2], "the parked row is not called again, past the repeat period either");
+    assert_eq!(p.error_events().len(), 1, "no second Event");
+    assert!(p.refused_at(TS).is_some());
+
+    // A second engine on the same home, with fresh memory: the same, with a new control row.
+    let third = "1793040003.000003";
+    p.write(&queue_sql(third, "eyes"));
+    t.run(then_ticks(10, move |p| p.reacted_at(third).is_some()));
+    assert_eq!(p.ts_called(), [TS, TS2, third.to_owned().as_str()], "the restarted engine places the control and not the parked row");
+    assert_eq!(p.error_events().len(), 1, "no second Event");
+    assert!(p.refused_at(TS).is_some() && p.reacted_at(TS).is_none());
+}
+
+#[test]
+fn a_parked_row_is_reopened_and_placed_when_the_policy_names_another_emoji() {
+    // A rewrite to the same refused emoji reopens nothing; the control row behind shows the step is alive.
+    let t = react(LONG);
+    t.merge_row(&owner_toml(Some("git-merge")), "");
+    let p = park(&t);
+    p.says(OK);
+    p.write(&queue_sql(TS2, "eyes"));
+    p.policy_file("owner", &format!("# edited\n{}", owner_toml(Some("git-merge"))));
+    t.run(then_ticks(10, |p| p.reacted_at(TS2).is_some()));
+    assert_eq!(p.ts_called(), [TS, TS2], "the same emoji: the row stays parked");
+    assert!(p.refused_at(TS).is_some());
+
+    // Another emoji: reopened and placed.
+    p.policy_file("owner", &owner_toml(Some("git-merged")));
+    t.run(then_ticks(3, |p| p.reacted_at(TS).is_some()));
+    assert_eq!(p.emojis_called(), ["git-merge", "eyes", "git-merged"]);
+    let (emoji, reacted, refused_at, refusal) = p.row(TS);
+    assert_eq!((emoji.as_str(), refused_at, refusal), ("git-merged", None, None));
+    assert!(reacted.is_some());
+    assert_eq!(p.error_events().len(), 1, "the parking is the only Event");
+}
+
+#[test]
+fn a_merge_reaction_whose_policy_names_no_emoji_is_parked_as_policy_empty() {
+    let t = react(LONG);
+    t.merge_row(&owner_toml(Some("")), "");
+    t.queue(TS2, "eyes");
+    t.run(then_ticks(3, |p| p.refused_at(TS).is_some() && p.reacted_at(TS2).is_some()));
+    let p = t.probe();
+
+    assert_eq!(p.ts_called(), [TS2], "no helper call for the merge reaction; the control row is placed");
+    let (_, reacted, refused_at, refusal) = p.row(TS);
+    assert_eq!((reacted, refusal.as_deref()), (None, Some("policy_empty")));
+    assert!(refused_at.is_some());
+    let events = p.error_events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].0.as_deref(), Some("pay"));
+    assert_eq!(events[0].1["code"], "slack_refused");
+    let text = events[0].1["message"].as_str().unwrap();
+    assert!(text.contains("pr.post.merged_reaction") && mentions(text, &p, "owner.toml"), "{text}");
+
+    // A later non-empty policy reopens and places it.
+    p.policy_file("owner", &owner_toml(Some("git-merged")));
+    t.run(then_ticks(3, |p| p.reacted_at(TS).is_some()));
+    assert_eq!(p.emojis_called(), ["eyes", "git-merged"]);
+    let (emoji, _, refused_at, refusal) = p.row(TS);
+    assert_eq!((emoji.as_str(), refused_at, refusal), ("git-merged", None, None));
+    assert_eq!(p.error_events().len(), 1);
+}
+
+#[test]
+fn a_merge_reaction_whose_policy_does_not_resolve_is_reported_and_retried_later() {
+    const REPEAT: u32 = 600;
+    let t = react(REPEAT);
+    t.merge_row("this is = = not toml\n", "");
+    t.queue(TS2, "eyes");
+    t.run(then_ticks(3, |p| p.reacted_at(TS2).is_some() && !p.error_events().is_empty()));
+    let p = t.probe();
+
+    assert_eq!(p.ts_called(), [TS2], "no helper call for the merge reaction (the control row is placed)");
+    let events = p.error_events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!((events[0].0.as_deref(), events[0].1["code"].as_str()), (Some("pay"), Some("policy_invalid")));
+    let (_, reacted, refused_at, _) = p.row(TS);
+    assert_eq!((reacted, refused_at), (None, None), "pending, not parked");
+
+    // The file is fixed; the row is tried again after the repeat period.
+    p.policy_file("owner", &owner_toml(Some("git-merged")));
+    p.skip(u64::from(REPEAT) + 1);
+    t.run(then_ticks(3, |p| p.reacted_at(TS).is_some()));
+    assert_eq!(p.emojis_called(), ["eyes", "git-merged"]);
+    assert_eq!(p.error_events().len(), 1, "no more Events");
+}
+
+#[test]
+fn a_refused_row_without_a_pr_is_parked_with_an_event_that_names_no_policy_file() {
+    const REPEAT: u32 = 60;
+    let t = react(REPEAT);
+    t.probe().says(&refused("message_not_found"));
+    t.queue(TS, "eyes");
+    t.run(then_ticks(3, |p| p.refused_at(TS).is_some()));
+    let p = t.probe();
+
+    let (emoji, reacted, _, refusal) = p.row(TS);
+    assert_eq!((emoji.as_str(), reacted, refusal.as_deref()), ("eyes", None, Some("message_not_found")));
+    let events = p.error_events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    let (plan, data) = &events[0];
+    assert_eq!(*plan, None, "machine-level: no Plan");
+    assert_eq!(data["code"], "slack_refused");
+    let text = data["message"].as_str().unwrap();
+    assert!(text.contains("eyes") && text.contains("message_not_found") && text.contains(CHANNEL) && text.contains(TS), "{text}");
+    assert!(!text.contains(".toml") && !text.contains("policy"), "{text}");
+    let d = &data["details"];
+    assert_eq!((d["emoji"].as_str(), d["reason"].as_str(), d["channel"].as_str(), d["ts"].as_str()), (Some("eyes"), Some("message_not_found"), Some(CHANNEL), Some(TS)));
+    assert!(d.get("file").is_none() && d.get("plan").is_none() && d.get("pr").is_none(), "{d}");
+
+    // Never retried, past the repeat period either; the control: a row queued after is placed.
+    p.says(OK);
+    p.write(&queue_sql(TS2, "eyes"));
+    p.skip(u64::from(REPEAT) * 5);
+    t.run(then_ticks(10, |p| p.reacted_at(TS2).is_some()));
+    assert_eq!(p.ts_called(), [TS, TS2]);
+    assert_eq!(p.error_events().len(), 1);
+}

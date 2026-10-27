@@ -21,7 +21,7 @@ export const SERVER = "slack";
 const AUTH_MARKERS = ["invalid_token", "unauthorized", "invalid_auth", "token_expired", "requires sign-in"];
 
 /** A failure the helper answers with: its code, exit status and details are the contract's (commands.md §21.6). */
-export type RefusalCode = "usage" | "slack_not_configured" | "slack_auth" | "slack_failed" | "slack_unparseable" | "slack_helper_failed";
+export type RefusalCode = "usage" | "slack_not_configured" | "slack_auth" | "slack_failed" | "slack_refused" | "slack_unparseable" | "slack_helper_failed";
 
 export class Refusal extends Error {
   readonly code: RefusalCode;

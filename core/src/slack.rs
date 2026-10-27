@@ -90,6 +90,7 @@ pub fn answer(out: &Output, argv: &[String]) -> Result<Value, CpdError> {
                 ErrorCode::SlackAuth,
                 ErrorCode::SlackNotConfigured,
                 ErrorCode::SlackFailed,
+                ErrorCode::SlackRefused,
                 ErrorCode::SlackUnparseable,
                 ErrorCode::SlackHelperFailed,
             ]
@@ -184,7 +185,7 @@ mod tests {
 
     #[test]
     fn each_known_code_keeps_its_message_and_details() {
-        for code in [ErrorCode::SlackAuth, ErrorCode::SlackNotConfigured, ErrorCode::SlackFailed, ErrorCode::SlackUnparseable, ErrorCode::SlackHelperFailed] {
+        for code in [ErrorCode::SlackAuth, ErrorCode::SlackNotConfigured, ErrorCode::SlackFailed, ErrorCode::SlackRefused, ErrorCode::SlackUnparseable, ErrorCode::SlackHelperFailed] {
             let line = json!({"ok": false, "error": {"code": code.as_str(), "message": "m", "details": {"k": 1}}}).to_string();
             let error = failed(&line);
             assert_eq!((error.code(), error.message()), (code, "m"));
