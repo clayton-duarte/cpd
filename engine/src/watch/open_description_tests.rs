@@ -5,7 +5,7 @@
 use cpd_core::ports::Fakes;
 use serde_json::json;
 
-use super::schedule;
+use super::{open, schedule};
 use super::testkit::Fx;
 
 /// One tick of E3 on the fake ports: a started Attempt records its rows and launches nothing real.
@@ -89,4 +89,22 @@ fn e3_starts_the_open_job_of_a_described_pr() {
     ticks(&mut fx, 2);
     assert_eq!(attempts(&mut fx), 1);
     assert_eq!(fx.count("error"), 0, "{:?}", texts(&mut fx, "error"));
+}
+
+/// Pin (Plan bifrost, PR haiku55): the refused open Job stays queued, so E4 adds no second open Job.
+#[test]
+fn an_undescribed_pr_keeps_one_open_job_and_no_attempt_over_eleven_e3_and_e4_ticks() {
+    let mut fx = with_open_job("open-repo", "open");
+
+    for _ in 0..11 {
+        tick(&mut fx);
+        open::run(&mut fx.engine);
+    }
+
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM jobs WHERE plan = 'pay' AND kind = 'open'"), 1);
+    assert_eq!(attempts(&mut fx), 0);
+    assert_eq!(fx.job_status("open-repo"), "queued");
+    let errors = fx.events("error");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].3["code"], json!("description_required"));
 }
