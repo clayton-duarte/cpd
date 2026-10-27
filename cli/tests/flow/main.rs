@@ -30,6 +30,8 @@ mod host_repair;
 mod job;
 mod job_edit_locked;
 mod job_fix;
+mod job_verify;
+mod driver_verify;
 mod driver_fix;
 mod metrics;
 mod models_cmd;

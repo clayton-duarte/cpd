@@ -1915,17 +1915,17 @@ fn retry_accepts_h0_to_h3_and_s0_to_s3() {
 // (contract §2.2 "Job kinds", §7.7; commands.md §4.6, §4.8, §5.3, §5.9)
 
 /// `plan review` of Plan `plan`.
-fn review(fx: &Fx, plan: &str) -> Run {
+pub(super) fn review(fx: &Fx, plan: &str) -> Run {
     fx.cpd(&["plan", "review", "--title", "The batch", "--plan", plan])
 }
 
 /// `plan lock` of Plan `plan`.
-fn plan_lock(fx: &Fx, plan: &str) -> Run {
+pub(super) fn plan_lock(fx: &Fx, plan: &str) -> Run {
     fx.cpd(&["plan", "lock", "--plan", plan])
 }
 
 /// `job add <key> --kind <kind> --needs <needs>` into PR `pr`, with the Spec of the kind (a `test` Job names `t::<key>` in `tests/<key>.rs`).
-fn add_needing(fx: &Fx, plan: &str, key: &str, kind: &str, needs: &[&str], pr: &str) -> Run {
+pub(super) fn add_needing(fx: &Fx, plan: &str, key: &str, kind: &str, needs: &[&str], pr: &str) -> Run {
     let spec = if kind == "test" {
         test_spec_file(&fx.env, &format!("{key}.json"), json!([format!("t::{key}")]), json!([format!("tests/{key}.rs")]))
     } else {
