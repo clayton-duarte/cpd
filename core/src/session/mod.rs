@@ -32,7 +32,7 @@ mod report;
 pub(crate) mod retitle;
 mod row;
 pub(crate) mod run;
-mod send;
+pub(crate) mod send;
 mod state;
 
 use std::path::PathBuf;

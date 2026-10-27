@@ -18,7 +18,7 @@ export const KINDS = [
   "escalation", "escalation-answered", "escalation-expired",
   "session-registered", "session-state", "session-moved", "session-renamed", "session-titled", "session-retiered",
   "context-renamed", "context-owner", "plan-renamed", "context-archived", "plan-archived", "session-archived", "session-asleep", "session-resumed", "plan-deleted", "context-deleted", "records-retired", "docs-decided", "context-curated", "session-message",
-  "inbox-opened", "inbox-closed", "inbox-snoozed", "inbox-dismissed",
+  "inbox-opened", "inbox-closed", "inbox-snoozed", "inbox-dismissed", "inbox-claimed",
   "pr-added", "pr-edited", "pr-cancelled", "pr-started", "pr-base-changed", "pr-opened", "pr-merged",
   "watch-started", "watch-stopped", "review-opened", "review-closed", "incident-started", "incident-plans", "incident-ended", "error", "mcp-attached",
 ] as const;

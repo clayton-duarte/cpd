@@ -20,23 +20,23 @@ use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 
-const T0: &str = "2026-01-01T00:00:00.000Z";
-const T1: &str = "2026-01-01T01:00:00.000Z";
-const T2: &str = "2026-01-01T02:00:00.000Z";
-const T3: &str = "2026-01-01T03:00:00.000Z";
-const T4: &str = "2026-01-01T04:00:00.000Z";
+pub(crate) const T0: &str = "2026-01-01T00:00:00.000Z";
+pub(crate) const T1: &str = "2026-01-01T01:00:00.000Z";
+pub(crate) const T2: &str = "2026-01-01T02:00:00.000Z";
+pub(crate) const T3: &str = "2026-01-01T03:00:00.000Z";
+pub(crate) const T4: &str = "2026-01-01T04:00:00.000Z";
 const CLOSED_X: &str = "2026-01-02T00:00:00.000Z";
-const CLOSED_Y: &str = "2026-01-03T00:00:00.000Z";
+pub(crate) const CLOSED_Y: &str = "2026-01-03T00:00:00.000Z";
 
 /// A temporary `$CPD_HOME` with an item of each rank in Contexts `ctx1` and `ctx2`.
-struct Fixture {
-    fx: Fx,
-    store: Store,
+pub(crate) struct Fixture {
+    pub(crate) fx: Fx,
+    pub(crate) store: Store,
     /// Item ids by subject.
     ids: Vec<(String, i64)>,
 }
 
-fn condition(kind: Kind, urgency: Urgency, subject: &str, context: &str) -> Condition {
+pub(crate) fn condition(kind: Kind, urgency: Urgency, subject: &str, context: &str) -> Condition {
     Condition {
         kind,
         urgency,
@@ -56,7 +56,7 @@ impl Fixture {
     /// Open, in order: `stuck` (red), `review` (yellow, ctx2, T2), `question`
     /// (yellow, T4), `unread` (magenta), `dialog` (white). Closed: `x` at
     /// 2026-01-02, then `y` at 2026-01-03.
-    fn new() -> Fixture {
+    pub(crate) fn new() -> Fixture {
         let fx = Fx::with_ports();
         let env = &fx.env;
         fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
@@ -101,34 +101,34 @@ impl Fixture {
         Fixture { fx, store, ids }
     }
 
-    fn id(&self, subject: &str) -> i64 {
+    pub(crate) fn id(&self, subject: &str) -> i64 {
         self.ids.iter().find(|(s, _)| s == subject).unwrap().1
     }
 
-    fn cpd(&self, args: &[&str]) -> Run {
+    pub(crate) fn cpd(&self, args: &[&str]) -> Run {
         self.fx.cpd(args)
     }
 
     /// `cpd inbox <args>`, which must succeed.
-    fn ok(&self, args: &[&str]) -> Value {
+    pub(crate) fn ok(&self, args: &[&str]) -> Value {
         let mut argv = vec!["inbox"];
         argv.extend(args);
         self.cpd(&argv).ok()
     }
 
-    fn fail(&self, args: &[&str]) -> (i32, Value) {
+    pub(crate) fn fail(&self, args: &[&str]) -> (i32, Value) {
         let mut argv = vec!["inbox"];
         argv.extend(args);
         let run = self.cpd(&argv);
         (run.exit, run.error())
     }
 
-    fn events(&self, kind: &str) -> Vec<Value> {
+    pub(crate) fn events(&self, kind: &str) -> Vec<Value> {
         self.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
     }
 
     /// Holds `locks/watch.lock` as an engine does, until dropped.
-    fn engine(&self) -> Flock<File> {
+    pub(crate) fn engine(&self) -> Flock<File> {
         let path = self.fx.env.cpd_home().join("locks/watch.lock");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         Flock::lock(File::create(path).unwrap(), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap()
@@ -157,7 +157,7 @@ fn list_is_in_order_with_engine_down_first_when_no_engine_runs() {
     assert_eq!(down["urgency"], "red");
     assert_eq!(down["label"], "engine is down");
     assert_eq!(down["context"], Value::Null);
-    assert_eq!(list["hidden"], json!({"snoozed": 0, "dismissed": 0}));
+    assert_eq!(list["hidden"], json!({"snoozed": 0, "dismissed": 0, "claimed": 0}));
     // The highest Event id: the fixture's reconcile calls appended Events.
     assert!(list["events_cursor"].as_i64().unwrap() > 0);
 
@@ -221,11 +221,11 @@ fn hidden_items_leave_the_list_and_are_counted() {
 
     let list = fx.ok(&["list"]);
     assert_eq!(subjects(&list), ["stuck", "review", "question"]);
-    assert_eq!(list["hidden"], json!({"snoozed": 1, "dismissed": 1}));
+    assert_eq!(list["hidden"], json!({"snoozed": 1, "dismissed": 1, "claimed": 0}));
 
     let all = fx.ok(&["list", "--all"]);
     assert_eq!(subjects(&all), ["stuck", "review", "question", "unread", "dialog"]);
-    assert_eq!(all["hidden"], json!({"snoozed": 1, "dismissed": 1}));
+    assert_eq!(all["hidden"], json!({"snoozed": 1, "dismissed": 1, "claimed": 0}));
     let hidden: Vec<&Value> = all["items"].as_array().unwrap().iter().map(|i| &i["hidden"]).collect();
     assert_eq!(hidden, [&Value::Null, &Value::Null, &Value::Null, &json!("dismissed"), &json!("snoozed")]);
 }
@@ -245,7 +245,7 @@ fn a_snooze_that_has_passed_shows_the_item_again() {
         .unwrap();
     let list = fx.ok(&["list"]);
     assert_eq!(subjects(&list), ["stuck", "review", "question", "unread", "dialog"]);
-    assert_eq!(list["hidden"], json!({"snoozed": 0, "dismissed": 0}));
+    assert_eq!(list["hidden"], json!({"snoozed": 0, "dismissed": 0, "claimed": 0}));
 }
 
 #[test]
@@ -271,7 +271,7 @@ fn closed_lists_newest_first_with_a_limit_and_a_fixed_age() {
     assert_eq!(list["items"][1]["age_seconds"], 86_400);
     assert_eq!(subjects(&fx.ok(&["list", "--closed", "--limit", "1"])), ["y"]);
     // Open items are not listed, so neither is engine-down, but they are counted as hidden.
-    assert_eq!(list["hidden"], json!({"snoozed": 0, "dismissed": 0}));
+    assert_eq!(list["hidden"], json!({"snoozed": 0, "dismissed": 0, "claimed": 0}));
 }
 
 #[test]
@@ -415,7 +415,7 @@ fn dismiss_refuses_what_it_cannot_hide() {
 
 impl Fixture {
     /// One integer from a query on a fresh connection.
-    fn store_count(&self, sql: &str) -> i64 {
+    pub(crate) fn store_count(&self, sql: &str) -> i64 {
         let home = CpdHome::resolve(Some(self.fx.env.cpd_home().into()), None).unwrap();
         Store::open(&home, 5000).unwrap().read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?)).unwrap()
     }

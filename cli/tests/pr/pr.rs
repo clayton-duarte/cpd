@@ -1146,6 +1146,17 @@ impl Handler for Gh {
                 Some(text) => Reply::ok(&format!("{text}\n")),
                 None => Reply::ok(&format!("{}\n", empty_comments(query))),
             },
+            // The checks read (poll step 3b): one failing check for each pull request, so a FAILURE rollup is confirmed.
+            ["api", "graphql", "-f", query, ..] if query.contains("contexts(first: 100") => {
+                let run = serde_json::json!({"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"});
+                let page = serde_json::json!({"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": [run]});
+                let pull = serde_json::json!({"commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": page}}}]}});
+                let mut data = serde_json::Map::new();
+                for i in 0..query.matches(": repository(").count() {
+                    data.insert(format!("p{i}"), serde_json::json!({"pullRequest": pull}));
+                }
+                Reply::ok(&format!("{}\n", serde_json::json!({"data": data})))
+            }
             ["api", "graphql", "-f", query, ..] if query.contains("p0: repository") => self.lookup.get(),
             ["api", "graphql", "-f", query, ..] => Reply::exit(9, "", &format!("unexpected graphql query: {query}\n")),
             _ => Reply::exit(9, "", &format!("unexpected gh call: {}\n", args.join(" "))),
@@ -1588,7 +1599,7 @@ fn is_search(call: &[String]) -> bool {
 }
 
 fn is_lookup(call: &[String]) -> bool {
-    call[..3] == ["api", "graphql", "-f"] && call[3].starts_with("query=query { p0: repository(owner: ")
+    call[..3] == ["api", "graphql", "-f"] && call[3].starts_with("query=query { p0: repository(owner: ") && !call[3].contains("contexts(first: 100")
 }
 
 #[test]
