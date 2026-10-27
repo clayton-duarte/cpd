@@ -188,6 +188,10 @@ pub fn owner_in_use(context: &ContextId, owner: &OwnerLogin, prs: &[String]) -> 
 
 
 #[cfg(test)]
+#[path = "resources_tests.rs"]
+mod resources_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::home::CpdHome;

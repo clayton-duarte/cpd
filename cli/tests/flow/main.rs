@@ -33,6 +33,7 @@ mod driver_fix;
 mod metrics;
 mod models_cmd;
 mod plan_cancel;
+mod policy_resources;
 mod plan_delete;
 mod plan_render_cancelled;
 mod plan_render_waiting;

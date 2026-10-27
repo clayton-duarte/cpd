@@ -175,6 +175,25 @@ impl HasText for Protected {
     }
 }
 
+/// The `resources` domain (repo scope only, no `text`): the declared exclusive resource names, sorted.
+/// STUB: red tests only (Job decl-tests); the implementation replaces it.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Resources {
+    pub names: Vec<String>,
+}
+
+impl HasText for Resources {
+    fn text(&self) -> &str {
+        ""
+    }
+}
+
+/// What a scope file's `[resources]` table sets. STUB: accepts any table.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct ResourcesSet(pub std::collections::BTreeMap<String, serde_json::Value>);
+
 /// What a scope file's `[hooks]` table sets. It is not read from a value (`toml::Table` sorts keys, and a
 /// block's commands keep file order): the loader reads it from the file text (`load::parse_scope`).
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -358,6 +377,18 @@ impl Set for ProtectedSet {
     }
 }
 
+impl Set for ResourcesSet {
+    type Value = Resources;
+
+    fn fill(&self, base: &Resources) -> (Resources, Vec<&'static str>) {
+        (base.clone(), Vec::new())
+    }
+
+    fn complete(&self) -> Option<Resources> {
+        Some(Resources { names: vec!["stub".to_owned()] })
+    }
+}
+
 /// Where a domain's value came from (contract §8.3 "Model").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Source {
@@ -538,6 +569,7 @@ domains! {
     hooks, Hooks, [], [Repo], Hooks, HooksSet;
     test_commands = "test-commands", TestCommands, [], [Repo], Option<RepoTests>, TestCommandsSet;
     protected, Protected, [], [Repo], Protected, ProtectedSet;
+    resources, Resources, [], [Machine, Owner, Repo], Resources, ResourcesSet;
 }
 
 impl Sources {
