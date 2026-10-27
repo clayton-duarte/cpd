@@ -2102,7 +2102,7 @@ The detail behind a `pr-feedback` (hs-d98, D10; contract §7.6): the checks, rev
 
 Effects: **gh**, in the PR's Lead worktree: `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url,baseRefName` and `gh api repos/{owner}/{repo}/pulls/<n>/comments`. No rows, no Event.
 
-Output: `plan`; `pr`, the PR's `key`, `number`, `url`, `title`, `base` (the pull request's base branch on GitHub, `baseRefName`), `base_pr` (the base PR as `<plan>/<key>`, derived from the PR's stored `base`, or null: it differs from `base` only until the poll has followed a repoint, contract §3.8 "Stacked PRs" step 8), `state` (`open`, `closed` or `merged`), `review_decision` and `checks` (`none`, `passed`, `pending` or `failed`; the mappings of contract §7.6, applied to this call's fields); `checks`, one entry for each check, `{name, conclusion, url?}`; `reviews`, `{id, author, state, body}`; `comments`, `{id, author, body}`; `inline_comments`, the pull request's review comments, `{id, author, path, body}`; and `feedback` (pro-d68), the row's stored list of open feedback items (contract §2.2 "Feedback item"; null when the poll never read it), which is what `pr reply --to` names. `reviews`, `comments` and `inline_comments` are as before and list everything, a bot's included.
+Output: `plan`; `pr`, the PR's `key`, `number`, `url`, `title`, `base` (the pull request's base branch on GitHub, `baseRefName`), `base_pr` (the base PR as `<plan>/<key>`, derived from the PR's stored `base`, or null: it differs from `base` only until the poll has followed a repoint, contract §3.8 "Stacked PRs" step 8), `state` (`open`, `closed` or `merged`), `review_decision` and `checks` (`none`, `passed`, `pending` or `failed`; the mappings of contract §7.6, applied to this call's fields); `checks`, one entry for each check, `{name, conclusion, url?}`; `reviews`, `{id, author, state, body}`; `comments`, `{id, author, body}`; `inline_comments`, the pull request's review comments, `{id, author, path, body}`; `feedback` (pro-d68), the row's stored list of open feedback items (contract §2.2 "Feedback item"; null when the poll never read it), which is what `pr reply --to` names; and `post` (pro-d65, contract §2.2), null for an unposted PR, else `{channel, ts, link, posted_at, reaction, reacted_at}`. `reviews`, `comments` and `inline_comments` are as before and list everything, a bot's included.
 
 ```json
 {"ok": true, "plan": "pay-4521",
@@ -2110,7 +2110,8 @@ Output: `plan`; `pr`, the PR's `key`, `number`, `url`, `title`, `base` (the pull
  "checks": [{"name": "ci/test", "conclusion": "FAILURE", "url": "https://github.com/acme/pay/actions/runs/1"}, {"name": "ci/lint", "conclusion": "SUCCESS"}],
  "reviews": [{"id": "PRR_kwDO…", "author": "reviewer", "state": "CHANGES_REQUESTED", "body": "Please add a test."}],
  "comments": [{"id": "IC_kwDO…", "author": "reviewer", "body": "Thanks for the fix."}],
- "inline_comments": [{"id": "1893", "author": "reviewer", "path": "src/payout.rs", "body": "This retry never backs off."}]}
+ "inline_comments": [{"id": "1893", "author": "reviewer", "path": "src/payout.rs", "body": "This retry never backs off."}],
+ "post": null}
 ```
 
 Idempotent: yes (a read).
@@ -2146,6 +2147,57 @@ Output: `{"ok": true, "replied": {"pr", "to", "url"}}`, `url` the posted comment
 ```
 
 Idempotent: no (every run posts a comment).
+
+### 9.8b `pr post`
+
+```
+cpd pr post [--pr <key>] [--plan <id>]
+```
+
+Posts a PR's pull request to Slack for review, so an agent never calls Slack tools by hand (pro-d64, pro-d65). **Callers:** Lead; not cockpit, not internal (§2). The Lead asks the User and posts only on the User's yes. A PR may be posted only once; a second attempt is refused `already_posted`. The command makes NO GitHub call: it reads the stored `pull_requests` row of the PR (the poll keeps it, every `watch.pr_poll_seconds`; `cpd pr poll` makes it fresh).
+
+| Flag | Meaning |
+|---|---|
+| `--pr <key>` | the PR to post, selected by §1.3's rule: required when the Plan has two or more PRs that are not `cancelled`, defaulted to the one when it has one |
+
+Check order; the first failure refuses, and then nothing is sent and nothing is written:
+
+1. the PR's status is not `open` (`details` `{pr, status}`) → `pr_not_open` (exit 3)
+2. a `pr_posts` row exists for the PR (`details` `{pr, channel, ts, link, posted_at}`) → `already_posted` (exit 3)
+3. the owner's policy resolves for the PR (`policy_invalid`, `owner_unset`, `owner_unconfirmed`, contract §8.3 "Validation") → refusal with listed exit codes (1 or 3)
+4. `policy.pr.post.enabled` is false (`details` `{pr, key: "pr.post.enabled"}`) → `post_disabled` (exit 3)
+5. the stored pull request is not `authored` (`details` `{pr, number}`) → `not_authored` (exit 3)
+6. the channel is `policy.pr.post.channel` when not empty, else the machine config's `inbox.team_channel` when not empty, else (`details` `{keys: ["pr.post.channel", "inbox.team_channel"]}`) → `post_unconfigured` (exit 3)
+7. `postable::unready(&row)` (contract §2.2, §8.3, the eight Unready reasons: `not_open`, `draft`, `conflicting`, `changes_requested`, `checks_failed`, `checks_pending`, `comments_unread`, `bot_comments`) is not empty (`details` `{pr, number, url, reasons: [<as_str of each>]}`) → `pr_not_ready` (exit 3)
+
+| Refusal | Exit | Details |
+|---|---|---|
+| `pr_not_open` | 3 | `{pr, status}` |
+| `already_posted` | 3 | `{pr, channel, ts, link, posted_at}` |
+| `policy_invalid` | 1 | `{key: "pr.post.*", …}` as contract §8.3 |
+| `owner_unset` | 3 | contract §8.3 |
+| `owner_unconfirmed` | 1 | contract §8.3 |
+| `post_disabled` | 3 | `{pr, key: "pr.post.enabled"}` |
+| `not_authored` | 3 | `{pr, number}` |
+| `post_unconfigured` | 3 | `{keys: ["pr.post.channel", "inbox.team_channel"]}` |
+| `pr_not_ready` | 3 | `{pr, number, url, reasons: ["draft", "changes_requested", …]}` |
+| `slack_auth` | 3 | the Slack sign-in in pi's MCP credentials is missing or invalid (§21.7); run `pi mcp login slack` |
+| `slack_not_configured` | 3 | no `slack` server in `~/.pi/agent/mcp.json` (§21.7); run `pi mcp add slack --url https://mcp.slack.com/mcp --exposure hidden` |
+| `slack_failed` | 1 | the helper could not send the message (timeout, network, Slack service failure) (§21.7); check the channel to see if the message was posted |
+| `slack_unparseable` | 1 | the helper's response is not the expected JSON (§21.7); the message may have been posted |
+| `slack_helper_failed` | 1 | the helper could not load pi's MCP modules (§21.7) |
+| `spawn_failed` | 1 | the helper could not be started |
+| `store_failed` | 1 | the store write after a sent message failed (§21.7, D5); the message WAS posted to the channel and the link is in `details` |
+
+Effects: **Slack**, through the helper (§21.7), one `slack_send_message` call with the rendered message from `policy.pr.post.template` (contract §8.3). Rows: one `pr_posts` row (contract §4.4); the only later write is `reacted_at` (PR `react`). Events: none (contract §5.1). Limits: a crash between Slack's answer and the row can post twice on a rerun; a timeout leaves the outcome unknown, check the channel; two simultaneous runs of the same PR could both send and the second's insert fails as `already_posted` (documented, not guarded); the stored row is up to `watch.pr_poll_seconds` old, `cpd pr poll` first makes it fresh, and a PR the poll never read for comments is `comments_unread`.
+
+Output: `{"ok":true,"plan":<id>,"pr":<key>,"number":<n>,"url":<the pull request's url>,"post":{"channel":"C…","ts":"1793040197.490209","link":"https://missionlane.slack.com/archives/C…/p1793040197490209","posted_at":<time>,"reaction":<emoji name or null>,"reacted_at":null},"message":<rendered text>}`.
+
+```json
+{"ok": true, "plan": "pay-4521", "pr": "api", "number": 813, "url": "https://github.com/acme/pay/pull/813", "post": {"channel": "C02JU6C2Z1D", "ts": "1793040197.490209", "link": "https://missionlane.slack.com/archives/C02JU6C2Z1D/p1793040197490209", "posted_at": "2026-10-26T21:36:37.490209Z", "reaction": "git-merge", "reacted_at": null}, "message": "Retry failed payouts (api)\nhttps://github.com/acme/pay/pull/813"}
+```
+
+Idempotent: no (every run tries to post).
 
 ### 9.9 `pr push`
 
@@ -4491,11 +4543,47 @@ Output, one JSON value on stdout (contract §1.2), progress on stderr:
 
 A helper that exits 0 and prints no result is not one of these refusals: E11 reports it as `spawn_failed`, whose message is `<argv> exited 0 but printed no result.` (any other exit with no result keeps `<argv> printed no result.`) and whose `details` are `{argv, exit, stdout, stderr}`, the last two the tail of what the child printed.
 
-Writes nothing: no file, no Slack message, no reaction (hermes' `post_message`, `add_reaction` and `mark_merged` are not ported). The credential is read and refreshed inside pi's modules; the helper holds no token.
+Writes nothing to cpd or the filesystem; message posting and reactions are done by later helpers (`slack-post.ts`, `slack-react.ts`). The credential is read and refreshed inside pi's modules; the helper holds no token.
 
 **The helper is no Session** (contract §6.11): `--no-mcp` and `cpd mcp attach` (§24.1) do not reach it. It keeps reading the `slack` entry of `<agentDir>/mcp.json`, which therefore stays until a later Plan moves the helper (pro-d10).
 
 **What the User runs once** (`pi mcp login` needs a browser, so it is theirs; cpd never runs it): `pi mcp add slack --url https://mcp.slack.com/mcp --exposure hidden`, then `pi mcp login slack`, then `pi mcp list` shows `slack: connected`. `--exposure hidden` keeps the user-level entry from handing the Slack tools to every Lead and Worker (`docs/research/team-review.md` §3). If Slack refuses pi's dynamic client registration, the User adds `--oauth-client-id` (pi's `pi mcp add` options; unverified for Slack).
+
+### 21.7 The helper `slack-post.ts`
+
+`pi/lib/slack-post.ts` in cpd's `pi/` package, beside `slack-channel.ts` (§21.6 contract §8 `pi_adapter`). Not a cpd command: `pr post` (§9.8b) runs it, and later (PR `react`) `slack-react.ts` runs the same way. It calls the Slack MCP server's tools **through pi's own MCP client and token store**, so cpd has no HTTP client and never reads, copies or logs the credential.
+
+```
+node <adapter>/lib/slack-post.ts --coding-agent <…/@earendil-works/pi-coding-agent/dist/index.js> --channel <C…>
+```
+
+Environment: `PI_CODING_AGENT_DIR` (the agent directory of the pi release, contract §9); `CPD_HOME`, `CPD_PLAN`, `CPD_SESSION` and `CPD_ATTEMPT` are passed; others from the caller are removed. cwd is `$CPD_HOME`; the helper hands it to the connection. Constants in the helper, each with its source: tool `slack_send_message`, server entry `slack` of `<agentDir>/mcp.json` (the global file only; a project file is never read), `unfurl_app_links: true`, message size 1 to 5000 bytes (UTF-8), 30 s for the send call (contrast hermes' 45 s read).
+
+**Entry.** The helper answers only when it is the script `node` was started with, same as `slack-channel.ts` (§21.6).
+
+What it does:
+1. **Loads pi's modules** by file URL from the directory of `--coding-agent`, reuses `connect`, `Refusal` and `CallTool` from `slack-channel.ts` and its `McpServerConnection`. A failure is `slack_helper_failed`.
+2. **Reads stdin** (UTF-8, up to 5000 bytes): the message text; no message or over 5000 is `usage` and nothing is sent.
+3. **Sends the message**: `callTool("slack_send_message", {channel_id, message, unfurl_app_links: true})` with a 30 s deadline. Not signed in is `slack_auth`. A timeout, `isError`, or any other failure is `slack_failed`.
+4. **Reads the answer** and validates it: the real tool answers `{"message_link":"…","message_context":{"message_ts":"<ts>","channel_id":"<C…>"}}`. An invalid result, or a channel_id that does not match the channel asked, is `slack_unparseable` with `details.message` that may have been posted, check the channel.
+
+Output, one JSON value on stdout (contract §1.2):
+
+```json
+{"ok": true, "channel": "C02JU6C2Z1D", "ts": "1793040197.490209", "link": "https://missionlane.slack.com/archives/C02JU6C2Z1D/p1793040197490209"}
+```
+
+| Failure | Code | Exit |
+|---|---|---|
+| no `--channel`, or stdin over 5000 bytes, or empty | `usage` | 2 |
+| the `slack` server is not in `<agentDir>/mcp.json` | `slack_not_configured` | 3 |
+| Slack needs a sign-in (step 3) | `slack_auth` | 3 |
+| the send timed out or failed (step 3) | `slack_failed` | 1 |
+| the answer is not the expected JSON, or channel_id does not match | `slack_unparseable` | 1 |
+| pi's modules did not load (step 1) | `slack_helper_failed` | 1 |
+| the helper could not be started | `spawn_failed` | 1 |
+
+Writes one Slack message and nothing else. The credential is read and refreshed inside pi's modules; the helper holds no token. The caller (§9.8b) writes the `pr_posts` row after a successful send.
 
 ## 22. `policy`
 
