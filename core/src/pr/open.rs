@@ -586,9 +586,16 @@ fn stored_title(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<String, Cpd
 /// The PR's stored description (§9.5a), which a cpd PR must have (`description_required`): the body of its pull request. An
 /// adopted PR (`head_ref` set) keeps the body of its own pull request and needs none.
 fn stored_description(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Option<String>, CpdError> {
-    let (stored, adopted): (Option<String>, bool) = env.store.read(|conn| {
-        Ok(conn.query_row("SELECT description, head_ref IS NOT NULL FROM prs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?)
-    })?;
+    env.store.read(|conn| stored_description_of(conn, plan, key))
+}
+
+/// [`stored_description`] on a connection: the one rule (`description IS NULL AND head_ref IS NULL` is `description_required`).
+pub fn stored_description_of(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<Option<String>, CpdError> {
+    let (stored, adopted): (Option<String>, bool) = conn.query_row(
+        "SELECT description, head_ref IS NOT NULL FROM prs WHERE plan = ?1 AND key = ?2",
+        [plan.as_str(), key.as_str()],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
     if stored.is_none() && !adopted {
         return Err(description_required(plan, key));
     }
