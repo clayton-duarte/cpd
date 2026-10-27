@@ -2341,21 +2341,6 @@ fn a_failed_direct_read_fails_the_poll_and_writes_nothing() {
 }
 
 #[test]
-fn poll_with_a_done_plan_reruns_its_clean_up() {
-    let fx = poll_fx("done");
-    let (worktree, branch) = kept_attempt(&fx);
-    fx.search(&[]);
-
-    let out = fx.poll();
-
-    assert_eq!(out["done"], json!([]));
-    assert_eq!(out["prs"][0]["status"], "merged");
-    assert!(!worktree.exists());
-    assert_eq!(fx.git(&fx.repo, &["branch", "--list", &branch]), "");
-    assert!(fx.lead.exists());
-}
-
-#[test]
 fn with_a_plan_the_output_adds_its_prs_and_their_rows() {
     let fx = poll_fx("deploy");
     fx.add_waiting_web();
@@ -3087,8 +3072,7 @@ fn an_owned_pull_request_that_left_the_search_and_is_closed_is_told_to_the_plan_
 fn an_owned_pull_request_that_left_the_search_and_is_merged_takes_the_merged_path() {
     let fx = poll_fx("deploy");
     let (worktree, branch) = kept_attempt(&fx);
-    // The Lead Branch is pushed and clean, as a merged PR's is: its clean-up removes the worktree, which unpushed work would keep.
-    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
+        fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
     let started = fx.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "pay--b-a1", "cat"]);
     assert!(started.status.success(), "{started:?}");
     assert!(fx.tmux(&["new-window", "-d", "-t", "cpd-work", "-n", "other-plan", "cat"]).status.success());
@@ -3112,13 +3096,13 @@ fn an_owned_pull_request_that_left_the_search_and_is_merged_takes_the_merged_pat
     assert_eq!(merged.len(), 1);
     assert_eq!(merged[0].1, json!({"pr": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}));
     assert!(fx.events("pr-feedback").is_empty());
-    // The Attempt's worktree and branch and the Lead's (pushed, clean) are gone, the Attempt's window is killed.
-    assert!(!worktree.exists());
-    assert_eq!(fx.git(&fx.repo, &["branch", "--list", &branch]), "");
-    assert!(!fx.lead.exists());
-    assert_eq!(fx.git(&fx.repo, &["branch", "--list", "cpd/pay"]), "");
+    // The poll cleans nothing (commands.md §9.2): the Attempt's worktree and branch, the Lead's, and the windows stay for `cpd janitor`.
+    assert!(worktree.exists());
+    assert_ne!(fx.git(&fx.repo, &["branch", "--list", &branch]), "");
+    assert!(fx.lead.exists());
+    assert_ne!(fx.git(&fx.repo, &["branch", "--list", "cpd/pay"]), "");
     let windows = fx.window_names();
-    assert!(!windows.contains("pay--b-a1") && windows.contains("cpd-work:other-plan"), "{windows}");
+    assert!(windows.contains("pay--b-a1") && windows.contains("cpd-work:other-plan"), "{windows}");
 
     // Done: a rerun polls again and finds nothing new.
     let txns = fx.txns();
