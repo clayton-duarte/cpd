@@ -417,6 +417,8 @@ fn config_accepts_an_open_tier_in_the_worker_range() {
         let ok = config_with(&fx, &format!("version = 1\nmachine = \"hs\"\nopen_tier = \"{tier}\"\n")).ok();
         assert_eq!(ok["config"]["open_tier"], tier);
     }
+    // The range ends at H3: H4 is not part of it.
+    assert_eq!(config_with(&fx, "version = 1\nmachine = \"hs\"\nopen_tier = \"H4\"\n").error()["code"], "config_invalid");
 }
 
 /// pro-d82 (hs-d554 for the cost reason): `open_tier` outside H0-H3, S0-S3 is refused.
