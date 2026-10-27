@@ -58,9 +58,18 @@ fn add(fx: &Fx, key: &str, resources: &[&str], then: &str) {
 fn hold(fx: &Fx, name: &str, record: &str) -> File {
     let dir = fx.env.cpd_home().join("locks");
     fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("resource-acme--pay--{name}.lock"));
+    let path = dir.join(format!("resource.repo.acme.pay.{name}.1.lock"));
     let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
     assert!(lock::try_lock(&file).unwrap(), "the test could not take {name}");
+    fs::write(&path, record).unwrap();
+    file
+}
+
+/// Holds slot `slot` of the repo pool `name` of `acme/pay`, as `hold` does slot 1.
+fn hold_slot(fx: &Fx, name: &str, slot: u8, record: &str) -> File {
+    let path = fx.env.cpd_home().join(format!("locks/resource.repo.acme.pay.{name}.{slot}.lock"));
+    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
+    assert!(lock::try_lock(&file).unwrap(), "the test could not take slot {slot} of {name}");
     fs::write(&path, record).unwrap();
     file
 }
@@ -202,4 +211,42 @@ fn resource_hold_e3_raises_resource_undeclared_once_and_leaves_the_job_queued() 
     fx.watch_first_tick().unwrap();
     assert_eq!(started(&fx), ["api"]);
     assert_eq!(errors(&fx, "resource_undeclared").len(), 1);
+}
+
+const ATTEMPT_RECORD: &str = r#"{"by":"attempt","plan":"other","job":"db","attempt":"db-a1","at":"2026-10-26T21:41:00.000Z"}"#;
+
+#[test]
+fn job_stays_queued_while_every_slot_is_held_and_job_show_lists_the_holders() {
+    let fx = engine("[resources.e2e-port]\nslots = 2\n");
+    add(&fx, "api", &["e2e-port"], "");
+    let _first = hold_slot(&fx, "e2e-port", 1, COMMAND_RECORD);
+    let _second = hold_slot(&fx, "e2e-port", 2, ATTEMPT_RECORD);
+
+    fx.watch_ticks(3).unwrap();
+
+    assert_eq!((status(&fx, "api"), attempts(&fx), all_errors(&fx)), ("queued".into(), 0, 0));
+    assert_eq!(fx.fakes.spawn.launches_but_janitor(), []);
+    let shown = fx.cpd(&["job", "show", "api", "--plan", PLAN]).ok();
+    assert_eq!(
+        shown["job"]["waiting_for"],
+        json!([{
+            "resource": "e2e-port", "scope": "repo", "slots": 2,
+            "holders": [serde_json::from_str::<Value>(COMMAND_RECORD).unwrap(), serde_json::from_str::<Value>(ATTEMPT_RECORD).unwrap()],
+        }])
+    );
+}
+
+#[test]
+fn job_starts_when_one_of_two_slots_is_free() {
+    let fx = engine("[resources.e2e-port]\nslots = 2\n");
+    add(&fx, "api", &["e2e-port"], "");
+    let _first = hold_slot(&fx, "e2e-port", 1, COMMAND_RECORD);
+
+    fx.watch_first_tick().unwrap();
+
+    assert_eq!(started(&fx), ["api"], "the Job takes the free slot");
+    assert_eq!(status(&fx, "api"), "running");
+    let record: Value = serde_json::from_str(&fs::read_to_string(fx.env.cpd_home().join("locks/resource.repo.acme.pay.e2e-port.2.lock")).unwrap()).unwrap();
+    assert_eq!((record["by"].as_str(), record["job"].as_str()), (Some("attempt"), Some("api")));
+    assert_eq!(fs::read_to_string(fx.env.cpd_home().join("locks/resource.repo.acme.pay.e2e-port.1.lock")).unwrap(), COMMAND_RECORD);
 }
