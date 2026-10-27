@@ -500,6 +500,8 @@ fn a_right_click_on_a_review_requested_item_opens_claim_first_and_no_other_item_
     let screen = first_rows(&fx);
     let frames = run(&fx, pick(&screen, "acme/web#5 review requested", 0).into_iter().take(1).collect());
     frame_with(&frames, 0, "the review-requested item's menu", |r| menu_labels(r) == CLAIM_ENTRIES);
+    drop(_engine);
+    drop(fx);
 
     let fx = rig(four());
     let _engine = engine(&fx);
