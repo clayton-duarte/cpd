@@ -114,7 +114,7 @@ fn adopts_a_pull_request_of_the_user_without_asking() {
     assert_eq!(out["pr"]["head_ref"], "feat/x");
     assert_eq!(out["pr"]["base"], "release");
     assert_eq!(out["pr"]["status"], "waiting");
-    assert_eq!(out["pr"]["lead_branch"], "cpd/pay-1/web");
+    assert_eq!(out["pr"]["lead_branch"], "pay-1/web");
     assert_eq!(fx.env.query::<String>("SELECT head_ref FROM prs WHERE key = 'web'"), "feat/x");
 }
 
@@ -161,11 +161,12 @@ fn refuses_a_pull_request_from_a_fork() {
 }
 
 #[test]
-fn refuses_a_head_branch_of_cpd() {
+fn refuses_a_head_branch_that_is_a_stored_lead_branch() {
     let fx = fx();
-    fx.view(json!({"headRefName": "cpd/other/web"}));
+    fx.pr(&["add", "api", "--repo", fx.pay.to_str().unwrap(), "--title", "T", "--shape", "config"]).ok();
+    fx.view(json!({"headRefName": "pay-1/api"}));
     let error = fx.refuse(&fx.adopt("web", &[]), "adopt_cpd_branch");
-    assert_eq!(error["details"]["head_ref"], "cpd/other/web");
+    assert_eq!(error["details"]["head_ref"], "pay-1/api");
 }
 
 #[test]

@@ -15,8 +15,8 @@ use crate::host::runner::Runner;
 use crate::ports::Ports;
 use crate::ids::{AttemptId, PlanId, PrKey};
 
-/// The Lead Branch of a Plan: `cpd/<plan>`.
-pub fn lead_branch(plan: &PlanId) -> String {
+/// The LEGACY Lead Branch of a Plan: `cpd/<plan>` (a PR made before R34 keeps it; a new PR's is `<plan>/<key>`).
+pub fn legacy_lead_branch(plan: &PlanId) -> String {
     format!("cpd/{plan}")
 }
 
@@ -55,7 +55,7 @@ pub fn lead_worktree_path(repo: &Path, plan: &PlanId) -> Result<PathBuf, CpdErro
 /// A PR made by migration 4 keeps the Lead Branch `cpd/<plan>` and with it the
 /// worktree `<repo-parent>/<repo-name>.<plan>` it had.
 pub fn pr_lead_worktree_path(repo: &Path, plan: &PlanId, key: &PrKey, lead_branch_name: &str) -> Result<PathBuf, CpdError> {
-    if lead_branch_name == lead_branch(plan) {
+    if lead_branch_name == legacy_lead_branch(plan) {
         lead_worktree_path(repo, plan)
     } else {
         sibling(repo, &format!("{plan}.{key}"))
@@ -575,8 +575,10 @@ pub fn prepare_pr_lead_worktree(
         return Err(in_worktree(error));
     }
     let mut clashes = vec![branch.to_owned()];
-    if branch != lead_branch(plan) {
-        clashes.push(lead_branch(plan));
+    if branch != legacy_lead_branch(plan)
+        && let Some((parent, _)) = branch.rsplit_once('/')
+    {
+        clashes.push(parent.to_owned());
     }
     for clash in clashes {
         if branch_exists(repo, &clash).map_err(in_worktree)? {
@@ -617,7 +619,7 @@ pub fn prepare_pr_lead_worktree(
     Ok(Prepared { path: path.to_path_buf(), branch: branch.to_owned(), base_sha, remote })
 }
 
-/// Creates the Lead worktree of a Plan's Lead Branch `cpd/<plan>` and runs
+/// Creates the Lead worktree of a Plan's legacy Lead Branch `cpd/<plan>` and runs
 /// `pre-start` in it (contract §7.2 for a PR made by migration 4), then pushes
 /// a new branch (R35). A failed push does not fail it: see [`Created`].
 pub fn create_lead_worktree(repo: &Path, plan: &PlanId, base: &str, setup: &Setup) -> Result<Created, CpdError> {
@@ -627,24 +629,21 @@ pub fn create_lead_worktree(repo: &Path, plan: &PlanId, base: &str, setup: &Setu
 /// [`create_lead_worktree`] running `pre_start`, the policy's `hooks.pre-start`; the one above runs no hook.
 pub fn create_lead_worktree_with(repo: &Path, plan: &PlanId, base: &str, setup: &Setup, pre_start: &Pipeline) -> Result<Created, CpdError> {
     let path = lead_worktree_path(repo, plan)?;
-    let prepared = prepare_pr_lead_worktree(repo, plan, &path, &lead_branch(plan), base, Cut::Base, setup, pre_start).map_err(|f| f.error)?;
+    let prepared = prepare_pr_lead_worktree(repo, plan, &path, &legacy_lead_branch(plan), base, Cut::Base, setup, pre_start).map_err(|f| f.error)?;
     // The remote is touched only after `pre-start` has passed.
     let push_failed = prepared.push().err();
     Ok(Created { path: prepared.path, branch: prepared.branch, base_sha: prepared.base_sha, push_failed })
 }
 
-/// The Lead Branch of the PR whose Lead worktree is `lead_worktree` (R34 A5):
-/// the branch checked out there, which must be `cpd/<plan>` (a PR migrated from
-/// cpd 2's first schema) or `cpd/<plan>/<key>`. A detached HEAD or any other
-/// branch is `setup_failed`; there is no fallback to `cpd/<plan>`.
+/// The Lead Branch of the PR whose Lead worktree is `lead_worktree`: the branch checked out there, whatever its
+/// name (the stored lead_branch is the caller's). A detached HEAD is `setup_failed`.
 fn checked_out_lead_branch(lead_worktree: &Path, plan: &PlanId) -> Result<String, CpdError> {
     let fail = |why: String| {
         CpdError::new(ErrorCode::SetupFailed, format!("The Lead worktree {} has no Lead Branch of Plan {plan}: {why}.", lead_worktree.display()))
             .with("lead_worktree", lead_worktree.to_string_lossy().into_owned())
     };
     match super::run::current_branch(lead_worktree)? {
-        Some(branch) if branch == lead_branch(plan) || branch.starts_with(&format!("{}/", lead_branch(plan))) => Ok(branch),
-        Some(branch) => Err(fail(format!("it is on {branch}"))),
+        Some(branch) => Ok(branch),
         None => Err(fail("its HEAD is detached".to_owned())),
     }
 }

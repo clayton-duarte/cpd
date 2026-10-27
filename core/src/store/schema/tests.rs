@@ -658,7 +658,7 @@ fn plans_phase_allows_deploy_and_done_back_to_dispatch_and_refuses_the_other_bac
 }
 
 #[test]
-fn prs_locked_allows_only_the_legacy_lead_branch_rename_of_a_merged_pr() {
+fn prs_locked_refuses_every_lead_branch_rename_even_of_a_merged_pr() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = migrated_4(&dir);
     for sql in [
@@ -680,10 +680,8 @@ fn prs_locked_allows_only_the_legacy_lead_branch_rename_of_a_merged_pr() {
         assert_eq!(err.code(), ErrorCode::PrLocked, "{sql}: {err:?}");
         assert_eq!(err.exit().code(), 3);
     }
-    write(&mut store, "UPDATE prs SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'").unwrap();
-    assert_eq!(rows(&mut store, "SELECT lead_branch FROM prs WHERE plan = 'dn'"), vec![serde_json::json!(["cpd/dn/web"])]);
-    // And back is not allowed.
-    let err = refused(&mut store, "UPDATE prs SET lead_branch = 'cpd/dn' WHERE plan = 'dn'");
+    // `lead-branch-name` (pro-d113 A3) removed the exception: the rename itself is refused too.
+    let err = refused(&mut store, "UPDATE prs SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'");
     assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
 }
 
@@ -961,13 +959,13 @@ fn migration_6_keeps_migration_5s_triggers_on_prs() {
         }
     }
     let locked = &after.iter().find(|(name, _)| name == "prs_locked").unwrap().1;
-    assert!(locked.contains("OLD.status = 'merged'"), "migration 5's prs_locked: {locked}");
+    assert!(!locked.contains("OLD.status = 'merged'"), "`lead-branch-name` dropped migration 5's exception: {locked}");
     let status = &after.iter().find(|(name, _)| name == "prs_status").unwrap().1;
     assert!(status.contains("'waiting>cancelled', 'dispatch>cancelled', 'open>cancelled'"), "prs_status: {status}");
 }
 
 #[test]
-fn after_migration_6_prs_locked_still_allows_only_the_legacy_lead_branch_rename_of_a_merged_pr() {
+fn after_migration_6_prs_locked_refuses_the_legacy_lead_branch_rename_of_a_merged_pr() {
     let dir = tempfile::tempdir().unwrap();
     let (mut store, _) = migrated_5(&dir);
     for sql in [
@@ -979,8 +977,9 @@ fn after_migration_6_prs_locked_still_allows_only_the_legacy_lead_branch_rename_
         let err = refused(&mut store, sql);
         assert_eq!(err.code(), ErrorCode::PrLocked, "{sql}: {err:?}");
     }
-    write(&mut store, "UPDATE prs SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'").unwrap();
-    assert_eq!(rows(&mut store, "SELECT lead_branch FROM prs WHERE plan = 'dn'"), vec![serde_json::json!(["cpd/dn/web"])]);
+    // `lead-branch-name` (pro-d113 A3) removed the exception: the rename itself is refused too.
+    let err = refused(&mut store, "UPDATE prs SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'");
+    assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
 }
 
 // ---------- migration 12 (the Inbox) ----------

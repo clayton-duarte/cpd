@@ -32,7 +32,7 @@ struct Fx {
 }
 
 /// Repo `pay` with its bare `origin` (`denyNonFastForwards`) holding `main` and `feat/x` (one commit past `main`); PR `web`
-/// of Plan `pay` adopts #7 and is in `status`, its Lead worktree on `cpd/pay/web` cut from `origin/feat/x`.
+/// of Plan `pay` adopts #7 and is in `status`, its Lead worktree on `pay/web` cut from `origin/feat/x`.
 fn fx(status: &str) -> Fx {
     let env = TestEnv::new();
     let config = format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket());
@@ -70,7 +70,7 @@ fn fx(status: &str) -> Fx {
 
     // The start of the PR, as `pr start` leaves it: the Lead worktree on the local branch, cut from the remote head.
     let lead = repo.parent().unwrap().join("pay.pay.web");
-    env.git(&repo, &["worktree", "add", "-q", "--no-track", "-b", "cpd/pay/web", lead.to_str().unwrap(), "origin/feat/x"]);
+    env.git(&repo, &["worktree", "add", "-q", "--no-track", "-b", "pay/web", lead.to_str().unwrap(), "origin/feat/x"]);
     env.git(&lead, &["config", "user.name", "cpd test"]);
     env.git(&lead, &["config", "user.email", "test@cpd.invalid"]);
     let opened = if status == "open" {
@@ -104,7 +104,7 @@ impl Fx {
     }
 
     fn lead_sha(&self) -> String {
-        self.git(&self.repo, &["rev-parse", "refs/heads/cpd/pay/web"])
+        self.git(&self.repo, &["rev-parse", "refs/heads/pay/web"])
     }
 
     fn remote_head(&self) -> String {
@@ -172,7 +172,7 @@ fn rebase_puts_the_unpushed_commits_on_the_moved_remote_head_and_pushes_plain() 
     assert_eq!(fx.git(&fx.repo, &["show", &format!("{new}:b.txt")]), "b");
     assert_eq!(fx.git(&fx.repo, &["show", &format!("{new}:remote.txt")]), "remote");
     assert_eq!(fx.remote_head(), new, "pushed plain, under denyNonFastForwards");
-    assert_eq!(fx.git(&fx.origin, &["branch", "--list", "cpd/*"]), "", "no cpd/* branch on origin");
+    assert_eq!(fx.git(&fx.origin, &["branch", "--list", "pay/*"]), "", "no pay/* branch on origin");
     assert_eq!(fx.git(&fx.lead, &["status", "--porcelain"]), "");
 }
 
@@ -219,7 +219,7 @@ fn rebase_is_already_when_the_remote_head_is_in_the_lead_branch() {
     assert_eq!(out["already"], true, "{out}");
     assert_eq!(fx.lead_sha(), tip, "nothing moves");
     assert_eq!(fx.remote_head(), remote, "nothing pushed");
-    assert_eq!(fx.git(&fx.origin, &["branch", "--list", "cpd/*"]), "");
+    assert_eq!(fx.git(&fx.origin, &["branch", "--list", "pay/*"]), "");
 }
 
 #[test]
