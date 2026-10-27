@@ -39,22 +39,21 @@ use crate::merge::marker;
 use crate::merge::{self, Action, Pull};
 use crate::plan::Offsets;
 use crate::pump::{Pump, Schedule, Signal};
-use crate::read::{self, Target};
+use crate::read;
 use crate::test_text::rows as buffer_rows;
 use crate::tree::folds::{Folds, FoldsFile};
 use crate::view_ports::{
     Ctx, Input, Restore, RunFn, Tty, backed_off_with, frame_now, run_view_with, snooze_over, wall_ms,
 };
 use crate::viewlog::ViewLog;
-use crate::worker::{CHECK, TICK};
-use crate::{Capture, Restart, RestartOutcome, ViewError, logs, palette, widgets, worker};
+use crate::{Capture, Restart, RestartOutcome, ViewError, logs, palette, widgets};
 use cpd_core::clock::{Clock, ManualClock};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host::Tmux;
 use cpd_core::host::runner::{FakeRunner, Reply};
 use cpd_core::host::spawn::{Launch, Pid, Spawn};
-use cpd_core::ids::{AttemptId, PlanId, SessionId};
+use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::output::Output;
 use cpd_core::ports::{Fakes, Ports};
 use cpd_core::store::Store;
@@ -849,115 +848,6 @@ fn logs_a_failed_input_is_a_terminal_failure() {
     assert_eq!(draws, 1);
 }
 
-// ---- the worker view --------------------------------------------------------------------------------------------------
-
-const WORKER_FIXTURE: &str = "INSERT INTO contexts (id, title, jira, created_at, created_on)
-         VALUES ('alpha', 'Title', NULL, '2026-01-01T00:00:00.000Z', 'm1');
-         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
-         VALUES ('ship', 'alpha', 'Plan ship', 'dispatch', 'l1', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-         VALUES ('ship', 'repo', '/repo', 'main', 'dispatch', 'cpd/ship', '/wt', cpd_txn(), '2026-01-02T00:00:00.000Z',
-                 '2026-01-02T00:00:00.000Z');
-         INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
-         VALUES ('l1', 'lead', 'alpha', 'ship', NULL, 'lead', '/sessions/l1.jsonl', '/repo', 'O3', NULL, 'idle', NULL,
-                 '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
-         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
-                           created_txn, created_at)
-         VALUES ('ship', 'repo', 'api', 'Job api', 'S3', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', 'running', 0, '0000000000000000000000000000000000000000000000000000000000000000',
-                 cpd_txn(), '2026-01-02T00:00:00.000Z');
-         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
-         VALUES ('ship', 'api-a1', 'api', 1, 'S3', 'ladder', 'running', 'cpd/ship--api-a1', '/w/api-a1', 'w1',
-                 '2026-01-03T00:01:00.000Z');
-         INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
-         VALUES ('w1', 'worker', 'alpha', 'ship', 'api-a1', 'api-a1', NULL, '/w/api-a1', 'S3', NULL, 'working', NULL,
-                 '2026-01-03T00:01:00.000Z', '2026-01-03T00:01:00.000Z');";
-
-/// The worker of Attempt `api-a1` over a store, run on `steps`; the result, the draws, the naps and the last screen.
-fn run_worker(fakes: &Fakes, home: &Home, steps: Vec<Step>) -> (io::Result<()>, usize, Vec<Duration>, String) {
-    let (result, draws, naps, shown, _) = run_worker_counting(fakes, home, steps);
-    (result, draws, naps, shown)
-}
-
-/// [`run_worker`], and the snapshots the loop told its input it took.
-fn run_worker_counting(fakes: &Fakes, home: &Home, steps: Vec<Step>) -> (io::Result<()>, usize, Vec<Duration>, String, usize) {
-    let mut store = home.store();
-    sql(&mut store, WORKER_FIXTURE);
-    let (plan, target) = (PlanId::parse("ship").unwrap(), Target::Attempt(AttemptId::parse("api-a1").unwrap()));
-    let first = read::worker(&mut store, &plan, &target).unwrap();
-    let follow = read::Follow::new(&mut store, &[], first.events_cursor).unwrap();
-    let mut input = FakeInput::new(fakes, steps);
-    let snapshots = Rc::clone(&input.snapshots);
-    let mut ctx = Ctx::new(&fakes.ports, terminal(), &mut input);
-    let result = worker::event_loop_with(&mut ctx, &mut store, follow, &plan, &target, first);
-    let snapshots = snapshots.get();
-    (result, ctx.draws(), fakes.clock.naps(), screen(&ctx), snapshots)
-}
-
-/// Another process: the Worker's Session goes idle, and says so with an Event.
-fn worker_goes_idle(home: &Home) -> Vec<Step> {
-    let h = home.home.clone();
-    vec![
-        Step::Do(Box::new(move || sql(&mut Store::open(&h, 5000).unwrap(), "UPDATE sessions SET state = 'idle' WHERE id = 'w1';"))),
-        commit_event(&home.home, "'w1'"),
-    ]
-}
-
-#[test]
-fn worker_idle_polls_nap_one_tick_each_on_the_clock_and_draw_nothing_more() {
-    let (fakes, home) = (Fakes::new(), home());
-    let mut steps = idle(3);
-    steps.push(key(KeyCode::Char('q')));
-    let (result, draws, naps, shown) = run_worker(&fakes, &home, steps);
-    result.unwrap();
-    assert_eq!((draws, naps), (1, vec![TICK; 3]));
-    assert!(shown.contains("api-a1 running · working"), "{shown}");
-}
-
-#[test]
-fn worker_a_change_in_the_store_is_noticed_at_the_first_check_a_check_interval_later() {
-    let (fakes, home) = (Fakes::new(), home());
-    let mut steps = worker_goes_idle(&home);
-    steps.extend(idle((CHECK.as_millis() / TICK.as_millis()) as usize));
-    steps.push(key(KeyCode::Char('q')));
-    let (result, draws, _, shown) = run_worker(&fakes, &home, steps);
-    result.unwrap();
-    assert_eq!(draws, 2);
-    assert!(shown.contains("api-a1 running · idle"), "{shown}");
-}
-
-#[test]
-fn worker_a_change_in_the_store_is_not_looked_for_before_the_check_interval_is_over() {
-    let (fakes, home) = (Fakes::new(), home());
-    let mut steps = worker_goes_idle(&home);
-    steps.extend(idle((CHECK.as_millis() / TICK.as_millis()) as usize - 1));
-    steps.push(key(KeyCode::Char('q')));
-    let (result, draws, _, shown) = run_worker(&fakes, &home, steps);
-    result.unwrap();
-    assert_eq!(draws, 1);
-    assert!(shown.contains("api-a1 running · working"), "{shown}");
-}
-
-#[test]
-fn worker_an_idle_store_reads_no_snapshot() {
-    let (fakes, home) = (Fakes::new(), home());
-    let mut steps = idle(2 * (CHECK.as_millis() / TICK.as_millis()) as usize);
-    steps.push(key(KeyCode::Char('q')));
-    let (result, _, _, _, snapshots) = run_worker_counting(&fakes, &home, steps);
-    result.unwrap();
-    assert_eq!(snapshots, 0, "two checks over a store with no Event");
-}
-
-#[test]
-fn worker_an_event_of_the_store_reads_one_snapshot_at_the_first_check_and_none_at_the_next() {
-    let (fakes, home) = (Fakes::new(), home());
-    let mut steps = worker_goes_idle(&home);
-    steps.extend(idle(2 * (CHECK.as_millis() / TICK.as_millis()) as usize));
-    steps.push(key(KeyCode::Char('q')));
-    let (result, _, _, _, snapshots) = run_worker_counting(&fakes, &home, steps);
-    result.unwrap();
-    assert_eq!(snapshots, 1, "one Event, read at the first check; the second check finds none");
-}
-
 #[test]
 fn a_context_tells_its_input_of_each_snapshot_and_a_real_input_ignores_it() {
     let fakes = Fakes::new();
@@ -968,22 +858,6 @@ fn a_context_tells_its_input_of_each_snapshot_and_a_real_input_ignores_it() {
     ctx.snapshot_read();
     assert_eq!((snapshots.get(), ctx.draws()), (2, 0), "a snapshot is told, and is no frame");
     crate::view_ports::CrosstermInput.snapshot_read(); // the default: nothing to count, nothing to fail
-}
-
-#[test]
-fn worker_a_key_redraws_and_q_closes() {
-    let (fakes, home) = (Fakes::new(), home());
-    let (result, draws, naps, _) = run_worker(&fakes, &home, vec![key(KeyCode::Down), Step::Idle, key(KeyCode::Char('q'))]);
-    result.unwrap();
-    assert_eq!((draws, naps), (2, vec![TICK]));
-}
-
-#[test]
-fn worker_a_failed_input_is_returned_as_the_terminal_failure() {
-    let (fakes, home) = (Fakes::new(), home());
-    let (result, draws, _, _) = run_worker(&fakes, &home, vec![Step::Fail(io::ErrorKind::BrokenPipe)]);
-    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
-    assert_eq!(draws, 1);
 }
 
 // ---- the dialog view ----------------------------------------------------------------------------------------------------

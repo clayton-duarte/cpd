@@ -11,7 +11,7 @@ use cpd_core::home::CpdHome;
 use serde_json::{Value, json};
 
 /// The env with its config and Plan `pay-1` in `phase` (the Lead's session beside it), no PR.
-fn fx(phase: &str) -> Fx {
+pub(super) fn fx(phase: &str) -> Fx {
     let fx = Fx::new();
     let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
     fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
@@ -27,7 +27,7 @@ fn fx(phase: &str) -> Fx {
 }
 
 /// The fixtures of Plan `pay-1` on an [`Fx`].
-trait Pay {
+pub(super) trait Pay {
     fn pr(&self, key: &str, status: &str, needs: &[&str]);
     fn job(&self, key: &str, pr: &str, status: &str, needs: &[&str]);
     fn show(&self) -> Value;
@@ -151,7 +151,7 @@ fn show_with_one_pr_lists_its_fields_and_its_jobs() {
                "lead_branch": "cpd/pay-1/pay", "lead_worktree": "/r/pay.pay-1.pay",
                "pr": null, "pull_request": null, "all_merged_at": null, "start_failed_at": null,
                "created_at": "t", "started_at": "2000-01-01T00:00:01.000Z", "merged_at": null, "title": null, "shape": "free",
-               "head_ref": null, "jobs": ["a", "b", "gone"]})
+               "head_ref": null, "feedback_open": null, "jobs": ["a", "b", "gone"]})
     );
     assert_eq!(keys(&show["jobs"]), ["a", "b", "gone"]);
     let jobs = show["jobs"].as_array().unwrap();

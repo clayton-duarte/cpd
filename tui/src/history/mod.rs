@@ -2,8 +2,8 @@
 //! read-only, in the chat slot. `cpd session history <id>` puts it there.
 //!
 //! `cpd tui view history <id>` reads the Session's `file` from the store and
-//! draws it once with the Worker view's renderer
-//! ([`crate::worker::render`]); nothing is followed or re-read. An unknown
+//! draws it once with the session renderer
+//! ([`crate::history::render`]); nothing is followed or re-read. An unknown
 //! Session is `session_not_found`, a Session with no readable file
 //! `file_unreadable`, both before anything is drawn. The top line is
 //! `<name> (archived, read-only)`.
@@ -12,7 +12,13 @@
 //! `G` follows the end again (the view starts there); `q` or Esc leaves the
 //! history for the chat slot's placeholder text.
 
+mod render;
 mod view;
+
+#[cfg(test)]
+mod local_time_tests;
+#[cfg(test)]
+mod render_tests;
 
 use std::io::Write;
 use std::time::Duration;
@@ -24,7 +30,7 @@ use rusqlite::OptionalExtension;
 
 use super::view_ports::{Ctx, Input, Tty, run_view_with};
 use super::{Capture, chat, run_view_on};
-use crate::worker::render::render;
+use crate::history::render::render;
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;

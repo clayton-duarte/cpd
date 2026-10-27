@@ -98,6 +98,7 @@ fn team_with(period: Option<u32>, gate: Option<Gate>, gh: &str) -> Team {
         adapter.display(),
         fx.env.tmux_socket()
     ));
+    fx.env.quiet_models(fx.fakes.clock.utc());
     fx.engine_routes();
     fx.install_pi();
     fx.fake_gh(Reply::ok(gh));

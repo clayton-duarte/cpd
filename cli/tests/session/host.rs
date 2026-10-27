@@ -126,7 +126,7 @@ fn starts_the_server_once_with_the_contract_options() {
 
 /// `pane-border-format`, exactly (contract §6.1, hs-d475, hs-d478, hs-d671): every title is a pill with no padding;
 /// the three view titles are dango in the cursor cycle order (Context sakura 5, Plan shiro 7, Deploy midori 2) and
-/// keep their colour on the focused pane, while every other title (a Lead's `@cpd_title`, the Worker's and the pane
+/// keep their colour on the focused pane, while every other title (a Lead's `@cpd_title` and the pane
 /// command) is grey (colour 7) and blue on the focused pane, set in the format itself; one `━` with no colour of its own (it takes the
 /// pane border line's style, blue on the focused pane and colour 7 otherwise, whatever the pill's colour; pro-d61) before the left cap, so the cap is the fourth
 /// cell of the border row, three columns in counted from the pane's edge.
@@ -134,10 +134,19 @@ const BORDER_FORMAT_WANT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\
 ━#{?pane_active,#[fg=colour4],#[fg=colour7]}\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4},},\
 #{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
 ━#{?#{==:#{@cpd_view},tree},#[fg=colour5],#{?#{==:#{@cpd_view},plan},#[fg=colour7],#{?#{==:#{@cpd_view},widgets},#[fg=colour2],#{?pane_active,#[fg=colour4],#[fg=colour7]}}}}\u{e0b6}#[reverse]\
-#{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,\
-#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}\
+#{?#{==:#{@cpd_view},tree},Context,\
+#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}\
 #[noreverse]\u{e0b4}}}}";
 
+
+#[test]
+fn the_worker_is_no_view_any_more() {
+    assert!(View::parse("worker").is_none());
+    assert!(View::ALL.iter().all(|v| v.as_str() != "worker"));
+    for name in ["tree", "plan", "widgets", "chat", "history"] {
+        assert_eq!(View::parse(name).map(|v| v.as_str()), Some(name), "{name}");
+    }
+}
 
 /// Every option, binding and hook of contract §6.1: the reference's
 /// `tui/scripts/tmux.conf` lines 2–17, renamed, with the conditional hook.

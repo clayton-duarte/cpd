@@ -46,6 +46,8 @@ use cpd_core::host::git_guard;
 use cpd_core::store::Store;
 use serde_json::Value;
 use tempfile::TempDir;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 pub mod causes;
 pub mod cockpit;
@@ -354,8 +356,18 @@ pub const DENIED_EXIT: i32 = 97;
 /// `mergeable` and `mergeStateStatus` GitHub reports (`MERGEABLE`/`CLEAN`, `CONFLICTING`/`DIRTY`, `MERGEABLE`/`BEHIND`, ...).
 fn pay_node(mergeable: &str, merge_state: &str) -> String {
     format!(
-        r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":812,"url":"https://github.com/acme/pay/pull/812","title":"Pay the bills","isDraft":false,"state":"OPEN","createdAt":"opened","mergedAt":null,"reviewDecision":null,"mergeable":"{mergeable}","mergeStateStatus":"{merge_state}","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
+        r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":812,"url":"https://github.com/acme/pay/pull/812","title":"Pay the bills","isDraft":false,"state":"OPEN","createdAt":"opened","updatedAt":"U1","mergedAt":null,"reviewDecision":null,"mergeable":"{mergeable}","mergeStateStatus":"{merge_state}","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
     )
+}
+
+/// The comments read's answer when a test scripted none: an empty read (updatedAt `U1`) of every alias the query names.
+pub fn empty_comments(query: &str) -> String {
+    let empty = serde_json::json!({"totalCount": 0, "pageInfo": {"hasPreviousPage": false, "hasNextPage": false}, "nodes": []});
+    let mut data = serde_json::json!({"viewer": {"login": "me"}});
+    for i in 0..query.matches(": repository(").count() {
+        data[format!("p{i}")] = serde_json::json!({"pullRequest": {"id": format!("PR_{i}"), "updatedAt": "U1", "reviewThreads": empty, "comments": empty, "reviews": empty}});
+    }
+    serde_json::json!({"data": data}).to_string()
 }
 
 /// The PR poll's search answer (commands.md §9.2) for the one pull request a fixture stored, [`pay_node`]: the one thing a test of the
@@ -1104,6 +1116,21 @@ impl TestEnv {
         }
         let model = "[model]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\nG = \"p/gemini\"\n";
         fs::write(&path, format!("{held}{model}")).expect("write host.toml");
+    }
+
+    /// One cached model list, `run/models-quiet.json` (contract §1.4), `polled_at` `now`: E14 is not due before the newest
+    /// `polled_at` is a week old (§3.7), so an engine a test starts runs no helper and reports nothing about one. A test of
+    /// E14 itself does not call this.
+    pub fn quiet_models(&self, now: OffsetDateTime) {
+        let polled_at = now.format(&Rfc3339).expect("format polled_at");
+        let file = serde_json::json!({
+            "version": 1, "provider": "quiet", "polled_at": polled_at, "pi_version": "1.0.0",
+            "source": {"kind": "copilot-available", "auth": "oauth", "base": null},
+            "ids": ["quiet-model"]
+        });
+        let run = self.cpd_home().join("run");
+        fs::create_dir_all(&run).expect("create the run directory");
+        fs::write(run.join("models-quiet.json"), file.to_string()).expect("write models-quiet.json");
     }
 
     /// `config.toml` of machine `m1` on this env's private tmux server. `extra` is more TOML

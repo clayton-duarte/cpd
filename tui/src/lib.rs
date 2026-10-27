@@ -14,7 +14,7 @@
 //! - [`dialog`]: the dialog kit (confirm, input and scrollable text), the popups of the tree and the StatusBar;
 //! - [`fold`]: the one widget every block that folds is drawn by (the tree's Contexts and archived groups, the Inbox's toggle);
 //! - [`section`]: the one helper every in-pane section title is drawn by;
-//! - [`tree`], [`plan`], [`worker`]: the other views of §13.2.
+//! - [`tree`], [`plan`]: the other views of §13.2.
 
 mod background;
 #[cfg(test)]
@@ -121,7 +121,6 @@ mod test_text;
 pub mod tree;
 mod viewlog;
 pub mod widgets;
-pub mod worker;
 pub mod view_ports;
 #[cfg(test)]
 mod view_ports_tests;
@@ -221,8 +220,6 @@ pub enum View {
     Plan,
     /// The Dispatch column (right)
     Widgets,
-    /// An Attempt's Worker, read-only (beside the chat)
-    Worker(worker::Args),
     /// An archived Session's history, read-only (the chat slot)
     History(history::Args),
     /// The key legend (opened by `?` in the Dispatch column, in a tmux popup)
@@ -246,7 +243,6 @@ pub fn run_with(ports: &Ports, args: Args, version: &str, run_command: RunComman
             View::Tree => tree::run(ports),
             View::Plan => plan::run(ports, run_command),
             View::Widgets => widgets::run(ports, run_command),
-            View::Worker(args) => worker::run(ports, args),
             View::History(args) => history::run(ports, args),
             View::Legend => widgets::legend::run(ports),
             View::Logs(args) => logs::run(ports, args),

@@ -64,6 +64,10 @@ Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku), `G` (gem
 | Docs, config, mechanical edits | `H3` | Cheap and enough. |
 | A PR's open and update Jobs | `open_tier` (default `S1`) | cpd sets it, you never choose it; if one fails, retry higher with `cpd job retry <k> --tier <T>`. |
 
+## A feedback fix Job
+
+On an open PR a fix is one `work` Job (`--tier S1`, no `--kind`, no `--draft`): its Spec carries the comment text, file and line, the failing log lines and the exact fix, and, when behaviour changes, an acceptance item naming the test the Worker writes first in the same Job. Its merge pushes the pull request ([Addressing](../SKILL.md#addressing)).
+
 ## Test Jobs
 
 A PR that changes behaviour has a test Job and an implementation Job after its docs Job ([the PR's shape](../SKILL.md#dividing)). A different Worker writes each, so the tests are not fitted to the code.

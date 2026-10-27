@@ -14,7 +14,7 @@ use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, mcp, plan, policy, pr, prune, review, secret, session, tag, testsel, version_sync};
+use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, mcp, models, plan, policy, pr, prune, review, secret, session, tag, testsel, version_sync};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -89,6 +89,9 @@ pub enum Command {
     Config(config::ConfigArgs),
     /// Print the Tiers and their valid efforts (commands.md §14.3)
     Tiers(config::TiersArgs),
+    /// The model lists pi can offer (commands.md §14.5)
+    #[command(subcommand)]
+    Models(models::Command),
     /// Install the cpd built from a checkout (commands.md §14.4)
     Install(install::Args),
     /// Secrets in 1Password through op (commands.md §24)
@@ -183,6 +186,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Doctor(a) => doctor::run(a, &ports.clock.zone()),
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),
+        Command::Models(c) => models::run(c),
         Command::Install(a) => install::run(ports, a),
         Command::Secret(c) => secret::run(c),
         Command::Host(c) => host::run(c),

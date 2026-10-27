@@ -10,7 +10,7 @@ use ratatui::style::{Modifier, Style};
 
 use super::numbered::{C1, C10, C11, C13, C14, C15, C2, C3, C4, C5, C6, C7, C8, C9};
 use super::{
-    archived_text, asleep_text, dot_span, bright, clickable_text, color, count_style, color_clickable, job_pill, muted_text, pill_focus, pill_interactive,
+    archived_text, asleep_text, dot_span, bright, clickable_text, color, count_style, color_clickable, job_pill, muted_text, pill_focus,
     pill_static, read_only_text, selected, toggle_text, JobStatus, Meaning,
 };
 use crate::read::Dot;
@@ -27,22 +27,23 @@ fn text(fg: ratatui::style::Color) -> Style {
 }
 
 #[test]
-fn job_pills_are_their_status_colour_bright__inverted() {
-    // (status, merging, stuck, the pill's background number): draft 13, queued 15, running 14, merging 11, merged 10,
-    // failed 9, cancelled 8; inverted.
+fn job_pills_are_their_status_colour_base_inverted() {
+    // (status, merging, stuck, the pill's background number): draft 5, queued 7, running 6, merging 3, merged 2,
+    // failed 1, cancelled 8; the base colour, inverted (a pill that is not clickable).
     let table = [
-        ("draft", JobStatus::Draft, false, false, C13),
-        ("queued", JobStatus::Queued, false, false, C15),
-        ("running", JobStatus::Running, false, false, C14),
-        ("merging", JobStatus::Running, true, false, C11),
-        ("merged", JobStatus::Merged, false, false, C10),
-        ("failed, stuck", JobStatus::Failed, false, true, C9),
+        ("draft", JobStatus::Draft, false, false, C5),
+        ("queued", JobStatus::Queued, false, false, C7),
+        ("running", JobStatus::Running, false, false, C6),
+        ("merging", JobStatus::Running, true, false, C3),
+        ("merged", JobStatus::Merged, false, false, C2),
+        ("failed", JobStatus::Failed, false, false, C1),
+        ("failed, stuck", JobStatus::Failed, false, true, C1),
         ("cancelled", JobStatus::Cancelled, false, false, C8),
     ];
     for (name, status, merging, stuck, bg) in table {
         assert_eq!(job_pill(status, merging, stuck), block(bg), "the {name} Job's pill");
     }
-    assert_eq!(job_pill(JobStatus::Queued, false, false), pill_interactive(), "a queued pill is the clickable pill");
+    assert_eq!(job_pill(JobStatus::Queued, false, false), pill_static(), "a queued pill is the read-only pill");
 }
 
 #[test]

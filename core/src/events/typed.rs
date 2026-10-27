@@ -137,7 +137,7 @@ impl NewEvent {
     }
 
     /// The `job-added` of a Job cpd adds itself (§5.2, §3.7 E4): an `open` Job (`by` `engine`). It is `queued` (`draft` while a draft of its PR remains) and `appended`, and its
-    /// `needs` is the empty list: its Ready rule is derived (§3.2). `reason` is for an `update` Job (`conflict` or `feedback`).
+    /// `needs` is the empty list: its Ready rule is derived (§3.2). `reason` is for an `update` Job (`conflict`).
     pub fn job_added_by_cpd(text: impl Into<String>, pr: impl Serialize, kind: &str, status: &str, tier: &str, by: &str, reason: Option<&str>) -> NewEvent {
         let mut data = json!({
             "pr": pr, "kind": kind, "status": status, "appended": true, "tier": tier, "needs": [], "review": false, "urgent": false, "by": by,

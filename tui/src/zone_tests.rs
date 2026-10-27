@@ -1,6 +1,5 @@
 //! The cockpit views draw their times in the zone the caller gives them, never the machine's (PLAN local-time). The
 //! zone here is `<+1245>-12:45`, which no machine is likely to be in, so a view that read the system zone could not pass.
-//! (The Worker view's is in `worker::screen_tests`.)
 
 use cpd_core::clock::TimeZone;
 use cpd_core::events::Event;

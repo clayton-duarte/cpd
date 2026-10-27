@@ -51,8 +51,15 @@ pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, 
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
         .map(|(key, pull_request, mut value)| {
+            value["feedback_open"] = Value::Null;
             value["pull_request"] = match pull_request {
-                Some(row) => pulls::load(conn, row)?.to_json(),
+                Some(row) => {
+                    let loaded = pulls::load(conn, row)?;
+                    if let Some(items) = &loaded.feedback {
+                        value["feedback_open"] = json!(items.len());
+                    }
+                    loaded.to_json()
+                }
                 None => Value::Null,
             };
             value["needs"] = json!(needs.remove(&key).unwrap_or_default());
