@@ -655,6 +655,53 @@ mod migrations {
         clone.commit();
         clone.check().unwrap();
     }
+
+    const NEW_BREAKING: &str = "-- cpd-migration: breaking after 2\nSELECT 1;\n";
+    const DIR: &str = "core/src/store/migrations";
+
+    fn refused_for(why: &str, new: &str) {
+        assert!(why.contains(new) && why.contains("20260202T0000-additive"), "{why}");
+    }
+
+    /// pro-d122 (#526): a new breaking migration must sort after every name on the base.
+    #[test]
+    fn the_frozen_check_refuses_a_new_breaking_migration_that_sorts_before_a_name_on_the_base() {
+        let clone = Clone::new();
+        fs::write(clone.migrations().join("20260202T0000-aaa-breaking.sql"), NEW_BREAKING).unwrap();
+        clone.commit();
+        let why = clone.check().expect_err("sorts before a base name");
+        refused_for(&why, "20260202T0000-aaa-breaking");
+    }
+
+    /// pro-d122: the same when the breaking migration is renamed in to a too-old name.
+    #[test]
+    fn the_frozen_check_refuses_a_renamed_in_breaking_migration_that_sorts_before_a_name_on_the_base() {
+        let clone = Clone::new();
+        fs::write(clone.migrations().join("20260301T0000-aaa-breaking.sql"), NEW_BREAKING).unwrap();
+        clone.commit();
+        clone.git(&["mv", &format!("{DIR}/20260301T0000-aaa-breaking.sql"), &format!("{DIR}/20260202T0000-aaa-breaking.sql")]);
+        clone.commit();
+        let why = clone.check().expect_err("renamed before a base name");
+        refused_for(&why, "20260202T0000-aaa-breaking");
+    }
+
+    /// The remedy: a name after every base name passes.
+    #[test]
+    fn the_frozen_check_passes_a_new_breaking_migration_that_sorts_after_every_name_on_the_base() {
+        let clone = Clone::new();
+        fs::write(clone.migrations().join("20260303T0000-zzz-breaking.sql"), NEW_BREAKING).unwrap();
+        clone.commit();
+        clone.check().unwrap();
+    }
+
+    /// O2: additive migrations may sort anywhere.
+    #[test]
+    fn the_frozen_check_passes_a_new_additive_migration_that_sorts_before_a_name_on_the_base() {
+        let clone = Clone::new();
+        fs::write(clone.migrations().join("20260202T0000-aaa-additive.sql"), "-- cpd-migration: additive\n").unwrap();
+        clone.commit();
+        clone.check().unwrap();
+    }
 }
 
 /// Everything that is not one of those allowances still fails: an edit, a delete, and a
