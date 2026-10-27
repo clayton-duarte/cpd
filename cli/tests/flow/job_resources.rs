@@ -10,6 +10,7 @@ use common::{Run, refused};
 use serde_json::{Value, json};
 
 use super::job::{events, fixture, lock, plan, setup};
+use super::resource;
 
 /// Plan `pl` in phase `plan`, its PR `repo` named `cpd` of owner `acme`, whose policy declares `e2e-port`.
 fn world() -> Fx {
@@ -222,9 +223,39 @@ fn job_show_waiting_for_names_workers_when_no_worker_slot_is_free() {
     // A running Job has none.
     assert!(shown(&fx, "a").get("waiting_for").is_none());
 
-    // The slot frees: the entry goes (no other resource is held: `c`'s `e2e-port` is free).
+    // `a` fails and its Attempt ends: a `failed` Job keeps its worker (contract §3.4 "Tenancy"), so `b` and `c` still wait for `workers`.
     fixture(&fx.env, "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'a-a1';
                       UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE plan = 'pl' AND key = 'a';");
+    for job in ["b", "c"] {
+        let waiting = shown(&fx, job)["waiting_for"].clone();
+        assert_eq!(waiting.as_array().map(Vec::len), Some(1), "{job} still waits for the worker the failed Job keeps: {waiting}");
+        assert_eq!((&waiting[0]["resource"], &waiting[0]["holders"][0]["job"]), (&json!("workers"), &json!("a")));
+    }
+
+    // The Lead cancels `a`, with no live Attempt: the slot frees at once and the entry goes (no other resource is held: `c`'s
+    // `e2e-port` is free).
+    fixture(&fx.env, "UPDATE jobs SET status = 'cancelled', failed_cause = NULL, cancel_reason = 'no longer needed', cancel_requested_at = 't' WHERE plan = 'pl' AND key = 'a';");
     assert!(shown(&fx, "b").get("waiting_for").is_none(), "no resources and a free Worker slot: the key is absent");
     assert_eq!(shown(&fx, "c")["waiting_for"], json!([]), "it lists resources and none is full: `[]`");
+}
+
+#[test]
+fn resource_list_shows_job_tenants_and_command_tenants() {
+    let (fx, repo) = resource::tenancy_world("[resources.e2e-port]\nslots = 3\n");
+    let _command = resource::hold(&fx, "e2e-port", resource::COMMAND_RECORD);
+    resource::job_tenant(&fx, "api", "repo:acme/cpd:e2e-port", resource::API_AT);
+    // A Job of another repo's pool of the same name is no tenant of this pool.
+    resource::job_tenant(&fx, "other", "repo:acme/elsewhere:e2e-port", "2026-10-26T21:42:00.000Z");
+
+    let out = fx.cpd_in(&repo, &["resource", "list"]).ok();
+
+    let command: Value = serde_json::from_str(resource::COMMAND_RECORD).unwrap();
+    assert_eq!(
+        resource::declared_only(&out),
+        json!([{
+            "name": "e2e-port", "scope": "repo", "slots": 3, "free": 1,
+            "holders": [{"slot": 1, "holder": command}, {"slot": null, "holder": resource::api_holder()}],
+        }]),
+        "the held command slots first, with their slot; then the Job tenants, with no slot number"
+    );
 }

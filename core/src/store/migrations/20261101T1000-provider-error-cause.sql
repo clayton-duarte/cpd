@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 64
+-- cpd-migration: breaking after 67
 -- `provider_error` joins the causes `attempts.cause` accepts (contract §3.4 A5, decision pro-d102): pi stopped on a
 -- provider error ("Connection error.", "Request timed out.", HTTP 5xx). `ALTER TABLE` cannot change a CHECK, so
 -- `attempts` is rebuilt as `attempt-lead-branch` rebuilt it (the runner applies a migration with foreign keys off and

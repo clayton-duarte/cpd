@@ -125,7 +125,7 @@ fn resource_hold_e3_keeps_a_job_queued_while_its_resource_is_held() {
 
 #[test]
 fn resource_hold_e3_starts_the_next_ready_job_past_a_held_one() {
-    // Three Worker slots: the blocked `api` holds one back (contract §3.7 E3 reservation), the others are free.
+    // Three Worker slots: the skipped `api` reserves nothing (contract §3.7 E3: skipped, nothing reserved), the others are free.
     let fx = engine_with(POLICY, 3);
     // `api` is older and held; `web` lists a free resource and `ui` lists none.
     add(&fx, "api", &["e2e-port"], "");
@@ -233,12 +233,14 @@ fn job_stays_queued_while_every_slot_is_held_and_job_show_lists_the_holders() {
     assert_eq!((status(&fx, "api"), attempts(&fx), all_errors(&fx)), ("queued".into(), 0, 0));
     assert_eq!(fx.fakes.spawn.launches_but_janitor(), []);
     let shown = fx.cpd(&["job", "show", "api", "--plan", PLAN]).ok();
+    let held = |record: &str, slot: u8| json!({"slot": slot, "holder": serde_json::from_str::<Value>(record).unwrap()});
     assert_eq!(
         shown["job"]["waiting_for"],
         json!([{
             "resource": "e2e-port", "scope": "repo", "slots": 2,
-            "holders": [serde_json::from_str::<Value>(COMMAND_RECORD).unwrap(), serde_json::from_str::<Value>(ATTEMPT_RECORD).unwrap()],
-        }])
+            "holders": [held(COMMAND_RECORD, 1), held(ATTEMPT_RECORD, 2)],
+        }]),
+        "the held command slots, each with its slot number, in the shape of `resource list`"
     );
 }
 
@@ -252,39 +254,130 @@ fn job_starts_when_one_of_two_slots_is_free() {
 
     assert_eq!(started(&fx), ["api"], "the Job takes the free slot");
     assert_eq!(status(&fx, "api"), "running");
-    let record: Value = serde_json::from_str(&fs::read_to_string(fx.env.cpd_home().join("locks/resource.repo.acme.pay.e2e-port.2.lock")).unwrap()).unwrap();
-    assert_eq!((record["by"].as_str(), record["job"].as_str()), (Some("attempt"), Some("api")));
+    // The Job is the tenant of the pool in the Ledger: its row commits with its Attempt, and it takes no lock file.
+    assert_eq!(fx.env.query::<i64>(&format!("SELECT count(*) FROM job_tenants WHERE job = 'api' AND pool = '{PORT_POOL}'")), 1);
+    assert!(!fx.env.cpd_home().join("locks/resource.repo.acme.pay.e2e-port.2.lock").exists(), "a Job writes no slot file");
     assert_eq!(fs::read_to_string(fx.env.cpd_home().join("locks/resource.repo.acme.pay.e2e-port.1.lock")).unwrap(), COMMAND_RECORD);
 }
 
+/// The `skipped_n` of Job `key` (NULL: not skipped).
+fn skipped_n(fx: &Fx, key: &str) -> Option<i64> {
+    fx.env.query(&format!("SELECT skipped_n FROM jobs WHERE plan = '{PLAN}' AND key = '{key}'"))
+}
+
+/// Job `key` as a tenant: `running` with its first Attempt, its `job_pools` rows `pools` (the starter's), and its driver gone:
+/// its Attempt `ended` as `failed` when `failed`, and the Job `failed` with it. Lists `resources` in its Spec.
+fn tenant(fx: &Fx, key: &str, resources: &[&str], pools: &[&str], failed: bool) {
+    let mut then = format!(
+        "UPDATE jobs SET status = 'running' WHERE plan = '{PLAN}' AND key = '{key}';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+           VALUES ('{PLAN}', '{key}-a1', '{key}', 1, 'S2', 'ladder', 'running', 'cpd/{PLAN}--{key}-a1', '/w', 't');"
+    );
+    // The Attempt turned `running`: E2 reads this Event for a live Attempt, as `Fx::add_running` writes it.
+    then += &format!(
+        "INSERT INTO events (txn, at, kind, context, plan, job, attempt, text, data)
+           VALUES (cpd_txn(), '{}', 'attempt-status', 'ctx', '{PLAN}', '{key}', '{key}-a1', 'running', '{{\"from\":\"starting\",\"to\":\"running\"}}');",
+        fx.stamp_ago(60_000)
+    );
+    for pool in pools {
+        then += &format!("INSERT INTO job_pools (plan, job, pool) VALUES ('{PLAN}', '{key}', '{pool}');");
+    }
+    if failed {
+        then += &format!(
+            "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = '{key}-a1';
+             UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE plan = '{PLAN}' AND key = '{key}';"
+        );
+    }
+    add(fx, key, resources, &then);
+}
+
+const PORT_POOL: &str = "repo:acme/pay:e2e-port";
+
 #[test]
-fn watch_blocked_job_keeps_the_freed_slot_from_a_lower_job() {
-    // Three Worker slots. `big` (older) needs `e2e-port` and `db`; `small` needs `e2e-port` alone. Both resources are held.
-    let fx = engine_with(POLICY, 3);
-    add(&fx, "big", &["e2e-port", "db"], "");
-    add(&fx, "small", &["e2e-port"], "");
-    let port = hold(&fx, "e2e-port", COMMAND_RECORD);
-    let db = hold(&fx, "db", COMMAND_RECORD);
-    fx.watch_ticks(2).unwrap();
-    assert_eq!(started(&fx), Vec::<String>::new());
+fn watch_skipped_job_gets_its_skip_order_once_and_keeps_it_across_ticks() {
+    // One Worker slot, held by a Job that holds `e2e-port`: `api` and then `web` are Ready, miss it, and are skipped.
+    let fx = engine(POLICY);
+    tenant(&fx, "busy", &["e2e-port"], &[PORT_POOL], false);
+    let _driver = fx.live_driver("busy-a1");
+    add(&fx, "api", &["e2e-port"], "");
+    add(&fx, "web", &[], "");
+    assert_eq!((skipped_n(&fx, "api"), skipped_n(&fx, "web")), (None, None), "no Job is skipped before E3 walks");
 
-    // `e2e-port` is freed. `big` still lacks `db`; the slot is earmarked for it (held back), so `small` does not take it.
-    drop(port);
     fx.watch_first_tick().unwrap();
-    assert_eq!(started(&fx), Vec::<String>::new(), "the freed slot is kept for the Job ahead");
-    assert_eq!((status(&fx, "big"), status(&fx, "small")), ("queued".into(), "queued".into()));
-    assert_eq!((attempts(&fx), all_errors(&fx)), (0, 0));
 
-    // `db` is freed: `big` takes both resources and starts; `small` waits for `e2e-port` in its turn.
-    drop(db);
-    fx.watch_first_tick().unwrap();
-    assert_eq!(started(&fx), ["big"]);
-    assert_eq!((status(&fx, "big"), status(&fx, "small")), ("running".into(), "queued".into()));
+    // Recorded once, in the order of the walk (`jobs.seq`): a number above every other skip.
+    assert_eq!((skipped_n(&fx, "api"), skipped_n(&fx, "web")), (Some(1), Some(2)));
+    let events = |key: &str| fx.env.query::<i64>(&format!("SELECT count(*) FROM events WHERE job = '{key}'"));
+    let seen = (events("api"), events("web"));
+
+    // Later ticks record nothing again and change nothing: the Jobs keep their place, and a skip appends no Event.
+    fx.watch_ticks(3).unwrap();
+    assert_eq!((skipped_n(&fx, "api"), skipped_n(&fx, "web")), (Some(1), Some(2)));
+    assert_eq!((events("api"), events("web")), seen);
+    assert_eq!((status(&fx, "api"), status(&fx, "web"), all_errors(&fx)), ("queued".into(), "queued".into(), 0));
 }
 
 #[test]
-fn watch_job_waits_queued_with_no_attempt_and_no_back_off_while_blocked() {
-    // One Worker slot, taken by a running Attempt: `api` is Ready but blocked on `workers`.
+fn watch_skip_order_is_cleared_when_the_job_starts() {
+    let fx = engine(POLICY);
+    add(&fx, "api", &["e2e-port"], "");
+    let holder = hold(&fx, "e2e-port", COMMAND_RECORD);
+    fx.watch_ticks(2).unwrap();
+    assert_eq!(skipped_n(&fx, "api"), Some(1), "skipped for want of the pool");
+
+    drop(holder);
+    fx.watch_first_tick().unwrap();
+
+    assert_eq!(started(&fx), ["api"]);
+    assert_eq!(skipped_n(&fx, "api"), None, "cleared when it starts");
+}
+
+#[test]
+fn watch_failed_job_keeps_its_resources_and_its_worker_for_the_retry() {
+    // Two Worker slots. `api` failed: its Attempt ended, and it is still the tenant of `e2e-port` and of one worker.
+    let fx = engine_with(POLICY, 2);
+    tenant(&fx, "api", &["e2e-port"], &[PORT_POOL], true);
+    add(&fx, "other", &["e2e-port"], "");
+    add(&fx, "web", &[], "");
+    add(&fx, "late", &[], "");
+
+    fx.watch_ticks(2).unwrap();
+
+    // `other` misses the port the failed Job keeps; `web` takes the one worker the failed Job leaves; `late` finds none.
+    assert_eq!(started(&fx), ["web"]);
+    assert_eq!((status(&fx, "other"), status(&fx, "web"), status(&fx, "late")), ("queued".into(), "running".into(), "queued".into()));
+    assert_eq!((skipped_n(&fx, "other"), skipped_n(&fx, "late")), (Some(1), Some(2)));
+    assert_eq!(status(&fx, "api"), "failed");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM job_pools"), 1, "the failed Job's rows stay, and nobody else writes one");
+    assert_eq!(all_errors(&fx), 0);
+}
+
+#[test]
+fn watch_resources_are_free_in_the_tick_after_the_job_merges() {
+    // Two Worker slots. `api` is a running tenant of `e2e-port`: `web`, which needs it, is skipped.
+    let fx = engine_with(POLICY, 2);
+    fx.add_running("api", "running", &fx.stamp_ago(60_000));
+    fx.env.sql(&format!("INSERT INTO job_pools (plan, job, pool) VALUES ('{PLAN}', 'api', '{PORT_POOL}');"));
+    let driver = fx.live_driver("api-a1");
+    add(&fx, "web", &["e2e-port"], "");
+    fx.watch_ticks(2).unwrap();
+    assert_eq!((started(&fx), status(&fx, "web"), skipped_n(&fx, "web")), (Vec::<String>::new(), "queued".into(), Some(1)));
+
+    // `api` merges, its Attempt ends: no timer and no clock moves, and the very next tick starts `web` on the pool.
+    fx.env.sql(&format!(
+        "UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = 'abc', ended_at = 't' WHERE id = 'api-a1';
+         UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE plan = '{PLAN}' AND key = 'api';"
+    ));
+    drop(driver);
+    fx.watch_first_tick().unwrap();
+
+    assert_eq!(started(&fx), ["web"]);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM job_pools WHERE job = 'web'"), 1, "`web` is the tenant now: its row commits with its Attempt");
+}
+
+#[test]
+fn watch_job_waits_queued_with_no_attempt_and_no_back_off_while_skipped() {
+    // One Worker slot, taken by a running Attempt: `api` is Ready but skipped for want of `workers`.
     let fx = engine("");
     let busy = fx.live_driver("busy-a1");
     fx.add_running("busy", "running", &fx.stamp_ago(60_000));
@@ -293,7 +386,8 @@ fn watch_job_waits_queued_with_no_attempt_and_no_back_off_while_blocked() {
     fx.watch_ticks(3).unwrap();
 
     assert_eq!(status(&fx, "api"), "queued");
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 0, "a blocked Job has no Attempt");
+    assert_eq!(skipped_n(&fx, "api"), Some(1), "skipped, once");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 0, "a skipped Job has no Attempt");
     assert_eq!(all_errors(&fx), 0);
     let shown = fx.cpd(&["job", "show", "api", "--plan", PLAN]).ok();
     let waiting = shown["job"]["waiting_for"].as_array().unwrap_or_else(|| panic!("`api` waits for workers: {shown}"));
@@ -305,7 +399,10 @@ fn watch_job_waits_queued_with_no_attempt_and_no_back_off_while_blocked() {
     fx.watch_first_tick().unwrap();
     assert_eq!(attempts(&fx), 1, "still only the running Attempt: the wait counted nothing");
     drop(busy);
+    fx.env.sql(&format!(
+        "UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = 'abc', ended_at = 't' WHERE id = 'busy-a1';
+         UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE plan = '{PLAN}' AND key = 'busy';"
+    ));
     fx.watch_first_tick().unwrap();
-    assert_eq!(started(&fx), ["api"]);
-    assert_eq!(status(&fx, "api"), "running");
+    assert_eq!(started(&fx), ["api"], "`busy` merged: its worker is free in the next tick");
 }

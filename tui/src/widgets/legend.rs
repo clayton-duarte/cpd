@@ -222,6 +222,9 @@ pub(crate) fn sections() -> Vec<Section> {
             vec![Line::from(Span::styled(palette::ITEM_DOCS, palette::fg_clickable(Meaning::Notice))), plain("a documentation candidate")],
             vec![Line::from(Span::styled(palette::ITEM_RETIRE, palette::fg_clickable(Meaning::Notice))), plain("a record to retire")],
             tier(Urgency::White, "an unread reply"),
+            vec![Line::from(Span::styled(palette::ITEM_DEPLOY, palette::fg_clickable(Meaning::Review))), plain("a deploy waits for your approval")],
+            vec![Line::from(Span::styled(palette::ITEM_PR_READY, palette::fg_clickable(Meaning::Review))), plain("a pull request of yours is ready to merge")],
+            vec![Line::from(Span::styled(palette::ITEM_REVIEW_REQUESTED, palette::fg_clickable(Meaning::External))), plain("a review asked of you")],
         ],
     };
     let pulse = Section {
@@ -656,14 +659,17 @@ mod tests {
                 "\u{F0653}", "a documentation candidate",
                 "\u{F116E}", "a record to retire",
                 "\u{F0366}", "an unread reply",
+                "\u{F15A9}", "a deploy waits for your approval",
+                "\u{F12F4}", "a pull request of yours is ready to merge",
+                "\u{F12F2}", "a review asked of you",
             ]
         );
         let colours: Vec<_> = inbox.rows.iter().map(|r| r[0].spans[0].style.fg).collect();
         let c = |m| Some(palette::color_clickable(m));
         assert_eq!(
             colours,
-            [c(Meaning::Failed), c(Meaning::Review), c(Meaning::Planning), c(Meaning::External), c(Meaning::Notice), c(Meaning::Notice), c(Meaning::Notice), c(Meaning::NotStarted)],
-            "red, yellow, magenta, blue, cyan (three lines: the tier and the two curate kinds), white"
+            [c(Meaning::Failed), c(Meaning::Review), c(Meaning::Planning), c(Meaning::External), c(Meaning::Notice), c(Meaning::Notice), c(Meaning::Notice), c(Meaning::NotStarted), c(Meaning::Review), c(Meaning::Review), c(Meaning::External)],
+            "red, yellow, magenta, blue, cyan (three lines: the tier and the two curate kinds), white, then the deploy, pr-ready and review-requested lines"
         );
         let dots = all.iter().position(|s| s.title == "Session Dots" || s.title == "Session dots").unwrap();
         let pulse = all.iter().position(|s| s.title == "Pulse").unwrap();

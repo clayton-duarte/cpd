@@ -393,6 +393,7 @@ fn condition(kind: Kind, urgency: Urgency, session: Option<&str>, plan: Option<&
         session: session.map(self::session),
         record: None,
         event: None,
+        opened_at: None,
     }
 }
 

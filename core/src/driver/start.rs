@@ -9,13 +9,8 @@ use std::path::PathBuf;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::attempt::ledger::{self, Cause, End, Ladder, Stage};
-use super::lock::{RESOURCE_FDS_ENV, Starter};
-use crate::resource::{self, Held, Holder, Take};
-use nix::fcntl::{FcntlArg, FdFlag, fcntl};
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
-
-/// The lowest descriptor number a resource lock is handed to the driver on.
-const HAND_OVER_MIN: i32 = 100;
+use super::lock::Starter;
+use crate::resource;
 use crate::config::{Catalog, Config, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -140,59 +135,71 @@ pub fn start_with_allocation(
     })?;
     // §3.4 step 1: the lock before the transaction that inserts the Attempt.
     let lock = Starter::take(ctx.home, plan, &next.attempt)?;
-    // Then the Job's resources, all or none, before the Attempt row exists. Dropping `held` on any later failure releases them.
-    let held = match &wanted {
-        None => None,
-        Some(w) => {
-            let holder = Holder::Attempt {
-                plan: plan.to_string(),
-                job: key.to_string(),
-                attempt: next.attempt.to_string(),
-                at: crate::clock::timestamp(ports.clock.utc()),
-            };
-            match resource::take(ctx.home, &pools, &holder)? {
-                Take::Held(held) => Some(held),
-                Take::Busy { resource, holders } => {
-                    // Nothing changes: the driver lock file made for an Attempt that will not exist goes too.
-                    drop(lock);
-                    super::lock::remove(ctx.home, plan, &next.attempt)?;
-                    return Err(CpdError::new(
-                        ErrorCode::ResourceBusy,
-                        format!("Job {key} cannot start: the resource {resource} of {}/{} has no free slot.", w.owner, w.repo),
-                    )
-                    .with("job", key.as_str())
-                    .with("resource", resource)
-                    .with("holders", serde_json::to_value(holders).expect("a holder serialises")));
+    // The Job's pools (contract §3.4 "Resources of a Job"): a Job that is not yet a tenant takes the guard of each pool, in name order,
+    // and finds every pool with a free slot, or none is taken. A Job already a tenant (a retry) competes for none. The guards
+    // are held until the Attempt row and the `job_pools` rows have committed: the commit is the moment the Job becomes the tenant.
+    let first = next.attempt.number().get() == 1;
+    let mut guarded: Vec<(&resource::Pool, resource::Guard)> = Vec::new();
+    if first {
+        let mut sorted: Vec<&resource::Pool> = pools.iter().collect();
+        sorted.sort_by(|a, b| (a.name(), resource::identity(a)).cmp(&(b.name(), resource::identity(b))));
+        for pool in sorted {
+            guarded.push((pool, resource::Guard::take(ctx.home, pool)?));
+        }
+        let full = store.read(|conn| {
+            for (pool, _) in &guarded {
+                if resource::free_slots(conn, ctx.home, pool)? == 0 {
+                    return Ok(Some((pool.name().to_owned(), resource::occupants(conn, ctx.home, pool)?)));
                 }
             }
+            Ok(None)
+        })?;
+        if let Some((name, occupants)) = full {
+            // Nothing changes: the driver lock file made for an Attempt that will not exist goes too.
+            drop(guarded);
+            drop(lock);
+            super::lock::remove(ctx.home, plan, &next.attempt)?;
+            let holders: Vec<serde_json::Value> = occupants.into_iter().map(|(slot, holder)| serde_json::json!({"slot": slot, "holder": holder})).collect();
+            let w = wanted.as_ref().expect("a Job with pools lists resources");
+            return Err(CpdError::new(
+                ErrorCode::ResourceBusy,
+                format!("Job {key} cannot start: the resource {name} of {}/{} has no free slot.", w.owner, w.repo),
+            )
+            .with("job", key.as_str())
+            .with("resource", name)
+            .with("holders", holders));
         }
-    };
+    }
+    let identities: Vec<String> = if first { pools.iter().map(resource::identity).collect() } else { Vec::new() };
     store.write(ctx.command, |tx| {
         if decide(tx, ctx.catalog, plan, key, allocation)? != next {
             return Err(CpdError::new(ErrorCode::CasLost, format!("Job {key} changed while its Attempt was being started: try again."))
                 .with("plan", plan.as_str())
                 .with("job", key.as_str()));
         }
-        let workers = resource::workers(tx, ctx.config.concurrency)?;
-        // An urgent Job may start one Attempt beyond `concurrency` (§3.7 E3).
-        let urgent: bool = tx.query_row("SELECT urgent FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
-        // The `workers` pool, the one rule E3 schedules by (§3.7 E3): a free slot, or for an urgent Job the one beyond.
-        let pool = workers.pool();
-        if pool.free + if urgent { pool.urgent_free } else { 0 } == 0 {
-            let (active, limit) = (workers.holders.len(), ctx.config.concurrency + u32::from(urgent));
-            return Err(CpdError::new(
-                ErrorCode::NoSlot,
-                format!("{active} Attempts are running, the limit is {limit} (concurrency {}): wait for one to end.", ctx.config.concurrency),
-            )
-            .with("active", active)
-            .with("concurrency", ctx.config.concurrency)
-            .with("urgent", urgent));
+        // An urgent Job may start one Attempt beyond `concurrency` (§3.7 E3). A Job already a tenant of `workers` takes no slot.
+        if first {
+            let workers = resource::workers(tx, ctx.config.concurrency)?;
+            let urgent: bool = tx.query_row("SELECT urgent FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
+            // The `workers` pool, the one rule E3 schedules by (§3.7 E3): a free slot, or for an urgent Job the one beyond.
+            let pool = workers.pool();
+            if pool.free + if urgent { pool.urgent_free } else { 0 } == 0 {
+                let (active, limit) = (workers.holders.len(), ctx.config.concurrency + u32::from(urgent));
+                return Err(CpdError::new(
+                    ErrorCode::NoSlot,
+                    format!("{active} Attempts are running, the limit is {limit} (concurrency {}): wait for one to end.", ctx.config.concurrency),
+                )
+                .with("active", active)
+                .with("concurrency", ctx.config.concurrency)
+                .with("urgent", urgent));
+            }
         }
-        insert(tx, plan, key, &next)
+        insert(tx, plan, key, &next, &identities)
     })?;
+    drop(guarded);
 
     // §3.4 step 2: spawn the driver with the lock as fd 3.
-    let spawned = spawn(ports, ctx.home, plan, &next.attempt, &lock, held);
+    let spawned = spawn(ports, ctx.home, plan, &next.attempt, &lock);
     let pid = match spawned {
         Ok(pid) => pid,
         Err(e) => {
@@ -382,7 +389,7 @@ fn require_ready(all: &[Job], job: &Job, plan: &PlanId, phase: &str, pr_status: 
 }
 
 /// The `starting` Attempt and its Job `running`, with `attempt-started`.
-fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &Next) -> Result<(), CpdError> {
+fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &Next, pools: &[String]) -> Result<(), CpdError> {
     let worktree = next.worktree.to_str().ok_or_else(|| {
         CpdError::new(ErrorCode::GitFailed, "The Attempt's worktree path is not valid UTF-8.")
             .with("path", next.worktree.to_string_lossy().into_owned())
@@ -402,8 +409,13 @@ fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &N
             worktree
         ],
     )?;
+    // The Job's pools commit with its first Attempt: from this commit it is their tenant (contract §3.4 "Tenancy").
+    for pool in pools {
+        tx.execute("INSERT INTO job_pools (plan, job, pool) VALUES (?1, ?2, ?3)", params![plan.as_str(), key.as_str(), pool])?;
+    }
+    // The Job starts: its skip, if E3 recorded one, is cleared (contract §3.7 E3 "The skip order").
     let moved = tx.execute(
-        "UPDATE jobs SET status = 'running' WHERE plan = ?1 AND key = ?2 AND status = 'queued'",
+        "UPDATE jobs SET status = 'running', skipped_n = NULL WHERE plan = ?1 AND key = ?2 AND status = 'queued'",
         params![plan.as_str(), key.as_str()],
     )?;
     if moved == 0 {
@@ -423,7 +435,7 @@ fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &N
 /// Spawns `cpd attempt run <attempt> --plan <plan>` detached (`setsid`), with
 /// the lock as fd 3, stdin from `/dev/null`, and stdout and stderr appended to
 /// `run/<plan>/logs/attempt-<attempt>.log`, through `ports.spawn`. Returns its pid.
-fn spawn(ports: &Ports, home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock: &Starter, held: Option<Held>) -> Result<u32, String> {
+fn spawn(ports: &Ports, home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock: &Starter) -> Result<u32, String> {
     // The path recorded at process start: the live path of the file is `(deleted)` after an install.
     let exe = ports.spawn.self_exe().map_err(|e| e.to_string())?;
     let log_path = home.driver_log(plan, attempt);
@@ -434,25 +446,7 @@ fn spawn(ports: &Ports, home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock
     if !exe.exists() {
         return Err(format!("cannot run {}: no such file", exe.display()));
     }
-    // The resource locks go to the driver as copies of the same open file descriptions, numbered from `HAND_OVER_MIN` up:
-    // clear of the numbers the starter's own files take, and not close-on-exec. The driver learns the numbers from the
-    // environment and makes them close-on-exec again (A1). The starter's own descriptors close here; the copies close
-    // when this function returns, after the spawn.
-    let mut env_set = vec![("CPD_HOME".to_owned(), home.root().display().to_string())];
-    let mut handed: Vec<OwnedFd> = Vec::new();
-    if let Some(held) = held {
-        for name in held.names() {
-            let fd = held.fd(name).expect("a name of the held resources");
-            // SAFETY: `held` owns the descriptor for the whole call.
-            let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-            let copy = fcntl(borrowed, FcntlArg::F_DUPFD(HAND_OVER_MIN)).map_err(|e| format!("cannot hand over the resource {name}: {e}"))?;
-            // SAFETY: `F_DUPFD` returned a new descriptor that nothing else owns.
-            handed.push(unsafe { OwnedFd::from_raw_fd(copy) });
-        }
-        drop(held);
-        let numbers: Vec<String> = handed.iter().map(|fd| fd.as_raw_fd().to_string()).collect();
-        env_set.push((RESOURCE_FDS_ENV.to_owned(), numbers.join(",")));
-    }
+    let env_set = vec![("CPD_HOME".to_owned(), home.root().display().to_string())];
     // hs-d528: nice and ionice exec (`idle`), so the recorded pid is the driver's.
     let launch = Launch {
         program: exe.display().to_string(),
@@ -469,6 +463,5 @@ fn spawn(ports: &Ports, home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock
     };
     // The real `Spawn` reaps the child on a thread, if this process outlives it (the engine); detached otherwise.
     let pid = ports.spawn.spawn(&launch).map_err(|e| format!("cannot run {}: {e}", exe.display()))?;
-    drop(handed);
     Ok(pid.0)
 }
