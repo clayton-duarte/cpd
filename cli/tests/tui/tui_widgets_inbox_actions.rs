@@ -481,3 +481,67 @@ fn a_refused_snooze_shows_the_failure_dialog_and_esc_closes_the_menu() {
     assert!(dialog.starts_with("cpd tui view dialog text --title="), "a text dialog: {dialog}");
     assert!(dialog.ends_with("--body='item_closed: Item 2 is closed.'"), "the body is why: {dialog}");
 }
+
+fn review_requested() -> Condition {
+    Condition {
+        plan: None,
+        context: None,
+        ..linked(Kind::ReviewRequested, Urgency::Yellow, "pr:acme/web#5", "acme/web#5 review requested", None, Some("https://x.io/review"))
+    }
+}
+
+const CLAIM_ENTRIES: [&str; 5] = ["Claim", "Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00", "Dismiss"];
+
+#[test]
+fn a_right_click_on_a_review_requested_item_opens_claim_first_and_no_other_item_has_claim() {
+    let fx = rig(vec![review_requested()]);
+    let _engine = engine(&fx);
+    cockpit(&fx);
+    let screen = first_rows(&fx);
+    let frames = run(&fx, pick(&screen, "acme/web#5 review requested", 0).into_iter().take(1).collect());
+    frame_with(&frames, 0, "the review-requested item's menu", |r| menu_labels(r) == CLAIM_ENTRIES);
+    drop(_engine);
+    drop(fx);
+
+    let fx = rig(four());
+    let _engine = engine(&fx);
+    cockpit(&fx);
+    let screen = first_rows(&fx);
+    let frames = run(&fx, pick(&screen, "l-rel label", 0).into_iter().take(1).collect());
+    frame_with(&frames, 0, "the menu of another kind without Claim", |r| menu_labels(r) == ENTRIES);
+}
+
+#[test]
+fn choosing_claim_runs_inbox_claim_with_the_items_id() {
+    let fx = rig(vec![review_requested()]);
+    let _engine = engine(&fx);
+    cockpit(&fx);
+    let screen = first_rows(&fx);
+    let frames = run(&fx, pick(&screen, "acme/web#5 review requested", 0));
+    let open = frame_with(&frames, 0, "the item's menu", |r| menu_labels(r) == CLAIM_ENTRIES);
+    frame_with(&frames, open, "the menu closed", the_menu_is_closed);
+    assert_eq!(cpd_calls(&fx), [words(&["inbox", "claim", "1"])]);
+    assert!(popups(&fx).is_empty(), "{:?}", popups(&fx));
+}
+
+#[test]
+fn a_refused_claim_shows_the_failure_dialog_and_esc_closes_the_menu() {
+    let fx = rig(vec![review_requested()]);
+    let _engine = engine(&fx);
+    cockpit(&fx);
+    says(&fx, &["inbox", "claim"], Says::Refused(ErrorCode::ItemClosed, "Item 1 is closed."));
+    let screen = first_rows(&fx);
+    let label = "acme/web#5 review requested";
+    let mut signals = pick(&screen, label, 0);
+    signals.extend([Signal::Input(right_click(10, row_of(&screen, label))), common::inbox::press(KeyCode::Esc)]);
+    let frames = run(&fx, signals);
+    let first = frame_with(&frames, 0, "the menu", |r| menu_labels(r) == CLAIM_ENTRIES);
+    let closed = frame_with(&frames, first, "the menu closed by Claim", the_menu_is_closed);
+    let again = frame_with(&frames, closed, "the menu again", |r| menu_labels(r) == CLAIM_ENTRIES);
+    frame_with(&frames, again, "the menu closed by Esc", the_menu_is_closed);
+    assert_eq!(cpd_calls(&fx), [words(&["inbox", "claim", "1"])], "Esc runs nothing");
+    let commands = commands(&fx);
+    let [dialog] = &commands[..] else { panic!("{commands:?}") };
+    assert!(dialog.starts_with("cpd tui view dialog text --title="), "a text dialog: {dialog}");
+    assert!(dialog.ends_with("--body='item_closed: Item 1 is closed.'"), "the body is why: {dialog}");
+}

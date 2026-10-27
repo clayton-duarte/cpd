@@ -8,7 +8,7 @@
 //!   A `cancelled` need counts for nothing: it blocks nothing.
 //! - **Superseded**: a `cancelled` PR names the PR that carried its work, from its `pr-cancelled` Event.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::Connection;
 
@@ -27,6 +27,10 @@ pub struct Display {
     bases: BTreeMap<String, String>,
     /// The PR (a reference) that superseded each cancelled PR of the Plan, by PR key.
     superseded: BTreeMap<String, String>,
+    /// Each Job's Attempts of the Plan as (number, tier, status), by Job key, in number order.
+    attempts: BTreeMap<String, Vec<(u32, String, String)>>,
+    /// The Jobs of the Plan with a retry pending ([`crate::job::retries_pending`]).
+    retrying: BTreeSet<String>,
 }
 
 /// A PR of the Plan as the reference its own Plan uses, or `<plan>/<key>`.
@@ -58,6 +62,12 @@ impl Display {
             let (key, by) = row?;
             display.superseded.insert(key, by);
         }
+        let mut stmt = conn.prepare("SELECT job, number, tier, status FROM attempts WHERE plan = ?1 ORDER BY job, number")?;
+        for row in stmt.query_map([own], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))? {
+            let (job, number, tier, status) = row?;
+            display.attempts.entry(job).or_default().push((number, tier, status));
+        }
+        display.retrying = crate::job::retries_pending(conn, plan)?;
         Ok(display)
     }
 
@@ -72,6 +82,15 @@ impl Display {
             }
         }
         display
+    }
+
+    /// The Tier the Job `job` is shown at (the Plan view pill, `plan render`): the Tier of its active Attempt, else its
+    /// `retry_tier` while a retry has no Attempt since, else the latest Attempt's Tier, else its `tier`.
+    pub fn job_tier(&self, job: &Job) -> Option<String> {
+        let attempts = self.attempts.get(job.key.as_str()).map(Vec::as_slice).unwrap_or_default();
+        let active = attempts.iter().find(|(_, _, status)| status != "ended").map(|(_, tier, _)| tier.clone());
+        let retry = || self.retrying.contains(job.key.as_str()).then(|| job.retry_tier.clone()).flatten();
+        active.or_else(retry).or_else(|| attempts.last().map(|(_, tier, _)| tier.clone())).or_else(|| job.tier.clone())
     }
 
     /// The PR that superseded the cancelled PR `key`, as a reference.

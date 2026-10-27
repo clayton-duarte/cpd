@@ -28,7 +28,7 @@ pub mod worked_on;
 #[cfg(test)]
 mod worked_on_tests;
 
-pub(crate) use retry::retried_since_last_start;
+pub(crate) use retry::{retried_since_last_start, retries_pending};
 
 use std::path::PathBuf;
 

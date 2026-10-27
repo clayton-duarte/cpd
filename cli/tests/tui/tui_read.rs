@@ -416,7 +416,7 @@ fn a_plan_carries_its_stuck_jobs_and_whether_its_lead_asks_the_user() {
     let needs = |store: &mut Store, p: &str| read::plan_boxes(store, &plan(p)).unwrap().needs_user;
     assert_eq!(
         needs(&mut store, "ship"),
-        read::NeedsUser { lead_working: true, lead_phase: Some(Phase::Dispatch), ..Default::default() },
+        read::NeedsUser { lead_working: true, lead_phase: Some(Phase::Dispatch), worked_on: vec![key("e")], ..Default::default() },
         "no item: an agent handles everything"
     );
 
@@ -436,7 +436,7 @@ fn a_plan_carries_its_stuck_jobs_and_whether_its_lead_asks_the_user() {
     );
     assert_eq!(
         needs(&mut store, "ship"),
-        read::NeedsUser { stuck_jobs: vec![key("e")], lead_dialog: false, lead_working: true, lead_phase: Some(Phase::Dispatch), worked_on: vec![] },
+        read::NeedsUser { stuck_jobs: vec![key("e")], lead_dialog: false, lead_working: true, lead_phase: Some(Phase::Dispatch), worked_on: vec![key("e")] },
         "a fork's dialog is not the Lead's"
     );
     assert_eq!(

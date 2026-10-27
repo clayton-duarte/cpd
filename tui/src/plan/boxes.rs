@@ -380,6 +380,7 @@ mod tests {
             needs: needs.iter().map(|n| JobKey::parse(n).unwrap()).collect(),
             appended: false,
             retry_tier: None,
+            shown_tier: Some(Tier::parse("S1").unwrap()),
             failed_cause: None,
             cancel_reason: None,
             merged_sha: None,

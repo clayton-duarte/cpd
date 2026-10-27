@@ -113,7 +113,7 @@ pub fn flow_jobs<'a>(jobs: impl IntoIterator<Item = &'a JobNode>, worked_on: &[J
         .map(|j| FlowJob {
             key: j.key.to_string(),
             status: Live::of(j, worked_on.contains(&j.key)),
-            tier: j.tier,
+            tier: j.shown_tier,
             needs: if j.status == JobStatus::Cancelled {
                 Vec::new()
             } else {

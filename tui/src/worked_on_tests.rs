@@ -5,7 +5,7 @@
 
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
-use cpd_core::ids::{JobKey, PlanId};
+use cpd_core::ids::PlanId;
 use cpd_core::session::State;
 use cpd_core::inbox::model::Urgency;
 use cpd_core::plan::Phase;
@@ -182,5 +182,3 @@ fn the_dot_of_a_lead_with_a_failed_job_being_worked_on_is_red_loader_or_red_item
     }
 }
 
-#[allow(dead_code)]
-fn _types(_: JobKey) {}

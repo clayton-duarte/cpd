@@ -8,7 +8,7 @@ use time::macros::datetime;
 
 use super::worked_on::failed_worked_on;
 use crate::home::CpdHome;
-use crate::ids::{JobKey, PlanId};
+use crate::ids::PlanId;
 use crate::inbox::rules::stuck_jobs;
 use crate::store::Store;
 
@@ -114,8 +114,6 @@ impl Fixture {
     }
 }
 
-#[allow(dead_code)]
-fn _types(_: JobKey) {}
 
 #[test]
 fn worked_on_holds_for_a_failed_job_while_its_lead_works() {

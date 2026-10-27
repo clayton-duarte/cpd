@@ -721,6 +721,7 @@ fn sample_job(pr: &str, key: &str) -> read::JobNode {
         needs: Vec::new(),
         appended: false,
         retry_tier: None,
+        shown_tier: Some(cpd_core::config::Tier::parse("S1").unwrap()),
         failed_cause: None,
         cancel_reason: None,
         merged_sha: None,
@@ -809,6 +810,8 @@ mod margin_tests;
 #[cfg(test)]
 mod pill_label_tests;
 #[cfg(test)]
+mod pill_tier_tests;
+#[cfg(test)]
 mod lines_tests;
 #[cfg(test)]
 mod box_lines_tests;
@@ -890,6 +893,7 @@ mod tests {
             needs: Vec::new(),
             appended: false,
             retry_tier: None,
+            shown_tier: Some(Tier::parse("S1").unwrap()),
             failed_cause: None,
             cancel_reason: None,
             merged_sha: None,
