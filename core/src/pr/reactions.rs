@@ -152,7 +152,7 @@ pub fn refuse(tx: &WriteTxn<'_>, source: &str, id: i64, reason: &str, file: Opti
             row.ts, row.channel
         ),
     };
-    let mut event = NewEvent::error(text.clone(), source, ErrorCode::SlackRefused.as_str(), &format!("{what}."), details);
+    let mut event = NewEvent::error(text.clone(), source, ErrorCode::SlackRefused.as_str(), &text, details);
     if let Some(merge) = &row.merge {
         event = event.plan(PlanId::parse(&merge.plan)?);
     }
@@ -191,7 +191,7 @@ fn repo_sets_reaction(path: &Path) -> Result<bool, CpdError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(CpdError::new(ErrorCode::Internal, format!("cannot read {}: {e}", path.display()))),
     };
-    let value: toml::Value = text.parse().map_err(|e| CpdError::new(ErrorCode::Internal, format!("{} is not TOML: {e}", path.display())))?;
+    let value: toml::Table = text.parse().map_err(|e| CpdError::new(ErrorCode::Internal, format!("{} is not TOML: {e}", path.display())))?;
     Ok(value.get("pr").and_then(|v| v.get("post")).and_then(|v| v.get("merged_reaction")).is_some())
 }
 
