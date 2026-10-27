@@ -205,11 +205,23 @@ pub struct HeadPr {
     pub created_at: String,
 }
 
-/// The newest (highest number) pull request whose head is `head`, in any state, if any.
-pub fn head_pr(cwd: &Path, head: &str) -> Result<Option<HeadPr>, CpdError> {
+/// The newest (highest number) pull request whose head is `head`, in any state, created at or after `since`, if any. A pull
+/// request older than `since` (the row's start) is not the row's and is not seen, whatever its state; `None` (an adopted PR)
+/// sees every pull request. Both times are compared as instants.
+pub fn head_pr(cwd: &Path, head: &str, since: Option<jiff::Timestamp>) -> Result<Option<HeadPr>, CpdError> {
     let args = ["pr", "list", "--head", head, "--state", "all", "--json", "number,url,state,createdAt"];
     let found: Vec<HeadPr> = parse(&args, &run(cwd, &args)?)?;
-    Ok(found.into_iter().max_by_key(|f| f.number))
+    let mut kept = Vec::new();
+    for f in found {
+        if let Some(since) = since {
+            let created: jiff::Timestamp = f.created_at.parse().map_err(|e| failed(&args, format!("gh printed the createdAt {:?} of pull request #{}: {e}", f.created_at, f.number), Some(0), ""))?;
+            if created < since {
+                continue;
+            }
+        }
+        kept.push(f);
+    }
+    Ok(kept.into_iter().max_by_key(|f| f.number))
 }
 
 /// The pull request `pr add --adopt` reads (`gh pr view <n> --json number,url,state,isCrossRepository,headRefName,baseRefName,author`)
