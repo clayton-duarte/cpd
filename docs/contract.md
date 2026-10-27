@@ -357,9 +357,11 @@ An `APPROVED` review's body, an empty body, a `DISMISSED` or `PENDING` review ar
 
 **The item's JSON** (stored in `pull_requests.feedback` and shown), exactly these ten keys: `{"id", "kind", "last", "author", "bot", "path", "outdated", "url", "excerpt"}` and no other: `id` = the GraphQL node id of the thread (kind `thread`) or of the comment or review; `kind` = `"thread"`, `"comment"` or `"review"`; `last` = the node id of the comment that makes it open (a thread's last comment; for `comment` and `review` the item's own id); `author` = the login of the item's root (a thread's first comment) and `bot` = whether that author is a bot; `path` = a thread's file, else null; `outdated` = bool (false for `comment` and `review`); `url` and `excerpt` = the html url and the first 160 characters, whitespace collapsed, of the `last` comment.
 
-#### PR post (pro-d64, pro-d65; Plan pr-post)
+#### PR post (pro-d64, pro-d65, pro-d117; Plan pr-post)
 
-One message announcing a PR for review in Slack. A PR has at most one post (pro-d65): `cpd pr post` refuses `already_posted` on a second run for the same PR. A post is recorded in `pr_posts` with its Slack channel, message timestamp and link, the time it was posted, and optionally the emoji name of a reaction to add when the PR merges. The poll's reasons `ready_to_post` and `approved`, and the reaction that the engine adds after merge, are in their own sections (PR `flow`, `react`: they are not documented here).
+One message announcing a PR for review in Slack. A PR has at most one post (pro-d65): `cpd pr post` refuses `already_posted` on a second run for the same PR. A post is recorded in `pr_posts` with its Slack channel, message timestamp and link, the time it was posted, optionally the emoji name of a reaction to add when the PR merges, and the state of its auto-merge request (below). The poll's reasons `ready_to_post` and `approved`, and the reaction that the engine adds after merge, are in their own sections (PR `flow`, `react`: they are not documented here).
+
+**Auto-merge** (pro-d117). The post also enables squash auto-merge on the PR on GitHub via the GraphQL mutation `enablePullRequestAutoMerge` with `mergeMethod: SQUASH`. The request is **deferred** (nothing sent to GitHub) if the PR is **stacked** (its `base` is another `prs` row's `lead_branch`, in this Plan or any Plan): the engine's step E18 retries the request once the PR is unstacked by the base PR's merge (§3.7, §7.6 "The base follow"). The request's outcome is stored in `auto_merge` and `auto_merge_at` columns: the states are `pending` (a deferred request waiting for unstacking), `enabled` (mutation accepted by GitHub), `not_allowed` (the repo does not allow auto-merge), `refused` (GitHub's mutation error), and `failed` (network error, retried by E18). Known limit: a repo that does not delete branches on merge never has a stacked PR repointed by GitHub, so its auto-merge request stays `pending`.
 
 **Readiness.** A PR is **ready to post** exactly when all eight of the following conditions hold (one definition, read by the `postable` module and the `flow` job): **(1)** the PR's `state` is `open`; **(2)** the PR's `draft` is false; **(3)** the PR's `mergeable` is not `conflicting`; **(4)** the PR's `review_decision` is not `changes_requested`; **(5)** the PR's `checks` is not `failed`; **(6)** the PR's `checks` is `passed` (not `pending` or `none`); **(7)** the PR's `feedback` is not NULL (the comments have been read at least once); **(8)** no item in `feedback` has `bot == true` (all bot comments have been addressed, or the bot is not commenting). The reasons match the error code `pr_not_ready` reasons (§1.2).
 
@@ -1678,7 +1680,7 @@ CREATE TABLE plannotator_reviews (
   CHECK ((closed_at IS NULL) = (ended IS NULL))
 ) STRICT, WITHOUT ROWID;
 
--- ---------- PR posts (pro-d64, pro-d65; Plan pr-post; migration pr-posts) ----------
+-- ---------- PR posts (pro-d64, pro-d65, pro-d117; Plan pr-post; migration pr-posts, then pr-auto-merge) ----------
 CREATE TABLE pr_posts (
   plan        TEXT NOT NULL REFERENCES plans(id),
   pr          TEXT NOT NULL,
@@ -1688,9 +1690,12 @@ CREATE TABLE pr_posts (
   posted_at   TEXT NOT NULL,
   reaction    TEXT CHECK (reaction IS NULL OR length(reaction) BETWEEN 1 AND 100),
   reacted_at  TEXT,
+  auto_merge  TEXT NOT NULL DEFAULT 'none' CHECK (auto_merge IN ('none','pending','enabled','refused')),
+  auto_merge_at TEXT,
   PRIMARY KEY (plan, pr),
   FOREIGN KEY (plan, pr) REFERENCES prs(plan, key),
-  CHECK (reaction IS NOT NULL OR reacted_at IS NULL)
+  CHECK (reaction IS NOT NULL OR reacted_at IS NULL),
+  CHECK ((auto_merge IN ('enabled','refused')) = (auto_merge_at IS NOT NULL))
 ) STRICT;
 
 -- ---------- Message board (hs-d514) ----------
