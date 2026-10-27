@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 66
+-- cpd-migration: breaking after 65
 -- Resource tenancy by queue (pro-d106; contract §3.4 "Tenancy", §4.4): `job_pools`, the view `job_tenants` and `jobs.skipped_n`.
 CREATE TABLE job_pools (
   plan  TEXT NOT NULL,
