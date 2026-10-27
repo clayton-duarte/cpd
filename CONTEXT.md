@@ -171,7 +171,7 @@ The single source of "needs you": the open Inbox items, shown by `cpd inbox` and
 _Avoid_: notifications, alerts, to-do list
 
 **Inbox item** (new):
-One thing that needs the User (a dialog, a Plan review, an unread reply, a stuck Job, an engine error, an open question, or the engine being down), kept in `inbox_items` while its condition holds and forever after, closed; the User can snooze or dismiss it.
+One thing that needs the User (a dialog, a Plan review, an unread reply, a pull request of the User, a stuck Job, an engine error, an open question, or the engine being down), kept in `inbox_items` while its condition holds and forever after, closed; the User can snooze or dismiss it.
 _Avoid_: notification, alert, task
 
 **Cockpit**:
