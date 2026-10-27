@@ -91,9 +91,10 @@ impl Fixture {
 
     fn set(&mut self, plan: &str, key: &str, status: &str) {
         let cause = if status == "failed" { "'crashed'" } else { "NULL" };
+        let sha = if status == "merged" { "'abc'" } else { "NULL" };
         let reason = if status == "cancelled" { "'r'" } else { "NULL" };
         let reason_at = if status == "cancelled" { format!("'{T}'") } else { "NULL".to_owned() };
-        self.sql(&format!("UPDATE jobs SET status = '{status}', failed_cause = {cause}, cancel_reason = {reason}, cancel_requested_at = {reason_at} WHERE plan = '{plan}' AND key = '{key}'"));
+        self.sql(&format!("UPDATE jobs SET status = '{status}', failed_cause = {cause}, merged_sha = {sha}, cancel_reason = {reason}, cancel_requested_at = {reason_at} WHERE plan = '{plan}' AND key = '{key}'"));
     }
 
     /// `retry_after_fix` for `merged` of Plan `plan`, in a write transaction.
