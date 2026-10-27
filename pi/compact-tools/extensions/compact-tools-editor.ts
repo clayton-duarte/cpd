@@ -1,7 +1,8 @@
 /**
  * The input widget: pi-tui's Editor drawn as a rounded box in the Dango palette (docs/contract.md 6.1.1, 6.9
  * "The input widget"). Every row is the wall or corner, one padding space, the text, one padding space, the wall or
- * corner, with no margin column; the box spans the pane and the text starts at column 2. The border is one colour by state: cyan 6
+ * corner, with no margin column; the box spans the pane and the text starts at column 2 (a pane that is not compact style
+ * with fold `toggle` keeps a margin column on each side and the text at column 3). The border is one colour by state: cyan 6
  * while the agent works, else bright blue 12 while the terminal pane has focus, else 15. The pane counts as focused from a focus-in
  * report, a key the editor takes or a left-button press in it; only a focus-out report unfocuses it (6.9). Pi's own `borderColor`
  * (thinking level, bash mode) is ignored. Indexed SGR only.
@@ -16,10 +17,10 @@ import { LOADER_FRAMES } from "./compact-tools-loader.ts";
 
 const STATE_KEY = Symbol.for("pi-compact-tools.editor.state");
 const WIDGET_KEY = "compact-tools-editor";
-/** Wall + padding on each side. */
-const SIDE = 2;
+/** Wall + padding on each side; a pane without the chat margins (not compact style with fold `toggle`) adds a margin column. */
+const sideOf = (margins: boolean): number => margins ? 2 : 3;
 /** Narrower than this the box has no room for text and pi's own rows are kept. */
-const MIN_WIDTH = SIDE * 2 + 2;
+const minWidth = (margins: boolean): number => sideOf(margins) * 2 + 2;
 const FOCUS_IN = "\x1b[I";
 const FOCUS_OUT = "\x1b[O";
 /** A left-button press in SGR: button 0 (any modifier bits), motion bit 32 and wheel bit 64 clear, final byte M. */
@@ -43,11 +44,13 @@ interface EditorState {
 	words: string | undefined;
 	/** The loader frame index, stepped by the progress label's tick of the shared clock. */
 	frame: number;
+	/** Whether the pane draws the chat margins of docs/contract.md 6.9; set by the bound controller. */
+	margins: () => boolean;
 }
 
 function state(): EditorState {
 	const holder = globalThis as typeof globalThis & { [STATE_KEY]?: EditorState };
-	holder[STATE_KEY] ??= { focused: false, gains: 0, words: undefined, frame: 0 };
+	holder[STATE_KEY] ??= { focused: false, gains: 0, words: undefined, frame: 0, margins: () => true };
 	return holder[STATE_KEY];
 }
 
@@ -83,7 +86,10 @@ const borderIndex = (editor: EditorLike): number =>
 const loaderFrame = (): string => LOADER_FRAMES[state().frame % LOADER_FRAMES.length]!;
 
 function boxRows(editor: EditorLike, width: number, original: (width: number) => string[]): string[] {
-	if (width < MIN_WIDTH) return original(width);
+	const margins = state().margins();
+	const SIDE = sideOf(margins);
+	const lead = margins ? "" : " ";
+	if (width < minWidth(margins)) return original(width);
 	const textWidth = width - SIDE * 2;
 	const { paddingX, borderColor, workingStatusIndicator } = editor;
 	// Pi's rows are drawn plain at the text width; the box adds the border and the walls.
@@ -101,7 +107,7 @@ function boxRows(editor: EditorLike, width: number, original: (width: number) =>
 	const index = borderIndex(editor);
 	const ink = (text: string) => paint(index, text);
 	const bodyCount = editor.renderedVisibleLineCount;
-	const inner = width - 2;
+	const inner = width - 2 - lead.length * 2;
 	const out: string[] = [];
 	const words = state().words;
 	const hidden = editor.scrollOffset;
@@ -118,12 +124,12 @@ function boxRows(editor: EditorLike, width: number, original: (width: number) =>
 				tail = `${"─".repeat(rest - visibleWidth(scroll) - 1)}${scroll}─`;
 				rest = 0;
 			}
-			top = `${ink("╭─")}${block}${ink(`${tail || "─".repeat(rest)}╮`)}`;
+			top = `${lead}${ink("╭─")}${block}${ink(`${tail || "─".repeat(rest)}╮`)}${lead}`;
 		}
 	}
-	out.push(top ?? ink(`╭─${rows[0]}─╮`));
-	for (let i = 1; i <= bodyCount; i++) out.push(`${ink("│")} ${rows[i]} ${ink("│")}`);
-	out.push(ink(`╰─${rows[bodyCount + 1]}─╯`));
+	out.push(top ?? `${lead}${ink(`╭─${rows[0]}─╮`)}${lead}`);
+	for (let i = 1; i <= bodyCount; i++) out.push(`${lead}${ink("│")} ${rows[i]} ${ink("│")}${lead}`);
+	out.push(`${lead}${ink(`╰─${rows[bodyCount + 1]}─╯`)}${lead}`);
 	for (const row of rows.slice(bodyCount + 2)) out.push(`${" ".repeat(SIDE)}${row}${" ".repeat(SIDE)}`);
 	return out;
 }
@@ -144,7 +150,8 @@ export function hookEditor(): void {
 	// A click's column is counted from the text column, in the text area's width.
 	hookMethod(Editor.prototype, "handleMouse", "editor.box.mouse", (self: EditorLike, args, original) => {
 		const event = args[0];
-		if (event.width < MIN_WIDTH) return original.call(self, event);
+		const SIDE = sideOf(state().margins());
+		if (event.width < SIDE * 2 + 2) return original.call(self, event);
 		const { paddingX } = self;
 		self.paddingX = 0;
 		try { return original.call(self, { ...event, x: event.x - SIDE, width: event.width - SIDE * 2 }); }
@@ -156,8 +163,12 @@ export function hookEditor(): void {
 export class EditorBoxController {
 	private stopInput: (() => void) | undefined;
 
+	/** `margins`: whether the pane draws the chat margins (compact style, fold `toggle`); read at every render. */
+	constructor(private readonly margins: () => boolean = () => true) {}
+
 	bind(ctx: ExtensionContext, startup: boolean): void {
 		this.release();
+		state().margins = this.margins;
 		hookEditor();
 		// Only a pi startup has no report; reload, new, resume and fork keep the focus the pane reported (6.9).
 		if (startup) state().focused = false;

@@ -10,7 +10,7 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
-import { drawBalloon, MIN_BALLOON_WIDTH, type BalloonSide } from "./compact-tools-balloon.ts";
+import { balloonGap, drawBalloon, MIN_BALLOON_WIDTH, type BalloonSide } from "./compact-tools-balloon.ts";
 import { hookMethod } from "./compact-tools-hook.ts";
 import type { DisplayMode } from "./compact-tools-types.ts";
 import { captureViewport } from "./compact-tools-viewport.ts";
@@ -60,6 +60,9 @@ interface RenderOverrides {
 	notice: RenderOverride;
 }
 
+/** Whether the pane draws the chat margins of docs/contract.md 6.9 (compact style, fold `toggle`); set by the newest load. */
+let chatMargins: () => boolean = () => true;
+
 type MarkdownLike = Renderable & { paddingX?: number; paddingY?: number; invalidate?: () => void };
 
 /**
@@ -67,6 +70,7 @@ type MarkdownLike = Renderable & { paddingX?: number; paddingY?: number; invalid
  * Markdown are dropped for the render, so the text wraps at `width - 8` (the agent) or `width - 7` (the user) and the balloon adds the only gaps.
  */
 function balloonOf(child: MarkdownLike, side: BalloonSide, width: number, at?: number): string[] {
+	const margins = chatMargins();
 	if (width < MIN_BALLOON_WIDTH) return child.render(width);
 	const { paddingX, paddingY } = child;
 	child.paddingX = 0;
@@ -74,7 +78,7 @@ function balloonOf(child: MarkdownLike, side: BalloonSide, width: number, at?: n
 	child.invalidate?.();
 	let rows: string[];
 	try {
-		rows = child.render(width - (side === "agent" ? 8 : 7));
+		rows = child.render(width - balloonGap(side, margins));
 	} finally {
 		child.paddingX = paddingX;
 		child.paddingY = paddingY;
@@ -84,7 +88,7 @@ function balloonOf(child: MarkdownLike, side: BalloonSide, width: number, at?: n
 	// Markdown pads every row to the full width; the balloon fits the longest row instead.
 	const paint = painter();
 	const fitted = rows.map((row) => row.replace(/ +((?:\x1b\[[0-9;]*m)*)$/, "$1")).map((row) => paint ? paint(row) : row);
-	return drawBalloon(fitted, side, width, at);
+	return drawBalloon(fitted, side, width, at, margins);
 }
 
 /** Render `container` with its children replaced by `swap`, restoring them afterwards. */
@@ -311,7 +315,7 @@ function publishOverrides(): void {
 				if (!container) return next(width);
 				// A spacer right before a text block goes: the balloon's own blank top row is the one gap.
 				const kids = container.children ?? [];
-				const dropped = new Set(kids.filter((child, i) => isKind(child, Spacer) && isKind(kids[i + 1], Markdown)));
+				const dropped = new Set(kids.filter((child, i) => isKind(child, Spacer) && isKind(kids[i + 1], Markdown) && (chatMargins() || i === 0)));
 				return withChildren(container, (child) => {
 					if (isKind(child, Markdown)) return rowsOf((w) => balloonOf(child, "agent", w, (target as { lastMessage?: { timestamp?: number } }).lastMessage?.timestamp));
 					if (dropped.has(child)) return rowsOf(() => []);
@@ -362,7 +366,8 @@ export class SilentModeController {
 	private context: ExtensionContext | undefined;
 	private readonly activity: SilentActivityAnimator;
 
-	constructor(pi: ExtensionAPI) {
+	constructor(pi: ExtensionAPI, margins: () => boolean = () => true) {
+		chatMargins = margins;
 		this.activity = new SilentActivityAnimator(pi);
 		pi.registerCommand("silent", {
 			description: `(${SILENT_SHORTCUT}) Show only prompts and final answers`,

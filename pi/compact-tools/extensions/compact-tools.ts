@@ -838,8 +838,8 @@ export default function compactTools(pi: ExtensionAPI): void {
 		() => foldToggles() ? runtime.config.toggle : undefined);
 	const progress = new ProgressController(pi);
 	const viewport = new ViewportKeeper();
-	const silent = new SilentModeController(pi);
-	const editorBox = new EditorBoxController();
+	const silent = new SilentModeController(pi, foldToggles);
+	const editorBox = new EditorBoxController(foldToggles);
 	const cursor = new CursorController();
 	const groups = new ToolGroupController(runtime);
 	builtinStates = new WeakMap();
