@@ -20,6 +20,8 @@ mod pr_local_needs;
 mod pr_merge;
 mod pr_needs_required;
 mod pr_open;
+mod pr_post;
+mod pr_post_flow;
 mod pr_push;
 mod pr_reply;
 mod pr;

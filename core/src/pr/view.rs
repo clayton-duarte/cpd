@@ -56,6 +56,9 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
 
     let row = pr.pull_request.expect("an open or merged PR has its pull_request row (prs CHECK)");
     let feedback = env.store.read(|conn| crate::pr::pulls::load(conn, row))?.feedback;
+    let post = env.store.read(|conn| super::posts::find(conn, id.as_str(), pr.key.as_str()))?.map(|p| {
+        json!({"channel": p.channel, "ts": p.ts, "link": p.link, "posted_at": p.posted_at, "reaction": p.reaction, "reacted_at": p.reacted_at})
+    });
     Ok(Output::success(json!({
         "plan": id,
         "pr": {
@@ -67,5 +70,6 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         "comments": comments,
         "inline_comments": inline_comments,
         "feedback": feedback,
+        "post": post,
     })))
 }

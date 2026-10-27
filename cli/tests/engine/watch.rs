@@ -941,6 +941,33 @@ fn the_engine_counts_waiting_and_queued_jobs() {
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
 
+#[test]
+fn watch_cpd_workers_option_counts_are_unchanged_with_workers_as_a_resource() {
+    // Workers are a resource now (contract §8.3), but `@cpd_workers` and the StatusBar keep their meaning and numbers (§6.2): the
+    // same fixture as `the_engine_counts_waiting_and_queued_jobs` gives the same texts, and the Attempts they count are the
+    // tenants `job show` names for `workers`.
+    let fx = engine_on_tmux_with("concurrency = 1");
+    fx.tmux_server();
+    let _lock = fx.live_driver("run-a1");
+    fx.add_running("run", "running", &ago_in(&fx, 1));
+    fx.add_job("free", &[], "");
+    fx.add_job("blocked", &["free"], "");
+
+    fx.watch_ticks(OVER_ONE_TICK).unwrap();
+
+    assert_eq!(fx.tmux_option("@cpd_workers"), "workers 1/1 · 1 waiting · 3 queued");
+    assert_eq!(fx.tmux_option("@cpd_workers_short"), "1/1·1·3");
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+    // The ready Job waits for `workers`, whose one tenant is the one Attempt the `1/1` counts.
+    let shown = fx.cpd(&["job", "show", "free", "--plan", PLAN]).ok();
+    let waiting = shown["job"]["waiting_for"].as_array().unwrap_or_else(|| panic!("`free` waits for workers: {shown}"));
+    assert_eq!(waiting.len(), 1, "{waiting:?}");
+    assert_eq!((&waiting[0]["resource"], &waiting[0]["scope"], &waiting[0]["slots"]), (&json!("workers"), &json!("host"), &json!(1)));
+    let holders = waiting[0]["holders"].as_array().unwrap();
+    assert_eq!(holders.len(), 1);
+    assert_eq!((&holders[0]["by"], &holders[0]["job"], &holders[0]["attempt"]), (&json!("attempt"), &json!("run"), &json!("run-a1")));
+}
+
 // ---------- E1 ----------
 
 #[test]

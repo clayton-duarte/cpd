@@ -133,7 +133,7 @@ fn view_prints_the_checks_reviews_comments_and_inline_comments() {
                 {"name": "ci/old", "conclusion": "SUCCESS"}],
             "reviews": [{"id": "PRR_1", "author": "reviewer", "state": "CHANGES_REQUESTED", "body": "Please add a test."}],
             "comments": [{"id": "IC_1", "author": "reviewer", "body": "Thanks for the fix."}],
-            "inline_comments": [{"id": "1893", "author": "reviewer", "path": "src/payout.rs", "body": "This retry never backs off."}], "feedback": null})
+            "inline_comments": [{"id": "1893", "author": "reviewer", "path": "src/payout.rs", "body": "This retry never backs off."}], "feedback": null, "post": null})
     );
     let gh = fx.gh_calls();
     assert_eq!(gh[0][..3], ["pr", "view", "812"]);
@@ -195,4 +195,27 @@ fn view_reports_a_failing_gh_as_gh_failed() {
     assert_eq!(details["argv"].as_array().unwrap()[..3], [json!("gh"), json!("pr"), json!("view")]);
     assert!(details["stderr"].as_str().unwrap().contains("bad credentials"), "{details}");
     assert_eq!(fx.count("txns"), txns);
+}
+
+#[test]
+fn view_prints_the_post_of_a_posted_pr() {
+    let fx = fx("open");
+    let link = "https://missionlane.slack.com/archives/C02JU6C2Z1D/p1793040197490209";
+    let mut store = fx.store();
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(&format!(
+                "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at)
+                 VALUES ('pay', 'repo', 'C02JU6C2Z1D', '1793040197.490209', '{link}', 'opened', 'git-merge', NULL)"
+            ))
+            .map_err(Into::into)
+        })
+        .unwrap();
+
+    let out = fx.fx.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok();
+
+    assert_eq!(
+        out["post"],
+        json!({"channel": "C02JU6C2Z1D", "ts": "1793040197.490209", "link": link, "posted_at": "opened", "reaction": "git-merge", "reacted_at": null})
+    );
 }

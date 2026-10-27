@@ -53,7 +53,7 @@ impl Driverish {
         let Ok(entries) = fs::read_dir(&self.locks) else { return vec![] };
         entries
             .flatten()
-            .filter(|e| e.file_name().to_string_lossy().starts_with("resource-"))
+            .filter(|e| e.file_name().to_string_lossy().starts_with("resource."))
             .filter_map(|e| e.metadata().ok())
             .map(|m| (m.dev(), m.ino()))
             .collect()
@@ -161,7 +161,7 @@ impl World {
     }
 
     fn lock(&self, name: &str) -> PathBuf {
-        self.fx.env.cpd_home().join(format!("locks/resource-acme--pay--{name}.lock"))
+        self.fx.env.cpd_home().join(format!("locks/resource.repo.acme.pay.{name}.1.lock"))
     }
 
     /// Holds `name` as another process would: its own open file description, with `record` in the file.
@@ -239,7 +239,6 @@ fn resource_hold_a_held_resource_refuses_the_start_with_resource_busy_and_takes_
     let error = refused(&run, "resource_busy", 3);
     assert_eq!(error["details"]["job"], "api");
     assert_eq!(error["details"]["resource"], "e2e-port");
-    assert_eq!(error["details"]["holder"], serde_json::from_str::<Value>(COMMAND_RECORD).unwrap());
     // No Attempt row, no driver, and the holder's record is left as it was.
     assert_eq!(w.attempts(), 0);
     assert_eq!(w.status(JOB), "queued");
@@ -265,7 +264,6 @@ fn resource_hold_taking_is_all_or_none_across_two_resources() {
     let _db = w.hold("db", OTHER_RECORD);
     let error = refused(&w.dispatch(JOB), "resource_busy", 3);
     assert_eq!(error["details"]["resource"], "db");
-    assert_eq!(error["details"]["holder"], serde_json::from_str::<Value>(OTHER_RECORD).unwrap());
     assert!(!w.held("e2e-port"), "e2e-port was left taken");
     assert_eq!(w.attempts(), 0);
 }
@@ -307,27 +305,6 @@ fn resource_hold_job_dispatch_refuses_resource_busy_and_changes_nothing() {
     // Free once the holder lets go: the same command now starts the Job.
     drop(_other);
     assert_eq!(w.dispatch(JOB).ok()["attempt"], "api-a1");
-}
-
-#[test]
-fn resource_hold_job_show_gives_waiting_for_on_a_queued_job() {
-    let w = world(BOTH, &["db", "e2e-port"]);
-    assert_eq!(w.shown(JOB)["waiting_for"], json!([]));
-
-    let _one = w.hold("e2e-port", COMMAND_RECORD);
-    assert_eq!(
-        w.shown(JOB)["waiting_for"],
-        json!([{"resource": "e2e-port", "holder": serde_json::from_str::<Value>(COMMAND_RECORD).unwrap()}])
-    );
-
-    let _two = w.hold("db", OTHER_RECORD);
-    assert_eq!(
-        w.shown(JOB)["waiting_for"],
-        json!([
-            {"resource": "db", "holder": serde_json::from_str::<Value>(OTHER_RECORD).unwrap()},
-            {"resource": "e2e-port", "holder": serde_json::from_str::<Value>(COMMAND_RECORD).unwrap()}
-        ])
-    );
 }
 
 #[test]

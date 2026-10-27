@@ -21,6 +21,15 @@ fn world() -> Fx {
     fx
 }
 
+/// The host file and the owner file `acme` declare `shared-port` and `staging`; the repo file declares `e2e-port`.
+fn declared_at_three_levels(fx: &Fx) {
+    let home = fx.env.cpd_home();
+    let host = home.join("policy/host.toml");
+    let held = fs::read_to_string(&host).unwrap_or_default();
+    fs::write(&host, format!("{held}[resources.shared-port]\nslots = 2\n")).unwrap();
+    fs::write(home.join("policy/acme/owner.toml"), "[resources.staging]\n").unwrap();
+}
+
 fn spec_with(fx: &Fx, resources: Option<Value>) -> String {
     let mut spec = json!({"goal": "Do it.", "context": "Because.", "touches": ["src/a.rs"], "acceptance": ["cargo test"], "out_of_scope": []});
     if let Some(r) = resources {
@@ -137,4 +146,85 @@ fn resource_spec_job_edit_of_a_queued_job_checks_and_stores_resources() {
     let details = refused(&edit(json!(["gpu"])), "resource_undeclared", 3)["details"].clone();
     assert_eq!((details["job"].as_str(), details["resource"].as_str()), (Some("a"), Some("gpu")));
     assert_eq!(shown(&fx, "a")["resources"], json!(["e2e-port"]), "the refused edit stored nothing");
+}
+
+#[test]
+fn job_add_accepts_a_resource_declared_at_host_or_owner_level() {
+    let fx = world();
+    declared_at_three_levels(&fx);
+
+    add(&fx, "a", Some(json!(["e2e-port", "shared-port", "staging"])), &[]).ok();
+
+    assert_eq!(shown(&fx, "a")["resources"], json!(["e2e-port", "shared-port", "staging"]));
+    add(&fx, "b", None, &[]).ok();
+    let spec = spec_with(&fx, Some(json!(["staging"])));
+    fx.cpd(&["job", "edit", "b", "--spec", &spec, "--plan", "pl"]).ok();
+    assert_eq!(shown(&fx, "b")["resources"], json!(["staging"]));
+}
+
+#[test]
+fn job_add_refuses_a_resource_visible_at_no_level_with_the_visible_names() {
+    let fx = world();
+    declared_at_three_levels(&fx);
+
+    let run = add(&fx, "a", Some(json!(["shared-port", "gpu"])), &[]);
+
+    let details = refused(&run, "resource_undeclared", 3)["details"].clone();
+    assert_eq!((details["job"].as_str(), details["pr"].as_str(), details["resource"].as_str()), (Some("a"), Some("repo"), Some("gpu")));
+    assert_eq!(details["declared"], json!(["e2e-port", "shared-port", "staging"]), "the union over host, owner and repo");
+    assert!(details["file"].as_str().unwrap().ends_with("policy/acme/cpd.toml"), "{details}");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs"), 0);
+}
+
+/// Plan `pl` with `concurrency = 1`: Job `a` runs (its Attempt `a-a1` takes the one Worker slot), Jobs `b` (no resources) and
+/// `c` (lists the free `e2e-port`) are queued.
+pub(super) fn one_worker_slot_taken() -> Fx {
+    let fx = world();
+    fs::write(fx.env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\nconcurrency = 1\n").unwrap();
+    add(&fx, "a", None, &[]).ok();
+    add(&fx, "b", None, &[]).ok();
+    add(&fx, "c", Some(json!(["e2e-port"])), &[]).ok();
+    lock(&fx.env, "pl");
+    fixture(
+        &fx.env,
+        "UPDATE jobs SET status = 'running' WHERE plan = 'pl' AND key = 'a';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, driver_pid)
+           VALUES ('pl', 'a-a1', 'a', 1, 'S2', 'ladder', 'running', 'cpd/pl--a-a1', '/w', '2026-10-26T21:41:00.000Z', 4242);",
+    );
+    fx
+}
+
+#[test]
+fn job_show_waiting_for_names_workers_when_no_worker_slot_is_free() {
+    let fx = one_worker_slot_taken();
+
+    let b = shown(&fx, "b");
+    let c = shown(&fx, "c");
+
+    // A queued Job with no resources of its own waits for `workers` (commands.md §5.7): scope host, slots = concurrency, and the
+    // holders are the Attempts not ended.
+    let workers = |job: &Value| {
+        let waiting = job["waiting_for"].as_array().unwrap_or_else(|| panic!("no waiting_for: {job}"));
+        assert_eq!(waiting.len(), 1, "{waiting:?}");
+        waiting[0].clone()
+    };
+    for job in [&b, &c] {
+        let entry = workers(job);
+        assert_eq!((&entry["resource"], &entry["scope"], &entry["slots"]), (&json!("workers"), &json!("host"), &json!(1)), "{entry}");
+        let holders = entry["holders"].as_array().unwrap();
+        assert_eq!(holders.len(), 1, "{entry}");
+        assert_eq!(
+            (&holders[0]["by"], &holders[0]["plan"], &holders[0]["job"], &holders[0]["attempt"]),
+            (&json!("attempt"), &json!("pl"), &json!("a"), &json!("a-a1"))
+        );
+        assert!(holders[0]["at"].is_string(), "{entry}");
+    }
+    // A running Job has none.
+    assert!(shown(&fx, "a").get("waiting_for").is_none());
+
+    // The slot frees: the entry goes (no other resource is held: `c`'s `e2e-port` is free).
+    fixture(&fx.env, "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'a-a1';
+                      UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE plan = 'pl' AND key = 'a';");
+    assert!(shown(&fx, "b").get("waiting_for").is_none(), "no resources and a free Worker slot: the key is absent");
+    assert_eq!(shown(&fx, "c")["waiting_for"], json!([]), "it lists resources and none is full: `[]`");
 }

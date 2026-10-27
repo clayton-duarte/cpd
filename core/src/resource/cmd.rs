@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
-use super::{Holder, Take, lock_path, read, take};
+use super::{Holder, Pool, Take, holders, lock_path, take};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::spawn::Launch;
@@ -43,9 +43,14 @@ struct Repo {
     owner: OwnerLogin,
     name: RepoName,
     declared: Vec<String>,
+    pools: Vec<Pool>,
 }
 
 impl Repo {
+    fn pool(&self, name: &str) -> &Pool {
+        self.pools.iter().find(|p| p.name() == name).expect("a declared resource has a pool")
+    }
+
     fn label(&self) -> String {
         format!("{}/{}", self.owner, self.name)
     }
@@ -62,9 +67,10 @@ fn here(ports: &Ports, home: &CpdHome) -> Result<(PathBuf, Repo), CpdError> {
         return Err(usage(format!("cpd resource: {} is not in a git worktree.", cwd.display())));
     }
     let (owner, name) = repo_key(&cwd)?;
-    let mut declared = resolve(home, &PolicyKey::Repo(owner.clone(), name.clone()))?.policy.resources.names;
-    declared.sort();
-    Ok((cwd, Repo { owner, name, declared }))
+    let resources = resolve(home, &PolicyKey::Repo(owner.clone(), name.clone()))?.policy.resources;
+    let declared = resources.names.clone();
+    let pools = super::pools_of(&resources, &owner, &name);
+    Ok((cwd, Repo { owner, name, declared, pools }))
 }
 
 pub fn run(ports: &Ports, command: Command) -> Result<Output, CpdError> {
@@ -77,11 +83,23 @@ pub fn run(ports: &Ports, command: Command) -> Result<Output, CpdError> {
 fn list(ports: &Ports) -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     let (_, repo) = here(ports, &home)?;
+    let mut env = crate::env::Env::open_home_with(ports, home.clone())?;
+    let concurrency = env.config.concurrency;
+    let workers = env.store.read(|conn| super::workers(conn, concurrency))?;
     let mut resources = Vec::new();
     for name in &repo.declared {
-        let holder = read(&home, &repo.owner, &repo.name, name)?;
-        resources.push(json!({"name": name, "held": holder.is_some(), "holder": holder}));
+        let pool = repo.pool(name);
+        let slots: Vec<_> = holders(&home, pool)?.into_iter().enumerate().map(|(i, holder)| (i + 1, holder)).collect();
+        let free = slots.iter().filter(|(_, h)| h.is_none()).count();
+        let holders: Vec<_> = slots.into_iter().map(|(slot, holder)| json!({"slot": slot, "holder": holder})).collect();
+        resources.push(json!({"name": name, "scope": pool.scope(), "slots": pool.slots(), "free": free, "holders": holders}));
     }
+    // The built-in `workers`: host scope, one holder per Attempt not `ended`, in the name order with the declared ones.
+    let held: Vec<_> = workers.holders.iter().enumerate().map(|(i, h)| json!({"slot": i + 1, "holder": h})).collect();
+    let free = workers.slots.saturating_sub(u32::try_from(workers.holders.len()).unwrap_or(u32::MAX));
+    let entry = json!({"name": super::WORKERS, "scope": "host", "slots": workers.slots, "free": free, "holders": held});
+    let at = resources.iter().position(|r| r["name"].as_str().is_some_and(|n| n > super::WORKERS)).unwrap_or(resources.len());
+    resources.insert(at, entry);
     Ok(Output::success(json!({"repo": repo.label(), "resources": resources})))
 }
 
@@ -91,6 +109,9 @@ fn run_command(ports: &Ports, args: RunArgs) -> Result<Output, CpdError> {
     }
     if args.wait == Some(0) {
         return Err(usage("cpd resource run: --wait is a positive number of minutes."));
+    }
+    if args.name == super::WORKERS {
+        return Err(usage("cpd resource run: `workers` is the built-in resource, taken only by the starter of an Attempt."));
     }
     let home = CpdHome::from_env()?;
     let (cwd, repo) = here(ports, &home)?;
@@ -121,13 +142,17 @@ fn run_command(ports: &Ports, args: RunArgs) -> Result<Output, CpdError> {
     let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
     let (session, attempt) = (var("CPD_SESSION"), var("CPD_ATTEMPT"));
 
-    // An Attempt that holds the resource takes nothing more.
-    if let Some(id) = &attempt
-        && matches!(read(&home, &repo.owner, &repo.name, &args.name)?, Some(Holder::Attempt { attempt, .. }) if &attempt == id)
-    {
-        let path = lock_path(&home, &repo.owner, &repo.name, &args.name);
-        let file = std::fs::File::open(&path).map_err(|e| lock_failed(&path, e))?;
-        return exec(ports, &launch, std::os::fd::AsRawFd::as_raw_fd(&file), &args.name);
+    // An Attempt that holds a slot of the resource takes nothing more.
+    if let Some(id) = &attempt {
+        let pool = repo.pool(&args.name);
+        let own = holders(&home, pool)?
+            .iter()
+            .position(|h| matches!(h, Some(Holder::Attempt { attempt, .. }) if attempt == id));
+        if let Some(i) = own {
+            let path = lock_path(&home, pool, u8::try_from(i + 1).expect("slots are at most 64"));
+            let file = std::fs::File::open(&path).map_err(|e| lock_failed(&path, e))?;
+            return exec(ports, &launch, std::os::fd::AsRawFd::as_raw_fd(&file), &args.name);
+        }
     }
 
     let holder = Holder::Command {
@@ -140,9 +165,9 @@ fn run_command(ports: &Ports, args: RunArgs) -> Result<Output, CpdError> {
     let minutes = args.wait.unwrap_or(0);
     let mut tries_left = minutes * 60;
     let held = loop {
-        match take(&home, &repo.owner, &repo.name, &[args.name.as_str()], &holder)? {
+        match take(&home, std::slice::from_ref(repo.pool(&args.name)), &holder)? {
             Take::Held(held) => break held,
-            Take::Busy { resource, holder } => {
+            Take::Busy { resource, holders } => {
                 if tries_left == 0 {
                     return Err(CpdError::new(
                         ErrorCode::ResourceBusy,
@@ -150,7 +175,7 @@ fn run_command(ports: &Ports, args: RunArgs) -> Result<Output, CpdError> {
                     )
                     .with("resource", resource)
                     .with("repo", repo.label())
-                    .with("holder", serde_json::to_value(holder).expect("a holder serialises"))
+                    .with("holders", serde_json::to_value(holders).expect("a holder serialises"))
                     .with("waited_minutes", minutes));
                 }
                 tries_left -= 1;
