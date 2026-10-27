@@ -121,19 +121,6 @@ fn merging_twice_queues_one_row() {
 }
 
 #[test]
-fn pr_view_reads_reacted_at_from_the_queue() {
-    let pay = super::pr_view::fx("open");
-    pay.fx.env.sql(&format!(
-        "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at)
-         VALUES ('pay', 'repo', '{CHANNEL}', '{TS}', 'https://acme.slack.com/archives/{CHANNEL}/p1793040197490209', 'opened', 'git-merge', 'stale');
-         INSERT INTO slack_reactions (channel, ts, emoji, queued_at, reacted_at) VALUES ('{CHANNEL}', '{TS}', 'git-merge', 'q', 'fresh');
-         INSERT INTO slack_reactions (channel, ts, emoji, queued_at, reacted_at) VALUES ('{CHANNEL}', '{TS}', 'eyes', 'q', 'other');"
-    ));
-    let out = pay.fx.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok();
-    assert_eq!(out["post"]["reacted_at"], "fresh", "the row of (channel, ts, the post's reaction), not pr_posts.reacted_at: {out}");
-}
-
-#[test]
 fn a_merge_queues_its_reaction_linked_to_the_pr() {
     let fx = fixture(Some(Some("git-merged")));
     merge(&fx);
@@ -141,6 +128,7 @@ fn a_merge_queues_its_reaction_linked_to_the_pr() {
     let row: serde_json::Value = serde_json::from_str(&env.query::<String>("SELECT json_object('emoji', emoji, 'plan', plan, 'pr', pr) FROM slack_reactions")).unwrap();
     assert_eq!(row, json!({"emoji": "git-merged", "plan": "pay-1", "pr": "api"}), "the row names the PR whose merge it is");
     assert_eq!(queued(env), 1);
+    drop(fx);
 
     let none = fixture(Some(None));
     merge(&none);

@@ -2,6 +2,9 @@ import { connect, parseArgs, Refusal, type CallTool } from "./slack-channel.ts";
 
 export const ADD_TIMEOUT_MS = 30_000;
 
+// The permanent refusals of reactions.add: https://docs.slack.dev/reference/methods/reactions.add
+export const PERMANENT_REFUSALS = ["invalid_name", "bad_timestamp", "message_not_found", "channel_not_found", "is_archived", "thread_locked", "not_reactable", "too_many_emoji", "too_many_reactions", "no_item_specified"];
+
 export type Reacted = { channel: string; ts: string; emoji: string; already: boolean };
 
 export async function addReaction(call: CallTool, channel: string, ts: string, emoji: string): Promise<Reacted> {
@@ -10,6 +13,11 @@ export async function addReaction(call: CallTool, channel: string, ts: string, e
     return { channel, ts, emoji, already: false };
   } catch (e) {
     if (e instanceof Refusal && e.code === "slack_failed" && e.message.includes("already_reacted")) return { channel, ts, emoji, already: true };
+    if (e instanceof Refusal && e.code === "slack_failed") {
+      const tokens = e.message.split(/[^A-Za-z0-9_]+/);
+      const reason = PERMANENT_REFUSALS.find((name) => tokens.includes(name));
+      if (reason) throw new Refusal("slack_refused", e.message, { ...e.details, reason });
+    }
     throw e;
   }
 }

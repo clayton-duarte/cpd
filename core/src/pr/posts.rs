@@ -1,5 +1,6 @@
 //! The table `pr_posts` (contract §4.4; PR post, pro-d64, pro-d65): the one post of a PR for review in Slack.
-//! Written once by `pr post`; no later write (the reaction is queued in `slack_reactions`). A data row: it appends no Event.
+//! Written once by `pr post`; no later write (the reaction is queued in `slack_reactions`).
+//! `reaction` only records that a reaction was wanted at post time (NULL = none); it is never the emoji used. A data row: it appends no Event.
 
 use rusqlite::{Connection, OptionalExtension};
 
@@ -13,7 +14,8 @@ pub struct PostRecord {
     pub ts: String,
     pub link: String,
     pub posted_at: String,
-    /// The emoji name the policy had at the post; `None` = no reaction.
+    /// Whether a reaction was wanted at post time (`None` = none): the emoji name the policy had then, never the emoji that will be
+    /// used (the engine resolves that from the PR's policy when it places the reaction).
     pub reaction: Option<String>,
     /// When the reaction was added; `None` until then.
     pub reacted_at: Option<String>,
