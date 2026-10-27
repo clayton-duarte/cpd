@@ -331,3 +331,78 @@ fn resource_list_shows_workers_with_the_running_attempts() {
         assert_eq!(holders[i]["holder"], json!({"by": "attempt", "plan": "pl", "job": job, "attempt": format!("{job}-a1"), "at": at}));
     }
 }
+
+/// Job `job` of Plan `pl` as a tenant of `pool` (the text of contract §3.4 "Resources of a Job" item 3) with its first Attempt
+/// `running` since `at`: the rows the starter writes in one transaction. Plan `pl` and its PR exist after [`tenancy_world`].
+fn job_tenant(fx: &Fx, job: &str, pool: &str, at: &str) {
+    let fingerprint = "f".repeat(64);
+    super::job::fixture(
+        &fx.env,
+        &format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+               VALUES ('pl', 'repo', '{job}', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fingerprint}', cpd_txn(), 't');
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+               VALUES ('pl', '{job}-a1', '{job}', 1, 'S2', 'ladder', 'running', 'cpd/pl--{job}-a1', '/w', '{at}');
+             INSERT INTO job_pools (plan, job, pool) VALUES ('pl', '{job}', '{pool}');"
+        ),
+    );
+}
+
+/// [`world`] with Plan `pl` in `dispatch`, whose Jobs the test adds with [`job_tenant`].
+fn tenancy_world(policy: &str) -> (Fx, PathBuf) {
+    let (fx, repo) = world(policy);
+    super::job::setup(&fx.env);
+    super::job::plan(&fx.env, "pl", "dispatch");
+    (fx, repo)
+}
+
+const API_AT: &str = "2026-10-26T21:41:00.000Z";
+
+fn api_holder() -> Value {
+    json!({"by": "attempt", "plan": "pl", "job": "api", "attempt": "api-a1", "at": API_AT})
+}
+
+#[test]
+fn resource_list_shows_job_tenants_and_command_tenants() {
+    let (fx, repo) = tenancy_world("[resources.e2e-port]\nslots = 3\n");
+    let _command = hold(&fx, "e2e-port", COMMAND_RECORD);
+    job_tenant(&fx, "api", "repo:acme/cpd:e2e-port", API_AT);
+    // A Job of another repo's pool of the same name is no tenant of this pool.
+    job_tenant(&fx, "other", "repo:acme/elsewhere:e2e-port", "2026-10-26T21:42:00.000Z");
+
+    let out = fx.cpd_in(&repo, &["resource", "list"]).ok();
+
+    let command: Value = serde_json::from_str(COMMAND_RECORD).unwrap();
+    assert_eq!(
+        declared_only(&out),
+        json!([{
+            "name": "e2e-port", "scope": "repo", "slots": 3, "free": 1,
+            "holders": [{"slot": 1, "holder": command}, {"slot": null, "holder": api_holder()}],
+        }]),
+        "the held command slots first, with their slot; then the Job tenants, with no slot number"
+    );
+}
+
+#[test]
+fn resource_run_takes_a_slot_only_when_job_tenants_plus_commands_are_below_slots() {
+    let (fx, repo) = tenancy_world("[resources.e2e-port]\nslots = 2\n");
+    let command = hold(&fx, "e2e-port", COMMAND_RECORD);
+    job_tenant(&fx, "api", "repo:acme/cpd:e2e-port", API_AT);
+
+    // One Job tenant (in the database, with no slot file) and one held command slot are the two slots: no slot is free.
+    let run = fx.cpd_in(&repo, &run_args("e2e-port", &["--", "npm", "test"]));
+    let error = refused(&run, "resource_busy", 3);
+    assert_eq!(
+        error["details"]["holders"],
+        json!([{"slot": 1, "holder": serde_json::from_str::<Value>(COMMAND_RECORD).unwrap()}, {"slot": null, "holder": api_holder()}])
+    );
+    assert!(fx.fakes.spawn.execs().is_empty());
+    assert!(!slot_path(&fx, "e2e-port", 2).exists() || !is_held(&slot_path(&fx, "e2e-port", 2)), "the command took no second slot");
+
+    // The command ends: the Job tenant is one slot of two, so a command takes the other, the lowest free slot file.
+    drop(command);
+    let seen = watch_exec_slot(&fx, "e2e-port", 1);
+    let _ = fx.cpd_in(&repo, &run_args("e2e-port", &["--", "npm", "test"]));
+    assert_eq!(fx.fakes.spawn.execs().len(), 1, "one Job tenant and no command: a slot is free");
+    assert!(seen.lock().unwrap()[0].0, "slot 1 is held when the command is exec-ed");
+}
