@@ -99,7 +99,7 @@ Every `--help` prints `{"ok": true, "help": "<clap's text>"}`. The root help (`c
   | 4 | a **bare id prefix of at least 4 characters** | the Session, of any Plan or none, whose id starts with it |
 
   Matching is exact and case-sensitive, over every Session, archived ones included (so `session unarchive` and `session history` can name them). A form that matches nothing falls through to the next; when none matches, `session_not_found` (exit 4). A form (3) or (4) that matches **more than one** Session is `session_ambiguous` (exit 3) with `details.candidates`, the matching ids, and is never resolved by guessing. A value outside §2.1's input pattern is `invalid_session_id` (exit 2); one that is valid but shorter than 4 characters and no Plan id or form (3) is `session_not_found`. Output always carries the full id.
-- **PR** (R34, §1.3): `--pr <key>`, within the selected Plan, used by `job add`, `pr open`, `pr rebase`, `pr push`, `pr view` and `pr reply`. It may be omitted when the Plan has exactly one PR that is not `cancelled`, which is then selected; with two or more, `pr_required` (exit 2); with none, `pr_required` too, its message naming `cpd pr add`. A key that is not one of the Plan's PRs is `pr_not_found` (exit 4). Exceptions, stated at each command: `pr poll` has no `--pr`, it polls every open pull request of the User (§9.2, hs-d96), and `job edit --pr` changes the Job's PR, so omitting it changes nothing (§5.2). `pr add`, `pr edit`, `pr cancel` and `pr start` take the key as their positional argument.
+- **PR** (R34, §1.3): `--pr <key>`, within the selected Plan, used by `job add`, `pr open`, `pr rebase`, `pr push`, `pr view`, `pr reply` and `pr post`. It may be omitted when the Plan has exactly one PR that is not `cancelled`, which is then selected; with two or more, `pr_required` (exit 2); with none, `pr_required` too, its message naming `cpd pr add`. A key that is not one of the Plan's PRs is `pr_not_found` (exit 4). Exceptions, stated at each command: `pr poll` has no `--pr`, it polls every open pull request of the User (§9.2, hs-d96), and `job edit --pr` changes the Job's PR, so omitting it changes nothing (§5.2). `pr add`, `pr edit`, `pr cancel` and `pr start` take the key as their positional argument.
 - **Job, Attempt, Escalation, Plan review:** a positional id, within the selected Plan (§2.1).
 
 Common refusals, which apply to every command and are not repeated in the sections below:
@@ -121,6 +121,11 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `pr_not_open` | 3 | `pr reply` (§9.8a) found the PR not `open`; `details` is `{pr, status}` (pro-d68) |
 | `feedback_not_found` | 3 | `pr reply` (§9.8a): `--to` is the `id` of no item in the PR's stored list; `details` is `{pr, to, open: [ids]}`; nothing is posted (pro-d68) |
 | `pr_not_closed` | 3 | `pr cancel` (§9.6) found the `open` PR's pull request not stored `closed`; `details` is `{pr, number, url, state}`, the stored row's `state` (`open` or `merged`) (hs-d329) |
+| `already_posted` | 3 | `pr post` (§9.8b) found a `pr_posts` row for the PR; `details` is `{pr, channel, ts, link, posted_at}` (pro-d65) |
+| `post_disabled` | 3 | `pr post` (§9.8b) found `policy.pr.post.enabled` is false; `details` is `{pr, key: "pr.post.enabled"}` |
+| `not_authored` | 3 | `pr post` (§9.8b) found the stored pull request is not `authored`; `details` is `{pr, number}` |
+| `post_unconfigured` | 3 | `pr post` (§9.8b) found no channel configured; `details` is `{keys: ["pr.post.channel", "inbox.team_channel"]}` |
+| `pr_not_ready` | 3 | `pr post` (§9.8b) found `postable::unready(&row)` is not empty; `details` is `{pr, number, url, reasons: [<as_str of each>, …]}`, the Unready reasons being `not_open`, `draft`, `conflicting`, `changes_requested`, `checks_failed`, `checks_pending`, `comments_unread`, `bot_comments` (pro-d64, contract §2.2, §8.3) |
 | `base_pr_unknown`, `base_pr_unavailable`, `base_pr_other_repo`, `pr_other_plan` | 3 | `pr add` or `pr edit` (§9.4, §9.5) found a bad PR reference in `--base <plan>/<key>` or `--needs`: no such PR; a base PR that is `cancelled` or `merged`; a base PR of another repo; a PR of another Plan (contract §2.2 "Validation of a reference", hs-d522); `details` as at §9.4 |
 | `stacked_rebase` | 3 | `pr rebase` (§9.3) found the PR stacked on a base PR; `details` is `{pr, base, base_pr, next}` (contract §3.8 "Stacked PRs" step 4, hs-d325) |
 | `invalid_context_id`, `invalid_plan_id`, `invalid_pr_id`, `invalid_job_id`, `invalid_attempt_id`, `invalid_escalation_id`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id` | 2 | an id does not match §2.1 |
@@ -224,6 +229,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context retire` (§3.16, internal) | none | yes | yes |
 | `cpd context docs` (§3.17, internal) | none | yes | yes |
 | `cpd pr reply` (§9.8a) | Lead | no | no |
+| `cpd pr post` (§9.8b) | Lead | no | no |
 | `cpd tag` (§26.1) | Lead | no | no |
 | `cpd version sync` (§26.2) | Lead | no | no |
 
@@ -1687,7 +1693,7 @@ Idempotent: no; §3.5 refuses `answer` on an Escalation that is not `open`, so a
 
 ## 9. `pr`
 
-A Plan's PRs (R34, §2.2 PR, §3.8) and their pull requests, through `gh` (§7.6). `gh` failures are `gh_failed` (exit 1) with its stderr tail. Every command here works on **one PR**: `pr open`, `pr rebase`, `pr push`, `pr view` and `pr reply` select it by `--pr <key>` (§1.3: omitted, the Plan's one PR that is not `cancelled`); `pr add`, `pr edit`, `pr cancel` and `pr start` (§9.4–§9.7) take its key as their argument; `pr poll` has no `--pr`: it polls every open pull request of the User. `<repo>`, `<base>`, `<lead branch>` and `<lead worktree>` are the selected PR's (§7); `gh` runs with cwd = its Lead worktree, so it addresses the PR's repo.
+A Plan's PRs (R34, §2.2 PR, §3.8) and their pull requests, through `gh` (§7.6). `gh` failures are `gh_failed` (exit 1) with its stderr tail. Every command here works on **one PR**: `pr open`, `pr rebase`, `pr push`, `pr view`, `pr reply` and `pr post` select it by `--pr <key>` (§1.3: omitted, the Plan's one PR that is not `cancelled`); `pr add`, `pr edit`, `pr cancel` and `pr start` (§9.4–§9.7) take its key as their argument; `pr poll` has no `--pr`: it polls every open pull request of the User. `<repo>`, `<base>`, `<lead branch>` and `<lead worktree>` are the selected PR's (§7); `gh` runs with cwd = its Lead worktree, so it addresses the PR's repo.
 
 ### 9.1 `pr open`
 
