@@ -40,10 +40,9 @@ mod scroll_tests;
 #[cfg(test)]
 mod fixing_tests;
 #[cfg(test)]
-mod new_context_tests;
+mod inbox_merge_tests;
 #[cfg(test)]
-#[path = "another_owner_tests.rs"]
-mod another_owner_tests;
+mod no_confirm_tests;
 #[cfg(test)]
 mod counter_tests;
 #[cfg(test)]
