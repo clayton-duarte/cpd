@@ -36,7 +36,7 @@ use time::OffsetDateTime;
 
 use crate::dialog::{Dialog, Mode, Outcome};
 use crate::merge::marker;
-use crate::merge::{self, Action, Pull};
+use crate::merge::{self, Pull};
 use crate::plan::Offsets;
 use crate::pump::{Pump, Schedule, Signal};
 use crate::read;
@@ -901,32 +901,6 @@ fn dialog_a_failed_input_is_returned_as_the_terminal_failure() {
 }
 
 // ---- the merge view and its action ---------------------------------------------------------------------------------------
-
-fn run_merge(steps: Vec<Step>) -> (io::Result<Action>, usize) {
-    let fakes = Fakes::new();
-    let mut input = FakeInput::new(&fakes, steps);
-    let mut ctx = Ctx::new(&fakes.ports, terminal(), &mut input);
-    let result = merge::show_with(&mut ctx, &Pull::parse("acme/api#7").unwrap(), Some("Fix the thing"));
-    (result, ctx.draws())
-}
-
-#[test]
-fn merge_y_confirms_after_one_frame_per_event_taken() {
-    let (result, draws) = run_merge(vec![key(KeyCode::Char('x')), key(KeyCode::Char('y'))]);
-    assert_eq!((result.unwrap(), draws), (Action::Merge, 2));
-}
-
-#[test]
-fn merge_n_cancels() {
-    let (result, draws) = run_merge(vec![key(KeyCode::Char('n'))]);
-    assert_eq!((result.unwrap(), draws), (Action::Cancel, 1));
-}
-
-#[test]
-fn merge_a_failed_input_is_returned_as_the_terminal_failure() {
-    let (result, _) = run_merge(vec![Step::Fail(io::ErrorKind::BrokenPipe)]);
-    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
-}
 
 /// The commands `merge::action_with` ran through `reply`, in order, each as its words.
 fn merge_action(reply: impl Fn(&[String]) -> Result<Output, CpdError>, home: &Home, fakes: &Fakes) -> (Result<(), CpdError>, Vec<Vec<String>>) {

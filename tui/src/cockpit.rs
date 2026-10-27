@@ -329,7 +329,7 @@ fn reset_layout(tmux: &Tmux, cockpit: &str) -> Result<(), CpdError> {
 }
 
 /// What a `cpd tui action` does: a StatusBar button's (the range names of
-/// contract §6.1), or the `merge` popup's confirm (hs-d473).
+/// contract §6.1), or a merge started at once (hs-d473).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
     Reset,
@@ -356,7 +356,7 @@ impl Action {
 
 /// `cpd tui action <reset|legend|logs|host|incident> --client <name>` and `cpd tui action
 /// merge <owner>/<repo>#<n> --client <name>` (commands.md §13.2): runs the
-/// click of a StatusBar button, or the merge the `merge` popup confirmed, on
+/// click of a StatusBar button, or the merge a click started, on
 /// client `client`. It prints nothing, on stdout or stderr, and always exits
 /// 0: tmux's `run-shell -b` puts the active pane into view mode on a failure
 /// or any output. A failure is shown with `display-message -c <client>`
