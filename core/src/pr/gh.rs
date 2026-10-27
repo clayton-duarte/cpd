@@ -201,11 +201,13 @@ pub struct HeadPr {
     pub number: i64,
     pub url: String,
     pub state: HeadState,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
 }
 
 /// The newest (highest number) pull request whose head is `head`, in any state, if any.
 pub fn head_pr(cwd: &Path, head: &str) -> Result<Option<HeadPr>, CpdError> {
-    let args = ["pr", "list", "--head", head, "--state", "all", "--json", "number,url,state"];
+    let args = ["pr", "list", "--head", head, "--state", "all", "--json", "number,url,state,createdAt"];
     let found: Vec<HeadPr> = parse(&args, &run(cwd, &args)?)?;
     Ok(found.into_iter().max_by_key(|f| f.number))
 }

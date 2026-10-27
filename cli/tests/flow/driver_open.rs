@@ -341,6 +341,7 @@ pub(super) fn open_live() -> Live {
     ));
     live.hooks("[pre-commit]\ngate = \"make quick\"\n\n[pre-merge]\ngate = \"make test\"\n");
     live.add_cpd_job("open-repo", "open");
+    live.fixture("UPDATE prs SET started_at = '2026-10-27T09:00:00.000Z' WHERE key = 'repo';");
     live
 }
 
@@ -397,7 +398,7 @@ fn an_open_job_with_no_conflict_merges_nothing_runs_both_gates_at_its_merge_push
     // Pushed, and the pull request created: ready, never a draft.
     assert_eq!(live.remote("cpd/pay/repo"), tip);
     let calls = live.gh_pr_calls();
-    assert_eq!(calls[0], ["pr", "list", "--head", "cpd/pay/repo", "--state", "all", "--json", "number,url,state"]);
+    assert_eq!(calls[0], ["pr", "list", "--head", "cpd/pay/repo", "--state", "all", "--json", "number,url,state,createdAt"]);
     let created: Vec<&Vec<String>> = calls.iter().filter(|c| c[1] == "create").collect();
     assert_eq!(created.len(), 1, "{calls:?}");
     assert_eq!(created[0][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay/repo", "--title", PR_TITLE]);
@@ -584,7 +585,7 @@ fn an_open_job_adopts_a_pull_request_merged_on_github_after_its_gates_with_no_pu
     let live = open_live();
     let merged = common::pay_lookup().replace("\"state\":\"OPEN\"", "\"state\":\"MERGED\"").replace("\"mergedAt\":null", "\"mergedAt\":\"2026-10-20T12:00:00Z\"");
     live.runner()
-        .on("gh", |c| c.args[..2] == ["pr", "list"], Reply::ok(&format!("[{{\"number\":812,\"url\":\"{PR_URL}\",\"state\":\"MERGED\"}}]")))
+        .on("gh", |c| c.args[..2] == ["pr", "list"], Reply::ok(&format!("[{{\"number\":812,\"url\":\"{PR_URL}\",\"state\":\"MERGED\",\"createdAt\":\"2026-10-28T10:00:00Z\"}}]")))
         .on("gh", |c| c.args[..2] == ["api", "graphql"], Reply::ok(&merged));
     let before = live.remote("cpd/pay/repo");
 
@@ -606,6 +607,28 @@ fn an_open_job_adopts_a_pull_request_merged_on_github_after_its_gates_with_no_pu
     assert_eq!(live.phase(), "done");
     assert!(live.plan_events("pr-opened").is_empty());
     assert_eq!(live.plan_events("pr-merged").len(), 1);
+}
+
+/// A pull request of the Lead Branch created 2026-10-22, before the PR started (2026-10-27), `MERGED` on GitHub, is not the PR's: the `open`
+/// Job's submit and merge ignore it (the Gates run), create the new pull request, and the PR ends `open`, never `merged`.
+#[test]
+fn an_open_job_ignores_a_merged_pull_request_created_before_the_pr_started() {
+    let live = open_live();
+    live.gh_creates();
+    live.runner().on("gh", |c| c.args[..2] == ["pr", "list"], Reply::ok(&format!("[{{\"number\":265,\"url\":\"https://github.com/acme/pay/pull/265\",\"state\":\"MERGED\",\"createdAt\":\"2026-10-22T08:00:00Z\"}}]")));
+    let tip = live.lead_sha();
+
+    let (attempt, submitted) = live.run_job("open-repo", submit_only);
+
+    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
+    assert_eq!(submitted["ok"], true, "{submitted}");
+    assert_eq!(live.gate_runs(), [format!("make quick head={tip}"), format!("make test head={tip}")]);
+    let created = live.gh_pr_calls().into_iter().filter(|c| c[1] == "create").count();
+    assert_eq!(created, 1, "{:?}", live.gh_pr_calls());
+    let (status, number, _) = live.pr_row();
+    assert_eq!((status.as_str(), number), ("open", Some(812)));
+    assert!(live.plan_events("pr-merged").is_empty());
+    assert_eq!(live.plan_events("pr-opened").len(), 1);
 }
 
 // ---------- the stall rule (§3.4 A4, hs-d195) ----------

@@ -75,7 +75,8 @@ fn seed_pay(mut store: Store, phase: &str, job: &str, branch: &str, repo: &Path,
            VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', {locked}, {done});
          {pull_request}
          INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{columns})
-           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', '{status}', '{branch}', {worktree}, '{REPO_TITLE}', 'config', cpd_txn(), 't', {locked}{values});",
+           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', '{status}', '{branch}', {worktree}, '{REPO_TITLE}', 'config', cpd_txn(), 't', {started}{values});",
+        started = if locked == "NULL" { "NULL" } else { "'2026-10-27T09:00:00.000Z'" },
         repo = repo.display(),
         branch = branch,
     );
@@ -506,7 +507,13 @@ fn rebase_with_gate_ci_runs_no_gate_and_pushes() {
 
 /// `gh pr list` answering one pull request of the Lead Branch in `state`.
 fn list_of(state: &str) -> Reply {
-    Reply::ok(&format!("[{{\"number\": 812, \"url\": \"{URL}\", \"state\": \"{state}\"}}]\n"))
+    list_created(812, state, "2026-10-28T10:00:00Z")
+}
+
+/// `gh pr list` answering one pull request `number` of the Lead Branch in `state`, created at `created` (the PR row started 2026-10-27).
+fn list_created(number: i64, state: &str, created: &str) -> Reply {
+    let url = format!("https://github.com/acme/pay/pull/{number}");
+    Reply::ok(&format!("[{{\"number\": {number}, \"url\": \"{url}\", \"state\": \"{state}\", \"createdAt\": \"{created}\"}}]\n"))
 }
 
 /// A fixture of phase `dispatch` whose `pre-merge` hook leaves a marker file when it runs; and that marker.
@@ -565,7 +572,7 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
     assert!(config.stdout.is_empty(), "{}", String::from_utf8_lossy(&config.stdout));
     // gh: look for an existing PR (twice: before the Gate's push, and to open it), then create it with the Jobs table as its body.
     let calls = fx.gh_calls();
-    let list = ["pr", "list", "--head", "cpd/pay", "--state", "all", "--json", "number,url,state"];
+    let list = ["pr", "list", "--head", "cpd/pay", "--state", "all", "--json", "number,url,state,createdAt"];
     assert_eq!(calls[0], list);
     assert_eq!(calls[1], list);
     assert_eq!(calls[2][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", REPO_TITLE]);
@@ -605,6 +612,58 @@ fn open_fails_loud_when_gh_cannot_find_the_pull_request_it_created() {
     let End::Failed { detail, .. } = end else { panic!("{end:?}") };
     assert!(detail.contains("gh_failed"), "{detail}");
     assert_eq!(fx.plan_row().0, "dispatch");
+}
+
+/// The pull request #265 of the Lead Branch, created 2026-10-22, before the PR row started (2026-10-27): not the row's.
+fn old_pull_request(state: &str) -> Reply {
+    list_created(265, state, "2026-10-22T08:00:00Z")
+}
+
+#[test]
+fn open_ignores_a_merged_pull_request_created_before_the_pr_started() {
+    let fx = poll_fx("dispatch");
+    fx.gh.list.set(old_pull_request("MERGED"));
+    let (attempt, _, tip) = fx.submitted_opener();
+
+    let end = fx.merge(&attempt);
+
+    assert_eq!(end, End::Merged { sha: tip });
+    assert_eq!(fx.gh_calls().iter().filter(|c| c[1] == "create").count(), 1, "{:?}", fx.gh_calls());
+    let row = fx.plan_row();
+    assert_eq!((row.0.as_str(), row.1), ("deploy", Some(812)));
+    let status: String = fx.store().read(|c| Ok(c.query_row("SELECT status FROM prs WHERE plan = 'pay' AND key = 'repo'", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(status, "open");
+    assert!(fx.events("pr-merged").is_empty());
+}
+
+#[test]
+fn open_ignores_a_closed_pull_request_created_before_the_pr_started() {
+    let fx = poll_fx("dispatch");
+    fx.gh.list.set(old_pull_request("CLOSED"));
+    let (attempt, _, tip) = fx.submitted_opener();
+
+    let end = fx.merge(&attempt);
+
+    assert_eq!(end, End::Merged { sha: tip });
+    assert_eq!(fx.gh_calls().iter().filter(|c| c[1] == "create").count(), 1, "{:?}", fx.gh_calls());
+    assert_eq!(fx.plan_row().1, Some(812));
+    assert!(fx.events("pr-closed").is_empty());
+}
+
+#[test]
+fn open_does_not_adopt_an_open_pull_request_created_before_the_pr_started() {
+    let fx = poll_fx("dispatch");
+    fx.gh.list.set(old_pull_request("OPEN"));
+    fx.gh.create.set(Reply::exit(1, "", "a pull request for branch cpd/pay already exists\n"));
+    let (attempt, _, _) = fx.submitted_opener();
+
+    let end = fx.merge(&attempt);
+
+    let End::Failed { detail, .. } = end else { panic!("{end:?}") };
+    assert!(detail.contains("gh_failed"), "{detail}");
+    assert!(fx.gh_calls().iter().any(|c| c[1] == "create"), "{:?}", fx.gh_calls());
+    let row = fx.plan_row();
+    assert_eq!((row.0.as_str(), row.1), ("dispatch", None));
 }
 
 #[test]
