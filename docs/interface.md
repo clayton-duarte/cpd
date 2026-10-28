@@ -120,6 +120,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd inbox snooze` | Hide an item for a while (§21.3) | | |
 | `cpd inbox dismiss` | Hide an item for the rest of its life (§21.4) | | |
 | `cpd inbox claim` | Hand a review-requested item to the review Context's Manager (§21.7) | | |
+| `cpd inbox approve` | Approve the pending deployments of a deploy item (§21.13) | | |
 | `cpd watch` | The engine, one per machine (commands.md §12) | Lead | |
 | `cpd tui` | Build the cockpit and start the engine (commands.md §13) | | |
 | `cpd tui view` | A view in a cockpit pane (internal; owns its terminal) (§13.2) | internal | |

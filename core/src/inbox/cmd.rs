@@ -33,6 +33,8 @@ pub enum Command {
     Dismiss(DismissArgs),
     /// Hand a review-requested item to the review Context's Manager (§21.7)
     Claim(DismissArgs),
+    /// Approve the pending deployments of a deploy item (§21.13)
+    Approve(DismissArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -99,6 +101,7 @@ pub fn run_with(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Snooze(args) => snooze(ports, args),
         Command::Dismiss(args) => dismiss(ports, args),
         Command::Claim(args) => claim(ports, args),
+        Command::Approve(args) => approve(ports, args),
     }
 }
 
@@ -362,6 +365,16 @@ fn dismiss(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
 /// the `session-message` to the review Context's Manager and the `eyes` reaction queued on the PR's Slack post (the cache's
 /// channel and the post's `ts_raw`) in one transaction, and a stopped Manager started after it. An already claimed item and a
 /// refusal queue nothing.
+fn approve(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
+    let mut env = Env::open_with(ports)?;
+    approve_in(&mut env, args.id)
+}
+
+/// `inbox approve` (§21.13) on an open `env`. Stub.
+pub(super) fn approve_in(_env: &mut Env, _id: i64) -> Result<Output, CpdError> {
+    Ok(Output::success(json!({})))
+}
+
 fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
     let mut env = Env::open_with(ports)?;
     let now = ports.clock.utc();

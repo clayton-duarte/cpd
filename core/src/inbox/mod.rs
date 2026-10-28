@@ -11,6 +11,8 @@ pub mod team;
 #[cfg(test)]
 mod blue_tests;
 #[cfg(test)]
+mod approve_tests;
+#[cfg(test)]
 mod deploy_tests;
 #[cfg(test)]
 mod claim_tests;
