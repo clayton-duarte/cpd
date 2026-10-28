@@ -317,6 +317,7 @@ fn an_upper_case_head_is_accepted_and_used_as_lowercase() {
     assert_eq!(calls.len(), 2, "{calls:?}");
     let sent: Value = serde_json::from_slice(calls[1].stdin.as_deref().expect("the review on stdin")).unwrap();
     assert_eq!(sent["commit_id"], HEAD);
+    drop(fx);
 
     let fx = fixture(head_at(&HEAD.to_uppercase()), answer());
     let file = input(&fx, &review().to_string());
