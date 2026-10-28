@@ -18,7 +18,7 @@ mod layout;
 mod no_repo_lock;
 mod pill_parity;
 mod pill_sites;
-mod npm_fresh;
+mod pnpm_fresh;
 mod preview_script;
 mod run_with;
 mod smoke;
