@@ -117,14 +117,14 @@ pub fn draw(
     machine: &Machine,
     frame: usize,
     inbox: &[Item],
-    (expanded, inbox_scroll): (bool, usize),
+    inbox_scroll: usize,
     now: OffsetDateTime,
     merging: &std::collections::BTreeSet<String>,
 ) -> Drawn {
     let [_top, home, rest] = Layout::vertical([Constraint::Length(1), Constraint::Length(2), Constraint::Min(0)]).areas(area);
-    let shape = Shape::new(inbox.len(), expanded).capped(rest.height).scrolled(inbox_scroll);
+    let shape = Shape::new(inbox.len()).capped(rest.height).scrolled(inbox_scroll);
     let inbox_area = Rect { height: shape.height().min(rest.height), ..rest };
-    let links = inbox::draw(f, inbox_area, inbox, shape, None, now, &|item| inbox::merges(merging, item).then_some(frame));
+    let links = inbox::draw(f, inbox_area, inbox, shape, now, &|item| inbox::merges(merging, item).then_some(frame));
     f.render_widget(Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::styled(machine.usage_line(), palette::read_only_text())]), home);
     Drawn { links, inbox: inbox_area, inbox_shape: shape }
 }
@@ -143,7 +143,6 @@ pub fn draw_error(f: &mut Frame, area: Rect, error: &str) {
 mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use ratatui::buffer::Buffer;
 
     use crate::test_text::row;
 
@@ -151,27 +150,6 @@ mod tests {
 
     fn machine() -> Machine {
         Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } }
-    }
-
-    fn buffer(width: u16, height: u16) -> Buffer {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|f| drop(draw(f, f.area(), &machine(), 0, &[], (false, 0), OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
-        terminal.backend().buffer().clone()
-    }
-
-    #[test]
-    fn the_column_has_a_blank_row_an_untitled_machine_with_cpu_and_memory_and_the_inbox_under_it() {
-        let buf = buffer(20, 10);
-        let got: Vec<String> = (0..10).map(|y| row(&buf, y)).collect();
-        assert_eq!(&got[..3], ["".to_owned(), " homeserver".to_owned(), " \u{F4BC} 23%  \u{EFC5} 41%".to_owned()], "{got:#?}");
-        assert_eq!(got[3], "", "the Inbox's empty row");
-        assert!(got[4].contains("Inbox"), "its title is row 4: {got:#?}");
-        assert!(buf[(1, 1)].modifier.contains(Modifier::BOLD), "the hostname is bold");
-        for x in 0..20 {
-            let cell = &buf[(x, 2)];
-            assert!(!cell.modifier.contains(Modifier::BOLD) && (cell.symbol() == " " || cell.fg == palette::read_only_text().fg.unwrap()), "read-only text, no bold, on the usage row, x={x}");
-        }
-        assert!(!got.iter().any(|r| r.contains("PRs") || r.contains("git") || r.contains("Jira") || r.contains("future") || r.contains("load")));
     }
 
     #[test]
@@ -186,7 +164,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(30, 15)).unwrap();
         terminal
             .draw(|f| {
-                draw(f, f.area(), &machine(), 0, &[], (false, 0), OffsetDateTime::UNIX_EPOCH, &Default::default());
+                draw(f, f.area(), &machine(), 0, &[], 0, OffsetDateTime::UNIX_EPOCH, &Default::default());
                 draw_error(f, f.area(), "no_cockpit: nothing here");
             })
             .unwrap();

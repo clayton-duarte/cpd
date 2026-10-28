@@ -36,6 +36,8 @@ mod guard_popup_tests;
 mod guard_terminal_tests;
 #[cfg(test)]
 mod section_title_tests;
+#[cfg(test)]
+mod section_flush_tests;
 mod buffer;
 mod cells;
 mod chat;

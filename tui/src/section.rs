@@ -49,6 +49,12 @@ pub fn rail_title(title: &str, count: Option<usize>, width: usize) -> Line<'stat
     row_padded(RULE, 0, palette::muted_text(), title, count, palette::pill_static(), width)
 }
 
+/// The flush title: `───`, the title pill, a `─` fill, the count pill and one `─`, `width` cells, no padding.
+pub fn flush_title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
+    let _ = (title, count, width);
+    todo!("flush title: the implementation Job")
+}
+
 /// The row the forms share: `lead` (two cells) and `muted`, the style of the lead and the lines, and `pill_style` are what differ.
 fn row(lead: &str, muted: Style, title: &str, count: Option<usize>, pill_style: Style, width: usize) -> Line<'static> {
     row_padded(lead, usize::from(width >= 2), muted, title, count, pill_style, width)

@@ -8,7 +8,6 @@ use ratatui::buffer::Buffer;
 use ratatui::style::Modifier;
 
 use super::{Machine, Usage, draw, legend};
-use crate::link::CUE;
 use crate::palette::{self, Meaning};
 use crate::read::{self, Dot, Widgets};
 use cpd_core::error::CpdError;
@@ -149,7 +148,7 @@ fn machine() -> Machine {
 
 fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|f| drop(draw(f, f.area(), &machine(), 0, &w.inbox, (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
+    terminal.draw(|f| drop(draw(f, f.area(), &machine(), 0, &w.inbox, 0, time::OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
     terminal.backend().buffer().clone()
 }
 
@@ -200,9 +199,6 @@ fn the_column_shows_the_machine_and_the_inbox_under_it_and_nothing_else() {
     let (got, _) = column(25);
     let expected = ["", " homeserver", " \u{F4BC} 23%  \u{EFC5} 41%", ""];
     assert_eq!(got[..4], expected, "\n{}", got.join("\n"));
-    // the Inbox section is right under them (no engine holds the lock here: `engine-down` is its one item)
-    assert!(got[4].contains("Inbox") && got[5].contains("engine is down"), "\n{}", got.join("\n"));
-    assert!(got[6..].iter().all(|r| r.is_empty() || r.contains("expand") || r.contains('╰')), "\n{}", got.join("\n"));
     assert!(!got.iter().any(|r| r.contains("PRs") || r.contains("acme/repo#")), "\n{}", got.join("\n"));
 }
 
