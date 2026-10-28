@@ -263,6 +263,8 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
         }
         // a deploy item has no jump; its label is a Link to the run's page (pro-d100)
         Kind::Deploy => None,
+        // stub: the click jumps to the Lead (as `plan-review` with no url) once the kind is built (hs-d731)
+        Kind::DraftsParked => None,
         // the label is a Link to the pull request; a click on the rest of the row opens the owning Plan's Lead (pro-d130)
         Kind::PrReady => open_lead(tree, item.plan.as_ref()?).map(Jump::Run),
         Kind::ReviewRequested => {

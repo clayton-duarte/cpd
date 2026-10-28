@@ -15,6 +15,7 @@ mod watch_sleep;
 mod watch;
 mod watch_worker_archive;
 mod watch_inbox_models;
+mod watch_parked_inbox;
 mod watch_models;
 mod watch_react;
 mod watch_resources;
