@@ -1557,14 +1557,37 @@ fn basename(call: &Call) -> String {
 pub(super) fn node(repo: &str, number: i64, state: &str, review: Option<&str>, rollup: Option<&str>) -> String {
     let title = if number == 813 { "Pay the bills (web)" } else { "Pay the bills" };
     let merged = if state == "MERGED" { r#""2026-10-14T10:00:00Z""# } else { "null" };
+    let reviewers = if review == Some("APPROVED") {
+        r#""latestOpinionatedReviews":{"nodes":[{"state":"APPROVED","author":{"__typename":"User","login":"amy"}}]},"#
+    } else {
+        ""
+    };
     let review = review.map_or("null".to_owned(), |r| format!("\"{r}\""));
     let rollup = rollup.map_or("null".to_owned(), |s| format!(r#"{{"state":"{s}"}}"#));
     format!(
         r#"{{"repository":{{"nameWithOwner":"{repo}"}},"number":{number},"url":"https://github.com/{repo}/pull/{number}","title":"{title}",
-        "isDraft":false,"state":"{state}","createdAt":"opened","updatedAt":"U1","mergedAt":{merged},"reviewDecision":{review},
+        "isDraft":false,"state":"{state}","createdAt":"opened","updatedAt":"U1","mergedAt":{merged},"reviewDecision":{review},{reviewers}
         "mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
         "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}"#
     )
+}
+
+/// `node` with `latestOpinionatedReviews` exactly `reviewers`, each `(__typename, login, state)`: it replaces the field when the
+/// node has it (an APPROVED node has `amy`), else inserts it right after `"reviewDecision":...,`.
+pub(super) fn reviewed(node: String, reviewers: &[(&str, &str, &str)]) -> String {
+    let nodes: Vec<String> = reviewers
+        .iter()
+        .map(|(kind, login, state)| format!(r#"{{"state":"{state}","author":{{"__typename":"{kind}","login":"{login}"}}}}"#))
+        .collect();
+    let field = format!(r#""latestOpinionatedReviews":{{"nodes":[{}]}},"#, nodes.join(","));
+    const KEY: &str = r#""latestOpinionatedReviews":"#;
+    if let Some(start) = node.find(KEY) {
+        let end = start + node[start..].find("]}").expect("the field ends") + 3;
+        return format!("{}{field}{}", &node[..start], &node[end..]);
+    }
+    let at = node.find(r#""reviewDecision":"#).expect("a node has a reviewDecision");
+    let after = at + node[at..].find(',').expect("a comma follows") + 1;
+    format!("{}{field}{}", &node[..after], &node[after..])
 }
 
 /// `node`, as GitHub reports its `mergeable` and `mergeStateStatus`.
