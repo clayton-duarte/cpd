@@ -630,3 +630,97 @@ Mapping of the refusals of section 6 (rule: `isError: true` with a JSON `statusC
 | connection `failed`, timeout, 5xx, 429 (not observed) | transient: retry with backoff |
 
 Final state: `EEC-3413` was read back in status `BLOCKED` after the last write (third move, `In Progress` to `BLOCKED`), and again after the last probe call of this Job: `BLOCKED`.
+
+## 9. The helper against the real server
+
+Run in Job `sync-verify` (attempt `sync-verify-a1`, Plan `jira-sync`) on 2026-10-28 EDT: the real `pi/lib/jira-transition.ts`, once per case, through the connection built from the machine policy's server object (not from `mcp.json`), with the sign-in of the User.
+
+Scratch ticket: the ticket named in the Spec, EEC-3413, was deleted by the User before this Job (the pre-write read answered 404 "Issue does not exist or you do not have permission to see it", no write made). By the User's decision, relayed by the Lead, this Job created ONE new scratch ticket, **EEC-3427**, with `createJiraIssue` (`projectKey` `EEC`, `issueTypeName` `Task`, summary `cpd jira-sync verify scratch: safe to delete`, nothing else) for this check. Its initial status, read at once with `getJiraIssue` `fields: ["status"]`, was `Backlog`. The only writes after the creation were status transitions of EEC-3427 (by the helper into `In Review`; the restore below); none into `Done` or `Won't Do`.
+
+Every request below used `names` = `{"in_progress": "In Progress", "in_review": "In Review", "done": "Done"}` unless said, and `server` = `{"url": "https://mcp.atlassian.com/v1/mcp/authv2", "exposure": "deferred"}` unless said. Command: `printf '%s' '<request>' | PI_CODING_AGENT_DIR="$HOME/.pi/agent" timeout 90 node pi/lib/jira-transition.ts --coding-agent <entry>` with the entry of pi 1.3.0.
+
+### 9.1 Run 1: target `in_review` from `Backlog`
+
+Request: `{"server": <server>, "ticket": "EEC-3427", "target": "in_review", "names": <names>}`
+
+Output (exit status 0):
+
+```
+{"ok":true,"ticket":"EEC-3427","target":"in_review","outcome":"moved","from":"Backlog","to":"In Review"}
+```
+
+Expected `moved` into In Review, exit 0 (from `Backlog` instead of `BLOCKED`, the new ticket's initial status): VERIFIED.
+
+### 9.2 Run 2: the same request again
+
+Request: as 9.1.
+
+Output (exit status 0):
+
+```
+{"ok":true,"ticket":"EEC-3427","target":"in_review","outcome":"unchanged","status":"In Review","why":"at_target"}
+```
+
+Expected `unchanged` why `at_target`: VERIFIED.
+
+### 9.3 Run 3: target `in_progress`
+
+Request: `{"server": <server>, "ticket": "EEC-3427", "target": "in_progress", "names": <names>}`
+
+Output (exit status 0):
+
+```
+{"ok":true,"ticket":"EEC-3427","target":"in_progress","outcome":"unchanged","status":"In Review","why":"past_target"}
+```
+
+Expected `unchanged` why `past_target`: VERIFIED.
+
+### 9.4 Run 4: `names.in_review` = `Nope`, target `in_review`
+
+Request: `{"server": <server>, "ticket": "EEC-3427", "target": "in_review", "names": {"in_progress": "In Progress", "in_review": "Nope", "done": "Done"}}` (the ticket stood in `In Review`, not `Nope`).
+
+Output (exit status 1):
+
+```
+{"ok":false,"error":{"code":"jira_refused","message":"EEC-3427 has no transition to \"Nope\" from \"In Review\".","details":{"reason":"no_transition"}}}
+```
+
+Expected `jira_refused` reason `no_transition`, exit 1, no move (the status was read back as `In Review` before the restore): VERIFIED.
+
+### 9.5 Run 5: ticket EEC-99999999
+
+Request: `{"server": <server>, "ticket": "EEC-99999999", "target": "in_review", "names": <names>}`
+
+Output (exit status 1):
+
+```
+{"ok":false,"error":{"code":"jira_refused","message":"getJiraIssue: the issue was not found.","details":{"tool":"getJiraIssue","reason":"issue_not_found"}}}
+```
+
+Expected `jira_refused` reason `issue_not_found`, exit 1: VERIFIED.
+
+### 9.6 Run 6: server url `https://example.invalid/mcp`
+
+Request: `{"server": {"url": "https://example.invalid/mcp"}, "ticket": "EEC-3427", "target": "in_review", "names": <names>}`
+
+Output (exit status 1, about 1 s, no hang):
+
+```
+{"ok":false,"error":{"code":"jira_failed","message":"getAccessibleAtlassianResources failed: MCP server \"atlassian\" failed to connect: fetch failed","details":{"tool":"getAccessibleAtlassianResources"}}}
+```
+
+Expected a non-zero exit with a one-line JSON failure (any `jira_*` code) and no hang past 90 s: VERIFIED; the code is `jira_failed`.
+
+### 9.7 Run 7: restore
+
+`Backlog` (the initial status) is not a target of the helper, so EEC-3427 was moved back through the same connection (a short node probe, not the helper): `getTransitionsForJiraIssue` listed `Backlog` as id 9 (`to.name` `Backlog`), then `transitionJiraIssue` with `{"cloudId": "<cloud-id>", "issueIdOrKey": "EEC-3427", "transition": {"id": "9"}}`.
+
+Output (isError `false`):
+
+```
+{"success": true, "statusName": "Backlog"}
+```
+
+Read back with `getJiraIssue` `fields: ["status"]`: `Backlog`. Expected the ticket back in its initial status: VERIFIED.
+
+Summary: all seven runs matched the expectation; nothing differs and the helper needs no fix. The scratch ticket EEC-3427 was read back in status `Backlog` after the last write. The scratch ticket EEC-3427 was left in Backlog; the MCP has no delete tool, so it is for the User to delete.

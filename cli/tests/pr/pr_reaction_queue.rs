@@ -12,7 +12,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, Handler, Reply};
 use serde_json::json;
 
-const REF: &str = "acme/api#7";
+pub(super) const REF: &str = "acme/api#7";
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 const MERGED_AT: &str = "2026-10-21T15:01:30Z";
 const CHANNEL: &str = "C02JU6C2Z1D";
@@ -43,7 +43,7 @@ impl Handler for Gh {
 
 /// PR `api` of Plan `pay-1` is open as acme/api#7; its post is as `post` says: `Some(reaction)` posted (the reaction may be
 /// none), `None` not posted.
-fn fixture(post: Option<Option<&str>>) -> Fx {
+pub(super) fn fixture(post: Option<Option<&str>>) -> Fx {
     let fx = Fx::with_ports();
     let env = &fx.env;
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
@@ -78,7 +78,7 @@ fn queued(env: &TestEnv) -> i64 {
     if table == 0 { 0 } else { env.query("SELECT count(*) FROM slack_reactions") }
 }
 
-fn merge(fx: &Fx) {
+pub(super) fn merge(fx: &Fx) {
     fx.cpd(&["pr", "merge", REF]).ok();
     assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'api'"), "merged", "the PR's merge is recorded");
 }

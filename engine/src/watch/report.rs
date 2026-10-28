@@ -48,6 +48,7 @@ pub(super) enum Step {
     E16,
     E17,
     E18,
+    E19,
 }
 
 impl fmt::Display for Step {
@@ -72,6 +73,7 @@ impl fmt::Display for Step {
             Step::E16 => "E16 (janitor)",
             Step::E17 => "E17 (merge reactions)",
             Step::E18 => "E18 (auto-merge requests)",
+            Step::E19 => "E19 (Jira transitions)",
         })
     }
 }

@@ -271,12 +271,8 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     }
     assert_eq!(shown(&fx, &["show", "-gv", "remain-on-exit"]), "on");
     let border = shown(&fx, &["show", "-gv", "pane-border-format"]);
-    assert!(border.contains("#{==:#{@cpd_view},tree},Context,"), "{border}");
     assert!(border.contains("#[reverse]") && !border.contains("#[bg="), "{border}");
-    // tmux expands the format of the tree pane to its title pill (hs-d530 R1, R3).
-    let expanded = out(&fx, &["display", "-p", "-t", &view(&panes, "tree").id, "-F", &border]);
-    // (the colours, grey or blue, are the pane's focus: `pane_active`)
-    assert!(expanded.contains("#[reverse]Context#[noreverse]"), "{expanded}");
+    // (what the format expands to is pinned by `the_built_cockpits_tree_pane_border_expands_to_the_cpd_mark_and_plan_and_widgets_to_nothing`.)
     assert!(!border.contains("statusbar"), "{border}");
     // The StatusBar is the cockpit session's status line; a click on a pane is tmux's default again.
     assert_status_line(&fx);
@@ -790,41 +786,55 @@ fn a_pane_title_is_an_unpadded_pill_grey_and_blue_when_focused_three_columns_fro
     let border = shown(&fx, &["show", "-gv", "pane-border-format"]);
     // No padding inside the caps: the title between them, nothing around it; one cap on each side of every pill.
     assert!(border.contains("\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4}"), "{border}");
-    assert!(border.contains("#{pane_current_command}}}}#[noreverse]\u{e0b4}"), "{border}");
     assert_eq!(border.matches('\u{e0b6}').count(), 2, "{border}");
     assert_eq!(border.matches('\u{e0b4}').count(), 2, "{border}");
     assert!(!border.contains("\u{e0b6}#[reverse] ") && !border.contains(" #[noreverse]"), "{border}");
     // Every pill starts three columns from its pane's edge (hs-d478): tmux draws two border cells, then one `━` with no colour
     // of its own (it takes the border line's style, pro-d61), then the pill's colour, then the left cap.
-    assert_eq!(border.matches('\u{2501}').count(), 2, "{border}");
     assert!(!border.contains("#[fg=colour7]\u{2501}"), "{border}");
     // The Lead's and another pane's pill is colour 7 (grey) and, on the focused pane, blue (colour 4): the format
-    // itself says it (`pane_active`), whatever the border's colour is. The three views' pills keep their dango colour.
+    // itself says it (`pane_active`), whatever the border's colour is. 
     assert!(border.contains("\u{2501}#{?pane_active,#[fg=colour4],#[fg=colour7]}\u{e0b6}#[reverse]#{@cpd_title}"), "{border}");
-    let plain = "#{?pane_active,#[fg=colour4],#[fg=colour7]}";
-    let dango = format!(
-        "\u{2501}#{{?#{{==:#{{@cpd_view}},tree}},#[fg=colour5],#{{?#{{==:#{{@cpd_view}},plan}},#[fg=colour7],#{{?#{{==:#{{@cpd_view}},widgets}},#[fg=colour2],{plain}}}}}}}\u{e0b6}#[reverse]"
-    );
-    assert!(border.contains(&dango), "{border}");
     // The Lead's pane carries the header the pill shows.
     assert_eq!(shown(&fx, &["show", "-pv", "-t", &lead, "@cpd_title"]), "Retry Payouts");
 
     // tmux expands the format of each pane to its pill: the title, and the colour of the focus.
     let pill = |pane: &str| shown(&fx, &["display", "-p", "-t", pane, "-F", &border]);
-    let titled = [("Context", tree.id.as_str()), ("Plan", plan.id.as_str()), ("Dispatch", widgets.id.as_str()), ("Retry Payouts", lead.as_str())];
+    let titled = [("Retry Payouts", lead.as_str())];
     for focused in [lead.as_str(), plan.id.as_str()] {
         out(&fx, &["select-pane", "-t", focused]);
         for (title, id) in titled {
-            let colour = match title {
-                "Context" => "colour5",
-                "Plan" => "colour7",
-                "Dispatch" => "colour2",
-                _ if id == focused => "colour4",
-                _ => "colour7",
-            };
+            let colour = if id == focused { "colour4" } else { "colour7" };
             let want = format!("\u{2501}#[fg={colour}]\u{e0b6}#[reverse]{title}#[noreverse]\u{e0b4}");
             assert_eq!(pill(id), want, "{title} (focus on {focused})");
         }
+    }
+    let _ = (&tree, &widgets);
+}
+
+/// The live server option is wired: the tree pane expands to the cpd mark, the plan and widgets panes to nothing.
+#[test]
+fn the_built_cockpits_tree_pane_border_expands_to_the_cpd_mark_and_plan_and_widgets_to_nothing() {
+    let fx = fx();
+    tui(&fx, &[]);
+    let panes = main_panes(&fx);
+    let (tree, plan, widgets, chat) =
+        (view(&panes, "tree").clone(), view(&panes, "plan").clone(), view(&panes, "widgets").clone(), view(&panes, "chat").clone());
+    let lead = shown(&fx, &["new-window", "-d", "-t", "=cpd:", "-n", "park-pay", "-P", "-F", "#{pane_id}", "sleep", "3600"]);
+    out(&fx, &["set", "-p", "-t", &lead, "@cpd_session", "lead-a"]);
+    out(&fx, &["set", "-p", "-t", &lead, "@cpd_title", "Retry Payouts"]);
+    out(&fx, &["swap-pane", "-d", "-s", &lead, "-t", &chat.id]);
+    let border = shown(&fx, &["show", "-gv", "pane-border-format"]);
+    let expand = |pane: &str| shown(&fx, &["display", "-p", "-t", pane, "-F", &border]);
+    for focused in [plan.id.as_str(), lead.as_str()] {
+        out(&fx, &["select-pane", "-t", focused]);
+        let mark = expand(&tree.id);
+        let at = |needle: &str| mark.find(needle).unwrap_or_else(|| panic!("{needle} in {mark:?} (focus on {focused})"));
+        let (c, p, d) = (at("#[fg=colour13]\u{f0bf2}"), at("#[fg=colour15]\u{f0c19}"), at("#[fg=colour10]\u{f0bf5}"));
+        assert!(c < p && p < d, "{mark:?}");
+        assert!(!mark.contains("Context") && !mark.contains('\u{e0b6}') && !mark.contains("reverse"), "{mark:?}");
+        assert_eq!(expand(&plan.id), "", "plan (focus on {focused})");
+        assert_eq!(expand(&widgets.id), "", "widgets (focus on {focused})");
     }
 }
 

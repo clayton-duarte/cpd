@@ -76,12 +76,22 @@ pub struct Post {
     pub merged_reaction: String,
 }
 
+/// `[pr.jira]`: the Jira status names cpd moves a PR's ticket to; empty means no transition.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Jira {
+    pub in_progress: String,
+    pub in_review: String,
+    pub done: String,
+}
+
 /// The `pr` domain.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pr {
     pub feedback: Feedback,
     pub post: Post,
+    pub jira: Jira,
     pub jira_required: bool,
     pub text: String,
 }
@@ -110,6 +120,15 @@ pub struct PostSet {
     pub merged_reaction: Option<String>,
 }
 
+/// What a scope file's `[pr.jira]` table sets: a left-out key is `None`.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JiraSet {
+    pub in_progress: Option<String>,
+    pub in_review: Option<String>,
+    pub done: Option<String>,
+}
+
 /// What a scope file's `[pr]` table sets.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -118,6 +137,7 @@ pub struct PrSet {
     pub gate: Option<GateAlias>,
     pub feedback: Option<FeedbackSet>,
     pub post: Option<PostSet>,
+    pub jira: Option<JiraSet>,
     pub jira_required: Option<bool>,
     pub text: Option<String>,
 }
@@ -353,6 +373,9 @@ pub const POST_CHANNEL: &str = "pr.post.channel";
 pub const POST_TEMPLATE: &str = "pr.post.template";
 pub const POST_MERGED_REACTION: &str = "pr.post.merged_reaction";
 pub const JIRA_REQUIRED: &str = "pr.jira_required";
+pub const JIRA_IN_PROGRESS: &str = "pr.jira.in_progress";
+pub const JIRA_IN_REVIEW: &str = "pr.jira.in_review";
+pub const JIRA_DONE: &str = "pr.jira.done";
 
 impl Set for GatesSet {
     type Value = Gates;
@@ -380,6 +403,7 @@ impl Set for PrSet {
     fn fill(&self, base: &Pr) -> (Pr, Vec<&'static str>) {
         let checks = self.feedback.as_ref().and_then(|f| f.checks);
         let post = self.post.as_ref();
+        let jira = self.jira.as_ref();
         let left_out = left_out([
             (FEEDBACK_CHECKS, checks.is_none()),
             (POST_ENABLED, post.and_then(|p| p.enabled).is_none()),
@@ -387,6 +411,9 @@ impl Set for PrSet {
             (POST_TEMPLATE, post.and_then(|p| p.template.as_ref()).is_none()),
             (POST_MERGED_REACTION, post.and_then(|p| p.merged_reaction.as_ref()).is_none()),
             (JIRA_REQUIRED, self.jira_required.is_none()),
+            (JIRA_IN_PROGRESS, jira.and_then(|j| j.in_progress.as_ref()).is_none()),
+            (JIRA_IN_REVIEW, jira.and_then(|j| j.in_review.as_ref()).is_none()),
+            (JIRA_DONE, jira.and_then(|j| j.done.as_ref()).is_none()),
         ]);
         let pick = |set: Option<String>, base: &str| set.unwrap_or_else(|| base.to_owned());
         let value = Pr {
@@ -396,6 +423,11 @@ impl Set for PrSet {
                 channel: pick(post.and_then(|p| p.channel.clone()), &base.post.channel),
                 template: pick(post.and_then(|p| p.template.clone()), &base.post.template),
                 merged_reaction: pick(post.and_then(|p| p.merged_reaction.clone()), &base.post.merged_reaction),
+            },
+            jira: Jira {
+                in_progress: pick(jira.and_then(|j| j.in_progress.clone()), &base.jira.in_progress),
+                in_review: pick(jira.and_then(|j| j.in_review.clone()), &base.jira.in_review),
+                done: pick(jira.and_then(|j| j.done.clone()), &base.jira.done),
             },
             jira_required: self.jira_required.unwrap_or(base.jira_required),
             text: self.text.clone().unwrap_or_else(|| base.text.clone()),
@@ -414,6 +446,10 @@ impl Set for PrSet {
                     template: p.template.clone()?,
                     merged_reaction: p.merged_reaction.clone()?,
                 }
+            },
+            jira: {
+                let j = self.jira.as_ref()?;
+                Jira { in_progress: j.in_progress.clone()?, in_review: j.in_review.clone()?, done: j.done.clone()? }
             },
             jira_required: self.jira_required?,
             text: self.text.clone()?,

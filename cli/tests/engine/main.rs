@@ -9,6 +9,7 @@ mod watch_auto_merge;
 mod watch_curate_inbox;
 mod watch_distill_inbox;
 mod watch_host_alert;
+mod watch_jira;
 mod watch_sleep;
 mod watch;
 mod watch_worker_archive;

@@ -14,6 +14,7 @@ mod load;
 mod machine;
 pub mod model;
 mod origin;
+mod jira;
 mod post;
 mod resolve;
 mod show;
@@ -23,7 +24,7 @@ use crate::ids::{ContextId, OwnerLogin, RepoName};
 use crate::session::Role;
 
 pub use domain::{
-    audience, Checks, Declared, Deploys, Domain, DomainSource, Feedback, Gate, GateAlias, Gates, Policy, Post, PostSet, Pr, ResourceScope, Resources, Scope, Source, Sources,
+    audience, Checks, Declared, Deploys, Domain, DomainSource, Feedback, Gate, GateAlias, Gates, Jira, JiraSet, Policy, Post, PostSet, Pr, ResourceScope, Resources, Scope, Source, Sources,
     Text,
 };
 /// The `policy` commands (commands.md §22).
@@ -305,7 +306,7 @@ mod tests {
         write(
             &home,
             "acme/owner.toml",
-            "[pr]\nfeedback.checks = \"none\"\njira_required = true\ntext = \"owner pr\"\n[pr.post]\nenabled = true\nchannel = \"\"\ntemplate = \"{{ url }}\"\nmerged_reaction = \"\"\n",
+            "[pr]\nfeedback.checks = \"none\"\njira_required = true\ntext = \"owner pr\"\n[pr.post]\nenabled = true\nchannel = \"\"\ntemplate = \"{{ url }}\"\nmerged_reaction = \"\"\n[pr.jira]\nin_progress = \"\"\nin_review = \"\"\ndone = \"\"\n",
         );
         write(&home, "acme/cpd.toml", "[pr]\n");
         let r = resolve(&home, &repo_key("acme", "cpd")).unwrap();
@@ -315,7 +316,7 @@ mod tests {
         assert_eq!(src.source, Source::Repo(real(&home, "acme/cpd.toml")));
         assert_eq!(
             src.left_out,
-            ["feedback.checks", "pr.post.enabled", "pr.post.channel", "pr.post.template", "pr.post.merged_reaction", "pr.jira_required"]
+            ["feedback.checks", "pr.post.enabled", "pr.post.channel", "pr.post.template", "pr.post.merged_reaction", "pr.jira_required", "pr.jira.in_progress", "pr.jira.in_review", "pr.jira.done"]
         );
         assert!(src.to_string().ends_with(" (key default)"));
         // The owner file sets every typed key: no `(key default)`.

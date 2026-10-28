@@ -122,7 +122,13 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
         auto_merge_at: None,
     };
     // (j)
-    let stored = env.store.write("pr post", |tx| posts::insert(tx, id.as_str(), key.as_str(), &record));
+    let stored = env.store.write("pr post", |tx| {
+        let new = posts::insert(tx, id.as_str(), key.as_str(), &record)?;
+        if new {
+            super::jira_sync::queue(tx, id.as_str(), key.as_str(), super::jira_sync::Target::InReview)?;
+        }
+        Ok(new)
+    });
     match stored {
         Ok(true) => {}
         Ok(false) => {

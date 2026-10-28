@@ -215,6 +215,33 @@ fn the_sccache_server_starts_in_a_clean_environment() {
     assert!(env.lines().any(|l| l == format!("PATH={}", path_dir.display())), "{env}");
 }
 
+/// The `TMPDIR=` line the fake sccache server saw, when it saw one.
+fn server_tmpdir(vars: &[(&str, &str)]) -> Option<String> {
+    let tmp = tempfile::tempdir().unwrap();
+    let (path_dir, log) = logging_path(tmp.path(), "exit 0");
+    let vars: Vec<(&str, String)> = vars.iter().map(|(k, v)| (*k, v.replace("<dir>", tmp.path().to_str().unwrap()))).collect();
+    run(&path_dir, &vars);
+    let env = read_or_empty(&PathBuf::from(format!("{}.env", log.display())));
+    assert!(!env.is_empty(), "the fake sccache was never run: {}", read_or_empty(&log));
+    let found = env.lines().find_map(|l| l.strip_prefix("TMPDIR=")).map(|v| v.replace(tmp.path().to_str().unwrap(), "<dir>"));
+    found
+}
+
+#[test]
+fn a_gate_run_tmpdir_is_replaced_by_its_parent_for_the_server() {
+    assert_eq!(server_tmpdir(&[("TMPDIR", "<dir>/gate-run.abc123")]).as_deref(), Some("<dir>"));
+}
+
+#[test]
+fn another_tmpdir_reaches_the_server_unchanged() {
+    assert_eq!(server_tmpdir(&[("TMPDIR", "<dir>")]).as_deref(), Some("<dir>"));
+}
+
+#[test]
+fn an_unset_tmpdir_stays_unset_for_the_server() {
+    assert_eq!(server_tmpdir(&[]), None);
+}
+
 #[test]
 fn a_failed_sccache_start_warns_and_cargo_runs_without_the_wrapper() {
     let tmp = tempfile::tempdir().unwrap();

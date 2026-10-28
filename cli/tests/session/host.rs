@@ -13,7 +13,7 @@ use cpd_core::clock::ManualClock;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::fakes::tmux::TmuxRoute;
 use cpd_core::host::layout::{self, View};
-use cpd_core::host::tmux::{PANE_DIED_HOOK, WINDOW_UNLINKED_HOOK};
+use cpd_core::host::tmux::{BORDER_FORMAT, PANE_DIED_HOOK, WINDOW_UNLINKED_HOOK};
 use cpd_core::host::runner::{Call, FakeRunner, Reply};
 use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux, WindowId};
 use cpd_core::ids::{AttemptId, PlanId, SessionId};
@@ -124,20 +124,8 @@ fn starts_the_server_once_with_the_contract_options() {
     assert_eq!(size.trim(), "215x62");
 }
 
-/// `pane-border-format`, exactly (contract §6.1, hs-d475, hs-d478, hs-d671): every title is a pill with no padding;
-/// the three view titles are dango in the cursor cycle order (Context sakura 5, Plan shiro 7, Dispatch midori 2) and
-/// keep their colour on the focused pane, while every other title (a Lead's `@cpd_title` and the pane
-/// command) is grey (colour 7) and blue on the focused pane, set in the format itself; one `━` with no colour of its own (it takes the
-/// pane border line's style, blue on the focused pane and colour 7 otherwise, whatever the pill's colour; pro-d61) before the left cap, so the cap is the fourth
-/// cell of the border row, three columns in counted from the pane's edge.
-const BORDER_FORMAT_WANT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\
-━#{?pane_active,#[fg=colour4],#[fg=colour7]}\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4},},\
-#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
-━#{?#{==:#{@cpd_view},tree},#[fg=colour5],#{?#{==:#{@cpd_view},plan},#[fg=colour7],#{?#{==:#{@cpd_view},widgets},#[fg=colour2],#{?pane_active,#[fg=colour4],#[fg=colour7]}}}}\u{e0b6}#[reverse]\
-#{?#{==:#{@cpd_view},tree},Context,\
-#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Dispatch,#{pane_current_command}}}}\
-#[noreverse]\u{e0b4}}}}";
-
+/// `pane-border-format` is the constant `BORDER_FORMAT` (contract §6.1): the server option carries it; its content is
+/// pinned by the expansion tests of `core/src/host/tmux/pill_lines_tests.rs`.
 
 #[test]
 fn the_worker_is_no_view_any_more() {
@@ -162,7 +150,7 @@ fn assert_server_options(s: &Server) {
         ("pane-border-lines", "heavy"),
         (
             "pane-border-format",
-            BORDER_FORMAT_WANT,
+            BORDER_FORMAT.as_str(),
         ),
         ("pane-border-style", "fg=colour7"),
         ("pane-active-border-style", "fg=blue"),
@@ -173,7 +161,6 @@ fn assert_server_options(s: &Server) {
         assert_eq!(s.tmux.global_option(option).unwrap(), value, "{option}");
     }
     assert_eq!(s.raw(&["show", "-gv", "extended-keys-format"]).trim(), "csi-u", "extended-keys-format");
-    assert!(s.tmux.global_option("pane-border-format").unwrap().contains(",Dispatch,"));
     let features = s.tmux.global_option("terminal-features").unwrap();
     for feature in ["xterm*:extkeys", "xterm-ghostty:extkeys", "xterm-ghostty:hyperlinks"] {
         assert_eq!(features.matches(feature).count(), 1, "{feature} in {features}");

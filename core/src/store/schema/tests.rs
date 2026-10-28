@@ -1791,6 +1791,7 @@ fn converts_keeping_every_row_and_id(n: usize) {
         assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(crate::events::Kind::ALL.len()));
         assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
         assert_eq!(rows_after.remove("slack_reactions").map(|r| r.len()), Some(0)); // `slack-reactions`: a new empty table
+        assert_eq!(rows_after.remove("jira_transitions"), Some(Vec::new())); // `jira-transitions`: a new empty table
         assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(25)); // 17, `plannotator_reviews`, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts` and `job_pools`
         let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
         assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");

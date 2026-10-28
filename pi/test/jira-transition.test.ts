@@ -1,0 +1,259 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { ConnectionError, Refusal, main, transition, type Answer, type CallTool, type Request } from "../lib/jira-transition.ts";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const helper = join(here, "..", "lib", "jira-transition.ts");
+const CLOUD = "11111111-2222-3333-4444-555555555555";
+const OTHER = "99999999-8888-7777-6666-555555555555";
+const NAMES = { in_progress: "In Progress", in_review: "In Review", done: "Done" };
+const SERVER = { url: "https://mcp.atlassian.com/v1/mcp/authv2" };
+const ARGS = ["--coding-agent", "/x/index.js"];
+const ENV = { PI_CODING_AGENT_DIR: "/agent" };
+
+const json = (v: unknown): Answer => ({ isError: false, text: JSON.stringify(v, null, 2) });
+const failed = (statusCode: number, message = "boom"): Answer => ({ isError: true, text: JSON.stringify({ error: true, message, statusCode }, null, 2) });
+const jira = { id: CLOUD, url: "https://s.atlassian.net", scopes: ["read:jira-work", "write:jira-work"] };
+const confluence = { id: CLOUD, url: "https://s.atlassian.net", scopes: ["read:page:confluence", "write:page:confluence"] };
+const issue = (name: string, key = "indeterminate"): Answer => json({ key: "ABC-1", fields: { status: { name, statusCategory: { key } } } });
+const tr = (id: string, name: string, to = name) => ({ id, name, to: { name: to } });
+const moved = (statusName: string): Answer => json({ success: true, statusName });
+
+type Table = Record<string, Answer | Error | ((args: Record<string, unknown>) => Answer | Error)>;
+
+function request(target: Request["target"] = "in_review", names: Request["names"] = NAMES): Request {
+  return { server: SERVER, ticket: "ABC-1", target, names };
+}
+
+function scripted(table: Table) {
+  const calls: Array<{ name: string; args: Record<string, unknown>; timeoutMs: number }> = [];
+  const call: CallTool = async (name, args, timeoutMs) => {
+    calls.push({ name, args, timeoutMs });
+    let a = table[name];
+    if (a === undefined) throw new Error(`unscripted call ${name}`);
+    if (typeof a === "function") a = a(args);
+    if (a instanceof Error) throw a;
+    return a;
+  };
+  return { call, calls };
+}
+
+const happy = (over: Table = {}): Table => ({
+  getAccessibleAtlassianResources: json([confluence, jira]),
+  getJiraIssue: issue("In Progress"),
+  getTransitionsForJiraIssue: json({ transitions: [tr("21", "In Progress"), tr("2", "In Review")] }),
+  transitionJiraIssue: moved("In Review"),
+  ...over,
+});
+
+async function refusal(table: Table, req: Request = request()): Promise<{ refusal: Refusal; calls: ReturnType<typeof scripted>["calls"] }> {
+  const f = scripted(table);
+  try {
+    await transition(f.call, req);
+  } catch (e) {
+    assert.ok(e instanceof Refusal, `a Refusal, got ${e}`);
+    return { refusal: e, calls: f.calls };
+  }
+  assert.fail("expected a Refusal");
+}
+
+test("transition moves the issue with the first transition whose target status has the name of the target", async () => {
+  const f = scripted(happy());
+  const out = await transition(f.call, request());
+  assert.deepEqual(f.calls, [
+    { name: "getAccessibleAtlassianResources", args: {}, timeoutMs: 30000 },
+    { name: "getJiraIssue", args: { cloudId: CLOUD, issueIdOrKey: "ABC-1", fields: ["status"] }, timeoutMs: 30000 },
+    { name: "getTransitionsForJiraIssue", args: { cloudId: CLOUD, issueIdOrKey: "ABC-1" }, timeoutMs: 30000 },
+    { name: "transitionJiraIssue", args: { cloudId: CLOUD, issueIdOrKey: "ABC-1", transition: { id: "2" } }, timeoutMs: 30000 },
+  ]);
+  assert.deepEqual(out, { ticket: "ABC-1", target: "in_review", outcome: "moved", from: "In Progress", to: "In Review" });
+});
+
+test("transition reads only the status and takes the site with both Jira scopes", async () => {
+  const f = scripted(happy({ getAccessibleAtlassianResources: json([{ ...confluence, id: OTHER }, jira]) }));
+  await transition(f.call, request());
+  for (const c of f.calls.slice(1)) assert.equal(c.args.cloudId, CLOUD);
+  const read = f.calls.find((c) => c.name === "getJiraIssue")!;
+  assert.deepEqual(read.args.fields, ["status"]);
+});
+
+test("transition leaves a ticket at the target, in a later status or in a done category alone and makes no transition call", async () => {
+  const cases: Array<[Request["target"], string, string, string, Request["names"]?]> = [
+    ["in_review", "In Review", "indeterminate", "at_target"],
+    ["in_review", "Won't Do", "done", "done_category"],
+    ["in_progress", "In Review", "indeterminate", "past_target"],
+    ["in_review", "Done", "indeterminate", "past_target"],
+  ];
+  for (const [target, status, category, why] of cases) {
+    const f = scripted(happy({ getJiraIssue: issue(status, category) }));
+    const out = await transition(f.call, request(target));
+    assert.deepEqual(out, { ticket: "ABC-1", target, outcome: "unchanged", status, why }, why);
+    assert.deepEqual(f.calls.map((c) => c.name), ["getAccessibleAtlassianResources", "getJiraIssue"], why);
+  }
+  // A later target with an empty name does not count as past.
+  const f = scripted(happy({ getJiraIssue: issue("Done", "indeterminate") }));
+  const out = await transition(f.call, request("in_review", { ...NAMES, done: "" }));
+  assert.equal(out.outcome, "moved");
+});
+
+test("transition picks by target status name, never by transition name or id, and skips a transition to the current status", async () => {
+  const list = [
+    tr("2", "In Review"),
+    tr("5", "Done", "Won't Do"),
+    tr("31", "Done"),
+    tr("6", "PR Approved", "Done"),
+  ];
+  const f = scripted(happy({ getJiraIssue: issue("In Review"), getTransitionsForJiraIssue: json({ transitions: list }), transitionJiraIssue: moved("Done") }));
+  const out = await transition(f.call, request("done"));
+  assert.deepEqual(f.calls.at(-1), { name: "transitionJiraIssue", args: { cloudId: CLOUD, issueIdOrKey: "ABC-1", transition: { id: "31" } }, timeoutMs: 30000 });
+  assert.deepEqual(out, { ticket: "ABC-1", target: "done", outcome: "moved", from: "In Review", to: "Done" });
+
+  const g = scripted(happy({ getJiraIssue: issue("In Progress"), getTransitionsForJiraIssue: json({ transitions: [tr("21", "In Progress"), tr("6", "PR Approved", "Done"), tr("7", "In Review", "Backlog")] }), transitionJiraIssue: moved("Done") }));
+  await transition(g.call, request("done"));
+  assert.equal((g.calls.at(-1)!.args.transition as any).id, "6");
+});
+
+test("transition refuses jira_refused no_transition when no transition leads to the name", async () => {
+  const r = await refusal(happy({ getTransitionsForJiraIssue: json({ transitions: [tr("21", "In Progress"), tr("7", "In Review", "Backlog")] }) }));
+  assert.equal(r.refusal.code, "jira_refused");
+  assert.equal(r.refusal.details.reason, "no_transition");
+  assert.equal(r.refusal.exit, 1);
+  assert.ok(!r.calls.some((c) => c.name === "transitionJiraIssue"));
+});
+
+test("transition refuses jira_refused issue_not_found on a 404 of the issue read", async () => {
+  const text = JSON.stringify({ error: true, message: "{\"errorMessages\":[\"Issue does not exist or you do not have permission to see it.\"],\"errors\":{}}", rateLimit: { limit: 400, remaining: 399 }, statusCode: 404 }, null, 2);
+  const r = await refusal(happy({ getJiraIssue: { isError: true, text } }));
+  assert.equal(r.refusal.code, "jira_refused");
+  assert.equal(r.refusal.details.reason, "issue_not_found");
+  assert.deepEqual(r.calls.map((c) => c.name), ["getAccessibleAtlassianResources", "getJiraIssue"]);
+});
+
+test("transition refuses jira_refused site_ambiguous with two Jira sites", async () => {
+  const r = await refusal(happy({ getAccessibleAtlassianResources: json([jira, { ...jira, id: OTHER, url: "https://t.atlassian.net" }]) }));
+  assert.equal(r.refusal.code, "jira_refused");
+  assert.equal(r.refusal.details.reason, "site_ambiguous");
+  assert.deepEqual(r.calls.map((c) => c.name), ["getAccessibleAtlassianResources"]);
+});
+
+test("transition maps a missing sign-in, a 401 or 403 and no Jira-scoped site to jira_auth", async () => {
+  const cases: Table[] = [
+    { getAccessibleAtlassianResources: new ConnectionError("needs sign-in", true) },
+    { getJiraIssue: failed(401) },
+    { getJiraIssue: failed(403) },
+    { getJiraIssue: { isError: true, text: "MCP error: requires sign-in" } },
+    { getAccessibleAtlassianResources: json([confluence]) },
+    { getAccessibleAtlassianResources: json([{ ...jira, scopes: ["read:jira-work"] }]) },
+  ];
+  for (const [i, over] of cases.entries()) {
+    const r = await refusal(happy(over));
+    assert.equal(r.refusal.code, "jira_auth", `case ${i}`);
+    assert.equal(r.refusal.exit, 3, `case ${i}`);
+    assert.equal(r.refusal.message, "Atlassian needs a sign-in. Run: pi mcp login atlassian", `case ${i}`);
+  }
+});
+
+test("transition maps 429, 5xx, a 400 of the transition, a timeout and unparseable text to jira_failed", async () => {
+  const cases: Array<[Table, string]> = [
+    [{ getJiraIssue: failed(429) }, "getJiraIssue"],
+    [{ getJiraIssue: failed(503) }, "getJiraIssue"],
+    [{ transitionJiraIssue: failed(400, "Failed to transition issue: Bad Request. Transition id '2' is not valid for this issue.") }, "transitionJiraIssue"],
+    [{ getTransitionsForJiraIssue: new Error("timed out after 30000ms") }, "getTransitionsForJiraIssue"],
+    [{ getJiraIssue: { isError: false, text: "not json at all" } }, "getJiraIssue"],
+    [{ getJiraIssue: json({ fields: {} }) }, "getJiraIssue"],
+    [{ getTransitionsForJiraIssue: json({ nope: [] }) }, "getTransitionsForJiraIssue"],
+    [{ transitionJiraIssue: json({ success: true }) }, "transitionJiraIssue"],
+    [{ getAccessibleAtlassianResources: { isError: false, text: "{}" } }, "getAccessibleAtlassianResources"],
+  ];
+  for (const [i, [over, tool]] of cases.entries()) {
+    const r = await refusal(happy(over));
+    assert.equal(r.refusal.code, "jira_failed", `case ${i}`);
+    assert.equal(r.refusal.exit, 1, `case ${i}`);
+    assert.equal(r.refusal.details.tool, tool, `case ${i}`);
+  }
+});
+
+function body(over: Record<string, unknown> = {}): string {
+  return JSON.stringify({ server: SERVER, ticket: "ABC-1", target: "in_review", names: NAMES, ...over });
+}
+
+test("main refuses a stdin that is not the request with usage before connecting", async () => {
+  let opened = 0;
+  const open = (async () => void opened++) as any;
+  const cases: Array<[string[], NodeJS.ProcessEnv, string]> = [
+    [ARGS, ENV, "not json"],
+    [ARGS, ENV, body({ ticket: "abc-1" })],
+    [ARGS, ENV, body({ ticket: "ABC-" })],
+    [ARGS, ENV, body({ target: "later" })],
+    [ARGS, ENV, body({ names: { ...NAMES, in_review: "" } })],
+    [ARGS, ENV, body({ server: { command: "x" } })],
+    [ARGS, ENV, body({ server: {} })],
+    [[], ENV, body()],
+    [ARGS, {}, body()],
+  ];
+  for (const [i, [argv, env, stdin]] of cases.entries()) {
+    const r = await main(argv, env, "/cwd", stdin, open);
+    assert.equal(r.exit, 2, `case ${i}`);
+    assert.equal((r.value as any).ok, false, `case ${i}`);
+    assert.equal((r.value as any).error.code, "usage", `case ${i}`);
+  }
+  assert.equal(opened, 0);
+});
+
+test("main connects with the server of the request and prints one ok line for a move", async () => {
+  const f = scripted(happy());
+  let closed = 0;
+  const opens: unknown[][] = [];
+  const open = (async (...a: unknown[]) => {
+    opens.push(a);
+    return { call: f.call, close: async () => void closed++ };
+  }) as any;
+  const server = { url: "https://mcp.atlassian.com/v1/mcp/authv2", exposure: "deferred" };
+  const r = await main(ARGS, ENV, "/cwd", body({ server }), open);
+  assert.equal(opens.length, 1);
+  assert.equal(opens[0]![0], "/x/index.js");
+  assert.equal(opens[0]![1], "/agent");
+  assert.equal(opens[0]![2], "/cwd");
+  assert.deepEqual(opens[0]![3], server);
+  assert.deepEqual(r, { value: { ok: true, ticket: "ABC-1", target: "in_review", outcome: "moved", from: "In Progress", to: "In Review" }, exit: 0 });
+  assert.equal(closed, 1);
+});
+
+test("main prints a failure as ok false with its code and exit and closes the connection", async () => {
+  let closed = 0;
+  const mk = (table: Table) => (async () => ({ call: scripted(table).call, close: async () => void closed++ })) as any;
+  const r = await main(ARGS, ENV, "/cwd", body(), mk(happy({ getTransitionsForJiraIssue: json({ transitions: [] }) })));
+  assert.equal(r.exit, 1);
+  const v = r.value as any;
+  assert.equal(v.ok, false);
+  assert.equal(v.error.code, "jira_refused");
+  assert.equal(typeof v.error.message, "string");
+  assert.equal(v.error.details.reason, "no_transition");
+  assert.equal(closed, 1);
+
+  const auth = await main(ARGS, ENV, "/cwd", body(), mk(happy({ getJiraIssue: failed(401) })));
+  assert.equal(auth.exit, 3);
+  assert.equal((auth.value as any).error.code, "jira_auth");
+  assert.equal(closed, 2);
+
+  const thrown = await main(ARGS, ENV, "/cwd", body(), (async () => { throw new Error("cannot open"); }) as any);
+  assert.equal(thrown.exit, 1);
+  assert.equal((thrown.value as any).error.code, "jira_helper_failed");
+  assert.equal(closed, 2);
+});
+
+test("run as a script it prints one usage line for an empty stdin", () => {
+  const r = spawnSync(process.execPath, [helper, "--coding-agent", "/nonexistent/pi/index.js"], {
+    input: "",
+    env: { ...process.env, PI_CODING_AGENT_DIR: "/nonexistent/agent" },
+    encoding: "utf8",
+    timeout: 30000,
+  });
+  assert.equal(r.status, 2, r.stderr);
+  const lines = r.stdout.trim().split("\n");
+  assert.equal(lines.length, 1);
+  assert.equal(JSON.parse(lines[0]!).error.code, "usage");
+});

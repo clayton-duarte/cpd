@@ -74,6 +74,9 @@ fn parse_scope_of(file: &Path, text: &str, kind: Option<ScopeKind>) -> Result<Sc
             }
         }
     }
+    if let Some(jira) = scope.pr.as_ref().and_then(|pr| pr.jira.as_ref()) {
+        super::jira::check(jira).map_err(|(name, why)| policy_invalid(file, Some(&format!("pr.jira.{name}")), why))?;
+    }
     if let Some(post) = scope.pr.as_ref().and_then(|pr| pr.post.as_ref()) {
         super::post::check(post).map_err(|(name, why)| policy_invalid(file, Some(&format!("pr.post.{name}")), why))?;
     }
