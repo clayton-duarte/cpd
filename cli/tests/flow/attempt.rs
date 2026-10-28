@@ -83,8 +83,8 @@ impl Rows {
         let work = self.fx.env.root().join("repos").join(format!("pay.pay--{key}-a1"));
         self.fx.env.sql(&format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                               status, appended, fingerprint, created_txn, created_at, kind, review)
-             VALUES ('pay', 'repo', '{key}', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{f}', cpd_txn(), 't', 'work', 0);
+                               status, appended, fingerprint, created_txn, created_at, kind)
+             VALUES ('pay', 'repo', '{key}', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{f}', cpd_txn(), 't', 'work');
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
              VALUES ('pay', '{key}-a1', '{key}', 1, 'S2', 'ladder', '{status}', 'cpd/pay--{key}-a1', '{work}', '{BASE}', 't');",
             f = "f".repeat(64),
@@ -144,7 +144,7 @@ fn git_fixture(files: &[(&str, &str)]) -> Git {
     git_fixture_kind(files, "work")
 }
 
-/// [`git_fixture`] with Job `api` of `kind` (`work`, `review`, `test` or `impl`).
+/// [`git_fixture`] with Job `api` of `kind` (`work`, `test` or `impl`).
 fn git_fixture_kind(files: &[(&str, &str)], kind: &str) -> Git {
     git_fixture_needing(files, kind, None, None)
 }
@@ -234,7 +234,7 @@ impl Git {
         Pr { key: key.into(), repo, lead }
     }
 
-    /// A Job of `pr` and of `kind` (`work` or `review`) with its Attempt `<key>-a1` in `status`: its worktree cut from the
+    /// A Job of `pr` and of `kind` (`work`, `test` or `impl`) with its Attempt `<key>-a1` in `status`: its worktree cut from the
     /// Lead Branch HEAD. Returns the worktree.
     fn attempt_in(&self, pr: &Pr, key: &str, status: &str, kind: &str) -> PathBuf {
         self.attempt_needing(pr, key, status, kind, None, None)
@@ -250,10 +250,9 @@ impl Git {
             .write("fixture", |tx| {
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                                       status, appended, fingerprint, created_txn, created_at, kind, tests, test_files, review)
-                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', ?5, ?6, ?7, ?8)",
-                    // The pseudo-kind `review` is a `work` Job with the review flag.
-                    params![key, "f".repeat(64), tx.id(), pr.key, if kind == "review" { "work" } else { kind }, tests.map(|t| t.0), tests.map(|t| t.1), kind == "review"],
+                                       status, appended, fingerprint, created_txn, created_at, kind, tests, test_files)
+                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', ?5, ?6, ?7)",
+                    params![key, "f".repeat(64), tx.id(), pr.key, kind, tests.map(|t| t.0), tests.map(|t| t.1)],
                 )?;
                 if let Some(names) = needs {
                     tx.execute(
@@ -1087,17 +1086,6 @@ fn a_test_jobs_quick_check_and_tests_run_in_one_checks_span() {
     assert_eq!(fx.statuses(), [span("start"), span("end"), json!({"from": "running", "to": "merging"})]);
     let txns = fx.status_txns();
     assert_eq!(txns[1], txns[2]);
-}
-
-/// Guards the rule that a review Job has no checks and no span (green today).
-#[test]
-fn a_review_jobs_submit_records_no_check_span() {
-    let fx = git_fixture_kind(&[], "review");
-    let findings = fx.home.root().join("run/pay/reviews/api.md");
-    fs::create_dir_all(findings.parent().unwrap()).unwrap();
-    fs::write(&findings, "- one finding\n").unwrap();
-    fx.submit().ok();
-    assert_eq!(fx.statuses(), [json!({"from": "running", "to": "merging"})]);
 }
 
 // ---------- attempt read ----------

@@ -1,6 +1,6 @@
 name: CI
 
-# cpd's PR gate (hs-d16, hs-d17): the Gate, `npm run verify`, on the self-hosted runner on hs.
+# cpd's PR gate (hs-d16, hs-d17): the Gate, `pnpm run verify`, on the self-hosted runner on hs.
 on:
   push:
     branches: [main]
@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# One run per branch: a newer push cancels the older run of a pull request (the runner runs one job at a time).
+# One run per branch: a newer push cancels the older run of a pull request (each runner runs one job at a time; hs has two).
 # A push to main is never cancelled. GitHub keeps one running and one pending run per group, so a burst of merges
 # checks the first and the last (the last contains the others).
 concurrency:
@@ -36,20 +36,25 @@ jobs:
       # pi/test/gate.test.ts pins them equal. Each runs under gate-run.sh (the leak check); the first failure stops the job (hs-d355).
       # Installs node_modules when they are stale (the Gate does it in preverify).
       - name: Dependencies
-        run: scripts/npm-fresh.sh
+        run: scripts/pnpm-fresh.sh
       - name: Migrations frozen
-        run: scripts/gate-run.sh npm run verify:migrations
+        run: scripts/gate-run.sh pnpm run verify:migrations
       - name: Portability
-        run: scripts/gate-run.sh npm run verify:portable
+        run: scripts/gate-run.sh pnpm run verify:portable
       # tsc --noEmit: the repo's only static check besides the two above.
       - name: Typecheck
-        run: scripts/gate-run.sh npm run typecheck
+        run: scripts/gate-run.sh pnpm run typecheck
       - name: pi check
-        run: scripts/gate-run.sh npm run verify:pi
+        run: scripts/gate-run.sh pnpm run verify:pi
       # The Rust compiler: a compile error or warning shows here, apart from a failing test.
       - name: Rust build
-        run: scripts/gate-run.sh npm run verify:build
+        run: scripts/gate-run.sh pnpm run verify:build
       - name: Node tests
-        run: scripts/gate-run.sh npm run verify:node
+        run: scripts/gate-run.sh pnpm run verify:node
       - name: Rust tests
-        run: scripts/gate-run.sh npm run verify:rust
+        run: scripts/gate-run.sh pnpm run verify:rust
+        # CI runs one Gate per runner, so the cap of .config/nextest.toml (for several Gates at once) is not needed:
+        # 8 threads ran the tests in 90 s against 171 s at 4, with no leak. Delete the line if a leak shows.
+        # See docs/research/test-threads.md.
+        env:
+          NEXTEST_TEST_THREADS: "8"

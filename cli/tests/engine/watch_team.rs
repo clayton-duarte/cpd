@@ -338,7 +338,7 @@ fn e11_reports_pi_not_found_once_and_keeps_ticking() {
 #[test]
 fn e8_opens_the_review_item_for_a_cached_post_hermes_calls_needs_review() {
     // GitHub (the one answer of the fake) says nobody reviewed the pull request.
-    let gh = r#"{"data":{"viewer":{"login":"clayton-duarte"},"p0":{"pullRequest":{"isDraft":false,"state":"OPEN","reviewDecision":null,"author":{"login":"ryan"},"latestReviews":{"nodes":[]}}}}}"#;
+    let gh = r#"{"data":{"viewer":{"login":"clayton-duarte"},"p0":{"pullRequest":{"title":"Add retries","isDraft":false,"state":"OPEN","reviewDecision":null,"author":{"login":"ryan"},"latestReviews":{"nodes":[]}}}}}"#;
     let t = team_with(Some(3600), None, gh);
     // The post is unclaimed and just made, on the clock the engine reads.
     let now = t.fx.fakes.clock.utc().unix_timestamp();
@@ -346,5 +346,5 @@ fn e8_opens_the_review_item_for_a_cached_post_hermes_calls_needs_review() {
         .replace("TS", &now.to_string());
     t.answer(&format!("0 {post}"));
     let db = t.db();
-    t.run_until(move |_| items(&db).contains(&("pr:acme/pay#812".to_owned(), "review pay#812".to_owned())));
+    t.run_until(move |_| items(&db).contains(&("pr:acme/pay#812".to_owned(), "review pay#812\nAdd retries".to_owned())));
 }

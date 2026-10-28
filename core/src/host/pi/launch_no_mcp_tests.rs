@@ -27,13 +27,13 @@ fn lead_argv(plan: Option<&str>, start: LeadStart) -> Vec<String> {
     lead(&LeadLaunch { home: &home, session: &session, plan: plan.as_ref(), extensions: &extensions, plannotator: &plannotator, start }).argv
 }
 
-fn worker_argv(fork: Option<&Path>) -> Vec<String> {
+fn worker_argv() -> Vec<String> {
     let home = home();
     let session = SessionId::parse(ID).unwrap();
     let plan = PlanId::parse("cpd2").unwrap();
     let attempt = AttemptId::new(JobKey::parse("rs-host").unwrap(), NonZeroU32::new(2).unwrap());
     let extensions = strs(&["/opt/cpd/pi"]);
-    worker(&WorkerLaunch { home: &home, session: &session, plan: &plan, attempt: &attempt, model: "p/m:high", extensions: &extensions, fork }).argv
+    worker(&WorkerLaunch { home: &home, session: &session, plan: &plan, attempt: &attempt, model: "p/m:high", extensions: &extensions }).argv
 }
 
 /// `--no-mcp` is in `argv` exactly once, and before the `--` that ends the options when there is one; the rest of `argv` is `rest`, in order: nothing else was added or removed.
@@ -100,10 +100,9 @@ fn a_side_fork_has_no_mcp_once_with_and_without_a_first_message() {
     assert_no_mcp_once(&lead_argv(Some("cpd2"), fork(None)), &strs(&base));
 }
 
-fn worker_rest(fork: &[&str]) -> Vec<String> {
+fn worker_rest() -> Vec<String> {
     let mut rest: Vec<String> = crate::host::priority::idle_prefix().iter().map(|s| (*s).to_owned()).collect();
     rest.extend(strs(&["pi", "--approve", "--no-skills", "--exclude-tools", WORKER_EXCLUDED_TOOLS, "-e", "/opt/cpd/pi", "--model", "p/m:high"]));
-    rest.extend(strs(fork));
     rest.extend(strs(&[
         "--session-id", ID, "-n", "cpd2 rs-host a2", "--",
         "Read /cpd-home/run/cpd2/specs/rs-host-a2.md and follow it exactly. Your attempt id is rs-host-a2.",
@@ -113,12 +112,7 @@ fn worker_rest(fork: &[&str]) -> Vec<String> {
 
 #[test]
 fn a_worker_has_no_mcp_once_before_the_double_dash() {
-    assert_no_mcp_once(&worker_argv(None), &worker_rest(&[]));
-}
-
-#[test]
-fn a_review_worker_has_no_mcp_once_before_the_double_dash() {
-    assert_no_mcp_once(&worker_argv(Some(Path::new("/s/lead.jsonl"))), &worker_rest(&["--fork", "/s/lead.jsonl"]));
+    assert_no_mcp_once(&worker_argv(), &worker_rest());
 }
 
 #[test]

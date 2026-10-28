@@ -1,5 +1,5 @@
 //! The optional Spec field `resources` (contract §2.2, commands.md §5.1, §5.2, §5.7): stored, checked against the
-//! repo policy's declared names, refused on a review Job, shown by `job show` and `plan render`, not fingerprinted.
+//! repo policy's declared names, shown by `job show` and `plan render`, not fingerprinted.
 
 use crate::common;
 
@@ -83,14 +83,6 @@ fn resource_spec_job_edit_spec_refuses_an_undeclared_resource() {
     let details = refused(&run, "resource_undeclared", 3)["details"].clone();
     assert_eq!((details["job"].as_str(), details["resource"].as_str()), (Some("a"), Some("gpu")));
     assert_eq!(details["declared"], json!(["e2e-port"]));
-}
-
-#[test]
-fn resource_spec_resources_are_refused_on_a_review_job() {
-    let fx = world();
-    add(&fx, "a", None, &[]).ok();
-    let run = add(&fx, "rev", Some(json!(["e2e-port"])), &["--review"]);
-    assert_eq!(refused(&run, "spec_invalid", 2)["details"]["path"], "$.resources");
 }
 
 #[test]

@@ -33,6 +33,8 @@ pub enum Command {
     Dismiss(DismissArgs),
     /// Hand a review-requested item to the review Context's Manager (§21.7)
     Claim(DismissArgs),
+    /// Approve the pending deployments of a deploy item (§21.13)
+    Approve(DismissArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -99,6 +101,7 @@ pub fn run_with(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Snooze(args) => snooze(ports, args),
         Command::Dismiss(args) => dismiss(ports, args),
         Command::Claim(args) => claim(ports, args),
+        Command::Approve(args) => approve(ports, args),
     }
 }
 
@@ -325,7 +328,7 @@ fn snooze(ports: &Ports, args: SnoozeArgs) -> Result<Output, CpdError> {
     let item = store.write("inbox snooze", |tx| {
         let item = open_item(tx, args.id)?;
         tx.execute("UPDATE inbox_items SET snoozed_until = ?2 WHERE id = ?1", params![item.id, until])?;
-        let event = NewEvent::inbox_snoozed(format!("Inbox item {} snoozed until {said}: {}.", item.id, item.label), item.id, &until);
+        let event = NewEvent::inbox_snoozed(format!("Inbox item {} snoozed until {said}: {}.", item.id, model::one_line(&item.label)), item.id, &until);
         events::append(tx, scoped(event, &item))?;
         model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))
     })?;
@@ -347,7 +350,7 @@ fn dismiss(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
             return Ok((item, true));
         }
         tx.execute("UPDATE inbox_items SET dismissed_at = ?2 WHERE id = ?1", params![item.id, timestamp(now)])?;
-        let event = NewEvent::inbox_dismissed(format!("Inbox item {} dismissed: {}.", item.id, item.label), item.id);
+        let event = NewEvent::inbox_dismissed(format!("Inbox item {} dismissed: {}.", item.id, model::one_line(&item.label)), item.id);
         events::append(tx, scoped(event, &item))?;
         Ok((model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))?, false))
     })?;
@@ -362,6 +365,50 @@ fn dismiss(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
 /// the `session-message` to the review Context's Manager and the `eyes` reaction queued on the PR's Slack post (the cache's
 /// channel and the post's `ts_raw`) in one transaction, and a stopped Manager started after it. An already claimed item and a
 /// refusal queue nothing.
+fn approve(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
+    let mut env = Env::open_with(ports)?;
+    approve_in(&mut env, args.id)
+}
+
+/// `inbox approve` (§21.13): the preconditions, then the READ and WRITE of `gh`, then the clean-up of the cache and the item.
+pub(super) fn approve_in(env: &mut Env, id: i64) -> Result<Output, CpdError> {
+    let item = env.store.read(|conn| open_item(conn, id))?;
+    if item.kind != Kind::Deploy {
+        return Err(CpdError::new(ErrorCode::NotApprovable, format!("Inbox item {id} is not approvable: only a deploy item is."))
+            .with("item", item.id)
+            .with("kind", item.kind.as_str()));
+    }
+    let (repo, run_id) = item
+        .subject
+        .strip_prefix("deploy:")
+        .and_then(|s| s.split_once('#'))
+        .and_then(|(repo, run)| Some((repo, run.parse::<u64>().ok()?)))
+        .filter(|(repo, _)| repo.split_once('/').is_some_and(|(o, r)| !o.is_empty() && !r.is_empty()))
+        .ok_or_else(|| CpdError::bad_row(format!("Inbox item {id} has an invalid deploy subject: {:?}.", item.subject)))?;
+    let environments = crate::pr::deploys::approvable(&*env.ports.runner, &env.home, repo, run_id)?;
+    if !environments.is_empty() {
+        crate::pr::deploys::approve(&*env.ports.runner, &env.home, repo, run_id, &environments)?;
+    }
+    crate::pr::deploys::forget_run(&env.home, repo, run_id)?;
+    let closed_at = timestamp(env.ports.clock.utc());
+    env.store.write("inbox approve", |tx| {
+        if let Some(now) = model::get(tx, id)?.filter(|i| i.closed_at.is_none()) {
+            model::close_item(tx, &now, &closed_at)?;
+        }
+        Ok(())
+    })?;
+    let mut fields = json!({
+        "id": id,
+        "repo": repo,
+        "run_id": run_id,
+        "environments": environments.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+    });
+    if environments.is_empty() {
+        fields["already"] = json!(true);
+    }
+    Ok(Output::success(fields))
+}
+
 fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
     let mut env = Env::open_with(ports)?;
     let now = ports.clock.utc();
@@ -426,10 +473,10 @@ fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
     let claimed = timestamp(now);
     let (channel, ts_raw) = (cache.channel.clone(), post.ts_raw.clone());
     let item = Ports::scope(ports, || {
-        session::send::send_as_user(&mut env, &manager, "inbox claim", &text, &format!("the review of {}", item.label), |tx| {
+        session::send::send_as_user(&mut env, &manager, "inbox claim", &text, &format!("the review of {}", model::one_line(&item.label)), |tx| {
             let item = open_item(tx, args.id)?;
             tx.execute("UPDATE inbox_items SET claimed_at = ?2 WHERE id = ?1", params![item.id, claimed])?;
-            let event = NewEvent::inbox_claimed(format!("Inbox item {} claimed: {}.", item.id, item.label), item.id);
+            let event = NewEvent::inbox_claimed(format!("Inbox item {} claimed: {}.", item.id, model::one_line(&item.label)), item.id);
             events::append(tx, scoped(event, &item))?;
             crate::pr::reactions::queue(tx, &channel, &ts_raw, "eyes")?;
             model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))

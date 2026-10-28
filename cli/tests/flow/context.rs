@@ -944,8 +944,8 @@ fn archivable(fx: &Fx) {
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
            VALUES ('fork-pay', 'lead', 'building-cpd', 'pay', 'Fork', '/', 'O3', 'stopped', 't', 't1', 'lead-pay'),
                   ('manager', 'manager', 'building-cpd', NULL, 'Manager', '/', 'O5', 'idle', 't', 't0', NULL);
-         INSERT INTO jobs (plan, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-           VALUES ('pay', 'api', 'r', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, 1, 't');
+         INSERT INTO jobs (plan, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, cancel_reason, cancel_requested_at, appended, created_txn, created_at)
+           VALUES ('pay', 'api', 'r', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'cancelled', 'a fixture', 't', 0, 1, 't');
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
            VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', 'worker1', 't');
          INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at)
@@ -1007,7 +1007,10 @@ fn archive_covers_plans_leads_forks_and_the_manager_with_one_event_each() {
 fn archive_refused_by_any_one_blocker_changes_nothing() {
     let fingerprint = "a".repeat(64);
     let blockers = [
-        ("job", format!("UPDATE jobs SET status = 'queued', fingerprint = '{fingerprint}' WHERE key = 'api'")),
+        ("job", format!(
+                "INSERT INTO jobs (plan, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, fingerprint, appended, created_txn, created_at)
+                 VALUES ('pay', 'blk', 'r', 'Blk', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', '{fingerprint}', 0, 1, 't')"
+            )),
         (
             "escalation",
             "INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)

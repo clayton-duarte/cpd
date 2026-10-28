@@ -5,7 +5,7 @@
 use super::inbox;
 use super::testkit::Fx;
 
-const PR_READY_OPEN: &str = "SELECT count(*) FROM inbox_items WHERE kind = 'pr-ready' AND label LIKE '% ready to merge' AND closed_at IS NULL";
+const PR_READY_OPEN: &str = "SELECT count(*) FROM inbox_items WHERE kind = 'pr-ready' AND label LIKE '% ready to merge' || char(10) || '%' AND closed_at IS NULL";
 const REPO: &str = "missionlane/card-dashboard";
 
 fn fx() -> Fx {

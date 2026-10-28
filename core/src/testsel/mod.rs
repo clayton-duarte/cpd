@@ -158,7 +158,7 @@ pub fn run(ports: &Ports, cwd: &Path, names: &[String], out: &mut dyn Write, err
     Ok(status)
 }
 
-/// `scripts/tests.sh build`: `nextest run --workspace --no-run`, then `npm run typecheck`; stops at the first failure.
+/// `scripts/tests.sh build`: `nextest run --workspace --no-run`, then `pnpm run typecheck`; stops at the first failure.
 pub fn build(ports: &Ports, cwd: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Result<u8, CpdError> {
     let root = repo_root(ports, cwd)?;
     let compiled = cargo(ports, &root, &["nextest", "run", "--workspace", "--no-run"])?;
@@ -166,7 +166,7 @@ pub fn build(ports: &Ports, cwd: &Path, out: &mut dyn Write, err: &mut dyn Write
     if !compiled.status.success() {
         return Ok(status_of(&compiled));
     }
-    let typechecked = process(ports, "npm", "npm", &["run", "typecheck"], &root)?;
+    let typechecked = process(ports, "pnpm", "pnpm", &["run", "typecheck"], &root)?;
     forward(out, err, &typechecked)?;
     Ok(status_of(&typechecked))
 }

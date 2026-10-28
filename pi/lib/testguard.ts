@@ -57,17 +57,18 @@ function cargoRun(name: string, args: string[]): string | undefined {
   return targeted(rest) ? undefined : shown.join(" ");
 }
 
-/** The unfiltered `npm test`, `npm run test` or the Gate `npm run verify`, as shown in the reason, or undefined. */
-function npmRun(args: string[]): string | undefined {
+/** The unfiltered `npm|pnpm test`, `run test` or the Gate `run verify` (pnpm also bare `pnpm verify`), as shown in the reason, or undefined. */
+function npmRun(prog: "npm" | "pnpm", args: string[]): string | undefined {
   let i = 0;
   while (i < args.length && args[i]!.startsWith("-")) i++;
   const sub = args[i];
   const isRun = sub === "run" || sub === "run-script";
-  const script = isRun ? args[i + 1] : sub === "test" || sub === "t" || sub === "tst" ? "test" : undefined;
-  if (script === "verify" && isRun) return "npm run verify";
+  const bareVerify = prog === "pnpm" && sub === "verify";
+  const script = isRun ? args[i + 1] : bareVerify ? "verify" : sub === "test" || sub === "t" || sub === "tst" ? "test" : undefined;
+  if (script === "verify" && (isRun || bareVerify)) return `${prog} run verify`;
   if (script !== "test") return undefined;
   const after = args.slice(i + (isRun ? 2 : 1));
-  return after.some((w) => w !== "--" && !w.startsWith("-")) ? undefined : isRun ? "npm run test" : "npm test";
+  return after.some((w) => w !== "--" && !w.startsWith("-")) ? undefined : isRun ? `${prog} run test` : `${prog} test`;
 }
 
 /**
@@ -78,7 +79,7 @@ export function unfilteredTestRun(command: string): string | undefined {
   for (const words of simpleCommands(command)) {
     const c = strip(words);
     if (!c) continue;
-    const hit = c.name === "cargo" || c.name === "cargo.sh" ? cargoRun(c.name, c.args) : c.name === "npm" ? npmRun(c.args) : undefined;
+    const hit = c.name === "cargo" || c.name === "cargo.sh" ? cargoRun(c.name, c.args) : c.name === "npm" || c.name === "pnpm" ? npmRun(c.name, c.args) : undefined;
     if (hit !== undefined) return hit;
   }
   return undefined;

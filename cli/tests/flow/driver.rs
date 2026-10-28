@@ -5,7 +5,7 @@
 //!
 //! There is no Reviewer (R19, Escalation rs-driver-a1-q1): a submitted Attempt
 //! goes straight to the merge. `attempt submit` runs no quick check and no Gate;
-//! the merge (A8) runs `gate.merge` (the repo's `pre-commit`) for every non-review
+//! the merge (A8) runs `gate.merge` (the repo's `pre-commit`) for every
 //! Job and `gate.pr` (the repo's `pre-merge`) for an `open`/`update` Job, while the
 //! Attempt is still `merging` (the tree shows it yellow). Contract §7.4 step 6, hs-d679.
 //!
@@ -383,40 +383,6 @@ fn job_merged_does_not_turn_while_other_jobs_run() {
     let (attempt, _) = live.run_job(JOB, work);
     assert_eq!(attempt["outcome"], "merged", "{attempt}");
     assert_eq!(merged_data(&live, JOB)["turn"], json!(false), "{}", merged_data(&live, JOB));
-}
-
-#[test]
-fn a_merged_review_job_turns() {
-    let live = live("");
-    // A review Job's Worker is a fork of the Lead: it waits for the Lead's session file to show a finished turn.
-    let file = live.fx.env.home().join(".pi/agent/sessions/lead/2026_lead1.jsonl");
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(&file, "{\"type\":\"session\"}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n").unwrap();
-    File::options().write(true).open(&file).unwrap().set_modified(std::time::SystemTime::UNIX_EPOCH).unwrap();
-    fixture(
-        &live.fx.env,
-        &format!(
-            "UPDATE sessions SET file = '{}' WHERE id = 'lead1';
-             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, review, created_txn, created_at)
-             VALUES ('pay', 'repo', 'final', 'Title of final', 'S2', 'Review it.', 'Because.', '[\"run/pay/reviews/final.md\"]', '[\"findings written\"]', '[]', 'draft', 1, 1, cpd_txn(), 't');",
-            file.display()
-        ),
-    );
-    let plan = PlanId::parse(PLAN).unwrap();
-    let all = store(&live.fx.env).read(|conn| jobs::load(conn, &plan)).unwrap();
-    let job = all.iter().find(|j| j.key == "final").unwrap();
-    fixture(&live.fx.env, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = 'pay' AND key = 'final';", locked_fingerprint(job)));
-    // Its Worker writes the findings and submits.
-    let (attempt, submitted) = live.run_job("final", |live, id| {
-        let findings = live.fx.env.cpd_home().join("run/pay/reviews/final.md");
-        fs::create_dir_all(findings.parent().unwrap()).unwrap();
-        fs::write(findings, "- one finding\n").unwrap();
-        submit(live, id)
-    });
-    assert_eq!(attempt["outcome"], "merged", "{attempt}");
-    assert_eq!(submitted["ok"], true, "{submitted}");
-    // No draft Job exists and `api` is queued: only the review makes it a turn.
-    assert_eq!(merged_data(&live, "final")["turn"], json!(true), "{}", merged_data(&live, "final"));
 }
 
 // ---------- PRs across repos (R34) ----------

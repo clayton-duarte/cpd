@@ -44,7 +44,7 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
         .with("attempt", id.to_string())
         .with("files", status.lines().map(|l| l.trim().to_owned()).collect::<Vec<_>>()));
     }
-    // 4. At least one commit ahead of base_sha; a review Job (B2) instead: none, and its findings.
+    // 4. At least one commit ahead of base_sha.
     let base = attempt
         .base_sha
         .clone()
@@ -56,21 +56,18 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
             .find(|j| j.key == attempt.job)
             .ok_or_else(|| CpdError::bad_row(format!("Attempt {plan}/{id} has no Job {}", attempt.job)))
     })?;
-    let review = job.review;
     // An `open` or `update` Job needs no commit: the base may not have moved (§7.3 precondition 3, §7.7).
     let cpd_job = matches!(job.kind.as_str(), "open" | "update");
-    if review {
-        require_review(&env, &plan, &id, &attempt.job, &base, ahead.trim() != "0")?;
-    } else if ahead.trim() == "0" && !cpd_job {
+    if ahead.trim() == "0" && !cpd_job {
         return Err(CpdError::new(ErrorCode::NoCommits, "There is no commit on top of the base: commit your work, then submit again.")
             .with("attempt", id.to_string())
             .with("base_sha", base));
     }
     let sha = git::run::rev_parse(&root, "HEAD")?;
     // 5 and 6. The checks, in ONE `checks` span (contract §7.7): the Worker's clocks stop from the first check to the end of the
-    // merge. A review Job has no checks and no span. Every way out ends the span once, before the error returns.
-    let span = if review { None } else { Some(span::open(&mut env, &plan, &id, &job.key)?) };
-    let checked = if review { Ok(()) } else { run_checks(&mut env, &plan, &id, &job, &attempt.job, &attempt.branch, &root, &base, &sha) };
+    // merge. Every way out ends the span once, before the error returns.
+    let span = span::open(&mut env, &plan, &id, &job.key)?;
+    let checked = run_checks(&mut env, &plan, &id, &job, &attempt.job, &attempt.branch, &root, &base, &sha);
     // The Worker is the only one who moves its HEAD, and it is waiting for us: but the
     // compare-and-swap of §6.1 is on the HEAD that was checked.
     let checked = checked.and_then(|()| match git::run::rev_parse(&root, "HEAD") {
@@ -81,10 +78,8 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
     match checked {
         Ok(()) => {}
         Err(e) => {
-            if let Some(span) = span {
-                // The refusal is what returns; a failed `end` is E2's to close (`died: true`).
-                let _ = span.end(&mut env);
-            }
+            // The refusal is what returns; a failed `end` is E2's to close (`died: true`).
+            let _ = span.end(&mut env);
             return Err(e);
         }
     };
@@ -98,9 +93,7 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
             };
         }
         // The span ends in this transaction, right before the Attempt is `merging`.
-        if let Some(span) = &span {
-            span.end_in(tx)?;
-        }
+        span.end_in(tx)?;
         let moved = tx.execute(
             "UPDATE attempts SET status = 'merging', submitted_sha = ?3,
                     submitted_at = (SELECT at FROM txns WHERE id = cpd_txn())
@@ -112,9 +105,8 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
                 .with("attempt", id.to_string()));
         }
         let text = format!(
-            "Attempt {id} of Job {} was submitted{}; the driver merges it. Next: cpd attempt show {id} --plan {plan}",
-            now.job,
-            if review { " (a review Job: nothing to check)" } else { "" }
+            "Attempt {id} of Job {} was submitted; the driver merges it. Next: cpd attempt show {id} --plan {plan}",
+            now.job
         );
         let job = crate::ids::JobKey::parse(&now.job).map_err(|_| CpdError::bad_row(format!("job key {:?}", now.job)))?;
         append(
@@ -130,16 +122,14 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
     let outcome = match written {
         Ok(outcome) => outcome,
         Err(e) => {
-            if let Some(span) = span {
-                let _ = span.end(&mut env);
-            }
+            let _ = span.end(&mut env);
             return Err(e);
         }
     };
     Ok(done(&id, &sha, outcome))
 }
 
-/// The checks of a non-review Job, in order: the tamper check, the guard of the `test` Jobs' files and the kind's check
+/// The checks of a Job, in order: the tamper check, the guard of the `test` Jobs' files and the kind's check
 /// (`[test-commands]`). The quick check and the Gates run at the merge (§7.4 step 6, hs-d679).
 #[allow(clippy::too_many_arguments)]
 fn run_checks(
@@ -169,29 +159,6 @@ fn run_checks(
     // is the Attempt's base for every Attempt (a parallel Attempt's `base_sha` is its branch point too).
     if kind::has_checks(job) {
         kind::check(env, plan, id, job, &policy, root, &lead, base, sha)?;
-    }
-    Ok(())
-}
-
-/// A review Job's preconditions (B2, contract §7.3 precondition 3): no commit
-/// ahead of `base` (`review_commits`), and a non-empty `run/<plan>/reviews/<job>.md` (`review_missing`).
-fn require_review(env: &Env, plan: &PlanId, id: &AttemptId, job: &str, base: &str, committed: bool) -> Result<(), CpdError> {
-    if committed {
-        return Err(CpdError::new(
-            ErrorCode::ReviewCommits,
-            "A review Job commits nothing: undo your commits (git reset --hard to the base commit), then submit again.",
-        )
-        .with("attempt", id.to_string())
-        .with("base_sha", base));
-    }
-    let findings = crate::job::findings_path(&env.home, plan, job);
-    if !std::fs::metadata(&findings).is_ok_and(|m| m.is_file() && m.len() > 0) {
-        return Err(CpdError::new(
-            ErrorCode::ReviewMissing,
-            format!("Write your findings to {} (not empty), then submit again.", findings.display()),
-        )
-        .with("attempt", id.to_string())
-        .with("path", findings.display().to_string()));
     }
     Ok(())
 }

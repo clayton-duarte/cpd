@@ -117,7 +117,8 @@ impl Fx {
     /// Urgency and status of the row of pull request `n`; the label is `shop#<n> <status>`.
     fn status(&mut self, n: i64) -> (Urgency, String) {
         let c = self.row(n);
-        let status = c.label.strip_prefix(&format!("shop#{n} ")).unwrap_or_else(|| panic!("label {:?}", c.label)).to_owned();
+        let row1 = c.label.split('\n').next().unwrap();
+        let status = row1.strip_prefix(&format!("shop#{n} ")).unwrap_or_else(|| panic!("label {:?}", c.label)).to_owned();
         (c.urgency, status)
     }
 }
@@ -137,7 +138,7 @@ fn an_authored_draft_pr_is_a_white_draft_row() {
     let mut f = fixture();
     f.pr(3, "draft = 1, merge_state = 'draft'");
     let c = f.row(3);
-    assert_eq!((c.urgency, c.label.as_str()), (White, "shop#3 draft"));
+    assert_eq!((c.urgency, c.label.as_str()), (White, "shop#3 draft\nT"));
     assert_eq!(c.subject, "pr:acme/shop#3");
     assert_eq!(c.url.as_deref(), Some("https://github.com/acme/shop/pull/3"));
 }
@@ -232,7 +233,7 @@ fn an_unposted_owned_postable_pr_of_a_post_owner_is_a_yellow_ready_for_review_ro
     f.pr(1, "checks = 'passed'");
     f.own("pay", 1);
     let c = f.row(1);
-    assert_eq!((c.urgency, c.label.as_str()), (Yellow, "shop#1 ready for user review"));
+    assert_eq!((c.urgency, c.label.as_str()), (Yellow, "shop#1 ready for user review\nT"));
     assert_eq!(c.plan.as_ref().map(|p| p.as_str()), Some("pay"));
     assert_eq!(c.context.as_ref().map(|p| p.as_str()), Some("ctx"));
     assert_eq!(c.session.as_ref().map(|p| p.as_str()), Some("l-pay"));

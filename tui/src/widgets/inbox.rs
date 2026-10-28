@@ -1,6 +1,6 @@
 //! The Inbox section at the bottom of the right column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a flat list, no
 //! rail, no fold. Its rows, top to bottom: a blank row, the header (`crate::section::flush_title`, `───<Inbox>───…<n>─`, from
-//! column 0), the ▲ line, one row per item `<glyph> <label> … <age>` (each with its tier's glyph and colour, hs-d483; one blank
+//! column 0), the ▲ line, two rows per item (Row 1 `<glyph> <label> … <age>`, Row 2 the muted subtitle; each with its tier's glyph and colour, hs-d483; one blank
 //! column on each side), and the ▼ line; with no item the list is the one muted row `up to date, drink some water`. Both cue
 //! lines are always reserved (blank when nothing is hidden); with more items than the column's rows give it, the items scroll
 //! with the wheel and the cue lines read `▲ <n> more` / `▼ <n> more` (`dialog::scroll::cue`, [`Shape`]).
@@ -34,6 +34,9 @@ use crate::link::{Link, Links};
 /// The columns before the label: the item's tier glyph and a space.
 const LEAD_WIDTH: usize = 2;
 
+/// The rows of an item: Row 1 names it, Row 2 is its muted subtitle (pro-d171).
+const ITEM_ROWS: usize = 2;
+
 /// The rows above the list: the blank row, the header and the ▲ line.
 const TOP: usize = 3;
 
@@ -55,7 +58,7 @@ pub enum Hit {
 }
 
 /// The rows of the section for `count` items: four rows and the list, which is capped with the section at `cap` rows and then
-/// scrolls from the item `scroll`, one row an item ([`Window`]).
+/// scrolls from the item `scroll`, [`ITEM_ROWS`] rows an item ([`Window`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Shape {
     count: usize,
@@ -79,9 +82,9 @@ impl Shape {
         Shape { scroll, ..self }
     }
 
-    /// The rows the section wants: the list (one row at least: the up-to-date row) and four more, at most the cap.
+    /// The rows the section wants: the list ([`ITEM_ROWS`] an item, one row at least: the up-to-date row) and four more, at most the cap.
     pub fn height(self) -> u16 {
-        let height = (self.count.max(1) + AROUND).min(usize::from(self.cap));
+        let height = ((self.count * ITEM_ROWS).max(1) + AROUND).min(usize::from(self.cap));
         u16::try_from(height).unwrap_or(u16::MAX)
     }
 
@@ -90,14 +93,14 @@ impl Shape {
         usize::from(self.height()).saturating_sub(AROUND)
     }
 
-    /// The items drawn and the cues.
+    /// The items drawn and the cues: the list holds `list_rows / ITEM_ROWS` items, an odd row stays blank.
     fn window(self) -> Window {
-        Window::new(self.count, self.list_rows(), self.scroll)
+        Window::new(self.count, self.list_rows() / ITEM_ROWS, self.scroll)
     }
 
     /// The largest scroll offset: the last item reaches the bottom of the list. 0 when all fit.
     pub fn max_scroll(self) -> usize {
-        Window::max_scroll(self.count, self.list_rows())
+        Window::max_scroll(self.count, self.list_rows() / ITEM_ROWS)
     }
 
     /// The scroll offset after a wheel notch down or up over the section: [`WHEEL_ROWS`] items a notch, clamped.
@@ -107,14 +110,14 @@ impl Shape {
         if down { (scroll + WHEEL_ROWS).min(max) } else { scroll.saturating_sub(WHEEL_ROWS) }
     }
 
-    /// The row `row` rows below the section's first: the header, or an item's row; the blank row, the cue lines and the
+    /// The row `row` rows below the section's first: the header, or either row of an item; the blank row, the cue lines and the
     /// up-to-date row are none.
     pub fn hit(self, row: u16) -> Option<Hit> {
         let row = usize::from(row);
         let win = self.window();
         match row {
             1 => Some(Hit::Header),
-            r if (TOP..TOP + win.shown).contains(&r) => Some(Hit::Item(win.first + r - TOP)),
+            r if (TOP..TOP + win.shown * ITEM_ROWS).contains(&r) => Some(Hit::Item(win.first + (r - TOP) / ITEM_ROWS)),
             _ => None,
         }
     }
@@ -263,6 +266,8 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
         }
         // a deploy item has no jump; its label is a Link to the run's page (pro-d100)
         Kind::Deploy => None,
+        // hs-d731: the Lead of the Plan opens, as for a `plan-review` with no url
+        Kind::DraftsParked => open_lead(tree, item.plan.as_ref()?).map(Jump::Run),
         // the label is a Link to the pull request; a click on the rest of the row opens the owning Plan's Lead (pro-d130)
         Kind::PrReady => open_lead(tree, item.plan.as_ref()?).map(Jump::Run),
         Kind::ReviewRequested => {
@@ -291,6 +296,7 @@ pub fn click(tree: &Tree, item: &Item) -> Option<Jump> {
 /// An entry of an item's right-click menu (commands.md §13.2): the labels are the contract's, exactly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Choice {
+    Approve,
     Claim,
     Snooze15,
     Snooze1h,
@@ -299,18 +305,23 @@ pub enum Choice {
 }
 
 impl Choice {
-    /// The entries of the menu of a row of `kind`, in order: `Claim` first on `review-requested` rows only.
+    /// The entries of the menu of a row of `kind`, in order: `Approve` first on `deploy` rows only, `Claim` first on `review-requested` rows only.
     pub fn entries(kind: Kind) -> Vec<Choice> {
         let rest = [Choice::Snooze15, Choice::Snooze1h, Choice::SnoozeTomorrow, Choice::Dismiss];
-        let claim = (kind == Kind::ReviewRequested).then_some(Choice::Claim);
-        claim.into_iter().chain(rest).collect()
+        let first = match kind {
+            Kind::Deploy => Some(Choice::Approve),
+            Kind::ReviewRequested => Some(Choice::Claim),
+            _ => None,
+        };
+        first.into_iter().chain(rest).collect()
     }
 
-    /// The words of the command of the item `id`: `inbox claim <id>`, `inbox snooze <id> <15m|1h|tomorrow>` (§21.3) or `inbox dismiss <id>` (§21.4).
+    /// The words of the command of the item `id`: `inbox approve <id>`, `inbox claim <id>`, `inbox snooze <id> <15m|1h|tomorrow>` (§21.3) or `inbox dismiss <id>` (§21.4).
     pub fn argv(self, id: i64) -> Vec<String> {
         let id = id.to_string();
         let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         match self {
+            Choice::Approve => words(&["inbox", "approve", &id]),
             Choice::Claim => words(&["inbox", "claim", &id]),
             Choice::Snooze15 => words(&["inbox", "snooze", &id, "15m"]),
             Choice::Snooze1h => words(&["inbox", "snooze", &id, "1h"]),
@@ -323,6 +334,7 @@ impl Choice {
 impl crate::menu::Entry for Choice {
     fn label(self) -> &'static str {
         match self {
+            Choice::Approve => "Approve",
             Choice::Claim => "Claim",
             Choice::Snooze15 => "Snooze 15 min",
             Choice::Snooze1h => "Snooze 1 h",
@@ -395,16 +407,22 @@ fn is_link(kind: Kind) -> bool {
     matches!(kind, Kind::PlanReview | Kind::ReviewWaiting | Kind::PrReady | Kind::ReviewRequested | Kind::Deploy)
 }
 
-/// An item's row, in the box's body: the item's tier glyph in its urgency's colour, a space, the label cut with
+/// A label's two rows: the text before its one `\n`, and the subtitle after it (empty for a one-row label).
+fn rows_of(label: &str) -> (&str, &str) {
+    label.split_once('\n').unwrap_or((label, ""))
+}
+
+/// An item's Row 1, in the box's body: the item's tier glyph in its urgency's colour, a space, the label cut with
 /// `…` so that it never reaches the age, and the age (`width` cells: the body's). Returns the line and the number of cells of the label.
 /// A merge of the item's pull request runs (hs-d495): `spin` is the spinner's frame, and the glyph cell shows it.
 /// The label of a link kind with a url is no text of the line: its cells are blank, for the [`Link`] drawn over them, which is as
 /// wide as the label and the cue (cut to the room before the age); the number of cells is that width.
 fn item_line(item: &Item, age: &str, width: usize, spin: Option<usize>) -> (Line<'static>, usize) {
     let room = width.saturating_sub(LEAD_WIDTH + 1 + cells::width(age));
+    let head = rows_of(&item.label).0;
     let linked = link_url(item).is_some();
-    let label = if linked { String::new() } else { truncate(&item.label, room) };
-    let label_width = if linked { (cells::width(&item.label) + 2).min(room) } else { cells::width(&label) };
+    let label = if linked { String::new() } else { truncate(head, room) };
+    let label_width = if linked { (cells::width(head) + 2).min(room) } else { cells::width(&label) };
     let gap = width.saturating_sub(LEAD_WIDTH + label_width + cells::width(age));
     let mut glyph = palette::item_span(item.kind, item.urgency);
     if let Some(frame) = spin {
@@ -455,12 +473,18 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, now: Offset
     }
     for at in 0..win.shown {
         let item = &items[win.first + at];
-        let row = TOP + at;
+        let row = TOP + at * ITEM_ROWS;
+        let (head, sub) = rows_of(&item.label);
         let (line, label_width) = item_line(item, &age_of(&item.opened_at, now), inner, spinning(item));
         put(buf, row, 1, line);
+        if !sub.is_empty() {
+            let mut spans = vec![" ".repeat(LEAD_WIDTH).into()];
+            spans.extend(phi::spans(&truncate(sub, inner.saturating_sub(LEAD_WIDTH)), palette::muted_text()));
+            put(buf, row + 1, 1, Line::from(spans));
+        }
         let y = area.y.saturating_add(u16::try_from(row).unwrap_or(u16::MAX));
         if let Some(url) = link_url(item).filter(|_| y < area.bottom()) {
-            let text = Line::from(phi::spans(&item.label, palette::clickable_text()));
+            let text = Line::from(phi::spans(head, palette::clickable_text()));
             drawn.draw(Link::new(url).text(text), Rect::new(area.x + 1 + LEAD_WIDTH as u16, y, label_width as u16, 1), buf);
         }
     }

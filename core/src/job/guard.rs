@@ -71,7 +71,6 @@ mod tests {
             spec: None,
             status: "queued".to_owned(),
             appended: false,
-            review: false,
             kind: kind.to_owned(),
             tests: None,
             test_files: None,

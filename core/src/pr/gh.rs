@@ -463,6 +463,22 @@ pub fn post_review(runner: &dyn Runner, repo: &str, number: &str, body: Vec<u8>)
     }
 }
 
+/// `gh api repos/<repo>/pulls/<number>`: the pull request's current head sha (`head.sha`). Anything else is `gh_failed`.
+pub fn pull_head(runner: &dyn Runner, repo: &str, number: &str) -> Result<String, CpdError> {
+    #[derive(Deserialize)]
+    struct Pull {
+        head: Head,
+    }
+    #[derive(Deserialize)]
+    struct Head {
+        sha: String,
+    }
+    let endpoint = format!("repos/{repo}/pulls/{number}");
+    let args = ["api", endpoint.as_str()];
+    let stdout = run_on(runner, Path::new("."), &args)?;
+    Ok(parse::<Pull>(&args, &stdout)?.head.sha)
+}
+
 /// Inline review comments, which `gh pr view` does not list. `{owner}/{repo}`
 /// are filled in by `gh` from `cwd`'s repo. Every page is read: `gh` 2.45 has no
 /// `--slurp`, so `--paginate` prints the pages as consecutive JSON arrays.

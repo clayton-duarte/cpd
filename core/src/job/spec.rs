@@ -10,7 +10,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::plan::jobs::JobSpec;
 
 const FIELDS: [&str; 5] = ["goal", "context", "touches", "acceptance", "out_of_scope"];
-/// The Spec fields any non-review Job may add (contract §2.2).
+/// The Spec fields any Job may add (contract §2.2).
 const OPTIONAL_FIELDS: [&str; 1] = ["resources"];
 /// The two more of a `test` Job's Spec (contract §2.2 "Job kinds"), refused for every other kind.
 const TEST_FIELDS: [&str; 2] = ["tests", "test_files"];
@@ -27,7 +27,7 @@ pub struct Spec {
     pub tests: Option<Vec<String>>,
     /// `test_files` of a `test` Job: the files that hold them (repo-relative paths or `dir/` prefixes).
     pub test_files: Option<Vec<String>>,
-    /// `resources` of a non-review Job: the names of the repo's declared exclusive resources it takes.
+    /// `resources` of a Job: the names of the repo's declared exclusive resources it takes.
     pub resources: Option<Vec<String>>,
 }
 
@@ -41,14 +41,6 @@ impl Spec {
                 (false, true) => return Err(invalid(&format!("$.{name}"), format!("unknown field: only a `test` Job's Spec has {name}, and this Job is `{kind}`"))),
                 _ => {}
             }
-        }
-        Ok(())
-    }
-
-    /// `resources` fit the Job: any kind but a review Job's (commands.md §5.1), else `spec_invalid` at `$.resources`.
-    pub fn check_resources_allowed(&self, review: bool) -> Result<(), CpdError> {
-        if review && self.resources.is_some() {
-            return Err(invalid("$.resources", "unknown field: a review Job takes no resources"));
         }
         Ok(())
     }

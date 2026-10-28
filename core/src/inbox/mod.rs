@@ -11,6 +11,8 @@ pub mod team;
 #[cfg(test)]
 mod blue_tests;
 #[cfg(test)]
+mod approve_tests;
+#[cfg(test)]
 mod deploy_tests;
 #[cfg(test)]
 mod claim_tests;
@@ -22,3 +24,7 @@ mod pr_tests;
 mod follow_tests;
 #[cfg(test)]
 mod dialog_tests;
+#[cfg(test)]
+mod rows_tests;
+#[cfg(test)]
+mod rows_review_tests;

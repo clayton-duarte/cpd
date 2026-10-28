@@ -109,6 +109,7 @@ pub const TABLE: &[Entry] = &[
     ("inbox snooze", &[], false),
     ("inbox dismiss", &[], false),
     ("inbox claim", &[], false),
+    ("inbox approve", &[], false),
     ("watch", &[Lead], false),
     ("tui", &[], false),
     ("doctor", &[], false),

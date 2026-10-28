@@ -36,6 +36,20 @@ const REFUSED = [
   "timeout 900 npm run verify",
   "npm run-script verify",
   "cd pi && npm test",
+  "pnpm test",
+  "pnpm run test",
+  "pnpm t",
+  "pnpm tst",
+  "pnpm test --silent",
+  "pnpm test --",
+  "pnpm test -- --test-reporter=spec",
+  "timeout 300 pnpm test",
+  "pnpm run verify",
+  "pnpm run verify --silent",
+  "timeout 900 pnpm run verify",
+  "pnpm run-script verify",
+  "pnpm verify",
+  "cd pi && pnpm test",
   "echo go; scripts/cargo.sh test --workspace | tail",
 ];
 
@@ -64,6 +78,15 @@ const ALLOWED = [
   "npm run typecheck",
   "npm run build",
   "npm install",
+  "pnpm test -- pi/test/x.test.ts",
+  "pnpm run test -- pi/test/x.test.ts",
+  "pnpm test pi/test/x.test.ts",
+  "pnpm run typecheck",
+  "pnpm run build",
+  "pnpm install",
+  "pnpm install --frozen-lockfile",
+  "pnpm exec tsc --noEmit",
+  "pnpm add chalk",
   "cargo build",
   "scripts/cargo.sh build --workspace",
   "cargo check --workspace",
@@ -76,6 +99,10 @@ const ALLOWED = [
   "echo cargo test",
   "# cargo test",
   "git log --grep 'npm test'",
+  "grep -r 'pnpm test' docs",
+  'echo "pnpm run verify"',
+  "# pnpm test",
+  "git log --grep 'pnpm test'",
 ];
 
 test("a full unfiltered test run is refused, however it is wrapped", () => {
@@ -93,6 +120,13 @@ test("the reason is one line naming the rule and what matched", () => {
   assert.equal(unfilteredTestRun("timeout 60 cargo nextest run"), "cargo nextest run");
   assert.equal(unfilteredTestRun("npm test"), "npm test");
   assert.equal(unfilteredTestRun("npm run verify"), "npm run verify");
+  assert.equal(unfilteredTestRun("pnpm test"), "pnpm test");
+  assert.equal(unfilteredTestRun("pnpm t"), "pnpm test");
+  assert.equal(unfilteredTestRun("pnpm run test"), "pnpm run test");
+  assert.equal(unfilteredTestRun("pnpm run verify"), "pnpm run verify");
+  assert.equal(unfilteredTestRun("pnpm run-script verify"), "pnpm run verify");
+  assert.equal(unfilteredTestRun("pnpm verify"), "pnpm run verify");
+  assert.equal(unfilteredTestRun("timeout 60 pnpm test"), "pnpm test");
 });
 
 // ---- through the adapter ----
@@ -112,12 +146,12 @@ const call = async (f: Fixture, command: string, toolName = "bash") => (await f.
 test("a Worker's full test runs get block and the rule's reason; the targeted ones run", async (t) => {
   const f = await started("worker");
   t.after(() => f.close());
-  for (const c of ["scripts/cargo.sh test --workspace", "cargo nextest run", "npm test", "npm run verify"]) {
+  for (const c of ["scripts/cargo.sh test --workspace", "cargo nextest run", "npm test", "npm run verify", "pnpm test", "pnpm run verify"]) {
     const r = await call(f, c);
     assert.equal(r?.block, true, c);
     assert.match(r?.reason ?? "", /^φ: a Worker runs only the tests its change touches; the full suite is the Gate's, run by the PR's open Job; refused: /);
   }
-  for (const c of ["scripts/cargo.sh nextest run -p cpd --test plan_overlap", "cargo test -p cpd-core spec::", "node --test pi/test/x.test.ts", "npm test -- pi/test/x.test.ts", "npm run typecheck", "cargo build"])
+  for (const c of ["scripts/cargo.sh nextest run -p cpd --test plan_overlap", "cargo test -p cpd-core spec::", "node --test pi/test/x.test.ts", "npm test -- pi/test/x.test.ts", "npm run typecheck", "pnpm test -- pi/test/x.test.ts", "pnpm run typecheck", "cargo build"])
     assert.equal(await call(f, c), undefined, c);
 });
 

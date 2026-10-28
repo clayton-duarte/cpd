@@ -96,7 +96,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
 }
 
 fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits: &Edits) -> Result<Decision, CpdError> {
-    plan_phase(conn, plan)?;
+    let phase = plan_phase(conn, plan)?;
     let all = jobs::load(conn, plan)?;
     let before = find(&all, plan, key)?;
     // open and update Jobs are cpd's, a draft one included.
@@ -144,7 +144,6 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     }
     if let Some(spec) = &edits.spec {
         spec.check_kind(&after.kind)?;
-        spec.check_resources_allowed(after.review)?;
         // The Spec names no primary checkout of a PR of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
         spec.check_primary_roots(&super::add::primary_roots(&load_prs(conn, plan)?), &std::env::home_dir().unwrap_or_default())?;
         spec.check_files_relative()?;
@@ -196,7 +195,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
         super::add::check_resources_declared(conn, home, plan, &after.pr, key.as_str(), names.as_deref())?;
     }
     if moved || after.kind != before.kind {
-        check_shape_allows(&load_prs(conn, plan)?, plan, &after.pr, &after.kind, after.review)?;
+        check_shape_allows(&load_prs(conn, plan)?, plan, &after.pr, &after.kind)?;
     }
     // A Job that changes PR keeps none of its old needs: they are checked against the new PR.
     if let Some(needs) = &edits.needs {
@@ -256,6 +255,9 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     }
     if fields.is_empty() {
         return Ok(Decision::Already(before.clone()));
+    }
+    if before.is_draft() {
+        crate::plan::parked::door(conn, plan, &phase, &all, &after)?;
     }
     Ok(Decision::Update { before: before.clone(), after, fields })
 }

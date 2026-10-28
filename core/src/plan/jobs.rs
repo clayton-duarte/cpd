@@ -41,8 +41,6 @@ pub struct Job {
     pub spec: Option<JobSpec>,
     pub status: String,
     pub appended: bool,
-    /// A review Job (`jobs.review`, B2).
-    pub review: bool,
     /// The Job's kind (`jobs.kind`, §2.2 "Job kinds"): one of [`KINDS`]; `work` for every Job before migration `job-kinds`.
     pub kind: String,
     /// A `test` Job's named tests (`jobs.tests`, a JSON array): set only with a Spec, and only for kind `test`.
@@ -128,7 +126,7 @@ impl Job {
         let spec = |f: fn(&JobSpec) -> Value| self.spec.as_ref().map_or(Value::Null, f);
         let mut value = json!({
             "key": self.key, "seq": self.seq, "pr": self.pr, "title": self.title, "kind": self.kind, "status": self.status, "tier": self.tier,
-            "appended": self.appended, "review": self.review, "urgent": self.urgent, "needs": self.needs,
+            "appended": self.appended, "urgent": self.urgent, "needs": self.needs,
             "goal": spec(|s| json!(s.goal)), "context": spec(|s| json!(s.context)), "touches": spec(|s| s.touches.clone()),
             "acceptance": spec(|s| s.acceptance.clone()), "out_of_scope": spec(|s| s.out_of_scope.clone()),
             "resources": self.resources.clone().unwrap_or_else(|| json!([])),
@@ -158,7 +156,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
     }
     let mut stmt = conn.prepare(
         "SELECT seq, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
-                fingerprint, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, review, urgent,
+                fingerprint, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, urgent,
                 kind, tests, test_files, test_approved, resources
            FROM jobs WHERE plan = ?1 ORDER BY seq",
     )?;
@@ -170,13 +168,13 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 (r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?, r.get::<_, Option<String>>(9)?),
                 (r.get::<_, String>(10)?, r.get::<_, bool>(11)?, r.get::<_, Option<String>>(12)?, r.get::<_, Option<String>>(13)?),
                 (r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?, r.get::<_, Option<String>>(16)?),
-                (r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?, r.get::<_, bool>(19)?, r.get::<_, bool>(20)?),
-                (r.get::<_, String>(21)?, r.get::<_, Option<String>>(22)?, r.get::<_, Option<String>>(23)?, r.get::<_, Option<String>>(24)?, r.get::<_, Option<String>>(25)?),
+                (r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?, r.get::<_, bool>(19)?),
+                (r.get::<_, String>(20)?, r.get::<_, Option<String>>(21)?, r.get::<_, Option<String>>(22)?, r.get::<_, Option<String>>(23)?, r.get::<_, Option<String>>(24)?),
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, review, urgent), (kind, tests, test_files, test_approved, resources))| {
+        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, urgent), (kind, tests, test_files, test_approved, resources))| {
             let array = |name: &str, text: &str| -> Result<Value, CpdError> {
                 serde_json::from_str::<Value>(text)
                     .ok()
@@ -211,7 +209,6 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 tier,
                 status,
                 appended,
-                review,
                 urgent,
                 fingerprint,
                 retry_tier,
@@ -318,7 +315,6 @@ mod tests {
             spec: Some(JobSpec { goal: "g".into(), context: "c".into(), touches: json!(["a"]), acceptance: json!(["b"]), out_of_scope: json!([]) }),
             status: status.into(),
             appended: false,
-            review: false,
             kind: "work".into(),
             tests: None,
             test_files: None,

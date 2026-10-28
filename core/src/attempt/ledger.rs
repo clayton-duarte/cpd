@@ -353,14 +353,12 @@ pub fn end_opened(
     let show = format!("cpd job show {job} --plan {plan}");
     let (status, failed_cause, event) = match end {
         End::Merged { sha } => {
-            // hs-d514: a review Job's merge turns the Lead; so does the merge that leaves a draft and no queued or running Job but
-            // `open` and `update` Jobs. An `open` Job's own merge never turns it.
+            // hs-d514: the merge that leaves a draft and no queued or running Job but `open` and `update` Jobs turns the Lead. An `open` Job's own merge never turns it.
             let turn = attempt.kind != "open"
                 && tx.query_row(
-                    "SELECT (SELECT review FROM jobs WHERE plan = ?1 AND key = ?2) = 1
-                         OR (EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND status = 'draft')
-                             AND NOT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND key != ?2 AND status IN ('queued', 'running')
-                                               AND kind NOT IN ('open', 'update')))",
+                    "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND status = 'draft')
+                        AND NOT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND key != ?2 AND status IN ('queued', 'running')
+                                          AND kind NOT IN ('open', 'update'))",
                     params![attempt.plan.as_str(), attempt.job.as_str()],
                     |r| r.get::<_, bool>(0),
                 )?;

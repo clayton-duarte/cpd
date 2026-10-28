@@ -71,22 +71,57 @@ type MarkdownLike = Renderable & { paddingX?: number; paddingY?: number; invalid
  */
 function balloonOf(child: MarkdownLike, side: BalloonSide, width: number, at?: number): string[] {
 	const margins = chatMargins();
-	if (width < MIN_BALLOON_WIDTH) return child.render(width);
+	if (width < MIN_BALLOON_WIDTH) {
+		// Pi's own rows: drop whatever the balloon left in the Markdown's cache and the balloon cached.
+		child.invalidate?.();
+		balloonCache.delete(child);
+		return child.render(width);
+	}
+	const paint = painter();
+	const text = (child as { text?: string }).text;
+	const hit = balloonCache.get(child);
+	if (hit && hit.text === text && hit.side === side && hit.width === width && hit.at === at && hit.margins === margins && hit.paint === paint) return hit.rows;
+	const rows = drawnBalloon(child, side, width, at, margins, paint);
+	watchInvalidate(child);
+	balloonCache.set(child, { text, side, width, at, margins, paint, rows });
+	return rows;
+}
+
+interface BalloonEntry { text: string | undefined; side: BalloonSide; width: number; at: number | undefined; margins: boolean; paint: ((line: string) => string) | undefined; rows: string[] }
+/** The finished balloon rows per Markdown child (docs/contract.md 6.9, Render cache). */
+const balloonCache = new WeakMap<object, BalloonEntry>();
+/** Children whose `invalidate` is wrapped, and whether the balloon itself is calling it. */
+const watched = new WeakSet<object>();
+let ownInvalidate = false;
+
+/** An external `child.invalidate()` drops the child's cached balloon; the balloon's own calls do not. */
+function watchInvalidate(child: MarkdownLike): void {
+	if (watched.has(child) || !child.invalidate) return;
+	watched.add(child);
+	const inner = child.invalidate.bind(child);
+	child.invalidate = () => {
+		if (!ownInvalidate) balloonCache.delete(child);
+		inner();
+	};
+}
+
+function drawnBalloon(child: MarkdownLike, side: BalloonSide, width: number, at: number | undefined, margins: boolean, paint: ((line: string) => string) | undefined): string[] {
 	const { paddingX, paddingY } = child;
 	child.paddingX = 0;
 	child.paddingY = 0;
-	child.invalidate?.();
 	let rows: string[];
+	ownInvalidate = true;
 	try {
+		child.invalidate?.();
 		rows = child.render(width - balloonGap(side, margins));
 	} finally {
 		child.paddingX = paddingX;
 		child.paddingY = paddingY;
 		child.invalidate?.();
+		ownInvalidate = false;
 	}
 	if (rows.length === 0) return rows;
 	// Markdown pads every row to the full width; the balloon fits the longest row instead.
-	const paint = painter();
 	const fitted = rows.map((row) => row.replace(/ +((?:\x1b\[[0-9;]*m)*)$/, "$1")).map((row) => paint ? paint(row) : row);
 	return drawBalloon(fitted, side, width, at, margins);
 }

@@ -44,6 +44,8 @@ pub enum Kind {
     ModelsChanged,
     /// A workflow run waits for the User's approval (pro-d100): one entry of `run/deploy-runs.json`.
     Deploy,
+    /// A Plan has parked drafts its Lead did not resolve (hs-d731, hs-d733); always magenta, linked to the Plan and its Lead.
+    DraftsParked,
 }
 
 impl Kind {
@@ -67,12 +69,13 @@ impl Kind {
             Kind::LoopGuard => "loop-guard",
             Kind::ModelsChanged => "models-changed",
             Kind::Deploy => "deploy",
+            Kind::DraftsParked => "drafts-parked",
         }
     }
 
     pub fn parse(s: &str) -> Option<Kind> {
         use Kind::*;
-        [Dialog, PlanReview, ReviewWaiting, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested, CurateRetire, CurateDocs, LoopGuard, ModelsChanged, Deploy]
+        [Dialog, PlanReview, ReviewWaiting, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested, CurateRetire, CurateDocs, LoopGuard, ModelsChanged, Deploy, DraftsParked]
             .into_iter()
             .find(|k| k.as_str() == s)
     }
@@ -283,6 +286,17 @@ pub fn engine_running(home: &CpdHome) -> Result<bool, CpdError> {
     Ok(!shared)
 }
 
+/// The one-line form of a two-row label (pro-d171), as every Event text names an item: Row 1 and Row 2 joined with `: `;
+/// just Row 1 when Row 2 is empty.
+#[must_use]
+pub fn one_line(label: &str) -> String {
+    match label.split_once('\n') {
+        Some((row1, row2)) if !row2.is_empty() => format!("{row1}: {row2}"),
+        Some((row1, _)) => row1.to_owned(),
+        None => label.to_owned(),
+    }
+}
+
 /// The items of `filter`. Open ones come in §2.2's order: red, yellow,
 /// magenta, blue, cyan, white, then the oldest `opened_at` first. A plain read.
 pub fn list(conn: &Connection, filter: &Filter) -> Result<Vec<Item>, CpdError> {
@@ -307,15 +321,22 @@ pub fn list(conn: &Connection, filter: &Filter) -> Result<Vec<Item>, CpdError> {
     }
 }
 
+/// Closes `item` at `closed_at` and appends its `inbox-closed` Event, scoped with the item's links.
+pub fn close_item(tx: &crate::store::WriteTxn<'_>, item: &Item, closed_at: &str) -> Result<(), CpdError> {
+    tx.execute("UPDATE inbox_items SET closed_at = ?2 WHERE id = ?1", params![item.id, closed_at])?;
+    let event = NewEvent::inbox_closed(format!("Inbox item {} closed: {}.", item.id, one_line(&item.label)), item.id, item.kind.as_str());
+    events::append(tx, scope(event, &item.context, &item.plan, &item.job, &item.session))?;
+    Ok(())
+}
+
 /// Closes the open `pr-ready` item of the pull request `repo#number` (hs-n404), in the caller's transaction, at its time, as
 /// [`reconcile`] does (`closed_at`, `inbox-closed`): every path that stores a pull request as merged calls it, so the item
 /// never waits for E8's next pass. Nothing is written when no such item is open.
 pub fn close_pr_ready(tx: &crate::store::WriteTxn<'_>, repo: &str, number: i64) -> Result<(), CpdError> {
     let subject = format!("pr:{repo}#{number}");
     for item in open_items(tx)?.into_iter().filter(|i| i.kind == Kind::PrReady && i.subject == subject) {
-        tx.execute("UPDATE inbox_items SET closed_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?1", params![item.id])?;
-        let event = NewEvent::inbox_closed(format!("Inbox item {} closed: {}.", item.id, item.label), item.id, item.kind.as_str());
-        events::append(tx, scope(event, &item.context, &item.plan, &item.job, &item.session))?;
+        let at: String = tx.query_row("SELECT at FROM txns WHERE id = cpd_txn()", [], |r| r.get(0))?;
+        close_item(tx, &item, &at)?;
     }
     Ok(())
 }
@@ -336,10 +357,10 @@ impl Changes {
 /// The open items whose condition has the same identity and has moved inside it, and the item follows it in place
 /// without closing, so a snooze or a dismissal stays: a `curate-*` item (subject `curate-retire:<context>`) whose
 /// count moved changes its label (hs-d549, hs-d551); a `pr-ready` item changes its label or its links (url, context,
-/// plan, session); a `dialog` item changes its label (the Verdict's option).
+/// plan, session); a `dialog` item changes its label (the Verdict's option); a `drafts-parked` item changes its label (the count of drafts, hs-d731).
 fn relabelled<'a>(open: &'a [Item], conditions: &'a [Condition]) -> Vec<(&'a Item, &'a Condition)> {
     open.iter()
-        .filter(|i| matches!(i.kind, Kind::CurateRetire | Kind::CurateDocs | Kind::PrReady | Kind::Dialog))
+        .filter(|i| matches!(i.kind, Kind::CurateRetire | Kind::CurateDocs | Kind::PrReady | Kind::Dialog | Kind::DraftsParked))
         .filter_map(|i| conditions.iter().find(|c| c.identity() == i.identity()).map(|c| (i, c)))
         .filter(|(i, c)| {
             i.label != c.label
@@ -399,9 +420,7 @@ pub fn reconcile(store: &mut Store, conditions: &[Condition], now: &str) -> Resu
             }
         }
         for item in gone {
-            tx.execute("UPDATE inbox_items SET closed_at = ?2 WHERE id = ?1", params![item.id, now])?;
-            let event = NewEvent::inbox_closed(format!("Inbox item {} closed: {}.", item.id, item.label), item.id, item.kind.as_str());
-            events::append(tx, scope(event, &item.context, &item.plan, &item.job, &item.session))?;
+            close_item(tx, item, now)?;
             changes.closed.push(item.id);
         }
         for c in new {
@@ -425,7 +444,7 @@ pub fn reconcile(store: &mut Store, conditions: &[Condition], now: &str) -> Resu
             )?;
             let id = tx.last_insert_rowid();
             let event = NewEvent::inbox_opened(
-                format!("Inbox item {id} opened: {}.", c.label),
+                format!("Inbox item {id} opened: {}.", one_line(&c.label)),
                 id,
                 c.kind.as_str(),
                 c.urgency.as_str(),

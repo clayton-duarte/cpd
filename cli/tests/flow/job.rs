@@ -228,9 +228,9 @@ fn add_in_phase_plan_writes_a_draft_job_its_needs_and_an_event() {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     let out = job_add(&fx, "pl", "a", "S2", &[]).ok();
-    assert_eq!(out["job"], json!({"key": "a", "pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": false}));
+    assert_eq!(out["job"], json!({"key": "a", "pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "urgent": false}));
     let out = job_add(&fx, "pl", "b", "S3", &["a"]).ok();
-    assert_eq!(out["job"], json!({"key": "b", "pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S3", "needs": ["a"], "review": false, "urgent": false}));
+    assert_eq!(out["job"], json!({"key": "b", "pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S3", "needs": ["a"], "urgent": false}));
     assert!(out.get("already").is_none());
 
     assert_eq!(job_row(&fx.env, "pl", "b", "title"), "Title of b");
@@ -250,7 +250,7 @@ fn add_in_phase_plan_writes_a_draft_job_its_needs_and_an_event() {
     assert_eq!(added[1]["job"], "b");
     assert_eq!(added[1]["plan"], "pl");
     assert_eq!(added[1]["context"], "ctx");
-    assert_eq!(added[1]["data"], json!({"pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S3", "needs": ["a"], "review": false, "urgent": false}));
+    assert_eq!(added[1]["data"], json!({"pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S3", "needs": ["a"], "urgent": false}));
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM history WHERE tbl = 'jobs' AND op = 'insert'"), 2);
 }
 
@@ -275,7 +275,7 @@ fn add_in_phase_dispatch_or_deploy_appends_a_queued_job_with_its_fingerprint() {
             );
         }
         let out = job_add(&fx, "pl", "late", "H3", &["a"]).ok();
-        assert_eq!(out["job"], json!({"key": "late", "pr": "repo", "kind": "work", "status": "queued", "appended": true, "tier": "H3", "needs": ["a"], "review": false, "urgent": false}), "{phase}");
+        assert_eq!(out["job"], json!({"key": "late", "pr": "repo", "kind": "work", "status": "queued", "appended": true, "tier": "H3", "needs": ["a"], "urgent": false}), "{phase}");
         assert_eq!(job_row(&fx.env, "pl", "late", "appended"), 1);
         let id = PlanId::parse("pl").unwrap();
         let all = store(&fx.env).read(|conn| jobs::load(conn, &id)).unwrap();
@@ -802,9 +802,9 @@ fn list_shows_every_job_in_creation_order_and_filters_by_status() {
     assert_eq!(keys, ["a", "b", "c"]);
     assert_eq!(
         jobs[0],
-        json!({"key": "a", "title": "Title of a", "kind": "work", "status": "merged", "tier": "S2", "appended": false, "needs": [], "attempts": 1, "merged_sha": "c0ffee", "review": false, "urgent": false})
+        json!({"key": "a", "title": "Title of a", "kind": "work", "status": "merged", "tier": "S2", "appended": false, "needs": [], "attempts": 1, "merged_sha": "c0ffee", "urgent": false})
     );
-    assert_eq!(jobs[1], json!({"key": "b", "title": "Title of b", "kind": "work", "status": "queued", "tier": "S2", "appended": false, "needs": ["a"], "attempts": 0, "merged_sha": null, "review": false, "urgent": false}));
+    assert_eq!(jobs[1], json!({"key": "b", "title": "Title of b", "kind": "work", "status": "queued", "tier": "S2", "appended": false, "needs": ["a"], "attempts": 0, "merged_sha": null, "urgent": false}));
     assert_eq!(jobs[2]["attempts"], 1);
 
     let out = job(&fx, &["list", "--status", "queued"], "pl").ok();
@@ -1143,12 +1143,12 @@ fn add_draft_after_the_lock_is_an_appended_draft_that_stays_editable_and_cancell
         job_add(&fx, "pl", "a", "S2", &[]).ok();
 
         let out = job_add_draft(&fx, "pl", "d", &["a"], &[]).ok();
-        assert_eq!(out["job"], json!({"key": "d", "pr": "repo", "kind": "work", "status": "draft", "appended": true, "tier": "S2", "needs": ["a"], "review": false, "urgent": false}), "{phase}");
+        assert_eq!(out["job"], json!({"key": "d", "pr": "repo", "kind": "work", "status": "draft", "appended": true, "tier": "S2", "needs": ["a"], "urgent": false}), "{phase}");
         assert_eq!((job_row(&fx.env, "pl", "d", "status"), job_row(&fx.env, "pl", "d", "appended")), (json!("draft"), json!(1)));
         assert_eq!(job_row(&fx.env, "pl", "d", "fingerprint"), Value::Null);
         assert_eq!(
             events(&fx, "job-added").last().unwrap()["data"],
-            json!({"pr": "repo", "kind": "work", "status": "draft", "appended": true, "tier": "S2", "needs": ["a"], "review": false, "urgent": false})
+            json!({"pr": "repo", "kind": "work", "status": "draft", "appended": true, "tier": "S2", "needs": ["a"], "urgent": false})
         );
         // Its needs may be drafts; an identical rerun is `already`, as for any add.
         job_add_draft(&fx, "pl", "e", &["d"], &[]).ok();
@@ -1194,17 +1194,10 @@ fn a_queued_job_may_not_need_a_draft() {
     let e = refused(&job_add(&fx, "pl", "q", "S2", &["a", "d"]), "needs_unavailable", 3);
     assert_eq!(e["details"]["jobs"], json!(["d"]));
     assert!(e["message"].as_str().unwrap().contains("--draft"), "{e}");
-    // A review Job needs every Job of its PR, the draft among them.
-    let spec = spec_file(&fx.env);
-    let review = ["job", "add", "r", "--title", "Review", "--tier", "S2", "--spec", spec.as_str(), "--review", "--plan", "pl"];
-    let e = refused(&fx.cpd(&review), "needs_unavailable", 3);
-    assert_eq!(e["details"]["jobs"], json!(["d"]));
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, rows));
 
     // As drafts both are added: they are queued together when the review of the drafts is approved.
     assert_eq!(job_add_draft(&fx, "pl", "q", &["a", "d"], &[]).ok()["job"]["status"], "draft");
-    let out = job_add_draft(&fx, "pl", "r", &[], &["--review"]).ok();
-    assert_eq!((&out["job"]["status"], &out["job"]["needs"]), (&json!("draft"), &json!(["a", "d", "q"])));
 }
 
 // ---------- stub drafts (hs-d241, R1; commands.md §5.1, §5.2) ----------
@@ -1223,18 +1216,19 @@ fn add_draft_needs_only_a_title_and_stores_the_tier_and_the_spec_as_null() {
         let fx = Fx::new();
         setup(&fx.env);
         plan(&fx.env, "pl", phase);
-        job_add_draft(&fx, "pl", "a", &[], &[]).ok();
+        // `a` is queued after the lock: a stub that needs it waits (the door, hs-d731).
+        job_add(&fx, "pl", "a", "S2", &[]).ok();
 
-        let out = stub_add(&fx, "pl", "k", &[]).ok();
+        let out = stub_add(&fx, "pl", "k", &["--needs", "a"]).ok();
         let appended = phase != "plan";
-        assert_eq!(out["job"], json!({"key": "k", "pr": "repo", "kind": "work", "status": "draft", "appended": appended, "tier": null, "needs": [], "review": false, "urgent": false}), "{phase}");
+        assert_eq!(out["job"], json!({"key": "k", "pr": "repo", "kind": "work", "status": "draft", "appended": appended, "tier": null, "needs": ["a"], "urgent": false}), "{phase}");
         for column in ["tier", "goal", "context", "touches", "acceptance", "out_of_scope", "fingerprint"] {
             assert_eq!(job_row(&fx.env, "pl", "k", column), Value::Null, "{phase}: {column}");
         }
         assert_eq!((job_row(&fx.env, "pl", "k", "title"), job_row(&fx.env, "pl", "k", "status")), (json!("Title of k"), json!("draft")));
         assert_eq!(
             events(&fx, "job-added").last().unwrap()["data"],
-            json!({"pr": "repo", "kind": "work", "status": "draft", "appended": appended, "tier": null, "needs": [], "review": false, "urgent": false})
+            json!({"pr": "repo", "kind": "work", "status": "draft", "appended": appended, "tier": null, "needs": ["a"], "urgent": false})
         );
 
         // Either half may be given: the Tier alone, the Spec alone; needs work as for any draft.
@@ -1242,15 +1236,15 @@ fn add_draft_needs_only_a_title_and_stores_the_tier_and_the_spec_as_null() {
         let out = stub_add(&fx, "pl", "t", &["--tier", "S3", "--needs", "a"]).ok();
         assert_eq!((&out["job"]["tier"], &out["job"]["needs"]), (&json!("S3"), &json!(["a"])), "{phase}");
         assert_eq!((job_row(&fx.env, "pl", "t", "tier"), job_row(&fx.env, "pl", "t", "goal")), (json!("S3"), Value::Null));
-        stub_add(&fx, "pl", "s", &["--spec", &spec]).ok();
+        stub_add(&fx, "pl", "s", &["--spec", &spec, "--needs", "a"]).ok();
         assert_eq!((job_row(&fx.env, "pl", "s", "tier"), job_row(&fx.env, "pl", "s", "goal")), (Value::Null, json!("Do it.")));
         assert_eq!(job_row(&fx.env, "pl", "s", "touches"), "[\"src/a.rs\"]");
 
         // An identical rerun is `already` and writes nothing; the same key with other fields is a clash.
         let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-        assert_eq!(stub_add(&fx, "pl", "k", &[]).ok()["already"], true);
+        assert_eq!(stub_add(&fx, "pl", "k", &["--needs", "a"]).ok()["already"], true);
         assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
-        refused(&stub_add(&fx, "pl", "k", &["--tier", "S2"]), "job_key_exists", 3);
+        refused(&stub_add(&fx, "pl", "k", &["--tier", "S2", "--needs", "a"]), "job_key_exists", 3);
 
         // The stub is shown as it is, and can be cancelled.
         let shown = job(&fx, &["show", "k"], "pl").ok();
@@ -1265,7 +1259,7 @@ fn add_draft_needs_only_a_title_and_stores_the_tier_and_the_spec_as_null() {
 }
 
 #[test]
-fn add_without_draft_still_needs_the_tier_and_the_spec_and_a_review_job_never_is_a_stub() {
+fn add_without_draft_still_needs_the_tier_and_the_spec() {
     let fx = Fx::new();
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
@@ -1276,8 +1270,6 @@ fn add_without_draft_still_needs_the_tier_and_the_spec_and_a_review_job_never_is
         vec!["job", "add", "k", "--title", "T", "--plan", "pl"],
         vec!["job", "add", "k", "--title", "T", "--tier", "S2", "--plan", "pl"],
         vec!["job", "add", "k", "--title", "T", "--spec", spec.as_str(), "--plan", "pl"],
-        vec!["job", "add", "k", "--title", "T", "--draft", "--review", "--plan", "pl"],
-        vec!["job", "add", "k", "--title", "T", "--draft", "--review", "--tier", "S2", "--plan", "pl"],
     ] {
         let e = refused(&fx.cpd(&args), "usage", 2);
         assert!(e["message"].as_str().unwrap().contains("--draft"), "{args:?}: {e}");
@@ -1297,7 +1289,9 @@ fn edit_completes_a_stub_draft_with_its_tier_and_its_spec() {
         setup(&fx.env);
         plan(&fx.env, "pl", phase);
         let spec = spec_file(&fx.env);
-        stub_add(&fx, "pl", "k", &[]).ok();
+        // `a` is queued after the lock: the stubs that need it wait (the door, hs-d731).
+        job_add(&fx, "pl", "a", "S2", &[]).ok();
+        stub_add(&fx, "pl", "k", &["--needs", "a"]).ok();
 
         let out = job(&fx, &["edit", "k", "--tier", "S2", "--spec", &spec], "pl").ok();
         assert_eq!((&out["job"], &out["fields"]), (&json!({"key": "k", "status": "draft"}), &json!(["tier", "spec"])), "{phase}");
@@ -1318,14 +1312,14 @@ fn edit_completes_a_stub_draft_with_its_tier_and_its_spec() {
         assert_eq!(job(&fx, &["edit", "k", "--spec", &other], "pl").ok()["fields"], json!(["goal", "out_of_scope"]), "{phase}");
 
         // The Tier alone, then the Spec alone, complete a stub in two edits.
-        stub_add(&fx, "pl", "two", &[]).ok();
+        stub_add(&fx, "pl", "two", &["--needs", "a"]).ok();
         assert_eq!(job(&fx, &["edit", "two", "--tier", "S3"], "pl").ok()["fields"], json!(["tier"]), "{phase}");
         assert_eq!((job_row(&fx.env, "pl", "two", "tier"), job_row(&fx.env, "pl", "two", "goal")), (json!("S3"), Value::Null));
         assert_eq!(job(&fx, &["edit", "two", "--spec", &spec], "pl").ok()["fields"], json!(["spec"]), "{phase}");
         assert_eq!((job_row(&fx.env, "pl", "two", "tier"), job_row(&fx.env, "pl", "two", "goal")), (json!("S3"), json!("Do it.")));
 
         // A title edit leaves a stub a stub.
-        stub_add(&fx, "pl", "three", &[]).ok();
+        stub_add(&fx, "pl", "three", &["--needs", "a"]).ok();
         assert_eq!(job(&fx, &["edit", "three", "--title", "Renamed"], "pl").ok()["fields"], json!(["title"]));
         assert_eq!(job_row(&fx.env, "pl", "three", "tier"), Value::Null);
     }
@@ -1353,9 +1347,9 @@ fn a_job_is_not_urgent_unless_added_with_urgent() {
     assert_eq!(events(&fx, "job-added")[0]["data"]["urgent"], false);
 
     let out = job_add_urgent(&fx, "pl", "hot", &[]).ok();
-    assert_eq!(out["job"], json!({"key": "hot", "pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": true}));
+    assert_eq!(out["job"], json!({"key": "hot", "pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "urgent": true}));
     assert_eq!(job_row(&fx.env, "pl", "hot", "urgent"), 1);
-    assert_eq!(events(&fx, "job-added")[1]["data"], json!({"pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": true}));
+    assert_eq!(events(&fx, "job-added")[1]["data"], json!({"pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "urgent": true}));
 
     // The flag is not a Locked field: the same add with or without it is `already`, as for `--draft`.
     assert_eq!(job_add_urgent(&fx, "pl", "calm", &[]).ok()["already"], true);
@@ -1542,9 +1536,8 @@ fn add_kind_refusals_write_nothing() {
         let e = refused(&add_kind(&fx, "pl", "k", kind, &spec, "repo"), "kind_reserved", 3);
         assert_eq!(e["details"]["kind"], kind);
     }
-    // Not a kind (clap), and a review Job is a `work` Job.
+    // Not a kind (clap).
     refused(&add_kind(&fx, "pl", "k", "other", &spec, "repo"), "usage", 2);
-    refused(&fx.cpd(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec, "--kind", "docs", "--review", "--pr", "repo", "--plan", "pl"]), "usage", 2);
     // The Spec fits the kind: a `test` Job names its tests and files, every other kind neither.
     let e = refused(&add_kind(&fx, "pl", "k", "test", &spec, "repo"), "spec_invalid", 2);
     assert_eq!(e["details"]["path"], "$.tests");
@@ -1579,10 +1572,6 @@ fn a_job_cannot_need_an_open_or_an_update_job() {
     let e = refused(&job_add(&fx, "pl", "k", "S2", &["open-repo"]), "needs_unavailable", 3);
     assert_eq!(e["details"]["jobs"], json!(["open-repo"]));
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), writes);
-    // And a review Job does not take it as a Dependency.
-    let spec = spec_file(&fx.env);
-    let review = fx.cpd(&["job", "add", "rev", "--title", "R", "--tier", "S2", "--spec", &spec, "--review", "--draft", "--plan", "pl"]).ok();
-    assert_eq!(review["job"]["needs"], json!(["a"]));
 }
 
 #[test]
@@ -1618,12 +1607,7 @@ fn the_stored_shape_decides_the_kinds_a_waiting_pr_may_have() {
             }
         }
     }
-    // A review Job (kind `work`) is allowed in every shape; a PR from before the migration (`free`) allows every kind.
-    for shape in ["tdd", "docs", "config"] {
-        let key = format!("rev-{shape}");
-        fx.cpd(&["job", "add", &key, "--title", "R", "--tier", "S2", "--spec", &spec, "--review", "--draft", "--pr", shape, "--plan", "pl"]).ok();
-        assert_eq!(job_row(&fx.env, "pl", &key, "review"), json!(1));
-    }
+    // A PR from before the migration (`free`) allows every kind.
     for kind in ["work", "docs", "test", "impl"] {
         assert_eq!(add_kind(&fx, "pl", &format!("free-{kind}"), kind, &spec_of(kind), "repo").ok()["job"]["kind"], kind);
     }
@@ -1853,7 +1837,7 @@ fn add_edit_and_retry_refuse_h4_even_when_the_catalog_has_h4() {
     fixture(&fx.env, "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';");
     let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
     not_allowed(&job_add(&fx, "pl", "k", "H4", &[]), "H4");
-    not_allowed(&stub_add(&fx, "pl", "k", &["--tier", "H4"]), "H4");
+    not_allowed(&stub_add(&fx, "pl", "k", &["--tier", "H4", "--needs", "c"]), "H4");
     not_allowed(&job(&fx, &["edit", "b", "--tier", "H4"], "pl"), "H4");
     not_allowed(&job(&fx, &["retry", "a", "--tier", "H4"], "pl"), "H4");
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, rows));
@@ -1873,7 +1857,7 @@ fn add_edit_and_retry_refuse_gx_as_a_worker_tier() {
     engine(&fx.env, "pl", "c", "running");
     let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
     not_allowed(&job_add(&fx, "pl", "k", "GX", &[]), "GX");
-    not_allowed(&stub_add(&fx, "pl", "k", &["--tier", "GX"]), "GX");
+    not_allowed(&stub_add(&fx, "pl", "k", &["--tier", "GX", "--needs", "c"]), "GX");
     not_allowed(&job(&fx, &["edit", "b", "--tier", "GX"], "pl"), "GX");
     not_allowed(&job(&fx, &["edit", "b", "--tier", "GX", "--title", "New"], "pl"), "GX");
     not_allowed(&job(&fx, &["retry", "a", "--tier", "GX"], "pl"), "GX");

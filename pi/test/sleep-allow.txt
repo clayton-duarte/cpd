@@ -4,7 +4,6 @@ cli/tests/store/events.rs 1  # m-engine: sleep or wall-clock wait
 cli/tests/store/store.rs 3  # m-engine: sleep or wall-clock wait
 cli/tests/tooling/harness.rs 1  # m-tooling: sleep or wall-clock wait
 cli/tests/tui/tui_plan_cancelled.rs 1  # m-tui-t: sleep or wall-clock wait
-core/src/driver/worker.rs 1  # m-units: sleep or wall-clock wait
 core/src/host/deadline.rs 4  # m-units: sleep or wall-clock wait
 core/src/host/exe.rs 1  # m-units: sleep or wall-clock wait
 core/src/inbox/team.rs 2  # m-units: sleep or wall-clock wait

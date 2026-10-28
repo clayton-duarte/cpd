@@ -35,7 +35,7 @@ fn header(count: usize) -> String {
     format!("───{}{}{count}─", pill("Inbox"), "─".repeat(fill))
 }
 
-/// An item row aged `5m`: ` <glyph> <label>`, spaces, the age ending at column `W - 2`.
+/// Row 1 of an item aged `5m`: ` <glyph> <label>`, spaces, the age ending at column `W - 2`.
 fn item(glyph: &str, label: &str) -> String {
     format!(" {glyph} {label}{}5m", " ".repeat(W - 4 - label.chars().count() - 2))
 }
@@ -63,8 +63,9 @@ fn item_n(i: usize) -> String {
     item(palette::TIER_RED, &format!("item {i:02}"))
 }
 
+/// Both rows of each item of `range` (Row 2 is blank: the labels are one row).
 fn list(range: std::ops::Range<usize>) -> Vec<String> {
-    range.map(item_n).collect()
+    range.flat_map(|i| [item_n(i), blank()]).collect()
 }
 
 /// The first frame whose rows from `from_row` on are `want` (and whose height is `height`).
@@ -79,12 +80,12 @@ fn the_inbox_is_flat_and_pinned_to_the_bottom_of_the_column() {
     let _engine = engine(&fx);
     let frames = show(&fx, 20, vec![Signal::Commit, gone()], &World::new());
     let mut want = vec![blank(), header(4), blank()];
-    want.extend(FOUR.iter().map(|(g, l)| item(g, l)));
+    want.extend(FOUR.iter().flat_map(|(g, l)| [item(g, l), blank()]));
     want.push(blank());
-    let at = frame_at(&frames, 0, "the flat Inbox", 20, 12, &want);
+    let at = frame_at(&frames, 0, "the flat Inbox", 20, 8, &want);
     let screen = rows(&frames, at);
     assert_eq!(screen[..3], [blank(), " homeserver".to_owned(), USAGE.to_owned()], "{screen:?}");
-    assert_eq!(screen[3..12], vec![blank(); 9], "{screen:?}");
+    assert_eq!(screen[3..8], vec![blank(); 5], "{screen:?}");
     for row in &screen {
         for word in ["│", "╰", "expand", "collapse"] {
             assert!(!row.contains(word), "{word} in {row:?}");
@@ -111,11 +112,12 @@ fn an_inbox_that_overflows_fills_the_column_and_the_wheel_scrolls_it_between_cue
     let section = |up: Option<usize>, range: std::ops::Range<usize>, down: Option<usize>| -> Vec<String> {
         let mut v = vec![blank(), header(40), up.map_or_else(blank, |n| cue(&format!("▲ {n} more")))];
         v.extend(list(range));
+        v.push(blank()); // 27 list rows: 13 items and an odd blank row
         v.push(down.map_or_else(blank, |n| cue(&format!("▼ {n} more"))));
         v
     };
-    let top = section(None, 0..27, Some(13));
-    let scrolled = section(Some(3), 3..30, Some(10));
+    let top = section(None, 0..13, Some(27));
+    let scrolled = section(Some(3), 3..16, Some(24));
     let (down, up) = (MouseEventKind::ScrollDown, MouseEventKind::ScrollUp);
     let signals = vec![
         Signal::Commit,
@@ -182,18 +184,19 @@ fn scrolled_and_clicked(clicks: Vec<Signal>) -> (Vec<Screen>, Vec<Vec<String>>) 
 #[test]
 fn a_click_on_the_header_a_blank_row_or_a_cue_line_runs_nothing_and_a_click_on_an_item_jumps() {
     let mut scrolled = vec![blank(), header(40), cue("▲ 3 more")];
-    scrolled.extend(list(3..30));
-    scrolled.push(cue("▼ 10 more"));
+    scrolled.extend(list(3..16));
+    scrolled.push(blank());
+    scrolled.push(cue("▼ 24 more"));
 
-    let (frames, ran) = scrolled_and_clicked(vec![click(10, 3), click(10, 4), click(10, 5), click(10, 33)]);
+    let (frames, ran) = scrolled_and_clicked(vec![click(10, 3), click(10, 4), click(10, 5), click(10, 32), click(10, 33)]);
     let at = frame_at(&frames, 0, "the Inbox three down", 34, 3, &scrolled);
     for (i, f) in frames.iter().enumerate().skip(at) {
         assert_eq!(f.shown_rows()[3..], scrolled[..], "frame {i} changed after a click");
     }
     assert_eq!(ran, Vec::<Vec<String>>::new(), "those clicks run nothing");
 
-    // item 05 is the third list row of the window (items 03-29 from row 6): row 8
-    let (_, ran) = scrolled_and_clicked(vec![click(10, 8)]);
+    // item 05 is the third item of the window (items 03-15 from row 6, two rows each): rows 10 and 11
+    let (_, ran) = scrolled_and_clicked(vec![click(10, 10)]);
     assert_eq!(ran, [vec!["session".to_owned(), "open".to_owned(), "item-05".to_owned()]]);
 }
 
@@ -205,11 +208,11 @@ fn the_inbox_grows_upward_when_an_item_arrives() {
     let _engine = engine(&fx);
     let home = fx.env.cpd_home();
     let at = stamp(&fx, -330);
-    let before = vec![blank(), header(1), blank(), item(palette::TIER_RED, "first"), blank()];
+    let before = vec![blank(), header(1), blank(), item(palette::TIER_RED, "first"), blank(), blank()];
     let world = World::new().at(
         {
             let before = before.clone();
-            move |r| r.len() == 12 && r[7..] == before[..]
+            move |r| r.len() == 12 && r[6..] == before[..]
         },
         move || {
             let mut items = one();
@@ -226,7 +229,7 @@ fn the_inbox_grows_upward_when_an_item_arrives() {
         },
     );
     let frames = show(&fx, 12, vec![Signal::Commit, Signal::Commit, gone()], &world);
-    let first = frame_at(&frames, 0, "one item", 12, 7, &before);
-    let two = vec![blank(), header(2), blank(), item(palette::TIER_RED, "first"), item(palette::TIER_RED, "second"), blank()];
-    frame_at(&frames, first, "two items, grown upward", 12, 6, &two);
+    let first = frame_at(&frames, 0, "one item", 12, 6, &before);
+    let two = vec![blank(), header(2), blank(), item(palette::TIER_RED, "first"), blank(), item(palette::TIER_RED, "second"), blank(), blank()];
+    frame_at(&frames, first, "two items, grown upward", 12, 4, &two);
 }

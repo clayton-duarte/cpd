@@ -3,12 +3,12 @@
 //! session, and its session file.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
-use crate::attempt::ledger::{self, Attempt as Target};
+use crate::attempt::ledger::Attempt as Target;
 use crate::config::{Catalog, Config, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::clock::Clock;
@@ -23,37 +23,8 @@ use crate::ids::{AttemptId, EscalationId, PlanId, SessionId};
 use crate::metrics;
 use crate::plan::jobs::Job;
 use crate::ports::Ports;
-use crate::session::run::{quiet_since_with, turn_finished};
 use crate::attempt::ledger::{Cause, Stored};
 use crate::spec::{self, Answer, Evidence, Input, JobKind, Previous};
-use crate::store::Store;
-
-/// How often a review Job's driver looks at the Lead while it waits for it to be idle (§6.7 step 1).
-const LEAD_POLL: Duration = Duration::from_secs(2);
-
-/// A3's wait for the Lead logs one line this often (§3.4 A4).
-const WAIT_LOG: Duration = Duration::from_secs(10 * 60);
-
-/// When the next "still waiting" line is due: every `every` after `since`.
-struct WaitLog {
-    every: Duration,
-    last: Instant,
-}
-
-impl WaitLog {
-    fn new(every: Duration, since: Instant) -> Self {
-        Self { every, last: since }
-    }
-
-    /// Whether a line is due at `now`; true at most once per `every`.
-    fn due(&mut self, now: Instant) -> bool {
-        let due = now.duration_since(self.last) >= self.every;
-        if due {
-            self.last = now;
-        }
-        due
-    }
-}
 
 /// How the merge words a conflict's detail (`crate::merge`, §7.4 step 5):
 /// the file list follows it, comma-separated, ending with a full stop.
@@ -193,143 +164,7 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
             answers: &answers,
         },
     )?;
-    if job.review {
-        let base: String = conn.query_row(
-            "SELECT r.base FROM jobs j JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE j.plan = ?1 AND j.key = ?2",
-            params![target.plan.as_str(), job.key],
-            |r| r.get(0),
-        )?;
-        let findings = crate::job::findings_path(home, &target.plan, &job.key);
-        let base_text = std::fs::read_to_string(&path).map_err(|e| unreadable(&path, &e))?;
-        let text = review_spec(&base_text, target, &job.title, &base, &findings, home)?;
-        std::fs::write(&path, text).map_err(|e| unreadable(&path, &e))?;
-    }
     Ok(path)
-}
-
-fn unreadable(path: &Path, e: &std::io::Error) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("Cannot use {}: {e}.", path.display())).with("path", path.display().to_string())
-}
-
-/// A review Job's Spec (commands.md §16.1, B2): the Worker Spec `base_text` with
-/// its *Who you are*, *Rules* and *Finish* sections replaced. The Job,
-/// Previous Attempts and Answers sections are the Worker's own. The template
-/// belongs to the Worker Spec (`crate::spec`), so the replacement is made here, in code.
-fn review_spec(base_text: &str, target: &Target, title: &str, base: &str, findings: &Path, home: &CpdHome) -> Result<String, CpdError> {
-    let broken = |what: &str| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot render a review Job's Spec: the Worker Spec has no {what} section."))
-            .with("attempt", target.id.to_string())
-    };
-    let heading = base_text.find('\n').ok_or_else(|| broken("title"))?;
-    let rules = base_text.find("\n## Rules\n").ok_or_else(|| broken("Rules"))?;
-    let job = base_text.find("\n## Job\n").ok_or_else(|| broken("Job"))?;
-    let finish = base_text.find("\n## Finish\n").ok_or_else(|| broken("Finish"))?;
-    if !(heading < rules && rules < job && job < finish) {
-        return Err(broken("ordered"));
-    }
-    let (plan, attempt, number) = (&target.plan, &target.id, target.id.number());
-    let (key, lead, worktree) = (target.job.as_str(), &target.lead_branch, target.worktree.display());
-    let specs = home.plan_dir(plan).join("specs").display().to_string();
-    let findings = findings.display();
-    let who = format!(
-        "{title_line}\n\n## Who you are\n\n\
-         You are a CPD Worker on Attempt {number} of Job `{key}` ({title}) in Plan `{plan}`, a **review Job**: a fork of the Plan's Lead session, so you know the intention.\n\
-         Your attempt id is `{attempt}`. Your Tier is `{tier}`.\n\
-         Your worktree is `{worktree}`. Your current directory is that worktree.\n\n\
-         ## Rules\n\n\
-         - Review, do not build: **commit nothing** and do not edit the repo. The worktree must stay clean.\n\
-         - Read the diff of the Lead Branch against the base: `git diff {base}...{lead}`.\n\
-         - Read the Plan's Specs: `cpd plan show --plan {plan}`, and the rendered Specs in `{specs}`.\n\
-         - Write your findings, in Markdown, to `{findings}` (create its directory if it is missing). The file must not be empty. The Lead reads it and turns the findings into fix Jobs.\n\
-         - Never ask the User anything. You have no conversation with them.\n\
-         - If continuing would require guessing, ask the Lead and wait for the answer. The command blocks until the Lead answers:\n\n\
-         \x20     cpd ask {attempt} \"<your question>\"\n\n\
-         \x20 Ask one real blocker at a time. Do not ask what this Spec or the code already answers.\n\
-         - Do not stop until you have submitted.\n",
-        title_line = &base_text[..heading],
-        tier = target.tier,
-    );
-    let fin = format!(
-        "\n## Finish\n\n\
-         When `{findings}` holds your findings, run exactly:\n\n\
-         \x20   cpd attempt submit {attempt}\n\n\
-         If it succeeds, stop at once and make no more changes. If it refuses, the error code says what to do:\n\n\
-         - `wrong_worktree`: you ran it outside your worktree. Run it from the worktree.\n\
-         - `dirty_tree`: the worktree has changes. Undo them (`git checkout -- .`, delete stray files), then submit again.\n\
-         - `review_commits`: you committed. Undo it (`git reset --hard` to the Attempt's base commit), then submit again.\n\
-         - `review_missing`: the findings file does not exist or is empty. Write it, then submit again.\n\
-         - `attempt_not_running`: the Attempt was stopped. Stop.\n\n\
-         Do not stop until `cpd attempt submit` has succeeded.\n"
-    );
-    Ok(format!("{who}{}{fin}", &base_text[job..finish]))
-}
-
-/// The Lead Session a review Job's Worker forks, and its session file.
-#[derive(Clone, Debug)]
-pub struct Fork {
-    pub session: SessionId,
-    pub file: PathBuf,
-}
-
-/// A3 for a review Job (§3.4, B2): waits until the Plan's Lead is idle, by §6.7
-/// step 1 (its session file exists, its state is `idle` or `stopped`, its last
-/// message is a finished assistant turn, and the file has been quiet for
-/// `fork_quiet_seconds`), checking every 2 seconds without a limit, and returns
-/// what to fork. `None` when a cancel request was seen first (the safe point).
-/// The Lead is never interrupted. The wait does not count as active time
-/// (§3.4 A4): `log` gets one line every 10 minutes of it.
-pub fn wait_for_lead(
-    store: &mut Store,
-    config: &Config,
-    dirs: &PiDirs,
-    target: &Target,
-    log: &dyn Fn(&str),
-) -> Result<Option<Fork>, CpdError> {
-    wait_for_lead_with(&Ports::current(), store, config, dirs, target, log)
-}
-
-/// [`wait_for_lead`] on `ports`: the 2 s poll naps on `ports.clock`, the quiet of the Lead's file is read on its `utc()`.
-pub fn wait_for_lead_with(
-    ports: &Ports,
-    store: &mut Store,
-    config: &Config,
-    dirs: &PiDirs,
-    target: &Target,
-    log: &dyn Fn(&str),
-) -> Result<Option<Fork>, CpdError> {
-    let quiet = Duration::from_secs(u64::from(config.timeouts.fork_quiet_seconds));
-    let began = ports.clock.now();
-    let mut waits = WaitLog::new(WAIT_LOG, began);
-    loop {
-        if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
-            return Ok(None);
-        }
-        let (session, state, recorded) = store.read(|conn| lead_session(conn, &target.plan))?;
-        let file = recorded.map(PathBuf::from).filter(|p| p.is_file()).or_else(|| pi::session_file(dirs, &session));
-        if let Some(file) = file
-            && matches!(state.as_str(), "idle" | "stopped")
-            && quiet_since_with(&*ports.clock, &file, quiet)
-            && std::fs::read_to_string(&file).is_ok_and(|text| turn_finished(&text))
-        {
-            return Ok(Some(Fork { session, file }));
-        }
-        let now = ports.clock.now();
-        if waits.due(now) {
-            log(&format!("A3: still waiting for the Lead to be idle ({} minutes so far)", now.duration_since(began).as_secs() / 60));
-        }
-        ports.clock.sleep(LEAD_POLL);
-    }
-}
-
-/// The Plan's Lead Session: its id, state and recorded session file.
-fn lead_session(conn: &Connection, plan: &PlanId) -> Result<(SessionId, String, Option<String>), CpdError> {
-    let (id, state, file): (String, String, Option<String>) = conn.query_row(
-        "SELECT s.id, s.state, s.file FROM plans p JOIN sessions s ON s.id = p.lead_session WHERE p.id = ?1",
-        [plan.as_str()],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-    )?;
-    let session = SessionId::parse(&id).map_err(|_| bad(format!("lead session id {id:?} of Plan {plan}")))?;
-    Ok((session, state, file))
 }
 
 /// The Worker's pane, once pi runs in it.
@@ -350,7 +185,6 @@ pub fn start(
     dirs: &PiDirs,
     target: &Target,
     session: &SessionId,
-    fork: Option<&Fork>,
 ) -> Result<Pane, CpdError> {
     let model = catalog.model_arg(target.tier)?;
     let adapter = config.pi_adapter_dir()?;
@@ -363,7 +197,6 @@ pub fn start(
         attempt: &target.id,
         model: &model,
         extensions: &extensions,
-        fork: fork.map(|f| f.file.as_path()),
     });
     let spawn = launch.spawn(&target.worktree);
     let work = config.tmux.work_session.as_str();
@@ -516,18 +349,6 @@ mod tests {
         let result = retry_kill(3, Duration::ZERO, || { calls += 1; Err(failure()) }, || true);
         assert_eq!(calls, 1);
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn the_wait_log_is_due_every_period_and_not_before() {
-        let start = Instant::now();
-        let mut waits = WaitLog::new(WAIT_LOG, start);
-        assert!(!waits.due(start));
-        assert!(!waits.due(start + WAIT_LOG - Duration::from_secs(1)));
-        assert!(waits.due(start + WAIT_LOG));
-        assert!(!waits.due(start + WAIT_LOG + Duration::from_secs(1)));
-        assert!(waits.due(start + WAIT_LOG * 2));
-        assert_eq!(WAIT_LOG, Duration::from_secs(600));
     }
 
     #[test]

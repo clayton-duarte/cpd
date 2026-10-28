@@ -574,3 +574,150 @@ fn an_install_carries_the_compact_tools_extension_listed_in_its_package_json_and
     // The tests are under pi/test, which the install leaves out whole: pi/test/compact-tools goes with it.
     assert_eq!(directories_named(&rig.share().join(&id), "test"), Vec::<PathBuf>::new(), "no test directory anywhere under {id}");
 }
+
+// ---- the adapter's production packages, installed with pnpm beside `pi/` (docs/implementing.md `## cpd install`) ----
+
+const PACKAGE_WITH_DEPENDENCIES: &str = "{\n  \"name\": \"cpd\",\n  \"dependencies\": {\"left-pad\": \"1.3.0\"}\n}\n";
+const PNPM_LOCK: &str = "lockfileVersion: '9.0'\n# a lock\n";
+const PNPM_WORKSPACE: &str = "packages: []\n";
+const PNPM_REFUSED: &str = "pnpm install --prod --frozen-lockfile failed in";
+
+impl Rig {
+    /// Writes `text` at `path` of the checkout (the working tree, as the install reads it).
+    fn write_in_checkout(&self, path: &str, text: &str) {
+        let file = self.install.root.join(path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, text).unwrap();
+    }
+
+    /// The checkout has a root `package.json` with dependencies, a `pnpm-lock.yaml` and a `pnpm-workspace.yaml`.
+    fn with_pnpm_files(&self) {
+        self.write_in_checkout("package.json", PACKAGE_WITH_DEPENDENCIES);
+        self.write_in_checkout("pnpm-lock.yaml", PNPM_LOCK);
+        self.write_in_checkout("pnpm-workspace.yaml", PNPM_WORKSPACE);
+    }
+
+    /// A scripted `pnpm` that answers `reply` to every call.
+    fn pnpm_answers(&self, reply: Reply) {
+        (*self.fakes.runner).clone().on("pnpm", |_| true, reply);
+    }
+
+    fn pnpm_calls(&self) -> Vec<Call> {
+        self.fakes.runner.calls().into_iter().filter(|c| c.program.rsplit('/').next() == Some("pnpm")).collect()
+    }
+
+    /// An installed `cpd` and a `pi` link of an earlier install: (binary, link target).
+    fn earlier_install(&self) -> (PathBuf, String) {
+        let bin = self.installed_cpd();
+        fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        fs::write(&bin, "old cpd\n").unwrap();
+        let old = "pi.20260101T000000-1";
+        fs::create_dir_all(self.share().join(old)).unwrap();
+        symlink(old, self.share().join("pi")).unwrap();
+        (bin, old.to_string())
+    }
+}
+
+#[test]
+fn a_package_json_with_dependencies_is_installed_beside_the_adapter_with_pnpm() {
+    let rig = Rig::new();
+    rig.with_pnpm_files();
+    let (installed, seen) = (rig.installed_cpd(), Arc::new(Mutex::new(Vec::new())));
+    let log = seen.clone();
+    (*rig.fakes.runner).clone().on(
+        "pnpm",
+        move |_| {
+            log.lock().unwrap().push(installed.exists());
+            true
+        },
+        Reply::ok(""),
+    );
+
+    let run = rig.run();
+
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    let calls = rig.pnpm_calls();
+    assert_eq!(calls.len(), 1, "exactly one pnpm call: {calls:?}");
+    assert_eq!(calls[0].args, ["install", "--prod", "--frozen-lockfile"]);
+    assert_eq!(calls[0].cwd.as_deref(), Some(rig.share().as_path()));
+    assert_eq!(calls[0].deadline, Duration::from_secs(600));
+    for (file, text) in [("package.json", PACKAGE_WITH_DEPENDENCIES), ("pnpm-lock.yaml", PNPM_LOCK), ("pnpm-workspace.yaml", PNPM_WORKSPACE)] {
+        assert_eq!(fs::read(rig.share().join(file)).unwrap(), text.as_bytes(), "{file} in share");
+    }
+    assert_eq!(*seen.lock().unwrap(), [false], "the installed cpd does not exist yet when pnpm runs");
+    assert!(rig.installed_cpd().exists(), "the binary is replaced afterwards");
+}
+
+#[test]
+fn a_package_json_without_dependencies_runs_no_pnpm() {
+    let variants: [(&str, Option<&str>); 3] = [
+        ("only devDependencies", Some("{\"devDependencies\": {\"left-pad\": \"1.3.0\"}}\n")),
+        ("empty dependencies", Some("{\"dependencies\": {}}\n")),
+        ("no package.json", None),
+    ];
+    for (what, package) in variants {
+        let rig = Rig::new();
+        if let Some(text) = package {
+            rig.write_in_checkout("package.json", text);
+        }
+
+        let run = rig.run();
+
+        assert_eq!(run.exit, 0, "{what}: {}", run.stderr);
+        assert!(rig.pnpm_calls().is_empty(), "{what}: no pnpm call");
+        assert!(!rig.share().join("package.json").exists(), "{what}: no share/package.json");
+        assert!(rig.fakes.runner.unscripted().is_empty(), "{what}: {:?}", rig.fakes.runner.unscripted());
+    }
+}
+
+#[test]
+fn dependencies_without_a_pnpm_lockfile_refuse_the_install() {
+    let rig = Rig::new();
+    rig.write_in_checkout("package.json", PACKAGE_WITH_DEPENDENCIES);
+    rig.pnpm_answers(Reply::ok(""));
+
+    let run = rig.run();
+
+    assert_eq!(run.exit, 1, "{}", run.stderr);
+    assert!(
+        run.stderr.contains("cpd install refused: package.json has dependencies but the checkout has no pnpm-lock.yaml"),
+        "{}",
+        run.stderr
+    );
+    assert!(rig.pnpm_calls().is_empty(), "no pnpm call");
+    assert!(!rig.installed_cpd().exists(), "the binary is not installed");
+    assert!(fs::symlink_metadata(rig.share().join("pi")).is_err(), "pi is not linked");
+}
+
+#[test]
+fn a_failing_pnpm_refuses_the_install_before_the_binary_is_replaced() {
+    let rig = Rig::new();
+    rig.with_pnpm_files();
+    let (bin, old) = rig.earlier_install();
+    rig.pnpm_answers(Reply::exit(1, "", "ERR_PNPM_OUTDATED_LOCKFILE\n"));
+
+    let run = rig.run();
+
+    assert_eq!(run.exit, 1, "{}", run.stderr);
+    let want = format!("cpd install refused: {PNPM_REFUSED} {}:", rig.share().display());
+    assert!(run.stderr.starts_with(&want), "{}", run.stderr);
+    assert!(run.stderr.contains("ERR_PNPM_OUTDATED_LOCKFILE"), "{}", run.stderr);
+    assert_eq!(fs::read_to_string(bin).unwrap(), "old cpd\n", "the installed binary is untouched");
+    assert_eq!(fs::read_link(rig.share().join("pi")).unwrap().to_string_lossy(), old, "pi keeps its old target");
+}
+
+#[test]
+fn a_missing_pnpm_refuses_the_install_naming_pnpm() {
+    let rig = Rig::new();
+    rig.with_pnpm_files();
+    let (bin, old) = rig.earlier_install();
+    rig.pnpm_answers(Reply::io(std::io::ErrorKind::NotFound));
+
+    let run = rig.run();
+
+    assert_eq!(run.exit, 1, "{}", run.stderr);
+    let want = format!("cpd install refused: {PNPM_REFUSED} {}:", rig.share().display());
+    assert!(run.stderr.starts_with(&want), "{}", run.stderr);
+    assert_eq!(fs::read_to_string(bin).unwrap(), "old cpd\n", "the installed binary is untouched");
+    assert_eq!(fs::read_link(rig.share().join("pi")).unwrap().to_string_lossy(), old, "pi keeps its old target");
+}

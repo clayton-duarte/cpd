@@ -248,12 +248,14 @@ fn add_stores_the_realpath_of_the_main_worktree_of_the_repo_given() {
 #[test]
 fn add_in_dispatch_appends_the_pr() {
     let fx = crud("dispatch");
-    let out = fx.add("late", &fx.pay, &["--no-needs"]).ok();
+    // The PR waits for another PR: a PR that starts at once is refused its stub drafts (`draft_parked`).
+    fx.locked_pr("base", &fx.pay, "dispatch");
+    let out = fx.add("late", &fx.pay, &["--needs", "base"]).ok();
     assert_eq!(out["pr"]["appended"], true);
     assert_eq!(out["pr"]["status"], "waiting");
     assert_eq!(fx.events("pr-added")[0]["data"]["appended"], true);
     // A rerun still says it was appended.
-    assert_eq!(fx.add("late", &fx.pay, &["--no-needs"]).ok()["pr"]["appended"], true);
+    assert_eq!(fx.add("late", &fx.pay, &["--needs", "base"]).ok()["pr"]["appended"], true);
 }
 
 // ---------- pr add --shape: the template of stub drafts, and the stored shape (commands.md §9.4, contract §2.2 "Job kinds") ----------
@@ -303,7 +305,7 @@ fn add_lays_out_the_tdd_template_by_default_as_stub_drafts() {
     assert_eq!(kinds, [(json!("api-docs"), json!("docs")), (json!("api-tests"), json!("test")), (json!("api-impl"), json!("impl")), (json!("open-api"), json!("open"))]);
     assert_eq!(
         added[1]["data"],
-        json!({"pr": "api", "kind": "test", "status": "draft", "appended": false, "tier": null, "needs": ["api-docs"], "review": false, "urgent": false})
+        json!({"pr": "api", "kind": "test", "status": "draft", "appended": false, "tier": null, "needs": ["api-docs"], "urgent": false})
     );
     let order: Vec<i64> = [fx.events("pr-added")[0]["id"].as_i64().unwrap(), added[0]["id"].as_i64().unwrap()].to_vec();
     assert!(order[0] < order[1], "pr-added comes first: {order:?}");
@@ -392,7 +394,10 @@ fn the_opener_stub_carries_the_fixed_spec_and_open_tier() {
 fn the_stubs_of_a_pr_added_after_the_lock_are_appended_and_a_reopened_plan_goes_back_to_dispatch() {
     for phase in ["dispatch", "deploy"] {
         let fx = crud(phase);
-        fx.add_shape("late", Some("docs")).ok();
+        // The PR waits for another PR: a PR that starts at once is refused its stub drafts (`draft_parked`).
+        fx.locked_pr("base", &fx.pay, "dispatch");
+        let args = ["add", "late", "--repo", fx.pay.to_str().unwrap(), "--title", "Add retries", "--shape", "docs", "--needs", "base"];
+        fx.add_with_stubs("pay-1", &args).ok();
         assert_eq!(
             fx.stubs("late"),
             json!([
@@ -639,7 +644,9 @@ fn add_refusals_write_nothing() {
 fn add_in_deploy_or_done_reopens_the_plan_in_dispatch() {
     for phase in ["deploy", "done"] {
         let fx = crud(phase);
-        let out = fx.add("fix", &fx.pay, &[]).ok();
+        // The PR waits for another PR: a PR that starts at once is refused its stub drafts (`draft_parked`).
+        fx.locked_pr("base", &fx.pay, "dispatch");
+        let out = fx.add("fix", &fx.pay, &["--needs", "base"]).ok();
         assert_eq!((out["pr"]["appended"].clone(), out["pr"]["status"].clone()), (json!(true), json!("waiting")), "{phase}");
         let row: (String, Option<String>) = fx
             .store()
@@ -657,7 +664,7 @@ fn add_in_deploy_or_done_reopens_the_plan_in_dispatch() {
 
         // A rerun is already and writes nothing.
         let writes = fx.writes();
-        let again = fx.add("fix", &fx.pay, &[]).ok();
+        let again = fx.add("fix", &fx.pay, &["--needs", "base"]).ok();
         assert_eq!((again["already"].clone(), again["pr"]["appended"].clone()), (json!(true), json!(true)));
         assert_eq!(fx.writes(), writes);
     }
@@ -964,8 +971,10 @@ fn gh_args(fx: &Crud) -> Vec<Vec<String>> {
 
 #[test]
 fn edit_title_of_an_open_pull_request_retitles_it_on_github_first() {
-    let fx = crud("dispatch");
+    // Added before the lock: after it a PR that starts at once is refused its stub drafts (`draft_parked`).
+    let fx = crud("plan");
     fx.add("api", &fx.pay, &["--no-needs"]).ok();
+    fx.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z'");
     open_pr(&fx, Reply::ok("{}\n"));
 
     let out = fx.pr(&["edit", "api", "--title", "Charge the card"]).ok();
@@ -983,8 +992,10 @@ fn edit_title_of_an_open_pull_request_retitles_it_on_github_first() {
 
 #[test]
 fn edit_title_of_an_open_pull_request_stores_nothing_when_github_fails() {
-    let fx = crud("dispatch");
+    // Added before the lock: after it a PR that starts at once is refused its stub drafts (`draft_parked`).
+    let fx = crud("plan");
     fx.add("api", &fx.pay, &["--no-needs"]).ok();
+    fx.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z'");
     open_pr(&fx, Reply::exit(1, "", "HTTP 422: nope\n"));
     let writes = fx.writes();
 
@@ -1913,96 +1924,6 @@ fn a_merged_job_holds_the_pr_cancel_unless_superseded_and_the_others_are_cancell
     assert_eq!(fx.env.query::<String>("SELECT status FROM jobs WHERE key = 'done'"), "merged");
     assert_eq!(fx.events("pr-cancelled")[0]["data"], json!({"pr": "busyfix", "superseded_by": "other-1/storefix"}));
     assert_eq!(fx.cancelled_jobs(), ["d"]);
-}
-
-impl Crud {
-    /// A review Job (`review = 1`) of PR `pr` in `status` (`merged` or `running`).
-    fn review_job(&self, key: &str, pr: &str, status: &str) {
-        // `review` is set while the Job is still a draft: a Locked Job refuses the change.
-        self.job_kind(key, pr, "draft", "work");
-        self.env.sql(&format!("UPDATE jobs SET review = 1 WHERE key = '{key}'"));
-        self.env.sql(&format!(
-            "UPDATE jobs SET status = 'queued', fingerprint = printf('%064d', 1) WHERE key = '{key}';
-             UPDATE jobs SET status = 'running' WHERE key = '{key}'"
-        ));
-        if status == "merged" {
-            self.env.sql(&format!("UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = '{key}'"));
-        }
-    }
-}
-
-#[test]
-fn a_dispatch_pr_holding_only_a_merged_review_job_is_cancelled_without_superseded_by() {
-    let fx = crud("dispatch");
-    fx.locked_pr("api", &fx.pay, "merged");
-    fx.locked_pr("audit", &fx.web, "dispatch");
-    fx.review_job("rev", "audit", "merged");
-    fx.job_of("fixes", "audit", "work", "draft");
-    fx.job_of("open-audit", "audit", "open", "queued");
-
-    let out = fx.pr(&["cancel", "audit"]).ok();
-    assert_eq!(out["pr"], json!({"key": "audit", "status": "cancelled"}));
-    assert_eq!(out["phase"], "done");
-    assert_eq!((fx.pr_status("audit"), fx.phase()), ("cancelled".to_string(), "done".to_string()));
-    assert_eq!(fx.job_row("rev"), "merged/-/-");
-    assert_eq!((fx.job_row("fixes"), fx.job_row("open-audit")), ("cancelled/pr cancelled/-".to_string(), "cancelled/pr cancelled/-".to_string()));
-    assert_eq!(fx.cancelled_jobs(), ["fixes", "open-audit"]);
-
-    let cancelled = fx.events("pr-cancelled");
-    assert_eq!(cancelled.len(), 1);
-    assert_eq!(cancelled[0]["data"], json!({"pr": "audit"}));
-    assert_eq!(fx.events("plan-done").len(), 1);
-
-    let writes = fx.writes();
-    assert_eq!(fx.pr(&["cancel", "audit"]).ok()["already"], true);
-    assert_eq!(fx.writes(), writes);
-}
-
-#[test]
-fn a_merged_code_job_beside_a_merged_review_job_still_holds_the_pr_cancel() {
-    let fx = crud("dispatch");
-    fx.plan("other-1", "ctx", "deploy");
-    fx.merged_pr("other-1", "storefix", &fx.pay, 8);
-    fx.locked_pr("api", &fx.pay, "merged");
-    fx.locked_pr("busyfix", &fx.web, "dispatch");
-    fx.merged_job("code", "busyfix");
-    fx.review_job("rev", "busyfix", "merged");
-
-    let writes = fx.writes();
-    let error = fx.refused(&fx.pr(&["cancel", "busyfix"]), "pr_in_use", 3, writes);
-    assert_eq!(error["details"]["jobs"], json!(["code"]));
-    assert_eq!(fx.writes(), writes);
-    assert_eq!(fx.pr_status("busyfix"), "dispatch");
-
-    fx.pr(&["cancel", "busyfix", "--superseded-by", "other-1/storefix"]).ok();
-    assert_eq!(fx.pr_status("busyfix"), "cancelled");
-}
-
-#[test]
-fn a_running_review_job_still_holds_the_pr_cancel() {
-    let fx = crud("dispatch");
-    fx.locked_pr("api", &fx.pay, "merged");
-    fx.locked_pr("audit", &fx.web, "dispatch");
-    fx.review_job("rev", "audit", "running");
-
-    let writes = fx.writes();
-    let error = fx.refused(&fx.pr(&["cancel", "audit"]), "pr_in_use", 3, writes);
-    assert_eq!(error["details"]["jobs"], json!(["rev"]));
-    assert_eq!(fx.writes(), writes);
-    assert_eq!(fx.pr_status("audit"), "dispatch");
-}
-
-#[test]
-fn a_plan_whose_only_pr_ends_as_an_audit_stays_in_dispatch() {
-    let fx = crud("dispatch");
-    fx.locked_pr("audit", &fx.web, "dispatch");
-    fx.review_job("rev", "audit", "merged");
-
-    let out = fx.pr(&["cancel", "audit"]).ok();
-    assert_eq!(out["pr"], json!({"key": "audit", "status": "cancelled"}));
-    assert!(out.get("phase").is_none());
-    assert_eq!((fx.pr_status("audit"), fx.phase()), ("cancelled".to_string(), "dispatch".to_string()));
-    assert_eq!(fx.events("plan-done").len(), 0);
 }
 
 #[test]

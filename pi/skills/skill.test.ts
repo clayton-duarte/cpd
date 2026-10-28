@@ -209,7 +209,7 @@ test("cpd-lead is organised by the CPD flow: Context, Plan and Dispatch with the
   assert.deepEqual(flow, [
     "## 1. Context", "### Grounding", "### Grilling",
     "## 2. Plan", "### Clarifying", "### Scoping", "### Splitting", "### Orchestrating",
-    "## 3. Dispatch", DISPATCH_STEPS, "### Reviewing", "### Deploying",
+    "## 3. Dispatch", DISPATCH_STEPS, "### Deploying",
   ]);
   const deploying = section(text, "### Deploying").split("\n").filter((l) => /^#### /.test(l));
   assert.deepEqual(deploying, [
@@ -219,14 +219,14 @@ test("cpd-lead is organised by the CPD flow: Context, Plan and Dispatch with the
   assert.match(section(text, DISPATCH_STEPS), /\| `job-merged` \|/, "the Events table stays under the first Dispatch step");
 });
 
-/** The three stages and twelve steps of the CPD flow, in order (CONTEXT.md "The CPD flow"; contract §3.9). */
+/** The three stages and eleven steps of the CPD flow, in order (CONTEXT.md "The CPD flow"; contract §3.9). */
 const STAGES = ["Context", "Plan", "Dispatch"];
 const STEPS = [
   "Grounding", "Grilling", "Clarifying", "Scoping", "Splitting", "Orchestrating",
-  "Documenting", "Red testing", "Implementing", "Verifying", "Reviewing", "Deploying",
+  "Documenting", "Red testing", "Implementing", "Verifying", "Deploying",
 ];
 
-test("the Lead skill and CONTEXT.md name the same three stages and twelve steps, in order", () => {
+test("the Lead skill and CONTEXT.md name the same three stages and eleven steps, in order", () => {
   const flow = skillFiles("cpd-lead")[0]!.text.split("\n").filter((l) => /^#{2,3} /.test(l));
   const inFlow = flow.slice(flow.indexOf("## 1. Context"));
   assert.deepEqual(inFlow.filter((l) => l.startsWith("## ")).map((l) => l.replace(/^## \d+\. /, "")), STAGES, "the skill's stage headings");
@@ -234,14 +234,13 @@ test("the Lead skill and CONTEXT.md name the same three stages and twelve steps,
   const glossary = readFileSync(new URL("../../CONTEXT.md", here), "utf8");
   const entries = (kind: string) => [...glossary.matchAll(new RegExp(`^\\*\\*([^*]+)\\*\\* \\(${kind}\\b`, "gm"))].map((m) => m[1]!);
   assert.deepEqual(entries("stage").map((n) => n.replace(/ stage$/, "")), STAGES, "CONTEXT.md's stage entries");
-  assert.deepEqual(entries("step").filter((n) => STEPS.includes(n)), STEPS, "CONTEXT.md's step entries (Addressing is a thirteenth, inside Deploying)");
+  assert.deepEqual(entries("step").filter((n) => STEPS.includes(n)), STEPS, "CONTEXT.md's step entries (Addressing is a twelfth, inside Deploying)");
 });
 
 test("cpd-lead: no local review before the PR opens, and the overlaps are settled before the Plan review", () => {
   const text = skillFiles("cpd-lead")[0]!.text;
   const deploy = section(text, "### Deploying");
   assert.match(deploy, /No local review before the PR opens/);
-  assert.match(deploy, /final review Job stays optional/);
   const approving = section(text, "### Orchestrating");
   assert.ok(approving.indexOf("## Overlaps") >= 0, "Orchestrating reads the ## Overlaps section of plan render");
   assert.ok(approving.indexOf("## Overlaps") < approving.indexOf("Call `cpd_plan_review`"), "overlaps are settled before the review is called");
@@ -698,7 +697,6 @@ test("cpd-lead leaves a PR's conflict to the update Job and a feedback fix is on
   assert.match(addressing, /Append ONE `work` Job per cohesive fix/);
   assert.match(addressing, /The Job's merge pushes the Lead Branch to the pull request: nothing else is queued, no Gate runs/);
   assert.match(addressing, /A conflict with the base is unchanged: cpd queues an `update` Job \(never for a base that merely moved\)/);
-  assert.match(addressing, /only `work` Jobs and review Jobs are allowed there/);
   assert.doesNotMatch(addressing, /Queuing the first fix Job makes cpd queue/);
   assert.match(addressing, /never a plain `git push`/);
   assert.match(addressing, /never by adding an update Job yourself/);
@@ -788,17 +786,6 @@ test("the open Job and the update Job: cpd adds them, the Lead decides only when
   assert.match(fixes, /A Gate failure of a PR's open or update Job is not one/);
   assert.match(fixes, /On a PR that is already open, a fix Job is a `work` Job and its own merge carries it to the pull request/);
   assert.doesNotMatch(fixes, /makes cpd queue the PR's update Job/);
-});
-
-test("a review Job holds the open Job through a stub fix draft the Lead registers with it (hs-d497)", () => {
-  const lead = skillFiles("cpd-lead")[0]!.text;
-  const judging = section(lead, "### Reviewing");
-  assert.match(judging, /together with a stub draft for its fixes/);
-  assert.match(judging, /cpd job add <fixes> --title "Fix the findings of <k>" --draft --pr <key>/);
-  assert.match(judging, /keeps the PR's open Job from becoming Ready/);
-  assert.match(judging, /cancel the stub/);
-  const merged = lead.split("\n").find((l) => l.startsWith("| `job-merged`"))!;
-  assert.match(merged, /cancel the stub fix draft/);
 });
 
 test("cpd-manager: job approve-tests joins the commands that belong to a Lead and pr open leaves them (hs-d340, hs-d341)", () => {

@@ -1,6 +1,6 @@
 //! `cpd install` (commands.md §14.4, docs/implementing.md "`cpd install`"): the install, in Rust over `Ports`.
 //!
-//! The steps, in order: the preflight, the migration check, the verdict of the built binary, the binary, the
+//! The steps, in order: the preflight, the migration check, the verdict of the built binary, the config migration, the adapter's production packages (pnpm, step 4a), the binary, the
 //! adapter swap, the follow-ups, the tag. Only the migration check, the verdict and the binary exist so far as
 //! tests (`migration_tests`, `adapter_tests`).
 
@@ -13,6 +13,7 @@ use std::time::Duration;
 
 mod adapter;
 mod follow_up;
+mod packages;
 
 use crate::git::run::{Out, run_with};
 use crate::home::CpdHome;
@@ -74,6 +75,7 @@ fn steps(ports: &Ports, install: &Install, err: &mut dyn Write) -> Result<i32, S
     adapter::preflight(install)?;
     check_verdict(ports, install)?;
     migrate_config(ports, install, err)?;
+    packages::install_packages(ports, install)?;
     let dest = replace_binary(install)?;
     let displaced = adapter::swap(ports, install)?;
     adapter::verify(install)?;

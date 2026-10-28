@@ -1036,7 +1036,8 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
 
     // A PR appended after the lock is not reviewed: the review stays current.
     let web = fx.keyed_repo("web");
-    fx.cpd(&["pr", "add", "web", "--repo", web.to_str().unwrap(), "--title", "Change the PR", "--base", "main", "--shape", "config", "--no-needs", "--plan", "pay"]).ok();
+    // It waits for PR `pay` (a need that is not merged), so its stubs are legal after the lock (hs-d731).
+    fx.cpd(&["pr", "add", "web", "--repo", web.to_str().unwrap(), "--title", "Change the PR", "--base", "main", "--shape", "config", "--needs", "pay", "--plan", "pay"]).ok();
     // Its stub drafts are drafts of the review's kind: cancelled, they are none, and the review stays current.
     assert_eq!(inproc::show(&fx, "pay")["review"]["current"], false, "a stub draft is a draft the review did not cover");
     fx.cpd(&["job", "cancel", "web-config", "--reason", "a stub of the template", "--plan", "pay"]).ok();
@@ -1692,7 +1693,7 @@ fn archive_refused_by_any_one_blocker_changes_nothing() {
     let escalation = format!(
         "{}{}INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
          VALUES ('pay', 'api-a1-q1', 'api-a1', 1, 'Which?', 'open', 1, 't');",
-        job("draft"),
+        job("draft").replace("'draft'", "'cancelled'").replace("status,", "cancel_reason, cancel_requested_at, status,").replace("'cancelled'", "'a fixture', 't', 'cancelled'"),
         ATTEMPT.replace("$STATUS", "running")
     );
     // One blocker at a time, each in its own environment: Jobs are append-only.
@@ -1810,10 +1811,11 @@ fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_app
     fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
     // A follow-up batch is registered at once: two stubs, one with its Tier, and a stub that is dropped again.
-    let out = inproc::stub(&fx, "next-1", &[]);
+    // After the lock a stub waits for a queued Job (the door, hs-d731): `a` is queued by the lock.
+    let out = inproc::stub(&fx, "next-1", &["--needs", "a"]);
     assert_eq!((&out["job"]["status"], &out["job"]["tier"], &out["job"]["appended"]), (&json!("draft"), &Value::Null, &json!(true)));
     inproc::stub(&fx, "next-2", &["--tier", "S3", "--needs", "next-1"]);
-    inproc::stub(&fx, "dropped", &[]);
+    inproc::stub(&fx, "dropped", &["--needs", "a"]);
     fx.cpd(&["job", "cancel", "dropped", "--reason", "Not needed.", "--plan", "pay"]).ok();
     add_draft(&fx.env, "pay", "done-1", &["a"], true);
     let shown = inproc::show(&fx, "pay");

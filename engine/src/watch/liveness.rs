@@ -239,8 +239,7 @@ fn stop_request(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
 }
 
 /// Wall time since the Attempt turned `running` (the time of its `starting →
-/// running` `attempt-status` Event: the wait in `starting`, a review Job's wait
-/// for its Lead, is not counted), minus the time an Escalation of it was
+/// running` `attempt-status` Event: the wait in `starting` is not counted), minus the time an Escalation of it was
 /// `open` (§3.3, §3.4 A4), minus the check spans of its `attempt submit` (a `start` to its `end`, or to now while open; §7.7). Overlaps
 /// count once.
 fn active_time(engine: &mut Engine, active: &Active) -> Result<Duration, CpdError> {

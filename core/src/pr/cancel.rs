@@ -3,8 +3,7 @@
 //! its `draft`, `queued` and `failed` Jobs cancelled with it in the same transaction, the shape check never applying; and an `open` PR whose pull request is
 //! stored `closed` (hs-d329). The PR keeps its key; before the lock the plan
 //! fingerprint changes, after it the Plan may move on. With `--superseded-by <plan>/<key>` a `dispatch` PR whose
-//! `merged` Jobs were carried by another PR is cancelled too, the Event naming that PR (hs-d301). A `dispatch` PR whose merged Jobs are all review
-//! Jobs (which commit nothing) is cancelled without it (pro-d77).
+//! `merged` Jobs were carried by another PR is cancelled too, the Event naming that PR (hs-d301).
 
 use rusqlite::Connection;
 use serde_json::json;
@@ -106,21 +105,55 @@ pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
 /// The PR's Jobs go with it (contract §3.8): in the transaction that cancels a PR, every Job of it that is `draft`, `queued` or `failed`, of every kind,
 /// is `cancelled` (`reason` `pr cancelled`, one `job-cancelled` each, by `seq`). One already `cancelled` is untouched.
 fn cancel_jobs(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+    cancel_jobs_with(tx, plan, key, &["draft", "queued", "failed"], "pr cancelled", "was cancelled")
+}
+
+/// The Jobs of PR `key` whose status is one of `statuses`, `cancelled` in the caller's transaction with `reason`, one `job-cancelled` Event each,
+/// by `seq`. `what` is what happened to the PR, for the Event's text. `pr cancel` cancels `draft`, `queued` and `failed` ones; the merge of a PR its `draft` ones
+/// (hs-d735, `pr merged`).
+pub(super) fn cancel_jobs_with(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, statuses: &[&str], reason: &str, what: &str) -> Result<(), CpdError> {
+    let list = statuses.iter().map(|s| format!("'{s}'")).collect::<Vec<_>>().join(", ");
     let own: Vec<String> = {
-        let mut stmt =
-            tx.prepare("SELECT key FROM jobs WHERE plan = ?1 AND pr = ?2 AND status IN ('draft', 'queued', 'failed') ORDER BY seq")?;
+        let mut stmt = tx.prepare(&format!("SELECT key FROM jobs WHERE plan = ?1 AND pr = ?2 AND status IN ({list}) ORDER BY seq"))?;
         stmt.query_map([plan.as_str(), key.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
-    let reason = "pr cancelled";
     for job in own {
         tx.execute(
-            "UPDATE jobs SET status = 'cancelled', failed_cause = NULL, cancel_reason = ?3,
-                    cancel_requested_at = (SELECT at FROM txns WHERE id = cpd_txn())
-              WHERE plan = ?1 AND key = ?2 AND status IN ('draft', 'queued', 'failed')",
+            &format!(
+                "UPDATE jobs SET status = 'cancelled', failed_cause = NULL, cancel_reason = ?3,
+                        cancel_requested_at = (SELECT at FROM txns WHERE id = cpd_txn())
+                  WHERE plan = ?1 AND key = ?2 AND status IN ({list})"
+            ),
             [plan.as_str(), job.as_str(), reason],
         )?;
-        let text = format!("Job {job} of Plan {plan} was cancelled: {reason}: PR {key} was cancelled. Next: cpd plan show --plan {plan}");
+        let text = format!("Job {job} of Plan {plan} was cancelled: {reason}: PR {key} {what}. Next: cpd plan show --plan {plan}");
         append(tx, NewEvent::job_cancelled(text, reason).plan(plan.clone()).job(crate::ids::JobKey::parse(&job)?))?;
+    }
+    Ok(())
+}
+
+/// The reason of a `draft` Job cancelled with its archived Plan (engine E20, hs-d731).
+const ARCHIVED_REASON: &str = "Plan archived with a draft (hs-d731)";
+
+/// The archived Plans that have a `draft` Job of any kind (engine E20).
+pub fn archived_with_drafts(conn: &Connection) -> Result<Vec<PlanId>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT p.id FROM plans p WHERE p.archived_at IS NOT NULL
+            AND EXISTS (SELECT 1 FROM jobs j WHERE j.plan = p.id AND j.status = 'draft') ORDER BY p.id",
+    )?;
+    let ids = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    ids.iter().map(|id| PlanId::parse(id)).collect()
+}
+
+/// Every `draft` Job of the archived `plan` is `cancelled` in the caller's transaction, one `job-cancelled` Event each; nothing
+/// when it has none (engine E20).
+pub fn cancel_archived_drafts(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<(), CpdError> {
+    let prs: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT DISTINCT pr FROM jobs WHERE plan = ?1 AND status = 'draft' ORDER BY pr")?;
+        stmt.query_map([plan.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+    };
+    for pr in prs {
+        cancel_jobs_with(tx, plan, &PrKey::parse(&pr)?, &["draft"], ARCHIVED_REASON, "belongs to an archived Plan")?;
     }
     Ok(())
 }
@@ -192,7 +225,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, superseded: Option<&str
             ErrorCode::PrInUse,
             format!(
                 "PR {key} is in use: a running Job holds it (cancel it with cpd job cancel and wait for it to stop), a merged Job holds it unless --superseded-by \
-                 names the PR that carried its work (a merged review Job, which commits nothing, never holds it), and PRs that need it or are stacked on it hold it (edit them away with cpd pr edit) first."
+                 names the PR that carried its work, and PRs that need it or are stacked on it hold it (edit them away with cpd pr edit) first."
             ),
         )
         .with("plan", plan.as_str())
@@ -228,9 +261,9 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, superseded: Option<&str
                 .with("to", "cancelled"));
         }
     };
-    // Only a `running` Job holds the PR, and a `merged` one unless superseded (its work another PR carried) or a review Job (commits nothing): `draft`, `queued` and `failed` Jobs
+    // Only a `running` Job holds the PR, and a `merged` one unless superseded (its work another PR carried): `draft`, `queued` and `failed` Jobs
     // go with the PR (`cancel_jobs`).
-    let holds = |j: &jobs::Job| j.status == "running" || (j.status == "merged" && superseded.is_none() && !j.review);
+    let holds = |j: &jobs::Job| j.status == "running" || (j.status == "merged" && superseded.is_none());
     let live_jobs: Vec<String> = jobs::load(conn, plan)?.into_iter().filter(|j| j.pr == key.as_str() && holds(j)).map(|j| j.key).collect();
     if !live_jobs.is_empty() || !needing.is_empty() {
         return Err(in_use(live_jobs));

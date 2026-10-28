@@ -91,7 +91,6 @@ mod tests {
             spec: Some(JobSpec { goal: "g".into(), context: "c".into(), touches: json!(["a"]), acceptance: json!(["b"]), out_of_scope: json!([]) }),
             status: status.into(),
             appended: false,
-            review: false,
             kind: "work".into(),
             tests: None,
             test_files: None,
