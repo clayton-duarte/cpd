@@ -147,6 +147,32 @@ pub fn inbox_at(store: &mut Store, now: Option<&str>) -> Result<(Vec<Item>, bool
     store.read(|conn| Ok((inbox_in(conn, &db_now(conn, now)?, engine_running)?, engine_running)))
 }
 
+/// The mark of the Inbox: the open rows' own columns and how many Managers are live (they decide `engine-down`). It moves
+/// when an item is opened, closed, snoozed, dismissed, claimed, relabelled or re-linked, and on no write to another table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InboxMark {
+    rows: Vec<InboxRow>,
+    managers: i64,
+}
+
+/// `id, urgency, label, url, plan, session, snoozed_until, dismissed_at, claimed_at` of an open item.
+type InboxRow = (i64, String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
+
+/// [`InboxMark`] now: one cheap read of the open items, never the closed history.
+pub fn inbox_mark(store: &mut Store) -> Result<InboxMark, CpdError> {
+    store.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id, urgency, label, url, plan, session, snoozed_until, dismissed_at, claimed_at
+               FROM inbox_items WHERE closed_at IS NULL ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let managers = conn.query_row("SELECT count(*) FROM sessions WHERE role = 'manager' AND archived_at IS NULL", [], |r| r.get(0))?;
+        Ok(InboxMark { rows, managers })
+    })
+}
+
 /// Each live Lead or fork's dot from the `visible` items (§17, "Which items fill which row"); an archived row keeps
 /// its glyph and takes no item. Every view that draws a Lead's dot (the tree, Pulse) uses this one rule.
 /// `heads` are the Plans: a Lead of a Plan with a failed Job being worked on gets the red loader (pro-d88), else the bright

@@ -1,7 +1,8 @@
 //! The `widgets` view (commands.md §13.2, §17): the right column of the cockpit. It takes one snapshot of the Inbox
-//! ([`read::inbox_at`]) and the merge markers, then reads them again on every refresh: it blocks on the [`Pump`] and reads on
-//! the reader thread when the store committed (the watcher) or the safety poll is due, at most one read per frame, with no gate
-//! on Events (an in-place label change has no Event); the CPU, GPU and memory % are sampled every [`SAMPLE_EVERY`], since they
+//! ([`read::inbox_at`]) and the merge markers, then reads the markers again on every refresh and the Inbox when its mark
+//! ([`read::inbox_mark`]) moved (an in-place label change has no Event), a click forced it, an error is shown, a snooze ended or
+//! the engine lock changed: it blocks on the [`Pump`] and reads on the reader thread when the store committed (the watcher) or
+//! the safety poll is due, at most one read per frame; an idle view takes no snapshot. The CPU, GPU and memory % are sampled every [`SAMPLE_EVERY`], since they
 //! are no Event. It draws when a read result, the CPU, GPU and memory, the error, the size, a click or the wheel changed, and at
 //! each frame while a spinner turns. It makes no write of its own, but for what a click or the menu of an Inbox item runs
 //! (commands.md §13.2, pro-d130). A right click on an Inbox item opens its menu (on a `pr-ready` row Merge or Post by its status, Go to Lead, Copy Link; Claim on a `review-requested` row only, Snooze 15 min, Snooze 1 h, Snooze until tomorrow 09:00, Dismiss); a
@@ -56,7 +57,8 @@ use cpd_core::clock;
 use cpd_core::inbox::model::{self, Item};
 use crate::menu::Entry;
 use super::runner::{ViewError, kept};
-use super::view_ports::{Ctx, Input, Tty, frame_now, run_view_with, wall_ms};
+use super::view_ports::{Ctx, Input, Tty, frame_now, run_view_with, snooze_over, wall_ms};
+use time::OffsetDateTime;
 use super::{Capture, RunCommand, run_view_on};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
@@ -116,11 +118,14 @@ pub fn run_on<B: Backend, W: Write>(
 
 /// What the view starts from: the home and its config, the first snapshot of the Inbox and of the machine, and the reader.
 pub struct Prepared {
-    reader: Arc<Mutex<pace::Owned<()>>>,
+    reader: Arc<Mutex<pace::Owned<Option<read::InboxMark>>>>,
     home: CpdHome,
     config: Config,
     /// The Inbox's open visible items (`engine-down` first).
     inbox: Vec<Item>,
+    /// Whether an engine holds the lock, and when the first snooze ends.
+    engine_running: bool,
+    snooze_end: Option<OffsetDateTime>,
     /// The pull requests whose merge runs, as of the first snapshot of the merge markers.
     merging: BTreeSet<String>,
     machine: Machine,
@@ -134,25 +139,28 @@ pub fn prepare(ports: &Ports, home: CpdHome) -> Result<Prepared, CpdError> {
     let mut sampler = Sampler::default();
     let machine = Machine { name: hostname(ports), usage: sampler.sample_with(ports) };
     let now = clock::timestamp(ports.clock.utc());
-    let (inbox, _) = read::inbox_at(&mut store, Some(&now))?;
+    // the mark and the snooze's end are read before the items: a change between the reads is read again
+    let mark = read::inbox_mark(&mut store)?;
+    let snooze_end = read::snooze_end_at(&mut store, Some(&now))?;
+    let (inbox, engine_running) = read::inbox_at(&mut store, Some(&now))?;
     // the first read of the merges is the first snapshot's: it runs here, before the terminal is set up
     let open = read::open_pulls(&mut store)?;
     let merging = crate::merge::marker::live_with(ports, &home, &open);
     // the reads after them run on the reader thread, with a store of its own
-    let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), ());
-    Ok(Prepared { reader, home, config, inbox, merging, machine, sampler })
+    let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), Some(mark));
+    Ok(Prepared { reader, home, config, inbox, engine_running, snooze_end, merging, machine, sampler })
 }
 
 /// [`show`] on what [`prepare`] made: the tmux of the config's socket, `run_command` for what a click runs, and `feed`'s pump
 /// for the one wait. A test's `feed` is scripted (signals, the `ManualClock` of `ctx.ports`, reads inline, no watcher) and
 /// `ctx.input` is not read; the end of a script is `Signal::InputFailed`.
 pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared, run_command: RunCommand) -> Result<(), ViewError> {
-    let Prepared { reader, home, config, inbox, merging, machine, sampler } = prepared;
+    let Prepared { reader, home, config, inbox, engine_running, snooze_end, merging, machine, sampler } = prepared;
     let tmux = Tmux::new(config.tmux.socket.clone()).with_runner(ctx.ports.runner.clone());
     let log = ViewLog::of(&home, "widgets");
     let runner = actions::Runner::new(home.clone(), &config, ctx.ports);
     let lead = Opener { home: &home, busy_ms: u64::from(config.timeouts.store_busy_ms), run_command, tmux: &tmux, log: &log, runner: &runner };
-    show(ctx, feed, &reader, (inbox, merging), machine, sampler, &lead, config.events.poll_ms)
+    show(ctx, feed, &reader, (inbox, engine_running, snooze_end, merging), machine, sampler, &lead, config.events.poll_ms)
 }
 
 /// The area the Deploy column's right-click menu is clamped in and hit-tested against: the pane less a blank column on
@@ -283,8 +291,8 @@ impl Opener<'_> {
 fn show<B: Backend>(
     ctx: &mut Ctx<B>,
     feed: Feed,
-    reader: &Arc<Mutex<pace::Owned<()>>>,
-    (mut inbox, mut merging): Seen,
+    reader: &Arc<Mutex<pace::Owned<Option<read::InboxMark>>>>,
+    (mut inbox, mut engine_running, mut snooze_end, mut merging): Seen,
     mut machine: Machine,
     mut sampler: Sampler,
     opener: &Opener,
@@ -429,15 +437,19 @@ fn show<B: Backend>(
                 while let Some(result) = reads.take() {
                     schedule.done();
                     let shown = error.clone();
-                    if let Some((items, live)) = kept(result, &mut error) {
-                        ctx.snapshot_read();
+                    if let Some((fresh, live)) = kept(result, &mut error) {
                         if live != merging {
                             merging = live;
                             redraw = true;
                         }
-                        if items != inbox {
-                            inbox = items;
-                            redraw = true;
+                        // a cycle that read no Inbox took no snapshot and keeps what is shown
+                        if let Some((items, running, end)) = fresh {
+                            ctx.snapshot_read();
+                            (engine_running, snooze_end) = (running, end);
+                            if items != inbox {
+                                inbox = items;
+                                redraw = true;
+                            }
                         }
                     }
                     redraw |= error != shown;
@@ -456,28 +468,42 @@ fn show<B: Backend>(
                 redraw = true;
             }
         }
-        if schedule.take(now).is_some() {
-            // Every read takes the Inbox (items, engine lock, snooze end) and the merge markers: a label changes in place with no
-            // Event, a snooze ends and an engine stops with none either.
-            let (shared, home, now_text) = (Arc::clone(reader), opener.home.clone(), clock::timestamp(ports.clock.utc()));
+        if let Some(kind) = schedule.take(now) {
+            // Every read takes the merge markers; the Inbox (items, engine lock, snooze end) only when its mark moved (a label
+            // changes in place with no Event), a click forced it, an error is shown, a snooze ended or the engine lock changed
+            // (an engine stops with no Event either).
+            let (shared, home, retry, ended, now_text) =
+                (Arc::clone(reader), opener.home.clone(), error.is_some(), snooze_over(ports, snooze_end), clock::timestamp(ports.clock.utc()));
+            let force = kind.force;
             let ports = ports.clone();
             reads.request(move || {
-                pace::Owned::read(&shared, |store, ()| {
+                pace::Owned::read(&shared, |store, last| {
                     let open = read::open_pulls(store)?;
                     let live = crate::merge::marker::live_with(&ports, &home, &open);
-                    let (items, _running) = read::inbox_at(store, Some(&now_text))?;
-                    Ok((items, live))
+                    let mark = read::inbox_mark(store)?;
+                    let engine = model::engine_running(&home)?;
+                    let fresh = if last.as_ref() != Some(&mark) || force || retry || ended || engine != engine_running {
+                        // the mark was read before the items: a change between the reads is read again
+                        let end = read::snooze_end_at(store, Some(&now_text))?;
+                        let (items, running) = read::inbox_at(store, Some(&now_text))?;
+                        *last = Some(mark);
+                        Some((items, running, end))
+                    } else {
+                        None
+                    };
+                    Ok((fresh, live))
                 })
             });
         }
     }
 }
 
-/// What the view shows besides the machine: the Inbox's items and the pull requests whose merge runs.
-type Seen = (Vec<Item>, BTreeSet<String>);
+/// What the view shows besides the machine: the Inbox's items, whether an engine holds the lock, when the first snooze ends and the pull requests whose merge runs.
+type Seen = (Vec<Item>, bool, Option<OffsetDateTime>, BTreeSet<String>);
 
-/// What a read of the reader thread returns: the Inbox's items and the pull requests with a live merge marker.
-type Read = Result<(Vec<Item>, BTreeSet<String>), CpdError>;
+/// What a read of the reader thread returns: the Inbox (its items, the lock and the snooze's end) when it was read, and the
+/// pull requests with a live merge marker.
+type Read = Result<(Option<(Vec<Item>, bool, Option<OffsetDateTime>)>, BTreeSet<String>), CpdError>;
 
 /// The merge of a `pr-ready` item runs: its spinner turns.
 fn spins(inbox: &[Item], merging: &BTreeSet<String>) -> bool {
