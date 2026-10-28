@@ -1,4 +1,4 @@
-//! The layout rows of the section titles (the Deploy column's `PRs`, the legend's, the logs popup's) and of the rows under
+//! The layout rows of the section titles (the legend's, the logs popup's) and of the rows under
 //! the logs popup's and the legend's titles, which have no box, only the container's margin.
 
 use crate::layout_tests::{SectionCase, Sample, check};
@@ -15,7 +15,6 @@ fn rows(subject: &str, case: SectionCase, sample: fn(u16, u16, SectionCase) -> S
 
 #[test]
 fn layout_section_titles() {
-    rows("deploy PRs title", SectionCase::Title, crate::widgets::column::layout_sample);
     rows("legend title", SectionCase::Title, crate::widgets::legend::layout_sample);
     rows("logs title", SectionCase::Title, crate::logs::layout_sample);
 }

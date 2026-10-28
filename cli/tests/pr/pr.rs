@@ -2174,9 +2174,15 @@ impl Poll {
             .unwrap()
     }
 
-    /// `(repo, number)` of the cockpit widgets' PRs section.
+    /// `(repo, number)` of the open pull requests the User authored, oldest first: the rows that become the Inbox's `pr-ready` items.
     fn widget_prs(&self) -> Vec<(String, i64)> {
-        read::widgets(&mut self.store(), 3, 0).unwrap().prs.into_iter().map(|p| (p.repo, p.number)).collect()
+        self.store()
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT repo, number FROM pull_requests WHERE state = 'open' AND authored = 1 ORDER BY created_at, repo, number")?;
+                let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .unwrap()
     }
 
     /// Adds a stored pull request `number` of `acme/<repo>`, no PR points to it.

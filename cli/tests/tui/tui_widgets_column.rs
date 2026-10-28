@@ -88,6 +88,8 @@ fn an_expanded_inbox_takes_every_row_under_the_header_with_no_third_cap() {
     let at = frame_with(&frames, 0, "the expanded Inbox in rows 3 to 19", |r| r.len() == 20 && r[3..] == expanded[..]);
     assert_eq!(rows(&frames, at)[3..], expanded[..]);
 
+    drop(_engine);
+    drop(fx);
     let fx = prepared(&many(12));
     let _engine = engine(&fx);
     let frames = show(&fx, 20, vec![Signal::Commit, click(10, 8), gone()], &World::new());

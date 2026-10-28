@@ -71,11 +71,6 @@ pub fn cue_row(arrow: char, n: usize) -> String {
     format!(" │{:>w$}", format!("{arrow} {n} more"), w = W - 5)
 }
 
-/// A scroll cue row of the PRs list: the cue right-aligned at the last column.
-pub fn pr_cue_row(arrow: char, n: usize) -> String {
-    format!("{:>W$}", format!("{arrow} {n} more"))
-}
-
 // ---------- the prepared store ----------
 
 pub fn open(env: &TestEnv) -> Store {
@@ -217,11 +212,6 @@ fn pull_request(repo: &str, number: i64) -> String {
 pub fn pull_requests(env: &TestEnv, n: i64) {
     let rows: String = (1..=n).map(|i| pull_request("acme/repo", i)).collect();
     sql(&mut open(env), &rows);
-}
-
-/// The PR's first line on the pane: its name and the `󱆭` link cell in the last column.
-pub fn first_line(name: &str) -> String {
-    format!("{name:<w$}{}", cpd_tui::link::CUE, w = W - 1)
 }
 
 // ---------- the signals ----------

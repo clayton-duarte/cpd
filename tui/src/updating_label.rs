@@ -1,17 +1,17 @@
 //! Red tests (hs-d532): a PR whose pull request conflicts reads `updating`, not `conflict`, while it has a not-ended update
 //! Job: in the running colour while that Job runs, in the waiting colour while it is queued. In the Plan view's PR box
-//! title, the PRs column and the legend. (`Meaning::InProgress` is the running colour of `palette`.)
+//! title and the legend. (`Meaning::InProgress` is the running colour of `palette`.)
 
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
-use cpd_core::ids::{ContextId, PlanId, PrKey, SessionId};
+use cpd_core::ids::{ContextId, PlanId, PrKey};
 use cpd_core::store::Store;
 use ratatui::text::{Line, Span};
 
 use crate::palette::{self, Meaning};
 use crate::plan::boxes;
-use crate::read::{OpenPr, PrNode, PrState, PrStatus, Pull, ReviewDecision, UpdateState};
-use crate::widgets::{column, legend};
+use crate::read::{PrNode, PrState, PrStatus, Pull, UpdateState};
+use crate::widgets::legend;
 
 const RUNNING: Meaning = Meaning::InProgress;
 
@@ -34,27 +34,6 @@ fn node(update: Option<UpdateState>) -> PrNode {
         }),
         waiting_on: Vec::new(),
         superseded_by: None,
-    }
-}
-
-fn open_pr(update: Option<UpdateState>, lead: Option<&str>) -> OpenPr {
-    OpenPr {
-        repo: "acme/repo".to_owned(),
-        number: 7,
-        url: "https://github.com/acme/repo/pull/7".to_owned(),
-        title: "A title".to_owned(),
-        draft: false,
-        checks: crate::read::Checks::Passed,
-        review_decision: ReviewDecision::None,
-        conflicting: true,
-        update,
-        clean: false,
-        active: false,
-        lead: lead.map(|l| SessionId::parse(l).unwrap()),
-        lead_working: false,
-        plan_failed: false,
-        plan_phase: None,
-        merging: false,
     }
 }
 
@@ -92,21 +71,6 @@ fn a_box_with_no_update_job_still_reads_conflict() {
     // and only the absence of the update Job: with one, the same box no longer reads `conflict`
     let (with, _) = box_word(Some(UpdateState::Queued), "updating");
     assert!(with.contains("#12 updating") && !with.contains("conflict"), "{with:?}");
-}
-
-#[test]
-fn a_column_pr_with_an_update_job_reads_updating() {
-    for (update, meaning) in [(UpdateState::Running, RUNNING), (UpdateState::Queued, Meaning::Waiting)] {
-        let [_, second] = column::pr_lines(&open_pr(Some(update), Some("l-a")), 60, 0);
-        let text = second.to_string();
-        assert!(text.contains(" updating") && !text.contains("conflict"), "{update:?}: {text:?}");
-        assert_eq!(span_of(&second, "updating").expect("an `updating` span").style, palette::fg_clickable(meaning), "{update:?}");
-    }
-    // no update Job: `conflict` as before; a pull request no Plan owns has none and keeps it red
-    let [_, owned] = column::pr_lines(&open_pr(None, Some("l-a")), 60, 0);
-    assert_eq!(span_of(&owned, "conflict").unwrap().style, palette::fg_clickable(Meaning::Waiting));
-    let [_, unowned] = column::pr_lines(&open_pr(None, None), 60, 0);
-    assert!(!unowned.to_string().contains("updating"));
 }
 
 #[test]

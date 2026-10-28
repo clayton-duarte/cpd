@@ -1,4 +1,4 @@
-//! The layout rows of the two right-click menus (the tree's and the Deploy column's): a right click at the first cell,
+//! The layout rows of the right-click menu (the tree's): a right click at the first cell,
 //! the last cell and the middle of a pane, in a roomy pane and a tiny one. Placed is `Menu::rect`.
 
 use crate::layout_tests::{Case, Click, Sample, check};
@@ -18,9 +18,4 @@ fn rows(subject: &str, sample: fn(u16, u16, Case) -> Sample) {
 #[test]
 fn layout_tree_menu() {
     rows("tree menu", crate::tree::layout_sample);
-}
-
-#[test]
-fn layout_deploy_menu() {
-    rows("deploy menu", crate::widgets::layout_sample);
 }

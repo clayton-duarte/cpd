@@ -7,8 +7,8 @@
 //!   Dependencies, and the Plan of the Lead in the chat slot; [`flow()`]: one Plan's Jobs, Escalations,
 //!   review and first PR (`plan show`);
 //! - [`pulse()`] and [`manager_slot()`]: the Pulse view, one Context's Plans with their 5-minute activity;
-//! - [`widgets()`]: slots, the engine, the Plans, the open pull requests, open Escalations and the latest Events
-//!   (`plan list`); the views read only what they draw: [`open_prs()`] (the Dispatch column) and [`slots()`] (the StatusBar);
+//! - [`widgets()`]: slots, the engine, the Plans, open Escalations and the latest Events
+//!   (`plan list`); the views read only what they draw: [`inbox_at()`] (the right column) and [`slots()`] (the StatusBar);
 //! - [`logs()`] and [`logs_after()`]: the Event log, the latest Events and those after a cursor (`events list`);
 //!
 //! Each read is one [`Store::read`] transaction (contract §4.2): it takes no
@@ -64,5 +64,5 @@ pub use logs::{Logs, logs, logs_after};
 pub use pulse::{BUCKET_MINUTES, Bucket, Kind, ManagerSlot, Pulse, PulseRow, QUIET_MINUTES, manager_slot, pulse};
 pub use tree::{ContextNode, PlanNode, Tree, inbox_at, snooze_end, snooze_end_at, tree, tree_at};
 pub use widgets::{
-    Engine, HeldSlot, MachineEscalation, OpenPr, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, open_prs, open_pulls, slots, widgets,
+    Engine, HeldSlot, MachineEscalation, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, open_pulls, slots, widgets,
 };

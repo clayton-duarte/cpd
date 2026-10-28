@@ -16,7 +16,7 @@ fn entries(frame: &ratatui::buffer::Buffer, first: &str, count: usize) -> Vec<St
 #[test]
 fn inbox_menu_of_a_clean_pr_ready_item_starts_with_merge() {
     let (_dir, home) = home_with("clean");
-    let (x, y) = locate(&run(&home, vec![]).buf, "api#3 ready");
+    let (x, y) = locate(&run(&home, vec![]).buf, "api#3 ");
     let seen = run(&home, vec![right_click(x, y)]);
     let shown = entries(&seen.buf, "Merge", 5);
     for (row, label) in shown.iter().zip(["Merge", "Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00", "Dismiss"]) {
@@ -27,7 +27,7 @@ fn inbox_menu_of_a_clean_pr_ready_item_starts_with_merge() {
 #[test]
 fn inbox_menu_merge_runs_the_merge_action_at_once_with_no_popup() {
     let (_dir, home) = home_with("clean");
-    let (x, y) = locate(&run(&home, vec![]).buf, "api#3 ready");
+    let (x, y) = locate(&run(&home, vec![]).buf, "api#3 ");
     let opened = run(&home, vec![right_click(x, y)]);
     assert!(has(&opened.buf, "Merge"), "the menu offers Merge");
     let seen = run(&home, vec![right_click(x, y), enter()]);
@@ -37,11 +37,11 @@ fn inbox_menu_merge_runs_the_merge_action_at_once_with_no_popup() {
 #[test]
 fn inbox_menu_of_a_pr_ready_item_that_is_not_clean_has_no_merge() {
     let (_clean_dir, clean) = home_with("clean");
-    let (x, y) = locate(&run(&clean, vec![]).buf, "api#3 ready");
+    let (x, y) = locate(&run(&clean, vec![]).buf, "api#3 ");
     assert!(has(&run(&clean, vec![right_click(x, y)]).buf, "Merge"), "control: the same item with a clean pull request has Merge");
     for state in ["blocked", "unknown"] {
         let (_dir, home) = home_with(state);
-        let (x, y) = locate(&run(&home, vec![]).buf, "api#3 ready");
+        let (x, y) = locate(&run(&home, vec![]).buf, "api#3 ");
         let seen = run(&home, vec![right_click(x, y)]);
         assert!(!has(&seen.buf, "Merge"), "{state}: no Merge entry: {:?}", rows(&seen.buf));
         let shown = entries(&seen.buf, "Snooze 15 min", 4);
@@ -54,7 +54,7 @@ fn inbox_menu_of_a_pr_ready_item_that_is_not_clean_has_no_merge() {
 #[test]
 fn inbox_menu_merge_is_the_spinner_and_unselectable_while_it_merges() {
     let (_dir, home) = home_with("clean");
-    let (x, y) = locate(&run(&home, vec![]).buf, "api#3 ready");
+    let (x, y) = locate(&run(&home, vec![]).buf, "api#3 ");
     let seen = run_with_setup(&home, merging, vec![right_click(x, y)]);
     let (mx, my) = locate(&seen.buf, "Merge ");
     let line = rows(&seen.buf)[usize::from(my)].clone();
