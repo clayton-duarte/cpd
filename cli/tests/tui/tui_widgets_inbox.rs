@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use common::fx::Fx;
 use common::inbox::{
-    FOUR, W, World, engine_at, expand, four, frame_with, gone, manager, open, open_at, press, rows, seed, show,
+    FOUR, W, World, engine_at, four, frame_with, gone, manager, open, open_at, press, rows, seed, show,
     typed, view_fx,
 };
 use common::tree::{engine, stamp};
@@ -27,17 +27,13 @@ const ONE_SECOND: Duration = Duration::from_secs(1);
 
 /// The Inbox's title with the count pill, at `W` columns.
 fn pill(count: usize) -> String {
-    tui_titles::collapsible_title(W, "Inbox", Some(count))
+    tui_titles::flush_title(W, "Inbox", count)
 }
 
-/// The terminator of an Inbox that has nothing to fold: ` ╰󰬪` (hs-d574).
-fn terminator() -> String {
-    " ╰\u{F0B2A}".to_owned()
-}
-
-/// The section as it is drawn: its empty row, the title with `count`, the item rows, the closing row and its empty row below.
-fn section(count: usize, items: &[String], closing: String) -> Vec<String> {
-    [vec![String::new(), pill(count)], items.to_vec(), vec![closing, String::new()]].concat()
+/// The section as it is drawn, pinned to the bottom: its blank row, the header with `count`, the ▲ line (blank), the item rows
+/// and the ▼ line (blank), which is the pane's last row.
+fn section(count: usize, items: &[String]) -> Vec<String> {
+    [vec![String::new(), pill(count), String::new()], items.to_vec(), vec![String::new()]].concat()
 }
 
 /// The item rows of `items` (glyph, label), all aged `age`.
@@ -45,23 +41,23 @@ fn item_rows(items: &[(&str, &str)], age: &str) -> Vec<String> {
     items.iter().map(|(glyph, label)| common::inbox::item_row(glyph, label, age)).collect()
 }
 
-/// [`four`] folded: three rows and `expand`, aged `age`.
+/// [`four`]'s section, aged `age`.
 fn folded4_at(age: &str) -> Vec<String> {
-    section(4, &item_rows(&FOUR[..3], age), expand())
+    section(4, &item_rows(&FOUR, age))
 }
 
 fn folded4() -> Vec<String> {
     folded4_at("5m")
 }
 
-/// Whether `screen` has `section` right under the machine header: its rows from row 3 (the blank row, the machine's two).
+/// Whether `section` is the last rows of `screen`.
 fn under(screen: &[String], section: &[String]) -> bool {
-    screen.len() >= 3 + section.len() && screen[3..3 + section.len()] == *section
+    screen.len() >= 3 + section.len() && screen[screen.len() - section.len()..] == *section
 }
 
 /// [`frame_with`] for a section right under the header: the first frame from `from` on that has `section` there.
 fn frame_under(frames: &[common::screen::Screen], from: usize, what: &str, section: &[String]) -> usize {
-    frame_with(frames, from, &format!("{what}, right under the header, being\n{}\n", section.join("\n")), |r| under(r, section))
+    frame_with(frames, from, &format!("{what}, at the bottom, being\n{}\n", section.join("\n")), |r| under(r, section))
 }
 
 /// An `Fx` with the engine's lock held by the caller's guard, the store seeded with `items` opened 330 s ago (`5m`).
@@ -93,9 +89,9 @@ fn the_age_of_an_item_is_redrawn_every_second() {
     frame_under(&frames, b, "the items aged 1m", &folded4_at("1m"));
 }
 
-/// The glyph cell of the row that shows `label`: the fourth cell of ` │ <glyph> <label>`.
+/// The glyph cell of the row that shows `label`: the second cell of ` <glyph> <label>`.
 fn glyph_of(screen: &[String], label: &str) -> Option<String> {
-    screen.iter().find(|r| r.contains(label)).and_then(|r| r.chars().nth(3)).map(String::from)
+    screen.iter().find(|r| r.contains(label)).and_then(|r| r.chars().nth(1)).map(String::from)
 }
 
 #[test]
@@ -128,7 +124,8 @@ fn a_pr_ready_item_whose_merge_runs_shows_the_spinner() {
     let glyph = glyph_of(&screen, ready).unwrap();
     let red = common::inbox::item_row(palette::TIER_RED, "f-blocked label", "5m");
     let busy = common::inbox::linked_item_row(&glyph, ready, "5m");
-    assert_eq!(screen[4..7], [pill(2), red.clone(), busy], "the other items keep their tier glyph: {screen:?}");
+    let at = screen.iter().position(|r| *r == pill(2)).unwrap();
+    assert_eq!(screen[at + 2..at + 4], [red.clone(), busy], "the other items keep their tier glyph: {screen:?}");
     // stale: the tier glyph is back
     let white = common::inbox::linked_item_row(palette::ITEM_PR_READY, ready, "5m");
     frame_with(&frames, at, "the tier glyph back", |screen| screen.contains(&white));
@@ -160,12 +157,12 @@ fn phase(fx: &Fx, before: Vec<String>, change: impl FnMut() + 'static, signals: 
 
 /// The start of the `engine-down` item's row: red, first of the rows, `engine is down`.
 fn engine_down() -> String {
-    format!(" │ {} engine is down", palette::TIER_RED)
+    format!(" {} engine is down", palette::TIER_RED)
 }
 
 /// Whether the Inbox counts 5 items and its first row is `engine-down`'s.
 fn shows_down(screen: &[String]) -> bool {
-    screen.iter().position(|r| *r == pill(5)).is_some_and(|t| screen[t + 1].starts_with(&engine_down()))
+    screen.iter().position(|r| *r == pill(5)).is_some_and(|t| screen[t + 2].starts_with(&engine_down()))
 }
 
 #[test]
@@ -195,7 +192,7 @@ fn the_inbox_follows_its_events_a_started_engine_and_a_snooze_that_ends() {
         items.push(common::inbox::condition(Kind::Dialog, Urgency::Red, "session:new", "new label"));
         items
     };
-    let with_new = section(5, &item_rows(&[FOUR[0], FOUR[1], (palette::TIER_RED, "new label")], "5m"), expand());
+    let with_new = section(5, &item_rows(&[FOUR[0], FOUR[1], (palette::TIER_RED, "new label"), FOUR[2], FOUR[3]], "5m"));
     let (opened, at) = (home.clone(), stamp(&fx, -300));
     let frames = phase(&fx, folded4(), move || drop(reconcile(&mut open_at(&opened), &five(), &at).unwrap()), commits());
     frame_under(&frames, 0, "the fifth item after inbox-opened", &with_new);
@@ -205,14 +202,14 @@ fn the_inbox_follows_its_events_a_started_engine_and_a_snooze_that_ends() {
     let frames = phase(&fx, with_new, move || drop(reconcile(&mut open_at(&closed), &four(), &at).unwrap()), commits());
     frame_under(&frames, 0, "the four items after inbox-closed", &folded4());
 
-    // inbox-dismissed: the first leaves, and three are nothing to fold
-    let three = section(3, &item_rows(&[FOUR[1], FOUR[2], FOUR[3]], "5m"), terminator());
+    // inbox-dismissed: the first leaves
+    let three = section(3, &item_rows(&[FOUR[1], FOUR[2], FOUR[3]], "5m"));
     let dismissed = home.clone();
     let frames = phase(&fx, folded4(), move || change(&dismissed, "session:f-blocked", "dismissed_at", "2026-01-04T00:00:00.000Z", true), commits());
     frame_under(&frames, 0, "three items after inbox-dismissed", &three);
 
     // inbox-snoozed: `m-beta` hides for 8 s
-    let two = section(2, &item_rows(&[FOUR[1], FOUR[3]], "5m"), terminator());
+    let two = section(2, &item_rows(&[FOUR[1], FOUR[3]], "5m"));
     let (snoozed, until) = (home, stamp(&fx, 8));
     let frames = phase(&fx, three.clone(), move || change(&snoozed, "session:m-beta", "snoozed_until", &until, true), commits());
     frame_under(&frames, 0, "two items after inbox-snoozed", &two);
@@ -229,13 +226,9 @@ fn the_engine_down_item_shows_first_when_no_engine_and_no_manager() {
     // no engine holds the lock and no Manager lives: red, first of the rows, counted
     let frames = show(&fx, 30, vec![Signal::Commit, gone()], &World::new());
     let at = frame_with(&frames, 0, "the engine-down item first and 5 items counted", |screen| {
-        let bottom = &screen[3..10];
-        bottom[..2] == ["", pill(5).as_str()] && bottom[2].starts_with(&engine_down()) && bottom[3..] == [
-            common::inbox::item_row(FOUR[0].0, FOUR[0].1, "5m"),
-            common::inbox::item_row(FOUR[1].0, FOUR[1].1, "5m"),
-            expand(),
-            String::new(),
-        ]
+        let want = section(5, &item_rows(&FOUR, "5m"));
+        let start = screen.len() - want.len() - 1;
+        screen[start..start + 3] == want[..3] && screen[start + 3].starts_with(&engine_down()) && screen[start + 4..] == want[3..]
     });
     assert!(at < frames.len());
     // with a live Manager the engine's absence is no item

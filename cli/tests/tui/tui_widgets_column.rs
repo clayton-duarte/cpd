@@ -1,4 +1,4 @@
-//! The right column of the `widgets` view (commands.md §13.2): the machine header, then the Inbox directly under it, and no
+//! The right column of the `widgets` view (commands.md §13.2): the machine header, then the Inbox pinned to the bottom, and no
 //! PRs section. The view runs in this process on a script (`common/inbox.rs`).
 
 use crate::common;
@@ -19,7 +19,7 @@ const PR_GLYPH: &str = "\u{F12F4}";
 const USAGE: &str = " \u{F4BC} –%  \u{EFC5} –%";
 
 fn pill(count: usize) -> String {
-    tui_titles::collapsible_title(W, "Inbox", Some(count))
+    tui_titles::flush_title(W, "Inbox", count)
 }
 
 fn pr_item(urgency: Urgency, label: &str, number: i64) -> Condition {
@@ -41,13 +41,16 @@ fn the_column_is_the_machine_header_then_the_inbox_and_has_no_prs_section() {
     let _engine = engine(&fx);
     pull_requests(&fx.env, 3);
     let frames = show(&fx, 20, vec![Signal::Commit, gone()], &World::new());
-    let at = frame_with(&frames, 0, "the header and the Inbox's title at row 4", |r| r.get(4) == Some(&pill(2)));
+    // 20 rows: the machine lines, then the section (2 items + 4 rows) at the bottom, so its header is row 15
+    let at = frame_with(&frames, 0, "the header and the Inbox's title at row 15", |r| r.len() == 20 && r.get(15) == Some(&pill(2)));
     let screen = rows(&frames, at);
     assert_eq!(screen[0], "", "{screen:?}");
     assert_eq!(screen[1], " homeserver", "{screen:?}");
     assert_eq!(screen[2], USAGE, "{screen:?}");
-    assert_eq!(screen[3], "", "{screen:?}");
-    assert_eq!(screen[4], pill(2), "{screen:?}");
+    assert!(screen[3..15].iter().all(String::is_empty), "{screen:?}");
+    assert_eq!(screen[15], pill(2), "{screen:?}");
+    assert_eq!(screen[16], "", "the ▲ line: {screen:?}");
+    assert_eq!(screen[19], "", "the ▼ line: {screen:?}");
     for row in &screen {
         assert!(!row.contains("PRs") && !row.contains("no open PRs") && !row.contains("no review") && !row.starts_with(" acme/repo#"), "{screen:?}");
     }
