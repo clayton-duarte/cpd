@@ -2,7 +2,7 @@
 //! "The split: `scripts/gate-run.sh` and `cpd gate finish`"; hygiene.md, "The Gate leak check").
 //!
 //! The run's directory is `$TMPDIR` (the wrapper exported `TMPDIR=$RUN`); the tmux sockets are searched in
-//! `/tmp/tmux-<uid>` and `$TMUX_TMPDIR/tmux-<uid>`; the run's processes are `Spawn::with_env("GATE_RUN", <id>)`.
+//! `/tmp/tmux-<uid>` and `$TMUX_TMPDIR/tmux-<uid>`; the run's processes are the union of `Spawn::with_env("GATE_RUN", <id>)` and `Spawn::with_env("TMPDIR", <run dir>)`.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -130,6 +130,8 @@ fn paths_of(dir: &Path) -> Vec<PathBuf> {
 
 /// The leak check of run `run_id` whose command exited with `status`: the run's own leftovers are listed, reported,
 /// stopped and removed, and nothing else is touched. The run's directory is `$TMPDIR`.
+/// Its processes are those with `GATE_RUN=<id>` plus those with `TMPDIR=<run dir>` (exact match), deduplicated, in pid
+/// order, live only.
 pub fn finish(ports: &Ports, run_id: &str, status: i32) -> Finished {
     let dir = run_dir();
     let mut status = status;
@@ -151,7 +153,13 @@ pub fn finish(ports: &Ports, run_id: &str, status: i32) -> Finished {
         let _ = fs::remove_file(&log);
     }
 
-    let pids: Vec<Pid> = ports.spawn.with_env("GATE_RUN", run_id).into_iter().filter(|p| ports.spawn.alive(*p)).collect();
+    let mut found: Vec<Pid> = ports.spawn.with_env("GATE_RUN", run_id);
+    if let Some(dir) = &dir {
+        found.extend(ports.spawn.with_env("TMPDIR", &dir.to_string_lossy()));
+    }
+    found.sort();
+    found.dedup();
+    let pids: Vec<Pid> = found.into_iter().filter(|p| ports.spawn.alive(*p)).collect();
     let sockets = sockets_of(run_id, dir.as_deref());
     let paths = dir.as_deref().map(paths_of).unwrap_or_default();
     let count = pids.len() + sockets.len() + paths.len();
