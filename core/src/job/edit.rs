@@ -96,7 +96,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
 }
 
 fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits: &Edits) -> Result<Decision, CpdError> {
-    plan_phase(conn, plan)?;
+    let phase = plan_phase(conn, plan)?;
     let all = jobs::load(conn, plan)?;
     let before = find(&all, plan, key)?;
     // open and update Jobs are cpd's, a draft one included.
@@ -256,6 +256,9 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     }
     if fields.is_empty() {
         return Ok(Decision::Already(before.clone()));
+    }
+    if before.is_draft() {
+        crate::plan::parked::door(conn, plan, &phase, &all, &after)?;
     }
     Ok(Decision::Update { before: before.clone(), after, fields })
 }
