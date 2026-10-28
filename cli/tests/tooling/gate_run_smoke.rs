@@ -144,3 +144,41 @@ fn an_int_stops_the_command_runs_the_leak_check_with_130_and_removes_the_run_dir
     assert!(!record.contains("alive"), "the command was waited for before the check: {record:?}");
     assert_eq!(left, Vec::<String>::new(), "the run's directory is removed");
 }
+
+/// The contract, pinned without a signal race: the wrapper's own xtrace (`sh -x`) lists its `trap` commands for INT,
+/// TERM and HUP before its `pid=` line (the launch of the command). The command's own `+ true` line interleaves, so it
+/// is not used; the wrapper's lines are ordered.
+#[test]
+fn the_wrapper_arms_its_traps_before_it_starts_the_command() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let out = Command::new("sh")
+        .arg("-x")
+        .arg(script())
+        .arg("true")
+        .env("TMPDIR", tmp.path())
+        .env("GATE_RUN_CPD", built_cpd())
+        .env_remove("GATE_RUN")
+        .output()
+        .expect("run sh -x");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let lines: Vec<&str> = stderr.lines().collect();
+
+    let launch = lines.iter().position(|l| l.starts_with("+ pid=")).unwrap_or_else(|| panic!("no `+ pid=` line: {stderr}"));
+    // The signals a `+ trap <action> <signals...>` line arms: its trailing tokens that are signal names.
+    let armed_at = |name: &str| {
+        lines.iter().position(|l| {
+            l.starts_with("+ trap ") && l.split_whitespace().rev().take_while(|t| ["INT", "TERM", "HUP"].contains(t)).any(|t| t == name)
+        })
+    };
+    let order: Vec<String> = ["INT", "TERM", "HUP"]
+        .iter()
+        .map(|n| match armed_at(n) {
+            Some(i) => format!("trap {n} at line {i}"),
+            None => format!("trap {n} never armed"),
+        })
+        .collect();
+    let early = ["INT", "TERM", "HUP"].iter().all(|n| armed_at(n).is_some_and(|i| i < launch));
+
+    assert!(early, "the traps must be armed before the command starts (`+ pid=` at line {launch}); found: {order:?}\n{stderr}");
+}
