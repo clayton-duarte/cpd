@@ -17,7 +17,7 @@ function verdictOption(input: unknown): string | undefined {
     const option = first
       .replace(/[\s\p{Cc}]+/gu, " ")
       .trim()
-      .replace(/ \(Recommended\)$/i, "")
+      .replace(/(^| )\(Recommended\)$/i, "")
       .trim();
     if (option !== "") return option;
   }
