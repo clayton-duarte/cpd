@@ -46,6 +46,7 @@ mod driver_fix;
 mod metrics;
 mod models_cmd;
 mod plan_cancel;
+mod plan_archive_drafts;
 mod policy_resources;
 mod resource;
 mod plan_delete;

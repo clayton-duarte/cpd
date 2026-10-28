@@ -23,6 +23,7 @@ mod pr_jira;
 mod pr_jira_queue;
 mod pr_local_needs;
 mod pr_merge;
+mod pr_merge_drafts;
 mod pr_needs_required;
 mod pr_open;
 mod pr_open_jira;
