@@ -339,7 +339,6 @@ pub(super) enum Reason {
     ChangesRequested,
     Comments,
     Closed,
-    ReadyToPost,
     Approved,
 }
 
@@ -358,7 +357,6 @@ impl Reason {
             Reason::ChangesRequested => "changes_requested",
             Reason::Comments => "comments",
             Reason::Closed => "closed",
-            Reason::ReadyToPost => "ready_to_post",
             Reason::Approved => "approved",
         }
     }
@@ -389,10 +387,6 @@ pub(super) fn attention(before: Option<&PullRequest>, after: &PullRequest, check
     }
     // The post's reasons (pro-d64): only for the User's own pull requests of an owner that enabled posting.
     if post.enabled && after.authored {
-        let was_ready = before.is_some_and(|b| super::postable::unready(b).is_empty());
-        if !post.posted && super::postable::unready(after).is_empty() && !was_ready {
-            reasons.push(Reason::ReadyToPost);
-        }
         if post.posted && after.state == "open" && after.review_decision == "approved" && review != "approved" {
             reasons.push(Reason::Approved);
         }
@@ -493,32 +487,16 @@ mod tests {
     }
 
     #[test]
-    fn ready_to_post_fires_from_none_and_after_not_ready_but_not_while_ready() {
-        assert_eq!(post_reasons(None, &ready(), ON), [Reason::ReadyToPost]);
-        let mut pending = ready();
-        pending.checks = "pending".into();
-        assert_eq!(post_reasons(Some(&pending), &ready(), ON), [Reason::ReadyToPost]);
-        let mut unread = ready();
-        unread.feedback = None;
-        assert_eq!(post_reasons(Some(&unread), &ready(), ON), [Reason::ReadyToPost]);
-        let mut later = ready();
-        later.title = "other".into();
-        assert!(post_reasons(Some(&ready()), &later, ON).is_empty(), "no repeat while ready");
-    }
-
-    #[test]
-    fn ready_to_post_needs_the_policy_an_unposted_authored_ready_pr() {
-        assert!(post_reasons(None, &ready(), OFF).is_empty(), "not enabled");
-        assert!(post_reasons(None, &ready(), POSTED).is_empty(), "posted");
+    fn no_posting_state_or_authorship_raises_a_reason_for_a_ready_pr() {
         let mut other = ready();
         other.authored = false;
-        assert!(post_reasons(None, &other, ON).is_empty(), "not authored");
         let mut bot = ready();
         bot.feedback = Some(vec![bot_item()]);
-        assert!(post_reasons(None, &bot, ON).is_empty(), "a bot item is open");
-        let mut closed = ready();
-        closed.state = "closed".into();
-        assert_eq!(post_reasons(None, &closed, ON), [Reason::Closed], "a closed PR is not ready");
+        for post in [OFF, ON, POSTED] {
+            assert!(post_reasons(None, &ready(), post).is_empty());
+            assert!(post_reasons(None, &other, post).is_empty());
+            assert!(post_reasons(None, &bot, post).is_empty());
+        }
     }
 
     #[test]
@@ -530,7 +508,7 @@ mod tests {
         changes.review_decision = "changes_requested".into();
         assert_eq!(post_reasons(Some(&changes), &approved, POSTED), [Reason::Approved]);
         assert!(post_reasons(Some(&approved), &approved, POSTED).is_empty(), "no repeat");
-        assert_eq!(post_reasons(None, &approved, ON), [Reason::ReadyToPost], "unposted: no approved");
+        assert!(post_reasons(None, &approved, ON).is_empty(), "unposted: no approved");
         assert!(post_reasons(None, &approved, OFF).is_empty(), "disabled");
         let mut closed = approved.clone();
         closed.state = "closed".into();

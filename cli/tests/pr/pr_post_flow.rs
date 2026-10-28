@@ -120,9 +120,9 @@ fn a_pr_that_becomes_ready_tells_the_lead_nothing() {
 fn an_answered_bot_comment_that_makes_the_pr_ready_tells_the_lead_nothing() {
     let fx = fixture(Posting::Enabled, false, "any");
     step(&fx, "U1", "SUCCESS", None, vec![thread("T1", "review-bot[bot]")]);
-    assert_eq!(reasons(&fx), told(&[]), "a bot comment is open");
+    assert_eq!(reasons(&fx), told(&[&["comments"]]), "the open bot thread is a comment");
     step(&fx, "U2", "SUCCESS", None, vec![]);
-    assert_eq!(reasons(&fx), told(&[]), "the bot comment is answered");
+    assert_eq!(reasons(&fx), told(&[&["comments"]]), "the bot thread is answered: no ready_to_post, nothing new");
 }
 
 #[test]
