@@ -71,7 +71,8 @@ fn a_missing_cpd_binary_returns_the_commands_status() {
     let out = gate_run(tmp.path(), &missing, &["sh", "-c", "exit 3"]);
 
     assert_eq!(out.status.code(), Some(3), "{out:?}");
-    assert!(out.stdout.is_empty(), "{out:?}");
+    assert!(out.stdout.is_empty() && out.stderr.is_empty(), "{out:?}");
+    assert_eq!(entries(tmp.path()), Vec::<String>::new(), "no gate-run.* directory is left: nothing else can check it");
 }
 
 /// A `cpd` that records its arguments and whether the command was still alive, then hands over to the built one.
@@ -83,11 +84,15 @@ fn recording_cpd(dir: &Path, pid_file: &Path, record: &Path) -> PathBuf {
         pid = pid_file.display(),
         real = built_cpd().display(),
     );
-    fs::write(&stub, body).unwrap();
-    let mut perms = fs::metadata(&stub).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
-    fs::set_permissions(&stub, perms).unwrap();
+    write_stub(&stub, &body);
     stub
+}
+
+fn write_stub(path: &Path, body: &str) {
+    fs::write(path, body).unwrap();
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+    fs::set_permissions(path, perms).unwrap();
 }
 
 /// Starts the wrapper on a command that leaves a file in its TMPDIR, writes its pid and blocks on stdin, waits for
@@ -143,4 +148,24 @@ fn an_int_stops_the_command_runs_the_leak_check_with_130_and_removes_the_run_dir
     assert!(record.starts_with("gate finish --run ") && record.contains(" --status 130\n"), "{record:?}");
     assert!(!record.contains("alive"), "the command was waited for before the check: {record:?}");
     assert_eq!(left, Vec::<String>::new(), "the run's directory is removed");
+}
+
+/// The command's first act is a TERM to the wrapper (`eval` and `kill` are builtins: no exec, no wait for `ready`),
+/// as a runner cancelling a step in its first milliseconds does. On a wrapper that sets its traps after it starts the
+/// command, the TERM can come before them and kill the wrapper (no status, no `gate finish`). Not deterministic on
+/// that script: it is a race of the wrapper's own lines, there is no hook between the launch and the traps.
+#[test]
+fn a_term_sent_by_the_command_as_its_first_act_still_runs_the_leak_check_with_143() {
+    let tmp = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let record = work.path().join("record");
+    let cpd = work.path().join("cpd");
+    write_stub(&cpd, &format!("#!/bin/sh\necho \"$@\" >> '{rec}'\nexec '{real}' \"$@\"\n", rec = record.display(), real = built_cpd().display()));
+
+    let out = gate_run(tmp.path(), &cpd, &["eval", "kill -s TERM \"$$\""]);
+
+    let record = fs::read_to_string(&record).unwrap_or_default();
+    assert_eq!(out.status.code(), Some(143), "{out:?} {record:?}");
+    assert!(record.starts_with("gate finish --run ") && record.contains(" --status 143\n"), "{record:?}");
+    assert_eq!(entries(tmp.path()), Vec::<String>::new(), "the run's directory is removed");
 }
