@@ -43,8 +43,8 @@ fn pr_add_in_dispatch_refusal_covers_every_shape() {
 #[test]
 fn pr_add_in_dispatch_with_no_needs_adds_a_pr_without_needs() {
     let f = added("dispatch");
-    let other = f.fx.keyed_repo("other").canonicalize().unwrap();
-    let out = f.add("fix", &other, &["--no-needs"]).ok();
+    // Stacked on PR `repo`, which has not merged: a PR that starts at once is refused its stub drafts after the lock (`draft_parked`).
+    let out = f.add("fix", &f.repo, &["--no-needs", "--base", "pay/repo"]).ok();
     assert_eq!(out["pr"]["needs"], json!([]));
     assert!(f.needs_of("fix").is_empty());
 }
@@ -77,9 +77,9 @@ fn pr_add_in_plan_phase_needs_no_flag() {
 #[test]
 fn pr_add_rerun_in_dispatch_without_a_flag_is_already() {
     let f = added("dispatch");
-    let other = f.fx.keyed_repo("other").canonicalize().unwrap();
-    f.add("fix", &other, &["--no-needs"]).ok();
-    assert_eq!(f.add("fix", &other, &[]).ok()["already"], true);
+    // Stacked on PR `repo`, which has not merged: a PR that starts at once is refused its stub drafts after the lock (`draft_parked`).
+    f.add("fix", &f.repo, &["--no-needs", "--base", "pay/repo"]).ok();
+    assert_eq!(f.add("fix", &f.repo, &["--base", "pay/repo"]).ok()["already"], true);
 }
 
 /// A stacked PR (`--base` names a PR of the Plan in its repo, or that PR's Lead Branch) needs neither flag: its base is its link.

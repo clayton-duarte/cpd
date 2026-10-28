@@ -248,12 +248,14 @@ fn add_stores_the_realpath_of_the_main_worktree_of_the_repo_given() {
 #[test]
 fn add_in_dispatch_appends_the_pr() {
     let fx = crud("dispatch");
-    let out = fx.add("late", &fx.pay, &["--no-needs"]).ok();
+    // The PR waits for another PR: a PR that starts at once is refused its stub drafts (`draft_parked`).
+    fx.locked_pr("base", &fx.pay, "dispatch");
+    let out = fx.add("late", &fx.pay, &["--needs", "base"]).ok();
     assert_eq!(out["pr"]["appended"], true);
     assert_eq!(out["pr"]["status"], "waiting");
     assert_eq!(fx.events("pr-added")[0]["data"]["appended"], true);
     // A rerun still says it was appended.
-    assert_eq!(fx.add("late", &fx.pay, &["--no-needs"]).ok()["pr"]["appended"], true);
+    assert_eq!(fx.add("late", &fx.pay, &["--needs", "base"]).ok()["pr"]["appended"], true);
 }
 
 // ---------- pr add --shape: the template of stub drafts, and the stored shape (commands.md §9.4, contract §2.2 "Job kinds") ----------
@@ -392,7 +394,10 @@ fn the_opener_stub_carries_the_fixed_spec_and_open_tier() {
 fn the_stubs_of_a_pr_added_after_the_lock_are_appended_and_a_reopened_plan_goes_back_to_dispatch() {
     for phase in ["dispatch", "deploy"] {
         let fx = crud(phase);
-        fx.add_shape("late", Some("docs")).ok();
+        // The PR waits for another PR: a PR that starts at once is refused its stub drafts (`draft_parked`).
+        fx.locked_pr("base", &fx.pay, "dispatch");
+        let args = ["add", "late", "--repo", fx.pay.to_str().unwrap(), "--title", "Add retries", "--shape", "docs", "--needs", "base"];
+        fx.add_with_stubs("pay-1", &args).ok();
         assert_eq!(
             fx.stubs("late"),
             json!([
@@ -639,7 +644,9 @@ fn add_refusals_write_nothing() {
 fn add_in_deploy_or_done_reopens_the_plan_in_dispatch() {
     for phase in ["deploy", "done"] {
         let fx = crud(phase);
-        let out = fx.add("fix", &fx.pay, &[]).ok();
+        // The PR waits for another PR: a PR that starts at once is refused its stub drafts (`draft_parked`).
+        fx.locked_pr("base", &fx.pay, "dispatch");
+        let out = fx.add("fix", &fx.pay, &["--needs", "base"]).ok();
         assert_eq!((out["pr"]["appended"].clone(), out["pr"]["status"].clone()), (json!(true), json!("waiting")), "{phase}");
         let row: (String, Option<String>) = fx
             .store()
@@ -657,7 +664,7 @@ fn add_in_deploy_or_done_reopens_the_plan_in_dispatch() {
 
         // A rerun is already and writes nothing.
         let writes = fx.writes();
-        let again = fx.add("fix", &fx.pay, &[]).ok();
+        let again = fx.add("fix", &fx.pay, &["--needs", "base"]).ok();
         assert_eq!((again["already"].clone(), again["pr"]["appended"].clone()), (json!(true), json!(true)));
         assert_eq!(fx.writes(), writes);
     }
@@ -964,8 +971,10 @@ fn gh_args(fx: &Crud) -> Vec<Vec<String>> {
 
 #[test]
 fn edit_title_of_an_open_pull_request_retitles_it_on_github_first() {
-    let fx = crud("dispatch");
+    // Added before the lock: after it a PR that starts at once is refused its stub drafts (`draft_parked`).
+    let fx = crud("plan");
     fx.add("api", &fx.pay, &["--no-needs"]).ok();
+    fx.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z'");
     open_pr(&fx, Reply::ok("{}\n"));
 
     let out = fx.pr(&["edit", "api", "--title", "Charge the card"]).ok();
@@ -983,8 +992,10 @@ fn edit_title_of_an_open_pull_request_retitles_it_on_github_first() {
 
 #[test]
 fn edit_title_of_an_open_pull_request_stores_nothing_when_github_fails() {
-    let fx = crud("dispatch");
+    // Added before the lock: after it a PR that starts at once is refused its stub drafts (`draft_parked`).
+    let fx = crud("plan");
     fx.add("api", &fx.pay, &["--no-needs"]).ok();
+    fx.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z'");
     open_pr(&fx, Reply::exit(1, "", "HTTP 422: nope\n"));
     let writes = fx.writes();
 

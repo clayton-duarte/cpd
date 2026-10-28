@@ -136,7 +136,14 @@ fn pr_add_leaves_a_merged_legacy_lead_branch_alone() {
         fx.pay.display()
     ));
 
-    let out = fx.add("web", &fx.pay).ok();
+    // `web` is stacked on an unmerged PR, `base`, so that it waits: after the lock a PR that starts at once is refused its stub
+    // drafts (`draft_parked`).
+    fx.env.sql(&format!(
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+           VALUES ('pay-1', 'base', '{}', 'main', 'dispatch', 'cpd/pay-1/base', '/w/base', cpd_txn(), 't', 't');",
+        fx.pay.display()
+    ));
+    let out = fx.cpd(&["pr", "add", "web", "--repo", fx.pay.to_str().unwrap(), "--title", "T", "--shape", "config", "--no-needs", "--base", "pay-1/base", "--plan", "pay-1"]).ok();
 
     assert_eq!(out["pr"]["lead_branch"], "pay-1/web");
     assert_eq!(fx.lead_branch("old"), "cpd/pay-1");
