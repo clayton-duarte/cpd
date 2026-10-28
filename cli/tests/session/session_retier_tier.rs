@@ -121,7 +121,6 @@ fn retier_tier_moves_the_manager_too() {
 fn retier_tier_refuses_a_g_tier_and_changes_nothing() {
     let fx = Fx::new();
     fixture(&fx.env, "", FOUR);
-    fx.env.sql("INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1.0.0', 'G', 'p/gemini', '[0,1,2,3,4]', 't');");
     not_allowed(&fx, LEAD1, "GX");
 }
 
@@ -173,6 +172,7 @@ fn retier_tier_is_not_sticky() {
     fx.cpd(&["session", "retier", LEAD1]).ok();
     assert_eq!(tier(&fx, LEAD1), "O2", "lead_tier");
 
+    drop(fx);
     let review = Fx::new();
     fixture(&review.env, REVIEW, FOUR);
     review.cpd(&["session", "retier", LEAD1, "--tier", "S2"]).ok();

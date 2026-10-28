@@ -213,6 +213,7 @@ context_curation_min_records = 4294967295
 loop_guard_turns = 4294967295
 retry_cap = 0
 lead_tier = "H0"
+review_lead_tier = "S3"
 manager_tier = "H1"
 context_distill_tier = "GX"
 open_tier = "S3"

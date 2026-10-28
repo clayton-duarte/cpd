@@ -144,6 +144,27 @@ impl Tier {
         .with("rule", "pro-d82"))
     }
 
+    /// What a Lead may have: any letter but G, effort 0-4 (hs-d506, hs-d562).
+    pub fn is_lead_allowed(self) -> bool {
+        self.letter != Letter::G && self.effort <= Tier::MAX_EFFORT
+    }
+
+    /// `tier_not_allowed` (exit 2) unless a Lead may have this Tier (hs-d506, hs-d562).
+    pub fn check_lead(self) -> Result<(), CpdError> {
+        if self.is_lead_allowed() {
+            return Ok(());
+        }
+        Err(CpdError::new(
+            ErrorCode::TierNotAllowed,
+            format!(
+                "Tier {self} is not allowed for a Lead: Leads use only the Tiers O0-O4, S0-S4, H0-H4, never effort 5 and never G (hs-d506, hs-d562)."
+            ),
+        )
+        .with("tier", self.to_string())
+        .with("allowed", "O0-O4, S0-S4, H0-H4")
+        .with("rule", "hs-d506, hs-d562"))
+    }
+
     pub fn letter(self) -> Letter {
         self.letter
     }

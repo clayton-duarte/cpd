@@ -18,8 +18,11 @@ use crate::ids::SessionId;
 use crate::output::Output;
 
 /// The Tier the config gives a Session of this role, `None` for a Worker (its Tier is its Job's).
-fn target(config: &Config, role: Role) -> Option<Tier> {
-    match role {
+fn target(config: &Config, row: &Row) -> Option<Tier> {
+    match row.role {
+        Role::Lead if !config.inbox.review_context.is_empty() && row.context.as_str() == config.inbox.review_context => {
+            Some(config.review_lead_tier)
+        }
         Role::Lead => Some(config.lead_tier),
         Role::Manager => Some(config.manager_tier),
         Role::Worker => None,
@@ -28,17 +31,17 @@ fn target(config: &Config, role: Role) -> Option<Tier> {
 
 /// The selected Sessions, each with its target: `<id>` (refused when it may not be retiered), or every live Lead and
 /// Manager (`--all`).
-fn selected(conn: &Connection, config: &Config, one: Option<&SessionId>) -> Result<Vec<(Row, Tier)>, CpdError> {
+fn selected(conn: &Connection, config: &Config, one: Option<&SessionId>, chosen: Option<Tier>) -> Result<Vec<(Row, Tier)>, CpdError> {
     match one {
         Some(id) => {
             let row = row::load(conn, id)?;
-            let Some(tier) = target(config, row.role) else { return Err(not_a_lead(&row.id, row.role)) };
+            let Some(tier) = target(config, &row) else { return Err(not_a_lead(&row.id, row.role)) };
             if row.archived_at.is_some() {
                 return Err(archived(&row));
             }
-            Ok(vec![(row, tier)])
+            Ok(vec![(row, chosen.unwrap_or(tier))])
         }
-        None => Ok(row::live(conn)?.into_iter().filter_map(|row| target(config, row.role).map(|tier| (row, tier))).collect()),
+        None => Ok(row::live(conn)?.into_iter().filter_map(|row| target(config, &row).map(|tier| (row, tier))).collect()),
     }
 }
 
@@ -47,12 +50,21 @@ pub(super) fn retier(args: RetierArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let one = args.id.as_ref().map(|reference| env.resolve(reference)).transpose()?;
     let config = env.config.clone();
-    let chosen = env.store.read(|conn| selected(conn, &config, one.as_ref()))?;
+    if let (Some(tier), Some(id)) = (args.tier, one.as_ref()) {
+        let home = env.home.clone();
+        let models = env.store.read(|conn| {
+            let row = row::load(conn, id)?;
+            crate::policy::model::models_of_context(conn, &home, row.context.as_str())
+        })?;
+        crate::config::catalog::load_with(&models, &mut env.store)?.check(tier)?;
+        tier.check_lead()?;
+    }
+    let chosen = env.store.read(|conn| selected(conn, &config, one.as_ref(), args.tier))?;
     let (moved, unchanged): (Vec<Value>, Vec<String>) = if chosen.iter().any(|(row, tier)| row.tier != tier.to_string()) {
         // One transaction: the rows are read again in it, so what is written is what was found there.
         env.store.write("session retier", |tx| {
             let (mut moved, mut unchanged) = (Vec::new(), Vec::new());
-            for (row, tier) in selected(tx, &config, one.as_ref())? {
+            for (row, tier) in selected(tx, &config, one.as_ref(), args.tier)? {
                 let to = tier.to_string();
                 if row.tier == to {
                     unchanged.push(row.id.to_string());
