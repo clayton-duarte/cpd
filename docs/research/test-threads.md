@@ -1,6 +1,6 @@
 # Research: does raising nextest's test-threads shorten CI's Rust test step on hs? (Job threads-ab-note, Plan runner)
 
-An A/B of `test-threads` 4, 6 and 8 for the exact CI command, on hs. Nothing is changed: not `.config/nextest.toml`, not `ci.yml`, not a script or test. Base `cd4bc290` (`origin/main`). Machine hs: 16 CPUs, shared with other Workers' builds and Gates and with the CI runner. Every number says how it was got: **measured** (on hs, 2026-10-28 14:12-14:50 EDT, with the commands in Data), **computed** (arithmetic on measured numbers), **inferred** or **unverified**.
+An A/B of `test-threads` 4, 6 and 8 for the exact CI command, on hs. Nothing is changed: not `.config/nextest.toml`, not `ci.yml`, not a script or test. Base `cd4bc290` (`origin/main`). Machine hs: 16 CPUs, shared with other Workers' builds and Gates and with the CI runner. Every number says how it was got: **measured** (on hs, 2026-10-28 14:11-14:48 EDT, with the commands in Data), **computed** (arithmetic on measured numbers), **inferred** or **unverified**.
 
 Neighbouring notes are referred to, not restated: `.config/nextest.toml` (the cap of 4, marked PROVISIONAL, and its reason), `docs/research/leak-flake-ab.md` and `leak-flake-verdict.md` (the leak A/B under heavy pressure that set it), `docs/research/build-cycle.md` (where the Gate's time goes).
 
@@ -75,7 +75,7 @@ No run overlapped a CI job's nextest except c1-c4 and the first one; but hs was 
 ### Leaks, failures, slow tests
 
 - **Leaks: 0 in 15 of 15 runs** (measured: no `LEAK` line in any output; every exit 0, no `gate-run.sh` / `cpd gate finish` line). **Failing, timed-out or killed tests: 0 in 15 of 15** (no `FAIL`, `TIMEOUT`, `SIGABRT` or `SIGKILL` line). So the rule "if any count shows a leak or a failing test, run that count three more times" was never triggered: the rate is 0 of 5 at each count (15 runs; plus the first 4-thread run, 0 of 1).
-- The slowest single test in a run (measured, from the PASS lines): 9.4-13.1 s at every count (4: 9.4-10.1 and 13.1 in d4; 6: 9.8-11.2; 8: 11.1-12.8, 11.4, 9.8, 11.6), far under the 30 s slow limit of the profile and the 90 s kill. No sign that more threads make a test slow enough to matter (5 runs per count: weak).
+- The slowest single test in a run (measured, from the PASS lines): 9.4-13.1 s at every count (4: 9.4-13.1; 6: 9.4-11.2; 8: 9.8-12.8), far under the 30 s slow limit of the profile and the 90 s kill. No sign that more threads make a test slow enough to matter (5 runs per count: weak).
 - Peak number of test processes: **not measured** (it was not cheap to get right without tooling). The leak-flake notes' figure for 4 threads is 42 at once for a clean run of the Gate (read from `.config/nextest.toml`'s comment, not re-measured).
 
 ### Load and overlap
@@ -96,7 +96,7 @@ No run overlapped a CI job's nextest except c1-c4 and the first one; but hs was 
 - **Recommendation: raise for CI only (option 2), to 8.** Supporting number: **8 threads 89.9 s against 4 threads 171.4 s (median of the runs without a CI overlap, computed), 48 % shorter, no leak and no failing test in 15 of 15 runs, 5 at 8 threads** (measured). 6 threads is the cautious step: 119.1 s, 30 % shorter, same 0 in 5. Both ranges are far apart from 4's.
 - **How sure the data allows.** Sure that, on one Gate at a time, with load 5-13, hs is faster at 6 and 8 than at 4, because the difference (50-80 s) is larger than the spread (up to 21 s). **Not sure** the step stays free of leaks and flakes: 5 runs per count with 0 leaks bound the rate only loosely (inferred: a leak that happens in 1 of 5 runs would be seen about two times in three; one in 20 would mostly not), and `leak-timeout` is 1 s (`.config/nextest.toml`). Zero tolerance for flakes asks for more runs than nine to fifteen; a week of CI runs at the new count is the stronger test.
 - **A CI-only override would need:** one line in `ci.yml`, `env: NEXTEST_TEST_THREADS: 8` on the `Rust tests` step, and a pin test (the repo's way of keeping a workflow line from drifting) that the line is there, with the count. Not done here.
-- **What the User must decide:** (a) whether a CI-only override is wanted, and 6 or 8; (b) whether the data is enough (15 runs, 0 leaks) or a longer trial in CI is wanted first; (c) whether a worse case should be tried before: the cap's reason was load 33-63 (several Gates at once), and CI's runner can overlap Workers' Gates on hs (it did here: other Workers' nextest ran during 10 of the 15 runs, with no leak).
+- **What the User must decide:** (a) whether a CI-only override is wanted, and 6 or 8; (b) whether the data is enough (15 runs, 0 leaks) or a longer trial in CI is wanted first; (c) whether a worse case should be tried before: the cap's reason was load 33-63 (several Gates at once), and CI's runner can overlap Workers' Gates on hs (it did here: other Workers' nextest ran during 8 of the 15 runs, with no leak).
 
 ## Open questions
 
