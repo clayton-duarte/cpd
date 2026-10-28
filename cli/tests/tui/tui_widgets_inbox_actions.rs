@@ -594,11 +594,11 @@ fn a_refused_claim_shows_the_failure_dialog_and_esc_closes_the_menu() {
 }
 
 fn deploy() -> Condition {
-    linked(Kind::Deploy, Urgency::Yellow, "deploy:acme/pay#123", "acme/pay deploy production: Release 1.2", None, Some("https://github.com/acme/pay/actions/runs/123"))
+    linked(Kind::Deploy, Urgency::Yellow, "deploy:acme/pay#123", "acme/pay deploy prod: R1", None, Some("https://github.com/acme/pay/actions/runs/123"))
 }
 
 const APPROVE_ENTRIES: [&str; 5] = ["Approve", "Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00", "Dismiss"];
-const DEPLOY_LABEL: &str = "acme/pay deploy production: Release 1.2";
+const DEPLOY_LABEL: &str = "acme/pay deploy prod: R1";
 
 #[test]
 fn a_right_click_on_a_deploy_item_opens_approve_first_and_no_other_item_has_approve() {
