@@ -29,8 +29,9 @@ fn an_owner_file_sets_the_jira_status_names_and_a_repo_file_overrides_one() {
     let out = show(&fx, true).ok();
     let repo = format!("repo:{}", real(&fx, "acme/r.toml"));
     assert_eq!(keys(&out)["pr.jira.in_review"], json!({"value": "Code Review", "source": repo}), "{out}");
-    assert_eq!(keys(&out)["pr.jira.in_progress"], json!({"value": "In Progress", "source": owner}), "{out}");
-    assert_eq!(keys(&out)["pr.jira.done"], json!({"value": "Done", "source": owner}), "{out}");
+    let left_out = format!("{repo} (key default)");
+    assert_eq!(keys(&out)["pr.jira.in_progress"], json!({"value": "", "source": left_out}), "{out}");
+    assert_eq!(keys(&out)["pr.jira.done"], json!({"value": "", "source": left_out}), "{out}");
 }
 
 #[test]
