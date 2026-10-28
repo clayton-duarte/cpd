@@ -179,8 +179,8 @@ Evidence, all `packages/chord` at `v1.4.0`:
   `errors.ts`, `sqlite/node.ts`, `sqlite/cloudflare.ts`, `connection.ts`, `host.ts`, `object.ts`, `reload.ts`. Reading the hits: `retry` is a
   boolean `retryable` on `ChordError` for `superseded` and `upgrade_conflict` (`errors.ts:24-42`), meaning "start a new root";
   `schedule` is ack and output-commit timers; `checkpoint` is SQLite `PRAGMA wal_checkpoint` (`sqlite/node.ts:166`); `durable` is
-  the `durableTasks` counter in `manager.ts` and the name "Durable Object" in `sqlite/cloudflare.ts`; `persist`/`workflow` do not
-  appear as primitives.
+  the `durableTasks` counter in `manager.ts`, the name "Durable Object" in `sqlite/cloudflare.ts`, and comments about pi's Durable in `host.ts:64` and
+  `object.ts:200`; `persist` and `workflow` appear in no declaration, and `object.ts`, `host.ts`, `reload.ts` hits are the `superseded`/`upgrade_conflict` retry comments.
 - **Task:** only `self.task(fn)`: in-memory background work, no identity, no state, no persistence, no retry (a throw is not
   restarted by chord; the guide says "Long-running work is a `task`, and long waits are state").
 - **Job, workflow, schedule, retry policy, checkpoint:** none. State "survives" a reload only in memory; a cell is "not saved
@@ -206,8 +206,8 @@ Evidence, all `packages/chord` at `v1.4.0`:
 
 **Backends pi-durable ships** (pi-durable README "Storage", `docs/research/pi-durable.md`; files verified in `packages/durable/src/storage`):
 memory (`memory.ts`), JSONL (`jsonl/`), SQLite (`sqlite/`, `NodeSqliteStorage`, `cloudflare.ts`) and IndexedDB (`indexeddb.ts`). Chord
-contributes the delta `Op` type and `apply`/`applyImmutableBatches` for materialising documents in memory, JSONL-independent
-code, IndexedDB and SQLite storages, plus the SQLite driver and migration runner for the two SQLite storages.
+contributes the delta `Op` type and `apply`/`applyImmutableBatches` for materialising documents in the memory, IndexedDB and SQLite
+storages (the JSONL files import only the `Context` and `JsonValue` types), plus the SQLite driver and migration runner for the two SQLite storages.
 
 ### Main differs from v1.4.0
 
@@ -253,8 +253,7 @@ Source: `rg -n "@earendil-works/chord" packages/durable/src packages/durable/REA
 - Names imported from `.`: types `Context`, `JsonValue`, `JsonRepresentation`, `Draft`, `AttachedReplicatedState`, `ReplicatedStateSource*`; values
   `copyJson`, `replicatedState`. From `./context`: `BACKGROUND_CONTEXT`, `withAbortSignal`, `withoutAbortSignal`, `withTelemetry`, `awaitWithContext`.
   From `./delta`: `track`, `apply`, `applyImmutable`, `applyImmutableBatches`, `overlap`, types `Op`, `Path`, `NonEmptyPath`, `Change`, `Prepared`,
-  `Tracker`. From `./output`: `OutputBuffer`, `Progress`, `boundOutput`, `characterEnd`, `utf8ByteLength`, `PROGRESS_BYTES_PER_SECOND` (note: not
-  exported by chord's index docs; it is imported from `./output` in `harness/tool.ts:4`, I did not check where it is defined), `ProgressClock`,
+  `Tracker`. From `./output`: `OutputBuffer`, `Progress`, `boundOutput`, `characterEnd`, `utf8ByteLength`, `PROGRESS_BYTES_PER_SECOND` (a constant defined at `packages/chord/src/output.ts:303`), `ProgressClock`,
   `OutputLimits`. From `./sqlite*`: `SqliteDatabase`, `SqliteExecutor`, `SqliteValue`, `SqliteMigration`, `applySqliteMigrations`,
   `validateSqliteSchemaPrefix`, `openNodeSqliteDatabase`, `NodeSqliteDatabase`, `DurableObjectSqliteDatabase`.
 
@@ -263,7 +262,7 @@ Source: `rg -n "@earendil-works/chord" packages/durable/src packages/durable/REA
 Every import or re-export of `@earendil-works/chord` in `packages/durable/src` at `v1.4.0`, line = first line of the statement. Generated with a
 script over the files (`import`/`export ... from "@earendil-works/chord..."`); statements with `type` imports are included.
 
-| File | Line(s) | Subpath: names | Used for |
+| File | Line(s) | Subpath: names | Area (by directory) |
 |---|---|---|---|
 | `packages/durable/src/codemode/codemode.ts` | 37 | `chord`: Context, copyJson, JsonValue | types: `Context`, `JsonValue`, `Op` |
 | `packages/durable/src/codemode/models.ts` | 10 | `chord`: Context, JsonValue | types: `Context`, `JsonValue`, `Op` |
@@ -349,7 +348,7 @@ Verified by reading imports and the files they name at `v1.4.0`:
   uses them for real, not just for types; it does not use chord's runtime layer, and the durable execution model is not in chord.
   Other consumers in `packages/*` at `v1.4.0`: `packages/env` imports chord's `Context` type (and `BACKGROUND_CONTEXT`, `withAbortSignal`
   in tests); `rg "@earendil-works/chord" packages --glob '!chord' --glob '!durable'` finds no other source import (`pi-telemetry`'s README
-  mentions `@earendil-works/chord/telemetry-sqlite`; `pi-codemode`, `pi-ai`, `pi-coding-agent` and `pi-agent` have no hit).
+  mentions `@earendil-works/chord/telemetry-sqlite`; `pi-codemode`, `pi-ai`, `pi-coding-agent` and `pi-agent-core` (directory `packages/agent`) have no hit).
 
 ## Sources
 
