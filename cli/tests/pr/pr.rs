@@ -2951,7 +2951,15 @@ fn a_reopened_plan_whose_new_pr_merges_is_done_again_with_a_second_plan_done() {
     assert_eq!(fx.events("plan-done").len(), 1);
 
     // `pr add` moves the legacy branch and reopens the Plan.
-    fx.cpd(&["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
+    // The PR is stacked on an unmerged PR, `side`, so that it waits: a PR that starts at once is refused its stub drafts after the lock
+    // (`draft_parked`). `side` is cancelled once the PR is added, so that it does not keep the Plan from `done`.
+    fx.env.sql(&format!(
+        "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+           VALUES ('pay', 'side', '{}', 'pay', 'main', 'dispatch', 'cpd/pay/side', '/w/side', 'Side', 'config', cpd_txn(), 't', 't');",
+        fx.repo.display()
+    ));
+    fx.cpd(&["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--base", "pay/side", "--plan", "pay"]).ok();
+    fx.env.sql("UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'pay' AND key = 'side';");
     assert_eq!(fx.phase(), "dispatch");
     // The engine would start the PR and the Lead open it: written straight, as the other tests do,
     // with the pull request's row `pr open` writes.
@@ -3856,17 +3864,28 @@ impl Added {
     fn add_fix(&self, extra: &[&str]) -> Run {
         self.add("fix", &self.repo, extra)
     }
+
+    /// An unmerged PR `side` in `repo`, as the lock leaves one (`dispatch`): a PR stacked on it (`--base pay/side`) waits for it, and
+    /// so its stub drafts are legal after the lock (a PR that starts at once is refused `draft_parked`).
+    fn side(&self, repo: &Path) {
+        self.fx.env.sql(&format!(
+            "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+               VALUES ('pay', 'side', '{}', 'pay', 'main', 'dispatch', 'cpd/pay/side', '/w/side', 'Side', 'config', cpd_txn(), 't', 't');",
+            repo.display()
+        ));
+    }
 }
 
 #[test]
 fn pr_add_on_a_reopened_plan_needs_its_merged_prs_by_default() {
     let f = added("done");
-    let out = f.add_fix(&[]).ok();
+    f.side(&f.repo);
+    let out = f.add_fix(&["--base", "pay/side"]).ok();
     assert_eq!(out["pr"]["needs"], json!(["repo"]));
     assert_eq!(f.needs_of("fix"), ["repo"]);
     assert_eq!(f.pr_added()[0]["needs"], json!(["repo"]));
     // A rerun (the Plan is in dispatch now) is `already`, not `pr_exists`.
-    assert_eq!(f.add_fix(&[]).ok()["already"], true);
+    assert_eq!(f.add_fix(&["--base", "pay/side"]).ok()["already"], true);
 }
 
 #[test]
@@ -3874,12 +3893,14 @@ fn pr_add_no_needs_and_needs_override_the_reopen_default() {
     // One in-process `Fx` at a time (its lock is process-wide): each block drops its own before the next.
     {
         let a = added("done");
-        assert_eq!(a.add_fix(&["--no-needs"]).ok()["pr"]["needs"], json!([]));
+        a.side(&a.repo);
+        assert_eq!(a.add_fix(&["--no-needs", "--base", "pay/side"]).ok()["pr"]["needs"], json!([]));
         assert!(a.needs_of("fix").is_empty());
     }
     {
         let b = added("done");
-        b.add("x", &b.repo, &["--no-needs"]).ok();
+        b.side(&b.repo);
+        b.add("x", &b.repo, &["--no-needs", "--base", "pay/side"]).ok();
         // The Plan is in dispatch now; `--needs x` names a PR that is not merged.
         assert_eq!(b.add_fix(&["--needs", "x"]).ok()["pr"]["needs"], json!(["x"]));
         assert_eq!(b.needs_of("fix"), ["x"]);
@@ -3896,7 +3917,8 @@ fn pr_add_on_a_plan_in_dispatch_with_no_needs_has_no_needs() {
     let f = added("dispatch");
     // Another repo: the fixture's own holds `cpd/pay` for its unmerged PR.
     let other = f.fx.keyed_repo("other").canonicalize().unwrap();
-    let out = f.add("fix", &other, &["--no-needs"]).ok();
+    f.side(&other);
+    let out = f.add("fix", &other, &["--no-needs", "--base", "pay/side"]).ok();
     assert_eq!(out["pr"]["needs"], json!([]));
     assert!(f.needs_of("fix").is_empty());
 }

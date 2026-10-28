@@ -225,6 +225,9 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
         check_needs_not_draft(&all, plan, &job)?;
         job.fingerprint = Some(locked_fingerprint(&job));
     }
+    if draft {
+        crate::plan::parked::door(conn, plan, &phase, &all, &job)?;
+    }
     Ok(Decision::Insert(job))
 }
 

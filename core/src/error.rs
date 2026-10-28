@@ -232,6 +232,7 @@ error_codes! {
     WatchRunning = "watch_running" => Refused,
     NotATerminal = "not_a_terminal" => Refused,
     ArchiveBlocked = "archive_blocked" => Refused,
+    DraftParked = "draft_parked" => Refused,
     Archived = "archived" => Refused,
     ItemClosed = "item_closed" => Refused,
     NotClaimable = "not_claimable" => Refused,

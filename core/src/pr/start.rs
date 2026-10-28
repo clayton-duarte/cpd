@@ -89,12 +89,12 @@ pub struct NotReady {
 }
 
 impl NotReady {
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.needs.is_empty() && self.base_pr.is_none()
     }
 }
 
-fn not_ready(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<NotReady, CpdError> {
+pub(crate) fn not_ready(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<NotReady, CpdError> {
     let mut stmt = conn.prepare(concat!(
         "SELECT n.needs FROM prs r, pr_needs n, prs q WHERE r.plan = ?1 AND r.key = ?2 AND ",
         needs_unmerged!(),

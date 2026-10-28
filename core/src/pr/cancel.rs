@@ -106,20 +106,28 @@ pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
 /// The PR's Jobs go with it (contract §3.8): in the transaction that cancels a PR, every Job of it that is `draft`, `queued` or `failed`, of every kind,
 /// is `cancelled` (`reason` `pr cancelled`, one `job-cancelled` each, by `seq`). One already `cancelled` is untouched.
 fn cancel_jobs(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+    cancel_jobs_with(tx, plan, key, &["draft", "queued", "failed"], "pr cancelled", "was cancelled")
+}
+
+/// The Jobs of PR `key` whose status is one of `statuses`, `cancelled` in the caller's transaction with `reason`, one `job-cancelled` Event each,
+/// by `seq`. `what` is what happened to the PR, for the Event's text. `pr cancel` cancels `draft`, `queued` and `failed` ones; the merge of a PR its `draft` ones
+/// (hs-d735, `pr merged`).
+pub(super) fn cancel_jobs_with(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, statuses: &[&str], reason: &str, what: &str) -> Result<(), CpdError> {
+    let list = statuses.iter().map(|s| format!("'{s}'")).collect::<Vec<_>>().join(", ");
     let own: Vec<String> = {
-        let mut stmt =
-            tx.prepare("SELECT key FROM jobs WHERE plan = ?1 AND pr = ?2 AND status IN ('draft', 'queued', 'failed') ORDER BY seq")?;
+        let mut stmt = tx.prepare(&format!("SELECT key FROM jobs WHERE plan = ?1 AND pr = ?2 AND status IN ({list}) ORDER BY seq"))?;
         stmt.query_map([plan.as_str(), key.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
-    let reason = "pr cancelled";
     for job in own {
         tx.execute(
-            "UPDATE jobs SET status = 'cancelled', failed_cause = NULL, cancel_reason = ?3,
-                    cancel_requested_at = (SELECT at FROM txns WHERE id = cpd_txn())
-              WHERE plan = ?1 AND key = ?2 AND status IN ('draft', 'queued', 'failed')",
+            &format!(
+                "UPDATE jobs SET status = 'cancelled', failed_cause = NULL, cancel_reason = ?3,
+                        cancel_requested_at = (SELECT at FROM txns WHERE id = cpd_txn())
+                  WHERE plan = ?1 AND key = ?2 AND status IN ({list})"
+            ),
             [plan.as_str(), job.as_str(), reason],
         )?;
-        let text = format!("Job {job} of Plan {plan} was cancelled: {reason}: PR {key} was cancelled. Next: cpd plan show --plan {plan}");
+        let text = format!("Job {job} of Plan {plan} was cancelled: {reason}: PR {key} {what}. Next: cpd plan show --plan {plan}");
         append(tx, NewEvent::job_cancelled(text, reason).plan(plan.clone()).job(crate::ids::JobKey::parse(&job)?))?;
     }
     Ok(())
