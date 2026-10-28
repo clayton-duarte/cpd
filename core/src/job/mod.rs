@@ -44,7 +44,6 @@ use crate::config::{self, Tier};
 use crate::driver;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
 use crate::ids::{JobKey, PlanId, PrKey};
 use crate::output::Output;
 use crate::plan::PrRow;
@@ -89,10 +88,6 @@ pub struct AddArgs {
     /// Dependencies, comma-separated
     #[arg(long, value_name = "k1,k2", value_delimiter = ',')]
     needs: Vec<JobKey>,
-    /// A review Job (B2): its Worker forks the Lead, it commits nothing and
-    /// writes run/<plan>/reviews/<key>.md; it needs every Job of its PR so far
-    #[arg(long, conflicts_with = "needs")]
-    review: bool,
     /// Add it as a draft in a phase after plan too: the engine never runs it
     /// until a Plan review of the drafts is approved. Needs no --tier and no
     /// --spec: a stub draft, completed later with job edit
@@ -249,11 +244,6 @@ fn plan_phase(conn: &Connection, plan: &PlanId) -> Result<String, CpdError> {
         .ok_or_else(|| CpdError::plan_not_found(plan))
 }
 
-/// Where a review Job's Worker writes its findings: `run/<plan>/reviews/<job>.md` (contract §1.4).
-pub(crate) fn findings_path(home: &CpdHome, plan: &PlanId, job: &str) -> PathBuf {
-    home.plan_dir(plan).join("reviews").join(format!("{job}.md"))
-}
-
 /// The Job `key` among `jobs`, else `job_not_found`.
 pub(crate) fn find<'a>(jobs: &'a [Job], plan: &PlanId, key: &JobKey) -> Result<&'a Job, CpdError> {
     jobs.iter().find(|j| j.key == key.as_str()).ok_or_else(|| {
@@ -308,13 +298,10 @@ fn kinds_allowed(shape: &str) -> &'static [&'static str] {
 }
 
 /// The PR's stored shape allows a Job of `kind` while the PR is `waiting` or `dispatch`, else `shape_violation`
-/// (§5.1). A review Job (kind `work`) is allowed in every shape; an `open` PR allows only `work`.
-fn check_shape_allows(prs: &[PrRow], plan: &PlanId, pr: &str, kind: &str, review: bool) -> Result<(), CpdError> {
+/// (§5.1). An `open` PR allows only `work`.
+fn check_shape_allows(prs: &[PrRow], plan: &PlanId, pr: &str, kind: &str) -> Result<(), CpdError> {
     let Some(row) = prs.iter().find(|p| p.key.as_str() == pr) else { return Ok(()) };
     let allowed = kinds_allowed(&row.shape);
-    if review {
-        return Ok(());
-    }
     if row.status == "open" {
         if kind == "work" {
             return Ok(());
