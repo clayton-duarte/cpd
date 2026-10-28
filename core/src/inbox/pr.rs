@@ -94,7 +94,9 @@ struct Facts<'a> {
     clean: bool,
 }
 
-/// The STATUS table, first match wins. `post_enabled` is asked at most once, and only when rule 5 or 6 needs it.
+/// The STATUS table, first match wins: draft; broken; checks running; ready for review (also when stacked); ready to
+/// merge; then a stacked PR is `Stacked` when approved or not posted (pro-d152: stacking blocks only ready to merge),
+/// else a posted PR is in review, else waiting. `post_enabled` is asked at most once, and only when needed.
 fn classify(f: &Facts<'_>, mut post_enabled: impl FnMut() -> bool) -> Status {
     let r = f.row;
     if r.draft {
@@ -110,9 +112,6 @@ fn classify(f: &Facts<'_>, mut post_enabled: impl FnMut() -> bool) -> Status {
             (false, false, false) => Status::ChangesRequested,
         };
     }
-    if matches!((&r.base_ref, &r.default_branch), (Some(b), Some(d)) if b != d) {
-        return Status::Stacked;
-    }
     if r.checks == "pending" {
         return Status::ChecksRunning;
     }
@@ -126,7 +125,14 @@ fn classify(f: &Facts<'_>, mut post_enabled: impl FnMut() -> bool) -> Status {
     if f.clean && (approved || r.review_decision == "none") && (!judged || approved || !ask()) {
         return Status::ReadyToMerge;
     }
-    if f.posted { Status::InReview } else { Status::Waiting }
+    let stacked = matches!((&r.base_ref, &r.default_branch), (Some(b), Some(d)) if b != d);
+    if stacked && (approved || !f.posted) {
+        Status::Stacked
+    } else if f.posted {
+        Status::InReview
+    } else {
+        Status::Waiting
+    }
 }
 
 /// The `pr-ready` conditions: one per open authored pull request, linking its owner (the newest Plan with a `prs` row
