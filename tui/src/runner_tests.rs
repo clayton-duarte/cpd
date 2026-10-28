@@ -1,5 +1,5 @@
 //! The tui's child processes on a [`FakeRunner`]: `actions::call_with` (`cpd <argv>`), `host::run_with` and the macOS reads
-//! of the Deploy column (`ioreg`, `sysctl`, `ps`, `vm_stat`), and `hostname_with`.
+//! of the Dispatch column (`ioreg`, `sysctl`, `ps`, `vm_stat`), and `hostname_with`.
 
 use std::io::ErrorKind;
 use std::path::Path;
@@ -86,7 +86,7 @@ fn run_with_a_program_that_cannot_start_is_none() {
     assert_eq!(run_with(&fake, "sysctl", &["-n", "hw.ncpu"]), None);
 }
 
-// ---- the macOS reads of the Deploy column -------------------------------------------------------------------------
+// ---- the macOS reads of the Dispatch column -------------------------------------------------------------------------
 
 const IOREG_ONE: &str = "+-o AGXAcceleratorG13X  <class AGXAcceleratorG13X, id 0x100000385, registered, matched, active, busy 0 (0 ms), retain 28>\n\
     {\n\

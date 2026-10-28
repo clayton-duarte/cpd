@@ -36,7 +36,7 @@ fn machine() -> Machine {
 
 fn render(width: u16, height: u16, w: &read::Widgets) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|f| drop(widgets::draw(f, f.area(), &machine(), 0, &w.inbox, (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
+    terminal.draw(|f| drop(widgets::draw(f, f.area(), &machine(), 0, &w.inbox, 0, time::OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
     terminal.backend().buffer().clone()
 }
 
@@ -70,13 +70,9 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let w = read::widgets(&mut open(&fx), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
     let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: None, gpus: vec![], mem: Some(7) } };
-    terminal.draw(|f| drop(widgets::draw(f, f.area(), &machine, 0, &w.inbox, (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
+    terminal.draw(|f| drop(widgets::draw(f, f.area(), &machine, 0, &w.inbox, 0, time::OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
     let lines = rows(terminal.backend().buffer());
     assert_eq!(lines[..3], ["", " homeserver", " \u{F4BC} –%  \u{EFC5} 7%"], "no CPU % until a second sample");
-    // the Inbox section, with no item, is right under them: an empty row, its title, the up-to-date row, an empty row
-    assert_eq!(lines[3], "", "{lines:?}");
-    assert!(lines[4].contains("Inbox") && lines[5].contains("up to date"), "{lines:?}");
-    assert_eq!(lines[6..], [""; 14], "nothing else: no PRs, no git, no Jira");
 }
 
 #[test]
@@ -87,7 +83,7 @@ fn a_snapshot_error_is_the_last_row_in_red() {
     let mut terminal = Terminal::new(TestBackend::new(46, 25)).unwrap();
     terminal
         .draw(|f| {
-            drop(widgets::draw(f, f.area(), &machine(), 0, &w.inbox, (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default()));
+            drop(widgets::draw(f, f.area(), &machine(), 0, &w.inbox, 0, time::OffsetDateTime::UNIX_EPOCH, &Default::default()));
             widgets::draw_error(f, f.area(), "no cockpit");
         })
         .unwrap();
@@ -95,7 +91,7 @@ fn a_snapshot_error_is_the_last_row_in_red() {
     assert_eq!(row(&buf, 24).trim_end(), "no cockpit");
     assert_eq!(buf[(0, 24)].fg, palette::color(Meaning::Failed), "red, colour 1");
     assert_eq!(row(&buf, 23), row(&render(46, 25, &w), 23), "the rest is as without it");
-    assert!(row(&buf, 5).contains("up to date"), "{}", row(&buf, 5));
+    assert!(row(&buf, 23).contains("up to date"), "{}", row(&buf, 23));
 }
 
 // ---------- the view's loop, in this process ----------

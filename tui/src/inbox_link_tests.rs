@@ -1,7 +1,7 @@
 //! The Inbox rows of the link kinds and the `Link` widget (decision pro-d60, assumption A7): the label of an item of kind
 //! `plan-review`, `review-waiting`, `pr-ready` or `review-requested` that has a url is the `Link`'s text and the cue follows it
 //! (`<label> 󱆭`, the label underlined, the whole output the click target); a plain left click on it opens the url through the
-//! `Runner` (`open <url>`) and runs no jump; a click elsewhere on the row jumps as before. The Deploy column is driven as
+//! `Runner` (`open <url>`) and runs no jump; a click elsewhere on the row jumps as before. The Dispatch column is driven as
 //! `widgets/column_link_tests.rs` drives it: a store, a scripted pump, the `ManualClock`, a `TestBackend` and a `FakeRunner`
 //! that records what a click ran. No real `open`, tmux or process.
 
@@ -31,8 +31,8 @@ use cpd_core::store::Store;
 
 const WIDTH: u16 = 41;
 const HEIGHT: u16 = 30;
-/// The body's last column at `WIDTH`: where an item's age ends.
-const AGE_END: u16 = 37;
+/// An item's age ends at column W-2: the flat Inbox's rows have one blank column on each side.
+const AGE_END: u16 = WIDTH - 2;
 const URL: &str = "https://github.com/acme/api/pull/12";
 
 struct NoInput;
@@ -108,7 +108,7 @@ fn named(call: &Call, program: &str) -> bool {
     std::path::Path::new(&call.program).file_name().is_some_and(|n| n == program)
 }
 
-/// Runs the Deploy column on `home` at `WIDTH` x `HEIGHT` through `script`; `open` and `tmux` answer exit 0.
+/// Runs the Dispatch column on `home` at `WIDTH` x `HEIGHT` through `script`; `open` and `tmux` answer exit 0.
 fn run(home: &CpdHome, mut script: Vec<Signal>) -> Seen {
     let clock = ManualClock::new();
     let runner = Arc::new(FakeRunner::new(clock.clone()).on("open", |_| true, Reply::ok("")).on("tmux", |_| true, Reply::ok("")));

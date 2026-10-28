@@ -1,5 +1,5 @@
 //! The right column's drawing (commands.md §13.2), a port of the reference's `draw_dispatch`: the machine (hostname, CPU %,
-//! one % per GPU, memory %) under one blank row, then the Inbox section directly under it, taking the rest of the column.
+//! one % per GPU, memory %) under one blank row, then the Inbox section at the bottom of the rest of the column.
 //! Pure: [`draw`] only writes to the frame.
 
 use ratatui::Frame;
@@ -57,26 +57,19 @@ pub(crate) struct Window {
     pub below: usize,
 }
 
-/// The largest offset for `count` items of `item_rows` rows each in a list of `height` rows: the last one reaches the
-/// bottom (under the `▲` cue, which takes a row). 0 when every one fits.
-pub(crate) fn max_scroll(count: usize, height: usize, item_rows: usize) -> usize {
-    if count * item_rows <= height {
-        return 0;
+impl Window {
+    /// The window at offset `scroll` of `count` items in `rows` list rows (the two cue lines are not in `rows`): `scroll` is
+    /// clamped to [`Window::max_scroll`].
+    pub(crate) fn new(count: usize, rows: usize, scroll: usize) -> Window {
+        let first = scroll.min(Window::max_scroll(count, rows));
+        let shown = (count - first).min(rows);
+        Window { first, shown, cue_above: first > 0, below: count - first - shown }
     }
-    count.saturating_sub((height.saturating_sub(1)) / item_rows).min(count.saturating_sub(1))
-}
 
-/// The window at offset `scroll` (clamped to [`max_scroll`]). A cue takes one row of the list, and an item is whole.
-pub(crate) fn window(count: usize, height: usize, item_rows: usize, scroll: usize) -> Window {
-    let first = scroll.min(max_scroll(count, height, item_rows));
-    let cue_above = first > 0 && height > 0;
-    let room = height - usize::from(cue_above);
-    let left = count - first;
-    if left * item_rows <= room {
-        return Window { first, shown: left, cue_above, below: 0 };
+    /// The largest offset: the last item reaches the bottom of the `rows`; 0 when every one fits.
+    pub(crate) fn max_scroll(count: usize, rows: usize) -> usize {
+        count.saturating_sub(rows)
     }
-    let shown = room.saturating_sub(1) / item_rows;
-    Window { first, shown, cue_above, below: left - shown }
 }
 
 /// What [`draw`] reports to the view.
@@ -84,16 +77,15 @@ pub(crate) fn window(count: usize, height: usize, item_rows: usize, scroll: usiz
 pub struct Drawn {
     /// Every link drawn (the Inbox rows' labels): a click on one opens its url.
     pub links: Links,
-    /// The Inbox section as drawn, directly under the machine (its first row is the empty one): the wheel there scrolls it, a
-    /// click on its toggle row folds or unfolds it.
+    /// The Inbox section as drawn, at the bottom of the column (its first row is the blank one): the wheel there scrolls it, and
+    /// a click there is tested against [`Shape::hit`].
     pub inbox: Rect,
     /// The Inbox section as drawn: capped by the column's rows and scrolled ([`Shape::hit`], [`Shape::wheeled`]).
     pub inbox_shape: Shape,
 }
 
-/// Draws the column in `area`: a blank row, the machine, then the Inbox section from the first row under them (commands.md
-/// §13.2, pro-d130), not pinned to the bottom. The Inbox draws `inbox`, folded or `expanded`, from the item `inbox_scroll`, capped
-/// at the rows below the machine; its ages are taken at `now`, the spinner in the glyph cell of a `pr-ready` item whose pull
+/// Draws the column in `area`: a blank row, the machine, then the Inbox section pinned to the bottom of the rows under them
+/// (commands.md §13.2), growing upward. The Inbox draws `inbox` from the item `inbox_scroll`, capped at the rows below the machine; its ages are taken at `now`, the spinner in the glyph cell of a `pr-ready` item whose pull
 /// request is in `merging` at `frame` (`palette::frame`). It draws no note (commands.md §17 "No notes"); the snapshot's error is
 /// [`draw_error`]'s.
 pub fn draw(
@@ -102,14 +94,15 @@ pub fn draw(
     machine: &Machine,
     frame: usize,
     inbox: &[Item],
-    (expanded, inbox_scroll): (bool, usize),
+    inbox_scroll: usize,
     now: OffsetDateTime,
     merging: &std::collections::BTreeSet<String>,
 ) -> Drawn {
     let [_top, home, rest] = Layout::vertical([Constraint::Length(1), Constraint::Length(2), Constraint::Min(0)]).areas(area);
-    let shape = Shape::new(inbox.len(), expanded).capped(rest.height).scrolled(inbox_scroll);
-    let inbox_area = Rect { height: shape.height().min(rest.height), ..rest };
-    let links = inbox::draw(f, inbox_area, inbox, shape, None, now, &|item| inbox::merges(merging, item).then_some(frame));
+    let shape = Shape::new(inbox.len()).capped(rest.height).scrolled(inbox_scroll);
+    let h = shape.height();
+    let inbox_area = Rect { y: rest.bottom() - h, height: h, ..rest };
+    let links = inbox::draw(f, inbox_area, inbox, shape, now, &|item| inbox::merges(merging, item).then_some(frame));
     f.render_widget(Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::styled(machine.usage_line(), palette::read_only_text())]), home);
     Drawn { links, inbox: inbox_area, inbox_shape: shape }
 }
@@ -128,7 +121,6 @@ pub fn draw_error(f: &mut Frame, area: Rect, error: &str) {
 mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use ratatui::buffer::Buffer;
 
     use crate::test_text::row;
 
@@ -136,27 +128,6 @@ mod tests {
 
     fn machine() -> Machine {
         Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } }
-    }
-
-    fn buffer(width: u16, height: u16) -> Buffer {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|f| drop(draw(f, f.area(), &machine(), 0, &[], (false, 0), OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
-        terminal.backend().buffer().clone()
-    }
-
-    #[test]
-    fn the_column_has_a_blank_row_an_untitled_machine_with_cpu_and_memory_and_the_inbox_under_it() {
-        let buf = buffer(20, 10);
-        let got: Vec<String> = (0..10).map(|y| row(&buf, y)).collect();
-        assert_eq!(&got[..3], ["".to_owned(), " homeserver".to_owned(), " \u{F4BC} 23%  \u{EFC5} 41%".to_owned()], "{got:#?}");
-        assert_eq!(got[3], "", "the Inbox's empty row");
-        assert!(got[4].contains("Inbox"), "its title is row 4: {got:#?}");
-        assert!(buf[(1, 1)].modifier.contains(Modifier::BOLD), "the hostname is bold");
-        for x in 0..20 {
-            let cell = &buf[(x, 2)];
-            assert!(!cell.modifier.contains(Modifier::BOLD) && (cell.symbol() == " " || cell.fg == palette::read_only_text().fg.unwrap()), "read-only text, no bold, on the usage row, x={x}");
-        }
-        assert!(!got.iter().any(|r| r.contains("PRs") || r.contains("git") || r.contains("Jira") || r.contains("future") || r.contains("load")));
     }
 
     #[test]
@@ -171,13 +142,13 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(30, 15)).unwrap();
         terminal
             .draw(|f| {
-                draw(f, f.area(), &machine(), 0, &[], (false, 0), OffsetDateTime::UNIX_EPOCH, &Default::default());
+                draw(f, f.area(), &machine(), 0, &[], 0, OffsetDateTime::UNIX_EPOCH, &Default::default());
                 draw_error(f, f.area(), "no_cockpit: nothing here");
             })
             .unwrap();
         let buf = terminal.backend().buffer().clone();
         assert_eq!(row(&buf, 14), "no_cockpit: nothing here");
         assert_eq!(buf[(0, 14)].fg, palette::error().fg.unwrap());
-        assert!(row(&buf, 4).contains("Inbox"), "the rest is as drawn");
+        assert!(row(&buf, 11).contains("Inbox"), "the rest is as drawn: the header of the bottom-aligned section");
     }
 }

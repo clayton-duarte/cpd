@@ -101,7 +101,7 @@ fn selection_is_a_blue_block__inverted() {
 fn read_only_pills_are_grey_inverted_blocks() {
     assert_eq!(pill_static(), block(C7), "a read-only pill: colour 7, inverted");
     // the title pill and the count pill as the views draw them: every block of the row is colour 7, inverted
-    for line in [section::title("Inbox", Some(3), 30), section::collapsible_title("Inbox", Some(3), 30)] {
+    for line in [section::title("Inbox", Some(3), 30), section::flush_title("Inbox", Some(3), 30)] {
         let blocks: Vec<_> = line.spans.iter().filter(|s| s.style.add_modifier.contains(Modifier::REVERSED)).collect();
         assert_eq!(blocks.len(), 2, "a title pill and a count pill: {line:?}");
         for span in blocks {

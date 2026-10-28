@@ -9,8 +9,8 @@
 //! - [`widgets`]: the Dispatch column and the key legend (`tui view legend`), with the shared [`palette`];
 //! - [`logs`]: the Event log, a popup of the StatusBar (R36);
 //! - [`history`]: an archived Session's pi file, read-only, in the chat slot;
-//! - [`menu`]: the right-click menu the tree and the Deploy column share;
-//! - [`merge`]: the merge the Deploy column's merge icon and the menus start at once, in the background;
+//! - [`menu`]: the right-click menu the tree and the Dispatch column share;
+//! - [`merge`]: the merge the Dispatch column's merge icon and the menus start at once, in the background;
 //! - [`dialog`]: the dialog kit (confirm for Delete, input, select, form, checklist and scrollable text), the popups of the tree and the StatusBar;
 //! - [`fold`]: the one widget every block that folds is drawn by (the tree's Contexts and archived groups, the Inbox's toggle);
 //! - [`section`]: the one helper every in-pane section title is drawn by;
@@ -36,6 +36,8 @@ mod guard_popup_tests;
 mod guard_terminal_tests;
 #[cfg(test)]
 mod section_title_tests;
+#[cfg(test)]
+mod section_flush_tests;
 mod buffer;
 mod cells;
 mod chat;

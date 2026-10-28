@@ -1,29 +1,26 @@
 //! The fold widget (commands.md §17, "Collapsible blocks"; decisions hs-d337, hs-d339): the one look of every block of
-//! the cockpit that folds, drawn here and nowhere else. The tree's Contexts and the Inbox's list use it; a popup or a
+//! the cockpit that folds, drawn here and nowhere else. The tree's Contexts use it; a popup or a
 //! Plan view panel that folds would too.
 //!
-//! - **Margins** (hs-d476): the widget has **one empty row above and one below**, and none inside. The tree's Contexts and the
-//!   Inbox (`crate::box_widget`, `Walls::Rail`) each draw their own margins (two blocks share one empty row).
+//! - **Margins** (hs-d476): the widget has **one empty row above and one below**, and none inside. The tree's Contexts draw their own margins (two blocks share one empty row).
 //! - **Expanded:** the title row `╭` and the title's content (bold), for example `╭󰪥 building-cpd`; each content row
 //!   led by a muted branch with no indent, `├─` in the tree, which puts a glyph straight against it
-//!   (`├─󰪥 cross-repo`), or `│` (the Inbox's rows, `│ <icon> <item>`); then **one** closing row, `╰󰬬 collapse`.
+//!   (`├─󰪥 cross-repo`); then **one** closing row, `╰󰬬 collapse`.
 //! - **Folded:** the title row (`╭󰝦 dotfiles`), then `╰󰬦 expand`.
-//! - **Nothing to fold:** a block of rows ends with the terminator ` ╰󰬪` (U+F0B2A, colour 8, no word, no toggle; hs-d574, replacing hs-d477's and hs-d459's plain `╰─` line). A tree Context block with no closing row keeps its last row's branch as `╰─` ([`LAST_BRANCH`]); a block with no row at all closes with the terminator ([`done`]).
-//! - **Muted** is `palette::muted_text()` (colour 8): the lines (`╭`, `├─`, `│`, `╰`). The toggle's arrow and word
+//! - **Nothing to fold:** a block of rows ends with the terminator ` ╰󰬪` (U+F0B2A, colour 8, no word, no toggle; hs-d574, replacing hs-d477's and hs-d459's plain `╰─` line). A tree Context block with no closing row keeps its last row's branch as `╰─` ([`LAST_BRANCH`]); a block with no row at all closes with the terminator ([`plain`]).
+//! - **Muted** is `palette::muted_text()` (colour 8): the lines (`╭`, `├─`, `╰`). The toggle's arrow and word
 //!   (`expand`, `collapse`) are `palette::toggle_text()` (colour 7, hs-d534). The content is not muted, and a row the widget
 //!   wraps keeps its own glyphs and colours: the fold only adds muted lines.
 //! - **Toggling:** only the closing row toggles. The caller hit-tests its row; a click
 //!   on the title row keeps the caller's own action.
 //!
-//! Pure: it only builds lines (the Inbox's rows are laid out by `box_widget`).
+//! Pure: it only builds lines.
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::palette;
 
-/// The branch of a content row that has no glyph of its own (the Inbox's).
-pub const BRANCH: &str = "│";
 /// The branch of a content row in the tree, whose rows lead with their glyph.
 pub const TREE_BRANCH: &str = "├─";
 
@@ -35,7 +32,7 @@ const OPEN: &str = "╭";
 /// The start of the closing row.
 const CLOSE: &str = "╰";
 /// U+F0B26 nf-md-chevron_down_circle: the folded block's arrow.
-/// The terminator glyph (hs-d574), also the empty Inbox's closing row glyph (hs-d487).
+/// The terminator glyph (hs-d574).
 pub(crate) const TERMINATOR: &str = "\u{F0B2A}";
 
 pub(crate) const DOWN: &str = "\u{F0B26}";
@@ -60,8 +57,7 @@ pub fn toggle(expanded: bool) -> Line<'static> {
     Line::from(vec![Span::styled(CLOSE, muted()), Span::styled(format!("{arrow} {word}"), palette::toggle_text())])
 }
 
-/// The closing row of a block with nothing to fold and no row to close it (a Context with no row at all; the Inbox with 3
-/// items or fewer): the muted terminator `╰󰬪` and no word (commands.md §17, "Collapsible blocks"; hs-d574).
+/// The closing row of a block with nothing to fold and no row to close it (a Context with no row at all): the muted terminator `╰󰬪` and no word (commands.md §17, "Collapsible blocks"; hs-d574).
 pub fn plain() -> Line<'static> {
     Line::from(Span::styled(format!("{CLOSE}{TERMINATOR}"), muted()))
 }
@@ -74,35 +70,6 @@ pub fn new_plan() -> Line<'static> {
         Span::styled(TERMINATOR, muted()),
         Span::styled(" new", palette::clickable_text()),
     ])
-}
-
-/// The closing row of a block with nothing to fold and no row to close it (a Context with no row at all; the Inbox with 3
-/// items or fewer): a muted `╰`, the terminator glyph U+F0B2A and the word (the empty Inbox; hs-d487, hs-d574).
-pub fn done(text: &str) -> Line<'static> {
-    Line::from(Span::styled(format!("{CLOSE}{TERMINATOR} {text}"), muted()))
-}
-
-/// A closing row without its `╰`, `width` cells at most: what `Walls::Rail { closing }` takes (the widget draws the corner, and
-/// the row ends before the rail's right padding).
-pub fn after_corner(line: Line<'static>, width: usize) -> Line<'static> {
-    let mut left = width;
-    let mut spans = Vec::new();
-    let mut corner = true;
-    for span in line.spans {
-        let text = if corner { span.content.strip_prefix(CLOSE).unwrap_or(&span.content).to_owned() } else { span.content.to_string() };
-        corner = false;
-        let mut cut = String::new();
-        for c in text.chars() {
-            let w = Span::raw(c.to_string()).width();
-            if w > left {
-                break;
-            }
-            left -= w;
-            cut.push(c);
-        }
-        spans.push(Span::styled(cut, span.style));
-    }
-    Line { spans, ..line }
 }
 
 /// A content row: the muted `branch`, then the content as it is.
@@ -159,14 +126,5 @@ mod tests {
         let row = plain();
         assert_eq!(flat(&row), format!("╰{TERMINATOR}"));
         assert!(row.spans.iter().all(is_muted), "{:?}", row.spans);
-    }
-
-    #[test]
-    fn after_corner_drops_the_corner_and_cuts_the_row_to_the_room() {
-        assert_eq!(flat(&after_corner(toggle(true), 80)), format!("{UP} collapse"));
-        assert_eq!(flat(&after_corner(toggle(true), 4)), format!("{UP} co"));
-        assert_eq!(flat(&after_corner(plain(), 80)), TERMINATOR);
-        assert_eq!(flat(&after_corner(plain(), 0)), "");
-        assert!(after_corner(toggle(false), 80).spans[1].style == palette::toggle_text(), "the styles are kept");
     }
 }

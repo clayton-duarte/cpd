@@ -275,32 +275,6 @@ pub(super) fn populate(env: &mut Env) {
 
 // ---------- tests ----------
 
-/// The tree taller than its share of the column (hs-d307): forty Plans more under `gamma`, in a pane of 20
-/// rows with the Inbox's items. The tree keeps the top of the column and scrolls inside it, with the wheel, between a
-/// `▲` and a `▼` cue; the Inbox stays below it (the bug: the tree did not scroll, its rows past the column were lost).
-#[test]
-fn a_tree_taller_than_its_share_scrolls_with_the_wheel_between_its_cues() {
-    let mut env = Env::new();
-    populate(&mut env);
-    let mut s = String::new();
-    for i in 0..40 {
-        let (plan, lead) = (format!("p{i:02}"), format!("l-p{i:02}"));
-        let created = format!("2026-01-03T00:00:{i:02}.000Z");
-        s += &plan_row(&plan, "gamma", "plan", &lead, &created, false);
-        s += &session_row(&lead, &plan, "gamma", &plan, "idle", None, &created);
-    }
-    env.sql(&s);
-    let mut view = env.view();
-    let cue = |r: &String, glyph: char| r.trim_start().starts_with(glyph) && r.ends_with(" more");
-    let screen = screen(&draw(&mut view, 46, 20));
-    assert!(screen.last().is_some_and(|r| cue(r, '▼')), "the tree's ▼ cue on the column's last row: {screen:?}");
-    assert!(!screen.iter().any(|r| cue(r, '▲')), "nothing is hidden above yet: {screen:?}");
-    view.mouse(MouseEvent { kind: MouseEventKind::ScrollDown, column: 10, row: 3, modifiers: KeyModifiers::NONE });
-    let screen = self::screen(&draw(&mut view, 46, 20));
-    assert!(screen.get(1).is_some_and(|r| cue(r, '▲')), "the tree's ▲ cue after a notch: {screen:?}");
-    assert!(!screen[1..].iter().any(|r| r.contains(" beta")), "the first Context scrolled away: {screen:?}");
-}
-
 #[test]
 fn the_tree_of_a_prepared_store() {
     let mut env = Env::new();
