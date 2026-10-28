@@ -2,28 +2,9 @@
 //! text and the data of the Event, from the reasons `pulls::attention` found.
 //! Pure: no I/O.
 
-use std::collections::BTreeMap;
-
-
 use super::gh::{Check, View};
 use super::pulls::{PullRequest, Reason};
 use crate::events::NewEvent;
-
-/// The PR's current checks: name (a CheckRun's `name`, a StatusContext's `context`) → conclusion (else state).
-pub(super) fn current_checks(view: &View) -> BTreeMap<String, String> {
-    checks_map(view.checks.iter().flatten())
-}
-
-/// [`current_checks`] of any list of checks.
-pub(super) fn checks_map<'a>(list: impl IntoIterator<Item = &'a Check>) -> BTreeMap<String, String> {
-    let mut checks = BTreeMap::new();
-    for c in list {
-        let Some(name) = c.name.clone().or_else(|| c.context.clone()) else { continue };
-        let conclusion = c.conclusion.clone().filter(|s| !s.is_empty()).or_else(|| c.state.clone()).unwrap_or_default();
-        checks.insert(name, conclusion);
-    }
-    checks
-}
 
 fn phrase(reason: Reason) -> &'static str {
     match reason {
@@ -97,7 +78,7 @@ mod tests {
 
     #[test]
     fn checks_are_summarised_failed_over_pending_over_passed() {
-        let summary = |checks: Vec<(&str, &str)>| ChecksSummary::of(&current_checks(&view(checks)));
+        let summary = |checks: Vec<(&str, &str)>| ChecksSummary::of(view(checks).checks.as_deref().unwrap_or_default(), &[]);
         assert_eq!(summary(vec![]), ChecksSummary::None);
         assert_eq!(summary(vec![("a", "success")]), ChecksSummary::Passed);
         assert_eq!(summary(vec![("a", "SUCCESS"), ("b", "")]), ChecksSummary::Pending);

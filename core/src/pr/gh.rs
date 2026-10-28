@@ -1068,10 +1068,10 @@ fn parse_checks(reply: &Reply, count: usize) -> Result<Vec<(Vec<Check>, Option<S
 }
 
 /// The checks of the pull requests `(owner/name, number)` (contract §7.6 step 3b): one alias each, in one call, 15 s at
-/// most; each pull request with more than 100 contexts is read again, page by page, with those only. Each result maps a
-/// check's key (a CheckRun's `name`, a StatusContext's `context`) to its conclusion (else state, else empty). Any failure
+/// most; each pull request with more than 100 contexts is read again, page by page, with those only. Each result is the
+/// PR's typed checks (a CheckRun has `name`, a StatusContext `context`). Any failure
 /// is `gh_failed` with the poll's `details` (`call` `lookup`). An empty `prs` makes no call.
-pub fn read_checks(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<BTreeMap<String, String>>, CpdError> {
+pub fn read_checks(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Vec<Check>>, CpdError> {
     let mut all: Vec<Vec<Check>> = prs.iter().map(|_| Vec::new()).collect();
     let mut pending: Vec<(usize, Option<String>)> = (0..prs.len()).map(|i| (i, None)).collect();
     while !pending.is_empty() {
@@ -1103,7 +1103,7 @@ pub fn read_checks(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)]) -> Re
         }
         pending = next;
     }
-    Ok(all.iter().map(|checks| super::feedback::checks_map(checks)).collect())
+    Ok(all)
 }
 
 fn lookup_call(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], viewer: bool) -> Result<Vec<Option<Listed>>, CpdError> {
@@ -1212,8 +1212,9 @@ mod tests {
         let out = reply(body, 0);
         let pages = parse_checks(&Reply { args: &ARGS, out: &out }, 3).unwrap();
         assert_eq!(pages[0].1.as_deref(), Some("c1"));
-        let map = super::super::feedback::checks_map(&pages[0].0);
-        assert_eq!(map.into_iter().collect::<Vec<_>>(), [("a".into(), "CANCELLED".into()), ("b".into(), String::new()), ("c".into(), "PENDING".into())]);
+        let got: Vec<(Option<&str>, Option<&str>, Option<&str>)> =
+            pages[0].0.iter().map(|c| (c.name.as_deref().or(c.context.as_deref()), c.conclusion.as_deref(), c.state.as_deref())).collect();
+        assert_eq!(got, [(Some("a"), Some("CANCELLED"), None), (Some("b"), None, None), (Some("c"), None, Some("PENDING"))]);
         assert!(pages[1].0.is_empty() && pages[2].0.is_empty() && pages[1].1.is_none());
     }
 
