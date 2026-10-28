@@ -370,9 +370,43 @@ fn approve(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
     approve_in(&mut env, args.id)
 }
 
-/// `inbox approve` (§21.13) on an open `env`. Stub.
-pub(super) fn approve_in(_env: &mut Env, _id: i64) -> Result<Output, CpdError> {
-    Ok(Output::success(json!({})))
+/// `inbox approve` (§21.13): the preconditions, then the READ and WRITE of `gh`, then the clean-up of the cache and the item.
+pub(super) fn approve_in(env: &mut Env, id: i64) -> Result<Output, CpdError> {
+    let item = env.store.read(|conn| open_item(conn, id))?;
+    if item.kind != Kind::Deploy {
+        return Err(CpdError::new(ErrorCode::NotApprovable, format!("Inbox item {id} is not approvable: only a deploy item is."))
+            .with("item", item.id)
+            .with("kind", item.kind.as_str()));
+    }
+    let (repo, run_id) = item
+        .subject
+        .strip_prefix("deploy:")
+        .and_then(|s| s.split_once('#'))
+        .and_then(|(repo, run)| Some((repo, run.parse::<u64>().ok()?)))
+        .filter(|(repo, _)| repo.split_once('/').is_some_and(|(o, r)| !o.is_empty() && !r.is_empty()))
+        .ok_or_else(|| CpdError::bad_row(format!("Inbox item {id} has an invalid deploy subject: {:?}.", item.subject)))?;
+    let environments = crate::pr::deploys::approvable(&*env.ports.runner, &env.home, repo, run_id)?;
+    if !environments.is_empty() {
+        crate::pr::deploys::approve(&*env.ports.runner, &env.home, repo, run_id, &environments)?;
+    }
+    crate::pr::deploys::forget_run(&env.home, repo, run_id)?;
+    let closed_at = timestamp(env.ports.clock.utc());
+    env.store.write("inbox approve", |tx| {
+        if let Some(now) = model::get(tx, id)?.filter(|i| i.closed_at.is_none()) {
+            model::close_item(tx, &now, &closed_at)?;
+        }
+        Ok(())
+    })?;
+    let mut fields = json!({
+        "id": id,
+        "repo": repo,
+        "run_id": run_id,
+        "environments": environments.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+    });
+    if environments.is_empty() {
+        fields["already"] = json!(true);
+    }
+    Ok(Output::success(fields))
 }
 
 fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
