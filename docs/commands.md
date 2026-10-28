@@ -3172,7 +3172,7 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 
 A view in a pane never exits on a key: the `pane-died` hook (§6.1) starts a view again whenever its program exits, so the widgets view has no `q`. A view that fails (at start or later) prints its error, waits 3 s and then exits, so the hook does not start it again in a tight loop. Without a terminal the error is returned at once.
 
-**Cockpit parity** (User, 2026-10-15). The cockpit matches the running cpd 1 cockpit exactly: layout, elements, text, colours, keys, mouse and behaviour. The reference was cpd 1's cockpit spike, `tui/` on branch `main` before the switch-over (`tui/src/*.rs`, `tui/README.md`; `tui/` now holds the Rust cockpit crate `cpd-tui`); the checklist of every difference is [cockpit-parity.md](cockpit-parity.md). Where this section states a deviation, it is deliberate and has its reason.
+**Cockpit parity** (User, 2026-10-15). The cockpit matches the running cpd 1 cockpit exactly: layout, elements, text, colours, keys, mouse and behaviour. The reference was cpd 1's cockpit spike, `tui/` on branch `main` before the switch-over (`tui/src/*.rs`, `tui/README.md`; `tui/` now holds the Rust cockpit crate `cpd-tui`); the checklist of every difference is [cockpit-parity.md](archive/cockpit-parity.md). Where this section states a deviation, it is deliberate and has its reason.
 
 | View | What it is | Keys and mouse |
 |---|---|---|
@@ -4444,7 +4444,7 @@ Applied to contract.md by Job contract-amend.
 
 This file specifies the following, which contract.md does not state or states otherwise. contract.md is not edited by this Job; the Lead appends a follow-up Job that applies this list. Each item names the contract.md section it changes.
 
-Rows 22–27 were added by Job `docs` of Plan `tree-menu` (renames, archive and the tree's right-click menu); they are applied to contract.md itself. Rows 28–31 were added by Job `docs-followups` of Plan `tree-menu` (PR `followups`); rows 28 and 29 are applied to contract.md itself. Rows 12–21 were added by Job `parity-contract` (cockpit parity, User, 2026-10-15, and R36); the checklist behind them is [cockpit-parity.md](cockpit-parity.md). Rows 12–14 and 16 are also applied to contract.md itself; rows 15 and 17–21 state what contract.md leaves to this file.
+Rows 22–27 were added by Job `docs` of Plan `tree-menu` (renames, archive and the tree's right-click menu); they are applied to contract.md itself. Rows 28–31 were added by Job `docs-followups` of Plan `tree-menu` (PR `followups`); rows 28 and 29 are applied to contract.md itself. Rows 12–21 were added by Job `parity-contract` (cockpit parity, User, 2026-10-15, and R36); the checklist behind them is [cockpit-parity.md](archive/cockpit-parity.md). Rows 12–14 and 16 are also applied to contract.md itself; rows 15 and 17–21 state what contract.md leaves to this file.
 
 | # | contract.md section | Amendment | Where here |
 |---|---|---|---|
