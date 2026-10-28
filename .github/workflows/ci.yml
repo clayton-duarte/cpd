@@ -2,6 +2,8 @@ name: CI
 
 # cpd's PR gate (hs-d16, hs-d17): the Gate, `npm run verify`, on the self-hosted runner on hs.
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -9,6 +11,8 @@ permissions:
   contents: read
 
 # One run per branch: a newer push cancels the older run of a pull request (the runner runs one job at a time).
+# A push to main is never cancelled. GitHub keeps one running and one pending run per group, so a burst of merges
+# checks the first and the last (the last contains the others).
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -40,12 +44,12 @@ jobs:
       # tsc --noEmit: the repo's only static check besides the two above.
       - name: Typecheck
         run: scripts/gate-run.sh npm run typecheck
-      - name: Node tests
-        run: scripts/gate-run.sh npm run verify:node
       - name: pi check
         run: scripts/gate-run.sh npm run verify:pi
       # The Rust compiler: a compile error or warning shows here, apart from a failing test.
       - name: Rust build
         run: scripts/gate-run.sh npm run verify:build
+      - name: Node tests
+        run: scripts/gate-run.sh npm run verify:node
       - name: Rust tests
         run: scripts/gate-run.sh npm run verify:rust
