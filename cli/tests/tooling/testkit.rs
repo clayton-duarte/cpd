@@ -62,8 +62,9 @@ fn lead(fx: &Fx) -> std::path::PathBuf {
 /// [`lead`] and needs nothing else (no git).
 fn open_pr(fx: &Fx) {
     std::fs::create_dir_all(lead(fx)).expect("create the Lead worktree");
+    fx.env.owner_policy("acme", "");
     let sql = format!(
-        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
