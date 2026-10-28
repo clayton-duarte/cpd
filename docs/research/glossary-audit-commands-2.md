@@ -75,7 +75,7 @@ One row per term or word-to-watch used in more than one sense, loosely, stale, w
 | check | docs/commands.md:1829 | "**The checks read** (pro-d75, contract §7.6 step 3b)": CI checks of a pull request | internal: Mechanical checks, Quick check, "Conflict check" (docs/commands.md:1782) | overloaded | “The CI checks read”  |
 | review | docs/commands.md:1781 | "every pending review of the Plan is closed `superseded`": a Plan review | internal: review Job (docs/commands.md:1880 "work, review, open, update"); upstream: GitHub review (docs/commands.md:2173 `reviews`, `review_decision`) | overloaded | “Plan review”, “review Job”, “pull request review”  |
 | merge | docs/commands.md:1737 | "its Worker merges the base": git merge of the base into the Lead Branch | internal: a Job's merge into the Lead Branch (docs/commands.md:1780 "merges into the PR go on during the command"); upstream: squash merge (docs/commands.md:2312 "Merges a pull request on GitHub"), `merge_state` | overloaded | “merges the base”, “a Job's merge”, “squash-merge the pull request”  |
-| run | docs/commands.md:1830 | "actions/workflows/<file>/runs?status=waiting": a GitHub Actions run | internal: `run/<plan>/logs` directory, "runs the Gate" (docs/commands.md:1739); CONTEXT.md:156 Attempt avoids run | loose | “GitHub Actions run” where it is one  |
+| run | docs/commands.md:1830 | "runs?status=waiting&per_page=100": a GitHub Actions run | internal: `run/<plan>/logs` directory, "runs the Gate" (docs/commands.md:1739); CONTEXT.md:156 Attempt avoids run | loose | “GitHub Actions run” where it is one  |
 | owner, owned | docs/commands.md:1829 | "when a PR a Plan owns (`prs.status` `open`) has an `updatedAt`": a pull request a Workflow points to | internal: the Context's owner (GitHub login, Policy key); `<owner>/<repo>` | overloaded | “a pull request a Workflow points to” (1832 already says “whose PR points to the pull request”)  |
 | ticket | docs/commands.md:1951 | "the PR's own Jira ticket, a key matching": a Jira issue key stored on a Workflow | internal: CONTEXT.md:10 levels table has Ticket as the Plan; upstream: Jira | overloaded | “the Workflow's own Jira issue key”  |
 | base | docs/commands.md:2173 | "`base` (the pull request's base branch on GitHub, `baseRefName`)": the pull request's base | internal: the Workflow's stored `base` (docs/commands.md:1833 "differs from the PR's `base`"), `base_pr`; git "merges the base" (docs/commands.md:1737) | overloaded | “base branch of the pull request”, “stored base of the Workflow”, “base Workflow”  |
@@ -208,7 +208,7 @@ Groups are by subsection, with the count of `PR`/`PRs` tokens. Every `mixed`, `p
 | docs/commands.md:2057-2080 | 6 | pull request | "When the PR has an **open** pull request, the command also updates it" | unchanged  |
 | docs/commands.md:2081-2122 | 2 | pull request | "an **`open`** PR whose pull request was closed on GitHub without a merge" | unchanged  |
 | docs/commands.md:2154-2186 | 4 | pull request | "of one PR's pull request, which the poller does not store" | unchanged  |
-| docs/commands.md:2187-2218 | 1 | pull request | "<the pull request's node id>" | unchanged  |
+| docs/commands.md:2187-2218 | 1 | pull request | "the pull request's node id" | unchanged  |
 | docs/commands.md:2219-2269 | 4 | pull request | "Posts a PR's pull request to Slack for review" | unchanged  |
 | docs/commands.md:2270-2305 | 1 | pull request | "only need to reach the pull request" | unchanged  |
 | docs/commands.md:2306-2337 | 6 | pull request | "Merges a pull request on GitHub" | unchanged  |
