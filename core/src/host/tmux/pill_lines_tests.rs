@@ -18,26 +18,98 @@ fn pane_and_popup_borders_are_colour7_and_the_active_border_blue() {
     assert_eq!(option("pane-active-border-style"), "fg=blue");
 }
 
+/// Expands `BORDER_FORMAT` with the fake's evaluator, for a pane with these variables.
+fn border(session: &str, title: &str, view: &str, active: bool, command: &str) -> String {
+    // `None` for a name that is no variable: the evaluator then expands a `#{..}` condition itself.
+    crate::fakes::tmux::format::expand(&BORDER_FORMAT, &|name: &str| {
+        Some(match name {
+            "@cpd_session" => session.to_owned(),
+            "@cpd_title" => title.to_owned(),
+            "@cpd_view" => view.to_owned(),
+            "pane_active" => (if active { "1" } else { "0" }).to_owned(),
+            "pane_current_command" => command.to_owned(),
+            _ => return None,
+        })
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Style {
+    Base,
+    Colour(u8),
+}
+
+/// The styled cells of an expanded format, as tmux 3.8 draws it (`format_draw`, `style_parse`): `default` is the base
+/// style, `fg=colourN` sets the foreground; any other directive panics.
+fn cells(expansion: &str) -> Vec<(char, Style)> {
+    let mut out = Vec::new();
+    let mut style = Style::Base;
+    let mut rest = expansion;
+    while let Some(c) = rest.chars().next() {
+        if let Some(run) = rest.strip_prefix("#[") {
+            let end = run.find(']').expect("a closed #[");
+            for directive in run[..end].split(',') {
+                style = match directive {
+                    "default" => Style::Base,
+                    d => match d.strip_prefix("fg=colour") {
+                        Some(n) => Style::Colour(n.parse().expect("a colour number")),
+                        None => panic!("unread directive {d}"),
+                    },
+                };
+            }
+            rest = &run[end + 1..];
+        } else {
+            out.push((c, style));
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    out
+}
+
+#[test]
+fn border_mark_tree_view_draws_the_three_glyphs_in_13_15_10_with_border_styled_lines_between() {
+    use Style::{Base, Colour};
+    let want = vec![
+        ('\u{f0bf2}', Colour(13)),
+        ('━', Base),
+        ('\u{f0c19}', Colour(15)),
+        ('━', Base),
+        ('\u{f0bf5}', Colour(10)),
+    ];
+    for active in [true, false] {
+        let expansion = border("", "", "tree", active, "cpd");
+        let mut got = cells(&expansion);
+        while got.last() == Some(&('━', Base)) {
+            got.pop();
+        }
+        assert_eq!(got, want, "active {active}: {expansion:?}");
+        assert!(!expansion.contains('\u{e0b6}') && !expansion.contains('\u{e0b4}'), "{expansion:?}");
+        assert!(!expansion.contains("reverse") && !expansion.contains("Context"), "{expansion:?}");
+        assert!(cells(&expansion).iter().all(|(c, s)| *c != '━' || *s == Base), "{expansion:?}");
+    }
+}
+
+#[test]
+fn border_mark_plan_and_widgets_views_draw_no_title() {
+    for view in ["plan", "widgets"] {
+        for active in [true, false] {
+            assert_eq!(border("", "", view, active, "cpd"), "", "{view} active {active}");
+        }
+    }
+}
+
 #[test]
 fn border_format_title_pills_follow_the_rule() {
-    const LEAD_CAP: &str = "━#{?pane_active,#[fg=colour4],#[fg=colour7]}\u{e0b6}#[reverse]";
-    const VIEW_CAP: &str = "━#{?#{==:#{@cpd_view},tree},#[fg=colour5],#{?#{==:#{@cpd_view},plan},#[fg=colour7],#{?#{==:#{@cpd_view},widgets},#[fg=colour2],#{?pane_active,#[fg=colour4],#[fg=colour7]}}}}\u{e0b6}#[reverse]";
-    let want = format!(
-        "#{{?#{{@cpd_session}},#{{?#{{@cpd_title}},{lead},}},\
-         #{{?#{{==:#{{@cpd_view}},chat}},,#{{?#{{==:#{{@cpd_view}},history}},,{views}}}}}}}",
-        lead = format!("{LEAD_CAP}#{{@cpd_title}}#[noreverse]\u{e0b4}"),
-        views = format!(
-            "{VIEW_CAP}{}#[noreverse]\u{e0b4}",
-            "#{?#{==:#{@cpd_view},tree},Context,\
-             #{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}"
-        ),
-    );
-    assert_eq!(*BORDER_FORMAT, want);
-    assert!(!BORDER_FORMAT.contains("#[fg=colour7]━"));
-    assert_eq!(BORDER_FORMAT.matches('━').count(), 2);
+    for (active, colour) in [(true, 4), (false, 7)] {
+        let pill = |text: &str| format!("━#[fg=colour{colour}]\u{e0b6}#[reverse]{text}#[noreverse]\u{e0b4}");
+        assert_eq!(border("lead-a", "Retry Payouts", "", active, "cpd"), pill("Retry Payouts"));
+        assert_eq!(border("", "", "", active, "zsh"), pill("zsh"));
+        assert_eq!(border("lead-a", "", "", active, "cpd"), "");
+        assert_eq!(border("", "", "chat", active, "cpd"), "");
+        assert_eq!(border("", "", "history", active, "cpd"), "");
+    }
     let colour_zero = format!("colour{}", 0);
-    assert_eq!(BORDER_FORMAT.matches("#[reverse]").count(), 2, "one #[reverse] per pill");
-    assert_eq!(BORDER_FORMAT.matches("#[noreverse]").count(), 2, "one #[noreverse] per pill");
+    assert!(!BORDER_FORMAT.contains("#[fg=colour7]━"));
     assert!(!BORDER_FORMAT.contains(&colour_zero), "no colour 0 in the format");
 }
 
