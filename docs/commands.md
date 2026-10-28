@@ -101,7 +101,7 @@ Every `--help` prints `{"ok": true, "help": "<clap's text>"}`. The root help (`c
   | 4 | a **bare id prefix of at least 4 characters** | the Session, of any Plan or none, whose id starts with it |
 
   Matching is exact and case-sensitive, over every Session, archived ones included (so `session unarchive` and `session history` can name them). A form that matches nothing falls through to the next; when none matches, `session_not_found` (exit 4). A form (3) or (4) that matches **more than one** Session is `session_ambiguous` (exit 3) with `details.candidates`, the matching ids, and is never resolved by guessing. A value outside §2.1's input pattern is `invalid_session_id` (exit 2); one that is valid but shorter than 4 characters and no Plan id or form (3) is `session_not_found`. Output always carries the full id.
-- **PR** (R34, §1.3): `--pr <key>`, within the selected Plan, used by `job add`, `pr open`, `pr rebase`, `pr push`, `pr view`, `pr reply` and `pr post`. It may be omitted when the Plan has exactly one PR that is not `cancelled`, which is then selected; with two or more, `pr_required` (exit 2); with none, `pr_required` too, its message naming `cpd pr add`. A key that is not one of the Plan's PRs is `pr_not_found` (exit 4). Exceptions, stated at each command: `pr poll` has no `--pr`, it polls every open pull request of the User (§9.2, hs-d96), and `job edit --pr` changes the Job's PR, so omitting it changes nothing (§5.2). `pr add`, `pr edit`, `pr cancel` and `pr start` take the key as their positional argument.
+- **PR** (R34, §1.3): `--pr <key>`, within the selected Plan, used by `job add`, `pr open`, `pr rebase`, `pr push`, `pr view`, `pr reply`, `pr rerun` and `pr post`. It may be omitted when the Plan has exactly one PR that is not `cancelled`, which is then selected; with two or more, `pr_required` (exit 2); with none, `pr_required` too, its message naming `cpd pr add`. A key that is not one of the Plan's PRs is `pr_not_found` (exit 4). Exceptions, stated at each command: `pr poll` has no `--pr`, it polls every open pull request of the User (§9.2, hs-d96), and `job edit --pr` changes the Job's PR, so omitting it changes nothing (§5.2). `pr add`, `pr edit`, `pr cancel` and `pr start` take the key as their positional argument.
 - **Job, Attempt, Escalation, Plan review:** a positional id, within the selected Plan (§2.1).
 
 Common refusals, which apply to every command and are not repeated in the sections below:
@@ -120,8 +120,9 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `push_rejected` | 3 | `pr push` found the remote branch moved (§9.9); `details.stderr` is git's |
 | `base_not_found` | 4 | `pr add`, `pr edit` (§9.4): the base branch does not exist; `pr open` (§9.1): the base branch of a stacked PR, its base PR's Lead Branch, is not on the remote (never for a `merged` base PR: that PR is unstacked first, hs-d301); `details` `{pr, base, base_pr}` (hs-d324) |
 | `base_conflict` | 3 | `pr open` (§9.1, contract §7.6 step 1) or an `open` or `update` Job's submit (§6.1, contract §7.7) found that the gated commit conflicts with `origin/<base>`, freshly fetched (`git merge-tree`); `details` is `{pr, base, base_sha, sha, files, next}`, `files` the conflicted paths, `next` the commands the Lead runs, as written (hs-d490; it replaces hs-d329's `base_behind`, retired: a base that merely moved ahead refuses nothing) |
-| `pr_not_open` | 3 | `pr reply` (§9.8a) found the PR not `open`; `details` is `{pr, status}` (pro-d68) |
+| `pr_not_open` | 3 | `pr reply` (§9.8a) and `pr rerun` (§9.8c) found the PR not `open`; `details` is `{pr, status}` (pro-d68, pro-d155) |
 | `feedback_not_found` | 3 | `pr reply` (§9.8a): `--to` is the `id` of no item in the PR's stored list; `details` is `{pr, to, open: [ids]}`; nothing is posted (pro-d68) |
+| `no_failed_run` | 3 | `pr rerun` (§9.8c) found no GitHub Actions workflow run of the PR's head commit failed; `details` is `{pr, head_sha, runs: [{id, name, status, conclusion}]}`; nothing is re-run (pro-d155) |
 | `pr_not_closed` | 3 | `pr cancel` (§9.6) found the `open` PR's pull request not stored `closed`; `details` is `{pr, number, url, state}`, the stored row's `state` (`open` or `merged`) (hs-d329) |
 | `already_posted` | 3 | `pr post` (§9.8b) found a `pr_posts` row for the PR; `details` is `{pr, channel, ts, link, posted_at}` (pro-d65) |
 | `post_disabled` | 3 | `pr post` (§9.8b) found `policy.pr.post.enabled` is false; `details` is `{pr, key: "pr.post.enabled"}` |
@@ -1740,7 +1741,7 @@ Idempotent: no; §3.5 refuses `answer` on an Escalation that is not `open`, so a
 
 ## 9. `pr`
 
-A Plan's PRs (R34, §2.2 PR, §3.8) and their pull requests, through `gh` (§7.6). `gh` failures are `gh_failed` (exit 1) with its stderr tail. Every command here works on **one PR**: `pr open`, `pr rebase`, `pr push`, `pr view`, `pr reply` and `pr post` select it by `--pr <key>` (§1.3: omitted, the Plan's one PR that is not `cancelled`); `pr add`, `pr edit`, `pr cancel` and `pr start` (§9.4–§9.7) take its key as their argument; `pr poll` has no `--pr`: it polls every open pull request of the User. `<repo>`, `<base>`, `<lead branch>` and `<lead worktree>` are the selected PR's (§7); `gh` runs with cwd = its Lead worktree, so it addresses the PR's repo.
+A Plan's PRs (R34, §2.2 PR, §3.8) and their pull requests, through `gh` (§7.6). `gh` failures are `gh_failed` (exit 1) with its stderr tail. Every command here works on **one PR**: `pr open`, `pr rebase`, `pr push`, `pr view`, `pr reply`, `pr rerun` and `pr post` select it by `--pr <key>` (§1.3: omitted, the Plan's one PR that is not `cancelled`); `pr add`, `pr edit`, `pr cancel` and `pr start` (§9.4–§9.7) take its key as their argument; `pr poll` has no `--pr`: it polls every open pull request of the User. `<repo>`, `<base>`, `<lead branch>` and `<lead worktree>` are the selected PR's (§7); `gh` runs with cwd = its Lead worktree, so it addresses the PR's repo.
 
 ### 9.1 `pr open`
 
@@ -2282,6 +2283,48 @@ Output: `{"ok":true,"plan":<id>,"pr":<key>,"number":<n>,"url":<the pull request'
 ```
 
 Idempotent: no (every run tries to post).
+
+### 9.8c `pr rerun`
+
+```
+cpd pr rerun [--pr <key>] [--plan <id>]
+```
+
+Re-runs the failed GitHub Actions workflow runs of a PR's head commit (pro-d155), so a Lead never runs `gh run rerun` itself and never asks the User to click Re-run failed jobs. **Callers:** Lead; not cockpit, not internal (§2). Use it when the log of a failed check shows an infrastructure or transient runner failure, not a code defect on the branch: a code defect needs a fix Job (§9.8, `pr-feedback`).
+
+| Flag | Meaning |
+|---|---|
+| `--pr <key>` | the PR, selected by §1.3's rule |
+| `--plan <id>` | the Plan, else `CPD_PLAN` (§1.3) |
+
+Check order; the first failure refuses, and then nothing is re-run:
+
+1. the PR's status is not `open` → `pr_not_open` (exit 3, `details` `{pr, status}`); no `gh` call is made
+2. `gh pr view` gives the head commit, `head_sha`, read fresh from GitHub
+3. `gh run list --commit <head_sha>` lists the GitHub Actions workflow runs of that commit. A run is **failed** when its `conclusion` is `failure`, `timed_out` or `startup_failure`, compared case-insensitively (`gh` prints them in lower case, GraphQL in upper case). A run still running has an empty conclusion and is not failed. `cancelled`, `skipped`, `neutral`, `action_required`, `stale` and `success` are not failed.
+4. no run is failed → `no_failed_run` (exit 3, `details` `{pr, head_sha, runs: [{id, name, status, conclusion}]}`, every run of the commit so the Lead can see why); nothing is re-run
+
+| Precondition or failure | Code | Exit |
+|---|---|---|
+| the PR is not `open` (`details` `{pr, status}`); no `gh` call is made | `pr_not_open` | 3 |
+| no GitHub Actions workflow run of the head commit is failed (`details` `{pr, head_sha, runs}`); nothing is re-run | `no_failed_run` | 3 |
+| a `gh` call fails (§1.3); the loop stops there, `details` is `{argv, exit, stderr, rerun}`, `rerun` the runs already re-run, `[{id, name}]`, empty when it failed before the first re-run | `gh_failed` | 1 |
+
+Effects: **gh**, as the User's own GitHub login, with cwd = the PR's Lead worktree, so `gh` addresses the PR's repo (§9):
+
+1. `gh pr view <number> --json headRefOid`: `head_sha`, the head commit of the pull request, read fresh from GitHub, not from the stored row
+2. `gh run list --commit <head_sha> --json databaseId,name,status,conclusion --limit 100`: the GitHub Actions workflow runs of that commit, as `gh` lists them (at most the first 100)
+3. for each failed run, in the order listed: `gh run rerun <databaseId> --failed` (only its failed jobs)
+
+It writes nothing in the store and appends no Event (contract §5.1).
+
+Output: `{"ok": true, "pr": "<key>", "head_sha": "<sha>", "rerun": [{"id": <databaseId>, "name": "<run name>"}]}`, one entry for each run re-run, in listing order.
+
+```json
+{"ok": true, "pr": "api", "head_sha": "4c1e7b2f9a0d3e58", "rerun": [{"id": 12345678901, "name": "CI"}]}
+```
+
+Idempotent: no (each call re-runs what has failed). A second call right after the first finds those runs in progress (empty conclusion) and is refused `no_failed_run`.
 
 ### 9.9 `pr push`
 
