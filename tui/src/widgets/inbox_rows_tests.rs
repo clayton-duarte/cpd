@@ -108,7 +108,7 @@ fn the_list_holds_half_as_many_items_as_it_has_rows_and_an_odd_row_stays_blank()
     let ten = Shape::new(10).capped(10);
     assert_eq!((ten.max_scroll(), ten.wheeled(true)), (7, 3));
     let (buf, _) = drawn(&items, ten, 40, 10);
-    assert!(row(&buf, 8).contains("item 3") && row(&buf, 9).contains("▼ 7 more"), "3 items shown");
+    assert!(row(&buf, 7).contains("item 3") && row(&buf, 8).contains("sub 3") && row(&buf, 9).contains("▼ 7 more"), "3 items shown");
 
     let (buf, _) = drawn(&items, Shape::new(10).capped(9), 40, 9);
     assert!(row(&buf, 5).contains("item 2") && row(&buf, 6).contains("sub 2"), "2 items shown");

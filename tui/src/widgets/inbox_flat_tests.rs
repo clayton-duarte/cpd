@@ -1,4 +1,4 @@
-//! The flat Inbox section (commands.md §13.2, §17): a blank row, the header, a ▲ line, one row per item, a ▼ line.
+//! The flat Inbox section (commands.md §13.2, §17): a blank row, the header, a ▲ line, two rows per item, a ▼ line.
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -94,14 +94,14 @@ fn an_item_with_wide_text_fills_its_row_to_the_width() {
 #[test]
 fn the_section_is_a_blank_row_the_header_a_cue_line_the_items_and_a_cue_line() {
     let shape = Shape::new(2);
-    assert_eq!(shape.height(), 6);
+    assert_eq!(shape.height(), 8);
     let buf = flat(&numbered(2), shape);
-    for y in [0, 2, 5] {
+    for y in [0, 2, 4, 6, 7] {
         assert_eq!(row(&buf, y), "", "row {y} is blank (no cue)");
     }
     assert_eq!(row(&buf, 1), header(40, 2));
     assert_eq!(row(&buf, 3).split_whitespace().nth(2), Some("1"));
-    assert_eq!(row(&buf, 4).split_whitespace().nth(2), Some("2"));
+    assert_eq!(row(&buf, 5).split_whitespace().nth(2), Some("2"));
 }
 
 #[test]
@@ -125,33 +125,36 @@ fn with_no_item_the_list_is_the_up_to_date_row_under_the_cue_line() {
 fn an_overflowing_section_scrolls_between_its_cue_lines() {
     let items = numbered(12);
     let drawn = |scroll| draw(&items, Shape::new(12).capped(9).scrolled(scroll), 30, 9);
+    // 5 list rows: 2 items (rows 3-6), row 7 blank, the cue on row 8
     let cue = |text: &str| format!("{}{text}", " ".repeat(29 - text.chars().count()));
     let items_at = |buf: &Buffer, first: usize| {
-        for (i, y) in (3..8).enumerate() {
+        for (i, y) in [3, 5].into_iter().enumerate() {
             let words: Vec<String> = row(buf, y).split_whitespace().map(str::to_owned).collect();
             assert_eq!(words[1..], ["item".to_owned(), (first + i + 1).to_string(), "5m".to_owned()], "row {y}");
+            assert_eq!(row(buf, y + 1), "", "Row 2 of a one-row label is blank");
         }
+        assert_eq!(row(buf, 7), "", "the odd row stays blank");
     };
     let top = drawn(0);
     assert_eq!(row(&top, 2), "");
     items_at(&top, 0);
-    assert_eq!(row(&top, 8), cue("▼ 7 more"));
+    assert_eq!(row(&top, 8), cue("▼ 10 more"));
     let middle = drawn(3);
     assert_eq!(row(&middle, 2), cue("▲ 3 more"));
     items_at(&middle, 3);
-    assert_eq!(row(&middle, 8), cue("▼ 4 more"));
+    assert_eq!(row(&middle, 8), cue("▼ 7 more"));
     let end = drawn(100);
-    assert_eq!(row(&end, 2), cue("▲ 7 more"));
-    items_at(&end, 7);
+    assert_eq!(row(&end, 2), cue("▲ 10 more"));
+    items_at(&end, 10);
     assert_eq!(row(&end, 8), "");
 }
 
 #[test]
 fn the_shape_is_four_rows_plus_its_list_capped_at_the_pane() {
     assert_eq!(Shape::new(0).height(), 5);
-    assert_eq!(Shape::new(1).height(), 5);
-    assert_eq!(Shape::new(2).height(), 6);
-    assert_eq!(Shape::new(12).height(), 16);
+    assert_eq!(Shape::new(1).height(), 6);
+    assert_eq!(Shape::new(2).height(), 8);
+    assert_eq!(Shape::new(12).height(), 28);
     assert_eq!(Shape::new(12).capped(9).height(), 9);
     assert_eq!(Shape::new(12).capped(3).height(), 3);
 }
@@ -160,23 +163,23 @@ fn the_shape_is_four_rows_plus_its_list_capped_at_the_pane() {
 fn only_the_header_and_the_item_rows_are_hits() {
     let hits = |shape: Shape, rows: std::ops::Range<u16>| rows.map(|r| shape.hit(r)).collect::<Vec<_>>();
     assert_eq!(
-        hits(Shape::new(2), 0..7),
-        [None, Some(Hit::Header), None, Some(Hit::Item(0)), Some(Hit::Item(1)), None, None]
+        hits(Shape::new(2), 0..9),
+        [None, Some(Hit::Header), None, Some(Hit::Item(0)), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(1)), None, None]
     );
     let scrolled = Shape::new(12).capped(9).scrolled(3);
-    assert_eq!((scrolled.hit(2), scrolled.hit(8)), (None, None));
-    assert_eq!(hits(scrolled, 3..8), [Some(Hit::Item(3)), Some(Hit::Item(4)), Some(Hit::Item(5)), Some(Hit::Item(6)), Some(Hit::Item(7))]);
+    assert_eq!((scrolled.hit(2), scrolled.hit(7), scrolled.hit(8)), (None, None, None));
+    assert_eq!(hits(scrolled, 3..7), [Some(Hit::Item(3)), Some(Hit::Item(3)), Some(Hit::Item(4)), Some(Hit::Item(4))]);
     assert_eq!(Shape::new(0).hit(3), None);
 }
 
 #[test]
 fn the_wheel_moves_three_items_a_notch_and_clamps_at_the_last_item() {
     let shape = Shape::new(12).capped(9);
-    assert_eq!(shape.max_scroll(), 7);
+    assert_eq!(shape.max_scroll(), 10);
     assert_eq!(shape.wheeled(true), 3);
     assert_eq!(shape.scrolled(3).wheeled(true), 6);
-    assert_eq!(shape.scrolled(6).wheeled(true), 7);
+    assert_eq!(shape.scrolled(9).wheeled(true), 10);
     assert_eq!(shape.scrolled(2).wheeled(false), 0);
-    assert_eq!(shape.scrolled(7).wheeled(false), 4);
+    assert_eq!(shape.scrolled(10).wheeled(false), 7);
     assert_eq!(Shape::new(2).max_scroll(), 0);
 }
