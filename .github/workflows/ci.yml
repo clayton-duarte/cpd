@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# One run per branch: a newer push cancels the older run of a pull request (the runner runs one job at a time).
+# One run per branch: a newer push cancels the older run of a pull request (each runner runs one job at a time; hs has two).
 # A push to main is never cancelled. GitHub keeps one running and one pending run per group, so a burst of merges
 # checks the first and the last (the last contains the others).
 concurrency:
@@ -53,3 +53,8 @@ jobs:
         run: scripts/gate-run.sh npm run verify:node
       - name: Rust tests
         run: scripts/gate-run.sh npm run verify:rust
+        # CI runs one Gate per runner, so the cap of .config/nextest.toml (for several Gates at once) is not needed:
+        # 8 threads ran the tests in 90 s against 171 s at 4, with no leak. Delete the line if a leak shows.
+        # See docs/research/test-threads.md.
+        env:
+          NEXTEST_TEST_THREADS: "8"
