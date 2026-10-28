@@ -336,10 +336,10 @@ impl Changes {
 /// The open items whose condition has the same identity and has moved inside it, and the item follows it in place
 /// without closing, so a snooze or a dismissal stays: a `curate-*` item (subject `curate-retire:<context>`) whose
 /// count moved changes its label (hs-d549, hs-d551); a `pr-ready` item changes its label or its links (url, context,
-/// plan, session).
+/// plan, session); a `dialog` item changes its label (the Verdict's option).
 fn relabelled<'a>(open: &'a [Item], conditions: &'a [Condition]) -> Vec<(&'a Item, &'a Condition)> {
     open.iter()
-        .filter(|i| matches!(i.kind, Kind::CurateRetire | Kind::CurateDocs | Kind::PrReady))
+        .filter(|i| matches!(i.kind, Kind::CurateRetire | Kind::CurateDocs | Kind::PrReady | Kind::Dialog))
         .filter_map(|i| conditions.iter().find(|c| c.identity() == i.identity()).map(|c| (i, c)))
         .filter(|(i, c)| {
             i.label != c.label
@@ -366,8 +366,8 @@ pub fn open_items(conn: &Connection) -> Result<Vec<Item>, CpdError> {
 /// Engine step E8 (§3.7): in one write transaction, opens an item for each
 /// condition with no open item of its identity (`kind`, `subject`,
 /// `urgency`), closes each open item with no condition, and appends
-/// `inbox-opened` and `inbox-closed` for them, closed ones first. A `curate-*`
-/// or `pr-ready` item whose condition moved inside its identity (see
+/// `inbox-opened` and `inbox-closed` for them, closed ones first. A `curate-*`,
+/// `dialog` or `pr-ready` item whose condition moved inside its identity (see
 /// `relabelled`) is updated in place, with no Event. Writes
 /// nothing, not even a `txns` row, when nothing changed. `now` is §1.3's time.
 pub fn reconcile(store: &mut Store, conditions: &[Condition], now: &str) -> Result<Changes, CpdError> {
@@ -577,7 +577,7 @@ mod tests {
     #[test]
     fn unchanged_conditions_write_nothing() {
         let (_dir, mut store) = store();
-        let conditions = [dialog("session:a", Urgency::Red), dialog("session:b", Urgency::White)];
+        let conditions = [dialog("session:a", Urgency::Red), condition(Kind::Unread, Urgency::White, "session:b")];
         reconcile(&mut store, &conditions, "2026-01-01T00:00:00.000Z").unwrap();
         let (txns, events, history) = (
             count(&mut store, "SELECT count(*) FROM txns"),
@@ -586,7 +586,7 @@ mod tests {
         );
         // The same conditions, in another order and with another label, are the same conditions.
         let again = [
-            Condition { label: "renamed".into(), ..dialog("session:b", Urgency::White) },
+            Condition { label: "renamed".into(), ..condition(Kind::Unread, Urgency::White, "session:b") },
             dialog("session:a", Urgency::Red),
         ];
         let changes = reconcile(&mut store, &again, "2026-01-01T00:05:00.000Z").unwrap();

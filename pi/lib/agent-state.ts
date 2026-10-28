@@ -68,6 +68,10 @@ export function registerAgentState(host: Host): void {
   pi.on("ui_prompt_start", () => onPrompt(true));
   pi.on("ui_prompt_end", () => onPrompt(false));
 
+  pi.on("tool_result", (event) => {
+    if (event.toolName === "ask_user_question") host.run?.facts.release();
+  });
+
   pi.on("agent_settled", (_event, ctx) => {
     const r = host.run;
     if (!r) return;

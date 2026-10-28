@@ -29,6 +29,9 @@ use crate::store::Store;
 /// goes to its Lead, and the Lead that waits for the Worker is `waiting`, not `blocked` (hs-d303).
 const PLAN_REVIEW: &str = "φ: plan review";
 
+/// The `state_label` prefix of a Verdict dialog (pi adapter): the item is named by it, `<who> verdict: <option>`.
+const VERDICT_PREFIX: &str = "verdict: ";
+
 /// What the team review rule needs besides the cache (contract §2.2 "The team review rule"): `inbox.bot_reviewers` and
 /// the GitHub state of the posted pull requests, one call for all of them.
 pub struct Team<'a> {
@@ -189,6 +192,8 @@ struct Seat {
     phase: Option<Phase>,
     /// The tree's label of the Session: its Plan id, `<plan>·<suffix>` for a fork, the Context id for a Manager.
     who: String,
+    /// The Session's `state_label`, empty when it has none.
+    state_label: String,
     event: Option<i64>,
 }
 
@@ -199,7 +204,7 @@ fn seats(conn: &Connection, event: &str, filter: &str) -> Result<Vec<Seat>, CpdE
         "SELECT s.id, s.context, s.plan, p.phase,
                 EXISTS (SELECT 1 FROM plans q WHERE q.lead_session = s.id),
                 s.role = 'manager',
-                {event}
+                {event}, COALESCE(s.state_label, '')
            FROM sessions s LEFT JOIN plans p ON p.id = s.plan
           WHERE s.role <> 'worker' AND s.archived_at IS NULL AND p.deleted_at IS NULL AND {filter}
           ORDER BY s.created_at, s.id"
@@ -224,6 +229,7 @@ fn seats(conn: &Connection, event: &str, filter: &str) -> Result<Vec<Seat>, CpdE
             phase: phase.map(|p| Phase::parse(&p).ok_or_else(|| corrupt("Plan phase", &p))).transpose()?,
             who,
             event: row.get(6)?,
+            state_label: row.get(7)?,
         });
     }
     Ok(seats)
@@ -256,7 +262,11 @@ fn dialogs(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
                 Some(Phase::Dispatch | Phase::Deploy) => Urgency::Red,
                 _ => Urgency::Magenta,
             };
-            let label = format!("{} asks you", seat.who);
+            let label = if seat.state_label.starts_with(VERDICT_PREFIX) {
+                format!("{} {}", seat.who, seat.state_label)
+            } else {
+                format!("{} asks you", seat.who)
+            };
             seat_condition(seat, Kind::Dialog, urgency, label)
         })
         .collect())
