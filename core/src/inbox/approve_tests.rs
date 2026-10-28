@@ -108,7 +108,7 @@ fn gh_calls(f: &Fixture) -> Vec<Call> {
 }
 
 fn closed_at(f: &mut Fixture) -> Option<String> {
-    f.env.store.read(|c| Ok(c.query_row("SELECT closed_at FROM items WHERE id = 1", [], |r| r.get(0))?)).unwrap()
+    f.env.store.read(|c| Ok(c.query_row("SELECT closed_at FROM inbox_items WHERE id = 1", [], |r| r.get(0))?)).unwrap()
 }
 
 fn closed_events(f: &mut Fixture) -> Vec<Value> {
