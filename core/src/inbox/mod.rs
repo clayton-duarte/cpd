@@ -15,3 +15,5 @@ mod deploy_tests;
 mod claim_tests;
 #[cfg(test)]
 mod runner_tests;
+#[cfg(test)]
+mod pr_tests;
