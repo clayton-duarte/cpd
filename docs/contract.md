@@ -3516,7 +3516,71 @@ pro-d3, pro-d7, pro-d8, pro-d10. An MCP server reaches a Session only through `c
 
 ### 6.12 The durable Worker runner
 
-(skeleton)
+The durable Worker runner is `pi/durable-worker/main.ts`, a headless Node process that runs one cpd Attempt with `@earendil-works/pi-durable` 1.3.0 instead of a pi session in a tmux window. It is a second runner beside pi, not a replacement: both runners are kept (pro-d165). It has no pane (pro-d109), and it resumes an interrupted Worker in place instead of burning an Attempt (pro-d164). The research behind it is `docs/research/pi-durable.md`; what a Worker is and is given is commands.md §15.3 and §16.
+
+**Not in this section.** The `worker_runner = "pi" | "durable"` flag, the child-process start of a durable Worker and the reading of its end by the driver belong to Plan `worker-contract`, not to this section; nothing here starts the runner. How cpd starts a pi Worker is §6.6 (the Worker row and "`PATH` and the `git` wrapper"), and §6.6 is not restated here.
+
+**Invocation.** `node pi/durable-worker/main.ts --model <pattern> --spec <path>`, with `CPD_HOME`, `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT` in the environment, `PATH` with `$CPD_HOME/bin` first, and the cwd the Attempt's worktree: the environment and cwd of a pi Worker (§6.6). `<pattern>` is the pi pattern `[<provider>/]<id>[:<thinking>]` that cpd passes to `pi --model`. A missing variable, a missing `--model` or `--spec`, or an unusable pattern is a `usage` CpdError naming it; the process prints it on stderr and exits 2 before opening anything.
+
+**Modules** (all in `pi/durable-worker/`, one concern each):
+
+| File | Exports |
+|---|---|
+| `config.ts` | `type Config = { home: string; session: string; plan: string; attempt: string; cwd: string; spec: string; model: string }` (`model` is the pattern); `parseConfig(argv: readonly string[], env: Record<string, string \| undefined>, cwd: string): Config`; `storePath(home: string, plan: string, attempt: string): string` = `<home>/run/<plan>/durable/<attempt>.sqlite`; `reportPath(home, plan, attempt)` = `<home>/run/<plan>/durable/<attempt>.report.json` |
+| `guards.ts` | `type Verdict = { block: string } \| undefined`; `workerVerdict(call: { name: string; arguments: Record<string, unknown> }, where: { cwd: string; home: string }): Verdict`. The Worker rows of the adapter's `tool_call` handler (`pi/lib/adapter.ts`), same order, same reasons: for `edit` and `write`, `primaryCheckoutWrite` (`mainguard.ts`); for `bash` with a string `command`, `primaryCheckoutMove` (`mainguard.ts`), `secretBypass` (`secretguard.ts`), `hostApproveBypass` (`hostapprove.ts`), then `unfilteredTestRun` (`testguard.ts`); the `block` text is that module's `reasonText(matched)`. `home` is the User's home directory (what `os.homedir()` returns) |
+| `extension.ts` | `cpdExtension(prompt: { contextFiles: string \| undefined; policy: string \| undefined; zone: string }, where: { cwd: string; home: string }): Extension` (pi-durable's `defineExtension`), named `cpd`: prompt `sections` in this order, each omitted when its text is `undefined`: `cpd-context-files`, `cpd-policy` (key `POLICY_SECTION` of `pi/lib/policy.ts`), `cpd-time-zone` (key `TIME_ZONE_SECTION` of `pi/lib/time.ts`); and one `hook(ToolTask, { beforeTool })` that returns `{ block }` from `workerVerdict(call, where)` and `undefined` otherwise |
+| `deliver.ts` | `type Input = { content: string; requestId: string; whenBusy: "followUp" }`; `inputOf(event: CpdEvent, session: string): Input \| undefined`. Only an Event whose `session` is this Session becomes input: `attempt-nudge` -> `content` = `data.prompt`; `session-message` -> `content` = the text of `sessionMessage(...)` of `pi/lib/delivery.ts` with the sender `null` when `data.from` is null, else `{ id: data.from, name: null }`. `requestId` is `event:<event.id>`. Every other Event, and every Event of another Session, is `undefined` |
+| `report.ts` | `type EndReport = { stop_reason: string; error_message: string \| null; turns: number; tokens_in: number; tokens_out: number; cache_read: number; cache_write: number; cost_usd: number; model: string \| null }` (the field names of the `metrics` row, contract §4, so the driver reads them as it reads pi's); `endReport(entries: readonly Entry[]): EndReport` over the `pi.assistant` entries (`entry.model[0]` is the pi-ai assistant message: `stopReason`, `errorMessage?`, `usage: { input, output, cacheRead, cacheWrite, cost: { total } }`, `provider`, `model`): `stop_reason` and `error_message` of the last one (`null` when it has none), `turns` their count, the usage fields summed, `model` = `<provider>/<model>` of the last. Entries with no `pi.assistant` entry are a `no_assistant_entry` CpdError (no default papers over it). `type Entry = { kind: string; model?: readonly unknown[] }` |
+| `run.ts` | `runWorker(config: Config, deps: Deps): Promise<number>` and the `Deps` port below. The whole sequence; it returns the process exit code |
+| `harness.ts` | `openConversation(models: Models, o: { file: string; cwd: string; model: { provider: string; modelId: string; thinkingLevel?: string }; extension: Extension }): Promise<Conversation>` (`Models` from `@earendil-works/pi-ai`): the one adapter from a real pi-durable `Harness` to `Deps.open` (below). `main.ts` passes pi's `ModelRuntime`; the Job `durable-verify` passes pi-ai's faux provider. Not unit tested: it is a wrapper of an external library, proven by `durable-verify` |
+| `main.ts` | The entry: `parseConfig`, the real `Deps` (cpd run through `callCpd` of `pi/lib/cpd.ts` over `node:child_process`, pi's `ModelRuntime` and `resolveCliModel`, `loadProjectContextFiles`, a `Follower` of `pi/lib/follower.ts`), `process.exit(await runWorker(...))`, exit 2 for a `usage` error |
+
+**The `Deps` port** (`run.ts`). Every effect `runWorker` has is one of these, so a test passes fakes:
+
+```ts
+type Conversation = { submit(input: Input): Promise<Submission>; entries(): Promise<readonly Entry[]>; closed: Promise<unknown> };
+type Submission = { wait(): Promise<"done" | "unanswered"> };
+```
+
+| Member | Does |
+|---|---|
+| `cpd(args: readonly string[]): Promise<Record<string, unknown>>` | runs `cpd <args>`; resolves to the parsed `{"ok":true,...}` object, or throws a CpdError |
+| `resolveModel(pattern: string): { provider: string; modelId: string; thinkingLevel?: string }` | throws a `usage` CpdError for an unusable pattern |
+| `contextFiles(cwd: string): readonly { path: string; content: string }[]` | the context files of `cwd` |
+| `open(o: { file: string; cwd: string; model: { provider: string; modelId: string; thinkingLevel?: string }; extension: Extension }): Promise<Conversation>` | opens the store at `file` (`openConversation` of `harness.ts` in production) |
+| `follow(hooks: FollowerHooks): { start(): void; stop(): void }` | the Event follower of `pi/lib/follower.ts` |
+| `writeReport(file: string, report: EndReport): Promise<void>` | writes the report atomically |
+| `onTerminate(handler: () => void): void` | calls `handler` on SIGTERM and on SIGINT |
+| `homeDir(): string` | the User's home directory |
+| `now(): Date` | the current time |
+| `log(line: string): void` | logs one line |
+
+**`runWorker`, in order.**
+
+1. `resolveModel(config.model)` first: a `usage` error ends it before any effect.
+2. `cpd session show --session <session>`, read with `parseSession` of `pi/lib/run.ts` (its `registeredEvent` is the Event cursor).
+3. `cpd policy show` -> `policySection` of `pi/lib/policy.ts`. The context files -> one text, each file as `## <path>` and its content, blocks separated by a blank line (`undefined` when there are none). `zone` = `zoneLine(now())` of `pi/lib/time.ts`.
+4. `open({ file: storePath(...), cwd, model, extension: cpdExtension(...) })`.
+5. Submit the first message `Read <spec> and follow it exactly. Your attempt id is <attempt>.` with `requestId` = the Attempt id and `whenBusy: "followUp"`.
+6. Start the follower with the cursor `registeredEvent`: each line is parsed with `parseLine` of `pi/lib/event.ts`, an Event goes through `inputOf`, and an input is submitted; the cursor advances to the Event's id.
+7. Track every submission: while any is pending the Session state is `working`; when the last settles it is `idle` and the report is written to `reportPath(...)` from `endReport(await conversation.entries())`, after every settle (the file is replaced, so rerunning is safe). States go through `cpd session state` with `stateArgs` and `Reporter` of `pi/lib/state.ts`.
+8. The run ends on the first of: `onTerminate` (stop the follower, report `stopped`, return 143, **without closing the harness**); `conversation.closed` settling, which pi-durable does after a storage error (log it, stop the follower, report `stopped`, return 1: the driver restarts the runner and the store resumes); or an error thrown by steps 1 to 7 (stop the follower if started, report `stopped` best effort, return 1).
+
+A Worker does not exit when its first turn ends: it stays up and idle, because the driver's nudge (commands.md §16.1) arrives as an Event. The driver ends an Attempt by signalling the process, as it kills a Worker's window today. So `runWorker` resolves only in the three cases of step 8. `main.ts` exits with that code, and with 2 for a `usage` error.
+
+**Crash resume** (pro-d164). The store is keyed by Attempt, so a runner started again for the same Attempt (the process was killed, or cpd was reinstalled) opens the same file and finds the same conversation. Step 5 uses `requestId` = the Attempt id and step 6 `event:<id>`: pi-durable returns the existing submission for a request id it has seen, so a restart neither sends the first message twice nor delivers an Event twice, and the run it interrupted goes on from the last committed step. The follower always starts at `registered_event`, so replayed Events are the same requests. A tool call the crash interrupted is not run again: the model is told `Tool bash was interrupted and may have partially run` and decides. (Spiked on pi-durable 1.3.0 with SQLite: a `bash` killed 1.5 s into `sleep 8`; the restarted process settled `done`, `ran.txt` held one line, and the conversation was user, system, assistant (tool call), tool result (interrupted), assistant.)
+
+**Restart limit.** pi-durable 1.3.0 has **no restart limit** (nothing named `restartLimit` in the package). How often the driver restarts a runner is the driver's bound, set by Plan `worker-contract`, not by this module.
+
+**No `close()`.** The runner never calls `Harness.close()`: with a tool call that never ended, `close()` had not returned after 3 s (spiked on pi-durable 1.3.0, in-memory store, faux model). A kill needs no close, because pi-durable's SQLite store commits survive a process crash (its README, "Storage").
+
+**Delivery to the Worker.** A Worker gets only `attempt-nudge` (and `session-message`) as Events (commands.md §15.3). A Worker's Escalation answer does not arrive as an Event: the Worker's own `cpd ask` bash call polls for it (commands.md §6, `escalation-answered`), so the runner delivers none.
+
+**The report is a file for now.** `reportPath` is this module's own choice, because the runner-neutral way a driver reads a Worker's end is decided by Plan `worker-contract`; the wiring Job of the PR that follows adapts the runner to it.
+
+**Model and credentials.** The model is resolved with pi's `ModelRuntime` and `resolveCliModel` over the User's `~/.pi/agent` (`models.json`, `auth.json`), so the durable runner uses the same logins as pi.
+
+**Packages.** `@earendil-works/pi-durable`, `@earendil-works/chord` and `@earendil-works/pi-ai` are pinned at exactly 1.3.0, the version of the installed pi. `engines.node` is `>=22.19.0`, what they declare.
 
 ## 7. git and the Gate
 

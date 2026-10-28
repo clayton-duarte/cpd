@@ -692,4 +692,12 @@ dotfiles runs it (hs-d145) after updating the `cpd` checkout and before activati
 
 ## The durable Worker runner
 
-(skeleton)
+Contract §6.12 fixes what the durable Worker runner is: its modules, the `Deps` port, the eight steps of `runWorker`, the crash resume and the delivery rule. This section is how it is made and tested, from which the red tests are written. The PR follows the TDD order: docs, red tests written from §6.12 by another Worker, then the implementation. How cpd starts a Worker is [contract §6.5](contract.md) and [§6.6](contract.md); the Worker contract is [commands.md §15.3 and §16](commands.md); the research is [docs/research/pi-durable.md](research/pi-durable.md). They are linked, not restated here.
+
+**1. The files.** `pi/durable-worker/` holds the eight files of contract §6.12's table: `config.ts`, `guards.ts`, `extension.ts`, `deliver.ts`, `report.ts`, `run.ts`, `harness.ts` and `main.ts`, each with the exports the table gives. `run.ts` performs no effect itself: every effect is a member of `Deps`, and `main.ts` is the only file that builds the real one. Only `extension.ts` and `harness.ts` import `@earendil-works/pi-durable`.
+
+**2. The tests.** They live in `pi/test/durable-worker/`, one `*.test.ts` per module that has rules of its own, written with `node:test`. The `test` script runs them: the change that adds the tests adds `pi/test/durable-worker/*.test.ts` to its default file list in the root `package.json`. Nothing real runs in them. A test takes its effects from fakes of `Deps` (contract §6.12) and of `Conversation`, reads the time only through `Deps.now()`, and never sleeps, starts a process or opens a socket. `harness.ts` has no unit test: it is a wrapper of an external library, proven by `durable-verify` (point 4).
+
+**3. The pins and `engines.node`.** `@earendil-works/pi-durable`, `@earendil-works/chord` and `@earendil-works/pi-ai` are pinned at exactly `1.3.0`, the version of the installed pi (contract §6.12, "Packages"). The root `package.json` `engines.node` becomes `>=22.19.0`, the minimum the three packages declare; it is `>=22.18` today.
+
+**4. `durable-verify`: the one Job that proves the resume.** It runs `main.ts` over a real pi-durable store (SQLite, in a temporary directory that it removes on exit), with pi-ai's faux provider passed to `openConversation`. It kills the runner during a `bash` tool call, starts the runner again for the same Attempt, and checks the outcomes of contract §6.12's "Crash resume": the first message is not sent twice, no Event is delivered twice, the interrupted tool call is reported as interrupted, and the run settles `done`. No unit test opens a store or kills a process; `durable-verify` is the only place that does.
