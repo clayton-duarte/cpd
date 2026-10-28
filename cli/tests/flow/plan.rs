@@ -1810,10 +1810,11 @@ fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_app
     fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
     // A follow-up batch is registered at once: two stubs, one with its Tier, and a stub that is dropped again.
-    let out = inproc::stub(&fx, "next-1", &[]);
+    // After the lock a stub waits for a queued Job (the door, hs-d731): `a` is queued by the lock.
+    let out = inproc::stub(&fx, "next-1", &["--needs", "a"]);
     assert_eq!((&out["job"]["status"], &out["job"]["tier"], &out["job"]["appended"]), (&json!("draft"), &Value::Null, &json!(true)));
     inproc::stub(&fx, "next-2", &["--tier", "S3", "--needs", "next-1"]);
-    inproc::stub(&fx, "dropped", &[]);
+    inproc::stub(&fx, "dropped", &["--needs", "a"]);
     fx.cpd(&["job", "cancel", "dropped", "--reason", "Not needed.", "--plan", "pay"]).ok();
     add_draft(&fx.env, "pay", "done-1", &["a"], true);
     let shown = inproc::show(&fx, "pay");

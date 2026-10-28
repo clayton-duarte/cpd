@@ -1223,18 +1223,19 @@ fn add_draft_needs_only_a_title_and_stores_the_tier_and_the_spec_as_null() {
         let fx = Fx::new();
         setup(&fx.env);
         plan(&fx.env, "pl", phase);
-        job_add_draft(&fx, "pl", "a", &[], &[]).ok();
+        // `a` is queued after the lock: a stub that needs it waits (the door, hs-d731).
+        job_add(&fx, "pl", "a", "S2", &[]).ok();
 
-        let out = stub_add(&fx, "pl", "k", &[]).ok();
+        let out = stub_add(&fx, "pl", "k", &["--needs", "a"]).ok();
         let appended = phase != "plan";
-        assert_eq!(out["job"], json!({"key": "k", "pr": "repo", "kind": "work", "status": "draft", "appended": appended, "tier": null, "needs": [], "review": false, "urgent": false}), "{phase}");
+        assert_eq!(out["job"], json!({"key": "k", "pr": "repo", "kind": "work", "status": "draft", "appended": appended, "tier": null, "needs": ["a"], "review": false, "urgent": false}), "{phase}");
         for column in ["tier", "goal", "context", "touches", "acceptance", "out_of_scope", "fingerprint"] {
             assert_eq!(job_row(&fx.env, "pl", "k", column), Value::Null, "{phase}: {column}");
         }
         assert_eq!((job_row(&fx.env, "pl", "k", "title"), job_row(&fx.env, "pl", "k", "status")), (json!("Title of k"), json!("draft")));
         assert_eq!(
             events(&fx, "job-added").last().unwrap()["data"],
-            json!({"pr": "repo", "kind": "work", "status": "draft", "appended": appended, "tier": null, "needs": [], "review": false, "urgent": false})
+            json!({"pr": "repo", "kind": "work", "status": "draft", "appended": appended, "tier": null, "needs": ["a"], "review": false, "urgent": false})
         );
 
         // Either half may be given: the Tier alone, the Spec alone; needs work as for any draft.
@@ -1242,15 +1243,15 @@ fn add_draft_needs_only_a_title_and_stores_the_tier_and_the_spec_as_null() {
         let out = stub_add(&fx, "pl", "t", &["--tier", "S3", "--needs", "a"]).ok();
         assert_eq!((&out["job"]["tier"], &out["job"]["needs"]), (&json!("S3"), &json!(["a"])), "{phase}");
         assert_eq!((job_row(&fx.env, "pl", "t", "tier"), job_row(&fx.env, "pl", "t", "goal")), (json!("S3"), Value::Null));
-        stub_add(&fx, "pl", "s", &["--spec", &spec]).ok();
+        stub_add(&fx, "pl", "s", &["--spec", &spec, "--needs", "a"]).ok();
         assert_eq!((job_row(&fx.env, "pl", "s", "tier"), job_row(&fx.env, "pl", "s", "goal")), (Value::Null, json!("Do it.")));
         assert_eq!(job_row(&fx.env, "pl", "s", "touches"), "[\"src/a.rs\"]");
 
         // An identical rerun is `already` and writes nothing; the same key with other fields is a clash.
         let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-        assert_eq!(stub_add(&fx, "pl", "k", &[]).ok()["already"], true);
+        assert_eq!(stub_add(&fx, "pl", "k", &["--needs", "a"]).ok()["already"], true);
         assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
-        refused(&stub_add(&fx, "pl", "k", &["--tier", "S2"]), "job_key_exists", 3);
+        refused(&stub_add(&fx, "pl", "k", &["--tier", "S2", "--needs", "a"]), "job_key_exists", 3);
 
         // The stub is shown as it is, and can be cancelled.
         let shown = job(&fx, &["show", "k"], "pl").ok();
@@ -1297,7 +1298,9 @@ fn edit_completes_a_stub_draft_with_its_tier_and_its_spec() {
         setup(&fx.env);
         plan(&fx.env, "pl", phase);
         let spec = spec_file(&fx.env);
-        stub_add(&fx, "pl", "k", &[]).ok();
+        // `a` is queued after the lock: the stubs that need it wait (the door, hs-d731).
+        job_add(&fx, "pl", "a", "S2", &[]).ok();
+        stub_add(&fx, "pl", "k", &["--needs", "a"]).ok();
 
         let out = job(&fx, &["edit", "k", "--tier", "S2", "--spec", &spec], "pl").ok();
         assert_eq!((&out["job"], &out["fields"]), (&json!({"key": "k", "status": "draft"}), &json!(["tier", "spec"])), "{phase}");
@@ -1318,14 +1321,14 @@ fn edit_completes_a_stub_draft_with_its_tier_and_its_spec() {
         assert_eq!(job(&fx, &["edit", "k", "--spec", &other], "pl").ok()["fields"], json!(["goal", "out_of_scope"]), "{phase}");
 
         // The Tier alone, then the Spec alone, complete a stub in two edits.
-        stub_add(&fx, "pl", "two", &[]).ok();
+        stub_add(&fx, "pl", "two", &["--needs", "a"]).ok();
         assert_eq!(job(&fx, &["edit", "two", "--tier", "S3"], "pl").ok()["fields"], json!(["tier"]), "{phase}");
         assert_eq!((job_row(&fx.env, "pl", "two", "tier"), job_row(&fx.env, "pl", "two", "goal")), (json!("S3"), Value::Null));
         assert_eq!(job(&fx, &["edit", "two", "--spec", &spec], "pl").ok()["fields"], json!(["spec"]), "{phase}");
         assert_eq!((job_row(&fx.env, "pl", "two", "tier"), job_row(&fx.env, "pl", "two", "goal")), (json!("S3"), json!("Do it.")));
 
         // A title edit leaves a stub a stub.
-        stub_add(&fx, "pl", "three", &[]).ok();
+        stub_add(&fx, "pl", "three", &["--needs", "a"]).ok();
         assert_eq!(job(&fx, &["edit", "three", "--title", "Renamed"], "pl").ok()["fields"], json!(["title"]));
         assert_eq!(job_row(&fx.env, "pl", "three", "tier"), Value::Null);
     }
@@ -1853,7 +1856,7 @@ fn add_edit_and_retry_refuse_h4_even_when_the_catalog_has_h4() {
     fixture(&fx.env, "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';");
     let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
     not_allowed(&job_add(&fx, "pl", "k", "H4", &[]), "H4");
-    not_allowed(&stub_add(&fx, "pl", "k", &["--tier", "H4"]), "H4");
+    not_allowed(&stub_add(&fx, "pl", "k", &["--tier", "H4", "--needs", "c"]), "H4");
     not_allowed(&job(&fx, &["edit", "b", "--tier", "H4"], "pl"), "H4");
     not_allowed(&job(&fx, &["retry", "a", "--tier", "H4"], "pl"), "H4");
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, rows));
@@ -1873,7 +1876,7 @@ fn add_edit_and_retry_refuse_gx_as_a_worker_tier() {
     engine(&fx.env, "pl", "c", "running");
     let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
     not_allowed(&job_add(&fx, "pl", "k", "GX", &[]), "GX");
-    not_allowed(&stub_add(&fx, "pl", "k", &["--tier", "GX"]), "GX");
+    not_allowed(&stub_add(&fx, "pl", "k", &["--tier", "GX", "--needs", "c"]), "GX");
     not_allowed(&job(&fx, &["edit", "b", "--tier", "GX"], "pl"), "GX");
     not_allowed(&job(&fx, &["edit", "b", "--tier", "GX", "--title", "New"], "pl"), "GX");
     not_allowed(&job(&fx, &["retry", "a", "--tier", "GX"], "pl"), "GX");
