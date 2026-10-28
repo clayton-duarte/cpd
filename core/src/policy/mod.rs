@@ -306,7 +306,7 @@ mod tests {
         write(
             &home,
             "acme/owner.toml",
-            "[pr]\nfeedback.checks = \"none\"\njira_required = true\ntext = \"owner pr\"\n[pr.post]\nenabled = true\nchannel = \"\"\ntemplate = \"{{ url }}\"\nmerged_reaction = \"\"\n[pr.jira]\nin_progress = \"\"\nin_review = \"\"\ndone = \"\"\n",
+            "[pr]\nfeedback.checks = \"none\"\njira_required = true\nhuman_gated_contexts = []\ntext = \"owner pr\"\n[pr.post]\nenabled = true\nchannel = \"\"\ntemplate = \"{{ url }}\"\nmerged_reaction = \"\"\n[pr.jira]\nin_progress = \"\"\nin_review = \"\"\ndone = \"\"\n",
         );
         write(&home, "acme/cpd.toml", "[pr]\n");
         let r = resolve(&home, &repo_key("acme", "cpd")).unwrap();
@@ -316,7 +316,7 @@ mod tests {
         assert_eq!(src.source, Source::Repo(real(&home, "acme/cpd.toml")));
         assert_eq!(
             src.left_out,
-            ["feedback.checks", "pr.post.enabled", "pr.post.channel", "pr.post.template", "pr.post.merged_reaction", "pr.jira_required", "pr.jira.in_progress", "pr.jira.in_review", "pr.jira.done"]
+            ["feedback.checks", "pr.post.enabled", "pr.post.channel", "pr.post.template", "pr.post.merged_reaction", "pr.jira_required", "pr.human_gated_contexts", "pr.jira.in_progress", "pr.jira.in_review", "pr.jira.done"]
         );
         assert!(src.to_string().ends_with(" (key default)"));
         // The owner file sets every typed key: no `(key default)`.
@@ -550,8 +550,13 @@ mod tests {
         while i < parts.len() {
             let span = parts[i];
             if let Some((name, values)) = span.split_once(" = ") {
-                let allowed: Vec<String> = values.split('|').map(|v| v.trim().trim_matches('"').to_owned()).collect();
+                let allowed: Vec<String> = if values.starts_with('[') { Vec::new() } else { values.split('|').map(|v| v.trim().trim_matches('"').to_owned()).collect() };
                 let default = (i + 2 < parts.len() && parts[i + 1].trim_end().ends_with('(')).then(|| parts[i + 2].to_owned());
+                // A list default is compared as compact JSON, the form `leaves` gives.
+                let default = default.map(|d| match serde_json::from_str::<serde_json::Value>(&d) {
+                    Ok(list @ serde_json::Value::Array(_)) => list.to_string(),
+                    _ => d,
+                });
                 keys.push((name.to_owned(), default, allowed));
             }
             i += 2;
@@ -569,6 +574,7 @@ mod tests {
             }
             serde_json::Value::String(s) => out.push((prefix.to_owned(), s.clone())),
             serde_json::Value::Bool(b) => out.push((prefix.to_owned(), b.to_string())),
+            serde_json::Value::Array(_) => out.push((prefix.to_owned(), v.to_string())),
             other => panic!("unexpected default value at {prefix}: {other}"),
         }
     }
