@@ -74,6 +74,7 @@ use cpd_core::store::Store;
 pub use column::{Drawn, Machine, draw, draw_error};
 pub use host::Usage;
 use host::Sampler;
+pub use host::ProcReader;
 pub(crate) use column::{Window, max_scroll, window};
 
 /// The CPU, GPU and memory sample this often: they are no Event, and the CPU share is over the time since the last sample.
@@ -84,7 +85,7 @@ pub(super) fn run(ports: &Ports, run_command: RunCommand) -> Result<Output, CpdE
         ports,
         "widgets",
         Capture::Mouse,
-        || prepare(ports, CpdHome::from_env()?),
+        || prepare_with(ports, CpdHome::from_env()?, host::real_proc()),
         |ctx, prepared| {
             let feed = Feed::real(prepared.home.root());
             show_with(ctx, feed, prepared, run_command)
@@ -132,11 +133,16 @@ pub struct Prepared {
     sampler: Sampler,
 }
 
-/// The first snapshot of `home`, and the first sample of the machine.
+/// [`prepare_with`] on a machine whose `/proc` reads nothing (what a test of the view wants: it reads no real machine).
 pub fn prepare(ports: &Ports, home: CpdHome) -> Result<Prepared, CpdError> {
+    prepare_with(ports, home, host::unreadable())
+}
+
+/// The first snapshot of `home`, and the first sample of the machine, whose `/proc` (Linux) is read through `proc`.
+pub fn prepare_with(ports: &Ports, home: CpdHome, proc: host::ProcReader) -> Result<Prepared, CpdError> {
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    let mut sampler = Sampler::default();
+    let mut sampler = Sampler::new(proc);
     let machine = Machine { name: hostname(ports), usage: sampler.sample_with(ports) };
     let now = clock::timestamp(ports.clock.utc());
     // the mark and the snooze's end are read before the items: a change between the reads is read again
