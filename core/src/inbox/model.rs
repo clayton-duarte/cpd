@@ -44,6 +44,8 @@ pub enum Kind {
     ModelsChanged,
     /// A workflow run waits for the User's approval (pro-d100): one entry of `run/deploy-runs.json`.
     Deploy,
+    /// A Plan has parked drafts its Lead did not resolve (hs-d731, hs-d733); always magenta, linked to the Plan and its Lead.
+    DraftsParked,
 }
 
 impl Kind {
@@ -67,12 +69,13 @@ impl Kind {
             Kind::LoopGuard => "loop-guard",
             Kind::ModelsChanged => "models-changed",
             Kind::Deploy => "deploy",
+            Kind::DraftsParked => "drafts-parked",
         }
     }
 
     pub fn parse(s: &str) -> Option<Kind> {
         use Kind::*;
-        [Dialog, PlanReview, ReviewWaiting, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested, CurateRetire, CurateDocs, LoopGuard, ModelsChanged, Deploy]
+        [Dialog, PlanReview, ReviewWaiting, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested, CurateRetire, CurateDocs, LoopGuard, ModelsChanged, Deploy, DraftsParked]
             .into_iter()
             .find(|k| k.as_str() == s)
     }
@@ -343,10 +346,10 @@ impl Changes {
 /// The open items whose condition has the same identity and has moved inside it, and the item follows it in place
 /// without closing, so a snooze or a dismissal stays: a `curate-*` item (subject `curate-retire:<context>`) whose
 /// count moved changes its label (hs-d549, hs-d551); a `pr-ready` item changes its label or its links (url, context,
-/// plan, session); a `dialog` item changes its label (the Verdict's option).
+/// plan, session); a `dialog` item changes its label (the Verdict's option); a `drafts-parked` item changes its label (the count of drafts, hs-d731).
 fn relabelled<'a>(open: &'a [Item], conditions: &'a [Condition]) -> Vec<(&'a Item, &'a Condition)> {
     open.iter()
-        .filter(|i| matches!(i.kind, Kind::CurateRetire | Kind::CurateDocs | Kind::PrReady | Kind::Dialog))
+        .filter(|i| matches!(i.kind, Kind::CurateRetire | Kind::CurateDocs | Kind::PrReady | Kind::Dialog | Kind::DraftsParked))
         .filter_map(|i| conditions.iter().find(|c| c.identity() == i.identity()).map(|c| (i, c)))
         .filter(|(i, c)| {
             i.label != c.label

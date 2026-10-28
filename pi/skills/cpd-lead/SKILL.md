@@ -268,6 +268,8 @@ The engine polls every open pull request of the User every 5 s. You may run `cpd
 
 A message that starts `cpd adapter:` comes from the pi adapter, not from a Plan: read its code, tell the User what broke and what you propose.
 
+Engine step E20 sends a session-message (with no sender, so it appears as `Message from the User (HH:MM): ...`, but it is cpd's engine) with the text `Drafts of Plan <P> are parked: <k1>, <k2> (no pending Plan review, no unfinished need). Resolve each now: edit it to a full Spec and Tier and call cpd_plan_review; or cancel it and add it queued when it only carries out a recorded decision; or cancel it (cpd job cancel <k> --reason "<why>"). Nothing runs it otherwise.` A draft of the Plan has neither a pending Plan review nor an unfinished need. Resolve each listed draft now, in one of the three legal forms (Rules, "Register planned work at once"), and do not wait for the User. After your next finished turn with a draft still parked, the User is asked in the Inbox (kind drafts-parked).
+
 #### Starting a later batch
 
 A batch added as drafts ([Orchestrating](#orchestrating) step 6, or a follow-up PR after `plan-done`) starts only with the User's approval, in any phase after the lock. Only undecided design is a batch of drafts: decided work is added queued and needs no review (when unsure, a draft):

@@ -1032,6 +1032,22 @@ fn a_fresh_database_accepts_the_session_resumed_event_and_a_loop_guard_inbox_ite
         .unwrap_or_else(|e| panic!("loop-guard: {e:?}"));
 }
 
+/// The Inbox kind `drafts-parked` (contract §4.4; hs-d731, hs-d733): a fresh store takes it, magenta, and refuses another tier's
+/// kind it does not know.
+#[test]
+fn a_fresh_database_accepts_a_drafts_parked_inbox_item() {
+    let env = Home::empty();
+    let mut store = fixture_store(&env);
+    store
+        .write("test", |tx| {
+            Ok(tx.execute(
+                "INSERT INTO inbox_items (kind, urgency, subject, context, label, opened_at) VALUES ('drafts-parked', 'magenta', 'drafts-parked:pay', 'ctx', 'pay: 2 parked drafts', 't')",
+                [],
+            )?)
+        })
+        .unwrap_or_else(|e| panic!("drafts-parked: {e:?}"));
+}
+
 #[test]
 fn a_fresh_database_holds_one_live_manager_per_context_and_a_brief_with_its_plan() {
     let env = Home::empty();

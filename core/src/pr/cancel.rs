@@ -133,6 +133,32 @@ pub(super) fn cancel_jobs_with(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, st
     Ok(())
 }
 
+/// The reason of a `draft` Job cancelled with its archived Plan (engine E20, hs-d731).
+const ARCHIVED_REASON: &str = "Plan archived with a draft (hs-d731)";
+
+/// The archived Plans that have a `draft` Job of any kind (engine E20).
+pub fn archived_with_drafts(conn: &Connection) -> Result<Vec<PlanId>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT p.id FROM plans p WHERE p.archived_at IS NOT NULL
+            AND EXISTS (SELECT 1 FROM jobs j WHERE j.plan = p.id AND j.status = 'draft') ORDER BY p.id",
+    )?;
+    let ids = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    ids.iter().map(|id| PlanId::parse(id)).collect()
+}
+
+/// Every `draft` Job of the archived `plan` is `cancelled` in the caller's transaction, one `job-cancelled` Event each; nothing
+/// when it has none (engine E20).
+pub fn cancel_archived_drafts(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<(), CpdError> {
+    let prs: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT DISTINCT pr FROM jobs WHERE plan = ?1 AND status = 'draft' ORDER BY pr")?;
+        stmt.query_map([plan.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+    };
+    for pr in prs {
+        cancel_jobs_with(tx, plan, &PrKey::parse(&pr)?, &["draft"], ARCHIVED_REASON, "belongs to an archived Plan")?;
+    }
+    Ok(())
+}
+
 /// After the lock, the cancelled PR may have been the last one `waiting` or `dispatch`: the Plan then moves on as
 /// `pr open` and `pr poll` move it (§3.1): `dispatch → deploy`, and `deploy → done` when every PR left is `merged`.
 /// Never when no PR is left that is not `cancelled`. The Plan's new phase, if it moved.

@@ -112,7 +112,7 @@ impl Dot {
 }
 
 /// The kinds a Plan's own Lead shows besides the ones linked to it (§17, "Which items fill which row").
-const PLAN_KINDS: [Kind; 2] = [Kind::PlanReview, Kind::JobStuck];
+const PLAN_KINDS: [Kind; 3] = [Kind::PlanReview, Kind::JobStuck, Kind::DraftsParked];
 
 /// The urgency of the most urgent of the `visible` items that fill the dot of `session`: its `dialog`, `unread` and `review-waiting`
 /// items (`inbox_items.session`) and, when it is the Lead of `lead_of`, the Plan's `plan-review`, `job-stuck` and

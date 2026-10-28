@@ -21,6 +21,7 @@ use crate::host::addr::review_host;
 use crate::job::worked_on::failed_worked_on;
 use crate::ids::{ContextId, JobKey, PlanId, PrKey, SessionId};
 use crate::plan::Phase;
+use crate::plan::parked_wake::wake_state;
 use crate::ports::Ports;
 use crate::session::LOOP_GUARD_LABEL;
 use crate::store::Store;
@@ -83,6 +84,7 @@ pub fn conditions_with(
     all.extend(review_requested(store, home, now, team)?);
     all.extend(models_changed(store, home, now)?);
     all.extend(deploys(store, home)?);
+    all.extend(store.read(drafts_parked)?);
     Ok(all)
 }
 
@@ -151,6 +153,42 @@ fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError
             Ok(out)
         }
     }
+}
+
+/// `drafts-parked` (contract §2.2 "Inbox item", hs-d731, hs-d733): a live Plan whose `parked_drafts` is not empty, whose Lead was
+/// woken (W, newer than T) and has finished a turn since. The Lead need not be idle now. Closes when S is empty or T moves past W.
+fn drafts_parked(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT p.id, p.context, p.lead_session FROM plans p JOIN sessions s ON s.id = p.lead_session
+          WHERE p.archived_at IS NULL AND p.deleted_at IS NULL AND s.role = 'lead' AND s.archived_at IS NULL
+          ORDER BY p.id",
+    )?;
+    let plans = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?.collect::<Result<Vec<_>, _>>()?;
+    let mut out = Vec::new();
+    for (plan, context, lead) in plans {
+        let plan = id("Plan id", &plan, PlanId::parse)?;
+        let wake = wake_state(conn, &plan, &lead)?;
+        let opened = !wake.parked.is_empty() && wake.wake.is_some_and(|w| w > wake.t) && wake.finished_turn_after_wake;
+        if !opened {
+            continue;
+        }
+        let n = wake.parked.len();
+        out.push(Condition {
+            kind: Kind::DraftsParked,
+            urgency: Urgency::Magenta,
+            subject: format!("drafts-parked:{plan}"),
+            label: format!("{plan}: {n} parked draft{}", if n == 1 { "" } else { "s" }),
+            url: None,
+            context: Some(id("Context id", &context, ContextId::parse)?),
+            plan: Some(plan),
+            job: None,
+            session: Some(id("Session id", &lead, SessionId::parse)?),
+            record: None,
+            event: None,
+            opened_at: None,
+        });
+    }
+    Ok(out)
 }
 
 /// A stored value that does not parse: the database was written outside cpd.
