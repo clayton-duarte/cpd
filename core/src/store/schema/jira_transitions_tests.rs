@@ -25,8 +25,8 @@ const PLAN: &str = "INSERT INTO contexts (id, title, created_at, created_on) VAL
 
 fn pr(key: &str, jira: &str) -> String {
     format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, jira)
-           VALUES ('pay', '{key}', '/nowhere', 'main', 'planned', 'cpd/pay/{key}', '/nowhere/lead', cpd_txn(), 't', {jira});"
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, jira)
+           VALUES ('pay', '{key}', '/nowhere', 'main', 'dispatch', 'cpd/pay/{key}', '/nowhere/lead', cpd_txn(), 't', 't', {jira});"
     )
 }
 

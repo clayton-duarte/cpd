@@ -183,9 +183,10 @@ mod tests {
         let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
         let mut store = Store::open(&home, 5000).unwrap();
         let pr = |key: &str, jira: &str, status: &str| {
+            let (started, worktree) = if status == "cancelled" { ("NULL", "NULL".to_owned()) } else { ("'t'", format!("'/nowhere/{key}'")) };
             format!(
-                "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, jira)
-                   VALUES ('pay', '{key}', '/nowhere', 'main', '{status}', 'cpd/pay/{key}', '/nowhere/{key}', cpd_txn(), 't', {jira});"
+                "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, jira)
+                   VALUES ('pay', '{key}', '/nowhere', 'main', '{status}', 'cpd/pay/{key}', {worktree}, cpd_txn(), 't', {started}, {jira});"
             )
         };
         let sql = format!(
@@ -195,8 +196,8 @@ mod tests {
              INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
              {}{}{}",
-            pr("api", "'ABC-1'", "planned"),
-            pr("web", "NULL", "planned"),
+            pr("api", "'ABC-1'", "dispatch"),
+            pr("web", "NULL", "dispatch"),
             pr("old", "'ABC-3'", "cancelled"),
         );
         store
