@@ -40,7 +40,7 @@ Other words to watch were found by reading, not by a count. `Jira`, task, ticket
 | Plan view / `plan` view | docs/commands.md:3178 `the **Plan view**: one box per PR of the chat slot's Plan` | a cockpit pane | internal: Plan (entity), Plan phase `plan`, Plan stage | loose | ok when written "Plan view"; after the rename "one box per Workflow" |
 | Session | docs/commands.md:2423 `the cockpit's tmux session (`tmux.cockpit_session`) exists`; :3180 `the Session's pi file` | cpd Session; tmux session; pi session file | upstream: tmux session, pi session | loose | always qualify: "tmux session", "pi session file" (already done almost everywhere) |
 | Slot | docs/commands.md:2363 `**The chat slot.**`; :3075 `the ones E3 would start if a slot were free` | chat slot (a tmux pane) and a Resource slot of the `workers` pool | internal: Slot (Resource) | overloaded | "chat slot" always with `chat`; "a free Worker slot" for the pool |
-| state / status | docs/commands.md:2492 `how the pi adapter reports its agent state`; :3347 `where `<state>` is `open`, `merged`, or `closed``; :3347 `Else the PR's status (`waiting`, `dispatch`) colour 8` | Session state; pull request state; PR (Workflow) status; Job status | internal: all four; `waiting`, `open`, `merged` occur in two or more | overloaded | State = Session state, status = Job or Workflow, "pull request state" for GitHub. User decides |
+| state / status | docs/commands.md:2492 `How the pi adapter reports its agent state`; :3347 `where `<state>` is `open`, `merged`, or `closed``; :3347 `Else the PR's status (`waiting`, `dispatch`) colour 8` | Session state; pull request state; PR (Workflow) status; Job status | internal: all four; `waiting`, `open`, `merged` occur in two or more | overloaded | State = Session state, status = Job or Workflow, "pull request state" for GitHub. User decides |
 | waiting | docs/commands.md:2492 `waiting` (an agent waits for another agent); :3075 `W` (**waiting**: the Ready Jobs; :3347 `Else the PR's status (`waiting`, `dispatch`) colour 8` | Session state; count of Ready Jobs; PR status | internal: three meanings; `Meaning::Waiting` (3347, 3428, 3437) a fourth (a colour) | overloaded | "ready" for the W count (the Job term is Ready Job); keep `waiting` for agent waits |
 | open / merged | docs/commands.md:3347 `A merged PR's level is 0 with no needs`; :3347 `where `<state>` is `open`, `merged`, or `closed``; :2436 `### 10.4 `session open`` | PR status `merged`; pull request state `merged`; Job status `merged`; Open Job; command `session open` | internal: Open Job, `job-merged`; upstream: GitHub open/merged | overloaded | after the rename "a merged Workflow" and "a merged pull request" stay apart |
 | blocked | docs/commands.md:2492 `blocked` (the User has to act); :2896 `blocked by the loop guard`; :3300 `resumes a Lead or Manager blocked by the loop guard` | Session state `blocked`; `archive_blocked`; Inbox red tier "a blocker only the User can clear" (3289) | internal: Axiom "Blocked means it needs the human" | loose | `session resume` clears loop-guard blocked and a Manager may run it (unverified who may): then that state is `waiting`, not `blocked`. Needs the User's decision |
@@ -57,7 +57,7 @@ Other words to watch were found by reading, not by a count. `Jira`, task, ticket
 | post | docs/commands.md:2920 `### 10a.1 `board post``; :3405 `the cockpit waits for the Slack call` | `board post` writes the board; `pr post` sends the pull request to Slack | internal: PR post vs board post; upstream: Slack | loose | none for `board`; keep `pr post` as the Glossary's PR post |
 | message | docs/commands.md:2918 `The message board`; :2543 `The first message is the file `plan new` or `session fork` wrote`; :2689 `Event** `session-message`` | board post; first message; `session-message` Event | internal: Event vs board post; upstream: pi custom message | loose | "board post", "first message", "message Event" |
 | board | docs/commands.md:2918 `The message board: a SQLite table whose posts name who they are for` | a cpd table of posts | upstream: Jira board, GitHub project board | loose | keep "message board" in full, never "board" alone |
-| review | docs/commands.md:3313 `the url is the Review page (plannotator's`; :3304 `the Session's review page` | plannotator plan review; Review Job; GitHub review (`review-requested`) | internal: Review Job, Reviewing step; upstream: GitHub review | overloaded | "plan review page" for plannotator |
+| review | docs/commands.md:3313 `the url is the Review page (plannotator's`; :3299 `the Session's review page` | plannotator plan review; Review Job; GitHub review (`review-requested`) | internal: Review Job, Reviewing step; upstream: GitHub review | overloaded | "plan review page" for plannotator |
 | check / checks | docs/commands.md:3098 `**With `--check`** (hs-d463`; :3504 `Checks, in order:` | `watch --check`; `doctor` checks | internal: Mechanical checks, Quick check; upstream: CI checks | loose | "preflight" for `watch --check`; "doctor checks" |
 | lock | docs/commands.md:3279 `a draft appended after the lock included`; :3072 `locks/watch.lock` | Plan lock (Locked); file lock | internal: Locked vs `flock` | loose | "Plan lock" vs "lock file" |
 | note | docs/commands.md:3346 `no Plan yet`, `loading… (first fetch)`, or the note`; :3188 `(no note, §17 "No notes")` | a UI message line | internal: Context record kind `note` | loose | "notice line" or "message row" |
@@ -101,7 +101,7 @@ Every engine tick, Event, Inbox kind, widget heading and label that carries a PR
 | Event `pr-opened` (3367, 3374) | 2 | mixed | `` `pr-opened` `` | see mixed rows |
 | Inbox kinds `pr-ready` (3179, 3281, 3289, 3302, 3313, 3401, 3405, 3407, 3411, 3428, 3430) | 13 | pull request | `` a left click on a `pr-ready` row of the Inbox `` | keep |
 | Inbox kinds `pr-failing`, `pr-changes` (3301) | 2 | pull request | `` `pr-failing`, `pr-changes` (history rows only `` | keep |
-| Widget heading `PRs` (3193, removed section) | 1 | mixed | `──PRs───────────3` | see mixed rows |
+| Widget heading `PRs` (3193, between two pill caps in the example title; removed section) | 1 | mixed | `PRs` | see mixed rows |
 | Widget heading ` Plan ` and label `no PR yet: cpd pr add` (3360) | 2 | object | `shows the message `no PR yet: cpd pr add`` | "no Workflow yet: cpd workflow add" |
 | Widget label `PR opened` (3374, 3379, 3428) | 3 | mixed | `PR opened` | see mixed rows |
 
@@ -109,7 +109,7 @@ Every engine tick, Event, Inbox kind, widget heading and label that carries a PR
 
 | Where | Count | Sense | Quote | After the rename |
 |---|---|---|---|---|
-| 3193 | 1 | mixed: the heading of a section that no longer exists (3407); cannot tell if it listed Workflows or pull requests | `──PRs───────────3` | drop the example |
+| 3193 | 1 | mixed: the heading of a section that no longer exists (3407); cannot tell if it listed Workflows or pull requests | `PRs` | drop the example |
 | 3279 | 1 | mixed: a tree row has no PR status in this text | `the counters, the PR status) keeps its colours` | drop the words (unverified) |
 | 3347 | 1 | mixed: a pull request state drawn on a PR box | `in the palette's PR state colours` | "pull request state colours" |
 | 3347 | 1 | mixed: the pull request is ready, the box is a PR | `only when the PR is ready to merge` | "when its pull request is ready to merge" |
@@ -135,7 +135,7 @@ Every engine tick, Event, Inbox kind, widget heading and label that carries a PR
 | docs/commands.md:3178, 3341, 3345, 3346, 3347, 3360, 3411, 3417, 3428 | rule: `PR box`, `per PR`, `PR key`, `PR's Jobs`, `base PR`, `no PR yet: cpd pr add` become Workflow; about 41 uses, no row each | `object`, mechanical |
 | docs/commands.md:3347 | write "pull request state" where the box shows the GitHub state; keep "Workflow status" for `waiting`, `dispatch`, `cancelled`, `merged` | `mixed`: `PR state colours`, `PR is ready to merge`, `pr_state`: three uses name both |
 | docs/commands.md:3347 | replace `§13.2's PRs column` with the Inbox | stale: the PRs column was removed by pro-d130 (3407) |
-| docs/commands.md:3193 | replace the example ` ──PRs───3 ` with a section that exists | stale: the `PRs` section no longer exists (3396, 3407) |
+| docs/commands.md:3193 | replace the example ` ──PRs─── ` with a section that exists | stale: the `PRs` section no longer exists (3396, 3407) |
 | docs/commands.md:3279 | delete `the PR status` from the tree row | stale: tree rows have no PR status (unverified; the Inbox text at 3396 says the PRs section is gone) |
 | docs/commands.md:3396, 3407 | delete or shorten the removed-section text | `mixed`; prose about what is gone is history |
 | docs/commands.md:3367, 3374, 3379, 3428 | decide a name for Event `pr-opened` and the kind label `PR opened` (Workflow opened it, the pull request is what opens) | `mixed`: the User decides |
@@ -163,9 +163,9 @@ Every engine tick, Event, Inbox kind, widget heading and label that carries a PR
 |---|---|
 | Files | 1 (`docs/commands.md`); the findings file is the 2nd |
 | Lines of the part | 1289 (2359 to 3647): all read, about 160 of them skimmed (see Coverage) |
-| Rows in `## Terms` | 29, plus one summary line |
-| Rows in `## PR occurrences` | 14 (sections) + 13 (ticks, Events, Inbox kinds, labels) + 16 (`mixed`/`phase`) = 43 |
-| Rows in `## Fix list` | 27 |
+| Rows in `## Terms` | 28, plus one summary line |
+| Rows in `## PR occurrences` | 41: 12 (sections) + 13 (ticks, Events, Inbox kinds, labels) + 16 (`mixed` and `phase`, one by one) |
+| Rows in `## Fix list` | 26 |
 | `object` | 53 |
 | `pull request` | 80 |
 | `phase` | 1 |
