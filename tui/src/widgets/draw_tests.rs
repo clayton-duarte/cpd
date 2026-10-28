@@ -327,10 +327,10 @@ fn the_session_dots_are_listed_in_their_colours() {
     );
     find_after(&buf, dots, &precedence);
     let red = row(&buf, find_after(&buf, dots, "red:").1);
-    assert!(red.contains("a dialog in dispatch or deploy, a stuck Job, an engine error, your own failing or changed pull request"), "{red}");
+    assert!(red.contains("a dialog in dispatch or deploy, a stuck Job, an engine error, your own broken pull request that nobody is fixing"), "{red}");
     assert!(!red.contains("Escalation") && !red.contains("or pr"), "{red}");
     let yellow = row(&buf, find_after(&buf, dots, "yellow:").1);
-    assert!(yellow.contains("yellow: ready to merge, review requested"), "{yellow}");
+    assert!(yellow.contains("yellow: ready to post, ready to merge, review requested"), "{yellow}");
     let waiting = row(&buf, find_after(&buf, dots, "waiting:").1);
     assert!(waiting.contains("an agent waits for another agent"), "{waiting}");
 }

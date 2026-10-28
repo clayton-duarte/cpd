@@ -4,8 +4,7 @@
 //! on Events (an in-place label change has no Event); the CPU, GPU and memory % are sampled every [`SAMPLE_EVERY`], since they
 //! are no Event. It draws when a read result, the CPU, GPU and memory, the error, the size, a click or the wheel changed, and at
 //! each frame while a spinner turns. It makes no write of its own, but for what a click or the menu of an Inbox item runs
-//! (commands.md §13.2, pro-d130). A right click on an Inbox item opens its menu (Merge on a `pr-ready` row whose status is
-//! `ready to merge`, Claim on a `review-requested` row only, Snooze 15 min, Snooze 1 h, Snooze until tomorrow 09:00, Dismiss); a
+//! (commands.md §13.2, pro-d130). A right click on an Inbox item opens its menu (on a `pr-ready` row Merge or Post by its status, Go to Lead, Copy Link; Claim on a `review-requested` row only, Snooze 15 min, Snooze 1 h, Snooze until tomorrow 09:00, Dismiss); a
 //! menu then takes every key and click until it closes. Otherwise it has no key; mouse capture is on, for the clicks and the
 //! wheel over the Inbox section.
 //!
@@ -55,7 +54,6 @@ use super::tree::actions::{self, Failed};
 use inbox::{Entry as InboxEntry, Hit as InboxHit, Jump};
 use cpd_core::clock;
 use cpd_core::inbox::model::{self, Item};
-use cpd_core::inbox::pr::Status;
 use crate::menu::Entry;
 use super::runner::{ViewError, kept};
 use super::view_ports::{Ctx, Input, Tty, frame_now, run_view_with, wall_ms};
@@ -153,7 +151,7 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared, r
     let tmux = Tmux::new(config.tmux.socket.clone()).with_runner(ctx.ports.runner.clone());
     let log = ViewLog::of(&home, "widgets");
     let runner = actions::Runner::new(home.clone(), &config, ctx.ports);
-    let lead = Opener { home: &home, run_command, tmux: &tmux, log: &log, runner: &runner };
+    let lead = Opener { home: &home, busy_ms: u64::from(config.timeouts.store_busy_ms), run_command, tmux: &tmux, log: &log, runner: &runner };
     show(ctx, feed, &reader, (inbox, merging), machine, sampler, &lead, config.events.poll_ms)
 }
 
@@ -166,6 +164,8 @@ pub(crate) fn menu_pane(pane: Rect) -> Rect {
 /// What a click on an Inbox item runs. `log` is `run/tui/widgets.log`.
 struct Opener<'a> {
     home: &'a CpdHome,
+    /// `timeouts.store_busy_ms`, for the read a pick makes.
+    busy_ms: u64,
     run_command: RunCommand,
     tmux: &'a Tmux,
     log: &'a ViewLog,
@@ -176,9 +176,8 @@ struct Opener<'a> {
 /// The right-click menu of an Inbox item, while it is open: its entries and the item it is about.
 struct InboxMenu {
     menu: Menu<InboxEntry>,
-    id: i64,
-    /// The item's pull request, `<owner>/<repo>#<n>`, when it has one (`pr-ready`).
-    pull: Option<String>,
+    /// The item itself: what Merge, Post, Go to Lead and Copy Link act on.
+    item: Item,
 }
 
 /// What an open menu does with `event`: it takes every key and click.
@@ -227,6 +226,43 @@ impl Opener<'_> {
     fn said(&self, result: Result<String, Failed>) {
         if let Err(Failed { step, why }) = result {
             dialog::report_why(self.tmux, self.log, &step.argv().join(" "), why);
+        }
+    }
+
+    /// `Post`: `pr post --pr <key> --plan <plan>`, `<key>` read now from the `prs` row of the item's Plan that points at the item's
+    /// pull request; no popup, the cockpit waits. A refusal, or no such row, is the failure dialog.
+    fn post(&self, item: &Item) {
+        const TITLE: &str = "Post Pull Request";
+        let (Some(plan), Some(pull)) = (item.plan.as_ref(), inbox::Pull::from_subject(&item.subject)) else { return };
+        let key = Store::open(self.home, self.busy_ms).and_then(|mut store| {
+            store.read(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT r.key FROM prs r JOIN pull_requests q ON q.id = r.pull_request \
+                     WHERE r.plan = ?1 AND q.repo = ?2 AND q.number = ?3 ORDER BY r.key LIMIT 1",
+                )?;
+                let keys = stmt.query_map(rusqlite::params![plan.as_str(), pull.repo, pull.number], |r| r.get::<_, String>(0))?;
+                Ok(keys.collect::<rusqlite::Result<Vec<_>>>()?.into_iter().next())
+            })
+        });
+        match key {
+            Err(e) => dialog::report(self.tmux, self.log, TITLE, &e),
+            Ok(None) => dialog::report_why(self.tmux, self.log, TITLE, format!("No PR of Plan {plan} points at {pull}.")),
+            Ok(Some(key)) => {
+                let argv = ["post", "--pr", &key, "--plan", plan.as_str()];
+                let all = std::iter::once(PROGRAM).chain(["pr"]).chain(argv).map(std::ffi::OsString::from).collect();
+                if let Err(e) = (self.run_command)(all) {
+                    dialog::report(self.tmux, self.log, TITLE, &e);
+                }
+            }
+        }
+    }
+
+    /// `Copy Link`: the item's url into tmux's buffer and the client's clipboard.
+    fn copy_link(&self, item: &Item) {
+        let Some(url) = item.url.as_ref() else { return };
+        let args = ["set-buffer", "-w", "--", url.as_str()].map(str::to_owned);
+        if let Err(e) = self.tmux.run(&args) {
+            dialog::report(self.tmux, self.log, "Copy Link", &e);
         }
     }
 
@@ -323,15 +359,20 @@ fn show<B: Backend>(
                     Outcome::Stay => {}
                     Outcome::Close => inbox_menu = None,
                     Outcome::Pick(entry) => {
-                        let InboxMenu { id, pull, .. } = inbox_menu.take().expect("the menu was open");
-                        match (entry, pull) {
-                            (InboxEntry::Choice(choice), _) => opener.choose(choice, id),
-                            (InboxEntry::Merge, Some(pull)) => {
-                                if let Err(e) = crate::merge::start(opener.tmux, &pull) {
-                                    dialog::report(opener.tmux, opener.log, "Merge Pull Request", &e);
+                        let InboxMenu { item, .. } = inbox_menu.take().expect("the menu was open");
+                        match entry {
+                            InboxEntry::Choice(choice) => opener.choose(choice, item.id),
+                            InboxEntry::Merge => {
+                                if let Some(pull) = inbox::Pull::from_subject(&item.subject) {
+                                    if let Err(e) = crate::merge::start(opener.tmux, &pull.to_string()) {
+                                        dialog::report(opener.tmux, opener.log, "Merge Pull Request", &e);
+                                    }
                                 }
                             }
-                            (InboxEntry::Merge | InboxEntry::Merging, _) => {}
+                            InboxEntry::Post => opener.post(&item),
+                            InboxEntry::GoToLead => opener.jump(&item, &clock::timestamp(ports.clock.utc())),
+                            InboxEntry::CopyLink => opener.copy_link(&item),
+                            InboxEntry::Merging => {}
                         }
                         schedule.force(); // the Inbox shows the result on the next read
                     }
@@ -345,11 +386,8 @@ fn show<B: Backend>(
                             let item = &inbox[i];
                             if item.kind != model::Kind::EngineDown {
                                 let at = Position::new(m.column, m.row);
-                                // Merge: a `pr-ready` item whose status is `ready to merge` (pro-d111, pro-d130)
-                                let pull = inbox::Pull::from_subject(&item.subject).map(|p| p.to_string()).filter(|_| item.kind == model::Kind::PrReady);
-                                let ready = Status::of_item(item) == Some(Status::ReadyToMerge);
-                                let merge = ready.then(|| inbox::merges(&merging, item));
-                                inbox_menu = Some(InboxMenu { menu: Menu::new(InboxEntry::entries(item.kind, merge), at), id: item.id, pull });
+                                let merging = inbox::merges(&merging, item);
+                                inbox_menu = Some(InboxMenu { menu: Menu::new(InboxEntry::entries(item, merging), at), item: item.clone() });
                             }
                         }
                     }

@@ -297,6 +297,7 @@ fn merge_and_post_come_from_the_label_status_not_from_the_pull_request_row() {
 #[test]
 fn picking_merge_runs_the_merge_action_at_once_with_no_confirm_popup() {
     let fx = shop(vec![owned("ready to merge")]);
+    fx.fake("sh", Reply::ok(""));
     let _engine = engine(&fx);
     cockpit(&fx);
     let screen = first_rows(&fx);
@@ -339,10 +340,9 @@ fn a_refused_post_opens_the_error_dialog_and_a_post_with_no_matching_pr_row_says
     drop(_engine);
     drop(fx);
 
-    let fx = shop(vec![owned("ready for review")]);
+    let fx = rig(vec![owned("ready for review")]);
     let _engine = engine(&fx);
     cockpit(&fx);
-    sql(&mut open(&fx.env), "UPDATE prs SET status = 'waiting', pr_number = NULL, pr_url = NULL, pr_opened_at = NULL, pull_request = NULL WHERE plan = 'ship';");
     let screen = first_rows(&fx);
     run(&fx, pick(&screen, "shop#4 ready for review", 0));
     assert_eq!(cpd_calls(&fx), Vec::<Vec<String>>::new(), "no `pr post` without a matching PR row");

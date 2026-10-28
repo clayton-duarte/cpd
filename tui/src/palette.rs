@@ -461,7 +461,17 @@ pub fn item_span(kind: cpd_core::inbox::model::Kind, urgency: Urgency) -> Span<'
         Item::CurateDocs => Span::styled(ITEM_DOCS, fg_clickable(Meaning::Notice)),
         Item::CurateRetire => Span::styled(ITEM_RETIRE, fg_clickable(Meaning::Notice)),
         Item::Deploy => Span::styled(ITEM_DEPLOY, fg_clickable(Meaning::Review)),
-        Item::PrReady => Span::styled(ITEM_PR_READY, fg_clickable(Meaning::Review)),
+        Item::PrReady => {
+            let meaning = match urgency {
+                Urgency::Red => Meaning::Failed,
+                Urgency::Yellow => Meaning::Review,
+                Urgency::Cyan => Meaning::Notice,
+                Urgency::White => Meaning::NotStarted,
+                Urgency::Magenta => Meaning::Planning,
+                Urgency::Blue => Meaning::External,
+            };
+            Span::styled(ITEM_PR_READY, fg_clickable(meaning))
+        }
         Item::ReviewRequested => Span::styled(ITEM_REVIEW_REQUESTED, fg_clickable(Meaning::External)),
         _ => tier_span(urgency),
     }

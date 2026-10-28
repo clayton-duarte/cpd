@@ -1,5 +1,5 @@
 //! Merge from the Inbox item menu (decision pro-d111, assumption A3, commands.md §13.2): the right-click menu of a `pr-ready`
-//! item whose pull request is clean (`merge_state = 'clean'`) starts with Merge, above the Snooze and Dismiss entries; picking
+//! item whose pull request is clean (`merge_state = 'clean'`) starts with Merge, then Copy Link (it has a url), above the Snooze and Dismiss entries; picking
 //! it runs the merge at once, with no popup; while that merge runs the entry is the spinner and cannot be picked. The rig is
 //! `merge_at_once_tests.rs`'s.
 
@@ -18,8 +18,8 @@ fn inbox_menu_of_a_clean_pr_ready_item_starts_with_merge() {
     let (_dir, home) = home_with("clean");
     let (x, y) = locate(&run(&home, vec![]).buf, "api#3 ");
     let seen = run(&home, vec![right_click(x, y)]);
-    let shown = entries(&seen.buf, "Merge", 5);
-    for (row, label) in shown.iter().zip(["Merge", "Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00", "Dismiss"]) {
+    let shown = entries(&seen.buf, "Merge", 6);
+    for (row, label) in shown.iter().zip(["Merge", "Copy Link", "Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00", "Dismiss"]) {
         assert!(row.contains(label), "{label:?} in order, got {shown:?}");
     }
 }

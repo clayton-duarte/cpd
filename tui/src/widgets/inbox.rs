@@ -32,6 +32,7 @@ use crate::dialog::scroll::WHEEL_ROWS;
 use super::{Window, max_scroll, window};
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Item, Kind};
+use cpd_core::inbox::pr::Status;
 use crate::link::{Link, Links};
 
 /// How many item rows the section shows before the `╰󰬦 expand` row.
@@ -314,8 +315,8 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
         }
         // a deploy item has no jump; its label is a Link to the run's page (pro-d100)
         Kind::Deploy => None,
-        // a plain click does nothing (pro-d111): the label is a Link to the pull request, Merge is in the menu
-        Kind::PrReady => None,
+        // the label is a Link to the pull request; a click on the rest of the row opens the owning Plan's Lead (pro-d130)
+        Kind::PrReady => open_lead(tree, item.plan.as_ref()?).map(Jump::Run),
         Kind::ReviewRequested => {
             item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))
         }
@@ -383,21 +384,39 @@ impl crate::menu::Entry for Choice {
     }
 }
 
-/// An entry of an item's menu as drawn: Merge (a `pr-ready` item whose pull request is clean, pro-d111), or a [`Choice`].
+/// An entry of an item's menu as drawn: Merge or Post (a `pr-ready` item by its label's status, pro-d130), Go to Lead, Copy Link, or a [`Choice`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Entry {
     Merge,
     /// A merge of the pull request runs: the `Merge` entry with the spinner, not selectable.
     Merging,
+    Post,
+    GoToLead,
+    CopyLink,
     Choice(Choice),
 }
 
 impl Entry {
-    /// The entries of the menu of a row of `kind`, in order: `Merge` first when `merge` says the item's pull request is clean
-    /// (`Some(merging)`: whether its merge runs), then the [`Choice`]s.
-    pub fn entries(kind: Kind, merge: Option<bool>) -> Vec<Entry> {
-        let merge = merge.map(|merging| if merging { Entry::Merging } else { Entry::Merge });
-        merge.into_iter().chain(Choice::entries(kind).into_iter().map(Entry::Choice)).collect()
+    /// The entries of the menu of `item`, in order. A `pr-ready` item: `Merge` (`Merging` when `merging`) when its status is
+    /// `ready to merge`, `Post` when `ready for review` and it has a Plan, `Go to Lead` with a Plan, `Copy Link` with a url; then the
+    /// [`Choice`]s (every other kind has only those).
+    pub fn entries(item: &Item, merging: bool) -> Vec<Entry> {
+        let mut entries = Vec::new();
+        if item.kind == Kind::PrReady {
+            match Status::of_item(item) {
+                Some(Status::ReadyToMerge) => entries.push(if merging { Entry::Merging } else { Entry::Merge }),
+                Some(Status::ReadyForReview) if item.plan.is_some() => entries.push(Entry::Post),
+                _ => {}
+            }
+            if item.plan.is_some() {
+                entries.push(Entry::GoToLead);
+            }
+            if item.url.is_some() {
+                entries.push(Entry::CopyLink);
+            }
+        }
+        entries.extend(Choice::entries(item.kind).into_iter().map(Entry::Choice));
+        entries
     }
 }
 
@@ -405,6 +424,9 @@ impl crate::menu::Entry for Entry {
     fn label(self) -> &'static str {
         match self {
             Entry::Merge | Entry::Merging => "Merge",
+            Entry::Post => "Post",
+            Entry::GoToLead => "Go to Lead",
+            Entry::CopyLink => "Copy Link",
             Entry::Choice(choice) => crate::menu::Entry::label(choice),
         }
     }
@@ -709,9 +731,13 @@ mod tests {
         );
         let ready = |subject: &'static str| move |item: &mut Item| item.subject = subject.to_owned();
         for subject in ["pr:acme/api#3", "acme/api#3", "pr:", "session:l-ship"] {
-            assert_eq!(jump(&tree, &with(Kind::PrReady, &ready(subject))), None, "{subject:?}: a plain click does nothing (pro-d111)");
+            assert_eq!(jump(&tree, &with(Kind::PrReady, &ready(subject))), None, "{subject:?}: an unowned row: a click on the rest of it does nothing (pro-d130)");
         }
-        assert_eq!(jump(&tree, &with(Kind::PrReady, &owned)), None, "a Plan's pull request: nor does it");
+        assert_eq!(
+            jump(&tree, &with(Kind::PrReady, &owned)),
+            Some(Jump::Run(Action::Open(sid("l-ship")))),
+            "a Plan's pull request: a click outside the link opens its Lead (pro-d130)"
+        );
         for kind in [Kind::PrFailing, Kind::PrChanges] {
             assert_eq!(jump(&tree, &with(kind, &owned)), None, "{kind:?} (an old row, hs-d470): no click, a Plan's or not");
             assert_eq!(jump(&tree, &with(kind, &url)), None, "{kind:?} (an old row, hs-d470): no url copy");
