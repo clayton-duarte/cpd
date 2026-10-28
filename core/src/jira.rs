@@ -109,7 +109,7 @@ mod tests {
     fn a_missing_atlassian_server_is_jira_not_configured() {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
-        let config = Config::load(&home).unwrap();
+        let config = Config::parse("version = 1\nmachine = \"test\"\n", std::path::Path::new("config.toml")).unwrap().0;
         let error = call(&config, &home, &request(), Duration::from_secs(1)).unwrap_err();
         assert_eq!(error.code(), ErrorCode::JiraNotConfigured);
         assert!(error.message().contains("[mcp.servers.atlassian]"));
