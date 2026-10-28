@@ -159,7 +159,7 @@ impl Kind {
             PlanReview => spec([Y, Y, N, N, N], &["review", "fingerprint", "status"], &["feedback", "jobs"]),
             PlanOutlined => spec([Y, Y, N, N, N], &["replaced"], &[]),
             PlanDone => spec([Y, Y, N, N, N], &["prs"], &[]),
-            JobAdded => spec([Y, Y, Y, N, N], &["pr", "kind", "status", "appended", "tier", "needs", "review", "urgent"], &["by", "reason"]),
+            JobAdded => spec([Y, Y, Y, N, N], &["pr", "kind", "status", "appended", "tier", "needs", "urgent"], &["by", "reason"]),
             JobEdited => spec([Y, Y, Y, N, N], &["fields"], &[]),
             JobMerged => spec([Y, Y, Y, Y, N], &["sha", "tier", "kind"], &["turn", "cancel_too_late", "pr", "number", "url"]),
             JobFailed => spec([Y, Y, Y, M, N], &["cause", "detail", "tier", "attempts"], &[]),

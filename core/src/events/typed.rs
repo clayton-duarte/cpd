@@ -126,13 +126,12 @@ impl NewEvent {
         appended: bool,
         tier: Option<&str>,
         needs: impl Serialize,
-        review: bool,
         urgent: bool,
     ) -> NewEvent {
         make(
             Kind::JobAdded,
             text,
-            json!({"pr": pr, "kind": kind, "status": status, "appended": appended, "tier": tier, "needs": needs, "review": review, "urgent": urgent}),
+            json!({"pr": pr, "kind": kind, "status": status, "appended": appended, "tier": tier, "needs": needs, "urgent": urgent}),
         )
     }
 
@@ -140,7 +139,7 @@ impl NewEvent {
     /// `needs` is the empty list: its Ready rule is derived (§3.2). `reason` is for an `update` Job (`conflict`).
     pub fn job_added_by_cpd(text: impl Into<String>, pr: impl Serialize, kind: &str, status: &str, tier: &str, by: &str, reason: Option<&str>) -> NewEvent {
         let mut data = json!({
-            "pr": pr, "kind": kind, "status": status, "appended": true, "tier": tier, "needs": [], "review": false, "urgent": false, "by": by,
+            "pr": pr, "kind": kind, "status": status, "appended": true, "tier": tier, "needs": [], "urgent": false, "by": by,
         });
         if let Some(reason) = reason {
             data["reason"] = json!(reason);
@@ -538,8 +537,8 @@ mod tests {
             Kind::PlanOutlined => vec![NewEvent::plan_outlined(T, b)],
             Kind::PlanDone => vec![NewEvent::plan_done(T, [s])],
             Kind::JobAdded => vec![
-                NewEvent::job_added(T, s, s, s, b, Some(s), [s], b, b),
-                NewEvent::job_added(T, s, s, s, b, None, [s], b, b),
+                NewEvent::job_added(T, s, s, s, b, Some(s), [s], b),
+                NewEvent::job_added(T, s, s, s, b, None, [s], b),
                 NewEvent::job_added_by_cpd(T, s, s, s, s, s, None),
                 NewEvent::job_added_by_cpd(T, s, s, s, s, s, Some(s)),
             ],

@@ -61,10 +61,6 @@ _Avoid_: opener, release Job
 A Job of kind `update`, added by cpd for a Workflow whose pull request is already open and conflicts with its base (never for a base that merely moved, and never for feedback). Like the Open Job it merges the base, then cpd runs the Gate and pushes. `pr rebase` and `pr push` repair a failed one.
 _Avoid_: sync Job, rebase Job
 
-**Review Job** (new, B2):
-A Job added with `job add --review`, whose Worker is a fork of the Plan's Lead, so it knows the intention. It depends on every Job of its Workflow that exists when it is added, reads the Lead Branch's diff against the base and the Plan's Specs, and writes its findings to `run/<plan>/reviews/<job>.md`. It commits nothing and ends Merged with no change to the Lead Branch. Optional: the Lead adds one only when it makes sense. It is not a Reviewer, and no Gate or verdict belongs to it; the Reviewing step names its place in the flow, and a person's look at the pull request is the pull request review.
-_Avoid_: reviewer, verdict, code review Job
-
 **Spec**:
 The complete, guess-free description of a Job: its `goal`, `context` (what the Worker needs to know), the files it touches, acceptance criteria and what is out of scope. The field `context` is the Spec's own and is not the Context entity.
 _Avoid_: brief (that is the Brief), prompt
@@ -150,7 +146,7 @@ The first stage: Grounding and Grilling, in phase `grounding`; it ends with `pla
 The second stage: Clarifying, Scoping, Splitting and Orchestrating, in phase `plan`; it ends with `plan lock`.
 
 **Dispatch stage** (stage, pro-d145, pro-d146):
-The third stage: Documenting, Red testing, Implementing, Verifying, Reviewing and Deploying, in phases `dispatch` and `deploy`. The Plan is `done` when every Workflow's pull request is merged. Its name is not the old phase "Dispatch" (retired) nor the Workflow status `dispatch`.
+The third stage: Documenting, Red testing, Implementing, Verifying and Deploying, in phases `dispatch` and `deploy`. The Plan is `done` when every Workflow's pull request is merged. Its name is not the old phase "Dispatch" (retired) nor the Workflow status `dispatch`.
 
 **Grounding** (step, pro-d146):
 Reading the Context's records and the User's material (`context show`, `context note`).
@@ -182,15 +178,11 @@ Workers run the Jobs of kind `impl` and `work`, and Merge them into the Lead Bra
 **Verifying** (step, pro-d146):
 Workers run the Jobs of kind `verify`: checks that change no product behaviour.
 
-**Reviewing** (step, pro-d146):
-The optional Review Job only; there is no local review before the Gate (hs-d171). A person's review of the pull request is called pull request review, never Reviewing.
-_Avoid_: pre-Gate review
-
 **Deploying** (step, pro-d145, pro-d146):
 The process of a Workflow's pull request, the last step once all its Jobs ran: the Open Job, the Gate (which runs inside it), opening the pull request, CI, pull request review and its polling (`pr poll`, `pr-feedback`), feedback fixes (Addressing), posting and merge.
 
 **Addressing** (step):
-A feedback fix is one `work` Job per cohesive fix, appended to the Workflow whose pull request is open (only `work` and review Jobs are allowed there); the Plan returns to phase `dispatch` and the Job's own merge pushes the Lead Branch to the pull request: no Update Job, no Gate at `gate.pr`. A conflict with the base queues an Update Job. `pr push` repairs a failed push; `pr rebase` is the other repair.
+A feedback fix is one `work` Job per cohesive fix, appended to the Workflow whose pull request is open (only `work` Jobs are allowed there); the Plan returns to phase `dispatch` and the Job's own merge pushes the Lead Branch to the pull request: no Update Job, no Gate at `gate.pr`. A conflict with the base queues an Update Job. `pr push` repairs a failed push; `pr rebase` is the other repair.
 
 **Plan review** (entity, new):
 The User's approval of the draft Jobs: one request, a summary in the Lead's chat and one dialog, covering every draft Job when the Plan is in phase `plan` (its approval is what `plan lock` needs) and the drafts of a running Plan batch by batch (contract §2.2 "Plan review").
@@ -214,7 +206,7 @@ GitHub's unfinished pull request. cpd opens none and no command makes one (contr
 _Avoid_: draft (alone, for a pull request)
 
 **pull request review** (other, pro-d146):
-What a person says on a pull request on GitHub: a review with a body or a verdict, its threads and comments. cpd reads it (the PR poll, Feedback items) and the Lead answers it; it is part of Deploying. Not the Reviewing step and not the Review Job.
+What a person says on a pull request on GitHub: a review with a body or a verdict, its threads and comments. cpd reads it (the PR poll, Feedback items) and the Lead answers it; it is part of Deploying. Not the Reviewing step (retired, pro-d163).
 _Avoid_: Reviewing, review (alone)
 
 **squash-merged** (state, pro-d144):
@@ -274,7 +266,7 @@ _Avoid_: notification, poll
 ## Runtime
 
 **Session** (entity, pro-d146):
-cpd's own record of an agent it runs: a role (Lead, Worker or Manager), a Context, usually a Plan, a tmux pane and an agent state: working, waiting (an agent waits for another agent), blocked (the User has to act), idle or stopped. A Session forked for a tangent (`cpd session fork`) is a sibling, drawn directly under its Context (B1, B4); a Review Job's Worker is a fork hidden like every Worker. Not a **tmux session** and not a **pi session**.
+cpd's own record of an agent it runs: a role (Lead, Worker or Manager), a Context, usually a Plan, a tmux pane and an agent state: working, waiting (an agent waits for another agent), blocked (the User has to act), idle or stopped. A Session forked for a tangent (`cpd session fork`) is a sibling, drawn directly under its Context (B1, B4). Not a **tmux session** and not a **pi session**.
 _Avoid_: agent, pane, chat
 
 **tmux session** (other, pro-d146):
@@ -450,3 +442,9 @@ The old step of checks before the pull request opens. Now part of Deploying; **M
 
 **Reviewing and Monitoring** (retired, pro-d146):
 The old step of watching the pull request and its review. Now part of Deploying (the PR poll, pull request review).
+
+**Review Job** (retired, pro-d163):
+The optional Job added with `job add --review`, whose Worker forked the Plan's Lead. Retired: no Worker forks a Lead's session any more. Code review intake is the Plan's Lead's; PR verification uses `--kind verify` or `--shape`.
+
+**Reviewing** (retired, pro-d163):
+The optional step after Verifying, run by a Review Job. Retired with it: the Dispatch stage is Documenting, Red testing, Implementing, Verifying and Deploying.

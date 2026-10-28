@@ -36,8 +36,6 @@ struct Wanted {
     tier: Option<String>,
     spec: Option<Spec>,
     needs: Vec<String>,
-    /// `--review` (B2): the needs are set from the Plan, not given.
-    review: bool,
     /// `--draft`: a draft in a phase after `plan` too.
     draft: bool,
     /// `--urgent` (§2.2): not a Locked field, so a rerun without it is `already`.
@@ -57,15 +55,11 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let needs = sorted_needs(&args.needs)?;
     let kind = args.kind.clone().unwrap_or_else(|| "work".to_owned());
     check_kind_not_reserved(&kind)?;
-    if args.review && kind != "work" {
-        return Err(CpdError::new(ErrorCode::Usage, format!("--review is a work Job: it cannot be --kind {kind}.")).with("kind", kind));
-    }
     require_tier_and_spec(&args)?;
     let spec = args.spec.as_deref().map(spec::read).transpose()?;
     if let Some(spec) = &spec {
         spec.check_kind(&kind)?;
-        spec.check_resources_allowed(args.review)?;
-    }
+            }
     let mut env = Env::open()?;
     if let Some(tier) = args.tier {
         let prs = env.store.read(|conn| {
@@ -82,7 +76,6 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         tier: args.tier.map(|t| t.to_string()),
         spec,
         needs,
-        review: args.review,
         draft: args.draft,
         urgent: args.urgent,
         kind,
@@ -95,7 +88,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         Decision::Insert(_) => env.store.write(COMMAND, |tx| match decide(tx, &home, &plan, &wanted)? {
             Decision::Already(job) => Ok((job, true)),
             Decision::Insert(job) => {
-                insert(tx, &plan, &job, wanted.review)?;
+                insert(tx, &plan, &job)?;
                 let text = format!("Job {} added to Plan {plan} as {}. Next: cpd job show {} --plan {plan}", job.key, job.status, job.key);
                 append(
                     tx,
@@ -107,7 +100,6 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                         job.appended,
                         job.tier.as_deref(),
                         &job.needs,
-                        wanted.review,
                         job.urgent,
                     )
                     .plan(plan.clone())
@@ -117,25 +109,23 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
             }
         })?,
     };
-    let mut out = json!({"job": {"key": job.key, "pr": job.pr, "kind": job.kind, "status": job.status, "appended": job.appended, "tier": job.tier, "needs": job.needs, "review": wanted.review, "urgent": job.urgent}});
+    let mut out = json!({"job": {"key": job.key, "pr": job.pr, "kind": job.kind, "status": job.status, "appended": job.appended, "tier": job.tier, "needs": job.needs, "urgent": job.urgent}});
     if already {
         out["already"] = json!(true);
     }
     Ok(Output::success(out))
 }
 
-/// `--tier` and `--spec` are required, except with `--draft` (a stub draft, §5.1);
-/// a review Job is never a stub.
+/// `--tier` and `--spec` are required, except with `--draft` (a stub draft, §5.1).
 fn require_tier_and_spec(args: &AddArgs) -> Result<(), CpdError> {
     let missing: Vec<&str> = [("--tier", args.tier.is_none()), ("--spec", args.spec.is_none())]
         .into_iter()
         .filter_map(|(flag, lacks)| lacks.then_some(flag))
         .collect();
-    if missing.is_empty() || (args.draft && !args.review) {
+    if missing.is_empty() || args.draft {
         return Ok(());
     }
-    let why = if args.review { "a --review Job" } else { "a Job that is not a --draft" };
-    Err(CpdError::new(ErrorCode::Usage, format!("{} required for {why}: only a stub draft (--draft) may leave them out.", missing.join(" and "))))
+    Err(CpdError::new(ErrorCode::Usage, format!("{} required for a Job that is not a --draft: only a stub draft (--draft) may leave them out.", missing.join(" and "))))
 }
 
 fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> Result<Decision, CpdError> {
@@ -151,18 +141,13 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
     let prs = load_prs(conn, plan)?;
     let pr = wanted.pr.select(plan, &prs)?.key.to_string();
     check_pr_live(&prs, plan, &pr)?;
-    check_shape_allows(&prs, plan, &pr, &wanted.kind, wanted.review)?;
+    check_shape_allows(&prs, plan, &pr, &wanted.kind)?;
     let all = jobs::load(conn, plan)?;
-    let needs = if wanted.review {
-        review_needs(&all, plan, &pr, wanted.key.as_str())?
-    } else {
-        let pr_status = &prs.iter().find(|p| p.key.as_str() == pr).expect("check_pr_live found the PR").status;
-        let mut needs = wanted.needs.clone();
-        needs.extend(super::chain::leaves(&all, plan, &pr, pr_status, wanted.key.as_str())?.unwrap_or_default());
-        needs.sort();
-        needs.dedup();
-        needs
-    };
+    let pr_status = &prs.iter().find(|p| p.key.as_str() == pr).expect("check_pr_live found the PR").status;
+    let mut needs = wanted.needs.clone();
+    needs.extend(super::chain::leaves(&all, plan, &pr, pr_status, wanted.key.as_str())?.unwrap_or_default());
+    needs.sort();
+    needs.dedup();
     let appended = phase != "plan";
     // In phase `plan` every Job is a draft; after it, only with `--draft`.
     let draft = !appended || wanted.draft;
@@ -175,7 +160,6 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
         spec: wanted.spec.as_ref().map(Spec::stored),
         status: if draft { "draft" } else { "queued" }.to_owned(),
         appended,
-        review: wanted.review,
         kind: wanted.kind.clone(),
         tests: wanted.spec.as_ref().and_then(|s| s.tests.as_ref()).map(|t| json!(t)),
         test_files: wanted.spec.as_ref().and_then(|s| s.test_files.as_ref()).map(|t| json!(t)),
@@ -192,7 +176,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
         needs,
     };
     if let Some(existing) = all.iter().find(|j| j.key == job.key) {
-        if same_locked_fields(existing, &job) && existing.review == wanted.review {
+        if same_locked_fields(existing, &job) {
             return Ok(Decision::Already(existing.clone()));
         }
         return Err(CpdError::new(
@@ -208,8 +192,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
         spec.check_files_relative()?;
         check_resources_declared(conn, home, plan, &job.pr, &job.key, spec.resources.as_deref())?;
     }
-    // A review Job's `touches` is informational (commands.md §5.1).
-    if let (Some(spec), false) = (&wanted.spec, wanted.review) {
+    if let Some(spec) = &wanted.spec {
         let pr = prs.iter().find(|p| p.key.as_str() == job.pr).expect("check_pr_live found the PR");
         check_touches(pr, &prs, &spec.touches)?;
     }
@@ -219,7 +202,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
         check_impl_job_required(&all, plan, &job)?;
     }
     // Only the chain may need the merged open Job: what was named by hand is checked alone.
-    check_needs_available(&all, plan, if wanted.review { &job.needs } else { &wanted.needs })?;
+    check_needs_available(&all, plan, &wanted.needs)?;
     if !draft {
         check_test_job_required(&all, plan, &job)?;
         check_needs_not_draft(&all, plan, &job)?;
@@ -264,8 +247,7 @@ pub(crate) fn check_resources_declared(conn: &Connection, home: &CpdHome, plan: 
 }
 
 /// A `queued` Job may not need a `draft` (§5.1): it could start before its need
-/// exists. `details.jobs` lists the drafts; for a review Job they are every
-/// draft of its PR, as its needs are.
+/// exists. `details.jobs` lists the drafts.
 fn check_needs_not_draft(all: &[Job], plan: &PlanId, job: &Job) -> Result<(), CpdError> {
     let drafts: Vec<&str> = all.iter().filter(|j| j.is_draft() && job.needs.contains(&j.key)).map(|j| j.key.as_str()).collect();
     if drafts.is_empty() {
@@ -284,40 +266,19 @@ fn check_needs_not_draft(all: &[Job], plan: &PlanId, job: &Job) -> Result<(), Cp
     .with("jobs", drafts))
 }
 
-/// A review Job's Dependencies (B2): every Job of its PR that exists now and is
-/// not `cancelled` nor an `open` or `update` Job (nothing waits for them), itself excepted (a rerun of the same add). A `failed` Job
-/// refuses with `needs_unavailable` and `details.jobs`: retry or cancel it first.
-fn review_needs(all: &[Job], plan: &PlanId, pr: &str, key: &str) -> Result<Vec<String>, CpdError> {
-    let of_pr = || all.iter().filter(|j| j.pr == pr && j.key != key && j.status != "cancelled" && !matches!(j.kind.as_str(), "open" | "update"));
-    let failed: Vec<&str> = of_pr().filter(|j| j.status == "failed").map(|j| j.key.as_str()).collect();
-    if !failed.is_empty() {
-        return Err(CpdError::new(
-            ErrorCode::NeedsUnavailable,
-            format!("A review Job needs every Job of PR {pr}, and {} failed: retry or cancel it first.", failed.join(", ")),
-        )
-        .with("plan", plan.as_str())
-        .with("pr", pr)
-        .with("jobs", failed));
-    }
-    let mut needs: Vec<String> = of_pr().map(|j| j.key.clone()).collect();
-    needs.sort();
-    Ok(needs)
-}
-
-/// The Locked fields (§2.2: the Spec, `title`, `tier`, `pr`, `kind`, `tests`, `test_files`, `resources`) and the needs; `review` is
-/// compared by the caller.
+/// The Locked fields (§2.2: the Spec, `title`, `tier`, `pr`, `kind`, `tests`, `test_files`, `resources`) and the needs.
 fn same_locked_fields(a: &Job, b: &Job) -> bool {
     (&a.pr, &a.title, &a.tier, &a.spec, &a.needs, &a.kind, &a.tests, &a.test_files, &a.resources)
         == (&b.pr, &b.title, &b.tier, &b.spec, &b.needs, &b.kind, &b.tests, &b.test_files, &b.resources)
 }
 
-fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(), CpdError> {
+fn insert(tx: &Connection, plan: &PlanId, job: &Job) -> Result<(), CpdError> {
     let array = |v: Option<&Value>| v.map(Value::to_string);
     let spec = job.spec.as_ref();
     tx.execute(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                           status, appended, fingerprint, review, urgent, kind, tests, test_files, resources, created_txn, created_at)
-         VALUES (?1, ?13, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?14, ?15, ?16, ?17, ?18, ?19, cpd_txn(),
+                           status, appended, fingerprint, urgent, kind, tests, test_files, resources, created_txn, created_at)
+         VALUES (?1, ?13, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?14, ?15, ?16, ?17, ?18, cpd_txn(),
                  (SELECT at FROM txns WHERE id = cpd_txn()))",
         rusqlite::params![
             plan.as_str(),
@@ -333,7 +294,6 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(),
             job.appended,
             job.fingerprint,
             job.pr,
-            review,
             job.urgent,
             job.kind,
             array(job.tests.as_ref()),

@@ -510,7 +510,6 @@ mod tests {
             spec: Some(JobSpec { goal: "g".into(), context: "c".into(), touches: serde_json::json!(["a"]), acceptance: serde_json::json!(["b"]), out_of_scope: serde_json::json!([]) }),
             status: "draft".into(),
             appended: false,
-            review: false,
             kind: kind.into(),
             tests: None,
             test_files: None,

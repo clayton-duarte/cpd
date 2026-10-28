@@ -24,7 +24,7 @@ pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
             .map(|j| {
                 let needs = super::open::shown_needs(&everything, &j);
                 let attempts = counts.iter().find(|(job, _)| *job == j.key).map_or(0, |(_, n)| *n);
-                json!({"key": j.key, "title": j.title, "kind": j.kind, "status": j.status, "tier": j.tier, "appended": j.appended, "review": j.review, "urgent": j.urgent,
+                json!({"key": j.key, "title": j.title, "kind": j.kind, "status": j.status, "tier": j.tier, "appended": j.appended, "urgent": j.urgent,
                        "needs": needs, "attempts": attempts, "merged_sha": j.merged_sha})
             })
             .collect::<Vec<_>>())
@@ -44,7 +44,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let home = env.home.clone();
     let concurrency = env.config.concurrency;
-    let (job, review, needed_by, attempts, needs, waiting_for) = env.store.read(|conn| {
+    let (job, needed_by, attempts, needs, waiting_for) = env.store.read(|conn| {
         plan_phase(conn, &plan)?;
         let all = jobs::load(conn, &plan)?;
         let job = find(&all, &plan, &args.key)?.clone();
@@ -53,7 +53,6 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         let needed_by: Vec<&str> = all.iter().filter(|j| j.needs.contains(&job.key)).map(|j| j.key.as_str()).collect();
         let needed_by = needed_by.into_iter().map(str::to_owned).collect::<Vec<_>>();
         let attempts = attempts(conn, &plan, &job.key)?;
-        let review: bool = conn.query_row("SELECT review FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.key.as_str()], |r| r.get(0))?;
         // §5.7: only a queued Job that is not a tenant, for each resource it needs that has no free slot right now: `workers` first, then its Spec's.
         let wanted = crate::resource::wanted(conn, &plan, &job.key)?;
         let tenant: bool = conn.query_row(
@@ -88,11 +87,10 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         } else {
             None
         };
-        Ok((job, review, needed_by, attempts, needs, waiting_for))
+        Ok((job, needed_by, attempts, needs, waiting_for))
     })?;
     let tamper = jobs::tampered(&plan, std::slice::from_ref(&job));
     let mut fields = job.to_json();
-    fields["review"] = json!(review);
     fields["needs"] = json!(needs);
     if let Some(waiting_for) = waiting_for {
         fields["waiting_for"] = json!(waiting_for);

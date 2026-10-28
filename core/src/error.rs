@@ -208,8 +208,6 @@ error_codes! {
     WrongWorktree = "wrong_worktree" => Refused,
     DirtyTree = "dirty_tree" => Refused,
     NoCommits = "no_commits" => Refused,
-    ReviewCommits = "review_commits" => Refused,
-    ReviewMissing = "review_missing" => Refused,
     GateTampered = "gate_tampered" => Refused,
     CheckFailed = "check_failed" => Refused,
     NotAwaitingReview = "not_awaiting_review" => Refused,

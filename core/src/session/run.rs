@@ -33,9 +33,6 @@ use crate::ids::SessionId;
 use crate::output::Output;
 use crate::store;
 
-// Shared with the review Worker's fork wait (`driver::worker`), which reads them here.
-pub(crate) use super::fork_wait::{quiet_since_with, turn_finished};
-
 /// How often it looks for pi's session file while pi runs (tests: `CPD_TEST_FILE_POLL`, [`limit`]).
 const FILE_POLL: Duration = Duration::from_millis(500);
 /// How often the adapter watchdog reads the Session's state while pi runs (commands.md §10.8;

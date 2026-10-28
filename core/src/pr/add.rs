@@ -120,7 +120,6 @@ fn read_jobs(path: &Path, shape: &str, pr: &PrKey, title: &str) -> Result<BTreeM
         let spec = entry.remove("spec").ok_or_else(|| invalid(&format!("{at}.spec"), "missing field: the Job's Spec object".to_owned()))?;
         let spec = parse_spec(&spec.to_string()).map_err(|e| e.with("job", stub.key.as_str()).with("file", path.display().to_string()))?;
         spec.check_kind(stub.kind)?;
-        spec.check_resources_allowed(false)?;
         jobs.insert(stub.suffix, (tier, spec));
     }
     Ok(jobs)
@@ -509,13 +508,13 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                         let needs: Vec<&String> = stub.needs.iter().collect();
                         let event = if let Some((tier, _)) = wanted.jobs.as_ref().and_then(|j| j.get(stub.suffix)) {
                             let text = format!("Job {} added to Plan {plan} as queued (the {} template of PR {key}, from --jobs). Next: cpd job show {} --plan {plan}", stub.key, wanted.shape, stub.key);
-                            NewEvent::job_added(text, key, stub.kind, "queued", appended, Some(&tier.to_string()), needs, false, false)
+                            NewEvent::job_added(text, key, stub.kind, "queued", appended, Some(&tier.to_string()), needs, false)
                         } else if stub.kind == "open" {
                             let text = format!("Job {} added to Plan {plan} as draft (the {} template of PR {key}). Next: cpd job edit {} --tier <T> --spec <file> --plan {plan}", stub.key, wanted.shape, stub.key);
                             NewEvent::job_added_by_cpd(text, key, stub.kind, "draft", &open_tier.to_string(), open::BY_TEMPLATE, None)
                         } else {
                             let text = format!("Job {} added to Plan {plan} as draft (the {} template of PR {key}). Next: cpd job edit {} --tier <T> --spec <file> --plan {plan}", stub.key, wanted.shape, stub.key);
-                            NewEvent::job_added(text, key, stub.kind, "draft", appended, None, needs, false, false)
+                            NewEvent::job_added(text, key, stub.kind, "draft", appended, None, needs, false)
                         };
                         append(tx, event.plan(plan.clone()).job(JobKey::parse(&stub.key)?))?;
                     }
@@ -842,7 +841,6 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
                 spec: Some(spec.stored()),
                 status: "queued".to_owned(),
                 appended,
-                review: false,
                 kind: stub.kind.to_owned(),
                 tests: spec.tests.as_ref().map(|t| json!(t)),
                 test_files: spec.test_files.as_ref().map(|t| json!(t)),
@@ -862,8 +860,8 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
             let array = |v: &Vec<String>| json!(v).to_string();
             tx.execute(
                 "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                                   status, appended, fingerprint, review, urgent, kind, tests, test_files, resources, created_txn, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'queued', ?11, ?12, 0, 0, ?13, ?14, ?15, ?16, cpd_txn(),
+                                   status, appended, fingerprint, urgent, kind, tests, test_files, resources, created_txn, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'queued', ?11, ?12, 0, ?13, ?14, ?15, ?16, cpd_txn(),
                          (SELECT at FROM txns WHERE id = cpd_txn()))",
                 rusqlite::params![
                     plan.as_str(),

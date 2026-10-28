@@ -4,7 +4,7 @@
 //! for each orphaned Attempt.
 //!
 //! The Gates run here (contract §7.4 step 6, hs-d679): `gate.merge` (the repo's
-//! `pre-commit`) at every non-review Job merge, and `gate.pr` (the repo's
+//! `pre-commit`) at every Job merge, and `gate.pr` (the repo's
 //! `pre-merge`) at an `open` or `update` Job merge, in the Attempt worktree at
 //! HEAD, while the Attempt is still `merging` (the tree shows it yellow).
 
@@ -76,8 +76,7 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
         .with("attempt", attempt.to_string())
         .with("status", target.status));
     }
-    let review = store.read(|conn| crate::job::find(&crate::plan::jobs::load(conn, plan)?, plan, &target.job).map(|j| j.review))?;
-    let stepped = if review { review_steps(store, &target) } else { steps(store, ctx.home, ctx.config, &target) };
+    let stepped = steps(store, ctx.home, ctx.config, &target);
     let Stepped { end, stale, push, pulled } = match stepped {
         Ok(s) => s,
         Err(e) if is_cpd_kind(&target) && is_refusal(e.code()) => {
@@ -125,21 +124,6 @@ impl Stepped {
 /// An `open` or `update` Job's merge differs from the others' (§7.4): no rebase, and the push is part of the Job.
 fn is_cpd_kind(target: &Attempt) -> bool {
     matches!(target.kind.as_str(), "open" | "update")
-}
-
-/// A review Job's merge (B2, §7.4): step 1 (cancel check), step 2 (snapshot `old`)
-/// and step 7 (cancel check again); no tamper check, rebase, fast-forward, push
-/// or worktree sync, because the Attempt has no commits and the Lead Branch does
-/// not move; then the Attempt ends `merged` with `merged_sha = old`.
-fn review_steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
-    if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
-        return Ok(Stepped::ends(End::Cancelled));
-    }
-    let old = git::run::rev_parse(&target.repo, &format!("refs/heads/{}", target.lead_branch))?;
-    if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
-        return Ok(Stepped::ends(End::Cancelled));
-    }
-    Ok(Stepped::ends(End::Merged { sha: old }))
 }
 
 /// Steps 1–9, with step 8's push; for an `open` or `update` Job the steps of §7.4 "An `open` or `update` Job's merge".

@@ -137,7 +137,6 @@ fn one_pr() -> Fx {
 #[test]
 fn show_with_one_pr_lists_its_fields_and_its_jobs() {
     let fx = one_pr();
-    fx.env.sql("UPDATE jobs SET review = 1 WHERE key = 'b'");
     let show = fx.show();
     let plan = show["plan"].as_object().unwrap();
     assert_eq!(plan.keys().map(String::as_str).collect::<Vec<_>>(), ["archived_at", "context", "created_at", "done_at", "id", "jira", "lead_session", "locked_at", "outline", "phase", "title"]);
@@ -155,8 +154,9 @@ fn show_with_one_pr_lists_its_fields_and_its_jobs() {
     );
     assert_eq!(keys(&show["jobs"]), ["a", "b", "gone"]);
     let jobs = show["jobs"].as_array().unwrap();
-    assert_eq!((&jobs[1]["pr"], &jobs[1]["review"], &jobs[1]["needs"]), (&json!("pay"), &json!(true), &json!(["a"])));
-    assert_eq!((&jobs[0]["pr"], &jobs[0]["review"], &jobs[0]["attempts"]), (&json!("pay"), &json!(false), &json!([])));
+    assert_eq!((&jobs[1]["pr"], &jobs[1]["needs"]), (&json!("pay"), &json!(["a"])));
+    assert_eq!((&jobs[0]["pr"], &jobs[0]["attempts"]), (&json!("pay"), &json!([])));
+    assert!(jobs.iter().all(|job| !job.as_object().unwrap().contains_key("review")), "a Job has no review key: {jobs:?}");
     assert_eq!(show["counts"], json!({"draft": 2, "queued": 0, "running": 0, "merged": 0, "failed": 0, "cancelled": 1}));
 }
 

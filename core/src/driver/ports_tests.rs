@@ -25,15 +25,13 @@ use time::OffsetDateTime;
 
 use super::run::{Look, PaneWatch, poll_with};
 use super::stall::Watch;
-use super::worker::{kill_attempt_window_with, retry_kill_with, wait_for_lead_with};
-use crate::attempt::ledger;
+use super::worker::{kill_attempt_window_with, retry_kill_with};
 use crate::clock::{Clock, ManualClock};
 use crate::config::{Catalog, Config, TierModel};
 use crate::error::{CpdError, ErrorCode};
 use crate::fakes::git::{GitRoute, Head, Repo, Universe};
 use crate::home::CpdHome;
 use crate::host::layout::attempt_window;
-use crate::host::pi::PiDirs;
 use crate::host::runner::{Call, Reply};
 use crate::host::spawn::{FakeSpawn, Launch, Pid, Signal, Spawn};
 use crate::host::{PaneId, Tmux};
@@ -539,106 +537,6 @@ fn a_process_that_ends_during_the_grace_is_not_killed() {
     assert!(!line.contains("SIGKILL"), "{line}");
     assert!(fakes.spawn.signals().is_empty());
     assert_eq!(fakes.clock.naps(), [Duration::from_millis(100); 3]);
-}
-
-// ---- A3: the wait for the Lead (a review Job) ------------------------------------------------------------------------
-
-/// A temporary store with Plan `pay`, its Lead Session `lead1` in `lead_state`, Job `a` and its running Attempt `a-a1`.
-struct Fixture {
-    _dir: tempfile::TempDir,
-    home: CpdHome,
-    store: Store,
-    target: ledger::Attempt,
-    dirs: PiDirs,
-}
-
-fn fixture(lead_state: &str) -> Fixture {
-    let dir = tempfile::tempdir().unwrap();
-    let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
-    let mut store = Store::open(&home, 5000).unwrap();
-    let fingerprint = "f".repeat(64);
-    store
-        .write("fixture", |tx| {
-            tx.execute_batch(&format!(
-                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
-                 INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-                   VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', '{lead_state}', 't', 't');
-                 INSERT INTO plans (id, context, title, phase, lead_session, locked_at, created_at)
-                   VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
-                   VALUES ('pay', 'api', '/r', 'main', 'dispatch', 'cpd/pay', '/lead', 't', cpd_txn(), 't');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
-                   VALUES ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fingerprint}', cpd_txn(), 't');
-                 INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, driver_pid, started_at)
-                   VALUES ('pay', 'a-a1', 'a', 1, 'S2', 'ladder', 'running', 'cpd/pay--a-a1', '/w', 4242, 't');"
-            ))?;
-            Ok(())
-        })
-        .unwrap();
-    let (plan, id) = attempt();
-    let target = store.read(|conn| ledger::load(conn, &plan, &id)).unwrap();
-    let dirs = PiDirs { home: dir.path().to_owned(), agent_dir: dir.path().join("agent"), session_dir: Some(dir.path().join("sessions")) };
-    Fixture { _dir: dir, home, store, target, dirs }
-}
-
-/// A clock whose `after`th nap is followed by the User's `job cancel`, written from another connection.
-fn cancel_when_napped(home: &CpdHome, clock: &ManualClock, after: usize) -> Arc<dyn Clock> {
-    let home = home.clone();
-    Arc::new(HookClock::new(clock, move |n| {
-        if n == after {
-            Store::open(&home, 5000)
-                .unwrap()
-                .write("test", |tx| {
-                    tx.execute("UPDATE jobs SET cancel_reason = 'Gave up.', cancel_requested_at = 't' WHERE plan = 'pay' AND key = 'a'", [])?;
-                    Ok(())
-                })
-                .unwrap();
-        }
-    }))
-}
-
-#[test]
-fn the_wait_for_the_lead_naps_two_seconds_a_poll_until_a_cancel_is_seen() {
-    let mut f = fixture("working");
-    let fakes = Fakes::new();
-    let ports = ports_with(&fakes, cancel_when_napped(&f.home, &fakes.clock, 3), fakes.ports.spawn.clone());
-    let seen = wait_for_lead_with(&ports, &mut f.store, &config(), &f.dirs, &f.target, &|_| {}).unwrap();
-    assert!(seen.is_none(), "a cancel request ends the wait: the safe point");
-    assert_eq!(fakes.clock.naps(), [Duration::from_secs(2); 3]);
-}
-
-#[test]
-fn the_wait_for_the_lead_logs_one_line_every_ten_virtual_minutes() {
-    let mut f = fixture("working");
-    let fakes = Fakes::new();
-    let ports = ports_with(&fakes, cancel_when_napped(&f.home, &fakes.clock, 650), fakes.ports.spawn.clone());
-    let lines = Mutex::new(Vec::new());
-    let log = |line: &str| lines.lock().unwrap().push(line.to_owned());
-    wait_for_lead_with(&ports, &mut f.store, &config(), &f.dirs, &f.target, &log).unwrap();
-    let lines = lines.into_inner().unwrap();
-    assert_eq!(lines.len(), 2, "{lines:?}");
-    assert!(lines[0].ends_with("(10 minutes so far)"), "{lines:?}");
-    assert!(lines[1].ends_with("(20 minutes so far)"), "{lines:?}");
-}
-
-#[test]
-fn an_idle_lead_is_forked_once_its_file_has_been_quiet_for_fork_quiet_seconds_of_virtual_time() {
-    let mut f = fixture("idle");
-    let fakes = Fakes::new();
-    let file = f.dirs.home.join("lead1.jsonl");
-    std::fs::write(&file, r#"{"type":"message","message":{"role":"assistant","stopReason":"stop"}}"#).unwrap();
-    modified_at(&file, fakes.clock.utc());
-    let path = file.display().to_string();
-    f.store
-        .write("test", |tx| {
-            tx.execute("UPDATE sessions SET file = ?1 WHERE id = 'lead1'", [path.as_str()])?;
-            Ok(())
-        })
-        .unwrap();
-    // `fork_quiet_seconds` is 5: the file is quiet at the third 2 s nap (6 s), not at the second (4 s).
-    let fork = wait_for_lead_with(&fakes.ports, &mut f.store, &config(), &f.dirs, &f.target, &|_| {}).unwrap().expect("forked");
-    assert_eq!((fork.session.as_str(), fork.file), ("lead1", file));
-    assert_eq!(fakes.clock.naps(), [Duration::from_secs(2); 3]);
 }
 
 // ---- The workflow-worktree model (hs-d680/hs-d682/hs-d683, `wlinear-tests`) ------------------------------------------
