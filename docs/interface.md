@@ -74,6 +74,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd pr push` | Gate, then push the Lead Branch as it is, without a rebase (§9.9) | Lead | |
 | `cpd pr view` | Show the PR's checks, reviews and comments (§9.8) | Lead | |
 | `cpd pr reply` | Reply to an open feedback item of the PR's pull request as the User, with the cpd marker; never resolves a thread | Lead | |
+| `cpd pr rerun` | Re-run the failed GitHub Actions workflow runs of the PR's head commit (§9.8c) | Lead | |
 | `cpd pr post` | Post the PR's pull request to Slack for review (§9.8b) | Lead | |
 | `cpd pr merge` | Squash-merge a clean pull request on GitHub and delete its branch (§9.10) | Lead | yes |
 | `cpd review` | Plannotator sessions a Session has open (hs-d496) | | |

@@ -301,6 +301,45 @@ pub fn view(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<View, CpdErr
     parse(&args, &run_on(runner, cwd, &args)?)
 }
 
+/// A GitHub Actions workflow run of `gh run list --json databaseId,name,status,conclusion`; `conclusion` is empty until it concludes.
+#[derive(Debug, Deserialize)]
+pub struct WorkflowRun {
+    #[serde(rename = "databaseId")]
+    pub id: i64,
+    pub name: String,
+    pub status: String,
+    #[serde(default, deserialize_with = "empty_if_null")]
+    pub conclusion: String,
+}
+
+fn empty_if_null<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
+}
+
+/// `gh pr view <number> --json headRefOid`, through the runner: the head commit of the pull request, read fresh from GitHub.
+pub fn head_commit(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<String, CpdError> {
+    #[derive(Deserialize)]
+    struct Head {
+        #[serde(rename = "headRefOid")]
+        oid: String,
+    }
+    let n = number.to_string();
+    let args = ["pr", "view", &n, "--json", "headRefOid"];
+    parse::<Head>(&args, &run_on(runner, cwd, &args)?).map(|h| h.oid)
+}
+
+/// `gh run list --commit <sha> --json databaseId,name,status,conclusion --limit 100`: the GitHub Actions workflow runs of a commit.
+pub fn workflow_runs(runner: &dyn Runner, cwd: &Path, sha: &str) -> Result<Vec<WorkflowRun>, CpdError> {
+    let args = ["run", "list", "--commit", sha, "--json", "databaseId,name,status,conclusion", "--limit", "100"];
+    parse(&args, &run_on(runner, cwd, &args)?)
+}
+
+/// `gh run rerun <id> --failed`: re-runs only the failed jobs of a GitHub Actions workflow run.
+pub fn rerun_failed(runner: &dyn Runner, cwd: &Path, id: i64) -> Result<(), CpdError> {
+    let n = id.to_string();
+    run_on(runner, cwd, &["run", "rerun", &n, "--failed"]).map(drop)
+}
+
 /// `gh pr close <number> --repo <repo>`. A pull request that is already closed or merged is the
 /// state wanted: when `gh` fails, `gh pr view` says whether it is, and only then is the failure not one.
 pub fn close_pr(cwd: &Path, repo: &str, number: i64) -> Result<(), CpdError> {
