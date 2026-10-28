@@ -689,3 +689,7 @@ So a field, a command or a protocol number the adapter starts requiring is added
 **In the Gate** (hs-d355): `pnpm run verify` runs `scripts/pi-check.sh node_modules/.bin/pi` after `pnpm test` and before the cargo steps. That pi is the one `package.json` pins (`@earendil-works/pi-coding-agent`, an exact version, installed by `pnpm install --frozen-lockfile`, which `preverify`'s `scripts/pnpm-fresh.sh` runs when `node_modules` is stale), so the Gate checks the current adapter against the pinned pi, with no `pi` on `PATH` and no dotfiles. A missing `node_modules/.bin/pi` fails step 1 (`pi-check: FAIL: step 1 (version): 'node_modules/.bin/pi --version' failed`); a missing `python3` or `node` fails step 0. The Gate does not skip on a machine that lacks them: the failure is the signal. A fake that falls behind the adapter therefore fails the Gate on hs, not a Mac's `bootstrap.sh`.
 
 dotfiles runs it (hs-d145) after updating the `cpd` checkout and before activating a new pinned pi on a machine: `scripts/pi-check.sh <path of the new pi>`; a failure leaves the active pi as it was. It runs on a Mac too, which is why "The portability check" covers it.
+
+## The durable Worker runner
+
+(skeleton)

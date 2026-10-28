@@ -3514,6 +3514,10 @@ pro-d3, pro-d7, pro-d8, pro-d10. An MCP server reaches a Session only through `c
 - **Evidence, pi 1.3.0 (read from its source):** `dist/main.js` maps `--no-mcp` to `disabledBuiltinExtensions: ["mcp"]`; `dist/extensions/mcp/index.d.ts` declares `createMcpExtension` and its `loadConfig` option; `dist/index.d.ts` exports `createMcpExtension`. The mount depends on that export, so a pi bump re-runs `scripts/pi-check.sh` (docs/implementing.md "Checking a pi version").
 - The E11 helper (commands.md §21.6) is no Session and is unaffected: it keeps reading the `slack` entry of `<agentDir>/mcp.json` (pro-d10).
 
+### 6.12 The durable Worker runner
+
+(skeleton)
+
 ## 7. git and the Gate
 
 cpd runs git itself (R4); there is no worktrunk. Every git call is `git -C <dir> …` with argv, `GIT_TERMINAL_PROMPT=0`, and stdin from `/dev/null`. Every git call also gets, in its environment, `GIT_CONFIG_COUNT=2`, `GIT_CONFIG_KEY_0=core.filesRefLockTimeout`, `GIT_CONFIG_VALUE_0=10000`, `GIT_CONFIG_KEY_1=core.packedRefsTimeout`, `GIT_CONFIG_VALUE_1=10000` (git-config(1)): a ref or `packed-refs` lock held by another git process is waited for up to 10 s instead of git's 100 ms (`filesRefLockTimeout`) and 1 s (`packedRefsTimeout`), because cpd has concurrent writers of shared refs such as `refs/remotes/origin/<base>` (hs-d243, G2). Hooks are spawned by cpd, not by git, and do not get it (§7.3).
