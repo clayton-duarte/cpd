@@ -278,6 +278,17 @@ pub fn show(fx: &Fx, height: u16, signals: Vec<Signal>, world: &World) -> Vec<Sc
 
 /// [`show`] with `run_command` as what a click runs `cpd` through (the in-process command tree, or a test's own).
 pub fn show_with(fx: &Fx, height: u16, signals: Vec<Signal>, world: &World, run_command: cpd_tui::RunCommand) -> Vec<Screen> {
+    show_over(fx, height, signals, world, run_command, &[])
+}
+
+/// [`show`] on a machine whose `/proc` files are `files` (path, text; Linux reads them): what is not scripted is unreadable.
+pub fn show_proc(fx: &Fx, height: u16, signals: Vec<Signal>, world: &World, files: &[(&str, &str)]) -> Vec<Screen> {
+    show_over(fx, height, signals, world, run_command, files)
+}
+
+fn show_over(fx: &Fx, height: u16, signals: Vec<Signal>, world: &World, run_command: cpd_tui::RunCommand, files: &[(&str, &str)]) -> Vec<Screen> {
+    let files: std::collections::HashMap<String, String> = files.iter().map(|(p, t)| ((*p).to_owned(), (*t).to_owned())).collect();
+    let proc: widgets::ProcReader = std::sync::Arc::new(move |path| files.get(path).cloned());
     let backend = SharedBackend::new(W as u16, height);
     let frames = Rc::new(RefCell::new(Vec::new()));
     {
@@ -299,7 +310,7 @@ pub fn show_with(fx: &Fx, height: u16, signals: Vec<Signal>, world: &World, run_
     let ports = &fx.fakes.ports;
     let ended = Ports::scope(ports, || {
         let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
-        let prepared = widgets::prepare(ports, home).unwrap();
+        let prepared = widgets::prepare_with(ports, home, proc).unwrap();
         let mut input = NoInput;
         let mut ctx = Ctx::new(ports, backend.terminal(), &mut input);
         widgets::show_with(&mut ctx, Feed::scripted(ports.clock.clone(), signals), prepared, run_command)

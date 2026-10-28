@@ -1,6 +1,6 @@
 //! What the Deploy column reads of the machine (commands.md §13.2, §17): CPU %, one utilization % per GPU, and memory %. The
 //! parsers are pure, on the text of `/proc/stat`, `/proc/meminfo`, `nvidia-smi` (Linux), `ps`, `vm_stat` and `ioreg` (macOS);
-//! [`Sampler`] reads the real thing.
+//! [`Sampler`] reads the real thing; on Linux it reads `/proc` through its [`ProcReader`], which a test scripts.
 //!
 //! The macOS GPU parse ([`parse_ioreg`]) is UNVERIFIED on hardware: it is written from the documented shape of `ioreg -r -d 1
 //! -w 0 -c IOAccelerator` and tested on a captured sample only.
@@ -32,25 +32,51 @@ pub struct CpuTimes {
 
 /// Reads [`Usage`]; it holds the previous CPU sample, which Linux needs for the share over an interval, and on Linux the
 /// one `nvidia-smi` that reports the GPUs ([`Gpus`]), started at the first sample.
-#[derive(Debug, Default)]
 pub struct Sampler {
     previous: Option<CpuTimes>,
     gpus: Option<Gpus>,
+    proc: ProcReader,
+}
+
+/// How Linux reads `/proc/stat` and `/proc/meminfo`: the text of the file at the path, `None` when it cannot be read. A file
+/// read, never a process (no child counts against the view's idle I/O budget). Production reads the disk ([`read_file`]); a test
+/// scripts it, and what it does not script is unreadable ([`unreadable`]).
+pub type ProcReader = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
+/// The real [`ProcReader`].
+pub fn real_proc() -> ProcReader {
+    Arc::new(read_file)
+}
+
+/// The [`ProcReader`] that reads nothing: every number from `/proc` is `–`.
+pub fn unreadable() -> ProcReader {
+    Arc::new(|_| None)
+}
+
+impl std::fmt::Debug for Sampler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sampler").field("previous", &self.previous).field("gpus", &self.gpus).finish_non_exhaustive()
+    }
 }
 
 impl Sampler {
+    /// A sampler that reads `/proc` through `proc`.
+    pub fn new(proc: ProcReader) -> Sampler {
+        Sampler { previous: None, gpus: None, proc }
+    }
+
     /// The usage now; on Linux the GPU tool is started through `ports.spawn`.
     pub fn sample_with(&mut self, ports: &Ports) -> Usage {
         if cfg!(target_os = "macos") {
             macos_usage_with(&*ports.runner)
         } else {
-            let times = read_file("/proc/stat").and_then(|text| parse_proc_stat(&text));
+            let times = (self.proc)("/proc/stat").and_then(|text| parse_proc_stat(&text));
             let cpu = self.previous.zip(times).and_then(|(before, after)| cpu_share(before, after));
             if times.is_some() {
                 self.previous = times;
             }
             let gpus = self.gpus.get_or_insert_with(|| Gpus::start(&ports.spawn)).now();
-            Usage { cpu, gpus, mem: read_file("/proc/meminfo").and_then(|text| parse_meminfo(&text)) }
+            Usage { cpu, gpus, mem: (self.proc)("/proc/meminfo").and_then(|text| parse_meminfo(&text)) }
         }
     }
 }
