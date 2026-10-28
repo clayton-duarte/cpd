@@ -32,18 +32,22 @@ fn the_first_attempt_of_a_pr_queues_in_progress_and_a_later_one_queues_nothing()
     live.dispatch("api").ok();
     assert_eq!(queue(&live), json!([row("in_progress")]), "the first Attempt of the PR");
 
+    // A PR runs one linear Attempt at a time: the first one ends before a second Job starts.
+    live.fixture("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE status IN ('starting', 'running');
+                  UPDATE jobs SET status = 'queued' WHERE plan = 'pay' AND key = 'api';");
     live.dispatch("web").ok();
     assert_eq!(queue(&live), json!([row("in_progress")]), "an Attempt of a second Job");
 
-    // A retry Attempt of the first Job: its first Attempt ends failed and the Job is queued again.
-    live.fixture("UPDATE attempts SET status = 'failed', outcome = 'failed', cause = 'crashed' WHERE plan = 'pay' AND job = 'api';
+    // A retry Attempt of the first Job: its first Attempt ended failed and the Job is queued again.
+    live.fixture("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE status IN ('starting', 'running');
                   UPDATE jobs SET status = 'queued' WHERE plan = 'pay' AND key = 'api';");
     live.dispatch("api").ok();
     assert_eq!(live.value::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 2, "a retry Attempt started");
     assert_eq!(queue(&live), json!([row("in_progress")]), "a retry Attempt");
 
     // The PR's open Job starts.
-    live.fixture("UPDATE jobs SET status = 'merged' WHERE key IN ('api', 'web');");
+    live.fixture("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE status IN ('starting', 'running');
+                  UPDATE jobs SET status = 'merged', merged_sha = 's' WHERE key IN ('api', 'web');");
     live.add_cpd_job("open-repo", "open");
     live.dispatch("open-repo").ok();
     assert_eq!(queue(&live), json!([row("in_progress")]), "the open Job starting");
