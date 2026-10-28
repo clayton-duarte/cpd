@@ -125,7 +125,7 @@ fn starts_the_server_once_with_the_contract_options() {
 }
 
 /// `pane-border-format`, exactly (contract §6.1, hs-d475, hs-d478, hs-d671): every title is a pill with no padding;
-/// the three view titles are dango in the cursor cycle order (Context sakura 5, Plan shiro 7, Deploy midori 2) and
+/// the three view titles are dango in the cursor cycle order (Context sakura 5, Plan shiro 7, Dispatch midori 2) and
 /// keep their colour on the focused pane, while every other title (a Lead's `@cpd_title` and the pane
 /// command) is grey (colour 7) and blue on the focused pane, set in the format itself; one `━` with no colour of its own (it takes the
 /// pane border line's style, blue on the focused pane and colour 7 otherwise, whatever the pill's colour; pro-d61) before the left cap, so the cap is the fourth
@@ -135,7 +135,7 @@ const BORDER_FORMAT_WANT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\
 #{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
 ━#{?#{==:#{@cpd_view},tree},#[fg=colour5],#{?#{==:#{@cpd_view},plan},#[fg=colour7],#{?#{==:#{@cpd_view},widgets},#[fg=colour2],#{?pane_active,#[fg=colour4],#[fg=colour7]}}}}\u{e0b6}#[reverse]\
 #{?#{==:#{@cpd_view},tree},Context,\
-#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}\
+#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Dispatch,#{pane_current_command}}}}\
 #[noreverse]\u{e0b4}}}}";
 
 
@@ -173,7 +173,7 @@ fn assert_server_options(s: &Server) {
         assert_eq!(s.tmux.global_option(option).unwrap(), value, "{option}");
     }
     assert_eq!(s.raw(&["show", "-gv", "extended-keys-format"]).trim(), "csi-u", "extended-keys-format");
-    assert!(s.tmux.global_option("pane-border-format").unwrap().contains(",Deploy,"));
+    assert!(s.tmux.global_option("pane-border-format").unwrap().contains(",Dispatch,"));
     let features = s.tmux.global_option("terminal-features").unwrap();
     for feature in ["xterm*:extkeys", "xterm-ghostty:extkeys", "xterm-ghostty:hyperlinks"] {
         assert_eq!(features.matches(feature).count(), 1, "{feature} in {features}");

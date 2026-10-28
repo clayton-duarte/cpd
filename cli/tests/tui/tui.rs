@@ -811,14 +811,14 @@ fn a_pane_title_is_an_unpadded_pill_grey_and_blue_when_focused_three_columns_fro
 
     // tmux expands the format of each pane to its pill: the title, and the colour of the focus.
     let pill = |pane: &str| shown(&fx, &["display", "-p", "-t", pane, "-F", &border]);
-    let titled = [("Context", tree.id.as_str()), ("Plan", plan.id.as_str()), ("Deploy", widgets.id.as_str()), ("Retry Payouts", lead.as_str())];
+    let titled = [("Context", tree.id.as_str()), ("Plan", plan.id.as_str()), ("Dispatch", widgets.id.as_str()), ("Retry Payouts", lead.as_str())];
     for focused in [lead.as_str(), plan.id.as_str()] {
         out(&fx, &["select-pane", "-t", focused]);
         for (title, id) in titled {
             let colour = match title {
                 "Context" => "colour5",
                 "Plan" => "colour7",
-                "Deploy" => "colour2",
+                "Dispatch" => "colour2",
                 _ if id == focused => "colour4",
                 _ => "colour7",
             };
