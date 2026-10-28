@@ -147,9 +147,10 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `context_not_found`, `plan_not_found`, `pr_not_found`, `job_not_found`, `attempt_not_found`, `escalation_not_found`, `review_not_found`, `session_not_found` | 4 | the selected or named object does not exist. (A Context record that names a missing record is `record_not_found`, exit 3, §4.6) |
 | `merge_not_clean` | 3 | `pr merge` (§9.10) re-read the pull request and found it not `OPEN` or not `CLEAN`; `details` has `repo`, `number`, `state`, `merge_state` (hs-d272, hs-d274) |
 | `mcp_unknown` | 4 | `mcp attach` (§24.1) named a server the machine policy does not list; `details: {name, machine, available}`, `available` the sorted server names (an empty array when none); nothing is written (pro-d8) |
-| `item_not_found` | 4 | `inbox show`, `snooze`, `dismiss` or `claim` named an Inbox item that does not exist |
-| `item_closed` | 3 | `inbox snooze`, `dismiss` or `claim` named an Inbox item that is closed (§21) |
+| `item_not_found` | 4 | `inbox show`, `snooze`, `dismiss`, `claim` or `approve` named an Inbox item that does not exist |
+| `item_closed` | 3 | `inbox snooze`, `dismiss`, `claim` or `approve` named an Inbox item that is closed (§21) |
 | `not_claimable` | 3 | `inbox claim` (§21.7): the item is not `review-requested` or is dismissed (C4); `details.kind` |
+| `not_approvable` | 3 | `inbox approve` (§21.13): the item is not `deploy`; `details.item`, `details.kind` |
 | `review_context_unset` | 3 | `inbox claim` (§21.7): config `inbox.review_context` is unset (C5) |
 | `post_not_found` | 3 | `inbox claim` (§21.7): the team review cache holds no primary post of the pull request (C4) |
 | `not_loop_guarded` | 3 | `session resume` (§10.17): the Session is not a `lead` or a `manager`, or is archived, or is not `blocked` with label `φ: loop guard`; `details` `{state, label}` |
@@ -3376,7 +3377,7 @@ The header's lines are colour 8 and its two pills are read-only title pills (col
   | `pr-failing`, `pr-changes` (history rows only: hs-d470 dropped the kind, E8 opens none; no check or review state opens an Inbox item, hs-d470) | nothing; no jump, no click action |
   | `pr-ready` (the User's open authored pull request, in every state; the row's colour is the state, contract §2.2 "The authored pull request rule") | the glyph U+F12F4 is drawn in the item's urgency colour. The label is a `Link` widget (the label is the Link's text, the cue `󱆭` follows): a plain left click on it opens the item's `url` (the GitHub pull request page). A click on the rest of the row runs `session open <lead>`, then `select-pane` on the chat slot when a Plan owns the pull request (its Lead Session), and does nothing when none does. While that pull request's merge is running (the merge marker, below, hs-d495) the glyph cell is the yellow spinner and a click does nothing |
   | `review-requested` | a `Link` widget: the label is the Link's text, the cue `󱆭` follows, and a plain left click on them opens the item's `url` (the GitHub pull request page); with no `url` the label draws with no link and a plain click does nothing |
-  | `deploy` (pro-d100, A8) | a `Link` widget, as the link kinds: a plain left click on the label opens the item's `url`, the workflow run's page, in the default browser. cpd never approves a deploy and offers no approve action |
+  | `deploy` (pro-d100, A8) | a `Link` widget, as the link kinds: a plain left click on the label opens the item's `url`, the workflow run's page, in the default browser. Its right-click menu starts with **Approve**, which runs `cpd inbox approve <id>` at once (§21.13; the menu below) |
   | `engine-down` (shown only when no live Manager exists, below) | `cpd watch --ensure` (§12; idempotent), and says nothing (the result goes to the log only, never stderr; a failure is a `text` dialog); no popup (the StatusBar's `󰧭` button still opens the logs) |
   | `engine-error` (history rows only: hs-d314 dropped the kind, E8 opens none; the engine's errors are recorded in Events, counted in the Manager's turn-start digest, hs-d514, contract §3.7) | nothing: no jump, no popup |
   | `job-stuck` (history rows only: hs-d318 dropped the kind, E8 opens none; a stuck Job goes to the Context's Manager as a message, contract §3.7 "A stuck Job") | nothing: no jump, no popup |
@@ -3477,7 +3478,7 @@ The header's lines are colour 8 and its two pills are read-only title pills (col
 
 The menu is drawn as a rounded box (the Box rule, contract §6.1.1 "Boxes", by `tui/src/menu.rs` using box_widget), at the click, clamped inside the pane less one blank column on each side, as the tree's menu is; ↑↓ and Enter pick, Esc closes; a click picks an item; a click outside closes it. The generic menu drawing is shared between the tree's right-click menu and the Inbox's (`tui/src/menu.rs`, shared with `tui/src/tree/menu.rs`, hs-d9: reused, not copied). There is no key that opens it.
 
-**The Inbox's right-click menu** (Dispatch column). Claim is the first entry on `review-requested` rows only, and runs `inbox claim <id>` (§21.7, review-requested items only); the other entries are the Snooze and Dismiss entries. A `deploy` row's menu is the Snooze and Dismiss entries only (no Claim, no approve). **A `pr-ready` row's menu** (pro-d130), in this order, each entry only when it applies: **Merge** (status `ready to merge`; shown busy as **Merging** while the pull request's merge marker is live, and then not selectable) runs `cpd tui action merge <owner>/<repo>#<n> --client <name>` at once, no confirm popup (pro-d111); **Post** (status `ready for review`) runs `cpd pr post --pr <key> --plan <plan>` (§9.8b) at once, no confirm popup, through the cockpit's command runner, where `<key>` is the key of the `prs` row of the item's Plan that points to the pull request, read from the store when the entry is picked (the cockpit waits for the Slack call, shows no spinner, and a failure opens the error dialog titled `Post Pull Request`); **Go to Lead** (a Plan owns the pull request) runs `cpd session open <lead>`, then `select-pane` on the chat slot; **Copy Link** (the item has a `url`) runs `tmux set-buffer -w -- <url>` (no `cpd` command); then **Snooze 15 min**, **Snooze 1 h**, **Snooze until tomorrow 09:00** and **Dismiss**. The status is the label's tail, parsed by `cpd_core::inbox::pr::Status::of_item`; the cockpit never re-derives a state from the pull request row. Every other kind's menu is unchanged.
+**The Inbox's right-click menu** (Dispatch column). Claim is the first entry on `review-requested` rows only, and runs `inbox claim <id>` (§21.7, review-requested items only); the other entries are the Snooze and Dismiss entries. **Approve** is the first entry on `deploy` rows only (pro-d167), then the Snooze and Dismiss entries (no Claim): it runs `cpd inbox approve <id>` (§21.13) at once through the cockpit's command runner, with no confirm popup (pro-d111); a refusal or failure opens the failure dialog titled with the command words, exactly as a refused `Claim` does (`dialog::report`). No other kind has Approve. **A `pr-ready` row's menu** (pro-d130), in this order, each entry only when it applies: **Merge** (status `ready to merge`; shown busy as **Merging** while the pull request's merge marker is live, and then not selectable) runs `cpd tui action merge <owner>/<repo>#<n> --client <name>` at once, no confirm popup (pro-d111); **Post** (status `ready for review`) runs `cpd pr post --pr <key> --plan <plan>` (§9.8b) at once, no confirm popup, through the cockpit's command runner, where `<key>` is the key of the `prs` row of the item's Plan that points to the pull request, read from the store when the entry is picked (the cockpit waits for the Slack call, shows no spinner, and a failure opens the error dialog titled `Post Pull Request`); **Go to Lead** (a Plan owns the pull request) runs `cpd session open <lead>`, then `select-pane` on the chat slot; **Copy Link** (the item has a `url`) runs `tmux set-buffer -w -- <url>` (no `cpd` command); then **Snooze 15 min**, **Snooze 1 h**, **Snooze until tomorrow 09:00** and **Dismiss**. The status is the label's tail, parsed by `cpd_core::inbox::pr::Status::of_item`; the cockpit never re-derives a state from the pull request row. Every other kind's menu is unchanged.
 
 **The PRs section** was removed by pro-d130: its pull requests are Inbox rows (above, `pr-ready`), and the Inbox scrolls as §13.2 "Inbox section" says.
 
@@ -4589,7 +4590,7 @@ Job `contract-gate-pr` applied the User's decisions R19 (no Job-level Gate or Re
 
 ## 21. `inbox`
 
-Contract §2.2 "Inbox item", §3.7 E8, §4.4, §5.2. The Inbox is the single source of "needs you": one stored item per thing that needs the User, opened and closed by the engine (E8) from its cause, never by a command. The commands read the items and hide them. Area `core/src/inbox/`. This section describes the core kinds (`dialog`, `plan-review`, `loop-guard`, `unread`, and `engine-down`, which is not stored; `engine-error` is no longer opened, hs-d314, and nor is `job-stuck`, hs-d318: a stuck Job is a message to the Context's Manager, contract §3.7 "A stuck Job") and the PR poll's (`pr-ready` and `pr-failing`, `pr-changes`, which are no longer opened, hs-d470) and the team review poll's (`review-requested`, §21.5; and the PR poll's deploy read's, `deploy`, one item per deploy run that waits for the User's approval, from `run/deploy-runs.json`, contract §2.2 "The deploy rule", §7.6 step 8: it links no Plan, Context, Job or Session, and its `url` is the run's page;  contract §2.2 gives their conditions, urgency and labels, and their `url` is the pull request's page).
+Contract §2.2 "Inbox item", §3.7 E8, §4.4, §5.2. The Inbox is the single source of "needs you": one stored item per thing that needs the User, opened and closed by the engine (E8) from its cause, never by a command. The commands read the items and hide them, except `inbox approve` (§21.13), which approves a `deploy` item's run and closes the item. Area `core/src/inbox/`. This section describes the core kinds (`dialog`, `plan-review`, `loop-guard`, `unread`, and `engine-down`, which is not stored; `engine-error` is no longer opened, hs-d314, and nor is `job-stuck`, hs-d318: a stuck Job is a message to the Context's Manager, contract §3.7 "A stuck Job") and the PR poll's (`pr-ready` and `pr-failing`, `pr-changes`, which are no longer opened, hs-d470) and the team review poll's (`review-requested`, §21.5; and the PR poll's deploy read's, `deploy`, one item per deploy run that waits for the User's approval, from `run/deploy-runs.json`, contract §2.2 "The deploy rule", §7.6 step 8: it links no Plan, Context, Job or Session, and its `url` is the run's page;  contract §2.2 gives their conditions, urgency and labels, and their `url` is the pull request's page).
 
 An item as printed:
 
@@ -4932,6 +4933,45 @@ or, when the ticket is already at or past the target:
 A failure is the envelope `{"ok": false, "error": {"code", "message", "details"}}` with the exit of the table, for example `{"ok": false, "error": {"code": "jira_auth", "message": "Atlassian needs a sign-in. Run: pi mcp login atlassian", "details": {}}}`.
 
 **What the User runs once:** `pi mcp login atlassian`, from a shell on the machine. It opens a browser for the Atlassian sign-in; cpd never runs it, and cpd never reads or writes pi's token store `mcp-auth.json`. The shell form needs an `atlassian` entry with the same url in `~/.pi/agent/mcp.json` (§24.1 "Signing in"); the helper never reads that file. Rerunning the helper is safe: a ticket already at or past the target answers `unchanged`.
+
+### 21.13 `inbox approve`
+
+```
+cpd inbox approve <id>
+```
+
+Approves the pending deployments of a `deploy` item (contract §2.2 "The deploy rule"; pro-d167). It mirrors `inbox claim` (§21.7): `Command::Approve(DismissArgs)`, `run_with` opens `Env::open_with(ports)` and calls `approve_in(env, id)`, which uses `env.ports.runner` for `gh` and `env.ports.clock` for the time. It never rejects a deployment. The cockpit's **Approve** entry runs it (§13.2).
+
+| Precondition, in this order | Code | Exit |
+|---|---|---|
+| the item exists | `item_not_found` | 4 |
+| the item is open | `item_closed` | 3 |
+| the item is `deploy` (a snoozed or dismissed one too); `details` `{item, kind}` | `not_approvable` | 3 |
+| its subject is `deploy:<owner>/<repo>#<run_id>` with `<run_id>` a u64; else the database holds an invalid row, and nothing else is done | `store_failed` (a bad row) | 1 |
+| READ: `gh api` answers within 15 s with a JSON array of `{"environment": {"id": <u64>, "name": "<str>"}, "current_user_can_approve": <bool>, …}` (other members ignored); a failed call, a timeout or JSON of another shape | `gh_failed` | 1 |
+| WRITE (only when some entry is approvable): the POST answers within 15 s; a failed call | `gh_failed` | 1 |
+
+A `gh_failed` has the `details` of §1.3 (`argv`, `exit`, the last 60 lines of stderr). Its item stays open and nothing is written.
+
+Effects, in this order:
+
+1. **READ**: `gh api repos/<owner>/<repo>/actions/runs/<run_id>/pending_deployments`, argv exactly `["api", "repos/<owner>/<repo>/actions/runs/<run_id>/pending_deployments"]`, cwd the cpd home root, deadline 15 s, as the PR poll's deploy read (contract §7.6 step 8; `core/src/pr/deploys.rs`). It validates the answer at the boundary. `approvable` is the entries with `current_user_can_approve` true, sorted by (environment name, environment id).
+2. **WRITE** (when `approvable` is not empty): `gh api --method POST repos/<owner>/<repo>/actions/runs/<run_id>/pending_deployments --input -`, argv exactly `["api", "--method", "POST", "repos/<owner>/<repo>/actions/runs/<run_id>/pending_deployments", "--input", "-"]`, deadline 15 s, `GH_PROMPT_DISABLED=1` and `NO_COLOR=1`, stdin the JSON object `{"environment_ids": [<id>, …], "state": "approved", "comment": ""}` with the ids in `approvable` order (`Call.stdin`, as `post_review` sends its body, contract §7.6).
+3. **CLEAN UP**, also when `approvable` was empty (nothing is posted: the run no longer waits for the User, so its stale item clears at once):
+   - **File** `run/deploy-runs.json` (contract §1.4): when it is a valid version-1 cache (the `Cache` of `core/src/pr/deploys.rs`), the entries whose `repo` is `<owner>/<repo>` and `run_id` is `<run_id>` are removed; `version`, `polled_at` and every other run stay as they are; it is rewritten atomically (`write_atomic`) only when an entry was removed. A missing, unreadable, invalid or not-version-1 file is left byte for byte as it is, with no error. So E8's next reconcile does not reopen the item before the next `pr poll`.
+   - **Rows and Event**, one transaction (`store.write("inbox approve", …)`): the item is re-read; when it is still open, `inbox_items.closed_at` is set to now and the Event `inbox-closed` is appended with the text `Inbox item <id> closed: <label>.` (contract §5.2; the close of E8's reconcile, by the one helper `close_item` of `core/src/inbox/model.rs`). A deploy item has no links, so the Event has none. When E8 closed the item meanwhile, nothing is written and the command still succeeds.
+
+```json
+{"ok": true, "id": 12, "repo": "acme/pay", "run_id": 40508749055, "environments": ["production", "staging"]}
+```
+
+`environments` is the names of the approved entries, in `approvable` order. When nothing was approvable (nothing was posted), it is `[]` and `"already": true` is added:
+
+```json
+{"ok": true, "id": 12, "repo": "acme/pay", "run_id": 40508749055, "environments": [], "already": true}
+```
+
+Idempotent: yes. A failure before the WRITE writes nothing, so a rerun is safe. A failure after the POST (the cache or the close) leaves the item open; a rerun finds nothing approvable, because GitHub no longer lists the run's environments as waiting for the User, and finishes the clean-up with `"already": true`. A rerun after success is `item_closed` (exit 3).
 
 ## 22. `policy`
 
