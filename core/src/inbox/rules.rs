@@ -30,7 +30,7 @@ use crate::store::Store;
 /// goes to its Lead, and the Lead that waits for the Worker is `waiting`, not `blocked` (hs-d303).
 const PLAN_REVIEW: &str = "φ: plan review";
 
-/// The `state_label` prefix of a Verdict dialog (pi adapter): the item is named by it, `<who> verdict: <option>`.
+/// The `state_label` prefix of a Verdict dialog (pi adapter): the item is `<who> verdict\n<option>` (Row 1, Row 2).
 const VERDICT_PREFIX: &str = "verdict: ";
 
 /// What the team review rule needs besides the cache (contract §2.2 "The team review rule"): `inbox.bot_reviewers` and
@@ -122,7 +122,7 @@ fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError
                 kind: Kind::Deploy,
                 urgency: Urgency::Yellow,
                 subject: format!("deploy:{}#{}", r.repo, r.run_id),
-                label: format!("{} deploy {}: {}", r.repo, r.environment, r.title),
+                label: format!("{} deploy {}\n{}", r.repo, r.environment, r.title),
                 url: Some(r.url),
                 context: None,
                 plan: None,
@@ -301,7 +301,7 @@ fn dialogs(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
                 _ => Urgency::Magenta,
             };
             let label = if seat.state_label.starts_with(VERDICT_PREFIX) {
-                format!("{} {}", seat.who, seat.state_label)
+                format!("{} verdict\n{}", seat.who, &seat.state_label[VERDICT_PREFIX.len()..])
             } else {
                 format!("{} asks you", seat.who)
             };
@@ -1358,19 +1358,19 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 8, "passed", "conflicting", "approved");
         assert!(f.of(Kind::PrFailing).is_empty());
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#8 conflict");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#8 conflict\nT");
         set(&mut f, 8, "checks = 'failed'");
         assert!(f.of(Kind::PrFailing).is_empty());
         set(&mut f, 8, "checks = 'passed', mergeable = 'mergeable', merge_state = 'clean'");
         assert!(f.of(Kind::PrFailing).is_empty());
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#8 ready to merge");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#8 ready to merge\nT");
     }
 
     #[test]
     fn an_unknown_mergeable_is_neither_failing_nor_ready() {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 9, "passed", "unknown", "approved");
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#9 waiting");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#9 waiting\nT");
     }
 
     #[test]
@@ -1378,7 +1378,7 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 3, "pending", "mergeable", "changes_requested");
         assert!(f.of(Kind::PrChanges).is_empty());
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#3 changes requested");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#3 changes requested\nT");
     }
 
     #[test]
@@ -1386,16 +1386,16 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 4, "passed", "mergeable", "approved");
         let c = one(f.of(Kind::PrReady));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Yellow, "pr:acme/shop#4", "shop#4 ready to merge"));
+        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Yellow, "pr:acme/shop#4", "shop#4 ready to merge\nT"));
         assert_eq!(c.url.as_deref(), Some("https://github.com/acme/shop/pull/4"));
         set(&mut f, 4, "review_decision = 'none'");
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 ready to merge", "no review is no objection");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 ready to merge\nT", "no review is no objection");
         set(&mut f, 4, "draft = 1");
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 draft", "a draft is never ready");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 draft\nT", "a draft is never ready");
         set(&mut f, 4, "draft = 0, review_decision = 'changes_requested'");
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 changes requested");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 changes requested\nT");
         set(&mut f, 4, "review_decision = 'approved', checks = 'pending'");
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 checks running");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 checks running\nT");
     }
 
     /// The exact row of missionlane/cc-api-orc-apollo#2385 (hs-d481): everything looks ready but GitHub says BLOCKED.
@@ -1404,9 +1404,9 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 5, "passed", "mergeable", "none");
         set(&mut f, 5, "merge_state = 'blocked'");
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#5 waiting", "unowned");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#5 waiting\nT", "unowned");
         own(&mut f, 5);
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#5 waiting", "owned");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#5 waiting\nT", "owned");
     }
 
     #[test]
@@ -1415,7 +1415,7 @@ mod tests {
             let mut f = fixture("dispatch");
             pull_request(&mut f, 1, "passed", "mergeable", review);
             set(&mut f, 1, &format!("merge_state = '{merge_state}'"));
-            one(f.of(Kind::PrReady)).label == "shop#1 ready to merge"
+            one(f.of(Kind::PrReady)).label == "shop#1 ready to merge\nT"
         };
         // hs-d525: only clean is ready; unstable and has_hooks are not.
         for merge_state in ["clean"] {

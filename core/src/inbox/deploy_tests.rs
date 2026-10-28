@@ -62,7 +62,7 @@ fn a_cached_run_opens_one_yellow_deploy_item() {
     let c = &found[0];
     assert_eq!((c.kind, c.urgency), (Kind::Deploy, Urgency::Yellow));
     assert_eq!(c.subject, "deploy:acme/pay#40508749055");
-    assert_eq!(c.label, "acme/pay deploy production, staging: Release 1.2");
+    assert_eq!(c.label, "acme/pay deploy production, staging\nRelease 1.2");
     assert_eq!(c.url.as_deref(), Some("https://github.com/acme/pay/actions/runs/40508749055"));
     assert_eq!((&c.plan, &c.context, &c.job, &c.session, &c.record, &c.event), (&None, &None, &None, &None, &None, &None));
 
