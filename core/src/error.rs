@@ -328,6 +328,7 @@ error_codes! {
     PathNotGuarded = "path_not_guarded" => Refused,
     OpenJobLive = "open_job_live" => Refused,
     LeadBranchMoved = "lead_branch_moved" => Refused,
+    HeadMoved = "head_moved" => Refused,
     PrNotFound = "pr_not_found" => NotFound,
 }
 
