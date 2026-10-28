@@ -19,6 +19,7 @@
 [profile.default]
 fail-fast = false
 
+# CI overrides it for its Rust tests step (NEXTEST_TEST_THREADS in .github/workflows/ci.yml, docs/research/test-threads.md).
 # test-threads = 4, still PROVISIONAL: the A/B leaked at 4 (docs/research/leak-flake-ab.md:
 # 8 LEAK-FAIL in 18 runs, against 34 at 14 threads, same pressure: about 4 times fewer, not 0).
 # 14 cores; a clean run had at most 42 test processes at once, failing runs 56-70 (rs-dyn),

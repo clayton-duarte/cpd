@@ -38,6 +38,15 @@ test("the CI workflow runs the stages of verify:steps, in order, as named steps"
   assert.deepEqual(names.filter((n) => wanted.includes(n)), wanted);
 });
 
+test("the CI workflow sets NEXTEST_TEST_THREADS: \"8\" in the env of the Rust tests step only", () => {
+  const ci = readFileSync(join(fileURLToPath(import.meta.url), "..", "..", "..", ".github", "workflows", "ci.yml"), "utf8");
+  const parts = ci.split(/^\s*- (?=name: )/m);
+  const withVar = parts.filter((p) => p.includes("NEXTEST_TEST_THREADS"));
+  assert.equal(withVar.length, 1);
+  assert.match(withVar[0], /^name: Rust tests\n(?:.*\n)*?\s+env:\n\s+NEXTEST_TEST_THREADS: "8"\n/);
+  assert.equal(parts[0].includes("NEXTEST_TEST_THREADS"), false);
+});
+
 // A push to main runs the Gate too: two green pull requests can break main together.
 test("the CI workflow runs on pull_request, workflow_dispatch and a push to main", () => {
   const ci = readFileSync(join(fileURLToPath(import.meta.url), "..", "..", "..", ".github", "workflows", "ci.yml"), "utf8");
