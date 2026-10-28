@@ -299,8 +299,8 @@ impl Jira {
         } else {
             let url = format!("https://github.com/acme/pay/pull/{number}");
             format!(
-                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-                   VALUES ('acme/pay', {number}, '{url}', 'PR {key}', 0, 'open', 'none', 'none', 't', NULL, 't');
+                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, authored)
+                   VALUES ('acme/pay', {number}, '{url}', 'PR {key}', 0, 'open', 'none', 'none', 't', NULL, 't', 0);
                  INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, name, jira)
                    VALUES ('pay', '{key}', '/nowhere', 'main', 'open', 'cpd/pay/{key}', '/nowhere/lead', {number}, '{url}', 't',
                            (SELECT id FROM pull_requests WHERE repo = 'acme/pay' AND number = {number}), cpd_txn(), 't', 't', 'pay', {jira});"
