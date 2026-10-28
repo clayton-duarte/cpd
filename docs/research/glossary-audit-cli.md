@@ -9,7 +9,7 @@ Shorthand for every command below, run from the repo root (tests excluded by glo
     P=(cli/src engine/src scripts contrib package.json Cargo.toml docs/interface.md bacon.toml cliff.toml)
     X=(-g '!*_tests.rs' -g '!testkit.rs')
 
-Test exclusion: files named `*_tests.rs` and `testkit.rs` are excluded by `X`. `cli/src/ambient_run_with_tests.rs` and `cli/src/fakes/**` are tests and fakes: not read (they match no `pr` pattern: `rg -c '\bprs?\b|Pr[A-Z]|pr_|_pr\b|pull_request' cli/src/fakes cli/src/ambient_run_with_tests.rs` prints nothing). Inline `#[cfg(test)]` modules of non-test files stay IN the counts and are named here: `engine/src/watch/report.rs:266-` (about 20 matches), `engine/src/watch/pr.rs:311-` (1 match, line 328), `engine/src/watch/workers.rs:153-` (7 matches of `prs`/`pr`, lines 178-193). Counts that include them say so by file name in the Files column.
+Test exclusion: files named `*_tests.rs` and `testkit.rs` are excluded by `X`. `cli/src/ambient_run_with_tests.rs` and `cli/src/fakes/**` are tests and fakes: not read (they match no `pr` pattern: `rg -c '\bprs?\b|Pr[A-Z]|pr_|_pr\b|pull_request' cli/src/fakes cli/src/ambient_run_with_tests.rs` prints nothing). Inline `#[cfg(test)]` modules of non-test files stay IN the counts and are named here: `engine/src/watch/report.rs:266-` (7 matches), `engine/src/watch/pr.rs:311-` (1 match, line 328), `engine/src/watch/workers.rs:153-` (7 matches of `prs`/`pr`, lines 178-193). Counts that include them say so by file name in the Files column.
 
 | Path | Files | Read |
 |---|---|---|
@@ -29,7 +29,7 @@ Commands run: `timeout 20 cpd --help`, `cpd pr --help` and `cpd pr <sub> --help`
 
 Totals (`. /tmp/c.sh` form, all with `"${X[@]}" "${P[@]}"`):
 
-- Union pattern `\bprs?\b|Pr[A-Z]|pr_|_pr\b|pull_request|PullRequest`: `rg -c -e '<pattern>' "${X[@]}" "${P[@]}"` lists 31 files; `rg -n ... | wc -l` gives 154 lines (measured with `-g` for tests excluded).
+- Union pattern `\bprs?\b|Pr[A-Z]|pr_|_pr\b|pull_request|PullRequest`: `rg -c -e '<pattern>' "${X[@]}" "${P[@]}"` lists 19 files; `rg -n ... | wc -l` gives 154 lines.
 - Tokens containing a pattern: `rg -o --no-filename -e '[A-Za-z0-9_.-]*(\bprs?\b|Pr[A-Z]|pr_|_pr\b|pull_request|PullRequest)[A-Za-z0-9_-]*' "${X[@]}" "${P[@]}" | sort | uniq -c | sort -nr`: 116 `pr`, 13 `prs`, 11 `PrKey`, 7 `j.pr`, 6 `start_pr`, 5 `o.pr`, 3 `pr-poll-failing`, 3 `post.pr`, 2 `watch.pr_poll_transient_minutes`, 2 `pr-poll`, 2 `pr_poll_seconds`, 2 `merge.pr`, 2 `m-pr-b`, and 1 each of `wanted.pr`, `group.pr`, `pr-post`, `pr-description`, `pr_start_failed`, `pr_has_live_linear`, `policy_of_pr`, `engine.config.watch.pr_poll_seconds`, `engine.config.watch.pr_poll_transient_minutes`, `cpd-pr-poll`, `--pr`, and two test names. Every token is assigned to a row below: `pr` (116) to rows 1, 12, 13, 14, 15; `prs` (13) to rows 5 and 9; the others to the row of the same name. The only matches NOT covered by a row: none.
 - No match of `pull_request` or `PullRequest` exists in the part (`rg -c 'pull_request|PullRequest' "${X[@]}" "${P[@]}"` prints nothing): the `pull_requests` table is only in core.
 
@@ -149,7 +149,7 @@ Not strings a person reads: the `E4`-`E18` module comments (`open.rs:2-8`, `engi
 
 ## Counts
 
-- Files read: 20 files with a match read at their matching lines (13 engine/watch, 2 doctor, 2 cli, 3 scripts-or-root with a match) plus `docs/interface.md`; 137 files in the part: `rg --files cli/src engine/src scripts contrib package.json Cargo.toml docs/interface.md bacon.toml cliff.toml | wc -l`.
-- Rows: Identifier families 22 (plus the `cpd pr` noun, mixed); User-facing strings 58; Wrong or stale 14.
+- Files read: 20 files with a match read at their matching lines (13 engine/watch, 2 doctor, 2 cli, 3 scripts-or-root with a match) plus `docs/interface.md`; 92 files in the part: `rg --files cli/src engine/src scripts contrib package.json Cargo.toml docs/interface.md bacon.toml cliff.toml | wc -l`.
+- Rows: Identifier families 22 (plus the `cpd pr` noun, mixed); User-facing strings 52; Wrong or stale 14 (counted from the tables, header rows excluded).
 - Occurrences per sense (rows, by their Count; rows 21 and 22 are overlap summaries and are not added): object = rows 1 (5), 5 (1), 7 (11), 8 (7), 9 (19+4), 10 (8+2+6), 11 (2), 15 (1), 20 (2); pull request = rows 3 (5), 13 (1), 14 (18+6+14, overlap, counted once as the 14-token row), 22 (11); mixed = rows 2 (3), 4 (19), 12 (15+5), 18 (5), `cpd pr` noun (3: `interface.md:65`, `cli.rs:58,60`); phase = row 17 (3); other = row 19 (3). These sums overlap where a line matches two patterns, so they are not additive to the 159-token total (unverified as an exact partition).
-- Whole-part union: 154 matching lines, 31 files (`rg -c` as in Coverage).
+- Whole-part union: 154 matching lines, 19 files (`rg -c` as in Coverage).
