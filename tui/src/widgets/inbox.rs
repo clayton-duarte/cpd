@@ -1,11 +1,9 @@
-//! The Inbox section directly under the machine in the right column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a collapsible
-//! widget (`crate::fold`) with its margins, one empty row above and one below (hs-d476): the grey pill title
-//! `╭─Inbox────…────<n>` (`crate::section`, inside the panel's padding), up to [`SHOWN`] item rows `│ <glyph> <label>` (each with
-//! its tier's glyph and colour, hs-d483) with the age right-aligned, and the fold widget's closing row (`crate::fold`): with more items
-//! the muted `╰󰬦 expand` that expands the list inline and becomes `╰󰬬 collapse`, with 3 or fewer the terminator `╰󰬪` (U+F0B2A; hs-d574), with none no
-//! row. Only the toggle row toggles. Whether it is expanded is view state only. Expanded, it is capped at the rows the
-//! column's split gives it (the rows below the machine, [`super::draw`]) and its items scroll inside the cap, with right-aligned `▲ <n> more` / `▼ <n> more` cue rows
-//! (`dialog::scroll::cue`, [`Shape`]).
+//! The Inbox section at the bottom of the right column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a flat list, no
+//! rail, no fold. Its rows, top to bottom: a blank row, the header (`crate::section::flush_title`, `───<Inbox>───…<n>─`, from
+//! column 0), the ▲ line, one row per item `<glyph> <label> … <age>` (each with its tier's glyph and colour, hs-d483; one blank
+//! column on each side), and the ▼ line; with no item the list is the one muted row `up to date, drink some water`. Both cue
+//! lines are always reserved (blank when nothing is hidden); with more items than the column's rows give it, the items scroll
+//! with the wheel and the cue lines read `▲ <n> more` / `▼ <n> more` (`dialog::scroll::cue`, [`Shape`]).
 //!
 //! A click on an item row jumps to its cause ([`jump`]): a command or the copy of its `url` (a `pr-ready` row has none: its menu has Merge). The label of a link kind with a `url` is a `Link` widget (`crate::link`): a click on it opens the page
 //! instead. Everything here is pure but [`draw`], which only writes to the frame.
@@ -19,9 +17,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::tree::actions::Action;
-use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
 use crate::cells::{self, truncate};
-use crate::fold;
 pub(crate) use crate::merge::Pull;
 use crate::palette;
 use crate::phi;
@@ -29,23 +25,20 @@ use crate::read::{Tree, age_text};
 use crate::section;
 use crate::dialog::scroll::{Cue, cue};
 use crate::dialog::scroll::WHEEL_ROWS;
-use super::{Window, max_scroll, window};
+use super::Window;
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Item, Kind};
 use cpd_core::inbox::pr::Status;
 use crate::link::{Link, Links};
 
-/// How many item rows the section shows before the `╰󰬦 expand` row.
-pub const SHOWN: usize = 3;
-
 /// The columns before the label: the item's tier glyph and a space.
 const LEAD_WIDTH: usize = 2;
 
-/// The rows above the items: the empty row (hs-d346) and the title.
-const TOP: usize = 2;
+/// The rows above the list: the blank row, the header and the ▲ line.
+const TOP: usize = 3;
 
-/// The rows below the closing row: the empty row (hs-d476).
-const BOTTOM: usize = 1;
+/// The rows around the list: the three above and the ▼ line.
+const AROUND: usize = TOP + 1;
 
 /// Whether the merge of the `pr-ready` `item`'s pull request runs: `merging` is the pull requests (`<owner>/<repo>#<n>`) with a live
 /// merge marker (hs-d495).
@@ -53,7 +46,7 @@ pub(crate) fn merges(merging: &std::collections::BTreeSet<String>, item: &Item) 
     item.kind == Kind::PrReady && Pull::from_subject(&item.subject).is_some_and(|pull| merging.contains(&pull.to_string()))
 }
 
-/// What a row of the section is, by its offset from the section's first row (the empty one).
+/// What a row of the section is, by its offset from the section's first row (the blank one).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
     Header,
@@ -61,13 +54,11 @@ pub enum Hit {
     Item(usize),
 }
 
-/// The rows of the section for `count` visible items. Expanded, its height is capped at `cap` rows (never below the
-/// collapsed section's) and the items scroll in it from the item `scroll`, with a `▲ <n> more` and a `▼ <n> more` cue row
-/// where some are hidden; the scrolling is [`window`]'s, one row an item.
+/// The rows of the section for `count` items: four rows and the list, which is capped with the section at `cap` rows and then
+/// scrolls from the item `scroll`, one row an item ([`Window`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Shape {
     count: usize,
-    expanded: bool,
     cap: u16,
     scroll: usize,
 }
@@ -75,10 +66,10 @@ pub struct Shape {
 impl Shape {
     /// The section as tall as its items want (no cap), at the top.
     pub fn new(count: usize) -> Shape {
-        Shape { count, expanded: false, cap: u16::MAX, scroll: 0 }
+        Shape { count, cap: u16::MAX, scroll: 0 }
     }
 
-    /// The same, expanded at most `cap` rows tall.
+    /// The same, at most `cap` rows tall.
     pub fn capped(self, cap: u16) -> Shape {
         Shape { cap, ..self }
     }
@@ -88,43 +79,25 @@ impl Shape {
         Shape { scroll, ..self }
     }
 
-    /// The item rows the keyboard cursor reaches: three, or all when expanded (they scroll).
-    pub fn shown(self) -> usize {
-        if self.expanded { self.count } else { self.count.min(SHOWN) }
-    }
-
-    fn has_toggle(self) -> bool {
-        self.count > SHOWN
-    }
-
-    /// The rows the section wants: the empty row, the title, the items, the closing row (the toggle, the terminator `╰󰬪`, or
-    /// with no item the up-to-date row, hs-d487; hs-d574) and the empty row below; expanded, at most the cap, but not less than
-    /// collapsed.
+    /// The rows the section wants: the list (one row at least: the up-to-date row) and four more, at most the cap.
     pub fn height(self) -> u16 {
-        let close = 1;
-        let collapsed = TOP + self.count.min(SHOWN) + close + BOTTOM;
-        let full = TOP + self.count + close + BOTTOM;
-        let height = if self.expanded { full.min(usize::from(self.cap)).max(collapsed) } else { collapsed };
+        let height = (self.count.max(1) + AROUND).min(usize::from(self.cap));
         u16::try_from(height).unwrap_or(u16::MAX)
     }
 
-    /// The rows between the title and the closing row: the items and their cues.
+    /// The rows of the list, between the two cue lines.
     fn list_rows(self) -> usize {
-        usize::from(self.height()) - TOP - 1 - BOTTOM
+        usize::from(self.height()).saturating_sub(AROUND)
     }
 
-    /// The items drawn and the cues: all of the first three when collapsed, else the window at the scroll offset.
+    /// The items drawn and the cues.
     fn window(self) -> Window {
-        if self.expanded {
-            window(self.count, self.list_rows(), 1, self.scroll)
-        } else {
-            Window { first: 0, shown: self.shown(), cue_above: false, below: 0 }
-        }
+        Window::new(self.count, self.list_rows(), self.scroll)
     }
 
-    /// The largest scroll offset: the last item reaches the bottom of the list. 0 when collapsed or when all fit.
+    /// The largest scroll offset: the last item reaches the bottom of the list. 0 when all fit.
     pub fn max_scroll(self) -> usize {
-        if self.expanded { max_scroll(self.count, self.list_rows(), 1) } else { 0 }
+        Window::max_scroll(self.count, self.list_rows())
     }
 
     /// The scroll offset after a wheel notch down or up over the section: [`WHEEL_ROWS`] items a notch, clamped.
@@ -134,36 +107,14 @@ impl Shape {
         if down { (scroll + WHEEL_ROWS).min(max) } else { scroll.saturating_sub(WHEEL_ROWS) }
     }
 
-    /// The row, below the section's first, of the item `i`, when it is drawn.
-    pub fn row_of(self, i: usize) -> Option<u16> {
-        let win = self.window();
-        (win.first..win.first + win.shown).contains(&i).then(|| (TOP + usize::from(win.cue_above) + i - win.first) as u16)
-    }
-
-    /// The scroll offset nearest `scroll` at which the item `i` is drawn.
-    pub fn scroll_to(self, i: usize) -> usize {
-        let mut scroll = self.scroll.min(self.max_scroll());
-        if i < self.scrolled(scroll).window().first {
-            scroll = i;
-        }
-        while scroll < self.max_scroll() && self.scrolled(scroll).row_of(i).is_none() {
-            scroll += 1;
-        }
-        scroll
-    }
-
-    /// The row `row` rows below the section's first; the empty rows, a cue row and the terminator are none (hs-d574).
+    /// The row `row` rows below the section's first: the header, or an item's row; the blank row, the cue lines and the
+    /// up-to-date row are none.
     pub fn hit(self, row: u16) -> Option<Hit> {
         let row = usize::from(row);
         let win = self.window();
-        let list = self.list_rows();
         match row {
             1 => Some(Hit::Header),
-            r if (TOP..TOP + list).contains(&r) => {
-                let at = r - TOP;
-                (at >= usize::from(win.cue_above) && at - usize::from(win.cue_above) < win.shown)
-                    .then(|| Hit::Item(win.first + at - usize::from(win.cue_above)))
-            }
+            r if (TOP..TOP + win.shown).contains(&r) => Some(Hit::Item(win.first + r - TOP)),
             _ => None,
         }
     }
@@ -477,82 +428,44 @@ fn link_url(item: &Item) -> Option<&str> {
     item.url.as_deref().filter(|_| is_link(item.kind))
 }
 
-/// The box's body: the rows of the list (items and cues), each a line, and the links of the labels of the link kinds.
-struct Body<'a> {
-    rows: Vec<Line<'static>>,
-    /// (row, width of the label and the cue, the item)
-    links: Vec<(u16, u16, &'a Item)>,
-    drawn: &'a mut Links,
-}
-
-impl Widget for Body<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        for (y, line) in (area.y..area.bottom()).zip(self.rows) {
-            line.render(Rect::new(area.x, y, area.width, 1), buf);
-        }
-        for (row, width, item) in self.links {
-            let Some(url) = link_url(item) else { continue };
-            if row < area.height {
-                let text = Line::from(phi::spans(&item.label, palette::clickable_text()));
-                self.drawn.draw(Link::new(url).text(text), Rect::new(area.x + LEAD_WIDTH as u16, area.y + row, width, 1), buf);
-            }
-        }
-    }
-}
-
-/// Draws the section into `area`, the panel's full width: a `BoxWidget<Rail>` over `spacing::contain(area)` (its first row is the
-/// empty one; rows that do not fit are cut): `items` are the
-/// snapshot's visible open items, `now` the clock the ages are taken from, `shape` is the section's, as capped and scrolled. `spinning` says, of an
-/// item whose merge runs, the frame of the spinner its glyph cell shows instead of its tier glyph (hs-d495).
+/// Draws the section into `area`, the pane's full width (its first row is the blank one; rows that do not fit are cut from the
+/// bottom): `items` are the snapshot's visible open items, `now` the clock the ages are taken from, `shape` is the section's, as
+/// capped and scrolled. `spinning` says, of an item whose merge runs, the frame of the spinner its glyph cell shows instead of its
+/// tier glyph (hs-d495).
 pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, now: OffsetDateTime, spinning: &dyn Fn(&Item) -> Option<usize>) -> Links {
-    // the section is drawn whole; rows below the area are cut
-    let wall = Rect { height: shape.height(), ..spacing::contain(area) };
-    let closing = if items.is_empty() {
-        fold::done("up to date, drink some water")
-    } else if shape.has_toggle() {
-        fold::toggle(shape.expanded)
-    } else {
-        fold::plain()
-    };
-    let closing = fold::after_corner(closing, usize::from(wall.width).saturating_sub(1 + spacing::RIGHT_PAD as usize));
-    let walls = Walls::Rail { closing };
-    let inner = geometry(&walls, wall).inner;
-    let width = usize::from(inner.width);
+    let mut drawn = Links::default();
+    let width = usize::from(area.width);
+    let inner = width.saturating_sub(2);
     let win = shape.window();
     let list = shape.list_rows();
-    let mut rows = Vec::new();
-    let mut links = Vec::new();
-    let mut drawn = Links::default();
-    for at in 0..list {
-        let row = at as u16;
-        match shape.hit(row + TOP as u16) {
-            Some(Hit::Item(i)) => {
-                let item = &items[i];
-                let (line, label_width) = item_line(item, &age_of(&item.opened_at, now), width, spinning(item));
-                rows.push(line);
-                if link_url(item).is_some() {
-                    links.push((row, label_width as u16, item));
-                }
-            }
-            _ if win.cue_above && at == 0 => rows.push(cue(Cue::Above, win.first, width)),
-            _ if win.below > 0 && at == list - 1 => rows.push(cue(Cue::Below, win.below, width)),
-            _ => rows.push(Line::default()),
-        }
-    }
-    let title = section::rail_title("Inbox", Some(items.len()), usize::from(wall.width).saturating_sub(1));
-    let widget = BoxWidget::new(walls, palette::muted_text(), Body { rows, links, drawn: &mut drawn }).title(title);
-    let shown = area.height.min(wall.height);
-    if shown == wall.height {
-        f.render_widget(widget, wall);
-        return drawn;
-    }
-    let mut whole = Buffer::empty(wall);
-    widget.render(wall, &mut whole);
     let buf = f.buffer_mut();
-    for y in wall.y..wall.y + shown {
-        for x in wall.x..wall.right() {
-            buf[(x, y)] = whole[(x, y)].clone();
+    // a line `row` rows below the section's first, `skip` columns in: rows below the area are cut
+    let put = |buf: &mut Buffer, row: usize, skip: u16, line: Line<'static>| {
+        let y = area.y.saturating_add(u16::try_from(row).unwrap_or(u16::MAX));
+        if y < area.bottom() && skip < area.width {
+            line.render(Rect::new(area.x + skip, y, area.width - skip, 1), buf);
         }
+    };
+    put(buf, 1, 0, section::flush_title("Inbox", Some(items.len()), width));
+    if win.cue_above {
+        put(buf, 2, 1, cue(Cue::Above, win.first, inner));
+    }
+    if items.is_empty() {
+        put(buf, TOP, 1, Line::styled("up to date, drink some water", palette::muted_text()));
+    }
+    for at in 0..win.shown {
+        let item = &items[win.first + at];
+        let row = TOP + at;
+        let (line, label_width) = item_line(item, &age_of(&item.opened_at, now), inner, spinning(item));
+        put(buf, row, 1, line);
+        let y = area.y.saturating_add(u16::try_from(row).unwrap_or(u16::MAX));
+        if let Some(url) = link_url(item).filter(|_| y < area.bottom()) {
+            let text = Line::from(phi::spans(&item.label, palette::clickable_text()));
+            drawn.draw(Link::new(url).text(text), Rect::new(area.x + 1 + LEAD_WIDTH as u16, y, label_width as u16, 1), buf);
+        }
+    }
+    if win.below > 0 {
+        put(buf, TOP + list, 1, cue(Cue::Below, win.below, inner));
     }
     drawn
 }
