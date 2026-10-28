@@ -3659,16 +3659,19 @@ Steps, in order (implementing.md "`cpd install`" has each with its message; cont
 2. **The migration check.** `git fetch --quiet origin main` (a failed fetch refuses); every file of `core/src/store/migrations/` must be on `origin/main` with the same content; else refused, listing the names.
 3. **The verdict of the built binary.** `<target>/release/cpd --version` must succeed, carry a `store` field, and not say `store.opens` false; else refused with the refusal's message and the fix of its code. Nothing migrates.
 4. **The config migration and validation.** `<target>/release/cpd config --migrate` reads `$CPD_HOME/config.toml`, applies the migrations (contract §8.1 "Config migrations", hs-d722; the two first are `distill-tier-gx` and `drop-test-concurrency`, hs-d722 and hs-d679), validates the result, and writes the file only when it changed and only when the result is valid. The file is untouched on any refusal. Prints `{"ok":true,"path":"<path>","migrated":["<name>",...]}` and each applied migration as a stderr line `cpd install: config.toml migrated: <name>`. Refusals: `config_missing` (the file is absent), `config_invalid` (the migrated file is still invalid, `details.key` names it). The migration happens before the binary is replaced, so that if it fails, the config is not mutated.
+4a. **The adapter packages.** Runs after step 4 and before step 5, so a failure leaves the binary, the adapter link and the config as they are. It reads `<root>/package.json`. When the file is absent, or has no `dependencies` key or an empty one, it does nothing and runs no pnpm (today the root package.json has no `dependencies`, so no machine runs pnpm at install). Otherwise `<root>/pnpm-lock.yaml` must exist; else refused: `cpd install refused: package.json has dependencies but the checkout has no pnpm-lock.yaml`. It creates `~/.local/share/cpd` if needed, copies `package.json`, `pnpm-lock.yaml` and, when present, `pnpm-workspace.yaml` there byte for byte, and runs `pnpm install --prod --frozen-lockfile` with that directory as working directory, bounded at 10 minutes, output captured. Result: `~/.local/share/cpd/node_modules` holds the production packages only (no devDependencies); the adapter's `pi.<id>` finds them (implementing.md "The adapter swap"). A non-zero exit, a timeout, or a pnpm that cannot start (not installed) refuses the install (the refusals table below). Idempotent: the same package.json and lockfile give the same result.
 5. **The binary.** Copied to `~/.local/bin/.cpd.tmp.<pid>`, `chmod 755`, `rename`d over `~/.local/bin/cpd` (atomic, also while it runs).
-6. **The adapter swap.** `pi/` minus `test/` is built as `pi.tmp.<pid>`, renamed to `pi.<id>`, linked as `pi.link.<pid>` (a relative symlink) and `rename`d over `pi` in one `rename(2)`; a real `pi/` directory is first renamed to `pi.legacy` (the one non-atomic moment, restored if the swap fails); `pi/package.json` must exist; then `pi.<id>` and `pi.legacy` that are neither current nor displaced and are older than 60 minutes, and `pi.tmp.<pid>` and `pi.link.<pid>` of dead pids, are removed (a failure only warns). Prints `installed <bin> and <link>` on stderr.
+6. **The adapter swap.** `pi/` minus `test/` is built as `pi.tmp.<pid>`, renamed to `pi.<id>`, linked as `pi.link.<pid>` (a relative symlink) and `rename`d over `pi` in one `rename(2)`; a real `pi/` directory is first renamed to `pi.legacy` (the one non-atomic moment, restored if the swap fails); `pi/package.json` must exist; then `pi.<id>` and `pi.legacy` that are neither current nor displaced and are older than 60 minutes, and `pi.tmp.<pid>` and `pi.link.<pid>` of dead pids, are removed (a failure only warns); the cleanup never touches `<share>/node_modules`, `<share>/package.json` or `<share>/pnpm-lock.yaml`. Prints `installed <bin> and <link>` on stderr.
 7. **The follow-ups, on the new binary:** `cpd config`; `cpd watch --check` (§12); `cpd tui --respawn` (§13.1) when the cockpit has its `main` window; when the work session has its `watch` window, `cpd watch --mark-restart` (§12), `tmux kill-window -t =<work>:watch`, the wait for `locks/watch.lock` to be free (0.25 s steps, `CPD_INSTALL_LOCK_WAIT_SECS`, default 60), `cpd watch --ensure`, and the check that the lock is held. A failure of `config` or `watch --check` leaves the engine and the views alone and skips the rest; any other failure prints and goes on. Each failure is one line `cpd install follow-up failed: <text>` on stderr (texts: contract §3.7).
 8. **The tag.** `scripts/tag-version.sh` (docs/versioning.md): a failure warns with `tag-version:` and does not change the exit.
 
 | Precondition | Code | Exit |
 |---|---|---|
 | `--root` is given | `usage` | 2 |
+| Step 4a: `<root>/package.json` has `dependencies` and `<root>/pnpm-lock.yaml` is absent: `cpd install refused: package.json has dependencies but the checkout has no pnpm-lock.yaml` | `install_failed` | 1 |
+| Step 4a: `pnpm install --prod --frozen-lockfile` exits non-zero, times out (10 minutes) or cannot start (pnpm not installed): `cpd install refused: pnpm install --prod --frozen-lockfile failed in <share>:`, then its captured stdout and stderr, trimmed (for a pnpm that cannot start, the error) | `install_failed` | 1 |
 
-Every refusal (steps 1 to 4, nothing replaced), failure (steps 5 and 6) and failed follow-up (step 7) is a message on stderr as above and **exit 1**; the exit is 1 at the end when any follow-up line was printed.
+Every refusal (steps 1 to 4a, nothing replaced), failure (steps 5 and 6) and failed follow-up (step 7) is a message on stderr as above and **exit 1**; the exit is 1 at the end when any follow-up line was printed.
 
 Output: the install's progress and every message above go to stderr as human text, as the script's did (a Lead's commit hooks and dotfiles read the exit code and the text, not JSON); the one JSON value on stdout is `{"ok": true, "binary": "<path>", "adapter": "<path>", "version": "<cpd --version of the built binary>"}` on success, and the error value (§1.2) with exit 1 otherwise (the messages are the script's own; every refusal, failure and failed follow-up is `install_failed`, exit 1). Effects: writes only `~/.local/bin`, `~/.local/share/cpd` and what the follow-ups write (`run/install-restart.json`, the engine's own files); no row, no Event. Idempotent: yes, safe to rerun, also by two installs at once (contract §3.7 "The adapter swap"). The command-tree test `cli/tests/tooling/interface.rs` lists it (callers none, cockpit no, internal no); `docs/interface.md` is regenerated from the tree.
 
@@ -4105,9 +4108,13 @@ Decision (User, 2026-10-19). A Worker runs only the tests its change touches; th
 
 - `cargo test` or `cargo nextest run`, also through `scripts/cargo.sh`, with or without `timeout N` in front, when it has `--workspace`, or has none of `-p` / `--package`, `--test`, `--lib`, `--bin`, `-E` / `--filterset`, or a positional test-name filter (also after `--`);
 - `npm test` or `npm run test` with no file argument (a word after `--`, or after the script name, that is not an option);
-- `npm run verify` (the Gate), whatever its arguments.
+- `npm run verify` (the Gate), whatever its arguments;
+- `pnpm test`, `pnpm t` or `pnpm tst`, and `pnpm run test` or `pnpm run-script test`, with no file argument (a word after `--`, or after the script name, that is not an option);
+- `pnpm run verify` or `pnpm run-script verify`, and the bare `pnpm verify` (pnpm runs a script by its bare name), whatever its arguments.
 
-**Allowed**, for example: `scripts/cargo.sh nextest run -p cpd --test flow plan_overlap::`, `scripts/cargo.sh build -p cpd --test flow`, `cargo test -p cpd-core spec::`, `node --test pi/test/x.test.ts`, `npm test -- pi/test/x.test.ts`, `npm run typecheck`, `cargo build`.
+The npm rules stay as they are (older branches still use npm).
+
+**Allowed**, for example: `scripts/cargo.sh nextest run -p cpd --test flow plan_overlap::`, `scripts/cargo.sh build -p cpd --test flow`, `cargo test -p cpd-core spec::`, `node --test pi/test/x.test.ts`, `npm test -- pi/test/x.test.ts`, `pnpm test -- pi/test/x.test.ts`, `pnpm test pi/test/x.test.ts`, `pnpm run typecheck`, `pnpm install --frozen-lockfile`, `npm run typecheck`, `cargo build`.
 
 A pattern counts where a command runs, as in §15.11 (a command word of a simple command, not an argument or quoted text: `grep "cargo test" f` passes).
 
@@ -4117,7 +4124,7 @@ A pattern counts where a command runs, as in §15.11 (a command word of a simple
 cpd: a Worker runs only the tests its change touches; the full suite is the Gate's, run by the PR's open Job; refused: <what matched>
 ```
 
-`<what matched>` is the command word and its subcommand, with `--workspace` when it was given (`cargo.sh test --workspace`, `cargo nextest run`, `npm test`, `npm run verify`).
+`<what matched>` is the command word and its subcommand, with `--workspace` when it was given (`cargo.sh test --workspace`, `cargo nextest run`, `npm test`, `npm run verify`). For pnpm the matched text is `pnpm test` (for `test`, `t` and `tst`), `pnpm run test` (for `run test` and `run-script test`) and `pnpm run verify` (for `run verify`, `run-script verify` and the bare `verify`).
 
 **Not affected:** a Lead or a Manager, whatever it runs; every other tool; the Gate itself.
 
@@ -5023,7 +5030,7 @@ Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Ses
    "instructions": {"source": "default", "audience": ["manager", "lead", "worker"], "keys": {}, "text": ""},
    "hooks": {"source": "repo:/home/clayton/.cpd/policy/clayton-duarte/cpd.toml", "audience": [],
              "keys": {"pre-start": {"value": [], "source": "repo:/home/clayton/.cpd/policy/clayton-duarte/cpd.toml"},
-                      "pre-commit": {"value": [[{"name": null, "command": "npm run typecheck || exit 64"}]], "source": "repo:/home/clayton/.cpd/policy/clayton-duarte/cpd.toml"},
+                      "pre-commit": {"value": [[{"name": null, "command": "pnpm run typecheck || exit 64"}]], "source": "repo:/home/clayton/.cpd/policy/clayton-duarte/cpd.toml"},
                       "pre-merge": {"value": [], "source": "repo:/home/clayton/.cpd/policy/clayton-duarte/cpd.toml"}}, "text": ""},
    "test-commands": {"source": "default", "audience": [],
                      "keys": {"build": {"value": null, "source": "default"}, "run": {"value": null, "source": "default"}, "list": {"value": null, "source": "default"}}, "text": ""},
@@ -5612,7 +5619,7 @@ cpd test list <name>
 cpd test build
 ```
 
-`list` exits 0 only when that one test exists: a pi name when its title is in a `test(` or `it(` call of its file (nothing is started), a Rust name when `nextest list --workspace --message-format oneline <name>` prints a test. `build` runs `nextest run --workspace --no-run`, then `npm run typecheck`, and stops at the first failure; its status is that of the step that failed. Both run from the repo root, whatever the cwd.
+`list` exits 0 only when that one test exists: a pi name when its title is in a `test(` or `it(` call of its file (nothing is started), a Rust name when `nextest list --workspace --message-format oneline <name>` prints a test. `build` runs `nextest run --workspace --no-run`, then `pnpm run typecheck`, and stops at the first failure; its status is that of the step that failed. Both run from the repo root, whatever the cwd.
 
 ### 23.4 The `scripts/tests.sh` contract
 
