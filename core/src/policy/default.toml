@@ -9,6 +9,7 @@ text = ""
 
 [pr]
 jira_required = false
+human_gated_contexts = ["UI Review", "UI Tests"]
 text = ""
 
 [pr.feedback]

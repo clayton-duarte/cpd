@@ -1,8 +1,7 @@
 //! The PR status enums (contract §7.6): what `pr poll` stores and prints for a
 //! pull request's checks, review and state, and how GitHub's values map to them.
 
-use std::collections::BTreeMap;
-
+use super::gh::Check;
 use crate::error::{CpdError, ErrorCode};
 
 /// Check conclusions that count as failing. CANCELLED is neither failing nor pending (a cancelled run is no failure).
@@ -25,18 +24,35 @@ pub(super) enum ChecksSummary {
 }
 
 impl ChecksSummary {
-    /// Any failure wins over pending, pending over passed; no checks is `none`.
-    pub fn of(checks: &BTreeMap<String, String>) -> ChecksSummary {
-        let upper: Vec<String> = checks.values().map(|c| c.to_ascii_uppercase()).collect();
-        if upper.is_empty() {
-            ChecksSummary::None
-        } else if upper.iter().any(|c| failing(c)) {
-            ChecksSummary::Failed
-        } else if upper.iter().any(|c| PENDING.contains(&c.as_str())) {
-            ChecksSummary::Pending
-        } else {
-            ChecksSummary::Passed
+    /// The one rule (contract §7.6) of the poll and `pr view`: any failure wins; a CheckRun is pending when its conclusion is not
+    /// final, a StatusContext when its state is PENDING or EXPECTED; a PENDING StatusContext named in `human_gated` counts as
+    /// passed only when a CheckRun exists and none is pending; no checks is `none`.
+    pub fn of(checks: &[Check], human_gated: &[String]) -> ChecksSummary {
+        let mut runs = 0;
+        let mut run_pending = false;
+        let mut failed = false;
+        let mut contexts: Vec<(&str, bool)> = Vec::new();
+        for c in checks {
+            if let Some(context) = c.name.is_none().then_some(c.context.as_deref()).flatten() {
+                let state = c.state.as_deref().unwrap_or_default().to_ascii_uppercase();
+                failed |= failing(&state);
+                contexts.push((context, matches!(state.as_str(), "PENDING" | "EXPECTED")));
+            } else if c.name.is_some() {
+                let conclusion = c.conclusion.clone().filter(|s| !s.is_empty()).or_else(|| c.state.clone()).unwrap_or_default().to_ascii_uppercase();
+                runs += 1;
+                failed |= failing(&conclusion);
+                run_pending |= PENDING.contains(&conclusion.as_str());
+            }
         }
+        if runs + contexts.len() == 0 {
+            return ChecksSummary::None;
+        }
+        if failed {
+            return ChecksSummary::Failed;
+        }
+        let gated_ok = runs > 0 && !run_pending;
+        let context_pending = contexts.iter().any(|(name, pending)| *pending && !(gated_ok && human_gated.iter().any(|g| g == name)));
+        if run_pending || context_pending { ChecksSummary::Pending } else { ChecksSummary::Passed }
     }
 
     /// From GraphQL's `statusCheckRollup.state` (`StatusState`); `None` when the

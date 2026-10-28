@@ -345,7 +345,7 @@ fn the_states_take_the_documented_precedence() {
     f.own("pay", 5);
     is(&mut f, 1, White, "draft");
     is(&mut f, 2, Red, "conflict");
-    is(&mut f, 3, White, "stacked");
+    is(&mut f, 3, Cyan, "checks running");
     is(&mut f, 4, Cyan, "checks running");
     is(&mut f, 5, Yellow, "ready for review");
 }
@@ -435,4 +435,90 @@ fn a_clean_approved_unowned_pr_is_a_yellow_ready_to_merge_row() {
     let mut f = fixture();
     f.pr(1, "review_decision = 'approved'");
     is(&mut f, 1, Yellow, "ready to merge");
+}
+
+const STACKED: &str = "base_ref = 'feature', default_branch = 'main'";
+
+#[test]
+fn stack_review_a_stacked_pr_with_pending_checks_is_checks_running() {
+    let mut f = fixture();
+    f.pr(1, &format!("{STACKED}, checks = 'pending'"));
+    is(&mut f, 1, Cyan, "checks running");
+}
+
+#[test]
+fn stack_review_a_stacked_postable_pr_is_ready_for_review() {
+    let mut f = fixture();
+    f.policy(POST);
+    f.pr(1, &format!("{STACKED}, checks = 'passed'"));
+    f.own("pay", 1);
+    is(&mut f, 1, Yellow, "ready for review");
+    // With an open bot comment it is not postable, so it stays stacked.
+    f.sql(&format!("UPDATE pull_requests SET feedback = '{}' WHERE number = 1", bot_comment()));
+    is(&mut f, 1, White, "stacked");
+}
+
+#[test]
+fn stack_review_a_posted_stacked_pr_is_in_review() {
+    let mut f = fixture();
+    f.policy(POST);
+    f.pr(1, &format!("{STACKED}, checks = 'passed', review_decision = 'none'"));
+    f.own("pay", 1);
+    f.posted(1);
+    is(&mut f, 1, Cyan, "in review");
+}
+
+#[test]
+fn stack_review_a_stacked_pr_walks_checks_running_ready_for_review_in_review_stacked() {
+    let mut f = fixture();
+    f.policy(POST);
+    f.pr(1, &format!("{STACKED}, checks = 'pending'"));
+    f.own("pay", 1);
+    is(&mut f, 1, Cyan, "checks running");
+    f.sql("UPDATE pull_requests SET checks = 'passed' WHERE number = 1");
+    is(&mut f, 1, Yellow, "ready for review");
+    f.posted(1);
+    is(&mut f, 1, Cyan, "in review");
+    f.sql("UPDATE pull_requests SET review_decision = 'approved' WHERE number = 1");
+    is(&mut f, 1, White, "stacked");
+}
+
+#[test]
+fn stack_review_a_posted_approved_stacked_pr_is_stacked() {
+    let mut f = fixture();
+    f.policy(POST);
+    f.pr(1, &format!("{STACKED}, checks = 'passed', review_decision = 'approved'"));
+    f.own("pay", 1);
+    f.posted(1);
+    is(&mut f, 1, White, "stacked");
+}
+
+#[test]
+fn stack_review_an_unposted_stacked_pr_that_is_not_ready_for_review_is_stacked() {
+    // Not owned.
+    let mut f = fixture();
+    f.policy(POST);
+    f.pr(1, &format!("{STACKED}, checks = 'passed'"));
+    is(&mut f, 1, White, "stacked");
+    // Post disabled.
+    let mut f = fixture();
+    f.policy("[pr.post]\nenabled = false\n");
+    f.pr(1, &format!("{STACKED}, checks = 'passed'"));
+    f.own("pay", 1);
+    is(&mut f, 1, White, "stacked");
+    // Comments unread.
+    let mut f = fixture();
+    f.policy(POST);
+    f.pr(1, &format!("{STACKED}, checks = 'passed', feedback = NULL"));
+    f.own("pay", 1);
+    is(&mut f, 1, White, "stacked");
+}
+
+#[test]
+fn stack_review_stacking_blocks_only_ready_to_merge() {
+    let mut f = fixture();
+    f.pr(1, &format!("{STACKED}, review_decision = 'approved'"));
+    f.pr(2, "review_decision = 'approved'");
+    is(&mut f, 1, White, "stacked");
+    is(&mut f, 2, Yellow, "ready to merge");
 }

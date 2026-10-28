@@ -1208,13 +1208,29 @@ impl Handler for Gh {
                 Some(text) => Reply::ok(&format!("{text}\n")),
                 None => Reply::ok(&format!("{}\n", empty_comments(query))),
             },
-            // The checks read (poll step 3b): one failing check for each pull request, so a FAILURE rollup is confirmed.
+            // The checks read (poll step 3b): by the rollup state the search reports for each pull request: PENDING or EXPECTED
+            // is one running check, anything else one failing check, so a FAILURE rollup is confirmed.
             ["api", "graphql", "-f", query, ..] if query.contains("contexts(first: 100") => {
-                let run = serde_json::json!({"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"});
-                let page = serde_json::json!({"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": [run]});
-                let pull = serde_json::json!({"commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": page}}}]}});
+                let searched = match self.search.get() {
+                    Reply::Exit { stdout, .. } => String::from_utf8_lossy(&stdout).into_owned(),
+                    _ => String::new(),
+                };
                 let mut data = serde_json::Map::new();
-                for i in 0..query.matches(": repository(").count() {
+                for (i, part) in query.split(": repository(").skip(1).enumerate() {
+                    let number = part.split("pullRequest(number: ").nth(1).and_then(|t| t.split(')').next()).unwrap_or_default();
+                    let rollup = searched
+                        .split(&format!(r#""number":{number},"#))
+                        .nth(1)
+                        .and_then(|t| t.split(r#""statusCheckRollup":"#).nth(1))
+                        .unwrap_or_default();
+                    let running = rollup.starts_with(r#"{"state":"PENDING""#) || rollup.starts_with(r#"{"state":"EXPECTED""#);
+                    let run = if running {
+                        serde_json::json!({"__typename": "CheckRun", "name": "ci", "status": "IN_PROGRESS", "conclusion": null})
+                    } else {
+                        serde_json::json!({"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"})
+                    };
+                    let page = serde_json::json!({"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": [run]});
+                    let pull = serde_json::json!({"commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": page}}}]}});
                     data.insert(format!("p{i}"), serde_json::json!({"pullRequest": pull}));
                 }
                 Reply::ok(&format!("{}\n", serde_json::json!({"data": data})))

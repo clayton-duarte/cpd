@@ -65,6 +65,7 @@ mod policy_layout;
 mod policy_model;
 mod policy_model_use;
 mod policy_post;
+mod policy_human_gated;
 mod policy_jira;
 mod policy_jira_status;
 mod policy_scopes;

@@ -5,10 +5,9 @@
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
-use super::feedback::current_checks;
 use super::gh;
 use super::status::{ChecksSummary, PrState, ReviewDecision};
-use super::{Args, Env};
+use super::{Args, Env, pr_policy};
 use crate::error::CpdError;
 use crate::output::Output;
 use crate::ports::Ports;
@@ -30,11 +29,12 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     let number = pr.pull.as_ref().expect("an open or merged PR has its pull request (prs CHECK)").number;
     let lead = pr.lead(&id)?;
 
+    let policy = pr_policy(&mut env, &id, &pr.key)?;
     let view = gh::view(&*env.ports.runner, lead, number)?;
     let inline = gh::inline_comments(&*env.ports.runner, lead, number)?;
 
     let state = PrState::of_graphql(&view.state)?;
-    let summary = ChecksSummary::of(&current_checks(&view));
+    let summary = ChecksSummary::of(view.checks.as_deref().unwrap_or_default(), &policy.pr.human_gated_contexts);
     let checks: Vec<Value> = view
         .checks
         .iter()

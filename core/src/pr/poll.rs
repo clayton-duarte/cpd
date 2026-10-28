@@ -93,7 +93,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     let mut unresolved = Vec::new();
     for (plan, key, row) in &owned {
         match super::pr_policy_resolved(&mut env, plan, key, crate::policy::resolve)? {
-            Ok(policy) => checks.push(Resolved { plan: plan.clone(), key: key.clone(), checks: policy.pr.feedback.checks, post_enabled: policy.pr.post.enabled }),
+            Ok(policy) => checks.push(Resolved { plan: plan.clone(), key: key.clone(), checks: policy.pr.feedback.checks, post_enabled: policy.pr.post.enabled, human_gated: policy.pr.human_gated_contexts.clone() }),
             Err(error) => unresolved.push(Unresolved { plan: plan.clone(), pr: key.clone(), number: row.number, error }),
         }
     }
@@ -148,22 +148,31 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     }
     let reads = gh::read_comments(&*env.ports.runner, &root, &due, &env.config.inbox.bot_reviewers)?;
 
-    // The checks of each owned open pull request whose `pr.feedback.checks` is `any` and whose rollup says `failed`
-    // (§7.6 step 3b): GitHub rolls a CANCELLED check up as FAILURE, so one call confirms it, before anything is written.
+    // The checks of each owned open pull request (§7.6 step 3b) whose `pr.feedback.checks` is `any` and whose rollup says `failed`
+    // (GitHub rolls a CANCELLED check up as FAILURE), or whose rollup says `pending` while its `human_gated_contexts` is not
+    // empty: one call, before anything is written. Each PR's summary is the one rule with its own list.
     let mut confirm: Vec<(String, i64)> = Vec::new();
+    let mut lists: Vec<Vec<String>> = Vec::new();
     for listed in &seen {
         let (repo, number) = (&listed.pr.repo, listed.pr.number);
-        let any = owned.iter().any(|(plan, key, row)| {
-            row.repo == *repo && row.number == number && checks_of(&checks, plan, key).is_some_and(|r| r.checks == Checks::Any)
-        });
-        if any && listed.pr.state == PrState::Open && listed.pr.checks == ChecksSummary::Failed && !confirm.contains(&(repo.clone(), number)) {
+        if listed.pr.state != PrState::Open || confirm.contains(&(repo.clone(), number)) {
+            continue;
+        }
+        let mut mine = owned.iter().filter(|(_, _, row)| row.repo == *repo && row.number == number).filter_map(|(plan, key, _)| checks_of(&checks, plan, key));
+        let wanted = |r: &&Resolved| match listed.pr.checks {
+            ChecksSummary::Failed => r.checks == Checks::Any,
+            ChecksSummary::Pending => !r.human_gated.is_empty(),
+            _ => false,
+        };
+        if let Some(r) = mine.find(wanted) {
             confirm.push((repo.clone(), number));
+            lists.push(r.human_gated.clone());
         }
     }
     let confirmed = gh::read_checks(&*env.ports.runner, &root, &confirm)?;
     for listed in &mut seen {
         if let Some(i) = confirm.iter().position(|(repo, number)| *repo == listed.pr.repo && *number == listed.pr.number) {
-            listed.pr.checks = ChecksSummary::of(&confirmed[i]);
+            listed.pr.checks = ChecksSummary::of(&confirmed[i], &lists[i]);
         }
     }
 
@@ -357,6 +366,7 @@ struct Resolved {
     key: PrKey,
     checks: Checks,
     post_enabled: bool,
+    human_gated: Vec<String>,
 }
 
 /// One `error` Event for each PR whose policy did not resolve (§7.6): `source` `pr poll`, the resolve error's `code`,

@@ -108,6 +108,7 @@ pub(super) fn fx(status: &str) -> Pay {
     let env = &fx.env;
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     fs::write(home.config(), format!("version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket())).unwrap();
+    env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
     let gh = Arc::new(Gh::default());
     let _ = (*fx.fakes.runner).clone().route("gh", gh.clone());
     let lead: PathBuf = env.root().join("lead");
@@ -118,7 +119,7 @@ pub(super) fn fx(status: &str) -> Pay {
     };
     let (worktree, started) = if status == "waiting" { ("NULL", "NULL") } else { ("'LEAD'", "'t'") };
     let sql = format!(
-        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
