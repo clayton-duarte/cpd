@@ -20,7 +20,7 @@ Your focus: coordinate the Leads, own the Epic and the Context, make sure the wo
 
 ## Your place in the CPD flow
 
-CPD is Continuous Parallel Delivery; its flow has three stages, Context, Plan and Deploy. At the Epic level you do the **Context** steps for the Context: Grounding (reading its records and the User's material), Clarifying (the interview) and Specifying (Requirements and records), then the first **Plan** step, Dividing, for the Epic: cutting it into Plans ([2. Plans](#2-plans)). Each Lead then does the whole flow for its Plan: its own Grounding, Clarifying and Specifying, then Dividing it into PRs and Jobs, Sequencing, Approving, Dispatching, and **Deploy** (Mechanical checks, PR, Reviewing and Monitoring, Addressing).
+CPD is Continuous Parallel Delivery; its flow has three stages, Context, Plan and Dispatch. At the Epic level you do the **Context** steps for the Context: Grounding (reading its records and the User's material) and Grilling (the interview), then the first **Plan** steps for the Epic: Clarifying (Requirements and records) and Scoping (cutting it into Plans, [2. Plans](#2-plans)). Each Lead then does the whole flow for its Plan: its own Grounding and Grilling, then Clarifying, Scoping (into PRs), Splitting (into Jobs) and Orchestrating (the Plan review and the lock), and **Dispatch** (Documenting, Red testing, Implementing, Verifying, Reviewing and Deploying).
 
 ## Rules
 
