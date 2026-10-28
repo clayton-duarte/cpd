@@ -34,41 +34,17 @@ use super::screen::{NoInput, Screen, SharedBackend, left_click, wheel};
 use super::tree::stamp;
 use super::{TestEnv, sql};
 
-/// The pane's width in the tests: the title's `collapsible_title` and the item rows are laid out for it.
+/// The pane's width in the tests: the title's `flush_title` and the item rows are laid out for it.
 pub const W: usize = 46;
 
-/// The closing row's arrows (md-arrow_down_drop_circle_outline, md-arrow_up_drop_circle_outline).
-const DOWN: &str = "\u{F0B26}";
-const UP: &str = "\u{F0B2C}";
-
-/// The terminator of an empty Inbox: `╰`, md-chevron_right_circle, the words (commands.md §13.2, hs-d487).
-pub fn up_to_date() -> String {
-    " ╰\u{F0B2A} up to date, drink some water".to_owned()
-}
-
-/// The closing row of a folded block, after the pane's margin.
-pub fn expand() -> String {
-    format!(" ╰{DOWN} expand")
-}
-
-/// The same, expanded.
-pub fn collapse() -> String {
-    format!(" ╰{UP} collapse")
-}
-
-/// An item row: the muted `│`, the tier `glyph`, the label, and the `age` ending at column `W - 4` (the rail rule).
+/// An item row (trimmed): ` <glyph> <label>`, spaces, and the `age` ending at column `W - 2`; the last column is blank.
 pub fn item_row(glyph: &str, label: &str, age: &str) -> String {
-    format!(" │ {glyph} {label}{}{age}", " ".repeat(W - 8 - label.chars().count() - age.chars().count()))
+    format!(" {glyph} {label}{}{age}", " ".repeat(W - 4 - label.chars().count() - age.chars().count()))
 }
 
 /// [`item_row`] of a link kind: the label is followed by a space and the link cue, and the age keeps its column.
 pub fn linked_item_row(glyph: &str, label: &str, age: &str) -> String {
     item_row(glyph, &format!("{label} {}", cpd_tui::link::CUE), age)
-}
-
-/// A scroll cue row of the Inbox list: ` │` and the cue right-aligned to column `W - 4`.
-pub fn cue_row(arrow: char, n: usize) -> String {
-    format!(" │{:>w$}", format!("{arrow} {n} more"), w = W - 5)
 }
 
 // ---------- the prepared store ----------

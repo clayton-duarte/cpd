@@ -65,9 +65,9 @@ fn row(line: ratatui::text::Line<'static>, width: u16) -> Buffer {
 
 #[test]
 fn section_title_pills_are_inverted_with_caps_in_colour_7() {
-    // ` ╭─<Inbox>────…─<3> `: the title's pill and the count pill
+    // ` ───<Inbox>────…─<3> `: the title's pill and the count pill
     for (line, text, count) in [
-        (section::collapsible_title("Inbox", Some(3), 30), "Inbox", true),
+        (section::flush_title("Inbox", Some(3), 30), "Inbox", true),
         (section::title("Logs", None, 30), "Logs", false),
     ] {
         let buf = row(line, 30);

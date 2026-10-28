@@ -102,7 +102,7 @@ mod tests {
         assert_eq!(found("/// the note\nfn f() {}\n#[cfg(test)]\nmod tests {\n let note = 1;\n}"), 0, "tests may name it");
     }
 
-    /// No view keeps a note: not the tree and its Inbox, the Plan view, the Deploy column, nor the history and the chat
+    /// No view keeps a note: not the tree and its Inbox, the Plan view, the Dispatch column, nor the history and the chat
     /// views. A refusal or a failure is a dialog, the rest a line of the log.
     #[test]
     fn no_view_keeps_a_note() {

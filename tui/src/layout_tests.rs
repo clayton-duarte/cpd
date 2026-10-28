@@ -126,19 +126,9 @@ pub(crate) enum Case {
     Menu(Click),
 }
 
-/// The fixture the tree pane's samples draw (the Inbox and the Context fold).
+/// The fixture the tree pane's samples draw (the Context fold).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TreeCase {
-    /// The Inbox with no items.
-    InboxNone,
-    /// The Inbox with three items.
-    Inbox3,
-    /// The Inbox with five items, folded.
-    Inbox5Folded,
-    /// The Inbox with five items, expanded.
-    Inbox5Expanded,
-    /// The Inbox with eight items, expanded in a column that scrolls them: both cues show.
-    InboxCues,
     /// The tree's Contexts: live ones with Plans that have counters, and an archived one.
     ContextFold,
 }

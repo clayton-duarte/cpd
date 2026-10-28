@@ -149,8 +149,8 @@ fn run(fx: &Fx, signals: Vec<Signal>) -> Vec<Screen> {
     show_with(fx, HEIGHT, all, &World::new(), recording)
 }
 
-/// The labels of the menu box on `screen`: the `│ <label> │` rows between the `╮` and the `╯` rows (the segment before the last `│`: the
-/// menu opens over the Inbox's item rows, which have a `│` of their own on its left).
+/// The labels of the menu box on `screen`: the `│ <label> │` rows between the `╮` and the `╯` rows (the segment before the last `│`; the
+/// Inbox's item rows have no `│` of their own).
 fn menu_labels(screen: &[String]) -> Vec<String> {
     let top = screen.iter().position(|r| r.contains('╮'));
     let Some(top) = top else { return vec![] };
@@ -359,7 +359,7 @@ fn a_live_merge_marker_shows_the_merging_entry_busy() {
     cockpit(&fx);
     crate::tui_merge::put_marker_at(&fx.env.cpd_home(), "acme__shop__4.json", fx.live_pid());
     let screen = first_rows(&fx);
-    let glyph = screen.iter().find(|r| r.contains("shop#4 ready to merge")).and_then(|r| r.chars().nth(3)).map(String::from);
+    let glyph = screen.iter().find(|r| r.contains("shop#4 ready to merge")).and_then(|r| r.chars().nth(1)).map(String::from);
     assert!(glyph.as_ref().is_some_and(|g| palette::SPINNER.contains(&g.as_str())), "a spinner frame in the glyph cell: {screen:?}");
     let frames = run(&fx, vec![Signal::Input(right_click(10, row_of(&screen, "shop#4 ready to merge")))]);
     let at = frame_with(&frames, 0, "a menu", |r| r.iter().any(|row| row.contains('╮')));

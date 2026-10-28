@@ -38,6 +38,8 @@ mod manager_tests;
 #[cfg(test)]
 mod scroll_tests;
 #[cfg(test)]
+mod cue_lines_tests;
+#[cfg(test)]
 mod fixing_tests;
 #[cfg(test)]
 mod inbox_merge_tests;

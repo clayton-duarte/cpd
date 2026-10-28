@@ -31,14 +31,14 @@ fn with_dot(dot: Dot) -> Tree {
     tree(vec![context("cc", vec![plan("pp", "cc", Phase::Dispatch, [0, 0, 0, 0, 1, 0], lead, vec![])])])
 }
 
-/// The dot's cell (column 2 of row 1) of the tree drawn at `frame`: its glyph and foreground.
+/// The dot's cell (column 2 of row 2, under the ▲ line) of the tree drawn at `frame`: its glyph and foreground.
 fn dot_cell(t: &Tree, frame: usize) -> (String, Color) {
     let mut state: TreeState<String> = TreeState::default();
     open_new(&mut state, &mut HashSet::new(), t);
     state.select(vec![]);
-    let mut terminal = Terminal::new(TestBackend::new(30, 6)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(30, 7)).unwrap();
     terminal.draw(|f| draw(f, f.area(), t, &mut state, false, frame, &mut Scroll::default())).unwrap();
-    let cell = &terminal.backend().buffer()[(2, 1)];
+    let cell = &terminal.backend().buffer()[(2, 2)];
     (cell.symbol().to_owned(), cell.fg)
 }
 

@@ -21,13 +21,13 @@ mod deploy_tests;
 #[cfg(test)]
 mod draw_tests;
 #[cfg(test)]
-mod inbox_indent;
+mod column_flat_tests;
 #[cfg(test)]
-mod inbox_margin_tests;
-#[cfg(test)]
-mod inbox_width_tests;
+mod inbox_flat_tests;
 #[cfg(test)]
 mod needs_tests;
+#[cfg(test)]
+mod window_tests;
 pub(crate) mod host;
 pub(crate) mod inbox;
 pub mod legend;
@@ -75,7 +75,7 @@ pub use column::{Drawn, Machine, draw, draw_error};
 pub use host::Usage;
 use host::Sampler;
 pub use host::ProcReader;
-pub(crate) use column::{Window, max_scroll, window};
+pub(crate) use column::Window;
 
 /// The CPU, GPU and memory sample this often: they are no Event, and the CPU share is over the time since the last sample.
 const SAMPLE_EVERY: Duration = Duration::from_secs(2);
@@ -169,7 +169,7 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared, r
     show(ctx, feed, &reader, (inbox, engine_running, snooze_end, merging), machine, sampler, &lead, config.events.poll_ms)
 }
 
-/// The area the Deploy column's right-click menu is clamped in and hit-tested against: the pane less a blank column on
+/// The area the Dispatch column's right-click menu is clamped in and hit-tested against: the pane less a blank column on
 /// each side.
 pub(crate) fn menu_pane(pane: Rect) -> Rect {
     pane.inner(Margin::new(1, 0))
@@ -325,7 +325,7 @@ fn show<B: Backend>(
     let mut pane = Rect::default();
     // The Inbox section: whether it is unfolded and its offset, in items (memory only, kept by a refresh and clamped by the
     // drawing), and what the last draw showed of the clock's second (the items' ages).
-    let (mut inbox_expanded, mut inbox_scroll) = (false, 0usize);
+    let mut inbox_scroll = 0usize;
     let mut drawn_second = wall_ms(ports) / 1000;
     loop {
         // the spinner of a working Lead turns: a new frame redraws (commands.md §13.2)
@@ -340,7 +340,7 @@ fn show<B: Backend>(
                 // the border's cell, so while it is open the labels are drawn without their OSC 8 links
                 let unlinked: Vec<model::Item> = inbox_menu.iter().flat_map(|_| inbox.iter().cloned().map(|i| model::Item { url: None, ..i })).collect();
                 let shown = if inbox_menu.is_some() { &unlinked } else { &inbox };
-                last = Some(draw(f, pane, &machine, frame, shown, (inbox_expanded, inbox_scroll), ports.clock.utc(), &merging));
+                last = Some(draw(f, pane, &machine, frame, shown, inbox_scroll, ports.clock.utc(), &merging));
                 if let Some(error) = error.as_ref().or(watch_failure.as_ref()) {
                     draw_error(f, pane, error);
                 }
@@ -405,13 +405,9 @@ fn show<B: Backend>(
                             }
                         }
                     }
-                    // a left click on the Inbox's toggle row folds or unfolds it, on an item row jumps to its cause
+                    // a left click on an item row jumps to its cause
                     Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) && drawn.inbox.contains(Position::new(m.column, m.row)) && drawn.links.at(Position::new(m.column, m.row)).is_none() => {
                         match drawn.inbox_shape.hit(m.row - drawn.inbox.y) {
-                            Some(InboxHit::Toggle) => {
-                                inbox_expanded = !inbox_expanded;
-                                inbox_scroll = 0;
-                            }
                             Some(InboxHit::Item(i)) => {
                                 opener.jump(&inbox[i], &clock::timestamp(ports.clock.utc()));
                                 schedule.force(); // the result shows on the next read

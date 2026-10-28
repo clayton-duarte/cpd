@@ -1,5 +1,5 @@
 //! Merge needs no confirmation (decision pro-d111, commands.md §13.2): the Inbox `pr-ready` item's Merge runs `cpd tui action merge <owner>/<repo>#<n> --client <name>`
-//! through tmux `run-shell -b` at once; no `merge` popup opens and `cpd tui view merge` is gone. The Deploy column is driven as
+//! through tmux `run-shell -b` at once; no `merge` popup opens and `cpd tui view merge` is gone. The Dispatch column is driven as
 //! `inbox_link_tests.rs` drives it: a store, a scripted pump, the `ManualClock`, a `TestBackend` and a `FakeRunner`
 //! that records the tmux calls. No real tmux, `open` or process. The rig is shared with `tree/inbox_merge_tests.rs`.
 
@@ -125,7 +125,7 @@ fn named(call: &Call, program: &str) -> bool {
     std::path::Path::new(&call.program).file_name().is_some_and(|n| n == program)
 }
 
-/// Runs the Deploy column on `home` at `WIDTH` x `HEIGHT` through `script`: `open` answers exit 0, tmux lists one client
+/// Runs the Dispatch column on `home` at `WIDTH` x `HEIGHT` through `script`: `open` answers exit 0, tmux lists one client
 /// `/dev/ttys001`. `setup` runs on the fakes before the view reads anything (a live merge, say).
 pub(crate) fn run_with_setup(home: &CpdHome, setup: impl FnOnce(&Fakes, &CpdHome), mut script: Vec<Signal>) -> Seen {
     let clock = ManualClock::new();

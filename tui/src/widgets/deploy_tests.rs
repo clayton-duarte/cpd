@@ -23,12 +23,12 @@ const URL: &str = "https://github.com/acme/api/actions/runs/42";
 const WIDTH: u16 = 60;
 
 fn drawn(items: &[Item]) -> (Buffer, Links) {
-    let shape = Shape::new(items.len(), false);
+    let shape = Shape::new(items.len());
     let pane = Rect::new(0, 0, WIDTH, 12);
     let now = OffsetDateTime::parse("2026-01-01T00:03:00.000Z", &Rfc3339).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(WIDTH, 12)).unwrap();
     let mut links = Links::default();
-    terminal.draw(|f| links = inbox::draw(f, pane, items, shape, None, now, &|_| None)).unwrap();
+    terminal.draw(|f| links = inbox::draw(f, pane, items, shape, now, &|_| None)).unwrap();
     (terminal.backend().buffer().clone(), links)
 }
 

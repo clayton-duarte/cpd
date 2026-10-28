@@ -513,7 +513,7 @@ impl View {
         self.error.clone().unwrap_or_default()
     }
 
-    /// Draw a blank row, the tree below it and (when the snapshot cannot be read) its error in the rows at the bottom: the
+    /// Draw the ▲ line (the blank row), the tree, the ▼ line and (when the snapshot cannot be read) its error in the rows at the bottom: the
     /// reference's layout. One blank column is left on each side of all of it. `frame` is the animation frame of the working dots (`palette::frame`).
     pub fn draw(&mut self, f: &mut Frame, frame: usize) {
         let inner = f.area().inner(Margin::new(1, 0));
@@ -522,15 +522,15 @@ impl View {
         let wrapped = rows::width(&footer).div_ceil(width);
         let footer_height =
             if footer.is_empty() { 0 } else { (wrapped + usize::from(wrapped > 1)).max(1).min(inner.height as usize) as u16 };
-        let [_, list, footer_area] =
-            Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(footer_height)]).areas(inner);
+        let [body, footer_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height)]).areas(inner);
         if footer_height > 0 {
             f.render_widget(Paragraph::new(footer).style(palette::error()).wrap(Wrap { trim: false }), footer_area);
         }
         // the tree scrolls to keep the cursor's Session in view
         let cursor = self.cursor_shown();
-        rows::draw(f, list, &self.tree, &mut self.state, cursor, frame, &mut self.tree_scroll);
+        rows::draw(f, body, &self.tree, &mut self.state, cursor, frame, &mut self.tree_scroll);
         let tree_rows = u16::try_from(rows::row_count(&self.state, &self.tree)).unwrap_or(u16::MAX);
+        let list = rows::list_area(body);
         self.tree_area = Rect { height: list.height.min(tree_rows), ..list };
         self.pane = Rect { y: inner.y + inner.height.min(1), height: inner.height.saturating_sub(1), ..inner };
         if let Some(menu) = &self.menu {
@@ -1665,72 +1665,6 @@ mod tests {
                 row.trim_end().to_owned()
             })
             .collect()
-    }
-
-    /// A scroll cue row of the tree at 43 columns: the margin, the cue right-aligned in the 41 columns of the inner area.
-    fn cue_row_at(arrow: char, n: usize) -> String {
-        format!(" {:>41}", format!("{arrow} {n} more"))
-    }
-
-    fn wheel(view: &mut View, kind: MouseEventKind, column: u16, row: u16) {
-        assert_eq!(view.mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE }), Effect::None);
-    }
-
-    // ---------- the tree takes the whole column ----------
-
-    /// A tree of one Context `alpha` with `n` Plans `p00`, `p01`, …: `n + 1` rows, a Session cursor on each Plan.
-    fn long_tree(n: usize) -> Tree {
-        use super::super::fixture::{context, plan, session, tree};
-        use crate::read::Place;
-        use cpd_core::plan::Phase;
-        use cpd_core::session::State;
-        let plans = (0..n)
-            .map(|i| {
-                plan(&format!("p{i:02}"), "alpha", Phase::Dispatch, [0; 6], session(&format!("l-p{i:02}"), "lead", State::Idle, None, Place::Parked), vec![])
-            })
-            .collect();
-        tree(vec![context("alpha", plans)])
-    }
-
-    #[test]
-    fn the_tree_scrolls_with_the_wheel_three_rows_a_notch_between_cues_and_clamps() {
-        let mut view = View::new(long_tree(60), true);
-        draw_now(&mut view, 43, 31);
-        wheel(&mut view, MouseEventKind::ScrollDown, 10, 5);
-        let rows = text_rows(&draw_now(&mut view, 43, 31));
-        assert_eq!(rows[1], cue_row_at('▲', 3), "right-aligned");
-        assert!(rows[2].contains("p02"), "{rows:?}");
-        assert_eq!(rows[30], cue_row_at('▼', 30));
-        for _ in 0..40 {
-            wheel(&mut view, MouseEventKind::ScrollDown, 10, 5);
-        }
-        let rows = text_rows(&draw_now(&mut view, 43, 31));
-        assert_eq!(rows[1], cue_row_at('▲', 32), "clamped: the last row reaches the bottom of the tree's rows");
-        assert!(rows[30].contains("p59") && rows[30].starts_with(" ╰─"), "{rows:?}");
-        assert!(!rows[1..31].iter().any(|r| r.contains('▼')), "nothing hidden below: {rows:?}");
-        for _ in 0..40 {
-            wheel(&mut view, MouseEventKind::ScrollUp, 10, 5);
-        }
-        let rows = text_rows(&draw_now(&mut view, 43, 31));
-        assert!(rows[1].ends_with(" alpha") && rows[30] == cue_row_at('▼', 32), "{rows:?}");
-    }
-
-    #[test]
-    fn the_keyboard_cursor_scrolls_the_tree_to_stay_between_the_cues() {
-        let mut view = View::new(long_tree(60), true);
-        for _ in 0..40 {
-            press(&mut view, KeyCode::Down);
-        }
-        let buf = draw_now(&mut view, 43, 31);
-        let rows = text_rows(&buf);
-        let at = rows.iter().position(|r| r.contains("p39")).expect("the cursor's Session is drawn");
-        assert!((2..30).contains(&at), "between the cues: {rows:?}");
-        assert!(crate::palette::check::is_selected(&buf[(5, at as u16)]));
-        assert!(rows[1].trim_start().starts_with('▲') && rows[30].trim_start().starts_with('▼'), "{rows:?}");
-        assert_eq!((rows[1].as_str(), rows[30].as_str()), (cue_row_at('▲', 13).as_str(), cue_row_at('▼', 20).as_str()), "right-aligned: {rows:?}");
-        let before = rows.clone();
-        wheel(&mut view, MouseEventKind::ScrollUp, 10, 5);
-        assert_ne!(text_rows(&draw_now(&mut view, 43, 31)), before, "the wheel moved it, though the cursor is out of sight");
     }
 
     /// A fake runner of the commands the tree may run (`session send` to a Manager; never `watch --ensure`), and the live
