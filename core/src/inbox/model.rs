@@ -286,6 +286,13 @@ pub fn engine_running(home: &CpdHome) -> Result<bool, CpdError> {
     Ok(!shared)
 }
 
+/// The one-line form of a two-row label (pro-d171), as every Event text names an item: Row 1 and Row 2 joined with `: `;
+/// just Row 1 when Row 2 is empty. Stub: returns the label whole until implemented.
+#[must_use]
+pub fn one_line(label: &str) -> String {
+    label.to_owned()
+}
+
 /// The items of `filter`. Open ones come in §2.2's order: red, yellow,
 /// magenta, blue, cyan, white, then the oldest `opened_at` first. A plain read.
 pub fn list(conn: &Connection, filter: &Filter) -> Result<Vec<Item>, CpdError> {

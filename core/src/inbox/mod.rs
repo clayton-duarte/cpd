@@ -24,3 +24,5 @@ mod pr_tests;
 mod follow_tests;
 #[cfg(test)]
 mod dialog_tests;
+#[cfg(test)]
+mod rows_tests;
