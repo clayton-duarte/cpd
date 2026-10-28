@@ -86,10 +86,12 @@ impl Fx {
     /// A Job of `kind` and `status` of the PR `p<n>` of Plan `pay`.
     fn job(&mut self, n: i64, key: &str, kind: &str, status: &str) {
         let cause = if status == "failed" { "'crashed'" } else { "NULL" };
+        let sha = if status == "merged" { "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'" } else { "NULL" };
+        let (reason, requested) = if status == "cancelled" { ("'t'", format!("'{T}'")) } else { ("NULL", "NULL".to_owned()) };
         self.sql(&format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
-                               fingerprint, created_txn, created_at, failed_cause, kind)
-             VALUES ('pay', 'p{n}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{FP}', 1, '{T}', {cause}, '{kind}');"
+                               fingerprint, created_txn, created_at, failed_cause, kind, merged_sha, cancel_reason, cancel_requested_at)
+             VALUES ('pay', 'p{n}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{FP}', 1, '{T}', {cause}, '{kind}', {sha}, {reason}, {requested});"
         ));
     }
 
