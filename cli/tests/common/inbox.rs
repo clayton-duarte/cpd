@@ -37,12 +37,21 @@ use super::{TestEnv, sql};
 /// The pane's width in the tests: the title's `flush_title` and the item rows are laid out for it.
 pub const W: usize = 46;
 
-/// An item row (trimmed): ` <glyph> <label>`, spaces, and the `age` ending at column `W - 2`; the last column is blank.
+/// Row 1 of an item (trimmed): ` <glyph> <label>`, spaces, and the `age` ending at column `W - 2`; the last column is blank.
+/// Every item is two rows now: [`item_rows`] returns both.
 pub fn item_row(glyph: &str, label: &str, age: &str) -> String {
     format!(" {glyph} {label}{}{age}", " ".repeat(W - 4 - label.chars().count() - age.chars().count()))
 }
 
-/// [`item_row`] of a link kind: the label is followed by a space and the link cue, and the age keeps its column.
+/// The two rows of an item (trimmed): Row 1 is [`item_row`]; Row 2 is three spaces then the `subtitle` (the column, then the
+/// two-space lead), or empty when the `subtitle` is (a one-row label).
+pub fn item_rows(glyph: &str, label: &str, subtitle: &str, age: &str) -> [String; 2] {
+    let second = if subtitle.is_empty() { String::new() } else { format!("   {subtitle}") };
+    [item_row(glyph, label, age), second]
+}
+
+/// [`item_row`] (Row 1 only) of a link kind: the label is followed by a space and the link cue, and the age keeps its column.
+/// The link covers Row 1 only.
 pub fn linked_item_row(glyph: &str, label: &str, age: &str) -> String {
     item_row(glyph, &format!("{label} {}", cpd_tui::link::CUE), age)
 }
@@ -131,7 +140,7 @@ pub fn condition(kind: Kind, urgency: Urgency, subject: &str, label: &str) -> Co
     }
 }
 
-/// The glyph and label of the rows of [`four`], in the order they are drawn.
+/// The glyph and label (Row 1) of the items of [`four`], in the order they are drawn; each is one-row, so its Row 2 is blank.
 pub const FOUR: [(&str, &str); 4] = [
     (palette::TIER_RED, "f-blocked label"),
     (palette::TIER_RED, "l-rel label"),
@@ -149,7 +158,7 @@ pub fn four() -> Vec<Condition> {
     ]
 }
 
-/// `n` red items labelled `item 00`, `item 01`, … (drawn in that order).
+/// `n` red one-row items (Row 2 blank) labelled `item 00`, `item 01`, … (drawn in that order).
 pub fn many(n: usize) -> Vec<Condition> {
     (0..n).map(|i| condition(Kind::Dialog, Urgency::Red, &format!("session:item-{i:02}"), &format!("item {i:02}"))).collect()
 }
