@@ -326,3 +326,19 @@ fn deleting_a_plan_deletes_its_pr_posts() {
     assert_eq!(count(&fx, "SELECT count(*) FROM pr_posts WHERE plan = 'other'"), 1, "another Plan's post stays");
     assert_eq!(plan_rows(&fx, "pay"), 0, "the Plan's other rows go as before");
 }
+
+#[test]
+fn deleting_a_plan_deletes_its_jira_transitions() {
+    let fx = Fx::with_ports();
+    base(&fx);
+    world(&fx, "pay");
+    world(&fx, "other");
+    let row = |plan: &str| format!("INSERT INTO jira_transitions (plan, pr, target, queued_at) VALUES ('{plan}', 'api', 'in_review', 't')");
+    fixture(&fx, &format!("{}; {};", row("pay"), row("other")));
+    archive(&fx, "pay");
+
+    fx.cpd(&["plan", "delete", "pay", "--yes"]).ok();
+
+    assert_eq!(count(&fx, "SELECT count(*) FROM jira_transitions WHERE plan = 'pay'"), 0);
+    assert_eq!(count(&fx, "SELECT count(*) FROM jira_transitions WHERE plan = 'other'"), 1, "another Plan's row stays");
+}

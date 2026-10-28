@@ -888,3 +888,5 @@ mod lead_branch_tests;
 mod restack_tests;
 #[cfg(test)]
 mod reaction_refusal_tests;
+#[cfg(test)]
+mod jira_transitions_tests;
