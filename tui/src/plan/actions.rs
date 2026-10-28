@@ -37,7 +37,7 @@ impl Actions {
     }
 
     /// A click on a tab: `session open <id>`, which moves that Lead into the chat slot, then `select-pane` on the chat
-    /// (shared with the Deploy column's rows).
+    /// (shared with the Dispatch column's rows).
     pub fn open_lead(&self, session: &SessionId) -> Result<(), CpdError> {
         widgets::open_lead(self.run_command, &self.tmux, &self.cockpit, session)
     }

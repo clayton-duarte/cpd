@@ -81,7 +81,7 @@ pub const OPT_VIEW: &str = "@cpd_view";
 pub const OPT_HISTORY: &str = "@cpd_history";
 
 /// The three view titles' base (unfocused) colours, in the cursor cycle order (hs-d648, hs-d671):
-/// `Context` (view tree) sakura 5, `Plan` (view plan) shiro 7, `Deploy` (view widgets) midori 2.
+/// `Context` (view tree) sakura 5, `Plan` (view plan) shiro 7, `Dispatch` (view widgets) midori 2.
 /// They are read-only base indices: a clickable mark takes `spec().clickable(base)`, so the
 /// status buttons are 13, 15 and 10.
 const DANGO: [u8; 3] = [5, 7, 2];
@@ -117,7 +117,7 @@ pub static BORDER_FORMAT: LazyLock<String> = LazyLock::new(|| {
         title(&plain, "#{@cpd_title}"),
         title(&view_colour, concat!(
             "#{?#{==:#{@cpd_view},tree},Context,",
-            "#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}"
+            "#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Dispatch,#{pane_current_command}}}}"
         )),
     )
 });

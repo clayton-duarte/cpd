@@ -169,7 +169,7 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared, r
     show(ctx, feed, &reader, (inbox, engine_running, snooze_end, merging), machine, sampler, &lead, config.events.poll_ms)
 }
 
-/// The area the Deploy column's right-click menu is clamped in and hit-tested against: the pane less a blank column on
+/// The area the Dispatch column's right-click menu is clamped in and hit-tested against: the pane less a blank column on
 /// each side.
 pub(crate) fn menu_pane(pane: Rect) -> Rect {
     pane.inner(Margin::new(1, 0))

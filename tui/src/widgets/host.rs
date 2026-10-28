@@ -1,4 +1,4 @@
-//! What the Deploy column reads of the machine (commands.md §13.2, §17): CPU %, one utilization % per GPU, and memory %. The
+//! What the Dispatch column reads of the machine (commands.md §13.2, §17): CPU %, one utilization % per GPU, and memory %. The
 //! parsers are pure, on the text of `/proc/stat`, `/proc/meminfo`, `nvidia-smi` (Linux), `ps`, `vm_stat` and `ioreg` (macOS);
 //! [`Sampler`] reads the real thing; on Linux it reads `/proc` through its [`ProcReader`], which a test scripts.
 //!

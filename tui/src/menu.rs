@@ -1,4 +1,4 @@
-//! The right-click menu both the tree and the Deploy column open (commands.md §13.2): a pure model (the entries, the
+//! The right-click menu both the tree and the Dispatch column open (commands.md §13.2): a pure model (the entries, the
 //! selection, ↑↓, Enter, Esc, the hit test) and its drawing, a bordered box over the view at the click, clamped inside
 //! the pane. The view opens it on a right click and gives it every key and click while it is open; there is no key
 //! that opens it. What an entry does is the view's: the menu only says which one was picked.
