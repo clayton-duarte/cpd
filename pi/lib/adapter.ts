@@ -75,9 +75,10 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     if (host.run && event.toolName === "ask_user_question") {
       const long = tooLong(event.input);
       if (long !== undefined) return { block: true, reason: long };
-      if (role !== "lead" && role !== "manager") return undefined;
-      const unseenReason = unseen(event.input, event.toolCallId, ctx.sessionManager.getBranch());
-      return unseenReason === undefined ? undefined : { block: true, reason: unseenReason };
+      const unseenReason = role === "lead" || role === "manager" ? unseen(event.input, event.toolCallId, ctx.sessionManager.getBranch()) : undefined;
+      if (unseenReason !== undefined) return { block: true, reason: unseenReason };
+      host.run.facts.hold(event.input); // §15.4: not refused, so a Verdict option names the dialog it opens
+      return undefined;
     }
     if ((role !== "manager" && role !== "lead" && role !== "worker") || event.toolName !== "bash") return undefined;
     const input = event.input as { command?: unknown; timeout?: unknown };
