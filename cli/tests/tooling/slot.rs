@@ -40,7 +40,7 @@ fn fake_cpd(dir: &Path) -> (PathBuf, PathBuf) {
              [ \"$1\" = slot ] && exit 98\n\
              [ \"$1\" = resource ] && [ \"$2\" = list ] && {{ echo '{list}'; exit 0; }}\n\
              [ \"$1\" = resource ] && [ \"$2\" = run ] || exit 99\n\
-             shift 5\nexec \"$@\"\n",
+             shift 6\nexec \"$@\"\n",
             calls.display()
         ),
     );

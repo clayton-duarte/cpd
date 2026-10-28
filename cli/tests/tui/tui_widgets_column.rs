@@ -6,7 +6,7 @@ use crate::tui_titles;
 
 use common::inbox::{
     W, World, click, collapse, condition, cue_row, frame_with, gone, linked_item_row, many, open_at, pull_requests, rows, seed,
-    show, up_to_date, view_fx,
+    show, show_proc, up_to_date, view_fx,
 };
 use common::fx::Fx;
 use common::sql;
@@ -146,4 +146,24 @@ fn an_empty_inbox_is_under_the_machine_header() {
     let at = frame_with(&frames, 0, "the empty Inbox under the header", |r| r.len() == 20 && r[3..7] == want[..]);
     let screen = rows(&frames, at);
     assert_eq!((screen[1].as_str(), screen[2].as_str()), (" homeserver", USAGE), "{screen:?}");
+}
+
+/// Linux reads `/proc/meminfo` through the view's reader, which the test scripts; macOS reads other tools, so these are Linux's.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_scripted_proc_meminfo_is_the_memory_percent_of_the_machine_row() {
+    let fx = prepared(&[]);
+    let meminfo = "MemTotal:       16000000 kB\nMemFree:         1000000 kB\nMemAvailable:    4000000 kB\n";
+    let frames = show_proc(&fx, 10, vec![Signal::Commit, gone()], &World::new(), &[("/proc/meminfo", meminfo)]);
+    let at = frame_with(&frames, 0, "the machine row", |r| r.get(1).is_some_and(|h| h == " homeserver"));
+    assert_eq!(rows(&frames, at)[2], " \u{F4BC} –%  \u{EFC5} 75%");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn an_unscripted_proc_meminfo_is_an_unreadable_memory_on_the_machine_row() {
+    let fx = prepared(&[]);
+    let frames = show_proc(&fx, 10, vec![Signal::Commit, gone()], &World::new(), &[]);
+    let at = frame_with(&frames, 0, "the machine row", |r| r.get(1).is_some_and(|h| h == " homeserver"));
+    assert_eq!(rows(&frames, at)[2], USAGE);
 }

@@ -1,6 +1,7 @@
 //! `pr edit` (commands.md §9.5, contract §3.8): changes a `waiting` PR's repo,
 //! base (a branch, or a base PR to stack on) or needs before the lock. The plan
-//! fingerprint changes with them. With `--title` it also changes a PR's own title
+//! fingerprint changes with them. After the lock only a restack is allowed (§3.8 step 10): a
+//! `waiting` PR stacks on a PR it needs (`--base <A>` with `--needs <rest>` or `--no-needs`). With `--title` it also changes a PR's own title
 //! in any phase and any status but `merged` and `cancelled` (hs-d285): the title is
 //! not a Locked field and not in the fingerprint.
 
@@ -41,6 +42,11 @@ impl Edits {
     fn others(&self) -> bool {
         self.repo.is_some() || self.base.is_some() || self.needs.is_some()
     }
+
+    /// Whether the flags have the shape of a restack: `--base` with `--needs` or `--no-needs`, no `--repo`.
+    fn restack_shape(&self) -> bool {
+        self.repo.is_none() && self.base.is_some() && self.needs.is_some()
+    }
 }
 
 enum Decision {
@@ -65,7 +71,8 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     // The phase, the PR and its status first; then git on the new repo and base.
     let wants_others = args.repo.is_some() || args.base.is_some() || needs.is_some();
     let wants_title = args.title.is_some() || args.jira.is_some();
-    let stored = env.store.read(|conn| editable_pr(conn, &plan, &key, wants_title, wants_others))?.0;
+    let restack_shape = args.repo.is_none() && args.base.is_some() && needs.is_some();
+    let stored = env.store.read(|conn| editable_pr(conn, &plan, &key, wants_title, wants_others, restack_shape))?.0;
     if stored.head_ref.is_some()
         && let Some(flag) = [(args.repo.is_some(), "--repo"), (args.base.is_some(), "--base")].iter().find_map(|(given, flag)| given.then_some(*flag))
     {
@@ -129,9 +136,10 @@ fn retitle_open_pull_request(env: &mut Env, plan: &PlanId, key: &PrKey, title: &
 
 /// The PR `key` and its stored title, which must be editable. With `title`, the PR is not
 /// `merged` or `cancelled` (`pr_ended`: its title is history). With `others` (a flag other than
-/// `--title`), the Plan is in `grounding` or `plan` (`pr_locked`) and the PR `waiting`
-/// (`illegal_transition`); `--title` alone meets neither rule.
-fn editable_pr(conn: &Connection, plan: &PlanId, key: &PrKey, title: bool, others: bool) -> Result<(PrRow, Option<String>), CpdError> {
+/// `--title`), the Plan is in `grounding` or `plan` and the PR `waiting` (`illegal_transition`); `--title` alone
+/// meets neither rule. After the lock only a restack (`restack`: the flags have its shape) of a `waiting` PR passes;
+/// anything else is `pr_locked`, and `decide` checks the rest of the restack.
+fn editable_pr(conn: &Connection, plan: &PlanId, key: &PrKey, title: bool, others: bool, restack: bool) -> Result<(PrRow, Option<String>), CpdError> {
     let prs = load_prs(conn, plan)?;
     let pr = find_pr(&prs, plan, key)?;
     if title && matches!(pr.status.as_str(), "merged" | "cancelled") {
@@ -142,7 +150,7 @@ fn editable_pr(conn: &Connection, plan: &PlanId, key: &PrKey, title: bool, other
     }
     if others {
         let phase = plan_phase(conn, plan)?;
-        if !matches!(phase, Phase::Grounding | Phase::Plan) {
+        if !matches!(phase, Phase::Grounding | Phase::Plan) && !(restack && pr.status == "waiting") {
             return Err(pr_locked(plan, phase, COMMAND));
         }
         if pr.status != "waiting" {
@@ -158,7 +166,7 @@ fn editable_pr(conn: &Connection, plan: &PlanId, key: &PrKey, title: bool, other
 }
 
 fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Result<Decision, CpdError> {
-    let (before, stored_title) = editable_pr(conn, plan, key, edits.title.is_some() || edits.jira.is_some(), edits.others())?;
+    let (before, stored_title) = editable_pr(conn, plan, key, edits.title.is_some() || edits.jira.is_some(), edits.others(), edits.restack_shape())?;
     let mut after = before.clone();
     if let Some(repo) = &edits.repo {
         after.repo = repo.clone();
@@ -176,6 +184,10 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Resul
         };
         let resolved = resolve_refs(conn, &Subject { plan, key, repo: &after.repo }, &base, &after.needs)?;
         after.base = resolved.base;
+        let phase = plan_phase(conn, plan)?;
+        if !matches!(phase, Phase::Grounding | Phase::Plan) {
+            check_restack(conn, plan, &before, &after, resolved.base_pr.as_deref()).map_err(|()| pr_locked(plan, phase, COMMAND))?;
+        }
     }
     if after.repo != before.repo {
         let in_use = stacked_on(&known_prs(conn, plan)?, &before.repo, &before.lead_branch);
@@ -205,6 +217,22 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Resul
         return Ok(Decision::Already(before));
     }
     Ok(Decision::Update { before, after, fields })
+}
+
+/// After the lock, a restack is allowed only onto `A`, the base PR the edit resolves to, when `A` is a current need or
+/// already the base PR, and the needs after the edit are the current needs without `A` (§3.8 step 10).
+fn check_restack(conn: &Connection, plan: &PlanId, before: &PrRow, after: &PrRow, base_pr: Option<&str>) -> Result<(), ()> {
+    let a = base_pr.and_then(|p| p.split_once('/')).map(|(_, k)| k).ok_or(())?;
+    let prs = load_prs(conn, plan).map_err(|_| ())?;
+    let already = prs.iter().any(|q| q.key.as_str() == a && q.repo == before.repo && q.lead_branch == before.base);
+    if !already && !before.needs.iter().any(|n| n == a) {
+        return Err(());
+    }
+    let mut want: Vec<&String> = before.needs.iter().filter(|n| n.as_str() != a).collect();
+    let mut got: Vec<&String> = after.needs.iter().collect();
+    want.sort();
+    got.sort();
+    if want == got { Ok(()) } else { Err(()) }
 }
 
 /// Writes the changed `prs` columns, and deletes and inserts `pr_needs` rows

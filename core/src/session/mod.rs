@@ -39,6 +39,7 @@ mod state;
 use std::path::PathBuf;
 
 use crate::args::{Name, SessionArg, SessionRef, Text};
+use crate::config::Tier;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::host::Tmux;
@@ -281,6 +282,9 @@ pub struct RetierArgs {
     /// Every Lead and Manager that is not archived
     #[arg(long)]
     all: bool,
+    /// Move the one Session to this Tier instead of the config's target
+    #[arg(long, value_name = "T", requires = "id", conflicts_with = "all")]
+    tier: Option<Tier>,
 }
 
 #[derive(clap::Args, Debug)]

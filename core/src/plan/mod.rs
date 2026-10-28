@@ -38,6 +38,7 @@ mod sql_trace;
 use std::path::{Path, PathBuf};
 
 use crate::args::{Name, PlanArg, PrTitle, Text, Title};
+use crate::config::Tier;
 use crate::context::Jira;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -105,6 +106,9 @@ pub struct NewArgs {
     /// The User's brief for the Lead
     #[arg(long = "brief-file", value_name = "file")]
     brief_file: Option<PathBuf>,
+    /// The Lead's Tier [default: review_lead_tier in the review Context, else lead_tier]
+    #[arg(long, value_name = "T")]
+    tier: Option<Tier>,
     /// The User creates the Plan: its Lead starts with no first message and runs no turn until the User's first prompt
     #[arg(long = "by-user")]
     by_user: bool,
