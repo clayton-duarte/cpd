@@ -19,8 +19,33 @@ export TMPDIR
 NODE_DISABLE_COMPILE_CACHE=1
 export NODE_DISABLE_COMPILE_CACHE
 
-"$@"
-status=$?
 cpd=${GATE_RUN_CPD:-$(dirname "$0")/../target/debug/cpd}
-[ -x "$cpd" ] || exit "$status"
-exec "$cpd" gate finish --run "$GATE_RUN" --status "$status"
+
+# The leak check is the last step, on every way out: exec'd, so its status is the wrapper's.
+finish() {
+  [ -x "$cpd" ] || exit "$1"
+  exec "$cpd" gate finish --run "$GATE_RUN" --status "$1"
+}
+
+# The command runs in the background and the wrapper waits for it: a trap does not run while a foreground command
+# does, and the runner cancels a step with INT, then TERM, then KILL. `<&0` keeps the command's stdin (an async
+# command otherwise gets /dev/null).
+"$@" <&0 &
+pid=$!
+
+# $1 the signal's name, $2 its number. The signal goes to the command alone, not to its process group: with no job
+# control the wrapper shares that group, and the command (cargo-nextest, npm) stops its own tests on TERM, INT or
+# HUP; what it leaves, `cpd gate finish` stops. An async command ignores INT (POSIX), so INT is passed on as TERM.
+cancel() {
+  trap '' INT TERM HUP
+  case $1 in INT) set -- TERM "$2" ;; esac
+  kill -s "$1" "$pid" 2>/dev/null
+  wait "$pid"
+  finish $((128 + $2))
+}
+trap 'cancel INT 2' INT
+trap 'cancel TERM 15' TERM
+trap 'cancel HUP 1' HUP
+
+wait "$pid"
+finish $?

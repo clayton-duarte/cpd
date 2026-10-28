@@ -73,3 +73,74 @@ fn a_missing_cpd_binary_returns_the_commands_status() {
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     assert!(out.stdout.is_empty(), "{out:?}");
 }
+
+/// A `cpd` that records its arguments and whether the command was still alive, then hands over to the built one.
+fn recording_cpd(dir: &Path, pid_file: &Path, record: &Path) -> PathBuf {
+    let stub = dir.join("cpd");
+    let body = format!(
+        "#!/bin/sh\necho \"$@\" >> '{rec}'\nkill -0 \"$(cat '{pid}')\" 2>/dev/null && echo alive >> '{rec}'\nexec '{real}' \"$@\"\n",
+        rec = record.display(),
+        pid = pid_file.display(),
+        real = built_cpd().display(),
+    );
+    fs::write(&stub, body).unwrap();
+    let mut perms = fs::metadata(&stub).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+    fs::set_permissions(&stub, perms).unwrap();
+    stub
+}
+
+/// Starts the wrapper on a command that leaves a file in its TMPDIR, writes its pid and blocks on stdin, waits for
+/// it to say `ready` (a blocking read, no sleep), sends the wrapper `signal` and returns the wrapper's status, the
+/// recorded `cpd` calls and the entries left in `tmp`. A wrapper that does not stop fails the test through nextest's
+/// own timeout.
+fn cancelled_run(signal: nix::sys::signal::Signal) -> (Option<i32>, String, Vec<String>) {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let pid_file = work.path().join("pid");
+    let record = work.path().join("record");
+    let cpd = recording_cpd(work.path(), &pid_file, &record);
+    let command = format!("echo $$ > '{}'; : > \"$TMPDIR/leftover\"; echo ready; read line", pid_file.display());
+
+    let mut child = Command::new("sh")
+        .arg(script())
+        .args(["sh", "-c", &command])
+        .env("TMPDIR", tmp.path())
+        .env("GATE_RUN_CPD", &cpd)
+        .env_remove("GATE_RUN")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("run sh");
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
+    assert_eq!(line, "ready\n");
+
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(child.id() as i32), signal).unwrap();
+    let status = child.wait().unwrap();
+    drop(child.stdin.take()); // lets a command that was not stopped end: nothing is left behind
+    (status.code(), fs::read_to_string(&record).unwrap_or_default(), entries(tmp.path()))
+}
+
+#[test]
+fn a_term_stops_the_command_runs_the_leak_check_with_143_and_removes_the_run_directory() {
+    let (code, record, left) = cancelled_run(nix::sys::signal::Signal::SIGTERM);
+
+    assert_eq!(code, Some(143), "{record:?}");
+    assert!(record.starts_with("gate finish --run ") && record.contains(" --status 143\n"), "{record:?}");
+    assert!(!record.contains("alive"), "the command was waited for before the check: {record:?}");
+    assert_eq!(left, Vec::<String>::new(), "the run's directory is removed");
+}
+
+#[test]
+fn an_int_stops_the_command_runs_the_leak_check_with_130_and_removes_the_run_directory() {
+    let (code, record, left) = cancelled_run(nix::sys::signal::Signal::SIGINT);
+
+    assert_eq!(code, Some(130), "{record:?}");
+    assert!(record.starts_with("gate finish --run ") && record.contains(" --status 130\n"), "{record:?}");
+    assert!(!record.contains("alive"), "the command was waited for before the check: {record:?}");
+    assert_eq!(left, Vec::<String>::new(), "the run's directory is removed");
+}
