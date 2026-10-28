@@ -183,10 +183,11 @@ pub(super) fn add_second_owned_pr(fx: &Poll) {
 
 #[test]
 fn the_checks_are_read_only_for_an_owned_any_pr_whose_rollup_failed() {
-    // The rollup is FAILURE but no Plan owns the pull request. (One fixture at a time.)
+    // Only an owned PR's FAILED rollup is confirmed here: the rollup of acme/web#902 is FAILURE but no Plan owns it. (The read of
+    // an owned PR's PENDING rollup is pinned by pr_human_gated.) (One fixture at a time.)
     let fx = poll_fx("deploy");
     policy(&fx, "any");
-    fx.search(&[pay("OPEN", None, Some("PENDING")), node("acme/web", 902, "OPEN", None, Some("FAILURE"))]);
+    fx.search(&[pay("OPEN", None, Some("SUCCESS")), node("acme/web", 902, "OPEN", None, Some("FAILURE"))]);
     fx.poll();
     assert_eq!(reads(&fx).len(), 0, "not owned");
     let rows = fx.store().read(|c| Ok(c.query_row("SELECT checks FROM pull_requests WHERE number = 902", [], |r| r.get::<_, String>(0))?)).unwrap();
