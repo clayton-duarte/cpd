@@ -34,7 +34,7 @@ pub fn tiers(config: &Config) -> Check {
         Ok(catalog) => catalog,
         Err(e) => return Check::from_error(name, Severity::Error, &e),
     };
-    match catalog.check(config.lead_tier) {
+    match catalog.check(config.lead_tier).and_then(|()| catalog.check(config.review_lead_tier)) {
         Ok(()) => Check::pass(name, Severity::Error).found(catalog.pi_version),
         Err(e) => Check::from_error(name, Severity::Error, &e),
     }

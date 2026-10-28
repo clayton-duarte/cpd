@@ -39,6 +39,8 @@ pub struct Config {
     /// Automatic Attempts are capped at `1 + retry_cap` (§9).
     pub retry_cap: u32,
     pub lead_tier: Tier,
+    /// The Tier of the Lead of a Plan in the review Context (`inbox.review_context`).
+    pub review_lead_tier: Tier,
     /// The Tier of a Context's Manager (§3.1, hs-d133).
     pub manager_tier: Tier,
     /// The Tier of the distiller, the pi run that writes a Context digest (§4.6, hs-d194).
@@ -268,6 +270,7 @@ impl Config {
         // an auxiliary run (the distiller) is `H` only; `open_tier` is a Worker's Tier.
         // The default is the Tier `docs/research/opener-tier.md` recommends.
         let lead_tier = r.get("lead_tier", Tier::parse("O2").expect("a valid Tier"), |v| leader_tier(&v))?;
+        let review_lead_tier = r.get("review_lead_tier", Tier::parse("S3").expect("a valid Tier"), |v| leader_tier(&v))?;
         let manager_tier = r.get("manager_tier", Tier::parse("O4").expect("a valid Tier"), |v| leader_tier(&v))?;
         let context_distill_tier = r.get("context_distill_tier", Tier::parse("GX").expect("a valid Tier"), |v| {
             let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
@@ -384,6 +387,7 @@ impl Config {
             concurrency,
             retry_cap,
             lead_tier,
+            review_lead_tier,
             manager_tier,
             context_distill_tier,
             context_curation_min_records,
@@ -553,7 +557,7 @@ fn leader_tier(value: &Value) -> Result<Tier, String> {
     if tier.letter() == Letter::G {
         return Err("must not be a G Tier, not GX: a Lead or the Manager is never on G (hs-d562)".to_owned());
     }
-    if tier.effort() > Tier::MAX_EFFORT {
+    if !tier.is_lead_allowed() {
         return Err(format!("must have effort 0-4, not {tier}: no agent uses effort 5, to keep cost down (hs-d506)"));
     }
     Ok(tier)

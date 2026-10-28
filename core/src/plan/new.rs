@@ -23,12 +23,15 @@ struct Created {
     plan: PlanRow,
     name: String,
     cwd: String,
+    tier: String,
 }
 
 fn find(conn: &Connection, id: &PlanId) -> Result<Option<Created>, CpdError> {
     let Some(plan) = row::find(conn, id)? else { return Ok(None) };
-    let (name, cwd) = conn.query_row("SELECT name, cwd FROM sessions WHERE id = ?1", [plan.lead_session.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?;
-    Ok(Some(Created { plan, name, cwd }))
+    let (name, cwd, tier) = conn.query_row("SELECT name, cwd, tier FROM sessions WHERE id = ?1", [plan.lead_session.as_str()], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+    })?;
+    Ok(Some(Created { plan, name, cwd, tier }))
 }
 
 /// The realpath of the directory `plan new` runs from: where the Lead starts (§6.4).
@@ -48,6 +51,12 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
     if context.owner.is_none() {
         return Err(crate::policy::owner_unset(&args.context));
     }
+    if let Some(tier) = args.tier {
+        let home = env.home.clone();
+        let models = env.store.read(|conn| crate::policy::model::models_of_context(conn, &home, args.context.as_str()))?;
+        crate::config::catalog::load_with(&models, &mut env.store)?.check(tier)?;
+        tier.check_lead()?;
+    }
     // A deleted Plan keeps its row, and so its id: never reused (contract §2.2 "Deleted").
     let deleted: Option<bool> = env.store.read(|conn| {
         Ok(conn.query_row("SELECT deleted_at IS NOT NULL FROM plans WHERE id = ?1", [id.as_str()], |r| r.get(0)).optional()?)
@@ -57,7 +66,8 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
     }
     if let Some(plan) = env.store.read(|conn| find(conn, &id))? {
         // The caller's cwd is not a flag: a rerun from another directory is still `already`.
-        let same = plan.plan.context == args.context && plan.plan.title == args.title.as_str() && plan.plan.jira == jira && plan.name == name;
+        let same = plan.plan.context == args.context && plan.plan.title == args.title.as_str() && plan.plan.jira == jira && plan.name == name
+            && args.tier.is_none_or(|t| t.to_string() == plan.tier);
         if !same {
             return Err(CpdError::new(ErrorCode::PlanExists, format!("Plan {id} exists with other flags.")).with("plan", summary(&plan.plan, &[])));
         }
@@ -75,7 +85,8 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
 
     // 1. The Plan and its Lead, in one transaction.
     let session = SessionId::new_v4();
-    let tier = env.config.lead_tier.to_string();
+    let review = !env.config.inbox.review_context.is_empty() && args.context.as_str() == env.config.inbox.review_context;
+    let tier = args.tier.unwrap_or(if review { env.config.review_lead_tier } else { env.config.lead_tier }).to_string();
     env.store.write("plan new", |tx| {
         let exists = tx.query_row("SELECT 1 FROM plans WHERE id = ?1", [id.as_str()], |_| Ok(())).optional()?;
         if exists.is_some() {
