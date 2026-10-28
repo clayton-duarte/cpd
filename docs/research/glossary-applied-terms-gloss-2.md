@@ -42,7 +42,7 @@ Line numbers are of CONTEXT.md after the edit. Section 11 is "Retired words".
 - **When the Gate runs.** contract :3704, :3761 say `pr open` and `pr push` run it when `gate.merge` is `local`; the code runs it under `gate.pr` (core/src/pr/push.rs:35, core/src/pr/mod.rs:407). CONTEXT.md says `gate.pr`, as the code does.
 - **Default.** docs/contract.md:3566-3567, :3696 say `ci` is cpd's default; core/src/policy/default.toml:5-7 and contract :4019 say `none`. CONTEXT.md says `none`.
 - **Quick check at submit.** contract :3666 says submit runs no quick check; :3620 and core/src/merge/mod.rs:276 run `pre-commit` at the Attempt's merge when `gate.merge` is `local`. CONTEXT.md says "at its merge".
-- **Sync Job.** audit says it names no Job kind; the old entry said "retired" nowhere: it was only an Avoid word.
+- **Sync Job.** it was only an Avoid word (under Update Job) and no Job kind (audit); CONTEXT.md now lists it as retired.
 
 ## Deferred to the rename
 
