@@ -19,6 +19,8 @@ fn fx() -> Ip {
     let pane = String::from_utf8(out.stdout).unwrap().trim().to_owned();
     env.env.sql("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');");
     env.engine_plan();
+    // A started PR has its open Job before a Lead adds a draft: E4 adds nothing (no `job-added` Event) after the wake W.
+    env.add_cpd_job_in("repo", "open-repo", "open", "");
     env.env.sql(&format!("UPDATE sessions SET tmux_pane = '{pane}', state = 'idle', state_at = 't' WHERE id = 'lead1';"));
     env
 }
@@ -72,9 +74,9 @@ fn labels(fx: &Ip) -> Vec<String> {
     items(fx).iter().map(|i| i["label"].as_str().unwrap().to_owned()).collect()
 }
 
-/// The newest Event id.
+/// How many Events there are, but the two every fresh engine run writes (`watch-started`, `watch-stopped`).
 fn last_event(fx: &Ip) -> i64 {
-    fx.env.query("SELECT max(id) FROM events")
+    fx.env.query("SELECT count(*) FROM events WHERE kind NOT IN ('watch-started', 'watch-stopped')")
 }
 
 #[test]
@@ -138,7 +140,7 @@ fn closes_when_resolved() {
     assert_eq!(labels(&fx), ["pay: 2 parked drafts"]);
 
     // d1 is cancelled and d2 needs a queued Job (so it waits): S is empty, whatever W and T say.
-    fx.env.sql("UPDATE jobs SET status = 'cancelled' WHERE plan = 'pay' AND key = 'd1';");
+    fx.env.sql("UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE plan = 'pay' AND key = 'd1';");
     fx.env.sql("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'd2', 'q1');");
     tick(&fx);
     assert_eq!(items(&fx), Vec::<Value>::new(), "S is empty: the item closes");

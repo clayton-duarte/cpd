@@ -339,10 +339,10 @@ impl Changes {
 /// The open items whose condition has the same identity and has moved inside it, and the item follows it in place
 /// without closing, so a snooze or a dismissal stays: a `curate-*` item (subject `curate-retire:<context>`) whose
 /// count moved changes its label (hs-d549, hs-d551); a `pr-ready` item changes its label or its links (url, context,
-/// plan, session); a `dialog` item changes its label (the Verdict's option).
+/// plan, session); a `dialog` item changes its label (the Verdict's option); a `drafts-parked` item changes its label (the count of drafts, hs-d731).
 fn relabelled<'a>(open: &'a [Item], conditions: &'a [Condition]) -> Vec<(&'a Item, &'a Condition)> {
     open.iter()
-        .filter(|i| matches!(i.kind, Kind::CurateRetire | Kind::CurateDocs | Kind::PrReady | Kind::Dialog))
+        .filter(|i| matches!(i.kind, Kind::CurateRetire | Kind::CurateDocs | Kind::PrReady | Kind::Dialog | Kind::DraftsParked))
         .filter_map(|i| conditions.iter().find(|c| c.identity() == i.identity()).map(|c| (i, c)))
         .filter(|(i, c)| {
             i.label != c.label
