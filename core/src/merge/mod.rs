@@ -286,7 +286,7 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
         // An `open` Job whose pull request was merged on GitHub and never recorded adopts it (§7.7 submit step 1, §7.4 step 8b): it has no
         // new commits to push, so steps 5 and 8 are skipped and step 10 writes the rows of `pr open` step 0.
         if target.kind == "open" && pull_request_is_merged(store, target)? {
-            let pulled = open_pull_request(store, target)?;
+            let pulled = open_pull_request(store, config, target)?;
             return Ok(Stepped { end: End::Merged { sha: old }, stale: None, push: None, pulled: Some(pulled) });
         }
         // 7. Cancel check again: the last safe point.
@@ -299,7 +299,7 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
             let new = git::run::rev_parse(&target.worktree, "HEAD")?;
             let push = publish(target, &new);
             let stale = git::sync_lead(lead, &target.lead_branch).err();
-            return finish_merge(store, target, submitted.to_owned(), cpd_kind, push, stale);
+            return finish_merge(store, config, target, submitted.to_owned(), cpd_kind, push, stale);
         }
         let new = git::run::rev_parse(&target.worktree, "HEAD")?;
         git::run::ok(repo, &["merge-base", "--is-ancestor", &old, &new])?;
@@ -310,7 +310,7 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
             let push = publish(target, &new);
             // 9. Rule S on the Lead worktree; the merge stands whatever happens here.
             let stale = git::sync_lead(lead, &target.lead_branch).err();
-            return finish_merge(store, target, new, cpd_kind, push, stale);
+            return finish_merge(store, config, target, new, cpd_kind, push, stale);
         }
         if git::run::rev_parse(repo, &lead_ref)? == old {
             return Err(CpdError::new(ErrorCode::GitFailed, "git update-ref failed, and the Lead Branch did not move.")
@@ -335,6 +335,7 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
 /// merges. `sha` is recorded as `merged_sha`.
 fn finish_merge(
     store: &mut Store,
+    config: &Config,
     target: &Attempt,
     sha: String,
     cpd_kind: bool,
@@ -352,7 +353,7 @@ fn finish_merge(
     }
     // 8b. An `open` Job's pull request: created or adopted, never a draft; a `gh` failure ends the Attempt `crashed`.
     if target.kind == "open" {
-        match open_pull_request(store, target) {
+        match open_pull_request(store, config, target) {
             Ok(pulled) => return Ok(Stepped { end: End::Merged { sha }, stale, push: None, pulled: Some(pulled) }),
             Err(e) if matches!(e.code(), ErrorCode::GhFailed | ErrorCode::ToolTimeout | ErrorCode::PrClosed) => {
                 let detail = format!("{}: {}", if e.code() == ErrorCode::PrClosed { "pr_closed" } else { "gh_failed" }, e.message());
@@ -476,9 +477,9 @@ fn pull_request_is_merged(store: &mut Store, target: &Attempt) -> Result<bool, C
 }
 
 /// Step 8b (§7.4): the pull request of the Lead Branch, created or adopted, as `pr open` steps 0 and 3 do it (never `--draft`).
-fn open_pull_request(store: &mut Store, target: &Attempt) -> Result<crate::pr::Pulled, CpdError> {
+fn open_pull_request(store: &mut Store, config: &Config, target: &Attempt) -> Result<crate::pr::Pulled, CpdError> {
     let (pr, title, description) = pr_of_job(store, target)?;
-    crate::pr::pull_request(&target.lead_worktree, &pr, &title, description.as_deref())
+    crate::pr::pull_request(&target.lead_worktree, &pr, &title, description.as_deref(), &config.inbox.bot_reviewers)
 }
 
 /// Step 8's and R2's push of `sha`: to the PR's remote branch, and skipped for an adopted PR that has not opened unless the Job is an `open` or

@@ -207,12 +207,12 @@ impl Pulled {
 /// request of the branch created at or after the PR's start (`prs.started_at`; an adopted PR has no such bound) decides, in any state, `gh pr list --head <lead branch> --state all`; an older one is not the PR's and is ignored. `MERGED` is adopted as it is; `CLOSED` is
 /// `pr_closed`; an `OPEN` one is adopted, and with none one is created, never a draft (hs-d329), through the one seam from the stored
 /// title to GitHub's. `lead` is the PR's Lead worktree, so `gh` addresses its repo; `description` the PR's stored description (§9.5a), the body verbatim.
-pub fn pull_request(lead: &Path, pr: &PrRow, stored_title: &str, description: Option<&str>) -> Result<Pulled, CpdError> {
+pub fn pull_request(lead: &Path, pr: &PrRow, stored_title: &str, description: Option<&str>, bots: &[String]) -> Result<Pulled, CpdError> {
     match gh::head_pr(lead, pr.remote_branch(), pr.bound_since()?)? {
-        Some(head) if head.state == HeadState::Merged => Ok(Pulled { row: merged_row(lead, &head)?, merged: true }),
+        Some(head) if head.state == HeadState::Merged => Ok(Pulled { row: merged_row(lead, &head, bots)?, merged: true }),
         Some(head) if head.state == HeadState::Closed => Err(closed(&pr.key, pr.remote_branch(), &head)),
-        Some(head) => Ok(Pulled { row: opened_row(lead, pr, Some(PrRef { number: head.number, url: head.url }), stored_title, description)?, merged: false }),
-        None => Ok(Pulled { row: opened_row(lead, pr, None, stored_title, description)?, merged: false }),
+        Some(head) => Ok(Pulled { row: opened_row(lead, pr, Some(PrRef { number: head.number, url: head.url }), stored_title, description, bots)?, merged: false }),
+        None => Ok(Pulled { row: opened_row(lead, pr, None, stored_title, description, bots)?, merged: false }),
     }
 }
 
@@ -239,14 +239,14 @@ pub fn closed(key: &PrKey, branch: &str, head: &gh::HeadPr) -> CpdError {
 /// The row of the open pull request `existing` (an earlier run died before its transaction), else of a new one: `gh pr create`
 /// (never `--draft`), and when that fails the Lead Branch's pull request is looked up again ([`find_or_create`]). GitHub's creation time is
 /// read by the poller's own lookup, which a pull request it cannot find fails as `gh_failed`; a rerun adopts the one created.
-fn opened_row(lead: &Path, pr: &PrRow, existing: Option<PrRef>, stored_title: &str, description: Option<&str>) -> Result<PolledPr, CpdError> {
+fn opened_row(lead: &Path, pr: &PrRow, existing: Option<PrRef>, stored_title: &str, description: Option<&str>, bots: &[String]) -> Result<PolledPr, CpdError> {
     let title = github_title(stored_title);
     let found = find_or_create(lead, pr, existing, &title, description)?;
     let (repo, _) = pulls::parse_url(&found.url).ok_or_else(|| {
         CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", found.url))
             .with("url", found.url.as_str())
     })?;
-    let (created_at, updated_at, base_ref, default_branch) = match gh::lookup(&*Ports::current().runner, lead, &[(repo.clone(), found.number)])?.into_iter().next().flatten() {
+    let (created_at, updated_at, base_ref, default_branch) = match gh::lookup(&*Ports::current().runner, lead, &[(repo.clone(), found.number)], bots)?.into_iter().next().flatten() {
         Some(looked_up) => (looked_up.created_at, looked_up.updated_at, looked_up.base_ref, looked_up.default_branch),
         None => {
             return Err(CpdError::new(ErrorCode::GhFailed, format!("gh cannot find pull request {repo}#{}, which it just opened.", found.number))
@@ -273,12 +273,12 @@ fn opened_row(lead: &Path, pr: &PrRow, existing: Option<PrRef>, stored_title: &s
 }
 
 /// The lookup of a pull request of the Lead Branch that `gh pr list` says is merged (§7.6 `pr open` step 0): one lookup of the poll's.
-fn merged_row(lead: &Path, head: &gh::HeadPr) -> Result<PolledPr, CpdError> {
+fn merged_row(lead: &Path, head: &gh::HeadPr, bots: &[String]) -> Result<PolledPr, CpdError> {
     let (repo, _) = pulls::parse_url(&head.url).ok_or_else(|| {
         CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", head.url))
             .with("url", head.url.as_str())
     })?;
-    match gh::lookup(&*Ports::current().runner, lead, &[(repo.clone(), head.number)])?.into_iter().next().flatten() {
+    match gh::lookup(&*Ports::current().runner, lead, &[(repo.clone(), head.number)], bots)?.into_iter().next().flatten() {
         Some(looked_up) if looked_up.state == PrState::Merged => Ok(looked_up),
         Some(other) => Err(CpdError::new(
             ErrorCode::GhFailed,

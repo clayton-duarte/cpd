@@ -191,7 +191,7 @@ pub fn parse(prs: &[(&str, i64)], answer: &str, bots: &[String]) -> Result<Vec<R
         return Err(gh(format!("The comments read answered with errors: {}", first.message.as_deref().unwrap_or("(no message)"))));
     }
     let mut data = answer.data.ok_or_else(|| gh("The comments read answered without data.".to_owned()))?;
-    let is_bot = |login: &str| login.ends_with("[bot]") || bots.iter().any(|b| b == login);
+    let is_bot = |login: &str| super::status::is_bot(login, bots);
     let me = data.viewer.login.clone();
     let mut reads = Vec::with_capacity(prs.len());
     for (i, (repo, number)) in prs.iter().enumerate() {
