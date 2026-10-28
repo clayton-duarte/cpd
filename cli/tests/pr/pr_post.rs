@@ -14,7 +14,7 @@ const OK: &str = r#"{"ok":true,"channel":"C0POLICY1","ts":"1793040197.490209","l
 const AUTH: &str = r#"{"ok":false,"error":{"code":"slack_auth","message":"Slack needs a sign-in. Run: pi mcp login slack","details":{}}}"#;
 
 /// What a test changes of the baseline.
-struct Setup {
+pub(super) struct Setup {
     /// The owner's `[pr.post]` table body after `enabled = true`; `None` leaves the table out.
     post: Option<String>,
     machine_channel: bool,
@@ -22,7 +22,7 @@ struct Setup {
 }
 
 impl Setup {
-    fn baseline() -> Setup {
+    pub(super) fn baseline() -> Setup {
         Setup { post: Some("channel = \"C0POLICY1\"\n".to_owned()), machine_channel: true, status: "open" }
     }
 
@@ -43,7 +43,7 @@ fn human_item() -> Value {
 
 /// The baseline of the Plan's one PR (its Context owned by `acme`, its repo named `pay`, the owner's policy as `setup`
 /// says, the stored row ready to post) and the helper answering [`OK`].
-fn post(setup: Setup) -> Pay {
+pub(super) fn post(setup: Setup) -> Pay {
     post_with_node(setup, Reply::ok(&format!("{OK}\n")))
 }
 
@@ -76,12 +76,12 @@ fn post_with_node(setup: Setup, node: Reply) -> Pay {
 }
 
 impl Pay {
-    fn set(&self, assignments: &str) {
+    pub(super) fn set(&self, assignments: &str) {
         let sql = format!("UPDATE pull_requests SET {assignments} WHERE number = 812;");
         self.store().write("fixture", |tx| tx.execute_batch(&sql).map_err(Into::into)).unwrap();
     }
 
-    fn post_cmd(&self) -> crate::common::Run {
+    pub(super) fn post_cmd(&self) -> crate::common::Run {
         self.fx.cpd(&["pr", "post", "--pr", "repo", "--plan", "pay"])
     }
 
