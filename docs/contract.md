@@ -622,7 +622,8 @@ Only `pr-ready` reads the `pull_requests` row the poll last wrote (§7.6): `url`
 - **POSTED:** a `pr_posts` row exists for the owner's (Plan, PR key).
 - **POST ENABLED:** the owner's resolved policy (`pr::policy_of_pr`) has `pr.post.enabled` true. An unowned pull request, or a policy that does not resolve (`owner_unset`, `owner_unconfirmed`, `policy_invalid`, §8.3), counts as not enabled and fails nothing (the poll already reports it, §7.6).
 - **POSTABLE:** `unready(row)` of `core/src/pr/postable.rs` is empty: the one definition of "ready to post" is **Readiness** in §2.2 "PR post", referenced here, not restated.
-- **ready to merge** in row 6 is the **'Ready to merge'** definition (§2.2 Pull request), via `pulls::ready_to_merge_sql`.
+- **STACKED:** `base_ref` and `default_branch` are both known and differ (a NULL one is not stacked).
+- **ready to merge** in row 5 is the **'Ready to merge'** definition (§2.2 Pull request), via `pulls::ready_to_merge_sql`.
 
 **STATUS**, first match wins:
 
@@ -631,12 +632,14 @@ Only `pr-ready` reads the `pull_requests` row the poll last wrote (§7.6): `url`
 | 1 | `draft` is true | white | `draft` |
 | 2 | broken: `mergeable` is `conflicting`, or `checks` is `failed`, or `review_decision` is `changes_requested`; and HANDLED | cyan | `updating` if conflicting, else `fixing` |
 | 2 | broken, and not HANDLED | red | `conflict` if conflicting, else `failing` if checks failed, else `changes requested` |
-| 3 | `base_ref` and `default_branch` are both known and differ (a NULL base or default is not stacked: it falls through, and is never ready to merge) | white | `stacked` |
-| 4 | `checks` is `pending` (`none` is not running) | cyan | `checks running` |
-| 5 | owned, not POSTED, POST ENABLED and POSTABLE | yellow | `ready for review` |
-| 6 | ready to merge, `review_decision` is `approved` or `none`, and (the pull request is not owned by a post-enabled owner, or it is POSTED, or its review is `approved`) | yellow | `ready to merge` |
+| 3 | `checks` is `pending` (`none` is not running) | cyan | `checks running` |
+| 4 | owned, not POSTED, POST ENABLED and POSTABLE (stacked or not) | yellow | `ready for review` |
+| 5 | ready to merge, `review_decision` is `approved` or `none`, and (the pull request is not owned by a post-enabled owner, or it is POSTED, or its review is `approved`) | yellow | `ready to merge` |
+| 6 | STACKED, and (`review_decision` is `approved` or the PR is not POSTED) | white | `stacked` |
 | 7 | POSTED | cyan | `in review` |
 | 8 | otherwise | cyan | `waiting` |
+
+Stacking blocks only `ready to merge` (pro-d118: its definition needs `base_ref` = `default_branch`, so row 5 never holds a stacked PR) and no longer hides the other states (pro-d152).
 
 **ROW LIFE.** One row per such pull request while it is open and authored. It closes when the pull request is merged, closed or no longer authored: the rule stops emitting it and E8's next reconcile closes it (the paths that store a merge, `close_pr_ready`, still close it in the same transaction, hs-d526). Reconcile keeps the identity (kind, subject, urgency): a colour change closes the row and opens a new one; a change of the label or links inside a colour updates the open row in place with no Event. **Dot:** only yellow and red `pr-ready` items fill the Plan Lead's dot in the Context tree; cyan and white ones fill no Session dot. The Lead is woken by `pr-feedback`, never with `ready_to_post`, which pro-d130 removed (§5.2).
 
