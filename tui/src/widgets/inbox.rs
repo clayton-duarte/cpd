@@ -291,6 +291,7 @@ pub fn click(tree: &Tree, item: &Item) -> Option<Jump> {
 /// An entry of an item's right-click menu (commands.md §13.2): the labels are the contract's, exactly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Choice {
+    Approve,
     Claim,
     Snooze15,
     Snooze1h,
@@ -299,18 +300,23 @@ pub enum Choice {
 }
 
 impl Choice {
-    /// The entries of the menu of a row of `kind`, in order: `Claim` first on `review-requested` rows only.
+    /// The entries of the menu of a row of `kind`, in order: `Approve` first on `deploy` rows only, `Claim` first on `review-requested` rows only.
     pub fn entries(kind: Kind) -> Vec<Choice> {
         let rest = [Choice::Snooze15, Choice::Snooze1h, Choice::SnoozeTomorrow, Choice::Dismiss];
-        let claim = (kind == Kind::ReviewRequested).then_some(Choice::Claim);
-        claim.into_iter().chain(rest).collect()
+        let first = match kind {
+            Kind::Deploy => Some(Choice::Approve),
+            Kind::ReviewRequested => Some(Choice::Claim),
+            _ => None,
+        };
+        first.into_iter().chain(rest).collect()
     }
 
-    /// The words of the command of the item `id`: `inbox claim <id>`, `inbox snooze <id> <15m|1h|tomorrow>` (§21.3) or `inbox dismiss <id>` (§21.4).
+    /// The words of the command of the item `id`: `inbox approve <id>`, `inbox claim <id>`, `inbox snooze <id> <15m|1h|tomorrow>` (§21.3) or `inbox dismiss <id>` (§21.4).
     pub fn argv(self, id: i64) -> Vec<String> {
         let id = id.to_string();
         let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         match self {
+            Choice::Approve => words(&["inbox", "approve", &id]),
             Choice::Claim => words(&["inbox", "claim", &id]),
             Choice::Snooze15 => words(&["inbox", "snooze", &id, "15m"]),
             Choice::Snooze1h => words(&["inbox", "snooze", &id, "1h"]),
@@ -323,6 +329,7 @@ impl Choice {
 impl crate::menu::Entry for Choice {
     fn label(self) -> &'static str {
         match self {
+            Choice::Approve => "Approve",
             Choice::Claim => "Claim",
             Choice::Snooze15 => "Snooze 15 min",
             Choice::Snooze1h => "Snooze 1 h",

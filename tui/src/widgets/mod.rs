@@ -17,6 +17,8 @@
 
 pub(crate) mod column;
 #[cfg(test)]
+mod approve_tests;
+#[cfg(test)]
 mod deploy_tests;
 #[cfg(test)]
 mod draw_tests;
@@ -280,7 +282,7 @@ impl Opener<'_> {
         }
     }
 
-    /// The entry `choice` of the menu of the item `id`: `inbox snooze` or `inbox dismiss`, through `run_command`.
+    /// The entry `choice` of the menu of the item `id`: `inbox approve`, `inbox claim`, `inbox snooze` or `inbox dismiss`, through `run_command`.
     fn choose(&self, choice: inbox::Choice, id: i64) {
         let argv = choice.argv(id);
         let words = argv.join(" ");
