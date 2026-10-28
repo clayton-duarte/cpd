@@ -21,7 +21,7 @@ fn queue(live: &Live) -> Value {
 }
 
 fn row(target: &str) -> Value {
-    json!(["pay", "repo", target, true, true])
+    json!(["pay", "repo", target, 1, 1])
 }
 
 #[test]
@@ -61,5 +61,5 @@ fn an_open_job_that_finds_the_pull_request_already_merged_queues_done() {
 
     assert_eq!(live.value::<String>("SELECT status FROM prs WHERE key = 'repo'"), "merged");
     let done: Value = serde_json::from_str(&live.value::<String>("SELECT coalesce(json_group_array(json_array(plan, pr, target, settled_at IS NULL)), '[]') FROM jira_transitions WHERE target = 'done'")).unwrap();
-    assert_eq!(done, json!([["pay", "repo", "done", true]]));
+    assert_eq!(done, json!([["pay", "repo", "done", 1]]));
 }

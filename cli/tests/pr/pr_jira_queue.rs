@@ -18,7 +18,7 @@ fn queue(env: &TestEnv) -> Value {
 }
 
 fn row(plan: &str, pr: &str, target: &str) -> Value {
-    json!([plan, pr, target, true, true])
+    json!([plan, pr, target, 1, 1])
 }
 
 #[test]
