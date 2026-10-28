@@ -9,7 +9,7 @@ Paths: `ctx` = `/tmp/cpd-glassary/context-cpd.md`, `titles` = `/tmp/cpd-glassary
 What I read:
 
 - `ctx` (428 lines, 152 KB): read in full, in chunks of 60 to 140 lines (`sed -n 'a,bp'`), lines 1-428. Lines up to 2,129 characters were shown cut at 700-1,200 characters in the chunk views, so the tails of the longest records (for example pro-d18, pro-d60, pro-d64, pro-d68, pro-d69, pro-d100, pro-d106, pro-d126, pro-d131) I read only through `rg -o` hits, not line by line: unverified for words that appear only in those tails.
-- `titles` (386 lines): read through `rg` hits for 'PR', 'pull request', review, workflow, deploy, draft, phase; lines 1-60 and the `## Plan` header lines read directly. I did not read all 290 `- PR <key>` lines one by one.
+- `titles` (386 lines): read through `rg` hits for 'PR', 'pull request', review, workflow, deploy, draft, phase; only its first 1,500 bytes (about 15 lines) and the `## Plan` header hits were read directly; the rest only through those hits. I did not read all 290 `- PR <key>` lines one by one.
 - `CONTEXT.md` of this worktree: only used to answer 'does CONTEXT.md define this term' with `rg -c -i -F` (section `Words agents invented`) and to name what it says for PR (section `PR in practice`). Auditing CONTEXT.md is another part's job.
 
 What I did not read: any file outside the two inputs and `CONTEXT.md`; the Context records of other Contexts (only their Plan and PR titles, via `titles`); source code. No `gh`, no network.
@@ -31,9 +31,9 @@ Ranked by harm (a wrong action or a wrong reading by an agent), then frequency. 
 | --- | --- | --- | --- | --- |
 | PR (`PR`, `PRs`) | `object` (a Workflow-to-be) and `pull request` in one sentence: a "PR" binds to a "GitHub PR"; only a qualifier tells them apart | ctx:90 pro-b43 "merged GitHub PR as its own PR"; titles:315 old-pr "a GitHub PR created after its PR started" | agent (Manager or Lead; unverified which); titles: Lead (unverified) | ctx 191 / titles 306 [PR (any form)] |
 | PR as Plan / as the Lead's own | the word 'PR' used where the Plan, its Lead or its batch of Jobs is meant: Leads and Plans own "a PR", Plans are named "(PR key)", work is parked "in a started PR" | ctx:177 pro-d36 "a Lead's PR waits only"; ctx:325 pro-n24 "Plan esc-digest (PR digest)"; ctx:56 pro-b26 "Jobs in a started PR" | agent (Manager or Lead; unverified which) | ctx 15 / titles 0 [Plan x (PR y) pattern] |
-| merged / merge | a Job merged into a Lead Branch, an Attempt recorded `merged`, a PR row with status merged, and a pull request merged on GitHub: one word, four events; one defect came from it | ctx:390 pro-n91 "PR marked merged"; ctx:122 pro-p60 "merge recorded merged"; ctx:36 pro-b16 "work merged into the Lead Branch" | agent (Manager or Lead; unverified which); pro-p60 text: Lead of preco-connected-flow (ctx:123) | ctx 133 / titles 208 [merge] |
+| merged / merge | a Job merged into a Lead Branch, an Attempt recorded `merged`, a PR row with status merged, and a pull request merged on GitHub: one word, four events; one defect came from it | ctx:390 pro-n91 "PR marked merged"; ctx:122 pro-p60 "merge recorded merged"; ctx:36 pro-b16 "work merged into the Lead Branch" | agent (Manager or Lead; unverified which); pro-b59 (ctx:123) names its author: the Lead of preco-connected-flow | ctx 133 / titles 208 [merge] |
 | open | the open Job, the PR status `open`, `pr open`, the open step and a pull request being open on GitHub | ctx:261 pro-d126 "no pull request opens (open Job refused to start)"; ctx:380 pro-n81 "the PR has no open Job" | agent (Manager or Lead; unverified which) | ctx 93 / titles 23 [open] |
-| stacked | `object` sense: the PR's base is another PR of the Plan; `pull request` sense: its base is not the default branch; a Lead's note says they differ | ctx:410 pro-n111 "base is no PR's Lead Branch"; ctx:254 pro-d118 "A stacked pull request"; ctx:211 pro-d73 "A stacked PR waits" | agent (Manager or Lead; unverified which) | ctx 28 / titles 8 [stacked] |
+| stacked | `object` sense: the PR's base is another PR of the Plan; `pull request` sense: its base is not the default branch; a record says they differ (ctx:410) | ctx:410 pro-n111 "base is no PR's Lead Branch"; ctx:254 pro-d118 "A stacked pull request"; ctx:211 pro-d73 "A stacked PR waits" | agent (Manager or Lead; unverified which) | ctx 28 / titles 8 [stacked] |
 | base | a PR key, a `<plan>/<key>`, a Lead Branch or a remote branch name in `--base`; the same value read as a branch failed with `base_not_found` | ctx:281 pro-d133 "a bare PR key in --base"; ctx:282 pro-d134 "any other value is a branch" | agent (Manager or Lead; unverified which) | ctx 31 / titles 6 [base] |
 | workflow | GitHub Actions workflow, a Jira workflow, cpd 1's name for Plan, and the new cpd object (pro-d136) | ctx:420 pro-n121 "EEC workflow names"; ctx:236 pro-d100 "a workflow listed in the repo"; ctx:283 pro-d136 "cpd 1's Workflow (= Plan" | agent (Manager or Lead; unverified which) | ctx 6 / titles 0 [workflow] |
 | review | Plan review (the approval step), a review Job (commits nothing), a GitHub review of a pull request, an Inbox review item, a review request from others | ctx:205 pro-d67 "pr-post's Plan review waits"; ctx:73 pro-p35 "holds only a merged review Job"; ctx:202 pro-d64 "A review that requests changes" | agent (Manager or Lead; unverified which) | ctx 65 / titles 29 [review] |
@@ -97,9 +97,8 @@ Terms used as terms of art in the records and Plan titles that `CONTEXT.md` does
 | Deploy column | context-cpd.md:39 (pro-p18) | 14 | 0 |
 | incident mode | context-cpd.md:178 (pro-d37) | 3 | 0 |
 | tripwire | context-cpd.md:177 (pro-d36) | 2 | 0 |
-| Verdict | context-cpd.md:108 (pro-p53) | 5 | 2 |
 | Claim = cpd inbox claim | context-cpd.md:196 (pro-d58) | 1 | 0 |
-| dot-urgency tier | context-cpd.md:32 (  - brief pro-b14) | 2 | 0 |
+| dot-urgency tier | context-cpd.md:32 (pro-b14) | 2 | 0 |
 | Pulse | context-cpd.md:187 (pro-d48) | 3 | 0 |
 | janitor | context-cpd.md:208 (pro-d70) | 4 | 0 |
 | adopted PR | context-cpd.md:157 (pro-d15) | 6 | 0 |
@@ -111,23 +110,21 @@ Terms used as terms of art in the records and Plan titles that `CONTEXT.md` does
 | earmark | context-cpd.md:242 (pro-d106) | 1 | 0 |
 | LEAK-FAIL | context-cpd.md:184 (pro-d43) | 6 | 0 |
 | quarantine | context-cpd.md:184 (pro-d43) | 5 | 0 |
-| Job pill | context-cpd.md:48 (  - brief pro-b22) | 6 | 0 |
+| Job pill | context-cpd.md:48 (pro-b22) | 6 | 0 |
 | questionnaire | context-cpd.md:206 (pro-d68) | 3 | 0 |
 | Ad-hoc Jobs | context-cpd.md:192 (pro-d53) | 2 | 0 |
 | drive-by | context-cpd.md:378 (pro-n79) | 1 | 0 |
 | its leaves | context-cpd.md:239 (pro-d103) | 1 | 0 |
 | implied need | context-cpd.md:211 (pro-d73) | 2 | 0 |
 | hard cut | context-cpd.md:168 (pro-d26) | 2 | 0 |
-| reaction queue | context-cpd.md:109 (  - brief pro-b52) | 3 | 0 |
+| reaction queue | context-cpd.md:109 (pro-b52) | 3 | 0 |
 | 'work' Jobs | context-cpd.md:206 (pro-d68) | 1 | 0 |
-| Feedback fix | context-cpd.md:104 (pro-p51) | 6 | 1 |
 | stopgap | context-cpd.md:331 (pro-n30) | 3 | 0 |
 | Interim | context-cpd.md:173 (pro-d31) | 4 | 0 |
 | Worker cap | context-cpd.md:186 (pro-d47) | 3 | 0 |
 | urgent PR | context-cpd.md:178 (pro-d37) | 2 | 0 |
 | red loader | context-cpd.md:93 (pro-p45) | 3 | 0 |
 | Inbox row | context-cpd.md:134 (pro-p66) | 3 | 0 |
-| cockpit | context-cpd.md:32 (  - brief pro-b14) | 22 | 3 |
 
 Terms that CONTEXT.md does define but that agents use in a second sense are in `Confusions` (for example `Gate`, `Merged`, `Tier`, `Escalation`). Note for the glossary part: `CONTEXT.md` itself defines 'PR' three times, as `**PR** (phase)` (CONTEXT.md:29), `**PR** (step)` (CONTEXT.md:71) and `**PR** (entity, new: R34)` (CONTEXT.md:111); I did not audit them.
 
