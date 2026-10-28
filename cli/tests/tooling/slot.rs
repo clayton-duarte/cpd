@@ -64,7 +64,8 @@ fn cargo_sh_takes_a_cargo_resource_slot_never_a_cpd_slot() {
     let out = run_sh(&bin, &[script.to_str().unwrap(), "nextest", "run", "--workspace"], tmp.path());
     assert!(out.status.success(), "{out:?}");
     let ran = fs::read_to_string(&calls).unwrap_or_default();
-    assert!(ran.contains("cpd resource run cargo --wait 30 -- cargo nextest run --workspace"), "{ran:?}");
+    let wrapped = format!("cpd resource run cargo --wait 30 -- {} nextest run --workspace", bin.join("cargo").display());
+    assert!(ran.lines().any(|l| l == wrapped), "{ran:?}");
     assert!(ran.lines().any(|l| l == "cargo nextest run --workspace"), "{ran:?}");
     assert!(!ran.lines().any(|l| l.starts_with("cpd slot")), "{ran:?}");
 }
