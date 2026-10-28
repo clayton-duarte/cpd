@@ -98,6 +98,11 @@ fn pr_add_in_dispatch_needs_neither_flag_for_a_stacked_pr() {
 }
 
 #[test]
+fn pr_add_in_dispatch_needs_neither_flag_for_a_stacked_pr_named_by_its_bare_key() {
+    assert_stacked_add_needs_no_flag("repo");
+}
+
+#[test]
 fn pr_add_in_dispatch_needs_neither_flag_for_a_pr_based_on_another_prs_lead_branch() {
     // The Lead Branch of PR `repo` in the fixture is `cpd/pay`.
     assert_stacked_add_needs_no_flag("cpd/pay");

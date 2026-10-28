@@ -1490,6 +1490,81 @@ fn edit_stacks_and_unstacks_and_a_pr_something_is_stacked_on_keeps_its_repo() {
     fx.pr(&["edit", "api", "--base", "main"]).ok();
 }
 
+#[test]
+fn add_reads_a_bare_pr_key_in_base_as_the_base_pr() {
+    let fx = crud("grounding");
+    fx.add("api", &fx.pay, &[]).ok();
+    let out = fx.add("web", &fx.pay, &["--base", "api"]).ok();
+    let pr = &out["pr"];
+    assert_eq!((pr["base"].clone(), pr["base_pr"].clone(), pr["needs"].clone(), pr["status"].clone()), (json!("pay-1/api"), json!("pay-1/api"), json!([]), json!("waiting")), "{out}");
+    assert_eq!(fx.add("web", &fx.pay, &["--base", "api"]).ok()["already"], true);
+    let out = fx.add("ui", &fx.pay, &["--base", "pay-1/api"]).ok();
+    assert_eq!(out["pr"]["base"], "pay-1/api", "{out}");
+    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "api", "--needs", "api"]), "usage", 2, fx.writes());
+    assert!(error["message"].as_str().unwrap().contains("api"), "{error}");
+}
+
+#[test]
+fn add_refuses_a_bare_base_pr_that_is_cancelled_or_merged() {
+    let fx = crud("grounding");
+    fx.add("gone", &fx.pay, &[]).ok();
+    fx.pr(&["cancel", "gone"]).ok();
+    fx.merged_pr("pay-1", "old", &fx.pay, 21);
+    let writes = fx.writes();
+    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "gone"]), "base_pr_unavailable", 3, writes);
+    assert_eq!(error["details"]["pr"], "gone");
+    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "old"]), "base_pr_unavailable", 3, writes);
+    assert_eq!(error["details"]["pr"], "old");
+}
+
+#[test]
+fn a_bare_base_is_a_pr_reference_only_for_a_pr_of_the_plan_in_the_repo() {
+    let fx = crud("grounding");
+    fx.plan("ledger-9", "ctx", "grounding");
+    fx.add("schema", &fx.web, &[]).ok();
+    fx.merged_pr("ledger-9", "led", &fx.pay, 8);
+    let writes = fx.writes();
+    for bare in ["ghost", "schema", "led"] {
+        let error = fx.refused(&fx.add("x", &fx.pay, &["--base", bare]), "base_not_found", 4, writes);
+        assert_eq!(error["details"]["base"], bare);
+    }
+    // An existing branch with no PR of that key stays a branch.
+    fx.git(&fx.pay, &["branch", "develop"]);
+    fx.git(&fx.pay, &["update-ref", "refs/remotes/origin/develop", "develop"]);
+    let out = fx.add("a", &fx.pay, &["--base", "develop"]).ok();
+    assert_eq!((out["pr"]["base"].clone(), out["pr"]["base_pr"].clone()), (json!("develop"), Value::Null), "{out}");
+    // A PR key of the Plan in the repo wins over the branch of the same name.
+    fx.add("develop", &fx.pay, &[]).ok();
+    let out = fx.add("b", &fx.pay, &["--base", "develop"]).ok();
+    assert_eq!((out["pr"]["base"].clone(), out["pr"]["base_pr"].clone()), (json!("pay-1/develop"), json!("pay-1/develop")), "{out}");
+}
+
+#[test]
+fn edit_reads_a_bare_pr_key_in_base_as_the_base_pr() {
+    let fx = crud("plan");
+    fx.add("api", &fx.pay, &[]).ok();
+    fx.add("schema", &fx.web, &[]).ok();
+    fx.add("web", &fx.pay, &[]).ok();
+
+    let out = fx.pr(&["edit", "web", "--base", "api", "--needs", "schema"]).ok();
+    assert_eq!(out["fields"], json!(["base", "needs"]));
+    assert_eq!(fx.shown("pay-1", "web"), json!(["pay-1/api", "pay-1/api", ["schema"]]));
+    assert_eq!(fx.pr(&["edit", "web", "--base", "api"]).ok()["already"], true);
+    fx.pr(&["edit", "web", "--base", "main", "--no-needs"]).ok();
+    assert_eq!(fx.shown("pay-1", "web"), json!(["main", null, []]));
+
+    let writes = fx.writes();
+    let error = fx.refused(&fx.pr(&["edit", "web", "--base", "schema"]), "base_not_found", 4, writes);
+    assert_eq!(error["details"]["base"], "schema");
+    let error = fx.refused(&fx.pr(&["edit", "api", "--base", "api"]), "dependency_cycle", 3, writes);
+    assert_eq!(error["details"]["cycle"], json!(["api", "api"]));
+    let error = fx.refused(&fx.pr(&["edit", "web", "--repo", fx.web.to_str().unwrap(), "--base", "api"]), "base_not_found", 4, writes);
+    assert_eq!(error["details"]["base"], "api");
+
+    fx.pr(&["cancel", "api"]).ok();
+    fx.refused(&fx.pr(&["edit", "web", "--base", "api"]), "base_pr_unavailable", 3, fx.writes());
+}
+
 // ---------- pr cancel --superseded-by (hs-d301) ----------
 
 impl Crud {
