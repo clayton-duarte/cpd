@@ -75,7 +75,7 @@ pub fn conditions_with(
     all.extend(store.read(unread)?);
     // No `question` kind (hs-d306 (1)): an open Context question opens nothing, and an item an older engine opened for
     // one closes at the next reconcile, its condition no longer holding. Questions to the User go through `ask_user_question`.
-    all.extend(store.read(|conn| pr_ready(conn))?);
+    all.extend(store.read(|conn| super::pr::conditions(conn, home))?);
     all.extend(store.read(|conn| curate(conn, floor))?);
     all.extend(review_requested(store, home, now, team)?);
     all.extend(models_changed(store, home, now)?);
@@ -155,7 +155,7 @@ fn corrupt(what: &str, value: &str) -> CpdError {
     CpdError::new(ErrorCode::StoreFailed, format!("The store holds an invalid {what}: {value:?}.")).with("value", value)
 }
 
-fn id<T>(what: &str, value: &str, parse: fn(&str) -> Result<T, CpdError>) -> Result<T, CpdError> {
+pub(super) fn id<T>(what: &str, value: &str, parse: fn(&str) -> Result<T, CpdError>) -> Result<T, CpdError> {
     parse(value).map_err(|_| corrupt(what, value))
 }
 
@@ -503,62 +503,6 @@ pub fn stuck_groups(jobs: Vec<StuckJob>) -> Vec<StuckGroup> {
 }
 
 // ---- Pull requests: pr-ready, review-requested -------------------------------------------
-
-/// The open `pull_requests` rows that match `filter`, a SQL condition over `r`, oldest first, as conditions of `kind`
-/// and `urgency`. `label` makes the label from the row's repo without its owner and its number. A `prs` row that
-/// points to the pull request links its Plan, Context and Lead. The filter alone decides (hs-d481): no checks or policy are read.
-fn pull_request_conditions(
-    conn: &Connection,
-    kind: Kind,
-    urgency: Urgency,
-    filter: &str,
-    label: fn(&str, i64) -> String,
-) -> Result<Vec<Condition>, CpdError> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT r.repo, r.number, r.url, p.context, prs.plan, p.lead_session
-           FROM pull_requests r
-           LEFT JOIN prs ON prs.pull_request = r.id
-           LEFT JOIN plans p ON p.id = prs.plan
-          WHERE r.state = 'open' AND {filter}
-          ORDER BY r.id"
-    ))?;
-    let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
-    while let Some(row) = rows.next()? {
-        let (repo, number, url): (String, i64, String) = (row.get(0)?, row.get(1)?, row.get(2)?);
-        let (context, plan, lead): (Option<String>, Option<String>, Option<String>) =
-            (row.get(3)?, row.get(4)?, row.get(5)?);
-        let name = repo.split_once('/').map_or(repo.as_str(), |(_, name)| name);
-        out.push(Condition {
-            kind,
-            urgency,
-            subject: format!("pr:{repo}#{number}"),
-            label: label(name, number),
-            url: Some(url),
-            context: context.as_deref().map(|c| id("Context id", c, ContextId::parse)).transpose()?,
-            plan: plan.as_deref().map(|p| id("Plan id", p, PlanId::parse)).transpose()?,
-            job: None,
-            session: lead.as_deref().map(|s| id("Session id", s, SessionId::parse)).transpose()?,
-            record: None,
-            event: None,
-            opened_at: None,
-        });
-    }
-    Ok(out)
-}
-
-/// `pr-ready` (hs-d481, hs-d525, pro-d118): the pull request is ready to merge (`pulls::ready_to_merge_sql`: open, not a draft,
-/// merge state clean, base the repo's default branch; a stacked PR or an unknown base is not), authored, and its review decision
-/// is approved or none. Checks and `pr.feedback.checks` are not read.
-fn pr_ready(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
-    pull_request_conditions(
-        conn,
-        Kind::PrReady,
-        Urgency::Yellow,
-        &format!("r.authored = 1 AND r.state = 'open' AND {} = 1 AND r.review_decision IN ('approved', 'none')", crate::pr::pulls::ready_to_merge_sql("r")),
-        |name, n| format!("{name}#{n} ready to merge"),
-    )
-}
 
 /// `review-requested`: a pull request posted in the team channel in the last 7 days that hermes' rule calls
 /// `NEEDS_REVIEW` (contract §2.2 "The team review rule", hs-d320). GitHub's own review requests open nothing.

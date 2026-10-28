@@ -55,7 +55,7 @@ pub fn ready_to_merge_sql(alias: &str) -> String {
     )
 }
 
-const COLUMNS: &str = "id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, \
+pub(crate) const COLUMNS: &str = "id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, \
                        mergeable, merge_state, authored, review_requested, updated_at, feedback, base_ref, default_branch";
 
 /// The items a `feedback` column holds: parsed once, here.
@@ -69,7 +69,7 @@ fn feedback_text(items: &[Item]) -> String {
 }
 
 impl PullRequest {
-    fn from_row(r: &Row) -> rusqlite::Result<PullRequest> {
+    pub(crate) fn from_row(r: &Row) -> rusqlite::Result<PullRequest> {
         Ok(PullRequest {
             id: r.get(0)?,
             repo: r.get(1)?,
