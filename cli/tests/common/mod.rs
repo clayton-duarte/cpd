@@ -1036,17 +1036,15 @@ impl TestEnv {
     /// of [`TestEnv::command`]) and the ones to set: the one place that says what isolated means, for the `Command` of
     /// [`TestEnv::command`] and for the process [`fx::Fx`] runs `cpd` in.
     pub fn isolation(&self) -> (Vec<OsString>, Vec<(&'static str, OsString)>) {
-        let remove = std::env::vars_os()
-            .map(|(key, _)| key)
-            .filter(|key| {
-                let k = key.to_string_lossy();
-                ["CPD_", "PI_", "GIT_", "XDG_", "PLANNOTATOR_", "GH_", "GITHUB_", "SSH_"].iter().any(|p| k.starts_with(p))
-                    || PROXY_VARS.iter().any(|v| k.eq_ignore_ascii_case(v))
-                    || k == "TMUX"
-                    || k == "TMUX_PANE"
-                    || k == "ZDOTDIR"
-            })
-            .collect();
+        let mut remove: Vec<OsString> = ["TMUX", "TMUX_PANE", "ZDOTDIR"].map(OsString::from).to_vec();
+        for (key, _) in std::env::vars_os() {
+            let k = key.to_string_lossy();
+            let listed = ["CPD_", "PI_", "GIT_", "XDG_", "PLANNOTATOR_", "GH_", "GITHUB_", "SSH_"].iter().any(|p| k.starts_with(p))
+                || PROXY_VARS.iter().any(|v| k.eq_ignore_ascii_case(v));
+            if listed && !remove.contains(&key) {
+                remove.push(key);
+            }
+        }
         let mut paths = vec![self.bin()];
         paths.extend(std::env::split_paths(inherited_path()));
         let set = vec![
