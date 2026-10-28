@@ -36,7 +36,11 @@ fi
 start_sccache_server() {
   set -- "PATH=$PATH"
   [ -z "${HOME+x}" ] || set -- "$@" "HOME=$HOME"
-  [ -z "${TMPDIR+x}" ] || set -- "$@" "TMPDIR=$TMPDIR"
+  if [ -n "${TMPDIR+x}" ]; then
+    # A Gate run's TMPDIR (scripts/gate-run.sh) is removed when the run ends; the
+    # machine-wide server outlives it, so it gets the directory that holds it.
+    case ${TMPDIR##*/} in (gate-run.*) set -- "$@" "TMPDIR=${TMPDIR%/*}" ;; (*) set -- "$@" "TMPDIR=$TMPDIR" ;; esac
+  fi
   names=$(/usr/bin/env | while IFS= read -r line; do
     case $line in
       (SCCACHE_*=*)
