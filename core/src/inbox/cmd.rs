@@ -328,7 +328,7 @@ fn snooze(ports: &Ports, args: SnoozeArgs) -> Result<Output, CpdError> {
     let item = store.write("inbox snooze", |tx| {
         let item = open_item(tx, args.id)?;
         tx.execute("UPDATE inbox_items SET snoozed_until = ?2 WHERE id = ?1", params![item.id, until])?;
-        let event = NewEvent::inbox_snoozed(format!("Inbox item {} snoozed until {said}: {}.", item.id, item.label), item.id, &until);
+        let event = NewEvent::inbox_snoozed(format!("Inbox item {} snoozed until {said}: {}.", item.id, model::one_line(&item.label)), item.id, &until);
         events::append(tx, scoped(event, &item))?;
         model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))
     })?;
@@ -350,7 +350,7 @@ fn dismiss(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
             return Ok((item, true));
         }
         tx.execute("UPDATE inbox_items SET dismissed_at = ?2 WHERE id = ?1", params![item.id, timestamp(now)])?;
-        let event = NewEvent::inbox_dismissed(format!("Inbox item {} dismissed: {}.", item.id, item.label), item.id);
+        let event = NewEvent::inbox_dismissed(format!("Inbox item {} dismissed: {}.", item.id, model::one_line(&item.label)), item.id);
         events::append(tx, scoped(event, &item))?;
         Ok((model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))?, false))
     })?;
@@ -473,10 +473,10 @@ fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
     let claimed = timestamp(now);
     let (channel, ts_raw) = (cache.channel.clone(), post.ts_raw.clone());
     let item = Ports::scope(ports, || {
-        session::send::send_as_user(&mut env, &manager, "inbox claim", &text, &format!("the review of {}", item.label), |tx| {
+        session::send::send_as_user(&mut env, &manager, "inbox claim", &text, &format!("the review of {}", model::one_line(&item.label)), |tx| {
             let item = open_item(tx, args.id)?;
             tx.execute("UPDATE inbox_items SET claimed_at = ?2 WHERE id = ?1", params![item.id, claimed])?;
-            let event = NewEvent::inbox_claimed(format!("Inbox item {} claimed: {}.", item.id, item.label), item.id);
+            let event = NewEvent::inbox_claimed(format!("Inbox item {} claimed: {}.", item.id, model::one_line(&item.label)), item.id);
             events::append(tx, scoped(event, &item))?;
             crate::pr::reactions::queue(tx, &channel, &ts_raw, "eyes")?;
             model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))

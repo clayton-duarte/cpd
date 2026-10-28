@@ -40,7 +40,7 @@ fn reviews(store: &mut Store, home: &CpdHome, now: OffsetDateTime, numbers: &[u6
     let prs = numbers
         .iter()
         .map(|n| {
-            let pr = GhPr { draft: false, state: GhState::Open, author: "ryan".to_owned(), decision: None, reviews: Vec::new() };
+            let pr = GhPr { title: "Add retries".to_owned(), draft: false, state: GhState::Open, author: "ryan".to_owned(), decision: None, reviews: Vec::new() };
             (("acme/pay".to_owned(), *n), Some(pr))
         })
         .collect();

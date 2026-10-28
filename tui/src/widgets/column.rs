@@ -44,7 +44,7 @@ fn bold(text: impl Into<String>) -> Span<'static> {
 
 
 /// Which items a scrolling list draws, and the cues around them (commands.md §13.2; the Inbox section
-/// scrolls with this code, one row an item).
+/// scrolls with this code, two rows an item: `count` and `rows` are in items).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Window {
     /// The first item drawn, after clamping.

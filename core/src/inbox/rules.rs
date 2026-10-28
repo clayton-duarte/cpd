@@ -30,7 +30,7 @@ use crate::store::Store;
 /// goes to its Lead, and the Lead that waits for the Worker is `waiting`, not `blocked` (hs-d303).
 const PLAN_REVIEW: &str = "φ: plan review";
 
-/// The `state_label` prefix of a Verdict dialog (pi adapter): the item is named by it, `<who> verdict: <option>`.
+/// The `state_label` prefix of a Verdict dialog (pi adapter): the item is `<who> verdict\n<option>` (Row 1, Row 2).
 const VERDICT_PREFIX: &str = "verdict: ";
 
 /// What the team review rule needs besides the cache (contract §2.2 "The team review rule"): `inbox.bot_reviewers` and
@@ -122,7 +122,7 @@ fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError
                 kind: Kind::Deploy,
                 urgency: Urgency::Yellow,
                 subject: format!("deploy:{}#{}", r.repo, r.run_id),
-                label: format!("{} deploy {}: {}", r.repo, r.environment, r.title),
+                label: format!("{} deploy {}\n{}", r.repo, r.environment, r.title),
                 url: Some(r.url),
                 context: None,
                 plan: None,
@@ -301,7 +301,7 @@ fn dialogs(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
                 _ => Urgency::Magenta,
             };
             let label = if seat.state_label.starts_with(VERDICT_PREFIX) {
-                format!("{} {}", seat.who, seat.state_label)
+                format!("{} verdict\n{}", seat.who, &seat.state_label[VERDICT_PREFIX.len()..])
             } else {
                 format!("{} asks you", seat.who)
             };
@@ -346,7 +346,7 @@ fn review_url(port: u16) -> String {
 
 /// `review-waiting` (hs-d496): an open tracked plannotator session (`plannotator_reviews`) of a Session that is neither
 /// archived nor `stopped`. Always magenta; it links its Session (and that Session's Plan, if it has one); its URL is the
-/// review host's page on the row's port. It marks no Session `blocked`.
+/// review host's page on the row's port. Label `<who> review\n<subject>`. It marks no Session `blocked`.
 fn review_waiting(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let filter = "s.state <> 'stopped' AND EXISTS (SELECT 1 FROM plannotator_reviews r WHERE r.session = s.id AND r.closed_at IS NULL)";
     let mut stmt = conn.prepare("SELECT pn_id, subject, port FROM plannotator_reviews WHERE session = ?1 AND closed_at IS NULL ORDER BY opened_at, pn_id")?;
@@ -360,7 +360,7 @@ fn review_waiting(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
                 kind: Kind::ReviewWaiting,
                 urgency: Urgency::Magenta,
                 subject: format!("pn:{}/{pn_id}", seat.session),
-                label: format!("{} review: {subject}", seat.who),
+                label: format!("{} review\n{subject}", seat.who),
                 url: Some(review_url(port)),
                 context: Some(seat.context.clone()),
                 plan: seat.plan.clone(),
@@ -416,7 +416,7 @@ fn curate(conn: &Connection, floor: u32) -> Result<Vec<Condition>, CpdError> {
     Ok(out)
 }
 
-/// `plan-review`: a Plan's latest review is `pending`. Its subject is Plan-qualified because review ids (`r1`)
+/// `plan-review`: a Plan's latest review is `pending`. Label `<plan> plan review\n<title>`, `<plan> plan review` with no title. Its subject is Plan-qualified because review ids (`r1`)
 /// repeat across Plans.
 fn plan_reviews(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare(
@@ -440,7 +440,7 @@ fn plan_reviews(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
             subject: format!("review:{plan}/{review}"),
             // A review requested before `plan_reviews.title` has none (hs-d291, R3).
             label: match title {
-                Some(title) => format!("{plan} plan review: {title}"),
+                Some(title) => format!("{plan} plan review\n{title}"),
                 None => format!("{plan} plan review"),
             },
             url: port_stmt.query_row([lead.as_str()], |r| r.get::<_, u16>(0)).optional()?.map(review_url),
@@ -552,7 +552,7 @@ pub fn stuck_groups(jobs: Vec<StuckJob>) -> Vec<StuckGroup> {
 
 // ---- Pull requests: pr-ready, review-requested -------------------------------------------
 
-/// `review-requested`: a pull request posted in the team channel in the last 7 days that hermes' rule calls
+/// `review-requested` (label `review <repo>#<n>\n<GitHub title>`): a pull request posted in the team channel in the last 7 days that hermes' rule calls
 /// `NEEDS_REVIEW` (contract §2.2 "The team review rule", hs-d320). GitHub's own review requests open nothing.
 ///
 /// The posts are `run/team-review.json` (E11); a missing file is "unknown", not "empty", and so is a GitHub that
@@ -585,16 +585,17 @@ fn review_requested(store: &mut Store, home: &CpdHome, now: OffsetDateTime, team
     Ok(posts
         .into_iter()
         .filter(|post| !settled.contains(&format!("pr:{}#{}", post.repo, post.number)))
-        .filter(|post| {
-            read(post).is_some_and(|pr| matches!(team::status(post, pr, &lookup.me, team.bot_reviewers), Status::NeedsReview(_)))
+        .filter_map(|post| {
+            let pr = read(post)?;
+            matches!(team::status(post, pr, &lookup.me, team.bot_reviewers), Status::NeedsReview(_)).then_some((post, pr))
         })
-        .map(|post| {
+        .map(|(post, pr)| {
             let name = post.repo.split_once('/').map_or(post.repo.as_str(), |(_, name)| name);
             Condition {
                 kind: Kind::ReviewRequested,
                 urgency: Urgency::Blue,
                 subject: format!("pr:{}#{}", post.repo, post.number),
-                label: format!("review {name}#{}", post.number),
+                label: format!("review {name}#{}\n{}", post.number, pr.title),
                 url: Some(format!("https://github.com/{}/pull/{}", post.repo, post.number)),
                 context: None,
                 plan: None,
@@ -1038,7 +1039,7 @@ mod tests {
         let c = one(found);
         assert_eq!(
             (c.urgency, c.subject.as_str(), c.label.as_str(), c.url.as_deref()),
-            (Urgency::Magenta, "pn:l-pay/pn-0a1b2c", "pay review: docs/plan.md", Some("http://review.example:20001/"))
+            (Urgency::Magenta, "pn:l-pay/pn-0a1b2c", "pay review\ndocs/plan.md", Some("http://review.example:20001/"))
         );
         assert_eq!(c.session.as_ref().map(|s| s.as_str()), Some("l-pay"), "its Session");
         assert_eq!((c.context.as_ref().map(|c| c.as_str()), c.plan.as_ref().map(|p| p.as_str())), (Some("ctx"), Some("pay")), "and its Plan");
@@ -1049,7 +1050,7 @@ mod tests {
         let mut f = fixture("plan");
         f.tracked("mgr", "pn-0a1b2c", "notes.md", 20002, None);
         let c = one(f.of(Kind::ReviewWaiting));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Magenta, "pn:mgr/pn-0a1b2c", "ctx review: notes.md"));
+        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Magenta, "pn:mgr/pn-0a1b2c", "ctx review\nnotes.md"));
         assert_eq!((c.session.as_ref().map(|s| s.as_str()), c.plan), (Some("mgr"), None));
     }
 
@@ -1099,7 +1100,7 @@ mod tests {
         let c = one(f.of(Kind::PlanReview));
         assert_eq!(
             (c.urgency, c.subject.as_str(), c.label.as_str()),
-            (Urgency::Magenta, "review:pay/r1", "pay plan review: Add retries")
+            (Urgency::Magenta, "review:pay/r1", "pay plan review\nAdd retries")
         );
         assert_eq!(c.url, None, "no open plan row (hs-d502)");
         assert_eq!(c.session.as_ref().map(|s| s.as_str()), Some("l-pay"), "its Lead");
@@ -1358,19 +1359,19 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 8, "passed", "conflicting", "approved");
         assert!(f.of(Kind::PrFailing).is_empty());
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#8 conflict");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#8 conflict\nT");
         set(&mut f, 8, "checks = 'failed'");
         assert!(f.of(Kind::PrFailing).is_empty());
         set(&mut f, 8, "checks = 'passed', mergeable = 'mergeable', merge_state = 'clean'");
         assert!(f.of(Kind::PrFailing).is_empty());
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#8 ready to merge");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#8 ready to merge\nT");
     }
 
     #[test]
     fn an_unknown_mergeable_is_neither_failing_nor_ready() {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 9, "passed", "unknown", "approved");
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#9 waiting");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#9 waiting\nT");
     }
 
     #[test]
@@ -1378,7 +1379,7 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 3, "pending", "mergeable", "changes_requested");
         assert!(f.of(Kind::PrChanges).is_empty());
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#3 changes requested");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#3 changes requested\nT");
     }
 
     #[test]
@@ -1386,16 +1387,16 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 4, "passed", "mergeable", "approved");
         let c = one(f.of(Kind::PrReady));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Yellow, "pr:acme/shop#4", "shop#4 ready to merge"));
+        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Yellow, "pr:acme/shop#4", "shop#4 ready to merge\nT"));
         assert_eq!(c.url.as_deref(), Some("https://github.com/acme/shop/pull/4"));
         set(&mut f, 4, "review_decision = 'none'");
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 ready to merge", "no review is no objection");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 ready to merge\nT", "no review is no objection");
         set(&mut f, 4, "draft = 1");
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 draft", "a draft is never ready");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 draft\nT", "a draft is never ready");
         set(&mut f, 4, "draft = 0, review_decision = 'changes_requested'");
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 changes requested");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 changes requested\nT");
         set(&mut f, 4, "review_decision = 'approved', checks = 'pending'");
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 checks running");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 checks running\nT");
     }
 
     /// The exact row of missionlane/cc-api-orc-apollo#2385 (hs-d481): everything looks ready but GitHub says BLOCKED.
@@ -1404,9 +1405,9 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 5, "passed", "mergeable", "none");
         set(&mut f, 5, "merge_state = 'blocked'");
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#5 waiting", "unowned");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#5 waiting\nT", "unowned");
         own(&mut f, 5);
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#5 waiting", "owned");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#5 waiting\nT", "owned");
     }
 
     #[test]
@@ -1415,7 +1416,7 @@ mod tests {
             let mut f = fixture("dispatch");
             pull_request(&mut f, 1, "passed", "mergeable", review);
             set(&mut f, 1, &format!("merge_state = '{merge_state}'"));
-            one(f.of(Kind::PrReady)).label == "shop#1 ready to merge"
+            one(f.of(Kind::PrReady)).label == "shop#1 ready to merge\nT"
         };
         // hs-d525: only clean is ready; unstable and has_hooks are not.
         for merge_state in ["clean"] {
@@ -1588,7 +1589,7 @@ mod tests {
     }
 
     fn open_pr() -> GhPr {
-        GhPr { draft: false, state: GhState::Open, author: "ryan".to_owned(), decision: None, reviews: Vec::new() }
+        GhPr { title: "Add retries".to_owned(), draft: false, state: GhState::Open, author: "ryan".to_owned(), decision: None, reviews: Vec::new() }
     }
 
     fn reviewed_by(login: &str) -> GhPr {
@@ -1616,7 +1617,7 @@ mod tests {
     fn a_post_with_no_review_opens_an_item_with_the_posts_pull_request() {
         let mut f = fixture("dispatch");
         let c = one(reviews(&mut f, &[post("acme/pay", 812)], &[("acme/pay", 812, open_pr())]));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Blue, "pr:acme/pay#812", "review pay#812"));
+        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Blue, "pr:acme/pay#812", "review pay#812\nAdd retries"));
         assert_eq!(c.url.as_deref(), Some("https://github.com/acme/pay/pull/812"));
         assert_eq!((c.context, c.plan, c.session, c.job, c.record, c.event), (None, None, None, None, None, None));
     }

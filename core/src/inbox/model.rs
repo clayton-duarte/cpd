@@ -286,6 +286,17 @@ pub fn engine_running(home: &CpdHome) -> Result<bool, CpdError> {
     Ok(!shared)
 }
 
+/// The one-line form of a two-row label (pro-d171), as every Event text names an item: Row 1 and Row 2 joined with `: `;
+/// just Row 1 when Row 2 is empty.
+#[must_use]
+pub fn one_line(label: &str) -> String {
+    match label.split_once('\n') {
+        Some((row1, row2)) if !row2.is_empty() => format!("{row1}: {row2}"),
+        Some((row1, _)) => row1.to_owned(),
+        None => label.to_owned(),
+    }
+}
+
 /// The items of `filter`. Open ones come in §2.2's order: red, yellow,
 /// magenta, blue, cyan, white, then the oldest `opened_at` first. A plain read.
 pub fn list(conn: &Connection, filter: &Filter) -> Result<Vec<Item>, CpdError> {
@@ -313,7 +324,7 @@ pub fn list(conn: &Connection, filter: &Filter) -> Result<Vec<Item>, CpdError> {
 /// Closes `item` at `closed_at` and appends its `inbox-closed` Event, scoped with the item's links.
 pub fn close_item(tx: &crate::store::WriteTxn<'_>, item: &Item, closed_at: &str) -> Result<(), CpdError> {
     tx.execute("UPDATE inbox_items SET closed_at = ?2 WHERE id = ?1", params![item.id, closed_at])?;
-    let event = NewEvent::inbox_closed(format!("Inbox item {} closed: {}.", item.id, item.label), item.id, item.kind.as_str());
+    let event = NewEvent::inbox_closed(format!("Inbox item {} closed: {}.", item.id, one_line(&item.label)), item.id, item.kind.as_str());
     events::append(tx, scope(event, &item.context, &item.plan, &item.job, &item.session))?;
     Ok(())
 }
@@ -433,7 +444,7 @@ pub fn reconcile(store: &mut Store, conditions: &[Condition], now: &str) -> Resu
             )?;
             let id = tx.last_insert_rowid();
             let event = NewEvent::inbox_opened(
-                format!("Inbox item {id} opened: {}.", c.label),
+                format!("Inbox item {id} opened: {}.", one_line(&c.label)),
                 id,
                 c.kind.as_str(),
                 c.urgency.as_str(),

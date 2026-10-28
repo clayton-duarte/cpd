@@ -159,10 +159,10 @@ fn the_polled_pull_requests_open_and_clear_their_items() {
     assert_eq!(
         seen,
         [
-            (Kind::PrReady, Urgency::Red, "shop#1 conflict"),
-            (Kind::PrReady, Urgency::Red, "shop#2 changes requested"),
-            (Kind::PrReady, Urgency::Yellow, "shop#3 ready to merge"),
-            (Kind::PrReady, Urgency::Cyan, "shop#5 waiting"),
+            (Kind::PrReady, Urgency::Red, "shop#1 conflict\nT"),
+            (Kind::PrReady, Urgency::Red, "shop#2 changes requested\nT"),
+            (Kind::PrReady, Urgency::Yellow, "shop#3 ready to merge\nT"),
+            (Kind::PrReady, Urgency::Cyan, "shop#5 waiting\nT"),
         ],
         "every authored pull request has one row named by its state; a blocked merge state (5, #2385) is only waiting (hs-d481); pull request 4 requests the User's review on GitHub, which alone opens nothing (hs-d320)"
     );
@@ -206,7 +206,7 @@ fn an_unowned_row_with_failed_checks_is_a_red_failing_row_whatever_its_policy() 
     pull_request(env, 3, "checks = 'failed', merge_state = 'blocked', repo = 'nofile/shop', url = 'https://github.com/nofile/shop/pull/3'");
 
     let seen: Vec<_> = found(env).into_iter().map(|c| (c.kind, c.urgency, c.label)).collect();
-    let row = |n: &str| (Kind::PrReady, Urgency::Red, format!("{n} failing"));
+    let row = |n: &str| (Kind::PrReady, Urgency::Red, format!("{n} failing\nT"));
     assert_eq!(seen, [row("shop#1"), row("other#2"), row("shop#3")], "failing checks are a red row under any policy, never a pr-failing item (hs-d470)");
 }
 
@@ -301,7 +301,7 @@ fn a_row_whose_owner_policy_does_not_resolve_opens_no_engine_error_and_pr_ready_
             (Kind::PrReady, "pr:other/x#7".to_owned())
         ]
     );
-    assert_eq!(items[0].label, "shop#5 ready to merge");
+    assert_eq!(items[0].label, "shop#5 ready to merge\nT");
 }
 
 #[test]
@@ -324,7 +324,7 @@ fn a_pr_of_a_context_with_no_owner_opens_no_engine_error_and_pr_ready_follows_th
 
     // An unset owner is post disabled: no engine-error, and no pr-failing (hs-d470).
     assert_eq!(kinds(&items), [(Kind::PrReady, "pr:acme/shop#5".to_owned())]);
-    assert_eq!(items[0].label, "shop#5 ready to merge");
+    assert_eq!(items[0].label, "shop#5 ready to merge\nT");
 }
 
 #[test]
@@ -336,6 +336,6 @@ fn an_unstable_pull_request_is_not_ready_to_merge_hs_d525() {
     pull_request(env, 2, "merge_state = 'has_hooks', review_decision = 'approved'");
     pull_request(env, 3, "merge_state = 'clean', review_decision = 'approved'");
     let ready: Vec<String> =
-        found(env).into_iter().filter(|c| c.kind == Kind::PrReady && c.label.ends_with("ready to merge")).map(|c| c.subject).collect();
+        found(env).into_iter().filter(|c| c.kind == Kind::PrReady && c.label.ends_with("ready to merge\nT")).map(|c| c.subject).collect();
     assert_eq!(ready, ["pr:acme/shop#3"], "only a CLEAN pull request is ready to merge (hs-d525)");
 }

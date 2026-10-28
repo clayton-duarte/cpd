@@ -72,13 +72,13 @@ impl Status {
         }
     }
 
-    /// The status a `pr-ready` item's label names (`<repo>#<n> <status>`); `None` for any other item.
+    /// The status a `pr-ready` item's label names (Row 1, `<repo>#<n> <status>`); `None` for any other item.
     #[must_use]
     pub fn of_item(item: &Item) -> Option<Status> {
         if item.kind != Kind::PrReady {
             return None;
         }
-        let (_, text) = item.label.split_once(' ')?;
+        let (_, text) = item.label.split('\n').next()?.split_once(' ')?;
         Status::ALL.into_iter().find(|s| s.text() == text)
     }
 }
@@ -177,7 +177,7 @@ pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, C
             kind: Kind::PrReady,
             urgency: status.urgency(),
             subject: format!("pr:{}#{}", pull.repo, pull.number),
-            label: format!("{name}#{} {}", pull.number, status.text()),
+            label: format!("{name}#{} {}\n{}", pull.number, status.text(), pull.title),
             url: Some(pull.url.clone()),
             context: context.as_deref().map(|c| id("Context id", c, ContextId::parse)).transpose()?,
             plan,

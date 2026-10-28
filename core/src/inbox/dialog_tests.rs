@@ -88,7 +88,7 @@ fn a_lead_blocked_with_a_verdict_label_is_a_dialog_named_by_its_verdict() {
         let mut f = fixture(phase);
         f.state("l-pay", "blocked", "verdict: Approve with comments");
         let c = one(f.dialogs());
-        assert_eq!(c.label, "pay verdict: Approve with comments", "{phase}");
+        assert_eq!(c.label, "pay verdict\nApprove with comments", "{phase}");
         assert_eq!(c.urgency, urgency, "{phase}");
         assert_eq!(c.subject, "session:l-pay");
     }
@@ -105,15 +105,15 @@ fn a_manager_and_a_fork_with_a_verdict_label_name_themselves_in_it() {
     let found = f.dialogs();
     assert_eq!(found.len(), 3);
     let label = |subject: &str| found.iter().find(|c| c.subject == subject).unwrap().label.clone();
-    assert_eq!(label("session:mgr"), "ctx verdict: Reject");
-    assert_eq!(label("session:fork-1234"), "pay·fork verdict: Approve");
-    assert_eq!(label("session:loose-fork-id"), "loose-fo verdict: Approve");
+    assert_eq!(label("session:mgr"), "ctx verdict\nReject");
+    assert_eq!(label("session:fork-1234"), "pay·fork verdict\nApprove");
+    assert_eq!(label("session:loose-fork-id"), "loose-fo verdict\nApprove");
 }
 
 #[test]
 fn only_the_verdict_prefix_names_the_verdict() {
     for (state_label, expected) in [
-        ("verdict: Approve", "pay verdict: Approve"),
+        ("verdict: Approve", "pay verdict\nApprove"),
         ("verdict:Approve", "pay asks you"),
         ("Verdict: Approve", "pay asks you"),
         ("verdict", "pay asks you"),
