@@ -56,6 +56,7 @@ fn a_post_queues_the_in_review_transition_and_a_refused_post_queues_nothing() {
     common::refused(&pay.post_cmd(), "already_posted", 3);
     assert_eq!(queue(env), json!([row("pay", "repo", "in_review")]), "a repeated post queues nothing");
 
+    drop(pay); // the harness holds a process-wide lock for a fixture's life
     let unready = post(Setup::baseline());
     unready.set("draft = 1");
     common::refused(&unready.post_cmd(), "pr_not_ready", 3);
