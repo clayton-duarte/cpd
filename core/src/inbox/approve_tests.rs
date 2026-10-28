@@ -169,7 +169,7 @@ fn approve_posts_the_environments_the_user_can_approve_and_closes_the_item() {
     assert_eq!(calls[1].args, ["api", "--method", "POST", GET, "--input", "-"]);
     assert_eq!(calls[1].deadline, std::time::Duration::from_secs(15));
     assert_eq!(stdin_of(&calls[1]), json!({"environment_ids": [7], "state": "approved", "comment": ""}));
-    assert_eq!(out, json!({"ok": true, "id": 1, "repo": "acme/pay", "run_id": 123, "environments": ["production"]}));
+    assert_eq!(out, json!({"id": 1, "repo": "acme/pay", "run_id": 123, "environments": ["production"]}));
     assert!(out.get("already").is_none());
 
     assert!(closed_at(&mut f).is_some());
@@ -205,7 +205,7 @@ fn nothing_approvable_posts_nothing_and_still_clears_the_cache_and_the_item() {
         let calls = gh_calls(&f);
         assert_eq!(calls.len(), 1, "{calls:?}");
         assert_eq!(calls[0].args, ["api", GET]);
-        assert_eq!(out, json!({"ok": true, "id": 1, "repo": "acme/pay", "run_id": 123, "environments": [], "already": true}));
+        assert_eq!(out, json!({"id": 1, "repo": "acme/pay", "run_id": 123, "environments": [], "already": true}));
         assert!(closed_at(&mut f).is_some());
         assert_eq!(closed_events(&mut f), [json!({"item": 1, "kind": "deploy"})]);
         assert_eq!(read_cache(&f)["runs"], json!([]));
