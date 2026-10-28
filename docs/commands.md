@@ -194,6 +194,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `tests_error` | 1 | a `test` or `impl` Job's submit: the repo's `[test-commands]` commands could not run (killed at `gate_minutes`, killed by a signal, `sh` not startable, `hook_invalid`; `list` included); the Worker asks the Lead. `details` as above |
 | `tests_tampered` | 3 | an `impl` Job's submit (§6.1) changed a path the `test_files` of a `test` Job it needs guard and the Lead has not approved (§5.9); `details.paths`, `details.jobs` |
 | `lead_branch_moved` | 3 | an `open` or `update` Job's submit (§6.1) found the Lead Branch's tip not in HEAD; `details.next` is the merge to run (contract §7.7) |
+| `head_moved` | 3 | `review submit` (§31.1) found the pull request's current head is not `--head`; `details` `{pr, expected, actual}`, both SHAs lowercase; nothing was posted (pro-d169) |
 | `open_job_live` | 3 | `pr open` (§9.1) found the PR's `open` Job `draft`, `queued` or `running`; `details.job` (hs-d573) |
 | `not_an_impl_job`, `path_not_guarded` | 3 | `job approve-tests` (§5.9): the Job is not of kind `impl`; `details.paths` lists the paths no `test_files` entry of its test Jobs guards |
 | `host_approval_required`, `not_a_manager` | 3 | `cpd host repair` (§9.17): needs an approval of the calling Session (`host_approval_required`); Manager role only (`not_a_manager`, commands.md §9.17) |
@@ -5764,50 +5765,53 @@ Idempotent: no. A run while every slot is held is `resource_busy`.
 
 ## 31. `review`
 
-Reviews on GitHub, posted by cpd commands (§2.2; pro-d107, pro-d108, pro-d110).
+Reviews on GitHub, posted by cpd commands (§2.2; pro-d107, pro-d108, pro-d110, pro-d169).
 
 ### 31.1 `review submit`
 
 ```
-cpd review submit --pr <url | owner/repo#n> --event APPROVE|REQUEST_CHANGES --input <review.json> [--slack <channel>/<ts>]
+cpd review submit --pr <url | owner/repo#n> --head <sha> --event APPROVE|REQUEST_CHANGES --input <review.json> [--slack <channel>/<ts>]
 ```
 
 Posts a GitHub review and, with `--slack`, queues a reaction to a Slack message (the same mechanism as `pr merge`, §21.9). **Callers:** the Lead, the Manager; not the cockpit or other agent roles. It takes a pull request URL or PullRef form, like `pr merge` (§9.10).
 
 Steps:
 
-1. Validate arguments: `--event` must be exactly `APPROVE` or `REQUEST_CHANGES`. `--input` is a file holding the review body as a JSON object (GitHub's REST `POST /repos/{owner}/{repo}/pulls/{n}/reviews` body), containing `body` (optional string), `commit_id` (optional), and `comments[]` (optional array of `{path, line, side, body}`). When a file is unreadable, not JSON, carries its own `event` key, or is not an object, refuse `usage` (exit 2). With `--slack`, `<channel>/<ts>` must match the pattern `^C[A-Z0-9]{8,}$/^[0-9]{10}\.[0-9]{6}$` or refuse `usage` (exit 2).
-2. Post the review to GitHub: `gh api --method POST repos/<owner>/<repo>/pulls/<n>/reviews --input -`, with the review JSON on stdin, with `"event"` added from `--event`. GitHub's failures are relayed as `gh_failed` (exit 1, `details.stderr` the tail). cpd checks no content: no refusal for failed checks, a stale `commit_id`, out-of-diff comments, or empty body (GitHub enforces). An answer without `id` or `html_url` is `gh_failed` with message "review may have been posted; check the pull request".
-3. On success, and only with `--slack`, queue the reaction: one store transaction calls `cpd_core::pr::reactions::queue(tx, channel, ts, emoji)` with emoji `github-check-mark` for APPROVE, `github-changes-requested` for REQUEST_CHANGES. A store failure after GitHub accepted is that error with `details.review` added: the review stands.
+1. Validate arguments: `--head <sha>` is required (a missing flag is `usage`, exit 2) and must be exactly 40 ASCII hex digits, either case: not 39 or 41, not empty, no `0x` prefix, no whitespace, no branch name, no abbreviated sha. cpd lowercases it once here; every later use (the head check, the POST's `commit_id`, `details.expected`, `review.commit_id`) is that lowercase value. `--event` must be exactly `APPROVE` or `REQUEST_CHANGES`. `--input` is a file holding the review body as a JSON object (GitHub's REST `POST /repos/{owner}/{repo}/pulls/{n}/reviews` body), containing `body` (optional string) and `comments[]` (optional array of `{path, line, side, body}`); it has no `commit_id` key, the head is `--head`. When a file is unreadable, not JSON, carries its own `event` key or its own `commit_id` key, or is not an object, refuse `usage` (exit 2). With `--slack`, `<channel>/<ts>` must match the pattern `^C[A-Z0-9]{8,}$/^[0-9]{10}\.[0-9]{6}$` or refuse `usage` (exit 2). Every refusal of this step happens before any `gh` call, with nothing queued.
+2. Read the pull request's current head with one `gh` call, a GET: `gh api repos/<owner>/<repo>/pulls/<n>` (argv exactly `api` and `repos/<owner>/<repo>/pulls/<n>`: no `--method`, no `--jq`, no stdin; `<owner>/<repo>` and `<n>` come from `--pr`, so a URL and `owner/repo#n` name the same call). Its stdout is the pull request's JSON object; its `head.sha` string is the current head, lowercased. A non-zero exit, a signal, a timeout, stdout that is not JSON, or an object without a string `head.sha` is `gh_failed` (exit 1). If the current head is not `--head`, refuse `head_moved` (exit 3) with `details` `{pr, expected, actual}` (`pr` is `<owner>/<repo>#<n>` even when `--pr` was a URL; `expected` is `--head` and `actual` the current head, both lowercase) and a message that names both SHAs. Both refusals post nothing and queue nothing; the GET is the only `gh` call made.
+3. Post the review to GitHub: `gh api --method POST repos/<owner>/<repo>/pulls/<n>/reviews --input -`, with the review JSON on stdin: the input object, with `"event"` added from `--event` and `"commit_id"` set to the lowercase `--head`, so GitHub pins the review to that commit even when a push lands after step 2. GitHub's failures are relayed as `gh_failed` (exit 1, `details.stderr` the tail). cpd checks no content: no refusal for failed checks, out-of-diff comments, or empty body (GitHub enforces). An answer without `id` or `html_url` is `gh_failed` with message "review may have been posted; check the pull request".
+4. On success, and only with `--slack`, queue the reaction: one store transaction calls `cpd_core::pr::reactions::queue(tx, channel, ts, emoji)` with emoji `github-check-mark` for APPROVE, `github-changes-requested` for REQUEST_CHANGES. A store failure after GitHub accepted is that error with `details.review` added: the review stands.
 
 | Precondition | Code | Exit |
 |---|---|---|
+| `--head` is present and is exactly 40 hex digits, either case | `usage` | 2 |
 | `--event` is exactly `APPROVE` or `REQUEST_CHANGES` | `usage` | 2 |
-| `--input` file is readable, is JSON, is an object, and has no `event` key | `usage` | 2 |
+| `--input` file is readable, is JSON, is an object, and has neither an `event` key nor a `commit_id` key | `usage` | 2 |
 | `--slack`, if present, matches `^C[A-Z0-9]{8,}$/^[0-9]{10}\.[0-9]{6}$` | `usage` | 2 |
-| the pull request can be read | `gh_failed` | 1 |
+| the pull request's current head can be read (`gh api repos/<owner>/<repo>/pulls/<n>`, a GET; its `head.sha` is a string) | `gh_failed` | 1 |
+| the current head is `--head` (`details` `{pr, expected, actual}`) | `head_moved` | 3 |
 | the review is posted; `details` has `stderr`, the `id` and `html_url` on success | `gh_failed` | 1 |
 
 Effects:
 
-- Posts a GitHub review on the pull request with the given event and body.
+- Posts a GitHub review on the pull request with the given event, body and `commit_id`. The review is pinned to `commit_id`, so a push after the head read still leaves the review on the reviewed commit.
 - If `--slack` is provided, queues a reaction to the Slack message in the store after the review is posted (§21.9).
 - The review verdict does not remove the Claim's :eyes: (A5).
 
 Output:
 
 ```json
-{"ok": true, "review": {"id": 123456, "url": "https://github.com/<owner>/<repo>/pull/<n>#pullrequestreview-123456", "state": "APPROVED"}, "reaction": null}
+{"ok": true, "review": {"id": 123456, "url": "https://github.com/<owner>/<repo>/pull/<n>#pullrequestreview-123456", "state": "APPROVED", "commit_id": "<head>"}, "reaction": null}
 ```
 
 With `--slack`:
 
 ```json
-{"ok": true, "review": {"id": 123456, "url": "https://github.com/<owner>/<repo>/pull/<n>#pullrequestreview-123456", "state": "APPROVED"}, "reaction": {"channel": "C123ABC45", "ts": "1234567890.123456", "emoji": "github-check-mark", "already": false}}
+{"ok": true, "review": {"id": 123456, "url": "https://github.com/<owner>/<repo>/pull/<n>#pullrequestreview-123456", "state": "APPROVED", "commit_id": "<head>"}, "reaction": {"channel": "C123ABC45", "ts": "1234567890.123456", "emoji": "github-check-mark", "already": false}}
 ```
 
 **Not idempotent** (A4): a rerun posts a second review. The queue row (with `--slack`) is unique per `channel+ts+emoji`, so the same reaction is queued once and placed once by the engine's slack-react step (§21.9).
 
-**What it does not do** (pro-d108): cpd checks no content of the review and no state of the pull request. No refusal for failed or pending checks, a stale `commit_id`, comments outside the diff, an empty body, or any other condition. GitHub's own refusal is relayed. Review skill rules (FR4) and COMMENT reviews are out of scope.
+**What it does not do** (pro-d108, pro-d169): cpd checks one thing about the pull request, its head (pro-d169), and no content of the review. No refusal for failed or pending checks, comments outside the diff, an empty body, or any other condition. GitHub's own refusal is relayed. Review skill rules (FR4) and COMMENT reviews are out of scope.
 
 See §21.9 for the queue and the reaction step.
