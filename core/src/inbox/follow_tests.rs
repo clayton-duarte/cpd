@@ -1,5 +1,5 @@
-//! Reconcile of `pr-ready` items: a label or link change inside a colour updates the open row in place (no Event);
-//! a colour change closes and opens (pro-d130, pro-d131).
+//! Reconcile of `pr-ready` and `dialog` items: a label or link change inside a colour updates the open row in place (no Event);
+//! a colour change closes and opens (pro-d130, pro-d131, pro-d150).
 
 use super::model::{Condition, Filter, Item, Kind, State, Urgency, list, reconcile};
 use crate::home::CpdHome;
@@ -167,12 +167,57 @@ fn a_colour_change_closes_the_pr_ready_item_and_opens_a_new_one_a_dismissal_stay
 }
 
 #[test]
-fn a_label_change_of_a_dialog_item_is_still_ignored() {
+fn a_dialog_item_whose_label_changes_is_updated_in_place() {
+    let dialog = |urgency: Urgency, label: &str| Condition { kind: Kind::Dialog, ..pr(urgency, label) };
     let (_d, mut store) = store();
-    let dialog = |label: &str| Condition { kind: Kind::Dialog, ..pr(Urgency::Red, label) };
-    reconcile(&mut store, &[dialog("first")], T1).unwrap();
-    reconcile(&mut store, &[dialog("second")], T2).unwrap();
+    let id = reconcile(&mut store, &[dialog(Urgency::Red, "pay asks you")], T1).unwrap().opened[0];
+    let before = all_events(&mut store);
+    let changes = reconcile(&mut store, &[dialog(Urgency::Red, "pay verdict: Approve")], T2).unwrap();
+    assert!(changes.opened.is_empty() && changes.closed.is_empty());
     let open = items(&mut store, State::Open);
     assert_eq!(open.len(), 1);
-    assert_eq!(open[0].label, "first");
+    assert_eq!(open[0].id, id);
+    assert_eq!(open[0].label, "pay verdict: Approve");
+    assert_eq!(open[0].opened_at, T1);
+    assert_eq!(all_events(&mut store), before);
+    assert_eq!(items(&mut store, State::Closed { limit: 10 }).len(), 0);
+
+    // a snooze and a dismissal set in between stay
+    for column in ["snoozed_until", "dismissed_at"] {
+        let (_d, mut store) = store_with_dialog(&dialog);
+        let id = open_id(&mut store);
+        store
+            .write("hide", |tx| {
+                tx.execute(&format!("UPDATE inbox_items SET {column} = ?2 WHERE id = ?1"), rusqlite::params![id, "2026-02-01T00:00:00.000Z"])?;
+                Ok(())
+            })
+            .unwrap();
+        reconcile(&mut store, &[dialog(Urgency::Red, "pay verdict: Approve")], T2).unwrap();
+        let open = items(&mut store, State::Open);
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].label, "pay verdict: Approve", "{column}");
+        assert_eq!(open[0].snoozed_until.is_some(), column == "snoozed_until");
+        assert_eq!(open[0].dismissed_at.is_some(), column == "dismissed_at");
+    }
+
+    // the same label again writes nothing
+    let txns = count(&mut store, "SELECT count(*) FROM txns");
+    reconcile(&mut store, &[dialog(Urgency::Red, "pay verdict: Approve")], T2).unwrap();
+    assert_eq!(count(&mut store, "SELECT count(*) FROM txns"), txns);
+
+    // an urgency change still closes the item and opens a new one
+    let changes = reconcile(&mut store, &[dialog(Urgency::Magenta, "pay verdict: Approve")], T2).unwrap();
+    assert_eq!(changes.closed, vec![id]);
+    assert_eq!(changes.opened.len(), 1);
+    assert_ne!(changes.opened[0], id);
+}
+
+fn store_with_dialog(dialog: &dyn Fn(Urgency, &str) -> Condition) -> (tempfile::TempDir, Store) {
+    let (d, mut store) = store();
+    reconcile(&mut store, &[dialog(Urgency::Red, "pay asks you")], T1).unwrap();
+    (d, store)
+}
+
+fn open_id(store: &mut Store) -> i64 {
+    items(store, State::Open)[0].id
 }

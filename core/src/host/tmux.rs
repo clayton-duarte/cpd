@@ -80,45 +80,50 @@ pub const OPT_VIEW: &str = "@cpd_view";
 /// The pane option naming the Session a history pane shows (commands.md §10.12).
 pub const OPT_HISTORY: &str = "@cpd_history";
 
-/// The three view titles' base (unfocused) colours, in the cursor cycle order (hs-d648, hs-d671):
-/// `Context` (view tree) sakura 5, `Plan` (view plan) shiro 7, `Deploy` (view widgets) midori 2.
-/// They are read-only base indices: a clickable mark takes `spec().clickable(base)`, so the
-/// status buttons are 13, 15 and 10.
+/// The three dango base (unfocused) colours, in the cursor cycle order (hs-d648, hs-d671):
+/// sakura 5, shiro 7, midori 2. Their clickable pair, `spec().clickable(base)` (13, 15, 10),
+/// colours the status buttons (hs-d671) and the tree pane's border mark (hs-d729).
 const DANGO: [u8; 3] = [5, 7, 2];
 
+/// U+F0BF2, the C of CPD.
+const MARK_C: &str = "\u{f0bf2}";
+/// U+F0C19, the P of CPD.
+const MARK_P: &str = "\u{f0c19}";
+/// U+F0BF5, the D of CPD.
+const MARK_D: &str = "\u{f0bf5}";
+
 /// The pane border titles (contract §6.1), keyed by the pane options, first
-/// match: a Lead's pane (`@cpd_session`) shows its `@cpd_title` when set, else
-/// nothing; the chat placeholder and a history pane have none, since pi and
-/// the placeholder say what they are; the views have their column titles; any
-/// other pane shows its command. Every title is a pill (hs-d266, hs-d475): the
-/// text (reversed) on a block with no padding, between a rounded cap on each
-/// side, `\u{e0b6}` and `\u{e0b4}`. A Lead's and another pane's pill is grey
-/// (colour 7, hs-d534) and blue on the focused pane, set in the format itself (`pane_active`);
-/// the three view pills are dango ([`DANGO`], hs-d671) and keep their colour when focused, so the
-/// caps and the block take it whatever the border lines' colour is. tmux draws two
-/// border line characters before the format, then the format's `━`, which carries no
-/// colour: it keeps the base style tmux draws the format from, the pane's own border
-/// style (`pane-active-border-style`, blue, on the active pane, else
-/// `pane-border-style`, colour 7), the style of the line cells around it (pro-d61;
-/// tmux 3.8 `window_make_pane_status`, `window_pane_get_border_style`). The pill's own
-/// colour starts after it, and the left cap lands at column 3 from the pane's edge (hs-d478).
+/// match: a Lead's pane (`@cpd_session`) shows its `@cpd_title` pill when set, else
+/// nothing; the chat placeholder, a history pane, the plan view and the widgets view have
+/// none; the tree view shows the CPD mark (hs-d729); any other pane shows its command as a pill.
+/// A pill (hs-d266, hs-d475) is the text (reversed) on a block with no padding, between a
+/// rounded cap on each side, `\u{e0b6}` and `\u{e0b4}`, grey (colour 7, hs-d534) and blue on the
+/// focused pane, set in the format itself (`pane_active`). tmux draws two border line
+/// characters before the format, then the pill's `━`, which carries no colour: it keeps the
+/// base style the format is drawn from, the pane's own border style (blue on the active
+/// pane, else colour 7; tmux 3.8 `window_make_pane_status`), so the left cap lands at
+/// column 3 from the edge (hs-d478).
+/// The mark is the three glyphs in the clickable dango colours (13, 15, 10), joined by `━`, with
+/// no leading `━` (the first cell of the format is the C glyph, after tmux's two). Each glyph
+/// ends with `#[default]`: a `#[fg=...]` would otherwise run into every later cell, and
+/// `#[default]` returns to the base style, the border's own, so the `━` between them is
+/// grey or blue like the line around it. One space follows each `#[default]` (hs-d730): the
+/// terminal draws a Nerd Font glyph full size only with an empty cell after it (observed in
+/// Ghostty; no option forces it), so the mark is `G #[default]`, a space, `━`, ... and a
+/// trailing space after the D. tmux counts the space as a cell, so each glyph is 2 cells wide.
 pub static BORDER_FORMAT: LazyLock<String> = LazyLock::new(|| {
     let plain = pill::fg_if("pane_active", spec().meanings.focus, spec().meanings.plain);
-    let view_colour = format!(
-        "#{{?#{{==:#{{@cpd_view}},tree}},{},#{{?#{{==:#{{@cpd_view}},plan}},{},#{{?#{{==:#{{@cpd_view}},widgets}},{},{}}}}}}}",
-        pill::fg(DANGO[0]),
-        pill::fg(DANGO[1]),
-        pill::fg(DANGO[2]),
-        plain
-    );
-    let title = |fg: &str, text: &str| format!("━{}", pill::pill(fg, "", text));
+    let title = |text: &str| format!("━{}", pill::pill(&plain, "", text));
+    let mark = [MARK_C, MARK_P, MARK_D]
+        .iter()
+        .zip(DANGO)
+        .map(|(glyph, base)| format!("{}{glyph}#[default] ", pill::fg(spec().clickable(base))))
+        .collect::<Vec<_>>()
+        .join("━");
     format!(
-        "#{{?#{{@cpd_session}},#{{?#{{@cpd_title}},{},}},#{{?#{{==:#{{@cpd_view}},chat}},,#{{?#{{==:#{{@cpd_view}},history}},,{}}}}}}}",
-        title(&plain, "#{@cpd_title}"),
-        title(&view_colour, concat!(
-            "#{?#{==:#{@cpd_view},tree},Context,",
-            "#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}"
-        )),
+        "#{{?#{{@cpd_session}},#{{?#{{@cpd_title}},{},}},#{{?#{{==:#{{@cpd_view}},chat}},,#{{?#{{==:#{{@cpd_view}},history}},,#{{?#{{==:#{{@cpd_view}},tree}},{mark},#{{?#{{==:#{{@cpd_view}},plan}},,#{{?#{{==:#{{@cpd_view}},widgets}},,{}}}}}}}}}}}}}",
+        title("#{@cpd_title}"),
+        title("#{pane_current_command}"),
     )
 });
 

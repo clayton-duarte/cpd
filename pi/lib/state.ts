@@ -6,6 +6,24 @@ export const LABEL_MAX = 80;
 /** Blocked means it needs the human (commands.md §15.4): `human` = the User has to act (`dialog`, `φ: plan review`); `agent` = another agent handles it (`φ: Worker question`). */
 export type Kind = "human" | "agent";
 
+/** The first `Verdict` question's first option of an `ask_user_question` input (commands.md §15.4), tidied; none when the input is not of that shape. */
+function verdictOption(input: unknown): string | undefined {
+  const questions = (input as { questions?: unknown } | null)?.questions;
+  if (!Array.isArray(questions)) return undefined;
+  for (const q of questions) {
+    if (typeof q?.header !== "string" || !/^verdict$/i.test(q.header)) continue;
+    const first = Array.isArray(q.options) ? q.options[0]?.label : undefined;
+    if (typeof first !== "string") continue;
+    const option = first
+      .replace(/[\s\p{Cc}]+/gu, " ")
+      .trim()
+      .replace(/(^| )\(Recommended\)$/i, "")
+      .trim();
+    if (option !== "") return option;
+  }
+  return undefined;
+}
+
 type Open = { key: string; label: string; kind: Kind };
 
 /**
@@ -19,6 +37,7 @@ export class Facts {
   private opened: Open[] = [];
   private prompts = 0;
   private own = 0;
+  private verdict: string | undefined;
 
   open(key: string, label: string, kind: Kind): boolean {
     if (this.opened.some((o) => o.key === key)) return false;
@@ -43,16 +62,28 @@ export class Facts {
     }
   }
 
+  /** An accepted `ask_user_question` call: holds its Verdict option (if any) for the next dialog's label. */
+  hold(input: unknown): void {
+    this.verdict = verdictOption(input);
+  }
+
+  /** The `tool_result` of an `ask_user_question`: no dialog is left to name. */
+  release(): void {
+    this.verdict = undefined;
+  }
+
   /** pi's `ui_prompt_start` (`active: true`) and `ui_prompt_end`: one reason, `dialog`, while any prompt is open. An end with nothing open changes nothing. */
   prompt(active: boolean): boolean {
     if (this.own > 0) return false;
     if (active) {
       this.prompts += 1;
-      return this.prompts === 1 && this.open("ui_prompt", "dialog", "human");
+      return this.prompts === 1 && this.open("ui_prompt", this.verdict === undefined ? "dialog" : `verdict: ${this.verdict}`, "human");
     }
     if (this.prompts === 0) return false;
     this.prompts -= 1;
-    return this.prompts === 0 && this.close("ui_prompt");
+    if (this.prompts > 0) return false;
+    this.verdict = undefined;
+    return this.close("ui_prompt");
   }
 
   /** `blocked` with the label of the latest human reason while any is open; else `waiting` with the label of the latest agent reason while any is open; else `working` while active; else `idle` (`reply` when the run answered the User). */

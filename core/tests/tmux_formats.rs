@@ -22,12 +22,6 @@ mod tmux_formats {
             "the plain title lead has no style before it: {}",
             *BORDER_FORMAT
         );
-        // The dango view pills too: `━`, then the `tree`/`plan`/`widgets` colour.
-        assert!(
-            BORDER_FORMAT.contains(",history},,━#{?#{==:#{@cpd_view},tree},"),
-            "the view title lead has no style before it: {}",
-            *BORDER_FORMAT
-        );
         assert!(!BORDER_FORMAT.contains("#[fg=colour7]━"), "no colour 7 before a lead: {}", *BORDER_FORMAT);
     }
 
