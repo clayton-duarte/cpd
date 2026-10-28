@@ -4,13 +4,7 @@ cpd's mark is **φ**, as pi's is **π**; the mark and its logo font are specifie
 
 cpd (Continuous Parallel Delivery) turns one human ticket into a reviewed pull request: a Lead agent specifies the work, and a swarm of Workers executes it in parallel, each in its own git worktree. One binary, `cpd`, is the CLI, the engine and the cockpit (a terminal UI).
 
-The levels, the cpd objects and their roles:
-
-| Level | cpd object | Role |
-|---|---|---|
-| Epic | Context | Manager |
-| Ticket | Plan | Lead |
-| Task | Job | Worker |
+The levels (Jira's words, as an analogy), the cpd objects and their roles are in [CONTEXT.md](CONTEXT.md).
 
 ## System dependencies
 
