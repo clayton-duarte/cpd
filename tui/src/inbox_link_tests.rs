@@ -31,8 +31,8 @@ use cpd_core::store::Store;
 
 const WIDTH: u16 = 41;
 const HEIGHT: u16 = 30;
-/// The body's last column at `WIDTH`: where an item's age ends.
-const AGE_END: u16 = 37;
+/// An item's age ends at column W-2: the flat Inbox's rows have one blank column on each side.
+const AGE_END: u16 = WIDTH - 2;
 const URL: &str = "https://github.com/acme/api/pull/12";
 
 struct NoInput;
