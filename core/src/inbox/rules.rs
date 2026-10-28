@@ -1362,7 +1362,7 @@ mod tests {
     }
 
     #[test]
-    fn pr_ready_is_decided_by_merge_state_and_review_decision_hs_d481() {
+    fn ready_to_merge_is_decided_by_merge_state_and_review_decision_hs_d481() {
         let ready = |merge_state: &str, review: &str| {
             let mut f = fixture("dispatch");
             pull_request(&mut f, 1, "passed", "mergeable", review);
