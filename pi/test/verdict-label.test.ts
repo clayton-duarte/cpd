@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Fixture, planShow, shown, stateCalls, waitFor } from "./fake.ts";
+import { Fixture, planShow, shown, stateCalls } from "./fake.ts";
 
 // commands.md §15.4 (pro-d150): an `ask_user_question` with a `Verdict` question names the next dialog's blocked reason `verdict: <option>`.
 
@@ -16,7 +16,9 @@ async function started(role: "lead" | "worker" = "lead"): Promise<Fixture> {
   f.respond("plan-show", planShow());
   f.load();
   await f.pi.fire("session_start");
-  await waitFor("idle", () => stateCalls(f).length >= 1);
+  await f.followerStarted();
+  await f.quiet();
+  assert.deepEqual(stateCalls(f), ["idle"], "the start state call");
   return f;
 }
 
@@ -28,15 +30,15 @@ async function ask(f: Fixture, questions: Question[], toolCallId = "t") {
 const next = async (f: Fixture) => {
   const n = stateCalls(f).length;
   await f.pi.fire("ui_prompt_start", PROMPT);
-  await waitFor("the state call", () => stateCalls(f).length > n);
   await f.quiet();
+  assert.ok(stateCalls(f).length > n, "the state call was made");
   return stateCalls(f).at(-1);
 };
 const end = async (f: Fixture) => {
   const n = stateCalls(f).length;
   await f.pi.fire("ui_prompt_end");
-  await waitFor("idle", () => stateCalls(f).length > n);
   await f.quiet();
+  assert.ok(stateCalls(f).length > n, "the state call was made");
   return stateCalls(f).at(-1);
 };
 /** One full dialog of a Verdict ask: its label as reported, then the end. */
