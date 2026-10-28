@@ -1,5 +1,5 @@
 //! The right column's drawing (commands.md §13.2), a port of the reference's `draw_dispatch`: the machine (hostname, CPU %,
-//! one % per GPU, memory %) under one blank row, then the Inbox section directly under it, taking the rest of the column.
+//! one % per GPU, memory %) under one blank row, then the Inbox section at the bottom of the rest of the column.
 //! Pure: [`draw`] only writes to the frame.
 
 use ratatui::Frame;
@@ -72,43 +72,20 @@ impl Window {
     }
 }
 
-/// The largest offset for `count` items of `item_rows` rows each in a list of `height` rows: the last one reaches the
-/// bottom (under the `▲` cue, which takes a row). 0 when every one fits.
-pub(crate) fn max_scroll(count: usize, height: usize, item_rows: usize) -> usize {
-    if count * item_rows <= height {
-        return 0;
-    }
-    count.saturating_sub((height.saturating_sub(1)) / item_rows).min(count.saturating_sub(1))
-}
-
-/// The window at offset `scroll` (clamped to [`max_scroll`]). A cue takes one row of the list, and an item is whole.
-pub(crate) fn window(count: usize, height: usize, item_rows: usize, scroll: usize) -> Window {
-    let first = scroll.min(max_scroll(count, height, item_rows));
-    let cue_above = first > 0 && height > 0;
-    let room = height - usize::from(cue_above);
-    let left = count - first;
-    if left * item_rows <= room {
-        return Window { first, shown: left, cue_above, below: 0 };
-    }
-    let shown = room.saturating_sub(1) / item_rows;
-    Window { first, shown, cue_above, below: left - shown }
-}
-
 /// What [`draw`] reports to the view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Drawn {
     /// Every link drawn (the Inbox rows' labels): a click on one opens its url.
     pub links: Links,
-    /// The Inbox section as drawn, directly under the machine (its first row is the empty one): the wheel there scrolls it, a
-    /// click on its toggle row folds or unfolds it.
+    /// The Inbox section as drawn, at the bottom of the column (its first row is the blank one): the wheel there scrolls it, and
+    /// a click there is tested against [`Shape::hit`].
     pub inbox: Rect,
     /// The Inbox section as drawn: capped by the column's rows and scrolled ([`Shape::hit`], [`Shape::wheeled`]).
     pub inbox_shape: Shape,
 }
 
-/// Draws the column in `area`: a blank row, the machine, then the Inbox section from the first row under them (commands.md
-/// §13.2, pro-d130), not pinned to the bottom. The Inbox draws `inbox`, folded or `expanded`, from the item `inbox_scroll`, capped
-/// at the rows below the machine; its ages are taken at `now`, the spinner in the glyph cell of a `pr-ready` item whose pull
+/// Draws the column in `area`: a blank row, the machine, then the Inbox section pinned to the bottom of the rows under them
+/// (commands.md §13.2), growing upward. The Inbox draws `inbox` from the item `inbox_scroll`, capped at the rows below the machine; its ages are taken at `now`, the spinner in the glyph cell of a `pr-ready` item whose pull
 /// request is in `merging` at `frame` (`palette::frame`). It draws no note (commands.md §17 "No notes"); the snapshot's error is
 /// [`draw_error`]'s.
 pub fn draw(
@@ -123,7 +100,8 @@ pub fn draw(
 ) -> Drawn {
     let [_top, home, rest] = Layout::vertical([Constraint::Length(1), Constraint::Length(2), Constraint::Min(0)]).areas(area);
     let shape = Shape::new(inbox.len()).capped(rest.height).scrolled(inbox_scroll);
-    let inbox_area = Rect { height: shape.height().min(rest.height), ..rest };
+    let h = shape.height();
+    let inbox_area = Rect { y: rest.bottom() - h, height: h, ..rest };
     let links = inbox::draw(f, inbox_area, inbox, shape, now, &|item| inbox::merges(merging, item).then_some(frame));
     f.render_widget(Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::styled(machine.usage_line(), palette::read_only_text())]), home);
     Drawn { links, inbox: inbox_area, inbox_shape: shape }

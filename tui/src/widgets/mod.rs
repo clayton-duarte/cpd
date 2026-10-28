@@ -75,7 +75,7 @@ pub use column::{Drawn, Machine, draw, draw_error};
 pub use host::Usage;
 use host::Sampler;
 pub use host::ProcReader;
-pub(crate) use column::{Window, max_scroll, window};
+pub(crate) use column::Window;
 
 /// The CPU, GPU and memory sample this often: they are no Event, and the CPU share is over the time since the last sample.
 const SAMPLE_EVERY: Duration = Duration::from_secs(2);

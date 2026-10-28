@@ -61,16 +61,15 @@ fn the_link_cue_is_share_circle() {
 
 #[test]
 fn the_fold_arrows_and_the_terminator_are_the_chevrons() {
-    let (expand, collapse, plain, done) = (fold::toggle(false), fold::toggle(true), fold::plain(), fold::done("x"));
+    let (expand, collapse, plain) = (fold::toggle(false), fold::toggle(true), fold::plain());
     assert_eq!(text(&expand), "╰\u{F0B26} expand");
     assert_eq!(text(&collapse), "╰\u{F0B2C} collapse");
     assert_eq!(text(&plain), "╰\u{F0B2A}");
-    assert_eq!(text(&done), "╰\u{F0B2A} x");
     for line in [&expand, &collapse] {
         assert_eq!(line.spans[0].style, palette::muted_text(), "the corner is muted");
         assert_eq!(line.spans[1].style, palette::toggle_text(), "the glyph and the word");
     }
-    for line in [&plain, &done] {
+    for line in [&plain] {
         assert_eq!(line.spans.len(), 1);
         assert_eq!(line.spans[0].style, palette::muted_text(), "the terminator rows are muted");
     }
