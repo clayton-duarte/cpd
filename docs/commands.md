@@ -4859,7 +4859,7 @@ Failure classes are read from a tool's `isError` text (JSON `{error: true, messa
 | no transition whose `to.name` is `names[target]` (step 4) | `jira_refused` `no_transition` | 1 |
 | everything else a retry may cure: 429, 5xx, a 400 on the transition, a timeout, text that is not the expected JSON, any other tool failure; `details.tool`, and `details.status_code` when known | `jira_failed` | 1 |
 
-Every refusal has `details.reason` when it is `jira_refused`. The spawn codes (`spawn_failed`, and `tool_timeout` from the 120 s deadline) are raised by `cpd_core::jira`, not by the helper (J8).
+A `jira_refused` always carries `details.reason`. The spawn codes (`spawn_failed`, and `tool_timeout` from the 120 s deadline) are raised by `cpd_core::jira`, not by the helper (J8).
 
 Output, one JSON line on stdout, as the Slack helpers do (contract §1.2):
 
