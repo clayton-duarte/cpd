@@ -26,7 +26,7 @@ fn the_inbox_mark_moves_on_an_open_item_and_stays_on_anything_else() {
         ("UPDATE inbox_items SET label = 'two' WHERE subject = 's'", true),
         ("UPDATE inbox_items SET snoozed_until = '2026-02-01T00:00:00.000Z' WHERE subject = 's'", true),
         ("UPDATE inbox_items SET label = 'older' WHERE subject = 'old'", false),
-        ("UPDATE sessions SET label = 'x'", false),
+        ("UPDATE sessions SET state_at = 'x'", false),
         ("UPDATE inbox_items SET closed_at = '2026-03-01T00:00:00.000Z' WHERE subject = 's'", true),
     ] {
         sql(&mut store, &format!("{text};"));
