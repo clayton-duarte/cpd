@@ -31,6 +31,7 @@ pub mod auto_merge;
 mod cancel;
 mod deploys;
 pub mod comments;
+pub mod jira_sync;
 mod describe;
 mod edit;
 mod feedback;
