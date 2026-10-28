@@ -27,7 +27,7 @@ pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, 
     let mut stmt = conn.prepare(
         "SELECT key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                 all_merged_at, start_failed_at, created_at, started_at, merged_at, title,
-                (SELECT q.plan || '/' || q.key FROM prs q WHERE q.repo = prs.repo AND q.lead_branch = prs.base), shape, head_ref
+                (SELECT q.plan || '/' || q.key FROM prs q WHERE q.repo = prs.repo AND q.lead_branch = prs.base), shape, head_ref, jira
            FROM prs WHERE plan = ?1 ORDER BY key",
     )?;
     let rows = stmt
@@ -45,7 +45,7 @@ pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, 
                 "start_failed_at": r.get::<_, Option<String>>(11)?, "created_at": r.get::<_, String>(12)?,
                 "started_at": r.get::<_, Option<String>>(13)?, "merged_at": r.get::<_, Option<String>>(14)?,
                 "title": r.get::<_, Option<String>>(15)?, "shape": r.get::<_, String>(17)?,
-                "head_ref": r.get::<_, Option<String>>(18)?,
+                "head_ref": r.get::<_, Option<String>>(18)?, "jira": r.get::<_, Option<String>>(19)?,
             })))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -136,6 +136,7 @@ fn current_fingerprint(plan: &PlanRow, jobs: &[Job], prs: &[Value]) -> String {
                 pull_request: None,
                 name: None,
                 title: p["title"].as_str().map(str::to_owned),
+                jira: p["jira"].as_str().map(str::to_owned),
                 shape: text(p, "shape"),
                 head_ref: p["head_ref"].as_str().map(str::to_owned),
                 started_at: p["started_at"].as_str().map(str::to_owned),

@@ -161,6 +161,8 @@ cpd pr cancel <key>
 
 **A PR's title** (`--title`, required) is one line of at most 72 characters that names what the PR changes, not the Plan: it becomes the squash commit's subject on `main`. Change it later with `cpd pr edit <key> --title "<title>"`.
 
+**A PR's Jira ticket.** A PR of an owner whose policy sets `pr.jira_required` needs `--jira <KEY>` before it can open: set it with `cpd pr add <key> --repo <path> --title "<title>" --jira <KEY>` or, in any phase, `cpd pr edit <key> --jira <KEY>`; one ticket per PR, never the Plan's; until then its open Job is held and `cpd pr open` is refused `jira_required`.
+
 Write one spec file per Job and add it to its PR. `--pr <key>` is required when the Plan has two or more PRs and defaulted when it has one:
 
 ```

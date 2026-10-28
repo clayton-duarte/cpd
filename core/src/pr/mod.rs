@@ -72,7 +72,7 @@ use crate::plan::PrRow;
 use row::PlanPrs;
 
 pub use gh::close_pr;
-pub use open::{Pulled, description_required, stored_description_of, base_check, is_merged_on_github, pull_request, record as record_pull, submit_checks};
+pub use open::{Pulled, description_required, jira_required, jira_required_of, stored_description_of, base_check, is_merged_on_github, pull_request, record as record_pull, submit_checks};
 #[cfg(test)]
 pub(crate) use rebase::{in_progress_with, rebase_onto_with, unresolved_with};
 
@@ -143,6 +143,9 @@ pub struct AddArgs {
     /// The PR's own title: names its change; 1-72 characters on one line
     #[arg(long, value_name = "text")]
     title: PrTitle,
+    /// The PR's own Jira ticket key, e.g. ABC-123 (optional)
+    #[arg(long, value_name = "KEY")]
+    jira: Option<crate::context::Jira>,
     /// The branch the pull request targets [default: origin's HEAD branch, else main], or <plan>/<key> to stack on that PR
     #[arg(long, value_name = "branch")]
     base: Option<String>,
@@ -185,6 +188,9 @@ pub struct EditArgs {
     /// The new title, in any phase while the PR is not merged or cancelled; 1-72 characters on one line
     #[arg(long, value_name = "text")]
     title: Option<PrTitle>,
+    /// The PR's Jira ticket key, e.g. ABC-123: sets or replaces it, in any phase while the PR is not merged or cancelled
+    #[arg(long, value_name = "KEY")]
+    jira: Option<crate::context::Jira>,
     #[command(flatten)]
     plan: PlanArg,
 }

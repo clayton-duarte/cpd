@@ -71,6 +71,8 @@ struct Wanted {
     name: RepoName,
     base: BaseWanted,
     title: String,
+    /// `--jira`: the PR's ticket.
+    jira: Option<String>,
     /// `--shape` (§9.4): `tdd` by default.
     shape: String,
     /// `--needs` as given, as sorted PR references (`needs_refs`); `Some(vec![])` is `--no-needs`; `None`: the default.
@@ -401,6 +403,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         repo: repo.display().to_string(),
         name,
         title: args.title.to_string(),
+        jira: args.jira.map(|j| j.to_string()),
         shape: args.shape,
         key: args.key,
         needs,
@@ -457,8 +460,9 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
             })?
         }
     };
+    let jira = env.store.read(|conn| Ok(conn.query_row("SELECT jira FROM prs WHERE plan = ?1 AND key = ?2", [plan.as_str(), wanted.key.as_str()], |r| r.get::<_, Option<String>>(0))?))?;
     let mut out = json!({"pr": {
-        "key": wanted.key, "repo": wanted.repo, "name": wanted.name, "base": base, "base_pr": base_pr, "title": wanted.title, "needs": needs,
+        "key": wanted.key, "repo": wanted.repo, "name": wanted.name, "base": base, "base_pr": base_pr, "title": wanted.title, "jira": jira, "needs": needs,
         "status": status, "lead_branch": lead_branch, "appended": appended, "shape": wanted.shape, "head_ref": head_ref,
         "jobs": template(&wanted.shape, &wanted.key, &wanted.title).iter().map(|s| s.key.clone()).collect::<Vec<_>>(),
     }});
@@ -700,14 +704,15 @@ fn same(existing: &PrRow, title: Option<&str>, wanted: &Wanted, prs: &[PrRow], b
     };
     (existing.repo.as_str(), existing.base.as_str(), existing.shape.as_str()) == (wanted.repo.as_str(), base, wanted.shape.as_str())
         && title == Some(wanted.title.as_str())
+        && wanted.jira.as_ref().is_none_or(|j| existing.jira.as_ref() == Some(j))
         && existing.head_ref.as_deref() == wanted.adopt.as_ref().map(|a| a.pull.head_ref.as_str())
         && needs_match
 }
 
 fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, base: &str, needs: &[String], lead_branch: &str) -> Result<(), CpdError> {
     tx.execute(
-        "INSERT INTO prs (plan, key, repo, name, base, title, shape, status, lead_branch, head_ref, created_txn, created_at)
-         SELECT ?1, ?2, ?3, ?6, ?4, ?7, ?8, 'waiting', ?5, ?9, id, at FROM txns WHERE id = cpd_txn()",
+        "INSERT INTO prs (plan, key, repo, name, base, title, shape, status, lead_branch, head_ref, jira, created_txn, created_at)
+         SELECT ?1, ?2, ?3, ?6, ?4, ?7, ?8, 'waiting', ?5, ?9, ?10, id, at FROM txns WHERE id = cpd_txn()",
         rusqlite::params![
             plan.as_str(),
             wanted.key.as_str(),
@@ -717,7 +722,8 @@ fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, base: &str, needs: &[
             wanted.name.as_str(),
             wanted.title,
             wanted.shape,
-            wanted.adopt.as_ref().map(|a| a.pull.head_ref.as_str())
+            wanted.adopt.as_ref().map(|a| a.pull.head_ref.as_str()),
+            wanted.jira
         ],
     )?;
     insert_needs(tx, plan, &wanted.key, needs)

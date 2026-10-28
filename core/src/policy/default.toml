@@ -8,6 +8,7 @@ pr = "none"
 text = ""
 
 [pr]
+jira_required = false
 text = ""
 
 [pr.feedback]

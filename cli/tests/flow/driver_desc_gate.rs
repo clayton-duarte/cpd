@@ -5,15 +5,16 @@ use serde_json::json;
 
 use super::driver_open::{Live, open_live, open_pr_live, submit_only};
 
-const CLEAR_DESCRIPTION: &str = "UPDATE prs SET description = NULL WHERE plan = 'pay' AND key = 'repo'";
-const CLEAR_TITLE: &str = "UPDATE prs SET title = NULL WHERE plan = 'pay' AND key = 'repo'";
+pub(super) const CLEAR_DESCRIPTION: &str = "UPDATE prs SET description = NULL WHERE plan = 'pay' AND key = 'repo'";
+pub(super) const CLEAR_TITLE: &str = "UPDATE prs SET title = NULL WHERE plan = 'pay' AND key = 'repo'";
+pub(super) const CLEAR_JIRA: &str = "UPDATE prs SET jira = NULL WHERE plan = 'pay' AND key = 'repo'";
 
 fn open_jobs(live: &Live) -> i64 {
     live.value("SELECT count(*) FROM jobs WHERE plan = 'pay' AND kind = 'open'")
 }
 
 /// Runs `open-repo` with a Worker that clears the PR's field (`clear`) and submits; asserts the refusal's outcome. Returns the remote Lead Branch before.
-fn refused_open_merge(live: &Live, clear: &str, code: &str) -> String {
+pub(super) fn refused_open_merge(live: &Live, clear: &str, code: &str) -> String {
     live.gh_creates();
     let before = live.remote("cpd/pay/repo");
 

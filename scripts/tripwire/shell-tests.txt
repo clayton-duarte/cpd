@@ -3,7 +3,7 @@
 # exists, no file is listed twice, and cli/tests/tooling/smoke.rs (the assert_cmd smoke tests of the binary) is not
 # listed: it is allowed by name. A file is listed only while its subject is a script that must exist before cpd does,
 # or that cpd cannot be (a script that builds cpd); a test of cpd's own code is never listed: it runs in process.
-cli/tests/tooling/cargo_script.rs # scripts/cargo.sh resolves cargo and sccache and exports RUSTC_WRAPPER; it builds cpd, so it cannot be a cpd subcommand. The cargo and sccache it runs are written by the test (no real ones)
+cli/tests/tooling/cargo_script.rs # scripts/cargo.sh resolves cargo and sccache and exports RUSTC_WRAPPER; it builds cpd, so it cannot be a cpd subcommand. The cargo, sccache and cpd it runs are written by the test (no real ones)
 cli/tests/tooling/npm_fresh.rs # scripts/npm-fresh.sh decides whether node_modules is fresh before cpd or the quick check run; sh, the files of a temp project and the node that reads them are the subject; the npm is written by the test
 cli/tests/tooling/preview_script.rs # scripts/preview-tui.sh previews a build in the cockpit's views; a developer's shell script, not part of cpd
 cli/tests/tooling/install_script.rs # the 10 tests of scripts/check-portable.sh, which guards the shell that stays; the install itself is `cpd install`, tested in process

@@ -39,6 +39,10 @@ fn texts(fx: &mut Fx, kind: &str) -> Vec<String> {
 /// PR `repo` with Job `api` merged and the PR's Job `key` of `kind` queued: Ready. The PR's description and head_ref are NULL.
 fn with_open_job(key: &str, kind: &str) -> Fx {
     let mut fx = Fx::with_plan("");
+    // The open Job's start resolves the PR's policy (the ticket rule): the Context's owner has an empty one.
+    let dir = fx.engine.home.root().join("policy/acme");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("owner.toml"), "").unwrap();
     fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
     fx.fixture(&format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
