@@ -885,4 +885,6 @@ mod deploy_tests;
 #[cfg(test)]
 mod lead_branch_tests;
 #[cfg(test)]
+mod restack_tests;
+#[cfg(test)]
 mod reaction_refusal_tests;

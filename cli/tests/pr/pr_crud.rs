@@ -836,6 +836,69 @@ fn edit_and_cancel_are_refused_once_the_plan_is_locked() {
     fx.refused(&fx.pr(&["cancel", "nope"]), "pr_not_found", 4, writes);
 }
 
+/// Plan `pay-1` in `plan` with PRs `a`, `c` (no needs), `b` (needs `a`) and `b2` (needs `a`, `c`), then locked.
+fn restack_fixture() -> Crud {
+    let fx = crud("plan");
+    fx.add("a", &fx.pay, &["--no-needs"]).ok();
+    fx.add("c", &fx.pay, &["--no-needs"]).ok();
+    fx.add("b", &fx.pay, &["--needs", "a"]).ok();
+    fx.add("b2", &fx.pay, &["--needs", "a,c"]).ok();
+    fx.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z'");
+    fx
+}
+
+#[test]
+fn edit_after_the_lock_stacks_a_waiting_pr_on_a_pr_it_needs() {
+    let fx = restack_fixture();
+    let fingerprint = fx.fingerprint();
+    let out = fx.pr(&["edit", "b", "--base", "a", "--no-needs"]).ok();
+    assert_eq!(out["fields"], json!(["base", "needs"]));
+    assert_eq!(fx.shown("pay-1", "b"), json!(["pay-1/a", "pay-1/a", []]));
+    assert_eq!(fx.needs("b"), "");
+    assert_eq!(fx.events("pr-edited").last().unwrap()["data"], json!({"pr": "b", "fields": ["base", "needs"]}));
+    assert_eq!(fx.fingerprint(), fingerprint);
+
+    let writes = fx.writes();
+    let out = fx.pr(&["edit", "b", "--base", "a", "--no-needs"]).ok();
+    assert_eq!(out["already"], json!(true));
+    assert_eq!(fx.writes(), writes);
+
+    let out = fx.pr(&["edit", "b2", "--base", "pay-1/a", "--needs", "c"]).ok();
+    assert_eq!(out["fields"], json!(["base", "needs"]));
+    assert_eq!(fx.needs("b2"), "c");
+    assert_eq!(fx.shown("pay-1", "b2"), json!(["pay-1/a", "pay-1/a", ["c"]]));
+}
+
+#[test]
+fn edit_after_the_lock_refuses_any_other_change_of_a_waiting_pr() {
+    let fx = restack_fixture();
+    let web = fx.web.to_str().unwrap().to_owned();
+    let cases: Vec<Vec<&str>> = vec![
+        vec!["edit", "b", "--base", "main"],
+        vec!["edit", "b", "--base", "a"],
+        vec!["edit", "b", "--no-needs"],
+        vec!["edit", "b", "--needs", "a"],
+        vec!["edit", "b", "--repo", &web],
+        vec!["edit", "b2", "--base", "a", "--no-needs"],
+        vec!["edit", "b", "--base", "c", "--no-needs"],
+        vec!["edit", "a", "--base", "main", "--no-needs"],
+    ];
+    for args in cases {
+        fx.refused(&fx.pr(&args), "pr_locked", 3, fx.writes());
+    }
+    fx.env.sql("UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE key = 'b2'");
+    fx.refused(&fx.pr(&["edit", "b2", "--base", "a", "--needs", "c"]), "pr_locked", 3, fx.writes());
+}
+
+#[test]
+fn a_pr_restacked_after_the_lock_waits_for_its_base_pr_to_open() {
+    let fx = restack_fixture();
+    fx.pr(&["edit", "b", "--base", "a", "--no-needs"]).ok();
+    let error = fx.refused(&fx.pr(&["start", "b"]), "pr_not_ready", 3, fx.writes());
+    assert_eq!((&error["details"]["base_pr"], &error["details"]["needs"]), (&json!("pay-1/a"), &json!([])));
+    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'b'"), "waiting");
+}
+
 #[test]
 fn edit_title_works_after_the_lock_in_any_status_and_keeps_the_review_and_the_lock() {
     let fx = crud("plan");
