@@ -133,8 +133,9 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `attempt_running` | 3 | `pr rebase` (§9.3) or `pr rebase --continue` found an Attempt of the PR of any kind (work, review, open, update) running (pro-d103, pro-d105); `details` is `{pr, jobs: [keys], attempts: [ids]}`; nothing is changed, checked before the fetch; the message tells the Lead to steer the Worker to do the rebase instead |
 | `needs_unavailable` | 3 | `job add` (A4, pro-d89): a named Job is `cancelled`, `failed`, a draft in a phase after plan, or an `open` or `update` Job; or in phase `dispatch` a failed Job has no fix appended yet (A4): that failed leaf refuses to queue a new Job that needs it; `details.jobs` lists them; may include `fix_job` with the Job key for the failed leaf |
 | `invalid_context_id`, `invalid_plan_id`, `invalid_pr_id`, `invalid_job_id`, `invalid_attempt_id`, `invalid_escalation_id`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id` | 2 | an id does not match §2.1 |
-| `config_missing`, `config_invalid` | 1 | §8.1; hs-d562, pro-d53, hs-d554 and hs-d506 add the Tier checks of contract §8.2 (§9 "Tier rules"): G0–G5 are `tier_invalid` (exit 2, below); `context_distill_tier` must be GX, not H0 or anything else, else `config_invalid` (hs-d562); `lead_tier` or `manager_tier` cannot be letter G ("must not be a G Tier..."), else `config_invalid`, or effort 5, else `config_invalid`; `open_tier` must be a Tier a Worker may have (§9), else `config_invalid`. Each with `details.key` |
-| `tier_not_allowed` | 2 | `job add`, `job edit`, `job retry` (§5.1, §5.2, §5.4) and `job dispatch` (§5.5): the Job's Tier is outside the Worker range of contract §9 "Tier rules" (`H0`–`H3` and `S0`–`S3`); Workers use only these Tiers to keep cost down (pro-d82, hs-d554, contract §9 "Tier rules"); `details` `{tier, allowed, rule}`; also an `error` Event of engine E3 (contract §3.7) for a stored Job on such a Tier |
+| `config_missing`, `config_invalid` | 1 | §8.1; hs-d562, pro-d53, hs-d554 and hs-d506 add the Tier checks of contract §8.2 (§9 "Tier rules"): G0–G5 are `tier_invalid` (exit 2, below); `context_distill_tier` must be GX, not H0 or anything else, else `config_invalid` (hs-d562); `lead_tier`, `review_lead_tier` or `manager_tier` cannot be letter G ("must not be a G Tier..."), else `config_invalid`, or effort 5, else `config_invalid`; `open_tier` must be a Tier a Worker may have (§9), else `config_invalid`. Each with `details.key` |
+| `tier_not_allowed` | 2 | `job add`, `job edit`, `job retry` (§5.1, §5.2, §5.4) and `job dispatch` (§5.5): the Job's Tier is outside the Worker range of contract §9 "Tier rules" (`H0`–`H3` and `S0`–`S3`); Workers use only these Tiers to keep cost down (pro-d82, hs-d554, contract §9 "Tier rules"); `details` `{tier, allowed, rule}`; also an `error` Event of engine E3 (contract §3.7) for a stored Job on such a Tier. `plan new --tier` (§4.1) and `session retier --tier` (§10.16) refuse a Lead's or the Manager's Tier of letter G or effort 5 the same way, `tier_not_allowed` with `details` `{tier, allowed: "O0-O4, S0-S4, H0-H4", rule: "hs-d506, hs-d562"}` (contract §9 "Tier rules", pro-d139, pro-d140, pro-d142) |
+| `tier_invalid` | 2 | `job add`, `job edit`, `job retry` (§5.1, §5.2, §5.4), `plan new --tier` (§4.1) and `session retier --tier` (§10.16): a Tier that is not valid at all: bad syntax, `G0`–`G5` (§5, the Tier flag), or an effort the Tier's model lacks; `details.tier`, and `details.efforts` for an effort. A Lead's `--tier` is checked before anything is written |
 | `store_too_new` | 1 | the store has a breaking migration this binary does not know, or a later scheme (contract §4.5 "The window"; it keeps its code and exit); `details: {user_version, floor, unknown}`: the store's `user_version`, its floor (the name of its newest breaking migration, or `null`) and every applied name this binary lacks. A store with a numbered migration this binary lacks (`user_version` above the legacy set and below 1000) is the same code, with `unknown` empty |
 | `migration_failed` | 1 | a migration, or the conversion, failed and rolled back (§4.5); `details: {from, to, sqlite_message}` |
 | `migration_changed` | 1 | an applied migration this binary knows has another checksum than the store recorded (§4.5 R3); `details: {name, recorded, embedded}` |
@@ -785,7 +786,7 @@ A Plan (§2.2) and its phases (§3.1). Replaces cpd 1's `workflow` group (D3) an
 ### 4.1 `plan new`
 
 ```
-cpd plan new <id> --context <c> --title <text> [--jira <key>] [--name <name>] [--brief-file <file>] [--by-user]
+cpd plan new <id> --context <c> --title <text> [--jira <key>] [--name <name>] [--brief-file <file>] [--by-user] [--tier <T>]
 ```
 
 A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4), and its Lead starts in the caller's cwd, the directory `plan new` runs from (usually `~`; §6.4). `--repo` and `--base` are gone: either is `usage` (exit 2).
@@ -799,16 +800,19 @@ A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4), an
 | `--name <name>` | the Lead's pi display name; default `<id>` |
 | `--brief-file <file>` | the brief for the Lead (B3-A4): written as a Context record of kind `brief` and put into the Lead's first message in full |
 | `--by-user` | (hs-d542 A2) when registering a new Lead, stores the flag on the Session and writes no first message (§1.4); `plan new` and `context manager` use it (§3.10); omit it and the Lead starts with its first message, as today |
+| `--tier <T>` | the Lead's Tier (contract §2.2, §9): a Tier in the Tier flag syntax (§5: `O`, `S` or `H` with an effort, or `GX`), checked by the Lead rule (below). Omitted, the Tier is `review_lead_tier` when `--context` is the non-empty `inbox.review_context` (contract §8.2), else `lead_tier` (Effects, step 1) |
 
 | Precondition | Code | Exit |
 |---|---|---|
 | the Context exists | `context_not_found` | 4 |
 | the Context has an owner (contract §8.3; null only for a Context made before the owner existed); the message names `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
+| `--tier` is not valid syntax (§5; `G0`–`G5` included), or an effort the catalog lacks for the Tier's model (the models of the Context, contract §8.3; the catalog is read only when `--tier` is given); `details.tier`, and `details.efforts` for an effort | `tier_invalid` | 2 |
+| `--tier` is letter G (`GX`) or effort 5, the Lead rule (contract §9); `details` `{tier, allowed: "O0-O4, S0-S4, H0-H4", rule: "hs-d506, hs-d562"}`, message `Tier <T> is not allowed for a Lead: Leads use only the Tiers O0-O4, S0-S4, H0-H4, never effort 5 and never G (hs-d506, hs-d562).` | `tier_not_allowed` | 2 |
 | no Plan with this id, unless every flag matches it (then the result is `already`) | `plan_exists` | 3 |
 | the Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
 
 Effects, in this order:
-1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier = lead_tier`; `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `prs` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
+1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier` = the Lead's Tier (the `--tier` flag; else `review_lead_tier` when the Context is the non-empty `inbox.review_context`; else `lead_tier`; contract §2.2); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `prs` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
 2. **Context records:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}` (`jira` omitted when null); **Event** `context-record`. With `--brief-file`, a second record of kind `brief` (letter `b`), `text` = the file's text, `plan` = `{id, machine}`; **Event** `context-record`.
 3. **First message**, when `by_user` is 0, written to `run/<id>/lead-message.md` (contract §4.6 "Consumers", hs-d655): a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then the pointer line:
    ```
@@ -826,7 +830,7 @@ When the cockpit session is missing, plan new creates it with the new Lead's par
  "record": "hs-p4"}
 ```
 
-Idempotent: yes. With the same flags it returns `"already": true` and redoes any step that did not happen: the `plan` record when the Context has none for this Plan, the `brief` record when `--brief-file` is given and the Context has none for this Plan, and step 4 when the Lead is `stopped` with no pane (in the stored `cwd`). The caller's cwd is not a flag: a rerun from another directory is still `already` and keeps the stored `cwd`. Different flags: `plan_exists`. The `--by-user` flag is part of 'the same flags': a rerun with or without it when the Plan exists is `plan_exists` (hs-d542 A1).
+Idempotent: yes. With the same flags it returns `"already": true` and redoes any step that did not happen: the `plan` record when the Context has none for this Plan, the `brief` record when `--brief-file` is given and the Context has none for this Plan, and step 4 when the Lead is `stopped` with no pane (in the stored `cwd`). The caller's cwd is not a flag: a rerun from another directory is still `already` and keeps the stored `cwd`. `--tier` is one of 'the same flags' only when it equals the stored `sessions.tier` of the Plan's Lead session: then the result is `already`, as above; a different Tier is `plan_exists` (exit 3, as for the other flags). The `--tier` checks of the table run first, so a refused Tier is refused whatever the Plan's state. A rerun without `--tier` compares no Tier, whatever the Lead's stored Tier is. Different flags: `plan_exists`. The `--by-user` flag is part of 'the same flags': a rerun with or without it when the Plan exists is `plan_exists` (hs-d542 A1).
 
 ### 4.2 `plan list`
 
@@ -2765,25 +2769,30 @@ Idempotent: yes; rerunning renders the message again (the same if no Events occu
 ### 10.16 `session retier`
 
 ```
-cpd session retier [--all | <id>]
+cpd session retier [--all | <id> [--tier <T>]]
 ```
 
-Moves live Leads and Managers to the Tier the config names now (hs-d506: the User sets `lead_tier` and `manager_tier` and every running Session must follow, not only those registered later). **A Session's `tier` is not fixed at registration** (contract §2.2 Session): this command is the one that changes it. Workers are not touched: a Worker's Tier is its Job's (contract §9).
+Moves live Leads and Managers to the Tier the config names for them now (hs-d506: the User sets `lead_tier`, `review_lead_tier` and `manager_tier` and every running Session must follow, not only those registered later; pro-d139, pro-d140). With `--tier <T>` it instead moves the one Session `<id>` to `<T>` (pro-d142, below). **A Session's `tier` is not fixed at registration** (contract §2.2 Session): this command is the one that changes it. Workers are not touched: a Worker's Tier is its Job's (contract §9).
 
 | Argument | Meaning |
 |---|---|
 | `<id>` | one Session (the short forms of §1.3) |
 | `--all` | every Lead and Manager that is not archived |
+| `--tier <T>` | with `<id>` only: the Tier the Session moves to instead of its target (below). With `--all`, or without `<id>`, it is `usage` |
 
-Exactly one of the two: neither, or both, is `usage` (exit 2).
+Exactly one of the two: neither, or both, is `usage` (exit 2). `--tier` with `--all` is `usage` too (a clap conflict: nothing is changed), and so is `--tier` without `<id>`.
 
-**The target.** A Session of role `lead` (a Plan's Lead and a side fork alike) moves to the config's `lead_tier`; one of role `manager` to `manager_tier` (contract §8.2).
+**The target.** A Session of role `lead` (a Plan's Lead and a side fork alike) moves to the config's `review_lead_tier` when its Context equals the non-empty `inbox.review_context`, else to `lead_tier`; one of role `manager` to `manager_tier` (contract §8.2; pro-d139, pro-d140). A later retier without `--tier` moves a Session to its target again, so a `--tier` override is reset by it.
+
+**`--tier <T>`** (pro-d142). The one Session `<id>` moves to `<T>` instead of its target, with no config change. `<T>` is checked before anything is written, in the order of `plan new --tier` (§4.1): a bad syntax, or an effort the catalog lacks for the Tier's model (the models of the Session's Context, contract §8.3; the catalog is read only when `--tier` is given), is `tier_invalid` (exit 2); letter G or effort 5 is `tier_not_allowed` (exit 2), with the `details` and message of §4.1 (the Lead rule applies to the Manager too). A refusal changes nothing. A Session already on `<T>` is unchanged (`already`).
 
 | Precondition | Code | Exit |
 |---|---|---|
 | the Session exists (`<id>`) | `session_not_found` | 4 |
 | it is a `lead` or a `manager`; a Worker is refused, its Tier is its Job's | `not_a_lead` | 3 |
 | it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
+| `--tier` (with `<id>`): a bad syntax, or an effort the catalog lacks for the Tier's model (`details.efforts`) | `tier_invalid` | 2 |
+| `--tier` is letter G (`GX`) or effort 5, the Lead rule (for a Lead and the Manager) | `tier_not_allowed` | 2 |
 
 `--all` refuses nothing for a Session it passes over: archived Sessions and Workers are not part of it and are not listed.
 
@@ -2804,7 +2813,7 @@ Exactly one of the two: neither, or both, is `usage` (exit 2).
 
 `unchanged` lists the ids of the selected Sessions already on their target. `"already": true` is added (and `retiered` is `[]`) when nothing changed. Per Session: `session` (id), `role`, `from`, `to` and `event` (the id of its Event).
 
-Idempotent: yes; run again, nothing changes (`"already": true`).
+Idempotent: yes; run again, nothing changes (`"already": true`). With `--tier`, a rerun is the same. A later `session retier` without `--tier` moves the Session to the config's target again: the override is not sticky.
 
 ### 10.18 `session report` (internal)
 
@@ -3511,7 +3520,7 @@ Checks, in order:
 | `git`, `tmux`, `pi`, `gh` | error | found on `PATH` at or above the minimum above |
 | `gh_auth` | warn | `gh auth status` exits 0 (needed only by `pr` commands; verified on 2026-10-14: logged in through `GH_TOKEN`) |
 | `pi_node` | error | pi's Node runs |
-| `tiers` | error | each model in the policy's `[model]` table is in pi's catalog (contract §8.3, §9), and `lead_tier`, `manager_tier`, `context_distill_tier` and `open_tier` are valid Tiers that obey the Tier rules (§9, hs-d562, pro-d82, hs-d554 and hs-d506: `context_distill_tier` `GX` only (hs-d562: the auxiliaries' Tier); `open_tier` a Tier a Worker may have (`H0`–`H3` or `S0`–`S3`); effort 0–3) |
+| `tiers` | error | each model in the policy's `[model]` table is in pi's catalog (contract §8.3, §9), and `lead_tier`, `review_lead_tier`, `manager_tier`, `context_distill_tier` and `open_tier` are valid Tiers that obey the Tier rules (§9, hs-d562, pro-d82, hs-d554 and hs-d506: `context_distill_tier` `GX` only (hs-d562: the auxiliaries' Tier); `open_tier` a Tier a Worker may have (`H0`–`H3` or `S0`–`S3`); effort 0–3) |
 | `holographic` | error | when `context_engine_enabled = true`, resolve the bridge script and the Python interpreter from the config (or their defaults, §8.2), run `{"cmd":"ping"}` under `context_engine_timeout_ms`, and report the engine version; when `context_engine_enabled = false`, passes with `"disabled": true` (hs-d677); no index read or build |
 | `pi_adapter` | error | the `pi_adapter` directory has a `package.json` |
 | `lead_packages` | warn | reports, for each `lead_pi_packages` entry and the adapter, whether a Lead gets it by `-e` or from which settings file (§6.5); warns when an entry is neither declared nor resolvable |
@@ -3534,7 +3543,7 @@ Change from cpd 1: no `node`, `bd`, `wt` or `herdr` checks (§1.1); `gh` now has
 cpd config [--migrate]
 ```
 
-Without `--migrate`, prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier rules of hs-d562, pro-d53, hs-d554 and hs-d506 (contract §8.2, §9 "Tier rules"): `lead_tier` or `manager_tier` with effort 5 or letter G, `context_distill_tier` must be GX (hs-d562), `open_tier` outside the Worker range (§9). Defaults: `lead_tier` `O2`, `manager_tier` `O4`, `context_distill_tier` `GX` (hs-d562: the Tier every distill run uses, one step only, no ladder, hs-d560), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
+Without `--migrate`, prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier rules of hs-d562, pro-d53, hs-d554 and hs-d506 (contract §8.2, §9 "Tier rules"): `lead_tier`, `review_lead_tier` or `manager_tier` with effort 5 or letter G, `context_distill_tier` must be GX (hs-d562), `open_tier` outside the Worker range (§9). Defaults: `lead_tier` `O2`, `review_lead_tier` `S3` (pro-d139), `manager_tier` `O4`, `context_distill_tier` `GX` (hs-d562: the Tier every distill run uses, one step only, no ladder, hs-d560), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
 
 With `--migrate`, reads `$CPD_HOME/config.toml`, applies the ordered, additive migrations (contract §8.1 "Config migrations", hs-d722; the two first migrations are `distill-tier-gx` and `drop-test-concurrency`, hs-d722 and hs-d679), validates the result (the same checks as plain `config` above), and writes the file only when it changed and only when the result is valid. The file is untouched on any refusal. Refusals: `config_missing` (exit 1) when the file is missing; `config_invalid` (exit 1, `details.key`) when the migrated file is still invalid after the migrations; any other code the migrations may return. It prints `{"ok":true,"path":"<path>","migrated":["<name>",...]}` with an empty array when nothing changed. Used only by `cpd install` before replacing the binary (contract §3.7 "The config migration and validation", commands.md §14.4 step 3).
 
