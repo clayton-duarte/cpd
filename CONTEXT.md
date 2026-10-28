@@ -1,92 +1,29 @@
 # CPD 2
 
-CPD (Continuous Parallel Delivery) turns one human ticket into a reviewed pull request by having a lead agent specify work and a swarm of agents execute it in parallel. This is cpd 2's vocabulary; the contract is [contract.md](docs/contract.md). cpd 1's vocabulary is the root `CONTEXT.md` of the commit before the switch-over (git history); every term below that is not marked new or changed means what it meant there.
+## How to read this glossary
 
-The levels, the cpd objects and their roles:
+CPD (Continuous Parallel Delivery) turns one human ticket into a reviewed pull request by having a lead agent specify work and a swarm of agents execute it in parallel. This is cpd 2's vocabulary; the contract is [contract.md](docs/contract.md). cpd 1's vocabulary is the root `CONTEXT.md` of the commit before the switch-over (git history); every term below that is not marked new or changed means what it meant there, except **Workflow**, which returns with a new meaning (pro-d136).
 
-| Level | cpd object | Role |
+The levels, the cpd objects and their roles. The levels are Jira's words, used as an analogy:
+
+| Level (Jira analogy) | cpd object | Role |
 |---|---|---|
 | Epic | Context | Manager |
 | Ticket | Plan | Lead |
+| (none) | Workflow | Lead |
 | Task | Job | Worker |
 
-## Phases
+Transitional note: until the rename lands, the CLI (`cpd pr add`, `--pr`), the tables (`prs`, `pr_needs`), the Events and the docs still call a Workflow "PR", and the cockpit's third column is still titled Deploy; this glossary's words are the target. The rename deletes this note.
 
-A Plan moves through the phases **grounding → plan → dispatch → deploy → done** (contract §3.1). A Plan in **deploy** or **done** returns to **dispatch** when a PR is added (`cpd pr add`).
+The one rule: **PR means only the pull request** on GitHub. Plan > Workflows > Jobs. History keeps the old words: ADRs, the archive, research, old Context records and applied migrations are never rewritten.
 
-**Grounding** (phase, new name):
-The first phase of every Plan, in which the Lead grounds itself on the Plan's Context: it reads the Context's records and the material the User provides, receives Requirements, and interviews the User until unknowns are minimised. A Lead always starts fresh, from its Plan's Brief and the Context's records (B3), given as the Context's digest and the records after it once the Context has one (Distilled Context). Replaces cpd 1's "Context" phase name, so that "Context" names only the entity.
-_Avoid_: discovery, intake, context phase
-
-**Plan** (phase):
-The phase where the Lead turns Requirements into a draft graph of Jobs and the User approves it.
-_Avoid_: breakdown, decomposition
-
-**Dispatch**:
-The phase that starts when the Plan is locked, in which PRs start, their Jobs are executed and merged, and each PR is opened by its open Job, whose submit runs the Gate; it ends when every PR of the Plan is open.
-_Avoid_: execution, run phase
-
-**PR** (phase):
-The phase from when every PR of the Plan is open until all are merged; PR feedback becomes appended Jobs. Then the Plan is **done**; a PR added later (a follow-up to a bug or regression) moves it back to dispatch, and it is done again when that PR merges.
-_Avoid_: review phase
-
-## The CPD flow
-
-**CPD** (new, hs-d245):
-Continuous Parallel Delivery. Its flow has three stages, Context, Plan and Deploy: the cockpit's three columns, read as past, present and future. Each stage has steps; contract §3.9 maps them to phases and commands.
-
-**Context** (stage):
-Grounding, Clarifying, Specifying; phase `grounding`, ending with `plan phase plan`. The Manager does it for the Context, each Lead for its Plan.
-
-**Grounding** (step):
-Reading the Context's records and the User's material.
-
-**Clarifying** (step):
-The interview, until unknowns are minimised.
-
-**Specifying** (step):
-Writing Requirements, assumptions and records.
-
-**Plan** (stage):
-Dividing, Sequencing, Approving, Dispatching; phases `plan` and `dispatch`.
-
-**Dividing** (step):
-Splitting the work into PRs and Jobs (`pr add`, `job add`).
-
-**Sequencing** (step):
-Ordering with `--needs` and PR needs: what runs in parallel, what in series.
-
-**Approving** (step):
-The Plan review (`plan render`, `cpd_plan_review`), then `plan lock`.
-
-**Dispatching** (step):
-The engine runs the Jobs.
-
-**Deploy** (stage):
-Mechanical checks, PR, Reviewing and Monitoring, Addressing; the end of phase `dispatch` and phase `deploy` until `done`.
-
-**Mechanical checks** (step, changed hs-d340, hs-d341):
-The checks cpd runs at an Attempt's submit, by the Job's kind: for a test Job the red tests (they build and fail), for an impl Job the same tests (they pass) and the red-test guard, and for an open or update Job the Lead Branch's fit with its base (merged only on a conflict) and the Gate, run when the PR's `pr.gate` is `local`; else the repo's CI. They are checks of the Job, so the Worker fixes what they report; the Lead runs none of them. `pr open` is the repair.
-
-**PR** (step):
-The pull request is opened, by the PR's open Job's merge (`pr open` is the repair).
-
-**Reviewing** (step, with Monitoring):
-People, the User's review bot and CI review the open pull request; the engine polls it (`pr-feedback`). There is no local review before the Gate (hs-d171, supersedes hs-d77); a final review Job stays optional.
-_Avoid_: pre-Gate review
-
-**Addressing** (step):
-A feedback fix is one `work` Job per cohesive fix, appended to the open PR (only `work` and review Jobs are allowed there); the Plan returns to Dispatching and the Job's own merge pushes the Lead Branch to the pull request: no update Job, no PR Gate. A conflict with the base queues an update Job. `pr push` repairs a failed push; `pr rebase` is the other repair.
-
-**φ** (new, hs-d694):
-cpd's mark, as π is pi's: it overlaps the three letters C·P·D, references the golden ratio, and reads like a dango. Documents that name cpd's mark write it φ beside the name; the word `cpd` never changes. The mark and its logo are specified once in [docs/mark.md](docs/mark.md).
-_Avoid_: cpd logo (the logo is defined soon)
+An entry is a bold term, a parenthesis with its kind and the Context record that decided it, a colon, the definition, and an `_Avoid_:` line when words are to be avoided. The kinds are entity, phase, stage, step, state, role, mechanism, policy, other and retired. A definition says what a thing is, never how a command works: the contract and [commands.md](docs/commands.md) own that, and an entry points to them. An Avoid word that is also a command is meant as a noun. A word with several senses has one entry per sense, each with a qualified name.
 
 ## Work units
 
-**Context** (entity):
-The parent shared by two or more Plans: the shared knowledge between Plans that together make a product, optionally mapped to a Jira Epic. Not a session. Each machine may keep one Manager per Context.
-_Avoid_: project, folder, epic
+**Context** (entity, pro-d136):
+The parent shared by two or more Plans: the shared knowledge between Plans that together make a product, optionally mapped to a Jira Epic. Not a Session. Each machine may keep one Manager per Context. Distinct from the Context stage.
+_Avoid_: project, folder; epic (Jira's word for the level, see the table)
 
 **Context record**:
 One typed, append-only entry of a Context's knowledge: a decision (which may supersede another), a note, a question, an answer, a Plan, or a Brief. Written only through `cpd context …`. An Axiom is not a Context record: it lives in AGENTS.md.
@@ -104,57 +41,174 @@ _Avoid_: summary, memory, compaction, cite-all, validation, model digest
 No longer created (B3): the Manager replaced it, and migration 0010 archived every existing one. Formerly, the Lead session that holds a Context's grounding on one machine, forked once from the first Plan's Lead when it leaves the grounding phase. It is never typed into again; every new Plan of the Context starts as a fork of it.
 _Avoid_: master session, template session
 
-**Plan** (entity, new: replaces Workflow; changed by R34):
-One deliverable over one or more PRs, optionally mapped to a Jira task, belonging to exactly one Context. Its Lead starts in the directory `plan new` runs from, not in a repository. cpd 1 called this a **Workflow**; the term Workflow is retired and every `workflow` command is now a `plan` command. Distinct from the Plan phase.
-_Avoid_: workflow, task, project, run
+**Plan** (entity, pro-d136; changed from R34):
+One deliverable over one or more Workflows, optionally mapped to a Jira ticket, belonging to exactly one Context. Its Lead starts in the directory `plan new` runs from, not in a repository. cpd 1 called this a Workflow (see Retired). Distinct from the Plan stage and from phase `plan`.
+_Avoid_: project; task, run (as a noun)
 
-**PR** (entity, new: R34):
-The part of a Plan in one repository, tied to its Lead Branch: a repo, a base branch, a Lead Branch and Lead worktree, its Jobs, and the Pull Request opened from that branch. A PR may need other PRs of the same Plan to be merged before it starts; one repository may hold several PRs of one Plan. Distinct from the PR phase.
-_Avoid_: sub-plan, track, slice, repo plan
+**Workflow** (entity, pro-d136, pro-d138):
+The part of a Plan in one repository: its repo, base branch, Lead Branch and Lead worktree, its Jobs, and the Workflows it needs. It ends in exactly one pull request, which cpd opens from its Lead Branch; it maps to one pull request but is not it. One repository may hold several Workflows of one Plan, and the Jira key of the work stays on the Workflow. cpd 1 used the word for a Plan (D3, retired); a GitHub Actions workflow is always written in full.
+_Avoid_: PR, sub-plan, track, slice, repo plan
 
 **Job** (changed):
-A self-contained unit of work defined by a Spec, executable by a fresh agent session with no other context. It belongs to exactly one PR of its Plan, and has a kind.
-_Avoid_: card, task, step
+A self-contained unit of work defined by a Spec, executable by a fresh agent session with no other context. It belongs to exactly one Workflow of its Plan, and has a Job kind. A GitHub Actions job is written in full.
+_Avoid_: card, step; task (except in the Jira analogy of the table)
 
 **Job kind** (new, hs-d340, hs-d341):
-What a Job is for, and so which checks its submit runs: `work` (the default: any Job, as before), `docs` (the contract amended first), `test` (red tests, written from the docs by a Worker other than the implementer, with stubs so the branch builds; its Spec names its `tests` and the `test_files` that hold them), `impl` (makes the tests of the test Jobs it needs pass, and may not change their files unless the Lead approved the path with `job approve-tests`), `verify` (adds checks: end-to-end, smoke, load, contract; changes no product behaviour; a label like `docs`, with no Spec section of its own and no check at submit beyond the quick check; the Lead adds it by hand, it needs an `impl` Job of its PR, and a `tdd` or `free` PR allows it), and `open` and `update`, which only cpd adds. A PR's shape (`pr add --shape tdd|docs|config`, stored and enforced) lays out its kinds: `tdd` is docs, tests, impl; `docs` and `config` have no test Job. A repo needs `[test-commands]` in its repo policy file before its PRs can be `tdd`.
+What a Job is for, and so which checks its submit runs: `work` (the default), `docs` (the contract amended first), `test` (red tests, written from the docs by a Worker other than the implementer), `impl` (makes the tests of the test Jobs it needs pass), `verify` (adds checks that change no product behaviour; the Lead adds it by hand), and `open` and `update`, which only cpd adds. The kinds a Workflow may hold follow its Shape. Defined once in contract §2.2 "Job kinds".
 _Avoid_: type, category, role
 
 **Open Job** (new, hs-d340):
-The last Job of every started PR, added by cpd (engine E4), never by the Lead: a Job of kind `open` that is Ready when every other Job of its PR is merged or cancelled. Its Worker merges the PR's base into the Lead Branch only if the two conflict, resolves the conflicts and submits; cpd then runs the Gate in a test slot, pushes the Lead Branch and opens the pull request, ready, never a draft. A Gate failure fails the Job like any other. `pr open` is kept as the repair for a failed Job or a down engine.
+The last Job of every started Workflow, added by cpd (engine E4), never by the Lead: a Job of kind `open` that is Ready when every other Job of its Workflow is merged or cancelled. Its Worker merges the base into the Lead Branch only if the two conflict; cpd then runs the Gate and opens the Workflow's pull request, ready, never a draft. `pr open` repairs a failed one or a down engine.
 _Avoid_: opener, release Job
 
 **Update Job** (new, hs-d340):
-A Job of kind `update`, added by cpd for a pull request that is already open and conflicts with its base (never for a base that merely moved, and never for feedback). Like the open Job it merges the base, then cpd runs the Gate and pushes. `pr rebase` and `pr push` are the repair.
+A Job of kind `update`, added by cpd for a Workflow whose pull request is already open and conflicts with its base (never for a base that merely moved, and never for feedback). Like the Open Job it merges the base, then cpd runs the Gate and pushes. `pr rebase` and `pr push` repair a failed one.
 _Avoid_: sync Job, rebase Job
 
-**Spec**:
-The complete, guess-free description of a Job: goal, context, files it touches, acceptance criteria and what is out of scope.
-_Avoid_: brief, prompt, ticket
-
-**Review Job** (new: B2):
-A Job added with `job add --review`, whose Worker is a fork of the Plan's Lead, so it knows the intention. It depends on every Job of its PR that exists when it is added, reads the Lead Branch's diff against the base and the Plan's Specs, and writes its findings to `run/<plan>/reviews/<job>.md`. It commits nothing and ends Merged with no change to the Lead Branch; the Lead turns the findings into fix Jobs before the PR's open Job runs, so it registers a stub draft for them when it adds the review Job (a draft holds the open Job). Optional: the Lead adds one only when it makes sense. Not a Reviewer, and no Gate or verdict belongs to it.
+**Review Job** (new, B2):
+A Job added with `job add --review`, whose Worker is a fork of the Plan's Lead, so it knows the intention. It depends on every Job of its Workflow that exists when it is added, reads the Lead Branch's diff against the base and the Plan's Specs, and writes its findings to `run/<plan>/reviews/<job>.md`. It commits nothing and ends Merged with no change to the Lead Branch. Optional: the Lead adds one only when it makes sense. It is not a Reviewer, and no Gate or verdict belongs to it; the Reviewing step names its place in the flow, and a person's look at the pull request is the pull request review.
 _Avoid_: reviewer, verdict, code review Job
 
+**Spec**:
+The complete, guess-free description of a Job: its `goal`, `context` (what the Worker needs to know), the files it touches, acceptance criteria and what is out of scope. The field `context` is the Spec's own and is not the Context entity.
+_Avoid_: brief (that is the Brief), prompt
+
+**Worker Spec** (new):
+The Spec as a Worker reads it: the Job's Spec rendered with the rows Who you are, Rules and Finish, and a section for the Job's kind (commands.md §16.1).
+_Avoid_: prompt
+
 **Dependency**:
-A relation saying a Job may only start after another Job of the same PR is Merged. Order across PRs is the PRs' needs.
+A relation saying a Job may only start after another Job of the same Workflow is Merged. Order across Workflows is the Workflow needs.
 _Avoid_: blocker, prerequisite
+
+**Workflow need** (pro-d136):
+A relation saying a Workflow starts only after another Workflow of the same Plan has merged its pull request (`--needs`). It orders Workflows as a Dependency orders Jobs. Stacking is the other order across Workflows.
+_Avoid_: blocker, prerequisite
+
+**Shape** (new, hs-d341, hs-d497):
+How a Workflow lays out its Jobs, stored when the Workflow is added and never changed: `tdd` (docs, test, impl: the default), `docs` or `config` (no test Job), or `free` (every kind the Lead may add). It decides which Job kinds the Workflow may hold (contract §2.2 "Job kinds").
+_Avoid_: template, type
+
+**Stacked Workflow** (new, hs-d522, hs-d523):
+A Workflow whose base is another Workflow's Lead Branch (`--base <key>`), so it is cut from that base Workflow's Lead Branch head and its pull request targets that branch. It starts when its base Workflow's pull request is open (contract §3.8 "Stacked PRs").
+_Avoid_: dependent PR, child
+
+**Lead Branch** (changed):
+The branch of one Workflow that accumulates its Merged Jobs and becomes its pull request; a Plan has one per Workflow.
+_Avoid_: feature branch, integration branch
+
+**Lead worktree** (new):
+The git worktree of a Workflow's Lead Branch, created when the Workflow starts. The Gate and the Open Job's merge run against it; Workers have their own worktrees.
+_Avoid_: workflow worktree, main worktree
 
 **Attempt**:
 One execution of a Job by one fresh Worker session; a Job has one or more Attempts.
-_Avoid_: retry, run
+_Avoid_: retry, run (as nouns)
 
 **Ledger** (changed):
 The durable, append-only record of every Plan's Jobs, Dependencies, Attempts, Plan reviews, Escalations, Sessions and Events, with the before and after of every write. In cpd 2 it is one SQLite database per machine, written only by `cpd`.
-_Avoid_: database, board, tracker
+_Avoid_: database, tracker; board (as a noun)
 
-**Draft**:
-A Job the User has not approved yet. The engine never runs it, and it is editable and cancellable. Every Job is a draft in the Plan phase; in a running Plan (any phase after it) the Lead adds its later batches as drafts (`job add --draft`), so that the Plan view shows every planned batch before it is approved, and the User approves each batch through a Plan review of the drafts, which queues them. A PR with a draft never opens by itself: its open Job waits for the draft.
+**Pending work** (new, hs-d159):
+The in-flight work of a Context's active Plans: for every Plan not done and not archived, each Workflow not merged and not cancelled and its Jobs not cancelled and not yet on the Workflow's base (draft, queued, running, failed, or merged on the Lead Branch only), with titles and touched files. Read by `cpd context pending`; the Manager checks it before starting or routing work for an issue (commands.md §3.11, §15.7).
+_Avoid_: backlog, WIP
+
+## Job and Workflow statuses
+
+**Draft** (state):
+A Job the User has not approved yet. The engine never runs it, and it is editable and cancellable. Every Job is a draft in phase `plan`; in a running Plan the Lead adds its later batches as drafts (`job add --draft`), and the User approves each batch through a Plan review, which queues them. A Workflow with a draft Job never opens its pull request by itself: its Open Job waits for the draft. A draft pull request on GitHub is a different thing, and cpd opens none.
 _Avoid_: proposed, pending Job
 
-**Locked**:
-The state of every Job that is not a draft: its title, Tier, PR, kind and Dependencies can no longer change, and its Spec can change only while the Job is queued and has no Attempt, when the Lead corrects it with `job edit --spec` (no Plan review; the old text stays in the history); it can otherwise only be re-attempted or cancelled, and new Jobs can be appended. A Job is Locked when the Plan is locked, or, if it was added as a draft later, when the review that covers it is approved.
+**Locked** (state):
+The state of every Job that is not a draft: its title, Tier, Workflow, kind and Dependencies can no longer change, and its Spec can change only while the Job is queued and has no Attempt (`job edit --spec`, no Plan review; the old text stays in the history); it can otherwise only be re-attempted or cancelled, and new Jobs can be appended. A Job is Locked when the Plan is locked, or, if it was added as a draft later, when the review that covers it is approved. Distinct from the Plan lock (`plan lock`, the act that moves phase `plan` to `dispatch`) and from a file lock or kernel `flock` (Runtime).
 _Avoid_: frozen, final
+
+**Ready** (state):
+A queued Job that the engine may start: every Dependency is Merged, its Workflow is started (status `dispatch` or `open`), and its Plan is in phase `dispatch` or `deploy`. An Open Job is Ready by its own rule (contract §3.2). A Ready Job that cannot start for want of a pool is Skipped. A Job that is not Ready is displayed as "held"; the status-line count of Ready Jobs reads "ready" (pro-d146).
+_Avoid_: runnable, waiting (for a Job, use "held")
+
+**Merged** (state, changed):
+The terminal success state of a Job, and the outcome of its successful Attempt: the Attempt passed the quick check and the tamper check, rebased cleanly onto its Workflow's Lead Branch, and that Lead Branch was fast-forwarded to it. Not the word for a pull request: that is **squash-merged**, and the Workflow's status `merged` follows it.
+_Avoid_: done (that is phase `done`), completed
+
+**Skipped** (state, pro-d106):
+A Ready Job that E3 could not start for want of a pool. Nothing is reserved for it; it keeps its place in the order urgent > skipped > queue, first skipped first served (contract §3.7 E3). Not a GitHub check conclusion.
+
+**Workflow status** (state, pro-d144, pro-d146):
+Where a Workflow is, stored as `waiting`, `dispatch`, `open`, `merged` or `cancelled` (contract §3.8). Qualified in prose: "a waiting Workflow" is one whose needs or base are not yet met; `dispatch` means started, its Jobs running, no pull request yet; `open` means its pull request is open; `merged` means its pull request is squash-merged; `cancelled` means given up. The words `dispatch` and `waiting` here are not the Dispatch stage and not a Session's waiting state.
+
+**Escalation** (changed):
+A question raised by an agent to its parent in the delegation tree (Worker → Lead → User) when continuing would require guessing.
+_Avoid_: blocker; ask (as a noun)
+
+## The CPD flow
+
+**Phase, stage and step** (entity, pro-d145, pro-d146):
+Three levels of one flow. A **phase** is the stored position of a Plan, one of five in this order: `grounding` → `plan` → `dispatch` → `deploy` → `done` (contract §3.1); a Plan in `deploy` or `done` returns to `dispatch` when a Workflow is added (`cpd pr add`). A **stage** is one of the three cockpit columns, read as past, present and future: Context, Plan, Dispatch. A **step** is a named piece of work the Lead or the Workers do inside a stage. An engine step is something else: the engine's own loop, written "engine step E7" (contract §3.7).
+_Avoid_: stage for a phase, step for a Job
+
+**Context stage** (stage, pro-d145):
+The first stage: Grounding and Grilling, in phase `grounding`; it ends with `plan phase plan`. The Manager does it for the Context, each Lead for its Plan.
+
+**Plan stage** (stage, pro-d145):
+The second stage: Clarifying, Scoping, Splitting and Orchestrating, in phase `plan`; it ends with `plan lock`.
+
+**Dispatch stage** (stage, pro-d145, pro-d146):
+The third stage: Documenting, Red testing, Implementing, Verifying, Reviewing and Deploying, in phases `dispatch` and `deploy`. The Plan is `done` when every Workflow's pull request is merged. Its name is not the old phase "Dispatch" (retired) nor the Workflow status `dispatch`.
+
+**Grounding** (step, pro-d146):
+Reading the Context's records and the User's material (`context show`, `context note`).
+
+**Grilling** (step, pro-d146):
+The interview with the User, with `ask_user_question`, until unknowns are minimised (`context ask`, `context decide`).
+
+**Clarifying** (step, pro-d146):
+Restating the Requirements, writing the records, and listing the assumptions the User accepts (`context decide`, `context note`).
+
+**Scoping** (step, pro-d146):
+Choosing the repositories and cutting the deliverable into Workflows (`pr add`).
+
+**Splitting** (step, pro-d146):
+Writing the Jobs with their Specs, Dependencies and the Workflow needs (`job add`, `--needs`).
+
+**Orchestrating** (step, pro-d146):
+The Plan review, then the Plan lock (`plan render`, `cpd_plan_review`, `plan lock`).
+
+**Documenting** (step, pro-d146):
+Workers run the Jobs of kind `docs`; the engine runs them once the Plan is locked.
+
+**Red testing** (step, pro-d146):
+Workers run the Jobs of kind `test`: red tests that build and fail.
+
+**Implementing** (step, pro-d146):
+Workers run the Jobs of kind `impl` and `work`, and Merge them into the Lead Branch.
+
+**Verifying** (step, pro-d146):
+Workers run the Jobs of kind `verify`: checks that change no product behaviour.
+
+**Reviewing** (step, pro-d146):
+The optional Review Job only; there is no local review before the Gate (hs-d171). A person's review of the pull request is called pull request review, never Reviewing.
+_Avoid_: pre-Gate review
+
+**Deploying** (step, pro-d145, pro-d146):
+The process of a Workflow's pull request, the last step once all its Jobs ran: the Open Job, the Gate (which runs inside it), opening the pull request, CI, pull request review and its polling (`pr poll`, `pr-feedback`), feedback fixes (Addressing), posting and merge.
+
+**Addressing** (step):
+A feedback fix is one `work` Job per cohesive fix, appended to the Workflow whose pull request is open (only `work` and review Jobs are allowed there); the Plan returns to phase `dispatch` and the Job's own merge pushes the Lead Branch to the pull request: no Update Job, no Gate at `gate.pr`. A conflict with the base queues an Update Job. `pr push` repairs a failed push; `pr rebase` is the other repair.
+
+**Mechanical checks** (mechanism, changed hs-d340, hs-d341):
+The checks cpd runs at an Attempt's submit, by the Job's kind: for a test Job the red tests (they build and fail), for an impl Job the same tests (they pass) and the red-test guard, and for an Open or Update Job the Lead Branch's fit with its base (merged only on a conflict) and the Gate, run when the Workflow's `gate.merge` is `local`; else the repo's CI. They are checks of the Job, so the Worker fixes what they report; the Lead runs none of them. `pr open` is the repair. Not a step: part of Deploying.
+
+**Plan review** (entity, new):
+The User's approval of the draft Jobs: one request, a summary in the Lead's chat and one dialog, covering every draft Job when the Plan is in phase `plan` (its approval is what `plan lock` needs) and the drafts of a running Plan batch by batch (contract §2.2 "Plan review").
+_Avoid_: review (alone), approval
+
+**CPD** (new, hs-d245):
+Continuous Parallel Delivery. Its flow has three stages, Context, Plan and Dispatch: the cockpit's three columns, read as past, present and future. Each stage has steps; contract §3.9 maps them to phases and commands.
+
+**φ** (new, hs-d694):
+cpd's mark, as π is pi's: it overlaps the three letters C·P·D, references the golden ratio, and reads like a dango. Documents that name cpd's mark write it φ beside the name; the word `cpd` never changes. The mark and its logo are specified once in [docs/mark.md](docs/mark.md).
+_Avoid_: cpd logo (the logo is defined soon)
 
 ## Runtime
 
@@ -208,10 +262,6 @@ _Avoid_: master, supervisor, orchestrator
 A Context record of kind `brief`, written by `cpd plan new --brief-file`: what the Manager (or the User) asks of one Plan's Lead. The Lead's first message holds it in full; `cpd context show` and Context updates list it short (id and first line), and `cpd context show --record <id>` prints it whole. Not a Spec, which describes a Job.
 _Avoid_: ticket, prompt
 
-**Pending work** (new, hs-d159):
-The in-flight work of a Context's active Plans: for every Plan not done and not archived, each PR not merged and not cancelled and its Jobs not cancelled and not yet on the PR's base (draft, queued, running, failed, or merged on the Lead Branch only), with titles and touched files. Read by `cpd context pending`; the Manager checks it before starting or routing work for an issue, and its digest summarises it (commands.md §3.11, §15.7).
-_Avoid_: backlog, WIP
-
 **Context update**:
 The message the pi adapter adds at the start of a Manager's turn only (never a Lead's: Leads read the Context on demand with `cpd context show --since <seq>`, hs-d209), listing the Context records other Sessions wrote since its last one (commands.md §15.7). It ends with the **digest**: a `Plans:` section of the Plan Events (created, phase, PR opened or merged, Job failed, done) since then.
 _Avoid_: notification, poll
@@ -226,10 +276,6 @@ _Avoid_: subagent, executor, thread
 
 **Reviewer** (removed): Removed by R19 (no Job-level Reviewer). The review is the Pull Request's own, on GitHub.
 
-**Escalation**:
-A question raised by an agent to its parent in the delegation tree (Worker → Lead → User) when continuing would require guessing.
-_Avoid_: blocker, ask
-
 ## Outcomes
 
 **Gate** (changed):
@@ -239,14 +285,6 @@ _Avoid_: CI, checks
 **Quick check** (new):
 The repository's `pre-commit` hook, run by cpd when a Worker submits; when the repo defines none, there is no quick check and nothing runs instead (R20).
 _Avoid_: pre-flight, lint step
-
-**Lead Branch** (changed):
-The branch of one PR that accumulates its Merged Jobs and becomes its Pull Request; a Plan has one per PR.
-_Avoid_: feature branch, integration branch
-
-**Merged** (changed):
-The terminal success state of a Job, and the outcome of its successful Attempt: the Attempt passed the quick check and the tamper check, rebased cleanly onto its PR's Lead Branch, and that Lead Branch was fast-forwarded to it.
-_Avoid_: done, completed
 
 **Tier**:
 A two-character code naming the model and effort an agent runs at, e.g. `O3` for the Lead or `S1` for a coding Worker.
@@ -294,9 +332,6 @@ _Avoid_: lock, seat
 
 **Tenant** (pro-d92, pro-d106):
 The Job or user occupying a resource slot. A Job is a tenant from its first Attempt until it is merged or cancelled (a failed Job keeps all its resources); the Ledger records it, so it is derived by a join. A command's holder record names it (contract §1.4, §3.4 "Tenancy").
-
-**Skipped** (pro-d106):
-A Ready Job that E3 could not start for want of a pool. Nothing is reserved for it; it keeps its place in the order urgent > skipped > queue, first skipped first served (contract §3.7 E3).
 
 **Machine policy** (changed, pro-d1):
 The machine Scope's file, `$CPD_HOME/policy/host.toml` (contract §8.3), which dotfiles render per machine: its `[model]` table first, then the machine's `cpd.policy` text (its `[mcp.servers.*]`). Besides Domains it may hold an `[mcp]` table, the MCP servers the machine may use, which only a machine file may have; `[mcp]` is not a Domain and takes no part in a Policy key.
