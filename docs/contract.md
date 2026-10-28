@@ -2842,7 +2842,7 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | Footer: the snapshot's error (every view's error line) | no | fg 1 | palette: red |
 | **The Inbox** | | | |
 | Flush header: title pill `Inbox` and its count pill (pro-d147) | no | block 7 inverted, caps 7 | `palette::pill_static()` |
-| Flush header lines: the `───` lead, the `─` fill and the closing `─` (column 0 beside tmux's `┃` reads `┠`) | no | fg 8 | palette: muted |
+| Flush header lines: the `───` lead, the `─` fill and the closing `─` (column 0 `─` is next to tmux's `┃` border cell, half a cell apart: they do not join, pro-d157) | no | fg 8 | palette: muted |
 | Tier glyph: red / yellow / magenta / cyan / white | yes (part of the item's row) | fg 9 / 11 / 13 / 14 / 15 | palette: bright meaning (pro-d16: the notice tier is cyan); the Inbox row of kind `deploy`, `pr-ready` or `review-requested` draws that kind's own glyph instead, in its tier's colour (the `pr-ready` glyph: red, yellow, cyan or white by its status, pro-d130; pro-d98, pro-d100; commands.md §13.2) |
 | Merge spinner in the glyph cell (an item's PR merge runs) | part of the row | fg 11 | palette: bright meaning |
 | Item label (the `Link` widget text for the five link kinds: `plan-review`, `review-waiting`, `pr-ready`, `review-requested`, `deploy`) | yes | fg 15 | palette: clickable text |
