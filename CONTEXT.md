@@ -37,10 +37,6 @@ _Avoid_: wiki, notes folder
 The curator at work: the distiller runs once per batch of uncurated records, and for each classifies it into a topic, compresses it into a short form (for machines), and proposes retirements (duplicate, superseded, documented records) and documentation candidates. The distiller writes curations and proposals (checked structurally by cpd), which the User approves through Inbox items. The records stay the truth. The Context is retrieved on demand with `cpd context search` (search over all records), `cpd context show --since <seq>` (records after a cursor), and `cpd context show --topic <t>` (curated records of one topic). The engine starts the distiller when a Context has 20 uncurated records or the newest is 10 minutes old; `cpd context distill` does it on demand. No first message holds a pushed digest or list of records (hs-d655): a Lead's first message is the header, the brief, and pointers to the on-demand commands; a Manager's is the header and pointers.
 _Avoid_: summary, memory, compaction, cite-all, validation, model digest
 
-**Grounded Lead** (retired, hs-d129):
-No longer created (B3): the Manager replaced it, and migration 0010 archived every existing one. Formerly, the Lead session that holds a Context's grounding on one machine, forked once from the first Plan's Lead when it leaves the grounding phase. It is never typed into again; every new Plan of the Context starts as a fork of it.
-_Avoid_: master session, template session
-
 **Plan** (entity, pro-d136; changed from R34):
 One deliverable over one or more Workflows, optionally mapped to a Jira ticket, belonging to exactly one Context. Its Lead starts in the directory `plan new` runs from, not in a repository. cpd 1 called this a Workflow (see Retired). Distinct from the Plan stage and from phase `plan`.
 _Avoid_: project; task, run (as a noun)
@@ -196,9 +192,6 @@ The process of a Workflow's pull request, the last step once all its Jobs ran: t
 **Addressing** (step):
 A feedback fix is one `work` Job per cohesive fix, appended to the Workflow whose pull request is open (only `work` and review Jobs are allowed there); the Plan returns to phase `dispatch` and the Job's own merge pushes the Lead Branch to the pull request: no Update Job, no Gate at `gate.pr`. A conflict with the base queues an Update Job. `pr push` repairs a failed push; `pr rebase` is the other repair.
 
-**Mechanical checks** (mechanism, changed hs-d340, hs-d341):
-The checks cpd runs at an Attempt's submit, by the Job's kind: for a test Job the red tests (they build and fail), for an impl Job the same tests (they pass) and the red-test guard, and for an Open or Update Job the Lead Branch's fit with its base (merged only on a conflict) and the Gate, run when the Workflow's `gate.merge` is `local`; else the repo's CI. They are checks of the Job, so the Worker fixes what they report; the Lead runs none of them. `pr open` is the repair. Not a step: part of Deploying.
-
 **Plan review** (entity, new):
 The User's approval of the draft Jobs: one request, a summary in the Lead's chat and one dialog, covering every draft Job when the Plan is in phase `plan` (its approval is what `plan lock` needs) and the drafts of a running Plan batch by batch (contract §2.2 "Plan review").
 _Avoid_: review (alone), approval
@@ -206,153 +199,250 @@ _Avoid_: review (alone), approval
 **CPD** (new, hs-d245):
 Continuous Parallel Delivery. Its flow has three stages, Context, Plan and Dispatch: the cockpit's three columns, read as past, present and future. Each stage has steps; contract §3.9 maps them to phases and commands.
 
-**φ** (new, hs-d694):
-cpd's mark, as π is pi's: it overlaps the three letters C·P·D, references the golden ratio, and reads like a dango. Documents that name cpd's mark write it φ beside the name; the word `cpd` never changes. The mark and its logo are specified once in [docs/mark.md](docs/mark.md).
-_Avoid_: cpd logo (the logo is defined soon)
+## GitHub words
 
-## Runtime
+**pull request** (other, pro-d136):
+GitHub's pull request. Each Workflow ends in exactly one, which cpd opens from the Workflow's Lead Branch, ready and never a draft (contract §7.6); a Workflow maps to it but is not it. Where CI exists, its checks run on it; a person reviews it (pull request review).
+_Avoid_: PR (for the Workflow)
 
-**Session** (new):
-A pi session cpd knows about, with a role (Lead, Worker or Manager), a Context, usually a Plan, a tmux pane, and an agent state: working, waiting (an agent waits for another agent: a Worker for its Lead's answer), blocked (the User has to act: a dialog, a pending Plan review), idle or stopped. A Session forked for a tangent the User starts (`cpd session fork`) is a sibling: drawn in the tree directly under its Context, after its Plans, never under a Plan or under the Session it came from (B1, B4). The other fork, a review Job's Worker, is hidden like every Worker.
-_Avoid_: agent, pane, chat
+**PR** (other, pro-d136):
+The abbreviation of pull request and nothing else. As a process it is the Deploying step, never the name of the Workflow.
+_Avoid_: PR for a Workflow, a Plan or a phase
 
-**Event** (new: replaces the Lead queue):
-An append-only record of something that happened, numbered in commit order. Every state change appends one. Events are the single channel to Leads, the TUI and agent states: the pi adapter follows them and delivers some to its Lead as messages, with or without a turn. They replace cpd 1's **Lead queue** (the per-Lead queue directory of message files) and the tmux options that carried agent states.
-_Avoid_: message, notification, queue item
+**draft pull request** (other, pro-d144):
+GitHub's unfinished pull request. cpd opens none and no command makes one (contract §7.6). Not a draft Job (**Draft**, section 3).
+_Avoid_: draft (alone, for a pull request)
 
-**Inbox** (new):
-The single source of "needs you": the open Inbox items, shown by `cpd inbox` and the cockpit's Inbox section, opened and closed by the engine from their cause.
-_Avoid_: notifications, alerts, to-do list
+**pull request review** (other, pro-d146):
+What a person says on a pull request on GitHub: a review with a body or a verdict, its threads and comments. cpd reads it (the PR poll, Feedback items) and the Lead answers it; it is part of Deploying. Not the Reviewing step and not the Review Job.
+_Avoid_: Reviewing, review (alone)
 
-**Inbox item** (new):
-One thing that needs the User (a dialog, a Plan review, an unread reply, a pull request of the User, a stuck Job, an engine error, an open question, or the engine being down), kept in `inbox_items` while its condition holds and forever after, closed; the User can snooze or dismiss it.
-_Avoid_: notification, alert, task
+**squash-merged** (state, pro-d144):
+What GitHub did to a pull request: it landed on the base as one commit. The Workflow's status `merged` follows it, and the Plan is `done` when every Workflow's pull request is. Not **Merged**, which is a Job's state.
+_Avoid_: merged (for a pull request)
 
-**Cockpit**:
-The User's interface: one tmux window with global side bars and a centre bound to one Plan (plan view above, the Lead's chat below). tmux hosts the panes, ratatui draws the views.
-_Avoid_: dashboard, TUI session
+**GitHub Actions workflow** (other, pro-d136, pro-d143):
+A workflow file of GitHub Actions, always written in full so that it is never taken for a Workflow. The policy key `[deploys]` `workflows` and the file `deploy-runs.json` name it today; the rename gives them `actions_workflows` and `actions_workflow`. A GitHub Actions job is written in full too.
+_Avoid_: workflow (alone), deploy (for it)
 
-**Engine** (new):
-The one `cpd watch` per machine that schedules every Plan's Jobs under one concurrency limit, watches liveness and timeouts, polls Pull Requests, starts a PR once the PRs it needs are merged, and rebuilds stale Context digests.
-_Avoid_: daemon, scheduler, watcher per workflow
-
-**PR poll** (new, hs-d565):
-The engine's poll, every 5 s, of every open pull request of the User on GitHub, by one search through `gh`. It stores them (table `pull_requests`), feeds the Dispatch column, and sends `pr-feedback` only to the Lead whose PR owns the pull request that needs attention (contract §7.6). A pull request a search misses is read directly and is never dropped on the search's absence (hs-d565). A Lead may run it by hand (`cpd pr poll`), and reads the detail with `cpd pr view`.
+**PR poll** (mechanism, hs-d565):
+The engine's poll, every 5 s, of the open pull requests of the User on GitHub, one search through `gh`. It stores them (table `pull_requests`) and sends `pr-feedback` only to the Lead of the Workflow that owns the pull request needing attention (contract §3.7 E5, §7.6). A pull request the search misses is read directly and never dropped on the search's absence. `cpd pr poll` runs it by hand and `cpd pr view` reads the detail.
 _Avoid_: PR watcher, PR sync
 
-**Feedback item** (new, pro-d68):
-One open thing a person said on a pull request a Plan owns: a review thread, an issue comment or a review with a body, not yet answered with a `cpd pr reply` (whose last line is the marker `<!-- cpd:reply -->`). The PR poll stores them and wakes the Lead (`pr-feedback`, reason `comments`); the Lead fixes or declines each and answers it; cpd never resolves a thread, and an open item blocks nothing. Defined once in `docs/contract.md` §2.2 "Feedback item".
-_Avoid_: review comment (the word for what a reviewer wrote, not for the open thing cpd tracks), notification
+**Feedback item** (entity, pro-d68):
+One open thing a person said on a pull request a Plan owns: a review thread, an issue comment or a review with a body, not yet answered with `cpd pr reply`. The PR poll stores them and wakes the Lead (`pr-feedback`, reason `comments`); cpd never resolves a thread. Defined in contract §2.2 "Feedback item".
+_Avoid_: review comment (what a reviewer wrote, not the open thing cpd tracks), notification
 
-**PR post** (new, pro-d64, pro-d65, pro-d66, pro-d117):
-One message announcing a PR for review in Slack. The Lead calls `cpd pr post` when the PR is ready (open, green CI, no unaddressed bot comments) and the User says yes; one post per PR. The owner's policy configures the Slack channel, message template, and an optional emoji to react with after the merge. The post also turns on GitHub squash auto-merge (pro-d117): the PR merges when checks pass unless it is stacked (base PR not yet merged), in which case the request waits. Defined once in `docs/contract.md` §2.2 "PR post".
+**PR post** (entity, pro-d64, pro-d65, pro-d66, pro-d117):
+One Slack message announcing a pull request for review, made by `cpd pr post`; one per pull request. The policy's `pr.post` keys set its channel, template and merged reaction. Defined in contract §2.2 "PR post".
 _Avoid_: Slack announcement, PR announcement
 
 ## Roles
 
-**User**:
-The human who owns the ticket and talks only to the Lead.
-_Avoid_: operator, owner
+**User** (role):
+The human who owns the ticket and talks only to the Lead (or the Manager).
+_Avoid_: operator; owner (that is a GitHub login)
 
-**Manager** (new, B3):
-The higher-level Lead of a Context, one live per Context per machine (`cpd context manager`). It works at the Epic level: holds the Context's records and Requirements, splits the User's requirements into Plans, starts their Leads with a Brief each, and knows where each is. Its memory is the Context records, not its chat. It acts only when the User talks to it (or a Lead messages it) and reads the Context on demand; at each turn start it receives a **Context update** with Plan Events since its last turn (created, phase, PR opened or merged, Job failed, done). It reads the full Context with `cpd context show` and searches it with `cpd context search`. Plan Events never wake it. Leads keep asking the User directly; the Manager never answers for the User. Default Tier `manager_tier` (O4).
+**Manager** (role, B3):
+The higher-level Lead of a Context, one live per Context per machine (`cpd context manager`). It holds the Context's records and Requirements, splits them into Plans, starts each Plan's Lead with a Brief, and knows where each is. Its memory is the Context records, not its chat. It acts only when the User or a Lead talks to it, and reads the Context on demand; it never answers for the User. Its default Tier is `manager_tier`.
 _Avoid_: master, supervisor, orchestrator
 
-**Brief** (new, B3):
-A Context record of kind `brief`, written by `cpd plan new --brief-file`: what the Manager (or the User) asks of one Plan's Lead. The Lead's first message holds it in full; `cpd context show` and Context updates list it short (id and first line), and `cpd context show --record <id>` prints it whole. Not a Spec, which describes a Job.
-_Avoid_: ticket, prompt
-
-**Context update**:
-The message the pi adapter adds at the start of a Manager's turn only (never a Lead's: Leads read the Context on demand with `cpd context show --since <seq>`, hs-d209), listing the Context records other Sessions wrote since its last one (commands.md §15.7). It ends with the **digest**: a `Plans:` section of the Plan Events (created, phase, PR opened or merged, Job failed, done) since then.
-_Avoid_: notification, poll
-
-**Lead**:
-The agent session that translates User intent into Specs and orchestrates the Plan; it never writes code itself.
+**Lead** (role):
+The agent that translates User intent into Specs and orchestrates the Plan; it never writes code itself.
 _Avoid_: coordinator, orchestrator
 
-**Worker**:
-An agent session that executes one Attempt of one Job in its own worktree.
-_Avoid_: subagent, executor, thread
+**Worker** (role):
+An agent that executes one Attempt of one Job in its own worktree.
+_Avoid_: subagent, executor, thread (as a word for a Worker)
 
-**Reviewer** (removed): Removed by R19 (no Job-level Reviewer). The review is the Pull Request's own, on GitHub.
+**Brief** (entity, B3):
+A Context record of kind `brief`, written by `cpd plan new --brief-file`: what the Manager or the User asks of one Plan's Lead. Not a Spec, which describes a Job.
+_Avoid_: ticket, prompt
 
-## Outcomes
+**Tier** (other, pro-d146):
+A two-character code naming the model and effort an agent runs at, e.g. `O3` for a Lead or `S1` for a coding Worker; the model table is the policy's `[model]` domain. It means this only: the Inbox colours are called urgency.
+_Avoid_: level, profile; tier (for a colour)
 
-**Gate** (changed):
-The repository's mechanical checks (tests, typecheck, lint), defined by the repo as its `pre-merge` hook in its repo policy file (`[hooks]`, contract §7.3) and run by cpd only at the PR level: on a PR's Lead Branch, in a gate worktree, at the submit of the PR's open or update Job (before cpd pushes), and in `pr open`, `pr push` and `pr rebase`, the repair, before they push, and only when the PR's Policy sets `pr.gate = "local"`; with cpd's default, `ci`, the repo's CI is the check (hs-d292). Never per Job (a Job's submit runs the quick check, and a test or impl Job's own tests) or per merge (R19).
-_Avoid_: CI, checks
+**Context update** (mechanism):
+The message the pi adapter adds at the start of a Manager's turn only (never a Lead's), listing the Context records other Sessions wrote since its last one and the Plan Events since then (created, phase, pull request opened or merged, Job failed, done) (commands.md §15.7).
+_Avoid_: notification, poll
 
-**Quick check** (new):
-The repository's `pre-commit` hook, run by cpd when a Worker submits; when the repo defines none, there is no quick check and nothing runs instead (R20).
-_Avoid_: pre-flight, lint step
+## Runtime
 
-**Tier**:
-A two-character code naming the model and effort an agent runs at, e.g. `O3` for the Lead or `S1` for a coding Worker.
-_Avoid_: level, profile
+**Session** (entity, pro-d146):
+cpd's own record of an agent it runs: a role (Lead, Worker or Manager), a Context, usually a Plan, a tmux pane and an agent state: working, waiting (an agent waits for another agent), blocked (the User has to act), idle or stopped. A Session forked for a tangent (`cpd session fork`) is a sibling, drawn directly under its Context (B1, B4); a Review Job's Worker is a fork hidden like every Worker. Not a **tmux session** and not a **pi session**.
+_Avoid_: agent, pane, chat
 
-## Axioms
+**tmux session** (other, pro-d146):
+tmux's own session, the one that hosts the cockpit window and the panes. Always written in full.
 
-**Axiom** (new, hs-d607, hs-d610):
-One of the cpd creator's core rules, applied everywhere and encoded into how cpd works and behaves: to every Context, owner, repo, role and tool. The one source is the global AGENTS.md of the pi that runs cpd (on hs `~/.pi/agent/AGENTS.md`, repo `clayton-duarte/pi-config`), which pi injects into every agent it launches without `--no-context-files`: the Manager, the Lead, the Worker and, since hs-d611, the Distiller. cpd reads no axiom: there is no config key and no record kind, and with no AGENTS.md cpd runs unchanged. An Axiom is not a decision (a dated choice about one Context's work, which a newer decision supersedes, hs-d358), not a note (a fact) and not a Policy (how one owner or repo works, per Scope, with typed keys). A decision, note, Policy, skill, Spec or doc may specialise an axiom but never restate or contradict it: it points to the axiom by its title. An axiom changes only when its creator edits the source.
-_Avoid_: principle, convention, philosophy, rule
+**pi session** (other, pro-d146):
+pi's own conversation file and process. A cpd Session wraps one; always written in full.
 
-## Policies
+**Event** (entity):
+An append-only record of something that happened, numbered in commit order; every state change appends one. Events are the single channel to Leads, the cockpit and agent states: the pi adapter follows them and delivers some to its Lead as messages. Not a GitHub event and not a tmux hook.
+_Avoid_: message, notification, queue item
 
-**Policy** (changed, hs-d9, hs-d12):
-How cpd and its agents work for one GitHub owner or repo: a fixed set of Domains, resolved per Policy key from cpd's built-in default and the instance's machine, owner and repo files under `$CPD_HOME/policy/` (contract §8.3). The machine file is optional and per-machine, never per owner or repo. Its `[mcp]` table, read only from the machine file, lists the MCP servers the machine may use (hs-d263, pro-d1; below). cpd reads nothing from a repo's tree. `cpd policy show` prints one. A Policy specialises the Axioms and never contradicts one.
-_Avoid_: rules, settings, profile, config
+**Inbox** (entity):
+The single source of "needs you": the open Inbox items, shown by `cpd inbox` and the cockpit's Inbox section, opened and closed by the engine from their cause. Its colours are urgency names.
+_Avoid_: notifications, alerts, to-do list
 
-**Domain** (new, hs-d288):
-One typed slot of a Policy, owned by cpd's code: `pr`, `deploy`, `code`, `tests`, `monitor`, `instructions` or, for a repo only, `hooks`, `test-commands` or `protected`. Its value has typed keys that cpd's commands branch on (such as `pr.gate`, `local` or `ci`) and a free `text` for the agents its fixed audience names. A Scope that sets a Domain sets all of it; a key it leaves out takes cpd's default.
-_Avoid_: section, category, setting
+**Inbox item** (entity):
+One thing that needs the User (a dialog, a Plan review, an unread reply, a pull request of the User, a stuck Job, an engine error, an open question, or the engine being down), kept in `inbox_items` while its condition holds and closed after; the User can snooze or dismiss it. Its kind `deploy` and the policy domain `deploy` keep that name; they are not the Deploying step.
+_Avoid_: notification, alert, task (as a word for an item)
 
-**Scope** (changed, hs-d9, hs-d12):
-Where a Domain's value is set: cpd's default, a machine file, an owner file, or a repo file. The most specific Scope that sets a Domain wins (repo > owner > machine > default, hs-d279); no Domain adds up across Scopes. The machine Scope holds policies for one machine on which cpd runs, in the file `policy/host.toml`, and is optional: a missing machine file sets nothing. It is never part of a Policy key; a Policy resolves the same for every key on one machine and differently across machines.
-_Avoid_: layer, level, override file
+**Cockpit** (entity, pro-d145):
+The User's interface: one tmux window with global side bars and a centre bound to one Plan (the plan view above, the Lead's chat below). Its three columns are the three stages, read as past, present and future: Context, Plan and the third column (Dispatch; its title in the code still differs until the rename lands). tmux hosts the panes, ratatui draws the views.
+_Avoid_: dashboard, TUI session
 
-**Repo policy file** (new):
-The repo scope of a Policy, `$CPD_HOME/policy/<owner>/<repo>.toml`: optional (a repo without one has no repo scope and inherits default, machine and owner; an empty file means the same), and the one place of the repo's hooks, test commands and protected paths (contract §8.3).
+**Engine** (entity):
+The one `cpd watch` per machine: it schedules every Plan's Jobs under one concurrency limit, watches liveness and timeouts, polls pull requests, starts a Workflow once the Workflows it needs are merged, and curates Context records. Its loop is a list of engine steps.
+_Avoid_: daemon, scheduler, one watcher per Workflow
 
+**engine step** (mechanism, pro-d146):
+One numbered part of the engine's loop, E1 to E17, always written "engine step E7" (contract §3.7). Not a step of the CPD flow.
+_Avoid_: step (alone)
 
-**Exposure** (new, hs-d9, hs-d12):
-The set of Scopes from which a Domain may be set, named in the domain table of contract §8.3. An unexposed Domain in a Scope's file is `policy_invalid`. One key is exposed below its domain: the table `pr.post` is set in owner and repo files only, never in the machine file (pro-d126).
-_Avoid_: visibility, permission
+**Board post** (entity):
+One message on a Plan's message board (`cpd board post`), read by the Plan's Sessions; written to a live Plan only.
+_Avoid_: chat message, broadcast
 
-**Policy key** (new, hs-d288):
-What a Policy is resolved for: an owner, or an owner and a repo name (`Owner(login) | Repo(login, name)`). cpd derives it from the one row a consumer acts on: a Context, its Manager and its Leads use the Context's owner; a PR, its Workers and the commands on it use the PR's repo. Never a machine, a path or a cwd.
-_Avoid_: scope, selector, context
-
-**Resource** (pro-d74, pro-d92):
-Anything that has a limited number of slots available for concurrent use, declared in a policy file at host, owner or repo level (`[resources.<name>]`, contract §8.3 "The `resources` domain"), such as the one port an e2e run needs. A Job takes a slot through its Spec's `resources` and is its tenant from its first Attempt until it is merged or cancelled; a human takes one with `cpd resource run`, which holds a kernel `flock` released when the command dies. Nothing declared means no limit. The built-in `workers` is the host's Worker slots, its tenants the Jobs with a live Attempt (contract §3.4 "Tenancy").
+**Resource** (entity, pro-d74, pro-d92):
+Anything with a limited number of Slots for concurrent use, declared in a policy file (`[resources.<name>]`, contract §8.3 "The `resources` domain"), such as the one port an e2e run needs. A Job takes a Slot through its Spec's `resources` and is its Tenant from its first Attempt until it is Merged or cancelled; a person takes one with `cpd resource run`. Nothing declared means no limit. The built-in `workers` has the host's Worker Slots (contract §3.4 "Tenancy"). Not a file lock (see Locked, section 3).
 _Avoid_: lock, mutex, semaphore
 
-**Slot** (pro-d92):
-The number of available concurrent units of a determined resource: one concurrent unit of it. Contract §1.4 "The resource locks and the holder record".
+**Slot** (entity, pro-d92):
+One concurrent unit of a Resource. Contract §1.4 "The resource locks and the holder record".
 _Avoid_: lock, seat
 
-**Tenant** (pro-d92, pro-d106):
-The Job or user occupying a resource slot. A Job is a tenant from its first Attempt until it is merged or cancelled (a failed Job keeps all its resources); the Ledger records it, so it is derived by a join. A command's holder record names it (contract §1.4, §3.4 "Tenancy").
+**Tenant** (entity, pro-d92, pro-d106):
+The Job or person occupying a Slot of a Resource. A Job is a Tenant from its first Attempt until it is Merged or cancelled (a failed Job keeps its Slots); the Ledger records it (contract §3.4 "Tenancy").
 
-**Machine policy** (changed, pro-d1):
-The machine Scope's file, `$CPD_HOME/policy/host.toml` (contract §8.3), which dotfiles render per machine: its `[model]` table first, then the machine's `cpd.policy` text (its `[mcp.servers.*]`). Besides Domains it may hold an `[mcp]` table, the MCP servers the machine may use, which only a machine file may have; `[mcp]` is not a Domain and takes no part in a Policy key.
-_Avoid_: machine config
-
-**MCP server** (new, pro-d1):
-A remote server cpd may attach to a Session; listed in a Machine policy. Its tools reach a Session only through an explicit attach, which another Job documents. cpd holds no credential: pi's own OAuth store does.
+**MCP server** (entity, pro-d1):
+A remote server cpd may attach to a Session, listed in the Machine policy. Its tools reach a Session only through an explicit Attach. cpd holds no credential: pi's own OAuth store does.
 _Avoid_: tool server, plugin
 
-**Attach** (new, pro-d2, pro-d8):
-Giving an MCP server to a Session: one explicit `cpd mcp attach <name>` (commands §24.1), for that Session only, not saved and never by default.
-_Avoid_: enable, load, install
+**Attach** (mechanism, pro-d2, pro-d8):
+Giving an MCP server to one Session, explicitly with `cpd mcp attach <name>` (commands.md §24.1): not saved and never by default. Not tmux's attach (`cpd tui --attach`).
+_Avoid_: enable, load; install (as a word for it)
 
-**Resolved policy** (changed, hs-d9, hs-d12):
+## Checks and gates
+
+**Gate** (mechanism, changed, pro-d146):
+The repo's `pre-merge` hook, run by cpd on a Workflow's Lead Branch at the submit of its open or update Job, before cpd pushes, and by the repair commands `pr open`, `pr push` and `pr rebase`; only when the policy key `gate.pr` is `local` (cpd's default is `none`: core/src/policy/default.toml). It is never run per Job. Where `gate.pr` is `none`, CI is the check where it exists. Keys and hooks: contract §7.3, §8.3.
+_Avoid_: CI; checks (GitHub's word); quick check (that is the `pre-commit` hook)
+
+**Quick check** (mechanism, pro-d146):
+The repo's `pre-commit` hook, run by cpd on a Worker's Attempt at its merge, only when the policy key `gate.merge` is `local` (default `none`). With no such hook there is no Quick check and nothing runs instead.
+_Avoid_: pre-flight, lint step; Gate (that is `pre-merge`)
+
+**Mechanical checks** (mechanism, changed hs-d340, hs-d341):
+The checks cpd runs at an Attempt's submit, by the Job's kind: for a test Job the red tests (they build and fail), for an impl Job the same tests (they pass) and the red-test guard, and for an open or update Job the Lead Branch's fit with its base (refused only on a conflict) and the Gate. The Worker fixes what they report; the Lead runs none. Not a step of the CPD flow: part of Deploying.
+
+**CI** (other):
+The repo's GitHub checks on a pull request, where CI exists (this repo runs none). cpd's `pr.feedback.checks` key decides whether failing checks raise `pr-feedback`. Not the Gate and not Mechanical checks.
+_Avoid_: checks (alone)
+
+## Policy
+
+**Policy** (policy, changed, hs-d9, hs-d12):
+How cpd and its agents work for one GitHub owner or repo: a fixed set of Domains, resolved per Policy key from cpd's built-in default and the machine, owner and repo files under `$CPD_HOME/policy/` (contract §8.3). cpd reads nothing from a repo's tree. `cpd policy show` prints one. A Policy specialises the Axioms and never contradicts one.
+_Avoid_: rules, settings, profile; config (as a word for a Policy)
+
+**Domain** (policy, hs-d288):
+One typed slot of a Policy, owned by cpd's code. The set and each Domain's keys, Exposure and audience are the table in contract §8.3; the domains `gate`, `pr`, `deploy` and `hooks` are not the Gate, the pull request, the Deploying step or git hooks of other tools. A Scope that sets a Domain sets all of it; a key it leaves out takes cpd's default.
+_Avoid_: section, category, setting
+
+**Scope** (policy, changed, hs-d9, hs-d12):
+Where a Domain's value is set: cpd's default, a machine file, an owner file or a repo file. The most specific Scope that sets a Domain wins (repo > owner > machine > default, hs-d279); no Domain adds up across Scopes. A Scope is never part of a Policy key.
+_Avoid_: layer, level, override file
+
+**Policy key** (policy, hs-d288):
+What a Policy is resolved for: an owner, or an owner and a repo name. cpd derives it from the one row a consumer acts on: a Context, its Manager and its Leads use the Context's owner; a Workflow, its Workers and the commands on it use the Workflow's repo. Never a machine, a path or a cwd.
+_Avoid_: selector
+
+**Exposure** (policy, hs-d9, hs-d12):
+The set of Scopes from which a Domain may be set, named in the domain table of contract §8.3. An unexposed Domain in a Scope's file is `policy_invalid`; the table `pr.post` is exposed in owner and repo files only (pro-d126).
+_Avoid_: visibility, permission
+
+**Repo policy file** (policy):
+The repo Scope of a Policy, `$CPD_HOME/policy/<owner>/<repo>.toml`: optional, and the one place of the repo's hooks, test commands and protected paths (contract §8.3).
+
+**Machine policy** (policy, changed, pro-d1):
+The machine Scope's file, `$CPD_HOME/policy/host.toml`, optional and per machine, never per owner or repo. Besides Domains it may hold the `[mcp]` table, the MCP servers the machine may use, which only a machine file may have; `[mcp]` is not a Domain.
+_Avoid_: machine config
+
+**Resolved policy** (policy, changed, hs-d9, hs-d12):
 The Policy of one Policy key: every Domain's value with its source (`default`, `machine:<path>`, `owner:<path>` or `repo:<path>`). It is total, because cpd's default sets every Domain.
 _Avoid_: effective config, merged policy
 
-**Known owner** (new, hs-d288):
-An owner with a `policy/<owner>/owner.toml` file in `$CPD_HOME/policy/` (a file or a symlink that resolves). The known owners on this instance are `clayton-duarte`, `missionlane`, and `missionlane-scratch`, their files shipped by the User's dotfiles. Any other GitHub login is unknown until confirmed with `--confirm-fallback` on `context new --owner <login>` or `context owner <login>`. Confirming creates `policy/<owner>/owner.toml` as a relative symlink to `../clayton-duarte/owner.toml`. Deleting the link revokes the confirmation.
+**Known owner** (policy, hs-d288):
+An owner with a `policy/<owner>/owner.toml` file in `$CPD_HOME/policy/`. Any other GitHub login is unknown until confirmed with `--confirm-fallback` (contract §8.3 "Known owners"); `cpd policy show` prints which owner file a key resolves to.
 _Avoid_: registered, available
 
-**Fallback** (new, hs-d288):
-The owner whose policy is used when an unknown owner is confirmed: `clayton-duarte` on this instance. When confirming an unknown owner, `--confirm-fallback` creates a symlink to the fallback owner's policy file; if the fallback file does not exist, the command fails with `fallback_missing`.
+**Fallback** (policy, hs-d288):
+The owner whose policy file a confirmed unknown owner's link points to (contract §8.3); if that file does not exist, confirming fails with `fallback_missing`.
 _Avoid_: default owner, default policy
+
+**owner** (other, pro-d146):
+A GitHub login, user or organisation: it names a Policy's owner scope and a repo's owner. It never means the User.
+_Avoid_: owner (for the User)
+
+## Axioms and marks
+
+**Axiom** (policy, hs-d607, hs-d610):
+One of the cpd creator's core rules, applied to every Context, owner, repo, role and tool. Its one source is the global AGENTS.md of the pi that runs cpd, which pi injects into every agent it launches; cpd reads no axiom and has no key or record kind for one. An Axiom is not a decision, not a note and not a Policy. A decision, note, Policy, skill, Spec or doc may specialise an Axiom but never restate or contradict it: it points to the Axiom by its title.
+_Avoid_: principle, convention, philosophy; rule (as a word for an Axiom)
+
+**φ** (new, hs-d694):
+cpd's mark, as π is pi's: it overlaps the three letters C·P·D, references the golden ratio, and reads like a dango. Documents that name cpd's mark write it φ beside the name; the word `cpd` never changes. The mark and its logo are specified once in [docs/mark.md](docs/mark.md).
+_Avoid_: cpd logo (the logo is defined soon)
+
+## Retired words
+
+Each line: what the word meant, what replaces it, the record that decided it. History keeps these words; live docs, skills and help text do not use them.
+
+**Workflow (cpd 1)** (retired, pro-d136):
+cpd 1's name for what is now a Plan. Retired by D3; the word **Workflow** returns with a new meaning (section 2).
+
+**PR phase** (retired, pro-d145):
+A phase named `pr`, once the last before `done`. The phase is now `deploy`; the process is the Deploying step.
+
+**Deploy (stage)** (retired, pro-d145):
+The third stage and the third cockpit column. Now the Dispatch stage; `deploy` stays the phase and the conclusion of Dispatch. The cockpit's third column is titled Deploy by the code until the rename lands. The policy domain `deploy` and the Inbox kind `deploy` keep their names.
+
+**Reviewer** (retired, R19):
+A Job-level reviewer. Removed: the review is the pull request review on GitHub, and the optional Review Job has no verdict.
+
+**Grounded Lead** (retired, hs-d129):
+The Lead Session that held a Context's grounding, forked for every new Plan. Replaced by the Manager (B3); migration 0010 archived every one.
+
+**Sync Job** (retired, hs-d340):
+A name for a Job that merges the base into the Lead Branch; never a Job kind. The Open Job and the Update Job do it.
+
+**workflow worktree** (retired, pro-d136):
+The git worktree of a Lead Branch. Now the **Lead worktree**; contract and code still use the old words until the rename.
+
+**Clarifying (interview)** (retired, pro-d146):
+The old step of the interview with the User. Now Grilling; the name Clarifying belongs to the Plan stage.
+
+**Specifying** (retired, pro-d146):
+The old step of writing Requirements, records and assumptions. Now Clarifying.
+
+**Dividing** (retired, pro-d146):
+The old step of cutting the deliverable. Now Scoping (the Workflows) and Splitting (the Jobs).
+
+**Sequencing** (retired, pro-d146):
+The old step of ordering the Jobs. Now Splitting.
+
+**Approving** (retired, pro-d146):
+The old step of the Plan review and lock. Now Orchestrating.
+
+**Dispatching (step)** (retired, pro-d146):
+The old step in which the engine runs the Jobs. Now the first steps of the Dispatch stage (Documenting, Red testing, Implementing, Verifying).
+
+**Mechanical checks (step)** (retired, pro-d146):
+The old step of checks before the pull request opens. Now part of Deploying; **Mechanical checks** stays a mechanism (section 8).
+
+**Reviewing and Monitoring** (retired, pro-d146):
+The old step of watching the pull request and its review. Now part of Deploying (the PR poll, pull request review).
