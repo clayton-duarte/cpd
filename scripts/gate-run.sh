@@ -27,11 +27,11 @@ finish() {
   exec "$cpd" gate finish --run "$GATE_RUN" --status "$1"
 }
 
-# The command runs in the background and the wrapper waits for it: a trap does not run while a foreground command
-# does, and the runner cancels a step with INT, then TERM, then KILL. `<&0` keeps the command's stdin (an async
-# command otherwise gets /dev/null).
-"$@" <&0 &
-pid=$!
+# The traps are armed before the command is launched: a signal in between would take the shell's default action and
+# kill the wrapper, skipping the leak check. With no command yet (pid empty) a signal stops nothing and ends the run.
+# The command then runs in the background and the wrapper waits for it: a trap does not run while a foreground command
+# does, and the runner cancels a step with INT, then TERM, then KILL. `$!` is the command's pid from the launch on, even before `pid=$!` ran,
+# and empty before it (`${!:-}`, for set -u).
 
 # $1 the signal's name, $2 its number. The signal goes to the command alone, not to its process group: with no job
 # control the wrapper shares that group, and the command (cargo-nextest, npm) stops its own tests on TERM, INT or
@@ -39,13 +39,24 @@ pid=$!
 cancel() {
   trap '' INT TERM HUP
   case $1 in INT) set -- TERM "$2" ;; esac
-  kill -s "$1" "$pid" 2>/dev/null
-  wait "$pid"
+  child=${!:-}
+  if [ -n "$child" ]; then
+    kill -s "$1" "$child" 2>/dev/null
+    wait "$child"
+  fi
   finish $((128 + $2))
 }
 trap 'cancel INT 2' INT
 trap 'cancel TERM 15' TERM
 trap 'cancel HUP 1' HUP
 
+# An async command gets /dev/null as stdin (POSIX), and dash does so even for an explicit `<&0`, which raced the
+# command's own end against the signal. The stdin is passed through fd 3: a redirect of fd 0 from another fd is kept.
+exec 3<&0
+"$@" <&3 3<&- &
+pid=$!
+exec 3<&-
+
 wait "$pid"
-finish $?
+status=$?
+finish "$status"
