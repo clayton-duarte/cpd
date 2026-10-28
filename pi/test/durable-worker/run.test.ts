@@ -11,7 +11,31 @@ import type { Input } from "../../durable-worker/deliver.ts";
 import { endReport, type EndReport, type Entry } from "../../durable-worker/report.ts";
 import { runWorker, type Conversation, type Deps, type Submission } from "../../durable-worker/run.ts";
 import { policyShow, shown } from "../answers.ts";
-import { ev, notify, waitFor } from "../fake.ts";
+import { ev } from "../fake.ts";
+
+/** Every fake calls notify() when it sets a fact; a waiter re-checks its fact on each call. No timer, no polling. */
+const waiters = new Set<() => void>();
+function notify(): void {
+  for (const wake of [...waiters]) wake();
+}
+/** Resolves when fn returns a truthy value; rejects when fn throws. A hang is caught by the test's timeout option. */
+function whenTrue<T>(_what: string, fn: () => T | undefined | false): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const check = (): void => {
+      try {
+        const v = fn();
+        if (!v) return;
+        waiters.delete(check);
+        resolve(v);
+      } catch (e) {
+        waiters.delete(check);
+        reject(e);
+      }
+    };
+    waiters.add(check);
+    check();
+  });
+}
 
 const CONFIG: Config = { home: "/cpd-home", session: "s-worker", plan: "plan-1", attempt: "job-a1", cwd: "/work/tree", spec: "/cpd-home/run/plan-1/specs/job-a1.md", model: "anthropic/sonnet:high" };
 const MODEL = { provider: "anthropic", modelId: "sonnet", thinkingLevel: "high" };
@@ -164,7 +188,7 @@ function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: 
     },
   );
   const until = <T>(what: string, fn: () => T | undefined | false): Promise<T> =>
-    waitFor(what, () => {
+    whenTrue(what, () => {
       if (ending.error) throw ending.error;
       return fn();
     });
@@ -193,14 +217,14 @@ const deliver = (hooks: FollowerHooks, line: string) => {
 };
 const stoppedArgs = ["session", "state", "stopped", "--session", CONFIG.session];
 
-test("the first message names the Spec path and the Attempt id and is submitted with requestId = the Attempt id", async () => {
+test("the first message names the Spec path and the Attempt id and is submitted with requestId = the Attempt id", { timeout: 20_000 }, async () => {
   const r = rig();
   await up(r);
   assert.deepEqual(r.store.submitted, [{ content: FIRST, requestId: CONFIG.attempt, whenBusy: "followUp" }]);
   assert.equal(await stop(r), 143);
 });
 
-test("a runner started again for the same Attempt opens the same store file and submits the same requestId", async () => {
+test("a runner started again for the same Attempt opens the same store file and submits the same requestId", { timeout: 20_000 }, async () => {
   const store = new Store();
   const first = rig({ store });
   await up(first);
@@ -217,13 +241,13 @@ test("a runner started again for the same Attempt opens the same store file and 
   assert.equal(await stop(again), 143);
 });
 
-test("an unusable model is a usage error before anything is opened", async () => {
+test("an unusable model is a usage error before anything is opened", { timeout: 20_000 }, async () => {
   const r = rig({
     resolveModel: () => {
       throw new CpdError("usage", "unusable model: nope");
     },
   });
-  await waitFor("the run to end", () => r.ending.error || r.ending.code);
+  await whenTrue("the run to end", () => r.ending.error || r.ending.code);
   assert.equal(r.ending.code, undefined);
   const error = r.ending.error;
   if (!(error instanceof CpdError)) throw error;
@@ -231,7 +255,7 @@ test("an unusable model is a usage error before anything is opened", async () =>
   assert.deepEqual(r.effects, [], "no effect before the model is resolved");
 });
 
-test("the store is run/<plan>/durable/<attempt>.sqlite and the extension carries the policy, the context files and the time zone", async () => {
+test("the store is run/<plan>/durable/<attempt>.sqlite and the extension carries the policy, the context files and the time zone", { timeout: 20_000 }, async () => {
   const r = rig();
   await up(r);
   assert.equal(r.opens.length, 1);
@@ -252,7 +276,7 @@ test("the store is run/<plan>/durable/<attempt>.sqlite and the extension carries
   assert.equal(await stop(r), 143);
 });
 
-test("the follower starts at the registered_event of the Session", async () => {
+test("the follower starts at the registered_event of the Session", { timeout: 20_000 }, async () => {
   const r = rig();
   const hooks = await up(r);
   assert.equal(r.follower.started, 1);
@@ -260,7 +284,7 @@ test("the follower starts at the registered_event of the Session", async () => {
   assert.equal(await stop(r), 143);
 });
 
-test("a delivered Event is submitted as follow-up input with requestId event:<id> and the cursor moves to it", async () => {
+test("a delivered Event is submitted as follow-up input with requestId event:<id> and the cursor moves to it", { timeout: 20_000 }, async () => {
   const r = rig();
   const hooks = await up(r);
   deliver(hooks, nudge(42, "Carry on."));
@@ -270,7 +294,7 @@ test("a delivered Event is submitted as follow-up input with requestId event:<id
   assert.equal(await stop(r), 143);
 });
 
-test("the Session is working while a submission is pending and idle when the last one settled", async () => {
+test("the Session is working while a submission is pending and idle when the last one settled", { timeout: 20_000 }, async () => {
   const r = rig();
   const hooks = await up(r);
   await r.until("working", () => r.states().includes(`working --session ${CONFIG.session}`));
@@ -284,7 +308,7 @@ test("the Session is working while a submission is pending and idle when the las
   assert.equal(await stop(r), 143);
 });
 
-test("the end report is written after every settle", async () => {
+test("the end report is written after every settle", { timeout: 20_000 }, async () => {
   const r = rig();
   const hooks = await up(r);
   r.store.settle(CONFIG.attempt);
@@ -300,7 +324,7 @@ test("the end report is written after every settle", async () => {
   assert.equal(await stop(r), 143);
 });
 
-test("a terminate signal reports stopped, stops the follower and returns 143 without closing the harness", async () => {
+test("a terminate signal reports stopped, stops the follower and returns 143 without closing the harness", { timeout: 20_000 }, async () => {
   const r = rig();
   await up(r);
   assert.equal(await stop(r), 143);
@@ -309,7 +333,7 @@ test("a terminate signal reports stopped, stops the follower and returns 143 wit
   assert.equal(r.store.closeCalls, 0);
 });
 
-test("a harness that closed after a storage error reports stopped and returns 1", async () => {
+test("a harness that closed after a storage error reports stopped and returns 1", { timeout: 20_000 }, async () => {
   const r = rig();
   await up(r);
   r.store.close(new Error("storage: disk I/O error"));
@@ -320,9 +344,9 @@ test("a harness that closed after a storage error reports stopped and returns 1"
   assert.equal(r.store.closeCalls, 0);
 });
 
-test("a failure to read the Session reports stopped and returns 1", async () => {
+test("a failure to read the Session reports stopped and returns 1", { timeout: 20_000 }, async () => {
   const r = rig({ sessionShowError: new CpdError("session_not_found", "no such session") });
-  const code = await waitFor("the runner to end", () => r.ending.code ?? (r.ending.error ? -1 : undefined));
+  const code = await whenTrue("the runner to end", () => r.ending.code ?? (r.ending.error ? -1 : undefined));
   if (r.ending.error) throw r.ending.error;
   assert.equal(code, 1);
   assert.deepEqual(r.calls.at(-1), stoppedArgs);
@@ -330,7 +354,7 @@ test("a failure to read the Session reports stopped and returns 1", async () => 
   assert.equal(r.follower.started, 0);
 });
 
-test("the runner stays up after the first turn ends and resolves only on terminate, close or failure", async () => {
+test("the runner stays up after the first turn ends and resolves only on terminate, close or failure", { timeout: 20_000 }, async () => {
   const r = rig();
   const hooks = await up(r);
   r.store.settle(CONFIG.attempt);
