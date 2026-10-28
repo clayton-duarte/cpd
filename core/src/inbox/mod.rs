@@ -17,3 +17,5 @@ mod claim_tests;
 mod runner_tests;
 #[cfg(test)]
 mod pr_tests;
+#[cfg(test)]
+mod follow_tests;
