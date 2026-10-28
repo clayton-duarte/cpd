@@ -37,11 +37,6 @@ use super::{TestEnv, sql};
 /// The pane's width in the tests: the title's `flush_title` and the item rows are laid out for it.
 pub const W: usize = 46;
 
-/// The terminator of an empty Inbox: muted words from column 1 (commands.md §13.2).
-pub fn up_to_date() -> String {
-    " up to date, drink some water".to_owned()
-}
-
 /// An item row (trimmed): ` <glyph> <label>`, spaces, and the `age` ending at column `W - 2`; the last column is blank.
 pub fn item_row(glyph: &str, label: &str, age: &str) -> String {
     format!(" {glyph} {label}{}{age}", " ".repeat(W - 4 - label.chars().count() - age.chars().count()))
@@ -50,11 +45,6 @@ pub fn item_row(glyph: &str, label: &str, age: &str) -> String {
 /// [`item_row`] of a link kind: the label is followed by a space and the link cue, and the age keeps its column.
 pub fn linked_item_row(glyph: &str, label: &str, age: &str) -> String {
     item_row(glyph, &format!("{label} {}", cpd_tui::link::CUE), age)
-}
-
-/// A scroll cue line of the Inbox list: the cue right-aligned to end at column `W - 2`.
-pub fn cue_row(arrow: char, n: usize) -> String {
-    format!(" {:>w$}", format!("{arrow} {n} more"), w = W - 2)
 }
 
 // ---------- the prepared store ----------
