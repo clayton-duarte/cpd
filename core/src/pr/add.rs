@@ -1,7 +1,7 @@
 //! `pr add` (commands.md §9.4, contract §3.8): adds a PR to the Plan,
 //! `waiting`. Nothing is started here: no git write, no tmux. It also holds
 //! what `pr edit` shares with it: the repo, the base, the PR references of
-//! `--base <plan>/<key>` and `--needs` (contract §2.2 "A PR reference") with
+//! `--base <key>`, `--base <plan>/<key>` and `--needs` (contract §2.2 "A PR reference") with
 //! their validation, and the branch checks.
 
 use std::collections::BTreeMap;
@@ -140,14 +140,22 @@ pub(super) enum BaseArg {
 pub(super) enum BaseWanted {
     /// A branch, checked to exist (`resolve_base`).
     Branch(String),
-    /// A base PR named as `<plan>/<key>`: its Lead Branch becomes the base.
+    /// A base PR named as `<key>` or `<plan>/<key>`: its Lead Branch becomes the base.
     Pr(PlanId, PrKey),
 }
 
-/// Reads `--base` (§2.2 "A PR reference"): a base PR exactly when it has the form `<plan>/<key>` and a
-/// Plan `<plan>` exists, else a branch.
-pub(super) fn classify_base(conn: &Connection, base: Option<&str>) -> Result<BaseArg, CpdError> {
+/// Reads `--base` (§2.2 "A PR reference"): a base PR when it is a bare `<key>` of a PR of `plan` in `repo`
+/// (it wins over a same-named branch), or has the form `<plan>/<key>` and a Plan `<plan>` exists; else a branch.
+pub(super) fn classify_base(conn: &Connection, plan: &PlanId, repo: &Path, base: Option<&str>) -> Result<BaseArg, CpdError> {
     let Some(value) = base else { return Ok(BaseArg::Branch(None)) };
+    if !value.contains('/')
+        && let Ok(key) = PrKey::parse(value)
+    {
+        let repo = repo.display().to_string();
+        if known_prs(conn, plan)?.iter().any(|q| q.key == key.as_str() && q.repo == repo) {
+            return Ok(BaseArg::Pr(plan.clone(), key));
+        }
+    }
     if let Some((plan, key)) = value.split_once('/')
         && let (Ok(plan), Ok(key)) = (PlanId::parse(plan), PrKey::parse(key))
     {
@@ -387,7 +395,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let adopt = args.adopt.map(|number| gh::adoptable(&repo, number)).transpose()?;
     let base = match &adopt {
         Some(a) => BaseArg::Branch(Some(a.base.clone())),
-        None => env.store.read(|conn| classify_base(conn, args.base.as_deref()))?,
+        None => env.store.read(|conn| classify_base(conn, &plan, &repo, args.base.as_deref()))?,
     };
     // A branch that is a PR's Lead Branch of the Plan and repo is its base PR's: it needs no branch yet (that PR may be `waiting`).
     let lead_branch_of_pr = match &base {

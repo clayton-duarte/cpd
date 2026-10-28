@@ -77,7 +77,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let name = repo.as_deref().map(|r| key_repo(&mut env, &plan, r)).transpose()?;
     let in_repo = repo.clone().unwrap_or_else(|| stored.repo.clone().into());
     let base = match args.base.as_deref() {
-        Some(_) => Some(wanted_base(&in_repo, env.store.read(|conn| classify_base(conn, args.base.as_deref()))?)?),
+        Some(_) => Some(wanted_base(&in_repo, env.store.read(|conn| classify_base(conn, &plan, &in_repo, args.base.as_deref()))?)?),
         // A new repo keeps the stored base, which must exist there.
         None if repo.is_some() => Some(wanted_base(&in_repo, BaseArg::Branch(Some(stored.base.clone())))?),
         None => None,
