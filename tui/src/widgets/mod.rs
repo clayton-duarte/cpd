@@ -17,6 +17,8 @@
 
 pub(crate) mod column;
 #[cfg(test)]
+mod approve_tests;
+#[cfg(test)]
 mod deploy_tests;
 #[cfg(test)]
 mod draw_tests;
