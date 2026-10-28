@@ -12,7 +12,13 @@
     "typecheck": "tsc --noEmit -p .",
     "preverify": "scripts/npm-fresh.sh",
     "verify": "scripts/gate-run.sh npm run verify:steps",
-    "verify:steps": "scripts/check-migrations-frozen.sh && scripts/check-portable.sh && npm run typecheck && (t=$(mktemp -d) && TMPDIR=$t npm test; s=$?; rm -rf \"$t\"; exit $s) && scripts/pi-check.sh node_modules/.bin/pi && export CPD_COMMIT=$(git rev-parse --short HEAD) && PATH=\"$PWD/scripts/tripwire:$PATH\" scripts/cargo.sh nextest run --workspace"
+    "verify:migrations": "scripts/check-migrations-frozen.sh",
+    "verify:portable": "scripts/check-portable.sh",
+    "verify:node": "(t=$(mktemp -d) && TMPDIR=$t npm test; s=$?; rm -rf \"$t\"; exit $s)",
+    "verify:pi": "scripts/pi-check.sh node_modules/.bin/pi",
+    "verify:build": "export CPD_COMMIT=$(git rev-parse --short HEAD) && scripts/cargo.sh nextest run --workspace --no-run",
+    "verify:rust": "export CPD_COMMIT=$(git rev-parse --short HEAD) && PATH=\"$PWD/scripts/tripwire:$PATH\" scripts/cargo.sh nextest run --workspace",
+    "verify:steps": "npm run verify:migrations && npm run verify:portable && npm run typecheck && npm run verify:node && npm run verify:pi && npm run verify:build && npm run verify:rust"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.3.0",

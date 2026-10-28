@@ -28,6 +28,24 @@ jobs:
       # Drop untracked leftovers of an earlier branch (not ignored files: target/ and node_modules/ stay).
       - name: Remove untracked files
         run: git clean -ffd
-      # npm run verify installs node_modules when they are stale (preverify, scripts/npm-fresh.sh).
-      - name: Gate
-        run: npm run verify
+      # The Gate's stages (package.json, verify:steps) as separate steps, so the run shows where it spends time and what failed;
+      # pi/test/gate.test.ts pins them equal. Each runs under gate-run.sh (the leak check); the first failure stops the job (hs-d355).
+      # Installs node_modules when they are stale (the Gate does it in preverify).
+      - name: Dependencies
+        run: scripts/npm-fresh.sh
+      - name: Migrations frozen
+        run: scripts/gate-run.sh npm run verify:migrations
+      - name: Portability
+        run: scripts/gate-run.sh npm run verify:portable
+      # tsc --noEmit: the repo's only static check besides the two above.
+      - name: Typecheck
+        run: scripts/gate-run.sh npm run typecheck
+      - name: Node tests
+        run: scripts/gate-run.sh npm run verify:node
+      - name: pi check
+        run: scripts/gate-run.sh npm run verify:pi
+      # The Rust compiler: a compile error or warning shows here, apart from a failing test.
+      - name: Rust build
+        run: scripts/gate-run.sh npm run verify:build
+      - name: Rust tests
+        run: scripts/gate-run.sh npm run verify:rust
