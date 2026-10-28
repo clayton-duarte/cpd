@@ -38,6 +38,7 @@ mod job_edit_locked;
 mod job_chain;
 mod job_fix;
 mod job_verify;
+mod job_touches_stacked;
 mod driver_verify;
 mod driver_fix;
 mod metrics;
