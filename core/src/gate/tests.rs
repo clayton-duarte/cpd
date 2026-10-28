@@ -94,6 +94,20 @@ impl Fx {
         pid
     }
 
+    /// A process as an `env -i` daemon leaves it: its environment is ONLY `TMPDIR=<tmpdir>`, no `GATE_RUN`.
+    fn daemon_with_tmpdir(&self, tmpdir: &Path) -> Pid {
+        let launch = Launch {
+            program: "sccache".into(),
+            args: vec!["--start-server".into()],
+            env_set: vec![("TMPDIR".to_owned(), tmpdir.to_string_lossy().into_owned())],
+            ..Launch::default()
+        };
+        let pid = self.fakes.ports.spawn.spawn(&launch).unwrap();
+        self.fakes.spawn.set_cmdline(pid, "sccache --start-server");
+        self.fakes.spawn.set_parent(pid, Pid(1));
+        pid
+    }
+
     /// A socket file named `cpdt-<id>-1-0` in tmux's directory, left by a server that ended (teardown.md).
     fn socket(&self, id: &str) -> PathBuf {
         let path = self.tmux_dir().join(format!("cpdt-{id}-1-0"));
@@ -310,4 +324,66 @@ fn a_leftover_process_whose_environment_has_no_nextest_test_name_says_so_instead
 
     assert_eq!(done.status, 64, "{done:?}");
     assert!(done.report.contains("NEXTEST_TEST_NAME=(not in its environment"), "{done:?}");
+}
+
+#[test]
+fn a_process_with_the_runs_tmpdir_and_no_gate_run_fails_the_run_and_is_stopped() {
+    let fx = Fx::new();
+    let pid = fx.daemon_with_tmpdir(&fx.run_dir());
+
+    let done = fx.finish(0);
+
+    assert_eq!(done.status, 64, "{done:?}");
+    assert!(done.report.starts_with(&format!("gate-run: FAIL: this run (GATE_RUN={ID}) left 1 things behind:\n")), "{done:?}");
+    assert!(done.report.contains(&format!("  process {} (ppid 1) sccache --start-server\n", pid.0)), "{done:?}");
+    assert!(done.report.ends_with("gate-run: stopped 1 process(es) and removed 1 path(s) of this run (nothing else was touched)\n"), "{done:?}");
+    assert_eq!(fx.fakes.spawn.signals(), vec![(pid, Signal::Kill)]);
+    assert!(!fx.fakes.ports.spawn.alive(pid), "process {pid:?} is still running");
+}
+
+#[test]
+fn a_process_with_both_gate_run_and_the_runs_tmpdir_is_one_leftover_killed_once() {
+    let fx = Fx::new();
+    let pid = fx.left_by_a_test(ID, "init", &[("TMPDIR", &fx.run_dir().to_string_lossy())]);
+
+    let done = fx.finish(0);
+
+    assert!(done.report.contains("left 1 things behind"), "{done:?}");
+    assert_eq!(fx.fakes.spawn.signals(), vec![(pid, Signal::Kill)], "{done:?}");
+}
+
+#[test]
+fn a_process_whose_tmpdir_is_the_parent_of_the_run_dir_is_not_a_leftover() {
+    let fx = Fx::new();
+    let pid = fx.daemon_with_tmpdir(fx.tmp.path());
+
+    let done = fx.finish(0);
+
+    assert_eq!(done, Finished { status: 0, report: String::new() });
+    assert!(fx.fakes.spawn.signals().is_empty());
+    assert!(fx.fakes.ports.spawn.alive(pid), "process {pid:?} was stopped");
+}
+
+#[test]
+fn a_process_with_another_runs_tmpdir_is_not_a_leftover() {
+    let fx = Fx::new();
+    let pid = fx.daemon_with_tmpdir(&fx.tmp.path().join(format!("gate-run.{OTHER}")));
+
+    let done = fx.finish(0);
+
+    assert_eq!(done, Finished { status: 0, report: String::new() });
+    assert!(fx.fakes.spawn.signals().is_empty());
+    assert!(fx.fakes.ports.spawn.alive(pid), "process {pid:?} was stopped");
+}
+
+#[test]
+fn a_process_with_the_runs_tmpdir_that_has_already_exited_is_not_a_leftover() {
+    let fx = Fx::new();
+    let pid = fx.daemon_with_tmpdir(&fx.run_dir());
+    fx.fakes.spawn.exit(pid, 0);
+
+    let done = fx.finish(0);
+
+    assert_eq!(done, Finished { status: 0, report: String::new() });
+    assert!(fx.fakes.spawn.signals().is_empty());
 }
