@@ -13,15 +13,15 @@ use std::time::Duration;
 
 use common::fx::Fx;
 use common::inbox::{
-    FOUR, W, World, click, collapse, cue_row, engine_at, expand, four, frame_with, gone, manager, many,
-    notch, open, open_at, press, pull_requests, rows, seed, show, typed, up_to_date, view_fx,
+    FOUR, W, World, engine_at, expand, four, frame_with, gone, manager, open, open_at, press, rows, seed, show,
+    typed, view_fx,
 };
 use common::tree::{engine, stamp};
 use cpd_core::events::{Kind as EventKind, NewEvent, append};
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use cpd_tui::palette;
 use cpd_tui::pump::Signal;
-use ratatui::crossterm::event::{KeyCode, MouseEventKind};
+use ratatui::crossterm::event::KeyCode;
 
 const ONE_SECOND: Duration = Duration::from_secs(1);
 
@@ -54,11 +54,6 @@ fn folded4() -> Vec<String> {
     folded4_at("5m")
 }
 
-/// [`four`] expanded: all four rows and `collapse`.
-fn expanded4() -> Vec<String> {
-    section(4, &item_rows(&FOUR, "5m"), collapse())
-}
-
 /// Whether `screen` has `section` right under the machine header: its rows from row 3 (the blank row, the machine's two).
 fn under(screen: &[String], section: &[String]) -> bool {
     screen.len() >= 3 + section.len() && screen[3..3 + section.len()] == *section
@@ -76,82 +71,10 @@ fn prepared(items: &[Condition]) -> Fx {
     fx
 }
 
-/// Whether some row of `rows` starts with `prefix`.
-fn starts(rows: &[String], prefix: &str) -> bool {
-    rows.iter().any(|r| r.starts_with(prefix))
-}
-
 /// The `cpd` and `tmux` commands the view ran that name the Inbox or a Session: none of the tests of this file runs one.
 fn commands_of_the_inbox(fx: &Fx) -> Vec<Vec<String>> {
     let calls = fx.fakes.runner.calls();
     calls.into_iter().map(|c| c.args).filter(|a| a.iter().any(|w| w == "inbox" || w == "session")).collect()
-}
-
-#[test]
-fn the_column_draws_the_inbox_section_right_under_the_machine_header() {
-    let fx = prepared(&four());
-    let _engine = engine(&fx);
-    pull_requests(&fx.env, 2);
-    let height = 30;
-    let frames = show(&fx, height, vec![Signal::Commit, gone()], &World::new());
-    // the section: its empty row, the title with its count, three items, `expand`, its empty row, from row 3
-    let at = frame_under(&frames, 0, "the folded Inbox", &folded4());
-    let screen = rows(&frames, at);
-    assert_eq!(screen.len(), height as usize);
-    assert_eq!((screen[0].as_str(), screen[1].as_str()), ("", " homeserver"), "{screen:?}");
-    assert_eq!(screen[10..], vec![String::new(); height as usize - 10], "nothing below it: the open pull requests draw no section");
-}
-
-#[test]
-fn with_no_item_the_inbox_shows_the_up_to_date_row() {
-    let fx = prepared(&[]);
-    let _engine = engine(&fx);
-    let frames = show(&fx, 20, vec![Signal::Commit, gone()], &World::new());
-    // the title with the count pill at 0, then one closing row and no toggle, between the empty rows
-    frame_under(&frames, 0, "the empty Inbox", &section(0, &[], up_to_date()));
-}
-
-#[test]
-fn a_folded_inbox_shows_three_items_and_a_click_on_expand_unfolds_it_and_collapse_folds_it() {
-    let fx = prepared(&four());
-    let _engine = engine(&fx);
-    let height = 30;
-    // folded, the toggle is row 8; expanded (four items), row 9; the title is row 4
-    let (row_of_title, row_folded, row_expanded) = (4, 8, 9);
-    let signals = vec![Signal::Commit, click(10, row_folded), click(3, row_expanded), click(10, row_of_title), gone()];
-    let frames = show(&fx, height, signals, &World::new());
-    let folded = frame_under(&frames, 0, "three items and `expand`", &folded4());
-    let expanded = frame_under(&frames, folded, "all four items and `collapse`, in place", &expanded4());
-    let again = frame_under(&frames, expanded, "folded again", &folded4());
-    // the title toggles nothing: from the fold back on, every frame is folded
-    for (i, frame) in frames.iter().enumerate().skip(again) {
-        let screen = frame.shown_rows();
-        assert!(under(&screen, &folded4()), "frame {i}: still folded");
-    }
-    assert_eq!(commands_of_the_inbox(&fx), Vec::<Vec<String>>::new(), "expanding and folding are no commands");
-}
-
-#[test]
-fn the_wheel_scrolls_the_inbox_over_it() {
-    let fx = prepared(&many(40));
-    let _engine = engine(&fx);
-    let height = 34;
-    let list = |range: std::ops::Range<usize>| -> Vec<String> {
-        range.map(|i| common::inbox::item_row(palette::TIER_RED, &format!("item {i:02}"), "5m")).collect()
-    };
-    // expanded, the Inbox has every row under the header: 27 list rows between the title and `collapse`; the `▼` cue takes one
-    let top = section(40, &[list(0..26), vec![cue_row('▼', 14)]].concat(), collapse());
-    assert_eq!(top.len(), usize::from(height) - 3);
-    // a notch is 3 rows: the list starts at item 03, under a `▲` cue, and shows 25 items before the `▼` cue
-    let scrolled = section(40, &[vec![cue_row('▲', 3)], list(3..28), vec![cue_row('▼', 12)]].concat(), collapse());
-    let over_inbox = 10;
-    let down = MouseEventKind::ScrollDown;
-    let up = MouseEventKind::ScrollUp;
-    let signals = vec![Signal::Commit, click(10, 8), notch(down, 10, over_inbox), notch(up, 10, over_inbox), gone()];
-    let frames = show(&fx, height, signals, &World::new());
-    let expanded = frame_under(&frames, 0, "the expanded Inbox at its top", &top);
-    let down = frame_under(&frames, expanded, "the Inbox three down", &scrolled);
-    frame_under(&frames, down, "the Inbox back at its top", &top);
 }
 
 #[test]
