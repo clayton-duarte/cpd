@@ -314,4 +314,14 @@ Shape of the Plan if built, two PRs:
 
 ## Cleanup
 
-The run's cleanup, and its output (below).
+Command (run after `kill-server` on both private servers, `tmux -L cpd-research-34137` and `tmux -L cpd-research-34137-outer`; the first `ls` showed the two stale socket files, so I removed them with `rm -f /tmp/tmux-503/cpd-research-34137 /tmp/tmux-503/cpd-research-34137-outer`, then ran):
+
+```
+$ timeout 20 tmux -L cpd-research-34137 ls; echo "rc=$?"; ls /tmp/tmux-*/cpd-research-*; ls -d /tmp/cpd-research-scratch.*
+error connecting to /private/tmp/tmux-503/cpd-research-34137 (No such file or directory)
+rc=1
+ls: /tmp/tmux-*/cpd-research-*: No such file or directory
+ls: /tmp/cpd-research-scratch.*: No such file or directory
+```
+
+`pgrep -fl "cpd-research|winch.sh"` printed nothing: no process left. The scratch directory (`/tmp/cpd-research-scratch.*`, outside the repo) is deleted.
