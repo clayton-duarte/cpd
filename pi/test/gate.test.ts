@@ -11,7 +11,7 @@ test("the verify script runs the portability check and pi-check, in the document
   // The tests run in a scratch TMPDIR removed after them (hygiene.md), so the steps are not split on every `&&`.
   assert.equal(
     pkg.scripts["verify:steps"],
-    ["migrations", "portable", "typecheck", "node", "pi", "build", "rust"].map((s) => (s === "typecheck" ? "npm run typecheck" : `npm run verify:${s}`)).join(" && "),
+    ["migrations", "portable", "typecheck", "pi", "build", "node", "rust"].map((s) => (s === "typecheck" ? "npm run typecheck" : `npm run verify:${s}`)).join(" && "),
   );
   assert.equal(pkg.scripts["verify:migrations"], "scripts/check-migrations-frozen.sh");
   assert.equal(pkg.scripts["verify:portable"], "scripts/check-portable.sh");
@@ -34,6 +34,14 @@ test("the CI workflow runs the stages of verify:steps, in order, as named steps"
   const workflow = [...ci.matchAll(/^\s*run: scripts\/gate-run\.sh npm run (\S+)\s*$/gm)].map((m) => m[1]);
   assert.deepEqual(workflow, gate);
   const names = [...ci.matchAll(/^\s*- name: (.+?)\s*$/gm)].map((m) => m[1]);
-  const wanted = ["Dependencies", "Migrations frozen", "Portability", "Typecheck", "Node tests", "pi check", "Rust build", "Rust tests"];
+  const wanted = ["Dependencies", "Migrations frozen", "Portability", "Typecheck", "pi check", "Rust build", "Node tests", "Rust tests"];
   assert.deepEqual(names.filter((n) => wanted.includes(n)), wanted);
+});
+
+// A push to main runs the Gate too: two green pull requests can break main together.
+test("the CI workflow runs on pull_request, workflow_dispatch and a push to main", () => {
+  const ci = readFileSync(join(fileURLToPath(import.meta.url), "..", "..", "..", ".github", "workflows", "ci.yml"), "utf8");
+  assert.match(ci, /^on:\n(?:  .*\n)*?  push:\n    branches: \[main\]\n/m);
+  assert.match(ci, /^  pull_request:$/m);
+  assert.match(ci, /^  workflow_dispatch:$/m);
 });
