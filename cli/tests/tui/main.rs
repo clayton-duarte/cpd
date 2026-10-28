@@ -38,5 +38,6 @@ mod tui_widgets;
 mod tui_widgets_column;
 mod tui_widgets_inbox;
 mod tui_widgets_inbox_actions;
+mod tui_widgets_pr_click;
 mod tui_widgets_pr_menu;
 mod tui_titles;
