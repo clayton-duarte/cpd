@@ -159,12 +159,15 @@ fn the_polled_pull_requests_open_and_clear_their_items() {
     assert_eq!(
         seen,
         [
+            (Kind::PrReady, Urgency::Red, "shop#1 conflict"),
+            (Kind::PrReady, Urgency::Red, "shop#2 changes requested"),
             (Kind::PrReady, Urgency::Yellow, "shop#3 ready to merge"),
+            (Kind::PrReady, Urgency::Cyan, "shop#5 waiting"),
         ],
-        "a conflict (1) and changes requested (2) open no item (hs-d470); a blocked merge state (5, #2385) is not ready (hs-d481); pull request 4 requests the User's review on GitHub, which alone opens nothing (hs-d320)"
+        "every authored pull request has one row named by its state; a blocked merge state (5, #2385) is only waiting (hs-d481); pull request 4 requests the User's review on GitHub, which alone opens nothing (hs-d320)"
     );
-    assert_eq!(items[0].subject, "pr:acme/shop#3");
-    assert_eq!(items[0].url.as_deref(), Some("https://github.com/acme/shop/pull/3"));
+    assert_eq!(items[2].subject, "pr:acme/shop#3");
+    assert_eq!(items[2].url.as_deref(), Some("https://github.com/acme/shop/pull/3"));
 
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     Store::open(&home, 5000)
@@ -190,7 +193,7 @@ fn policy_file(env: &TestEnv, rel: &str, toml: &str) {
 const NO_CHECKS: &str = "[pr.feedback]\nchecks = \"none\"\n";
 
 #[test]
-fn an_unowned_row_with_failed_checks_opens_no_item_whatever_its_policy() {
+fn an_unowned_row_with_failed_checks_is_a_red_failing_row_whatever_its_policy() {
     let fx = Fx::with_ports();
     let env = &fx.env;
     setup(&fx);
@@ -202,7 +205,9 @@ fn an_unowned_row_with_failed_checks_opens_no_item_whatever_its_policy() {
     pull_request(env, 2, "checks = 'failed', merge_state = 'blocked', repo = 'acme/other', url = 'https://github.com/acme/other/pull/2'");
     pull_request(env, 3, "checks = 'failed', merge_state = 'blocked', repo = 'nofile/shop', url = 'https://github.com/nofile/shop/pull/3'");
 
-    assert!(found(env).is_empty(), "failed checks open no item under any policy (hs-d470)");
+    let seen: Vec<_> = found(env).into_iter().map(|c| (c.kind, c.urgency, c.label)).collect();
+    let row = |n: &str| (Kind::PrReady, Urgency::Red, format!("{n} failing"));
+    assert_eq!(seen, [row("shop#1"), row("other#2"), row("shop#3")], "failing checks are a red row under any policy, never a pr-failing item (hs-d470)");
 }
 
 #[test]
@@ -287,8 +292,16 @@ fn a_row_whose_owner_policy_does_not_resolve_opens_no_engine_error_and_pr_ready_
 
     let items = found(env);
 
-    // `pr-ready` reads no policy (hs-d481): the unknown owner opens no engine-error; no pr-failing or pr-changes (hs-d470).
-    assert_eq!(kinds(&items), [(Kind::PrReady, "pr:acme/shop#5".to_owned())]);
+    // An unresolved policy is post disabled and fails nothing: no engine-error, no pr-failing or pr-changes (hs-d470); one row each.
+    assert_eq!(
+        kinds(&items),
+        [
+            (Kind::PrReady, "pr:acme/shop#5".to_owned()),
+            (Kind::PrReady, "pr:acme/shop#6".to_owned()),
+            (Kind::PrReady, "pr:other/x#7".to_owned())
+        ]
+    );
+    assert_eq!(items[0].label, "shop#5 ready to merge");
 }
 
 #[test]
@@ -309,18 +322,20 @@ fn a_pr_of_a_context_with_no_owner_opens_no_engine_error_and_pr_ready_follows_th
 
     let items = found(env);
 
-    // No policy is read (hs-d481): an unset owner opens no engine-error, and no pr-failing (hs-d470).
+    // An unset owner is post disabled: no engine-error, and no pr-failing (hs-d470).
     assert_eq!(kinds(&items), [(Kind::PrReady, "pr:acme/shop#5".to_owned())]);
+    assert_eq!(items[0].label, "shop#5 ready to merge");
 }
 
 #[test]
-fn an_unstable_pull_request_opens_no_pr_ready_item_hs_d525() {
+fn an_unstable_pull_request_is_not_ready_to_merge_hs_d525() {
     let fx = Fx::with_ports();
     let env = &fx.env;
     setup(&fx);
     pull_request(env, 1, "merge_state = 'unstable'");
     pull_request(env, 2, "merge_state = 'has_hooks', review_decision = 'approved'");
     pull_request(env, 3, "merge_state = 'clean', review_decision = 'approved'");
-    let ready: Vec<String> = found(env).into_iter().filter(|c| c.kind == Kind::PrReady).map(|c| c.subject).collect();
+    let ready: Vec<String> =
+        found(env).into_iter().filter(|c| c.kind == Kind::PrReady && c.label.ends_with("ready to merge")).map(|c| c.subject).collect();
     assert_eq!(ready, ["pr:acme/shop#3"], "only a CLEAN pull request is ready to merge (hs-d525)");
 }

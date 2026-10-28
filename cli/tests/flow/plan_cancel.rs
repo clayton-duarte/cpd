@@ -171,7 +171,7 @@ fn gh_closes(fx: &Fx) -> Vec<Vec<String>> {
 // ---------- the command ----------
 
 #[test]
-fn cancels_jobs_closes_open_prs_and_the_lead_and_archives_the_plan() {
+fn cancels_jobs_closes_open_pull_requests_and_the_lead_and_archives_the_plan() {
     let mut fx = Fx::with_ports();
     let (lead, fork) = setup(&fx);
     let (lead_pane, fork_pane) = (pane_of(&fx, &lead), pane_of(&fx, &fork));

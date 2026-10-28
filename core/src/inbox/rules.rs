@@ -75,7 +75,7 @@ pub fn conditions_with(
     all.extend(store.read(unread)?);
     // No `question` kind (hs-d306 (1)): an open Context question opens nothing, and an item an older engine opened for
     // one closes at the next reconcile, its condition no longer holding. Questions to the User go through `ask_user_question`.
-    all.extend(store.read(|conn| pr_ready(conn))?);
+    all.extend(store.read(|conn| super::pr::conditions(conn, home))?);
     all.extend(store.read(|conn| curate(conn, floor))?);
     all.extend(review_requested(store, home, now, team)?);
     all.extend(models_changed(store, home, now)?);
@@ -155,7 +155,7 @@ fn corrupt(what: &str, value: &str) -> CpdError {
     CpdError::new(ErrorCode::StoreFailed, format!("The store holds an invalid {what}: {value:?}.")).with("value", value)
 }
 
-fn id<T>(what: &str, value: &str, parse: fn(&str) -> Result<T, CpdError>) -> Result<T, CpdError> {
+pub(super) fn id<T>(what: &str, value: &str, parse: fn(&str) -> Result<T, CpdError>) -> Result<T, CpdError> {
     parse(value).map_err(|_| corrupt(what, value))
 }
 
@@ -503,62 +503,6 @@ pub fn stuck_groups(jobs: Vec<StuckJob>) -> Vec<StuckGroup> {
 }
 
 // ---- Pull requests: pr-ready, review-requested -------------------------------------------
-
-/// The open `pull_requests` rows that match `filter`, a SQL condition over `r`, oldest first, as conditions of `kind`
-/// and `urgency`. `label` makes the label from the row's repo without its owner and its number. A `prs` row that
-/// points to the pull request links its Plan, Context and Lead. The filter alone decides (hs-d481): no checks or policy are read.
-fn pull_request_conditions(
-    conn: &Connection,
-    kind: Kind,
-    urgency: Urgency,
-    filter: &str,
-    label: fn(&str, i64) -> String,
-) -> Result<Vec<Condition>, CpdError> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT r.repo, r.number, r.url, p.context, prs.plan, p.lead_session
-           FROM pull_requests r
-           LEFT JOIN prs ON prs.pull_request = r.id
-           LEFT JOIN plans p ON p.id = prs.plan
-          WHERE r.state = 'open' AND {filter}
-          ORDER BY r.id"
-    ))?;
-    let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
-    while let Some(row) = rows.next()? {
-        let (repo, number, url): (String, i64, String) = (row.get(0)?, row.get(1)?, row.get(2)?);
-        let (context, plan, lead): (Option<String>, Option<String>, Option<String>) =
-            (row.get(3)?, row.get(4)?, row.get(5)?);
-        let name = repo.split_once('/').map_or(repo.as_str(), |(_, name)| name);
-        out.push(Condition {
-            kind,
-            urgency,
-            subject: format!("pr:{repo}#{number}"),
-            label: label(name, number),
-            url: Some(url),
-            context: context.as_deref().map(|c| id("Context id", c, ContextId::parse)).transpose()?,
-            plan: plan.as_deref().map(|p| id("Plan id", p, PlanId::parse)).transpose()?,
-            job: None,
-            session: lead.as_deref().map(|s| id("Session id", s, SessionId::parse)).transpose()?,
-            record: None,
-            event: None,
-            opened_at: None,
-        });
-    }
-    Ok(out)
-}
-
-/// `pr-ready` (hs-d481, hs-d525, pro-d118): the pull request is ready to merge (`pulls::ready_to_merge_sql`: open, not a draft,
-/// merge state clean, base the repo's default branch; a stacked PR or an unknown base is not), authored, and its review decision
-/// is approved or none. Checks and `pr.feedback.checks` are not read.
-fn pr_ready(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
-    pull_request_conditions(
-        conn,
-        Kind::PrReady,
-        Urgency::Yellow,
-        &format!("r.authored = 1 AND r.state = 'open' AND {} = 1 AND r.review_decision IN ('approved', 'none')", crate::pr::pulls::ready_to_merge_sql("r")),
-        |name, n| format!("{name}#{n} ready to merge"),
-    )
-}
 
 /// `review-requested`: a pull request posted in the team channel in the last 7 days that hermes' rule calls
 /// `NEEDS_REVIEW` (contract §2.2 "The team review rule", hs-d320). GitHub's own review requests open nothing.
@@ -1358,7 +1302,7 @@ mod tests {
         pull_request(&mut f, 7, "failed", "mergeable", "none");
         set(&mut f, 7, "merge_state = 'blocked'"); // a required check failed (hs-d481)
         assert!(f.of(Kind::PrFailing).is_empty());
-        assert!(pr_kinds(&mut f).is_empty());
+        assert_eq!(pr_kinds(&mut f), [Kind::PrReady], "one pr-ready row, named failing");
     }
 
     #[test]
@@ -1366,19 +1310,19 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 8, "passed", "conflicting", "approved");
         assert!(f.of(Kind::PrFailing).is_empty());
-        assert!(f.of(Kind::PrReady).is_empty());
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#8 conflict");
         set(&mut f, 8, "checks = 'failed'");
         assert!(f.of(Kind::PrFailing).is_empty());
         set(&mut f, 8, "checks = 'passed', mergeable = 'mergeable', merge_state = 'clean'");
         assert!(f.of(Kind::PrFailing).is_empty());
-        assert_eq!(f.of(Kind::PrReady).len(), 1);
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#8 ready to merge");
     }
 
     #[test]
     fn an_unknown_mergeable_is_neither_failing_nor_ready() {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 9, "passed", "unknown", "approved");
-        assert!(pr_kinds(&mut f).is_empty());
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#9 waiting");
     }
 
     #[test]
@@ -1386,7 +1330,7 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 3, "pending", "mergeable", "changes_requested");
         assert!(f.of(Kind::PrChanges).is_empty());
-        assert!(pr_kinds(&mut f).is_empty());
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#3 changes requested");
     }
 
     #[test]
@@ -1397,13 +1341,13 @@ mod tests {
         assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Yellow, "pr:acme/shop#4", "shop#4 ready to merge"));
         assert_eq!(c.url.as_deref(), Some("https://github.com/acme/shop/pull/4"));
         set(&mut f, 4, "review_decision = 'none'");
-        assert_eq!(f.of(Kind::PrReady).len(), 1, "no review is no objection");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 ready to merge", "no review is no objection");
         set(&mut f, 4, "draft = 1");
-        assert!(f.of(Kind::PrReady).is_empty(), "a draft is never ready");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 draft", "a draft is never ready");
         set(&mut f, 4, "draft = 0, review_decision = 'changes_requested'");
-        assert!(f.of(Kind::PrReady).is_empty());
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 changes requested");
         set(&mut f, 4, "review_decision = 'approved', checks = 'pending'");
-        assert_eq!(f.of(Kind::PrReady).len(), 1, "checks no longer matter (hs-d481)");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 checks running");
     }
 
     /// The exact row of missionlane/cc-api-orc-apollo#2385 (hs-d481): everything looks ready but GitHub says BLOCKED.
@@ -1412,18 +1356,18 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 5, "passed", "mergeable", "none");
         set(&mut f, 5, "merge_state = 'blocked'");
-        assert!(f.of(Kind::PrReady).is_empty(), "unowned");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#5 waiting", "unowned");
         own(&mut f, 5);
-        assert!(f.of(Kind::PrReady).is_empty(), "owned");
+        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#5 waiting", "owned");
     }
 
     #[test]
-    fn pr_ready_is_decided_by_merge_state_and_review_decision_hs_d481() {
+    fn ready_to_merge_is_decided_by_merge_state_and_review_decision_hs_d481() {
         let ready = |merge_state: &str, review: &str| {
             let mut f = fixture("dispatch");
             pull_request(&mut f, 1, "passed", "mergeable", review);
             set(&mut f, 1, &format!("merge_state = '{merge_state}'"));
-            !f.of(Kind::PrReady).is_empty()
+            one(f.of(Kind::PrReady)).label == "shop#1 ready to merge"
         };
         // hs-d525: only clean is ready; unstable and has_hooks are not.
         for merge_state in ["clean"] {
@@ -1440,21 +1384,6 @@ mod tests {
     }
 
     #[test]
-    fn checks_no_longer_matter_to_pr_ready_hs_d481() {
-        let mut f = fixture("dispatch");
-        let owners = f.home.root().join("policy/acme");
-        std::fs::create_dir_all(&owners).unwrap();
-        std::fs::write(owners.join("owner.toml"), "[pr]\ngate = \"local\"\nfeedback.checks = \"any\"\n").unwrap();
-        for (n, checks) in [(1, "failed"), (2, "pending")] {
-            pull_request(&mut f, n, checks, "mergeable", "none");
-        }
-        own(&mut f, 1);
-        set(&mut f, 1, "merge_state = 'clean'");
-        set(&mut f, 2, "merge_state = 'clean'");
-        assert_eq!(f.of(Kind::PrReady).len(), 2, "clean is ready under `any`, whatever the checks (hs-d525)");
-    }
-
-    #[test]
     fn an_open_pr_ready_item_closes_when_its_pull_request_becomes_blocked_hs_d481() {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 5, "passed", "mergeable", "none");
@@ -1463,34 +1392,7 @@ mod tests {
         set(&mut f, 5, "merge_state = 'blocked'");
         let found = conditions(&mut f.store, &f.home).unwrap();
         let changes = reconcile(&mut f.store, &found, T).unwrap();
-        assert_eq!((changes.opened.len(), changes.closed.len()), (0, 1), "the open item closes");
-    }
-
-    #[test]
-    fn with_feedback_checks_none_a_mergeable_pr_is_ready_whatever_its_checks() {
-        let mut f = fixture("dispatch");
-        let owners = f.home.root().join("policy/acme");
-        std::fs::create_dir_all(&owners).unwrap();
-        std::fs::write(owners.join("owner.toml"), "[pr]\ngate = \"local\"\nfeedback.checks = \"none\"\n").unwrap();
-        for (n, checks) in [(1, "none"), (2, "failed"), (3, "pending")] {
-            pull_request(&mut f, n, checks, "mergeable", "none");
-        }
-        assert_eq!(f.of(Kind::PrReady).len(), 3);
-        set(&mut f, 1, "draft = 1");
-        set(&mut f, 2, "review_decision = 'changes_requested'");
-        set(&mut f, 3, "merge_state = 'blocked'");
-        assert!(f.of(Kind::PrReady).is_empty(), "draft, changes requested and a blocked merge state still bar it");
-    }
-
-    #[test]
-    fn with_feedback_checks_any_a_pr_is_ready_by_merge_state_and_review_alone() {
-        let mut f = fixture("dispatch");
-        for (n, checks) in [(1, "none"), (2, "failed"), (3, "pending"), (4, "passed")] {
-            pull_request(&mut f, n, checks, "mergeable", "none");
-        }
-        assert_eq!(f.of(Kind::PrReady).len(), 4, "checks do not decide (hs-d481)");
-        set(&mut f, 4, "merge_state = 'blocked'");
-        assert_eq!(f.of(Kind::PrReady).len(), 3);
+        assert_eq!((changes.opened.len(), changes.closed.len()), (1, 1), "a colour change closes the yellow row and opens a cyan one");
     }
 
     #[test]
@@ -1498,7 +1400,7 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 1, "failed", "conflicting", "changes_requested");
         pull_request(&mut f, 2, "passed", "mergeable", "approved");
-        assert_eq!(pr_kinds(&mut f), [Kind::PrReady], "authored: only the ready one opens an item");
+        assert_eq!(pr_kinds(&mut f), [Kind::PrReady, Kind::PrReady], "every authored open pull request has a row");
         f.sql("UPDATE pull_requests SET authored = 0, review_requested = 1");
         assert!(pr_kinds(&mut f).is_empty(), "review_requested alone is no item (hs-d320)");
     }
@@ -1508,7 +1410,7 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 1, "failed", "conflicting", "changes_requested");
         pull_request(&mut f, 2, "passed", "mergeable", "approved");
-        assert_eq!(pr_kinds(&mut f), [Kind::PrReady]);
+        assert_eq!(pr_kinds(&mut f), [Kind::PrReady, Kind::PrReady]);
         f.sql("UPDATE pull_requests SET state = 'closed'");
         assert!(pr_kinds(&mut f).is_empty());
     }
@@ -1559,7 +1461,7 @@ mod tests {
                 set(&mut f, 6, "merge_state = 'blocked'"); // a required check failed (hs-d481)
             }
             own(&mut f, 6);
-            assert!(pr_kinds(&mut f).is_empty(), "{checks} {mergeable} {review}");
+            assert_eq!(pr_kinds(&mut f), [Kind::PrReady], "{checks} {mergeable} {review}");
         }
     }
 
@@ -1845,7 +1747,7 @@ mod tests {
         f.sql("INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested)
                VALUES ('o/r', 3, 'u', 'T', 0, 'open', 'none', 'none', 't', 't', 0, 1)");
         let tail: Vec<_> = conditions(&mut f.store, &f.home).unwrap().into_iter().map(|c| c.kind).skip(3).collect();
-        assert_eq!(tail, [Kind::PrReady]);
+        assert_eq!(tail, [Kind::PrReady, Kind::PrReady]);
         write_cache(&f, &[post("acme/pay", 812)]);
         let lookup = lookup(&[("acme/pay", 812, open_pr())]);
         let kinds: Vec<_> = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Ok(lookup.clone()))))
@@ -1853,6 +1755,6 @@ mod tests {
             .into_iter()
             .map(|c| c.kind)
             .collect();
-        assert_eq!(kinds[3..], [Kind::PrReady, Kind::ReviewRequested]);
+        assert_eq!(kinds[3..], [Kind::PrReady, Kind::PrReady, Kind::ReviewRequested]);
     }
 }

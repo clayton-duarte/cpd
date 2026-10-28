@@ -1,5 +1,4 @@
-//! Merge needs no confirmation (decision pro-d111, commands.md §13.2): the Deploy column's merge icon, the Deploy PR
-//! menu's Merge and the Inbox `pr-ready` item's Merge run `cpd tui action merge <owner>/<repo>#<n> --client <name>`
+//! Merge needs no confirmation (decision pro-d111, commands.md §13.2): the Inbox `pr-ready` item's Merge runs `cpd tui action merge <owner>/<repo>#<n> --client <name>`
 //! through tmux `run-shell -b` at once; no `merge` popup opens and `cpd tui view merge` is gone. The Deploy column is driven as
 //! `inbox_link_tests.rs` drives it: a store, a scripted pump, the `ManualClock`, a `TestBackend` and a `FakeRunner`
 //! that records the tmux calls. No real tmux, `open` or process. The rig is shared with `tree/inbox_merge_tests.rs`.
@@ -31,8 +30,6 @@ pub(crate) const HEIGHT: u16 = 30;
 /// The body's last column at `WIDTH`: where an item's age ends.
 pub(crate) const AGE_END: u16 = 37;
 pub(crate) const URL: &str = "https://github.com/acme/api/pull/3";
-/// The merge icon (md-source_merge).
-pub(crate) const MERGE: &str = "\u{F062D}";
 
 struct NoInput;
 
@@ -49,18 +46,19 @@ fn no_command(_: Vec<OsString>) -> Result<Output, CpdError> {
     Err(CpdError::new(ErrorCode::StoreBusy, "no command runs in this test"))
 }
 
-/// A home with the open pull request `acme/api#3` in `merge_state` and the `pr-ready` Inbox item of it (label `api#3 ready`,
-/// with its url: a `pr-ready` item always has one).
+/// A home with the open pull request `acme/api#3` in `merge_state` and the `pr-ready` Inbox item of it (label `api#3 ready to merge`
+/// when `merge_state` is `clean`, else `api#3 waiting`; with its url: a `pr-ready` item always has one).
 pub(crate) fn home_with(merge_state: &str) -> (tempfile::TempDir, CpdHome) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
     std::fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
+    let label = if merge_state == "clean" { "api#3 ready to merge" } else { "api#3 waiting" };
     let sql = format!(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, merge_state, base_ref, default_branch, created_at, merged_at, changed_at)
          VALUES ('acme/api', 3, '{URL}', 'Title 3', 0, 'open', 'none', 'passed', '{merge_state}', 'main', 'main', '2026-01-03T00:00:00.000Z', NULL, '2026-01-09T00:00:00.000Z');
          INSERT INTO inbox_items (kind, urgency, subject, label, url, opened_at)
-         VALUES ('pr-ready', 'yellow', 'pr:acme/api#3', 'api#3 ready', '{URL}', '2026-01-01T00:00:00.000Z');"
+         VALUES ('pr-ready', 'yellow', 'pr:acme/api#3', '{label}', '{URL}', '2026-01-01T00:00:00.000Z');"
     );
     store
         .write("fixture", |tx| {
@@ -189,26 +187,6 @@ pub(crate) fn rows(buf: &Buffer) -> Vec<String> {
 /// Whether some row of the frame holds `text`.
 pub(crate) fn has(buf: &Buffer, text: &str) -> bool {
     rows(buf).iter().any(|r| r.contains(text))
-}
-
-#[test]
-fn merge_icon_click_runs_the_merge_action_at_once_with_no_popup() {
-    let (_dir, home) = home_with("clean");
-    let (x, y) = locate(&run(&home, vec![]).buf, MERGE);
-    let seen = run(&home, vec![click(x, y)]);
-    seen.assert_merged_at_once();
-}
-
-#[test]
-fn deploy_menu_merge_runs_the_merge_action_at_once_with_no_popup() {
-    let (_dir, home) = home_with("clean");
-    let (x, y) = locate(&run(&home, vec![]).buf, "Title 3");
-    let opened = run(&home, vec![right_click(x, y)]);
-    let (_, menu_row) = locate(&opened.buf, "Merge");
-    let (_, copy_row) = locate(&opened.buf, "Copy Link");
-    assert_eq!(copy_row, menu_row + 1, "Merge is the menu's first entry");
-    let seen = run(&home, vec![right_click(x, y), enter()]);
-    seen.assert_merged_at_once();
 }
 
 #[test]

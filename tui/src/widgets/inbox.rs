@@ -1,10 +1,10 @@
-//! The Inbox section at the bottom of the Deploy column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a collapsible
+//! The Inbox section directly under the machine in the right column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a collapsible
 //! widget (`crate::fold`) with its margins, one empty row above and one below (hs-d476): the grey pill title
 //! `╭─Inbox────…────<n>` (`crate::section`, inside the panel's padding), up to [`SHOWN`] item rows `│ <glyph> <label>` (each with
 //! its tier's glyph and colour, hs-d483) with the age right-aligned, and the fold widget's closing row (`crate::fold`): with more items
 //! the muted `╰󰬦 expand` that expands the list inline and becomes `╰󰬬 collapse`, with 3 or fewer the terminator `╰󰬪` (U+F0B2A; hs-d574), with none no
 //! row. Only the toggle row toggles. Whether it is expanded is view state only. Expanded, it is capped at the rows the
-//! column's split gives it (the PRs have two thirds, hs-d307; [`super::draw`]) and its items scroll inside the cap, with right-aligned `▲ <n> more` / `▼ <n> more` cue rows
+//! column's split gives it (the rows below the machine, [`super::draw`]) and its items scroll inside the cap, with right-aligned `▲ <n> more` / `▼ <n> more` cue rows
 //! (`dialog::scroll::cue`, [`Shape`]).
 //!
 //! A click on an item row jumps to its cause ([`jump`]): a command or the copy of its `url` (a `pr-ready` row has none: its menu has Merge). The label of a link kind with a `url` is a `Link` widget (`crate::link`): a click on it opens the page
@@ -32,6 +32,7 @@ use crate::dialog::scroll::WHEEL_ROWS;
 use super::{Window, max_scroll, window};
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Item, Kind};
+use cpd_core::inbox::pr::Status;
 use crate::link::{Link, Links};
 
 /// How many item rows the section shows before the `╰󰬦 expand` row.
@@ -45,28 +46,6 @@ const TOP: usize = 2;
 
 /// The rows below the closing row: the empty row (hs-d476).
 const BOTTOM: usize = 1;
-
-/// The most rows the Inbox section may take in a column of `column` rows (commands.md §13.2, hs-d307), for a tree of
-/// `tree` rows and `count` items. When both fit, each has its rows. Otherwise the tree is guaranteed two thirds of the
-/// column and the Inbox the third that is left (rounded down, but never below the collapsed section, so that its
-/// header, three items and `+<n> more` show in a column that is not tiny); a section that needs less than its share gives
-/// the rest to the other.
-pub(crate) fn inbox_share(tree: usize, count: usize, expanded: bool, column: u16) -> u16 {
-    let column = usize::from(column);
-    let wants = Shape::new(count, expanded).height().into();
-    if tree + wants <= column {
-        return u16::try_from(wants).unwrap_or(u16::MAX);
-    }
-    let share = (column / 3).max(Shape::new(count, false).height().into());
-    let rows = if wants <= share {
-        wants
-    } else if tree + share <= column {
-        column - tree
-    } else {
-        share
-    };
-    u16::try_from(rows).unwrap_or(u16::MAX)
-}
 
 /// Whether the merge of the `pr-ready` `item`'s pull request runs: `merging` is the pull requests (`<owner>/<repo>#<n>`) with a live
 /// merge marker (hs-d495).
@@ -86,7 +65,7 @@ pub enum Hit {
 
 /// The rows of the section for `count` visible items. Expanded, its height is capped at `cap` rows (never below the
 /// collapsed section's) and the items scroll in it from the item `scroll`, with a `▲ <n> more` and a `▼ <n> more` cue row
-/// where some are hidden; the scrolling is the Deploy column's PR list's ([`window`]), one row an item.
+/// where some are hidden; the scrolling is [`window`]'s, one row an item.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Shape {
     count: usize,
@@ -336,8 +315,8 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
         }
         // a deploy item has no jump; its label is a Link to the run's page (pro-d100)
         Kind::Deploy => None,
-        // a plain click does nothing (pro-d111): the label is a Link to the pull request, Merge is in the menu
-        Kind::PrReady => None,
+        // the label is a Link to the pull request; a click on the rest of the row opens the owning Plan's Lead (pro-d130)
+        Kind::PrReady => open_lead(tree, item.plan.as_ref()?).map(Jump::Run),
         Kind::ReviewRequested => {
             item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))
         }
@@ -405,21 +384,39 @@ impl crate::menu::Entry for Choice {
     }
 }
 
-/// An entry of an item's menu as drawn: Merge (a `pr-ready` item whose pull request is clean, pro-d111), or a [`Choice`].
+/// An entry of an item's menu as drawn: Merge or Post (a `pr-ready` item by its label's status, pro-d130), Go to Lead, Copy Link, or a [`Choice`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Entry {
     Merge,
     /// A merge of the pull request runs: the `Merge` entry with the spinner, not selectable.
     Merging,
+    Post,
+    GoToLead,
+    CopyLink,
     Choice(Choice),
 }
 
 impl Entry {
-    /// The entries of the menu of a row of `kind`, in order: `Merge` first when `merge` says the item's pull request is clean
-    /// (`Some(merging)`: whether its merge runs), then the [`Choice`]s.
-    pub fn entries(kind: Kind, merge: Option<bool>) -> Vec<Entry> {
-        let merge = merge.map(|merging| if merging { Entry::Merging } else { Entry::Merge });
-        merge.into_iter().chain(Choice::entries(kind).into_iter().map(Entry::Choice)).collect()
+    /// The entries of the menu of `item`, in order. A `pr-ready` item: `Merge` (`Merging` when `merging`) when its status is
+    /// `ready to merge`, `Post` when `ready for review` and it has a Plan, `Go to Lead` with a Plan, `Copy Link` with a url; then the
+    /// [`Choice`]s (every other kind has only those).
+    pub fn entries(item: &Item, merging: bool) -> Vec<Entry> {
+        let mut entries = Vec::new();
+        if item.kind == Kind::PrReady {
+            match Status::of_item(item) {
+                Some(Status::ReadyToMerge) => entries.push(if merging { Entry::Merging } else { Entry::Merge }),
+                Some(Status::ReadyForReview) if item.plan.is_some() => entries.push(Entry::Post),
+                _ => {}
+            }
+            if item.plan.is_some() {
+                entries.push(Entry::GoToLead);
+            }
+            if item.url.is_some() {
+                entries.push(Entry::CopyLink);
+            }
+        }
+        entries.extend(Choice::entries(item.kind).into_iter().map(Entry::Choice));
+        entries
     }
 }
 
@@ -427,6 +424,9 @@ impl crate::menu::Entry for Entry {
     fn label(self) -> &'static str {
         match self {
             Entry::Merge | Entry::Merging => "Merge",
+            Entry::Post => "Post",
+            Entry::GoToLead => "Go to Lead",
+            Entry::CopyLink => "Copy Link",
             Entry::Choice(choice) => crate::menu::Entry::label(choice),
         }
     }
@@ -731,9 +731,13 @@ mod tests {
         );
         let ready = |subject: &'static str| move |item: &mut Item| item.subject = subject.to_owned();
         for subject in ["pr:acme/api#3", "acme/api#3", "pr:", "session:l-ship"] {
-            assert_eq!(jump(&tree, &with(Kind::PrReady, &ready(subject))), None, "{subject:?}: a plain click does nothing (pro-d111)");
+            assert_eq!(jump(&tree, &with(Kind::PrReady, &ready(subject))), None, "{subject:?}: an unowned row: a click on the rest of it does nothing (pro-d130)");
         }
-        assert_eq!(jump(&tree, &with(Kind::PrReady, &owned)), None, "a Plan's pull request: nor does it");
+        assert_eq!(
+            jump(&tree, &with(Kind::PrReady, &owned)),
+            Some(Jump::Run(Action::Open(sid("l-ship")))),
+            "a Plan's pull request: a click outside the link opens its Lead (pro-d130)"
+        );
         for kind in [Kind::PrFailing, Kind::PrChanges] {
             assert_eq!(jump(&tree, &with(kind, &owned)), None, "{kind:?} (an old row, hs-d470): no click, a Plan's or not");
             assert_eq!(jump(&tree, &with(kind, &url)), None, "{kind:?} (an old row, hs-d470): no url copy");

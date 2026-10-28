@@ -333,13 +333,18 @@ impl Changes {
     }
 }
 
-/// The open `curate-*` items whose condition has the same identity and another label: their count moved (hs-d549,
-/// hs-d551), and the item, subject `curate-retire:<context>`, follows it without closing, so a dismissal stays.
+/// The open items whose condition has the same identity and has moved inside it, and the item follows it in place
+/// without closing, so a snooze or a dismissal stays: a `curate-*` item (subject `curate-retire:<context>`) whose
+/// count moved changes its label (hs-d549, hs-d551); a `pr-ready` item changes its label or its links (url, context,
+/// plan, session).
 fn relabelled<'a>(open: &'a [Item], conditions: &'a [Condition]) -> Vec<(&'a Item, &'a Condition)> {
     open.iter()
-        .filter(|i| matches!(i.kind, Kind::CurateRetire | Kind::CurateDocs))
+        .filter(|i| matches!(i.kind, Kind::CurateRetire | Kind::CurateDocs | Kind::PrReady))
         .filter_map(|i| conditions.iter().find(|c| c.identity() == i.identity()).map(|c| (i, c)))
-        .filter(|(i, c)| i.label != c.label)
+        .filter(|(i, c)| {
+            i.label != c.label
+                || (i.kind == Kind::PrReady && (i.url != c.url || i.context != c.context || i.plan != c.plan || i.session != c.session))
+        })
         .collect()
 }
 
@@ -361,7 +366,9 @@ pub fn open_items(conn: &Connection) -> Result<Vec<Item>, CpdError> {
 /// Engine step E8 (§3.7): in one write transaction, opens an item for each
 /// condition with no open item of its identity (`kind`, `subject`,
 /// `urgency`), closes each open item with no condition, and appends
-/// `inbox-opened` and `inbox-closed` for them, closed ones first. Writes
+/// `inbox-opened` and `inbox-closed` for them, closed ones first. A `curate-*`
+/// or `pr-ready` item whose condition moved inside its identity (see
+/// `relabelled`) is updated in place, with no Event. Writes
 /// nothing, not even a `txns` row, when nothing changed. `now` is §1.3's time.
 pub fn reconcile(store: &mut Store, conditions: &[Condition], now: &str) -> Result<Changes, CpdError> {
     let open = store.read(open_items)?;
@@ -375,7 +382,21 @@ pub fn reconcile(store: &mut Store, conditions: &[Condition], now: &str) -> Resu
         let (gone, new) = diff(&open, conditions);
         let mut changes = Changes::default();
         for (item, c) in relabelled(&open, conditions) {
-            tx.execute("UPDATE inbox_items SET label = ?2 WHERE id = ?1", params![item.id, c.label])?;
+            if item.kind == Kind::PrReady {
+                tx.execute(
+                    "UPDATE inbox_items SET label = ?2, url = ?3, context = ?4, plan = ?5, session = ?6 WHERE id = ?1",
+                    params![
+                        item.id,
+                        c.label,
+                        c.url,
+                        c.context.as_ref().map(ContextId::as_str),
+                        c.plan.as_ref().map(PlanId::as_str),
+                        c.session.as_ref().map(SessionId::as_str),
+                    ],
+                )?;
+            } else {
+                tx.execute("UPDATE inbox_items SET label = ?2 WHERE id = ?1", params![item.id, c.label])?;
+            }
         }
         for item in gone {
             tx.execute("UPDATE inbox_items SET closed_at = ?2 WHERE id = ?1", params![item.id, now])?;

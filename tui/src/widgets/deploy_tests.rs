@@ -74,7 +74,7 @@ fn legend_inbox_section_lists_the_three_kind_lines_after_the_six_tiers() {
         tail,
         [
             "\u{F15A9}", "a deploy waits for your approval",
-            "\u{F12F4}", "a pull request of yours is ready to merge",
+            "\u{F12F4}", "a pull request of yours, coloured by its state",
             "\u{F12F2}", "a review asked of you",
         ]
     );
