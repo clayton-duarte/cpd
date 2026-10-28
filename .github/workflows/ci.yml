@@ -1,0 +1,33 @@
+name: CI
+
+# cpd's PR gate (hs-d16, hs-d17): the Gate, `npm run verify`, on the self-hosted runner on hs.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run per branch: a newer push cancels the older run of a pull request (the runner runs one job at a time).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gate:
+    runs-on: self-hosted
+    timeout-minutes: 45
+    steps:
+      # Full history: scripts/check-migrations-frozen.sh diffs against origin/main.
+      # clean: false keeps target/ and node_modules/ between runs in the runner's workspace
+      # (a clean checkout would rebuild everything each time).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          clean: false
+      # Drop untracked leftovers of an earlier branch (not ignored files: target/ and node_modules/ stay).
+      - name: Remove untracked files
+        run: git clean -ffd
+      # npm run verify installs node_modules when they are stale (preverify, scripts/npm-fresh.sh).
+      - name: Gate
+        run: npm run verify
