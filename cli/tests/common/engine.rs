@@ -344,8 +344,8 @@ impl Fx {
         self.add_running_since(key, status, started_at, (status == "running").then_some(started_at));
     }
 
-    /// [`Fx::add_running`] with the `starting → running` Event at `running_at` (none: the Attempt is still `starting`): a
-    /// review Job that waited for its Lead, or an Attempt that waited in `starting`.
+    /// [`Fx::add_running`] with the `starting → running` Event at `running_at` (none: the Attempt is still `starting`): an
+    /// Attempt that waited in `starting`.
     pub fn add_running_since(&self, key: &str, status: &str, started_at: &str, running_at: Option<&str>) {
         let event = running_at
             .map(|at| {

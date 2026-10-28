@@ -1,5 +1,5 @@
 //! The Gates at the merge (contract §7.4 step 6, §7.7; hs-d679, Plan `gate-redefine` D5–D7).
-//! `gate.merge` (the repo's `pre-commit`) runs at every non-review Job merge, in its
+//! `gate.merge` (the repo's `pre-commit`) runs at every Job merge, in its
 //! Attempt worktree at HEAD, before the fast-forward; `gate.pr` (the repo's `pre-merge`)
 //! runs only at an `open`/`update` Job merge. Both run while the Attempt is `merging`
 //! (the tree shows it yellow). A gate that exits non-zero ends the Attempt `failed` /
