@@ -1036,7 +1036,8 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
 
     // A PR appended after the lock is not reviewed: the review stays current.
     let web = fx.keyed_repo("web");
-    fx.cpd(&["pr", "add", "web", "--repo", web.to_str().unwrap(), "--title", "Change the PR", "--base", "main", "--shape", "config", "--no-needs", "--plan", "pay"]).ok();
+    // It waits for PR `pay` (a need that is not merged), so its stubs are legal after the lock (hs-d731).
+    fx.cpd(&["pr", "add", "web", "--repo", web.to_str().unwrap(), "--title", "Change the PR", "--base", "main", "--shape", "config", "--needs", "pay", "--plan", "pay"]).ok();
     // Its stub drafts are drafts of the review's kind: cancelled, they are none, and the review stays current.
     assert_eq!(inproc::show(&fx, "pay")["review"]["current"], false, "a stub draft is a draft the review did not cover");
     fx.cpd(&["job", "cancel", "web-config", "--reason", "a stub of the template", "--plan", "pay"]).ok();
