@@ -8,7 +8,7 @@ use serde_json::{json, Map, Value};
 
 use super::resolve::{machine_path, owner_path, repo_path};
 use super::domain::{
-    BUILD, FEEDBACK_CHECKS, GATE_PR, LIST, MERGE, PATHS, POST_CHANNEL, POST_ENABLED, JIRA_REQUIRED, POST_MERGED_REACTION, POST_TEMPLATE, PRE_COMMIT,
+    BUILD, FEEDBACK_CHECKS, GATE_PR, LIST, MERGE, PATHS, POST_CHANNEL, POST_ENABLED, JIRA_DONE, JIRA_IN_PROGRESS, JIRA_IN_REVIEW, JIRA_REQUIRED, POST_MERGED_REACTION, POST_TEMPLATE, PRE_COMMIT,
     PRE_MERGE, PRE_START, RUN, WORKFLOWS,
 };
 use super::{audience, check_file_names, load_machine, resolve, Domain, DomainSource, Machine, PolicyKey};
@@ -216,6 +216,9 @@ pub(super) fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &Do
                 (POST_TEMPLATE, value(&pr.post.template)),
                 (POST_MERGED_REACTION, value(&pr.post.merged_reaction)),
                 (JIRA_REQUIRED, value(&pr.jira_required)),
+                (JIRA_IN_PROGRESS, value(&pr.jira.in_progress)),
+                (JIRA_IN_REVIEW, value(&pr.jira.in_review)),
+                (JIRA_DONE, value(&pr.jira.done)),
             ]
         }
         Domain::Hooks => {

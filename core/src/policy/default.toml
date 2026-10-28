@@ -20,6 +20,11 @@ channel = ""
 template = "{{ title }}\n{{ url }}"
 merged_reaction = ""
 
+[pr.jira]
+in_progress = ""
+in_review = ""
+done = ""
+
 [deploy]
 text = ""
 

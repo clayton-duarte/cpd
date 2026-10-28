@@ -159,6 +159,11 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `slack_unparseable` | 1 | a Slack helper (§21.6, §21.7) received an invalid payload (E11), response (post), or no messages (E11). Also the code of the engine's E11 `error` Event (contract §3.7) |
 | `slack_helper_failed` | 1 | a Slack helper (§21.6, §21.7) could not load pi's MCP modules or other failure inside it. Also the code of the engine's E11 `error` Event (contract §3.7) |
 | `spawn_failed` | 1 | a Slack helper (§21.6, §21.7) could not be started as a child process; `details` are `{argv, exit, stdout, stderr}` |
+| `jira_auth` | 3 | the Jira helper `jira-transition.ts` (§21.12) found the `atlassian` connection needs a sign-in, a 401 or 403, or no site with the scopes `read:jira-work` and `write:jira-work`; the message says to run `pi mcp login atlassian`. `cpd_core::jira` (§21.12, J8) passes it on. It is only the `error` Event code of engine E19 (§21.11), never a command's refusal |
+| `jira_not_configured` | 3 | `cpd_core::jira` (§21.12, J8) found no `atlassian` server in the machine policy `policy/host.toml`; the message says to add `[mcp.servers.atlassian]` there. Only the `error` Event code of engine E19 (§21.11), never a command's refusal |
+| `jira_failed` | 1 | the Jira helper (§21.12) could not read the issue or the transitions, or move the ticket, for a reason a retry may cure (429, 5xx, a 400 on the transition, a timeout, text that is not the expected JSON, another tool failure); `details.tool`, and `details.status_code` when known. Only the `error` Event code of engine E19 (§21.11), never a command's refusal |
+| `jira_refused` | 1 | the Jira helper (§21.12) refused the ticket for a reason a retry does not cure: `details.reason` is `site_ambiguous`, `issue_not_found` or `no_transition`. Engine E19 (§21.11) parks the row with the reason and one `error` Event; never a command's refusal |
+| `jira_helper_failed` | 1 | the Jira helper (§21.12) could not load pi's MCP modules, or they are of another shape; `cpd_core::jira::answer` (J8) uses it for a helper error code it does not know. Only the `error` Event code of engine E19 (§21.11), never a command's refusal |
 | `store_failed` | 1 | a write command failed on SQLite (contract §4.5); for `pr post` (§9.8b) means the message WAS posted and the link is in `details` |
 | `archive_blocked` | 3 | `context archive`, `plan archive` or `session archive` found a live object (contract §2.2 "Archived"); `details.blockers` lists each, `details.next` says what to do |
 | `archived` | 3 | the object (or its Context or Plan) is archived and the command does not work on archived objects; `details.next` is the unarchive command |
@@ -1278,6 +1283,7 @@ Effects, with `--yes` only (**without it, no rows or files are written**):
    - The plannotator reviews and board posts of the Plan's Sessions (the Lead's included)
    - Every Inbox item of the Plan, then every Event of the Plan
    - Every Escalation, Attempt, Dependency and Job of the Plan
+   - Every `jira_transitions` row of the Plan (§21.11), before the PRs it refers to
    - Every PR need, PR and Plan review of the Plan
    - Every Session of the Plan but the Lead (Workers and forks); the Lead's row stays, with its `plan` unchanged, hidden with the Plan
    - The Context's records stay (hs-d527)
@@ -1482,7 +1488,7 @@ Starts one Ready Job now: the same step as engine E3 (cpd 1 §11, kept).
 | fewer than `concurrency` Attempts are not `ended` (an urgent Job: fewer than `concurrency + 1`, contract §3.7) | `no_slot` | 3 |
 | the Job's Tier for the Attempt is one a Worker may have (§5, pro-d53, hs-d554): a Job stored on a Tier outside the range before the rule is not started here, as engine E3 does not start it and raises one `error` Event per such Job (contract §3.7 E3) | `tier_not_allowed` | 2 |
 
-Effects (§3.4 "The driver lock"): take `locks/attempt-<plan>--<attempt>.lock`; **rows**, one transaction: `attempts` (`starting`, Tier from §9, `origin`), Job `running`; **Event** `attempt-started` `{number, tier, origin}`; then spawn `cpd attempt run <attempt> --plan <plan>` with `setsid`, fd 3 = the lock, stderr to `run/<plan>/logs/attempt-<attempt>.log`, and record `driver_pid` (a data write, no Event). If the spawn fails, the command ends the Attempt `failed` / `crashed` with `driver_pid` still null (`attempt-retry` at the same Tier, not counted against `retry_cap`, §3.4) and returns `spawn_failed` (exit 1).
+Effects (§3.4 "The driver lock"): take `locks/attempt-<plan>--<attempt>.lock`; **rows**, one transaction: `attempts` (`starting`, Tier from §9, `origin`), Job `running`, and the `jira_transitions` row `in_progress` of the Job's PR (§21.11, J4a: the first Attempt of any Job of the PR queues it, later ones change nothing; engine E3's start is the same); **Event** `attempt-started` `{number, tier, origin}`; then spawn `cpd attempt run <attempt> --plan <plan>` with `setsid`, fd 3 = the lock, stderr to `run/<plan>/logs/attempt-<attempt>.log`, and record `driver_pid` (a data write, no Event). If the spawn fails, the command ends the Attempt `failed` / `crashed` with `driver_pid` still null (`attempt-retry` at the same Tier, not counted against `retry_cap`, §3.4) and returns `spawn_failed` (exit 1).
 
 ```json
 {"ok": true, "attempt": "api-schema-a1", "tier": "S2", "origin": "ladder", "pid": 81234}
@@ -1839,7 +1845,7 @@ Effects (contract §7.6 gives the query, the mapping and the caveats):
 - **Starting the PRs that waited for it** (A9): `pr poll` does not start a PR itself. Engine E7, which runs after E5 in the same tick (§3.7), starts every `waiting` PR whose needs are now all `merged`  and whose base PR, if any, is `open`, from a fresh `fetch origin <base>` (a stacked PR from its base PR's head, §9.7); when `pr poll` was run by hand, the next tick does, or the Lead runs `pr start <key>` (§9.7).
 - **A pull request closed without a merge** (A11, hs-d329): `pr-feedback` with `reasons: ["closed"]`, once; the poll never ends the PR: it stays `open` in cpd, every PR that needs it stays `waiting`, and the Lead decides. A Lead may have closed it itself, to reopen it on GitHub once it is ready again (contract §7.6 "Ready, never a draft"): reopened, the same pull request is in the search again and the poll writes its row `state` `open`, with no Event for the reopening; the PR was `open` throughout. To give it up the Lead runs `pr cancel <key>` (§9.6).
 - **A conflict** (hs-d340, hs-d497; contract §3.7 E5, §7.6 step 6): in the same transaction, for the PR that is `open` and points to the pull request, when `mergeable` becomes `conflicting` (from anything else, once per transition; a moved base with no conflict, `merge_state` `behind` included, queues nothing), the row's `state` is `open`, the Plan is not archived, the PR's policy resolves and the PR has no `update` Job that is `queued` or `running`: one `update` Job is inserted, with the Event `job-added` `{kind: "update", by: "poll", reason}`, `reason` `conflict`. No `pr-feedback`, no Gate here, nothing becomes a draft (hs-d329). A pull request that is a draft anyway is only stored (`draft`, `merge_state` `draft`): no Event.
-- **After a PR is merged or cancelled** (hs-d517, pro-d70, pro-d71): the poll records the status and cleans nothing. The PR's status is the queue (§3.8). `cpd janitor` (§29) removes merged and cancelled PRs' worktrees and branches, every `watch.janitor_minutes` minutes (default 60) or by hand.
+- **After a PR is merged or cancelled** (hs-d517, pro-d70, pro-d71): the poll records the status and cleans nothing. When the poll records a merge, the same transaction queues the PR's `done` Jira transition (§21.11, J4c), as `cpd pr merge` does (§9.10). The PR's status is the queue (§3.8). `cpd janitor` (§29) removes merged and cancelled PRs' worktrees and branches, every `watch.janitor_minutes` minutes (default 60) or by hand.
 
 Output: `polled`, the number of distinct pull requests in either search; `changed`, one entry for each pull request whose row was inserted or updated; `base_changed`, the `{plan, pr, from, to}` of each PR whose `base` followed GitHub (empty when none); `feedback`, `merged` and `done`, the `{plan, pr}` pairs that got `pr-feedback` or `pr-merged`, and the Plans that became `done` (hs-d565); `update_jobs`, the `{plan, pr, job, reason}` of each `update` Job the poll queued (hs-d340); `rate_limit`, the search's `cost`, `remaining` and `reset_at` (E5 reads it, §3.7); and, only with a Plan, `prs`, one entry for each of its PRs in key order that is not `cancelled`, with its `status` and its `pull_request` row (or null).
 
@@ -2267,7 +2273,7 @@ Check order; the first failure refuses, and then nothing is sent and nothing is 
 | `spawn_failed` | 1 | the helper could not be started |
 | `store_failed` | 1 | the store write after a sent message failed (§21.7, D5); the message WAS posted to the channel and the link is in `details` |
 
-Effects: **Slack**, through the helper (§21.7), one `slack_send_message` call with the rendered message from `policy.pr.post.template` (contract §8.3). Rows: one `pr_posts` row (contract §4.4); the only later write is `reacted_at` (PR `react`). Events: none (contract §5.1). Limits: a crash between Slack's answer and the row can post twice on a rerun; a timeout leaves the outcome unknown, check the channel; two simultaneous runs of the same PR could both send and the second's insert fails as `already_posted` (documented, not guarded); the stored row is up to `watch.pr_poll_seconds` old, `cpd pr poll` first makes it fresh, and a PR the poll never read for comments is `comments_unread`.
+Effects: **Slack**, through the helper (§21.7), one `slack_send_message` call with the rendered message from `policy.pr.post.template` (contract §8.3). Rows: one `pr_posts` row (contract §4.4) and, in the same transaction, the `jira_transitions` row `in_review` of the PR (§21.11, J4b; queued only when the `pr_posts` insert is new); the only later write is `reacted_at` (PR `react`). `pr post` never calls Jira: engine E19 does (§21.11). Events: none (contract §5.1). Limits: a crash between Slack's answer and the row can post twice on a rerun; a timeout leaves the outcome unknown, check the channel; two simultaneous runs of the same PR could both send and the second's insert fails as `already_posted` (documented, not guarded); the stored row is up to `watch.pr_poll_seconds` old, `cpd pr poll` first makes it fresh, and a PR the poll never read for comments is `comments_unread`.
 
 Output: `{"ok":true,"plan":<id>,"pr":<key>,"number":<n>,"url":<the pull request's url>,"post":{"channel":"C…","ts":"1793040197.490209","link":"https://missionlane.slack.com/archives/C…/p1793040197490209","posted_at":<time>,"reaction":<emoji name or null>,"reacted_at":null},"message":<rendered text>}`. `post.reaction` is the policy's value at post time (never changed on a policy edit; the final emoji for the reaction is resolved from the current policy when E17 places it, contract §3.7 A1, §8.3). `reacted_at` is null when the post is created; it is set by engine E17 (§21.9) after the reaction is added to the queue and successfully delivered.
 
@@ -2341,7 +2347,7 @@ Output:
 {"ok": true, "repo": "<owner/repo>", "number": 31, "method": "squash", "branch_deleted": true, "stored": true}
 ```
 
-**Rows** (hs-d550 B1): one store transaction, recorded immediately after `gh pr merge` succeeds (when the precheck reads `MERGED`, hs-d550 B2), never delayed to the next poll. The `pull_requests` row of <owner>/<repo>#<n>: when it exists, `state` becomes `merged` and `merged_at` is GitHub's `mergedAt` from the precheck's `gh pr view`, or the transaction's time when GitHub was not read or did not return it (changed_at now); when a `prs` row points to it, the PR `dispatch → open → merged` or `waiting → merged` with `merged_at`, Events `pr-merged` and, when every PR that is not `cancelled` is then `merged`, the Plan `deploy → done` with `plan-done` (contract §7.6 poll step 6). The open `pr-ready` Inbox item of subject `pr:<owner>/<repo>#<n>` is closed in the same transaction (closed_at, `inbox-closed`, hs-d550 B1, hs-n404). When no row exists, nothing is written and the merge still succeeds. No Event otherwise.
+**Rows** (hs-d550 B1): one store transaction, recorded immediately after `gh pr merge` succeeds (when the precheck reads `MERGED`, hs-d550 B2), never delayed to the next poll. The `pull_requests` row of <owner>/<repo>#<n>: when it exists, `state` becomes `merged` and `merged_at` is GitHub's `mergedAt` from the precheck's `gh pr view`, or the transaction's time when GitHub was not read or did not return it (changed_at now); when a `prs` row points to it, the PR `dispatch → open → merged` or `waiting → merged` with `merged_at`, Events `pr-merged` and, when every PR that is not `cancelled` is then `merged`, the Plan `deploy → done` with `plan-done` (contract §7.6 poll step 6). The same transaction queues the PR's `done` Jira transition (§21.11, J4c), next to the merge reaction. The open `pr-ready` Inbox item of subject `pr:<owner>/<repo>#<n>` is closed in the same transaction (closed_at, `inbox-closed`, hs-d550 B1, hs-n404). When no row exists, nothing is written and the merge still succeeds. No Event otherwise.
 
 Idempotent: (A), (B), (C) yes, by the rows: a row already `merged` is compared with GitHub and written only if a value changed; when none do (already merged with the same `merged_at`), nothing is written. A second call of (A) finds the pull request `MERGED` and is refused `merge_not_clean`; (B) and (C) would have written it the first time, so the second call writes nothing (idempotent). The refusal is the same: `merge_not_clean` with `state` `MERGED`.
 
@@ -4780,6 +4786,97 @@ Output, one JSON value on stdout (contract §1.2):
 
 Writes one Slack message and nothing else. The credential is read and refreshed inside pi's modules; the helper holds no token. The caller (§9.8b) writes the `pr_posts` row after a successful send.
 
+### 21.11 The Jira transition queue (engine E19)
+
+Not a command. A queue of Jira status moves, one row per PR and target, for the PR's own ticket (`prs.jira`, §9.4, pro-d127). `in_progress` is queued when the first Attempt of any Job of the PR starts, `in_review` when the PR is posted (§9.8b), `done` when the PR is recorded merged. The status names are the policy's (§22.1: `pr.jira.in_progress`, `pr.jira.in_review`, `pr.jira.done`); a target whose name is empty has no transition. The three steps that queue only append a row, in their own transaction: they never read policy and never call Jira. Engine step E19 drains the queue through the helper (§21.12). An outage never blocks or fails a step.
+
+**The table** (migration `<timestamp>-jira-transitions`, additive; contract §4.4): `jira_transitions`, a data table: no history triggers, no Event kind, and a row is never deleted but by `plan delete` (§4.14). Its columns: `id` (INTEGER PRIMARY KEY); `plan` and `pr` (both NOT NULL, a foreign key to `prs(plan, key)`); `target`, one of `in_progress`, `in_review`, `done`; `queued_at`, the transaction's time; `settled_at` and `outcome`, `outcome` one of `moved`, `unchanged`, `skipped`; `refused_at`, `refusal` (the reason) and `refused_with` (`<ticket>|<status name>` as it was refused). UNIQUE (`plan`, `pr`, `target`): queueing a target twice is a no-op (`ON CONFLICT DO NOTHING`). STRICT. CHECKs: `settled_at` and `outcome` are both NULL or both set; `refused_at`, `refusal` and `refused_with` are all NULL or all set; a row is never settled and parked at once.
+
+Queue states, each row in exactly one:
+- **PENDING**: `settled_at` and `refused_at` NULL.
+- **SETTLED**: `settled_at` and `outcome` set: `moved` (the ticket was moved), `unchanged` (it was already at or past the target), `skipped` (the policy names no status for the target).
+- **PARKED**: `refused_at`, `refusal` and `refused_with` set.
+
+**Who queues** (J4), each in the transaction of the step itself, `queued_at` the transaction's time:
+- **`in_progress`**: the transaction that starts an Attempt (`insert` in `core/src/driver/start.rs`, §5.5), for the PR of the Attempt's Job. The first Attempt of any Job of the PR queues it; later ones are no-ops.
+- **`in_review`**: the transaction of `cpd pr post` (§9.8b, `core/src/pr/post.rs`) that inserts `pr_posts`, only when that insert is new: a refused or repeated post queues nothing.
+- **`done`**: every transaction that records a PR merged, next to the queue of the merge reaction (`reactions::queue_merge`): the merge of `core/src/pr/poll.rs` (`pr poll`, §9.2, and `cpd pr merge`, §9.10, which goes through it) and the already-merged branch of `core/src/pr/open.rs` (§9.1).
+
+A PR with no ticket still gets its rows: they wait, PENDING, and are never read.
+
+- **When:** each tick, when incident mode holds (like E17 and E18, hs-d643), log `E19: holding: incident mode is on` and do nothing. Otherwise: first the reopen check of the bullet below, for every PARKED row; then, when a helper run is in flight, collect its answer; otherwise pick the oldest PENDING row (`next_due`, lowest `id`) whose PR has a ticket and is not `cancelled`, skipping a row that failed in this engine's life less than `watch.error_repeat_seconds` ago (the step remembers failures per row id, in memory, so a restart retries at once). A row of a PR with no ticket is never picked. With none, clear the step with `engine.clear(Step::E19, &About::Machine)` and nothing else.
+- **Policy:** the PR's policy is resolved (`policy_of_pr`). An error is E17's merge-row failure path: `engine.fail(Step::E19, About::Plan(<plan>), failure)`, and the row is tried later. When the target's name is empty, the row is settled in one transaction, `mark_settled(Skipped)`: no helper, and the step goes on to the next row.
+- **The helper call:** `cpd_core::jira::call(&config, &home, <the request: ticket, target, the three names of the policy>, <120 s deadline>)` (§21.12), run detached on its own thread (never holding the tick), and its answer read by `cpd_core::jira::answer` at a later tick, as E17 does (§21.9).
+- **On ok** (`moved` or `unchanged`): one transaction, `mark_settled(id, Moved | Unchanged)`, and the step is cleared. No Event, no Inbox item.
+- **On `jira_refused`:** one transaction, `refuse(...)` with the helper's `details.reason` (`site_ambiguous`, `issue_not_found` or `no_transition`) and its `message`, and the ticket and the status name the run used: the row is parked with `refused_with` `<ticket>|<status>`, and one `error` Event is appended (`source` `watch`, code `jira_refused`, scoped to the Plan, `details` `{id, plan, pr, ticket, target, status, reason}`). Its text names the ticket, the PR, the Plan, the status and the reason, and says nothing is tried again until the PR's ticket (`cpd pr edit <pr> --jira <KEY>`) or the policy key `pr.jira.<target>` changes.
+- **On any other failure** (`jira_auth`, `jira_not_configured`, `jira_failed`, `jira_helper_failed`, or the spawn codes `pi_not_found`, `spawn_failed`, `tool_timeout`): the row is not parked and stays PENDING. It is skipped for `watch.error_repeat_seconds` after the failed run's end, and `engine.fail(Step::E19, About::Machine, failure)` reports it: one `error` Event per code (`source` `watch`, reported again only when the code changes or after `watch.error_repeat_seconds`; hs-d514). No Inbox item. So a missing sign-in is retried, and reported once, and no move is lost: only late.
+- **Reopen:** each tick, for every PARKED row, the PR's ticket and policy are read again. When the target's name is non-empty and `<ticket>|<name>` differs from `refused_with`, `reopen(id)` clears `refused_at`, `refusal` and `refused_with`, and the normal path runs the row. A policy that does not resolve for a parked row is `engine.fail(Step::E19, About::Plan(<plan>), failure)`. There is no command for it.
+- **What it does not do:** no Inbox item and no Event on success; no reaction to a changed ticket after its row settled (a PR whose ticket is replaced after its rows settled is not moved again); no ticket creation or linking (Plan pr-ticket); no change to who may post (Plan post-scope); no `pr view` or `plan show` field for the queue.
+
+### 21.12 The helper `jira-transition.ts`
+
+`pi/lib/jira-transition.ts` in cpd's `pi/` package, beside `slack-channel.ts` (§21.6) and `slack-react.ts` (§21.8, contract §8 `pi_adapter`). Not a cpd command: engine E19 (§21.11) runs it, detached, through `cpd_core::jira::call`. It calls the Atlassian MCP server's tools **through pi's own MCP client and token store**, so cpd has no HTTP client and never reads, copies or logs the credential. The shapes it reads are the real ones of `docs/research/atlassian-mcp.md` (its sections 2 to 6, read on `origin/main`), not guesses.
+
+```
+node <adapter>/lib/jira-transition.ts --coding-agent <…/@earendil-works/pi-coding-agent/dist/index.js>
+```
+
+The request is ONE JSON object on stdin:
+
+```json
+{"server": {"url": "https://mcp.atlassian.com/v1/mcp/authv2", "exposure": "deferred"}, "ticket": "PAY-813", "target": "in_review", "names": {"in_progress": "In Progress", "in_review": "In Review", "done": "Done"}}
+```
+
+- `server`: the `atlassian` entry of the machine policy (`[mcp.servers.atlassian]` in `$CPD_HOME/policy/host.toml`, §22.1 `machine`), with pi's key names, as `mcp attach` hands it to pi (§24.1); `url` is required. The entry must not set `enabled` to `false`: pi takes a server as on unless its `enabled` is `false` (read from pi's source; not run).
+- `ticket`: a key of the `--jira` pattern `^[A-Z][A-Z0-9]+-[0-9]+$` (§9.4).
+- `target`: `in_progress`, `in_review` or `done`; `names[target]` is non-empty; the other two names may be `""`.
+
+Anything else is `usage` (exit 2), before connecting.
+
+Environment: `PI_CODING_AGENT_DIR` (the agent directory of the pi release, contract §9). cwd is `$CPD_HOME`; the helper hands it to the connection. The connection is built from `server` and never from `~/.pi/agent/mcp.json`, whose `atlassian` entry is `enabled: false`.
+
+Constants, each with its source: the four tools `getAccessibleAtlassianResources`, `getJiraIssue`, `getTransitionsForJiraIssue` and `transitionJiraIssue` (research §1); 30 000 ms for each call (the research's calls took 0.6 to 2.0 s); 120 s for the whole run, held by E19 (§21.11).
+
+What it does:
+1. **Loads pi's modules** by file URL from the directory of `--coding-agent`, reusing `loadPi` and `resultText` of `slack-channel.ts` (§21.6), and builds the connection: `new McpServerConnection({ entry: { name: "atlassian", config: server }, cwd, createTransport: createDefaultTransport, credentials: new McpOAuthCredentialStore(), onTools: () => {} })`, closed before it exits. A failure to load them, or modules of another shape, is `jira_helper_failed`.
+2. **Finds the site**: `getAccessibleAtlassianResources {}` answers a JSON array of `{id, url, scopes}`. It keeps the entries whose `scopes` include both `read:jira-work` and `write:jira-work` (the Confluence entry of the same site does not count). None: `jira_auth`. More than one distinct `id`: `jira_refused` `site_ambiguous` (only one site is verified, research §2). Else `cloudId` is that `id`.
+3. **Reads the status**: `getJiraIssue {cloudId, issueIdOrKey: ticket, fields: ["status"]}`. The status name is `fields.status.name` and its category `fields.status.statusCategory.key` (research §3). A 404 is `jira_refused` `issue_not_found`. Then the never-backwards rule, in this order; an unchanged answer makes no further call:
+   - the name equals `names[target]`: `unchanged`, `why` `at_target`;
+   - the category key is `done`: `unchanged`, `why` `done_category`;
+   - the name equals the name of a LATER target (the order is `in_progress` < `in_review` < `done`; only non-empty names count): `unchanged`, `why` `past_target`.
+4. **Finds the transition**: `getTransitionsForJiraIssue {cloudId, issueIdOrKey: ticket}` answers `{transitions: [{id, name, to: {name}}]}`. The FIRST entry whose `to.name` equals `names[target]` exactly is taken. Never match on `name` or `id`: from `In Review`, `Done` is offered twice, id 31 and id 6 (named `PR Approved`), and every status offers a transition to itself (research §4, §8). None: `jira_refused` `no_transition`.
+5. **Moves the ticket**: `transitionJiraIssue {cloudId, issueIdOrKey: ticket, transition: {id}}`, the id as a string. Success is `isError` false and `{"success": true, "statusName": …}`: `outcome` `moved`, `from` the name read in step 3, `to` `statusName` (research §5).
+
+Failure classes are read from a tool's `isError` text (JSON `{error: true, message, statusCode}`, or plain text) and from the connection.
+
+| Condition | Code | Exit |
+|---|---|---|
+| stdin is not the request above (not JSON, bad ticket, unknown target, empty `names[target]`, no `server.url`), refused before connecting | `usage` | 2 |
+| pi's modules did not load, or are of another shape (step 1) | `jira_helper_failed` | 1 |
+| sign-in missing: connection state `needs-auth`, or the text holds one of `invalid_token`, `unauthorized`, `invalid_auth`, `token_expired`, `requires sign-in`, or `statusCode` 401 or 403 on any call; or no site with the Jira scopes (step 2). Message: `Atlassian needs a sign-in. Run: pi mcp login atlassian` | `jira_auth` | 3 |
+| more than one distinct `id` with the Jira scopes (step 2) | `jira_refused` `site_ambiguous` | 1 |
+| `statusCode` 404 on the issue read (step 3) | `jira_refused` `issue_not_found` | 1 |
+| no transition whose `to.name` is `names[target]` (step 4) | `jira_refused` `no_transition` | 1 |
+| everything else a retry may cure: 429, 5xx, a 400 on the transition, a timeout, text that is not the expected JSON, any other tool failure; `details.tool`, and `details.status_code` when known | `jira_failed` | 1 |
+
+A `jira_refused` always carries `details.reason`. The spawn codes (`spawn_failed`, and `tool_timeout` from the 120 s deadline) are raised by `cpd_core::jira`, not by the helper (J8).
+
+Output, one JSON line on stdout, as the Slack helpers do (contract §1.2):
+
+```json
+{"ok": true, "ticket": "PAY-813", "target": "in_review", "outcome": "moved", "from": "In Progress", "to": "In Review"}
+```
+
+or, when the ticket is already at or past the target:
+
+```json
+{"ok": true, "ticket": "PAY-813", "target": "in_progress", "outcome": "unchanged", "status": "In Review", "why": "past_target"}
+```
+
+A failure is the envelope `{"ok": false, "error": {"code", "message", "details"}}` with the exit of the table, for example `{"ok": false, "error": {"code": "jira_auth", "message": "Atlassian needs a sign-in. Run: pi mcp login atlassian", "details": {}}}`.
+
+**What the User runs once:** `pi mcp login atlassian`, from a shell on the machine. It opens a browser for the Atlassian sign-in; cpd never runs it, and cpd never reads or writes pi's token store `mcp-auth.json`. The shell form needs an `atlassian` entry with the same url in `~/.pi/agent/mcp.json` (§24.1 "Signing in"); the helper never reads that file. Rerunning the helper is safe: a ticket already at or past the target answers `unchanged`.
+
 ## 22. `policy`
 
 The policies (contract §8.3, hs-d288): cpd's compiled-in default and the owner and repo files under `$CPD_HOME/policy/`, resolved for one policy key, most specific scope first per domain. Area `core/src/policy/`. The files are written by hand or by the User's dotfiles, never by a command: `policy` only reads.
@@ -4812,7 +4909,7 @@ Prints the resolved policy of one key: every domain with its value and its sourc
 
 Effects: none. One read transaction for the key's rows, then the compiled default and the key's files, read in order (`policy/host.toml` when it exists, `policy/<owner>/owner.toml`, `policy/<owner>/<repo>.toml` for a `Repo` key when it exists: the file is optional), each parsed once. No subprocess. `check_file_names`: the file `host.toml` is the machine scope; a directory whose name is a valid owner login must contain only `owner.toml` and files with valid repo names ending in `.toml`, else `policy_invalid` (§8.3).
 
-Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Session's role (`manager`, `lead` or `worker`) with no flag, else null; `files`, the realpath of each file read in order (machine, owner, repo), only the files that exist (a repo without a file has no repo scope and prints the owner's policy); and `policy`, one entry per domain of contract §8.3, in its table's order, each with `source`, `audience` (the roles its `text` reaches), `keys` (its typed keys, each with its `value` and `source`; `{}` for a domain that has none) and `text`. The repo-only domains (contract §8.3) and `resources` print like the others: `audience` `[]`, `text` `""`, `source` `default` or the file's (`machine:`, `owner:` or `repo:<path>`; `resources` only may come from any of the three); the `keys` of `hooks` are `pre-start`, `pre-commit` and `pre-merge`, each `value` a list of blocks, each block a list of `{"name": <string or null>, "command": <string>}` (`[]` when the hook is not set); of `test-commands`, `build`, `run` and `list` (a string, or null when not set); of `protected`, `paths` (a list of strings, `[]` by default); of `resources`, two keys: `names`, the visible resource names, sorted (the union over host, owner and repo, contract §8.3 "The `resources` domain"; `[]` and source `default` when none is declared), and `declared`, a list sorted by name of `{"name", "scope", "slots", "source"}`, one per name (`scope` `host`, `owner` or `repo`, the declaring level whose own declaration won; `slots` its slots; `source` the path of its file; `[]` when none). The domain's `source` and the `source` of both keys are that of the narrowest file that declares a resource, `default` when none does. A domain's `source` is `default`, `machine:<path>`, `owner:<path>` or `repo:<path>`; a typed key left out of a set domain has its domain's source followed by ` (key default)`, and its value is cpd's default (contract §8.3 "Precedence and replace"). The adapter keeps the domains whose `audience` holds `role` and whose `text` is not empty.
+Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Session's role (`manager`, `lead` or `worker`) with no flag, else null; `files`, the realpath of each file read in order (machine, owner, repo), only the files that exist (a repo without a file has no repo scope and prints the owner's policy); and `policy`, one entry per domain of contract §8.3, in its table's order, each with `source`, `audience` (the roles its `text` reaches), `keys` (its typed keys, each with its `value` and `source`; `{}` for a domain that has none) and `text`. The repo-only domains (contract §8.3) and `resources` print like the others: `audience` `[]`, `text` `""`, `source` `default` or the file's (`machine:`, `owner:` or `repo:<path>`; `resources` only may come from any of the three); the `keys` of `hooks` are `pre-start`, `pre-commit` and `pre-merge`, each `value` a list of blocks, each block a list of `{"name": <string or null>, "command": <string>}` (`[]` when the hook is not set); of `test-commands`, `build`, `run` and `list` (a string, or null when not set); of `protected`, `paths` (a list of strings, `[]` by default); of `resources`, two keys: `names`, the visible resource names, sorted (the union over host, owner and repo, contract §8.3 "The `resources` domain"; `[]` and source `default` when none is declared), and `declared`, a list sorted by name of `{"name", "scope", "slots", "source"}`, one per name (`scope` `host`, `owner` or `repo`, the declaring level whose own declaration won; `slots` its slots; `source` the path of its file; `[]` when none). The domain's `source` and the `source` of both keys are that of the narrowest file that declares a resource, `default` when none does. A domain's `source` is `default`, `machine:<path>`, `owner:<path>` or `repo:<path>`; a typed key left out of a set domain has its domain's source followed by ` (key default)`, and its value is cpd's default (contract §8.3 "Precedence and replace"). The adapter keeps the domains whose `audience` holds `role` and whose `text` is not empty. The `pr` domain's keys include `pr.jira.in_progress`, `pr.jira.in_review` and `pr.jira.done` (§21.11): strings, `""` by default, which is no transition.
 
 ```json
 {"ok": true, "key": {"owner": "clayton-duarte", "repo": "cpd"}, "role": "worker",
@@ -4823,7 +4920,8 @@ Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Ses
                     "pr": {"value": "local", "source": "owner:/home/clayton/.cpd/policy/clayton-duarte/owner.toml"}},
            "text": "These repos run no GitHub Actions: …"},
    "pr": {"source": "owner:/home/clayton/.cpd/policy/clayton-duarte/owner.toml", "audience": ["lead", "worker"],
-          "keys": {"feedback.checks": {"value": "none", "source": "owner:/home/clayton/.cpd/policy/clayton-duarte/owner.toml"}},
+          "keys": {"feedback.checks": {"value": "none", "source": "owner:/home/clayton/.cpd/policy/clayton-duarte/owner.toml"},
+                    "pr.jira.in_progress": {"value": "", "source": "default"}, "pr.jira.in_review": {"value": "", "source": "default"}, "pr.jira.done": {"value": "", "source": "default"}},
           "text": ""},
    "deploy": {"source": "default", "audience": ["lead"], "keys": {}, "text": ""},
    "code": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},

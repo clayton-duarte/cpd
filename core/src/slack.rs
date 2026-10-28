@@ -79,6 +79,19 @@ fn tail(text: &str) -> String {
 /// The helper's `ok:true` value, or its `ok:false` as a `CpdError` with the helper's code (an unknown code is
 /// `slack_helper_failed` with the code in `details.code`); no JSON line is `spawn_failed`.
 pub fn answer(out: &Output, argv: &[String]) -> Result<Value, CpdError> {
+    let known = [
+        ErrorCode::SlackAuth,
+        ErrorCode::SlackNotConfigured,
+        ErrorCode::SlackFailed,
+        ErrorCode::SlackRefused,
+        ErrorCode::SlackUnparseable,
+        ErrorCode::SlackHelperFailed,
+    ];
+    answer_with(out, argv, &known, ErrorCode::SlackHelperFailed)
+}
+
+/// [`answer`] for any helper: `known` are its codes, `fallback` the code of an unknown one.
+pub(crate) fn answer_with(out: &Output, argv: &[String], known: &[ErrorCode], fallback: ErrorCode) -> Result<Value, CpdError> {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let printed: Option<Value> = serde_json::from_str(stdout.trim()).ok();
     match printed {
@@ -86,18 +99,9 @@ pub fn answer(out: &Output, argv: &[String]) -> Result<Value, CpdError> {
         Some(value) if value["ok"] == false && value["error"]["code"].is_string() => {
             let error = &value["error"];
             let code = error["code"].as_str().unwrap_or_default();
-            let known = [
-                ErrorCode::SlackAuth,
-                ErrorCode::SlackNotConfigured,
-                ErrorCode::SlackFailed,
-                ErrorCode::SlackRefused,
-                ErrorCode::SlackUnparseable,
-                ErrorCode::SlackHelperFailed,
-            ]
-            .into_iter()
-            .find(|c| c.as_str() == code);
+            let known = known.iter().copied().find(|c| c.as_str() == code);
             let message = error["message"].as_str().unwrap_or_default();
-            let mut err = CpdError::new(known.unwrap_or(ErrorCode::SlackHelperFailed), message);
+            let mut err = CpdError::new(known.unwrap_or(fallback), message);
             match (known, error["details"].as_object()) {
                 (Some(_), Some(details)) => {
                     for (k, v) in details {

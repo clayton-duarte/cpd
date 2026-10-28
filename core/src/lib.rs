@@ -47,6 +47,7 @@ pub mod resource;
 pub mod prune;
 pub mod review;
 pub mod secret;
+pub mod jira;
 pub mod slack;
 pub mod session;
 pub mod spec;
