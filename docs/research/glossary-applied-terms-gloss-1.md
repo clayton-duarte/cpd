@@ -1,6 +1,6 @@
 # Glossary applied: terms-gloss-1 (CONTEXT.md sections 1 to 4)
 
-Line numbers are of CONTEXT.md after the edit. Sections 5 and later of the old file are kept as they were, except the entries that sections 2 to 3 now own (rows "moved").
+Line numbers are of CONTEXT.md after the edit; some are approximate (unverified). Sections 5 and later of the old file are kept as they were, except the entries that sections 2 to 3 now own (rows "moved").
 
 | Where | Row | Applied or not applied | Old quote → new text | Reason when not applied |
 |---|---|---|---|---|
