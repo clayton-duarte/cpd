@@ -94,6 +94,7 @@ fn a_head_commit_with_no_failed_run_is_refused_no_failed_run_and_reruns_nothing(
     );
     assert!(reruns(&pay).is_empty());
 
+    drop(pay);
     let pay = setup(&[], &[]);
     let r = rerun(&pay);
     assert_eq!((r.error()["code"].as_str().unwrap(), r.exit), ("no_failed_run", 3));
@@ -104,7 +105,13 @@ fn a_head_commit_with_no_failed_run_is_refused_no_failed_run_and_reruns_nothing(
 #[test]
 fn a_pr_that_is_not_open_is_refused_pr_not_open_and_calls_gh_not_at_all() {
     for status in ["waiting", "dispatch", "merged"] {
-        let pay = fx(status);
+        let pay = if status == "merged" {
+            let pay = fx("open");
+            pay.store().write("fixture", |tx| tx.execute_batch("UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pay' AND key = 'repo';").map_err(Into::into)).unwrap();
+            pay
+        } else {
+            fx(status)
+        };
 
         let r = rerun(&pay);
 
