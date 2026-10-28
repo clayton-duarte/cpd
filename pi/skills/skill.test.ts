@@ -550,6 +550,46 @@ test("cpd-lead: a stacked PR waits for its base PR to open, --base needs neither
   assert.match(text, /draft.*never.*parking place/, "cpd-lead: draft is no parking place");
 });
 
+test("cpd-lead: a same-repo PR on an earlier PR of the Plan is stacked with --base <pr-key> by default, in each of its five places", () => {
+  const text = skillFiles("cpd-lead")[0]!.text;
+  const bullet = (start: string) => text.split("\n").find((l) => l.startsWith(start)) ?? assert.fail(`no line ${start}`);
+  // 1. Rules: Register planned work at once
+  const register = bullet("- **Register planned work at once.**");
+  assert.match(register, /same-repo follow-up is stacked \(`--base <pr-key>`, the default\)/);
+  assert.match(register, /`--needs <pr-key>` \(the cross-repo or fresh-main exception: `cpd pr add <key> --repo <path> --title "<title>" --needs <pr-key>`\)/);
+  // 2. 1. Context, Clarifying step 1
+  assert.match(section(text, "### Clarifying"), /stacked on it with `--base <pr-key>`, the default; `--needs <pr-key>` only for another repo or a PR that must start from fresh `main`/);
+  // 3. 2. Plan, Dividing: the stacked example, the order between PRs, the base PR added before
+  const dividing = section(text, "### Dividing");
+  assert.match(dividing, /cpd pr add <key> --repo <path> --title "<title>" --base <pr-key>\n/);
+  assert.match(dividing, /\*\*The order between PRs\.\*\* A same-repo PR that depends on an earlier PR of the Plan is stacked on it: `--base <pr-key>`, never `--needs`/);
+  assert.match(dividing, /starts as soon as its base PR is `open`[^\n]*without waiting for the base PR's review or merge/);
+  assert.match(dividing, /a PR may need, or stack on, only PRs added before it/);
+  // 4. Sequencing: the Dependencies bullet and the PR needs bullet (which names the post-lock restack)
+  assert.match(bullet("- A Job's Dependencies are Jobs of its own PR"), /stacking, `--base <pr-key>`, the default for a same-repo PR/);
+  const needs = bullet("- **PR needs before the lock:**");
+  assert.match(needs, /`cpd pr edit <key> --base <pr-key> --no-needs`/, "the post-lock restack edit is named");
+  assert.match(needs, /`pr_locked` refuses every other `--base`, `--needs` or `--repo` edit after the lock/);
+  // 5. 3. Deploy, Stacked PRs
+  const registerLayer = bullet("- Register a later layer at once");
+  assert.match(registerLayer, /`--base <pr-key>`[^\n]*the default/);
+  assert.match(registerLayer, /`--needs <pr-key>` is the exception, for another repo or a PR that must start from fresh `main`/);
+  assert.doesNotMatch(registerLayer, /Use `--needs <pr-key>` instead/, "--needs is no longer the way to wait for a same-repo base PR");
+  assert.match(bullet("- While the previous PR is open"), /after the lock, `cpd pr edit` changes a waiting PR's base only in the restack of \[Sequencing\]\(#sequencing\)/);
+});
+
+test("cpd-lead references: the research follow-up keeps --needs <research-pr> as the fresh-main exception to stacking", () => {
+  const spec = skillFiles("cpd-lead").find((f) => f.name.endsWith("spec-files.md"))!.text;
+  const line = spec.split("\n").find((l) => l.includes("--needs <research-pr>")) ?? assert.fail("no research follow-up sentence");
+  assert.match(line, /the exception to stacking \(\[Dividing\]\(\.\.\/SKILL\.md#dividing\)\)/);
+});
+
+test("cpd-manager: the landing-order line stacks a same-repo PR and keeps --needs for other repos, not for the PRs of a Plan", () => {
+  const line = skillFiles("cpd-manager")[0]!.text.split("\n").find((l) => l.startsWith("- **Set the landing order.**")) ?? assert.fail("no landing-order line");
+  assert.match(line, /the Lead stacks a same-repo PR on the one it depends on \(`cpd pr add <key> --repo <path> --base <pr-key>`\), `--needs` across repos/);
+  assert.doesNotMatch(line, /needs order|order its own PRs|each starts when the other merges/, "needs no longer orders the PRs of a Plan");
+});
+
 test("urgent Jobs: both skills state the flag, the command and the explicit-request rule", () => {
   for (const skill of ["cpd-lead", "cpd-manager"]) {
     const text = skillFiles(skill)[0]!.text;
