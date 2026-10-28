@@ -243,3 +243,97 @@ fn a_fresh_lead_started_after_a_retier_runs_on_the_new_tier() {
     let message = home(&fx.env).lead_message(&cpd_core::ids::PlanId::parse("pay").unwrap());
     assert!(argv.ends_with(&["--".to_owned(), format!("@{}", message.display())]), "{argv:?}");
 }
+
+/// `fixture` plus a config that sets `review_lead_tier` explicitly, with `review` as `inbox.review_context` (empty
+/// text for none); `lead2` moves to another Context, so `lead1` and `fork1` are review-Context Leads and `lead2` not.
+fn review_fixture(env: &TestEnv, review: &str) {
+    fixture(env);
+    let inbox = if review.is_empty() { String::new() } else { format!("[inbox]\nreview_context = \"{review}\"\n") };
+    env.write_tmux_config(&format!(
+        "lead_tier = \"O2\"\nreview_lead_tier = \"S3\"\nmanager_tier = \"O4\"\n[timeouts]\nfork_quiet_seconds = 1\n{inbox}"
+    ));
+    env.sql("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('elsewhere', 'Else', 't', 'm1')");
+    env.sql("UPDATE sessions SET context = 'elsewhere' WHERE id = 'lead2'");
+}
+
+/// A Lead of the review Context goes to `review_lead_tier`, not `lead_tier`.
+/// Fails now: the config key `review_lead_tier` is unknown, the command refuses the config.
+#[test]
+fn retier_one_moves_a_review_context_lead_to_review_lead_tier() {
+    let fx = Fx::new();
+    review_fixture(&fx.env, "ctx");
+
+    let out = fx.cpd(&["session", "retier", LEAD1]).ok();
+    let one = &out["retiered"][0];
+    assert_eq!((one["session"].as_str(), one["from"].as_str(), one["to"].as_str()), (Some(LEAD1), Some("O3"), Some("S3")), "{out}");
+    assert_eq!(tier(&fx, LEAD1), "S3");
+    let shown = show(&fx, LEAD1);
+    assert_eq!((shown["model"].as_str(), shown["thinking"].as_str()), (Some("p/sonnet"), Some("high")), "{shown}");
+    let sent = events(&fx, "session-retiered");
+    assert_eq!(sent.len(), 1, "one Event: {sent:?}");
+    assert_eq!(sent[0]["session"], LEAD1);
+    assert_eq!(sent[0]["data"], json!({"from": "O3", "to": "S3"}));
+}
+
+/// `--all`: review-Context Leads to `review_lead_tier`, other Leads to `lead_tier`, the Manager to `manager_tier`.
+/// Fails now: the config key `review_lead_tier` is unknown.
+#[test]
+fn retier_all_moves_each_lead_to_the_tier_of_its_context() {
+    let fx = Fx::new();
+    review_fixture(&fx.env, "ctx");
+
+    fx.cpd(&["session", "retier", "--all"]).ok();
+    assert_eq!(tier(&fx, LEAD1), "S3");
+    assert_eq!(tier(&fx, FORK), "S3");
+    assert_eq!(tier(&fx, LEAD2), "O2");
+    assert_eq!(tier(&fx, MANAGER), "O4");
+}
+
+/// A side fork of a review-Context Lead goes to `review_lead_tier`.
+/// Fails now: the config key `review_lead_tier` is unknown.
+#[test]
+fn retier_one_moves_a_review_context_fork_to_review_lead_tier() {
+    let fx = Fx::new();
+    review_fixture(&fx.env, "ctx");
+
+    let out = fx.cpd(&["session", "retier", FORK]).ok();
+    assert_eq!((out["retiered"][0]["from"].as_str(), out["retiered"][0]["to"].as_str()), (Some("O3"), Some("S3")), "{out}");
+    assert_eq!(tier(&fx, FORK), "S3");
+}
+
+/// A review Lead on an override (`S2`, as `plan new --tier S2` leaves it) is reset to `review_lead_tier`; the Manager
+/// goes to `manager_tier`.
+/// Fails now: the config key `review_lead_tier` is unknown.
+#[test]
+fn retier_resets_a_plan_new_tier_override_and_leaves_the_manager_alone() {
+    let fx = Fx::new();
+    review_fixture(&fx.env, "ctx");
+    fx.env.sql("UPDATE sessions SET tier = 'S2' WHERE id = 'lead1'");
+
+    let out = fx.cpd(&["session", "retier", "--all"]).ok();
+    let moved: Vec<(&str, &str, &str)> = out["retiered"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["session"] == LEAD1 || r["session"] == MANAGER)
+        .map(|r| (r["session"].as_str().unwrap(), r["from"].as_str().unwrap(), r["to"].as_str().unwrap()))
+        .collect();
+    assert!(moved.contains(&(LEAD1, "S2", "S3")), "{out}");
+    assert!(moved.contains(&(MANAGER, "O5", "O4")), "{out}");
+    assert_eq!(tier(&fx, LEAD1), "S3");
+    assert_eq!(tier(&fx, MANAGER), "O4");
+}
+
+/// With no `inbox.review_context`, every Lead goes to `lead_tier`, never `review_lead_tier`.
+/// Fails now: the config key `review_lead_tier` is unknown.
+#[test]
+fn retier_with_an_empty_review_context_moves_every_lead_to_lead_tier() {
+    let fx = Fx::new();
+    review_fixture(&fx.env, "");
+
+    fx.cpd(&["session", "retier", "--all"]).ok();
+    for id in [LEAD1, LEAD2, FORK] {
+        assert_eq!(tier(&fx, id), "O2", "{id}");
+    }
+    assert_eq!(tier(&fx, MANAGER), "O4");
+}
