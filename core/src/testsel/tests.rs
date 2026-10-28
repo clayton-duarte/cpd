@@ -631,7 +631,7 @@ impl Sample {
     }
 
     /// The fakes: `scripted` adds its rules first (a first match answers); then git's top is the root, and nextest,
-    /// node and npm succeed, `nextest list` finds no test.
+    /// node and pnpm succeed, `nextest list` finds no test.
     fn fakes(&self, scripted: impl FnOnce(FakeRunner) -> FakeRunner) -> Fakes {
         let fakes = Fakes::new();
         let _ = scripted((*fakes.runner).clone())
@@ -639,7 +639,7 @@ impl Sample {
             .on("cargo.sh", |c| c.args.starts_with(&owned(&["nextest", "list"])), Reply::ok(""))
             .on("cargo.sh", first("nextest"), Reply::ok(""))
             .on("node", has("--test"), Reply::ok(""))
-            .on("npm", has("typecheck"), Reply::ok(""));
+            .on("pnpm", has("typecheck"), Reply::ok(""));
         fakes
     }
 
@@ -737,8 +737,10 @@ fn build_passes_when_the_typescript_typechecks_and_fails_when_it_does_not() {
     assert_eq!(ok.status, 0, "{}", ok.what());
     let steps: Vec<Vec<&str>> = ok.calls.iter().filter(|c| !c.program.ends_with("git")).map(words).collect();
     assert_eq!(steps, [vec!["nextest", "run", "--workspace", "--no-run"], vec!["run", "typecheck"]], "{}", ok.what());
+    assert_eq!(ok.calls_of("pnpm").len(), 1, "the typecheck is a pnpm call: {}", ok.what());
+    assert!(ok.calls_of("npm").is_empty(), "no npm call: {}", ok.what());
     let bad = s.build(&s.fakes(|r| {
-        r.on("npm", has("typecheck"), Reply::exit(2, "pi/bad.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n", ""))
+        r.on("pnpm", has("typecheck"), Reply::exit(2, "pi/bad.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n", ""))
     }));
     assert_ne!(bad.status, 0, "{}", bad.what());
     assert!(bad.stdout.contains("TS2322") || bad.stderr.contains("TS2322"), "{}", bad.what());
@@ -851,7 +853,7 @@ fn a_failed_build_stops_before_the_typecheck() {
     let fakes = s.fakes(|r| r.on("cargo.sh", has("--no-run"), Reply::exit(101, "", "error[E0425]: cannot find value\n")));
     let out = s.build(&fakes);
     assert_ne!(out.status, 0, "{}", out.what());
-    assert!(out.calls_of("npm").is_empty(), "{}", out.what());
+    assert!(out.calls_of("pnpm").is_empty(), "{}", out.what());
 }
 
 #[test]
