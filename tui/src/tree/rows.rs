@@ -50,7 +50,7 @@ use tui_tree_widget::TreeState;
 use crate::fold;
 use crate::palette;
 use crate::dialog::scroll::{Cue, cue};
-use crate::widgets::{Window, max_scroll, window};
+use crate::widgets::Window;
 use crate::read::{ContextNode, Dot, JobCounts, OrderKey, Place, PlanNode, SessionNode, Tree};
 use super::actions::{Action, Subject};
 
@@ -525,56 +525,52 @@ pub fn row_count(state: &TreeState<Id>, tree: &Tree) -> usize {
     if tree.contexts.is_empty() { 1 } else { items(tree, state.opened(), 0, 0).len() }
 }
 
-/// The rows drawn from the row `scroll` of `n` in `height` rows, with their cues. One row has no room for a cue: it draws
-/// its row, as every row of a pane that short does.
-fn view(n: usize, height: usize, scroll: usize) -> Window {
-    if height > 1 {
-        return window(n, height, 1, scroll);
-    }
-    Window { first: scroll.min(n.saturating_sub(1)), shown: height.min(n), cue_above: false, below: 0 }
+/// The scroll offset nearest `scroll` at which the row `i` of `n` is drawn in `rows` list rows.
+fn scroll_to(i: usize, n: usize, rows: usize, scroll: usize) -> usize {
+    let max = Window::max_scroll(n, rows);
+    scroll.min(max).min(i).max((i + 1).saturating_sub(rows).min(max))
 }
 
-/// The scroll offset nearest `scroll` at which the row `i` of `n` is drawn in `height` rows.
-fn scroll_to(i: usize, n: usize, height: usize, scroll: usize) -> usize {
-    let max = max_scroll(n, height, 1);
-    let mut scroll = scroll.min(max).min(i);
-    while scroll < max && i >= scroll + view(n, height, scroll).shown.max(1) {
-        scroll += 1;
-    }
-    scroll
+/// The list's rows inside the pane's `area` (the ▲ line, the list, the ▼ line): row 0 is the ▲ line, the last row the ▼
+/// line; with fewer than 3 rows there is no ▼ line and the list takes the rows after row 0.
+pub fn list_area(area: Rect) -> Rect {
+    let top = area.height.min(1);
+    let below = u16::from(area.height >= 3);
+    Rect::new(area.x, area.y + top, area.width, area.height - top - below)
 }
 
-/// Draw the column into `area`: the tree from the row `scroll` says (the cursor's Session is brought into view when it
-/// moved), with the cue rows, then the counters and the guides of each visible
+/// Draw the column into `area`, the pane without its footer: row 0 is the ▲ line, the list is [`list_area`], the last row
+/// is the ▼ line (both reserved, blank when nothing is hidden, never a click target). The tree from the row `scroll` says
+/// (the cursor's Session is brought into view when it moved), then the counters and the guides of each visible
 /// row, the archived rows muted, then the cursor's Session row as the blue block when
 /// `cursor` says it is shown (a Context row never is). `frame` is the animation frame of the working dots.
 pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, cursor: bool, frame: usize, scroll: &mut Scroll) {
     if tree.contexts.is_empty() {
         scroll.max = 0;
-        f.render_widget(Paragraph::new(Line::from(Span::styled(" no Contexts", palette::muted_text()))), area);
+        f.render_widget(Paragraph::new(Line::from(Span::styled(" no Contexts", palette::muted_text()))), list_area(area));
         scroll.hits = Hits::default();
         return;
     }
     let items = items(tree, state.opened(), area.width.saturating_sub(RIGHT_PAD), frame);
     let flat = items;
-    let height = usize::from(area.height);
-    scroll.max = max_scroll(flat.len(), height, 1);
-    let key = (state.selected().to_vec(), flat.len(), area.height);
+    let list = list_area(area);
+    let height = usize::from(list.height);
+    scroll.max = Window::max_scroll(flat.len(), height);
+    let key = (state.selected().to_vec(), flat.len(), list.height);
     if scroll.followed.as_ref() != Some(&key) {
         if let Some(i) = flat.iter().position(|r| r.path == key.0) {
             scroll.offset = scroll_to(i, flat.len(), height, scroll.offset);
         }
         scroll.followed = Some(key);
     }
-    let win = view(flat.len(), height, scroll.offset);
+    let win = Window::new(flat.len(), height, scroll.offset);
     scroll.offset = win.first;
-    let above = u16::from(win.cue_above);
-    let rows = Rect::new(area.x, area.y + above, area.width, u16::try_from(win.shown).unwrap_or(u16::MAX).min(area.height.saturating_sub(above + u16::from(win.below > 0))));
-    let drawn = &flat[win.first..win.first + win.shown.min(usize::from(rows.height))];
-    if win.cue_above {
+    let rows = Rect { height: u16::try_from(win.shown).unwrap_or(u16::MAX), ..list };
+    let drawn = &flat[win.first..win.first + win.shown];
+    if win.cue_above && area.height > 0 {
         f.render_widget(Paragraph::new(cue(Cue::Above, win.first, usize::from(area.width))), Rect::new(area.x, area.y, area.width, 1));
     }
-    if win.below > 0 {
+    if win.below > 0 && list.bottom() < area.bottom() {
         f.render_widget(Paragraph::new(cue(Cue::Below, win.below, usize::from(area.width))), Rect::new(area.x, area.bottom() - 1, area.width, 1));
     }
     let buf = f.buffer_mut();
@@ -735,13 +731,13 @@ mod tests {
     }
 
     /// The first `height` rows of the column drawn in a pane tall enough for every row: these tests are about the rows,
-    /// not the scroll (`view::tests` test the scroll and its cues), so no cue row replaces a row they read.
+    /// not the scroll (`view::tests` test the scroll and its cues), so no cue row replaces a row they read; row 0, the ▲ line, is skipped.
     fn render_at(tree: &Tree, state: &mut TreeState<Id>, width: u16, height: u16, cursor: bool, frame: usize) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height + 40)).unwrap();
         terminal.draw(|f| draw(f, f.area(), tree, state, cursor, frame, &mut Scroll::default())).unwrap();
         let full = terminal.backend().buffer();
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
-        copy_cells(full, Rect::new(0, 0, width, height), &mut buf, Position::new(0, 0));
+        copy_cells(full, Rect::new(0, 1, width, height), &mut buf, Position::new(0, 0));
         buf
     }
 

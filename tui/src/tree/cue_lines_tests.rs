@@ -100,5 +100,5 @@ fn a_click_on_a_cue_line_selects_nothing() {
     let before = view.state.selected().to_vec();
     assert_eq!(click(&mut view, 5, 11), Effect::None, "the ▼ line is no row");
     assert_eq!(view.state.selected(), before, "the selection moved nowhere");
-    assert!(matches!(click(&mut view, 5, 1), Effect::Run(Action::Open(_)) | Effect::None), "the alpha row is hit as today");
+    assert!(matches!(click(&mut view, 5, 1), Effect::Run(Action::OpenManager(_))), "the alpha row is hit as today");
 }

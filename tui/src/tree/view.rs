@@ -513,7 +513,7 @@ impl View {
         self.error.clone().unwrap_or_default()
     }
 
-    /// Draw a blank row, the tree below it and (when the snapshot cannot be read) its error in the rows at the bottom: the
+    /// Draw the ▲ line (the blank row), the tree, the ▼ line and (when the snapshot cannot be read) its error in the rows at the bottom: the
     /// reference's layout. One blank column is left on each side of all of it. `frame` is the animation frame of the working dots (`palette::frame`).
     pub fn draw(&mut self, f: &mut Frame, frame: usize) {
         let inner = f.area().inner(Margin::new(1, 0));
@@ -522,15 +522,15 @@ impl View {
         let wrapped = rows::width(&footer).div_ceil(width);
         let footer_height =
             if footer.is_empty() { 0 } else { (wrapped + usize::from(wrapped > 1)).max(1).min(inner.height as usize) as u16 };
-        let [_, list, footer_area] =
-            Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(footer_height)]).areas(inner);
+        let [body, footer_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height)]).areas(inner);
         if footer_height > 0 {
             f.render_widget(Paragraph::new(footer).style(palette::error()).wrap(Wrap { trim: false }), footer_area);
         }
         // the tree scrolls to keep the cursor's Session in view
         let cursor = self.cursor_shown();
-        rows::draw(f, list, &self.tree, &mut self.state, cursor, frame, &mut self.tree_scroll);
+        rows::draw(f, body, &self.tree, &mut self.state, cursor, frame, &mut self.tree_scroll);
         let tree_rows = u16::try_from(rows::row_count(&self.state, &self.tree)).unwrap_or(u16::MAX);
+        let list = rows::list_area(body);
         self.tree_area = Rect { height: list.height.min(tree_rows), ..list };
         self.pane = Rect { y: inner.y + inner.height.min(1), height: inner.height.saturating_sub(1), ..inner };
         if let Some(menu) = &self.menu {

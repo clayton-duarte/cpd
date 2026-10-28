@@ -36,7 +36,7 @@ fn render(t: &Tree, height: u16) -> Buffer {
     let mut buf = Buffer::empty(Rect::new(0, 0, WIDTH, height));
     for y in 0..height {
         for x in 0..WIDTH {
-            buf[(x, y)] = full[(x, y)].clone();
+            buf[(x, y)] = full[(x, y + 1)].clone(); // row 0 is the ▲ line
         }
     }
     buf

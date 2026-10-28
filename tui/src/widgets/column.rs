@@ -58,12 +58,17 @@ pub(crate) struct Window {
 }
 
 impl Window {
-    pub(crate) fn new(_count: usize, _rows: usize, _scroll: usize) -> Window {
-        todo!("cue lines: the implementation Job")
+    /// The window at offset `scroll` of `count` items in `rows` list rows (the two cue lines are not in `rows`): `scroll` is
+    /// clamped to [`Window::max_scroll`].
+    pub(crate) fn new(count: usize, rows: usize, scroll: usize) -> Window {
+        let first = scroll.min(Window::max_scroll(count, rows));
+        let shown = (count - first).min(rows);
+        Window { first, shown, cue_above: first > 0, below: count - first - shown }
     }
 
-    pub(crate) fn max_scroll(_count: usize, _rows: usize) -> usize {
-        todo!("cue lines: the implementation Job")
+    /// The largest offset: the last item reaches the bottom of the `rows`; 0 when every one fits.
+    pub(crate) fn max_scroll(count: usize, rows: usize) -> usize {
+        count.saturating_sub(rows)
     }
 }
 

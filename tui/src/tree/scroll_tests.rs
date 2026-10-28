@@ -74,7 +74,7 @@ fn is_cue(row: &str) -> bool {
 fn rows_that_grow_above_a_cursor_that_did_not_move_draw_the_same_frame_twice() {
     let mut view = View::new(tree(vec![plans_of("bb", 25)]), true);
     for _ in 0..24 {
-        press(&mut view, KeyCode::Down); // the cursor on bb24, the last row of 27
+        press(&mut view, KeyCode::Down); // the cursor on bb23, the row before the last of 27
     }
     let _ = draw_now(&mut view, 43, 24);
     view.refresh(tree(vec![plans_of("aa", 40), plans_of("bb", 25)])); // 42 more rows above the cursor
@@ -82,7 +82,7 @@ fn rows_that_grow_above_a_cursor_that_did_not_move_draw_the_same_frame_twice() {
     let again = text_rows(&draw_now(&mut view, 43, 24));
     assert_eq!(grown, again, "the frame the rows grew in is the next one");
     let (first, last) = (grown.iter().position(|r| is_cue(r)).expect("a cue"), grown.iter().rposition(|r| is_cue(r)).unwrap());
-    let at = grown.iter().position(|r| r.contains("bb24")).expect("the cursor's row is drawn");
+    let at = grown.iter().position(|r| r.contains("bb23")).expect("the cursor's row is drawn");
     assert!(first < at && (last == first || at < last), "between the cues: {grown:?}");
 }
 
@@ -180,10 +180,10 @@ fn the_click_geometry_follows_the_scroll_and_the_cues_and_the_tail_are_no_row() 
     assert_eq!(click(&mut view, 10, below as u16 - 1), Effect::Run(Action::Open(lead_of(&rows[below - 1]).unwrap())), "the last row above it");
     wheel(&mut view, true, 10, 5);
     let moved = text_rows(&draw_now(&mut view, 43, 24));
-    assert!(moved[1].trim_start().starts_with('▲'), "the ▲ cue now: {moved:?}");
-    assert_eq!(click(&mut view, 10, 1), Effect::None, "the ▲ cue is no row");
-    assert_eq!(click(&mut view, 10, 2), Effect::Run(Action::Open(lead_of(&moved[2]).unwrap())), "the row under the cue");
-    assert_ne!(lead_of(&moved[2]), lead_of(&rows[2]), "the same coordinates mean another row after the wheel");
+    assert!(moved[0].trim_start().starts_with('▲'), "the ▲ cue now: {moved:?}");
+    assert_eq!(click(&mut view, 10, 0), Effect::None, "the ▲ cue is no row");
+    assert_eq!(click(&mut view, 10, 1), Effect::Run(Action::Open(lead_of(&moved[1]).unwrap())), "the row under the cue");
+    assert_ne!(lead_of(&moved[1]), lead_of(&rows[1]), "the same coordinates mean another row after the wheel");
     assert_eq!(click(&mut view, 10, below as u16), Effect::None, "the ▼ cue is still no row");
 }
 
@@ -226,7 +226,6 @@ const FROZEN: [&[&str]; 6] = [
     r##"33*[" "|Reset|Reset|NONE] 1*["▼"|DarkGray|Reset|NONE] 1*[" "|DarkGray|Reset|NONE] 1*["1"|DarkGray|Reset|NONE] 1*["9"|DarkGray|Reset|NONE] 1*[" "|DarkGray|Reset|NONE] 1*["m"|DarkGray|Reset|NONE] 1*["o"|DarkGray|Reset|NONE] 1*["r"|DarkGray|Reset|NONE] 1*["e"|DarkGray|Reset|NONE] 1*[" "|Reset|Reset|NONE]"##,
     ],
     &[
-    r##"43*[" "|Reset|Reset|NONE]"##,
     r##"34*[" "|Reset|Reset|NONE] 1*["▲"|DarkGray|Reset|NONE] 1*[" "|DarkGray|Reset|NONE] 1*["6"|DarkGray|Reset|NONE] 1*[" "|DarkGray|Reset|NONE] 1*["m"|DarkGray|Reset|NONE] 1*["o"|DarkGray|Reset|NONE] 1*["r"|DarkGray|Reset|NONE] 1*["e"|DarkGray|Reset|NONE] 1*[" "|Reset|Reset|NONE]"##,
     r##"1*[" "|Reset|Reset|NONE] 1*["├"|DarkGray|Reset|NONE] 1*["─"|DarkGray|Reset|NONE] 1*["\u{e3d5}"|White|Reset|NONE] 1*[" "|Reset|Reset|NONE] 1*["e"|White|Reset|NONE] 1*["x"|White|Reset|NONE] 1*["t"|White|Reset|NONE] 1*["r"|White|Reset|NONE] 1*["a"|White|Reset|NONE] 1*["1"|White|Reset|NONE] 1*["2"|White|Reset|NONE] 27*[" "|Reset|Reset|NONE] 1*["1"|White|Reset|NONE] 3*[" "|Reset|Reset|NONE]"##,
     r##"1*[" "|Reset|Reset|NONE] 1*["├"|DarkGray|Reset|NONE] 1*["─"|DarkGray|Reset|NONE] 1*["\u{e3d5}"|White|Reset|NONE] 1*[" "|Reset|Reset|NONE] 1*["e"|White|Reset|NONE] 1*["x"|White|Reset|NONE] 1*["t"|White|Reset|NONE] 1*["r"|White|Reset|NONE] 1*["a"|White|Reset|NONE] 2*["1"|White|Reset|NONE] 25*[" "|Reset|Reset|NONE] 1*["1"|White|Reset|NONE] 1*["⋅"|DarkGray|Reset|NONE] 1*["2"|LightGreen|Reset|NONE] 3*[" "|Reset|Reset|NONE]"##,
@@ -237,10 +236,10 @@ const FROZEN: [&[&str]; 6] = [
     r##"1*[" "|Reset|Reset|NONE] 1*["├"|DarkGray|Reset|NONE] 1*["─"|DarkGray|Reset|NONE] 1*["\u{e3d5}"|White|Reset|NONE] 1*[" "|Reset|Reset|NONE] 1*["e"|White|Reset|NONE] 1*["x"|White|Reset|NONE] 1*["t"|White|Reset|NONE] 1*["r"|White|Reset|NONE] 1*["a"|White|Reset|NONE] 1*["0"|White|Reset|NONE] 1*["6"|White|Reset|NONE] 27*[" "|Reset|Reset|NONE] 1*["1"|White|Reset|NONE] 3*[" "|Reset|Reset|NONE]"##,
     r##"1*[" "|Reset|Reset|NONE] 1*["├"|DarkGray|Reset|NONE] 1*["─"|DarkGray|Reset|NONE] 1*["\u{e3d5}"|White|Reset|NONE] 1*[" "|Reset|Reset|NONE] 1*["e"|White|Reset|NONE] 1*["x"|White|Reset|NONE] 1*["t"|White|Reset|NONE] 1*["r"|White|Reset|NONE] 1*["a"|White|Reset|NONE] 1*["0"|White|Reset|NONE] 1*["5"|White|Reset|NONE] 25*[" "|Reset|Reset|NONE] 1*["1"|White|Reset|NONE] 1*["⋅"|DarkGray|Reset|NONE] 1*["2"|LightGreen|Reset|NONE] 3*[" "|Reset|Reset|NONE]"##,
     r##"1*[" "|Reset|Reset|NONE] 1*["├"|DarkGray|Reset|NONE] 1*["─"|DarkGray|Reset|NONE] 1*["\u{e3d5}"|White|Reset|NONE] 1*[" "|Reset|Reset|NONE] 1*["e"|White|Reset|NONE] 1*["x"|White|Reset|NONE] 1*["t"|White|Reset|NONE] 1*["r"|White|Reset|NONE] 1*["a"|White|Reset|NONE] 1*["0"|White|Reset|NONE] 1*["4"|White|Reset|NONE] 25*[" "|Reset|Reset|NONE] 1*["1"|White|Reset|NONE] 1*["⋅"|DarkGray|Reset|NONE] 1*["1"|LightGreen|Reset|NONE] 3*[" "|Reset|Reset|NONE]"##,
-    r##"33*[" "|Reset|Reset|NONE] 1*["▼"|DarkGray|Reset|NONE] 1*[" "|DarkGray|Reset|NONE] 1*["1"|DarkGray|Reset|NONE] 1*["4"|DarkGray|Reset|NONE] 1*[" "|DarkGray|Reset|NONE] 1*["m"|DarkGray|Reset|NONE] 1*["o"|DarkGray|Reset|NONE] 1*["r"|DarkGray|Reset|NONE] 1*["e"|DarkGray|Reset|NONE] 1*[" "|Reset|Reset|NONE]"##,
+    r##"1*[" "|Reset|Reset|NONE] 1*["├"|DarkGray|Reset|NONE] 1*["─"|DarkGray|Reset|NONE] 1*["\u{e3d5}"|White|Reset|NONE] 1*[" "|Reset|Reset|NONE] 1*["e"|White|Reset|NONE] 1*["x"|White|Reset|NONE] 1*["t"|White|Reset|NONE] 1*["r"|White|Reset|NONE] 1*["a"|White|Reset|NONE] 1*["0"|White|Reset|NONE] 1*["3"|White|Reset|NONE] 27*[" "|Reset|Reset|NONE] 1*["1"|White|Reset|NONE] 3*[" "|Reset|Reset|NONE]"##,
+    r##"33*[" "|Reset|Reset|NONE] 1*["▼"|DarkGray|Reset|NONE] 1*[" "|DarkGray|Reset|NONE] 1*["1"|DarkGray|Reset|NONE] 1*["3"|DarkGray|Reset|NONE] 1*[" "|DarkGray|Reset|NONE] 1*["m"|DarkGray|Reset|NONE] 1*["o"|DarkGray|Reset|NONE] 1*["r"|DarkGray|Reset|NONE] 1*["e"|DarkGray|Reset|NONE] 1*[" "|Reset|Reset|NONE]"##,
     ],
     &[
-    r##"43*[" "|Reset|Reset|NONE]"##,
     r##"34*[" "|Reset|Reset|NONE] 1*["▲"|DarkGray|Reset|NONE] 1*[" "|DarkGray|Reset|NONE] 1*["3"|DarkGray|Reset|NONE] 1*[" "|DarkGray|Reset|NONE] 1*["m"|DarkGray|Reset|NONE] 1*["o"|DarkGray|Reset|NONE] 1*["r"|DarkGray|Reset|NONE] 1*["e"|DarkGray|Reset|NONE] 1*[" "|Reset|Reset|NONE]"##,
     r##"1*[" "|Reset|Reset|NONE] 1*["╭"|DarkGray|Reset|NONE] 1*["\u{e3e3}"|White|Reset|BOLD] 1*[" "|Reset|Reset|BOLD] 1*["a"|White|Reset|BOLD] 1*["l"|White|Reset|BOLD] 1*["p"|White|Reset|BOLD] 1*["h"|White|Reset|BOLD] 1*["a"|White|Reset|BOLD] 34*[" "|Reset|Reset|NONE]"##,
     r##"1*[" "|Reset|Reset|NONE] 1*["├"|DarkGray|Reset|NONE] 1*["─"|DarkGray|Reset|NONE] 1*["\u{e3e3}"|LightCyan|Reset|NONE] 1*[" "|Reset|Reset|NONE] 1*["s"|Blue|Reset|NONE] 1*["h"|Blue|Reset|NONE] 1*["i"|Blue|Reset|NONE] 1*["p"|Blue|Reset|NONE] 26*[" "|Reset|Reset|NONE] 1*["2"|White|Reset|NONE] 1*["⋅"|DarkGray|Reset|NONE] 1*["2"|LightYellow|Reset|NONE] 1*["⋅"|DarkGray|Reset|NONE] 1*["5"|LightGreen|Reset|NONE] 3*[" "|Reset|Reset|NONE]"##,
@@ -259,10 +258,10 @@ const FROZEN: [&[&str]; 6] = [
     r##"1*[" "|Reset|Reset|NONE] 1*["├"|DarkGray|Reset|NONE] 1*["─"|DarkGray|Reset|NONE] 1*["\u{e3d5}"|White|Reset|NONE] 1*[" "|Reset|Reset|NONE] 1*["e"|White|Reset|NONE] 1*["x"|White|Reset|NONE] 1*["t"|White|Reset|NONE] 1*["r"|White|Reset|NONE] 1*["a"|White|Reset|NONE] 1*["0"|White|Reset|NONE] 1*["1"|White|Reset|NONE] 25*[" "|Reset|Reset|NONE] 1*["1"|White|Reset|NONE] 1*["⋅"|DarkGray|Reset|NONE] 1*["1"|LightGreen|Reset|NONE] 3*[" "|Reset|Reset|NONE]"##,
     r##"1*[" "|Reset|Reset|NONE] 1*["├"|DarkGray|Reset|NONE] 1*["─"|DarkGray|Reset|NONE] 1*["\u{e3d5}"|White|Reset|NONE] 1*[" "|Reset|Reset|NONE] 1*["e"|White|Reset|NONE] 1*["x"|White|Reset|NONE] 1*["t"|White|Reset|NONE] 1*["r"|White|Reset|NONE] 1*["a"|White|Reset|NONE] 2*["0"|White|Reset|NONE] 27*[" "|Reset|Reset|NONE] 1*["1"|White|Reset|NONE] 3*[" "|Reset|Reset|NONE]"##,
     r##"1*[" "|Reset|Reset|NONE] 1*["├"|DarkGray|Reset|NONE] 1*["─"|DarkGray|Reset|NONE] 1*["\u{e3d5}"|White|Reset|NONE] 1*[" "|Reset|Reset|NONE] 1*["s"|White|Reset|NONE] 1*["k"|White|Reset|NONE] 1*["e"|White|Reset|NONE] 1*["t"|White|Reset|NONE] 1*["c"|White|Reset|NONE] 1*["h"|White|Reset|NONE] 28*[" "|Reset|Reset|NONE] 1*["4"|LightMagenta|Reset|NONE] 3*[" "|Reset|Reset|NONE]"##,
-    r##"34*[" "|Reset|Reset|NONE] 1*["▼"|DarkGray|Reset|NONE] 1*[" "|DarkGray|Reset|NONE] 1*["9"|DarkGray|Reset|NONE] 1*[" "|DarkGray|Reset|NONE] 1*["m"|DarkGray|Reset|NONE] 1*["o"|DarkGray|Reset|NONE] 1*["r"|DarkGray|Reset|NONE] 1*["e"|DarkGray|Reset|NONE] 1*[" "|Reset|Reset|NONE]"##,
+    r##"1*[" "|Reset|Reset|NONE] 1*["├"|DarkGray|Reset|NONE] 1*["─"|DarkGray|Reset|NONE] 1*["\u{e3d5}"|White|Reset|NONE] 1*[" "|Reset|Reset|NONE] 1*["s"|White|Reset|NONE] 1*["h"|White|Reset|NONE] 1*["i"|White|Reset|NONE] 1*["p"|White|Reset|NONE] 1*["·"|White|Reset|NONE] 1*["f"|White|Reset|NONE] 1*["-"|White|Reset|NONE] 1*["i"|White|Reset|NONE] 1*["d"|White|Reset|NONE] 29*[" "|Reset|Reset|NONE]"##,
+    r##"34*[" "|Reset|Reset|NONE] 1*["▼"|DarkGray|Reset|NONE] 1*[" "|DarkGray|Reset|NONE] 1*["8"|DarkGray|Reset|NONE] 1*[" "|DarkGray|Reset|NONE] 1*["m"|DarkGray|Reset|NONE] 1*["o"|DarkGray|Reset|NONE] 1*["r"|DarkGray|Reset|NONE] 1*["e"|DarkGray|Reset|NONE] 1*[" "|Reset|Reset|NONE]"##,
     ],
     &[
-    r##"43*[" "|Reset|Reset|NONE]"##,
     r##"33*[" "|Reset|Reset|NONE] 1*["▲"|DarkGray|Reset|NONE] 1*[" "|DarkGray|Reset|NONE] 2*["1"|DarkGray|Reset|NONE] 1*[" "|DarkGray|Reset|NONE] 1*["m"|DarkGray|Reset|NONE] 1*["o"|DarkGray|Reset|NONE] 1*["r"|DarkGray|Reset|NONE] 1*["e"|DarkGray|Reset|NONE] 1*[" "|Reset|Reset|NONE]"##,
     r##"1*[" "|Reset|Reset|NONE] 1*["├"|DarkGray|Reset|NONE] 1*["─"|DarkGray|Reset|NONE] 1*["\u{e3d5}"|White|Reset|NONE] 1*[" "|Reset|Reset|NONE] 1*["e"|White|Reset|NONE] 1*["x"|White|Reset|NONE] 1*["t"|White|Reset|NONE] 1*["r"|White|Reset|NONE] 1*["a"|White|Reset|NONE] 1*["0"|White|Reset|NONE] 1*["7"|White|Reset|NONE] 25*[" "|Reset|Reset|NONE] 1*["1"|White|Reset|NONE] 1*["⋅"|DarkGray|Reset|NONE] 1*["1"|LightGreen|Reset|NONE] 3*[" "|Reset|Reset|NONE]"##,
     r##"1*[" "|Reset|Reset|NONE] 1*["├"|DarkGray|Reset|NONE] 1*["─"|DarkGray|Reset|NONE] 1*["\u{e3d5}"|White|Reset|NONE] 1*[" "|Reset|Reset|NONE] 1*["e"|White|Reset|NONE] 1*["x"|White|Reset|NONE] 1*["t"|White|Reset|NONE] 1*["r"|White|Reset|NONE] 1*["a"|White|Reset|NONE] 1*["0"|White|Reset|NONE] 1*["6"|White|Reset|NONE] 27*[" "|Reset|Reset|NONE] 1*["1"|White|Reset|NONE] 3*[" "|Reset|Reset|NONE]"##,
@@ -282,6 +281,7 @@ const FROZEN: [&[&str]; 6] = [
     r##"1*[" "|Reset|Reset|NONE] 1*["╰"|DarkGray|Reset|NONE] 1*["\u{f0b2a}"|DarkGray|Reset|NONE] 1*[" "|White|Reset|NONE] 1*["n"|White|Reset|NONE] 1*["e"|White|Reset|NONE] 1*["w"|White|Reset|NONE] 36*[" "|Reset|Reset|NONE]"##,
     r##"43*[" "|Reset|Reset|NONE]"##,
     r##"1*[" "|Reset|Reset|NONE] 1*["\u{f0b26}"|DarkGray|Reset|NONE] 1*[" "|DarkGray|Reset|NONE] 1*["a"|DarkGray|Reset|NONE] 1*["r"|DarkGray|Reset|NONE] 1*["c"|DarkGray|Reset|NONE] 1*["h"|DarkGray|Reset|NONE] 1*["i"|DarkGray|Reset|NONE] 1*["v"|DarkGray|Reset|NONE] 1*["e"|DarkGray|Reset|NONE] 33*[" "|Reset|Reset|NONE]"##,
+    r##"43*[" "|Reset|Reset|NONE]"##,
     ],
     &[
     r##"43*[" "|Reset|Reset|NONE]"##,
