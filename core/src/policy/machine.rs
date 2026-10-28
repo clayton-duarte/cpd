@@ -6,7 +6,7 @@
 //! - [`parse_machine`]: parses the text of one machine file. Every top-level key but `mcp` is left to the scope loader
 //!   and ignored here; only `servers` is allowed under `mcp`; each entry is a closed [`McpServer`]
 //!   (`deny_unknown_fields`, pi's camelCase key names); names match `^[a-z][a-z0-9-]{0,31}$`; strings are 1 to 500
-//!   characters with no NUL; `url` and `oauth.callbackUrl` match the patterns of §8.3; `toolExposure`, when present,
+//!   characters with no NUL; `oauth.clientName` is a string by the same rule; `url` and `oauth.callbackUrl` match the patterns of §8.3; `toolExposure`, when present,
 //!   has at least one entry and non-empty keys. Every refusal is `policy_invalid` (`policy::policy_invalid`) with
 //!   `details.file` the `file` argument and `details.key` the dotted path of the offending key (null when the file
 //!   does not parse).
@@ -38,7 +38,9 @@ pub enum Exposure {
     Hidden,
 }
 
-/// The optional `oauth` table of an entry.
+/// The optional `oauth` table of an entry: `clientId`, `scope`, `clientName` (the name pi sends on dynamic client
+/// registration; 1 to 500 characters, no NUL, passed unchanged) and `callbackUrl`. `clientSecret` and
+/// `clientRegistration` stay refused.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct McpOauth {
@@ -46,6 +48,8 @@ pub struct McpOauth {
     pub client_id: Option<String>,
     #[serde(default, deserialize_with = "text", skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    #[serde(default, deserialize_with = "text", skip_serializing_if = "Option::is_none")]
+    pub client_name: Option<String>,
     #[serde(default, deserialize_with = "callback_url", skip_serializing_if = "Option::is_none")]
     pub callback_url: Option<String>,
 }

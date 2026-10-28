@@ -544,6 +544,7 @@ fn headers_the_contract_table_lists_exactly_the_keys_the_parser_accepts() {
         ("clientId", ("oauth", "clientId = \"c\"")),
         ("scope", ("oauth", "scope = \"s\"")),
         ("callbackUrl", ("oauth", "callbackUrl = \"http://localhost:3118/callback\"")),
+        ("clientName", ("oauth", "clientName = \"Claude Code\"")),
     ]);
     let documented = contract_mcp_keys();
     let sampled: std::collections::BTreeSet<String> = sample.keys().map(|k| (*k).to_owned()).collect();
@@ -556,4 +557,95 @@ fn headers_the_contract_table_lists_exactly_the_keys_the_parser_accepts() {
     for key in ["url", "description", "exposure", "toolExposure", "oauth", "headers"] {
         assert!(json.get(key).is_some(), "{key} not kept: {json}");
     }
+}
+
+// ---------- oauth.clientName (pro-d17, D20) ----------
+
+const FIGMA: &str = "[mcp.servers.figma]\nurl = \"https://mcp.figma.com/mcp\"\nexposure = \"deferred\"\n\n[mcp.servers.figma.oauth]\nclientName = \"Claude Code\"\n";
+
+fn oauth(body: &str) -> String {
+    entry(&format!("[mcp.servers.slack.oauth]\n{body}"))
+}
+
+fn name_is(value: &str) -> String {
+    oauth(&format!("clientName = {}\n", q(value)))
+}
+
+/// The control of every test: a valid `clientName` is accepted (red until the key is read).
+fn control() {
+    accepted(&name_is("Claude Code"));
+}
+
+#[test]
+fn client_name_the_figma_entry_is_accepted_and_kept() {
+    let servers = parse(FIGMA).unwrap_or_else(|e| panic!("refused: {e:?}"));
+    let json = serde_json::to_value(&servers["figma"]).unwrap();
+    assert_eq!(json["oauth"], serde_json::json!({"clientName": "Claude Code"}));
+    assert_eq!(json["url"], "https://mcp.figma.com/mcp");
+    assert_eq!(json["exposure"], "deferred");
+}
+
+#[test]
+fn client_name_is_kept_beside_the_other_oauth_keys() {
+    let text = oauth("clientId = \"c\"\ncallbackUrl = \"http://localhost:3118/callback\"\nscope = \"s\"\nclientName = \"Claude Code\"\n");
+    assert_eq!(
+        json(&text)["oauth"],
+        serde_json::json!({"clientId": "c", "callbackUrl": "http://localhost:3118/callback", "scope": "s", "clientName": "Claude Code"})
+    );
+}
+
+#[test]
+fn client_name_a_left_out_key_stays_out_of_the_json() {
+    assert!(json(&oauth("clientId = \"c\"\n"))["oauth"].get("clientName").is_none());
+    // Control, red until the key is read.
+    assert_eq!(json(&oauth("clientId = \"c\"\nclientName = \"n\"\n"))["oauth"]["clientName"], "n");
+}
+
+#[test]
+fn client_name_of_one_and_of_500_characters_is_accepted() {
+    control();
+    for n in [1, 500] {
+        let name = "a".repeat(n);
+        assert_eq!(json(&name_is(&name))["oauth"]["clientName"], name.as_str());
+    }
+}
+
+#[test]
+fn client_name_is_passed_unchanged() {
+    control();
+    let name = "  Cläude  Code ";
+    assert_eq!(json(&name_is(name))["oauth"]["clientName"], name);
+}
+
+#[test]
+fn client_name_refuse_an_empty_string() {
+    control();
+    refused(&name_is(""), Some("clientName"));
+}
+
+#[test]
+fn client_name_refuse_a_string_over_500_characters() {
+    control();
+    refused(&name_is(&"a".repeat(501)), Some("clientName"));
+}
+
+#[test]
+fn client_name_refuse_a_nul() {
+    control();
+    refused(&oauth("clientName = \"a\\u0000b\"\n"), Some("clientName"));
+}
+
+#[test]
+fn client_name_refuse_a_value_that_is_not_a_string() {
+    control();
+    for v in ["1", "true", "[\"a\"]", "{ a = \"b\" }"] {
+        refused(&oauth(&format!("clientName = {v}\n")), Some("clientName"));
+    }
+}
+
+#[test]
+fn client_name_the_client_secret_and_client_registration_stay_refused() {
+    accepted(&oauth("clientName = \"Claude Code\"\n"));
+    refused(&oauth("clientName = \"Claude Code\"\nclientSecret = \"x\"\n"), Some("clientSecret"));
+    refused(&oauth("clientName = \"Claude Code\"\nclientRegistration = \"cimd\"\n"), Some("clientRegistration"));
 }

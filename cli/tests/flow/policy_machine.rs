@@ -247,3 +247,31 @@ fn a_file_of_the_old_machines_directory_is_refused_by_policy_show() {
     fx.write("machines/old.toml", SLACK);
     refused(&fx.show(&["--owner", "acme"]), "policy_invalid", 1);
 }
+
+const FIGMA: &str = "[mcp.servers.figma]\nurl = \"https://mcp.figma.com/mcp\"\ndescription = \"Figma\"\nexposure = \"deferred\"\n\n[mcp.servers.figma.oauth]\nclientName = \"Claude Code\"\n";
+
+#[test]
+fn the_machine_object_carries_oauth_client_name_verbatim() {
+    let fx = Fx::new();
+    fx.machine_file(FIGMA);
+    let out = fx.show(&["--owner", "acme"]).ok();
+    assert_eq!(
+        out["machine"]["mcp"]["servers"],
+        json!({"figma": {"url": "https://mcp.figma.com/mcp", "description": "Figma", "exposure": "deferred",
+                         "oauth": {"clientName": "Claude Code"}}})
+    );
+    let md = out["markdown"].as_str().unwrap();
+    let section = md.split("## Machine pro").nth(1).unwrap_or_else(|| panic!("no `## Machine pro` in {md}"));
+    assert!(section.contains("figma"), "{md}");
+}
+
+#[test]
+fn an_oauth_client_secret_stays_policy_invalid_where_client_name_is_accepted() {
+    let fx = Fx::new();
+    fx.machine_file(FIGMA);
+    fx.show(&["--owner", "acme"]).ok();
+    fx.machine_file(&format!("{FIGMA}clientSecret = \"x\"\n"));
+    let error = refused(&fx.show(&["--owner", "acme"]), "policy_invalid", 1);
+    assert_eq!(error["details"]["file"], fx.real("host.toml"));
+    assert!(error["details"]["key"].as_str().is_some_and(|k| k.contains("clientSecret")), "{error}");
+}

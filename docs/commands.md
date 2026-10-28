@@ -4988,7 +4988,7 @@ Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Ses
    "deploys": {"source": "default", "audience": [], "keys": {"workflows": {"value": [], "source": "default"}}, "text": ""}}}
 ```
 
-**The machine object.** Every form of the command (`--pr`, `--context`, `--owner`, `--owner --repo` and no flag) also carries a top-level `machine` object, because every form reads the machine file (`$CPD_HOME/policy/host.toml`, contract §8.3; it is also a full policy scope, read as the "Effects" above say, and the `mcp` table is the only part this object reports): `{"name": "<machine>", "mcp": {"source", "servers"}}`. `name` is the config key `machine`; `source` is `default` or `machine:<realpath>` (contract §8.3 "MCP servers of the machine scope"); `servers` maps each server name to its entry with the keys as written in the file (a key left out is absent; an entry carries `headers`, a table of header name to literal value, when the file sets it). An invalid machine file is `policy_invalid`, with the same exit and `details` (`file`, `key`) as an invalid owner file, and fails every form. `markdown` gains a section `## Machine <name>` listing each server's name, `url` and `exposure`, or `No MCP servers.`. Example, on machine `pro`, `machine` only:
+**The machine object.** Every form of the command (`--pr`, `--context`, `--owner`, `--owner --repo` and no flag) also carries a top-level `machine` object, because every form reads the machine file (`$CPD_HOME/policy/host.toml`, contract §8.3; it is also a full policy scope, read as the "Effects" above say, and the `mcp` table is the only part this object reports): `{"name": "<machine>", "mcp": {"source", "servers"}}`. `name` is the config key `machine`; `source` is `default` or `machine:<realpath>` (contract §8.3 "MCP servers of the machine scope"); `servers` maps each server name to its entry with the keys as written in the file (a key left out is absent; an entry carries `headers`, a table of header name to literal value, when the file sets it, and `oauth.clientName`, a string verbatim, when the file sets it). An invalid machine file is `policy_invalid`, with the same exit and `details` (`file`, `key`) as an invalid owner file, and fails every form. `markdown` gains a section `## Machine <name>` listing each server's name, `url` and `exposure`, or `No MCP servers.`. Example, on machine `pro`, `machine` only:
 
 ```json
 {"machine": {"name": "pro", "mcp": {
@@ -5014,6 +5014,18 @@ A Fullstory entry, which carries `headers`:
     "description": "Fullstory: session replay and analytics.",
     "exposure": "deferred",
     "headers": {"MCP-Protocol-Version": "2025-06-18"}}}}}}
+```
+
+A Figma entry, which carries `oauth.clientName`:
+
+```json
+{"machine": {"name": "pro", "mcp": {
+  "source": "machine:/home/clayton/.cpd/policy/host.toml",
+  "servers": {"figma": {
+    "url": "https://mcp.figma.com/mcp",
+    "description": "Figma: design files, components and variables.",
+    "exposure": "deferred",
+    "oauth": {"clientName": "Claude Code"}}}}}}
 ```
 
 Idempotent: yes; it only reads. It is also the check to run after editing a policy file.
