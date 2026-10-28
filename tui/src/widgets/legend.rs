@@ -170,8 +170,8 @@ pub(crate) fn sections() -> Vec<Section> {
             vec![dot(Dot::Waiting, 0), plain("waiting: an agent waits for another agent (a Worker for its Lead), not for you")],
             vec![dot(Dot::Idle, 0), plain("idle, nothing needed")],
             vec![dot(Dot::Stopped, 0), plain("pi stopped")],
-            vec![dot(Dot::Red, 0), plain("red: a dialog in dispatch or deploy, a stuck Job, an engine error, your own failing or changed pull request")],
-            vec![dot(Dot::Yellow, 0), plain("yellow: ready to merge, review requested")],
+            vec![dot(Dot::Red, 0), plain("red: a dialog in dispatch or deploy, a stuck Job, an engine error, your own broken pull request that nobody is fixing")],
+            vec![dot(Dot::Yellow, 0), plain("yellow: ready to post, ready to merge, review requested")],
             vec![dot(Dot::Magenta, 0), plain("magenta: blocked while grounding, planning or done, or the Plan's review is pending")],
             vec![dot(Dot::Cyan, 0), plain("cyan: a cpd notice that blocks nothing: curation")],
             vec![dot(Dot::White, 0), plain("white: idle, not seen since it last went idle")],
@@ -223,7 +223,7 @@ pub(crate) fn sections() -> Vec<Section> {
             vec![Line::from(Span::styled(palette::ITEM_RETIRE, palette::fg_clickable(Meaning::Notice))), plain("a record to retire")],
             tier(Urgency::White, "an unread reply"),
             vec![Line::from(Span::styled(palette::ITEM_DEPLOY, palette::fg_clickable(Meaning::Review))), plain("a deploy waits for your approval")],
-            vec![Line::from(Span::styled(palette::ITEM_PR_READY, palette::fg_clickable(Meaning::Review))), plain("a pull request of yours is ready to merge")],
+            vec![Line::from(Span::styled(palette::ITEM_PR_READY, palette::fg_clickable(Meaning::Review))), plain("a pull request of yours, coloured by its state")],
             vec![Line::from(Span::styled(palette::ITEM_REVIEW_REQUESTED, palette::fg_clickable(Meaning::External))), plain("a review asked of you")],
         ],
     };
@@ -460,9 +460,9 @@ mod tests {
         assert_eq!(dots.rows[3][0].spans, [palette::dot_span(Dot::Waiting, 0, false)]);
         assert_eq!(
             says[6],
-            "red: a dialog in dispatch or deploy, a stuck Job, an engine error, your own failing or changed pull request"
+            "red: a dialog in dispatch or deploy, a stuck Job, an engine error, your own broken pull request that nobody is fixing"
         );
-        assert_eq!(says[7], "yellow: ready to merge, review requested");
+        assert_eq!(says[7], "yellow: ready to post, ready to merge, review requested");
         let shown = says.join("\n");
         assert!(!shown.contains("Escalation") && !shown.contains("or pr"), "an Escalation is no item, the phase is deploy: {shown}");
     }
@@ -660,7 +660,7 @@ mod tests {
                 "\u{F116E}", "a record to retire",
                 "\u{F0366}", "an unread reply",
                 "\u{F15A9}", "a deploy waits for your approval",
-                "\u{F12F4}", "a pull request of yours is ready to merge",
+                "\u{F12F4}", "a pull request of yours, coloured by its state",
                 "\u{F12F2}", "a review asked of you",
             ]
         );

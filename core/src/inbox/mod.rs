@@ -4,6 +4,7 @@
 pub mod cmd;
 pub mod model;
 pub mod models;
+pub mod pr;
 pub mod rules;
 pub mod team;
 
@@ -15,3 +16,7 @@ mod deploy_tests;
 mod claim_tests;
 #[cfg(test)]
 mod runner_tests;
+#[cfg(test)]
+mod pr_tests;
+#[cfg(test)]
+mod follow_tests;

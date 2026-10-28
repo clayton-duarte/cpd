@@ -223,7 +223,7 @@ fn a_commit_that_concerns_a_view_makes_it_take_a_snapshot_and_a_key_makes_it_flu
     let fx = env();
     let _engine = engine(&fx);
     fx.env.sql(&fixture());
-    for name in ["tree", "plan", "widgets"] {
+    for name in ["tree", "plan"] {
         let mut view = start(&fx, name);
         let mut noise = fx.env.store();
         noisy(&fx, &mut view, &mut noise, SETTLE);
@@ -238,4 +238,41 @@ fn a_commit_that_concerns_a_view_makes_it_take_a_snapshot_and_a_key_makes_it_flu
         view.keys(&["j"]);
         assert!(view.flushes() > flushes, "{name} drew no frame for a key");
     }
+}
+
+/// An Event that changes no Inbox row concerns the widgets view no more: it takes no snapshot for it.
+#[test]
+fn a_session_state_event_alone_makes_the_widgets_view_take_no_snapshot() {
+    let fx = env();
+    let _engine = engine(&fx);
+    fx.env.sql(&fixture());
+    let mut view = start(&fx, "widgets");
+    let mut noise = fx.env.store();
+    noisy(&fx, &mut view, &mut noise, SETTLE);
+    let before = view.snapshots();
+    fx.env.sql(
+        "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+         VALUES (cpd_txn(), '2026-01-03T00:00:00.000Z', 'session-state', 'ctx', 'ship', 'lead-ship', 'State.', '{}');",
+    );
+    noisy(&fx, &mut view, &mut noise, Duration::from_secs(2));
+    assert_eq!(view.snapshots(), before, "widgets took a snapshot while nothing changed");
+}
+
+/// The widgets view reads the Inbox when an open item changed in place (a label change appends no Event).
+#[test]
+fn a_change_of_an_open_inbox_item_makes_the_widgets_view_take_a_snapshot() {
+    let fx = env();
+    let _engine = engine(&fx);
+    fx.env.sql(&fixture());
+    fx.env.sql(
+        "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at)
+         VALUES ('pr-ready', 'blue', 'acme/repo#1', 'Ready', '2026-01-03T00:00:00.000Z');",
+    );
+    let mut view = start(&fx, "widgets");
+    let mut noise = fx.env.store();
+    noisy(&fx, &mut view, &mut noise, SETTLE);
+    let before = view.snapshots();
+    fx.env.sql("UPDATE inbox_items SET label = 'Ready now' WHERE subject = 'acme/repo#1';");
+    noisy(&fx, &mut view, &mut noise, Duration::from_secs(2));
+    assert!(view.snapshots() > before, "widgets took no snapshot after an open Inbox item changed");
 }

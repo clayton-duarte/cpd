@@ -1,6 +1,5 @@
 //! The `widgets` view's snapshot (commands.md §17), the Dispatch column: the
-//! machine-wide numbers (slots, the engine), every open pull request of the
-//! User, every open Escalation and the latest Events (`plan list`, with the
+//! machine-wide numbers (slots, the engine), every open Escalation and the latest Events (`plan list`, with the
 //! rows the column draws from).
 
 use std::collections::BTreeMap;
@@ -12,8 +11,7 @@ use cpd_core::error::CpdError;
 use cpd_core::events::{Event, highest_id};
 use cpd_core::host::spawn::Pid;
 use cpd_core::inbox::model::{self, Item};
-use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, PrKey, SessionId};
-use cpd_core::plan::Phase;
+use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, PrKey};
 use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 
@@ -28,8 +26,6 @@ pub struct Widgets {
     pub engine: Engine,
     /// Every Plan, oldest first.
     pub plans: Vec<PlanCard>,
-    /// Every `open` row of `pull_requests` with `authored` 1 (review requests are Inbox items), oldest `created_at` first (then `repo`, `number`): what the PRs section lists.
-    pub prs: Vec<OpenPr>,
     /// Every `open` Escalation of the machine, oldest first.
     pub escalations: Vec<MachineEscalation>,
     /// The latest Events, oldest first.
@@ -79,46 +75,7 @@ pub enum Engine {
     Crashed { pid: u32, since: String },
 }
 
-/// An open pull request of the User, as the PRs section draws it (commands.md §13.2).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OpenPr {
-    /// GitHub's `owner/name`.
-    pub repo: String,
-    pub number: i64,
-    /// `pull_requests.url`: what the `󱆭` links to.
-    pub url: String,
-    pub title: String,
-    pub draft: bool,
-    pub checks: Checks,
-    pub review_decision: ReviewDecision,
-    /// `pull_requests.mergeable` is `'conflicting'` (`'unknown'` is not a conflict).
-    pub conflicting: bool,
-    /// The owning PR's not-ended update Job, if any: a conflict reads `updating` while it is `Some` (hs-d532).
-    pub update: Option<super::UpdateState>,
-    /// The PR is ready to merge (pro-d118: `cpd_core::pr::pulls::ready_to_merge_sql`, not GitHub's CLEAN alone): the merge icon shows (commands.md §13.2).
-    pub clean: bool,
-    /// A PR of the Plan whose Lead is in the chat slot points to this pull request.
-    pub active: bool,
-    /// The Lead of the owner: `plans.lead_session` of the Plan of the `prs` row that points to this pull request (the most
-    /// recently created Plan when several do). `None` when no Plan owns it.
-    pub lead: Option<SessionId>,
-    /// The Jira key of the owner's `prs` row (the same Plan `lead` comes from); `None` when no Plan owns it or it has none.
-    pub jira: Option<String>,
-    /// The owner's Lead Session has `state = 'working'` (contract §3.6): the row shows the Lead's working dot (hs-d335).
-    /// False when no Plan owns it.
-    pub lead_working: bool,
-    /// The Plan of the owner has a failed Job (the tree's `failed` rule).
-    pub plan_failed: bool,
-    /// The phase of the Plan that owns the pull request (`None` when no Plan owns it). Read from the Plan by
-    /// dot-impl-views, by the same subquery that reads `plan_failed`.
-    pub plan_phase: Option<Phase>,
-    /// A merge of this pull request is running (a live merge marker, `crate::merge::marker`, hs-d495): the merge
-    /// button shows the spinner instead and cannot be clicked. Not in the store: the view sets it from the markers.
-    pub merging: bool,
-}
-
-/// A Plan: its head (counts), its label and the rows of its PRs that have a pull request. The PRs section no longer draws it
-/// (it draws [`OpenPr`]s); `cli/tests/pr.rs` still reads it.
+/// A Plan: its head (counts), its label and the rows of its PRs that have a pull request. No view draws it; `cli/tests/pr.rs` reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlanCard {
     pub head: PlanHead,
@@ -173,7 +130,6 @@ pub fn widgets(store: &mut Store, concurrency: u32, recent: u32) -> Result<Widge
             slots: held_slots(conn, concurrency)?,
             engine: engine(conn)?,
             plans: plan_cards(conn)?,
-            prs: open_pr_rows(conn)?,
             escalations: escalations(conn)?,
             events: recent_events(conn, recent)?,
             events_cursor: highest_id(conn)?,
@@ -187,11 +143,6 @@ pub fn widgets(store: &mut Store, concurrency: u32, recent: u32) -> Result<Widge
 /// more: the Plans' `jobs` alone are most of its cost, tui-F1).
 pub fn slots(store: &mut Store, concurrency: u32) -> Result<(Slots, i64), CpdError> {
     store.read(|conn| Ok((held_slots(conn, concurrency)?, highest_id(conn)?)))
-}
-
-/// The open pull requests of the User, and the Event id of this read: the Dispatch column's whole model.
-pub fn open_prs(store: &mut Store) -> Result<(Vec<OpenPr>, i64), CpdError> {
-    store.read(|conn| Ok((open_pr_rows(conn)?, highest_id(conn)?)))
 }
 
 /// The open pull requests as `<owner>/<repo>#<n>` (every `open` row of `pull_requests`): what a merged marker is
@@ -218,72 +169,6 @@ fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
             Ok(PlanCard { label, lead_place, prs, head })
         })
         .collect()
-}
-
-/// The `open` pull requests the User wrote (`authored` 1), oldest first. `lead`: the owner's (see [`OpenPr::lead`]). `active`: a PR of the Plan of the chat slot's Lead (the Plan Lead whose latest
-/// `session-moved` says `chat`, the newest when there are several: `chat_slot`'s rule) points to it.
-fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
-    let ready = cpd_core::pr::pulls::ready_to_merge_sql("q");
-    let mut stmt = conn.prepare(&format!(
-        "SELECT q.repo, q.number, q.title, q.draft, q.checks, q.review_decision, q.url,
-                q.mergeable = 'conflicting', {ready},
-                EXISTS (SELECT 1 FROM prs r WHERE r.pull_request = q.id AND r.plan =
-                        (SELECT s.plan FROM sessions s
-                           JOIN events m ON m.id = (SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-moved')
-                          WHERE s.role = 'lead' AND s.plan IS NOT NULL AND json_extract(m.data, '$.place') = 'chat'
-                          ORDER BY m.id DESC LIMIT 1)),
-                (SELECT p.lead_session FROM prs r JOIN plans p ON p.id = r.plan
-                  WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1),
-                COALESCE((SELECT s.state = 'working' FROM prs r JOIN plans p ON p.id = r.plan JOIN sessions s ON s.id = p.lead_session
-                           WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1), 0),
-                (SELECT j.status FROM prs r JOIN jobs j ON j.plan = r.plan AND j.pr = r.key
-                  WHERE r.pull_request = q.id AND j.kind = 'update' AND j.status IN ('queued', 'running')
-                  ORDER BY j.status = 'running' DESC LIMIT 1),
-                -- the tree's rule (`PlanHead::counts.failed >= 1`, tree.rs): the Plan has a failed Job
-                COALESCE((SELECT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = p.id AND j.status = 'failed')
-                            FROM prs r JOIN plans p ON p.id = r.plan
-                           WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1), 0),
-                (SELECT p.phase FROM prs r JOIN plans p ON p.id = r.plan
-                  WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1),
-                (SELECT r.jira FROM prs r JOIN plans p ON p.id = r.plan
-                  WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1)
-           FROM pull_requests q WHERE q.state = 'open' AND q.authored = 1 ORDER BY q.created_at, q.repo, q.number",
-    ))?;
-    let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
-    while let Some(r) = rows.next()? {
-        let (repo, number): (String, i64) = (r.get(0)?, r.get(1)?);
-        let what = format!("Pull request {repo}#{number}");
-        let decision: String = r.get(5)?;
-        out.push(OpenPr {
-            title: r.get(2)?,
-            draft: r.get(3)?,
-            checks: Checks::parse(&what, &r.get::<_, String>(4)?)?,
-            review_decision: match decision.as_str() {
-                "none" => ReviewDecision::None,
-                "approved" => ReviewDecision::Approved,
-                "changes_requested" => ReviewDecision::ChangesRequested,
-                _ => return Err(bad_row(format!("{what} has review_decision {decision:?}"))),
-            },
-            url: r.get(6)?,
-            conflicting: r.get(7)?,
-            update: super::flow::update_state(&what, r.get::<_, Option<String>>(12)?.as_deref())?,
-            clean: r.get(8)?,
-            active: r.get(9)?,
-            lead: r.get::<_, Option<String>>(10)?.map(|lead| id("Session id", &lead, SessionId::parse)).transpose()?,
-            jira: r.get(15)?,
-            lead_working: r.get(11)?,
-            plan_failed: r.get(13)?,
-            plan_phase: r
-                .get::<_, Option<String>>(14)?
-                .map(|p| Phase::parse(&p).ok_or_else(|| bad_row(format!("{what} has owning Plan phase {p:?}"))))
-                .transpose()?,
-            merging: false,
-            repo,
-            number,
-        });
-    }
-    Ok(out)
 }
 
 /// Plan id → its Lead Session's name and place.

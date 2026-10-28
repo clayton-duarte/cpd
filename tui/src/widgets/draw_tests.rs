@@ -15,10 +15,6 @@ use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 
-/// The pill's left cap, U+E0B6.
-const CAP_LEFT: &str = "\u{E0B6}";
-const CAP_RIGHT: &str = "\u{E0B4}";
-
 // ---------- fixtures (the store API, as tui_read.rs prepares it) ----------
 
 /// A store in a temp directory; the directory lives as long as the returned guard.
@@ -36,16 +32,6 @@ fn sql(store: &mut Store, text: &str) {
             Ok::<(), CpdError>(())
         })
         .unwrap();
-}
-
-/// A section title as the User reads it back from a `width`-column pane (`tests/tui/tui_titles.rs` mirrors `section::title`): a blank
-/// column, two `─`, the title as a pill, `─` up to the count's pill (when given) and the blank last column.
-fn title_row(width: usize, title: &str, count: Option<usize>) -> String {
-    let count = count.map(|n| n.to_string());
-    let used = 1 + 2 + 2 + title.chars().count() + 1 + count.as_ref().map_or(0, |c| 2 + c.chars().count());
-    let fill = "─".repeat(width - used);
-    let count = count.map(|c| format!("{CAP_LEFT}{c}{CAP_RIGHT}")).unwrap_or_default();
-    format!(" ──{CAP_LEFT}{title}{CAP_RIGHT}{fill}{count}")
 }
 
 fn context(id: &str) -> String {
@@ -163,7 +149,7 @@ fn machine() -> Machine {
 
 fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|f| drop(draw(f, f.area(), &w.prs, &machine(), 0, 0, &w.inbox, (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
+    terminal.draw(|f| drop(draw(f, f.area(), &machine(), 0, &w.inbox, (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
     terminal.backend().buffer().clone()
 }
 
@@ -189,10 +175,6 @@ fn plain(symbol: &str) -> String {
     out
 }
 
-/// A PR's first line on a pane of `width` columns: its name, then `󱆭` in the last column.
-fn first_line(name: &str, width: usize) -> String {
-    format!("{name:<w$}{CUE}", w = width - 1)
-}
 
 /// The first cell of the first row at or after `from` that contains `needle` (every glyph here is one column wide).
 fn find_after(buf: &Buffer, from: u16, needle: &str) -> (u16, u16) {
@@ -205,11 +187,6 @@ fn find(buf: &Buffer, needle: &str) -> (u16, u16) {
     find_after(buf, 0, needle)
 }
 
-/// A section title on the 46-column test pane.
-fn header(title: &str, count: Option<usize>) -> String {
-    title_row(46, title, count)
-}
-
 /// The column on the prepared store as the User sees it: the open pull requests, oldest first.
 fn column(height: u16) -> (Vec<String>, Buffer) {
     let (_dir, mut store) = fixture();
@@ -219,41 +196,14 @@ fn column(height: u16) -> (Vec<String>, Buffer) {
 }
 
 #[test]
-fn the_column_shows_the_machine_and_the_open_prs_and_nothing_else() {
+fn the_column_shows_the_machine_and_the_inbox_under_it_and_nothing_else() {
     let (got, _) = column(25);
-    let prs = header("PRs", Some(2));
-    let (seven, eleven) = (first_line(" acme/repo#7", 46), first_line(" acme/repo#11", 46));
-    let failed_open = format!("  open {} changes requested  cpd-tui cockpit c…", palette::CHECKS_FAILED);
-    let none_open = format!("  open {} no review  Plan fresh", palette::CHECKS_NONE);
-    let mut expected = vec![
-        "",
-        " homeserver",
-        " \u{F4BC} 23%  \u{EFC5} 41%",
-        "",
-        prs.as_str(),
-        "",
-        seven.as_str(),
-        failed_open.as_str(),
-        eleven.as_str(),
-        none_open.as_str(),
-    ];
-    // the Inbox section is the column's last five rows (no engine holds the lock here: `engine-down` is its one item)
-    expected.resize(20, "");
-    assert_eq!(got[..20], expected, "\n{}", got.join("\n"));
-    assert!(got[21].contains("Inbox") && got[22].contains("engine is down"), "\n{}", got.join("\n"));
-    assert_eq!((got[20].as_str(), got[24].as_str()), ("", ""), "the section's empty rows:\n{}", got.join("\n"));
-}
-
-#[test]
-fn each_section_header_has_a_blank_row_above_and_below() {
-    for height in [20, 25, 29] {
-        let (got, _) = column(height);
-        for (title, count) in [("PRs", Some(2))] {
-            let at = got.iter().position(|r| *r == header(title, count)).unwrap_or_else(|| panic!("{title} at {height}:\n{got:#?}"));
-            assert_eq!(got[at - 1], "", "above {title} at {height}:\n{got:#?}");
-            assert_eq!(got[at + 1], "", "below {title} at {height}:\n{got:#?}");
-        }
-    }
+    let expected = ["", " homeserver", " \u{F4BC} 23%  \u{EFC5} 41%", ""];
+    assert_eq!(got[..4], expected, "\n{}", got.join("\n"));
+    // the Inbox section is right under them (no engine holds the lock here: `engine-down` is its one item)
+    assert!(got[4].contains("Inbox") && got[5].contains("engine is down"), "\n{}", got.join("\n"));
+    assert!(got[6..].iter().all(|r| r.is_empty() || r.contains("expand") || r.contains('╰')), "\n{}", got.join("\n"));
+    assert!(!got.iter().any(|r| r.contains("PRs") || r.contains("acme/repo#")), "\n{}", got.join("\n"));
 }
 
 #[test]
@@ -277,34 +227,14 @@ fn the_column_has_no_engine_slots_escalations_events_or_hint() {
 #[test]
 fn the_column_takes_every_colour_from_the_palette() {
     let (_, buf) = column(29);
-    let fg = |at: (u16, u16)| buf[at].fg;
     let c = palette::color;
-    // The PRs: state and checks.
-    assert_eq!(fg(find(&buf, "open")), palette::clickable_text().fg.unwrap(), "an owned PR's `open` is 15 (yellow only when it is ready to merge)");
-    assert_eq!(fg(find(&buf, palette::CHECKS_FAILED)), palette::color_clickable(Meaning::Waiting), "`acme/repo#7` is a Plan's: its Lead fixes failed checks (hs-d302)");
-    assert_eq!(fg(find(&buf, palette::CHECKS_NONE)), c(Meaning::Nothing));
-    // The titles: the corner and the line grey, the title inverted inside its caps.
-    for title in ["PRs"] {
-        let (x, y) = find(&buf, &format!("──{CAP_LEFT}{title}"));
-        assert_eq!(buf[(x, y)].fg, c(Meaning::Nothing), "{title}");
-        assert_eq!(buf[(x + 1, y)].fg, c(Meaning::Nothing), "{title}");
-        let word = buf[(x + 3, y)].clone();
-        assert_eq!((word.fg, word.bg), (palette::pill_static().fg.unwrap(), palette::pill_static().bg.unwrap()), "{title}");
-        assert!(!buf[(x, y)].modifier.contains(Modifier::BOLD), "{title}");
-    }
     let dim = |at: (u16, u16)| buf[at].fg == c(Meaning::Nothing);
     let bold = |at: (u16, u16)| buf[at].modifier.contains(Modifier::BOLD);
-    // Bold: the machine and the pull request names (the section titles are bold too); muted (colour 8): the title of the PR.
-    for title in ["homeserver", "acme/repo#7"] {
-        assert!(bold(find(&buf, title)), "{title}");
-        assert!(!dim(find(&buf, title)), "{title}");
-    }
-    for faint in ["cpd-tui cockpit", "Plan fresh"] {
-        assert!(dim(find(&buf, faint)), "{faint}");
-        assert!(!bold(find(&buf, faint)), "{faint}");
-    }
-    // Plain: the review decision and the CPU and memory %: not bold, not muted.
-    for plain in ["no review", "changes requested", "23%", "41%"] {
+    // Bold: the machine's name.
+    assert!(bold(find(&buf, "homeserver")));
+    assert!(!dim(find(&buf, "homeserver")));
+    // Plain: the CPU and memory %: not bold, not muted.
+    for plain in ["23%", "41%"] {
         let at = find(&buf, plain);
         assert!(!dim(at) && !bold(at), "{plain}");
     }
@@ -397,10 +327,10 @@ fn the_session_dots_are_listed_in_their_colours() {
     );
     find_after(&buf, dots, &precedence);
     let red = row(&buf, find_after(&buf, dots, "red:").1);
-    assert!(red.contains("a dialog in dispatch or deploy, a stuck Job, an engine error, your own failing or changed pull request"), "{red}");
+    assert!(red.contains("a dialog in dispatch or deploy, a stuck Job, an engine error, your own broken pull request that nobody is fixing"), "{red}");
     assert!(!red.contains("Escalation") && !red.contains("or pr"), "{red}");
     let yellow = row(&buf, find_after(&buf, dots, "yellow:").1);
-    assert!(yellow.contains("yellow: ready to merge, review requested"), "{yellow}");
+    assert!(yellow.contains("yellow: ready to post, ready to merge, review requested"), "{yellow}");
     let waiting = row(&buf, find_after(&buf, dots, "waiting:").1);
     assert!(waiting.contains("an agent waits for another agent"), "{waiting}");
 }

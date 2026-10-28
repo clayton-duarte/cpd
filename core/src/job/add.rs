@@ -211,7 +211,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
     // A review Job's `touches` is informational (commands.md §5.1).
     if let (Some(spec), false) = (&wanted.spec, wanted.review) {
         let pr = prs.iter().find(|p| p.key.as_str() == job.pr).expect("check_pr_live found the PR");
-        check_touches(pr, &spec.touches)?;
+        check_touches(pr, &prs, &spec.touches)?;
     }
     check_needs_known(&all, plan, &job.needs)?;
     check_needs_same_pr(&all, plan, &job.pr, &job.needs)?;
@@ -351,10 +351,18 @@ pub(super) fn primary_roots(prs: &[PrRow]) -> Vec<(String, PathBuf)> {
 
 /// Every `touches` entry against the tree the Job will start from (contract §2.1, hs-d512): the PR's Lead Branch head once
 /// the PR started, else its base. A literal path must exist, or its parent directory must (a new file); a glob must match a
-/// file, or its fixed prefix directory must exist. `touches_missing`, `details: {missing, tree}`.
-pub(super) fn check_touches(pr: &PrRow, touches: &[String]) -> Result<(), CpdError> {
+/// file, or its fixed prefix directory must exist. Nothing is read, and the check passes, for a PR that has not started and
+/// is stacked on a base PR that is `waiting` or `dispatch` (its Lead Branch is not in the repo yet). `touches_missing`, `details: {missing, tree}`.
+pub(super) fn check_touches(pr: &PrRow, prs: &[PrRow], touches: &[String]) -> Result<(), CpdError> {
     // A PR whose repo path is not on this machine has no tree to check against (a Plan written elsewhere, a test's placeholder).
     if touches.is_empty() || !std::path::Path::new(&pr.repo).is_dir() {
+        return Ok(());
+    }
+    // A PR that has not started, stacked on a base PR (same Plan and repo, Lead Branch == its base) that is `waiting` or
+    // `dispatch`, has no tree to read yet: the base's Lead Branch does not exist.
+    let base_unopened = pr.lead_worktree.is_none()
+        && prs.iter().any(|q| q.repo == pr.repo && q.lead_branch == pr.base && matches!(q.status.as_str(), "waiting" | "dispatch"));
+    if base_unopened {
         return Ok(());
     }
     let tree = if pr.lead_worktree.is_some() { pr.lead_branch.as_str() } else { pr.base.as_str() };

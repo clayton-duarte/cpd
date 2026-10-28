@@ -334,7 +334,7 @@ fn polled_2385(fx: &mut Fx, review_decision: &str, merge_state: &str) {
     ));
 }
 
-const PR_READY_OPEN: &str = "SELECT count(*) FROM inbox_items WHERE kind = 'pr-ready' AND closed_at IS NULL";
+const PR_READY_OPEN: &str = "SELECT count(*) FROM inbox_items WHERE kind = 'pr-ready' AND label LIKE '% ready to merge' AND closed_at IS NULL";
 
 /// hs-d481: a pull request GitHub reports REVIEW_REQUIRED and BLOCKED (stored `none`, `blocked`) is never `pr-ready`.
 /// `a_clean_approved_pull_request_is_ready` is the positive control.

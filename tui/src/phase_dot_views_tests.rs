@@ -8,7 +8,7 @@
 use cpd_core::config::Tier;
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
-use cpd_core::ids::{JobKey, PlanId, PrKey, SessionId};
+use cpd_core::ids::{JobKey, PlanId, PrKey};
 use cpd_core::plan::Phase;
 use cpd_core::store::Store;
 use ratatui::style::Color;
@@ -16,8 +16,7 @@ use ratatui::style::Color;
 use crate::palette;
 use crate::palette::numbered::{C9, C10, C11, C13, C14, C15};
 use crate::plan::boxes;
-use crate::read::{self, JobNode, JobStatus, NeedsUser, OpenPr, PrNode, PrState, PrStatus, Pull};
-use crate::widgets::column;
+use crate::read::{self, JobNode, JobStatus, NeedsUser, PrNode, PrState, PrStatus, Pull};
 
 /// Each Plan of the fixture: its phase, its id and its Lead Session.
 const PHASES: [(Phase, &str, &str); 5] = [
@@ -113,64 +112,6 @@ fn the_pr_box_title_dot_follows_the_plans_phase() {
     assert_eq!(title_dot(&pr_node(true), &[failed_job()], &failed, 3), Some(C9), "a failed Job: the red loader whatever the phase");
     let idle = NeedsUser { lead_working: true, lead_phase: Some(Phase::Deploy), ..NeedsUser::default() };
     assert_eq!(title_dot(&pr_node(false), &[], &idle, 3), None, "an idle Lead draws no dot");
-}
-
-/// `the_open_pr_rows_read_their_owners_plan_phase`: the Dispatch column's read gives a Plan-owned pull request the
-/// phase of the Plan that owns it, and `None` to one no Plan owns.
-#[test]
-fn the_open_pr_rows_read_their_owners_plan_phase() {
-    let (_dir, mut store) = fixture();
-    let (prs, _) = read::open_prs(&mut store).unwrap();
-    for (i, (phase, _, _)) in PHASES.iter().enumerate() {
-        let number = i as i64 + 1;
-        let pr = prs.iter().find(|p| p.number == number).unwrap_or_else(|| panic!("pull request #{number}"));
-        assert_eq!(pr.plan_phase, Some(*phase), "pull request #{number}");
-    }
-    let unowned = prs.iter().find(|p| p.number == 6).expect("the pull request no Plan owns");
-    assert_eq!(unowned.plan_phase, None, "a pull request no Plan owns has no phase");
-}
-
-/// An open pull request of `acme/repo#7` a Plan owns, with the new `plan_phase`.
-fn open_pr(lead_working: bool, plan_failed: bool, plan_phase: Option<Phase>) -> OpenPr {
-    OpenPr {
-        repo: "acme/repo".to_owned(),
-        number: 7,
-        url: "https://github.com/acme/repo/pull/7".to_owned(),
-        title: "A title".to_owned(),
-        draft: false,
-        checks: read::Checks::Passed,
-        review_decision: read::ReviewDecision::None,
-        conflicting: false,
-        update: None,
-        clean: false,
-        active: false,
-        lead: Some(SessionId::parse("l-a").unwrap()),
-        jira: None,
-        lead_working,
-        plan_failed,
-        plan_phase,
-        merging: false,
-    }
-}
-
-/// The foreground of the Lead's dot in the second line of an open-PR row, found by its spinner glyph.
-fn row_dot(pr: &OpenPr, frame: usize) -> Option<Color> {
-    let [_, second] = column::pr_lines(pr, 60, frame);
-    let dot = second.spans.iter().find(|span| palette::SPINNER.iter().any(|glyph| span.content.as_ref() == *glyph))?;
-    dot.style.fg
-}
-
-/// `the_open_pr_row_dot_follows_the_plans_phase`: the second line of a working Lead's open-PR row shows the dot in
-/// the bright pair of the Plan's phase colour, cyan with no Plan, the red loader with a failed Job, and none when
-/// the Lead is not working.
-#[test]
-fn the_open_pr_row_dot_follows_the_plans_phase() {
-    for (phase, colour) in [(Phase::Dispatch, C14), (Phase::Deploy, C11), (Phase::Done, C10)] {
-        assert_eq!(row_dot(&open_pr(true, false, Some(phase)), 3), Some(colour), "{phase:?}");
-    }
-    assert_eq!(row_dot(&open_pr(true, false, None), 3), Some(C14), "a working Session that leads no Plan is cyan");
-    assert_eq!(row_dot(&open_pr(true, true, Some(Phase::Deploy)), 3), Some(C9), "a failed Job: the red loader whatever the phase");
-    assert_eq!(row_dot(&open_pr(false, false, Some(Phase::Deploy)), 3), None, "an idle Lead draws no dot");
 }
 
 /// A store of one Context: a Plan in each phase with a working Lead, each owning an open, authored pull request

@@ -2,13 +2,12 @@
 
 use ratatui::buffer::CellWidth;
 use cpd_core::config::Tier;
-use cpd_core::ids::{JobKey, PrKey, SessionId};
+use cpd_core::ids::{JobKey, PrKey};
 use cpd_core::session::State;
 
-use super::{Checks, Dot, JobNode, JobStatus, NeedsUser, OpenPr, PrFacts, PrNode, PrState, PrStatus, Pull, ReviewDecision, UpdateState, pr_look};
+use super::{Dot, JobNode, JobStatus, NeedsUser, PrFacts, PrNode, PrState, PrStatus, Pull, UpdateState, pr_look};
 use crate::palette::{self, Meaning};
 use crate::plan::boxes;
-use crate::widgets::column::pr_lines;
 
 fn facts(state: PrState) -> PrFacts {
     PrFacts { state, draft: false, clean: false, conflicting: false, owned: false, update: None, asked: false }
@@ -119,28 +118,6 @@ fn failed_job() -> JobNode {
     }
 }
 
-fn open_pr() -> OpenPr {
-    OpenPr {
-        repo: "acme/repo".to_owned(),
-        number: 7,
-        url: "https://github.com/acme/repo/pull/7".to_owned(),
-        title: "A title".to_owned(),
-        draft: false,
-        checks: Checks::Passed,
-        review_decision: ReviewDecision::None,
-        conflicting: false,
-        update: None,
-        clean: false,
-        active: false,
-        lead: Some(SessionId::parse("l-a").unwrap()),
-        jira: None,
-        lead_working: false,
-        plan_failed: false,
-        plan_phase: None,
-        merging: false,
-    }
-}
-
 /// The plan box's top row (its title) of one PR box, as cells.
 fn box_top(pull: Pull, jobs: &[JobNode], frame: usize) -> Vec<ratatui::buffer::Cell> {
     let chart = boxes::layout(&[pr_node(pull)], jobs, &NeedsUser::default(), frame).chart;
@@ -178,15 +155,12 @@ fn the_plan_box_title_of_a_draft_pr_says_draft() {
 }
 
 #[test]
-fn the_plan_box_and_the_dispatch_row_use_the_same_conflict_word_for_the_same_pr() {
+fn the_plan_box_uses_the_conflict_word_of_pr_look() {
     for update in [None, Some(UpdateState::Running), Some(UpdateState::Queued)] {
         let look = pr_look(&PrFacts { conflicting: true, owned: true, update, ..facts(PrState::Open) });
-        let (word, meaning) = look.conflict.expect("a conflict word");
+        let (word, _) = look.conflict.expect("a conflict word");
         let top = text(&box_top(Pull { conflicting: true, update, ..pull(PrState::Open) }, &[], 0));
-        let [_, second] = pr_lines(&OpenPr { conflicting: true, update, ..open_pr() }, 60, 0);
         assert!(top.contains(&format!("#12 {word}")), "{update:?}: {top}");
-        let span = second.spans.iter().find(|s| s.content.trim() == word).expect("the row's conflict span");
-        assert_eq!(span.style, palette::fg_clickable(meaning), "{update:?}");
     }
 }
 
@@ -201,18 +175,10 @@ fn a_working_lead_of_a_plan_with_a_failed_job_shows_the_red_loader_in_the_plan_b
 }
 
 #[test]
-fn a_working_lead_of_a_plan_with_a_failed_job_shows_the_red_loader_in_the_dispatch_row() {
-    let [_, second] = pr_lines(&OpenPr { lead_working: true, plan_failed: true, ..open_pr() }, 60, 2);
-    assert!(second.spans.contains(&palette::dot_span(Dot::Fixing, 2, false)), "{second:?}");
-}
-
-#[test]
-fn a_working_lead_of_a_plan_without_a_failed_job_shows_the_plain_spinner_in_both() {
+fn a_working_lead_of_a_plan_without_a_failed_job_shows_the_plain_spinner_in_the_plan_box() {
     assert_eq!(Dot::working(false, None), Dot::Working(None));
     let cells = box_top(Pull { lead_working: true, ..pull(PrState::Open) }, &[], 2);
     assert_eq!(spinner_fg(&cells), palette::dot_span(Dot::Working(None), 2, false).style.fg);
-    let [_, second] = pr_lines(&OpenPr { lead_working: true, ..open_pr() }, 60, 2);
-    assert!(second.spans.contains(&palette::dot_span(Dot::Working(None), 2, false)), "{second:?}");
 }
 
 #[test]

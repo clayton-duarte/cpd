@@ -489,7 +489,7 @@ test("every Event kind of the Lead's Dispatching table is one the adapter delive
 
 test("the skills' list of pr-feedback reasons and of ladder causes is the contract's", () => {
   const reasons = vocabulary().reasons;
-  assert.ok(reasons.size === 6); // reasons: checks_failed, changes_requested, comments, closed, ready_to_post, approved (pro-d64)
+  assert.ok(reasons.size === 5); // reasons: checks_failed, changes_requested, comments, closed, approved (pro-d64; pro-d130 removed the post-readiness reason)
   const lead = skillFiles("cpd-lead")[0]!.text;
   const stated = /`data\.reasons` lists ((?:`[a-z_]+`(?:, | or )?)+)/.exec(lead);
   assert.ok(stated, "the pr-feedback row lists data.reasons");

@@ -188,7 +188,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
             if locked && !lead_exists {
                 pr.lead_worktree = None;
             }
-            super::add::check_touches(&pr, &spec.touches)?;
+            super::add::check_touches(&pr, &prs, &spec.touches)?;
         }
     }
     if edits.spec.is_some() || moved {

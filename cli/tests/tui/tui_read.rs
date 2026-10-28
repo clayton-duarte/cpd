@@ -1009,7 +1009,7 @@ fn a_pull_request_is_conflicting_only_when_the_poll_saw_a_conflict() {
 #[test]
 fn an_open_pull_request_is_clean_only_when_its_merge_state_is_clean() {
     let (_fx, mut store) = fixture();
-    let clean = |store: &mut Store| read::widgets(store, 3, 0).unwrap().prs.iter().find(|p| p.number == 7).unwrap().clean;
+    let clean = |store: &mut Store| read::plan_boxes(store, &plan("rel")).unwrap().prs[0].pull.as_ref().unwrap().clean;
     assert!(!clean(&mut store), "a fresh row reads `unknown`");
     sql(&mut store, "UPDATE pull_requests SET base_ref = 'main', default_branch = 'main' WHERE number = 7");
     for (merge_state, want) in [("clean", true), ("blocked", false), ("unstable", false), ("unknown", false)] {
@@ -1114,55 +1114,6 @@ fn the_widgets_list_every_plan_with_its_pr() {
 }
 
 #[test]
-fn an_open_pull_request_carries_its_url_and_the_lead_of_its_owner() {
-    let (_fx, mut store) = fixture();
-    // `acme/work#70` is one of the User's own: no Plan's PR points to it.
-    sql(
-        &mut store,
-        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-         VALUES ('acme/work', 70, 'https://github.com/acme/work/pull/70', 'Mine', 0, 'open', 'none', 'none',
-                 '2026-01-07T00:00:00.000Z', NULL, '2026-01-07T00:00:00.000Z');",
-    );
-    let w = read::widgets(&mut store, 3, 0).unwrap();
-    let listed: Vec<(&str, i64, &str, Option<&str>)> =
-        w.prs.iter().map(|p| (p.repo.as_str(), p.number, p.url.as_str(), p.lead.as_ref().map(SessionId::as_str))).collect();
-    assert_eq!(
-        listed,
-        [
-            ("acme/repo", 7, "https://github.com/acme/repo/pull/7", Some("l-rel")),
-            ("acme/work", 70, "https://github.com/acme/work/pull/70", None),
-        ],
-        "an owned one and an unowned one; the closed and the merged are not listed"
-    );
-    assert!(w.prs.iter().all(|p| !p.active), "the chat slot holds l-ship, which has no PR");
-    assert!(w.prs.iter().all(|p| !p.conflicting), "the default `unknown` is not a conflict");
-
-    // `mergeable` is a conflict only when it is `conflicting`.
-    sql(&mut store, "UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 70; UPDATE pull_requests SET mergeable = 'mergeable' WHERE number = 7;");
-    let w = read::widgets(&mut store, 3, 0).unwrap();
-    assert_eq!(w.prs.iter().map(|p| (p.number, p.conflicting)).collect::<Vec<_>>(), [(7, false), (70, true)]);
-    sql(&mut store, "UPDATE pull_requests SET mergeable = 'unknown' WHERE number = 70;");
-
-    // Two Plans own the same pull request (the later one took it over): the most recently created Plan's Lead owns it.
-    let lead = session_row("l-rel2", "lead", "beta", "rel2", None, "idle", None, "2026-01-04T00:00:00.000Z");
-    sql(
-        &mut store,
-        &format!(
-            "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
-             VALUES ('rel2', 'beta', 'Plan rel2', 'deploy', 'l-rel2', '2026-01-04T00:00:00.000Z', '2026-01-04T00:00:00.000Z');
-             {lead}
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
-                              created_txn, created_at, started_at)
-             VALUES ('rel2', 'repo', '/repo', 'main', 'open', 'cpd/rel2', '/wt', 7, 'https://github.com/acme/repo/pull/7',
-                     '2026-01-05T00:00:00.000Z', (SELECT id FROM pull_requests WHERE number = 7), cpd_txn(),
-                     '2026-01-04T00:00:00.000Z', '2026-01-04T00:00:00.000Z');"
-        ),
-    );
-    let w = read::widgets(&mut store, 3, 0).unwrap();
-    assert_eq!(w.prs[0].lead.as_ref().map(SessionId::as_str), Some("l-rel2"));
-}
-
-#[test]
 fn a_pull_request_is_worked_only_while_its_owners_lead_is_working() {
     let (_fx, mut store) = fixture();
     // `acme/work#70` is no Plan's: nobody works it.
@@ -1172,19 +1123,15 @@ fn a_pull_request_is_worked_only_while_its_owners_lead_is_working() {
          VALUES ('acme/work', 70, 'https://github.com/acme/work/pull/70', 'Mine', 0, 'open', 'none', 'none',
                  '2026-01-07T00:00:00.000Z', NULL, '2026-01-07T00:00:00.000Z');",
     );
-    let worked = |store: &mut Store| {
-        let w = read::widgets(store, 3, 0).unwrap();
-        let boxes = read::plan_boxes(store, &plan("rel")).unwrap();
-        (w.prs.iter().map(|p| (p.number, p.lead_working)).collect::<Vec<_>>(), boxes.prs[0].pull.as_ref().unwrap().lead_working)
-    };
+    let worked = |store: &mut Store| read::plan_boxes(store, &plan("rel")).unwrap().prs[0].pull.as_ref().unwrap().lead_working;
     for state in ["blocked", "idle", "waiting", "stopped"] {
         sql(&mut store, &format!(
                 "UPDATE sessions SET state = '{state}', state_label = CASE WHEN '{state}' IN ('waiting', 'blocked') THEN 'why' END WHERE id = 'l-rel'"
             ));
-        assert_eq!(worked(&mut store), (vec![(7, false), (70, false)], false), "{state}");
+        assert!(!worked(&mut store), "{state}");
     }
     sql(&mut store, "UPDATE sessions SET state = 'working', state_label = NULL WHERE id = 'l-rel'");
-    assert_eq!(worked(&mut store), (vec![(7, true), (70, false)], true), "the Lead of acme/repo#7 works; nobody owns #70");
+    assert!(worked(&mut store), "the Lead of acme/repo#7 works");
 }
 
 #[test]
@@ -1221,13 +1168,12 @@ fn the_widgets_return_the_latest_events_oldest_first_and_the_cursor() {
     assert!(read::widgets(&mut store, 3, 1000).unwrap().events.len() as i64 <= last);
 }
 
-/// tui-F1: the StatusBar reads the slots and the Dispatch column the open pull requests, not the whole model.
+/// tui-F1: the StatusBar reads the slots, not the whole model.
 #[test]
-fn the_slots_and_the_open_prs_read_alone_are_the_widgets_own() {
+fn the_slots_read_alone_are_the_widgets_own() {
     let (_fx, mut store) = fixture();
     let w = read::widgets(&mut store, 3, 0).unwrap();
     assert_eq!(read::slots(&mut store, 3).unwrap(), (w.slots, w.events_cursor));
-    assert_eq!(read::open_prs(&mut store).unwrap(), (w.prs, w.events_cursor));
 }
 
 /// tui-F3: a pull request row changes with no Event (`pr poll` writes the checks, the review, `mergeable`), so the follow

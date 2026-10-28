@@ -43,7 +43,7 @@ pub(crate) mod poll;
 pub mod posts;
 pub mod reactions;
 mod post;
-mod postable;
+pub(crate) mod postable;
 pub mod pulls;
 mod push;
 mod reply;
