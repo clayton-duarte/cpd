@@ -305,7 +305,7 @@ fn add_lays_out_the_tdd_template_by_default_as_stub_drafts() {
     assert_eq!(kinds, [(json!("api-docs"), json!("docs")), (json!("api-tests"), json!("test")), (json!("api-impl"), json!("impl")), (json!("open-api"), json!("open"))]);
     assert_eq!(
         added[1]["data"],
-        json!({"pr": "api", "kind": "test", "status": "draft", "appended": false, "tier": null, "needs": ["api-docs"], "review": false, "urgent": false})
+        json!({"pr": "api", "kind": "test", "status": "draft", "appended": false, "tier": null, "needs": ["api-docs"], "urgent": false})
     );
     let order: Vec<i64> = [fx.events("pr-added")[0]["id"].as_i64().unwrap(), added[0]["id"].as_i64().unwrap()].to_vec();
     assert!(order[0] < order[1], "pr-added comes first: {order:?}");
@@ -1924,96 +1924,6 @@ fn a_merged_job_holds_the_pr_cancel_unless_superseded_and_the_others_are_cancell
     assert_eq!(fx.env.query::<String>("SELECT status FROM jobs WHERE key = 'done'"), "merged");
     assert_eq!(fx.events("pr-cancelled")[0]["data"], json!({"pr": "busyfix", "superseded_by": "other-1/storefix"}));
     assert_eq!(fx.cancelled_jobs(), ["d"]);
-}
-
-impl Crud {
-    /// A review Job (`review = 1`) of PR `pr` in `status` (`merged` or `running`).
-    fn review_job(&self, key: &str, pr: &str, status: &str) {
-        // `review` is set while the Job is still a draft: a Locked Job refuses the change.
-        self.job_kind(key, pr, "draft", "work");
-        self.env.sql(&format!("UPDATE jobs SET review = 1 WHERE key = '{key}'"));
-        self.env.sql(&format!(
-            "UPDATE jobs SET status = 'queued', fingerprint = printf('%064d', 1) WHERE key = '{key}';
-             UPDATE jobs SET status = 'running' WHERE key = '{key}'"
-        ));
-        if status == "merged" {
-            self.env.sql(&format!("UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = '{key}'"));
-        }
-    }
-}
-
-#[test]
-fn a_dispatch_pr_holding_only_a_merged_review_job_is_cancelled_without_superseded_by() {
-    let fx = crud("dispatch");
-    fx.locked_pr("api", &fx.pay, "merged");
-    fx.locked_pr("audit", &fx.web, "dispatch");
-    fx.review_job("rev", "audit", "merged");
-    fx.job_of("fixes", "audit", "work", "draft");
-    fx.job_of("open-audit", "audit", "open", "queued");
-
-    let out = fx.pr(&["cancel", "audit"]).ok();
-    assert_eq!(out["pr"], json!({"key": "audit", "status": "cancelled"}));
-    assert_eq!(out["phase"], "done");
-    assert_eq!((fx.pr_status("audit"), fx.phase()), ("cancelled".to_string(), "done".to_string()));
-    assert_eq!(fx.job_row("rev"), "merged/-/-");
-    assert_eq!((fx.job_row("fixes"), fx.job_row("open-audit")), ("cancelled/pr cancelled/-".to_string(), "cancelled/pr cancelled/-".to_string()));
-    assert_eq!(fx.cancelled_jobs(), ["fixes", "open-audit"]);
-
-    let cancelled = fx.events("pr-cancelled");
-    assert_eq!(cancelled.len(), 1);
-    assert_eq!(cancelled[0]["data"], json!({"pr": "audit"}));
-    assert_eq!(fx.events("plan-done").len(), 1);
-
-    let writes = fx.writes();
-    assert_eq!(fx.pr(&["cancel", "audit"]).ok()["already"], true);
-    assert_eq!(fx.writes(), writes);
-}
-
-#[test]
-fn a_merged_code_job_beside_a_merged_review_job_still_holds_the_pr_cancel() {
-    let fx = crud("dispatch");
-    fx.plan("other-1", "ctx", "deploy");
-    fx.merged_pr("other-1", "storefix", &fx.pay, 8);
-    fx.locked_pr("api", &fx.pay, "merged");
-    fx.locked_pr("busyfix", &fx.web, "dispatch");
-    fx.merged_job("code", "busyfix");
-    fx.review_job("rev", "busyfix", "merged");
-
-    let writes = fx.writes();
-    let error = fx.refused(&fx.pr(&["cancel", "busyfix"]), "pr_in_use", 3, writes);
-    assert_eq!(error["details"]["jobs"], json!(["code"]));
-    assert_eq!(fx.writes(), writes);
-    assert_eq!(fx.pr_status("busyfix"), "dispatch");
-
-    fx.pr(&["cancel", "busyfix", "--superseded-by", "other-1/storefix"]).ok();
-    assert_eq!(fx.pr_status("busyfix"), "cancelled");
-}
-
-#[test]
-fn a_running_review_job_still_holds_the_pr_cancel() {
-    let fx = crud("dispatch");
-    fx.locked_pr("api", &fx.pay, "merged");
-    fx.locked_pr("audit", &fx.web, "dispatch");
-    fx.review_job("rev", "audit", "running");
-
-    let writes = fx.writes();
-    let error = fx.refused(&fx.pr(&["cancel", "audit"]), "pr_in_use", 3, writes);
-    assert_eq!(error["details"]["jobs"], json!(["rev"]));
-    assert_eq!(fx.writes(), writes);
-    assert_eq!(fx.pr_status("audit"), "dispatch");
-}
-
-#[test]
-fn a_plan_whose_only_pr_ends_as_an_audit_stays_in_dispatch() {
-    let fx = crud("dispatch");
-    fx.locked_pr("audit", &fx.web, "dispatch");
-    fx.review_job("rev", "audit", "merged");
-
-    let out = fx.pr(&["cancel", "audit"]).ok();
-    assert_eq!(out["pr"], json!({"key": "audit", "status": "cancelled"}));
-    assert!(out.get("phase").is_none());
-    assert_eq!((fx.pr_status("audit"), fx.phase()), ("cancelled".to_string(), "dispatch".to_string()));
-    assert_eq!(fx.events("plan-done").len(), 0);
 }
 
 #[test]

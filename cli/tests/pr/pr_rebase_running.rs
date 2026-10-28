@@ -10,15 +10,15 @@ use serde_json::json;
 use crate::pr::Rows;
 
 impl Poll {
-    /// A Job `key` of PR `repo` of `kind` (`review` = 1 for a review Job), `running`, with a running Attempt `<key>-a1`.
-    fn running_attempt(&self, key: &str, kind: &str, review: i64) {
+    /// A Job `key` of PR `repo` of `kind` `running`, with a running Attempt `<key>-a1`.
+    fn running_attempt(&self, key: &str, kind: &str) {
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO jobs (plan, pr, review, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, kind, fingerprint, created_txn, created_at)
-                     VALUES ('pay', 'repo', ?1, ?2, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 1, ?3, ?4, ?5, 't')",
-                    params![review, key, kind, "e".repeat(64), tx.id()],
+                     VALUES ('pay', 'repo', ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 1, ?2, ?3, ?4, 't')",
+                    params![key, kind, "e".repeat(64), tx.id()],
                 )?;
                 tx.execute(
                     "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, driver_pid, started_at)
@@ -62,25 +62,16 @@ fn refused(fx: &Poll, flag: Option<&str>, jobs: serde_json::Value, attempts: ser
 fn rebase_refuses_attempt_running_while_a_work_job_of_the_pr_has_a_running_attempt() {
     let fx = rebase_fx("deploy");
     fx.advance_base("base.txt", "base\n");
-    fx.running_attempt("fix", "work", 0);
+    fx.running_attempt("fix", "work");
 
     refused(&fx, None, json!(["fix"]), json!(["fix-a1"]));
-}
-
-#[test]
-fn rebase_refuses_while_a_review_job_attempt_runs() {
-    let fx = rebase_fx("deploy");
-    fx.advance_base("base.txt", "base\n");
-    fx.running_attempt("look", "work", 1);
-
-    refused(&fx, None, json!(["look"]), json!(["look-a1"]));
 }
 
 #[test]
 fn rebase_refuses_while_an_update_job_attempt_runs() {
     let fx = rebase_fx("deploy");
     fx.advance_base("base.txt", "base\n");
-    fx.running_attempt("up-repo", "update", 0);
+    fx.running_attempt("up-repo", "update");
 
     refused(&fx, None, json!(["up-repo"]), json!(["up-repo-a1"]));
 }
@@ -93,7 +84,7 @@ fn rebase_continue_refuses_attempt_running_and_leaves_the_stopped_rebase_alone()
     fx.conflicting(&["lead"]);
     assert_eq!(code(&fx.pr("rebase")).0, "rebase_conflict");
     fx.resolve("resolved");
-    fx.running_attempt("fix", "work", 0);
+    fx.running_attempt("fix", "work");
 
     refused_continue(&fx);
 }
@@ -121,7 +112,7 @@ fn rebase_abort_is_not_refused_while_an_attempt_runs() {
     fx.sh_prints_head();
     let before = fx.conflicting(&["lead"]);
     assert_eq!(code(&fx.pr("rebase")).0, "rebase_conflict");
-    fx.running_attempt("fix", "work", 0);
+    fx.running_attempt("fix", "work");
 
     let out = fx.rebase("--abort").ok();
 

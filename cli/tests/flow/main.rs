@@ -71,7 +71,7 @@ mod policy_human_gated;
 mod policy_jira;
 mod policy_jira_status;
 mod policy_scopes;
-mod review_job;
+mod retire_review;
 mod review;
 mod secret;
 mod secret_grants;

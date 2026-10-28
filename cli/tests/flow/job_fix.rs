@@ -1,4 +1,4 @@
-//! A Job added to an `open` PR is a feedback fix (pro-d68): only `work` Jobs (and review Jobs) may be appended, and none queues an
+//! A Job added to an `open` PR is a feedback fix (pro-d68): only `work` Jobs may be appended, and none queues an
 //! `update` Job. Written by Job fix-path-tests.
 
 use serde_json::json;
@@ -65,14 +65,6 @@ fn docs_test_and_impl_jobs_are_refused_on_an_open_pr() {
         assert_eq!(e["details"]["allowed"], json!(["work"]), "{kind}");
         assert_eq!((count(&fx.env, "jobs"), count(&fx.env, "events"), count(&fx.env, "txns")), writes, "{kind} wrote");
     }
-}
-
-#[test]
-fn a_review_job_is_allowed_on_an_open_pr() {
-    let fx = Fx::new();
-    open_tdd(&fx);
-    let out = add(&fx, "final", &["--review"]).ok();
-    assert_eq!((&out["job"]["review"], &out["job"]["status"]), (&json!(true), &json!("queued")));
 }
 
 #[test]

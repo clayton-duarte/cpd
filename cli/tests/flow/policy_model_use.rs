@@ -151,7 +151,7 @@ fn c2_a_job_tier_is_checked_against_the_efforts_cached_for_its_repos_s_ref() {
 
 // ---------- c3: a Worker Attempt ----------
 
-/// The argv of every pi the fake tmux was told to start (what follows `--`, from `pi` on), as `review_job.rs` reads it.
+/// The argv of every pi the fake tmux was told to start (what follows `--`, from `pi` on).
 fn pi_calls(live: &Live) -> Vec<Vec<String>> {
     live.fx
         .calls("tmux")
