@@ -149,6 +149,6 @@ mod tests {
         let buf = terminal.backend().buffer().clone();
         assert_eq!(row(&buf, 14), "no_cockpit: nothing here");
         assert_eq!(buf[(0, 14)].fg, palette::error().fg.unwrap());
-        assert!(row(&buf, 4).contains("Inbox"), "the rest is as drawn");
+        assert!(row(&buf, 11).contains("Inbox"), "the rest is as drawn: the header of the bottom-aligned section");
     }
 }
