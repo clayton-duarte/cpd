@@ -28,6 +28,8 @@ mod age;
 #[cfg(test)]
 mod age_tests;
 mod dot;
+#[cfg(test)]
+mod dot_pr_tests;
 mod flow;
 mod follow;
 mod logs;
