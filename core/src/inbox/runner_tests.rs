@@ -27,7 +27,7 @@ fn answer() -> String {
     json!({"data": {
         "viewer": {"login": "me"},
         "p0": {"pullRequest": {
-            "isDraft": false, "state": "OPEN", "reviewDecision": "APPROVED", "author": {"login": "bob"},
+            "title": "Add retries", "isDraft": false, "state": "OPEN", "reviewDecision": "APPROVED", "author": {"login": "bob"},
             "latestReviews": {"nodes": [{"state": "APPROVED", "author": {"login": "amy"}}]}
         }}
     }})

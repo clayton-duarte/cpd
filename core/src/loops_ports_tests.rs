@@ -568,7 +568,7 @@ fn write_cache(h: &Home, posts: &[Value]) {
 fn gh_answer() -> Reply {
     Reply::ok(
         &json!({"data": {"viewer": {"login": "me"},
-                         "p0": {"pullRequest": {"isDraft": false, "state": "OPEN", "reviewDecision": null,
+                         "p0": {"pullRequest": {"title": "Add retries", "isDraft": false, "state": "OPEN", "reviewDecision": null,
                                                 "author": {"login": "ryan"}, "latestReviews": {"nodes": []}}}}})
         .to_string(),
     )

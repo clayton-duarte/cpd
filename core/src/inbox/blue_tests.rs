@@ -108,7 +108,7 @@ fn a_post_that_needs_review_opens_a_blue_item_with_the_same_subject_label_and_ur
     let cache = json!({"version": 1, "polled_at": "2026-01-01T00:00:00.000Z", "channel": "C02JU6C2Z1D", "read": 10, "posts": [post]});
     std::fs::write(path, cache.to_string()).unwrap();
 
-    let pr = GhPr { draft: false, state: GhState::Open, author: "ryan".to_owned(), decision: None, reviews: Vec::new() };
+    let pr = GhPr { title: "Add retries".to_owned(), draft: false, state: GhState::Open, author: "ryan".to_owned(), decision: None, reviews: Vec::new() };
     let lookup = Lookup { me: "clayton-duarte".to_owned(), prs: [(("acme/pay".to_owned(), 812), Some(pr))].into_iter().collect() };
     let bots = ["github-actions".to_owned()];
     let mut github = |_: &[(String, u64)]| -> Result<Lookup, CpdError> { Ok(lookup.clone()) };
@@ -117,6 +117,6 @@ fn a_post_that_needs_review_opens_a_blue_item_with_the_same_subject_label_and_ur
     let reviews: Vec<Condition> = all.into_iter().filter(|c| c.kind == Kind::ReviewRequested).collect();
     assert_eq!(reviews.len(), 1, "{reviews:?}");
     let c = &reviews[0];
-    assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Blue, "pr:acme/pay#812", "review pay#812"));
+    assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Blue, "pr:acme/pay#812", "review pay#812\nAdd retries"));
     assert_eq!(c.url.as_deref(), Some("https://github.com/acme/pay/pull/812"));
 }

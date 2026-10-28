@@ -93,6 +93,8 @@ fn bad(path: &std::path::Path, message: String) -> CpdError {
 /// A pull request's GitHub state, the fields hermes' `classify` reads.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GhPr {
+    /// The pull request's GitHub title, Row 2 of its `review-requested` item.
+    pub title: String,
     pub draft: bool,
     pub state: GhState,
     pub author: String,
@@ -205,7 +207,7 @@ pub fn github_lookup_with(runner: &dyn Runner, home: &CpdHome, refs: &[(String, 
     for (i, (repo, number)) in refs.iter().enumerate() {
         let Some((owner, name)) = repo_parts(repo) else { continue };
         query.push_str(&format!(
-            " p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ isDraft state reviewDecision author {{ login }} latestReviews(first: 50) {{ nodes {{ state author {{ login }} }} }} }} }}"
+            " p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ title isDraft state reviewDecision author {{ login }} latestReviews(first: 50) {{ nodes {{ state author {{ login }} }} }} }} }}"
         ));
     }
     query.push_str(" }");
@@ -260,6 +262,7 @@ fn parse_pr(raw: &Value) -> Result<GhPr, String> {
         .map(|r| Review { author: login(r), state: r["state"].as_str().unwrap_or_default().to_owned() })
         .collect();
     Ok(GhPr {
+        title: raw["title"].as_str().ok_or("gh api graphql answered a pull request without title.")?.to_owned(),
         draft: raw["isDraft"].as_bool().ok_or("gh api graphql answered a pull request without isDraft.")?,
         state,
         author: login(raw),
@@ -307,7 +310,7 @@ mod tests {
     }
 
     fn pr() -> GhPr {
-        GhPr { draft: false, state: GhState::Open, author: "ryan".to_owned(), decision: None, reviews: Vec::new() }
+        GhPr { title: "Add retries".to_owned(), draft: false, state: GhState::Open, author: "ryan".to_owned(), decision: None, reviews: Vec::new() }
     }
 
     fn review(author: &str, state: &str) -> Review {
@@ -414,7 +417,7 @@ mod tests {
     fn reply() -> Value {
         json!({"data": {
             "viewer": {"login": ME},
-            "p0": {"pullRequest": {"isDraft": false, "state": "OPEN", "reviewDecision": null, "author": {"login": "ryan"},
+            "p0": {"pullRequest": {"title": "Add retries", "isDraft": false, "state": "OPEN", "reviewDecision": null, "author": {"login": "ryan"},
                    "latestReviews": {"nodes": [{"state": "COMMENTED", "author": {"login": "github-actions"}}]}}},
             "p1": null
         }, "errors": [{"type": "NOT_FOUND", "path": ["p1"], "message": "Could not resolve"}]})
