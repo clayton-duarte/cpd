@@ -146,7 +146,7 @@ pub struct AddArgs {
     /// The PR's own Jira ticket key, e.g. ABC-123 (optional)
     #[arg(long, value_name = "KEY")]
     jira: Option<crate::context::Jira>,
-    /// The branch the pull request targets [default: origin's HEAD branch, else main], or <plan>/<key> to stack on that PR
+    /// The branch the pull request targets [default: origin's HEAD branch, else main], or <key> (or <plan>/<key>) to stack on that PR
     #[arg(long, value_name = "branch")]
     base: Option<String>,
     /// PRs that must be merged before this one starts, comma-separated: a key of the Plan, or <plan>/<key> of another Plan of the Context
@@ -176,7 +176,7 @@ pub struct EditArgs {
     /// The new repo: a path inside it
     #[arg(long, value_name = "path")]
     repo: Option<PathBuf>,
-    /// The new base branch, or <plan>/<key> to stack on that PR
+    /// The new base branch, or <key> (or <plan>/<key>) to stack on that PR
     #[arg(long, value_name = "branch")]
     base: Option<String>,
     /// The new needs, replacing the list, comma-separated: keys of the Plan or <plan>/<key>
