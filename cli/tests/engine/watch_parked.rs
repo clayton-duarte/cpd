@@ -91,7 +91,7 @@ fn wakes_again_after_a_state_change() {
     assert_eq!(messages(&fx).len(), 1);
 
     // The Lead changes something (cancels d1, adds d3) and leaves drafts parked: T moves past W.
-    fx.env.sql("UPDATE jobs SET status = 'cancelled' WHERE plan = 'pay' AND key = 'd1';");
+    fx.env.sql("UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE plan = 'pay' AND key = 'd1';");
     event(&fx, "job-cancelled", "d1");
     draft(&fx, "d3");
     event(&fx, "job-added", "d3");

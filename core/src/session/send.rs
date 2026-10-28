@@ -122,6 +122,12 @@ pub fn tell_managers(tx: &WriteTxn<'_>, error: i64, text: &str) -> Result<usize,
     Ok(ids.len())
 }
 
+/// A waking message from the User's side (`from` null) to the live Session `target`, in the caller's transaction: the write
+/// of the stuck-Job message, for the engine's other reports to a Lead (E20).
+pub fn tell(tx: &WriteTxn<'_>, target: &SessionId, text: &str) -> Result<i64, CpdError> {
+    write(tx, &row::load(tx, target)?, &None, text, None, true)
+}
+
 /// Whether `target`, a stopped Lead or Manager with no live pane, is to be started after its message commits (hs-d725);
 /// `no_cockpit` when it is and there is no cockpit to start it in.
 fn needs_pane(env: &Env, target: &Row) -> Result<bool, CpdError> {

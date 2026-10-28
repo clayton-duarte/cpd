@@ -11,6 +11,7 @@
 //! - [`models`] E15: lists the models pi can offer into `run/models-<provider>.json` (7 days);
 //! - [`auto_merge`] E18: turns on squash auto-merge for posted PRs whose request is pending (deferred while stacked);
 //! - [`jira`] E19: moves the Jira ticket of the oldest queued transition through the helper `pi/lib/jira-transition.ts`;
+//! - [`parked`] E20: wakes the Lead of a Plan with parked drafts once, and cancels the drafts of an archived Plan;
 //! - [`janitor`] E16: starts `cpd janitor` detached every `watch.janitor_minutes`;
 //! - [`escalations`] E1, [`liveness`] E2, [`schedule`] E3, [`open`] E4,
 //!   [`pr`] E5, [`inbox`] E8: one module per step (E6 was removed, its number stays);
@@ -38,6 +39,7 @@ mod liveness;
 mod lock;
 mod log;
 mod models;
+mod parked;
 mod poll_run;
 mod pr;
 mod provider_hold;
@@ -59,6 +61,8 @@ mod provider_hold_e3_tests;
 mod janitor_tests;
 #[cfg(test)]
 mod inbox_tests;
+#[cfg(test)]
+mod parked_tests;
 #[cfg(test)]
 mod stacked_ready_tests;
 #[cfg(test)]
