@@ -251,12 +251,12 @@ fn a_linux_only_script_is_not_covered_and_a_covered_one_is_checked_by_the_defaul
     assert_eq!(run.exit, 0, "{}", run.stderr);
     assert!(run.all().contains("check-portable: ok (15 files, "), "{}", run.all());
 
-    let mut text = fs::read_to_string(dir.path().join("scripts/npm-fresh.sh")).unwrap();
+    let mut text = fs::read_to_string(dir.path().join("scripts/pnpm-fresh.sh")).unwrap();
     text.push_str("\nreadlink -f \"$0\"\n");
-    fs::write(dir.path().join("scripts/npm-fresh.sh"), text).unwrap();
+    fs::write(dir.path().join("scripts/pnpm-fresh.sh"), text).unwrap();
     let run = run_check(&script, dir.path(), &[]);
     assert_eq!(run.exit, 1, "{}", run.stderr);
-    assert!(run.stderr.contains("scripts/npm-fresh.sh:"), "{}", run.stderr);
+    assert!(run.stderr.contains("scripts/pnpm-fresh.sh:"), "{}", run.stderr);
 }
 
 // ---- The guard that a new tmux call cannot skip `-u` (hs-d463; docs/implementing.md "The row that guards tmux") ----

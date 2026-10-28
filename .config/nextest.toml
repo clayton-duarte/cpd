@@ -1,4 +1,4 @@
-# cargo-nextest (https://nexte.st/docs/configuration/): the Gate (`npm run
+# cargo-nextest (https://nexte.st/docs/configuration/): the Gate (`pnpm run
 # verify`) and CI run `cargo nextest run --workspace`, which runs every test in
 # a process of its own, at most 4 at a time per run (`test-threads`, below;
 # docs/implementing.md).

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Usage: scripts/check-portable.sh [<file>...]
 # Refuses Linux-only calls in the scripts Macs run (docs/implementing.md, "The
-# portability check", hs-d355). The Gate runs it (`npm run verify`), so a
+# portability check", hs-d355). The Gate runs it (`pnpm run verify`), so a
 # Linux-only call fails on hs and not on a Mac. With no argument it checks the
 # covered scripts of this directory and fails a script that is in neither list;
 # with files it checks exactly those.
@@ -15,7 +15,7 @@ set -eu
 dir=$(cd "$(dirname "$0")" && pwd)
 
 # What a Mac runs (dotfiles' install and sync, bare cpd, a Worker or Lead there, the Gate there).
-covered="install-cpd.sh pi-check.sh pi-check-pty.py check-portable.sh check-migrations-frozen.sh cargo.sh npm-fresh.sh new-migration.sh preview-tui.sh repin.sh sync-version.sh tag-version.sh test-changed tests.sh tripwire/tmux"
+covered="install-cpd.sh pi-check.sh pi-check-pty.py check-portable.sh check-migrations-frozen.sh cargo.sh pnpm-fresh.sh new-migration.sh preview-tui.sh repin.sh sync-version.sh tag-version.sh test-changed tests.sh tripwire/tmux"
 
 # Linux-only, not covered, each with its reason; a script in neither list fails.
 linux_only="prune-worktrees.sh: a one-time cleanup run on hs

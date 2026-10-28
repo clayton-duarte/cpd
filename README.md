@@ -44,5 +44,7 @@ State lives in `$CPD_HOME` (default `~/.cpd`).
 ## Gate
 
 ```sh
-npm run verify
+pnpm run verify
 ```
+
+pnpm must be on `PATH`, at the version `package.json` pins (`packageManager`); cpd does not install it.

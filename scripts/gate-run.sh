@@ -30,7 +30,7 @@ finish() {
 }
 
 # $1 the signal's name, $2 its number. The signal goes to the command alone, not to its process group: with no job
-# control the wrapper shares that group, and the command (cargo-nextest, npm) stops its own tests on TERM, INT or
+# control the wrapper shares that group, and the command (cargo-nextest, pnpm) stops its own tests on TERM, INT or
 # HUP; what it leaves, `cpd gate finish` stops. An async command ignores INT (POSIX), so INT is passed on as TERM.
 # A signal that comes before the launch, or between `&` and `pid=$!`, finds `pid` empty: nothing is killed or waited
 # for, and what the command left is stopped by `cpd gate finish`.
