@@ -91,7 +91,7 @@ fn a_snapshot_error_is_the_last_row_in_red() {
     assert_eq!(row(&buf, 24).trim_end(), "no cockpit");
     assert_eq!(buf[(0, 24)].fg, palette::color(Meaning::Failed), "red, colour 1");
     assert_eq!(row(&buf, 23), row(&render(46, 25, &w), 23), "the rest is as without it");
-    assert!(row(&buf, 5).contains("up to date"), "{}", row(&buf, 5));
+    assert!(row(&buf, 23).contains("up to date"), "{}", row(&buf, 23));
 }
 
 // ---------- the view's loop, in this process ----------

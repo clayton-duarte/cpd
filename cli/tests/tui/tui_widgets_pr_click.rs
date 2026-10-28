@@ -127,10 +127,11 @@ fn locate(fx: &Fx, label: &str) -> (Screen, u16) {
     (frame, at)
 }
 
-/// The Inbox sits directly under the header (rows 0-2, then its empty row 3): its title is row 4, not pinned to the bottom.
-fn assert_under_header(frame: &Screen) {
+/// The Inbox is pinned to the bottom (one item: the blank row, the header, the ▲ line, the item, the ▼ line): its header is the
+/// fourth row from the last.
+fn assert_pinned_to_bottom(frame: &Screen) {
     let screen = frame.rows();
-    assert_eq!(screen.iter().position(|r| r.contains("Inbox")), Some(4), "the Inbox title row on\n{}", screen.join("\n"));
+    assert_eq!(screen.iter().position(|r| r.contains("Inbox")), Some(usize::from(HEIGHT) - 4), "the Inbox header row on\n{}", screen.join("\n"));
 }
 
 /// A left click on the age cell of row `row`: the last cells of the row, outside the label's link.
@@ -158,8 +159,8 @@ fn a_click_on_the_row_outside_the_link_opens_the_owning_lead_in_the_chat_slot() 
     let _engine = engine(&fx);
     let chat = cockpit(&fx);
     let (frame, row) = locate(&fx, "shop#4 ready to merge");
-    assert_under_header(&frame);
-    run(&fx, vec![click_age(&frame, row), common::inbox::click(3, row)]);
+    assert_pinned_to_bottom(&frame);
+    run(&fx, vec![click_age(&frame, row), common::inbox::click(1, row)]);
     assert_eq!(cpd_calls(&fx), [words(&["session", "open", "l-ship"]), words(&["session", "open", "l-ship"])]);
     assert_eq!(focused(&fx), [chat.clone(), chat], "the focus goes to the chat slot after each open");
     assert!(popups(&fx).is_empty(), "{:?}", popups(&fx));
@@ -171,8 +172,8 @@ fn a_click_on_an_unowned_pr_row_outside_the_link_does_nothing() {
     let _engine = engine(&fx);
     cockpit(&fx);
     let (frame, row) = locate(&fx, "shop#4 ready to merge");
-    assert_under_header(&frame);
-    run(&fx, vec![click_age(&frame, row), common::inbox::click(3, row)]);
+    assert_pinned_to_bottom(&frame);
+    run(&fx, vec![click_age(&frame, row), common::inbox::click(1, row)]);
     assert_eq!(cpd_calls(&fx), Vec::<Vec<String>>::new(), "no command");
     assert_eq!(focused(&fx), Vec::<String>::new(), "no select-pane");
     assert!(popups(&fx).is_empty(), "{:?}", popups(&fx));
@@ -206,7 +207,7 @@ fn the_pr_row_glyph_takes_the_colour_of_its_urgency() {
         let _engine = engine(&fx);
         let label = format!("shop#{n} {status}");
         let (frame, row) = locate(&fx, &label);
-        let glyph = frame.cell(3, row);
+        let glyph = frame.cell(1, row);
         assert_eq!(glyph.symbol, GLYPH, "the glyph of {label}");
         assert_eq!(glyph.fg, palette::color_clickable(meaning), "the colour of {label}");
         assert!(frame.shown_row(row).contains(&label), "the label stays text: {}", frame.shown_row(row));
@@ -219,8 +220,8 @@ fn the_merge_spinner_of_a_ready_to_merge_row_stays_yellow() {
     let _engine = engine(&fx);
     crate::tui_merge::put_marker_at(&fx.env.cpd_home(), "acme__shop__4.json", fx.live_pid());
     let (frame, row) = locate(&fx, "shop#4 ready to merge");
-    assert_under_header(&frame);
-    let glyph = frame.cell(3, row);
+    assert_pinned_to_bottom(&frame);
+    let glyph = frame.cell(1, row);
     assert!(palette::SPINNER.contains(&glyph.symbol.as_str()), "a spinner frame in the glyph cell: {:?}", glyph.symbol);
     assert_eq!(glyph.fg, palette::color_clickable(Meaning::Review));
 }

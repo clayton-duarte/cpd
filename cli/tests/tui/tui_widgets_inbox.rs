@@ -124,8 +124,8 @@ fn a_pr_ready_item_whose_merge_runs_shows_the_spinner() {
     let glyph = glyph_of(&screen, ready).unwrap();
     let red = common::inbox::item_row(palette::TIER_RED, "f-blocked label", "5m");
     let busy = common::inbox::linked_item_row(&glyph, ready, "5m");
-    let at = screen.iter().position(|r| *r == pill(2)).unwrap();
-    assert_eq!(screen[at + 2..at + 4], [red.clone(), busy], "the other items keep their tier glyph: {screen:?}");
+    let head = screen.iter().position(|r| *r == pill(2)).unwrap();
+    assert_eq!(screen[head + 2..head + 4], [red.clone(), busy], "the other items keep their tier glyph: {screen:?}");
     // stale: the tier glyph is back
     let white = common::inbox::linked_item_row(palette::ITEM_PR_READY, ready, "5m");
     frame_with(&frames, at, "the tier glyph back", |screen| screen.contains(&white));

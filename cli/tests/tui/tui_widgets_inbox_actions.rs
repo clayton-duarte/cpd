@@ -180,9 +180,9 @@ fn click_on(screen: &[String], label: &str) -> Signal {
     common::inbox::click(10, row_of(screen, label))
 }
 
-/// A left click on the tier glyph of the item `label`'s row (the first cell after the rail `│ `): the jump.
+/// A left click on the tier glyph of the item `label`'s row (column 1): the jump.
 fn click_glyph_of(screen: &[String], label: &str) -> Signal {
-    common::inbox::click(3, row_of(screen, label))
+    common::inbox::click(1, row_of(screen, label))
 }
 
 /// A left click on the link cue of the item `label`'s row.
@@ -202,8 +202,8 @@ fn run(fx: &Fx, signals: Vec<Signal>) -> Vec<Screen> {
     show_with(fx, HEIGHT, all, &World::new(), recording)
 }
 
-/// The labels of the menu box on `screen`: the `│ <label> │` rows between the `╮` and the `╯` rows (the segment before the last `│`: the
-/// menu opens over the Inbox's item rows, which have a `│` of their own on its left).
+/// The labels of the menu box on `screen`: the `│ <label> │` rows between the `╮` and the `╯` rows (the segment before the last `│`; the
+/// Inbox's item rows have no `│` of their own).
 fn menu_labels(screen: &[String]) -> Vec<String> {
     let top = screen.iter().position(|r| r.contains('╮'));
     let Some(top) = top else { return vec![] };
