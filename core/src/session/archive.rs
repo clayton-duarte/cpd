@@ -72,6 +72,10 @@ pub fn blockers(conn: &Connection, sessions: &[SessionId], plans: &[PlanId]) -> 
     };
     for plan in plans {
         query("SELECT key, status FROM jobs WHERE plan = ?1 AND status IN ('queued', 'running') ORDER BY seq", "job", plan, &mut found)?;
+        let mut stmt = conn.prepare("SELECT key FROM jobs WHERE plan = ?1 AND status = 'draft' ORDER BY seq")?;
+        for key in stmt.query_map([plan.as_str()], |r| r.get::<_, String>(0))? {
+            found.push(Blocker { kind: "job", id: format!("{plan}/{}", key?), plan: None, reason: "draft".to_owned() });
+        }
         query("SELECT id, status FROM escalations WHERE plan = ?1 AND status = 'open' ORDER BY asked_at, id", "escalation", plan, &mut found)?;
         query("SELECT id, status FROM plan_reviews WHERE plan = ?1 AND status = 'pending' ORDER BY number", "review", plan, &mut found)?;
     }
@@ -81,8 +85,16 @@ pub fn blockers(conn: &Connection, sessions: &[SessionId], plans: &[PlanId]) -> 
 /// `archive_blocked` for a non-empty list of [`blockers`]; `details.next` is
 /// `next` when there is a command that helps.
 pub fn archive_blocked(blockers: &[Blocker], next: Option<&str>) -> CpdError {
-    let list = blockers.iter().map(|b| b.reason.as_str()).collect::<Vec<_>>().join(" ");
-    let mut error = CpdError::new(ErrorCode::ArchiveBlocked, format!("Something is still live: {list}"))
+    let list = blockers.iter().filter(|b| b.reason != "draft").map(|b| b.reason.as_str()).collect::<Vec<_>>().join(" ");
+    let drafts = blockers.iter().filter(|b| b.reason == "draft").map(|b| b.id.as_str()).collect::<Vec<_>>();
+    let mut message = format!("Something is still live: {list}");
+    if !drafts.is_empty() {
+        message = format!(
+            "{message} Draft Jobs: {}. A draft is never archived: `cpd plan cancel` abandons a Plan and `cpd job cancel` one draft.",
+            drafts.join(", ")
+        );
+    }
+    let mut error = CpdError::new(ErrorCode::ArchiveBlocked, message)
         .with("blockers", Value::Array(blockers.iter().map(Blocker::to_json).collect()));
     if let Some(next) = next {
         error = error.with("next", next);

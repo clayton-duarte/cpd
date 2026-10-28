@@ -105,6 +105,7 @@ fn world_ending(fx: &Fx, plan: &str, merged: bool) -> World {
                VALUES ('{plan}', 'api', 'm', 'Job m', 'S2', 'Goal.', 'Context.', '[\"src/m.rs\"]', '[\"cargo test\"]', '[]', 'draft', 0, cpd_txn(), 't');
              UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = '{plan}';
              UPDATE jobs SET status = 'queued', fingerprint = '{fingerprint}' WHERE plan = '{plan}' AND key = 'm';
+             UPDATE jobs SET status = 'cancelled', cancel_reason = 'a stub of the template', cancel_requested_at = 't' WHERE plan = '{plan}' AND status = 'draft';
              UPDATE prs SET status = 'dispatch', lead_worktree = '{lead_wt}', started_at = 't' WHERE plan = '{plan}' AND key = 'api';
              UPDATE jobs SET status = 'running' WHERE plan = '{plan}' AND key = 'm';
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, merged_sha, branch, worktree, started_at, ended_at)

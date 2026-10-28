@@ -1693,7 +1693,7 @@ fn archive_refused_by_any_one_blocker_changes_nothing() {
     let escalation = format!(
         "{}{}INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
          VALUES ('pay', 'api-a1-q1', 'api-a1', 1, 'Which?', 'open', 1, 't');",
-        job("draft"),
+        job("draft").replace("'draft'", "'cancelled'").replace("status,", "cancel_reason, cancel_requested_at, status,").replace("'cancelled'", "'a fixture', 't', 'cancelled'"),
         ATTEMPT.replace("$STATUS", "running")
     );
     // One blocker at a time, each in its own environment: Jobs are append-only.
