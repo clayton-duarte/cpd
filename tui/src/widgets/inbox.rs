@@ -346,7 +346,7 @@ pub enum Entry {
 
 impl Entry {
     /// The entries of the menu of `item`, in order. A `pr-ready` item: `Merge` (`Merging` when `merging`) when its status is
-    /// `ready to merge`, `Post` when `ready for review` and it has a Plan, `Go to Lead` with a Plan, `Copy Link` with a url; then the
+    /// `ready to merge`, `Post` when `ready for user review` and it has a Plan, `Go to Lead` with a Plan, `Copy Link` with a url; then the
     /// [`Choice`]s (every other kind has only those).
     pub fn entries(item: &Item, merging: bool) -> Vec<Entry> {
         let mut entries = Vec::new();

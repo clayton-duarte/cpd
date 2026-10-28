@@ -53,11 +53,11 @@ impl Status {
             Status::ChangesRequested => "changes requested",
             Status::Updating => "updating",
             Status::Fixing => "fixing",
-            Status::Stacked => "stacked",
+            Status::Stacked => "stacked pr pending base merge",
             Status::ChecksRunning => "checks running",
-            Status::ReadyForReview => "ready for review",
+            Status::ReadyForReview => "ready for user review",
             Status::ReadyToMerge => "ready to merge",
-            Status::InReview => "in review",
+            Status::InReview => "waiting for peer review",
             Status::Waiting => "waiting",
         }
     }
@@ -94,9 +94,9 @@ struct Facts<'a> {
     clean: bool,
 }
 
-/// The STATUS table, first match wins: draft; broken; checks running; ready for review (also when stacked); ready to
+/// The STATUS table, first match wins: draft; broken; checks running; ready for user review (also when stacked); ready to
 /// merge; then a stacked PR is `Stacked` when approved or not posted (pro-d152: stacking blocks only ready to merge),
-/// else a posted PR is in review, else waiting. `post_enabled` is asked at most once, and only when needed.
+/// else a posted PR is waiting for peer review, else waiting. `post_enabled` is asked at most once, and only when needed.
 fn classify(f: &Facts<'_>, mut post_enabled: impl FnMut() -> bool) -> Status {
     let r = f.row;
     if r.draft {
@@ -200,7 +200,7 @@ mod tests {
         let texts: Vec<&str> = Status::ALL.iter().map(|s| s.text()).collect();
         assert_eq!(
             texts,
-            ["draft", "conflict", "failing", "changes requested", "updating", "fixing", "stacked", "checks running", "ready for review", "ready to merge", "in review", "waiting"]
+            ["draft", "conflict", "failing", "changes requested", "updating", "fixing", "stacked pr pending base merge", "checks running", "ready for user review", "ready to merge", "waiting for peer review", "waiting"]
         );
         assert_eq!(Status::Stacked.urgency(), Urgency::White);
         assert_eq!(Status::Failing.urgency(), Urgency::Red);
