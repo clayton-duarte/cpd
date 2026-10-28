@@ -9,12 +9,12 @@
 # machine without them fails step 0, never skips (hs-d355).
 #
 # hs-d355, docs/implementing.md "Checking a pi version":
-# - The Gate runs it: `npm run verify` calls `scripts/pi-check.sh
+# - The Gate runs it: `pnpm run verify` calls `scripts/pi-check.sh
 #   node_modules/.bin/pi`, the pi package.json pins, against this checkout's adapter.
 # - The fake cpd holds no answers of its own: it records its argv, tells the
 #   runner on a fifo for `events follow` (then blocks on another fifo, no `sleep`),
 #   and runs `node pi/test/answers.ts <argv>` for the rest, the same answers the
-#   adapter's tests use, so a field the adapter starts requiring fails `npm test`
+#   adapter's tests use, so a field the adapter starts requiring fails `pnpm test`
 #   and this check together.
 # - It never starts a model turn: every pi command runs under `env -i` with an
 #   allow-list (PATH LANG LC_ALL LC_CTYPE TERM when set, plus HOME TMPDIR
