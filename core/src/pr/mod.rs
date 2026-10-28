@@ -31,7 +31,7 @@ mod add;
 pub mod auto_merge;
 mod cancel;
 pub use cancel::{archived_with_drafts, cancel_archived_drafts};
-mod deploys;
+pub mod deploys;
 pub mod comments;
 pub mod jira_sync;
 mod describe;

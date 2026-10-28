@@ -1,6 +1,6 @@
 //! `review submit` (commands.md §31.1; pro-d107, pro-d108, pro-d110): posts a GitHub review through `gh`, then, with
 //! `--slack`, queues the verdict's reaction (§21.9). It needs no Plan, Context or PR key and checks nothing of the
-//! review or the pull request: GitHub's own refusal is relayed.
+//! review, and of the pull request only its head (`--head`, pro-d169): GitHub's own refusal is relayed.
 
 use std::path::PathBuf;
 
@@ -30,6 +30,9 @@ pub struct SubmitArgs {
     /// The review's verdict: APPROVE or REQUEST_CHANGES
     #[arg(long, value_name = "APPROVE|REQUEST_CHANGES")]
     event: String,
+    /// The head commit the review is of: 40 hex digits; refused as head_moved when the pull request's head differs
+    #[arg(long, value_name = "sha")]
+    head: String,
     /// A file holding GitHub's create-review body, a JSON object without an `event` key
     #[arg(long, value_name = "review.json")]
     input: PathBuf,
@@ -72,6 +75,15 @@ fn parse_slack(text: &str) -> Result<(&str, &str), CpdError> {
     if channel_ok && ts_ok { Ok((channel, ts)) } else { Err(bad()) }
 }
 
+/// Exactly 40 ASCII hex digits, either case; the lowercase value.
+fn parse_head(text: &str) -> Result<String, CpdError> {
+    if text.len() == 40 && text.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(text.to_ascii_lowercase())
+    } else {
+        Err(usage(format!("--head {text:?} is not 40 hex digits.")))
+    }
+}
+
 fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
     let pull = parse_pull(&args.pr)?;
     let emoji = match args.event.as_str() {
@@ -80,6 +92,7 @@ fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
         other => return Err(usage(format!("--event {other:?} is not APPROVE or REQUEST_CHANGES."))),
     };
     let slack = args.slack.as_deref().map(parse_slack).transpose()?;
+    let head = parse_head(&args.head)?;
     let text = std::fs::read_to_string(&args.input)
         .map_err(|e| usage(format!("Cannot read --input {}: {e}.", args.input.display())))?;
     let mut review: Value = serde_json::from_str(&text)
@@ -90,10 +103,24 @@ fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
     if fields.contains_key("event") {
         return Err(usage("--input carries its own `event` key: the verdict is --event.".to_owned()));
     }
+    if fields.contains_key("commit_id") {
+        return Err(usage("--input carries its own `commit_id` key: the head is --head.".to_owned()));
+    }
     fields.insert("event".to_owned(), json!(args.event));
+    fields.insert("commit_id".to_owned(), json!(head));
 
     let repo = pull.to_string();
     let (repo, number) = repo.split_once('#').expect("a PullRef prints owner/repo#n");
+    let actual = gh::pull_head(&*ports.runner, repo, number)?;
+    if !actual.eq_ignore_ascii_case(&head) {
+        return Err(CpdError::new(
+            ErrorCode::HeadMoved,
+            format!("The head of {repo}#{number} is {actual}, not {head}: nothing was posted."),
+        )
+        .with("pr", format!("{repo}#{number}"))
+        .with("expected", head)
+        .with("actual", actual));
+    }
     let body = serde_json::to_vec(&review).expect("a JSON value serializes");
     let stdout = gh::post_review(&*ports.runner, repo, number, body)?;
     let posted: Value = serde_json::from_str(&stdout).unwrap_or(Value::Null);
@@ -104,7 +131,7 @@ fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
         )
         .with("stdout", crate::git::tail(&stdout, crate::git::TAIL_LINES)));
     };
-    let review = json!({"id": id, "url": url, "state": posted.get("state").cloned().unwrap_or(Value::Null)});
+    let review = json!({"id": id, "url": url, "state": posted.get("state").cloned().unwrap_or(Value::Null), "commit_id": head});
 
     let reaction = match slack {
         None => Value::Null,

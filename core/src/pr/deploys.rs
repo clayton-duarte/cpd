@@ -11,7 +11,8 @@ use super::gh::run_raw_with;
 use crate::atomic::write_atomic;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::host::runner::Runner;
+use crate::host::deadline::Failed;
+use crate::host::runner::{Call, Runner};
 use crate::policy::{self, load_scope_file};
 
 /// How long one `gh api` call of the read may take.
@@ -128,17 +129,7 @@ fn declared(home: &CpdHome) -> Result<Vec<(String, String)>, CpdError> {
 
 /// One `gh api <path>`: its stdout. A failed call is `gh_failed`, transient on an HTTP 5xx or a timeout, as the poll's lookups.
 fn api(runner: &dyn Runner, cwd: &Path, args: &[&str]) -> Result<String, CpdError> {
-    let fail = |message: String, exit: Option<i32>, stderr: &str, reason: Option<&str>| {
-        let mut argv = vec!["gh"];
-        argv.extend_from_slice(args);
-        CpdError::new(ErrorCode::GhFailed, message)
-            .with("argv", json!(argv))
-            .with("exit", json!(exit))
-            .with("stderr", crate::git::tail(stderr, crate::git::TAIL_LINES))
-            .with("call", "deploys")
-            .with("transient", reason.is_some())
-            .with("reason", reason.map_or(serde_json::Value::Null, |r| json!(r)))
-    };
+    let fail = |message: String, exit: Option<i32>, stderr: &str, reason: Option<&str>| gh_failed(args, message, exit, stderr, reason);
     let out = run_raw_with(runner, cwd, args, TIMEOUT)
         .map_err(|e| e.with("call", "deploys").with("transient", true).with("reason", "timeout"))?;
     match out.exit {
@@ -152,6 +143,19 @@ fn api(runner: &dyn Runner, cwd: &Path, args: &[&str]) -> Result<String, CpdErro
         }
         None => Err(fail(format!("gh {} was killed by a signal.", args[0]), None, &out.stderr, None)),
     }
+}
+
+/// The `gh_failed` of `gh <args>`: transient on an HTTP 5xx or a timeout (`reason`).
+fn gh_failed(args: &[&str], message: String, exit: Option<i32>, stderr: &str, reason: Option<&str>) -> CpdError {
+    let mut argv = vec!["gh"];
+    argv.extend_from_slice(args);
+    CpdError::new(ErrorCode::GhFailed, message)
+        .with("argv", json!(argv))
+        .with("exit", json!(exit))
+        .with("stderr", crate::git::tail(stderr, crate::git::TAIL_LINES))
+        .with("call", "deploys")
+        .with("transient", reason.is_some())
+        .with("reason", reason.map_or(serde_json::Value::Null, |r| json!(r)))
 }
 
 fn parsed<T: for<'de> Deserialize<'de>>(args: &[&str], stdout: &str) -> Result<T, CpdError> {
@@ -206,4 +210,87 @@ fn workflow_runs(runner: &dyn Runner, cwd: &Path, me: &str, repo: &str, workflow
         });
     }
     Ok(out)
+}
+
+/// An entry of `pending_deployments` the User can approve, as `approve` reads it.
+#[derive(Deserialize)]
+struct Waiting {
+    environment: Target,
+    current_user_can_approve: bool,
+}
+
+#[derive(Deserialize)]
+struct Target {
+    id: u64,
+    name: String,
+}
+
+/// A deployment environment the User can approve.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Approvable {
+    pub id: u64,
+    pub name: String,
+}
+
+/// `gh api repos/<repo>/actions/runs/<run_id>/pending_deployments`: the environments the User can approve, sorted by
+/// (name, id). A failed call, a timeout or another shape of JSON is `gh_failed`.
+pub fn approvable(runner: &dyn Runner, home: &CpdHome, repo: &str, run_id: u64) -> Result<Vec<Approvable>, CpdError> {
+    let path = format!("repos/{repo}/actions/runs/{run_id}/pending_deployments");
+    let args = ["api", path.as_str()];
+    let waiting: Vec<Waiting> = parsed(&args, &api(runner, home.root(), &args)?)?;
+    let mut out: Vec<Approvable> =
+        waiting.into_iter().filter(|w| w.current_user_can_approve).map(|w| Approvable { id: w.environment.id, name: w.environment.name }).collect();
+    out.sort_by(|a, b| (&a.name, a.id).cmp(&(&b.name, b.id)));
+    Ok(out)
+}
+
+/// `gh api --method POST repos/<repo>/actions/runs/<run_id>/pending_deployments --input -`: approves `environments`.
+pub fn approve(runner: &dyn Runner, home: &CpdHome, repo: &str, run_id: u64, environments: &[Approvable]) -> Result<(), CpdError> {
+    let path = format!("repos/{repo}/actions/runs/{run_id}/pending_deployments");
+    let args = ["api", "--method", "POST", path.as_str(), "--input", "-"];
+    let ids: Vec<u64> = environments.iter().map(|e| e.id).collect();
+    let body = json!({"environment_ids": ids, "state": "approved", "comment": ""}).to_string().into_bytes();
+    let call = Call {
+        tool: "gh".to_owned(),
+        program: "gh".to_owned(),
+        args: args.iter().map(|a| (*a).to_owned()).collect(),
+        envs: vec![("GH_PROMPT_DISABLED".to_owned(), Some("1".to_owned())), ("NO_COLOR".to_owned(), Some("1".to_owned()))],
+        cwd: Some(home.root().to_path_buf()),
+        deadline: TIMEOUT,
+        stdin: Some(body),
+        stderr_to: None,
+    };
+    let out = match runner.run(&call) {
+        Ok(out) => out,
+        Err(Failed::Timeout(_)) => {
+            return Err(gh_failed(&args, format!("gh api took longer than {}s and was killed.", TIMEOUT.as_secs()), None, "", Some("timeout")));
+        }
+        Err(Failed::Io(e)) => return Err(gh_failed(&args, format!("Cannot run gh: {e}."), None, &e.to_string(), None)),
+    };
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    match out.status.code() {
+        Some(0) => Ok(()),
+        Some(code) => Err(gh_failed(&args, format!("gh api exited {code}."), Some(code), &stderr, None)),
+        None => Err(gh_failed(&args, "gh api was killed by a signal.".to_owned(), None, &stderr, None)),
+    }
+}
+
+/// Removes the entries of run `run_id` of `repo` from `run/deploy-runs.json`, rewriting it only when one was removed.
+/// A missing, unreadable, invalid or not-version-1 file is left as it is.
+pub fn forget_run(home: &CpdHome, repo: &str, run_id: u64) -> Result<(), CpdError> {
+    let path = home.run_dir().join("deploy-runs.json");
+    let Ok(text) = std::fs::read_to_string(&path) else { return Ok(()) };
+    let Ok(mut cache) = serde_json::from_str::<Cache>(&text) else { return Ok(()) };
+    if cache.version != 1 {
+        return Ok(());
+    }
+    let before = cache.runs.len();
+    cache.runs.retain(|r| !(r.repo == repo && r.run_id == run_id));
+    if cache.runs.len() == before {
+        return Ok(());
+    }
+    let text = serde_json::to_string(&cache).expect("the cache serializes");
+    write_atomic(&path, text).map_err(|e| {
+        CpdError::new(ErrorCode::StoreFailed, format!("Cannot write {}: {e}.", path.display())).with("path", path.display().to_string())
+    })
 }

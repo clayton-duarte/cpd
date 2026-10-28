@@ -310,15 +310,22 @@ pub fn list(conn: &Connection, filter: &Filter) -> Result<Vec<Item>, CpdError> {
     }
 }
 
+/// Closes `item` at `closed_at` and appends its `inbox-closed` Event, scoped with the item's links.
+pub fn close_item(tx: &crate::store::WriteTxn<'_>, item: &Item, closed_at: &str) -> Result<(), CpdError> {
+    tx.execute("UPDATE inbox_items SET closed_at = ?2 WHERE id = ?1", params![item.id, closed_at])?;
+    let event = NewEvent::inbox_closed(format!("Inbox item {} closed: {}.", item.id, item.label), item.id, item.kind.as_str());
+    events::append(tx, scope(event, &item.context, &item.plan, &item.job, &item.session))?;
+    Ok(())
+}
+
 /// Closes the open `pr-ready` item of the pull request `repo#number` (hs-n404), in the caller's transaction, at its time, as
 /// [`reconcile`] does (`closed_at`, `inbox-closed`): every path that stores a pull request as merged calls it, so the item
 /// never waits for E8's next pass. Nothing is written when no such item is open.
 pub fn close_pr_ready(tx: &crate::store::WriteTxn<'_>, repo: &str, number: i64) -> Result<(), CpdError> {
     let subject = format!("pr:{repo}#{number}");
     for item in open_items(tx)?.into_iter().filter(|i| i.kind == Kind::PrReady && i.subject == subject) {
-        tx.execute("UPDATE inbox_items SET closed_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?1", params![item.id])?;
-        let event = NewEvent::inbox_closed(format!("Inbox item {} closed: {}.", item.id, item.label), item.id, item.kind.as_str());
-        events::append(tx, scope(event, &item.context, &item.plan, &item.job, &item.session))?;
+        let at: String = tx.query_row("SELECT at FROM txns WHERE id = cpd_txn()", [], |r| r.get(0))?;
+        close_item(tx, &item, &at)?;
     }
     Ok(())
 }
@@ -402,9 +409,7 @@ pub fn reconcile(store: &mut Store, conditions: &[Condition], now: &str) -> Resu
             }
         }
         for item in gone {
-            tx.execute("UPDATE inbox_items SET closed_at = ?2 WHERE id = ?1", params![item.id, now])?;
-            let event = NewEvent::inbox_closed(format!("Inbox item {} closed: {}.", item.id, item.label), item.id, item.kind.as_str());
-            events::append(tx, scope(event, &item.context, &item.plan, &item.job, &item.session))?;
+            close_item(tx, item, now)?;
             changes.closed.push(item.id);
         }
         for c in new {

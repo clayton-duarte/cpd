@@ -236,6 +236,7 @@ error_codes! {
     Archived = "archived" => Refused,
     ItemClosed = "item_closed" => Refused,
     NotClaimable = "not_claimable" => Refused,
+    NotApprovable = "not_approvable" => Refused,
     ReviewContextUnset = "review_context_unset" => Refused,
     PostNotFound = "post_not_found" => Refused,
     MergeNotClean = "merge_not_clean" => Refused,
@@ -328,6 +329,7 @@ error_codes! {
     PathNotGuarded = "path_not_guarded" => Refused,
     OpenJobLive = "open_job_live" => Refused,
     LeadBranchMoved = "lead_branch_moved" => Refused,
+    HeadMoved = "head_moved" => Refused,
     PrNotFound = "pr_not_found" => NotFound,
 }
 
@@ -493,6 +495,7 @@ mod tests {
             (ErrorCode::ItemNotFound, 4),
             (ErrorCode::ItemClosed, 3),
             (ErrorCode::NotClaimable, 3),
+            (ErrorCode::NotApprovable, 3),
             (ErrorCode::ReviewContextUnset, 3),
             (ErrorCode::PostNotFound, 3),
             (ErrorCode::MergeNotClean, 3),

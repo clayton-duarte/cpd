@@ -592,3 +592,63 @@ fn a_refused_claim_shows_the_failure_dialog_and_esc_closes_the_menu() {
     assert!(dialog.starts_with("cpd tui view dialog text --title="), "a text dialog: {dialog}");
     assert!(dialog.ends_with("--body='item_closed: Item 1 is closed.'"), "the body is why: {dialog}");
 }
+
+fn deploy() -> Condition {
+    linked(Kind::Deploy, Urgency::Yellow, "deploy:acme/pay#123", "acme/pay deploy prod: R1", None, Some("https://github.com/acme/pay/actions/runs/123"))
+}
+
+const APPROVE_ENTRIES: [&str; 5] = ["Approve", "Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00", "Dismiss"];
+const DEPLOY_LABEL: &str = "acme/pay deploy prod: R1";
+
+#[test]
+fn a_right_click_on_a_deploy_item_opens_approve_first_and_no_other_item_has_approve() {
+    let fx = rig(vec![deploy()]);
+    let _engine = engine(&fx);
+    cockpit(&fx);
+    let screen = first_rows(&fx);
+    let frames = run(&fx, pick(&screen, DEPLOY_LABEL, 0).into_iter().take(1).collect());
+    frame_with(&frames, 0, "the deploy item's menu", |r| menu_labels(r) == APPROVE_ENTRIES);
+    drop(_engine);
+    drop(fx);
+
+    let fx = rig(four());
+    let _engine = engine(&fx);
+    cockpit(&fx);
+    let screen = first_rows(&fx);
+    let frames = run(&fx, pick(&screen, "l-rel label", 0).into_iter().take(1).collect());
+    frame_with(&frames, 0, "the menu of another kind without Approve", |r| menu_labels(r) == ENTRIES);
+}
+
+#[test]
+fn choosing_approve_runs_inbox_approve_with_the_items_id() {
+    let fx = rig(vec![deploy()]);
+    let _engine = engine(&fx);
+    cockpit(&fx);
+    let screen = first_rows(&fx);
+    let frames = run(&fx, pick(&screen, DEPLOY_LABEL, 0));
+    let open = frame_with(&frames, 0, "the item's menu", |r| menu_labels(r) == APPROVE_ENTRIES);
+    frame_with(&frames, open, "the menu closed", the_menu_is_closed);
+    assert_eq!(cpd_calls(&fx), [words(&["inbox", "approve", "1"])]);
+    assert!(popups(&fx).is_empty(), "{:?}", popups(&fx));
+}
+
+#[test]
+fn a_refused_approve_shows_the_failure_dialog_and_esc_closes_the_menu() {
+    let fx = rig(vec![deploy()]);
+    let _engine = engine(&fx);
+    cockpit(&fx);
+    says(&fx, &["inbox", "approve"], Says::Refused(ErrorCode::GhFailed, "gh failed."));
+    let screen = first_rows(&fx);
+    let mut signals = pick(&screen, DEPLOY_LABEL, 0);
+    signals.extend([Signal::Input(right_click(10, row_of(&screen, DEPLOY_LABEL))), common::inbox::press(KeyCode::Esc)]);
+    let frames = run(&fx, signals);
+    let first = frame_with(&frames, 0, "the menu", |r| menu_labels(r) == APPROVE_ENTRIES);
+    let closed = frame_with(&frames, first, "the menu closed by Approve", the_menu_is_closed);
+    let again = frame_with(&frames, closed, "the menu again", |r| menu_labels(r) == APPROVE_ENTRIES);
+    frame_with(&frames, again, "the menu closed by Esc", the_menu_is_closed);
+    assert_eq!(cpd_calls(&fx), [words(&["inbox", "approve", "1"])], "Esc runs nothing");
+    let commands = commands(&fx);
+    let [dialog] = &commands[..] else { panic!("{commands:?}") };
+    assert!(dialog.starts_with("cpd tui view dialog text --title='inbox approve 1' "), "titled with the command words: {dialog}");
+    assert!(dialog.ends_with("--body='gh_failed: gh failed.'"), "the body is why: {dialog}");
+}
