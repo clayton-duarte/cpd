@@ -82,6 +82,7 @@ pub struct Post {
 pub struct Pr {
     pub feedback: Feedback,
     pub post: Post,
+    pub jira_required: bool,
     pub text: String,
 }
 
@@ -117,6 +118,7 @@ pub struct PrSet {
     pub gate: Option<GateAlias>,
     pub feedback: Option<FeedbackSet>,
     pub post: Option<PostSet>,
+    pub jira_required: Option<bool>,
     pub text: Option<String>,
 }
 
@@ -350,6 +352,7 @@ pub const POST_ENABLED: &str = "pr.post.enabled";
 pub const POST_CHANNEL: &str = "pr.post.channel";
 pub const POST_TEMPLATE: &str = "pr.post.template";
 pub const POST_MERGED_REACTION: &str = "pr.post.merged_reaction";
+pub const JIRA_REQUIRED: &str = "pr.jira_required";
 
 impl Set for GatesSet {
     type Value = Gates;
@@ -383,6 +386,7 @@ impl Set for PrSet {
             (POST_CHANNEL, post.and_then(|p| p.channel.as_ref()).is_none()),
             (POST_TEMPLATE, post.and_then(|p| p.template.as_ref()).is_none()),
             (POST_MERGED_REACTION, post.and_then(|p| p.merged_reaction.as_ref()).is_none()),
+            (JIRA_REQUIRED, self.jira_required.is_none()),
         ]);
         let pick = |set: Option<String>, base: &str| set.unwrap_or_else(|| base.to_owned());
         let value = Pr {
@@ -393,6 +397,7 @@ impl Set for PrSet {
                 template: pick(post.and_then(|p| p.template.clone()), &base.post.template),
                 merged_reaction: pick(post.and_then(|p| p.merged_reaction.clone()), &base.post.merged_reaction),
             },
+            jira_required: self.jira_required.unwrap_or(base.jira_required),
             text: self.text.clone().unwrap_or_else(|| base.text.clone()),
         };
         (value, left_out)
@@ -410,6 +415,7 @@ impl Set for PrSet {
                     merged_reaction: p.merged_reaction.clone()?,
                 }
             },
+            jira_required: self.jira_required?,
             text: self.text.clone()?,
         })
     }

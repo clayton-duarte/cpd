@@ -152,7 +152,9 @@ fn truncate(text: &str, max: usize) -> String {
 /// (`plan_phase`; `None`: cyan, hs-d622).
 pub(crate) fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static>; 2] {
     let name = truncate(&format!(" {}#{}", pr.repo, pr.number), width.saturating_sub(2));
-    let gap = " ".repeat(width.saturating_sub(cells::width(&name) + 1));
+    let free = width.saturating_sub(cells::width(&name) + 1);
+    let jira = pr.jira.as_deref().filter(|key| free > 2 + cells::width(key)).map(|key| muted(format!("  {key}")));
+    let gap = " ".repeat(free.saturating_sub(jira.as_ref().map_or(0, |j| j.width())));
     let review = match pr.review_decision {
         ReviewDecision::Approved => "approved",
         ReviewDecision::ChangesRequested => "changes requested",
@@ -208,7 +210,10 @@ pub(crate) fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static
             Span::styled(MERGE, palette::clickable_text())
         });
     }
-    let first = Line::from(vec![Span::styled(name, text.add_modifier(Modifier::BOLD)), gap.into(), Span::styled(link::CUE, palette::clickable_text())]);
+    let mut first = vec![Span::styled(name, text.add_modifier(Modifier::BOLD))];
+    first.extend(jira);
+    first.extend([gap.into(), Span::styled(link::CUE, palette::clickable_text())]);
+    let first = Line::from(first);
     let second = Line::from(spans);
     [first, second].map(|line| if pr.active { block(line, width) } else { line })
 }
@@ -458,6 +463,7 @@ mod tests {
             clean: false,
             active: false,
             lead: lead.map(|l| SessionId::parse(l).unwrap()),
+            jira: None,
             lead_working: false,
             plan_failed: false,
             plan_phase: None,

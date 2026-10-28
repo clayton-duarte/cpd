@@ -260,7 +260,8 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
         // runs first, so nothing is pushed or opened when it refuses.
         if cpd_kind {
             if target.kind == "open" {
-                pr_of_job(store, target)?;
+                let (pr, ..) = pr_of_job(store, target)?;
+                store.read(|conn| crate::pr::jira_required_of(conn, home, &target.plan, &pr.key))?;
             }
             let pr = pr_row(store, target)?;
             let again = format!("cpd attempt submit {}", target.id);
@@ -465,7 +466,7 @@ fn pr_of_job(store: &mut Store, target: &Attempt) -> Result<(crate::plan::PrRow,
 
 /// The refusals of an `open` or `update` Job's merge that end the Attempt `gate_error` instead of leaving it `merging`.
 fn is_refusal(code: ErrorCode) -> bool {
-    matches!(code, ErrorCode::PrTitleRequired | ErrorCode::DescriptionRequired | ErrorCode::BaseNotFound)
+    matches!(code, ErrorCode::PrTitleRequired | ErrorCode::DescriptionRequired | ErrorCode::JiraRequired | ErrorCode::BaseNotFound)
 }
 
 /// Whether the newest pull request of the PR's Lead Branch is already merged on GitHub: the `open` Job adopts it (§7.7 submit step 1).

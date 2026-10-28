@@ -19,10 +19,10 @@ use serde_json::{Value, json};
 
 /// The in-process env (fake ports, the git route) with its config, repos `pay` and `web`, and Plan `pay-1` in `phase`
 /// with no PR (the Lead's session beside it). It derefs to the [`Fx`] (`cpd`, `git`, `env`, `calls`, ...).
-struct Crud {
-    fx: Fx,
-    pay: PathBuf,
-    web: PathBuf,
+pub(super) struct Crud {
+    pub(super) fx: Fx,
+    pub(super) pay: PathBuf,
+    pub(super) web: PathBuf,
 }
 
 impl Deref for Crud {
@@ -56,7 +56,7 @@ fn plan_sql(phase: &str) -> String {
     )
 }
 
-fn crud(phase: &str) -> Crud {
+pub(super) fn crud(phase: &str) -> Crud {
     let fx = Fx::with_ports();
     // `pr add` of the default shape, `tdd`, needs the repo policy's `[test-commands]`.
     let pay = keyed_repo_with_tests(&fx, "pay");
@@ -72,7 +72,7 @@ impl Crud {
     }
 
     /// `cpd pr <args> --plan pay-1`; see [`Crud::pr_in`].
-    fn pr(&self, args: &[&str]) -> Run {
+    pub(super) fn pr(&self, args: &[&str]) -> Run {
         self.pr_in("pay-1", args)
     }
 
@@ -193,7 +193,7 @@ fn add_creates_a_waiting_pr_with_its_event_and_no_git_write() {
     assert_eq!(
         out["pr"],
         json!({"key": "api", "repo": fx.pay.display().to_string(), "name": "pay", "base": "main", "base_pr": null, "title": "Change api", "needs": [], "status": "waiting",
-               "lead_branch": "pay-1/api", "appended": false, "shape": "config", "head_ref": null, "jobs": ["api-config", "open-api"]})
+               "lead_branch": "pay-1/api", "appended": false, "shape": "config", "head_ref": null, "jira": null, "jobs": ["api-config", "open-api"]})
     );
     assert!(out.get("already").is_none());
     let out = fx.add("web", &fx.web, &["--base", "main", "--needs", "api"]).ok();

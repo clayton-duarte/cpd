@@ -62,6 +62,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     require_jobs_done(&mut env, &plan, &key)?;
     stored_title(&mut env, &id, &key)?;
     stored_description(&mut env, &id, &key)?;
+    env.store.read(|conn| jira_required_of(conn, &env.home, &id, &key))?;
 
     // `pr open` no longer opens the pull request itself: it adds and queues the PR's opener, whose submit runs the
     // Gate, pushes and opens the pull request (contract §7.6, §7.7). The write transaction decides again so two
@@ -404,6 +405,7 @@ pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jo
     if job.kind == "open" {
         stored_title(env, plan, &key)?;
         stored_description(env, plan, &key)?;
+        env.store.read(|conn| jira_required_of(conn, &env.home, plan, &key))?;
         if let Some(head) = gh::head_pr(&lead, pr.remote_branch(), pr.bound_since()?)? {
             match head.state {
                 HeadState::Closed => return Err(closed(&key, pr.remote_branch(), &head).with("plan", plan.as_str())),
@@ -607,6 +609,30 @@ pub fn description_required(plan: &PlanId, key: &PrKey) -> CpdError {
     CpdError::new(
         ErrorCode::DescriptionRequired,
         format!("PR {key} of Plan {plan} has no description: write it (the repo's pull request template, else ## What and why / ## How / ## Acceptance criteria / ## Out of scope and follow-ups / ## Links), run cpd pr describe --pr {key} --file <body.md>, then open it again."),
+    )
+    .with("plan", plan.as_str())
+    .with("pr", key.as_str())
+}
+
+/// The one ticket rule: a PR with no `jira` that is not adopted (`head_ref` null) is `jira_required` when its resolved policy sets
+/// `pr.jira_required`. A PR with a ticket, an adopted PR, or a policy that leaves it false never resolves a policy.
+pub fn jira_required_of(conn: &rusqlite::Connection, home: &crate::home::CpdHome, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+    let missing: bool = conn.query_row(
+        "SELECT jira IS NULL AND head_ref IS NULL FROM prs WHERE plan = ?1 AND key = ?2",
+        [plan.as_str(), key.as_str()],
+        |r| r.get(0),
+    )?;
+    if missing && super::policy_of_pr(conn, home, plan, key)?.pr.jira_required {
+        return Err(jira_required(plan, key));
+    }
+    Ok(())
+}
+
+/// `jira_required` (exit 3): the PR has no Jira ticket and its owner's policy requires one.
+pub fn jira_required(plan: &PlanId, key: &PrKey) -> CpdError {
+    CpdError::new(
+        ErrorCode::JiraRequired,
+        format!("PR {key} of Plan {plan} has no Jira ticket: its owner's policy sets pr.jira_required; run cpd pr edit {key} --jira <KEY>, then open it again."),
     )
     .with("plan", plan.as_str())
     .with("pr", key.as_str())

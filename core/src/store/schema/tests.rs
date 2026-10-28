@@ -2787,6 +2787,7 @@ fn stacked_prs_keeps_every_pr_and_need() {
             let mut cells: Vec<serde_json::Value> = serde_json::from_str(row).unwrap();
             assert_eq!(cells.pop(), Some(serde_json::Value::Null));
             assert_eq!(cells.pop(), Some(serde_json::Value::Null));
+            assert_eq!(cells.pop(), Some(serde_json::Value::Null));
             assert_eq!(cells.pop(), Some(serde_json::json!("free")));
             serde_json::Value::from(cells).to_string()
         })
@@ -3015,7 +3016,7 @@ fn job_kinds_keeps_every_job_and_pr_as_work_and_free_and_matches_a_fresh_store()
     };
     assert_eq!(strip(&after["jobs"], 6, "work"), before["jobs"]);
     // `prs` gained `shape` (`free`), then `pr-adopt` `head_ref` and `pr-description` `description`, both null.
-    assert_eq!(strip(&after["prs"], 3, "free"), before["prs"]);
+    assert_eq!(strip(&after["prs"], 4, "free"), before["prs"]);
     assert_eq!(count(&mut store, "SELECT count(*) FROM jobs WHERE status = 'merged'"), 1);
 
     let migrated = store.read(|c| Ok(canonical_hash(c)?)).unwrap();

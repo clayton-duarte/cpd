@@ -168,7 +168,7 @@ fn view_prints_the_checks_reviews_comments_and_inline_comments() {
         out,
         json!({"ok": true, "plan": "pay",
             "pr": {"key": "repo", "number": 812, "url": URL, "title": "Pay the bills", "state": "open",
-                   "review_decision": "changes_requested", "checks": "failed"},
+                   "review_decision": "changes_requested", "checks": "failed", "jira": null},
             "checks": [
                 {"name": "ci/test", "conclusion": "FAILURE", "url": "https://github.com/acme/pay/actions/runs/1"},
                 {"name": "ci/lint", "conclusion": "SUCCESS", "url": "https://lint.example/1"},

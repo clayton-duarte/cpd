@@ -51,6 +51,7 @@ fn open_pr(update: Option<UpdateState>, lead: Option<&str>) -> OpenPr {
         clean: false,
         active: false,
         lead: lead.map(|l| SessionId::parse(l).unwrap()),
+        jira: None,
         lead_working: false,
         plan_failed: false,
         plan_phase: None,

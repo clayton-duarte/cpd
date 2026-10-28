@@ -209,7 +209,7 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `base_conflict`: the Lead Branch conflicts with its base (`details.files`). Merge the base, resolve, commit, then submit again.
 - `lead_branch_moved`: a Job merged into the Lead Branch since you began. Merge it (`details.next`), then submit again.
 {% if kind == "open" %}
-- `pr_title_required`, `description_required`, `pr_closed`: ask the Lead.
+- `pr_title_required`, `description_required`, `jira_required`, `pr_closed`: ask the Lead.
 {% else %}
 - `illegal_transition`: the PR is not open. Ask the Lead.
 {% endif %}
