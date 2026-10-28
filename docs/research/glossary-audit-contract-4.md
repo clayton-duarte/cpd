@@ -51,7 +51,7 @@ No stale `PR` **phase** use exists in the part: every Plan phase named in it is 
 | PR (as the cpd object) | docs/contract.md:3501 "Everything in this section is per PR" | object | internal: PR = the pull request in GitHub-facing keys (`pr poll`, `pull_requests`) and the Plan phase/step 'PR' of CONTEXT.md | overloaded | Workflow (CONTEXT.md decision pro-d136/pro-d138); 'PR' only for the pull request |
 | workflow worktree (= Lead worktree) | docs/contract.md:3509 "Workflow worktree, one per PR" | object (the Lead worktree, in other words) | internal: the retired cpd 1 Workflow (= Plan) and the new Workflow; upstream: GitHub Actions workflow; the contract also says 'Lead worktree' for the same directory (43 uses of 'workflow' vs the glossary term 'Lead worktree' at the same place) | overloaded | Use one name. Proposal: 'Lead worktree' (the CONTEXT.md term, already used in the same cell); 'Workflow worktree' would also read right after the rename but is a second name for one thing. The User decides |
 | workflow (GitHub Actions workflow) | docs/contract.md:3715 "[deploys] workflows" | other: GitHub Actions workflow file names | internal: the new Workflow; upstream: GitHub Actions workflow | stale | Write 'GitHub Actions workflow' in full in prose; whether the key `[deploys] workflows` keeps its name is the User's decision (a key named `workflows` will read as the cpd Workflow). Candidate: `[deploys] actions_workflows` |
-| workflow (JSON key and API path of the deploy cache) | docs/contract.md:3716 ""workflow": "<file>"" | other: GitHub Actions workflow file | internal: the new Workflow | stale | Same as above; the cache key `workflow` of `run/deploy-runs.json` would be a Workflow key by the new glossary. Candidate: `actions_workflow` |
+| workflow (JSON key and API path of the deploy cache) | docs/contract.md:3716 "A repo with no declared workflows contributes none" | other: GitHub Actions workflow file (the row's cache key `workflow`, line 3716 earlier in the same sentence) | internal: the new Workflow | stale | Same as above; the cache key `workflow` of `run/deploy-runs.json` would be a Workflow key by the new glossary. Candidate: `actions_workflow` |
 | Workflow (cpd 1 Plan) | docs/contract.md:4192 "R7 running Workflows finish on TypeScript cpd" | other: cpd 1's name for Plan (history) | internal: the new Workflow | ok | History row (decision R7 stays as written); add nothing. The CONTEXT.md note that cpd 1's Workflow is retired must not be read as covering the new meaning |
 | workflow (cpd 1 Plan, in a decision row) | docs/contract.md:4238 "D3 `workflow` becomes `plan`" | other: cpd 1's Plan (history) | internal: the new Workflow | ok | History: keep. Reviewers should know the sentence is true of cpd 1 only |
 | workflow (generic process) | docs/contract.md:4233 "The workflow amended to the User's answers" | other: the process of the Job kinds (not an entity) | internal: the new Workflow; upstream: GitHub Actions workflow | loose | History row; if reworded, say 'The Job-kind flow'; leave as history |
@@ -91,47 +91,47 @@ Method: counts come from the `rg`/regex commands in Coverage, run on each sectio
 | Where (section or path:line range) | Count | Sense | Quote | After the rename |
 |---|---|---|---|---|
 | docs/contract.md:3491-3504 (§7 intro), word PR/PRs | 13 | object | "Everything in this section is per PR" | Workflow (mechanical rewrite, rule below) |
-| docs/contract.md:3499 (first of 2 in §7 intro) | 2 | mixed | `pr open` | see rule M in Fix list |
-| docs/contract.md:3499 (first of 2 in §7 intro) | 2 | mixed | `pr rebase` | see rule M in Fix list |
-| docs/contract.md:3501 (first of 1 in §7 intro) | 1 | mixed | `pr view` | see rule M in Fix list |
+| docs/contract.md:3499 (first of 2 in §7 intro) | 2 | mixed | "pr open" | see rule M in Fix list |
+| docs/contract.md:3499 (first of 2 in §7 intro) | 2 | mixed | "pr rebase" | see rule M in Fix list |
+| docs/contract.md:3501 (first of 1 in §7 intro) | 1 | mixed | "pr view" | see rule M in Fix list |
 | docs/contract.md:3501 (first of 3 in §7 intro), tokens | 3 | object | "--pr" | Workflow rename (mechanical) |
 | docs/contract.md:3505-3519 (§7.1), word PR/PRs | 22 | object | "A PR made by migration 4 from a Plan of before R34" | Workflow (mechanical rewrite, rule below) |
-| docs/contract.md:3516 (first of 1 in §7.1) | 1 | mixed | `pr rebase` | see rule M in Fix list |
+| docs/contract.md:3516 (first of 1 in §7.1) | 1 | mixed | "pr rebase" | see rule M in Fix list |
 | docs/contract.md:3509 (first of 1 in §7.1), tokens | 1 | object | "pr start" | Workflow rename (mechanical) |
 | docs/contract.md:3520-3550 (§7.2), word PR/PRs | 45 | object | "Lead worktree of an adopted PR" | Workflow (mechanical rewrite, rule below) |
 | docs/contract.md:3520-3550 (§7.2), phrase 'pull request(s)' | 7 | pull request | "the pull request's recorded head accepts them" | unchanged |
-| docs/contract.md:3526 (first of 2 in §7.2) | 2 | mixed | `pr open` | see rule M in Fix list |
-| docs/contract.md:3545 (first of 1 in §7.2) | 1 | mixed | `pr view` | see rule M in Fix list |
+| docs/contract.md:3526 (first of 2 in §7.2) | 2 | mixed | "pr open" | see rule M in Fix list |
+| docs/contract.md:3545 (first of 1 in §7.2) | 1 | mixed | "pr view" | see rule M in Fix list |
 | docs/contract.md:3523 (first of 3 in §7.2), tokens | 3 | object | "pr start" | Workflow rename (mechanical) |
 | docs/contract.md:3551-3600 (§7.3), word PR/PRs | 8 | object | "after a workflow worktree is created at the PR's start" | Workflow (mechanical rewrite, rule below) |
-| docs/contract.md:3560 (first of 2 in §7.3) | 2 | mixed | `pr open` | see rule M in Fix list |
-| docs/contract.md:3560 (first of 2 in §7.3) | 2 | mixed | `pr push` | see rule M in Fix list |
-| docs/contract.md:3560 (first of 2 in §7.3) | 2 | mixed | `pr rebase` | see rule M in Fix list |
-| docs/contract.md:3597 (first of 1 in §7.3) | 1 | mixed | `pr_title_required` | see rule M in Fix list |
+| docs/contract.md:3560 (first of 2 in §7.3) | 2 | mixed | "pr open" | see rule M in Fix list |
+| docs/contract.md:3560 (first of 2 in §7.3) | 2 | mixed | "pr push" | see rule M in Fix list |
+| docs/contract.md:3560 (first of 2 in §7.3) | 2 | mixed | "pr rebase" | see rule M in Fix list |
+| docs/contract.md:3597 (first of 1 in §7.3) | 1 | mixed | "pr_title_required" | see rule M in Fix list |
 | docs/contract.md:3561 (first of 2 in §7.3) | 2 | mixed | "gate.pr" | see rule M in Fix list |
 | docs/contract.md:3597 (first of 1 in §7.3), tokens | 1 | pull request | "pr_closed" | unchanged |
 | docs/contract.md:3601-3661 (§7.4), word PR/PRs | 24 | object | "no other Attempt of its PR is live when inserted" | Workflow (mechanical rewrite, rule below) |
 | docs/contract.md:3601-3661 (§7.4), phrase 'pull request(s)' | 9 | pull request | "the pull request is created or adopted" | unchanged |
-| docs/contract.md:3617 (first of 8 in §7.4) | 8 | mixed | `pr open` | see rule M in Fix list |
-| docs/contract.md:3617 (first of 5 in §7.4) | 5 | mixed | `pr push` | see rule M in Fix list |
-| docs/contract.md:3616 (first of 9 in §7.4) | 9 | mixed | `pr rebase` | see rule M in Fix list |
-| docs/contract.md:3657 (first of 1 in §7.4) | 1 | mixed | `pr_title_required` | see rule M in Fix list |
+| docs/contract.md:3617 (first of 8 in §7.4) | 8 | mixed | "pr open" | see rule M in Fix list |
+| docs/contract.md:3617 (first of 5 in §7.4) | 5 | mixed | "pr push" | see rule M in Fix list |
+| docs/contract.md:3616 (first of 9 in §7.4) | 9 | mixed | "pr rebase" | see rule M in Fix list |
+| docs/contract.md:3657 (first of 1 in §7.4) | 1 | mixed | "pr_title_required" | see rule M in Fix list |
 | docs/contract.md:3614 (first of 3 in §7.4) | 3 | mixed | "gate.pr" | see rule M in Fix list |
 | docs/contract.md:3655 (first of 1 in §7.4), tokens | 1 | object | "prs" | Workflow rename (mechanical) |
 | docs/contract.md:3662-3675 (§7.5), word PR/PRs | 13 | object | "each path in the PR's `protected.paths`" | Workflow (mechanical rewrite, rule below) |
 | docs/contract.md:3676-3765 (§7.6), word PR/PRs | 164 | object | "Each PR has its own Gate run" | Workflow (mechanical rewrite, rule below) |
 | docs/contract.md:3676-3765 (§7.6), phrase 'pull request(s)' | 74 | pull request | "Each PR has its own Gate run and its own pull request" | unchanged |
-| docs/contract.md:3682 (first of 23 in §7.6) | 23 | mixed | `pr open` | see rule M in Fix list |
-| docs/contract.md:3682 (first of 14 in §7.6) | 14 | mixed | `pr push` | see rule M in Fix list |
-| docs/contract.md:3680 (first of 38 in §7.6) | 38 | mixed | `pr rebase` | see rule M in Fix list |
-| docs/contract.md:3718 (first of 2 in §7.6) | 2 | mixed | `pr view` | see rule M in Fix list |
-| docs/contract.md:3696 (first of 2 in §7.6) | 2 | mixed | `pr-opened` | see rule M in Fix list |
-| docs/contract.md:3696 (first of 3 in §7.6) | 3 | mixed | `pr-merged` | see rule M in Fix list |
-| docs/contract.md:3695 (first of 3 in §7.6) | 3 | mixed | `pr-base-changed` | see rule M in Fix list |
-| docs/contract.md:3696 (first of 3 in §7.6) | 3 | mixed | `pr_number` | see rule M in Fix list |
-| docs/contract.md:3696 (first of 2 in §7.6) | 2 | mixed | `pr_url` | see rule M in Fix list |
-| docs/contract.md:3696 (first of 2 in §7.6) | 2 | mixed | `pr_opened_at` | see rule M in Fix list |
-| docs/contract.md:3694 (first of 1 in §7.6) | 1 | mixed | `pr_title_required` | see rule M in Fix list |
+| docs/contract.md:3682 (first of 23 in §7.6) | 23 | mixed | "pr open" | see rule M in Fix list |
+| docs/contract.md:3682 (first of 14 in §7.6) | 14 | mixed | "pr push" | see rule M in Fix list |
+| docs/contract.md:3680 (first of 38 in §7.6) | 38 | mixed | "pr rebase" | see rule M in Fix list |
+| docs/contract.md:3718 (first of 2 in §7.6) | 2 | mixed | "pr view" | see rule M in Fix list |
+| docs/contract.md:3696 (first of 2 in §7.6) | 2 | mixed | "pr-opened" | see rule M in Fix list |
+| docs/contract.md:3696 (first of 3 in §7.6) | 3 | mixed | "pr-merged" | see rule M in Fix list |
+| docs/contract.md:3695 (first of 3 in §7.6) | 3 | mixed | "pr-base-changed" | see rule M in Fix list |
+| docs/contract.md:3696 (first of 3 in §7.6) | 3 | mixed | "pr_number" | see rule M in Fix list |
+| docs/contract.md:3696 (first of 2 in §7.6) | 2 | mixed | "pr_url" | see rule M in Fix list |
+| docs/contract.md:3696 (first of 2 in §7.6) | 2 | mixed | "pr_opened_at" | see rule M in Fix list |
+| docs/contract.md:3694 (first of 1 in §7.6) | 1 | mixed | "pr_title_required" | see rule M in Fix list |
 | docs/contract.md:3690 (first of 10 in §7.6) | 10 | mixed | "gate.pr" | see rule M in Fix list |
 | docs/contract.md:3713 (first of 1 in §7.6) | 1 | mixed | `pr` | see rule M in Fix list |
 | docs/contract.md:3734 (first of 1 in §7.6) | 1 | mixed | "pr.gate" | see rule M in Fix list |
@@ -139,28 +139,28 @@ Method: counts come from the `rg`/regex commands in Coverage, run on each sectio
 | docs/contract.md:3678 (first of 35 in §7.6), tokens | 35 | pull request | "pr poll" | unchanged |
 | docs/contract.md:3766-3818 (§7.7), word PR/PRs | 26 | object | "the PR has a stored `title`" | Workflow (mechanical rewrite, rule below) |
 | docs/contract.md:3766-3818 (§7.7), phrase 'pull request(s)' | 6 | pull request | "the newest pull request of the Lead Branch is not" | unchanged |
-| docs/contract.md:3808 (first of 8 in §7.7) | 8 | mixed | `pr open` | see rule M in Fix list |
-| docs/contract.md:3817 (first of 1 in §7.7) | 1 | mixed | `pr push` | see rule M in Fix list |
-| docs/contract.md:3817 (first of 1 in §7.7) | 1 | mixed | `pr rebase` | see rule M in Fix list |
-| docs/contract.md:3815 (first of 2 in §7.7) | 2 | mixed | `pr-opened` | see rule M in Fix list |
-| docs/contract.md:3815 (first of 1 in §7.7) | 1 | mixed | `pr-merged` | see rule M in Fix list |
-| docs/contract.md:3815 (first of 1 in §7.7) | 1 | mixed | `pr_number` | see rule M in Fix list |
-| docs/contract.md:3815 (first of 1 in §7.7) | 1 | mixed | `pr_url` | see rule M in Fix list |
-| docs/contract.md:3815 (first of 1 in §7.7) | 1 | mixed | `pr_opened_at` | see rule M in Fix list |
-| docs/contract.md:3808 (first of 1 in §7.7) | 1 | mixed | `pr_title_required` | see rule M in Fix list |
+| docs/contract.md:3808 (first of 8 in §7.7) | 8 | mixed | "pr open" | see rule M in Fix list |
+| docs/contract.md:3817 (first of 1 in §7.7) | 1 | mixed | "pr push" | see rule M in Fix list |
+| docs/contract.md:3817 (first of 1 in §7.7) | 1 | mixed | "pr rebase" | see rule M in Fix list |
+| docs/contract.md:3815 (first of 2 in §7.7) | 2 | mixed | "pr-opened" | see rule M in Fix list |
+| docs/contract.md:3815 (first of 1 in §7.7) | 1 | mixed | "pr-merged" | see rule M in Fix list |
+| docs/contract.md:3815 (first of 1 in §7.7) | 1 | mixed | "pr_number" | see rule M in Fix list |
+| docs/contract.md:3815 (first of 1 in §7.7) | 1 | mixed | "pr_url" | see rule M in Fix list |
+| docs/contract.md:3815 (first of 1 in §7.7) | 1 | mixed | "pr_opened_at" | see rule M in Fix list |
+| docs/contract.md:3808 (first of 1 in §7.7) | 1 | mixed | "pr_title_required" | see rule M in Fix list |
 | docs/contract.md:3780 (first of 3 in §7.7), tokens | 3 | object | "pr add" | Workflow rename (mechanical) |
 | docs/contract.md:3817 (first of 2 in §7.7), tokens | 2 | pull request | "pr-feedback" | unchanged |
 | docs/contract.md:3882 (§8.1-§8.2), word PR | 1 | pull request | "every open PR of the User" | unchanged |
 | docs/contract.md:3819-3944 (§8.1-§8.2), word PR/PRs | 1 | object | "escalation of an unopened PR to the Manager" | Workflow (mechanical rewrite, rule below) |
 | docs/contract.md:3819-3944 (§8.1-§8.2), words 'PR poll' / 'PR post' | 1 | pull request | "of the PR poll may fail" | unchanged (CONTEXT.md terms PR poll, PR post keep PR = pull request) |
 | docs/contract.md:3943 (first of 1 in §8.1-§8.2), tokens | 1 | object | "pr_open_escalate_minutes" | Workflow rename (mechanical) |
-| docs/contract.md:3882 (first of 4 in §8.1-§8.2), tokens | 4 | pull request | "pr_poll_*" | unchanged |
+| docs/contract.md:3882 (first of 4 in §8.1-§8.2), tokens | 4 | pull request | "pr_poll_seconds" | unchanged |
 | docs/contract.md:3945-4120 (§8.3), word PR/PRs | 25 | object | "a PR, the Workers of its Jobs" | Workflow (mechanical rewrite, rule below) |
 | docs/contract.md:3945-4120 (§8.3), words 'PR poll' / 'PR post' | 4 | pull request | "The PR poll (§7.6) and engine E8" | unchanged (CONTEXT.md terms PR poll, PR post keep PR = pull request) |
 | docs/contract.md:3945-4120 (§8.3), phrase 'pull request(s)' | 2 | pull request | "h; `default (no owner file)` for a pull request row no PR owns whos" | unchanged |
-| docs/contract.md:3964 (first of 5 in §8.3) | 5 | mixed | `pr open` | see rule M in Fix list |
-| docs/contract.md:4013 (first of 4 in §8.3) | 4 | mixed | `pr push` | see rule M in Fix list |
-| docs/contract.md:4013 (first of 5 in §8.3) | 5 | mixed | `pr rebase` | see rule M in Fix list |
+| docs/contract.md:3964 (first of 5 in §8.3) | 5 | mixed | "pr open" | see rule M in Fix list |
+| docs/contract.md:4013 (first of 4 in §8.3) | 4 | mixed | "pr push" | see rule M in Fix list |
+| docs/contract.md:4013 (first of 5 in §8.3) | 5 | mixed | "pr rebase" | see rule M in Fix list |
 | docs/contract.md:3963 (first of 8 in §8.3) | 8 | mixed | "[pr]" | see rule M in Fix list |
 | docs/contract.md:3963 (first of 6 in §8.3) | 6 | mixed | `pr` | see rule M in Fix list |
 | docs/contract.md:4013 (first of 1 in §8.3) | 1 | mixed | "pr.gate" | see rule M in Fix list |
@@ -171,11 +171,11 @@ Method: counts come from the `rg`/regex commands in Coverage, run on each sectio
 | docs/contract.md:4182-4258 (§10), word PR/PRs | 85 | object | "R11 one big Plan, one PR" | Workflow (mechanical rewrite, rule below) |
 | docs/contract.md:4182-4258 (§10), words 'PR poll' / 'PR post' | 5 | pull request | "PR post" | unchanged (CONTEXT.md terms PR poll, PR post keep PR = pull request) |
 | docs/contract.md:4182-4258 (§10), phrase 'pull request(s)' | 11 | pull request | "Authored pull requests in the Inbox" | unchanged |
-| docs/contract.md:4201 (first of 5 in §10) | 5 | mixed | `pr open` | see rule M in Fix list |
-| docs/contract.md:4215 (first of 4 in §10) | 4 | mixed | `pr push` | see rule M in Fix list |
-| docs/contract.md:4201 (first of 4 in §10) | 4 | mixed | `pr rebase` | see rule M in Fix list |
-| docs/contract.md:4201 (first of 5 in §10) | 5 | mixed | `pr view` | see rule M in Fix list |
-| docs/contract.md:4201 (first of 2 in §10) | 2 | mixed | `pr-base-changed` | see rule M in Fix list |
+| docs/contract.md:4201 (first of 5 in §10) | 5 | mixed | "pr open" | see rule M in Fix list |
+| docs/contract.md:4215 (first of 4 in §10) | 4 | mixed | "pr push" | see rule M in Fix list |
+| docs/contract.md:4201 (first of 4 in §10) | 4 | mixed | "pr rebase" | see rule M in Fix list |
+| docs/contract.md:4201 (first of 5 in §10) | 5 | mixed | "pr view" | see rule M in Fix list |
+| docs/contract.md:4201 (first of 2 in §10) | 2 | mixed | "pr-base-changed" | see rule M in Fix list |
 | docs/contract.md:4231 (first of 1 in §10) | 1 | mixed | `pr` | see rule M in Fix list |
 | docs/contract.md:4200 (first of 18 in §10), tokens | 18 | object | "--pr" | Workflow rename (mechanical) |
 | docs/contract.md:4201 (first of 25 in §10), tokens | 25 | pull request | "pr poll" | unchanged |
