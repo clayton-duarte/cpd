@@ -18,6 +18,7 @@ mod pr_comments;
 mod pr_view_feedback;
 mod pr_crud;
 mod pr_describe;
+mod pr_human_approval;
 mod pr_human_gated;
 mod pr_jira;
 mod pr_jira_queue;

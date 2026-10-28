@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::error::{CpdError, ErrorCode};
 use super::comments;
-use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
+use super::status::{Approval, ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use crate::git::{TAIL_LINES, tail};
 use crate::host::limit::limit;
 use crate::host::deadline::Failed;
@@ -500,7 +500,7 @@ pub fn inline_comments(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<V
 /// The fields of a pull request, as the search and the lookup both select them.
 macro_rules! pr_fields {
     () => {
-        "repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision \
+        "repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } \
          mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
     };
 }
@@ -671,6 +671,8 @@ struct RawPr {
     base_ref: Option<String>,
     #[serde(rename = "reviewDecision")]
     review_decision: Option<String>,
+    #[serde(rename = "latestOpinionatedReviews", default)]
+    latest_reviews: RawReviews,
     mergeable: String,
     #[serde(rename = "mergeStateStatus")]
     merge_state: String,
@@ -680,6 +682,24 @@ struct RawPr {
     viewer_did_author: Option<bool>,
     #[serde(rename = "viewerLatestReviewRequest", default, deserialize_with = "present")]
     viewer_review_request: Option<Value>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RawReviews {
+    nodes: Vec<RawReview>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawReview {
+    state: String,
+    author: Option<RawReviewer>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawReviewer {
+    #[serde(rename = "__typename")]
+    kind: String,
+    login: String,
 }
 
 /// A key that is in the reply, null or not: `Some`.
@@ -741,10 +761,18 @@ impl Reply<'_> {
         }
     }
 
-    fn polled(&self, raw: RawPr) -> Result<PolledPr, CpdError> {
+    fn polled(&self, raw: RawPr, bots: &[String]) -> Result<PolledPr, CpdError> {
         let state = PrState::of_graphql(&raw.state).map_err(|e| self.fail(e.message().to_owned()))?;
         let mergeable = Mergeable::of_graphql(&raw.mergeable).map_err(|e| self.fail(e.message().to_owned()))?;
         let merge_state = MergeState::of_graphql(&raw.merge_state).map_err(|e| self.fail(e.message().to_owned()))?;
+        let approvals: Vec<Approval> = raw
+            .latest_reviews
+            .nodes
+            .iter()
+            .filter(|r| r.state == "APPROVED")
+            .filter_map(|r| r.author.as_ref())
+            .map(|a| Approval { login: a.login.clone(), bot_type: a.kind == "Bot" })
+            .collect();
         let rollup = raw.commits.nodes.first().and_then(|n| n.commit.as_ref()).and_then(|c| c.rollup.as_ref());
         Ok(PolledPr {
             repo: raw.repository.name_with_owner,
@@ -755,7 +783,7 @@ impl Reply<'_> {
             title: raw.title,
             draft: raw.draft,
             state,
-            review_decision: ReviewDecision::of(raw.review_decision.as_deref()),
+            review_decision: ReviewDecision::of_reviews(raw.review_decision.as_deref(), &approvals, bots),
             checks: ChecksSummary::of_rollup(rollup.map(|r| r.state.as_str())),
             mergeable,
             merge_state,
@@ -921,16 +949,16 @@ pub fn enable_auto_merge(runner: &dyn Runner, cwd: &Path, pull: &str) -> Result<
 
 /// The User's open pull requests (`SEARCH_QUERY`), 15 s at most. A response with
 /// `errors`, without `data` or without JSON is `gh_failed`, never "no PRs".
-pub fn search_open(runner: &dyn Runner, cwd: &Path) -> Result<Search, CpdError> {
+pub fn search_open(runner: &dyn Runner, cwd: &Path, bots: &[String]) -> Result<Search, CpdError> {
     let search = || {
         let (args, out) = graphql(runner, cwd, SEARCH_QUERY)?;
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        parse_search(&Reply { args: &refs, out: &out })
+        parse_search(&Reply { args: &refs, out: &out }, bots)
     };
     search().map_err(|e| polled_call("search", e))
 }
 
-fn parse_search(reply: &Reply) -> Result<Search, CpdError> {
+fn parse_search(reply: &Reply, bots: &[String]) -> Result<Search, CpdError> {
     let (data, errors): (RawSearchData, _) = reply.envelope()?;
     if let Some(first) = errors.first() {
         return Err(reply.fail(format!("gh api graphql answered with errors: {}", first.message.as_deref().unwrap_or("(no message)"))));
@@ -942,7 +970,7 @@ fn parse_search(reply: &Reply) -> Result<Search, CpdError> {
     let mut prs: Vec<Listed> = Vec::new();
     for (nodes, is_authored) in [(authored.nodes, true), (requested.nodes, false)] {
         for raw in nodes {
-            let pr = reply.polled(raw)?;
+            let pr = reply.polled(raw, bots)?;
             let at = match prs.iter().position(|l| (&l.pr.repo, l.pr.number) == (&pr.repo, pr.number)) {
                 Some(at) => at,
                 None => {
@@ -971,11 +999,11 @@ pub(super) fn repo_parts(repo: &str) -> Option<(&str, &str)> {
 /// most; `None` for one that GitHub cannot find (deleted, or no access). `gh`
 /// exits 1 on such an alias: stdout is parsed whatever the exit, and a call
 /// without `data` is `gh_failed`. An empty `prs` makes no call.
-pub fn lookup(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<PolledPr>>, CpdError> {
+pub fn lookup(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], bots: &[String]) -> Result<Vec<Option<PolledPr>>, CpdError> {
     if prs.is_empty() {
         return Ok(Vec::new());
     }
-    let found = lookup_call(runner, cwd, prs, false).map_err(|e| polled_call("lookup", e))?;
+    let found = lookup_call(runner, cwd, prs, false, bots).map_err(|e| polled_call("lookup", e))?;
     Ok(found.into_iter().map(|p| p.map(|l| l.pr)).collect())
 }
 
@@ -983,11 +1011,11 @@ pub fn lookup(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)]) -> Result<
 /// selected, both required in the reply. An `OPEN` pull request carries what the viewer's own flags are
 /// (`authored` = `viewerDidAuthor`, `review_requested` = a latest review request); a merged or closed one has neither.
 /// `None` for one GitHub cannot find. Failures are the lookup's (`details.call` `lookup`). An empty `prs` makes no call.
-pub fn read_absent(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<Listed>>, CpdError> {
+pub fn read_absent(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], bots: &[String]) -> Result<Vec<Option<Listed>>, CpdError> {
     if prs.is_empty() {
         return Ok(Vec::new());
     }
-    lookup_call(runner, cwd, prs, true).map_err(|e| polled_call("lookup", e))
+    lookup_call(runner, cwd, prs, true, bots).map_err(|e| polled_call("lookup", e))
 }
 
 /// The lookup's query: one alias `p<i>` per pull request; `viewer` adds the two fields of the direct read.
@@ -1161,15 +1189,15 @@ pub fn read_checks(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)]) -> Re
     Ok(all)
 }
 
-fn lookup_call(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], viewer: bool) -> Result<Vec<Option<Listed>>, CpdError> {
+fn lookup_call(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], viewer: bool, bots: &[String]) -> Result<Vec<Option<Listed>>, CpdError> {
     let query = lookup_query(prs, viewer)?;
     let (args, out) = graphql(runner, cwd, &query)?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    parse_lookup(&Reply { args: &refs, out: &out }, prs.len(), viewer)
+    parse_lookup(&Reply { args: &refs, out: &out }, prs.len(), viewer, bots)
 }
 
 /// The `count` aliases `p0`… of a lookup's reply; with `viewer`, each `OPEN` one carries its viewer flags.
-fn parse_lookup(reply: &Reply, count: usize, viewer: bool) -> Result<Vec<Option<Listed>>, CpdError> {
+fn parse_lookup(reply: &Reply, count: usize, viewer: bool, bots: &[String]) -> Result<Vec<Option<Listed>>, CpdError> {
     let (mut data, errors): (BTreeMap<String, Option<RawRepoLookup>>, _) = reply.envelope()?;
     if let Some(other) = errors.iter().find(|e| e.kind.as_deref() != Some("NOT_FOUND")) {
         return Err(reply.fail(format!("gh api graphql answered with errors: {}", other.message.as_deref().unwrap_or("(no message)"))));
@@ -1193,7 +1221,7 @@ fn parse_lookup(reply: &Reply, count: usize, viewer: bool) -> Result<Vec<Option<
                         .ok_or_else(|| reply.fail(format!("gh api graphql answered {alias} without viewerLatestReviewRequest.")))?;
                     membership = Membership { authored, review_requested: !request.is_null() };
                 }
-                let pr = reply.polled(raw)?;
+                let pr = reply.polled(raw, bots)?;
                 if pr.state != PrState::Open {
                     membership = Membership::default();
                 }
@@ -1224,22 +1252,22 @@ mod tests {
     fn pr(repo: &str, number: i64, draft: bool, state: &str, rollup: &str) -> String {
         format!(
             r#"{{"repository":{{"nameWithOwner":"{repo}"}},"number":{number},"url":"https://github.com/{repo}/pull/{number}","title":"T{number}",
-            "isDraft":{draft},"state":"{state}","createdAt":"2026-05-01T10:00:00Z","updatedAt":"2026-05-02T10:00:00Z","mergedAt":null,"reviewDecision":"APPROVED",
+            "isDraft":{draft},"state":"{state}","createdAt":"2026-05-01T10:00:00Z","updatedAt":"2026-05-02T10:00:00Z","mergedAt":null,"reviewDecision":"APPROVED","latestOpinionatedReviews":{{"nodes":[{{"state":"APPROVED","author":{{"__typename":"User","login":"alice"}}}}]}},
             "mergeable":"CONFLICTING","mergeStateStatus":"DIRTY",
             "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}"#
         )
     }
 
     fn search(out: &Output) -> Result<Search, CpdError> {
-        parse_search(&Reply { args: &ARGS, out })
+        parse_search(&Reply { args: &ARGS, out }, &[])
     }
 
     fn looked_up(out: &Output, count: usize) -> Result<Vec<Option<PolledPr>>, CpdError> {
-        Ok(parse_lookup(&Reply { args: &ARGS, out }, count, false)?.into_iter().map(|p| p.map(|l| l.pr)).collect())
+        Ok(parse_lookup(&Reply { args: &ARGS, out }, count, false, &[])?.into_iter().map(|p| p.map(|l| l.pr)).collect())
     }
 
     fn read(out: &Output, count: usize) -> Result<Vec<Option<Listed>>, CpdError> {
-        parse_lookup(&Reply { args: &ARGS, out }, count, true)
+        parse_lookup(&Reply { args: &ARGS, out }, count, true, &[])
     }
 
     #[test]
@@ -1287,12 +1315,34 @@ mod tests {
             SEARCH_QUERY,
             "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt \
-             baseRefName reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
+             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
              reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } } number url title isDraft state createdAt updatedAt mergedAt \
-             baseRefName reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
+             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
              rateLimit { cost remaining resetAt } }"
         );
+    }
+
+    #[test]
+    fn the_review_nodes_are_typed_with_a_bot_type_a_null_author_and_a_missing_field() {
+        let with = |reviews: &str| {
+            let node = pr("acme/pay", 1, false, "OPEN", "null");
+            let mut v: Value = serde_json::from_str(&node).unwrap();
+            match serde_json::from_str::<Value>(reviews).unwrap() {
+                Value::Null => {
+                    v.as_object_mut().unwrap().remove("latestOpinionatedReviews");
+                }
+                r => v["latestOpinionatedReviews"] = r,
+            }
+            let out = reply(&format!(r#"{{"data":{{"p0":{{"pullRequest":{v}}}}}}}"#), 0);
+            looked_up(&out, 1).unwrap().remove(0).unwrap().review_decision
+        };
+        let nodes = |n: &str| format!(r#"{{"nodes":[{n}]}}"#);
+        let approved = |a: &str| nodes(&format!(r#"{{"state":"APPROVED","author":{a}}}"#));
+        assert_eq!(with(&approved(r#"{"__typename":"Bot","login":"lane"}"#)), ReviewDecision::None);
+        assert_eq!(with(&approved("null")), ReviewDecision::None);
+        assert_eq!(with(&approved(r#"{"__typename":"User","login":"alice"}"#)), ReviewDecision::Approved);
+        assert_eq!(with("null"), ReviewDecision::None);
     }
 
     #[test]
@@ -1519,7 +1569,7 @@ mod tests {
         }
         let gone = r#"{"data":{"p0":null},"errors":[{"type":"NOT_FOUND","path":["p0"],"message":"x"}]}"#;
         assert_eq!(read(&reply(gone, 1), 1).unwrap(), vec![None]);
-        assert_eq!(read_absent(&runner(), Path::new("/nonexistent"), &[]).unwrap(), vec![]);
+        assert_eq!(read_absent(&runner(), Path::new("/nonexistent"), &[], &[]).unwrap(), vec![]);
     }
 
     #[test]
@@ -1549,7 +1599,7 @@ mod tests {
         let nowhere = Path::new("/nonexistent");
         let runner = runner();
         for repo in ["", "a", "a/", "/b", "a/b/c", "a b/c", "o/n\"}) { x", "o\"/n", "ö/n"] {
-            let e = lookup(&runner, nowhere, &[(repo.to_owned(), 1)]).unwrap_err();
+            let e = lookup(&runner, nowhere, &[(repo.to_owned(), 1)], &[]).unwrap_err();
             assert_eq!(e.code(), ErrorCode::GhFailed, "{repo:?}");
             assert!(e.message().contains("owner/name"), "{repo:?}: {}", e.message());
         }
@@ -1557,7 +1607,7 @@ mod tests {
 
     #[test]
     fn an_empty_lookup_makes_no_call() {
-        assert_eq!(lookup(&runner(), Path::new("/nonexistent"), &[]).unwrap(), vec![]);
+        assert_eq!(lookup(&runner(), Path::new("/nonexistent"), &[], &[]).unwrap(), vec![]);
     }
 
     #[test]

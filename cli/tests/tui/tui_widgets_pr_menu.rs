@@ -241,10 +241,10 @@ fn the_menu_of_a_ready_to_merge_row_is_merge_go_to_lead_copy_link_then_the_four_
 
 #[test]
 fn the_menu_of_a_ready_for_review_row_starts_with_post_then_go_to_lead_and_copy_link() {
-    let fx = shop(vec![owned("ready for review")]);
+    let fx = shop(vec![owned("ready for user review")]);
     let _engine = engine(&fx);
     cockpit(&fx);
-    assert_eq!(menu_of(&fx, "shop#4 ready for review"), with(&["Post", "Go to Lead", "Copy Link"]));
+    assert_eq!(menu_of(&fx, "shop#4 ready for user review"), with(&["Post", "Go to Lead", "Copy Link"]));
 }
 
 #[test]
@@ -286,10 +286,10 @@ fn merge_and_post_come_from_the_label_status_not_from_the_pull_request_row() {
     drop(_engine);
     drop(fx);
 
-    let fx = shop(vec![owned("ready for review")]);
+    let fx = shop(vec![owned("ready for user review")]);
     let _engine = engine(&fx);
     cockpit(&fx);
-    assert_eq!(menu_of(&fx, "shop#4 ready for review"), with(&["Post", "Go to Lead", "Copy Link"]), "clean, labelled ready for review");
+    assert_eq!(menu_of(&fx, "shop#4 ready for user review"), with(&["Post", "Go to Lead", "Copy Link"]), "clean, labelled ready for user review");
 }
 
 // ---------- what the entries run ----------
@@ -315,23 +315,23 @@ fn picking_merge_runs_the_merge_action_at_once_with_no_confirm_popup() {
 
 #[test]
 fn picking_post_runs_cpd_pr_post_with_the_pr_key_and_plan_and_opens_no_popup() {
-    let fx = shop(vec![owned("ready for review")]);
+    let fx = shop(vec![owned("ready for user review")]);
     let _engine = engine(&fx);
     cockpit(&fx);
     let screen = first_rows(&fx);
-    run(&fx, pick(&screen, "shop#4 ready for review", 0));
+    run(&fx, pick(&screen, "shop#4 ready for user review", 0));
     assert_eq!(cpd_calls(&fx), [words(&["pr", "post", "--pr", PR_KEY, "--plan", "ship"])]);
     assert!(popups(&fx).is_empty(), "{:?}", popups(&fx));
 }
 
 #[test]
 fn a_refused_post_opens_the_error_dialog_and_a_post_with_no_matching_pr_row_says_so() {
-    let fx = shop(vec![owned("ready for review")]);
+    let fx = shop(vec![owned("ready for user review")]);
     let _engine = engine(&fx);
     cockpit(&fx);
     refuse(&["pr", "post"], ErrorCode::PrNotReady, "The pull request is not ready.");
     let screen = first_rows(&fx);
-    run(&fx, pick(&screen, "shop#4 ready for review", 0));
+    run(&fx, pick(&screen, "shop#4 ready for user review", 0));
     let opened = commands(&fx);
     let [dialog] = &opened[..] else { panic!("{opened:?}") };
     assert!(dialog.starts_with("cpd tui view dialog text --title="), "a text dialog: {dialog}");
@@ -340,11 +340,11 @@ fn a_refused_post_opens_the_error_dialog_and_a_post_with_no_matching_pr_row_says
     drop(_engine);
     drop(fx);
 
-    let fx = rig(vec![owned("ready for review")]);
+    let fx = rig(vec![owned("ready for user review")]);
     let _engine = engine(&fx);
     cockpit(&fx);
     let screen = first_rows(&fx);
-    run(&fx, pick(&screen, "shop#4 ready for review", 0));
+    run(&fx, pick(&screen, "shop#4 ready for user review", 0));
     assert_eq!(cpd_calls(&fx), Vec::<Vec<String>>::new(), "no `pr post` without a matching PR row");
     let opened = commands(&fx);
     let [dialog] = &opened[..] else { panic!("{opened:?}") };

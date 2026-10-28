@@ -78,6 +78,18 @@ impl ChecksSummary {
     }
 }
 
+/// An APPROVED review's reviewer; `bot_type` is GraphQL's actor type `Bot` (`pr view` has no type: false).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Approval {
+    pub login: String,
+    pub bot_type: bool,
+}
+
+/// A bot reviewer: a login ending `[bot]` or one of the configured `bots`.
+pub(super) fn is_bot(login: &str, bots: &[String]) -> bool {
+    login.ends_with("[bot]") || bots.iter().any(|b| b == login)
+}
+
 /// The PR's review decision, from gh's `reviewDecision`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ReviewDecision {
@@ -87,10 +99,11 @@ pub(super) enum ReviewDecision {
 }
 
 impl ReviewDecision {
-    /// `APPROVED` and `CHANGES_REQUESTED` are themselves; anything else (`REVIEW_REQUIRED`, empty, absent) is `none`.
-    pub fn of(gh: Option<&str>) -> ReviewDecision {
+    /// The one rule (contract §7.6, pro-d158) of the poll and `pr view`: `CHANGES_REQUESTED` is itself; `APPROVED` is `approved`
+    /// only when one of the `approvals` is a human's; anything else (`REVIEW_REQUIRED`, empty, absent) is `none`.
+    pub fn of_reviews(gh: Option<&str>, approvals: &[Approval], bots: &[String]) -> ReviewDecision {
         match gh {
-            Some("APPROVED") => ReviewDecision::Approved,
+            Some("APPROVED") if approvals.iter().any(|a| !a.bot_type && !is_bot(&a.login, bots)) => ReviewDecision::Approved,
             Some("CHANGES_REQUESTED") => ReviewDecision::ChangesRequested,
             _ => ReviewDecision::None,
         }
@@ -233,13 +246,34 @@ mod tests {
         }
     }
 
+    fn approval(login: &str, bot_type: bool) -> Approval {
+        Approval { login: login.to_owned(), bot_type }
+    }
+
+    fn of(gh: Option<&str>, approvals: &[Approval], bots: &[&str]) -> ReviewDecision {
+        let bots: Vec<String> = bots.iter().map(|b| (*b).to_owned()).collect();
+        ReviewDecision::of_reviews(gh, approvals, &bots)
+    }
+
     #[test]
-    fn only_approved_and_changes_requested_are_decisions() {
-        assert_eq!(ReviewDecision::of(Some("APPROVED")), ReviewDecision::Approved);
-        assert_eq!(ReviewDecision::of(Some("CHANGES_REQUESTED")), ReviewDecision::ChangesRequested);
+    fn approved_needs_a_human_approval_and_changes_requested_stands() {
+        let human = [approval("alice", false)];
+        assert_eq!(of(Some("APPROVED"), &human, &[]), ReviewDecision::Approved);
+        assert_eq!(of(Some("APPROVED"), &[approval("bot", true)], &[]), ReviewDecision::None);
+        assert_eq!(of(Some("APPROVED"), &[], &[]), ReviewDecision::None);
+        assert_eq!(of(Some("APPROVED"), &[approval("bot", true), approval("alice", false)], &[]), ReviewDecision::Approved);
+        assert_eq!(of(Some("CHANGES_REQUESTED"), &[approval("bot", true)], &[]), ReviewDecision::ChangesRequested);
         for other in [Some("REVIEW_REQUIRED"), Some(""), None] {
-            assert_eq!(ReviewDecision::of(other), ReviewDecision::None, "{other:?}");
+            assert_eq!(of(other, &human, &[]), ReviewDecision::None, "{other:?}");
         }
+    }
+
+    #[test]
+    fn a_bot_is_known_by_its_type_its_suffix_or_the_list_and_a_configured_list_replaces_the_default() {
+        assert_eq!(of(Some("APPROVED"), &[approval("x", true)], &[]), ReviewDecision::None);
+        assert_eq!(of(Some("APPROVED"), &[approval("x[bot]", false)], &[]), ReviewDecision::None);
+        assert_eq!(of(Some("APPROVED"), &[approval("lane", false)], &["lane"]), ReviewDecision::None);
+        assert_eq!(of(Some("APPROVED"), &[approval("lane", false)], &["other"]), ReviewDecision::Approved);
     }
 
     #[test]

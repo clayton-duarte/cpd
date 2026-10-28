@@ -3,7 +3,7 @@
 
 use serde_json::{Value, json};
 
-use super::pr::{Poll, Rows, node, poll_fx, viewer};
+use super::pr::{Poll, Rows, node, poll_fx, reviewed, viewer};
 
 /// How the owner's policy file treats posting.
 #[derive(Clone, Copy, PartialEq)]
@@ -202,4 +202,23 @@ fn the_approved_reason_follows_the_old_ones_in_the_documented_order() {
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0].1["reasons"], json!(["checks_failed", "approved"]));
     assert!(events[0].0.contains("needs attention: checks failed, approved."), "{}", events[0].0);
+}
+
+#[test]
+fn human_approval_a_bot_only_approval_tells_a_posted_pr_nothing() {
+    let fx = fixture(Posting::Enabled, true, "any");
+    step(&fx, "U1", "SUCCESS", None, vec![]);
+
+    let bot_only = reviewed(
+        node("acme/pay", 812, "OPEN", Some("APPROVED"), Some("SUCCESS"))
+            .replace(r#""updatedAt":"U1""#, r#""updatedAt":"U2""#)
+            .replace(r#""mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN""#, r#""mergeable":"MERGEABLE","mergeStateStatus":"CLEAN""#),
+        &[("Bot", "acme-review-app", "APPROVED")],
+    );
+    fx.search(&[bot_only]);
+    *fx.gh.comments.lock().unwrap() = Some(answer("U2", vec![]));
+    fx.poll();
+
+    assert!(!flat(&reasons(&fx)).contains(&"approved"), "{:?}", reasons(&fx));
+    assert_eq!(fx.pr_data().1, "none");
 }

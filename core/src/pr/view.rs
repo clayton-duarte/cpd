@@ -6,7 +6,7 @@ use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use super::gh;
-use super::status::{ChecksSummary, PrState, ReviewDecision};
+use super::status::{Approval, ChecksSummary, PrState, ReviewDecision};
 use super::{Args, Env, pr_policy};
 use crate::error::CpdError;
 use crate::output::Output;
@@ -49,6 +49,13 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
             Some(check)
         })
         .collect();
+    let approvals: Vec<Approval> = view
+        .reviews
+        .iter()
+        .filter(|r| r.state == "APPROVED")
+        .filter_map(|r| r.author.as_ref())
+        .map(|a| Approval { login: a.login.clone(), bot_type: false })
+        .collect();
     let reviews: Vec<Value> =
         view.reviews.iter().map(|r| json!({"id": r.id.0, "author": login(&r.author), "state": r.state, "body": r.body})).collect();
     let comments: Vec<Value> = view.comments.iter().map(|c| json!({"id": c.id.0, "author": login(&c.author), "body": c.body})).collect();
@@ -73,7 +80,7 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         "plan": id,
         "pr": {
             "key": pr.key, "number": number, "url": view.url, "title": view.title, "jira": pr.jira, "state": state.as_str(),
-            "review_decision": ReviewDecision::of(view.review_decision.as_deref()).as_str(), "checks": summary.as_str(),
+            "review_decision": ReviewDecision::of_reviews(view.review_decision.as_deref(), &approvals, &env.config.inbox.bot_reviewers).as_str(), "checks": summary.as_str(),
         },
         "checks": checks,
         "reviews": reviews,
