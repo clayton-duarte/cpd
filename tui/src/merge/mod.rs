@@ -1,4 +1,4 @@
-//! The merge (commands.md §13.2; hs-d273, hs-d473; pro-d111): no confirmation. The Deploy column's merge icon, the PR menu's
+//! The merge (commands.md §13.2; hs-d273, hs-d473; pro-d111): no confirmation. The Dispatch column's merge icon, the PR menu's
 //! Merge and the Inbox `pr-ready` item's Merge call [`start`], which runs `cpd tui action merge <owner>/<repo>#<n>
 //! --client <name>` with tmux `run-shell -b` at once.
 //!
@@ -84,7 +84,7 @@ fn open_pulls(store: &mut Store) -> Result<std::collections::BTreeSet<String>, C
 
 /// `cpd tui action merge <owner>/<repo>#<n> --client <name>` (commands.md §13.2, the `merge` action; hs-d473,
 /// hs-d312): runs `cpd pr merge` in process and, once it succeeds, `cpd pr poll`, the full refresh the periodic poll
-/// runs, so the Deploy column shows the merge at once. A success says nothing. A failed poll is a line of the log
+/// runs, so the Dispatch column shows the merge at once. A success says nothing. A failed poll is a line of the log
 /// only: the pull request did merge. A failed merge runs no poll; it is a line of the log, written before any tmux
 /// call so that it is always there, then the cockpit's one failure dialog on `client`. The `Err` is what the dialog
 /// could not show: the caller shows it with `display-message -c <client>`.

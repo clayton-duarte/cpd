@@ -57,7 +57,7 @@ impl fmt::Display for PullRef {
 
 #[derive(clap::Args, Debug)]
 pub struct MergeArgs {
-    /// The pull request, as the Deploy column shows it
+    /// The pull request, as the Dispatch column shows it
     #[arg(value_name = "owner/repo#n")]
     pull: PullRef,
 }
