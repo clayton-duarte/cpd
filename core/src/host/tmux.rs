@@ -107,14 +107,17 @@ const MARK_D: &str = "\u{f0bf5}";
 /// no leading `━` (the first cell of the format is the C glyph, after tmux's two). Each glyph
 /// ends with `#[default]`: a `#[fg=...]` would otherwise run into every later cell, and
 /// `#[default]` returns to the base style, the border's own, so the `━` between them is
-/// grey or blue like the line around it.
+/// grey or blue like the line around it. One space follows each `#[default]` (hs-d730): the
+/// terminal draws a Nerd Font glyph full size only with an empty cell after it (observed in
+/// Ghostty; no option forces it), so the mark is `G #[default]`, a space, `━`, ... and a
+/// trailing space after the D. tmux counts the space as a cell, so each glyph is 2 cells wide.
 pub static BORDER_FORMAT: LazyLock<String> = LazyLock::new(|| {
     let plain = pill::fg_if("pane_active", spec().meanings.focus, spec().meanings.plain);
     let title = |text: &str| format!("━{}", pill::pill(&plain, "", text));
     let mark = [MARK_C, MARK_P, MARK_D]
         .iter()
         .zip(DANGO)
-        .map(|(glyph, base)| format!("{}{glyph}#[default]", pill::fg(spec().clickable(base))))
+        .map(|(glyph, base)| format!("{}{glyph}#[default] ", pill::fg(spec().clickable(base))))
         .collect::<Vec<_>>()
         .join("━");
     format!(

@@ -78,7 +78,7 @@ fn border_mark_tree_view_draws_the_three_glyphs_in_13_15_10_with_border_styled_l
     ];
     for active in [true, false] {
         let expansion = border("", "", "tree", active, "cpd");
-        let mut got = cells(&expansion);
+        let mut got: Vec<_> = cells(&expansion).into_iter().filter(|c| *c != (' ', Base)).collect();
         while got.last() == Some(&('━', Base)) {
             got.pop();
         }
@@ -86,6 +86,21 @@ fn border_mark_tree_view_draws_the_three_glyphs_in_13_15_10_with_border_styled_l
         assert!(!expansion.contains('\u{e0b6}') && !expansion.contains('\u{e0b4}'), "{expansion:?}");
         assert!(!expansion.contains("reverse") && !expansion.contains("Context"), "{expansion:?}");
         assert!(cells(&expansion).iter().all(|(c, s)| *c != '━' || *s == Base), "{expansion:?}");
+    }
+}
+
+#[test]
+fn border_mark_gives_every_glyph_an_empty_cell_after_it_so_the_terminal_draws_it_big() {
+    use Style::Base;
+    let glyphs = ['\u{f0bf2}', '\u{f0c19}', '\u{f0bf5}'];
+    for active in [true, false] {
+        let got = cells(&border("", "", "tree", active, "cpd"));
+        for glyph in glyphs {
+            let i = got.iter().position(|(c, _)| *c == glyph).expect("a glyph cell");
+            assert_eq!(got.get(i + 1), Some(&(' ', Base)), "active {active}: glyph {glyph:?} in {got:?}");
+        }
+        let d = got.iter().position(|(c, _)| *c == glyphs[2]).unwrap();
+        assert!(got[d + 2..].iter().all(|c| *c == ('━', Base)), "active {active}: {got:?}");
     }
 }
 
