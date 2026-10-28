@@ -8,45 +8,45 @@ use super::pr::{Poll, Rows, node, pay, poll_fx};
 use super::pr_view;
 
 /// What the policy says of `feedback.checks`.
-fn policy(fx: &Poll, checks: &str) {
+pub(super) fn policy(fx: &Poll, checks: &str) {
     fx.env.owner_policy("acme", &format!("[pr]\nfeedback.checks = \"{checks}\"\n"));
 }
 
 /// An owned PR (812) with policy `any` whose search rollup is `FAILURE`.
-fn failing_rollup() -> Poll {
+pub(super) fn failing_rollup() -> Poll {
     let fx = poll_fx("deploy");
     policy(&fx, "any");
     fx.search(&[pay("OPEN", None, Some("FAILURE"))]);
     fx
 }
 
-fn run(name: &str, status: &str, conclusion: Option<&str>) -> Value {
+pub(super) fn run(name: &str, status: &str, conclusion: Option<&str>) -> Value {
     json!({"__typename": "CheckRun", "name": name, "status": status, "conclusion": conclusion})
 }
 
 /// `n` successful check runs.
-fn green(n: usize) -> Vec<Value> {
+pub(super) fn green(n: usize) -> Vec<Value> {
     (0..n).map(|i| run(&format!("ci/{i}"), "COMPLETED", Some("SUCCESS"))).collect()
 }
 
-fn status_context(context: &str, state: &str) -> Value {
+pub(super) fn status_context(context: &str, state: &str) -> Value {
     json!({"__typename": "StatusContext", "context": context, "state": state})
 }
 
 /// One pull request's contexts of the checks read: its `nodes` and the page's `hasNextPage` and `endCursor`.
-fn contexts(nodes: Vec<Value>, next: Option<&str>) -> Value {
+pub(super) fn contexts(nodes: Vec<Value>, next: Option<&str>) -> Value {
     json!({"commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {
         "pageInfo": {"hasNextPage": next.is_some(), "endCursor": next}, "nodes": nodes}}}}]}})
 }
 
 /// The answer of the checks read: one alias `p<i>` per entry.
-fn answer(pulls: Vec<Value>) -> String {
+pub(super) fn answer(pulls: Vec<Value>) -> String {
     let data: serde_json::Map<String, Value> = pulls.into_iter().enumerate().map(|(i, p)| (format!("p{i}"), json!({"pullRequest": p}))).collect();
     json!({"data": data}).to_string() + "\n"
 }
 
 /// The answer for one pull request holding `nodes`, in one page.
-fn one_page(nodes: Vec<Value>) -> String {
+pub(super) fn one_page(nodes: Vec<Value>) -> String {
     answer(vec![contexts(nodes, None)])
 }
 
@@ -55,20 +55,20 @@ fn is_checks_read(call: &Call) -> bool {
 }
 
 /// The next checks read (the first page) is answered `text`.
-fn read_says(fx: &Poll, text: String) {
+pub(super) fn read_says(fx: &Poll, text: String) {
     let _ = (*fx.fakes.runner).clone().once("gh", |c| is_checks_read(c) && !c.args[3].contains("after:"), Reply::ok(&text));
 }
 
 /// The argv of every checks read so far.
-fn reads(fx: &Poll) -> Vec<Vec<String>> {
+pub(super) fn reads(fx: &Poll) -> Vec<Vec<String>> {
     fx.calls("gh").into_iter().filter(is_checks_read).map(|c| c.args).collect()
 }
 
-fn feedback_data(fx: &Poll) -> Vec<Value> {
+pub(super) fn feedback_data(fx: &Poll) -> Vec<Value> {
     fx.events("pr-feedback").into_iter().map(|e| e.1).collect()
 }
 
-fn checks_of_row(fx: &Poll) -> String {
+pub(super) fn checks_of_row(fx: &Poll) -> String {
     fx.pr_data().2
 }
 
@@ -164,7 +164,7 @@ fn a_real_failure_after_a_cancelled_poll_still_raises_feedback() {
 }
 
 /// A second owned pull request, 813 of `acme/pay`, as PR `web` of Plan `pay`, open.
-fn add_second_owned_pr(fx: &Poll) {
+pub(super) fn add_second_owned_pr(fx: &Poll) {
     fx.store()
         .write("fixture", |tx| {
             tx.execute_batch(
@@ -183,15 +183,7 @@ fn add_second_owned_pr(fx: &Poll) {
 
 #[test]
 fn the_checks_are_read_only_for_an_owned_any_pr_whose_rollup_failed() {
-    // The rollup is PENDING: no read, the search's value. (One fixture at a time: each is dropped before the next.)
-    let fx = poll_fx("deploy");
-    policy(&fx, "any");
-    fx.search(&[pay("OPEN", None, Some("PENDING"))]);
-    fx.poll();
-    assert_eq!((reads(&fx).len(), checks_of_row(&fx).as_str()), (0, "pending"), "rollup PENDING");
-
-    // The rollup is FAILURE but no Plan owns the pull request.
-    drop(fx);
+    // The rollup is FAILURE but no Plan owns the pull request. (One fixture at a time.)
     let fx = poll_fx("deploy");
     policy(&fx, "any");
     fx.search(&[pay("OPEN", None, Some("PENDING")), node("acme/web", 902, "OPEN", None, Some("FAILURE"))]);
@@ -258,7 +250,7 @@ fn a_failed_checks_read_fails_the_poll_and_writes_nothing() {
 }
 
 /// The `gh pr view` reply with `checks` as its `statusCheckRollup`.
-fn view_with(checks: Vec<Value>) -> String {
+pub(super) fn view_with(checks: Vec<Value>) -> String {
     json!({"state": "OPEN", "mergedAt": null, "title": "Pay the bills", "url": "https://github.com/acme/pay/pull/812",
            "reviewDecision": null, "statusCheckRollup": checks, "reviews": [], "comments": []})
     .to_string()
