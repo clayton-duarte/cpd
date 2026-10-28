@@ -8,7 +8,13 @@
 # builds uncached), then exports RUSTC_WRAPPER=sccache (one compile cache per machine). A RUSTC_WRAPPER that
 # is already set is kept, including the empty value: `RUSTC_WRAPPER= scripts/cargo.sh ...`
 # opts out.
-# The Gate has no separate concurrency (hs-d679): every run takes no test slot.
+# After the sccache step (the server must not inherit the slot's lock descriptor) it
+# takes one slot of the policy resource `cargo` (pro-d132) when all hold: (1)
+# CPD_CARGO_RESOURCE_HELD is unset or empty, (2) `cpd` is on PATH, (3) `cpd resource
+# list` prints `"name":"cargo"`. Then it exports CPD_CARGO_RESOURCE_HELD=1 and runs
+# `exec cpd resource run cargo --wait 30 -- cargo ...`. The guard stops nested calls
+# (tests inside a held run) from waiting for a second slot, a deadlock. Otherwise it
+# silently runs `exec cargo ...` directly.
 set -eu
 
 if [ -n "${CARGO:-}" ]; then
@@ -63,6 +69,16 @@ EOF
 
 if [ -z "${RUSTC_WRAPPER+x}" ] && command -v sccache >/dev/null 2>&1; then
   start_sccache_server
+fi
+
+if [ -z "${CPD_CARGO_RESOURCE_HELD:-}" ] && command -v cpd >/dev/null 2>&1; then
+  case $(cpd resource list 2>/dev/null) in
+    (*'"name":"cargo"'*)
+      CPD_CARGO_RESOURCE_HELD=1
+      export CPD_CARGO_RESOURCE_HELD
+      exec cpd resource run cargo --wait 30 -- "$cargo" "$@"
+      ;;
+  esac
 fi
 
 exec "$cargo" "$@"

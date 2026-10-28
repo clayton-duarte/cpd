@@ -259,3 +259,17 @@ fn resource_list_shows_job_tenants_and_command_tenants() {
         "the held command slots first, with their slot; then the Job tenants, with no slot number"
     );
 }
+
+/// The one fact `scripts/cargo.sh` reads from cpd: `cpd resource list` is one compact line naming `cargo` (pro-d132, A1).
+#[test]
+fn resource_list_names_cargo_in_the_compact_form_cargo_sh_reads() {
+    let (fx, repo) = resource::tenancy_world("");
+    let host = fx.env.cpd_home().join("policy/host.toml");
+    let held = fs::read_to_string(&host).unwrap_or_default();
+    fs::write(&host, format!("{held}[resources.cargo]\nslots = 3\n")).unwrap();
+
+    let run = fx.cpd_in(&repo, &["resource", "list"]);
+
+    assert_eq!(run.stdout.lines().count(), 1, "{}", run.stdout);
+    assert!(run.stdout.contains("\"name\":\"cargo\""), "{}", run.stdout);
+}

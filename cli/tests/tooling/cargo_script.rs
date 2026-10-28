@@ -250,3 +250,201 @@ fn a_running_sccache_server_is_left_alone() {
     let (exit, stdout, stderr) = run(&path_dir, NO_VARS);
     assert_eq!((exit, stdout.as_str(), stderr.as_str()), (0, "RUSTC_WRAPPER=sccache\n", ""));
 }
+
+// ---- the `cargo` resource (step-level slot) and its re-entrancy guard ----
+
+const LIST_DECLARED: &str = r#"{"ok":true,"repo":"o/r","resources":[{"free":3,"holders":[],"name":"cargo","scope":"host","slots":3},{"free":3,"holders":[],"name":"workers","scope":"host","slots":3}]}"#;
+const LIST_UNDECLARED: &str = r#"{"ok":true,"repo":"o/r","resources":[{"free":3,"holders":[],"name":"workers","scope":"host","slots":3}]}"#;
+const LIST_USAGE_ERROR: &str = r#"{"ok":false,"error":{"code":"usage","message":"cpd resource: /x is not in a git worktree.","details":{}}}"#;
+
+/// Writes a fake cpd (shell builtins only) into `path_dir`. Each call appends
+/// `cpd <args>` to `log`; a `resource run` call also appends its arguments, one
+/// per line, to `<log>.args`. `resource list` prints `list_reply` and exits
+/// `list_status`; `resource run cargo --wait 30 -- <cmd>...` execs the command;
+/// anything else exits 99.
+fn fake_cpd(path_dir: &Path, log: &Path, list_reply: &str, list_status: i32) {
+    fs::create_dir_all(path_dir).unwrap();
+    let log = log.display();
+    write_executable(
+        &path_dir.join("cpd"),
+        &format!(
+            "#!/bin/sh\n\
+             echo cpd \"$@\" >> {log}\n\
+             if [ \"$*\" = \"resource list\" ]; then\n  printf '%s\\n' '{list_reply}'\n  exit {list_status}\nfi\n\
+             if [ \"$1 $2 $3 $4 $5\" = \"resource run cargo --wait 30\" ] && [ \"$6\" = \"--\" ]; then\n\
+             \x20 for a in \"$@\"; do printf '%s\\n' \"$a\" >> {log}.args; done\n  shift 6\n  exec \"$@\"\nfi\n\
+             exit 99\n"
+        ),
+    );
+}
+
+/// Writes a fake cargo into `path_dir` that appends `cargo <args>` and
+/// `held=<CPD_CARGO_RESOURCE_HELD>` to `log`, prints `cargo-out`, and runs
+/// `extra` (a shell snippet) before exiting `status`.
+fn fake_cargo_logging(path_dir: &Path, log: &Path, status: i32, extra: &str) {
+    fs::create_dir_all(path_dir).unwrap();
+    let log = log.display();
+    write_executable(
+        &path_dir.join("cargo"),
+        &format!(
+            "#!/bin/sh\necho cargo \"$@\" >> {log}\necho held=${{CPD_CARGO_RESOURCE_HELD-unset}} >> {log}\n{extra}\necho cargo-out\nexit {status}\n"
+        ),
+    );
+}
+
+/// Like [`run`], with the given script arguments.
+fn run_args<V: AsRef<OsStr>>(path_dir: &Path, args: &[&str], vars: &[(&str, V)]) -> (i32, String, String) {
+    let mut cmd = Command::new("/bin/sh");
+    cmd.arg(script()).args(args).env_clear().env("PATH", path_dir);
+    for (key, value) in vars {
+        cmd.env(key, value.as_ref());
+    }
+    let out = output(&mut cmd).unwrap();
+    (
+        out.status.code().unwrap(),
+        String::from_utf8(out.stdout).unwrap(),
+        String::from_utf8(out.stderr).unwrap(),
+    )
+}
+
+/// A PATH dir with a fake cargo and a fake cpd sharing one log.
+fn cpd_path(tmp: &Path, list_reply: &str, list_status: i32) -> (PathBuf, PathBuf) {
+    let path_dir = tmp.join("path");
+    let log = tmp.join("calls.log");
+    fake_cpd(&path_dir, &log, list_reply, list_status);
+    fake_cargo_logging(&path_dir, &log, 0, "");
+    (path_dir, log)
+}
+
+#[test]
+fn a_declared_cargo_resource_wraps_the_run_in_a_resource_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (path_dir, log) = cpd_path(tmp.path(), LIST_DECLARED, 0);
+    let (exit, stdout, stderr) = run(&path_dir, NO_VARS);
+    assert_eq!((exit, stdout.as_str(), stderr.as_str()), (0, "cargo-out\n", ""));
+    assert_eq!(
+        read_or_empty(&log),
+        "cpd resource list\ncpd resource run cargo --wait 30 -- cargo build --workspace\ncargo build --workspace\nheld=1\n"
+    );
+}
+
+#[test]
+fn the_wrapped_run_sees_the_held_guard() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (path_dir, log) = cpd_path(tmp.path(), LIST_DECLARED, 0);
+    run_ok(&path_dir, NO_VARS);
+    assert!(read_or_empty(&log).lines().any(|l| l == "held=1"), "{}", read_or_empty(&log));
+
+    // An empty value counts as not held: the run is wrapped.
+    let tmp = tempfile::tempdir().unwrap();
+    let (path_dir, log) = cpd_path(tmp.path(), LIST_DECLARED, 0);
+    run_ok(&path_dir, &[("CPD_CARGO_RESOURCE_HELD", "")]);
+    assert!(read_or_empty(&log).lines().any(|l| l == "held=1"), "{}", read_or_empty(&log));
+}
+
+#[test]
+fn a_nested_script_call_inside_a_held_run_takes_no_second_slot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (path_dir, log) = cpd_path(tmp.path(), LIST_DECLARED, 0);
+    let marker = tmp.path().join("marker");
+    let extra = format!(
+        "if [ ! -e {m} ]; then\n  : > {m}\n  /bin/sh {s} inner > /dev/null\nfi",
+        m = marker.display(),
+        s = script().display()
+    );
+    fake_cargo_logging(&path_dir, &log, 0, &extra);
+    let (exit, _, stderr) = run(&path_dir, NO_VARS);
+    assert_eq!((exit, stderr.as_str()), (0, ""));
+    let calls = read_or_empty(&log);
+    let lines: Vec<&str> = calls.lines().collect();
+    let count = |prefix: &str| lines.iter().filter(|l| l.starts_with(prefix)).count();
+    assert_eq!(count("cpd resource run"), 1, "{calls}");
+    assert_eq!(count("cpd resource list"), 1, "{calls}");
+    assert_eq!(count("cpd "), 2, "{calls}");
+    assert!(lines.contains(&"cargo build --workspace"), "{calls}");
+    assert!(lines.contains(&"cargo inner"), "{calls}");
+}
+
+#[test]
+fn the_slot_is_taken_after_the_sccache_server_starts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (path_dir, log) = logging_path(tmp.path(), "exit 0");
+    fake_cpd(&path_dir, &log, LIST_DECLARED, 0);
+    fake_cargo_logging(&path_dir, &log, 0, "");
+    run_ok(&path_dir, NO_VARS);
+    let calls = read_or_empty(&log);
+    let order: Vec<&str> = calls
+        .lines()
+        .filter(|l| l.starts_with("sccache") || l.starts_with("cpd resource run") || l.starts_with("cargo "))
+        .collect();
+    assert_eq!(
+        order,
+        [
+            "sccache --start-server",
+            "cpd resource run cargo --wait 30 -- cargo build --workspace",
+            "cargo build --workspace"
+        ],
+        "{calls}"
+    );
+}
+
+#[test]
+fn a_wrapped_run_keeps_every_argument_and_the_exit_status() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (path_dir, log) = cpd_path(tmp.path(), LIST_DECLARED, 0);
+    fake_cargo_logging(&path_dir, &log, 3, "");
+    let args = ["nextest", "run", "-E", "test(/^a b/)", "--", "--nocapture"];
+    let (exit, _, stderr) = run_args(&path_dir, &args, NO_VARS);
+    assert_eq!((exit, stderr.as_str()), (3, ""));
+    let logged = read_or_empty(&PathBuf::from(format!("{}.args", log.display())));
+    assert_eq!(
+        logged,
+        "resource\nrun\ncargo\n--wait\n30\n--\ncargo\nnextest\nrun\n-E\ntest(/^a b/)\n--\n--nocapture\n"
+    );
+}
+
+// Green guards: the fallback runs cargo exactly as before.
+
+#[test]
+fn an_undeclared_cargo_resource_runs_cargo_directly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (path_dir, log) = cpd_path(tmp.path(), LIST_UNDECLARED, 0);
+    let (exit, stdout, stderr) = run(&path_dir, NO_VARS);
+    assert_eq!((exit, stdout.as_str(), stderr.as_str()), (0, "cargo-out\n", ""));
+    let calls = read_or_empty(&log);
+    let cpd_calls: Vec<&str> = calls.lines().filter(|l| l.starts_with("cpd ")).collect();
+    assert!(cpd_calls.iter().all(|l| *l == "cpd resource list"), "{calls}");
+    assert!(calls.contains("cargo build --workspace\nheld=unset\n"), "{calls}");
+}
+
+#[test]
+fn a_failing_resource_list_runs_cargo_directly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (path_dir, log) = cpd_path(tmp.path(), LIST_USAGE_ERROR, 2);
+    let (exit, stdout, stderr) = run(&path_dir, NO_VARS);
+    assert_eq!((exit, stdout.as_str(), stderr.as_str()), (0, "cargo-out\n", ""));
+    let calls = read_or_empty(&log);
+    assert!(!calls.contains("resource run"), "{calls}");
+    assert!(calls.contains("cargo build --workspace"), "{calls}");
+}
+
+#[test]
+fn a_preset_guard_never_calls_cpd() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (path_dir, log) = cpd_path(tmp.path(), LIST_DECLARED, 0);
+    let (exit, stdout, stderr) = run(&path_dir, &[("CPD_CARGO_RESOURCE_HELD", "1")]);
+    assert_eq!((exit, stdout.as_str(), stderr.as_str()), (0, "cargo-out\n", ""));
+    assert_eq!(read_or_empty(&log), "cargo build --workspace\nheld=1\n");
+
+}
+
+#[test]
+fn without_cpd_on_path_cargo_runs_directly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path_dir = tmp.path().join("path");
+    let log = tmp.path().join("calls.log");
+    fake_cargo_logging(&path_dir, &log, 0, "");
+    let (exit, stdout, stderr) = run(&path_dir, NO_VARS);
+    assert_eq!((exit, stdout.as_str(), stderr.as_str()), (0, "cargo-out\n", ""));
+    assert_eq!(read_or_empty(&log), "cargo build --workspace\nheld=unset\n");
+}
