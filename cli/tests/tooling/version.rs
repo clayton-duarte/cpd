@@ -76,6 +76,8 @@ fn the_install_script_builds_with_the_checkout_s_short_commit() {
     let given = env.root().join("cpd-commit");
     // Records the CPD_COMMIT it was given, then fails: the script stops before installing anything.
     let cargo = env.fake("fake-cargo", &format!("printf '%s' \"${{CPD_COMMIT-unset}}\" > '{}'\nexit 1", given.display()));
+    // cargo.sh calls `cpd resource list` when a `cpd` is on PATH: a fake that fails keeps the real one out and falls back to cargo.
+    env.fake("cpd", "exit 1");
     let out = output(env.command(checkout.script()).env("CARGO", cargo).env("CARGO_TARGET_DIR", env.root().join("target"))).unwrap();
     assert_eq!(env.calls("fake-cargo").len(), 1, "cargo ran once: {}", String::from_utf8_lossy(&out.stderr));
     let head = env.git(&checkout.root, &["rev-parse", "--short", "HEAD"]);
