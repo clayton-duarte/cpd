@@ -22,7 +22,7 @@ Part: CONTEXT.md, README.md, BACKLOG.md, docs/implementing.md, docs/versioning.m
 | docs/interface.md | 172 | 1-172 | Description column only (column 2 of the table, lines 6-172, by `awk -F'\|' '{print $3}'`); the Command, Callers and Cockpit columns are generated and were not read as vocabulary. Only the Description cells with a PR token were read word by word; the others were skimmed by the same `rg` |
 | docs/adr/0001..0014 | 14 files | title, status, first paragraph (lines 1-12 of each) | read; history, no change proposed. Where a term was born is in `## Terms` (rows that cite docs/adr) |
 
-Lines read in full: 323 + 54 + 16 + 282 + 45 + 13 + 33 + 232 = 998. Skimmed: 404 lines of docs/implementing.md (283-686) and the interface.md Description cells. Not read: docs/contract.md and docs/commands.md (another part's); I looked up single lines of docs/contract.md (:3560, :3963, :1133, :294) and one of docs/adr only to test a claim of this part, and label each use.
+Lines read in full: 323 + 54 + 16 + 282 + 45 + 13 + 33 + 232 = 998. Skimmed: 404 lines of docs/implementing.md (283-686) and the interface.md Description cells. Not read: docs/contract.md and docs/commands.md (another part's); I looked up single lines of docs/contract.md (:3560, :3963, :1133, :294, :3734) and one of docs/adr only to test a claim of this part, and label each use.
 
 Commands behind each count (from the worktree; the numbers are in `## Counts`):
 
@@ -67,7 +67,7 @@ One row per term or word-to-watch used in more than one sense, used loosely, sta
 | open | CONTEXT.md:124 | Job kind: "a Job of kind `open`" | status `open` (30); open Inbox items (174); GitHub open pull request (186); 'never opens by itself' (152) | overloaded | keep Open Job; say 'status open' and 'open Inbox item' in full |
 | Draft | CONTEXT.md:152 | Job: "A Job the User has not approved yet" | upstream GitHub draft pull request (124 'never a draft') | overloaded | write 'draft pull request' in full where GitHub's is meant |
 | Locked | CONTEXT.md:156 | Job state: "The state of every Job that is not a draft" | `plan lock` (60), kernel `flock` (288), Resource's Avoid word 'lock' (289); upstream GitHub issue locking | loose | none beyond dropping 'lock' from Resource's Avoid |
-| Session | CONTEXT.md:162 | "A pi session cpd knows about" | tmux session (docs/adr/0009-cockpit-replaces-herdr.md:7); Context 'Not a session' (88) | overloaded | say 'pi session' first, 'tmux session' in full |
+| Session | CONTEXT.md:162 | "A pi session cpd knows about" | tmux session (docs/adr/0009-cockpit-replaces-herdr.md:8); Context 'Not a session' (88) | overloaded | say 'pi session' first, 'tmux session' in full |
 | waiting, blocked | CONTEXT.md:162 | agent states "waiting (an agent waits for another agent" and "blocked (the User has to act" | Workflow status `waiting` (docs/interface.md:70 'Start a waiting PR'); Avoid 'blocker' (141, 231) | overloaded | the Workflow status `waiting` needs a qualifier; keep the Session states |
 | Event | CONTEXT.md:166 | "An append-only record of something that happened" | GitHub events; tmux hooks; Avoid 'message' (167) yet 'delivers some to its Lead as messages' | loose | drop 'message' from Event's Avoid, or call the delivery an 'Event message' |
 | message | CONTEXT.md:216 | "The message the pi adapter adds at the start of a Manager's turn" | Event Avoid (167); Slack message (194); 'first message' (100) | loose | Context update is the one message that needs the word; see Event |
@@ -148,7 +148,7 @@ One row per entry of CONTEXT.md, in file order. Kind: phase, stage, step, entity
 | Context (entity) | entity | the parent shared by two or more Plans | overloaded | CONTEXT.md:88: "Not a session."; Avoid epic (89) while the levels table says Epic (9) |
 | Context record | entity | one typed append-only entry of a Context's knowledge | ok | CONTEXT.md:92 |
 | Context store | mechanism | a Context's records in the machine's database | ok | CONTEXT.md:96: history inside the entry ("imported and archived by migration 0007") |
-| Distilled Context | mechanism | the distiller curates, compresses and retires records | restates docs/contract.md §4.6 | CONTEXT.md:100: about 230 words; names a process, not a Context; docs/implementing.md:56 cites contract §4.6 for the same (unverified, contract not read) |
+| Distilled Context | mechanism | the distiller curates, compresses and retires records | restates docs/contract.md §4.6 | CONTEXT.md:100: about 230 words; names a process, not a Context; docs/implementing.md:55 cites contract §4.6 for the same (unverified, contract not read) |
 | Grounded Lead | role | retired: the Manager replaced it | stale | CONTEXT.md:104: "No longer created (B3)" |
 | Plan (entity) | entity | one deliverable over one or more PRs, in exactly one Context | stale | CONTEXT.md:108: "the term Workflow is retired"; Avoid workflow (109); Workflow returns |
 | PR (entity) | entity | the part of a Plan in one repository, tied to its Lead Branch | stale | CONTEXT.md:112: becomes Workflow; "Distinct from the PR phase" goes with the phase |
@@ -221,7 +221,7 @@ Every word that names two or more entries, or has two or more senses inside CONT
 | open | Job kind (CONTEXT.md:123), status of the object (CONTEXT.md:30), open pull request (CONTEXT.md:186), open Inbox item (CONTEXT.md:174), 'never opens by itself' (CONTEXT.md:152) | five |
 | Draft | Job not approved (CONTEXT.md:151), GitHub draft pull request (CONTEXT.md:124) | two |
 | Gate | the Gate (CONTEXT.md:235), Quick check as the Gate of `gate.merge` (docs/contract.md:3560), 'no PR Gate' (CONTEXT.md:79) | contradiction with the contract |
-| Session | pi session (CONTEXT.md:161), tmux session (docs/adr/0009-cockpit-replaces-herdr.md:7), 'Not a session' (CONTEXT.md:88) | two |
+| Session | pi session (CONTEXT.md:161), tmux session (docs/adr/0009-cockpit-replaces-herdr.md:8), 'Not a session' (CONTEXT.md:88) | two |
 | Event | cpd Event (CONTEXT.md:165), GitHub events and tmux hooks (upstream) | upstream collision |
 | digest | Context digest (CONTEXT.md:18, 100), Plans digest (CONTEXT.md:216) | two |
 | lock | Locked (CONTEXT.md:155), `plan lock` (CONTEXT.md:60), kernel `flock` (CONTEXT.md:288) | three; Resource's Avoid word is a real term |
@@ -586,7 +586,7 @@ RULES (mechanical, no row each; the counts are `object` tokens from `## PR occur
 
 | Measure | Number |
 |---|---|
-| Files in the part | 9 (9 named files and docs/adr/*.md as one group of 14) |
+| Files in the part | 23 (9 named files and 14 ADRs) |
 | Lines read in full | 998 (CONTEXT.md 323, README.md 54, BACKLOG.md 16, docs/implementing.md 1-282, docs/versioning.md 45, docs/mark.md 13, docs/ui-preview.md 33, docs/cockpit-parity.md 232) |
 | Lines skimmed | 404 (docs/implementing.md 283-686) and the docs/interface.md Description column |
 | Entries in CONTEXT.md (`rg -n '^\*\*' CONTEXT.md \| wc -l`) | 78 |
