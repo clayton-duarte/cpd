@@ -194,6 +194,10 @@ _Avoid_: review comment (the word for what a reviewer wrote, not for the open th
 One message announcing a PR for review in Slack. The Lead calls `cpd pr post` when the PR is ready (open, green CI, no unaddressed bot comments) and the User says yes; one post per PR. The owner's policy configures the Slack channel, message template, and an optional emoji to react with after the merge. The post also turns on GitHub squash auto-merge (pro-d117): the PR merges when checks pass unless it is stacked (base PR not yet merged), in which case the request waits. Defined once in `docs/contract.md` §2.2 "PR post".
 _Avoid_: Slack announcement, PR announcement
 
+**Jira status sync** (new, pro-d127):
+For a PR that has its own Jira ticket (`--jira` on `pr add` or `pr edit`), cpd moves the ticket's status: to the policy's `pr.jira.in_progress` when the PR's first Attempt starts, to `pr.jira.in_review` when the PR is posted, and to `pr.jira.done` when it is recorded merged. The steps that reach those points only queue the move, each in its own transaction; engine E19 drains the queue through the pi helper `jira-transition.ts`, which calls the Atlassian MCP. A ticket never moves backwards, a target whose policy name is empty has no transition, and a move the ticket refuses is parked until the ticket or the policy changes. Specified in `docs/commands.md` §21.11 and §21.12.
+_Avoid_: Jira update
+
 ## Roles
 
 **User**:
