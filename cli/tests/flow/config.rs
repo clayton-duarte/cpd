@@ -47,6 +47,7 @@ fn config_defaults_context_distill_tier_to_gx() {
             "concurrency": 3,
             "retry_cap": 2,
             "lead_tier": "O2",
+            "review_lead_tier": "S3",
             "manager_tier": "O4",
             "context_distill_tier": "GX",
             "context_curation_min_records": 25,
@@ -190,7 +191,7 @@ fn config_has_one_source_per_leaf_key() {
     for key in ["version", "machine", "concurrency", "timeouts.ask_minutes"] {
         assert_eq!(sources[key], "file", "{key}");
     }
-    for key in ["retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "open_tier", "lead_pi_packages", "pi_adapter", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
+    for key in ["retry_cap", "lead_tier", "review_lead_tier", "manager_tier", "context_distill_tier", "open_tier", "lead_pi_packages", "pi_adapter", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
         assert_eq!(sources[key], "default", "{key}");
     }
     assert_eq!(out["config"]["concurrency"], 5);
@@ -1241,5 +1242,63 @@ fn watch_janitor_minutes_below_1_is_config_invalid() {
         assert_eq!(run.exit, 1, "{value}");
         assert_eq!(err["code"], "config_invalid", "{value}: {err}");
         assert_eq!(err["details"]["key"], "watch.janitor_minutes", "{value}: {err}");
+    }
+}
+
+fn review_tier_file(value: &str) -> String {
+    format!("version = 1\nmachine = \"hs\"\nreview_lead_tier = {value}\n")
+}
+
+#[test]
+fn config_defaults_review_lead_tier_to_s3_and_takes_a_lead_tier() {
+    let fx = Fx::new();
+    let out = config_with(&fx, MINIMAL).ok();
+    assert_eq!(out["config"]["review_lead_tier"], "S3");
+    assert_eq!(out["sources"]["review_lead_tier"], "default");
+    let out = config_with(&fx, &review_tier_file("\"O3\"")).ok();
+    assert_eq!(out["config"]["review_lead_tier"], "O3");
+    assert_eq!(out["sources"]["review_lead_tier"], "file");
+    for tier in ["O0", "O4", "S4"] {
+        let out = config_with(&fx, &review_tier_file(&format!("\"{tier}\""))).ok();
+        assert_eq!(out["config"]["review_lead_tier"], tier);
+    }
+}
+
+#[test]
+fn config_refuses_a_g_review_lead_tier() {
+    let fx = Fx::new();
+    let run = config_with(&fx, &review_tier_file("\"GX\""));
+    let err = run.error();
+    assert_eq!(run.exit, 1);
+    assert_eq!(err["code"], "config_invalid", "{err}");
+    assert_eq!(err["details"]["key"], "review_lead_tier", "{err}");
+    let message = err["message"].as_str().unwrap();
+    assert!(message.contains("must not be a G Tier") && message.contains("hs-d562"), "{message}");
+}
+
+#[test]
+fn config_refuses_an_effort_5_review_lead_tier() {
+    let fx = Fx::new();
+    for tier in ["O5", "S5"] {
+        let run = config_with(&fx, &review_tier_file(&format!("\"{tier}\"")));
+        let err = run.error();
+        assert_eq!(run.exit, 1, "{tier}");
+        assert_eq!(err["code"], "config_invalid", "{tier}: {err}");
+        assert_eq!(err["details"]["key"], "review_lead_tier", "{tier}: {err}");
+        let message = err["message"].as_str().unwrap();
+        assert!(message.contains("effort 0-4") && message.contains("hs-d506"), "{tier}: {message}");
+    }
+}
+
+#[test]
+fn config_refuses_an_invalid_review_lead_tier() {
+    let fx = Fx::new();
+    for value in ["\"X3\"", "\"O6\"", "\"s3\"", "3"] {
+        let run = config_with(&fx, &review_tier_file(value));
+        let err = run.error();
+        assert_eq!(run.exit, 1, "{value}");
+        assert_eq!(err["code"], "config_invalid", "{value}: {err}");
+        assert_eq!(err["details"]["key"], "review_lead_tier", "{value}: {err}");
+        assert!(!err["message"].as_str().unwrap().contains("is not a known key"), "{value}: {err}");
     }
 }
