@@ -28,6 +28,8 @@ mod inbox_margin_tests;
 mod inbox_width_tests;
 #[cfg(test)]
 mod needs_tests;
+#[cfg(test)]
+mod window_tests;
 pub(crate) mod host;
 pub(crate) mod inbox;
 pub mod legend;

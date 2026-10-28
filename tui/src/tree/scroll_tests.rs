@@ -15,17 +15,17 @@ use cpd_core::ids::SessionId;
 use cpd_core::plan::Phase;
 use cpd_core::session::State;
 
-fn draw_now(view: &mut View, width: u16, height: u16) -> Buffer {
+pub(super) fn draw_now(view: &mut View, width: u16, height: u16) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| view.draw(f, 0)).unwrap();
     terminal.backend().buffer().clone()
 }
 
-fn text_rows(buf: &Buffer) -> Vec<String> {
+pub(super) fn text_rows(buf: &Buffer) -> Vec<String> {
     (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()).collect()
 }
 
-fn press(view: &mut View, code: KeyCode) -> Effect {
+pub(super) fn press(view: &mut View, code: KeyCode) -> Effect {
     view.key(KeyEvent::new(code, KeyModifiers::NONE))
 }
 
@@ -33,11 +33,11 @@ fn pointer(view: &mut View, kind: MouseEventKind, column: u16, row: u16) -> Effe
     view.mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE })
 }
 
-fn click(view: &mut View, column: u16, row: u16) -> Effect {
+pub(super) fn click(view: &mut View, column: u16, row: u16) -> Effect {
     pointer(view, MouseEventKind::Down(MouseButton::Left), column, row)
 }
 
-fn wheel(view: &mut View, down: bool, column: u16, row: u16) {
+pub(super) fn wheel(view: &mut View, down: bool, column: u16, row: u16) {
     let kind = if down { MouseEventKind::ScrollDown } else { MouseEventKind::ScrollUp };
     assert_eq!(pointer(view, kind, column, row), Effect::None);
 }
@@ -55,7 +55,7 @@ fn plans_of(id: &str, n: usize) -> ContextNode {
 }
 
 /// One Context `alpha` with `n` Plans `alpha00`, …: `n + 1` rows.
-fn long_tree(n: usize) -> Tree {
+pub(super) fn long_tree(n: usize) -> Tree {
     tree(vec![plans_of("alpha", n)])
 }
 

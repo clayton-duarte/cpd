@@ -57,6 +57,16 @@ pub(crate) struct Window {
     pub below: usize,
 }
 
+impl Window {
+    pub(crate) fn new(_count: usize, _rows: usize, _scroll: usize) -> Window {
+        todo!("cue lines: the implementation Job")
+    }
+
+    pub(crate) fn max_scroll(_count: usize, _rows: usize) -> usize {
+        todo!("cue lines: the implementation Job")
+    }
+}
+
 /// The largest offset for `count` items of `item_rows` rows each in a list of `height` rows: the last one reaches the
 /// bottom (under the `▲` cue, which takes a row). 0 when every one fits.
 pub(crate) fn max_scroll(count: usize, height: usize, item_rows: usize) -> usize {
