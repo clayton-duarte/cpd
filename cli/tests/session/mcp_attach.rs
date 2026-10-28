@@ -392,3 +392,17 @@ fn mcp_attach_help_shows_the_name_argument() {
     assert_eq!(run.exit, 0, "{text}");
     assert!(text.contains("<name>") || text.contains("<NAME>"), "no <name> in: {text}");
 }
+
+#[test]
+fn the_event_of_a_server_with_oauth_client_name_carries_the_entry_verbatim() {
+    let env = TestEnv::new();
+    with_file(
+        &env,
+        "[mcp.servers.figma]\nurl = \"https://mcp.figma.com/mcp\"\nexposure = \"deferred\"\n\n[mcp.servers.figma.oauth]\nclientName = \"Claude Code\"\n",
+    );
+    attach(&env, LEAD, "figma").ok();
+    let sent = attached(&env);
+    assert_eq!(sent.len(), 1, "exactly one Event: {sent:?}");
+    let entry = json!({"url": "https://mcp.figma.com/mcp", "exposure": "deferred", "oauth": {"clientName": "Claude Code"}});
+    assert_eq!(sent[0]["data"], json!({"name": "figma", "server": entry}));
+}
