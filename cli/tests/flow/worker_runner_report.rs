@@ -20,13 +20,13 @@ use super::driver_open::{Live, submit};
 use super::worker_runner_durable::{durable_live, report, write_report};
 
 /// The runner the driver started, as its stop reads it: the command line a guarded signal compares (from the OS in production), so the
-/// stop before a merge or after a failure reaches it as it would a real runner.
+/// stop before a merge or after a failure reaches it as it would a real runner. That the driver starts the runner at all is the start's
+/// tests' concern (`worker_runner_durable`), not this file's: with no runner launched there is nothing to register.
 fn register_runner(live: &Live) {
-    let launches = live.fx.fakes.spawn.launches();
-    assert_eq!(launches.len(), 2, "the driver's launch and the runner's: {launches:#?}");
-    let runner = &launches[1];
-    let line = std::iter::once(runner.program.as_str()).chain(runner.args.iter().map(String::as_str)).collect::<Vec<_>>().join(" ");
-    live.fx.fakes.spawn.set_cmdline(Pid(1001), &line);
+    if let Some(runner) = live.fx.fakes.spawn.launches().get(1) {
+        let line = std::iter::once(runner.program.as_str()).chain(runner.args.iter().map(String::as_str)).collect::<Vec<_>>().join(" ");
+        live.fx.fakes.spawn.set_cmdline(Pid(1001), &line);
+    }
 }
 
 /// The Worker's Session of Attempt `id`.
