@@ -140,20 +140,21 @@ fn status_line_pills_follow_the_rule() {
     let italic_pill = |colour: &str, text: &str| {
         format!("#[fg={colour}]\u{e0b6}#[reverse]#[italics]{text}#[noitalics]#[noreverse]\u{e0b4}#[default]")
     };
-    let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}}";
+    let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},18},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}}";
     let want = format!(
-        "{JOIN}{}{JOIN}{}{JOIN}{}\
+        "{JOIN}{}{JOIN}{}{JOIN}{}{JOIN}{}\
          #{{?#{{@cpd_preview}},#[fg=colour8]\u{2501}{},}}\
-         #[fg=colour8]#{{R:\u{2501},#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},12}},#{{?#{{@cpd_preview}},#{{e|+:#{{n:@cpd_preview}},12}},0}}}},#{{?@cpd_version,#{{e|+:#{{n:@cpd_version}},3}},0}}}},#{{?@cpd_incident,#{{e|+:#{{n:@cpd_incident}},18}},0}}}},\
+         #[fg=colour8]#{{R:\u{2501},#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},16}},#{{?#{{@cpd_preview}},#{{e|+:#{{n:@cpd_preview}},12}},0}}}},#{{?@cpd_version,#{{e|+:#{{n:@cpd_version}},3}},0}}}},#{{?@cpd_incident,#{{e|+:#{{n:@cpd_incident}},18}},0}}}},\
          #{{e|+:#{{?{long},#{{e|+:#{{w:@cpd_workers}},2}},#{{e|+:#{{w:@cpd_workers_short}},2}}}},1}}}}}}\
          #[default]\
          #{{?@cpd_incident,{}{JOIN},}}\
          {}\
          #{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2501}#[range=user|host]{}#[norange],#{{?#{{@cpd_version}},#[fg=colour8]\u{2501}{},}}}}\
          {JOIN}",
-        button("reset", "colour13", super::RESET_GLYPH),
+        button("reset", "colour15", super::RESET_GLYPH),
         button("legend", "colour15", super::LEGEND_GLYPH),
-        button("logs", "colour10", super::LOGS_GLYPH),
+        button("logs", "colour15", super::LOGS_GLYPH),
+        button("costs", "colour15", "\u{EEC1}"),
         pill("colour3", "preview: #{@cpd_preview}"),
         format!("#[range=user|incident]{}#[norange]", italic_pill("colour9", "Incident Mode: #{@cpd_incident}")),
         pill("colour8", &format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
@@ -254,21 +255,24 @@ fn a_right_click_is_left_to_tmuxs_default_binding_and_the_status_click_runs_cpd_
 fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
     let prefix = format!(
             "#[fg=colour8]\u{2501}#[default]\
-             #[range=user|reset]#[fg=colour13]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
+             #[range=user|reset]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
              #[fg=colour8]\u{2501}#[default]\
              #[range=user|legend]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
              #[fg=colour8]\u{2501}#[default]\
-             #[range=user|logs]#[fg=colour10]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]",
+             #[range=user|logs]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
+             #[fg=colour8]\u{2501}#[default]\
+             #[range=user|costs]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]",
             super::RESET_GLYPH,
             super::LEGEND_GLYPH,
-            super::LOGS_GLYPH
+            super::LOGS_GLYPH,
+            "\u{EEC1}"
         );
     let prefix = prefix + "#{?#{@cpd_preview},#[fg=colour8]\u{2501}#[fg=colour3]\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}#[default],}\
          #[fg=colour8]";
     let suffix = "#[default]\
          #{?@cpd_incident,#[range=user|incident]#[fg=colour9]\u{e0b6}#[reverse]#[italics]Incident Mode: #{@cpd_incident}#[noitalics]#[noreverse]\u{e0b4}#[default]#[norange]#[fg=colour8]\u{2501}#[default],}\
          #[fg=colour8]\u{e0b6}#[reverse]\
-         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
+         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},18},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
          #[noreverse]\u{e0b4}#[default]\
          #{?#{@cpd_host_alert},#[fg=colour8]\u{2501}#[range=user|host]#[fg=colour9]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default]#[norange],#{?#{@cpd_version},#[fg=colour8]\u{2501}#[fg=colour8]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default],}}\
          #[fg=colour8]\u{2501}#[default]";
@@ -282,6 +286,28 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
 fn the_button_glyphs_are_the_hs_d235_code_points() {
     use super::{LEGEND_GLYPH, LOGS_GLYPH, RESET_GLYPH};
     assert_eq!([RESET_GLYPH, LEGEND_GLYPH, LOGS_GLYPH], ["\u{F0A1D}", "\u{F0A01}", "\u{F09ED}"]);
+    assert!(STATUS_FORMAT.contains("\u{EEC1}"), "the costs glyph (U+EEC1) is in the status format: {}", *STATUS_FORMAT);
+}
+
+/// pro-d189, pro-d195: the costs button is the fourth range, one pill of the glyph alone, the same whether costs show or not.
+#[test]
+fn the_costs_button_is_the_fourth_and_looks_the_same_whatever_the_state() {
+    let format = STATUS_FORMAT.as_str();
+    assert_eq!(format.matches("range=user|costs").count(), 1, "one costs range: {format}");
+    let ranges: Vec<&str> = format
+        .match_indices("#[range=user|")
+        .map(|(i, _)| &format[i + "#[range=user|".len()..])
+        .map(|r| &r[..r.find(']').expect("a closed range")])
+        .collect();
+    assert_eq!(ranges[..4], ["reset", "legend", "logs", "costs"], "the costs range is the fourth: {ranges:?}");
+    assert!(!format.contains("@cpd_costs"), "no conditional on an option of the costs: {format}");
+    let from = format.find("#[range=user|costs]").unwrap();
+    let pill = &format[from..from + format[from..].find("#[norange]").expect("a closed range") + "#[norange]".len()];
+    assert_eq!(
+        pill,
+        "#[range=user|costs]#[fg=colour15]\u{e0b6}#[reverse]\u{EEC1}#[noreverse]\u{e0b4}#[default]#[norange]",
+        "the pill text is the glyph alone"
+    );
 }
 
 #[test]

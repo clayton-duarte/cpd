@@ -37,7 +37,7 @@ fn dot_cell(t: &Tree, frame: usize) -> (String, Color) {
     open_new(&mut state, &mut HashSet::new(), t);
     state.select(vec![]);
     let mut terminal = Terminal::new(TestBackend::new(30, 7)).unwrap();
-    terminal.draw(|f| draw(f, f.area(), t, &mut state, false, frame, &mut Scroll::default())).unwrap();
+    terminal.draw(|f| draw(f, f.area(), t, &mut state, false, frame, false, &mut Scroll::default())).unwrap();
     let cell = &terminal.backend().buffer()[(2, 2)];
     (cell.symbol().to_owned(), cell.fg)
 }

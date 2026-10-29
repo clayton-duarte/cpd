@@ -390,10 +390,10 @@ fn selectable_name(name: String, selected: bool) -> Span<'static> {
 /// A Context's title (after the `╭`): its dot (the most urgent of its live Sessions, grey when the Context is
 /// archived) and id, blue when its Manager is in the chat slot, cut so that its cost fits. The fold makes it bold; the
 /// cost is not part of it ([`context_cost`], added after the fold's styling so that it stays colour 8, never bold).
-fn context_text(c: &ContextNode, width: u16, frame: usize) -> Line<'static> {
+fn context_text(c: &ContextNode, width: u16, frame: usize, costs: bool) -> Line<'static> {
     let selected = c.manager_place == Some(Place::Chat);
     let dot = palette::dot_span(c.dot, frame, c.is_archived() || c.manager_asleep);
-    let id = match context_cost(c, usize::from(width)) {
+    let id = match context_cost(c, usize::from(width)).filter(|_| costs) {
         None => c.id.to_string(),
         // the `╭`, the dot and its space come first; a cell stays blank before the cost
         Some(cost) => truncate(c.id.as_str(), usize::from(width).saturating_sub(1 + dot.width() + 1 + cost.width() + 1)),
@@ -402,11 +402,11 @@ fn context_text(c: &ContextNode, width: u16, frame: usize) -> Line<'static> {
 }
 
 /// A Plan's row text, one level under its Context.
-fn plan_row(c: &ContextNode, p: &PlanNode, width: u16, frame: usize) -> (Id, Line<'static>) {
+fn plan_row(c: &ContextNode, p: &PlanNode, width: u16, frame: usize, costs: bool) -> (Id, Line<'static>) {
     let muted = c.is_archived() || p.head.is_archived() || p.lead().is_some_and(SessionNode::is_asleep);
     // what is reserved is what `draw` draws; counters too narrow to be drawn keep today's reserve
     let counters_width = counters(p).width(); // drawn or not; the width is the same in any colour
-    let cost = plan_cost(p, usize::from(width));
+    let cost = plan_cost(p, usize::from(width)).filter(|_| costs);
     let text = row_text(RowText { session: p.lead(), name: p.head.id.to_string(), depth: 1, frame, counters_width, cost, muted }, width);
     (p.head.id.to_string(), text)
 }
@@ -451,7 +451,7 @@ pub(crate) fn plan_key(p: &PlanNode) -> OrderKey {
 
 /// A Context with nothing to fold (no archived row) has no closing row when it has rows: its last row's branch is the
 /// `╰─` instead of `├─` (hs-d477). With no row at all it ends with the terminator ` ╰󰬪` (U+F0B2A; hs-d574).
-fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<FlatRow> {
+fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: usize, costs: bool) -> Vec<FlatRow> {
     let id = c.id.to_string();
     let close = toggle_id(&id);
     let k = kids(c);
@@ -460,7 +460,7 @@ fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: 
     // read model's order (the Plans before the forks).
     let mut live: Vec<(OrderKey, Id, Line<'static>)> = Vec::new();
     for p in &k.direct {
-        let (id, line) = plan_row(c, p, width, frame);
+        let (id, line) = plan_row(c, p, width, frame, costs);
         live.push((plan_key(p), id, line));
     }
     for (_, s) in &k.forks {
@@ -470,15 +470,15 @@ fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: 
     live.sort_by(|a, b| a.0.cmp(&b.0));
     let mut rows: Vec<(Id, Line<'static>)> = live.into_iter().map(|(_, id, line)| (id, line)).collect();
     if expanded {
-        rows.extend(k.archived.iter().map(|p| plan_row(c, p, width, frame)));
+        rows.extend(k.archived.iter().map(|p| plan_row(c, p, width, frame, costs)));
         rows.extend(k.strays.iter().map(|(_, s)| fork_row(s, width, frame, true)));
         rows.extend(k.managers.iter().map(|s| manager_row(s, width, frame)));
     }
     let empty = rows.is_empty();
     let last = rows.len().saturating_sub(1);
     let closes_in_a_row = !k.has_archived() && !empty;
-    let mut title = fold::title(context_text(c, width, frame));
-    if let Some(cost) = context_cost(c, usize::from(width)) {
+    let mut title = fold::title(context_text(c, width, frame, costs));
+    if let Some(cost) = context_cost(c, usize::from(width)).filter(|_| costs) {
         title.spans.extend([" ".into(), cost]);
     }
     let mut flat = vec![FlatRow { path: vec![id.clone()], line: title }];
@@ -517,13 +517,18 @@ fn archive_item(opened: &HashSet<Vec<Id>>) -> FlatRow {
 /// Contexts when the archive path is open. `opened` is the tree state's open set: a Context not in it shows its title
 /// only. `frame` is the animation frame of the working dots.
 pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<FlatRow> {
+    items_with_costs(tree, opened, width, frame, false)
+}
+
+/// [`items`], with the cost of the Context and Plan rows drawn when `costs` (pro-d189).
+pub fn items_with_costs(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize, costs: bool) -> Vec<FlatRow> {
     let (archived, mut live): (Vec<&ContextNode>, Vec<&ContextNode>) = tree.contexts.iter().partition(|c| c.is_archived());
     // The live Contexts by tier then creation, newest first (hs-d686, pro-d48); the archived ones keep their read-model order after them.
     live.sort_by(|a, b| a.dot.order_key(&a.created_at).cmp(&b.dot.order_key(&b.created_at)));
     let mut rows: Vec<FlatRow> = Vec::new();
     let last_live = live.len().saturating_sub(1);
     for (i, c) in live.iter().enumerate() {
-        rows.extend(context_items(c, opened, width, frame));
+        rows.extend(context_items(c, opened, width, frame, costs));
         if i != last_live || !archived.is_empty() {
             rows.push(spacer(c));
         }
@@ -533,7 +538,7 @@ pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -
         if opened.contains(&vec![ARCHIVE.to_owned()]) {
             let last = archived.len().saturating_sub(1);
             for (i, c) in archived.iter().enumerate() {
-                rows.extend(context_items(c, opened, width, frame));
+                rows.extend(context_items(c, opened, width, frame, costs));
                 if i != last {
                     rows.push(spacer(c));
                 }
@@ -597,14 +602,15 @@ pub fn list_area(area: Rect) -> Rect {
 /// (the cursor's Session is brought into view when it moved), then the counters and the guides of each visible
 /// row, the archived rows muted, then the cursor's Session row as the blue block when
 /// `cursor` says it is shown (a Context row never is). `frame` is the animation frame of the working dots.
-pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, cursor: bool, frame: usize, scroll: &mut Scroll) {
+#[allow(clippy::too_many_arguments)] // the tree view hands over its whole state; a struct would only rename the arguments
+pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, cursor: bool, frame: usize, costs: bool, scroll: &mut Scroll) {
     if tree.contexts.is_empty() {
         scroll.max = 0;
         f.render_widget(Paragraph::new(Line::from(Span::styled(" no Contexts", palette::muted_text()))), list_area(area));
         scroll.hits = Hits::default();
         return;
     }
-    let items = items(tree, state.opened(), area.width, frame);
+    let items = items_with_costs(tree, state.opened(), area.width, frame, costs);
     let flat = items;
     let list = list_area(area);
     let height = usize::from(list.height);
@@ -650,6 +656,7 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
             Row::Context(c) => context_cost(c, usize::from(width)),
             _ => None,
         }
+        .filter(|_| costs)
         .map_or(0, |cost| u16::try_from(cost.width()).unwrap_or(u16::MAX));
         let text_end = rect.x + u16::try_from(flat_row.line.width()).unwrap_or(u16::MAX).min(width);
         let cost_cols = text_end.saturating_sub(cost_width)..text_end;
@@ -796,7 +803,7 @@ mod tests {
     /// not the scroll (`view::tests` test the scroll and its cues), so no cue row replaces a row they read; row 0, the ▲ line, is skipped.
     fn render_at(tree: &Tree, state: &mut TreeState<Id>, width: u16, height: u16, cursor: bool, frame: usize) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height + 40)).unwrap();
-        terminal.draw(|f| draw(f, f.area(), tree, state, cursor, frame, &mut Scroll::default())).unwrap();
+        terminal.draw(|f| draw(f, f.area(), tree, state, cursor, frame, false, &mut Scroll::default())).unwrap();
         let full = terminal.backend().buffer();
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
         copy_cells(full, Rect::new(0, 1, width, height), &mut buf, Position::new(0, 0));

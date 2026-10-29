@@ -50,6 +50,8 @@ mod counter_tests;
 #[cfg(test)]
 mod cost_tests;
 #[cfg(test)]
+mod cost_toggle_tests;
+#[cfg(test)]
 mod asleep_tests;
 #[cfg(test)]
 mod loop_guard_tests;

@@ -9,6 +9,7 @@ mod inbox;
 mod inbox_claim;
 mod inbox_rules;
 mod tui_chat_pad;
+mod tui_costs_toggle;
 mod tui_cause;
 mod tui_checklist;
 mod tui_dialog;

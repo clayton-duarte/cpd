@@ -335,6 +335,7 @@ enum Action {
     Reset,
     Legend,
     Logs,
+    Costs,
     Merge,
     Host,
     Incident,
@@ -346,6 +347,7 @@ impl Action {
             "reset" => Some(Action::Reset),
             "legend" => Some(Action::Legend),
             "logs" => Some(Action::Logs),
+            "costs" => Some(Action::Costs),
             "merge" => Some(Action::Merge),
             "host" => Some(Action::Host),
             "incident" => Some(Action::Incident),
@@ -354,7 +356,7 @@ impl Action {
     }
 }
 
-/// `cpd tui action <reset|legend|logs|host|incident> --client <name>` and `cpd tui action
+/// `cpd tui action <reset|legend|logs|costs|host|incident> --client <name>` and `cpd tui action
 /// merge <owner>/<repo>#<n> --client <name>` (commands.md §13.2): runs the
 /// click of a StatusBar button, or the merge a click started, on
 /// client `client`. It prints nothing, on stdout or stderr, and always exits
@@ -380,7 +382,7 @@ fn action_tmux(ports: &Ports) -> Result<Tmux, CpdError> {
 
 fn run_action(ports: &Ports, name: Option<&str>, pull: Option<&str>, client: &str, run_command: RunCommand, run_on: RunOn) -> Result<(), CpdError> {
     let action = name.and_then(Action::parse).ok_or_else(|| {
-        CpdError::new(ErrorCode::Usage, format!("unknown action {:?}: reset, legend, logs, host or incident.", name.unwrap_or("")))
+        CpdError::new(ErrorCode::Usage, format!("unknown action {:?}: reset, legend, logs, costs, host or incident.", name.unwrap_or("")))
     })?;
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
@@ -396,9 +398,19 @@ fn run_action(ports: &Ports, name: Option<&str>, pull: Option<&str>, client: &st
         (Action::Incident, None) => return super::incident_click::run(&home, &config, &tmux, run_command),
         (Action::Reset, None) => return reset_layout(&tmux, &config.tmux.cockpit_session),
         (Action::Legend, None) => legend::popup_args(client_size(&tmux, client)?),
+        (Action::Costs, None) => return toggle_costs(&tmux, &config.tmux.cockpit_session),
         (Action::Logs, None) => logs::popup_args(client_size(&tmux, client)?, None),
     };
     tmux.run(&on_client(popup, client)).map(drop)
+}
+
+/// The costs button (pro-d189, pro-d196): sends the literal key `$` to the live tree pane, whose view flips its cost
+/// flag. With no live tree pane it fails like every failed action.
+fn toggle_costs(tmux: &Tmux, cockpit: &str) -> Result<(), CpdError> {
+    let live: Vec<Pane> = main_panes(tmux, cockpit)?.into_iter().filter(|p| !p.dead).collect();
+    let pane = view_pane(&live, cockpit, View::Tree)
+        .ok_or_else(|| CpdError::new(ErrorCode::TmuxFailed, "the tree view is not running"))?;
+    tmux.run(&["send-keys".to_owned(), "-t".to_owned(), pane.pane.to_string(), "-l".to_owned(), "$".to_owned()]).map(drop)
 }
 
 /// `(columns, rows)` of client `client` (`display -p -c`). tmux prints an
@@ -709,7 +721,7 @@ mod tests {
 
     #[test]
     fn the_actions_are_the_status_line_ranges() {
-        assert_eq!(["reset", "legend", "logs"].map(Action::parse), [Some(Action::Reset), Some(Action::Legend), Some(Action::Logs)]);
+        assert_eq!(["reset", "legend", "logs", "costs"].map(Action::parse), [Some(Action::Reset), Some(Action::Legend), Some(Action::Logs), Some(Action::Costs)]);
         assert_eq!(Action::parse(""), None);
         assert_eq!(Action::parse("Reset"), None);
     }
