@@ -13,10 +13,10 @@ const CAP_L: &str = "\u{e0b6}";
 const CAP_R: &str = "\u{e0b4}";
 
 fn attempt(n: u32, tier: &str, origin: &str, ended: bool) -> String {
-    let (status, outcome, tail) = if ended { ("ended", "'failed'", ", 'timed_out', 't'") } else { ("running", "NULL", ", NULL, NULL") };
+    let (status, outcome, tail) = if ended { ("ended", "'failed'", ", 'timed_out', '2026-01-03T00:01:00.000Z'") } else { ("running", "NULL", ", NULL, NULL") };
     format!(
         "INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, ended_at, branch, worktree, started_at)
-         VALUES ('pl', 'a-a{n}', 'a', {n}, '{tier}', '{origin}', '{status}', {outcome}{tail}, 'cpd/pl--a-a{n}', '/w', 't');"
+         VALUES ('pl', 'a-a{n}', 'a', {n}, '{tier}', '{origin}', '{status}', {outcome}{tail}, 'cpd/pl--a-a{n}', '/w', '2026-01-03T00:00:00.000Z');"
     )
 }
 

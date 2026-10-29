@@ -163,7 +163,7 @@ fn snapshot_timed(ports: &Ports, store: &mut Store, width: u16, now_ms: i64, tim
         return Ok(Snapshot { cursor, centre: None, pulse: Some(pulse), layout: Duration::ZERO });
     }
     let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None, pulse: None, layout: Duration::ZERO }) };
-    let plan = read::plan_boxes(store, &slot.plan)?;
+    let plan = read::plan_boxes_at(store, &slot.plan, now_ms)?;
     let frame = frame_now(ports);
     let began = timed.then(|| ports.clock.now());
     let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame).with_margin(CHART_MARGIN);
@@ -705,6 +705,7 @@ fn sample_pr(key: &str) -> read::PrNode {
         pull: None,
         waiting_on: Vec::new(),
         superseded_by: None,
+        elapsed_seconds: None,
     }
 }
 
@@ -816,6 +817,8 @@ mod lines_tests;
 #[cfg(test)]
 mod box_lines_tests;
 #[cfg(test)]
+mod counter_tests;
+#[cfg(test)]
 mod needs_tests;
 #[cfg(test)]
 mod chain_tests;
@@ -884,6 +887,7 @@ mod tests {
             pull: None,
             waiting_on: Vec::new(),
             superseded_by: None,
+            elapsed_seconds: None,
         };
         let job = |n: usize| JobNode {
             key: JobKey::parse(&format!("job-{n}")).unwrap(),

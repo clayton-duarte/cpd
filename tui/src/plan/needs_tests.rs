@@ -78,6 +78,7 @@ fn tests_centre(jobs: usize) -> Centre {
         pull: None,
         waiting_on: Vec::new(),
         superseded_by: None,
+        elapsed_seconds: None,
     };
     let job = |n: usize| JobNode {
         key: JobKey::parse(&format!("job-{n}")).unwrap(),
