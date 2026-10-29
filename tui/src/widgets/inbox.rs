@@ -1,6 +1,6 @@
 //! The Inbox section at the bottom of the right column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a flat list, no
 //! rail, no fold. Its rows, top to bottom: a blank row, the header (`crate::section::flush_title`, `───<Inbox>───…<n>─`, from
-//! column 0), the ▲ line, two rows per item (Row 1 `<glyph> <label> … <age>`, Row 2 the muted subtitle; each with its tier's glyph and colour, hs-d483; one blank
+//! column 0), the ▲ line, one row or two per item (Row 1 `<glyph> <label> … <age>`, Row 2 the muted subtitle, only when the label has one; each with its tier's glyph and colour, hs-d483; one blank
 //! column on each side), and the ▼ line; with no item the list is the one muted row `up to date, drink some water`. Both cue
 //! lines are always reserved (blank when nothing is hidden); with more items than the column's rows give it, the items scroll
 //! with the wheel and the cue lines read `▲ <n> more` / `▼ <n> more` (`dialog::scroll::cue`, [`Shape`]).
@@ -34,9 +34,6 @@ use crate::link::{Link, Links};
 /// The columns before the label: the item's tier glyph and a space.
 const LEAD_WIDTH: usize = 2;
 
-/// The rows of an item: Row 1 names it, Row 2 is its muted subtitle (pro-d171).
-const ITEM_ROWS: usize = 2;
-
 /// The rows above the list: the blank row, the header and the ▲ line.
 const TOP: usize = 3;
 
@@ -57,19 +54,24 @@ pub enum Hit {
     Item(usize),
 }
 
-/// The rows of the section for `count` items: four rows and the list, which is capped with the section at `cap` rows and then
-/// scrolls from the item `scroll`, [`ITEM_ROWS`] rows an item ([`Window`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The rows of an item: 1, plus 1 when the text after its label's first `\n` is non-empty (pro-d177). The one place the rule lives.
+pub(crate) fn item_height(item: &Item) -> usize {
+    1 + usize::from(!rows_of(&item.label).1.is_empty())
+}
+
+/// The rows of the section for its items: four rows and the list, which is capped with the section at `cap` rows and then
+/// scrolls from the item `scroll`, [`item_height`] rows an item ([`Window::weighted`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Shape {
-    count: usize,
+    heights: Vec<usize>,
     cap: u16,
     scroll: usize,
 }
 
 impl Shape {
-    /// The section as tall as its items want (no cap), at the top.
-    pub fn new(count: usize) -> Shape {
-        Shape { count, cap: u16::MAX, scroll: 0 }
+    /// The section as tall as its `items` want (no cap), at the top.
+    pub fn new(items: &[Item]) -> Shape {
+        Shape { heights: items.iter().map(item_height).collect(), cap: u16::MAX, scroll: 0 }
     }
 
     /// The same, at most `cap` rows tall.
@@ -82,44 +84,51 @@ impl Shape {
         Shape { scroll, ..self }
     }
 
-    /// The rows the section wants: the list ([`ITEM_ROWS`] an item, one row at least: the up-to-date row) and four more, at most the cap.
-    pub fn height(self) -> u16 {
-        let height = ((self.count * ITEM_ROWS).max(1) + AROUND).min(usize::from(self.cap));
+    /// The rows the section wants: the list (the items' heights, one row at least: the up-to-date row) and four more, at most the cap.
+    pub fn height(&self) -> u16 {
+        let height = (self.heights.iter().sum::<usize>().max(1) + AROUND).min(usize::from(self.cap));
         u16::try_from(height).unwrap_or(u16::MAX)
     }
 
     /// The rows of the list, between the two cue lines.
-    fn list_rows(self) -> usize {
+    fn list_rows(&self) -> usize {
         usize::from(self.height()).saturating_sub(AROUND)
     }
 
-    /// The items drawn and the cues: the list holds `list_rows / ITEM_ROWS` items, an odd row stays blank.
-    fn window(self) -> Window {
-        Window::new(self.count, self.list_rows() / ITEM_ROWS, self.scroll)
+    /// The items drawn and the cues: the items from the offset on that fit the list; a spare row stays blank, no item splits.
+    fn window(&self) -> Window {
+        Window::weighted(&self.heights, self.list_rows(), self.scroll)
     }
 
-    /// The largest scroll offset: the last item reaches the bottom of the list. 0 when all fit.
-    pub fn max_scroll(self) -> usize {
-        Window::max_scroll(self.count, self.list_rows() / ITEM_ROWS)
+    /// The largest scroll offset: the first from which every remaining item fits. 0 when all fit.
+    pub fn max_scroll(&self) -> usize {
+        Window::max_scroll_weighted(&self.heights, self.list_rows())
     }
 
     /// The scroll offset after a wheel notch down or up over the section: [`WHEEL_ROWS`] items a notch, clamped.
-    pub fn wheeled(self, down: bool) -> usize {
+    pub fn wheeled(&self, down: bool) -> usize {
         let max = self.max_scroll();
         let scroll = self.scroll.min(max);
         if down { (scroll + WHEEL_ROWS).min(max) } else { scroll.saturating_sub(WHEEL_ROWS) }
     }
 
-    /// The row `row` rows below the section's first: the header, or either row of an item; the blank row, the cue lines and the
-    /// up-to-date row are none.
-    pub fn hit(self, row: u16) -> Option<Hit> {
+    /// The row `row` rows below the section's first: the header, or either row of an item; the blank row, the spare blank row, the
+    /// cue lines and the up-to-date row are none.
+    pub fn hit(&self, row: u16) -> Option<Hit> {
         let row = usize::from(row);
-        let win = self.window();
-        match row {
-            1 => Some(Hit::Header),
-            r if (TOP..TOP + win.shown * ITEM_ROWS).contains(&r) => Some(Hit::Item(win.first + (r - TOP) / ITEM_ROWS)),
-            _ => None,
+        if row == 1 {
+            return Some(Hit::Header);
         }
+        let win = self.window();
+        let mut top = TOP;
+        for at in win.first..win.first + win.shown {
+            let next = top + self.heights[at];
+            if (top..next).contains(&row) {
+                return Some(Hit::Item(at));
+            }
+            top = next;
+        }
+        None
     }
 }
 
@@ -450,7 +459,7 @@ fn link_url(item: &Item) -> Option<&str> {
 /// bottom): `items` are the snapshot's visible open items, `now` the clock the ages are taken from, `shape` is the section's, as
 /// capped and scrolled. `spinning` says, of an item whose merge runs, the frame of the spinner its glyph cell shows instead of its
 /// tier glyph (hs-d495).
-pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, now: OffsetDateTime, spinning: &dyn Fn(&Item) -> Option<usize>) -> Links {
+pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: &Shape, now: OffsetDateTime, spinning: &dyn Fn(&Item) -> Option<usize>) -> Links {
     let mut drawn = Links::default();
     let width = usize::from(area.width);
     let inner = width.saturating_sub(2);
@@ -471,9 +480,8 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, now: Offset
     if items.is_empty() {
         put(buf, TOP, 1, Line::styled("up to date, drink some water", palette::muted_text()));
     }
-    for at in 0..win.shown {
-        let item = &items[win.first + at];
-        let row = TOP + at * ITEM_ROWS;
+    let mut row = TOP;
+    for item in &items[win.first..win.first + win.shown] {
         let (head, sub) = rows_of(&item.label);
         let (line, label_width) = item_line(item, &age_of(&item.opened_at, now), inner, spinning(item));
         put(buf, row, 1, line);
@@ -483,6 +491,7 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, now: Offset
             put(buf, row + 1, 1, Line::from(spans));
         }
         let y = area.y.saturating_add(u16::try_from(row).unwrap_or(u16::MAX));
+        row += item_height(item);
         if let Some(url) = link_url(item).filter(|_| y < area.bottom()) {
             let text = Line::from(phi::spans(head, palette::clickable_text()));
             drawn.draw(Link::new(url).text(text), Rect::new(area.x + 1 + LEAD_WIDTH as u16, y, label_width as u16, 1), buf);

@@ -38,16 +38,19 @@ use super::{TestEnv, sql};
 pub const W: usize = 46;
 
 /// Row 1 of an item (trimmed): ` <glyph> <label>`, spaces, and the `age` ending at column `W - 2`; the last column is blank.
-/// Every item is two rows now: [`item_rows`] returns both.
+/// An item is one row, or two when it has a subtitle: [`item_rows`] returns its rows.
 pub fn item_row(glyph: &str, label: &str, age: &str) -> String {
     format!(" {glyph} {label}{}{age}", " ".repeat(W - 4 - label.chars().count() - age.chars().count()))
 }
 
-/// The two rows of an item (trimmed): Row 1 is [`item_row`]; Row 2 is three spaces then the `subtitle` (the column, then the
-/// two-space lead), or empty when the `subtitle` is (a one-row label).
-pub fn item_rows(glyph: &str, label: &str, subtitle: &str, age: &str) -> [String; 2] {
-    let second = if subtitle.is_empty() { String::new() } else { format!("   {subtitle}") };
-    [item_row(glyph, label, age), second]
+/// The rows of an item (trimmed): Row 1 is [`item_row`]; Row 2 is three spaces then the `subtitle` (the column, then the
+/// two-space lead), and there is none when the `subtitle` is empty (a one-row label: the item is one row).
+pub fn item_rows(glyph: &str, label: &str, subtitle: &str, age: &str) -> Vec<String> {
+    let mut rows = vec![item_row(glyph, label, age)];
+    if !subtitle.is_empty() {
+        rows.push(format!("   {subtitle}"));
+    }
+    rows
 }
 
 /// [`item_row`] (Row 1 only) of a link kind: the label is followed by a space and the link cue, and the age keeps its column.

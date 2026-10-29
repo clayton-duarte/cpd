@@ -124,9 +124,9 @@ fn a_pr_ready_item_whose_merge_runs_shows_the_spinner() {
     let glyph = glyph_of(&screen, ready).unwrap();
     let red = common::inbox::item_row(palette::TIER_RED, "f-blocked label", "5m");
     let busy = common::inbox::linked_item_row(&glyph, ready, "5m");
-    // each item is two rows: Row 1, then a blank Row 2
+    // each item is one row: the list has no blank row
     let head = screen.iter().position(|r| *r == pill(2)).unwrap();
-    assert_eq!([screen[head + 2].clone(), screen[head + 4].clone()], [red.clone(), busy], "the other items keep their tier glyph: {screen:?}");
+    assert_eq!([screen[head + 2].clone(), screen[head + 3].clone()], [red.clone(), busy], "the other items keep their tier glyph: {screen:?}");
     // stale: the tier glyph is back
     let white = common::inbox::linked_item_row(palette::ITEM_PR_READY, ready, "5m");
     frame_with(&frames, at, "the tier glyph back", |screen| screen.contains(&white));
@@ -228,11 +228,8 @@ fn the_engine_down_item_shows_first_when_no_engine_and_no_manager() {
     let frames = show(&fx, 30, vec![Signal::Commit, gone()], &World::new());
     let at = frame_with(&frames, 0, "the engine-down item first and 5 items counted", |screen| {
         let want = section(5, &item_rows(&FOUR, "5m"));
-        let start = screen.len() - want.len() - 2;
-        screen[start..start + 3] == want[..3]
-            && screen[start + 3].starts_with(&engine_down())
-            && screen[start + 4].is_empty()
-            && screen[start + 5..] == want[3..]
+        let start = screen.len() - want.len() - 1;
+        screen[start..start + 3] == want[..3] && screen[start + 3].starts_with(&engine_down()) && screen[start + 4..] == want[3..]
     });
     assert!(at < frames.len());
     // with a live Manager the engine's absence is no item

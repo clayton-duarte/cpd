@@ -26,6 +26,9 @@
 
 mod active;
 mod age;
+mod cost;
+#[cfg(test)]
+mod cost_tests;
 #[cfg(test)]
 mod age_tests;
 #[cfg(test)]

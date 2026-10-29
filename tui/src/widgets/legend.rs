@@ -154,6 +154,11 @@ pub(crate) fn sections() -> Vec<Section> {
         Line::from(counters),
         Line::from(order).style(palette::muted_text()),
     ]);
+    jobs.push(vec![
+        plain("cost"),
+        Line::from(cpd_core::metrics::format_cost(0.12)).style(palette::muted_text()),
+        Line::from("<1¢ ⋅ $1.2k ⋅ omitted when unknown").style(palette::muted_text()),
+    ]);
     let jobs = Section { title: "Jobs: Plan Pills And Context Counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
     let dot = |d: Dot, frame: usize| Line::from(palette::dot_span(d, frame, false));
     let loader = |d: Dot| Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(d, f, false)).collect::<Vec<_>>());
