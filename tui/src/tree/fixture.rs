@@ -35,6 +35,7 @@ pub fn session(id: &str, name: &str, state: State, label: Option<&str>, place: P
         dot: Dot::glyph(state),
         archived_at: None,
         asleep_at: None,
+        cost_usd: None,
     }
 }
 
@@ -70,6 +71,7 @@ pub fn plan(id: &str, context: &str, phase: Phase, counts: [usize; 6], mut lead:
             fixing: false,
         },
         sessions,
+        cost_usd: None,
     }
 }
 
@@ -87,6 +89,7 @@ pub fn context(id: &str, plans: Vec<PlanNode>) -> ContextNode {
         plans,
         archived_managers: Vec::new(),
         created_at: "2026-01-01T00:00:00.000Z".into(),
+        cost_usd: None,
     }
 }
 

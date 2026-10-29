@@ -471,8 +471,31 @@ One execution of a Job by one fresh Worker session, in its own worktree.
 | `merged_sha` | text? | set exactly when the outcome is `merged` |
 | `nudged` | bool | the "you ended your turn without submitting" message was sent (§3.4) |
 | `stop_request` | text? | `timed_out` or `cancelled`, set by the engine for the driver to act on |
-| `metrics` | json? | cpd 1 §14, kept: `{turns, tokens_in, tokens_out, cache_read, cache_write, cost_usd, duration_s, model, thinking_level, stop_reason}` |
+| `metrics` | json? | cpd 1 §14, kept: `{turns, tokens_in, tokens_out, cache_read, cache_write, cost_usd, duration_s, model, thinking_level, stop_reason}`; `cost_usd` is the session's whole usage cost, pi's own session total ("Session cost" below) |
 | `started_at`, `ended_at` | time, time? | |
+
+#### Session cost
+
+The cost counters of the cockpit (decision pro-d179) are dollar amounts that pi wrote into its session files. One parser reads them, `cpd_core::metrics` (`parse` and `parse_file`), and it is fork-safe: a fork's inherited copies of its parent's entries never count.
+
+**What the parser sums.** `parse` and `parse_file` add to `tokens_in`, `tokens_out`, `cache_read`, `cache_write` and `cost_usd` the `usage` of every entry that counts: the `usage` of each assistant `message` (as before), and the top-level `usage` object of each entry of type `usage` (a standalone usage entry; any `kind` counts, an unknown kind as much as a known one), of type `compaction` and of type `branch_summary`. Pi's session format says these entries are "included in session token and cost totals", so `cost_usd` equals pi's own session total. A `usage` object has the shape of an assistant message's usage: `input`, `output`, `cacheRead`, `cacheWrite` and `cost.total`; the other keys pi writes (`totalTokens`, `reasoning`) are ignored. A `compaction` or `branch_summary` entry with no `usage` adds nothing. A `usage` present but not of that shape (a missing `cost`, a string for a number) is `session_malformed`, with `path` and `line`, as a malformed message usage is. An inherited entry never counts, whatever its type. `turns`, `stop_reason`, `model`, `thinking_level` and `duration_s` are unchanged: only an assistant message is a turn, and only it gives a stop reason. An Attempt that has ended keeps the `metrics` it stored; nothing is recomputed for it.
+
+**Formatting.** `cpd_core::metrics::format_cost(usd: f64) -> String` is the one formatter of every surface. A cost that does not exist is never formatted: a surface draws nothing for `None`, and never `$0.00` for a missing or unreadable file. For a cost that exists:
+
+- `0` is `$0.00`.
+- Above 0 and below one cent: `<1¢` (U+00A2), for example `0.0001`, `0.005` and `0.0099`.
+- From one cent, while `(usd * 100.0).round()` is below 100000 cents: `$` and two decimals, for example `0.01` is `$0.01`, `0.449` is `$0.45`, `4.5` is `$4.50`, `12.3` is `$12.30`, `999.99` is `$999.99`.
+- From there up (`(usd * 100.0).round()` reaches 100000): `$`, the amount in thousands with one decimal and `k`, for example `999.996` is `$1.0k`, `1000` is `$1.0k`, `1234` is `$1.2k`, `12345` is `$12.3k` and `1000000` is `$1000.0k` (there is no larger unit).
+
+**Totals.** Every cost of the read model is an `Option<f64>`: `None` means no data at all, and `Some(0.0)` means data exists and totals zero.
+
+- A **Session's own cost** is the `cost_usd` of `parse_file` on its session file. It is `None` when the Session has no file, when the file is missing or unreadable, and when it cannot be parsed and never parsed well.
+- An **Attempt's cost**: when `attempts.metrics` is not NULL, its `$.cost_usd` (a stored `metrics` with no numeric `cost_usd` is an Attempt with no data, not an error); when it is NULL (a live Attempt, or an ended one that stored none), the own cost of its `worker_session`'s file, or `None` when it has none. A written `metrics` is the only source: the two are never added together.
+- A **Plan's cost** is the total of its Sessions' costs (the Lead and its side forks) and of the costs of every Attempt of the Plan, all its Jobs included (the open and update Jobs too).
+- A **Context's cost** is the total of its Plans' costs (archived Plans too) and of its Manager Sessions' own costs (live and archived).
+- **The total of parts** is `None` when every part is `None` (or there are none), else the sum of the parts that have a value. A part with no data adds nothing and does not make the total unknown.
+
+The tree draws the Context and Plan costs by the rule of commands.md §13.2 ("Rows").
 
 #### Escalation
 
@@ -2755,7 +2778,7 @@ In a pane `W` columns wide a rail fold's rows are, by column: column 0 the rail 
 **The rules.**
 
 - **(1) Base for read-only, bright for clickable.** A colour *n* (1-7) is *n* on what cannot be clicked and *n*+8 on what can. Clickable is the **whole hit target**, so every coloured mark inside a clickable area is bright: a red dot is 9 in the tree (the Plan row is clickable), while the status line's unclickable workers pill is 8 (hs-d561; it was 7). Blue is the exception hs-d534 itself states: it is **always 4** (the focus and selection colour, hs-d351), clickable or not, **except the focused input box's border is bright blue 12** (hs-d575), and bright blue 12 is also the input box's label pill when focused and the selected dialog button (hs-d578); a blue block's text is 0.
-- **(2) Colourless text follows one hierarchy of attention: 15 > 7 > 8 > 0.** **15** is clickable text. **7** is read-only text, inactive (asleep) rows except their Job counters, and the fold toggles (`╰󰬦 expand`, `╰󰬬 collapse`). **8** is muted: lines, rails, borders, separators, archived and cancelled rows, zero counts, the counters of an asleep row, and secondary text (ages, times, scroll cues, placeholders, the former `DIM` text). **0** is the background (and the text on a block). **Interactive lines**, the draggable pane borders and popup frames, are **7** (hs-d531); every other line is 8.
+- **(2) Colourless text follows one hierarchy of attention: 15 > 7 > 8 > 0.** **15** is clickable text. **7** is read-only text, inactive (asleep) rows except their Job counters and cost counters, and the fold toggles (`╰󰬦 expand`, `╰󰬬 collapse`). **8** is muted: lines, rails, borders, separators, archived and cancelled rows, zero counts, the counters and cost counters of an asleep row, the cost counters of a Context or Plan row (decision pro-d179; contract §2.2 "Session cost"), and secondary text (ages, times, scroll cues, placeholders, the former `DIM` text). **0** is the background (and the text on a block). **Interactive lines**, the draggable pane borders and popup frames, are **7** (hs-d531); every other line is 8.
 - **(3) Colour goes on the text or on the background, never both.** A block (a pill, a selection) is drawn with reverse video, the colour as foreground and the terminal's background as fill (hs-d594, below): a read-only title pill is colour 7 reversed; a clickable pill is 15 reversed; a coloured pill is its colour reversed (its bright pair when clickable); a selection is the blue block (4 reversed). **Coloured text never sits on a coloured block**: every mark inside a block inherits the reversal, so a pill carries no separate text colour and a cursor row shows no state colours. A pill's caps (U+E0B6, U+E0B4) are the block's colour as foreground, on the terminal's background, not reversed. The three view titles are gone (hs-d729: the tree pane shows the CPD mark, §6.1), and the three status buttons their bright pairs (reset 13, legend 15, logs 10, §6.1.1).
 - **(4) The mark φ is always bold.** cpd's mark φ is rendered bold wherever it renders: in the cockpit's styles and in the pi chat. Only the φ glyph is bold; the colon and any text that follows it are not. The mark and its logo font are specified in [`mark.md`](mark.md).
 

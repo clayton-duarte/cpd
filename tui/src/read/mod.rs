@@ -25,6 +25,9 @@
 //! [`Store::read`]: cpd_core::store::Store::read
 
 mod age;
+mod cost;
+#[cfg(test)]
+mod cost_tests;
 #[cfg(test)]
 mod age_tests;
 #[cfg(test)]
