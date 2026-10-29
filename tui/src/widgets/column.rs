@@ -134,7 +134,7 @@ pub fn draw(
     let shape = Shape::new(inbox).capped(rest.height).scrolled(inbox_scroll);
     let h = shape.height();
     let inbox_area = Rect { y: rest.bottom() - h, height: h, ..rest };
-    let links = inbox::draw(f, inbox_area, inbox, shape, now, &|item| inbox::merges(merging, item).then_some(frame));
+    let links = inbox::draw(f, inbox_area, inbox, &shape, now, &|item| inbox::merges(merging, item).then_some(frame));
     f.render_widget(Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::styled(machine.usage_line(), palette::read_only_text())]), home);
     Drawn { links, inbox: inbox_area, inbox_shape: shape }
 }

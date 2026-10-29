@@ -1,5 +1,5 @@
-//! The two-row Inbox item (pro-d171): each item is Row 1 (glyph, label, Link, age) and Row 2 (the muted subtitle, from the
-//! label's second line); both rows hit the item, the Link covers Row 1 only, and the list holds half as many items as rows.
+//! The Inbox item of one row or two (pro-d171, pro-d177): each item is Row 1 (glyph, label, Link, age) and Row 2 (the muted subtitle, from the
+//! label's second line); both rows hit the item, the Link covers Row 1 only, and the list holds as many items as fit its rows.
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -27,16 +27,21 @@ fn ready(id: i64, label: &str) -> Item {
     item(id, Kind::PrReady, Urgency::Yellow, label, OPENED)
 }
 
-fn drawn(items: &[Item], shape: Shape, width: u16, height: u16) -> (Buffer, Links) {
+fn drawn(items: &[Item], shape: &Shape, width: u16, height: u16) -> (Buffer, Links) {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     let mut links = Links::default();
     terminal.draw(|f| links = inbox::draw(f, Rect::new(0, 0, width, height), items, shape, now(), &|_| None)).unwrap();
     (terminal.backend().buffer().clone(), links)
 }
 
+/// `n` items, each with a Row 2 (two rows).
+fn two_rows(n: i64) -> Vec<Item> {
+    (1..=n).map(|i| ready(i, &format!("item {i}\nsub {i}"))).collect()
+}
+
 fn flat(items: &[Item]) -> (Buffer, Links) {
-    let shape = Shape::new(items.len());
-    drawn(items, shape, 40, shape.height())
+    let shape = Shape::new(items);
+    drawn(items, &shape, 40, shape.height())
 }
 
 fn cells(buf: &Buffer, from: u16, to: u16, y: u16) -> String {
@@ -44,15 +49,16 @@ fn cells(buf: &Buffer, from: u16, to: u16, y: u16) -> String {
 }
 
 #[test]
-fn an_item_is_two_rows_and_an_empty_list_stays_one_row() {
-    assert_eq!(Shape::new(3).height(), 10);
-    assert_eq!(Shape::new(0).height(), 5);
-    assert_eq!(Shape::new(3).capped(7).height(), 7);
+fn a_two_row_item_is_two_rows_and_an_empty_list_stays_one_row() {
+    let three = two_rows(3);
+    assert_eq!(Shape::new(&three).height(), 10);
+    assert_eq!(Shape::new(&[]).height(), 5);
+    assert_eq!(Shape::new(&three).capped(7).height(), 7);
 }
 
 #[test]
 fn both_rows_of_an_item_are_hits_for_that_item() {
-    let shape = Shape::new(3);
+    let shape = Shape::new(&two_rows(3));
     assert_eq!(shape.hit(1), Some(Hit::Header));
     for blank in [0, 2, 9] {
         assert_eq!(shape.hit(blank), None, "row {blank}");
@@ -82,12 +88,12 @@ fn a_long_subtitle_is_cut_with_an_ellipsis_before_the_right_margin() {
 }
 
 #[test]
-fn an_item_with_no_subtitle_has_a_blank_second_row() {
+fn an_item_with_no_subtitle_takes_one_row_and_the_next_item_starts_under_it() {
     for label in ["acme/api#3 ready", "acme/api#3 ready\n"] {
         let (buf, _) = flat(&[ready(1, label), ready(2, "acme/api#4 ready\nSub")]);
         assert!(row(&buf, 3).contains("acme/api#3 ready"), "{label:?}");
-        assert_eq!(row(&buf, 4), "", "{label:?}");
-        assert!(row(&buf, 5).contains("acme/api#4 ready"), "the next item starts under the blank row");
+        assert!(row(&buf, 4).contains("acme/api#4 ready"), "{label:?}: the next item starts right under it");
+        assert_eq!(row(&buf, 5), "   Sub", "{label:?}");
     }
 }
 
@@ -103,14 +109,14 @@ fn the_link_covers_row_one_only() {
 }
 
 #[test]
-fn the_list_holds_half_as_many_items_as_it_has_rows_and_an_odd_row_stays_blank() {
-    let items: Vec<Item> = (1..=10).map(|i| ready(i, &format!("item {i}\nsub {i}"))).collect();
-    let ten = Shape::new(10).capped(10);
+fn the_list_holds_as_many_two_row_items_as_fit_and_a_spare_row_stays_blank() {
+    let items = two_rows(10);
+    let ten = Shape::new(&items).capped(10);
     assert_eq!((ten.max_scroll(), ten.wheeled(true)), (7, 3));
-    let (buf, _) = drawn(&items, ten, 40, 10);
+    let (buf, _) = drawn(&items, &ten, 40, 10);
     assert!(row(&buf, 7).contains("item 3") && row(&buf, 8).contains("sub 3") && row(&buf, 9).contains("▼ 7 more"), "3 items shown");
 
-    let (buf, _) = drawn(&items, Shape::new(10).capped(9), 40, 9);
+    let (buf, _) = drawn(&items, &Shape::new(&items).capped(9), 40, 9);
     assert!(row(&buf, 5).contains("item 2") && row(&buf, 6).contains("sub 2"), "2 items shown");
     assert_eq!(row(&buf, 7), "");
     assert!(row(&buf, 8).ends_with("▼ 8 more"), "{:?}", row(&buf, 8));
