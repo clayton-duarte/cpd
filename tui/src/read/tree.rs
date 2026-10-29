@@ -4,6 +4,7 @@
 //! under the Context ([`ContextNode::forks`], B1).
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use cpd_core::error::CpdError;
 use cpd_core::events::highest_id;
@@ -14,6 +15,7 @@ use cpd_core::store::Store;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use super::cost;
 use super::dot::{self, Dot};
 use super::shared::{Place, PlanHead, SessionNode, bad_row, id, plan_heads, sessions};
 
@@ -255,10 +257,42 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
         let mut leads: Vec<SessionNode> = sessions(conn, "s.role = 'lead'", &[])?;
         let mut heads = plan_heads(conn, None)?;
         fill_dots(&inbox, &heads, &mut leads);
+        for s in &mut leads {
+            s.cost_usd = s.file.as_deref().and_then(|f| cost::own_cost(Path::new(f)));
+        }
+        // Every Attempt of every Plan, in one query: the stored `metrics` is the only source when written, else the
+        // Worker Session's file.
+        let mut attempt_costs: BTreeMap<String, Vec<Option<f64>>> = BTreeMap::new();
+        let mut stmt = conn.prepare(
+            "SELECT a.plan, json_extract(a.metrics, '$.cost_usd'), a.metrics IS NULL, s.file
+               FROM attempts a LEFT JOIN sessions s ON s.id = a.worker_session",
+        )?;
+        for row in stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<rusqlite::types::Value>>(1)?, r.get::<_, bool>(2)?, r.get::<_, Option<String>>(3)?))
+        })? {
+            let (plan, stored, no_metrics, file) = row?;
+            let cost = if no_metrics {
+                file.as_deref().and_then(|f| cost::own_cost(Path::new(f)))
+            } else {
+                match stored {
+                    Some(rusqlite::types::Value::Real(c)) => Some(c),
+                    Some(rusqlite::types::Value::Integer(c)) => Some(c as f64),
+                    _ => None,
+                }
+            };
+            attempt_costs.entry(plan).or_default().push(cost);
+        }
         // Every Manager Session, live or archived (`core/src/context/manager.rs`). The live one fills the Context
         // row's dot, a `●` only from the Manager's own items (hs-d215, hs-d217); each archived one goes into the
         // Context's archived section, oldest first (hs-d630, hs-d633).
-        let all_managers: Vec<SessionNode> = sessions(conn, "s.role = 'manager'", &[])?;
+        let mut all_managers: Vec<SessionNode> = sessions(conn, "s.role = 'manager'", &[])?;
+        for s in &mut all_managers {
+            s.cost_usd = s.file.as_deref().and_then(|f| cost::own_cost(Path::new(f)));
+        }
+        let mut manager_costs: BTreeMap<ContextId, Vec<Option<f64>>> = BTreeMap::new();
+        for s in &all_managers {
+            manager_costs.entry(s.context.clone()).or_default().push(s.cost_usd);
+        }
         let managers: BTreeMap<ContextId, (Dot, Place, bool)> = all_managers
             .iter()
             .filter(|s| !s.is_archived())
@@ -288,9 +322,12 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
                 .map(|head| {
                     let mut own: Vec<SessionNode> = leads.iter().filter(|s| s.plan.as_ref() == Some(&head.id)).cloned().collect();
                     own.sort_by_key(|s| !s.plan_lead); // stable: the Lead first, the rest oldest first
-                    PlanNode { head, sessions: own, cost_usd: None }
+                    let attempts = attempt_costs.remove(&head.id.to_string()).unwrap_or_default();
+                    let cost_usd = cost::total(own.iter().map(|s| s.cost_usd).chain(attempts));
+                    PlanNode { head, sessions: own, cost_usd }
                 })
                 .collect::<Vec<PlanNode>>();
+            let cost_usd = cost::total(plans.iter().map(|p| p.cost_usd).chain(manager_costs.remove(&context).unwrap_or_default()));
             let archived_at: Option<String> = r.get(3)?;
             contexts.push(ContextNode {
                 dot: managers.get(&context).map_or(Dot::Stopped, |m| m.0),
@@ -304,7 +341,7 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
                 archived_at,
                 plans,
                 archived_managers: archived_managers.remove(&context).unwrap_or_default(),
-                cost_usd: None,
+                cost_usd,
                 id: context,
             });
         }

@@ -1,35 +1,65 @@
-//! The cost read model's cache and total (stub: red tests first).
+//! The cost read model's cache and total .
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 use std::time::SystemTime;
 
 use cpd_core::error::CpdError;
+use cpd_core::metrics;
+
+type Stamp = (SystemTime, u64);
 
 /// Costs of session files by path, valid while the file's `(mtime, len)` stamp is unchanged.
-pub(crate) struct CostCache;
+pub(crate) struct CostCache {
+    entries: HashMap<PathBuf, (Stamp, f64)>,
+}
 
 impl CostCache {
     pub(crate) fn new() -> CostCache {
-        todo!()
+        CostCache { entries: HashMap::new() }
     }
 
     pub(crate) fn cost(
         &mut self,
-        _path: &Path,
-        _stat: impl FnOnce(&Path) -> Option<(SystemTime, u64)>,
-        _parse: impl FnOnce(&Path) -> Result<f64, CpdError>,
+        path: &Path,
+        stat: impl FnOnce(&Path) -> Option<Stamp>,
+        parse: impl FnOnce(&Path) -> Result<f64, CpdError>,
     ) -> Option<f64> {
-        todo!()
+        let Some(stamp) = stat(path) else {
+            self.entries.remove(path);
+            return None;
+        };
+        if let Some((cached, cost)) = self.entries.get(path) {
+            if *cached == stamp {
+                return Some(*cost);
+            }
+        }
+        match parse(path) {
+            Ok(cost) => {
+                self.entries.insert(path.to_owned(), (stamp, cost));
+                Some(cost)
+            }
+            Err(_) => self.entries.get(path).map(|(_, c)| *c),
+        }
     }
 }
 
 /// The own cost of the session file at `path`, through the process-wide cache.
-#[allow(dead_code)]
-pub(crate) fn own_cost(_path: &Path) -> Option<f64> {
-    todo!()
+pub(crate) fn own_cost(path: &Path) -> Option<f64> {
+    static CACHE: LazyLock<Mutex<CostCache>> = LazyLock::new(|| Mutex::new(CostCache::new()));
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    cache.cost(
+        path,
+        |p| {
+            let m = std::fs::metadata(p).ok()?;
+            Some((m.modified().ok()?, m.len()))
+        },
+        |p| metrics::parse_file(p).map(|m| m.cost_usd),
+    )
 }
 
 /// `None` when every part is `None`, else the sum of the parts that have a value.
-pub(crate) fn total(_parts: impl IntoIterator<Item = Option<f64>>) -> Option<f64> {
-    todo!()
+pub(crate) fn total(parts: impl IntoIterator<Item = Option<f64>>) -> Option<f64> {
+    parts.into_iter().flatten().fold(None, |acc, c| Some(acc.unwrap_or(0.0) + c))
 }
