@@ -13,6 +13,7 @@ mod watch_jira;
 mod watch_parked;
 mod watch_sleep;
 mod watch;
+mod watch_durable;
 mod watch_worker_archive;
 mod watch_inbox_models;
 mod watch_parked_inbox;
