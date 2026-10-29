@@ -209,7 +209,10 @@ pub fn push_lead_branch(lead_worktree: &Path, branch: &str) -> Result<(), CpdErr
         Ok(Some(out)) if out.code == 0 => Ok(()),
         Ok(Some(out)) => Err(CpdError::new(
             ErrorCode::PushFailed,
-            format!("git push of {branch} to origin exited {}.", out.code),
+            match push_reason("", &out.stderr) {
+                Some(reason) => format!("git push of {branch} to origin exited {}: {reason}.", out.code),
+                None => format!("git push of {branch} to origin exited {}.", out.code),
+            },
         )
         .with("branch", branch)
         .with("exit", out.code)
@@ -229,10 +232,9 @@ pub enum Push {
     /// `origin` has `sha` as the branch's tip: `new` when this push moved it,
     /// `false` when it was there already.
     Pushed { new: bool },
-    /// Rejected as not a fast-forward, but the remote tip `remote` already
-    /// contains `sha` (a later merge pushed a descendant): a success that pushed nothing.
+    /// Rejected (any `!` ref line), but the remote tip `remote` already contains `sha` (contract §7.4 rule P): a success that pushed nothing.
     Contained { remote: String },
-    /// Rejected as not a fast-forward, and the remote tip does not contain
+    /// Rejected as non-fast-forward or fetch first (contract §7.4 rule P), and the remote tip does not contain
     /// `sha` (or is not in the local object store). The caller reports it as
     /// its contract says (`push_failed`, `push_rejected` or `git_failed`).
     Rejected { stderr: String },
@@ -240,15 +242,15 @@ pub enum Push {
 
 /// Rule P (contract §7.4): `git -C <lead worktree> push --porcelain origin
 /// <sha>:refs/heads/<branch>`, a plain push, never `-u`, so that it publishes
-/// the commit it means, not whatever the ref holds at that moment. A rejection
-/// as not a fast-forward is checked against the remote tip `X` (`ls-remote`):
+/// the commit it means, not whatever the ref holds at that moment. Every `!`
+/// rejection (contract §7.4 rule P) is checked against the remote tip `X` (`ls-remote`):
 /// when `X` is in the local object store and contains `sha`, the push is
 /// [`Push::Contained`]. Any other failure (no `origin` included) is `git_failed`.
 pub fn push_commit(lead_worktree: &Path, branch: &str, sha: &str) -> Result<Push, CpdError> {
     push_commit_with(&*Ports::current().runner, lead_worktree, branch, sha)
 }
 
-/// [`push_commit`] on `runner` (a test passes a `FakeRunner`).
+/// [`push_commit`] on `runner` (a test passes a `FakeRunner`); rule P of contract §7.4 checks every `!` ref line for a contained commit.
 pub fn push_commit_with(runner: &dyn Runner, lead_worktree: &Path, branch: &str, sha: &str) -> Result<Push, CpdError> {
     let (run, ok) = (|dir: &Path, args: &[&str]| run_with(runner, dir, args), |dir: &Path, args: &[&str]| ok_with(runner, dir, args));
     let reference = format!("refs/heads/{branch}");
@@ -259,10 +261,23 @@ pub fn push_commit_with(runner: &dyn Runner, lead_worktree: &Path, branch: &str,
     if out.code == 0 {
         return Ok(Push::Pushed { new: line.and_then(|l| l.chars().next()) != Some('=') });
     }
-    if !line.is_some_and(|l| l.starts_with('!') && (l.contains("(non-fast-forward)") || l.contains("(fetch first)"))) {
-        return Err(super::run::failed(lead_worktree, &args, format!("git push exited {}.", out.code), Some(out.code), &out.stderr));
-    }
-    let listed = ok(lead_worktree, &["ls-remote", "origin", &reference])?;
+    let fail = || {
+        let message = match push_reason(&out.stdout, &out.stderr) {
+            Some(reason) => format!("git push exited {}: {reason}.", out.code),
+            None => format!("git push exited {}.", out.code),
+        };
+        super::run::failed(lead_worktree, &args, message, Some(out.code), &out.stderr)
+    };
+    let Some(line) = line.filter(|l| l.starts_with('!')) else { return Err(fail()) };
+    let rejected = line.contains("(non-fast-forward)") || line.contains("(fetch first)");
+    let listed = if rejected {
+        ok(lead_worktree, &["ls-remote", "origin", &reference])?
+    } else {
+        match run(lead_worktree, &["ls-remote", "origin", &reference]) {
+            Ok(o) if o.code == 0 => o.stdout,
+            _ => return Err(fail()),
+        }
+    };
     let remote = listed.lines().find(|l| l.split_whitespace().nth(1) == Some(reference.as_str())).and_then(|l| l.split_whitespace().next());
     if let Some(remote) = remote {
         let known = run(lead_worktree, &["cat-file", "-e", &format!("{remote}^{{commit}}")])?.code == 0;
@@ -270,7 +285,21 @@ pub fn push_commit_with(runner: &dyn Runner, lead_worktree: &Path, branch: &str,
             return Ok(Push::Contained { remote: remote.to_owned() });
         }
     }
-    Ok(Push::Rejected { stderr: tail(&out.stderr, TAIL_LINES) })
+    if rejected {
+        Ok(Push::Rejected { stderr: tail(&out.stderr, TAIL_LINES) })
+    } else {
+        Err(fail())
+    }
+}
+
+/// Git's reason for a failed push: the summary of the `!` line (the text after its second tab), else the first
+/// non-empty stderr line that does not start with `To ` or `hint:`; trimmed, cut at 200 characters.
+fn push_reason(stdout: &str, stderr: &str) -> Option<String> {
+    let summary = ref_line(stdout).filter(|l| l.starts_with('!')).and_then(|l| l.splitn(3, '\t').nth(2));
+    let text = summary.map(str::trim).filter(|s| !s.is_empty()).or_else(|| {
+        stderr.lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with("To ") && !l.starts_with("hint:"))
+    })?;
+    Some(text.chars().take(200).collect())
 }
 
 /// The line of `push --porcelain` for the pushed ref: `<flag>\t<from>:<to>\t<summary>`,
