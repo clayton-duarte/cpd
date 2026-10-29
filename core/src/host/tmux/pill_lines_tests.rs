@@ -255,21 +255,24 @@ fn a_right_click_is_left_to_tmuxs_default_binding_and_the_status_click_runs_cpd_
 fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
     let prefix = format!(
             "#[fg=colour8]\u{2501}#[default]\
-             #[range=user|reset]#[fg=colour13]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
+             #[range=user|reset]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
              #[fg=colour8]\u{2501}#[default]\
              #[range=user|legend]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
              #[fg=colour8]\u{2501}#[default]\
-             #[range=user|logs]#[fg=colour10]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]",
+             #[range=user|logs]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
+             #[fg=colour8]\u{2501}#[default]\
+             #[range=user|costs]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]",
             super::RESET_GLYPH,
             super::LEGEND_GLYPH,
-            super::LOGS_GLYPH
+            super::LOGS_GLYPH,
+            "\u{EEC1}"
         );
     let prefix = prefix + "#{?#{@cpd_preview},#[fg=colour8]\u{2501}#[fg=colour3]\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}#[default],}\
          #[fg=colour8]";
     let suffix = "#[default]\
          #{?@cpd_incident,#[range=user|incident]#[fg=colour9]\u{e0b6}#[reverse]#[italics]Incident Mode: #{@cpd_incident}#[noitalics]#[noreverse]\u{e0b4}#[default]#[norange]#[fg=colour8]\u{2501}#[default],}\
          #[fg=colour8]\u{e0b6}#[reverse]\
-         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
+         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},18},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
          #[noreverse]\u{e0b4}#[default]\
          #{?#{@cpd_host_alert},#[fg=colour8]\u{2501}#[range=user|host]#[fg=colour9]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default]#[norange],#{?#{@cpd_version},#[fg=colour8]\u{2501}#[fg=colour8]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default],}}\
          #[fg=colour8]\u{2501}#[default]";
