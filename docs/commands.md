@@ -5702,7 +5702,7 @@ For each such PR (**pending PR**), in this order:
 
 1. **Idle check**: every Attempt of the PR's Jobs is `ended` and its driver lock is free (probed without creating the file, as `merged_prs_to_clean` does today, contract §7.2). If not, the outcome is `pending`, nothing is touched, no Event for this PR in this pass.
 2. **Kill Attempt windows**: `tmux kill-pane` on every pane of this machine's Attempt windows of the PR's Jobs (as today, `core/src/pr/poll.rs` `clean_up`).
-3. **Discard parallel Attempt worktrees**: per Attempt of the PR's Jobs whose worktree exists on disk (a linear Attempt runs in the Lead worktree): `git worktree remove --force`, `git branch -D` on its branches (as today; contract §7.2).
+3. **Discard parallel Attempt worktrees**: per Attempt of the PR's Jobs whose worktree exists on disk (a linear Attempt runs in the Lead worktree): removed as contract §7.2 'Removal' says, forced: rename aside, prune, branch -D, delete the aside; an Attempt's leftover `<path>.removing` counts as on disk.
 4. **Rule S** on the Lead worktree (contract §7.4: fetch, merge base): its local branch stays up to date for the dirty and unpushed check (§4 below).
 5. **Remove the Lead worktree** (§4 below).
 
