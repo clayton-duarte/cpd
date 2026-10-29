@@ -596,7 +596,7 @@ mod tests {
     #[test]
     fn unchanged_conditions_write_nothing() {
         let (_dir, mut store) = store();
-        let conditions = [dialog("session:a", Urgency::Red), condition(Kind::Unread, Urgency::White, "session:b")];
+        let conditions = [dialog("session:a", Urgency::Red), condition(Kind::LoopGuard, Urgency::Red, "session:b")];
         reconcile(&mut store, &conditions, "2026-01-01T00:00:00.000Z").unwrap();
         let (txns, events, history) = (
             count(&mut store, "SELECT count(*) FROM txns"),
@@ -605,7 +605,7 @@ mod tests {
         );
         // The same conditions, in another order and with another label, are the same conditions.
         let again = [
-            Condition { label: "renamed".into(), ..condition(Kind::Unread, Urgency::White, "session:b") },
+            Condition { label: "renamed".into(), ..condition(Kind::LoopGuard, Urgency::Red, "session:b") },
             dialog("session:a", Urgency::Red),
         ];
         let changes = reconcile(&mut store, &again, "2026-01-01T00:05:00.000Z").unwrap();
