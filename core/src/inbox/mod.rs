@@ -28,3 +28,5 @@ mod dialog_tests;
 mod rows_tests;
 #[cfg(test)]
 mod rows_review_tests;
+#[cfg(test)]
+mod unread_rows_tests;

@@ -232,6 +232,8 @@ struct Seat {
     who: String,
     /// The Session's `state_label`, empty when it has none.
     state_label: String,
+    /// Its Plan's title, else its own: `COALESCE(plans.title, sessions.title)`; `None` when both are NULL. Only `unread` reads it.
+    title: Option<String>,
     event: Option<i64>,
 }
 
@@ -242,7 +244,7 @@ fn seats(conn: &Connection, event: &str, filter: &str) -> Result<Vec<Seat>, CpdE
         "SELECT s.id, s.context, s.plan, p.phase,
                 EXISTS (SELECT 1 FROM plans q WHERE q.lead_session = s.id),
                 s.role = 'manager',
-                {event}, COALESCE(s.state_label, '')
+                {event}, COALESCE(s.state_label, ''), COALESCE(p.title, s.title)
            FROM sessions s LEFT JOIN plans p ON p.id = s.plan
           WHERE s.role <> 'worker' AND s.archived_at IS NULL AND p.deleted_at IS NULL AND {filter}
           ORDER BY s.created_at, s.id"
@@ -268,6 +270,7 @@ fn seats(conn: &Connection, event: &str, filter: &str) -> Result<Vec<Seat>, CpdE
             who,
             event: row.get(6)?,
             state_label: row.get(7)?,
+            title: row.get(8)?,
         });
     }
     Ok(seats)
@@ -325,13 +328,17 @@ fn loop_guards(conn: &Connection, loop_guard_turns: u32) -> Result<Vec<Condition
 
 /// `unread`: the rule of the tree's white dot. A Lead, fork or Manager is `idle`, not in the chat slot, and its
 /// latest finished reply turn (`working`, `waiting` or `blocked` to `idle`, `data.reply` true) is newer than the last time its chat was in the slot
-/// (never in the slot counts as older than everything).
+/// (never in the slot counts as older than everything). Label `<who> replied`, then `\n` and the title (the Plan's, else the
+/// Session's, as is) when there is one: Row 2.
 fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let filter = format!("s.state = 'idle' AND {PLACE} IS NOT 'chat' AND {LATEST_IDLE} > COALESCE({LATEST_CHAT}, 0)");
     Ok(seats(conn, LATEST_IDLE, &filter)?
         .into_iter()
         .map(|seat| {
-            let label = format!("{} replied", seat.who);
+            let label = match &seat.title {
+                Some(title) => format!("{} replied\n{title}", seat.who),
+                None => format!("{} replied", seat.who),
+            };
             seat_condition(seat, Kind::Unread, Urgency::White, label)
         })
         .collect())
@@ -921,7 +928,7 @@ mod tests {
         let mut f = fixture("dispatch");
         let idle = f.reply("l-pay");
         let c = one(f.of(Kind::Unread));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::White, "session:l-pay", "pay replied"));
+        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::White, "session:l-pay", "pay replied\nPay"));
         assert_eq!(c.event, Some(idle), "the idle Event");
         assert_eq!(c.plan.as_ref().map(|p| p.as_str()), Some("pay"));
 
@@ -1012,7 +1019,7 @@ mod tests {
         f.reply("fork-1234");
         let mut labels: Vec<_> = f.of(Kind::Unread).into_iter().map(|c| c.label).collect();
         labels.sort();
-        assert_eq!(labels, ["ctx replied", "pay·fork replied"]);
+        assert_eq!(labels, ["ctx replied", "pay·fork replied\nPay"]);
     }
 
     // ---- review-waiting (hs-d496) ----

@@ -1,4 +1,4 @@
-//! The two-row Inbox item in the view (pro-d171): Row 1 and Row 2 drawn under the header and bottom-aligned, and a left or right
+//! The two-row Inbox item in the view (pro-d171, pro-d177): Row 1 and Row 2 drawn under the header and bottom-aligned, and a left or right
 //! click on Row 2 acting like one on Row 1. The view runs in this process on a script (`common/inbox.rs`).
 
 use crate::common;
@@ -100,10 +100,9 @@ fn the_inbox_draws_a_two_row_label_on_two_rows_at_the_bottom() {
         "   Which repo?".to_owned(),
         item_row(palette::TIER_RED, "l-rel label", "5m"),
         blank(),
-        blank(),
     ];
-    let what = format!("the two-row Inbox, rows 12.. being\n{}\n", want.join("\n"));
-    let at = frame_with(&frames, 0, &what, |r| r.len() == usize::from(HEIGHT) && r[12..] == *want);
+    let what = format!("the two-row Inbox, rows 13.. being\n{}\n", want.join("\n"));
+    let at = frame_with(&frames, 0, &what, |r| r.len() == usize::from(HEIGHT) && r[13..] == *want);
     assert_eq!(rows(&frames, at).len(), 20);
 }
 

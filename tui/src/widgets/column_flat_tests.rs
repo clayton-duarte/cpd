@@ -63,14 +63,14 @@ fn the_inbox_is_pinned_to_the_bottom_and_ends_on_the_panes_last_row() {
     assert_eq!(got, want, "no item");
     let (got, _, _) = draw(2, 0, 12);
     let mut want: Vec<String> = machine_rows().into();
-    want.extend(vec![String::new(); 2]);
-    want.extend([header(2), String::new(), item_row(1), String::new(), item_row(2), String::new(), String::new()]);
+    want.extend(vec![String::new(); 4]);
+    want.extend([header(2), String::new(), item_row(1), item_row(2), String::new()]);
     assert_eq!(got, want, "two items");
 }
 
 #[test]
 fn the_inbox_grows_upward_as_items_arrive() {
-    for (n, header_row) in [(0, 8), (1, 7), (2, 5)] {
+    for (n, header_row) in [(0, 8), (1, 8), (2, 7)] {
         let (got, _, _) = draw(n, 0, 12);
         assert_eq!(got[header_row], header(n), "{n} items: {got:#?}");
         assert_eq!(got[11], "", "{n} items: the last row stays blank");
@@ -79,13 +79,12 @@ fn the_inbox_grows_upward_as_items_arrive() {
 
 #[test]
 fn an_overflowing_inbox_fills_the_rows_under_the_machine_lines() {
-    for (scroll, above, first, below) in [(0, "", 1, "▼ 10 more"), (3, "▲ 3 more", 4, "▼ 7 more"), (10, "▲ 10 more", 11, "")] {
+    for (scroll, above, first, below) in [(0, "", 1, "▼ 7 more"), (3, "▲ 3 more", 4, "▼ 4 more"), (10, "▲ 7 more", 8, "")] {
         let (got, _, _) = draw(12, scroll, 12);
         let mut want: Vec<String> = machine_rows().into();
         want.extend([String::new(), header(12)]);
         want.push(if above.is_empty() { String::new() } else { cue(above) });
-        want.extend((first..first + 2).flat_map(|n| [item_row(n), String::new()]));
-        want.push(String::new()); // the odd list row stays blank
+        want.extend((first..first + 5).map(item_row));
         want.push(if below.is_empty() { String::new() } else { cue(below) });
         assert_eq!(got[..2 + 1 + 1], want[..4], "scroll {scroll}");
         assert_eq!(got[3], "", "scroll {scroll}: the section's blank first row");
@@ -96,7 +95,7 @@ fn an_overflowing_inbox_fills_the_rows_under_the_machine_lines() {
 #[test]
 fn the_drawn_inbox_rect_is_the_bottom_aligned_section() {
     let (_, drawn, _) = draw(2, 0, 12);
-    assert_eq!(drawn.inbox, Rect::new(0, 4, 30, 8));
+    assert_eq!(drawn.inbox, Rect::new(0, 6, 30, 6));
     assert_eq!(drawn.inbox_shape.hit(1), Some(Hit::Header));
     let (_, drawn, _) = draw(12, 0, 12);
     assert_eq!(drawn.inbox, Rect::new(0, 3, 30, 9));
