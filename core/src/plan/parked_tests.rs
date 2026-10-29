@@ -146,3 +146,33 @@ fn the_door_refuses_a_stub_that_waits_for_nothing_after_the_lock() {
     row.kind = "open".into();
     run(&mut s, &row, "dispatch").unwrap();
 }
+
+fn review(status: &str, fingerprint: &str) -> String {
+    let decided = if status == "pending" { "NULL" } else { "'t'" };
+    format!("INSERT INTO plan_reviews (plan, id, number, fingerprint, title, status, requested_at, decided_at) VALUES ('pl', 'r1', 1, '{fingerprint}', 'T', '{status}', 't', {decided});")
+}
+
+fn current_fingerprint() -> String {
+    let (_d, mut s) = store("plan", &job("k", "r", "work", "draft", true, &[]));
+    s.read(|conn| plan_fingerprint(conn, &plan())).unwrap()
+}
+
+#[test]
+fn an_approved_current_review_covers_a_draft_in_phase_plan() {
+    let fingerprint = current_fingerprint();
+    let draft = job("k", "r", "work", "draft", true, &[]);
+    let (_d, mut s) = store("plan", &format!("{draft}{}", review("approved", &fingerprint)));
+    assert!(parked(&mut s).is_empty(), "approved and current in phase plan covers the draft");
+    let (_d, mut s) = store("dispatch", &format!("{draft}{}", review("approved", &fingerprint)));
+    assert_eq!(parked(&mut s), ["k"], "only phase plan gains the case");
+}
+
+#[test]
+fn an_approved_stale_or_rejected_review_does_not_cover_a_draft_in_phase_plan() {
+    let current = current_fingerprint();
+    let draft = job("k", "r", "work", "draft", true, &[]);
+    for (status, fp) in [("approved", "0".repeat(64)), ("rejected", current)] {
+        let (_d, mut s) = store("plan", &format!("{draft}{}", review(status, &fp)));
+        assert_eq!(parked(&mut s), ["k"], "{status} {fp}");
+    }
+}

@@ -681,7 +681,7 @@ pub fn create_attempt_worktree_with(
 }
 
 /// Removes a worktree and its branch whatever state they are in:
-/// `git worktree remove --force`, `git branch -D`. Used after a failed setup
+/// renames the worktree aside, `git worktree prune`, `git branch -D`, then deletes the aside in-process (contract §7.2). Used after a failed setup
 /// and when a Plan is `done` (contract §7.2, commands.md §9). Idempotent: what
 /// is already gone is skipped. Run `dir` in the main repo or another worktree.
 pub fn discard_worktree(dir: &Path, path: &Path, branch: &str) -> Result<(), CpdError> {
@@ -689,7 +689,7 @@ pub fn discard_worktree(dir: &Path, path: &Path, branch: &str) -> Result<(), Cpd
 }
 
 /// Removes the worktree and branch of a Merged Attempt (contract §7.2, A9):
-/// `git worktree remove` then `git branch -d`; git refuses the `-d` unless the
+/// renames the worktree aside, `git worktree prune`, `git branch -d`, then deletes the aside in-process; git refuses the `-d` unless the
 /// branch is merged into HEAD of `lead_worktree`. Idempotent for what is already gone.
 pub fn remove_merged_attempt(lead_worktree: &Path, path: &Path, branch: &str) -> Result<(), CpdError> {
     remove(lead_worktree, path, branch, false, false)
@@ -743,9 +743,7 @@ pub fn remove_merged_lead(
     branch: &str,
     recorded_head: impl FnOnce() -> Option<String>,
 ) -> Result<LeadRemoval, CpdError> {
-    let mut name = path.file_name().ok_or_else(|| CpdError::new(ErrorCode::GitFailed, format!("{} has no file name", path.display())))?.to_os_string();
-    name.push(".removing");
-    let aside = path.with_file_name(name);
+    let aside = removing_aside(path)?;
     if path.exists() {
         if !ok(path, &["--no-optional-locks", "status", "--porcelain"])?.trim().is_empty() {
             return Ok(LeadRemoval::Kept(Kept::Dirty));
@@ -787,18 +785,36 @@ fn has_unpushed_work(worktree: &Path, recorded_head: impl FnOnce() -> Option<Str
     list(Some(&oid))
 }
 
-/// `force` is `--force` on the worktree; `delete` is `branch -D` rather than `-d`.
+/// `<path>.removing`: the file name plus `.removing`.
+fn removing_aside(path: &Path) -> Result<PathBuf, CpdError> {
+    let mut name = path.file_name().ok_or_else(|| CpdError::new(ErrorCode::GitFailed, format!("{} has no file name", path.display())))?.to_os_string();
+    name.push(".removing");
+    Ok(path.with_file_name(name))
+}
+
+fn delete_aside(aside: &Path) -> Result<(), CpdError> {
+    std::fs::remove_dir_all(aside).map_err(|e| CpdError::new(ErrorCode::GitFailed, format!("remove {}: {e}", aside.display())))
+}
+
+/// Contract §7.2 "Removal": rename aside, prune, delete the branch, delete the aside in this process.
+/// `force` skips the clean-status check; `delete` is `branch -D` rather than `-d`.
 fn remove(dir: &Path, path: &Path, branch: &str, force: bool, delete: bool) -> Result<(), CpdError> {
-    if list(dir)?.iter().any(|w| real(&w.path) == real(path)) {
-        let path = path_str(path)?;
-        if force {
-            ok(dir, &["worktree", "remove", "--force", path])?;
-        } else {
-            ok(dir, &["worktree", "remove", path])?;
+    let aside = removing_aside(path)?;
+    if list(dir)?.iter().any(|w| real(&w.path) == real(path)) && path.exists() {
+        if !force && !ok(path, &["--no-optional-locks", "status", "--porcelain"])?.trim().is_empty() {
+            return Err(CpdError::new(ErrorCode::GitFailed, format!("{} contains modified or untracked files", path.display())).with("path", path.display().to_string()));
         }
+        if aside.exists() {
+            delete_aside(&aside)?;
+        }
+        std::fs::rename(path, &aside).map_err(|e| CpdError::new(ErrorCode::GitFailed, format!("rename {} to {}: {e}", path.display(), aside.display())))?;
     }
+    ok(dir, &["worktree", "prune"])?;
     if branch_exists(dir, branch)? {
         ok(dir, &["branch", if delete { "-D" } else { "-d" }, branch])?;
+    }
+    if aside.exists() {
+        delete_aside(&aside)?;
     }
     Ok(())
 }

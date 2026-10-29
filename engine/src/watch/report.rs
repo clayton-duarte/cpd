@@ -5,6 +5,8 @@
 //! clears, the same code at the same step for the same object is appended at
 //! most once per `error_repeat_seconds` (contract §3.7), so a step that
 //! succeeds in one part and fails in another does not append at every tick.
+//! The window also holds across an engine restart: before appending, [`Report::fail`] reads the store for an
+//! `error` Event of the same step, scope and code appended less than `error_repeat_seconds` ago.
 //! With each `error` Event goes one message to the Context's Manager, or to
 //! every live Manager for a machine error (hs-d314). A stuck Job goes to its
 //! Context's Manager the same way, once (hs-d318), grouped by PR (hs-d647,
@@ -104,6 +106,11 @@ impl About {
             About::Attempt(p, a) => format!("Attempt {a} of Plan {p}"),
             About::Session(s) | About::TitleRun(s) => format!("Session {s}"),
         }
+    }
+
+    /// What the text of an `error` Event begins with: the one place the text is written and looked up by.
+    fn lead(&self, step: Step) -> String {
+        format!("The engine failed at {step} for {}:", self.describe())
     }
 
     /// The command the Lead may run to look at it (§5.1: a text ends with one).
@@ -218,7 +225,9 @@ impl Report {
 
 impl Report {
     /// Reports `failure` of `step` for `about`: logs it and appends `error`,
-    /// unless the same failure is already reported and not cleared.
+    /// unless the same failure is already reported and not cleared, or the store holds an `error` Event of
+    /// the same step, scope and code (matched by [`About::lead`]) appended less than `repeat` ago (an engine
+    /// restart forgets memory, not the store): then it is only remembered as still open.
     pub(super) fn fail(&mut self, store: &mut Store, log: &mut Log, step: Step, about: About, failure: impl Into<Failure>) {
         let failure = failure.into();
         self.forget_old();
@@ -233,13 +242,21 @@ impl Report {
             return;
         }
         let (step, about) = &key;
+        let lead = about.lead(*step);
+        if self.repeat > Duration::ZERO {
+            match self.recent(store, &lead, &failure.code) {
+                Ok(Some((event, age))) => {
+                    let at = Instant::now().checked_sub(age).unwrap_or_else(Instant::now);
+                    self.appended.insert(repeated, (at, event));
+                    self.open.insert(key, (failure.code, event));
+                    return;
+                }
+                Ok(None) => {}
+                Err(e) => log.line(&format!("cannot read the error Events: {} ({})", e.message(), e.code().as_str())),
+            }
+        }
         log.line(&format!("{step} failed for {}: {} ({})", about.describe(), failure.message, failure.code));
-        let text = format!(
-            "The engine failed at {step} for {}: {} It tries again at every tick. See: {}",
-            about.describe(),
-            failure.message,
-            about.see()
-        );
+        let text = format!("{lead} {} It tries again at every tick. See: {}", failure.message, about.see());
         let appended = store.write(SOURCE, |tx| {
             events::append(tx, about.event(text.clone(), &failure))
         });
@@ -251,6 +268,26 @@ impl Report {
             // Not marked as reported: the next tick tries again.
             Err(e) => log.line(&format!("cannot append the error Event: {} ({})", e.message(), e.code().as_str())),
         }
+    }
+
+    /// The newest `error` Event of source `watch` with `code` whose text begins `lead`, appended less than
+    /// `repeat` ago: its id and age. `at` is real UTC time (cpd_core::clock::now), so the cutoff is SQL's now.
+    fn recent(&self, store: &mut Store, lead: &str, code: &str) -> Result<Option<(i64, Duration)>, CpdError> {
+        let window = format!("-{} seconds", self.repeat.as_secs_f64());
+        store.read(|conn| {
+            let row: Option<(i64, f64)> = conn
+                .query_row(
+                    "SELECT id, (julianday('now') - julianday(at)) * 86400.0 FROM events
+                      WHERE kind = 'error' AND json_extract(data, '$.source') = 'watch'
+                        AND json_extract(data, '$.code') = ?1 AND substr(text, 1, length(?2)) = ?2
+                        AND at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?3)
+                      ORDER BY id DESC LIMIT 1",
+                    params![code, lead, window],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            Ok(row.map(|(id, secs)| (id, Duration::from_secs_f64(secs.max(0.0)))))
+        })
     }
 
     /// `step` succeeded for `about`: a later failure is reported again.

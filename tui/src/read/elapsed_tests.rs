@@ -13,7 +13,7 @@ use crate::read;
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 /// A store of Context `ctx`, Lead `lead1` and Plan `pay` with the given PRs (keys), each in `dispatch`.
-fn store_with(prs: &[&str]) -> (tempfile::TempDir, Store) {
+pub(super) fn store_with(prs: &[&str]) -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().to_path_buf().into()), None).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
@@ -38,7 +38,7 @@ fn store_with(prs: &[&str]) -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 
-fn run(store: &mut Store, sql: &str) {
+pub(super) fn run(store: &mut Store, sql: &str) {
     store
         .write("fixture", |tx| {
             tx.execute_batch(sql)?;
@@ -48,7 +48,7 @@ fn run(store: &mut Store, sql: &str) {
 }
 
 /// A Job `key` of kind `kind` of PR `pr`, queued or running.
-fn job(pr: &str, key: &str, kind: &str, status: &str) -> String {
+pub(super) fn job(pr: &str, key: &str, kind: &str, status: &str) -> String {
     format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, created_at, kind)

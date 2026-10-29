@@ -44,7 +44,7 @@ pub struct Flow {
 
 /// A Plan as the plan view draws it (commands.md §13.2, §17): its PRs, each a box, `cancelled` ones too, and the Jobs
 /// inside them. A Plan with no PR yet has none, and no Jobs.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PlanBoxes {
     pub plan: PlanId,
     pub context: ContextId,
@@ -115,7 +115,7 @@ impl PrStatus {
 }
 
 /// One PR of a Plan, for its box's title and its place among the boxes.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PrNode {
     pub key: PrKey,
     /// The repo's directory name: the last component of `prs.repo`.
@@ -132,6 +132,8 @@ pub struct PrNode {
     pub superseded_by: Option<String>,
     /// `None` when no Job of the Workflow has an Attempt, else its active time in whole seconds, see Context record pro-d175.
     pub elapsed_seconds: Option<u64>,
+    /// `None` when no Attempt of the Workflow has cost data, else its cost in USD, see Context record pro-d179.
+    pub cost_usd: Option<f64>,
 }
 
 /// The state of a PR's update Job (`jobs.kind = 'update'`) that is not ended (hs-d532).
@@ -351,6 +353,18 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool, lead: &str, jo
             spans.entry(job.pr.as_str()).or_default().push((start, end.max(start)));
         }
     }
+    let mut costs: BTreeMap<String, Vec<Option<f64>>> = BTreeMap::new();
+    let mut stmt = conn.prepare(
+        "SELECT j.pr, json_extract(a.metrics, '$.cost_usd'), a.metrics IS NULL, s.file
+           FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job LEFT JOIN sessions s ON s.id = a.worker_session
+          WHERE a.plan = ?1",
+    )?;
+    for row in stmt.query_map([plan.as_str()], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, Option<rusqlite::types::Value>>(1)?, r.get::<_, bool>(2)?, r.get::<_, Option<String>>(3)?))
+    })? {
+        let (pr, stored, no_metrics, file) = row?;
+        costs.entry(pr).or_default().push(super::cost::attempt_cost(stored, no_metrics, file.as_deref()));
+    }
     let display = Display::load(conn, plan)?;
     let pr_rows = load_prs(conn, plan)?;
     let mut needs: BTreeMap<String, Vec<PrKey>> = BTreeMap::new();
@@ -426,6 +440,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool, lead: &str, jo
             status,
             pull,
             elapsed_seconds: active::elapsed_seconds(spans.get(key.as_str()).map(Vec::as_slice).unwrap_or(&[]), &blocked),
+            cost_usd: super::cost::total(costs.remove(key.as_str()).unwrap_or_default()),
         });
     }
     Ok(out)

@@ -1,5 +1,5 @@
 //! A parked draft (contract §2.2 "A parked draft", hs-d731): a `draft` Job of a live Plan that is neither covered by a
-//! current pending Plan review nor waiting. Derived from the store, never stored; this module is the one definition:
+//! current Plan review (pending, or approved in phase `plan`) nor waiting. Derived from the store, never stored; this module is the one definition:
 //! the door of `job add` and `job edit` asks [`door`], the engine asks [`parked_drafts`].
 
 use std::collections::BTreeSet;
@@ -54,13 +54,14 @@ fn waiting_prs(conn: &Connection, plan: &PlanId, phase: &str) -> Result<BTreeSet
     Ok(waits)
 }
 
-/// The Plan's latest Plan review is `pending` and current: its recorded fingerprint is the Plan's (as `plan review` tests it).
-fn covered(conn: &Connection, plan: &PlanId) -> Result<bool, CpdError> {
+/// The Plan's latest Plan review is current (its recorded fingerprint is the Plan's, as `plan review` tests it) and is `pending`,
+/// or `approved` in phase `plan` (the drafts stay drafts until `plan lock`; later phases queued them on approval).
+fn covered(conn: &Connection, plan: &PlanId, phase: &str) -> Result<bool, CpdError> {
     let latest: Option<(String, String)> = conn
         .query_row("SELECT status, fingerprint FROM plan_reviews WHERE plan = ?1 ORDER BY number DESC LIMIT 1", [plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
     match latest {
-        Some((status, fingerprint)) if status == "pending" => Ok(fingerprint == plan_fingerprint(conn, plan)?),
+        Some((status, fingerprint)) if status == "pending" || (status == "approved" && phase == "plan") => Ok(fingerprint == plan_fingerprint(conn, plan)?),
         _ => Ok(false),
     }
 }
@@ -75,7 +76,7 @@ pub fn parked_drafts(conn: &Connection, plan: &PlanId) -> Result<Vec<String>, Cp
         return Ok(Vec::new());
     }
     let all = jobs::load(conn, plan)?;
-    if !all.iter().any(|j| j.is_draft() && j.kind != "open") || covered(conn, plan)? {
+    if !all.iter().any(|j| j.is_draft() && j.kind != "open") || covered(conn, plan, &phase)? {
         return Ok(Vec::new());
     }
     let waits = Waits { all: &all, pr_waits: waiting_prs(conn, plan, &phase)? };

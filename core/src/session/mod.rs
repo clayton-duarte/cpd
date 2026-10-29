@@ -85,7 +85,7 @@ pub enum Command {
     Archive(ArchiveArgs),
     /// Unarchive a Lead Session (§10.11)
     Unarchive(UnarchiveArgs),
-    /// Send a message to a Lead (§10.13)
+    /// Send a message to a Lead or Manager (§10.13)
     Send(SendArgs),
     /// Resume a Lead or Manager blocked by the loop guard (§10.17)
     Resume(ResumeArgs),
@@ -205,7 +205,7 @@ pub struct UnarchiveArgs {
 #[command(override_usage = "cpd session send <id> (<text> | --file <f>) --unblocks <reason>")]
 #[command(group(clap::ArgGroup::new("message").required(true).multiple(false).args(["text", "file"])))]
 pub struct SendArgs {
-    /// The Lead Session to send to
+    /// The Lead or Manager Session to send to
     #[arg(value_name = "id")]
     id: SessionRef,
     /// The message (1–20 000 characters)

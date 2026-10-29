@@ -706,6 +706,7 @@ fn sample_pr(key: &str) -> read::PrNode {
         waiting_on: Vec::new(),
         superseded_by: None,
         elapsed_seconds: None,
+        cost_usd: None,
     }
 }
 
@@ -819,6 +820,8 @@ mod box_lines_tests;
 #[cfg(test)]
 mod counter_tests;
 #[cfg(test)]
+mod footer_cost_tests;
+#[cfg(test)]
 mod needs_tests;
 #[cfg(test)]
 mod chain_tests;
@@ -888,6 +891,7 @@ mod tests {
             waiting_on: Vec::new(),
             superseded_by: None,
             elapsed_seconds: None,
+            cost_usd: None,
         };
         let job = |n: usize| JobNode {
             key: JobKey::parse(&format!("job-{n}")).unwrap(),

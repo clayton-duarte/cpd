@@ -59,6 +59,20 @@ pub(crate) fn own_cost(path: &Path) -> Option<f64> {
     )
 }
 
+/// An Attempt's cost: the stored `$.cost_usd` when `metrics` is written (`no_metrics` false), else the own cost of its
+/// Worker Session's `file`; the two are never added.
+pub(crate) fn attempt_cost(stored: Option<rusqlite::types::Value>, no_metrics: bool, file: Option<&str>) -> Option<f64> {
+    if no_metrics {
+        file.and_then(|f| own_cost(Path::new(f)))
+    } else {
+        match stored {
+            Some(rusqlite::types::Value::Real(c)) => Some(c),
+            Some(rusqlite::types::Value::Integer(c)) => Some(c as f64),
+            _ => None,
+        }
+    }
+}
+
 /// `None` when every part is `None`, else the sum of the parts that have a value.
 pub(crate) fn total(parts: impl IntoIterator<Item = Option<f64>>) -> Option<f64> {
     parts.into_iter().flatten().fold(None, |acc, c| Some(acc.unwrap_or(0.0) + c))

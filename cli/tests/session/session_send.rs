@@ -279,6 +279,16 @@ fn the_help_usage_puts_the_id_first() {
     assert!(id < unblocks, "usage must put the id first, as the parser does: {usage}");
 }
 
+#[test]
+fn the_send_help_names_a_lead_or_a_manager() {
+    let env = TestEnv::new();
+    let run = env.cpd(&["session", "send", "--help"]);
+    let text = format!("{}{}", run.stdout, run.stderr);
+    for want in ["Send a message to a Lead or Manager", "The Lead or Manager Session to send to"] {
+        assert!(text.contains(want), "help must contain {want:?}: {text}");
+    }
+}
+
 // ---------- a send starts a stopped Lead or Manager that has no pane (commands.md §10.13, hs-d725) ----------
 
 /// `(pane, window name, @cpd_session)` of every pane of the fake server.

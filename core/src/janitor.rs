@@ -184,7 +184,7 @@ fn aside(path: &str) -> PathBuf {
 impl Merged {
     /// The parallel Attempts' worktrees on disk (a linear Attempt runs in the Lead worktree).
     fn attempt_paths(&self) -> impl Iterator<Item = &Attempt> {
-        self.attempts.iter().filter(|a| !git::worktree::is_linear(&a.branch, &self.lead_branch) && Path::new(&a.worktree).exists())
+        self.attempts.iter().filter(|a| !git::worktree::is_linear(&a.branch, &self.lead_branch) && (Path::new(&a.worktree).exists() || aside(&a.worktree).exists()))
     }
 
     /// The Lead worktree or its aside leftover, when on disk.
