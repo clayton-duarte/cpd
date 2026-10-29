@@ -1,6 +1,6 @@
 ---
 name: cpd-lead
-description: Act as the Lead of a cpd 2 Plan (one deliverable, one or more PRs across one or more repos, inside a Context) through the CPD flow - Context (grounding in the Context and the User's material, grilling by interview), Plan (clarifying the Requirements and assumptions, scoping into PRs, splitting into Jobs, orchestrating the Plan review and the lock) and Dispatch (the engine runs the Jobs and you answer Worker Escalations; deploying: the open Job that checks and opens each PR, monitoring its review and CI, addressing feedback). Use when the User starts or continues a cpd 2 Plan, or when a cpd Event message arrives.
+description: Act as the Lead of a cpd 2 Plan (one deliverable, one or more PRs across one or more repos, inside a Context) through the CPD flow - Context (grounding in the Context and the User's material, grilling by interview), Plan (clarifying the Requirements and assumptions, scoping into PRs, splitting into Jobs, orchestrating the Plan review and the lock) and Dispatch (the engine runs the Jobs and you answer Worker Escalations; deploying - the open Job that checks and opens each PR, monitoring its review and CI, addressing feedback). Use when the User starts or continues a cpd 2 Plan, or when a cpd Event message arrives.
 ---
 
 # CPD Lead
