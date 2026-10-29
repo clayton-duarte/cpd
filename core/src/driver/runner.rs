@@ -26,6 +26,7 @@ use crate::host::Tmux;
 use crate::ids::{AttemptId, PlanId, SessionId};
 use crate::metrics::{self, Metrics};
 use crate::ports::Ports;
+use crate::store::Store;
 
 use super::worker;
 
@@ -177,6 +178,18 @@ pub(super) fn stop(
             let grace = Duration::from_secs(u64::from(config.timeouts.pi_stop_seconds));
             stop_durable(ports, &Guard::of(config, home, plan, id)?, pid, grace)
         }
+    }
+}
+
+/// E2 and R end the Worker of Attempt `id` whose driver is dead (R8), by the Attempt's stored `runner` (never today's
+/// `worker_runner`): `pi` kills its window, `durable` sends SIGKILL at once to the stored `worker_pid` through the [`Guard`]
+/// (the runner's commits survive a kill and the last report is on disk, so there is no SIGTERM and no wait). A `durable`
+/// Attempt with no pid never started a runner.
+pub fn kill_orphan(ports: &Ports, config: &Config, home: &CpdHome, tmux: &Tmux, store: &mut Store, plan: &PlanId, id: &AttemptId) -> Result<(), CpdError> {
+    match store.read(|conn| stored(conn, plan, id))? {
+        (WorkerRunner::Pi, _) => worker::kill_attempt_window_with(ports, config, tmux, plan, id),
+        (WorkerRunner::Durable, None) => Ok(()),
+        (WorkerRunner::Durable, Some(pid)) => Guard::of(config, home, plan, id)?.signal(&*ports.spawn, pid, Signal::Kill).map(drop),
     }
 }
 

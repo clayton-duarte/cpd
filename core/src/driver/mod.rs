@@ -13,7 +13,7 @@ pub mod lock;
 #[cfg(test)]
 pub(crate) mod ports_tests;
 mod run;
-pub(crate) mod runner;
+pub mod runner;
 pub mod schedule;
 #[cfg(test)]
 mod schedule_tests;
