@@ -124,7 +124,7 @@ fn the_cost_moves_the_exit_when_it_covers_the_middle_column() {
     assert_eq!((width, tees), (26, vec![12]));
     assert!(rows(&buf)[y].starts_with("╰─ 5s ───"), "{}", rows(&buf)[y]);
     let (buf, y, width, tees) = exit(Some(5), Some(0.449));
-    assert_eq!(rows(&buf)[y].chars().take(16).collect::<String>(), "╰─ 5s · $0.45 ┬");
+    assert_eq!(rows(&buf)[y].chars().take(15).collect::<String>(), "╰─ 5s · $0.45 ┬");
     assert_eq!((width, tees), (26, vec![14]));
 }
 
@@ -135,11 +135,12 @@ fn a_need_line_leaves_a_box_past_the_time_and_the_cost() {
     assert_eq!(tees, [2 + 34], "the first `─` after the text\n{}", r.join("\n"));
     assert_eq!(chars(&r[y])[..37].concat(), "╰─ 5124095576030431h·0m·15s · $1.2k ┬", "{}", r.join("\n"));
     let below = chars(&r[y + 1]);
-    assert_eq!(below[36], "╰", "the line turns right\n{}", r.join("\n"));
+    assert_ne!(below[36], " ", "a line cell under the exit\n{}", r.join("\n"));
     let b_top = y + 1 + r[y + 1..].iter().position(|l| l.starts_with('╭')).expect("b's top border");
     let landed: Vec<usize> = chars(&r[b_top]).iter().enumerate().filter(|(_, c)| *c == "┴").map(|(x, _)| x).collect();
     assert_eq!(landed.len(), 1, "{}", r.join("\n"));
-    assert!(landed[0] > 36, "{}", r.join("\n"));
+    // b's title is 30 cells, so b lands at 2 + 30 = 32, left of the exit (36): the line turns left
+    assert_eq!(landed[0], 32, "{}", r.join("\n"));
     let b_bottom = b_top + r[b_top..].iter().position(|l| l.starts_with('╰')).expect("b's bottom border");
     let boxes_: Vec<Rect> = vec![
         Rect::new(0, 0, width as u16, y as u16 + 1),

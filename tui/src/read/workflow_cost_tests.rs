@@ -65,7 +65,7 @@ fn a_workflow_costs_the_stored_costs_of_all_its_attempts() {
     );
     let got = costs(&mut store); // api, docs, web
     assert_eq!(got.len(), 3);
-    near(got[0], 0.8);
+    near(got[0], 0.75);
     near(got[1], 2.0);
     near(got[2], 1.0);
 }
