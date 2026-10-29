@@ -106,6 +106,12 @@ impl Rig {
     /// ended parallel Attempt `<key>-a1` with its worktree and branch. A cancelled PR's row has no `lead_worktree`,
     /// as `pr cancel` leaves it; its Lead worktree is the path contract §7.1 names.
     pub(crate) fn pr(&mut self, key: &'static str, status: &'static str) -> &Pr {
+        self.pr_with(key, status, "cancelled", "failed")
+    }
+
+    /// [`Rig::pr`] with the Job's status `job` (`merged`, `running`, `failed` or `cancelled`) and the Attempt's outcome
+    /// `attempt` (`failed` or `merged`). `dispatch` is a PR status too: a Lead worktree and no pull request yet.
+    pub(crate) fn pr_with(&mut self, key: &'static str, status: &'static str, job: &str, outcome: &str) -> &Pr {
         let plan = PlanId::parse("pay").unwrap();
         let lead_branch = format!("cpd/pay/{key}");
         let lead = pr_lead_worktree_path(self.repo.dir(), &plan, &PrKey::parse(key).unwrap(), &lead_branch).unwrap();
@@ -128,6 +134,7 @@ impl Rig {
         let repo = self.repo.dir().display();
         let (pull, lead_column, stamps) = match status {
             "cancelled" => (String::new(), "NULL".to_owned(), "NULL, NULL, NULL, NULL, NULL".to_owned()),
+            "dispatch" => (String::new(), format!("'{}'", lead.display()), "'t', NULL, NULL, NULL, NULL".to_owned()),
             _ => {
                 let merged = if status == "merged" { "'t'" } else { "NULL" };
                 let state = if status == "merged" { "merged" } else { "open" };
@@ -142,7 +149,17 @@ impl Rig {
             }
         };
         let merged_at = if status == "merged" { "'t'" } else { "NULL" };
-        let attempt_state = if self.running { "'running', NULL, NULL" } else { "'ended', 'failed', 'crashed'" };
+        let attempt_state = match (self.running, outcome) {
+            (true, _) => "'running', NULL, NULL, NULL",
+            (false, "merged") => "'ended', 'merged', 'merged', 'm'",
+            (false, _) => "'ended', 'failed', 'crashed', NULL",
+        };
+        let job_columns = match job {
+            "merged" => "NULL, NULL, NULL, 'm'",
+            "failed" => "NULL, NULL, 'crashed', NULL",
+            "cancelled" => "'no', 't', NULL, NULL",
+            _ => "NULL, NULL, NULL, NULL",
+        };
         let ended_at = if self.running { "NULL" } else { "'t'" };
         self.sql(&format!(
             "{pull}
@@ -150,14 +167,14 @@ impl Rig {
                               pr_number, pr_url, pr_opened_at, pull_request, merged_at)
                VALUES ('pay', '{key}', '{repo}', 'pay', 'main', '{status}', '{lead_branch}', {lead_column}, cpd_txn(), 't', {stamps}, {merged_at});
              INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                               status, appended, fingerprint, cancel_reason, cancel_requested_at, created_txn, created_at)
-               VALUES ('pay', '{key}', '{key}', 'B', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'cancelled', 0, '{fp}', 'no', 't', cpd_txn(), 't');
-             INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, started_at, ended_at)
+                               status, appended, fingerprint, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_txn, created_at)
+               VALUES ('pay', '{key}', '{key}', 'B', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{job}', 0, '{fp}', {job_columns}, cpd_txn(), 't');
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, merged_sha, branch, worktree, base_sha, started_at, ended_at)
                VALUES ('pay', '{attempt_id}', '{key}', 1, 'S2', 'ladder', {attempt_state}, '{attempt_branch}', '{aw}', 'sha', 't', {ended_at});",
             fp = "f".repeat(64),
             aw = attempt.display(),
         ));
-        self.prs.push(Pr { key, status: if status == "merged" { "merged" } else if status == "cancelled" { "cancelled" } else { "open" }, lead, lead_branch, attempt, attempt_branch, attempt_id });
+        self.prs.push(Pr { key, status: if status == "dispatch" { "dispatch" } else if status == "merged" { "merged" } else if status == "cancelled" { "cancelled" } else { "open" }, lead, lead_branch, attempt, attempt_branch, attempt_id });
         self.prs.last().unwrap()
     }
 
@@ -354,5 +371,90 @@ fn janitor_pass_while_another_holds_the_lock_does_nothing() {
     for pr in &rig.prs {
         assert_eq!(rig.left(pr), [true; 6], "PR {} is untouched", pr.key);
     }
+    assert_eq!(rig.errors(), Vec::new(), "no Event");
+}
+
+/// Contract §7.2 "Ended Attempts of merged Jobs on a live PR": the PR `key` in `status` with its Job in status `job` and
+/// its Attempt ended `attempt`, after one pass: `(left, outcomes, errors)`.
+fn live_pass(status: &'static str, job: &str, attempt: &str) -> (Rig, [bool; 6], Vec<(String, String)>) {
+    let mut rig = Rig::new();
+    rig.pr_with("api", status, job, attempt);
+    let outcomes = outcomes(rig.pass());
+    let left = rig.left(&rig.prs[0]);
+    (rig, left, outcomes)
+}
+
+fn swept_and_lead_untouched(status: &'static str, job: &str, attempt: &str) {
+    let (rig, left, outcomes) = live_pass(status, job, attempt);
+    assert_eq!(left, [true, true, true, false, false, false], "the Lead's three stay, the Attempt's three are gone");
+    assert!(outcomes.contains(&("api".to_owned(), "removed".to_owned())), "{outcomes:?}");
+    assert!(outcomes.iter().all(|(_, outcome)| outcome == "removed"), "{outcomes:?}");
+    assert_eq!(rig.errors(), Vec::new(), "no Event");
+}
+
+#[test]
+fn janitor_pass_sweeps_the_attempt_of_a_merged_job_of_an_open_pr() {
+    swept_and_lead_untouched("open", "merged", "failed");
+}
+
+#[test]
+fn janitor_pass_sweeps_the_attempt_of_a_merged_job_of_a_dispatch_pr() {
+    swept_and_lead_untouched("dispatch", "merged", "failed");
+}
+
+#[test]
+fn janitor_pass_sweeps_a_merged_attempt_of_a_live_pr_whatever_its_job_status() {
+    swept_and_lead_untouched("open", "running", "merged");
+}
+
+#[test]
+fn janitor_pass_keeps_the_attempts_of_a_live_pr_whose_job_is_not_merged() {
+    let (rig, left, outcomes) = live_pass("open", "failed", "failed");
+    assert_eq!(left, [true; 6], "a failed Job's Attempts are kept for debugging");
+    assert!(outcomes.iter().all(|(key, _)| key != "api"), "no outcome for the PR: {outcomes:?}");
+    assert_eq!(rig.errors(), Vec::new(), "no Event");
+}
+
+#[test]
+fn janitor_pass_leaves_a_live_prs_running_attempt_alone_and_sweeps_the_merged_jobs() {
+    let mut rig = Rig::new();
+    rig.pr_with("a", "open", "merged", "failed");
+    let plan = PlanId::parse("pay").unwrap();
+    let branch = "cpd/pay--b-a1".to_owned();
+    let dir = attempt_worktree_path(rig.repo.dir(), &plan, &AttemptId::parse("b-a1").unwrap()).unwrap();
+    rig.repo.branch(&branch);
+    rig.universe.lock().unwrap().add_worktree(rig.repo.id(), &dir, Head::Branch(branch.clone()));
+    std::fs::write(dir.join("f.txt"), "base\n").unwrap();
+    rig.sql(&format!(
+        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                           status, appended, fingerprint, created_txn, created_at)
+           VALUES ('pay', 'a', 'b', 'B', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fp}', cpd_txn(), 't');
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
+           VALUES ('pay', 'b-a1', 'b', 1, 'S2', 'ladder', 'running', '{branch}', '{dir}', 'sha', 't');",
+        fp = "f".repeat(64),
+        dir = dir.display(),
+    ));
+    let outcomes = outcomes(rig.pass());
+    assert_eq!(rig.left(&rig.prs[0]), [true, true, true, false, false, false], "a-a1 is swept, the Lead stays");
+    assert_eq!((dir.exists(), rig.registered(&dir), rig.branch_exists(&branch)), (true, true, true), "b-a1 is untouched");
+    assert!(outcomes.contains(&("a".to_owned(), "removed".to_owned())), "{outcomes:?}");
+    assert_eq!(rig.errors(), Vec::new(), "no Event");
+}
+
+#[test]
+fn janitor_pass_skips_a_swept_attempt_whose_driver_lock_is_held() {
+    let mut rig = Rig::new();
+    rig.pr_with("api", "open", "merged", "failed");
+    std::fs::create_dir_all(rig.home.locks_dir()).unwrap();
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(rig.home.attempt_lock(&PlanId::parse("pay").unwrap(), &AttemptId::parse("api-a1").unwrap()))
+        .unwrap();
+    assert!(crate::lock::try_lock(&held).unwrap());
+    let outcomes = outcomes(rig.pass());
+    assert_eq!(rig.left(&rig.prs[0]), [true; 6]);
+    assert!(outcomes.contains(&("api".to_owned(), "pending".to_owned())), "{outcomes:?}");
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
