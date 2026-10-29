@@ -486,10 +486,21 @@ The cost counters of the cockpit (decision pro-d179) are dollar amounts that pi 
 
 **Formatting.** `cpd_core::metrics::format_cost(usd: f64) -> String` is the one formatter of every surface. A cost that does not exist is never formatted: a surface draws nothing for `None`, and never `$0.00` for a missing or unreadable file. For a cost that exists:
 
-- `0` is `$0.00`.
-- Above 0 and below one cent: `<1¢` (U+00A2), for example `0.0001`, `0.005` and `0.0099`.
-- From one cent, while `(usd * 100.0).round()` is below 100000 cents: `$` and two decimals, for example `0.01` is `$0.01`, `0.449` is `$0.45`, `4.5` is `$4.50`, `12.3` is `$12.30`, `999.99` is `$999.99`.
-- From there up (`(usd * 100.0).round()` reaches 100000): `$`, the amount in thousands with one decimal and `k`, for example `999.996` is `$1.0k`, `1000` is `$1.0k`, `1234` is `$1.2k`, `12345` is `$12.3k` and `1000000` is `$1000.0k` (there is no larger unit).
+- A cost always fills 5 cells after the `$` (4 significant digits and the point), in thousands `k` after them (User, Context record pro-d194). The form is chosen by the value as the form's own rounding leaves it, so no cost shows 6 cells after the `$` below $100k. For `x = usd`:
+
+| Value | Form | Example |
+| --- | --- | --- |
+| `x <= 0`, NaN, or `x < 0.0005` | `$0.000` | `0.0` is `$0.000` |
+| `x < 9.9995` | `$d.ddd` (3 decimals) | `0.004` is `$0.004`, `0.0123` is `$0.012`, `0.12` is `$0.120`, `1.2344` is `$1.234` |
+| `x < 99.995` | `$dd.dd` (2 decimals) | `12.344` is `$12.34` |
+| `x < 999.95` | `$ddd.d` (1 decimal) | `123.44` is `$123.4` |
+| `x < 9995` | `$d.ddk` (`x / 1000`, 2 decimals) | `999.96` is `$1.00k`, `1234.0` is `$1.23k` |
+| `x < 99950` | `$dd.dk` (`x / 1000`, 1 decimal) | `12345.0` is `$12.3k` |
+| `x < 999500` | `$ddd` and `k` (`x / 1000`, 0 decimals) | `123456.0` is `$123k` |
+| above | `$` and `x / 1000` with 0 decimals and `k` | `1000000.0` is `$1000k` (more than 5 cells is accepted: no such cost exists) |
+
+- A cost under a cent has no special form: `0.0004` is `$0.000` (under 0.05¢, as zero is) and `0.0123` is `$0.012`; there is never a `<1¢`. A value exactly on a rounding tie is not pinned by a test (`1.2345` may give `$1.234` or `$1.235`).
+- `format_cost` is the one formatter of the tree's Context and Plan rows, the Workflow box footer and the legend's cost sample, so the footer changes with the rows.
 
 **Totals.** Every cost of the read model is an `Option<f64>`: `None` means no data at all, and `Some(0.0)` means data exists and totals zero.
 
@@ -4418,3 +4429,4 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read.
 | Worker runner flag and neutral Worker contract (User, Context records pro-d164, pro-d165 and pro-d180, 2026-10-29 EDT; Plan `worker-contract`; order: retire-review-jobs, worker-contract, pi-durable-worker): `worker_runner = "pi" \| "durable"` (default `pi`, both runners kept) is read once per Attempt and stored in `attempts.runner` with `worker_pid` (migration `worker-runner`); one driver seam for start, liveness, the end report and stop; the neutral end report at `run/<plan>/attempts/<attempt>.report.json`; a durable Worker is a child process with a bounded restart and a guarded stop, E2 leaves its paneless Session alone, doctor checks `worker_runner`, and `@earendil-works/pi-coding-agent` becomes a production dependency of the runner | §1.4 (`attempts/`, `worker-<attempt>.log`), §2.2 (Attempt), §3.4 ("The Worker runner and its seam", A3 to A5, A9), §3.7 (E2), §4.4 (`attempts`), §4.5 (`worker-runner`), §6.6, §6.12, §7.4, §8.1, §8.2; `commands.md` §6.3, §6.4, §14.1, §14.2; CONTEXT.md (Worker runner) |
 | Cost counter placement (User, Context record pro-d186, 2026-10-29 09:39 EDT, refining pro-d179 items 1 and 2; Plans cost-counters and cost-row-placement): a Plan row draws its cost one space after the name and a Context row one space after the id, always colour 8; the Job counters stay right-aligned; the tree's rows end at column `W - 2` (no `RIGHT_PAD`) | `commands.md` §13.2 "Rows" (Cost counters, Narrow rows, Muted rows), `commands.md` §17 "Collapsible blocks" (Right edge), contract §6.1.1 ("The rail fold", rule (2)) and §2.2 "Session cost" |
 | Cost toggle button (User, Context records pro-d189 and pro-d195, 2026-10-29; mechanism pro-d196) | core/src/host/tmux.rs (STATUS_FORMAT, COSTS_GLYPH), tui/src/cockpit.rs (Action::Costs), tui/src/tree/view.rs (the `$` key and the flag), tui/src/tree/rows.rs (the cost cells) |
+| Five-cell cost format (User, Context record pro-d194, 2026-10-29 EDT; Plan `cost-row-placement`): a cost always fills 5 cells after the `$` (`$0.123`, `$1.234`, `$12.34`, `$123.4`, `$1.23k`, `$12.3k`), `$0.000` for zero or under 0.05¢, never `<1¢`, one formatter for the tree, the Workflow box footer and the legend | core/src/metrics/mod.rs (`format_cost`), tui/src/widgets/legend.rs (the cost sample) |
