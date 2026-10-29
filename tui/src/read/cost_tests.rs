@@ -200,7 +200,7 @@ fn assistant(n: u32, minute: u32, cost: f64) -> String {
 }
 
 /// A session file of `header` and assistant messages that cost `costs`.
-fn costing(costs: &[f64]) -> Vec<String> {
+pub(super) fn costing(costs: &[f64]) -> Vec<String> {
     let mut lines = vec![header()];
     lines.extend(costs.iter().enumerate().map(|(i, c)| assistant(i as u32, i as u32 + 1, *c)));
     lines
@@ -212,7 +212,7 @@ fn context(id: &str) -> String {
     )
 }
 
-fn session(id: &str, role: &str, context: &str, plan: Option<&str>, attempt: Option<&str>, file: Option<&str>, extra: &str) -> String {
+pub(super) fn session(id: &str, role: &str, context: &str, plan: Option<&str>, attempt: Option<&str>, file: Option<&str>, extra: &str) -> String {
     let q = |v: Option<&str>| v.map_or("NULL".to_owned(), |v| format!("'{v}'"));
     format!(
         "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
@@ -293,7 +293,7 @@ fn pl<'a>(t: &'a read::Tree, context: &str, id: &str) -> &'a PlanNode {
     ctx(t, context).plans.iter().find(|p| p.head.id.as_str() == id).unwrap()
 }
 
-fn near(got: Option<f64>, want: f64) {
+pub(super) fn near(got: Option<f64>, want: f64) {
     let got = got.unwrap_or_else(|| panic!("no cost, wanted {want}"));
     assert!((got - want).abs() < 1e-9, "cost {got}, wanted {want}");
 }

@@ -42,6 +42,8 @@ mod logs;
 #[cfg(test)]
 mod elapsed_tests;
 #[cfg(test)]
+mod workflow_cost_tests;
+#[cfg(test)]
 mod look_tests;
 pub mod pr_look;
 mod pulse;

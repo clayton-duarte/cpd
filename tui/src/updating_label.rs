@@ -35,6 +35,7 @@ fn node(update: Option<UpdateState>) -> PrNode {
         waiting_on: Vec::new(),
         superseded_by: None,
         elapsed_seconds: None,
+        cost_usd: None,
     }
 }
 
