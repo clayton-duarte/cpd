@@ -13,14 +13,12 @@ use common::fx::Fx as Kit;
 use cpd_core::config::{Catalog, Config, TierModel};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
-use cpd_core::host::spawn::{Pid, Signal};
+use cpd_core::host::spawn::{Pid, Signal, Spawn};
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::merge::{self, Ctx, End, Failure};
 use cpd_core::store::Store;
 use rusqlite::params;
 use serde_json::Value;
-
-const RUNNER_FILE: &str = "/opt/cpd/pi/durable-worker/main.ts";
 
 fn plan() -> PlanId {
     PlanId::parse("pay").unwrap()
@@ -49,9 +47,13 @@ fn fx() -> Fx {
     let kit = Kit::with_ports();
     let repo = kit.git_repo("pay").canonicalize().unwrap();
     let home = CpdHome::resolve(Some(kit.env.cpd_home().into()), None).unwrap();
+    let adapter = kit.env.root().join("pi");
+    fs::create_dir_all(adapter.join("durable-worker")).unwrap();
+    fs::write(adapter.join("package.json"), "{}").unwrap();
+    fs::write(adapter.join("durable-worker/main.ts"), "").unwrap();
     fs::write(
         home.config(),
-        format!("version = 1\nmachine = \"t\"\npi_adapter = \"/opt/cpd/pi\"\n[tmux]\nsocket = \"{}\"\n", kit.env.tmux_socket()),
+        format!("version = 1\nmachine = \"t\"\npi_adapter = \"{}\"\n[tmux]\nsocket = \"{}\"\n", adapter.display(), kit.env.tmux_socket()),
     )
     .unwrap();
     let config = Config::load(&home).unwrap();
@@ -128,7 +130,7 @@ impl Fx {
 fn r_kills_the_durable_runner_of_a_merging_attempt_whose_driver_died() {
     let fx = fx();
     let spec = fx.home.worker_spec(&plan(), &AttemptId::parse("api-a1").unwrap());
-    let runner = fx.kit.fakes.spawn.add_process(Pid(1), &format!("/opt/node/bin/node {RUNNER_FILE} --model p/sonnet --spec {}", spec.display()));
+    let runner = fx.kit.fakes.spawn.add_process(Pid(1), &format!("/opt/node/bin/node {} --model p/sonnet --spec {}", fx.kit.env.root().join("pi/durable-worker/main.ts").display(), spec.display()));
     let (attempt, worktree) = fx.merging_durable("api", runner);
 
     let recovered = fx.recover(&attempt).expect("the driver lock is free: R runs");

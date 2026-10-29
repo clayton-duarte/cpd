@@ -6,19 +6,31 @@
 
 use crate::common;
 
+use std::fs;
+use std::path::PathBuf;
+
 use common::fx::Fx;
 use cpd_core::home::CpdHome;
-use cpd_core::host::spawn::{Pid, Signal};
+use cpd_core::host::spawn::{Pid, Signal, Spawn};
 use cpd_core::ids::{AttemptId, PlanId};
 
-/// The `pi_adapter` the engine's config names: the runner file is `<ADAPTER>/durable-worker/main.ts`.
-const ADAPTER: &str = "/opt/cpd/pi";
-const RUNNER_FILE: &str = "/opt/cpd/pi/durable-worker/main.ts";
+/// The adapter directory the engine's config names (`pi_adapter`, which must hold a `package.json`) in the temp home:
+/// the runner file is `<adapter>/durable-worker/main.ts`.
+fn adapter(fx: &Fx) -> PathBuf {
+    fx.env.root().join("pi")
+}
 
-/// [`common::engine`]'s `Plan pay` with `retry_cap = 0` (a dead driver's Job fails: E3 starts nothing) and the adapter named.
+fn runner_file(fx: &Fx) -> String {
+    adapter(fx).join("durable-worker/main.ts").display().to_string()
+}
+
+/// The engine of Plan `pay` with `retry_cap = 0` (a dead driver's Job fails: E3 starts nothing) and the adapter named.
 fn engine() -> Fx {
     let fx = Fx::with_ports();
-    fx.engine_config(&format!("retry_cap = 0\npi_adapter = \"{ADAPTER}\""));
+    fs::create_dir_all(adapter(&fx).join("durable-worker")).unwrap();
+    fs::write(adapter(&fx).join("package.json"), "{}").unwrap();
+    fs::write(adapter(&fx).join("durable-worker/main.ts"), "").unwrap();
+    fx.engine_config(&format!("retry_cap = 0\npi_adapter = \"{}\"", adapter(&fx).display()));
     fx.env.sql("INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');");
     fx.engine_routes();
     fx.engine_plan();
@@ -37,7 +49,7 @@ fn spec_path(fx: &Fx, attempt: &str) -> String {
 
 /// What `ps` shows of a durable runner started for `attempt` (contract §3.4, Start): `<node> <runner file> --model <pattern> --spec <path>`.
 fn runner_cmdline(fx: &Fx, attempt: &str) -> String {
-    format!("/opt/node/bin/node {RUNNER_FILE} --model p/sonnet --spec {}", spec_path(fx, attempt))
+    format!("/opt/node/bin/node {} --model p/sonnet --spec {}", runner_file(fx), spec_path(fx, attempt))
 }
 
 /// Attempt `<key>-a1` running (driver pid 4242, its lock free until [`Fx::live_driver`] holds it), runner `durable` and its
