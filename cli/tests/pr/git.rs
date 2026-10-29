@@ -1496,3 +1496,109 @@ fn lead_removal_with_a_failing_rename_is_kept_untouched() {
     assert!(!removing(&path).exists());
     assert!(registered(&fx, &repo, &path) && branch_exists(&fx, &repo));
 }
+
+// ------------------------------------------------ removing an Attempt worktree outside git's deadline (contract §7.2)
+
+fn is_worktree_remove(call: &Call) -> bool {
+    call.args.windows(2).any(|w| w == ["worktree", "remove"])
+}
+
+/// Every `git worktree remove` takes 120 s: the fake runner turns it into `tool_timeout`.
+fn worktree_remove_times_out(fx: &Fx) {
+    (*fx.fakes.runner).clone().on("git", is_worktree_remove, Reply::ok("").takes(Duration::from_secs(120)));
+}
+
+/// A repo with a Lead worktree and a parallel Attempt worktree of `id`.
+fn lead_and_attempt(fx: &Fx, id: &str) -> (PathBuf, cpd_core::git::Created, cpd_core::git::Created) {
+    let repo = fx.git_repo("pay");
+    let setup = setup_in(fx, "attempt.log");
+    let lead = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup)).unwrap();
+    let made = fx.scoped(|| create_attempt_worktree(&repo, &lead.path, &plan(), &AttemptId::parse(id).unwrap(), &setup)).unwrap();
+    (repo, lead, made)
+}
+
+fn has_branch(fx: &Fx, repo: &Path, branch: &str) -> bool {
+    !fx.git(repo, &["branch", "--list", branch]).trim().is_empty()
+}
+
+#[test]
+fn a_merged_attempt_is_removed_though_git_worktree_remove_would_time_out() {
+    let fx = Fx::with_ports();
+    let (repo, lead, made) = lead_and_attempt(&fx, "api-a1");
+    fx.commit_file(&made.path, "work.txt", "work\n", "edit work.txt");
+    fx.git(&lead.path, &["merge", "-q", "--ff-only", &made.branch]);
+    worktree_remove_times_out(&fx);
+
+    fx.scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch)).unwrap();
+
+    assert!(!made.path.exists());
+    assert!(!removing(&made.path).exists());
+    assert!(!registered(&fx, &repo, &made.path));
+    assert!(!has_branch(&fx, &repo, &made.branch));
+    assert!(git_calls(&fx, is_worktree_remove).is_empty(), "no git worktree remove call");
+    fx.scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch)).unwrap();
+}
+
+#[test]
+fn a_merged_attempt_with_untracked_files_is_refused_by_status_and_left_whole() {
+    let fx = Fx::with_ports();
+    let (repo, lead, made) = lead_and_attempt(&fx, "api-a1");
+    fx.commit_file(&made.path, "work.txt", "work\n", "edit work.txt");
+    fs::write(made.path.join("untracked.txt"), "x").unwrap();
+    fx.git(&lead.path, &["merge", "-q", "--ff-only", &made.branch]);
+    worktree_remove_times_out(&fx);
+
+    let err = fx.scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch)).unwrap_err();
+
+    assert_eq!(err.code(), ErrorCode::GitFailed);
+    assert!(made.path.join("untracked.txt").exists());
+    assert!(registered(&fx, &repo, &made.path));
+    assert!(has_branch(&fx, &repo, &made.branch));
+    assert!(!removing(&made.path).exists());
+}
+
+#[test]
+fn discard_worktree_removes_a_dirty_unmerged_worktree_though_git_worktree_remove_would_time_out() {
+    let fx = Fx::with_ports();
+    let (repo, lead, made) = lead_and_attempt(&fx, "api-a1");
+    fx.commit_file(&made.path, "work.txt", "unmerged\n", "edit work.txt");
+    fs::write(made.path.join("dirty.txt"), "dirty").unwrap();
+    worktree_remove_times_out(&fx);
+
+    fx.scoped(|| discard_worktree(&lead.path, &made.path, &made.branch)).unwrap();
+
+    assert!(!made.path.exists());
+    assert!(!removing(&made.path).exists());
+    assert!(!registered(&fx, &repo, &made.path));
+    assert!(!has_branch(&fx, &repo, &made.branch));
+    assert!(git_calls(&fx, is_worktree_remove).is_empty(), "no git worktree remove call");
+}
+
+#[test]
+fn a_removal_finishes_or_replaces_a_removing_aside_left_by_an_earlier_stop() {
+    let fx = Fx::with_ports();
+    let (repo, lead, made) = lead_and_attempt(&fx, "api-a1");
+    // (i) A stop after the rename: the path is gone, the aside holds the tree, registration and branch remain.
+    fs::rename(&made.path, removing(&made.path)).unwrap();
+    fs::write(removing(&made.path).join("left.txt"), "x").unwrap();
+
+    fx.scoped(|| discard_worktree(&lead.path, &made.path, &made.branch)).unwrap();
+
+    assert!(!made.path.exists());
+    assert!(!removing(&made.path).exists());
+    assert!(!registered(&fx, &repo, &made.path));
+    assert!(!has_branch(&fx, &repo, &made.branch));
+
+    // (ii) A stale aside beside a live worktree.
+    let setup = setup_in(&fx, "attempt2.log");
+    let other = fx.scoped(|| create_attempt_worktree(&repo, &lead.path, &plan(), &AttemptId::parse("web-a1").unwrap(), &setup)).unwrap();
+    fs::create_dir_all(removing(&other.path)).unwrap();
+    fs::write(removing(&other.path).join("stale.txt"), "x").unwrap();
+
+    fx.scoped(|| discard_worktree(&lead.path, &other.path, &other.branch)).unwrap();
+
+    assert!(!other.path.exists());
+    assert!(!removing(&other.path).exists());
+    assert!(!registered(&fx, &repo, &other.path));
+    assert!(!has_branch(&fx, &repo, &other.branch));
+}
