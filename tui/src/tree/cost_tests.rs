@@ -27,7 +27,7 @@ fn render(t: &Tree, width: u16, height: u16) -> Buffer {
     open_new(&mut state, &mut HashSet::new(), t);
     state.select(vec![]);
     let mut terminal = Terminal::new(TestBackend::new(width, height + 40)).unwrap();
-    terminal.draw(|f| draw(f, f.area(), t, &mut state, false, 0, &mut Scroll::default())).unwrap();
+    terminal.draw(|f| draw(f, f.area(), t, &mut state, false, 0, true, &mut Scroll::default())).unwrap();
     let full = terminal.backend().buffer();
     let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, width, height));
     for y in 0..height {

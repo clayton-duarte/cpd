@@ -152,6 +152,8 @@ pub struct View {
     /// The engine's downtime now: since when `locks/watch.lock` has been read free on every snapshot, and whether the
     /// Managers were told of it (view state only).
     down: Option<Down>,
+    /// Whether the Context and Plan rows draw their cost (pro-d189, pro-d196): off at every start, flipped by `$`, never stored.
+    costs: bool,
 }
 
 /// One downtime of the engine (see [`View::down`]).
@@ -172,6 +174,7 @@ impl View {
             folds: None,
             focused,
             last_input: Input::Click,
+            costs: false,
             menu: None,
             pane: Rect::default(),
             tree_scroll: rows::Scroll::default(),
@@ -317,6 +320,8 @@ impl View {
                 return close_effect(self.cursor_row().and_then(close_of));
             }
             KeyCode::Char('?') => return Effect::Legend,
+            // like `?`, it needs no cursor and leaves the cursor's visibility alone
+            KeyCode::Char('$') => self.costs = !self.costs,
             // the first arrow after a click only shows the cursor again where it was (the first Session when there is none)
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Up | KeyCode::Char('k') => {
                 let delta = if matches!(key.code, KeyCode::Down | KeyCode::Char('j')) { 1 } else { -1 };
@@ -528,7 +533,7 @@ impl View {
         }
         // the tree scrolls to keep the cursor's Session in view
         let cursor = self.cursor_shown();
-        rows::draw(f, body, &self.tree, &mut self.state, cursor, frame, &mut self.tree_scroll);
+        rows::draw(f, body, &self.tree, &mut self.state, cursor, frame, self.costs, &mut self.tree_scroll);
         let tree_rows = u16::try_from(rows::row_count(&self.state, &self.tree)).unwrap_or(u16::MAX);
         let list = rows::list_area(body);
         self.tree_area = Rect { height: list.height.min(tree_rows), ..list };
