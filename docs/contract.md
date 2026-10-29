@@ -354,7 +354,7 @@ An item is one open thing a person said on a pull request that a Plan owns. **Th
 
 **The marker** is the line `<!-- cpd:reply -->`, the last line of every reply `pr reply` posts. A reviewer who replies after it opens the thread again.
 
-**A bot** is a login ending `[bot]` or listed in `inbox.bot_reviewers` (§8.2; no key is added). **The User** is GitHub's `viewer.login`.
+**A bot** is an author whose GraphQL `__typename` is `Bot`, or whose `login` ends `[bot]`, or whose `login` is listed in `inbox.bot_reviewers` (§8.2; no key is added). The `__typename` is read because GitHub strips `[bot]` from the `login` of a GitHub App or Bot; a missing `__typename` (empty text) is not `Bot`, so only the login rules then apply. The rule applies to a thread's root author (the item's `bot`), to an issue comment's author and to a review's author: a bot's issue comment or review body is never an item, and a bot's thread always is. **The User** is GitHub's `viewer.login`.
 
 | Kind | What it is | An item only when | Open iff |
 |---|---|---|---|
