@@ -38,6 +38,13 @@ impl Pr {
         name.push(".removing");
         PathBuf::from(name)
     }
+
+    /// The aside directory of a failed removal of the Attempt worktree (contract §7.2).
+    pub(crate) fn attempt_aside(&self) -> PathBuf {
+        let mut name = self.attempt.clone().into_os_string();
+        name.push(".removing");
+        PathBuf::from(name)
+    }
 }
 
 /// Plan `pay` in one repo `pay` whose `origin/main` is its only commit, with the PRs added by [`Rig::pr`].
@@ -313,6 +320,21 @@ fn janitor_pass_finishes_what_a_killed_pass_left() {
     let outcomes = outcomes(rig.pass());
     let pr = &rig.prs[0];
     assert_eq!((pr.lead.exists(), pr.aside().exists(), rig.registered(&pr.lead), rig.branch_exists(&pr.lead_branch)), (false, false, false, false));
+    assert!(outcomes.iter().all(|(_, outcome)| outcome == "removed") && !outcomes.is_empty(), "{outcomes:?}");
+    assert_eq!(rig.errors(), Vec::new(), "no Event");
+}
+
+#[test]
+fn janitor_pass_finishes_an_attempt_worktree_left_as_removing() {
+    let mut rig = Rig::new();
+    rig.pr("api", "merged");
+    let pr = &rig.prs[0];
+    // A pass or A9 killed after the rename: the path is gone, the aside is the marker, the registration and branch remain.
+    std::fs::rename(&pr.attempt, pr.attempt_aside()).unwrap();
+    let outcomes = outcomes(rig.pass());
+    let pr = &rig.prs[0];
+    assert_eq!(rig.left(pr), [false; 6]);
+    assert!(!pr.attempt_aside().exists());
     assert!(outcomes.iter().all(|(_, outcome)| outcome == "removed") && !outcomes.is_empty(), "{outcomes:?}");
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
