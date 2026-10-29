@@ -3,7 +3,8 @@
 //! `file`, never from the cwd.
 //!
 //! - `turns` = the assistant messages; `tokens_in`, `tokens_out`, `cache_read`,
-//!   `cache_write`, `cost_usd` = the sums of their `usage`;
+//!   `cache_write`, `cost_usd` = the sums of the usage of assistant messages, standalone
+//!   `usage`, `compaction` and `branch_summary` entries;
 //! - `duration_s` = the last entry's timestamp minus the header's;
 //! - `model`, `thinking_level` = the last change; `stop_reason` = the last assistant message's.
 //!
@@ -119,6 +120,14 @@ pub fn last_error_message(path: &Path) -> Option<String> {
     last
 }
 
+fn add_usage(m: &mut Metrics, u: &Usage) {
+    m.tokens_in += u.input;
+    m.tokens_out += u.output;
+    m.cache_read += u.cache_read;
+    m.cache_write += u.cache_write;
+    m.cost_usd += u.cost.total;
+}
+
 /// Parses the session file at `path`. `file_unreadable` when it cannot be read as
 /// UTF-8 text, `session_malformed` (with `path` and `line`) when a line is not a
 /// session entry.
@@ -189,12 +198,13 @@ pub fn parse(text: &str, path: &Path) -> Result<Metrics, CpdError> {
             "message" if !inherited && value.pointer("/message/role").and_then(Value::as_str) == Some("assistant") => {
                 let u = Assistant::deserialize(&value).map_err(bad)?.message;
                 m.turns += 1;
-                m.tokens_in += u.usage.input;
-                m.tokens_out += u.usage.output;
-                m.cache_read += u.usage.cache_read;
-                m.cache_write += u.usage.cache_write;
-                m.cost_usd += u.usage.cost.total;
+                add_usage(&mut m, &u.usage);
                 m.stop_reason = Some(u.stop_reason);
+            }
+            "usage" | "compaction" | "branch_summary" if !inherited => {
+                if let Some(u) = value.get("usage") {
+                    add_usage(&mut m, &Usage::deserialize(u).map_err(bad)?);
+                }
             }
             _ => {}
         }
@@ -206,8 +216,15 @@ pub fn parse(text: &str, path: &Path) -> Result<Metrics, CpdError> {
 
 /// The one formatter of a dollar cost on every surface (`$0.45`, `<1¢`, `$1.2k`).
 pub fn format_cost(usd: f64) -> String {
-    let _ = usd;
-    todo!()
+    if usd <= 0.0 {
+        "$0.00".to_owned()
+    } else if usd < 0.01 {
+        "<1¢".to_owned()
+    } else if (usd * 100.0).round() >= 100_000.0 {
+        format!("${:.1}k", usd / 1000.0)
+    } else {
+        format!("${usd:.2}")
+    }
 }
 
 #[cfg(test)]
