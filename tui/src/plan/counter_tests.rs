@@ -127,10 +127,19 @@ fn a_need_line_leaves_a_box_past_its_counter() {
     let (buf, y, width, tees) = exit(Some(u64::MAX));
     assert_eq!(tees, [2 + 26], "the first `─` after the counter\n{}", rows(&buf).join("\n"));
     let r = rows(&buf);
+    let bottom_row = chars(&r[y]);
+    assert_eq!(bottom_row[..29].concat(), "╰─ 5124095576030431h·0m·15s ┬", "{}", r.join("\n"));
     let below = chars(&r[y + 1]);
-    assert_eq!(below[28], "│", "{}", r.join("\n"));
-    assert!(r.iter().any(|l| chars(l)[28] == "┴"), "{}", r.join("\n"));
-    let boxes_: Vec<Rect> = vec![Rect::new(0, 0, width as u16, y as u16 + 1)];
+    assert_eq!(below[28], "╰", "the line turns right\n{}", r.join("\n"));
+    let web_top = y + 1 + r[y + 1..].iter().position(|l| l.starts_with('╭')).expect("web's top border");
+    let landed: Vec<usize> = chars(&r[web_top]).iter().enumerate().filter(|(_, c)| *c == "┴").map(|(x, _)| x).collect();
+    assert_eq!(landed.len(), 1, "{}", r.join("\n"));
+    assert!(landed[0] > 28, "{}", r.join("\n"));
+    let web_bottom = web_top + r[web_top..].iter().position(|l| l.starts_with('╰')).expect("web's bottom border");
+    let boxes_: Vec<Rect> = vec![
+        Rect::new(0, 0, width as u16, y as u16 + 1),
+        Rect::new(0, web_top as u16, buf.area.width, (web_bottom - web_top) as u16 + 1),
+    ];
     let none: Vec<Pill> = Vec::new();
     assert!(violations(&buf, &[], &boxes_, buf.area).is_empty());
     let _ = (reaches, none);

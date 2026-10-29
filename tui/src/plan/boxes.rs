@@ -126,8 +126,20 @@ fn word(pull: &Pull, asked: bool) -> (&'static str, Meaning) {
 }
 
 /// The duration text of the counter on a box's bottom border (Context record pro-d175).
-pub(crate) fn format_elapsed(_seconds: u64) -> String {
-    String::new()
+pub(crate) fn format_elapsed(seconds: u64) -> String {
+    let (h, m, s) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+    if seconds < 60 {
+        format!("{s}s")
+    } else if seconds < 3600 {
+        format!("{m}m·{s}s")
+    } else {
+        format!("{h}h·{m}m·{s}s")
+    }
+}
+
+/// The text on a box's bottom border, the only place it is built: the counter, once the Workflow has an Attempt.
+fn footer_text(pr: &PrNode) -> Option<String> {
+    pr.elapsed_seconds.map(|secs| format!(" {} ", format_elapsed(secs)))
 }
 
 /// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󱆭` once the PR has
@@ -206,16 +218,19 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
     // the tree's rule: the Plan has a failed Job
     let plan_failed = jobs.iter().any(|j| j.status == JobStatus::Failed);
     let titles: Vec<Line> = prs.iter().map(|p| title_of(p, needs_user.lead_dialog, plan_failed, needs_user.lead_phase, frame)).collect();
+    let footers: Vec<Option<String>> = prs.iter().map(footer_text).collect();
+    let footer_w: Vec<u16> = footers.iter().map(|f| f.as_ref().map_or(0, |t| Line::from(t.as_str()).width() as u16)).collect();
     // each box: its walls and padding around the chart, or around `no Jobs`, and at least as wide as its title plus 4 (the
     // corner, a dash, the title, at least one dash, the corner)
     let size: Vec<(u16, u16)> = charts
         .iter()
         .zip(&titles)
-        .map(|(c, t)| {
+        .zip(&footer_w)
+        .map(|((c, t), &fw)| {
             let empty = c.pills.is_empty();
             let body_w = c.buf.area.width.max(if empty { NO_JOBS.chars().count() as u16 } else { 0 });
             let inner_h = if empty { 1 } else { c.buf.area.height };
-            ((body_w + 2 + 2 * spacing::PAD_X).max(t.width() as u16 + 4), inner_h + 2)
+            ((body_w + 2 + 2 * spacing::PAD_X).max(t.width() as u16 + 4).max(if fw > 0 { fw + 4 } else { 0 }), inner_h + 2)
         })
         .collect();
 
@@ -243,6 +258,8 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
     let mid = |i: usize| at[i].0 + (size[i].0 - 1) / 2;
     // a need line lands on the top border: the middle column, or the first dash after the title when the title covers it
     let land = |i: usize| mid(i).max(at[i].0 + 2 + titles[i].width() as u16);
+    // a need line leaves the bottom border: the middle column, or the first dash after the counter when it covers it
+    let exit = |i: usize| mid(i).max(at[i].0 + 2 + footer_w[i]);
     let bottom = |i: usize| at[i].1 + size[i].1 - 1; // its bottom border's row
     let run = |l: usize| ys[l] + row_h[l]; // the row of the run below row of boxes `l`
 
@@ -258,10 +275,10 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
     let mut vs: Vec<(u16, u16, u16)> = Vec::new(); // (x, y1, y2)
     for &(p, c) in &edges {
         let (lp, lc) = (level[p], level[c]);
-        vs.push((mid(p), bottom(p), run(lp)));
-        let mut x = mid(p);
+        vs.push((exit(p), bottom(p), run(lp)));
+        let mut x = exit(p);
         if lc > lp + 1 {
-            let free = free_row(mid(p), lp + 1..lc, &busy);
+            let free = free_row(exit(p), lp + 1..lc, &busy);
             hs.push((run(lp), x, free));
             vs.push((free, run(lp), run(lc - 1)));
             x = free;
@@ -286,6 +303,9 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
     for (i, chart) in charts.iter().enumerate() {
         let rect = Rect::new(at[i].0, at[i].1, size[i].0, size[i].1);
         BoxWidget::new(Walls::Full, lines, ChartBody { chart }).title(titles[i].clone()).render(rect, &mut buf);
+        if let Some(text) = &footers[i] {
+            buf.set_string(at[i].0 + 2, at[i].1 + size[i].1 - 1, text, lines);
+        }
         if let Some(pull) = &prs[i].pull {
             // the title starts after the corner and the dash and ends with one space; the link is the title's tail before its last space:
             // `#<number> <state>`, the Lead's dot when it works (the title's spans after the repo), then the cue
@@ -304,7 +324,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         }
     }
     for &(p, _) in &edges {
-        buf[(mid(p), bottom(p))].set_symbol(EXIT).set_style(lines);
+        buf[(exit(p), bottom(p))].set_symbol(EXIT).set_style(lines);
     }
     for &(_, c) in &edges {
         buf[(land(c), at[c].1)].set_symbol(LAND).set_style(lines);
