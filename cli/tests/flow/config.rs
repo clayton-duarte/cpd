@@ -227,6 +227,7 @@ context_engine_dir = "/b/engine"
 context_engine_timeout_ms = 4294967295
 context_engine_reindex_timeout_ms = 1
 plannotator_ports = "1-65535"
+worker_runner = "durable"
 [timeouts]
 attempt_minutes = 1
 ask_minutes = 1
