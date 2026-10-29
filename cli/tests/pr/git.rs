@@ -258,7 +258,7 @@ fn a_failed_lead_branch_push_names_the_first_stderr_line_in_its_message() {
     let e = made.push_failed.expect("the push failed");
     assert_eq!(e.code(), ErrorCode::PushFailed);
     assert!(e.message().contains("Connection closed by 140.82.112.4 port 22"), "{}", e.message());
-    assert_eq!(e.details()["stderr"].as_str().unwrap(), stderr);
+    assert_eq!(e.details()["stderr"].as_str().unwrap(), stderr.trim_end());
 }
 
 /// The `branch.*` entries of `repo`'s `.git/config`, one per line (exit 1 and no output when there is none).
