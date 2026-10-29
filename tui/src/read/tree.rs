@@ -271,15 +271,7 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
             Ok((r.get::<_, String>(0)?, r.get::<_, Option<rusqlite::types::Value>>(1)?, r.get::<_, bool>(2)?, r.get::<_, Option<String>>(3)?))
         })? {
             let (plan, stored, no_metrics, file) = row?;
-            let cost = if no_metrics {
-                file.as_deref().and_then(|f| cost::own_cost(Path::new(f)))
-            } else {
-                match stored {
-                    Some(rusqlite::types::Value::Real(c)) => Some(c),
-                    Some(rusqlite::types::Value::Integer(c)) => Some(c as f64),
-                    _ => None,
-                }
-            };
+            let cost = cost::attempt_cost(stored, no_metrics, file.as_deref());
             attempt_costs.entry(plan).or_default().push(cost);
         }
         // Every Manager Session, live or archived (`core/src/context/manager.rs`). The live one fills the Context

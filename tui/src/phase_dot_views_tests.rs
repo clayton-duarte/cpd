@@ -59,6 +59,7 @@ fn pr_node(lead_working: bool) -> PrNode {
         waiting_on: Vec::new(),
         superseded_by: None,
         elapsed_seconds: None,
+        cost_usd: None,
     }
 }
 
