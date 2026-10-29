@@ -163,7 +163,7 @@ fn snapshot_timed(ports: &Ports, store: &mut Store, width: u16, now_ms: i64, tim
         return Ok(Snapshot { cursor, centre: None, pulse: Some(pulse), layout: Duration::ZERO });
     }
     let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None, pulse: None, layout: Duration::ZERO }) };
-    let plan = read::plan_boxes(store, &slot.plan)?;
+    let plan = read::plan_boxes_at(store, &slot.plan, now_ms)?;
     let frame = frame_now(ports);
     let began = timed.then(|| ports.clock.now());
     let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame).with_margin(CHART_MARGIN);

@@ -21,6 +21,7 @@ use cpd_core::plan::{jobs, plan_fingerprint, Phase};
 use cpd_core::session::State;
 use cpd_core::store::Store;
 
+use super::active;
 use super::tree::visible_items;
 use super::shared::{
     AttemptStatus, JobStatus, Origin, Outcome, PlanHead, PrState, ReviewStatus, SHOWN_STATUS, bad_row, id, stored_cause, plan_heads, tier,
@@ -277,8 +278,8 @@ pub fn flow(store: &mut Store, plan: &PlanId) -> Result<Flow, CpdError> {
 }
 
 /// [`plan_boxes`] with the Workflows' active time read at `now_ms` (Unix milliseconds).
-pub fn plan_boxes_at(store: &mut Store, plan: &PlanId, _now_ms: i64) -> Result<PlanBoxes, CpdError> {
-    plan_boxes(store, plan)
+pub fn plan_boxes_at(store: &mut Store, plan: &PlanId, now_ms: i64) -> Result<PlanBoxes, CpdError> {
+    store.read(|conn| boxes(conn, plan, None, now_ms))
 }
 
 /// The plan view's snapshot of `plan`: `plan_not_found` when it does not exist. Unlike [`flow`], a Plan with no PR yet
@@ -286,6 +287,15 @@ pub fn plan_boxes_at(store: &mut Store, plan: &PlanId, _now_ms: i64) -> Result<P
 /// The Workflows' active time is read at the store's clock.
 pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdError> {
     store.read(|conn| {
+        let now: String = conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?;
+        let now_ms = active::parse_ms("The database clock", &now)?;
+        boxes(conn, plan, Some(now), now_ms)
+    })
+}
+
+/// The body of both reads: `now` is the database clock text (read here when `None`), `now_ms` the elapsed time's clock.
+fn boxes(conn: &Connection, plan: &PlanId, now: Option<String>, now_ms: i64) -> Result<PlanBoxes, CpdError> {
+    {
         let (context, lead, lead_working, phase): (String, String, bool, String) = conn
             .query_row(
                 "SELECT p.context, p.lead_session, s.state = 'working', p.phase FROM plans p JOIN sessions s ON s.id = p.lead_session WHERE p.id = ?1",
@@ -295,7 +305,10 @@ pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdErro
             .optional()?
             .ok_or_else(|| plan_not_found(plan))?;
         let phase = Phase::parse(&phase).ok_or_else(|| bad_row(format!("Plan {plan} has phase {phase:?}")))?;
-        let now: String = conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?;
+        let now: String = match now {
+            Some(now) => now,
+            None => conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?,
+        };
         let worked_on = failed_worked_on(conn, Some(plan))?.into_iter().map(|(_, job)| job).collect(); // a BTreeSet: sorted
         let needs_user = NeedsUser::of(
             &visible_items(conn, &now)?,
@@ -305,19 +318,39 @@ pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdErro
             Some(phase),
             worked_on,
         );
+        let jobs = job_nodes(conn, plan)?;
         Ok(PlanBoxes {
             needs_user,
             context: id("Context id", &context, ContextId::parse)?,
-            prs: pr_nodes(conn, plan, lead_working)?,
-            jobs: job_nodes(conn, plan)?,
+            prs: pr_nodes(conn, plan, lead_working, &lead, &jobs, now_ms)?,
+            jobs,
             events_cursor: highest_id(conn)?,
             plan: plan.clone(),
         })
-    })
+    }
 }
 
 /// The PRs of `plan` that are not `cancelled`, in key order, with their needs; `lead_working`: the Plan's Lead is working.
-fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<PrNode>, CpdError> {
+fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool, lead: &str, jobs: &[JobNode], now_ms: i64) -> Result<Vec<PrNode>, CpdError> {
+    let mut events = Vec::new();
+    let mut stmt = conn.prepare("SELECT at, json_extract(data, '$.to') FROM events WHERE session = ?1 AND kind = 'session-state' ORDER BY id")?;
+    for row in stmt.query_map([lead], |r| Ok((r.get::<_, String>(0)?, r.get::<_, rusqlite::types::Value>(1)?)))? {
+        let (at, to) = row?;
+        let rusqlite::types::Value::Text(to) = to else {
+            return Err(bad_row(format!("A session-state Event of {lead} has no string `to`")));
+        };
+        events.push((active::parse_ms(&format!("A session-state Event of {lead}"), &at)?, to));
+    }
+    let blocked = active::blocked_spans(&events, now_ms);
+    let mut spans: BTreeMap<&str, Vec<(i64, i64)>> = BTreeMap::new();
+    for job in jobs {
+        for a in &job.attempts {
+            let what = format!("Attempt {}", a.id);
+            let start = active::parse_ms(&what, &a.started_at)?;
+            let end = a.ended_at.as_deref().map(|e| active::parse_ms(&what, e)).transpose()?.unwrap_or(now_ms);
+            spans.entry(job.pr.as_str()).or_default().push((start, end.max(start)));
+        }
+    }
     let display = Display::load(conn, plan)?;
     let pr_rows = load_prs(conn, plan)?;
     let mut needs: BTreeMap<String, Vec<PrKey>> = BTreeMap::new();
@@ -392,7 +425,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
             base,
             status,
             pull,
-            elapsed_seconds: None,
+            elapsed_seconds: active::elapsed_seconds(spans.get(key.as_str()).map(Vec::as_slice).unwrap_or(&[]), &blocked),
         });
     }
     Ok(out)

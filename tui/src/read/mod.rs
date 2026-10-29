@@ -24,6 +24,7 @@
 //! [`Store`]: cpd_core::store::Store
 //! [`Store::read`]: cpd_core::store::Store::read
 
+mod active;
 mod age;
 #[cfg(test)]
 mod age_tests;
