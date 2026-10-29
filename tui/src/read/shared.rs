@@ -209,7 +209,7 @@ pub struct Pr {
 }
 
 /// A Session as the views show it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SessionNode {
     pub id: SessionId,
     pub role: Role,
@@ -235,6 +235,8 @@ pub struct SessionNode {
     pub archived_at: Option<String>,
     /// When engine E13 put it to sleep (contract §2.2 "Asleep"): it keeps its place among the live rows, drawn muted.
     pub asleep_at: Option<String>,
+    /// Its own cost in USD (`tree_at` fills it); `None`: no data.
+    pub cost_usd: Option<f64>,
 }
 
 impl SessionNode {
@@ -300,6 +302,7 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
             plan_lead,
             archived_at: r.get(16)?,
             asleep_at: r.get(17)?,
+            cost_usd: None,
             id: session,
         });
     }

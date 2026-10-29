@@ -18,7 +18,7 @@ use super::dot::{self, Dot};
 use super::shared::{Place, PlanHead, SessionNode, bad_row, id, plan_heads, sessions};
 
 /// Every Context of the machine, by id.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Tree {
     pub contexts: Vec<ContextNode>,
     /// The highest Event id in this snapshot's read transaction (§17).
@@ -31,7 +31,7 @@ pub struct Tree {
     pub engine_running: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ContextNode {
     pub id: ContextId,
     pub title: String,
@@ -55,11 +55,15 @@ pub struct ContextNode {
     pub manager_asleep: bool,
     /// When it was created (`contexts.created_at`): the tree orders by tier, then creation, newest first (hs-d686, pro-d48).
     pub created_at: String,
+    /// Total cost in USD (`tree_at` fills it); `None`: no data.
+    pub cost_usd: Option<f64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PlanNode {
     pub head: PlanHead,
+    /// Total cost in USD (`tree_at` fills it); `None`: no data.
+    pub cost_usd: Option<f64>,
     /// The Plan's Lead first, then its side forks, oldest first.
     pub sessions: Vec<SessionNode>,
 }
@@ -284,7 +288,7 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
                 .map(|head| {
                     let mut own: Vec<SessionNode> = leads.iter().filter(|s| s.plan.as_ref() == Some(&head.id)).cloned().collect();
                     own.sort_by_key(|s| !s.plan_lead); // stable: the Lead first, the rest oldest first
-                    PlanNode { head, sessions: own }
+                    PlanNode { head, sessions: own, cost_usd: None }
                 })
                 .collect::<Vec<PlanNode>>();
             let archived_at: Option<String> = r.get(3)?;
@@ -300,6 +304,7 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
                 archived_at,
                 plans,
                 archived_managers: archived_managers.remove(&context).unwrap_or_default(),
+                cost_usd: None,
                 id: context,
             });
         }
