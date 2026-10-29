@@ -177,6 +177,15 @@ fn declined_push() -> Reply {
     Reply::exit(1, "To origin\n!\trefs/heads/x:refs/heads/cpd/pay\t[remote rejected] (pre-receive hook declined)\nDone\n", "remote: nope\n")
 }
 
+/// What GitHub's ref-lock race prints (contract §7.4 rule P): a `!` line with no `(non-fast-forward)` reason.
+fn lock_race_push() -> Reply {
+    Reply::exit(
+        1,
+        "To origin\n!\trefs/heads/x:refs/heads/cpd/pay\t[remote rejected] (cannot lock ref 'refs/heads/cpd/pay': is at 1111111111111111111111111111111111111111 but expected 2222222222222222222222222222222222222222)\nDone\n",
+        "error: failed to push some refs to 'origin'\n",
+    )
+}
+
 impl Fx {
     fn store(&self) -> Store {
         Store::open(&self.home, 5000).unwrap()
@@ -1054,6 +1063,38 @@ fn a_push_that_origin_already_contains_is_no_push_failed() {
     assert_eq!(fx.lead_sha(), new);
     assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), later);
     assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+}
+
+#[test]
+fn a_remote_rejected_lock_race_the_origin_already_contains_is_no_push_failed() {
+    let (fx, origin) = fx_origin();
+    let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
+    let new = fx.git(&worktree, &["rev-parse", "HEAD"]);
+    let later = fx.commit(&worktree, "later.txt", "later\n");
+    fx.git(&worktree, &["push", "-q", "origin", &format!("{later}:refs/heads/cpd/pay")]);
+    fx.git(&worktree, &["reset", "-q", "--hard", &new]);
+    fx.script(|call| is(call, "push") && is(call, "--porcelain"), lock_race_push());
+
+    let result = fx.merge(&attempt);
+
+    assert_eq!(result.end, End::Merged { sha: new.clone() });
+    assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), later);
+    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+}
+
+#[test]
+fn a_remote_rejected_push_the_origin_does_not_contain_puts_git_s_reason_in_the_push_failed_message() {
+    let (fx, _origin) = fx_origin();
+    fx.script(|call| is(call, "push") && is(call, "--porcelain"), lock_race_push());
+    let (attempt, _) = fx.submitted("api", "api.txt", "api\n");
+
+    fx.merge(&attempt);
+
+    let events = fx.events(&attempt);
+    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged", "error"]);
+    assert_eq!(events[1].1["code"], "push_failed");
+    assert!(events[1].1["message"].as_str().unwrap().contains("cannot lock ref"), "{:?}", events[1].1);
+    assert!(events[1].1["details"]["stderr"].as_str().unwrap().contains("failed to push some refs"), "{:?}", events[1].1);
 }
 
 // ------------------------------------------------- an `open` or `update` Job's merge (contract §7.4; hs-d340)

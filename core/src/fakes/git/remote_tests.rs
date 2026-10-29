@@ -28,7 +28,7 @@ use crate::clock::ManualClock;
 use crate::error::ErrorCode;
 use crate::git::{Push, push_commit_with};
 use crate::host::deadline::Failed;
-use crate::host::runner::{FakeRunner, Runner};
+use crate::host::runner::{Call, FakeRunner, Reply, Runner};
 use crate::pr::remote_contains_with;
 
 struct Out {
@@ -967,6 +967,82 @@ fn push_commit_of_an_older_commit_the_remote_contains_is_contained_and_pushes_no
     let two = w.rev(repo.dir(), "main");
     assert_eq!(pushed(&w, &repo, &one), Push::Contained { remote: two.to_string() });
     assert_eq!(w.tip(&origin, "refs/heads/main"), Some(two));
+}
+
+/// What GitHub's ref-lock race between two concurrent pushes prints (contract §7.4 rule P): a `!` line with no `(non-fast-forward)` reason.
+fn lock_race() -> Reply {
+    let line = porcelain(
+        "!",
+        &"3".repeat(40),
+        "refs/heads/main",
+        "[remote rejected] (cannot lock ref 'refs/heads/main': is at 1111111111111111111111111111111111111111 but expected 2222222222222222222222222222222222222222)",
+    );
+    Reply::exit(1, &format!("To origin\n{line}Done\n"), "error: failed to push some refs to 'origin'\n")
+}
+
+fn is_push(call: &Call) -> bool {
+    call.args.iter().any(|a| a == "push")
+}
+
+fn is_ls_remote(call: &Call) -> bool {
+    call.args.iter().any(|a| a == "ls-remote")
+}
+
+#[test]
+fn push_commit_after_a_remote_rejected_lock_race_the_remote_already_contains_is_contained() {
+    let mut w = world();
+    let (repo, origin, _url) = w.linked();
+    let one = w.rev(repo.dir(), "main");
+    w.next(&repo, "two\n");
+    repo.push();
+    let two = w.rev(repo.dir(), "main");
+    let _ = w.runner.clone().once("git", is_push, lock_race());
+    assert_eq!(pushed(&w, &repo, &one), Push::Contained { remote: two.to_string() });
+    assert_eq!(w.tip(&origin, "refs/heads/main"), Some(two));
+}
+
+#[test]
+fn push_commit_after_a_remote_rejected_lock_race_the_remote_does_not_contain_is_git_failed_naming_the_reason() {
+    let mut w = world();
+    let d = w.diverged();
+    w.learn(&d.origin, &d.a, &d.b2);
+    let _ = w.runner.clone().once("git", is_push, lock_race());
+    let err = push_commit_with(&w.runner, d.a.dir(), "main", d.a2.as_str()).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::GitFailed);
+    assert!(err.message().contains("cannot lock ref"), "{}", err.message());
+    assert!(err.message().starts_with("git push exited 1: "), "{}", err.message());
+    assert!(!err.details()["stderr"].as_str().unwrap_or("").is_empty(), "{:?}", err.details());
+}
+
+#[test]
+fn push_commit_whose_lock_race_check_cannot_reach_the_remote_reports_the_push_error() {
+    let mut w = world();
+    let d = w.diverged();
+    w.learn(&d.origin, &d.a, &d.b2);
+    let _ = w.runner.clone().once("git", is_push, lock_race());
+    let _ = w.runner.clone().once("git", is_ls_remote, Reply::exit(128, "", "fatal: unable to access 'origin': Connection closed\n"));
+    let err = push_commit_with(&w.runner, d.a.dir(), "main", d.a2.as_str()).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::GitFailed);
+    assert!(err.message().contains("cannot lock ref"), "{}", err.message());
+}
+
+#[test]
+fn push_commit_failing_without_a_rejection_line_names_the_first_stderr_line() {
+    let mut w = world();
+    let (repo, _origin, _url) = w.linked();
+    let one = w.rev(repo.dir(), "main");
+    let _ = w.runner.clone().once(
+        "git",
+        is_push,
+        Reply::exit(
+            128,
+            "",
+            "Connection closed by 140.82.112.4 port 22\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n",
+        ),
+    );
+    let err = push_commit_with(&w.runner, repo.dir(), "main", one.as_str()).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::GitFailed);
+    assert_eq!(err.message(), "git push exited 128: Connection closed by 140.82.112.4 port 22.");
 }
 
 #[test]

@@ -245,6 +245,22 @@ fn with_origin(fx: &Fx, repo: &Path) -> PathBuf {
     origin
 }
 
+#[test]
+fn a_failed_lead_branch_push_names_the_first_stderr_line_in_its_message() {
+    let fx = Fx::with_ports();
+    let repo = fx.git_repo("pay");
+    with_origin(&fx, &repo);
+    let stderr = "Connection closed by 140.82.112.4 port 22\nfatal: Could not read from remote repository.\n";
+    let _ = (*fx.fakes.runner).clone().once("git", |c| c.args.iter().any(|a| a == "push"), Reply::exit(128, "", stderr));
+
+    let made = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log"))).unwrap();
+
+    let e = made.push_failed.expect("the push failed");
+    assert_eq!(e.code(), ErrorCode::PushFailed);
+    assert!(e.message().contains("Connection closed by 140.82.112.4 port 22"), "{}", e.message());
+    assert_eq!(e.details()["stderr"].as_str().unwrap(), stderr);
+}
+
 /// The `branch.*` entries of `repo`'s `.git/config`, one per line (exit 1 and no output when there is none).
 fn branch_config(fx: &Fx, repo: &Path) -> String {
     String::from_utf8(fx.git_output(repo, &["config", "--get-regexp", r"^branch\."]).stdout).unwrap()
