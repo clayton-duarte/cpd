@@ -74,6 +74,8 @@ mod archive_tests;
 #[cfg(test)]
 mod open_description_tests;
 #[cfg(test)]
+mod report_restart_tests;
+#[cfg(test)]
 mod open_jira_tests;
 #[cfg(test)]
 mod schedule_tests;
