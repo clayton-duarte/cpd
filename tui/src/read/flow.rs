@@ -353,6 +353,18 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool, lead: &str, jo
             spans.entry(job.pr.as_str()).or_default().push((start, end.max(start)));
         }
     }
+    let mut costs: BTreeMap<String, Vec<Option<f64>>> = BTreeMap::new();
+    let mut stmt = conn.prepare(
+        "SELECT j.pr, json_extract(a.metrics, '$.cost_usd'), a.metrics IS NULL, s.file
+           FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job LEFT JOIN sessions s ON s.id = a.worker_session
+          WHERE a.plan = ?1",
+    )?;
+    for row in stmt.query_map([plan.as_str()], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, Option<rusqlite::types::Value>>(1)?, r.get::<_, bool>(2)?, r.get::<_, Option<String>>(3)?))
+    })? {
+        let (pr, stored, no_metrics, file) = row?;
+        costs.entry(pr).or_default().push(super::cost::attempt_cost(stored, no_metrics, file.as_deref()));
+    }
     let display = Display::load(conn, plan)?;
     let pr_rows = load_prs(conn, plan)?;
     let mut needs: BTreeMap<String, Vec<PrKey>> = BTreeMap::new();
@@ -428,7 +440,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool, lead: &str, jo
             status,
             pull,
             elapsed_seconds: active::elapsed_seconds(spans.get(key.as_str()).map(Vec::as_slice).unwrap_or(&[]), &blocked),
-            cost_usd: None,
+            cost_usd: super::cost::total(costs.remove(key.as_str()).unwrap_or_default()),
         });
     }
     Ok(out)

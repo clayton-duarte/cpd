@@ -137,9 +137,11 @@ pub(crate) fn format_elapsed(seconds: u64) -> String {
     }
 }
 
-/// The text on a box's bottom border, the only place it is built: the counter, once the Workflow has an Attempt.
+/// The text on a box's bottom border, the only place it is built: the counter and the cost, the segments that exist,
+/// joined by ` · ` inside one pair of outer spaces; `None` when neither exists.
 fn footer_text(pr: &PrNode) -> Option<String> {
-    pr.elapsed_seconds.map(|secs| format!(" {} ", format_elapsed(secs)))
+    let parts: Vec<String> = pr.elapsed_seconds.map(format_elapsed).into_iter().chain(pr.cost_usd.map(cpd_core::metrics::format_cost)).collect();
+    (!parts.is_empty()).then(|| format!(" {} ", parts.join(" · ")))
 }
 
 /// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󱆭` once the PR has
