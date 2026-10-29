@@ -87,7 +87,8 @@ fn the_dollar_key_shows_the_costs_and_a_second_press_hides_them() {
 #[test]
 fn the_dollar_key_needs_no_cursor_and_does_not_show_it() {
     let mut view = View::new(priced(), false); // not focused, no cursor
-    let reversed = |buf: &Buffer| buf.content().iter().any(|c| c.modifier.contains(Modifier::REVERSED));
+    let block = crate::palette::selected().add_modifier;
+    let reversed = |buf: &Buffer| buf.content().iter().any(|c| c.modifier.intersects(block));
     let before = draw(&mut view);
     assert!(!reversed(&before) && !has_cost(&before), "no cursor and no cost before the key: {:?}", rows(&before));
     assert_eq!(press(&mut view, '$'), Effect::None);
