@@ -4,6 +4,7 @@
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::fixture::{context, plan, session, tree};
 use super::view::View;
@@ -24,6 +25,8 @@ fn last_column(buf: &Buffer, y: u16) -> usize {
 
 fn draw(t: crate::read::Tree) -> Buffer {
     let mut view = View::new(t, true);
+    // the costs are off until the `$` key (pro-d189, pro-d196)
+    view.key(KeyEvent::new(KeyCode::Char('$'), KeyModifiers::NONE));
     let mut terminal = Terminal::new(TestBackend::new(W, 12)).unwrap();
     terminal.draw(|f| view.draw(f, 0)).unwrap();
     terminal.backend().buffer().clone()
