@@ -314,6 +314,40 @@ fn counter_style(counts: &JobCounts, index: usize, n: usize) -> Style {
 // keeps this module's callers (`tree/view.rs`) and tests reading `rows::width` / `truncate`.
 pub(crate) use crate::cells::{truncate, width};
 
+/// A cost drawn at the right of a row: `format_cost`, colour 8.
+fn cost_span(usd: f64) -> Span<'static> {
+    Span::styled(cpd_core::metrics::format_cost(usd), palette::muted_text())
+}
+
+/// What a Plan row draws at the right in a row `width` wide (RIGHT_PAD apart): its counters, one space and its cost
+/// when they leave `MIN_LEFT`; else the counters alone when those do; else nothing. A Plan with no counter draws the
+/// cost alone, under the same rule. Empty when nothing is drawn. Both the name's cut and `draw` read it.
+fn plan_right(p: &PlanNode, width: usize) -> Line<'static> {
+    let counters = counters(p);
+    let mut full = counters.clone();
+    if let Some(usd) = p.cost_usd {
+        if !full.spans.is_empty() {
+            full.spans.push(Span::raw(" "));
+        }
+        full.spans.push(cost_span(usd));
+    }
+    if !full.spans.is_empty() && full.width() + MIN_LEFT <= width {
+        full
+    } else if !counters.spans.is_empty() && counters.width() + MIN_LEFT <= width {
+        counters
+    } else {
+        Line::default()
+    }
+}
+
+/// What a Context row draws at the right: its cost when it leaves `MIN_LEFT`, else nothing.
+fn context_right(c: &ContextNode, width: usize) -> Line<'static> {
+    match c.cost_usd.map(cost_span) {
+        Some(cost) if cost.width() + MIN_LEFT <= width => Line::from(cost),
+        _ => Line::default(),
+    }
+}
+
 /// What a Plan's or fork's row says (both are one level under their Context).
 struct RowText<'a> {
     /// The Session of the row: its name is blue when it is in the chat slot (selected).
@@ -347,18 +381,26 @@ fn selectable_name(name: String, selected: bool) -> Span<'static> {
 
 /// A Context's title (after the `╭`): its dot (the most urgent of its live Sessions, grey when the Context is
 /// archived) and id, blue when its Manager is in the chat slot. The fold makes it bold.
-fn context_text(c: &ContextNode, frame: usize) -> Line<'static> {
+fn context_text(c: &ContextNode, width: u16, frame: usize) -> Line<'static> {
     let selected = c.manager_place == Some(Place::Chat);
-    Line::from(vec![palette::dot_span(c.dot, frame, c.is_archived() || c.manager_asleep), " ".into(), selectable_name(c.id.to_string(), selected)])
+    let dot = palette::dot_span(c.dot, frame, c.is_archived() || c.manager_asleep);
+    let right = context_right(c, usize::from(width)).width();
+    let id = if right == 0 {
+        c.id.to_string()
+    } else {
+        // the `╭`, the dot and its space come first; a cell stays blank before the cost
+        truncate(c.id.as_str(), usize::from(width).saturating_sub(1 + dot.width() + 1 + right + 1))
+    };
+    Line::from(vec![dot, " ".into(), selectable_name(id, selected)])
 }
 
 /// A Plan's row text, one level under its Context.
 fn plan_row(c: &ContextNode, p: &PlanNode, width: u16, frame: usize) -> (Id, Line<'static>) {
     let muted = c.is_archived() || p.head.is_archived() || p.lead().is_some_and(SessionNode::is_asleep);
-    let text = row_text(
-        RowText { session: p.lead(), name: p.head.id.to_string(), depth: 1, frame, counters_width: counters(p).width() /* the width is the same in any colour */, muted },
-        width,
-    );
+    // what is reserved is what `draw` draws; counters too narrow to be drawn keep today's reserve
+    let right = plan_right(p, usize::from(width)).width();
+    let counters_width = if right > 0 { right } else { counters(p).width() /* the width is the same in any colour */ };
+    let text = row_text(RowText { session: p.lead(), name: p.head.id.to_string(), depth: 1, frame, counters_width, muted }, width);
     (p.head.id.to_string(), text)
 }
 
@@ -428,7 +470,7 @@ fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: 
     let empty = rows.is_empty();
     let last = rows.len().saturating_sub(1);
     let closes_in_a_row = !k.has_archived() && !empty;
-    let mut flat = vec![FlatRow { path: vec![id.clone()], line: fold::title(context_text(c, frame)) }];
+    let mut flat = vec![FlatRow { path: vec![id.clone()], line: fold::title(context_text(c, width, frame)) }];
     if opened.contains(&vec![id.clone()]) {
         flat.extend(rows.into_iter().enumerate().map(|(i, (child, line))| {
             let branch = if closes_in_a_row && i == last { fold::LAST_BRANCH } else { fold::TREE_BRANCH };
@@ -582,15 +624,17 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
         flat_row.line.clone().render(Rect { width: rect.width.saturating_sub(RIGHT_PAD), ..rect }, buf);
         // an asleep row's counters (separators too) are colour 8 whatever the count: the muted restyle skips them
         let mut counter_cols = 0..0;
-        if let Row::Plan(_, plan) = row {
-            let line = counters(plan);
-            let width = rect.width.saturating_sub(RIGHT_PAD);
-            // the counters are dropped when they would not leave the branch, the glyph and a cell of the name
-            if line.width() + MIN_LEFT <= usize::from(width) {
-                let start = rect.x + width.saturating_sub(u16::try_from(line.width()).unwrap_or(u16::MAX));
-                counter_cols = start..rect.x + width;
-                line.right_aligned().render(Rect { width, ..rect }, buf);
-            }
+        let width = rect.width.saturating_sub(RIGHT_PAD);
+        // the cost is dropped first, then the counters, when they would not leave the branch, the glyph and a cell of the name
+        let right = match row {
+            Row::Plan(_, plan) => plan_right(plan, usize::from(width)),
+            Row::Context(c) => context_right(c, usize::from(width)),
+            _ => Line::default(),
+        };
+        if right.width() > 0 {
+            let start = rect.x + width.saturating_sub(u16::try_from(right.width()).unwrap_or(u16::MAX));
+            counter_cols = start..rect.x + width;
+            right.right_aligned().render(Rect { width, ..rect }, buf);
         }
         if row.muted() {
             // archived: colour 8 on every mark; asleep: colour 7 on every mark, the fold's lines (the branch) and the counters
