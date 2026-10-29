@@ -138,9 +138,12 @@ fn click_ran_second(down: u16) -> Vec<Vec<String>> {
 
 #[test]
 fn a_click_on_the_row_under_a_one_row_item_is_the_next_items_hit() {
-    let fx = rig(vec![dialog("session:l-rel", "l-rel label", "l-rel"), dialog("session:f-blocked", "f-blocked label\nWhich repo?", "f-blocked")]);
-    let _engine = engine(&fx);
-    let screen = first_rows(&fx);
+    // the Fx lives only in this block: `click_ran` makes its own, and the process holds one at a time
+    let screen = {
+        let fx = rig(vec![dialog("session:l-rel", "l-rel label", "l-rel"), dialog("session:f-blocked", "f-blocked label\nWhich repo?", "f-blocked")]);
+        let _engine = engine(&fx);
+        first_rows(&fx)
+    };
     assert_eq!(row_of(&screen, "f-blocked label"), row_of(&screen, "l-rel label") + 1, "no blank row between the items");
     let (first, under, second_row_two) = (click_ran(0), click_ran(1), click_ran_second(1));
     assert_eq!(first.len(), 1, "a click on the first item runs one command: {first:?}");

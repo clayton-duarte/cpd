@@ -127,11 +127,11 @@ fn locate(fx: &Fx, label: &str) -> (Screen, u16) {
     (frame, at)
 }
 
-/// The Inbox is pinned to the bottom (one item: the blank row, the header, the ▲ line, the item's two rows, the ▼ line): its header is the
-/// fifth row from the last.
+/// The Inbox is pinned to the bottom (one item: the blank row, the header, the ▲ line, the item's one row, the ▼ line): its header is the
+/// fourth row from the last.
 fn assert_pinned_to_bottom(frame: &Screen) {
     let screen = frame.rows();
-    assert_eq!(screen.iter().position(|r| r.contains("Inbox")), Some(usize::from(HEIGHT) - 5), "the Inbox header row on\n{}", screen.join("\n"));
+    assert_eq!(screen.iter().position(|r| r.contains("Inbox")), Some(usize::from(HEIGHT) - 4), "the Inbox header row on\n{}", screen.join("\n"));
 }
 
 /// A left click on the age cell of row `row`: the last cells of the row, outside the label's link.
