@@ -156,11 +156,11 @@ fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError
 }
 
 /// `drafts-parked` (contract §2.2 "Inbox item", hs-d731, hs-d733): a live Plan whose `parked_drafts` is not empty, whose Lead was
-/// woken (W, newer than T) and has finished a turn since. The Lead need not be idle now. Closes when S is empty or T moves past W.
+/// woken (W, newer than T) and has finished a turn since. The Lead must be `idle` (pro-d197). Closes when S is empty or T moves past W.
 fn drafts_parked(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT p.id, p.context, p.lead_session FROM plans p JOIN sessions s ON s.id = p.lead_session
-          WHERE p.archived_at IS NULL AND p.deleted_at IS NULL AND s.role = 'lead' AND s.archived_at IS NULL
+          WHERE p.archived_at IS NULL AND p.deleted_at IS NULL AND s.role = 'lead' AND s.archived_at IS NULL AND s.state = 'idle'
           ORDER BY p.id",
     )?;
     let plans = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?.collect::<Result<Vec<_>, _>>()?;
