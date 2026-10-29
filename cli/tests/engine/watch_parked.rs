@@ -158,3 +158,29 @@ fn archived_cancel_is_idempotent() {
     assert_eq!(after, [], "a later tick writes nothing more");
     assert_eq!(statuses(&fx), expected_statuses("cancelled"));
 }
+
+#[test]
+fn an_approved_plan_review_in_phase_plan_sends_no_wake() {
+    let fx = fx();
+    // Plan `pay` is born in `dispatch` and the store forbids going back to `plan`: a second Plan `pln` is born in `plan`,
+    // its Lead `lead2` idle in the same pane.
+    let pane: String = fx.env.query("SELECT tmux_pane FROM sessions WHERE id = 'lead1'");
+    fx.env.sql(&format!(
+        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, tmux_pane)
+           VALUES ('lead2', 'lead', 'ctx', 'pln', 'Lead2', '/', 'O3', 'idle', 't', 't', '{pane}');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at) VALUES ('pln', 'ctx', 'Pln', 'plan', 'lead2', 't', NULL);
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+           VALUES ('pln', 'r', '/r', 'main', 'dispatch', 'cpd/pln', '/w', cpd_txn(), 't', 't');
+         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+           VALUES ('pln', 'r', 'd1', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 1, cpd_txn(), 't');"
+    ));
+    let plan = cpd_core::ids::PlanId::parse("pln").unwrap();
+    let fingerprint = fx.env.read(|conn| Ok(cpd_core::plan::plan_fingerprint(conn, &plan))).unwrap();
+    fx.env.sql(&format!(
+        "INSERT INTO plan_reviews (plan, id, number, fingerprint, title, status, requested_at, decided_at) VALUES ('pln', 'r1', 1, '{fingerprint}', 'T', 'approved', 't', 't');
+         INSERT INTO events (txn, at, kind, context, plan, job, text, data) VALUES (cpd_txn(), 't', 'plan-review', 'ctx', 'pln', '', 'x', '{{}}');"
+    ));
+    fx.watch_ticks(1).unwrap();
+    fx.watch_ticks(LATER_TICKS).unwrap();
+    assert_eq!(messages(&fx), [], "an approved current review in phase plan covers the drafts");
+}
