@@ -587,6 +587,7 @@ pub(crate) fn layout_fold_sample(width: u16, height: u16, case: crate::layout_te
         let rect = Rect { y: top, height: (end - start) as u16 + 2, ..spacing::contain(pane) };
         let exempt = (start + 1..end - 1)
             .map(|i| Exempt { name: "hs-d337 hs-d339 hs-d484: the branch ├─ sits against the rail", row: hits.rows.y + i as u16, rule: Rule::Padding })
+            .chain((start..end).map(|i| Exempt { name: "pro-d186: the tree's rows end at the pane's inner edge", row: hits.rows.y + i as u16, rule: Rule::RightEdge }))
             .chain([Exempt { name: "hs-d484: the fold is not the widget (B3 does not apply)", row: top, rule: Rule::Minimum }])
             .collect();
         boxes.push(Placed { name: "context fold", kind: Kind::Rail, rect, exempt });
@@ -931,11 +932,11 @@ mod tests {
     }
 
     #[test]
-    fn the_counters_end_at_width_minus_4_and_the_cursor_row_is_inverted_between_the_margins() {
+    fn the_counters_end_at_width_minus_2_and_the_cursor_row_is_inverted_between_the_margins() {
         let mut view = on(&["alpha", "ship"]);
         let buf = buffer(&mut view, 44, 12);
         let ship: String = (0..44).map(|x| buf[(x, 6)].symbol()).collect();
-        assert!(ship.trim_end().ends_with("2⋅2⋅5") && ship.chars().nth(40) == Some('5'), "{ship:?}");
+        assert!(ship.trim_end().ends_with("2⋅2⋅5") && ship.chars().nth(42) == Some('5'), "{ship:?}");
         let reversed: Vec<u16> = (0..44).filter(|x| crate::palette::check::is_selected(&buf[(*x, 6)])).collect();
         assert_eq!(reversed, (1..43).collect::<Vec<u16>>());
     }
