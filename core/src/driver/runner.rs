@@ -14,8 +14,6 @@ use std::time::Duration;
 use rusqlite::{Connection, params};
 use serde::Deserialize;
 use serde_json::Value;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use crate::attempt::ledger::{Attempt as Target, corrupt};
 use crate::config::{Catalog, Config, WorkerRunner};
@@ -214,10 +212,10 @@ struct EndReport {
     model: Option<String>,
 }
 
-/// The `durable` producer: the end report at `file`, with `duration_s` the wall seconds from `started_at` to now on
-/// `ports.clock`, and `thinking_level` null. `Ok(None)` while the runner has written none; `Err` for a file that exists
+/// The `durable` producer: the end report at `file`, with `duration_s` the wall seconds of the Attempt so far (`wall_s`) and
+/// `thinking_level` null. `Ok(None)` while the runner has written none; `Err` for a file that exists
 /// and does not parse (the runner writes it atomically, so that is its fault), naming the file and the parse error.
-pub(super) fn durable_report(ports: &Ports, file: &Path, started_at: &str) -> Result<Option<Report>, CpdError> {
+pub(super) fn durable_report(file: &Path, wall_s: f64) -> Result<Option<Report>, CpdError> {
     let text = match std::fs::read_to_string(file) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -227,8 +225,6 @@ pub(super) fn durable_report(ports: &Ports, file: &Path, started_at: &str) -> Re
         CpdError::new(ErrorCode::SessionMalformed, format!("The end report {} does not parse: {e}.", file.display()))
             .with("path", file.display().to_string())
     })?;
-    let started = OffsetDateTime::parse(started_at, &Rfc3339).map_err(|e| corrupt(format!("started_at {started_at:?}: {e}")))?;
-    let duration_s = (ports.clock.utc() - started).as_seconds_f64();
     Ok(Some(Report {
         metrics: Metrics {
             turns: report.turns,
@@ -237,7 +233,7 @@ pub(super) fn durable_report(ports: &Ports, file: &Path, started_at: &str) -> Re
             cache_read: report.cache_read,
             cache_write: report.cache_write,
             cost_usd: report.cost_usd,
-            duration_s,
+            duration_s: wall_s,
             model: report.model,
             thinking_level: None,
             stop_reason: Some(report.stop_reason),
@@ -247,14 +243,13 @@ pub(super) fn durable_report(ports: &Ports, file: &Path, started_at: &str) -> Re
 }
 
 /// A9's `metrics` by the stored `runner`: `pi` from its session file, `durable` from its end report at `report`; the
-/// Attempt's `started_at` gives the latter its duration. `None` (and why, in the log) when there is none to read.
+/// Attempt's `wall_s` gives the latter its duration. `None` (and why, in the log) when there is none to read.
 pub(super) fn metrics(
     runner: WorkerRunner,
-    ports: &Ports,
     dirs: &PiDirs,
     session: Option<&SessionId>,
     report: &Path,
-    started_at: &str,
+    wall_s: f64,
 ) -> Option<Value> {
     match runner {
         WorkerRunner::Pi => {
@@ -267,7 +262,7 @@ pub(super) fn metrics(
                 }
             }
         }
-        WorkerRunner::Durable => match durable_report(ports, report, started_at) {
+        WorkerRunner::Durable => match durable_report(report, wall_s) {
             Ok(found) => found.map(|r| r.metrics.to_json()),
             Err(e) => {
                 super::run::log(&format!("no metrics: {}", e.message()));

@@ -156,6 +156,9 @@ struct Driver {
     catalog: Option<Catalog>,
     /// The Attempt's stored runner, read in A1: never today's `worker_runner` (§3.4 "The Worker runner and its seam").
     runner: Option<WorkerRunner>,
+    /// Read in A1: the Attempt's age then (0 for a driver that started it; else from `started_at`, which the Ledger stamps by the system
+    /// clock) and `ports.clock` at that moment.
+    began: Option<(f64, std::time::Instant)>,
     /// Time, processes and `exec`: the real ones, or a test's.
     ports: Ports,
 }
@@ -230,7 +233,7 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
         }
     };
     let tmux = Tmux::new(config.tmux.socket.as_str());
-    let mut driver = Driver { home, config, store, tmux, plan, id, lock, exe, catalog: None, runner: None, ports };
+    let mut driver = Driver { home, config, store, tmux, plan, id, lock, exe, catalog: None, runner: None, began: None, ports };
 
     let outcome = (|| {
         let target = driver.load()?;
@@ -293,19 +296,17 @@ impl Driver {
         self.runner.expect("A1 reads the Attempt's runner")
     }
 
-    /// The Attempt's `started_at`, as stored: the start of a `durable` Worker's `duration_s`.
-    fn started_at(&mut self) -> Result<String, CpdError> {
-        let (plan, id) = (&self.plan, &self.id);
-        self.store.read(|conn| {
-            Ok(conn.query_row("SELECT started_at FROM attempts WHERE plan = ?1 AND id = ?2", params![plan.as_str(), id.to_string()], |r| r.get(0))?)
-        })
+    /// The wall seconds of the Attempt: its age when this driver began, then the time `ports.clock` has run since. A `durable`
+    /// Worker's `duration_s` (§3.4 "The Worker runner and its seam").
+    fn wall_seconds(&self) -> f64 {
+        let (age, at) = self.began.expect("A1 reads the Attempt's age");
+        age + self.ports.clock.now().duration_since(at).as_secs_f64()
     }
 
     /// A9's `metrics` of the Attempt's Worker, by its runner.
-    fn metrics(&mut self, dirs: &PiDirs, session: Option<&SessionId>) -> Result<Option<Value>, CpdError> {
-        let started_at = self.started_at()?;
+    fn metrics(&self, dirs: &PiDirs, session: Option<&SessionId>) -> Option<Value> {
         let report = self.home.worker_report(&self.plan, &self.id);
-        Ok(runner::metrics(self.runner(), &self.ports, dirs, session, &report, &started_at))
+        runner::metrics(self.runner(), dirs, session, &report, self.wall_seconds())
     }
 
     /// A9 and W1: stops the Worker by the Attempt's stored runner (the window of `pi`; SIGTERM, then SIGKILL, for `durable`).
@@ -323,7 +324,7 @@ impl Driver {
 
     /// A1 (after the lock) to A9, from `entry`.
     fn drive(&mut self, task: Task, target: Target) -> Result<Ended, CpdError> {
-        let job = self.begin(&target)?;
+        let job = self.begin(&target, matches!(task, Task::Start))?;
         let dirs = PiDirs::from_env()?;
         match task {
             Task::Start => self.start(&target, &job, &dirs),
@@ -335,10 +336,21 @@ impl Driver {
         }
     }
 
-    /// A1: the catalog, the Job, its fingerprint.
-    fn begin(&mut self, target: &Target) -> Result<jobs::Job, CpdError> {
+    /// A1: the catalog, the Job, its fingerprint, and the Attempt's age (`fresh`: this driver started it, so its age is 0).
+    fn begin(&mut self, target: &Target, fresh: bool) -> Result<jobs::Job, CpdError> {
         let (plan, id) = (&self.plan, &self.id);
         self.runner = Some(self.store.read(|conn| runner::stored(conn, plan, id))?.0);
+        let age = if fresh {
+            0.0
+        } else {
+            let started_at: String = self.store.read(|conn| {
+                Ok(conn.query_row("SELECT started_at FROM attempts WHERE plan = ?1 AND id = ?2", params![plan.as_str(), id.to_string()], |r| r.get(0))?)
+            })?;
+            let started = time::OffsetDateTime::parse(&started_at, &time::format_description::well_known::Rfc3339)
+                .map_err(|e| ledger::corrupt(format!("started_at {started_at:?} of Attempt {id}: {e}")))?;
+            (time::OffsetDateTime::now_utc() - started).as_seconds_f64()
+        };
+        self.began = Some((age, self.ports.clock.now()));
         let models = self.store.read(|conn| crate::policy::model::models_of_job(conn, &self.home, &target.plan, target.job.as_str()))?;
         self.catalog = Some(load_catalog(&self.config, &models)?);
         let all = self.store.read(|conn| jobs::load(conn, &target.plan))?;
@@ -747,8 +759,7 @@ impl Driver {
                 let read = match &worker {
                     Worker::Pane(_) => Ok(file.as_deref().and_then(runner::pi_report)),
                     Worker::Process(_) => {
-                        let started_at = self.started_at()?;
-                        runner::durable_report(&self.ports, &self.home.worker_report(&now.plan, &now.id), &started_at)
+                        runner::durable_report(&self.home.worker_report(&now.plan, &now.id), self.wall_seconds())
                     }
                 };
                 match read {
@@ -848,7 +859,7 @@ impl Driver {
     /// A Worker that submitted meanwhile wins: the Attempt goes to its merge.
     fn end(&mut self, target: &Target, end: End, dirs: &PiDirs) -> Result<Ended, CpdError> {
         log(&format!("ending: {} / {}", end.outcome(), end.cause()));
-        let metrics = self.metrics(dirs, target.worker_session.as_ref())?;
+        let metrics = self.metrics(dirs, target.worker_session.as_ref());
         let ladder = Ladder { catalog: self.catalog.as_ref().expect("A1 loads the catalog"), retry_cap: self.config.retry_cap };
         let (plan, id) = (&self.plan, &self.id);
         let submitted = self.store.write(SOURCE, |tx| {
@@ -884,12 +895,9 @@ impl Driver {
         self.reload_if_installed()?;
         log("A8: merging");
         let runner = self.runner();
-        let started_at = self.started_at()?;
         let report = self.home.worker_report(&self.plan, &self.id);
-        let ports = &self.ports;
-        let metrics = |a: &merge::Attempt| -> Option<Value> {
-            runner::metrics(runner, ports, dirs, a.worker_session.as_ref(), &report, &started_at)
-        };
+        let wall = self.wall_seconds();
+        let metrics = |a: &merge::Attempt| -> Option<Value> { runner::metrics(runner, dirs, a.worker_session.as_ref(), &report, wall) };
         let ctx = merge::Ctx {
             home: &self.home,
             config: &self.config,
@@ -970,7 +978,7 @@ impl Driver {
             return;
         }
         let detail = format!("Its driver failed: {}", error.message());
-        let metrics = PiDirs::from_env().ok().and_then(|dirs| self.metrics(&dirs, target.worker_session.as_ref()).ok().flatten());
+        let metrics = PiDirs::from_env().ok().and_then(|dirs| self.metrics(&dirs, target.worker_session.as_ref()));
         let ladder = Ladder { catalog: self.catalog.as_ref().expect("A1 loads the catalog"), retry_cap: self.config.retry_cap };
         let ended = self.store.write(SOURCE, |tx| {
             ledger::end(tx, &target, &End::Failed { cause: Cause::Crashed, detail: detail.clone() }, metrics.as_ref(), &ladder, Stage::Driver)
