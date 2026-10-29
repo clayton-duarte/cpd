@@ -176,9 +176,14 @@ pub fn worker(launch: &WorkerLaunch) -> Launch {
         "--".to_owned(),
         format!("Read {} and follow it exactly. Your attempt id is {attempt}.", spec.display()),
     ]);
-    let mut env = base_env(launch.home, launch.session, launch.plan);
+    Launch { argv, env: worker_env(launch.home, launch.session, launch.plan, attempt) }
+}
+
+/// A Worker's environment, a pi Worker's and a `durable` Worker's alike (contract §3.4 "The Worker runner and its seam").
+pub fn worker_env(home: &CpdHome, session: &SessionId, plan: &PlanId, attempt: &AttemptId) -> BTreeMap<String, String> {
+    let mut env = base_env(home, session, plan);
     env.insert("CPD_ATTEMPT".into(), attempt.to_string());
-    Launch { argv, env }
+    env
 }
 
 /// The distiller (contract §6.5 "Distiller", §4.6): a one-shot pi that reads

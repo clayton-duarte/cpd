@@ -236,9 +236,9 @@ test("a pi whose modules lack a name, or fail to load, is slack_helper_failed wi
 
 // --- the import guard (docs/research/team-review.md §5) -----------------------------------------------------------
 
-test("the four names of pi's own modules exist in the pinned devDependency, by file URL", async () => {
+test("the four names of pi's own modules exist in the pinned dependency, by file URL", async () => {
   const pkg = join(here, "..", "..", "node_modules", "@earendil-works", "pi-coding-agent");
-  const pinned = JSON.parse((await import("node:fs")).readFileSync(join(here, "..", "..", "package.json"), "utf8")).devDependencies["@earendil-works/pi-coding-agent"];
+  const pinned = JSON.parse((await import("node:fs")).readFileSync(join(here, "..", "..", "package.json"), "utf8")).dependencies["@earendil-works/pi-coding-agent"];
   assert.match(pinned, /^\d+\.\d+\.\d+$/, "an exact pin, so a bump fails here before an install does");
   assert.equal(JSON.parse((await import("node:fs")).readFileSync(join(pkg, "package.json"), "utf8")).version, pinned);
   const loaded = await loadPi(join(pkg, "dist", "index.js"));

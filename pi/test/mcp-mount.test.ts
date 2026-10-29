@@ -7,7 +7,7 @@ import { transportsStarted } from "./fake.ts";
 import { harness, writeMcpJson } from "./mcp-harness.ts";
 
 // contract §6.11 (pro-d3, pro-d7): the adapter mounts pi's own MCP extension with an empty file config, so no `mcp.json` reaches a Session and a server registered with
-// `pi.registerMcpServer` is connected by pi's code. Real pi 1.3.0 (the pinned devDependency), a recording transport that never connects: no network, no model call.
+// `pi.registerMcpServer` is connected by pi's code. Real pi 1.3.0 (the pinned dependency), a recording transport that never connects: no network, no model call.
 // Each test also registers `slack` with an inline factory: that is the control that the harness connects what is registered, and it is what is red against the stub.
 
 const SLACK = { url: "https://mcp.slack.com/mcp" };

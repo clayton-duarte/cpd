@@ -2,7 +2,7 @@
 //! Worker Spec is rendered from, the Worker's pi launch in the hidden work
 //! session, and its session file.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -20,7 +20,6 @@ use crate::host::layout::attempt_window;
 use crate::host::pi::{self, PiDirs, WorkerLaunch, extensions_to_pass, worker_candidates};
 use crate::host::{PaneId, Tmux, WindowId};
 use crate::ids::{AttemptId, EscalationId, PlanId, SessionId};
-use crate::metrics;
 use crate::plan::jobs::Job;
 use crate::ports::Ports;
 use crate::attempt::ledger::{Cause, Stored};
@@ -279,30 +278,6 @@ pub fn kill_attempt_window_with(
         retry_kill_with(&*ports.clock, KILL_TRIES, KILL_PAUSE, || tmux.kill_window(&window), gone)?;
     }
     Ok(())
-}
-
-/// A9's `metrics`, parsed from the Worker's session file (cpd 1 §14). None
-/// when there is no Worker or no readable file yet; why is logged.
-pub fn metrics(dirs: &PiDirs, session: Option<&SessionId>) -> Option<Value> {
-    let file = pi::session_file(dirs, session?)?;
-    match metrics::parse_file(&file) {
-        Ok(m) => Some(m.to_json()),
-        Err(e) => {
-            super::run::log(&format!("no metrics from {}: {}", file.display(), e.message()));
-            None
-        }
-    }
-}
-
-/// The last assistant message's `stopReason` and the number of assistant
-/// messages of `file`; None while it cannot be parsed (a line being written).
-pub fn last_stop(file: &Path) -> Option<(Option<String>, u64)> {
-    metrics::parse_file(file).ok().map(|m| (m.stop_reason, m.turns))
-}
-
-/// The last assistant message's `errorMessage` of `file`; None when it has none.
-pub fn last_error(file: &Path) -> Option<String> {
-    metrics::last_error_message(file)
 }
 
 /// Whether a pi `errorMessage` is a provider error (decision pro-d102): exactly "Connection error." or "Request timed

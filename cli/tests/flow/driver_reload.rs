@@ -47,13 +47,13 @@ impl Handler for Version {
 }
 
 /// Plan `pay` with Job `api` queued, in this process, and `cpd`'s own executable a file of the test's.
-struct Reload {
-    live: Live,
+pub(super) struct Reload {
+    pub(super) live: Live,
     installed: PathBuf,
     version: Arc<Version>,
 }
 
-fn reload() -> Reload {
+pub(super) fn reload() -> Reload {
     let mut live = live("");
     live.fx.exec_replaces_the_process();
     let installed = live.fx.env.root().join("cpd");
@@ -65,12 +65,12 @@ fn reload() -> Reload {
 }
 
 impl Reload {
-    fn fx(&self) -> &Fx {
+    pub(super) fn fx(&self) -> &Fx {
         &self.live.fx
     }
 
     /// `job dispatch api`: the driver's launch, recorded and not started.
-    fn dispatch(&self) -> Launch {
+    pub(super) fn dispatch(&self) -> Launch {
         let out = self.live.dispatch(JOB).ok();
         assert_eq!(out["attempt"], ATTEMPT);
         let launch = self.fx().take_launch(0);
@@ -105,7 +105,7 @@ impl Reload {
     }
 
     /// A new cpd that can open the store.
-    fn install(&self) {
+    pub(super) fn install(&self) {
         self.install_as(OPENS);
     }
 
@@ -119,9 +119,11 @@ impl Reload {
         self.fx().calls("cpd").iter().filter(|c| c.args == ["--version"]).count()
     }
 
-    /// What the driver `exec`ed: every launch after the driver's own.
-    fn execs(&self) -> Vec<Launch> {
-        self.fx().fakes.spawn.launches().split_off(1)
+    /// What the driver `exec`ed: every launch after the driver's own that runs the installed cpd (a `durable` runner, which the
+    /// driver also starts, is a launch of another program).
+    pub(super) fn execs(&self) -> Vec<Launch> {
+        let installed = self.installed.display().to_string();
+        self.fx().fakes.spawn.launches().split_off(1).into_iter().filter(|l| l.program == installed).collect()
     }
 
     /// The driver lock is held, by someone other than this call's own descriptor.
@@ -131,7 +133,7 @@ impl Reload {
     }
 
     /// What the exec recorded is the same argv, of the new file, and the driver was alive and held its lock across it.
-    fn assert_exec_of_the_driver(&self, exec: &Exec, pid: Pid) {
+    pub(super) fn assert_exec_of_the_driver(&self, exec: &Exec, pid: Pid) {
         assert_eq!(self.execs(), [exec.launch.clone()]);
         assert_eq!(exec.launch.program, self.installed.display().to_string());
         assert_eq!(exec.launch.args, ["attempt", "run", ATTEMPT, "--plan", PLAN], "the same argv");
@@ -141,14 +143,14 @@ impl Reload {
     }
 
     /// The Worker's pi submits: it commits `api.txt` in its worktree and runs `attempt submit`.
-    fn submit(&self) -> Value {
+    pub(super) fn submit(&self) -> Value {
         let wt = self.live.worktree(ATTEMPT);
         self.live.commit(&wt, "api.txt", "api\n", "api");
         self.fx().cpd_with(&wt, &["attempt", "submit", ATTEMPT], &[("CPD_PLAN", PLAN), ("CPD_ATTEMPT", ATTEMPT)]).json()
     }
 
     /// The new program of an `exec`, run on the lock the old one kept; its log is the same file. `hook` is called after each nap.
-    fn run_new(&self, mut exec: Exec, hook: impl FnMut(&Fx, usize)) -> common::Run {
+    pub(super) fn run_new(&self, mut exec: Exec, hook: impl FnMut(&Fx, usize)) -> common::Run {
         let launch = Launch { stdout_to: self.fx().take_launch(0).stdout_to, ..exec.launch.clone() };
         let _fd3 = self.fx().hand_over(exec.fd3());
         let ran = self.fx().run_launch_with(&launch, hook);
@@ -157,7 +159,7 @@ impl Reload {
     }
 
     /// The Attempt ended `merged` on the Lead Branch, and no retry was queued.
-    fn assert_merged(&self, old_lead: &str) {
+    pub(super) fn assert_merged(&self, old_lead: &str) {
         let log = self.log();
         let last: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap_or_else(|e| panic!("{e}: {log}"));
         assert_eq!(last["outcome"], "merged", "{log}");
@@ -170,7 +172,7 @@ impl Reload {
 }
 
 /// The first run of the driver, on the lock (fd 3), until it `exec`s; `hook` is called after each nap.
-fn run_until_exec(re: &Reload, launch: &Launch, hook: impl FnMut(&Fx, usize)) -> (Exec, common::fx::HandOver) {
+pub(super) fn run_until_exec(re: &Reload, launch: &Launch, hook: impl FnMut(&Fx, usize)) -> (Exec, common::fx::HandOver) {
     // As the starter leaves it: the lock taken on the file the driver is handed (a kernel lock on a file of ours, in the env's directory).
     let lock = File::open(re.lock()).unwrap();
     lock.try_lock().unwrap();

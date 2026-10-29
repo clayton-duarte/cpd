@@ -288,6 +288,17 @@ impl CpdHome {
         self.plan_dir(plan).join("reviews").join(format!("{attempt}.{extension}"))
     }
 
+    /// `run/<plan>/logs/worker-<attempt>.log`: a `durable` Worker's stdout and stderr, appended (contract §3.4 "The Worker
+    /// runner and its seam").
+    pub fn worker_log(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
+        self.plan_dir(plan).join("logs").join(format!("worker-{attempt}.log"))
+    }
+
+    /// `run/<plan>/attempts/<attempt>.report.json`: a `durable` Worker's end report, replaced after every settle (§6.12).
+    pub fn worker_report(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
+        self.plan_dir(plan).join("attempts").join(format!("{attempt}.report.json"))
+    }
+
     /// `run/<plan>/logs/attempt-<attempt>.log`: the Attempt driver's stderr.
     pub fn driver_log(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
         self.plan_dir(plan).join("logs").join(format!("attempt-{attempt}.log"))

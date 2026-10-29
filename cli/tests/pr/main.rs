@@ -8,6 +8,7 @@ mod git;
 mod git_guard;
 mod git_lead_branch;
 mod merge;
+mod merge_durable;
 mod pr_adopt_add;
 mod pr_adopt_life;
 mod pr_adopt_pub;

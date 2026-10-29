@@ -28,5 +28,5 @@ export function storePath(home: string, plan: string, attempt: string): string {
 }
 
 export function reportPath(home: string, plan: string, attempt: string): string {
-  return join(home, "run", plan, "durable", `${attempt}.report.json`);
+  return join(home, "run", plan, "attempts", `${attempt}.report.json`);
 }

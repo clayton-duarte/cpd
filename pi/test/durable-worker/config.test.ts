@@ -42,7 +42,10 @@ test("parseConfig refuses a missing --model or --spec", () => {
   assert.match(usage(() => parseConfig(["--model", "m"], ENV, "/wt")).message, /--spec/);
 });
 
-test("storePath and reportPath are under run/<plan>/durable/<attempt>", () => {
+test("storePath is under run/<plan>/durable/<attempt>", () => {
   assert.equal(storePath("/h/.cpd", "p1", "j1-a1"), "/h/.cpd/run/p1/durable/j1-a1.sqlite");
-  assert.equal(reportPath("/h/.cpd", "p1", "j1-a1"), "/h/.cpd/run/p1/durable/j1-a1.report.json");
+});
+
+test("reportPath is under the attempts directory of the plan", () => {
+  assert.equal(reportPath("/h/.cpd", "p1", "j1-a1"), "/h/.cpd/run/p1/attempts/j1-a1.report.json");
 });

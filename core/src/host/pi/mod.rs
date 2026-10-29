@@ -16,7 +16,7 @@ mod session_file;
 pub use dirs::{PiDirs, project_settings};
 pub use launch::{
     Launch, LeadLaunch, LeadStart, Plannotator, WORKER_EXCLUDED_TOOLS, WorkerLaunch, distiller, lead, lead_candidates, worker,
-    worker_candidates,
+    worker_candidates, worker_env,
 };
 pub use packages::declared;
 pub use packages::{PackageId, extensions_to_pass, package_identity};

@@ -55,6 +55,7 @@ fn config_defaults_context_distill_tier_to_gx() {
             "open_tier": "H3",
             "lead_pi_packages": ["npm:@plannotator/pi-extension@0.28.17"],
             "pi_adapter": "",
+            "worker_runner": "pi",
             "context_engine_enabled": true,
             "context_engine_bridge": "",
             "context_engine_python": "",
@@ -226,6 +227,7 @@ context_engine_dir = "/b/engine"
 context_engine_timeout_ms = 4294967295
 context_engine_reindex_timeout_ms = 1
 plannotator_ports = "1-65535"
+worker_runner = "durable"
 [timeouts]
 attempt_minutes = 1
 ask_minutes = 1

@@ -33,6 +33,8 @@ pub(super) struct Attempt {
     pub metrics: Value,
     pub started_at: String,
     pub ended_at: Option<String>,
+    pub runner: String,
+    pub worker_pid: Option<i64>,
 }
 
 impl Attempt {
@@ -46,13 +48,14 @@ impl Attempt {
             "submitted_sha": self.submitted_sha, "submitted_at": self.submitted_at, "check_tail": self.check_tail,
             "merged_sha": self.merged_sha, "nudged": self.nudged, "stop_request": self.stop_request,
             "metrics": self.metrics, "started_at": self.started_at, "ended_at": self.ended_at,
+            "runner": self.runner, "worker_pid": self.worker_pid,
         })
     }
 }
 
 const COLUMNS: &str = "id, job, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, driver_pid,
     worker_session, spec_path, submitted_sha, submitted_at, check_tail, merged_sha, nudged, stop_request, metrics,
-    started_at, ended_at";
+    started_at, ended_at, runner, worker_pid";
 
 /// One row; `metrics` is still text.
 fn raw(plan: &PlanId, r: &Row<'_>) -> rusqlite::Result<(Attempt, Option<String>)> {
@@ -81,6 +84,8 @@ fn raw(plan: &PlanId, r: &Row<'_>) -> rusqlite::Result<(Attempt, Option<String>)
         metrics: Value::Null,
         started_at: r.get(21)?,
         ended_at: r.get(22)?,
+        runner: r.get(23)?,
+        worker_pid: r.get(24)?,
     };
     Ok((attempt, r.get(20)?))
 }
