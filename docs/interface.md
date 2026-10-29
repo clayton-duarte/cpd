@@ -96,7 +96,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd session history` | Show a Lead Session's history, read-only, in the chat slot (§10.12) | | yes |
 | `cpd session archive` | Archive a Lead Session (§10.10) | | yes |
 | `cpd session unarchive` | Unarchive a Lead Session (§10.11) | | yes |
-| `cpd session send` | Send a message to a Lead (§10.13) | Lead, Manager | |
+| `cpd session send` | Send a message to a Lead or Manager (§10.13) | Lead, Manager | |
 | `cpd session resume` | Resume a Lead or Manager blocked by the loop guard (§10.17) | | yes |
 | `cpd session retier` | Move live Leads and Managers to the Tier the config names now (§10.15) | Manager | |
 | `cpd session rename` | Rename a Session (§10.7) | Lead | yes |
