@@ -40,7 +40,7 @@ pub fn tools_with(runner: &dyn Runner) -> Vec<Check> {
 
 /// The first dotted number run of `parts` or more numbers in `text`, cut to
 /// `parts` numbers (`v1.2.3` and `3.4a` parse; a letter suffix is ignored).
-fn parse_version(text: &str, parts: usize) -> Option<(String, [u64; 3])> {
+pub(super) fn parse_version(text: &str, parts: usize) -> Option<(String, [u64; 3])> {
     text.split_whitespace().find_map(|token| {
         let run: String = token.trim_start_matches('v').chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
         let numbers = run.trim_end_matches('.').split('.').map(str::parse::<u64>).collect::<Result<Vec<_>, _>>().ok()?;
@@ -56,7 +56,7 @@ fn parse_version(text: &str, parts: usize) -> Option<(String, [u64; 3])> {
 
 /// stdout then stderr of `program args`, or why it did not run and succeed. A probe
 /// past doctor's deadline ([`super::DEADLINE`]) is killed with its group and fails `tool_timeout` (commands.md §14.1).
-fn run_tool(runner: &dyn Runner, program: &OsStr, args: &[&str]) -> Result<String, String> {
+pub(super) fn run_tool(runner: &dyn Runner, program: &OsStr, args: &[&str]) -> Result<String, String> {
     let name = program.to_string_lossy();
     let tool = std::path::Path::new(program).file_name().map_or(name.clone(), |n| n.to_string_lossy());
     // tmux is probed as every cpd call of it is: a UTF-8 client (hs-d463).

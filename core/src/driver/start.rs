@@ -194,7 +194,7 @@ pub fn start_with_allocation(
                 .with("urgent", urgent));
             }
         }
-        insert(tx, plan, key, &next, &identities)
+        insert(tx, plan, key, &next, &identities, ctx.config.worker_runner)
     })?;
     drop(guarded);
 
@@ -394,15 +394,15 @@ fn require_ready(all: &[Job], job: &Job, plan: &PlanId, phase: &str, pr_status: 
 }
 
 /// The `starting` Attempt and its Job `running`, with `attempt-started`.
-fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &Next, pools: &[String]) -> Result<(), CpdError> {
+fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &Next, pools: &[String], runner: crate::config::WorkerRunner) -> Result<(), CpdError> {
     let worktree = next.worktree.to_str().ok_or_else(|| {
         CpdError::new(ErrorCode::GitFailed, "The Attempt's worktree path is not valid UTF-8.")
             .with("path", next.worktree.to_string_lossy().into_owned())
     })?;
     let number = next.attempt.number().get();
     tx.execute(
-        "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
-         SELECT ?1, ?2, ?3, ?4, ?5, ?6, 'starting', ?7, ?8, at FROM txns WHERE id = cpd_txn()",
+        "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, runner, started_at)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, 'starting', ?7, ?8, ?9, at FROM txns WHERE id = cpd_txn()",
         params![
             plan.as_str(),
             next.attempt.to_string(),
@@ -411,7 +411,8 @@ fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &N
             next.tier.to_string(),
             next.origin.as_str(),
             next.branch,
-            worktree
+            worktree,
+            runner.as_str()
         ],
     )?;
     // The Job's pools commit with its first Attempt: from this commit it is their tenant (contract §3.4 "Tenancy").

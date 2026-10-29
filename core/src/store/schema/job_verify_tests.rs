@@ -141,6 +141,11 @@ fn the_migration_keeps_every_job_dependency_and_attempt_row() {
             if let Some(row) = row.as_object_mut().filter(|_| *table == "jobs") {
                 assert_eq!(row.remove("skipped_n"), Some(Value::Null));
             }
+            // `runner` and `worker_pid` are the columns of `worker-runner`, which sorts after this migration: `pi` and null.
+            if let Some(row) = row.as_object_mut().filter(|_| *table == "attempts") {
+                assert_eq!(row.remove("runner"), Some(Value::from("pi")));
+                assert_eq!(row.remove("worker_pid"), Some(Value::Null));
+            }
         }
         assert_eq!(after, want, "every row of {table}, column for column (`seq` kept)");
     }
