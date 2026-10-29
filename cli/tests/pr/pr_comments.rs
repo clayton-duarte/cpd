@@ -238,6 +238,7 @@ fn a_bot_typed_issue_comment_is_stored_as_no_item_and_tells_nothing() {
     fx.poll();
     assert_eq!(stored_ids(&fx), Vec::<String>::new(), "a Bot's comment is no item");
     assert_eq!(fx.events("pr-feedback").len(), 0);
+    drop(fx);
 
     let fx = poll_fx("deploy");
     search_at(&fx, "U1");
