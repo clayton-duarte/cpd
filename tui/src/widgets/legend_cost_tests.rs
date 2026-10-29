@@ -6,7 +6,6 @@ use ratatui::text::Line;
 
 use super::legend::sections;
 use crate::palette;
-use cpd_core::metrics::format_cost;
 
 const TITLE: &str = "Jobs: Plan Pills And Context Counters";
 
@@ -29,16 +28,16 @@ fn colour_of(line: &Line) -> Vec<Option<ratatui::style::Color>> {
 }
 
 #[test]
-fn the_legend_has_a_cost_row_after_the_counters_row() {
+fn the_legend_cost_row_describes_the_new_format() {
     let row = cost_row();
     let cells: Vec<String> = row.iter().map(text).collect();
-    assert_eq!(cells, ["cost", "$0.12", "<1¢ ⋅ $1.2k ⋅ omitted when unknown"]);
+    assert_eq!(cells, ["cost", "$0.120", "$0.012 ⋅ $1.23k ⋅ omitted when unknown"]);
 }
 
 #[test]
 fn the_cost_sample_is_the_formatters_output_in_colour_8() {
     let row = cost_row();
-    assert_eq!(text(&row[1]), format_cost(0.12));
+    assert_eq!(text(&row[1]), "$0.120");
     let muted = palette::muted_text().fg;
     assert!(colour_of(&row[1]).iter().all(|c| *c == muted), "the sample is colour 8: {:?}", colour_of(&row[1]));
     assert!(colour_of(&row[2]).iter().all(|c| *c == muted), "the note is colour 8: {:?}", colour_of(&row[2]));

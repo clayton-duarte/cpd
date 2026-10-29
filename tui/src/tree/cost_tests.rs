@@ -122,7 +122,7 @@ fn a_context_row_with_no_cost_is_what_it_was() {
 #[test]
 fn a_cost_of_zero_draws_dollar_zero() {
     let zero = format_cost(0.0);
-    assert_eq!(zero, "$0.00", "the shared formatter's zero");
+    assert_eq!(zero, "$0.000", "the shared formatter's zero");
     let buf = render(&with_plan(ship(NONE, Some(0.0))), 30, 3);
     assert_eq!(text(&buf, 1), format!("╰─{IDLE} ship {zero}"));
     let mut c = context("alpha", vec![]);
