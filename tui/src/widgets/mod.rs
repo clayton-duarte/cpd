@@ -31,6 +31,8 @@ mod inbox_rows_tests;
 #[cfg(test)]
 mod needs_tests;
 #[cfg(test)]
+mod legend_cost_tests;
+#[cfg(test)]
 mod window_tests;
 pub(crate) mod host;
 pub(crate) mod inbox;
