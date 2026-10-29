@@ -55,6 +55,7 @@ fn config_defaults_context_distill_tier_to_gx() {
             "open_tier": "H3",
             "lead_pi_packages": ["npm:@plannotator/pi-extension@0.28.17"],
             "pi_adapter": "",
+            "worker_runner": "pi",
             "context_engine_enabled": true,
             "context_engine_bridge": "",
             "context_engine_python": "",

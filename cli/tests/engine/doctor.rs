@@ -18,7 +18,7 @@ use nix::fcntl::{Flock, FlockArg};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-const NAMES: [&str; 14] = [
+const NAMES: [&str; 15] = [
     "config",
     "store",
     "tamper",
@@ -30,6 +30,7 @@ const NAMES: [&str; 14] = [
     "pi_node",
     "tiers",
     "pi_adapter",
+    "worker_runner",
     "lead_packages",
     "watch",
     "holographic",
@@ -201,7 +202,7 @@ fn a_missing_config_fails_and_what_needs_it_is_not_checked() {
     let run = doctor(&fx);
     assert_doctor_failed(&run);
     assert_fails(&run, "config", "error", "config_missing");
-    for name in ["store", "tiers", "pi_adapter"] {
+    for name in ["store", "tiers", "pi_adapter", "worker_runner"] {
         assert_fails(&run, name, "error", "not checked");
     }
     assert_fails(&run, "lead_packages", "warn", "not checked");
@@ -750,4 +751,80 @@ fn a_hung_pi_node_is_a_failed_check() {
     assert_timed_out(&run, "pi_node", "error", "node", "--version");
     assert_timed_out(&run, "tiers", "error", "node", "--input-type=module");
     assert_eq!(fx.fakes.clock.elapsed(), DEADLINE * 2);
+}
+
+// ------------------------------------------------------------ worker_runner
+
+/// The runner file of the `durable` runner, under the adapter `write_config` made.
+fn runner_file(fx: &Fx) -> std::path::PathBuf {
+    fx.env.root().join("adapter/durable-worker/main.ts")
+}
+
+fn add_runner_file(fx: &Fx) {
+    let file = runner_file(fx);
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(file, "").unwrap();
+}
+
+/// The `node --version` calls: pi's Node, asked by `pi_node` and by `worker_runner` when it needs the version.
+fn version_calls(fx: &Fx) -> usize {
+    fx.calls("node").iter().filter(|c| c.args == ["--version"]).count()
+}
+
+#[test]
+fn worker_runner_passes_for_pi_and_never_looks_at_the_adapter() {
+    // No runner file, and a Node too old for the runner: `pi` does not care.
+    for extra in ["", "worker_runner = \"pi\""] {
+        let fx = healthy();
+        write_config(&fx, extra);
+        script(&fx, "node", |call| call.args == ["--version"], Reply::ok("v18.0.0\n"));
+        assert!(!runner_file(&fx).exists());
+        let run = doctor(&fx);
+        run.ok();
+        assert_passes(&run, "worker_runner");
+        let c = check(&run, "worker_runner");
+        assert_eq!(c["severity"], "error", "{c}");
+        assert_eq!(version_calls(&fx), 1, "only `pi_node` asked for the version: {extra:?}");
+    }
+}
+
+#[test]
+fn worker_runner_durable_passes_with_the_runner_file_and_node_22_19_0() {
+    let fx = healthy();
+    write_config(&fx, "worker_runner = \"durable\"");
+    add_runner_file(&fx);
+    script(&fx, "node", |call| call.args == ["--version"], Reply::ok("v22.19.0\n"));
+    let run = doctor(&fx);
+    run.ok();
+    let c = check(&run, "worker_runner");
+    assert_eq!(c["ok"], true, "{c}");
+    assert_eq!(c["severity"], "error", "{c}");
+    assert_eq!((c["found"].as_str(), c["expected"].as_str()), (Some("22.19.0"), Some(">= 22.19.0")), "{c}");
+}
+
+#[test]
+fn worker_runner_durable_fails_when_the_runner_file_is_missing() {
+    let fx = healthy();
+    write_config(&fx, "worker_runner = \"durable\"");
+    assert!(!runner_file(&fx).exists());
+    let run = doctor(&fx);
+    assert_doctor_failed(&run);
+    let c = assert_fails(&run, "worker_runner", "error", "main.ts");
+    assert!(c["message"].as_str().unwrap().contains(runner_file(&fx).to_str().unwrap()), "names the file it looked for: {c}");
+}
+
+#[test]
+fn worker_runner_durable_fails_when_node_is_older_than_22_19_0() {
+    for old in ["v22.18.9", "v20.11.1"] {
+        let fx = healthy();
+        write_config(&fx, "worker_runner = \"durable\"");
+        add_runner_file(&fx);
+        script(&fx, "node", |call| call.args == ["--version"], Reply::ok(&format!("{old}\n")));
+        let run = doctor(&fx);
+        assert_doctor_failed(&run);
+        let c = check(&run, "worker_runner");
+        assert_eq!((c["ok"].clone(), c["severity"].clone()), (json!(false), json!("error")), "{old}: {c}");
+        assert_eq!((c["found"].as_str(), c["expected"].as_str()), (Some(&old[1..]), Some(">= 22.19.0")), "{old}: {c}");
+        assert!(c["message"].as_str().is_some_and(|m| m.contains("22.19.0")), "{old}: {c}");
+    }
 }
