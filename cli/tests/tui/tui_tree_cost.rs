@@ -119,8 +119,8 @@ fn the_tree_draws_the_cost_of_a_plan_and_of_its_context_from_the_session_files()
     assert!(screen.iter().all(|r| !r.contains('$')), "the default: no cost on any row: {screen:?}");
     tree.keys(&["$"]);
     let screen = tree.screen();
-    assert!(row(&screen, "alpha").contains("alpha $0.95"), "the Context: Plan + Manager: {screen:?}");
-    assert!(row(&screen, " ship").contains("ship $0.35"), "the Plan: Lead messages + compaction: {screen:?}");
+    assert!(row(&screen, "alpha").contains("alpha $0.950"), "the Context: Plan + Manager: {screen:?}");
+    assert!(row(&screen, " ship").contains("ship $0.350"), "the Plan: Lead messages + compaction: {screen:?}");
     assert!(!row(&screen, " bare").contains('$'), "a Plan with no file draws none: {screen:?}");
 }
 
@@ -141,7 +141,7 @@ fn the_tree_draws_no_cost_until_the_dollar_key() {
     assert!(none(&screen), "by default: {screen:?}");
     tree.keys(&["$"]);
     let screen = tree.screen();
-    assert!(row(&screen, "alpha").contains("alpha $0.95") && row(&screen, " ship").contains("ship $0.35"), "after `$`: {screen:?}");
+    assert!(row(&screen, "alpha").contains("alpha $0.950") && row(&screen, " ship").contains("ship $0.350"), "after `$`: {screen:?}");
     tree.keys(&["$"]);
     let screen = tree.screen();
     assert!(none(&screen), "after a second `$`: {screen:?}");

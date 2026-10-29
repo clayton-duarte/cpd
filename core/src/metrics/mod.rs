@@ -214,16 +214,17 @@ pub fn parse(text: &str, path: &Path) -> Result<Metrics, CpdError> {
     Ok(m)
 }
 
-/// The one formatter of a dollar cost on every surface (`$0.45`, `<1¢`, `$1.2k`).
+/// The one formatter of a dollar cost on every surface: 5 cells after the `$` (`$0.123`, `$12.34`, `$123.4`,
+/// `$1.23k`, `$12.3k`). The form is chosen by the value as its own rounding leaves it.
 pub fn format_cost(usd: f64) -> String {
-    if usd <= 0.0 {
-        "$0.00".to_owned()
-    } else if usd < 0.01 {
-        "<1¢".to_owned()
-    } else if (usd * 100.0).round() >= 100_000.0 {
-        format!("${:.1}k", usd / 1000.0)
-    } else {
-        format!("${usd:.2}")
+    match usd {
+        x if x.is_nan() || x < 0.0005 => "$0.000".to_owned(),
+        x if x < 9.9995 => format!("${x:.3}"),
+        x if x < 99.995 => format!("${x:.2}"),
+        x if x < 999.95 => format!("${x:.1}"),
+        x if x < 9995.0 => format!("${:.2}k", x / 1000.0),
+        x if x < 99950.0 => format!("${:.1}k", x / 1000.0),
+        x => format!("${:.0}k", x / 1000.0),
     }
 }
 

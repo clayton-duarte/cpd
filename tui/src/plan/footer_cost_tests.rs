@@ -42,7 +42,7 @@ fn a_box_with_a_time_and_a_cost_reads_both_on_its_bottom_border() {
     let buf = canvas(&[small(Some(3723), Some(0.449))]);
     let (_, row) = bottom(&buf);
     let line = row.concat();
-    assert_eq!(line, "╰─ 1h·2m·3s · $0.450 ────╯");
+    assert_eq!(line, "╰─ 1h·2m·3s · $0.449 ────╯");
     assert_eq!(row.len(), buf.area.width as usize, "{line}");
     assert_eq!(row[2], " ", "the text starts at column 2: {line}");
     assert_eq!(row[3], "1", "{line}");
@@ -82,7 +82,7 @@ fn only_a_workflow_with_cost_data_shows_a_cost_after_the_counter() {
 fn the_time_and_the_cost_are_drawn_in_the_muted_text_colour() {
     let buf = canvas(&[small(Some(3723), Some(0.449))]);
     let (y, row) = bottom(&buf);
-    assert!(row.concat().starts_with("╰─ 1h·2m·3s · $0.450 ─"), "no cost drawn: {}", row.concat());
+    assert!(row.concat().starts_with("╰─ 1h·2m·3s · $0.449 ─"), "no cost drawn: {}", row.concat());
     let want = crate::palette::muted_text();
     for x in 2..20u16 {
         let c = &buf[(x, y as u16)];
@@ -124,7 +124,7 @@ fn the_cost_moves_the_exit_when_it_covers_the_middle_column() {
     assert_eq!((width, tees), (26, vec![12]));
     assert!(rows(&buf)[y].starts_with("╰─ 5s ───"), "{}", rows(&buf)[y]);
     let (buf, y, width, tees) = exit(Some(5), Some(0.449));
-    assert_eq!(rows(&buf)[y].chars().take(16).collect::<String>(), "╰─ 5s · $0.450 ┬");
+    assert_eq!(rows(&buf)[y].chars().take(16).collect::<String>(), "╰─ 5s · $0.449 ┬");
     assert_eq!((width, tees), (26, vec![15]));
 }
 
