@@ -5,13 +5,17 @@
 //!
 //! A driver, a reload, E2 and R follow the Attempt's stored `runner`, never today's `worker_runner`. This module holds the
 //! start (A3), the liveness (A4) and the stop (A9, W1) of the `durable` runner, and the choice between the runners for the
-//! stop and the metrics. The end report (A5, A9) is not here yet.
+//! stop and the end report. The end report (A5, A9) is [`Report`], one value with two producers: [`pi_report`] and
+//! [`durable_report`].
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rusqlite::{Connection, params};
+use serde::Deserialize;
 use serde_json::Value;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::attempt::ledger::{Attempt as Target, corrupt};
 use crate::config::{Catalog, Config, WorkerRunner};
@@ -22,6 +26,7 @@ use crate::host::pi::{self, PiDirs};
 use crate::host::spawn::{Launch, Pid, Signal, Spawn};
 use crate::host::Tmux;
 use crate::ids::{AttemptId, PlanId, SessionId};
+use crate::metrics::{self, Metrics};
 use crate::ports::Ports;
 
 use super::worker;
@@ -177,11 +182,97 @@ pub(super) fn stop(
     }
 }
 
-/// A9's `metrics` by the stored `runner`: `pi` from its session file; `durable` has none here yet (its end report is
-/// read elsewhere).
-pub(super) fn metrics(runner: WorkerRunner, dirs: &PiDirs, session: Option<&SessionId>) -> Option<Value> {
+/// The end report, as A5 and A9 read it whichever the runner: the fields of [`Metrics`] and the last turn's `errorMessage`.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Report {
+    pub(super) metrics: Metrics,
+    pub(super) error_message: Option<String>,
+}
+
+/// The `pi` producer: the Worker's session file at `file`. `None` while it cannot be parsed (a line being written).
+pub(super) fn pi_report(file: &Path) -> Option<Report> {
+    let metrics = metrics::parse_file(file).ok()?;
+    Some(Report { metrics, error_message: metrics::last_error_message(file) })
+}
+
+/// The `pi` Worker's session file, once pi has created it.
+pub(super) fn pi_file(dirs: &PiDirs, session: &SessionId) -> Option<PathBuf> {
+    pi::session_file(dirs, session)
+}
+
+/// The `EndReport` JSON of contract §6.12.
+#[derive(Deserialize)]
+struct EndReport {
+    stop_reason: String,
+    error_message: Option<String>,
+    turns: u64,
+    tokens_in: u64,
+    tokens_out: u64,
+    cache_read: u64,
+    cache_write: u64,
+    cost_usd: f64,
+    model: Option<String>,
+}
+
+/// The `durable` producer: the end report at `file`, with `duration_s` the wall seconds from `started_at` to now on
+/// `ports.clock`, and `thinking_level` null. `Ok(None)` while the runner has written none; `Err` for a file that exists
+/// and does not parse (the runner writes it atomically, so that is its fault), naming the file and the parse error.
+pub(super) fn durable_report(ports: &Ports, file: &Path, started_at: &str) -> Result<Option<Report>, CpdError> {
+    let text = match std::fs::read_to_string(file) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(CpdError::file_unreadable(file, e)),
+    };
+    let report: EndReport = serde_json::from_str(&text).map_err(|e| {
+        CpdError::new(ErrorCode::SessionMalformed, format!("The end report {} does not parse: {e}.", file.display()))
+            .with("path", file.display().to_string())
+    })?;
+    let started = OffsetDateTime::parse(started_at, &Rfc3339).map_err(|e| corrupt(format!("started_at {started_at:?}: {e}")))?;
+    let duration_s = (ports.clock.utc() - started).as_seconds_f64();
+    Ok(Some(Report {
+        metrics: Metrics {
+            turns: report.turns,
+            tokens_in: report.tokens_in,
+            tokens_out: report.tokens_out,
+            cache_read: report.cache_read,
+            cache_write: report.cache_write,
+            cost_usd: report.cost_usd,
+            duration_s,
+            model: report.model,
+            thinking_level: None,
+            stop_reason: Some(report.stop_reason),
+        },
+        error_message: report.error_message,
+    }))
+}
+
+/// A9's `metrics` by the stored `runner`: `pi` from its session file, `durable` from its end report at `report`; the
+/// Attempt's `started_at` gives the latter its duration. `None` (and why, in the log) when there is none to read.
+pub(super) fn metrics(
+    runner: WorkerRunner,
+    ports: &Ports,
+    dirs: &PiDirs,
+    session: Option<&SessionId>,
+    report: &Path,
+    started_at: &str,
+) -> Option<Value> {
     match runner {
-        WorkerRunner::Pi => worker::metrics(dirs, session),
-        WorkerRunner::Durable => None,
+        WorkerRunner::Pi => {
+            let file = pi::session_file(dirs, session?)?;
+            match metrics::parse_file(&file) {
+                Ok(m) => Some(m.to_json()),
+                Err(e) => {
+                    super::run::log(&format!("no metrics from {}: {}", file.display(), e.message()));
+                    None
+                }
+            }
+        }
+        WorkerRunner::Durable => match durable_report(ports, report, started_at) {
+            Ok(found) => found.map(|r| r.metrics.to_json()),
+            Err(e) => {
+                super::run::log(&format!("no metrics: {}", e.message()));
+                None
+            }
+        },
     }
 }

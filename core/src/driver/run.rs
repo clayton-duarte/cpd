@@ -25,7 +25,7 @@ use crate::git::{self, Setup};
 use crate::home::{CpdHome, Hook, Infra};
 use crate::host::exe::{Exe, Refusal};
 use crate::host::spawn::{Pid as SpawnPid, Spawn};
-use crate::host::pi::{self, PiDirs};
+use crate::host::pi::PiDirs;
 use crate::host::{PaneId, Tmux};
 use crate::ids::{AttemptId, PlanId, SessionId};
 use crate::merge;
@@ -293,9 +293,19 @@ impl Driver {
         self.runner.expect("A1 reads the Attempt's runner")
     }
 
+    /// The Attempt's `started_at`, as stored: the start of a `durable` Worker's `duration_s`.
+    fn started_at(&mut self) -> Result<String, CpdError> {
+        let (plan, id) = (&self.plan, &self.id);
+        self.store.read(|conn| {
+            Ok(conn.query_row("SELECT started_at FROM attempts WHERE plan = ?1 AND id = ?2", params![plan.as_str(), id.to_string()], |r| r.get(0))?)
+        })
+    }
+
     /// A9's `metrics` of the Attempt's Worker, by its runner.
-    fn metrics(&self, dirs: &PiDirs, session: Option<&SessionId>) -> Option<Value> {
-        runner::metrics(self.runner(), dirs, session)
+    fn metrics(&mut self, dirs: &PiDirs, session: Option<&SessionId>) -> Result<Option<Value>, CpdError> {
+        let started_at = self.started_at()?;
+        let report = self.home.worker_report(&self.plan, &self.id);
+        Ok(runner::metrics(self.runner(), &self.ports, dirs, session, &report, &started_at))
     }
 
     /// A9 and W1: stops the Worker by the Attempt's stored runner (the window of `pi`; SIGTERM, then SIGKILL, for `durable`).
@@ -642,7 +652,7 @@ impl Driver {
                 }
             };
             if matches!(seen, Seen::Pane(_)) && file.is_none() {
-                file = pi::session_file(dirs, session);
+                file = runner::pi_file(dirs, session);
                 if let Some(found) = &file {
                     // A data write, no Event: metrics, `attempt read` and the TUI read it.
                     let path = found.to_string_lossy().into_owned();
@@ -682,10 +692,9 @@ impl Driver {
                 }
             }
             let look = match seen {
-                Seen::Pane(look) => look,
-                // A `durable` runner that is alive: not judged yet (A5 for it reads its end report, which is not here), and
-                // the stall rule does not run for it.
-                Seen::Runner(None) => continue,
+                Seen::Pane(look) => Some(look),
+                // A `durable` runner that is alive: A5 reads its end report below; the stall rule does not run for it.
+                Seen::Runner(None) => None,
                 Seen::Runner(Some(ended)) => {
                     let log_file = self.home.worker_log(&now.plan, &now.id);
                     let detail = match ended {
@@ -712,31 +721,52 @@ impl Driver {
                     continue;
                 }
             };
-            let pi = match look {
-                Look::Gone(detail) => return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs),
-                // `list-panes` failed: whether the pane is gone is decided at the next poll.
-                Look::Unknown => continue,
-                Look::Alive(pid) => pid,
-            };
+            if let Some(look) = look {
+                let pi = match look {
+                    Look::Gone(detail) => return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs),
+                    // `list-panes` failed: whether the pane is gone is decided at the next poll.
+                    Look::Unknown => continue,
+                    Look::Alive(pid) => pid,
+                };
 
-            let Some(file) = file.clone() else { continue };
-            // The stall rule (§3.4 A4): pi is the pane's process, alive here. tmux
-            // gives a live pane's pid; it is empty only for a dead or dying pane (hs-n102).
-            // Not while the Worker's `attempt submit` holds a check span (§7.7): it is silent for as long as its Gate runs.
-            let span_open = lock::check_span_open(&self.home, &self.plan, &self.id)?;
-            let descendants = |pi: u32| self.ports.spawn.descendants(SpawnPid(pi)).into_iter().map(|p| p.0).collect();
-            if let Some(line) = pi.and_then(|pi| stall.check_with(&self.ports, &descendants, &file, pi, span_open)) {
-                log(&line);
+                let Some(file) = file.as_ref() else { continue };
+                // The stall rule (§3.4 A4): pi is the pane's process, alive here. tmux
+                // gives a live pane's pid; it is empty only for a dead or dying pane (hs-n102).
+                // Not while the Worker's `attempt submit` holds a check span (§7.7): it is silent for as long as its Gate runs.
+                let span_open = lock::check_span_open(&self.home, &self.plan, &self.id)?;
+                let descendants = |pi: u32| self.ports.spawn.descendants(SpawnPid(pi)).into_iter().map(|p| p.0).collect();
+                if let Some(line) = pi.and_then(|pi| stall.check_with(&self.ports, &descendants, file, pi, span_open)) {
+                    log(&line);
+                }
             }
             // Idle is read from the Session state and confirmed from the file (A5).
             let state: String =
                 self.store.read(|conn| Ok(conn.query_row("SELECT state FROM sessions WHERE id = ?1", [session.as_str()], |r| r.get(0))?))?;
-            let (stop, turns, error) = if state == "idle" {
-                let Some((stop, turns)) = worker::last_stop(&file) else { continue };
-                let error = if stop.as_deref() == Some("error") { worker::last_error(&file) } else { None };
-                (stop, turns, error)
+            // A5 reads the end report, never pi's session file directly: the same value from either runner.
+            let report = if state == "idle" {
+                let read = match &worker {
+                    Worker::Pane(_) => Ok(file.as_deref().and_then(runner::pi_report)),
+                    Worker::Process(_) => {
+                        let started_at = self.started_at()?;
+                        runner::durable_report(&self.ports, &self.home.worker_report(&now.plan, &now.id), &started_at)
+                    }
+                };
+                match read {
+                    // Absent, or a line of pi's file being written: judged at the next poll.
+                    Ok(None) => continue,
+                    Ok(Some(report)) => Some(report),
+                    // A report that exists and does not parse is the runner's fault (it writes atomically).
+                    Err(e) => {
+                        let detail = e.message().to_owned();
+                        return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs);
+                    }
+                }
             } else {
-                (None, 0, None)
+                None
+            };
+            let (stop, turns, error) = match report {
+                Some(report) => (report.metrics.stop_reason, report.metrics.turns, report.error_message),
+                None => (None, 0, None),
             };
             // An Attempt nudged by a driver that left (a reload) has its baseline in the Event;
             // one nudged before the Event carried it takes the first idle count seen.
@@ -818,7 +848,7 @@ impl Driver {
     /// A Worker that submitted meanwhile wins: the Attempt goes to its merge.
     fn end(&mut self, target: &Target, end: End, dirs: &PiDirs) -> Result<Ended, CpdError> {
         log(&format!("ending: {} / {}", end.outcome(), end.cause()));
-        let metrics = self.metrics(dirs, target.worker_session.as_ref());
+        let metrics = self.metrics(dirs, target.worker_session.as_ref())?;
         let ladder = Ladder { catalog: self.catalog.as_ref().expect("A1 loads the catalog"), retry_cap: self.config.retry_cap };
         let (plan, id) = (&self.plan, &self.id);
         let submitted = self.store.write(SOURCE, |tx| {
@@ -854,7 +884,12 @@ impl Driver {
         self.reload_if_installed()?;
         log("A8: merging");
         let runner = self.runner();
-        let metrics = |a: &merge::Attempt| -> Option<Value> { runner::metrics(runner, dirs, a.worker_session.as_ref()) };
+        let started_at = self.started_at()?;
+        let report = self.home.worker_report(&self.plan, &self.id);
+        let ports = &self.ports;
+        let metrics = |a: &merge::Attempt| -> Option<Value> {
+            runner::metrics(runner, ports, dirs, a.worker_session.as_ref(), &report, &started_at)
+        };
         let ctx = merge::Ctx {
             home: &self.home,
             config: &self.config,
@@ -935,7 +970,7 @@ impl Driver {
             return;
         }
         let detail = format!("Its driver failed: {}", error.message());
-        let metrics = PiDirs::from_env().ok().and_then(|dirs| self.metrics(&dirs, target.worker_session.as_ref()));
+        let metrics = PiDirs::from_env().ok().and_then(|dirs| self.metrics(&dirs, target.worker_session.as_ref()).ok().flatten());
         let ladder = Ladder { catalog: self.catalog.as_ref().expect("A1 loads the catalog"), retry_cap: self.config.retry_cap };
         let ended = self.store.write(SOURCE, |tx| {
             ledger::end(tx, &target, &End::Failed { cause: Cause::Crashed, detail: detail.clone() }, metrics.as_ref(), &ladder, Stage::Driver)
