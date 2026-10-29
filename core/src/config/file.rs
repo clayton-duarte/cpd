@@ -13,6 +13,7 @@ use std::time::Duration;
 use serde::Serialize;
 use toml::{Table, Value};
 
+use super::runner::WorkerRunner;
 use super::tier::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
@@ -54,6 +55,8 @@ pub struct Config {
     pub lead_pi_packages: Vec<String>,
     /// `""` is beside the binary: see [`Config::pi_adapter_dir`].
     pub pi_adapter: String,
+    /// Which runner starts a Worker; read once per Attempt, when it is created (contract §3.4, §8.2).
+    pub worker_runner: WorkerRunner,
     /// `context_engine_enabled`: the operator kill switch for the holographic engine.
     pub context_engine_enabled: bool,
     /// `""` is beside the binary: see [`Config::context_engine_bridge_path`].
@@ -302,6 +305,8 @@ impl Config {
             Ok(dir.to_owned())
         })?;
 
+        let worker_runner = r.get("worker_runner", WorkerRunner::Pi, |v| WorkerRunner::parse(text_of(&v)?))?;
+
         let context_engine_enabled = r.get("context_engine_enabled", true, |v| match v {
             Value::Boolean(b) => Ok(b),
             other => Err(format!("must be a boolean, not {}", other.type_str())),
@@ -395,6 +400,7 @@ impl Config {
             open_tier,
             lead_pi_packages,
             pi_adapter,
+            worker_runner,
             context_engine_enabled,
             context_engine_bridge,
             context_engine_python,

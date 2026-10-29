@@ -25,7 +25,7 @@ use super::engine::{Engine, metrics};
 use super::report::{About, Step};
 use cpd_core::attempt::ledger::{self, Cause, End, Ladder, Stage};
 use cpd_core::driver::lock::{self, Free};
-use cpd_core::driver::worker;
+use cpd_core::driver::runner;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::host::layout::{MAIN_WINDOW, View};
 use cpd_core::host::tmux::{OPT_SESSION, Pane, Spawn};
@@ -189,7 +189,7 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
     engine.home.remove_infra(plan, id)?;
     drop(lock);
     engine.log.line(&format!("E2: the driver of {id} (Plan {plan}) is dead: ended {} / {}", end.outcome(), end.cause()));
-    worker::kill_attempt_window(&engine.config, &engine.tmux, plan, id)
+    runner::kill_orphan(&engine.ports, &engine.config, &engine.home, &engine.tmux, &mut engine.store, plan, id)
 }
 
 /// R (§7.4) for the orphaned merge `active`, with no repo lock (hs-d243): R
@@ -390,12 +390,39 @@ fn sessions(engine: &mut Engine) {
             (None, _) => "it has no pane".to_owned(),
         };
         let about = About::Session(session.id.clone());
+        // R9: a live durable Worker has no pane by design.
+        match live_durable_worker(engine, &session, found.is_some()) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(e) => {
+                engine.fail(Step::E2, about, &e);
+                continue;
+            }
+        }
         let dead_lead = found.filter(|pane| pane.dead && session.role == "lead");
         match stop_and_clean(engine, &session, &why, dead_lead) {
             Ok(()) => engine.clear(Step::E2, &about),
             Err(e) => engine.fail(Step::E2, about, &e),
         }
     }
+}
+
+/// R9: whether `session` is a paneless Worker Session whose Attempt is not `ended` and has the stored runner `durable`: it
+/// has no pane by design, so it is live. Any other paneless Session is not.
+fn live_durable_worker(engine: &mut Engine, session: &Live, has_pane: bool) -> Result<bool, CpdError> {
+    if has_pane || session.role != "worker" {
+        return Ok(false);
+    }
+    let found: Option<(String, String)> = engine.store.read(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT a.status, a.runner FROM sessions s JOIN attempts a ON a.plan = s.plan AND a.id = s.attempt WHERE s.id = ?1",
+                [session.id.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+    })?;
+    Ok(found.is_some_and(|(status, runner)| status != "ended" && runner == "durable"))
 }
 
 /// [`stop`], and for a Lead's dead pane (G2, §3.6) its cleanup: a pane outside

@@ -6,6 +6,9 @@ mod common;
 
 mod ask;
 mod attempt;
+mod worker_runner;
+mod worker_runner_durable;
+mod worker_runner_report;
 mod config;
 mod context_curation;
 mod gate;

@@ -251,6 +251,10 @@ _Avoid_: coordinator, orchestrator
 An agent that executes one Attempt of one Job in its own worktree.
 _Avoid_: subagent, executor, thread (as a word for a Worker)
 
+**Worker runner** (term, pro-d165):
+What runs a Worker: `pi` (a pi session in a tmux window) or `durable` (a headless child process of the Attempt's driver that resumes in place). Chosen by the config key `worker_runner` when an Attempt is created and stored on it; both are kept.
+_Avoid_: engine, backend
+
 **Brief** (entity, B3):
 A Context record of kind `brief`, written by `cpd plan new --brief-file`: what the Manager or the User asks of one Plan's Lead. Not a Spec, which describes a Job.
 _Avoid_: ticket, prompt

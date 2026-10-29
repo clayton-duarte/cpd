@@ -1846,7 +1846,7 @@ fn converts_keeping_every_row_and_id(n: usize) {
                     continue;
                 }
                 // `job-kinds` added two NOT NULL columns with a default: `jobs.kind` `work` and `prs.shape` `free`; `session-by-user` one, `sessions.by_user` 0.
-                let default = |v: &Value| v.is_null() || (table == "jobs" && v == "work") || (table == "prs" && v == "free") || (table == "sessions" && v == 0);
+                let default = |v: &Value| v.is_null() || (table == "jobs" && v == "work") || (table == "prs" && v == "free") || (table == "sessions" && v == 0) || (table == "attempts" && v == "pi");
                 assert!(values[width..].iter().all(default), "{table}: an added column is set: {row}");
                 values.truncate(width);
                 *row = Value::from(values).to_string();

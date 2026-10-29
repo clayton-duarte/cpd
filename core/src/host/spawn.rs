@@ -392,6 +392,10 @@ struct Table {
     exec_hook: Option<ExecHook>,
     /// The failure `exec_keeping` answers, when a test said so.
     exec_fails: Option<io::ErrorKind>,
+    /// The failure `spawn` answers, when a test said so (`FakeSpawn::fail_spawn`).
+    spawn_fails: Option<io::ErrorKind>,
+    /// The signals a pid ignores (`FakeSpawn::survive`): `signal` records them and the pid keeps running.
+    survives: Vec<(Pid, Signal)>,
 }
 
 /// A call of [`Spawn::exec_keeping`] on the fake: what was exec-ed and the state of the descriptor kept at the call.
@@ -461,6 +465,16 @@ impl FakeSpawn {
         self.table().exec_fails = Some(kind);
     }
 
+    /// Makes `spawn` fail with `kind` from now on: the `Launch` is recorded, no pid is handed out and nothing runs.
+    pub fn fail_spawn(&self, kind: io::ErrorKind) {
+        self.table().spawn_fails = Some(kind);
+    }
+
+    /// Makes `pid` ignore `signal`: `signal` records it and the process keeps running (a runner that ignores SIGTERM).
+    pub fn survive(&self, pid: Pid, signal: Signal) {
+        self.table().survives.push((pid, signal));
+    }
+
     /// `launches` without the engine's `cpd janitor` launch (step E16 starts one on the first tick of every engine start).
     pub fn launches_but_janitor(&self) -> Vec<Launch> {
         self.launches().into_iter().filter(|l| l.args != ["janitor"]).collect()
@@ -511,7 +525,12 @@ impl FakeSpawn {
 
 impl Spawn for FakeSpawn {
     fn spawn(&self, l: &Launch) -> io::Result<Pid> {
-        Ok(self.table().start(l))
+        let mut table = self.table();
+        if let Some(kind) = table.spawn_fails {
+            table.launches.push(l.clone());
+            return Err(io::Error::from(kind));
+        }
+        Ok(table.start(l))
     }
 
     fn try_wait(&self, p: Pid) -> io::Result<Option<ExitStatus>> {
@@ -525,14 +544,15 @@ impl Spawn for FakeSpawn {
     fn signal(&self, p: Pid, s: Signal) -> io::Result<()> {
         let mut table = self.table();
         table.signals.push((p, s));
+        let ignored = table.survives.contains(&(p, s));
         let number = match s {
             Signal::Term => signal::Signal::SIGTERM,
             Signal::Kill => signal::Signal::SIGKILL,
         } as i32;
         match table.pids.get_mut(&p) {
             Some(fate) => {
-                // A pid that already exited stays as it exited.
-                if matches!(fate, Fate::Running) {
+                // A pid that already exited stays as it exited, and one that ignores the signal keeps running.
+                if matches!(fate, Fate::Running) && !ignored {
                     *fate = Fate::Exited(ExitStatus::from_raw(number));
                 }
                 Ok(())

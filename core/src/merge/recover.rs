@@ -9,9 +9,10 @@ use crate::attempt::ledger::{self, Attempt, Cause, End, Ladder, Stage};
 use crate::driver::lock::{self, probe};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, run::run};
-use crate::driver::worker;
+use crate::driver::runner;
 use crate::host::tmux::Tmux;
 use crate::ids::{AttemptId, PlanId};
+use crate::ports::Ports;
 use crate::store::Store;
 
 /// What R did for one orphaned Attempt.
@@ -88,7 +89,7 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
             if let Some(e) = super::publish(attempt, &tip) {
                 store.write(ctx.source, |tx| ledger::append_error(tx, attempt, ctx.source, &e, push_text(attempt, &e)))?;
             }
-            rest_of_a9(ctx, attempt)?;
+            rest_of_a9(store, ctx, attempt)?;
             Ok(Some(end))
         }
         // R3: no merge.
@@ -105,7 +106,7 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
             store.write(ctx.source, |tx| ledger::end(tx, attempt, &end, metrics.as_ref(), &ladder, Stage::Merge))?;
             // A9: the Attempt is ended, its worktree is kept, its window goes; the driver lock file goes
             // too, whether or not the kill worked (each item best effort).
-            let killed = kill_window(ctx, attempt);
+            let killed = kill_worker(store, ctx, attempt);
             lock::remove(ctx.home, &attempt.plan, &attempt.id)?;
             killed?;
             Ok(Some(end))
@@ -157,9 +158,9 @@ pub(super) fn push_text(attempt: &Attempt, error: &CpdError) -> String {
 
 /// The rest of A9 after R2: kill the Attempt's tmux window, remove its
 /// worktree and branch (§3.4, §7.2).
-fn rest_of_a9(ctx: &Ctx<'_>, attempt: &Attempt) -> Result<(), CpdError> {
+fn rest_of_a9(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<(), CpdError> {
     // Best effort per item: a window that cannot be killed does not keep the worktree.
-    let killed = kill_window(ctx, attempt);
+    let killed = kill_worker(store, ctx, attempt);
     // A linear Attempt is the workflow worktree and the Lead Branch: keep both (hs-d680).
     if git::worktree::is_linear(&attempt.branch, &attempt.lead_branch) {
         return killed;
@@ -168,8 +169,8 @@ fn rest_of_a9(ctx: &Ctx<'_>, attempt: &Attempt) -> Result<(), CpdError> {
     killed.and(removed)
 }
 
-/// A9's kill of the Attempt's window, as the driver does it (retried).
-fn kill_window(ctx: &Ctx<'_>, attempt: &Attempt) -> Result<(), CpdError> {
+/// A9's stop of the Attempt's Worker, by its stored runner (the seam's [`runner::kill_orphan`]: R's driver is dead).
+fn kill_worker(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<(), CpdError> {
     let tmux = Tmux::new(ctx.config.tmux.socket.as_str());
-    worker::kill_attempt_window(ctx.config, &tmux, &attempt.plan, &attempt.id)
+    runner::kill_orphan(&Ports::current(), ctx.config, ctx.home, &tmux, store, &attempt.plan, &attempt.id)
 }

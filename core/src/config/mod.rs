@@ -9,6 +9,7 @@ pub mod catalog;
 mod file;
 mod migrate;
 mod repo;
+mod runner;
 mod tier;
 
 #[cfg(test)]
@@ -32,6 +33,7 @@ use crate::policy::PolicyKey;
 pub use catalog::{PiInstall, load as load_catalog, load_with as load_catalog_with, locate_pi};
 pub use file::{Config, Events, Inbox, Source, Sources, TickSeconds, Timeouts, Tmux, Watch};
 pub use repo::RepoTests;
+pub use runner::WorkerRunner;
 pub use tier::{Catalog, Letter, Tier, TierModel};
 
 /// `cpd config` takes no arguments.
