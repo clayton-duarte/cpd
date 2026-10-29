@@ -338,3 +338,67 @@ fn the_query_selects_the_fields_the_contract_reads() {
         assert!(text.contains(needle), "missing `{needle}` in {text}");
     }
 }
+
+fn typed_comment(id: &str, typename: Option<&str>, login: &str, at: &str) -> Value {
+    let mut c = comment(id, login, "Scan summary", at);
+    if let Some(t) = typename {
+        c["author"]["__typename"] = json!(t);
+    }
+    c
+}
+
+fn typed_review(id: &str, typename: Option<&str>, login: &str, at: &str) -> Value {
+    let mut r = review(id, "COMMENTED", login, "Scan summary", at);
+    if let Some(t) = typename {
+        r["author"]["__typename"] = json!(t);
+    }
+    r
+}
+
+#[test]
+fn a_bot_typed_author_without_a_bot_suffix_is_a_bot_thread() {
+    let comments = |typename: &str| vec![typed_comment("C1", Some(typename), "kodem-security", "t1"), comment("C2", "rev", "Agreed", "t2")];
+
+    let items = threads_only(vec![thread("T1", false, false, comments("Bot"))]);
+    assert_eq!(items.len(), 1);
+    assert_eq!((items[0].author.as_str(), items[0].bot, items[0].last.as_str()), ("kodem-security", true, "C2"));
+
+    let items = threads_only(vec![thread("T1", false, false, comments("User"))]);
+    assert!(!items[0].bot);
+}
+
+#[test]
+fn a_bot_typed_issue_comment_is_never_an_item() {
+    let comments = vec![typed_comment("I1", Some("Bot"), "kodem-security", "t1"), typed_comment("I2", Some("User"), "rev", "t2")];
+
+    assert_eq!(ids(&read(vec![], comments, vec![]).items), ["I2"]);
+}
+
+#[test]
+fn a_bot_typed_review_is_never_an_item() {
+    let bot = read(vec![], vec![], vec![typed_review("R1", Some("Bot"), "kodem-security", "t1")]).items;
+    assert_eq!(bot, []);
+
+    let user = read(vec![], vec![], vec![typed_review("R1", Some("User"), "kodem-security", "t1")]).items;
+    assert_eq!(ids(&user), ["R1"]);
+}
+
+#[test]
+fn an_author_without_a_typename_is_a_bot_only_by_its_login() {
+    let threads = |login: &str| vec![thread("T1", false, false, vec![typed_comment("C1", None, login, "t1")])];
+
+    assert!(!threads_only(threads("kodem-security"))[0].bot);
+    assert!(threads_only(threads("copilot[bot]"))[0].bot);
+
+    let comments = vec![typed_comment("I1", None, "kodem-security", "t1"), typed_comment("I2", None, "copilot[bot]", "t2")];
+    assert_eq!(ids(&read(vec![], comments, vec![]).items), ["I1"]);
+}
+
+#[test]
+fn the_query_selects_the_author_typename_of_every_comment_and_review() {
+    let text = query(&[("acme/pay", 7)]);
+
+    assert_eq!(text.matches("author { __typename login }").count(), 3, "{text}");
+    assert!(!text.contains("author { login }"), "{text}");
+    assert!(text.contains("viewer { login }"), "{text}");
+}

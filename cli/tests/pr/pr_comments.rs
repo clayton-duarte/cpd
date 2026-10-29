@@ -27,9 +27,14 @@ fn open_thread(id: &str, last: &str) -> Value {
 
 /// GitHub's answer for pull request 812: its `updatedAt` and its threads.
 fn answer(updated_at: &str, threads: Vec<Value>) -> String {
+    answer_with_comments(updated_at, threads, vec![])
+}
+
+/// Like `answer`, with issue comments on the conversation too.
+fn answer_with_comments(updated_at: &str, threads: Vec<Value>, comments: Vec<Value>) -> String {
     let empty = page(vec![]);
     json!({"data": {"viewer": {"login": "me"}, "rateLimit": {"cost": 1, "remaining": 4900, "resetAt": "2026-10-20T11:00:00Z"},
-        "p0": {"pullRequest": {"id": "PR_1", "updatedAt": updated_at, "reviewThreads": page(threads), "comments": empty, "reviews": empty}}}})
+        "p0": {"pullRequest": {"id": "PR_1", "updatedAt": updated_at, "reviewThreads": page(threads), "comments": page(comments), "reviews": empty}}}})
     .to_string()
 }
 
@@ -217,4 +222,29 @@ fn a_failed_comments_read_fails_the_poll_loud_and_writes_nothing() {
     assert_eq!((fx.txns(), fx.event_count()), (txns, events), "nothing written");
     assert_eq!(fx.pr_data().1, "none", "the search's review decision was not stored");
     assert_eq!(stored(&fx, 812), Some((None, None)));
+}
+
+#[test]
+fn a_bot_typed_issue_comment_is_stored_as_no_item_and_tells_nothing() {
+    let typed = |typename: &str, login: &str| {
+        let mut c = comment("I1", login, "Scan summary", "2026-10-20T09:00:00Z");
+        c["author"]["__typename"] = json!(typename);
+        c
+    };
+
+    let fx = poll_fx("deploy");
+    search_at(&fx, "U1");
+    read_says(&fx, answer_with_comments("U1", vec![], vec![typed("Bot", "kodem-security")]));
+    fx.poll();
+    assert_eq!(stored_ids(&fx), Vec::<String>::new(), "a Bot's comment is no item");
+    assert_eq!(fx.events("pr-feedback").len(), 0);
+
+    let fx = poll_fx("deploy");
+    search_at(&fx, "U1");
+    read_says(&fx, answer_with_comments("U1", vec![], vec![typed("User", "rev")]));
+    fx.poll();
+    assert_eq!(stored_ids(&fx), ["I1"]);
+    let events = fx.events("pr-feedback");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].1, feedback("open", "none", "none", &["comments"]));
 }
