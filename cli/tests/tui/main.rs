@@ -34,6 +34,7 @@ mod tui_tree_delete;
 mod tui_tree_no_inbox;
 mod tui_tree_archive_manager;
 mod tui_tree_asleep;
+mod tui_tree_cost;
 mod tui_view_worker_gone;
 mod tui_widgets;
 mod tui_widgets_column;
