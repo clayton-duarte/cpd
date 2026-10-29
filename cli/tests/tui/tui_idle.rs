@@ -230,7 +230,7 @@ fn a_commit_that_concerns_a_view_makes_it_take_a_snapshot_and_a_key_makes_it_flu
         let before = view.snapshots();
         fx.env.sql(
             "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
-             VALUES (cpd_txn(), '2026-01-03T00:00:00.000Z', 'session-state', 'ctx', 'ship', 'lead-ship', 'State.', '{}');",
+             VALUES (cpd_txn(), '2026-01-03T00:00:00.000Z', 'session-state', 'ctx', 'ship', 'lead-ship', 'State.', '{\"from\":\"idle\",\"label\":null,\"to\":\"working\"}');",
         );
         noisy(&fx, &mut view, &mut noise, Duration::from_secs(2));
         assert!(view.snapshots() > before, "{name} took no snapshot after an Event that concerns it");
