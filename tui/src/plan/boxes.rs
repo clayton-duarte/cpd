@@ -125,6 +125,11 @@ fn word(pull: &Pull, asked: bool) -> (&'static str, Meaning) {
     look.conflict.unwrap_or(look.state)
 }
 
+/// The duration text of the counter on a box's bottom border (Context record pro-d175).
+pub(crate) fn format_elapsed(_seconds: u64) -> String {
+    String::new()
+}
+
 /// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󱆭` once the PR has
 /// a pull request, the state in the palette's PR state colour (`conflict`, waiting, for an open one that conflicts; `closed`,
 /// waiting, red when the Plan's Lead `asked` the User, see [`pr_look`]), else the PR's status, muted. While the Plan's Lead
