@@ -780,6 +780,34 @@ fn the_plan_chart_is_drawn_at_the_spinner_frame_of_the_clock() {
     assert_eq!(next.frame, (first.frame + 1) % palette::SPINNER.len());
 }
 
+#[test]
+fn the_plan_views_snapshot_reads_the_elapsed_time_at_its_ports_clock() {
+    let (fakes, home) = (Fakes::new(), home());
+    let mut store = home.store();
+    sql(&mut store, PLAN_FIXTURE);
+    // an Attempt that started 100 whole seconds before the fake clock's wall time and has not ended
+    let started = OffsetDateTime::from_unix_timestamp(i64::try_from(wall_ms(&fakes.ports) / 1000).unwrap() - 100).unwrap();
+    let started = started.format(&Rfc3339).unwrap().replace('Z', ".000Z");
+    sql(
+        &mut store,
+        &format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+                               created_txn, created_at)
+             VALUES ('p1', 'api', 'a', 'Job', 'S3', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', 'running', 0,
+                     '0000000000000000000000000000000000000000000000000000000000000000', cpd_txn(), '2026-01-02T00:00:00.000Z');
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, started_at, ended_at)
+             VALUES ('p1', 'a-a1', 'a', 1, 'S3', 'ladder', 'running', NULL, NULL, 'cpd/p1--a-a1', '/w/a', '{started}', NULL);"
+        ),
+    );
+    let elapsed = |fakes: &Fakes, store: &mut Store| {
+        let centre = crate::plan::snapshot_with(&fakes.ports, store, 40).unwrap().expect("the Lead is in the slot");
+        centre.plan.prs[0].elapsed_seconds
+    };
+    assert_eq!(elapsed(&fakes, &mut store), Some(100)); // the fake clock is 100 s after the start
+    fakes.clock.advance(Duration::from_secs(90));
+    assert_eq!(elapsed(&fakes, &mut store), Some(190)); // 90 s more
+}
+
 // ---- the logs view ----------------------------------------------------------------------------------------------------
 
 const POLL: Duration = Duration::from_millis(250);

@@ -36,6 +36,8 @@ mod flow;
 mod follow;
 mod logs;
 #[cfg(test)]
+mod elapsed_tests;
+#[cfg(test)]
 mod look_tests;
 pub mod pr_look;
 mod pulse;
@@ -53,7 +55,7 @@ mod watch_tests;
 pub use age::age_text;
 pub use flow::{
     AttemptNode, ChatSlot, Flow, JobNode, NeedsUser, OpenEscalation, PlanBoxes, PrNode, PrStatus, Pull, Review, UpdateState, WorkerRef, chat_slot, flow,
-    plan_boxes,
+    plan_boxes, plan_boxes_at,
 };
 pub use shared::{
     AttemptStatus, Checks, JobCounts, JobStatus, Origin, Outcome, Place, PlanHead, Pr,

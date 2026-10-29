@@ -78,6 +78,7 @@ fn pr_node(pull: Option<Pull>) -> PrNode {
         pull,
         waiting_on: Vec::new(),
         superseded_by: None,
+        elapsed_seconds: None,
     }
 }
 

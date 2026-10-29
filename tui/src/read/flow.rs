@@ -129,6 +129,8 @@ pub struct PrNode {
     pub waiting_on: Vec<String>,
     /// For a `cancelled` PR, the PR that carried its work (a reference), from its `pr-cancelled` Event.
     pub superseded_by: Option<String>,
+    /// `None` when no Job of the Workflow has an Attempt, else its active time in whole seconds, see Context record pro-d175.
+    pub elapsed_seconds: Option<u64>,
 }
 
 /// The state of a PR's update Job (`jobs.kind = 'update'`) that is not ended (hs-d532).
@@ -274,8 +276,14 @@ pub fn flow(store: &mut Store, plan: &PlanId) -> Result<Flow, CpdError> {
     })
 }
 
+/// [`plan_boxes`] with the Workflows' active time read at `now_ms` (Unix milliseconds).
+pub fn plan_boxes_at(store: &mut Store, plan: &PlanId, _now_ms: i64) -> Result<PlanBoxes, CpdError> {
+    plan_boxes(store, plan)
+}
+
 /// The plan view's snapshot of `plan`: `plan_not_found` when it does not exist. Unlike [`flow`], a Plan with no PR yet
 /// is read too (R34: `plan new` adds none).
+/// The Workflows' active time is read at the store's clock.
 pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdError> {
     store.read(|conn| {
         let (context, lead, lead_working, phase): (String, String, bool, String) = conn
@@ -384,6 +392,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
             base,
             status,
             pull,
+            elapsed_seconds: None,
         });
     }
     Ok(out)
