@@ -116,8 +116,8 @@ fn the_tree_draws_the_cost_of_a_plan_and_of_its_context_from_the_session_files()
     sql(&mut open(&fx.env), &s);
     let tree = Tree::start(&fx, 60, 14);
     let screen = tree.screen();
-    assert!(row(&screen, "alpha").ends_with("$0.95"), "the Context: Plan + Manager: {screen:?}");
-    assert!(row(&screen, " ship").ends_with("$0.35"), "the Plan: Lead messages + compaction: {screen:?}");
+    assert!(row(&screen, "alpha").contains("alpha $0.95"), "the Context: Plan + Manager: {screen:?}");
+    assert!(row(&screen, " ship").contains("ship $0.35"), "the Plan: Lead messages + compaction: {screen:?}");
     assert!(!row(&screen, " bare").contains('$'), "a Plan with no file draws none: {screen:?}");
 }
 
