@@ -61,6 +61,9 @@ pub(crate) enum Rule {
     Minimum,
     /// The pane clips the box (the canvas scrolls): only (7), nothing outside the container, is asserted of it.
     Clipped,
+    /// The row's text runs to the box's last column: the tree's rows end at the pane's inner edge (pro-d186), so the
+    /// rail's blank last column (2) and its right padding (4) are not asserted of it.
+    RightEdge,
 }
 
 /// A row that keeps a recorded design, by name: the name carries the record id.
@@ -263,7 +266,7 @@ fn check_box(placed: &Placed, buf: &Buffer, fail: &dyn Fn(u16, u16, &str)) {
             }
         }
         // a rail's title runs to the area's last cell (the Inbox's pill ends there); the body and closing rows leave it blank
-        if rail && y != top && !blank(&buf[(right, y)]) {
+        if rail && y != top && !blank(&buf[(right, y)]) && !exempted(placed, y, Rule::RightEdge) {
             fail(right, y, &format!("(2) box {name}: a rail writes its last column"));
         }
     };
@@ -295,7 +298,7 @@ fn check_box(placed: &Placed, buf: &Buffer, fail: &dyn Fn(u16, u16, &str)) {
             }
         }
         for x in r.x + 1..=right {
-            if x > last_content && !blank(&buf[(x, y)]) && !(x == right && !rail) {
+            if x > last_content && !blank(&buf[(x, y)]) && !(x == right && !rail) && !exempted(placed, y, Rule::RightEdge) {
                 fail(x, y, &format!("(4) box {name}: content past column {last_content}"));
             }
         }

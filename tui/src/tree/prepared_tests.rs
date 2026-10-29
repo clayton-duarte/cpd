@@ -279,7 +279,7 @@ pub(super) fn populate(env: &mut Env) {
 fn the_tree_of_a_prepared_store() {
     let mut env = Env::new();
     populate(&mut env);
-    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 42 - right.chars().count());
+    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
     let expected = vec![
         String::new(),
         format!(" ╭{NEEDS_YOU} beta"),
@@ -320,7 +320,7 @@ fn the_tree_orders_live_rows_by_dot_tier_then_newest_first() {
          UPDATE plans SET created_at = '2026-01-04T00:00:00.000Z' WHERE id = 'sketch';
          UPDATE sessions SET created_at = '2026-01-05T00:00:00.000Z' WHERE id = 'f-idle';",
     );
-    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 42 - right.chars().count());
+    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
     let beta = || {
         vec![
             String::new(),
@@ -365,7 +365,7 @@ fn an_archived_row_is_last_after_the_live_rows() {
         "UPDATE plans SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'sketch';
          UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'f-idle';",
     );
-    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 42 - right.chars().count());
+    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
     let expected = vec![
         String::new(),
         format!(" ╭{NEEDS_YOU} beta"),
@@ -399,7 +399,7 @@ fn the_tree_leaves_the_first_and_the_last_column_blank() {
     // `screen` is trimmed at the right, so the last column is blank when no row is longer than 45 columns
     assert!(screen.iter().all(|r| r.is_empty() || r.starts_with(' ')), "column 0: {screen:?}");
     assert!(screen.iter().all(|r| r.chars().count() <= 45), "the last column: {screen:?}");
-    assert!(screen.iter().any(|r| r.chars().count() == 43), "the counters end at width − 4: {screen:?}");
+    assert!(screen.iter().any(|r| r.chars().count() == 45), "the counters end at width − 2: {screen:?}");
 }
 
 #[test]

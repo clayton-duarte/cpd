@@ -48,13 +48,13 @@ fn fg(buf: &Buffer, x: u16, y: u16) -> Color {
 
 /// The drawn counter string of row `y`, read from column 9 to the edge, trimmed of surrounding spaces.
 fn counters_text(buf: &Buffer, y: u16) -> String {
-    let text: String = (9..WIDTH - 2).map(|x| buf[(x, y)].symbol()).collect();
+    let text: String = (9..WIDTH).map(|x| buf[(x, y)].symbol()).collect();
     text.trim().to_owned()
 }
 
 /// The fg colour of each drawn counter digit cell of row `y` (spaces and `⋅` skipped), in order.
 fn counter_colours(buf: &Buffer, y: u16) -> Vec<Color> {
-    (9..WIDTH - 2)
+    (9..WIDTH)
         .filter_map(|x| {
             let cell = &buf[(x, y)];
             (!matches!(cell.symbol(), " " | "⋅")).then_some(cell.fg)
@@ -64,7 +64,7 @@ fn counter_colours(buf: &Buffer, y: u16) -> Vec<Color> {
 
 /// The fg colour of each `⋅` of row `y`, in order.
 fn separator_colours(buf: &Buffer, y: u16) -> Vec<Color> {
-    (9..WIDTH - 2).filter_map(|x| (buf[(x, y)].symbol() == "⋅").then_some(buf[(x, y)].fg)).collect()
+    (9..WIDTH).filter_map(|x| (buf[(x, y)].symbol() == "⋅").then_some(buf[(x, y)].fg)).collect()
 }
 
 #[test]
