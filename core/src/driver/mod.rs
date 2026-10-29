@@ -5,6 +5,7 @@
 //! - `lock`: the driver lock, taken by the starter and inherited as fd 3;
 //! - `run`: the driver itself, A1–A9;
 //! - `worker`: the Worker Spec, the Worker's pane, its session file;
+//! - `runner`: the seam between the two Worker runners, `pi` and `durable`;
 //! - [`schedule`]: E3's queue walk, a pure function;
 //! - `stall`: A4's stall rule, the kill of a Worker's idle tool call.
 
@@ -12,6 +13,7 @@ pub mod lock;
 #[cfg(test)]
 pub(crate) mod ports_tests;
 mod run;
+pub(crate) mod runner;
 pub mod schedule;
 #[cfg(test)]
 mod schedule_tests;

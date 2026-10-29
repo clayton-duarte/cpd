@@ -13,10 +13,11 @@ use serde_json::{Value, json};
 use crate::clock;
 use crate::attempt::ledger::{self, Attempt as Target, Cause, End, Ladder, Stage};
 use super::lock;
+use super::runner;
 use super::stall;
 use super::worker;
 use super::RunArgs;
-use crate::config::{Catalog, Config, load_catalog};
+use crate::config::{Catalog, Config, WorkerRunner, load_catalog};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -153,6 +154,8 @@ struct Driver {
     exe: Exe,
     /// Loaded in A1; the ladder needs it to end an Attempt.
     catalog: Option<Catalog>,
+    /// The Attempt's stored runner, read in A1: never today's `worker_runner` (§3.4 "The Worker runner and its seam").
+    runner: Option<WorkerRunner>,
     /// Time, processes and `exec`: the real ones, or a test's.
     ports: Ports,
 }
@@ -168,13 +171,26 @@ enum Entry {
     Merge,
 }
 
+/// The Worker A4 watches: a `pi` Worker's pane, or a `durable` Worker's process.
+enum Worker {
+    Pane(PaneId),
+    Process(SpawnPid),
+}
+
 /// What the driver does after A1: `entry` with what a `running` Attempt's
 /// resume needs from the store.
 enum Task {
     Start,
-    /// The Worker's Session and pane.
-    Resume(SessionId, PaneId),
+    /// The Worker's Session and what A4 watches.
+    Resume(SessionId, Worker),
     Merge,
+}
+
+/// What one A4 poll saw of the Worker.
+enum Seen {
+    Pane(Look),
+    /// `None` while the runner's pid is alive, else how it ended.
+    Runner(Option<runner::Ended>),
 }
 
 /// A1's dispatch on the Attempt's status; any other is `illegal_transition`.
@@ -214,7 +230,7 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
         }
     };
     let tmux = Tmux::new(config.tmux.socket.as_str());
-    let mut driver = Driver { home, config, store, tmux, plan, id, lock, exe, catalog: None, ports };
+    let mut driver = Driver { home, config, store, tmux, plan, id, lock, exe, catalog: None, runner: None, ports };
 
     let outcome = (|| {
         let target = driver.load()?;
@@ -273,15 +289,37 @@ impl Driver {
         self.catalog.as_ref().expect("A1 loads the catalog")
     }
 
+    fn runner(&self) -> WorkerRunner {
+        self.runner.expect("A1 reads the Attempt's runner")
+    }
+
+    /// A9's `metrics` of the Attempt's Worker, by its runner.
+    fn metrics(&self, dirs: &PiDirs, session: Option<&SessionId>) -> Option<Value> {
+        runner::metrics(self.runner(), dirs, session)
+    }
+
+    /// A9 and W1: stops the Worker by the Attempt's stored runner (the window of `pi`; SIGTERM, then SIGKILL, for `durable`).
+    fn stop_worker(&mut self) -> Result<(), CpdError> {
+        let runner = self.runner();
+        let pid = match runner {
+            WorkerRunner::Pi => None,
+            WorkerRunner::Durable => {
+                let (plan, id) = (&self.plan, &self.id);
+                self.store.read(|conn| runner::stored(conn, plan, id))?.1
+            }
+        };
+        runner::stop(&self.ports, &self.config, &self.home, &self.tmux, &self.plan, &self.id, (runner, pid))
+    }
+
     /// A1 (after the lock) to A9, from `entry`.
     fn drive(&mut self, task: Task, target: Target) -> Result<Ended, CpdError> {
         let job = self.begin(&target)?;
         let dirs = PiDirs::from_env()?;
         match task {
             Task::Start => self.start(&target, &job, &dirs),
-            Task::Resume(session, pane) => {
+            Task::Resume(session, worker) => {
                 log("A1: resuming at A4 after a reload");
-                self.wait(&session, &pane, &dirs)
+                self.wait(&session, worker, &dirs)
             }
             Task::Merge => self.merge(&dirs),
         }
@@ -289,6 +327,8 @@ impl Driver {
 
     /// A1: the catalog, the Job, its fingerprint.
     fn begin(&mut self, target: &Target) -> Result<jobs::Job, CpdError> {
+        let (plan, id) = (&self.plan, &self.id);
+        self.runner = Some(self.store.read(|conn| runner::stored(conn, plan, id))?.0);
         let models = self.store.read(|conn| crate::policy::model::models_of_job(conn, &self.home, &target.plan, target.job.as_str()))?;
         self.catalog = Some(load_catalog(&self.config, &models)?);
         let all = self.store.read(|conn| jobs::load(conn, &target.plan))?;
@@ -369,12 +409,33 @@ impl Driver {
         let home = &self.home;
         let spec = self.store.read(|conn| worker::render_spec(conn, home, target, job))?;
         let session = SessionId::new_v4();
-        self.register(target, &session, &spec)?;
-        let pane = worker::start(&self.home, &self.config, self.catalog(), &self.tmux, dirs, target, &session)?;
-        self.running(target, &session, &pane)?;
+        let worker = match self.runner() {
+            WorkerRunner::Pi => {
+                self.register(target, &session, &spec)?;
+                let pane = worker::start(&self.home, &self.config, self.catalog(), &self.tmux, dirs, target, &session)?;
+                self.running(target, &session, &pane)?;
+                Worker::Pane(pane.pane)
+            }
+            WorkerRunner::Durable => {
+                // The runner file is checked before anything is registered or spawned; a failed spawn ends `setup_failed` too.
+                let launched = runner::launch(&self.home, &self.config, self.catalog(), target, &session);
+                let launch = match launched {
+                    Ok(launch) => launch,
+                    Err(e) => return self.end(target, End::Failed { cause: Cause::SetupFailed, detail: e.message().to_owned() }, dirs),
+                };
+                self.register(target, &session, &spec)?;
+                match runner::spawn(&self.ports, &launch) {
+                    Ok(pid) => {
+                        self.running_durable(target, pid)?;
+                        Worker::Process(pid)
+                    }
+                    Err(e) => return self.end(target, End::Failed { cause: Cause::SetupFailed, detail: e.message().to_owned() }, dirs),
+                }
+            }
+        };
 
         // A4 and A5.
-        self.wait(&session, &pane.pane, dirs)
+        self.wait(&session, worker, dirs)
     }
 
     /// What A1 does with an Attempt of this `entry`. A `running` Attempt takes
@@ -395,11 +456,19 @@ impl Driver {
                     .with("status", target.status.as_str())
                 };
                 let session = target.worker_session.clone().ok_or_else(|| nothing("Session"))?;
-                let pane: Option<String> = self.store.read(|conn| {
-                    Ok(conn.query_row("SELECT tmux_pane FROM sessions WHERE id = ?1", [session.as_str()], |r| r.get(0))?)
-                })?;
-                let pane = pane.as_deref().and_then(PaneId::parse).ok_or_else(|| nothing("pane"))?;
-                Ok(Task::Resume(session, pane))
+                let (plan, id) = (&self.plan, &self.id);
+                // By the Attempt's stored runner, never today's flag.
+                let (stored, pid) = self.store.read(|conn| runner::stored(conn, plan, id))?;
+                let worker = match stored {
+                    WorkerRunner::Pi => {
+                        let pane: Option<String> = self.store.read(|conn| {
+                            Ok(conn.query_row("SELECT tmux_pane FROM sessions WHERE id = ?1", [session.as_str()], |r| r.get(0))?)
+                        })?;
+                        Worker::Pane(pane.as_deref().and_then(PaneId::parse).ok_or_else(|| nothing("pane"))?)
+                    }
+                    WorkerRunner::Durable => Worker::Process(pid.ok_or_else(|| nothing("process"))?),
+                };
+                Ok(Task::Resume(session, worker))
             }
         }
     }
@@ -509,9 +578,51 @@ impl Driver {
         })
     }
 
+    /// A3's second transaction for a `durable` Worker: `starting → running` and the runner's `worker_pid` together. The
+    /// Session has no pane, so no `session-moved` Event.
+    fn running_durable(&mut self, target: &Target, pid: SpawnPid) -> Result<(), CpdError> {
+        self.store.write(SOURCE, |tx| {
+            let changed = tx.execute(
+                "UPDATE attempts SET status = 'running', worker_pid = ?3 WHERE plan = ?1 AND id = ?2 AND status = 'starting'",
+                params![target.plan.as_str(), target.id.to_string(), pid.0],
+            )?;
+            if changed == 0 {
+                return Err(CpdError::new(ErrorCode::CasLost, format!("Attempt {} is no longer starting.", target.id)));
+            }
+            let text = format!(
+                "Attempt {} is running: its Worker started. See: cpd attempt show {} --plan {}",
+                target.id, target.id, target.plan
+            );
+            events::append(
+                tx,
+                NewEvent::attempt_status(text, "starting", "running")
+                    .plan(target.plan.clone())
+                    .job(target.job.clone())
+                    .attempt(target.id.clone()),
+            )?;
+            Ok(())
+        })
+    }
+
+    /// A4's restart of the `durable` runner: the same launch again, in place, and the new `worker_pid` stored. `Err` is the
+    /// detail the Attempt ends `crashed` with.
+    fn restart_runner(&mut self, target: &Target, session: &SessionId) -> Result<SpawnPid, String> {
+        let launch = runner::launch(&self.home, &self.config, self.catalog(), target, session).map_err(|e| e.message().to_owned())?;
+        let pid = runner::spawn(&self.ports, &launch).map_err(|e| e.message().to_owned())?;
+        let stored = self.store.write(SOURCE, |tx| {
+            tx.execute(
+                "UPDATE attempts SET worker_pid = ?3 WHERE plan = ?1 AND id = ?2 AND status = 'running'",
+                params![target.plan.as_str(), target.id.to_string(), pid.0],
+            )?;
+            Ok(())
+        });
+        stored.map_err(|e| format!("Storing the new worker_pid failed: {}", e.message()))?;
+        Ok(pid)
+    }
+
     /// A4 and A5: waits until the Attempt is submitted (A8), stopped, or its
     /// Worker is gone or idle for good.
-    fn wait(&mut self, session: &SessionId, pane: &PaneId, dirs: &PiDirs) -> Result<Ended, CpdError> {
+    fn wait(&mut self, session: &SessionId, mut worker: Worker, dirs: &PiDirs) -> Result<Ended, CpdError> {
         log("A4: waiting for the Worker");
         // The Worker's session file, recorded once pi has created it.
         let mut file: Option<std::path::PathBuf> = None;
@@ -519,10 +630,18 @@ impl Driver {
         let mut nudged_at: Option<u64> = self.nudge_baseline(session)?;
         let mut stall = stall::Watch::new(self.config.timeouts.stall_seconds);
         let mut watch = PaneWatch::default();
+        // The restarts of a `durable` runner in this driver run: a reloaded driver counts from 0 again.
+        let mut restarts = 0;
         loop {
-            // The pane before the row: a Worker that submits and exits is seen `merging`.
-            let look = poll_with(&self.ports, &mut watch, &self.tmux, pane)?;
-            if file.is_none() {
+            // The Worker before the row: a Worker that submits and exits is seen `merging`.
+            let seen = match &worker {
+                Worker::Pane(pane) => Seen::Pane(poll_with(&self.ports, &mut watch, &self.tmux, pane)?),
+                Worker::Process(pid) => {
+                    self.ports.clock.sleep(POLL);
+                    Seen::Runner(runner::look(&*self.ports.spawn, *pid))
+                }
+            };
+            if matches!(seen, Seen::Pane(_)) && file.is_none() {
                 file = pi::session_file(dirs, session);
                 if let Some(found) = &file {
                     // A data write, no Event: metrics, `attempt read` and the TUI read it.
@@ -562,6 +681,37 @@ impl Driver {
                     return Err(CpdError::new(ErrorCode::StoreFailed, format!("Unknown stop_request {other:?}.")));
                 }
             }
+            let look = match seen {
+                Seen::Pane(look) => look,
+                // A `durable` runner that is alive: not judged yet (A5 for it reads its end report, which is not here), and
+                // the stall rule does not run for it.
+                Seen::Runner(None) => continue,
+                Seen::Runner(Some(ended)) => {
+                    let log_file = self.home.worker_log(&now.plan, &now.id);
+                    let detail = match ended {
+                        runner::Ended::Usage => Some(format!(
+                            "The durable runner exited with status 2, a usage error; its output is in {}.",
+                            log_file.display()
+                        )),
+                        runner::Ended::Other if restarts >= runner::MAX_RESTARTS => Some(format!(
+                            "The durable runner ended {} times in one driver run, after {restarts} restarts; its output is in {}.",
+                            restarts + 1,
+                            log_file.display()
+                        )),
+                        runner::Ended::Other => None,
+                    };
+                    if let Some(detail) = detail {
+                        return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs);
+                    }
+                    restarts += 1;
+                    log(&format!("A4: the durable runner ended; restart {restarts} of {}", runner::MAX_RESTARTS));
+                    match self.restart_runner(&now, session) {
+                        Ok(pid) => worker = Worker::Process(pid),
+                        Err(detail) => return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs),
+                    }
+                    continue;
+                }
+            };
             let pi = match look {
                 Look::Gone(detail) => return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs),
                 // `list-panes` failed: whether the pane is gone is decided at the next poll.
@@ -668,7 +818,7 @@ impl Driver {
     /// A Worker that submitted meanwhile wins: the Attempt goes to its merge.
     fn end(&mut self, target: &Target, end: End, dirs: &PiDirs) -> Result<Ended, CpdError> {
         log(&format!("ending: {} / {}", end.outcome(), end.cause()));
-        let metrics = worker::metrics(dirs, target.worker_session.as_ref());
+        let metrics = self.metrics(dirs, target.worker_session.as_ref());
         let ladder = Ladder { catalog: self.catalog.as_ref().expect("A1 loads the catalog"), retry_cap: self.config.retry_cap };
         let (plan, id) = (&self.plan, &self.id);
         let submitted = self.store.write(SOURCE, |tx| {
@@ -696,14 +846,15 @@ impl Driver {
         // steps, so nothing can move the Attempt branch afterwards. A failure is
         // reported as A9's is; the merge still runs, A9 tries the kill again.
         let target = self.load()?;
-        if let Err(e) = worker::kill_attempt_window_with(&self.ports, &self.config, &self.tmux, &target.plan, &target.id) {
-            log(&format!("killing the Worker's window failed: {}", e.message()));
+        if let Err(e) = self.stop_worker() {
+            log(&format!("stopping the Worker failed: {}", e.message()));
             let _ = self.store.write(SOURCE, |tx| append_error(tx, &target, &e));
         }
         // The safe point before A8's rebase.
         self.reload_if_installed()?;
         log("A8: merging");
-        let metrics = |a: &merge::Attempt| -> Option<Value> { worker::metrics(dirs, a.worker_session.as_ref()) };
+        let runner = self.runner();
+        let metrics = |a: &merge::Attempt| -> Option<Value> { runner::metrics(runner, dirs, a.worker_session.as_ref()) };
         let ctx = merge::Ctx {
             home: &self.home,
             config: &self.config,
@@ -724,7 +875,7 @@ impl Driver {
     /// failure here changes no state: it is reported as an `error` Event.
     fn cleanup(&mut self, target: &Target, merged: bool) {
         let linear = git::worktree::is_linear(&target.branch, &target.lead_branch);
-        let mut result = worker::kill_attempt_window_with(&self.ports, &self.config, &self.tmux, &target.plan, &target.id);
+        let mut result = self.stop_worker();
         if linear {
             // A9 (hs-d680): a merged linear Attempt keeps the workflow worktree and the Lead Branch. A failed or
             // cancelled one resets the Lead Branch to its `base_sha` and discards what the Attempt left, then keeps
@@ -784,7 +935,7 @@ impl Driver {
             return;
         }
         let detail = format!("Its driver failed: {}", error.message());
-        let metrics = PiDirs::from_env().ok().and_then(|dirs| worker::metrics(&dirs, target.worker_session.as_ref()));
+        let metrics = PiDirs::from_env().ok().and_then(|dirs| self.metrics(&dirs, target.worker_session.as_ref()));
         let ladder = Ladder { catalog: self.catalog.as_ref().expect("A1 loads the catalog"), retry_cap: self.config.retry_cap };
         let ended = self.store.write(SOURCE, |tx| {
             ledger::end(tx, &target, &End::Failed { cause: Cause::Crashed, detail: detail.clone() }, metrics.as_ref(), &ladder, Stage::Driver)
