@@ -47,7 +47,7 @@ const PAGE: u32 = 100;
 const PAGE_INFO: &str = "totalCount pageInfo { hasPreviousPage hasNextPage }";
 
 /// The fields of one comment.
-const COMMENT: &str = "id author { login } body url createdAt";
+const COMMENT: &str = "id author { __typename login } body url createdAt";
 
 /// The GraphQL text reading `prs` (`owner/name`, number pairs): alias `p<i>` for the i-th. The caller has checked
 /// that each repo is `owner/name`.
@@ -59,7 +59,7 @@ pub fn query(prs: &[(&str, i64)]) -> String {
             " p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ id updatedAt \
              reviewThreads(first: {PAGE}) {{ {PAGE_INFO} nodes {{ id isResolved isOutdated path comments(first: {PAGE}) {{ {PAGE_INFO} nodes {{ {COMMENT} }} }} }} }} \
              comments(last: {PAGE}) {{ {PAGE_INFO} nodes {{ {COMMENT} }} }} \
-             reviews(last: {PAGE}) {{ {PAGE_INFO} nodes {{ id state body author {{ login }} url createdAt }} }} }} }}"
+             reviews(last: {PAGE}) {{ {PAGE_INFO} nodes {{ id state body author {{ __typename login }} url createdAt }} }} }} }}"
         ));
     }
     text.push_str(" }");
@@ -93,6 +93,8 @@ struct Repository {
 #[derive(Deserialize)]
 struct Login {
     login: String,
+    #[serde(rename = "__typename", default)]
+    kind: String,
 }
 
 #[derive(Deserialize)]
@@ -161,6 +163,11 @@ struct Review {
     created_at: String,
 }
 
+/// A bot is an author typed `Bot`, whose login ends `[bot]`, or whose login is listed in `bots`.
+fn author_is_bot(author: &Option<Login>, bots: &[String]) -> bool {
+    author.as_ref().is_some_and(|a| a.kind == "Bot" || super::status::is_bot(&a.login, bots))
+}
+
 /// The login GitHub shows for an author that no longer exists.
 const GHOST: &str = "ghost";
 
@@ -191,7 +198,6 @@ pub fn parse(prs: &[(&str, i64)], answer: &str, bots: &[String]) -> Result<Vec<R
         return Err(gh(format!("The comments read answered with errors: {}", first.message.as_deref().unwrap_or("(no message)"))));
     }
     let mut data = answer.data.ok_or_else(|| gh("The comments read answered without data.".to_owned()))?;
-    let is_bot = |login: &str| super::status::is_bot(login, bots);
     let me = data.viewer.login.clone();
     let mut reads = Vec::with_capacity(prs.len());
     for (i, (repo, number)) in prs.iter().enumerate() {
@@ -218,7 +224,7 @@ pub fn parse(prs: &[(&str, i64)], answer: &str, bots: &[String]) -> Result<Vec<R
                 kind: Kind::Thread,
                 last: last.id.clone(),
                 author: author.to_owned(),
-                bot: is_bot(author),
+                bot: author_is_bot(&first.author, bots),
                 path: thread.path.clone(),
                 outdated: thread.outdated,
                 url: last.url.clone(),
@@ -233,10 +239,10 @@ pub fn parse(prs: &[(&str, i64)], answer: &str, bots: &[String]) -> Result<Vec<R
                 .enumerate()
                 .any(|(j, c)| marked(&c.body) && (c.created_at.as_str() > at || (c.created_at == at && position.is_some_and(|i| j > i))))
         };
-        let spoken = |author: &str| author != me && !is_bot(author);
+        let spoken = |author: &Option<Login>| login(author) != me && !author_is_bot(author, bots);
         for (i, comment) in pull.comments.nodes.iter().enumerate() {
             let author = login(&comment.author);
-            if !spoken(author) || marked(&comment.body) || answered_after(&comment.created_at, Some(i)) {
+            if !spoken(&comment.author) || marked(&comment.body) || answered_after(&comment.created_at, Some(i)) {
                 continue;
             }
             items.push(Item {
@@ -254,7 +260,7 @@ pub fn parse(prs: &[(&str, i64)], answer: &str, bots: &[String]) -> Result<Vec<R
         for review in &pull.reviews.nodes {
             let author = login(&review.author);
             let said = matches!(review.state.as_str(), "COMMENTED" | "CHANGES_REQUESTED") && !review.body.trim().is_empty();
-            if !said || !spoken(author) || answered_after(&review.created_at, None) {
+            if !said || !spoken(&review.author) || answered_after(&review.created_at, None) {
                 continue;
             }
             items.push(Item {
