@@ -357,10 +357,10 @@ impl Changes {
 /// The open items whose condition has the same identity and has moved inside it, and the item follows it in place
 /// without closing, so a snooze or a dismissal stays: a `curate-*` item (subject `curate-retire:<context>`) whose
 /// count moved changes its label (hs-d549, hs-d551); a `pr-ready` item changes its label or its links (url, context,
-/// plan, session); a `dialog` item changes its label (the Verdict's option); a `drafts-parked` item changes its label (the count of drafts, hs-d731).
+/// plan, session); a `dialog` item changes its label (the Verdict's option); a `drafts-parked` item changes its label (the count of drafts, hs-d731); an `unread` item changes its label (Row 2, the title).
 fn relabelled<'a>(open: &'a [Item], conditions: &'a [Condition]) -> Vec<(&'a Item, &'a Condition)> {
     open.iter()
-        .filter(|i| matches!(i.kind, Kind::CurateRetire | Kind::CurateDocs | Kind::PrReady | Kind::Dialog | Kind::DraftsParked))
+        .filter(|i| matches!(i.kind, Kind::CurateRetire | Kind::CurateDocs | Kind::PrReady | Kind::Dialog | Kind::DraftsParked | Kind::Unread))
         .filter_map(|i| conditions.iter().find(|c| c.identity() == i.identity()).map(|c| (i, c)))
         .filter(|(i, c)| {
             i.label != c.label
@@ -388,7 +388,7 @@ pub fn open_items(conn: &Connection) -> Result<Vec<Item>, CpdError> {
 /// condition with no open item of its identity (`kind`, `subject`,
 /// `urgency`), closes each open item with no condition, and appends
 /// `inbox-opened` and `inbox-closed` for them, closed ones first. A `curate-*`,
-/// `dialog` or `pr-ready` item whose condition moved inside its identity (see
+/// `dialog`, `pr-ready`, `drafts-parked` or `unread` item whose condition moved inside its identity (see
 /// `relabelled`) is updated in place, with no Event. Writes
 /// nothing, not even a `txns` row, when nothing changed. `now` is §1.3's time.
 pub fn reconcile(store: &mut Store, conditions: &[Condition], now: &str) -> Result<Changes, CpdError> {
