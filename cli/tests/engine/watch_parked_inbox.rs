@@ -94,18 +94,45 @@ fn opens_after_the_lead_finishes_a_turn() {
     assert_eq!((item["plan"].as_str(), item["session"].as_str()), (Some("pay"), Some("lead1")), "linked to the Plan and its Lead: {item}");
     assert_eq!(item["context"], "ctx", "{item}");
 
-    // The Lead works again (a chat turn of the User): the item does not flicker.
+    // The Lead works again (a chat turn of the User): the item is open only while the Lead is idle.
     state(&fx, "working");
     tick(&fx);
-    assert_eq!(labels(&fx), ["pay: 2 parked drafts"], "the item stays while the Lead works");
+    assert_eq!(items(&fx), Vec::<Value>::new(), "the item closes while the Lead works");
 
-    // A second pass writes nothing.
+    // Back to idle: it opens again, with the same label. A second pass writes nothing.
     state(&fx, "idle");
     tick(&fx);
+    assert_eq!(labels(&fx), ["pay: 2 parked drafts"], "the Lead is idle again, S non-empty, W > T");
     let before = last_event(&fx);
     tick(&fx);
     assert_eq!(last_event(&fx), before, "a pass with no change writes nothing");
     assert_eq!(items(&fx).len(), 1);
+}
+
+#[test]
+fn closes_while_the_lead_is_not_idle() {
+    let fx = fx();
+    drafts(&fx, &["d1", "d2"]);
+    wake(&fx, "d1, d2");
+    turn(&fx);
+    tick(&fx);
+    assert_eq!(labels(&fx), ["pay: 2 parked drafts"]);
+
+    for to in ["working", "waiting", "blocked"] {
+        if to == "working" {
+            state(&fx, to);
+        } else {
+            fx.cpd(&["session", "state", to, "--label", "a question", "--session", "lead1"]).ok();
+        }
+        tick(&fx);
+        assert_eq!(items(&fx), Vec::<Value>::new(), "the Lead is {to}: the item closes");
+        let closed = fx.cpd(&["inbox", "list", "--closed"]).ok();
+        assert!(closed["items"].as_array().unwrap().iter().any(|i| i["kind"] == "drafts-parked"), "closed, not deleted ({to}): {closed}");
+
+        state(&fx, "idle");
+        tick(&fx);
+        assert_eq!(labels(&fx), ["pay: 2 parked drafts"], "the Lead is idle again after {to}: the item reopens");
+    }
 }
 
 #[test]
