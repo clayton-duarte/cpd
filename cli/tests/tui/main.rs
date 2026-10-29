@@ -38,6 +38,7 @@ mod tui_view_worker_gone;
 mod tui_widgets;
 mod tui_widgets_column;
 mod tui_widgets_flat;
+mod tui_widgets_var;
 mod tui_widgets_rows;
 mod tui_widgets_inbox;
 mod tui_widgets_inbox_actions;
