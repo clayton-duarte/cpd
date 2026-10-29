@@ -1,5 +1,5 @@
 //! `cpd janitor` (commands.md §29, contract §7.2): one pass over the merged and cancelled PRs that still have a
-//! worktree on disk, then exit. The poll cleans nothing: a PR in status `merged` or `cancelled` is the queue.
+//! worktree on disk, and the ended Attempts of merged Jobs on live PRs (contract §7.2), then exit. The poll cleans nothing: a PR in status `merged` or `cancelled` is the queue.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -150,11 +150,12 @@ fn event(e: &Entry) -> (PlanId, NewEvent) {
     (plan.clone(), NewEvent::error(text, SOURCE, ErrorCode::CleanupFailed.as_str(), &message, details))
 }
 
-/// A merged or cancelled PR with what its clean-up removes.
+/// A merged or cancelled PR with what its clean-up removes; also a live (`dispatch` or `open`) PR with only its ended
+/// Attempts of merged Jobs, never its Lead worktree (contract §7.2 "Ended Attempts of merged Jobs on a live PR").
 pub(crate) struct Merged {
     pub(crate) plan: PlanId,
     pub(crate) pr: PrKey,
-    /// The PR's status in the store: `merged` or `cancelled`.
+    /// The PR's status in the store: `merged`, `cancelled`, or (for the swept Attempts only) `dispatch` or `open`.
     pub(crate) status: String,
     pub(crate) repo: String,
     pub(crate) lead_branch: String,
@@ -209,13 +210,14 @@ impl Merged {
     }
 }
 
-/// Every PR in status `merged` or `cancelled`, with its Attempts. A cancelled PR's row has no `lead_worktree`
+/// Every PR in status `merged` or `cancelled`, with its Attempts, and every live PR (`dispatch` or `open`) with only its
+/// ended Attempts that merged or whose Job merged (contract §7.2 "Ended Attempts of merged Jobs on a live PR"). A cancelled PR's row has no `lead_worktree`
 /// (`pr cancel` clears it), so its Lead worktree is the one contract §7.1 names, when that is a worktree of the repo
 /// on the PR's Lead Branch (or its aside leftover is on disk).
 pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Merged>, CpdError> {
     let mut prs = conn.prepare(
         "SELECT p.plan, p.key, p.repo, p.lead_branch, p.lead_worktree, q.repo, q.number, p.status
-           FROM prs p LEFT JOIN pull_requests q ON q.id = p.pull_request WHERE p.status IN ('merged', 'cancelled') ORDER BY p.plan, p.key",
+           FROM prs p LEFT JOIN pull_requests q ON q.id = p.pull_request WHERE p.status IN ('dispatch', 'open', 'merged', 'cancelled') ORDER BY p.plan, p.key",
     )?;
     let rows = prs
         .query_map([], |r| {
@@ -224,7 +226,7 @@ pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Mer
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut attempts = conn.prepare(
-        "SELECT a.id, a.branch, a.worktree, a.status = 'ended' FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+        "SELECT a.id, a.branch, a.worktree, a.status = 'ended', coalesce(a.outcome = 'merged' OR j.status = 'merged', 0) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
           WHERE j.plan = ?1 AND j.pr = ?2 ORDER BY a.id",
     )?;
     let mut reported = conn.prepare(
@@ -233,11 +235,13 @@ pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Mer
     )?;
     let mut found = Vec::new();
     for (plan, pr, repo, lead_branch, lead_worktree, pull_request, status) in rows {
+        let live = status == "dispatch" || status == "open";
         let list = attempts
-            .query_map([&plan, &pr], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, bool>(3)?)))?
+            .query_map([&plan, &pr], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, bool>(3)?, r.get::<_, bool>(4)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?
             .into_iter()
-            .map(|(id, branch, worktree, ended)| Ok(Attempt { id: AttemptId::parse(&id)?, branch, worktree, ended }))
+            .filter(|(_, _, _, ended, sweepable)| !live || *ended && *sweepable)
+            .map(|(id, branch, worktree, ended, _)| Ok(Attempt { id: AttemptId::parse(&id)?, branch, worktree, ended }))
             .collect::<Result<Vec<_>, CpdError>>()?;
         let plan = PlanId::parse(&plan)?;
         let pr = PrKey::parse(&pr)?;
@@ -252,6 +256,8 @@ pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Mer
                             })
                 })
                 .map(|path| path.to_string_lossy().into_owned())
+        } else if live {
+            None
         } else {
             lead_worktree
         };

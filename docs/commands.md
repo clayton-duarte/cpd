@@ -5685,7 +5685,7 @@ A server that uses OAuth needs the User to sign in once on the machine (pro-d10)
 cpd janitor
 ```
 
-Removes the worktrees and branches of merged and cancelled PRs (pro-d70, pro-d71). One pass, then exits. It runs once every `watch.janitor_minutes` minutes (config key, default 60) via engine step E16 (§3.7), and may be run by hand. The User calls it, not Leads or Workers (§2).
+Removes the worktrees and branches of merged and cancelled PRs (pro-d70, pro-d71), and of the ended Attempts of merged Jobs on live PRs (contract §7.2). One pass, then exits. It runs once every `watch.janitor_minutes` minutes (config key, default 60) via engine step E16 (§3.7), and may be run by hand. The User calls it, not Leads or Workers (§2).
 
 | Flag | Meaning |
 |---|---|
@@ -5697,11 +5697,11 @@ Removes the worktrees and branches of merged and cancelled PRs (pro-d70, pro-d71
 
 **Effects** (pro-d70, pro-d71, pro-d72; contract §7.1, §7.2):
 
-The pass scans every PR of every Plan (archived included) whose status is `merged` or `cancelled` that still has on disk an Attempt worktree, its Lead worktree, or its aside leftover (a directory `<path>.removing` from a failed removal, §4 below). It does not start a pass when another is running: the lock `locks/janitor.lock` (exclusive, non-blocking) is held by another; it prints `{"ok":true,"skipped":"running"}`, exits 0 and touches nothing.
+The pass scans every PR of every Plan (archived included) whose status is `merged` or `cancelled` that still has on disk an Attempt worktree, its Lead worktree, or its aside leftover (a directory `<path>.removing` from a failed removal, §4 below). It also scans the PRs whose status is `dispatch` or `open` for the ended Attempts that contract §7.2 'Ended Attempts of merged Jobs on a live PR' sweeps. It does not start a pass when another is running: the lock `locks/janitor.lock` (exclusive, non-blocking) is held by another; it prints `{"ok":true,"skipped":"running"}`, exits 0 and touches nothing.
 
 For each such PR (**pending PR**), in this order:
 
-1. **Idle check**: every Attempt of the PR's Jobs is `ended` and its driver lock is free (probed without creating the file, as `merged_prs_to_clean` does today, contract §7.2). If not, the outcome is `pending`, nothing is touched, no Event for this PR in this pass.
+1. **Idle check**: every Attempt of the PR's Jobs is `ended` and its driver lock is free (probed without creating the file, as `merged_prs_to_clean` does today, contract §7.2). For a swept Attempt of a `dispatch` or `open` PR (contract §7.2 'Ended Attempts of merged Jobs on a live PR') the check is that Attempt's (`ended`, lock free), not the PR's. If not, the outcome is `pending`, nothing is touched, no Event for this PR in this pass.
 2. **Kill Attempt windows**: `tmux kill-pane` on every pane of this machine's Attempt windows of the PR's Jobs (as today, `core/src/pr/poll.rs` `clean_up`).
 3. **Discard parallel Attempt worktrees**: per Attempt of the PR's Jobs whose worktree exists on disk (a linear Attempt runs in the Lead worktree): removed as contract §7.2 'Removal' says, forced: rename aside, prune, branch -D, delete the aside; an Attempt's leftover `<path>.removing` counts as on disk.
 4. **Rule S** on the Lead worktree (contract §7.4: fetch, merge base): its local branch stays up to date for the dirty and unpushed check (§4 below).
@@ -5738,7 +5738,7 @@ or:
 {"plan": "pay-4521", "pr": "api", "status": "merged", "path": "/home/clayton/projects/pay.api.removing", "outcome": "failed", "reason": "permission denied"}
 ```
 
-`status` is `cancelled` or `merged`, read from the PR's status in the store. `outcome` is one of: `removed` (the path was deleted whole), `kept` (the path remains untouched, worktree dirty or unpushed), `pending` (the PR is not idle yet), or `failed` (the path was renamed but not fully deleted; the next pass retries). `reason` is present only for `kept` and `failed` (the dirty/unpushed rule, git's stderr tail, or a file error message); it is a short string suitable for an Event.
+`status` is `cancelled`, `merged`, `dispatch` or `open` (the last two for an Attempt swept under contract §7.2 'Ended Attempts of merged Jobs on a live PR'), read from the PR's status in the store. `outcome` is one of: `removed` (the path was deleted whole), `kept` (the path remains untouched, worktree dirty or unpushed), `pending` (the PR is not idle yet), or `failed` (the path was renamed but not fully deleted; the next pass retries). `reason` is present only for `kept` and `failed` (the dirty/unpushed rule, git's stderr tail, or a file error message); it is a short string suitable for an Event.
 
 The pass writes a log to `run/janitor.log`, appended (new lines only, one per pass, format `<timestamp> <pass id> <status>` where `<status>` is `ok`, `locked`, or an error; the file is not parsed, so its format may change). The engine's watch.log reads events from that file (§12 "The watch loop").
 
