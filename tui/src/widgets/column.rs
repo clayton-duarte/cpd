@@ -44,7 +44,8 @@ fn bold(text: impl Into<String>) -> Span<'static> {
 
 
 /// Which items a scrolling list draws, and the cues around them (commands.md §13.2; the Inbox section
-/// scrolls with this code, two rows an item: `count` and `rows` are in items).
+/// scrolls with this code, one row or two an item by its content: [`Window::weighted`]; the tree's flat list counts one row an
+/// item: [`Window::new`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Window {
     /// The first item drawn, after clamping.
@@ -69,6 +70,37 @@ impl Window {
     /// The largest offset: the last item reaches the bottom of the `rows`; 0 when every one fits.
     pub(crate) fn max_scroll(count: usize, rows: usize) -> usize {
         count.saturating_sub(rows)
+    }
+
+    /// The largest offset of items of these `heights` (in rows) in `rows` list rows: the smallest offset from which the heights
+    /// of the remaining items add up to at most `rows` (`heights.len()` when none does, that is only when `rows` is 0).
+    pub(crate) fn max_scroll_weighted(heights: &[usize], rows: usize) -> usize {
+        let mut sum = 0;
+        let mut first = heights.len();
+        for (at, height) in heights.iter().enumerate().rev() {
+            sum += height;
+            if sum > rows {
+                break;
+            }
+            first = at;
+        }
+        first
+    }
+
+    /// The window at offset `scroll` of items of these `heights` in `rows` list rows: `scroll` is clamped to
+    /// [`Window::max_scroll_weighted`]; `shown` is the longest run of items from `first` whose heights add up to at most `rows`,
+    /// stopping at the first that does not fit (an item never splits).
+    pub(crate) fn weighted(heights: &[usize], rows: usize, scroll: usize) -> Window {
+        let first = scroll.min(Window::max_scroll_weighted(heights, rows));
+        let mut used = 0;
+        let shown = heights[first..]
+            .iter()
+            .take_while(|h| {
+                used += **h;
+                used <= rows
+            })
+            .count();
+        Window { first, shown, cue_above: first > 0, below: heights.len() - first - shown }
     }
 }
 
@@ -99,7 +131,7 @@ pub fn draw(
     merging: &std::collections::BTreeSet<String>,
 ) -> Drawn {
     let [_top, home, rest] = Layout::vertical([Constraint::Length(1), Constraint::Length(2), Constraint::Min(0)]).areas(area);
-    let shape = Shape::new(inbox.len()).capped(rest.height).scrolled(inbox_scroll);
+    let shape = Shape::new(inbox).capped(rest.height).scrolled(inbox_scroll);
     let h = shape.height();
     let inbox_area = Rect { y: rest.bottom() - h, height: h, ..rest };
     let links = inbox::draw(f, inbox_area, inbox, shape, now, &|item| inbox::merges(merging, item).then_some(frame));
