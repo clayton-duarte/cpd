@@ -68,7 +68,6 @@ pub(super) fn durable_live(tables: &str) -> Live {
 
 /// Writes the end report of Attempt `id`'s runner, `run/pay/attempts/<id>.report.json` (contract §6.12 `EndReport`): what the real
 /// runner leaves after each settle. `report` is the JSON of the file.
-#[allow(dead_code)]
 pub(super) fn write_report(live: &Live, id: &str, report: &Value) {
     let path = live.fx.env.cpd_home().join("run").join(PLAN).join("attempts").join(format!("{id}.report.json"));
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -76,7 +75,6 @@ pub(super) fn write_report(live: &Live, id: &str, report: &Value) {
 }
 
 /// An `EndReport` that stopped with `stop_reason`, with `turns` assistant messages and no error.
-#[allow(dead_code)]
 pub(super) fn report(stop_reason: &str, turns: u64) -> Value {
     json!({
         "stop_reason": stop_reason, "error_message": null, "turns": turns,
@@ -393,7 +391,7 @@ fn a_stop_sends_no_signal_to_a_pid_that_is_not_the_runner_of_this_attempt() {
     // (what the pid shows as its command line, given the runner file and the Spec of this Attempt)
     type Shown = fn(&str, &str) -> String;
     let others: [(&str, Shown); 3] = [
-        ("an unrelated process", |_, _| "sleep 600".to_owned()),
+        ("an unrelated process", |_, _| "sleep 100".to_owned()),
         ("the runner of another Attempt", |runner, spec| format!("node {runner} --model p/sonnet:medium --spec {}", spec.replace("api-a1", "api-a2"))),
         ("another program on this Attempt's Spec", |_, spec| format!("node /elsewhere/main.ts --model p/sonnet:medium --spec {spec}")),
     ];
