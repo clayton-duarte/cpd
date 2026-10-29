@@ -114,11 +114,37 @@ fn the_tree_draws_the_cost_of_a_plan_and_of_its_context_from_the_session_files()
     s += &session("l-bare", "lead", "alpha", "bare", None);
     s += &session("m-alpha", "manager", "alpha", "", Some(&manager));
     sql(&mut open(&fx.env), &s);
-    let tree = Tree::start(&fx, 60, 14);
+    let mut tree = Tree::start(&fx, 60, 14);
+    let screen = tree.screen();
+    assert!(screen.iter().all(|r| !r.contains('$')), "the default: no cost on any row: {screen:?}");
+    tree.keys(&["$"]);
     let screen = tree.screen();
     assert!(row(&screen, "alpha").contains("alpha $0.95"), "the Context: Plan + Manager: {screen:?}");
     assert!(row(&screen, " ship").contains("ship $0.35"), "the Plan: Lead messages + compaction: {screen:?}");
     assert!(!row(&screen, " bare").contains('$'), "a Plan with no file draws none: {screen:?}");
+}
+
+#[test]
+fn the_tree_draws_no_cost_until_the_dollar_key() {
+    let fx = fx();
+    let _engine = engine(&fx);
+    let lead = write(&fx.env, "lead.jsonl", &[message(0.10), message(0.20), compaction(0.05)]);
+    let manager = write(&fx.env, "manager.jsonl", &[message(0.60)]);
+    let mut s = context("alpha");
+    s += &plan_row("ship", "alpha", "dispatch", "l-ship", "2026-01-02T00:00:10.000Z", false);
+    s += &session("l-ship", "lead", "alpha", "ship", Some(&lead));
+    s += &session("m-alpha", "manager", "alpha", "", Some(&manager));
+    sql(&mut open(&fx.env), &s);
+    let mut tree = Tree::start(&fx, 60, 14);
+    let none = |screen: &[String]| screen.iter().all(|r| !r.contains('$'));
+    let screen = tree.screen();
+    assert!(none(&screen), "by default: {screen:?}");
+    tree.keys(&["$"]);
+    let screen = tree.screen();
+    assert!(row(&screen, "alpha").contains("alpha $0.95") && row(&screen, " ship").contains("ship $0.35"), "after `$`: {screen:?}");
+    tree.keys(&["$"]);
+    let screen = tree.screen();
+    assert!(none(&screen), "after a second `$`: {screen:?}");
 }
 
 #[test]

@@ -206,9 +206,10 @@ fn assert_window_title(fx: &Fx) {
 /// each in its range, joined by a single `━` outside the ranges.
 fn buttons() -> String {
     format!(
-        "#[fg=colour8]\u{2501}#[default]#[range=user|reset]#[fg=colour13]\u{e0b6}#[reverse]{RESET_GLYPH}#[noreverse]\u{e0b4}#[default]#[norange]\
+        "#[fg=colour8]\u{2501}#[default]#[range=user|reset]#[fg=colour15]\u{e0b6}#[reverse]{RESET_GLYPH}#[noreverse]\u{e0b4}#[default]#[norange]\
          #[fg=colour8]\u{2501}#[default]#[range=user|legend]#[fg=colour15]\u{e0b6}#[reverse]{LEGEND_GLYPH}#[noreverse]\u{e0b4}#[default]#[norange]\
-         #[fg=colour8]\u{2501}#[default]#[range=user|logs]#[fg=colour10]\u{e0b6}#[reverse]{LOGS_GLYPH}#[noreverse]\u{e0b4}#[default]#[norange]"
+         #[fg=colour8]\u{2501}#[default]#[range=user|logs]#[fg=colour15]\u{e0b6}#[reverse]{LOGS_GLYPH}#[noreverse]\u{e0b4}#[default]#[norange]\
+         #[fg=colour8]\u{2501}#[default]#[range=user|costs]#[fg=colour15]\u{e0b6}#[reverse]\u{EEC1}#[noreverse]\u{e0b4}#[default]#[norange]"
     )
 }
 
