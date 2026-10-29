@@ -217,40 +217,46 @@ fn a_fork_counts_the_usage_entries_it_added() {
     close(m.duration_s, 30.0);
 }
 
-#[test]
-fn format_cost_of_zero_is_dollar_zero() {
-    assert_eq!(format_cost(0.0), "$0.00");
-}
-
-#[test]
-fn format_cost_below_a_cent_is_less_than_one_cent() {
-    for usd in [0.0001, 0.005, 0.0099] {
-        assert_eq!(format_cost(usd), "<1\u{a2}", "{usd}");
+fn pin(table: &[(f64, &str)]) {
+    for (usd, want) in table {
+        assert_eq!(format_cost(*usd), *want, "format_cost({usd})");
     }
 }
 
 #[test]
-fn format_cost_from_a_cent_has_two_decimals() {
-    assert_eq!(format_cost(0.01), "$0.01");
-    assert_eq!(format_cost(4.5), "$4.50");
-    assert_eq!(format_cost(12.3), "$12.30");
-    assert_eq!(format_cost(999.99), "$999.99");
+fn format_cost_of_zero_and_under_half_a_mill_is_dollar_zero_point_zeros() {
+    pin(&[(0.0, "$0.000"), (0.0004, "$0.000")]);
 }
 
 #[test]
-fn format_cost_rounds_to_cents() {
-    assert_eq!(format_cost(0.449), "$0.45");
+fn format_cost_below_a_cent_has_no_special_form() {
+    pin(&[(0.004, "$0.004"), (0.0123, "$0.012")]);
 }
 
 #[test]
-fn format_cost_from_the_rounded_thousand_is_compact_k() {
-    assert_eq!(format_cost(999.996), "$1.0k");
-    assert_eq!(format_cost(1000.0), "$1.0k");
-    assert_eq!(format_cost(1234.0), "$1.2k");
-    assert_eq!(format_cost(12345.0), "$12.3k");
+fn format_cost_fills_five_cells_after_the_dollar_under_a_thousand() {
+    pin(&[(0.12, "$0.120"), (1.2344, "$1.234"), (12.344, "$12.34"), (123.44, "$123.4")]);
 }
 
 #[test]
-fn format_cost_has_no_unit_above_k() {
-    assert_eq!(format_cost(1_000_000.0), "$1000.0k");
+fn format_cost_in_thousands_is_two_one_or_no_decimals_and_k() {
+    pin(&[(999.96, "$1.00k"), (1234.0, "$1.23k"), (12345.0, "$12.3k"), (123456.0, "$123k")]);
+}
+
+#[test]
+fn format_cost_switches_form_at_the_rounded_boundary() {
+    pin(&[
+        (9.9994, "$9.999"),
+        (9.9996, "$10.00"),
+        (99.994, "$99.99"),
+        (99.996, "$100.0"),
+        (999.94, "$999.9"),
+        (999.96, "$1.00k"),
+        (9994.0, "$9.99k"),
+        (9996.0, "$10.0k"),
+        (99949.0, "$99.9k"),
+        (99951.0, "$100k"),
+        (999499.0, "$999k"),
+        (999501.0, "$1000k"),
+    ]);
 }
