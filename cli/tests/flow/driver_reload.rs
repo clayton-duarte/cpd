@@ -119,9 +119,11 @@ impl Reload {
         self.fx().calls("cpd").iter().filter(|c| c.args == ["--version"]).count()
     }
 
-    /// What the driver `exec`ed: every launch after the driver's own.
+    /// What the driver `exec`ed: every launch after the driver's own that runs the installed cpd (a `durable` runner, which the
+    /// driver also starts, is a launch of another program).
     pub(super) fn execs(&self) -> Vec<Launch> {
-        self.fx().fakes.spawn.launches().split_off(1)
+        let installed = self.installed.display().to_string();
+        self.fx().fakes.spawn.launches().split_off(1).into_iter().filter(|l| l.program == installed).collect()
     }
 
     /// The driver lock is held, by someone other than this call's own descriptor.
