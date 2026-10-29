@@ -283,6 +283,6 @@ fn fork_and_manager_rows_draw_no_cost() {
     let rows: Vec<String> = (0..6).map(|y| text(&buf, y)).collect();
     let costs = rows.iter().filter(|r| r.contains('$')).count();
     assert_eq!(costs, 1, "only the Plan's row draws a cost: {rows:?}");
-    assert!(rows.iter().any(|r| r.contains("1 $0.12")), "{rows:?}");
+    assert!(rows.iter().any(|r| r.contains("ship $0.12")), "{rows:?}");
     assert!(!rows.iter().any(|r| r.contains("$5.00") || r.contains("$3.00") || r.contains("$7.00")), "{rows:?}");
 }

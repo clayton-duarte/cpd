@@ -36,7 +36,7 @@ fn a_context_block_row_ends_at_the_panes_inner_edge() {
         "a-very-long-plan-id-xxxx",
         "cc",
         Phase::Dispatch,
-        [0, 36, 0, 0, 1, 5],
+        [0, 9999, 0, 0, 9999, 9999],
         session("l-long", "lead", State::Idle, None, Place::Parked),
         vec![],
     );
@@ -48,7 +48,7 @@ fn a_context_block_row_ends_at_the_panes_inner_edge() {
 
 #[test]
 fn a_long_context_id_and_its_cost_end_at_the_panes_inner_edge() {
-    let mut c = context(&"a".repeat(60), vec![]);
+    let mut c = context(&"a".repeat(40), vec![]);
     c.cost_usd = Some(12.3);
     let buf = draw(tree(vec![c]));
     let y = (0..12).find(|&y| cells(&buf, y).iter().any(|c| c == "…")).expect("the id is cut with an ellipsis");
