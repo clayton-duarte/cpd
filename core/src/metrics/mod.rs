@@ -203,3 +203,12 @@ pub fn parse(text: &str, path: &Path) -> Result<Metrics, CpdError> {
     m.duration_s = (last - first) as f64 / 1000.0;
     Ok(m)
 }
+
+/// The one formatter of a dollar cost on every surface (`$0.45`, `<1¢`, `$1.2k`).
+pub fn format_cost(usd: f64) -> String {
+    let _ = usd;
+    todo!()
+}
+
+#[cfg(test)]
+mod cost_tests;
