@@ -116,7 +116,7 @@ async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
       try {
         attachServer(pi, ev.data.name, ev.data.server as unknown as McpServerConfig);
       } catch (e) {
-        host.deliver("mcp attach", e, { name: ev.data.name });
+        host.deliver(`mcp attach ${ev.data.name}`, e, { name: ev.data.name });
       }
     }
     return;
