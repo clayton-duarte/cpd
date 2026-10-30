@@ -34,13 +34,13 @@ wait_for() {
     sleep 0.2
   done
 }
-pane() { tmux -L "$sock" capture-pane -p -t "$sock:0.0"; }
+pane() { tmux -L "$sock" capture-pane -p -t "$sock"; }
 drawn() { pane | grep -q '[^[:space:]]'; }
 has_keys() { pane | tr -d '\n' | grep -qF "$KEYS"; }
 no_keys() { ! has_keys; }
 
 tmux -L "$sock" new-session -d -s "$sock" -x 179 -y 46 "$@" || exit 1
-shpid=$(tmux -L "$sock" display-message -p -t "$sock:0.0" '#{pane_pid}')
+shpid=$(tmux -L "$sock" display-message -p -t "$sock" '#{pane_pid}')
 pid=$(pgrep -P "$shpid" | head -n 1)
 [ -n "$pid" ] || pid=$shpid
 echo "socket=$sock pi_pid=$pid label=$label mode=$mode"
@@ -80,7 +80,7 @@ keys)
     i=1
     while [ "$i" -le 40 ]; do
       k=$(printf '%s' "$KEYS" | cut -c"$i")
-      tmux -L "$sock" send-keys -t "$sock:0.0" -l "$k"
+      tmux -L "$sock" send-keys -t "$sock" -l "$k"
       i=$((i + 1))
     done
     wait_for 60 has_keys || { echo "timeout: last key never drawn" >&2; exit 2; }
@@ -90,7 +90,7 @@ keys)
     echo "run $r: cpu ${d} s, $m ms per key"
     out="$out$m
 "
-    tmux -L "$sock" send-keys -t "$sock:0.0" C-u
+    tmux -L "$sock" send-keys -t "$sock" C-u
     wait_for 30 no_keys || { echo "timeout: editor not cleared" >&2; exit 2; }
     wait_for 60 quiet || true
     r=$((r + 1))
