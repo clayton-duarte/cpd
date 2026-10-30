@@ -12,8 +12,6 @@ import {
 	type AskUserBlockedEventPayload,
 	type AskUserPromptEventPayload,
 } from "./events.ts";
-// Static import is fine — rpc-fallback pulls only types + the i18n bridge,
-// none of the ~560ms TUI render graph that QuestionnaireSession lazy-loads.
 import {
 	mustYieldInlineSlot,
 	type Presentation,
@@ -22,6 +20,13 @@ import {
 	STACKED_OVERLAY_PRESENTATION,
 	YIELD_TO_OVERLAY,
 } from "./presentation.ts";
+import { editWithExternalEditor } from "./state/external-editor.ts";
+import {
+	type QuestionnaireSession as QuestionnaireSessionInstance,
+	type QuestionnaireSessionComponent,
+	type QuestionnaireSessionConfig,
+	QuestionnaireSession,
+} from "./state/questionnaire-session.ts";
 import { type DialogUI, hasDialogUI, runRpcQuestionnaire } from "./rpc-fallback.ts";
 import { displayLabel, t } from "./state/i18n-bridge.ts";
 import { sentinelsToAppend } from "./state/row-intent.ts";
@@ -86,12 +91,6 @@ const ERROR_NO_UI = "Error: UI not available (running in non-interactive mode)";
 const ERROR_NO_CUSTOM_UI =
 	"Error: this client cannot render the questionnaire (custom UI is unavailable, e.g. RPC/ACP hosts such as Zed or Paseo). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead, without using this tool.";
 
-const ERROR_SESSION_LOAD_FAILED =
-	"Error: the questionnaire UI failed to load — the host's installed dependencies were likely replaced or removed on disk while Pi was running (e.g. a package-manager install touched the store). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead, and tell the user that restoring this tool requires repairing the install if needed and restarting Pi.";
-
-const ERROR_STALE_MODULE_CACHE =
-	"Error: the questionnaire UI cannot load — the host's module cache went stale after an earlier failed load (typically dependencies replaced on disk mid-session). This is unrecoverable within the current Pi process. The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead, and tell the user to restart Pi to restore this tool.";
-
 /** Standard terminal bell — same byte rpiv-warp exports as OSC_TERMINATOR. */
 export const BEL = "\x07";
 
@@ -110,47 +109,8 @@ function emitTerminalAttention(): void {
 	}
 }
 
-/** Delay before the background session-graph pre-warm; mirrors rpiv-workflow's /wf prewarm. */
-export const PREWARM_DELAY_MS = 2000;
-
-type SessionModule = typeof import("./state/questionnaire-session.ts");
-
-type SessionRef = { current: import("./state/questionnaire-session.ts").QuestionnaireSession | null };
+type SessionRef = { current: QuestionnaireSessionInstance | null };
 type OverlayHandleRef = { current: OverlayHandle | undefined };
-
-type SessionLoad =
-	| { ok: true; module: SessionModule }
-	| { ok: false; error: Extract<QuestionnaireError, "session_load_failed" | "stale_module_cache">; message: string };
-
-/**
- * Lazy-load the ~560ms QuestionnaireSession view/TUI render graph, guarding
- * the two failure shapes of issue #107. Pi's jiti loader registers a module in
- * its graph cache BEFORE evaluating the body and does not evict it when
- * evaluation throws (jiti 2.7.0), so one failed load — e.g. `pnpm install
- * --force` replacing the store entry mid-session — leaves every later import
- * of this specifier resolving to a namespace without the class. That state is
- * unrecoverable in-process (cache-busting specifiers fail jiti resolution);
- * both branches therefore return an LLM-facing envelope that names the restart
- * requirement instead of leaking a bare "not a constructor" TypeError.
- */
-export async function loadQuestionnaireSession(): Promise<SessionLoad> {
-	let mod: SessionModule;
-	try {
-		mod = await import("./state/questionnaire-session.ts");
-	} catch (e) {
-		const cause = e instanceof Error ? e.message : String(e);
-		return { ok: false, error: "session_load_failed", message: `${ERROR_SESSION_LOAD_FAILED} (cause: ${cause})` };
-	}
-	if (typeof mod.QuestionnaireSession !== "function") {
-		const keys = JSON.stringify(Object.keys(mod));
-		return {
-			ok: false,
-			error: "stale_module_cache",
-			message: `${ERROR_STALE_MODULE_CACHE} (resolved namespace keys: ${keys})`,
-		};
-	}
-	return { ok: true, module: mod };
-}
 
 /**
  * Register the raw terminal listener that toggles collapse while the overlay is hidden.
@@ -189,8 +149,8 @@ function registerCollapseKeyListener(
 
 /**
  * Build the `ctx.ui.custom` component factory: constructs the session (capturing it in
- * `sessionRef`) and exposes its component. `editInput` keeps its two dynamic imports —
- * they must stay lazy per-invocation.
+ * `sessionRef`) and exposes its component. `editInput` keeps the host package a dynamic import —
+ * the host package stays a dynamic import.
  */
 function makeSessionFactory(config: {
 	ctx: ExtensionContext;
@@ -200,15 +160,15 @@ function makeSessionFactory(config: {
 	canReopenWhileHidden: boolean;
 	presentation: Presentation;
 	sessionRef: SessionRef;
-	Session: SessionModule["QuestionnaireSession"];
+	Session: typeof QuestionnaireSession;
 }) {
 	const { ctx, typed, itemsByTab, collapseKey, canReopenWhileHidden, presentation, sessionRef, Session } = config;
 	return (
 		tui: TUI,
 		theme: Theme,
-		keybindings: import("./state/questionnaire-session.ts").QuestionnaireSessionConfig["keybindings"],
+		keybindings: QuestionnaireSessionConfig["keybindings"],
 		done: (result: QuestionnaireResult) => void,
-	): import("./state/questionnaire-session.ts").QuestionnaireSessionComponent => {
+	): QuestionnaireSessionComponent => {
 		// The factory runs at mount time — the first point the TUI is reachable — so this is
 		// where an inline mount notices an overlay already on screen and gives the slot up.
 		if (!presentation.overlay && mustYieldInlineSlot(tui)) {
@@ -224,10 +184,7 @@ function makeSessionFactory(config: {
 			keybindings,
 			editInput: async (value) => {
 				try {
-					const [{ SettingsManager }, { editWithExternalEditor }] = await Promise.all([
-						import("@earendil-works/pi-coding-agent"),
-						import("./state/external-editor.ts"),
-					]);
+					const { SettingsManager } = await import("@earendil-works/pi-coding-agent");
 					const editorCommand = SettingsManager.create(ctx.cwd, undefined, {
 						projectTrusted: ctx.isProjectTrusted(),
 					}).getExternalEditorCommand();
@@ -249,7 +206,7 @@ function makeSessionFactory(config: {
 }
 
 /** Stand-in returned by a mount that resolved before mounting (Pi discards it unmounted). */
-const INERT_COMPONENT: import("./state/questionnaire-session.ts").QuestionnaireSessionComponent = {
+const INERT_COMPONENT: QuestionnaireSessionComponent = {
 	render: () => [],
 	invalidate: () => {},
 	handleInput: () => {},
@@ -268,7 +225,7 @@ async function mountQuestionnaire(config: {
 	itemsByTab: WrappingSelectItem[][];
 	collapseKey: string;
 	presentation: Presentation;
-	Session: SessionModule["QuestionnaireSession"];
+	Session: typeof QuestionnaireSession;
 }): Promise<QuestionnaireResult | undefined> {
 	const { ctx, collapseKey, presentation } = config;
 	const sessionRef: SessionRef = { current: null };
@@ -315,21 +272,6 @@ async function resolveUndefinedResult(ctx: ExtensionContext, typed: QuestionPara
 		return buildQuestionnaireResponse(await runRpcQuestionnaire(ctx.ui, typed), typed);
 	}
 	return buildToolResult(ERROR_NO_CUSTOM_UI, { answers: [], cancelled: true, error: "no_custom_ui" });
-}
-
-/**
- * Pre-warm the lazy session graph once startup settles (#107). A graph
- * evaluated while the paths Pi resolved at boot still exist stays in memory
- * for the process lifetime, so later on-disk dependency churn (e.g. `pnpm
- * install --force` replacing the store mid-session) can no longer poison
- * jiti's graph cache. Swallowed failure is safe: the first real call
- * re-imports and surfaces it through loadQuestionnaireSession's structured
- * envelope. unref keeps the timer from holding a non-TUI embedder's process
- * open.
- */
-function prewarmSessionGraph(): void {
-	const timer = setTimeout(() => void loadQuestionnaireSession().catch(() => undefined), PREWARM_DELAY_MS);
-	timer.unref?.();
 }
 
 export function buildItemsForQuestion(question: QuestionData): WrappingSelectItem[] {
@@ -417,13 +359,6 @@ export function registerAskUserQuestionTool(pi: ExtensionAPI): void {
 
 			const itemsByTab: WrappingSelectItem[][] = typed.questions.map((q) => buildItemsForQuestion(q));
 
-			// Lazy — QuestionnaireSession pulls the ~560ms view/TUI render graph;
-			// load it only when the tool runs, not at extension registration.
-			const sessionLoad = await loadQuestionnaireSession();
-			if (!sessionLoad.ok) {
-				return buildToolResult(sessionLoad.message, { answers: [], cancelled: true, error: sessionLoad.error });
-			}
-			const { QuestionnaireSession } = sessionLoad.module;
 			// Resolve the collapse/expand key spec from config. Default is `ctrl+]`; users
 			// with non-US layouts (e.g. Latin American, where `]` is shifted) can override
 			// via the `collapseKey` config field. `resolveCollapseKey` also accepts the
@@ -457,8 +392,6 @@ export function registerAskUserQuestionTool(pi: ExtensionAPI): void {
 			}
 		},
 	});
-
-	prewarmSessionGraph();
 }
 
 export { buildQuestionnaireResponse, buildToolResult };

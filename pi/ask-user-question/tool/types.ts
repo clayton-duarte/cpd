@@ -131,9 +131,7 @@ export type QuestionnaireError =
 	| "too_many_questions"
 	| "duplicate_question"
 	| "duplicate_option_label"
-	| "reserved_label"
-	| "session_load_failed"
-	| "stale_module_cache";
+	| "reserved_label";
 
 export interface QuestionnaireResult {
 	answers: QuestionAnswer[];
