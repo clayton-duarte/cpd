@@ -26,6 +26,8 @@ merged_reaction = ""
 in_progress = ""
 in_review = ""
 done = ""
+# Jira custom field ids set to 1 before the Done move when empty; none means no estimate is written.
+estimate_fields = []
 
 [deploy]
 text = ""

@@ -27,7 +27,21 @@ pub(super) fn check(set: &JiraSet) -> Result<(), (&'static str, String)> {
             return Err((key, why));
         }
     }
+    if let Some(ids) = &set.estimate_fields {
+        for (i, id) in ids.iter().enumerate() {
+            if !is_field_id(id) {
+                return Err(("estimate_fields", format!("{id:?} is not a Jira custom field id (customfield_ and digits)")));
+            }
+            if ids[..i].contains(id) {
+                return Err(("estimate_fields", format!("{id:?} is listed twice")));
+            }
+        }
+    }
     Ok(())
+}
+
+fn is_field_id(id: &str) -> bool {
+    id.strip_prefix("customfield_").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 #[cfg(test)]
@@ -35,14 +49,14 @@ mod tests {
     use super::*;
 
     fn one(name: &str) -> Result<(), (&'static str, String)> {
-        check(&JiraSet { in_progress: None, in_review: Some(name.to_owned()), done: None })
+        check(&JiraSet { in_progress: None, in_review: Some(name.to_owned()), done: None, estimate_fields: None })
     }
 
     #[test]
     fn empty_and_a_plain_name_are_valid() {
         assert!(one("").is_ok());
         assert!(one("In Review").is_ok());
-        assert!(check(&JiraSet { in_progress: None, in_review: None, done: None }).is_ok());
+        assert!(check(&JiraSet { in_progress: None, in_review: None, done: None, estimate_fields: None }).is_ok());
     }
 
     #[test]
@@ -61,5 +75,23 @@ mod tests {
     fn a_control_character_is_refused() {
         assert!(one("In\tReview").is_err());
         assert!(one("In\nReview").is_err());
+    }
+
+    fn fields(ids: &[&str]) -> Result<(), (&'static str, String)> {
+        check(&JiraSet { in_progress: None, in_review: None, done: None, estimate_fields: Some(ids.iter().map(|s| (*s).to_owned()).collect()) })
+    }
+
+    #[test]
+    fn custom_field_ids_are_valid() {
+        assert!(fields(&[]).is_ok());
+        assert!(fields(&["customfield_10016", "customfield_1"]).is_ok());
+    }
+
+    #[test]
+    fn a_bad_or_repeated_field_id_is_refused() {
+        for bad in ["", "10016", "customfield_", "customfield_1a", "Customfield_1", " customfield_1", "customfield_1\n"] {
+            assert_eq!(fields(&[bad]).unwrap_err().0, "estimate_fields", "{bad:?}");
+        }
+        assert_eq!(fields(&["customfield_1", "customfield_1"]).unwrap_err().0, "estimate_fields");
     }
 }

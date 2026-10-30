@@ -83,6 +83,7 @@ pub struct Jira {
     pub in_progress: String,
     pub in_review: String,
     pub done: String,
+    pub estimate_fields: Vec<String>,
 }
 
 /// The `pr` domain.
@@ -129,6 +130,7 @@ pub struct JiraSet {
     pub in_progress: Option<String>,
     pub in_review: Option<String>,
     pub done: Option<String>,
+    pub estimate_fields: Option<Vec<String>>,
 }
 
 /// What a scope file's `[pr]` table sets.
@@ -382,6 +384,7 @@ pub const REQUIRED_CHECKS: &str = "pr.required_checks";
 pub const JIRA_IN_PROGRESS: &str = "pr.jira.in_progress";
 pub const JIRA_IN_REVIEW: &str = "pr.jira.in_review";
 pub const JIRA_DONE: &str = "pr.jira.done";
+pub const JIRA_ESTIMATE_FIELDS: &str = "pr.jira.estimate_fields";
 
 impl Set for GatesSet {
     type Value = Gates;
@@ -422,6 +425,7 @@ impl Set for PrSet {
             (JIRA_IN_PROGRESS, jira.and_then(|j| j.in_progress.as_ref()).is_none()),
             (JIRA_IN_REVIEW, jira.and_then(|j| j.in_review.as_ref()).is_none()),
             (JIRA_DONE, jira.and_then(|j| j.done.as_ref()).is_none()),
+            (JIRA_ESTIMATE_FIELDS, jira.and_then(|j| j.estimate_fields.as_ref()).is_none()),
         ]);
         let pick = |set: Option<String>, base: &str| set.unwrap_or_else(|| base.to_owned());
         let value = Pr {
@@ -436,6 +440,7 @@ impl Set for PrSet {
                 in_progress: pick(jira.and_then(|j| j.in_progress.clone()), &base.jira.in_progress),
                 in_review: pick(jira.and_then(|j| j.in_review.clone()), &base.jira.in_review),
                 done: pick(jira.and_then(|j| j.done.clone()), &base.jira.done),
+                estimate_fields: jira.and_then(|j| j.estimate_fields.clone()).unwrap_or_else(|| base.jira.estimate_fields.clone()),
             },
             jira_required: self.jira_required.unwrap_or(base.jira_required),
             human_gated_contexts: self.human_gated_contexts.clone().unwrap_or_else(|| base.human_gated_contexts.clone()),
@@ -459,7 +464,7 @@ impl Set for PrSet {
             },
             jira: {
                 let j = self.jira.as_ref()?;
-                Jira { in_progress: j.in_progress.clone()?, in_review: j.in_review.clone()?, done: j.done.clone()? }
+                Jira { in_progress: j.in_progress.clone()?, in_review: j.in_review.clone()?, done: j.done.clone()?, estimate_fields: j.estimate_fields.clone()? }
             },
             jira_required: self.jira_required?,
             human_gated_contexts: self.human_gated_contexts.clone()?,
