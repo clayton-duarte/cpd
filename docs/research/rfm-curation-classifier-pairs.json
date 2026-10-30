@@ -1,0 +1,1772 @@
+[
+ {
+  "pair": "pro-d130>pro-d129",
+  "newer": "pro-d130",
+  "older": "pro-d129",
+  "stratum": "retirement:superseded",
+  "gemini": [
+   "supersedes",
+   "supersedes"
+  ],
+  "sonnet": [
+   "supersedes",
+   "supersedes"
+  ],
+  "gold": "supersedes"
+ },
+ {
+  "pair": "pro-d174>pro-d173",
+  "newer": "pro-d174",
+  "older": "pro-d173",
+  "stratum": "retirement:superseded",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-n122>pro-n115",
+  "newer": "pro-n122",
+  "older": "pro-n115",
+  "stratum": "retirement:superseded",
+  "gemini": [
+   "supersedes",
+   "supersedes"
+  ],
+  "sonnet": [
+   "supersedes",
+   "supersedes"
+  ],
+  "gold": "supersedes"
+ },
+ {
+  "pair": "pro-n125>pro-n124",
+  "newer": "pro-n125",
+  "older": "pro-n124",
+  "stratum": "retirement:duplicate",
+  "gemini": [
+   "duplicate",
+   "independent"
+  ],
+  "sonnet": [
+   "duplicate",
+   "duplicate"
+  ],
+  "gold": null
+ },
+ {
+  "pair": "pro-d64>pro-n75",
+  "newer": "pro-d64",
+  "older": "pro-n75",
+  "stratum": "retirement:superseded",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d164>pro-d163",
+  "newer": "pro-d164",
+  "older": "pro-d163",
+  "stratum": "same-topic-high-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n66>pro-n55",
+  "newer": "pro-n66",
+  "older": "pro-n55",
+  "stratum": "same-topic-high-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n120>pro-n96",
+  "newer": "pro-n120",
+  "older": "pro-n96",
+  "stratum": "same-topic-high-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d3>pro-n1",
+  "newer": "pro-d3",
+  "older": "pro-n1",
+  "stratum": "same-topic-high-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n153>pro-d179",
+  "newer": "pro-n153",
+  "older": "pro-d179",
+  "stratum": "same-topic-high-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n56>pro-n38",
+  "newer": "pro-n56",
+  "older": "pro-n38",
+  "stratum": "same-topic-high-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d140>pro-d139",
+  "newer": "pro-d140",
+  "older": "pro-d139",
+  "stratum": "same-topic-high-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d57>pro-d56",
+  "newer": "pro-d57",
+  "older": "pro-d56",
+  "stratum": "same-topic-high-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d183>pro-d177",
+  "newer": "pro-d183",
+  "older": "pro-d177",
+  "stratum": "same-topic-high-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n147>pro-d163",
+  "newer": "pro-n147",
+  "older": "pro-d163",
+  "stratum": "same-topic-high-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d139>pro-d27",
+  "newer": "pro-d139",
+  "older": "pro-d27",
+  "stratum": "same-topic-low-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d79>pro-n78",
+  "newer": "pro-d79",
+  "older": "pro-n78",
+  "stratum": "same-topic-low-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d88>pro-n86",
+  "newer": "pro-d88",
+  "older": "pro-n86",
+  "stratum": "same-topic-low-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n33>pro-d10",
+  "newer": "pro-n33",
+  "older": "pro-d10",
+  "stratum": "same-topic-low-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n31>pro-n4",
+  "newer": "pro-n31",
+  "older": "pro-n4",
+  "stratum": "same-topic-low-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n72>pro-d31",
+  "newer": "pro-n72",
+  "older": "pro-d31",
+  "stratum": "same-topic-low-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d74>pro-n13",
+  "newer": "pro-d74",
+  "older": "pro-n13",
+  "stratum": "same-topic-low-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n9>pro-n8",
+  "newer": "pro-n9",
+  "older": "pro-n8",
+  "stratum": "same-topic-low-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n59>pro-n25",
+  "newer": "pro-n59",
+  "older": "pro-n25",
+  "stratum": "same-topic-low-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d52>pro-d50",
+  "newer": "pro-d52",
+  "older": "pro-d50",
+  "stratum": "same-topic-low-overlap",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n96>pro-n64",
+  "newer": "pro-n96",
+  "older": "pro-n64",
+  "stratum": "random-cross-topic",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n97>pro-d75",
+  "newer": "pro-n97",
+  "older": "pro-d75",
+  "stratum": "random-cross-topic",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n71>pro-n65",
+  "newer": "pro-n71",
+  "older": "pro-n65",
+  "stratum": "random-cross-topic",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n42>pro-d23",
+  "newer": "pro-n42",
+  "older": "pro-d23",
+  "stratum": "random-cross-topic",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d11>pro-d2",
+  "newer": "pro-d11",
+  "older": "pro-d2",
+  "stratum": "random-cross-topic",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n121>pro-n52",
+  "newer": "pro-n121",
+  "older": "pro-n52",
+  "stratum": "random-cross-topic",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n35>pro-n13",
+  "newer": "pro-n35",
+  "older": "pro-n13",
+  "stratum": "random-cross-topic",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d201>pro-d5",
+  "newer": "pro-d201",
+  "older": "pro-d5",
+  "stratum": "random-cross-topic",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d95>pro-d49",
+  "newer": "pro-d95",
+  "older": "pro-d49",
+  "stratum": "random-cross-topic",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d133>pro-n64",
+  "newer": "pro-d133",
+  "older": "pro-n64",
+  "stratum": "random-cross-topic",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d46>pro-d45",
+  "newer": "pro-d46",
+  "older": "pro-d45",
+  "stratum": "targeted-tfidf",
+  "gemini": [
+   "duplicate",
+   "duplicate"
+  ],
+  "sonnet": [
+   "duplicate",
+   "duplicate"
+  ],
+  "gold": "duplicate"
+ },
+ {
+  "pair": "pro-n156>pro-n155",
+  "newer": "pro-n156",
+  "older": "pro-n155",
+  "stratum": "targeted-tfidf",
+  "gemini": [
+   "duplicate",
+   "supersedes"
+  ],
+  "sonnet": [
+   "duplicate",
+   "duplicate"
+  ],
+  "gold": null
+ },
+ {
+  "pair": "pro-p73>pro-d150",
+  "newer": "pro-p73",
+  "older": "pro-d150",
+  "stratum": "targeted-tfidf",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "duplicate",
+   "duplicate"
+  ],
+  "gold": null
+ },
+ {
+  "pair": "pro-d8>pro-d4",
+  "newer": "pro-d8",
+  "older": "pro-d4",
+  "stratum": "targeted-cited",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "supersedes",
+   "supersedes"
+  ],
+  "gold": null
+ },
+ {
+  "pair": "pro-d25>pro-d18",
+  "newer": "pro-d25",
+  "older": "pro-d18",
+  "stratum": "targeted-cited",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d13>pro-n14",
+  "newer": "pro-d13",
+  "older": "pro-n14",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "supersedes",
+   "supersedes"
+  ],
+  "sonnet": [
+   "duplicate",
+   "duplicate"
+  ],
+  "gold": null
+ },
+ {
+  "pair": "pro-n113>pro-n112",
+  "newer": "pro-n113",
+  "older": "pro-n112",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "supersedes",
+   "supersedes"
+  ],
+  "gold": null
+ },
+ {
+  "pair": "pro-n165>pro-n163",
+  "newer": "pro-n165",
+  "older": "pro-n163",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "supersedes",
+   "supersedes"
+  ],
+  "sonnet": [
+   "supersedes",
+   "supersedes"
+  ],
+  "gold": "supersedes"
+ },
+ {
+  "pair": "pro-d29>pro-d20",
+  "newer": "pro-d29",
+  "older": "pro-d20",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "supersedes",
+   "supersedes"
+  ],
+  "sonnet": [
+   "supersedes",
+   "supersedes"
+  ],
+  "gold": "supersedes"
+ },
+ {
+  "pair": "pro-d29>pro-d22",
+  "newer": "pro-d29",
+  "older": "pro-d22",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d26>pro-d18",
+  "newer": "pro-d26",
+  "older": "pro-d18",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d34>pro-d33",
+  "newer": "pro-d34",
+  "older": "pro-d33",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "supersedes",
+   "supersedes"
+  ],
+  "sonnet": [
+   "supersedes",
+   "supersedes"
+  ],
+  "gold": "supersedes"
+ },
+ {
+  "pair": "pro-d55>pro-d54",
+  "newer": "pro-d55",
+  "older": "pro-d54",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "supersedes",
+   "supersedes"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": null
+ },
+ {
+  "pair": "pro-d100>pro-d98",
+  "newer": "pro-d100",
+  "older": "pro-d98",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "supersedes",
+   "supersedes"
+  ],
+  "sonnet": [
+   "supersedes",
+   "supersedes"
+  ],
+  "gold": "supersedes"
+ },
+ {
+  "pair": "pro-d106>pro-d92",
+  "newer": "pro-d106",
+  "older": "pro-d92",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d122>pro-d121",
+  "newer": "pro-d122",
+  "older": "pro-d121",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d177>pro-d171",
+  "newer": "pro-d177",
+  "older": "pro-d171",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-n135>pro-n133",
+  "newer": "pro-n135",
+  "older": "pro-n133",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "supersedes",
+   "supersedes"
+  ],
+  "sonnet": [
+   "supersedes",
+   "supersedes"
+  ],
+  "gold": "supersedes"
+ },
+ {
+  "pair": "pro-d194>pro-d179",
+  "newer": "pro-d194",
+  "older": "pro-d179",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-n105>pro-n7",
+  "newer": "pro-n105",
+  "older": "pro-n7",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d68>pro-d35",
+  "newer": "pro-d68",
+  "older": "pro-d35",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d25>pro-n15",
+  "newer": "pro-d25",
+  "older": "pro-n15",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d24>pro-n23",
+  "newer": "pro-d24",
+  "older": "pro-n23",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "supersedes",
+   "independent"
+  ],
+  "gold": null
+ },
+ {
+  "pair": "pro-n52>pro-n28",
+  "newer": "pro-n52",
+  "older": "pro-n28",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "supersedes",
+   "supersedes"
+  ],
+  "gold": null
+ },
+ {
+  "pair": "pro-d182>pro-d181",
+  "newer": "pro-d182",
+  "older": "pro-d181",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "supersedes",
+   "supersedes"
+  ],
+  "sonnet": [
+   "duplicate",
+   "duplicate"
+  ],
+  "gold": null
+ },
+ {
+  "pair": "pro-n169>pro-d206",
+  "newer": "pro-n169",
+  "older": "pro-d206",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-n67>pro-d60",
+  "newer": "pro-n67",
+  "older": "pro-d60",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d100>pro-d99",
+  "newer": "pro-d100",
+  "older": "pro-d99",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "supersedes",
+   "supersedes"
+  ],
+  "sonnet": [
+   "supersedes",
+   "supersedes"
+  ],
+  "gold": "supersedes"
+ },
+ {
+  "pair": "pro-d134>pro-d133",
+  "newer": "pro-d134",
+  "older": "pro-d133",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-b84>pro-d177",
+  "newer": "pro-b84",
+  "older": "pro-d177",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n52>pro-n29",
+  "newer": "pro-n52",
+  "older": "pro-n29",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n161>pro-n156",
+  "newer": "pro-n161",
+  "older": "pro-n156",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "supersedes",
+   "independent"
+  ],
+  "sonnet": [
+   "supersedes",
+   "supersedes"
+  ],
+  "gold": null
+ },
+ {
+  "pair": "pro-d152>pro-d149",
+  "newer": "pro-d152",
+  "older": "pro-d149",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d26>pro-d9",
+  "newer": "pro-d26",
+  "older": "pro-d9",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-n104>pro-n20",
+  "newer": "pro-n104",
+  "older": "pro-n20",
+  "stratum": "supersede-candidate",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d83>pro-n62",
+  "newer": "pro-d83",
+  "older": "pro-n62",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d82>pro-d53",
+  "newer": "pro-d82",
+  "older": "pro-d53",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d157>pro-d156",
+  "newer": "pro-d157",
+  "older": "pro-d156",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "supersedes",
+   "supersedes"
+  ],
+  "gold": null
+ },
+ {
+  "pair": "pro-d153>pro-d151",
+  "newer": "pro-d153",
+  "older": "pro-d151",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d154>pro-d147",
+  "newer": "pro-d154",
+  "older": "pro-d147",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d132>pro-d116",
+  "newer": "pro-d132",
+  "older": "pro-d116",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d132>pro-d30",
+  "newer": "pro-d132",
+  "older": "pro-d30",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": null
+ },
+ {
+  "pair": "pro-d16>pro-d7",
+  "newer": "pro-d16",
+  "older": "pro-d7",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": null
+ },
+ {
+  "pair": "pro-d27>pro-d7",
+  "newer": "pro-d27",
+  "older": "pro-d7",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d27>pro-d16",
+  "newer": "pro-d27",
+  "older": "pro-d16",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d37>pro-d36",
+  "newer": "pro-d37",
+  "older": "pro-d36",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d92>pro-d30",
+  "newer": "pro-d92",
+  "older": "pro-d30",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n141>pro-d147",
+  "newer": "pro-n141",
+  "older": "pro-d147",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d157>pro-d147",
+  "newer": "pro-d157",
+  "older": "pro-d147",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d6>pro-d1",
+  "newer": "pro-d6",
+  "older": "pro-d1",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-b42>pro-d53",
+  "newer": "pro-b42",
+  "older": "pro-d53",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "contradicts",
+   "contradicts"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": "contradicts"
+ },
+ {
+  "pair": "pro-d58>pro-d16",
+  "newer": "pro-d58",
+  "older": "pro-d16",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d152>pro-d151",
+  "newer": "pro-d152",
+  "older": "pro-d151",
+  "stratum": "contradict-candidate",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n159>pro-n93",
+  "newer": "pro-n159",
+  "older": "pro-n93",
+  "stratum": "same-topic-high-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n163>pro-n151",
+  "newer": "pro-n163",
+  "older": "pro-n151",
+  "stratum": "same-topic-high-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n82>pro-n74",
+  "newer": "pro-n82",
+  "older": "pro-n74",
+  "stratum": "same-topic-high-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d19>pro-n5",
+  "newer": "pro-d19",
+  "older": "pro-n5",
+  "stratum": "same-topic-high-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n43>pro-n20",
+  "newer": "pro-n43",
+  "older": "pro-n20",
+  "stratum": "same-topic-high-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d10>pro-d1",
+  "newer": "pro-d10",
+  "older": "pro-d1",
+  "stratum": "same-topic-high-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n123>pro-n120",
+  "newer": "pro-n123",
+  "older": "pro-n120",
+  "stratum": "same-topic-high-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d193>pro-d180",
+  "newer": "pro-d193",
+  "older": "pro-d180",
+  "stratum": "same-topic-high-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n107>pro-n96",
+  "newer": "pro-n107",
+  "older": "pro-n96",
+  "stratum": "same-topic-high-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n14>pro-d2",
+  "newer": "pro-n14",
+  "older": "pro-d2",
+  "stratum": "same-topic-high-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d125>pro-d124",
+  "newer": "pro-d125",
+  "older": "pro-d124",
+  "stratum": "same-topic-low-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d197>pro-d185",
+  "newer": "pro-d197",
+  "older": "pro-d185",
+  "stratum": "same-topic-low-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n143>pro-d156",
+  "newer": "pro-n143",
+  "older": "pro-d156",
+  "stratum": "same-topic-low-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d146>pro-d145",
+  "newer": "pro-d146",
+  "older": "pro-d145",
+  "stratum": "same-topic-low-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "contradicts",
+   "contradicts"
+  ],
+  "gold": null
+ },
+ {
+  "pair": "pro-n62>pro-d7",
+  "newer": "pro-n62",
+  "older": "pro-d7",
+  "stratum": "same-topic-low-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n69>pro-d61",
+  "newer": "pro-n69",
+  "older": "pro-d61",
+  "stratum": "same-topic-low-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d158>pro-d123",
+  "newer": "pro-d158",
+  "older": "pro-d123",
+  "stratum": "same-topic-low-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d192>pro-d70",
+  "newer": "pro-d192",
+  "older": "pro-d70",
+  "stratum": "same-topic-low-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d14>pro-n6",
+  "newer": "pro-d14",
+  "older": "pro-n6",
+  "stratum": "same-topic-low-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n109>pro-n107",
+  "newer": "pro-n109",
+  "older": "pro-n107",
+  "stratum": "same-topic-low-overlap-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n53>pro-d38",
+  "newer": "pro-n53",
+  "older": "pro-d38",
+  "stratum": "random-cross-topic-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n118>pro-d103",
+  "newer": "pro-n118",
+  "older": "pro-d103",
+  "stratum": "random-cross-topic-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d163>pro-b37",
+  "newer": "pro-d163",
+  "older": "pro-b37",
+  "stratum": "random-cross-topic-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d32>pro-d1",
+  "newer": "pro-d32",
+  "older": "pro-d1",
+  "stratum": "random-cross-topic-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d200>pro-p24",
+  "newer": "pro-d200",
+  "older": "pro-p24",
+  "stratum": "random-cross-topic-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d151>pro-d90",
+  "newer": "pro-d151",
+  "older": "pro-d90",
+  "stratum": "random-cross-topic-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-n74>pro-d34",
+  "newer": "pro-n74",
+  "older": "pro-d34",
+  "stratum": "random-cross-topic-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d113>pro-b30",
+  "newer": "pro-d113",
+  "older": "pro-b30",
+  "stratum": "random-cross-topic-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d103>pro-n35",
+  "newer": "pro-d103",
+  "older": "pro-n35",
+  "stratum": "random-cross-topic-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ },
+ {
+  "pair": "pro-d119>pro-n42",
+  "newer": "pro-d119",
+  "older": "pro-n42",
+  "stratum": "random-cross-topic-new",
+  "gemini": [
+   "independent",
+   "independent"
+  ],
+  "sonnet": [
+   "independent",
+   "independent"
+  ],
+  "gold": "independent"
+ }
+]
