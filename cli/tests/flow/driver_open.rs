@@ -517,6 +517,103 @@ fn an_open_jobs_gate_failure_ends_its_merge_gate_failed_and_pushes_nothing_creat
     assert!(live.plan_events("pr-opened").is_empty());
 }
 
+/// The scripted Gate output: 80 numbered lines of 4,000 characters, a blank line between `line 78` and `line 79`.
+fn long_gate_output() -> String {
+    let mut out = String::new();
+    for n in 1..=80 {
+        if n == 79 {
+            out.push('\n');
+        }
+        out.push_str(&format!("line {n:02} {}\n", "x".repeat(4000 - 8)));
+    }
+    out
+}
+
+/// The `text` of the `job-failed` Events of Plan `pay`, in order.
+fn job_failed_texts(live: &Live) -> Vec<String> {
+    store(&live.fx.env)
+        .read(|c| {
+            let mut stmt = c.prepare("SELECT text FROM events WHERE plan = 'pay' AND kind = 'job-failed' ORDER BY id")?;
+            Ok(stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .unwrap()
+}
+
+/// Runs `open-repo` against a hook that answers `reply`; returns the one `job-failed` Event's `(text, data.detail)`.
+fn gate_failure_text(reply: Reply) -> (String, String, Live) {
+    let live = open_live();
+    live.gh_creates();
+    live.hooks("[pre-merge]\ngate = \"make gate\"\n");
+    *live.hooks.reply.lock().unwrap() = reply;
+    live.run_job("open-repo", submit_only);
+    let texts = job_failed_texts(&live);
+    assert_eq!(texts.len(), 1, "{texts:?}");
+    let failed = live.plan_events("job-failed");
+    (texts[0].clone(), failed[0].1["detail"].as_str().unwrap().to_string(), live)
+}
+
+/// The last five non-blank lines of the scripted output, cut as the Event cuts them.
+fn last_five_cut() -> Vec<String> {
+    let out = long_gate_output();
+    let lines: Vec<&str> = out.lines().filter(|l| !l.trim().is_empty()).collect();
+    lines[lines.len() - 5..].iter().map(|l| format!("{}…", l.trim_end().chars().take(159).collect::<String>())).collect()
+}
+
+fn assert_five_lines_see_decide(text: &str) {
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 8, "header, five lines, See, Decide: {text}");
+    assert!(lines[0].ends_with("Its last 5 lines:"), "{}", lines[0]);
+    assert_eq!(lines[1..6], last_five_cut()[..], "the last five non-blank lines, cut at 160");
+    assert!(lines[6].starts_with("See: ") && lines[6].ends_with("open-repo-a1.pre-merge.log"), "{}", lines[6]);
+    assert_eq!(lines[7], "Decide: cpd job retry open-repo --tier <T> --plan pay, or cpd job cancel open-repo --reason <text> --plan pay");
+}
+
+#[test]
+fn a_gate_failed_events_text_stays_within_1500_characters_whatever_the_tail() {
+    let (text, _, _live) = gate_failure_text(Reply::exit(1, &long_gate_output(), ""));
+
+    assert!(text.chars().count() <= 1500, "{} characters", text.chars().count());
+}
+
+#[test]
+fn a_gate_failed_events_text_ends_with_see_the_log_which_holds_the_whole_output_and_the_detail_keeps_the_tail() {
+    let (text, detail, _live) = gate_failure_text(Reply::exit(1, &long_gate_output(), ""));
+
+    let see = text.lines().find(|l| l.starts_with("See: ")).unwrap_or_else(|| panic!("no See: line in {} characters", text.chars().count()));
+    let path = see.trim_start_matches("See: ");
+    assert!(path.ends_with("open-repo-a1.pre-merge.log"), "{path}");
+    let log = fs::read_to_string(path).unwrap();
+    for n in 1..=80 {
+        assert!(log.contains(&format!("line {n:02} ")), "line {n:02} is in the log");
+    }
+    for n in 22..=80 {
+        assert!(detail.contains(&format!("line {n:02} ")), "line {n:02} stays in data.detail");
+    }
+    assert!(!detail.contains("line 21 "), "the detail holds the 60-line tail only");
+    assert!(detail.contains("\n\n"), "the blank line stays in the tail");
+    assert!(detail.contains(&format!("log: {path}")), "the same log path: {detail}");
+}
+
+#[test]
+fn a_gate_failed_events_text_carries_the_last_five_non_blank_lines_cut_at_160_characters_and_none_before_them() {
+    let (text, _, _live) = gate_failure_text(Reply::exit(1, &long_gate_output(), ""));
+
+    assert!(text.starts_with("Job open-repo failed (gate_failed): pre-merge failed (exit 1)."), "{}", text.lines().next().unwrap_or(""));
+    assert_five_lines_see_decide(&text);
+    for n in 1..=75 {
+        assert!(!text.contains(&format!("line {n:02} ")), "line {n:02} is not in the text");
+    }
+}
+
+#[test]
+fn a_gate_errors_events_text_is_short_the_same_way() {
+    let (text, _, _live) = gate_failure_text(Reply::signal(9, &long_gate_output(), ""));
+
+    assert!(text.chars().count() <= 1500, "{} characters", text.chars().count());
+    assert!(text.starts_with("Job open-repo failed (gate_error): pre-merge could not be judged ("), "{}", text.lines().next().unwrap_or(""));
+    assert_five_lines_see_decide(&text);
+}
+
 /// A `gh` failure after the fast-forward ends the Attempt `failed` / `crashed` with the detail `gh_failed`: the push stands, the PR stays
 /// `dispatch`, and the Job goes through the ladder (the next Attempt finds the pull request, or creates it).
 #[test]

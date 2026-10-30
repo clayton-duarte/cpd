@@ -27,19 +27,19 @@ test("workerVerdict blocks an edit or write whose path is in a primary checkout"
   const x = fixtures(t);
   const abs = join(x.primary, "docs", "commands.md");
   for (const name of ["edit", "write"]) {
-    assert.deepEqual(workerVerdict({ name, arguments: { path: abs } }, { cwd: x.plain, home: x.tmp }), { block: mainReason(`${name} ${abs} in ${x.primary}`) }, name);
+    assert.deepEqual(workerVerdict({ name, arguments: { path: abs } }, { cwd: x.plain, home: x.tmp, cpdHome: join(x.tmp, "cpd") }), { block: mainReason(`${name} ${abs} in ${x.primary}`) }, name);
   }
 });
 
 test("workerVerdict blocks a bash command that moves a primary checkout", (t) => {
   const x = fixtures(t);
   const f = join(x.primary, "f");
-  assert.deepEqual(workerVerdict({ name: "bash", arguments: { command: `echo x > ${f}` } }, { cwd: x.plain, home: x.tmp }), { block: mainReason(`> ${f} in ${x.primary}`) });
+  assert.deepEqual(workerVerdict({ name: "bash", arguments: { command: `echo x > ${f}` } }, { cwd: x.plain, home: x.tmp, cpdHome: join(x.tmp, "cpd") }), { block: mainReason(`> ${f} in ${x.primary}`) });
 });
 
 test("workerVerdict blocks a bash command that bypasses the secret rules", (t) => {
   const x = fixtures(t);
-  const where = { cwd: x.plain, home: x.tmp };
+  const where = { cwd: x.plain, home: x.tmp, cpdHome: join(x.tmp, "cpd") };
   assert.deepEqual(workerVerdict({ name: "bash", arguments: { command: "op read op://cpd/x/y" } }, where), { block: secretReason("op read") });
   assert.deepEqual(
     workerVerdict({ name: "bash", arguments: { command: "cpd secret approve --action get --vault v --item i --field f" } }, where),
@@ -49,18 +49,18 @@ test("workerVerdict blocks a bash command that bypasses the secret rules", (t) =
 
 test("workerVerdict blocks a bash command that bypasses host approval", (t) => {
   const x = fixtures(t);
-  assert.deepEqual(workerVerdict({ name: "bash", arguments: { command: "cpd host approve --reason dirty" } }, { cwd: x.plain, home: x.tmp }), { block: hostReason("cpd host approve") });
+  assert.deepEqual(workerVerdict({ name: "bash", arguments: { command: "cpd host approve --reason dirty" } }, { cwd: x.plain, home: x.tmp, cpdHome: join(x.tmp, "cpd") }), { block: hostReason("cpd host approve") });
 });
 
 test("workerVerdict blocks an unfiltered full test run", (t) => {
   const x = fixtures(t);
-  const where = { cwd: x.plain, home: x.tmp };
+  const where = { cwd: x.plain, home: x.tmp, cpdHome: join(x.tmp, "cpd") };
   assert.deepEqual(workerVerdict({ name: "bash", arguments: { command: "cargo test --workspace" } }, where), { block: testReason("cargo test --workspace") });
 });
 
 test("workerVerdict lets an ordinary call through", (t) => {
   const x = fixtures(t);
-  const where = { cwd: x.plain, home: x.tmp };
+  const where = { cwd: x.plain, home: x.tmp, cpdHome: join(x.tmp, "cpd") };
   assert.equal(workerVerdict({ name: "bash", arguments: { command: "ls -la" } }, where), undefined);
   assert.equal(workerVerdict({ name: "bash", arguments: { command: 7 } }, where), undefined);
   assert.equal(workerVerdict({ name: "read", arguments: { path: join(x.primary, "f") } }, where), undefined);
@@ -69,7 +69,7 @@ test("workerVerdict lets an ordinary call through", (t) => {
 
 test("workerVerdict gives the reason text of the guard that matched", (t) => {
   const x = fixtures(t);
-  const where = { cwd: x.plain, home: x.tmp };
+  const where = { cwd: x.plain, home: x.tmp, cpdHome: join(x.tmp, "cpd") };
   const reasons = [
     workerVerdict({ name: "edit", arguments: { path: join(x.primary, "f") } }, where),
     workerVerdict({ name: "bash", arguments: { command: "op whoami" } }, where),

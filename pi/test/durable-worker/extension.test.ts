@@ -9,7 +9,7 @@ import { TIME_ZONE_SECTION } from "../../lib/time.ts";
 import { reasonText } from "../../lib/testguard.ts";
 import { cpdExtension } from "../../durable-worker/extension.ts";
 
-const WHERE = { cwd: "/nowhere", home: "/nohome" };
+const WHERE = { cwd: "/nowhere", home: "/nohome", cpdHome: "/nocpd" };
 
 /** What a section renders; the Harness's input and context are not used by cpd's sections, so none is opened. */
 const render = async (s: PromptSection) => s.render(undefined as never, undefined as never);
@@ -38,7 +38,7 @@ test("cpdExtension beforeTool blocks with the guard's reason and passes an allow
   const tmp = mkdtempSync(join(tmpdir(), "durable-ext-"));
   t.after(() => rmSync(tmp, { recursive: true, force: true }));
   mkdirSync(join(tmp, "plain"));
-  const hook = beforeTool(cpdExtension({ contextFiles: undefined, policy: undefined, zone: "z" }, { cwd: join(tmp, "plain"), home: tmp }));
+  const hook = beforeTool(cpdExtension({ contextFiles: undefined, policy: undefined, zone: "z" }, { cwd: join(tmp, "plain"), home: tmp, cpdHome: join(tmp, "cpd") }));
   const call = (command: string) => ({ type: "toolCall" as const, id: "c1", name: "bash", arguments: { command } });
   const api = undefined as never;
   assert.deepEqual(await hook(call("cargo test --workspace"), api, api), { block: reasonText("cargo test --workspace") });

@@ -64,6 +64,12 @@ pub struct Check {
     /// A CheckRun's `detailsUrl`, else a StatusContext's `targetUrl`.
     #[serde(rename = "detailsUrl", alias = "targetUrl")]
     pub url: Option<String>,
+    /// A CheckRun's workflow name (`gh pr view`: `workflowName`); none for a third-party app.
+    #[serde(rename = "workflowName", default)]
+    pub workflow: Option<String>,
+    /// A CheckRun's `startedAt`, a StatusContext's `startedAt` (`gh pr view`) or `createdAt` (GraphQL); RFC 3339 UTC.
+    #[serde(rename = "startedAt", default)]
+    pub started_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1092,7 +1098,7 @@ pub fn read_comments(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], bot
 }
 
 /// One pull request's checks read: the head commit's contexts, 100 at a time (contract §7.6 step 3b).
-const CHECKS_FIELDS: &str = "nodes { __typename ... on CheckRun { name status conclusion } ... on StatusContext { context state } }";
+const CHECKS_FIELDS: &str = "nodes { __typename ... on CheckRun { name status conclusion startedAt checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state createdAt } }";
 
 /// The checks read's query: one alias `p<i>` per `(owner/name, number, after)`, `after` the cursor of the page wanted.
 fn checks_query(prs: &[(&str, i64, Option<&str>)]) -> String {
@@ -1133,7 +1139,47 @@ struct RawChecksRollup {
 struct RawContexts {
     #[serde(rename = "pageInfo")]
     page_info: RawPageInfo,
-    nodes: Vec<Check>,
+    nodes: Vec<RawCheck>,
+}
+/// A GraphQL node: the workflow name is nested and a StatusContext's time is `createdAt`.
+#[derive(Deserialize)]
+struct RawCheck {
+    name: Option<String>,
+    context: Option<String>,
+    conclusion: Option<String>,
+    state: Option<String>,
+    #[serde(rename = "startedAt", default)]
+    started_at: Option<String>,
+    #[serde(rename = "createdAt", default)]
+    created_at: Option<String>,
+    #[serde(rename = "checkSuite", default)]
+    check_suite: Option<RawSuite>,
+}
+#[derive(Deserialize)]
+struct RawSuite {
+    #[serde(rename = "workflowRun")]
+    workflow_run: Option<RawWorkflowRun>,
+}
+#[derive(Deserialize)]
+struct RawWorkflowRun {
+    workflow: Option<RawWorkflow>,
+}
+#[derive(Deserialize)]
+struct RawWorkflow {
+    name: Option<String>,
+}
+impl From<RawCheck> for Check {
+    fn from(r: RawCheck) -> Check {
+        Check {
+            name: r.name,
+            context: r.context,
+            conclusion: r.conclusion,
+            state: r.state,
+            url: None,
+            workflow: r.check_suite.and_then(|s| s.workflow_run).and_then(|w| w.workflow).and_then(|w| w.name),
+            started_at: r.started_at.or(r.created_at),
+        }
+    }
 }
 #[derive(Deserialize)]
 struct RawPageInfo {
@@ -1171,7 +1217,7 @@ fn parse_checks(reply: &Reply, count: usize) -> Result<Vec<(Vec<Check>, Option<S
                     (true, Some(cursor)) => Some(cursor),
                     (true, None) => return Err(reply.fail(format!("gh api graphql answered {alias} with a next page and no endCursor."))),
                 };
-                (r.contexts.nodes, next)
+                (r.contexts.nodes.into_iter().map(Check::from).collect(), next)
             }
         });
     }
@@ -1303,11 +1349,11 @@ mod tests {
         assert_eq!(
             checks_query(&[("o/a", 7, None), ("o/b", 8, Some("c1"))]),
             "query { p0: repository(owner: \"o\", name: \"a\") { pullRequest(number: 7) { commits(last: 1) { nodes { commit { statusCheckRollup { \
-             contexts(first: 100) { pageInfo { hasNextPage endCursor } nodes { __typename ... on CheckRun { name status conclusion } \
-             ... on StatusContext { context state } } } } } } } } } \
+             contexts(first: 100) { pageInfo { hasNextPage endCursor } nodes { __typename ... on CheckRun { name status conclusion startedAt checkSuite { workflowRun { workflow { name } } } } \
+             ... on StatusContext { context state createdAt } } } } } } } } } \
              p1: repository(owner: \"o\", name: \"b\") { pullRequest(number: 8) { commits(last: 1) { nodes { commit { statusCheckRollup { \
-             contexts(first: 100, after: \"c1\") { pageInfo { hasNextPage endCursor } nodes { __typename ... on CheckRun { name status conclusion } \
-             ... on StatusContext { context state } } } } } } } } } }"
+             contexts(first: 100, after: \"c1\") { pageInfo { hasNextPage endCursor } nodes { __typename ... on CheckRun { name status conclusion startedAt checkSuite { workflowRun { workflow { name } } } } \
+             ... on StatusContext { context state createdAt } } } } } } } } } }"
         );
     }
 
@@ -1327,6 +1373,26 @@ mod tests {
             pages[0].0.iter().map(|c| (c.name.as_deref().or(c.context.as_deref()), c.conclusion.as_deref(), c.state.as_deref())).collect();
         assert_eq!(got, [(Some("a"), Some("CANCELLED"), None), (Some("b"), None, None), (Some("c"), None, Some("PENDING"))]);
         assert!(pages[1].0.is_empty() && pages[2].0.is_empty() && pages[1].1.is_none());
+    }
+
+    #[test]
+    fn checks_carry_the_workflow_and_the_start_time() {
+        let body = r#"{"data":{"p0":{"pullRequest":{"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[
+            {"__typename":"CheckRun","name":"a","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-10-30T04:19:08Z","checkSuite":{"workflowRun":{"workflow":{"name":"W"}}}},
+            {"__typename":"CheckRun","name":"b","status":"COMPLETED","conclusion":null,"startedAt":null,"checkSuite":{"workflowRun":null}},
+            {"__typename":"StatusContext","context":"c","state":"SUCCESS","createdAt":"2026-10-30T14:39:33Z"}]}}}}]}}}}}"#;
+        let out = reply(body, 0);
+        let pages = parse_checks(&Reply { args: &ARGS, out: &out }, 1).unwrap();
+        let got: Vec<(Option<&str>, Option<&str>)> = pages[0].0.iter().map(|c| (c.workflow.as_deref(), c.started_at.as_deref())).collect();
+        assert_eq!(got, [(Some("W"), Some("2026-10-30T04:19:08Z")), (None, None), (None, Some("2026-10-30T14:39:33Z"))]);
+    }
+
+    #[test]
+    fn a_start_time_that_is_not_a_string_is_gh_failed() {
+        let body = r#"{"data":{"p0":{"pullRequest":{"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[
+            {"__typename":"CheckRun","name":"a","status":"COMPLETED","conclusion":"FAILURE","startedAt":5}]}}}}]}}}}}"#;
+        let out = reply(body, 0);
+        assert_eq!(parse_checks(&Reply { args: &ARGS, out: &out }, 1).unwrap_err().code(), ErrorCode::GhFailed);
     }
 
     #[test]
