@@ -17,12 +17,13 @@ pub(super) enum Required {
 }
 
 /// The state of each name in `required` on `checks`, in order: the same classification of conclusions as [`ChecksSummary::of`];
-/// of several entries named alike, failed wins, then pending, then passed.
+/// of several runs of one name the newest decides (as [`newest_runs`]), and of several identities named alike failed wins, then pending, then passed.
 pub(super) fn required_states<'a>(checks: &[Check], required: &'a [String]) -> Vec<(&'a str, Required)> {
+    let newest = newest_runs(checks);
     required
         .iter()
         .map(|name| {
-            let states = checks.iter().filter_map(|c| {
+            let states = newest.iter().filter_map(|c| {
                 let state = if c.name.is_none() && c.context.as_deref() == Some(name) {
                     let state = c.state.as_deref().unwrap_or_default().to_ascii_uppercase();
                     if failing(&state) { Required::Failed } else if matches!(state.as_str(), "PENDING" | "EXPECTED") { Required::Pending } else { Required::Passed }
@@ -337,7 +338,7 @@ mod tests {
     }
 
     fn summary(checks: &[Check]) -> ChecksSummary {
-        ChecksSummary::of(checks, &[])
+        ChecksSummary::of(checks, &[], &[])
     }
 
     const T1: &str = "2026-10-30T01:00:00Z";
@@ -348,6 +349,15 @@ mod tests {
         assert_eq!(summary(&[run(Some("w"), "a", "FAILURE", Some(T1)), run(Some("w"), "a", "SUCCESS", Some(T2))]), ChecksSummary::Passed);
         assert_eq!(summary(&[run(Some("w"), "a", "SUCCESS", Some(T2)), run(Some("w"), "a", "FAILURE", Some(T1))]), ChecksSummary::Passed);
         assert_eq!(summary(&[run(Some("w"), "a", "SUCCESS", Some(T1)), run(Some("w"), "a", "FAILURE", Some(T2))]), ChecksSummary::Failed);
+    }
+
+    #[test]
+    fn required_check_follows_its_newest_run() {
+        let req = vec!["gate".to_owned()];
+        let of = |checks: &[Check]| ChecksSummary::of(checks, &[], &req);
+        assert_eq!(of(&[run(Some("w"), "gate", "FAILURE", Some(T1)), run(Some("w"), "gate", "SUCCESS", Some(T2))]), ChecksSummary::Passed);
+        assert_eq!(of(&[run(Some("w"), "gate", "SUCCESS", Some(T1)), run(Some("w"), "gate", "FAILURE", Some(T2))]), ChecksSummary::Failed);
+        assert_eq!(of(&[run(Some("w"), "gate", "SUCCESS", Some(T1)), run(Some("w"), "gate", "IN_PROGRESS", Some(T2))]), ChecksSummary::Pending);
     }
 
     #[test]

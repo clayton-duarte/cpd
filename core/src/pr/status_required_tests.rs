@@ -6,11 +6,11 @@ use crate::pr::gh::Check;
 
 fn run(name: &str, status: &str, conclusion: &str) -> Check {
     let conclusion = if status == "COMPLETED" { Some(conclusion.to_owned()) } else { None };
-    Check { name: Some(name.to_owned()), context: None, conclusion, state: None, url: None }
+    Check { name: Some(name.to_owned()), context: None, conclusion, state: None, url: None, started_at: None, workflow: None }
 }
 
 fn context(name: &str, state: &str) -> Check {
-    Check { name: None, context: Some(name.to_owned()), conclusion: None, state: Some(state.to_owned()), url: None }
+    Check { name: None, context: Some(name.to_owned()), conclusion: None, state: Some(state.to_owned()), url: None, started_at: None, workflow: None }
 }
 
 fn required(names: &[&str]) -> Vec<String> {
