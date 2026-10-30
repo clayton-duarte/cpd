@@ -482,10 +482,13 @@ One execution of a Job by one fresh Worker session, in its own worktree.
 | `driver_pid` | int? | pid of `cpd attempt run` |
 | `runner` | text | `pi` or `durable`: the Worker runner of this Attempt, fixed at its creation (§3.4 "The Worker runner and its seam") |
 | `worker_pid` | int? | pid of a `durable` Worker's process; null for `pi` and before the start (§3.4) |
+| `gate_hook` | text? | the hook of the Gate that failed at the merge, `pre-commit` or `pre-merge` (§7.4 step 6); set together with `gate_command`, `gate_exit` and `check_tail` exactly when `cause` is `gate_failed`, and null for every other end, `gate_error` included, and for Attempts that ended before migration `gate-facts` (pro-d267) |
+| `gate_command` | text? | the rendered `sh -c` text of the first command that exited non-zero, in file order (what ran, not its table key; §7.3); set and null together with `gate_hook` |
+| `gate_exit` | int? | the exit code of `gate_command`; set and null together with `gate_hook` |
 | `worker_session` | text? | the Worker's Session |
 | `spec_path` | text? | rendered Worker Spec |
 | `submitted_sha`, `submitted_at` | text?, time? | set by `attempt submit` |
-| `check_tail` | text? | last 60 lines of the quick check at submit (§7.3) |
+| `check_tail` | text? | last 60 lines of the Gate that failed at the merge (§7.4 step 6); set and null together with `gate_hook` (so `attempt submit` writes none) |
 | `merged_sha` | text? | set exactly when the outcome is `merged` |
 | `nudged` | bool | the "you ended your turn without submitting" message was sent (§3.4) |
 | `stop_request` | text? | `timed_out` or `cancelled`, set by the engine for the driver to act on |
