@@ -501,7 +501,7 @@ pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
         Dot::White => (NEEDS_YOU, clickable_text()),
         Dot::Working(p) => (
             SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }],
-            fg_clickable(if p.is_none() { Meaning::InProgress } else { phase(p) }),
+            fg_clickable(if p.is_none() { Meaning::InProgress } else { phase(p.map(|w| match w { crate::read::Work::Planning => Phase::Plan, crate::read::Work::Dispatch => Phase::Dispatch, crate::read::Work::Review => Phase::Deploy })) }),
         ),
         Dot::Fixing => (SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }], fg_clickable(Meaning::Failed)),
         Dot::Waiting => (WAITING, fg_clickable(Meaning::Waiting)),

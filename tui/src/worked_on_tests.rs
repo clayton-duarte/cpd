@@ -12,7 +12,7 @@ use cpd_core::plan::Phase;
 use cpd_core::store::Store;
 
 use crate::plan::boxes;
-use crate::read::{self, Dot};
+use crate::read::{self, Dot, Work};
 
 const T: &str = "2026-01-01T00:00:00.000Z";
 const FP: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -167,7 +167,7 @@ fn the_tree_shows_the_red_loader_for_an_idle_lead_whose_plan_has_a_failed_job_wi
 
 #[test]
 fn the_dot_of_a_lead_with_a_failed_job_being_worked_on_is_red_loader_or_red_item_whatever_its_state() {
-    let phase = Some(Phase::Deploy);
+    let phase = Some(Work::Review);
     let states = [State::Working, State::Idle, State::Waiting, State::Blocked, State::Stopped];
     for state in states {
         assert_eq!(Dot::of(state, None, true, phase), Dot::Fixing, "{state:?}, no item");

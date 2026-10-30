@@ -7,6 +7,21 @@ use cpd_core::inbox::model::{Item, Kind, Urgency};
 use cpd_core::plan::Phase;
 use cpd_core::session::State;
 
+/// What a working Lead is working on: its spinner colour (planning magenta 13, dispatch cyan 14, review yellow 11).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Work {
+    Planning,
+    Dispatch,
+    Review,
+}
+
+impl Work {
+    /// STUB (deliberately wrong): always `Dispatch`.
+    pub fn of(_phase: Phase, _drafts: bool, _git: bool) -> Work {
+        Work::Dispatch
+    }
+}
+
 /// The dot of a row, ordered by urgency: the greatest is the most urgent, `Red > Yellow > Magenta > Cyan > White >
 /// Working > Waiting > Idle > Stopped` (§17, Precedence); `Magenta > Cyan > White` since hs-d570.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -20,7 +35,7 @@ pub enum Dot {
     Waiting,
     /// `palette::SPINNER`: the Lead is working; `Some(phase)` is the phase of the Plan it leads, `None` for a Session
     /// that leads no Plan (a fork, a Manager, a Worker), drawn cyan (hs-d622).
-    Working(Option<Phase>),
+    Working(Option<Work>),
     /// The red loader: the Plan has a failed Job being worked on (pro-d88), whatever its Lead's state.
     Fixing,
     /// `palette::NEEDS_YOU` white: an Inbox item of urgency `white`.
@@ -65,8 +80,8 @@ impl Dot {
 
     /// The dot of a working Lead: the red loader when its Plan has a failed Job being worked on (pro-d88), else its
     /// Plan's phase (`None`: no Plan, cyan).
-    pub fn working(failed: bool, phase: Option<Phase>) -> Dot {
-        if failed { Dot::Fixing } else { Dot::Working(phase) }
+    pub fn working(failed: bool, work: Option<Work>) -> Dot {
+        if failed { Dot::Fixing } else { Dot::Working(work) }
     }
 
     /// The glyph of a state, for a row with no item: the spinner, `palette::WAITING`, `palette::IDLE` or
@@ -84,14 +99,14 @@ impl Dot {
     /// a Plan's own Lead whose Plan has a failed Job being worked on (pro-d88, `PlanHead::fixing`) and decides alone:
     /// the red dot when the item is red, else the red loader, whatever the state. Otherwise own state first
     /// (hs-d183): a working Session shows the spinner whatever its items; any other state shows its most urgent
-    /// item, else its glyph. `phase` is the phase of the Plan the Session leads (`None` for any other Session); only a
+    /// item, else its glyph. `work` is what the Plan the Session leads (`None` for any other Session); only a
     /// working Session uses it.
-    pub fn of(state: State, item: Option<Urgency>, failed: bool, phase: Option<Phase>) -> Dot {
+    pub fn of(state: State, item: Option<Urgency>, failed: bool, work: Option<Work>) -> Dot {
         if failed {
             return if item == Some(Urgency::Red) { Dot::Red } else { Dot::Fixing };
         }
         if state == State::Working {
-            return Dot::working(false, phase);
+            return Dot::working(false, work);
         }
         item.and_then(Dot::from_urgency).unwrap_or_else(|| Dot::glyph(state))
     }
@@ -297,5 +312,58 @@ mod tests {
         assert_eq!(order.iter().copied().max(), Some(Dot::Red));
         assert!(!Dot::Fixing.needs_you());
         assert_eq!(order.iter().filter(|d| d.needs_you()).count(), 5, "the needs-you dots are the five colours");
+    }
+
+    const PHASES: [Phase; 4] = [Phase::Grounding, Phase::Plan, Phase::Dispatch, Phase::Done];
+
+    fn all_phases() -> Vec<Phase> {
+        let mut v = PHASES.to_vec();
+        v.push(Phase::Deploy);
+        v
+    }
+
+    #[test]
+    fn dots_work_of_drafts_beat_every_phase_and_git() {
+        for phase in all_phases() {
+            for git in [false, true] {
+                assert_eq!(Work::of(phase, true, git), Work::Planning, "{phase:?} git={git}");
+            }
+        }
+    }
+
+    #[test]
+    fn dots_work_of_git_or_deploy_is_review() {
+        for phase in all_phases() {
+            assert_eq!(Work::of(phase, false, true), Work::Review, "{phase:?} with git");
+        }
+        assert_eq!(Work::of(Phase::Deploy, false, false), Work::Review, "deploy alone");
+    }
+
+    #[test]
+    fn dots_work_of_phase_alone() {
+        for phase in [Phase::Grounding, Phase::Plan, Phase::Done] {
+            assert_eq!(Work::of(phase, false, false), Work::Planning, "{phase:?}");
+        }
+        assert_eq!(Work::of(Phase::Dispatch, false, false), Work::Dispatch);
+    }
+
+    #[test]
+    fn dots_rule_failed_is_red_loader_and_no_plan_is_white() {
+        for work in [None, Some(Work::Planning), Some(Work::Dispatch), Some(Work::Review)] {
+            assert_eq!(Dot::working(true, work), Dot::Fixing, "{work:?}");
+            assert_eq!(Dot::working(false, work), Dot::Working(work), "{work:?}");
+            assert_eq!(Dot::of(State::Working, None, true, work), Dot::Fixing, "{work:?}");
+            assert_eq!(Dot::of(State::Working, Some(Urgency::Red), true, work), Dot::Red, "own red item: {work:?}");
+            assert_eq!(Dot::of(State::Working, Some(Urgency::Yellow), false, work), Dot::Working(work), "{work:?}");
+            for state in [State::Idle, State::Waiting, State::Blocked, State::Stopped] {
+                assert_eq!(Dot::of(state, None, false, work), Dot::glyph(state), "a non-working state ignores work: {state:?}");
+            }
+        }
+        assert_eq!(Dot::of(State::Working, None, false, None), Dot::Working(None), "no Plan: white");
+        for work in [Work::Planning, Work::Dispatch, Work::Review] {
+            assert!(!Dot::Working(Some(work)).needs_you());
+        }
+        // the dot of a Plan of drafts and an open PR is planning, whatever the phase: through the one rule
+        assert_eq!(Dot::of(State::Working, None, false, Some(Work::of(Phase::Dispatch, true, true))), Dot::Working(Some(Work::Planning)));
     }
 }

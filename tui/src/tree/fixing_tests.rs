@@ -74,3 +74,53 @@ fn the_legend_lists_the_red_loader_after_the_working_one() {
     let text: String = row[1].spans.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(text, "a Plan's failed Job is being worked on (one frame every 50 ms)");
 }
+
+/// A store of Plan `px` in dispatch whose working Lead `l-x` has a running Job, its Attempt and one Worker
+/// Escalation in `status` (`open`, `answered` or `expired`); no failed Job. No tmux, git or gh.
+fn escalated(status: &str) -> Tree {
+    let dir = tempfile::tempdir().unwrap();
+    let home = cpd_core::home::CpdHome::resolve(Some(dir.path().to_path_buf().into()), None).unwrap();
+    let mut store = cpd_core::store::Store::open(&home, 5000).unwrap();
+    let t = "'2026-01-02T01:00:00.000Z'";
+    let (answer, answered, expired) = match status {
+        "answered" => ("'a'", t, "NULL"),
+        "expired" => ("NULL", "NULL", t),
+        _ => ("NULL", "NULL", "NULL"),
+    };
+    let fp = "a".repeat(64);
+    let sql = format!(
+        "INSERT INTO contexts (id, title, jira, created_at, created_on) VALUES ('ctx', 'T', NULL, '2026-01-01T00:00:00.000Z', 'm1');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('l-x', 'lead', 'ctx', NULL, 'l-x', '/repo', 'O3', 'working', {t}, '2026-01-02T00:00:00.000Z');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+           VALUES ('px', 'ctx', 'X', 'dispatch', 'l-x', {t}, {t}, NULL);
+         UPDATE sessions SET plan = 'px' WHERE id = 'l-x';
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+           VALUES ('px', 'work', '/repo', 'main', 'dispatch', 'cpd/px/work', '/wt', cpd_txn(), {t}, {t});
+         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+                           created_txn, created_at)
+           VALUES ('px', 'work', 'j1', 'J', 'S1', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'running', 0, '{fp}', cpd_txn(), {t});
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+           VALUES ('px', 'j1-a1', 'j1', 1, 'S1', 'ladder', 'running', 'cpd/px--j1-a1', '/w/j1', {t});
+         INSERT INTO escalations (plan, id, attempt, number, question, status, answer, asker_pid, asked_at, answered_at, expired_at)
+           VALUES ('px', 'j1-a1-q1', 'j1-a1', 1, 'which?', '{status}', {answer}, 1, {t}, {answered}, {expired});"
+    );
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(&sql)?;
+            Ok::<(), cpd_core::error::CpdError>(())
+        })
+        .unwrap();
+    crate::read::tree(&mut store).unwrap()
+}
+
+/// `dots_tree_open_escalation_is_red_loader`: a working Lead whose Plan has an open Worker Escalation (no failed
+/// Job) shows the red loader; once the question is answered or expired it shows its Work dot again.
+#[test]
+fn dots_tree_open_escalation_is_red_loader() {
+    let lead = |t: &Tree| t.contexts[0].plans[0].lead().expect("the Lead").dot;
+    assert_eq!(lead(&escalated("open")), Dot::Fixing, "an open escalation");
+    for status in ["answered", "expired"] {
+        assert_eq!(lead(&escalated(status)), Dot::Working(Some(crate::read::Work::Dispatch)), "{status}");
+    }
+}

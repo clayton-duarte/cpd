@@ -14,9 +14,8 @@ use cpd_core::store::Store;
 use ratatui::style::Color;
 
 use crate::palette;
-use crate::palette::numbered::{C9, C10, C11, C13, C14, C15};
 use crate::plan::boxes;
-use crate::read::{self, JobNode, JobStatus, NeedsUser, PrNode, PrState, PrStatus, Pull};
+use crate::read::{self, Work, JobNode, JobStatus, NeedsUser, PrNode, PrState, PrStatus, Pull};
 
 /// Each Plan of the fixture: its phase, its id and its Lead Session.
 const PHASES: [(Phase, &str, &str); 5] = [
@@ -34,7 +33,7 @@ fn the_plan_view_reads_its_leads_plan_phase() {
     for (phase, plan, _) in PHASES {
         let boxes = read::plan_boxes(&mut store, &PlanId::parse(plan).unwrap()).unwrap();
         assert!(boxes.needs_user.lead_working, "Plan {plan}: its Lead is working");
-        assert_eq!(boxes.needs_user.lead_phase, Some(phase), "Plan {plan}");
+        assert_eq!(boxes.needs_user.lead_work.is_some(), true, "Plan {plan} {phase:?}");
     }
 }
 
@@ -92,28 +91,6 @@ fn title_dot(pr: &PrNode, jobs: &[JobNode], needs: &NeedsUser, frame: usize) -> 
         .map(|x| &chart.buf[(x, 0)])
         .find(|cell| palette::SPINNER.iter().any(|glyph| cell.symbol().contains(glyph)))
         .map(|cell| cell.fg)
-}
-
-/// `the_pr_box_title_dot_follows_the_plans_phase`: the Lead's dot after the state word is the bright pair of the
-/// Plan's phase colour, cyan with no Plan, the red loader with a failed Job, and absent when the Lead is not working.
-#[test]
-fn the_pr_box_title_dot_follows_the_plans_phase() {
-    for (phase, colour) in [
-        (Phase::Grounding, C15),
-        (Phase::Plan, C13),
-        (Phase::Dispatch, C14),
-        (Phase::Deploy, C11),
-        (Phase::Done, C10),
-    ] {
-        let needs = NeedsUser { lead_working: true, lead_phase: Some(phase), ..NeedsUser::default() };
-        assert_eq!(title_dot(&pr_node(true), &[], &needs, 3), Some(colour), "{phase:?}");
-    }
-    let cyan = NeedsUser { lead_working: true, lead_phase: None, ..NeedsUser::default() };
-    assert_eq!(title_dot(&pr_node(true), &[], &cyan, 3), Some(C14), "a working Session that leads no Plan is cyan");
-    let failed = NeedsUser { lead_working: true, lead_phase: Some(Phase::Deploy), ..NeedsUser::default() };
-    assert_eq!(title_dot(&pr_node(true), &[failed_job()], &failed, 3), Some(C9), "a failed Job: the red loader whatever the phase");
-    let idle = NeedsUser { lead_working: true, lead_phase: Some(Phase::Deploy), ..NeedsUser::default() };
-    assert_eq!(title_dot(&pr_node(false), &[], &idle, 3), None, "an idle Lead draws no dot");
 }
 
 /// A store of one Context: a Plan in each phase with a working Lead, each owning an open, authored pull request

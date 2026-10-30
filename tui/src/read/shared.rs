@@ -15,7 +15,7 @@ use cpd_core::ids::{AttemptId, ContextId, PlanId, SessionId};
 use cpd_core::plan::Phase;
 use cpd_core::session::{Role, State};
 
-use super::dot::Dot;
+use super::dot::{Dot, Work};
 
 /// A row the database holds in a shape the binary does not accept: it was
 /// changed outside cpd, or by a bug.
@@ -332,11 +332,23 @@ pub struct PlanHead {
     pub archived_at: Option<String>,
     /// The Plan has a failed Job being worked on (pro-d88): its Lead's dot is the red loader.
     pub fixing: bool,
+    /// STUB: always false.
+    pub git_active: bool,
 }
 
 impl PlanHead {
     pub fn is_archived(&self) -> bool {
         self.archived_at.is_some()
+    }
+
+    /// STUB: only `fixing`.
+    pub fn failing(&self) -> bool {
+        self.fixing
+    }
+
+    /// STUB: through the stub `Work::of`.
+    pub fn work(&self) -> Work {
+        Work::of(self.phase, self.counts.draft > 0, self.git_active || self.counts.merging > 0)
     }
 }
 
@@ -433,6 +445,7 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
             done_at: r.get(14)?,
             archived_at: r.get(15)?,
             fixing: fixing.contains(&plan),
+            git_active: false,
             phase,
             pr,
             id: plan,

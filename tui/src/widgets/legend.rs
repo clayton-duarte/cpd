@@ -18,7 +18,6 @@ use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
 use cpd_core::error::CpdError;
 use cpd_core::inbox::model::Urgency;
 use cpd_core::output::Output;
-use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
 use crate::buffer::copy_cells;
 use crate::cells;
@@ -26,7 +25,7 @@ use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
 use crate::pill::pill;
 use crate::popup;
-use crate::read::{Dot, JobCounts, JobStatus, PrState};
+use crate::read::{Dot, Work, JobCounts, JobStatus, PrState};
 use crate::box_widget::SectionTitle;
 use crate::view_ports::Ctx;
 use crate::{Capture, run_view_on};
@@ -180,10 +179,10 @@ pub(crate) fn sections() -> Vec<Section> {
             vec![dot(Dot::Magenta, 0), plain("magenta: blocked while grounding, planning or done, or the Plan's review is pending")],
             vec![dot(Dot::Cyan, 0), plain("cyan: a cpd notice that blocks nothing: curation")],
             vec![dot(Dot::White, 0), plain("white: idle, not seen since it last went idle")],
-            vec![loader(Dot::Working(Some(Phase::Grounding))), plain("the Lead is working, grounding (one frame every 50 ms)")],
-            vec![loader(Dot::Working(Some(Phase::Plan))), plain("the Lead is working, plan (one frame every 50 ms)")],
-            vec![loader(Dot::Working(Some(Phase::Deploy))), plain("the Lead is working, deploy (one frame every 50 ms)")],
-            vec![loader(Dot::Working(Some(Phase::Done))), plain("the Lead is working, done (one frame every 50 ms)")],
+            vec![loader(Dot::Working(Some(Work::Planning))), plain("the Lead is working, grounding (one frame every 50 ms)")],
+            vec![loader(Dot::Working(Some(Work::Planning))), plain("the Lead is working, plan (one frame every 50 ms)")],
+            vec![loader(Dot::Working(Some(Work::Review))), plain("the Lead is working, deploy (one frame every 50 ms)")],
+            vec![loader(Dot::Working(Some(Work::Planning))), plain("the Lead is working, done (one frame every 50 ms)")],
             vec![plain(""), plain(&precedence())],
         ],
     };
