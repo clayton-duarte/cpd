@@ -189,7 +189,15 @@ A reloaded copy rebuilds only from the file; it lacks state built by live events
 3. A component made from an event stream whose text changes in memory every tick but is clipped or hidden (misses the pro-d208 content key each frame).
 4. State from the live process that a copy cannot carry: plannotator package, MCP connections, 15 hours of uptime and 433 MB of heap.
 
+## Probe
+
+(skeleton)
+
 ## Trace
+
+## Proposed fix
+
+## Live probe
 
 ## Candidates
 
