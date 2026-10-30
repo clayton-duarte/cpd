@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { contextCursorFrom, contextUpdate, parsePending, parseRecords, type ContextRecord, type PendingJob, type PendingPlan, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
 import { Fixture, ID, OTHER, shown, waitFor } from "./fake.ts";
+import { adapterErrors } from "./lead-errors.ts";
 
 // Pin the process timezone so the expected local times are deterministic and prove the rendering is local, not UTC.
 process.env.TZ = "Asia/Kolkata";
@@ -614,4 +615,71 @@ test("a failing plan show gives one visible warning line", async (t) => {
   assert.equal(lines.filter((l) => l.startsWith("could not read the Plan's PRs:")).length, 1);
   assert.ok(lines.includes("could not read the Plan's PRs: database is locked"), m.content);
   assert.ok(!m.content.includes("retry later"), "the error's first line only");
+});
+
+// ---- the closed PR read: its argv, and a usage refusal of it ----
+
+const planShows = (f: Fixture) => f.argvs().filter((a) => a[0] === "plan" && a[1] === "show");
+const usageRefusal = { ok: false, error: { code: "usage", message: "unexpected argument 'p1' found", details: {} } };
+
+test("the closed PR line is read with plan show and the Plan id", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  f.respond("plan-show", planWith(planPr("api", 623, true)));
+  nothingNew(f);
+  const before = planShows(f).length;
+  const m = await beforeTurn(f);
+  const fresh = planShows(f).slice(before);
+  assert.equal(fresh.length, 1);
+  assert.deepEqual(fresh[0], ["plan", "show", "--plan", "p1"]);
+  assert.ok(m?.content.split("\n").includes(closedLine("api", 623)), m?.content);
+});
+
+test("a usage refusal of the closed PR read is reported, not rendered", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  f.respond("plan-show", usageRefusal, { exit: 2 });
+  nothingNew(f);
+  assert.equal(await beforeTurn(f), undefined);
+  await f.quiet();
+  const errors = adapterErrors(f);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]!.what, "closed-unmerged PR line");
+  assert.equal(errors[0]!.code, "usage");
+});
+
+test("a usage refusal of the closed PR read keeps the rest of the update", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  f.respond("plan-show", usageRefusal, { exit: 2 });
+  nothingNew(f);
+  f.respond("events-list@context-record", eventsList([1]));
+  f.respond("context-show", contextShow([decision(1, "Cut the wake.")]));
+  const m = await beforeTurn(f);
+  assert.ok(m, "the update is delivered");
+  assert.ok(m.content.includes("Cut the wake."), m.content);
+  const lines: string[] = m.content.split("\n");
+  assert.ok(!lines.some((l) => l.startsWith("could not read")), m.content);
+  assert.ok(!lines.some((l) => l.includes("closed without a merge")), m.content);
+  await f.quiet();
+  const errors = adapterErrors(f);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]!.code, "usage");
+});
+
+test("a usage refusal of the closed PR read is reported once", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  f.respond("plan-show", usageRefusal, { exit: 2 });
+  nothingNew(f);
+  await beforeTurn(f);
+  await beforeTurn(f);
+  await f.quiet();
+  const reports = f.reports();
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0]!.code, "usage");
 });
