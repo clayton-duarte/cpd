@@ -3593,7 +3593,7 @@ Checks the machine (cpd 1 §11 `doctor`, kept in shape). Each check has `name`, 
 |---|---|---|---|---|---|
 | git | `git --version` | `git version 2.43.0` | `2.43.0` | the first `x.y.z` | `worktree add`, `update-ref` with an old value, `merge-base --is-ancestor`, `merge-tree --write-tree --name-only` (git 2.38 or later, docs), `read-tree -m -u` (§7) |
 | tmux | `tmux -V` | `tmux 3.4` | `3.6` | `x.y`, ignoring a letter suffix (`3.4a`); `next-…` builds pass | `new-window`/`split-window -e`, argv commands after `--`, `swap-pane`, `pane-border-lines`, `extended-keys`, `#{pane_dead_status}` (§6); **3.6 because** older tmux can lose a pane's `SIGCHLD`, so `pane-died` never respawns a cockpit view (contract §6.1; fixed in tmux 3.6, tmux/tmux#4559) |
-| pi | `pi --version` | `1.2.0` | `>= 1.2.0 < 2.0.0` | `x.y.z` | `--fork`, `--session-id`, `-n`, `--exclude-tools`, `--no-skills`, `--approve`; the catalog of §9 (cpd 1 §11: pi updates itself, so a range) |
+| pi | `pi --version` | `1.2.0` | `>= 1.2.0 < 2.0.0` | `x.y.z` | `--fork`, `--session-id`, `-n`, `--exclude-tools`, `--no-skills`, `--approve`, `--no-mcp`, `--tools +name`; the catalog of §9 (cpd 1 §11: pi updates itself, so a range) |
 | gh | `gh --version` | `gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)` | `2.45.0` | the first `x.y.z` | `pr create`, `pr list --json`, `pr view --json …statusCheckRollup…`, `api` (§7.6) |
 | pi's Node | `<pi node> --version`, the binary §9 chooses | `v22.23.2` (`/usr/local/bin/node`; this machine has no `pi-node` directory) | none: it must run | | runs the catalog module of §9 |
 
@@ -4348,6 +4348,10 @@ Decision (User, 2026-10-26 11:53 EDT, relayed by the Lead of Plan preco-home-but
 **Where it runs.** Where the User says; for a Plan's branch, in the PR's Lead worktree (`lead_worktree` of `cpd plan show`).
 
 **Enforcement.** No guard is added: the adapter already lets a background start through (pi's bash tool starts each command in its own process group and returns when the shell exits), and the rule is prose in the cpd-lead skill, pinned by tests. State the exact shell commands NOT here: they belong to the cpd-lead skill, which a later Job of this PR writes, and this section must not repeat them (DRY).
+
+### 15.21 Calls a codemode script makes (hs-d736)
+
+When a codemode script runs in a Session and calls a pi tool nested inside the script, pi 1.3.0 emits a `tool_call` event with `parentToolCallId` set to the script's tool call id, and the adapter's handlers receive the nested call (read from pi source `dist/main.js` tool_call handler; confirmed with pi 1.3.0). **Nested calls are judged identically to direct calls**: a nested call goes through the same guard (`pi/lib/*.ts`, §15.11–15.20) that a direct call from a message goes through (assumption A6: the adapter's handlers are called for both direct and nested calls, and the handlers do not check `parentToolCallId` to exempt nested calls; verified from the adapter code in 2026-10, cpd.git~1:pi/lib/index.ts `tool_call` handler). No nested-call escape clause, no reduced guards, no lifted restrictions: the adapter treats a bash call the adapter refuses directly the same way whether it is called directly in a message or nested in a script—it is refused. The Worker's `--exclude-tools` list (contract §6.6 "How cpd starts pi" Worker row) remains not callable from a script, because pi's tool exclusion (pi source `dist/main.js` checks a tool before calling its handler) reaches nested calls. **Evidence** (read and ran from docs/research/codemode-default.md with pi 1.3.0): nested calls reach the adapter's `tool_call` handlers with `parentToolCallId` set; they are rejected by guards the same way direct calls are; pi's exclusion blocks them before the handlers.
 
 ## 16. The Worker contract
 
