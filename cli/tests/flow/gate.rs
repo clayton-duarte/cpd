@@ -542,7 +542,7 @@ fn attempt_show_and_job_show_print_the_gate_facts() {
 
     let shown = fx.env.cpd(&["attempt", "show", ATTEMPT, "--plan", PLAN]).ok();
     let job = fx.env.cpd(&["job", "show", "api", "--plan", PLAN]).ok();
-    for (what, row) in [("attempt show", &shown["attempt"]), ("job show", &job["job"]["attempts"][0])] {
+    for (what, row) in [("attempt show", &shown["attempt"]), ("job show", &job["attempts"][0])] {
         assert_eq!(row["gate_hook"], json!("pre-commit"), "{what}: {row}");
         assert_eq!(row["gate_command"], json!("echo the merge gate is red; exit 3"), "{what}: {row}");
         assert_eq!(row["gate_exit"], json!(3), "{what}: {row}");
