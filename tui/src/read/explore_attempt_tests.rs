@@ -105,3 +105,36 @@ fn every_cockpit_read_takes_a_plan_with_an_explore_attempt() {
         assert!(result.is_ok(), "{name} failed: {result:?}");
     }
 }
+
+#[test]
+fn an_explore_job_has_no_node_in_a_prs_flow() {
+    let (_dir, mut store) = mixed();
+    let flow = read::flow(&mut store, &pay()).unwrap();
+    let keys: Vec<&str> = flow.jobs.iter().map(|j| j.key.as_str()).collect();
+    assert_eq!(keys, vec!["work"]);
+}
+
+#[test]
+fn an_explore_attempts_time_is_in_no_workflows_active_time() {
+    let (_dir, mut store) = store_with(&["api"]);
+    let explore_run = format!(
+        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+                           created_txn, created_at, kind)
+         VALUES ('pay', NULL, 'look', 'Job', 'S1', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', 'running', 0, '{FP}', cpd_txn(),
+                 '2026-01-02T00:00:00.000Z', 'scout');
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, started_at, ended_at, metrics)
+         VALUES ('pay', 'look-a1', 'look', 1, 'S1', 'ladder', 'ended', 'failed', 'crashed', 'cpd/pay--look-a1', '/run/pay/explore',
+                 '2026-01-02T11:00:00.000Z', '2026-01-02T11:10:00.000Z', '{{\"cost_usd\":0.40}}');"
+    );
+    run(
+        &mut store,
+        &(job("api", "work", "work", "running")
+            + "INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, started_at, ended_at, metrics)
+               VALUES ('pay', 'work-a1', 'work', 1, 'S3', 'ladder', 'ended', 'failed', 'crashed', 'cpd/pay--work-a1', '/w',
+                       '2026-01-02T10:00:00.000Z', '2026-01-02T10:01:00.000Z', '{\"cost_usd\":0.25}');"
+            + &explore_run),
+    );
+    let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
+    assert_eq!(boxes.prs.len(), 1);
+    assert_eq!(boxes.prs[0].elapsed_seconds, Some(60));
+}
