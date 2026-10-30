@@ -884,6 +884,8 @@ mod deploy_tests;
 #[cfg(test)]
 mod drafts_parked_tests;
 #[cfg(test)]
+mod pr_closed_kind_tests;
+#[cfg(test)]
 mod worker_runner_tests;
 #[cfg(test)]
 mod lead_branch_tests;

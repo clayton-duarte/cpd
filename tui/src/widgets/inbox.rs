@@ -265,7 +265,7 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
         // hs-d731: the Lead of the Plan opens, as for a `plan-review` with no url
         Kind::DraftsParked => open_lead(tree, item.plan.as_ref()?).map(Jump::Run),
         // the label is a Link to the pull request; a click on the rest of the row opens the owning Plan's Lead (pro-d130)
-        Kind::PrReady => open_lead(tree, item.plan.as_ref()?).map(Jump::Run),
+        Kind::PrReady | Kind::PrClosed => open_lead(tree, item.plan.as_ref()?).map(Jump::Run),
         Kind::ReviewRequested => {
             item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))
         }

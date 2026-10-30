@@ -191,6 +191,12 @@ pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, C
     Ok(out)
 }
 
+/// The `pr-closed` conditions: one per closed-unmerged PR (`crate::pr::closed::closed_unmerged`). Stub: none yet.
+pub fn closed_conditions(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
+    let _ = crate::pr::closed::closed_unmerged(conn, None)?;
+    Ok(Vec::new())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
