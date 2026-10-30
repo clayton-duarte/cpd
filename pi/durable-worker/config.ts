@@ -27,7 +27,7 @@ export function parseConfig(argv: readonly string[], env: Record<string, string 
   } catch (e) {
     throw new CpdError("usage", (e as Error).message);
   }
-  return { home, session, plan, attempt, cwd, spec: flag(argv, "--spec"), model: flag(argv, "--model"), jobKind };
+  return { home, session, plan, attempt, cwd, spec: flag(argv, "--spec"), model: flag(argv, "--model"), ...(jobKind === undefined ? {} : { jobKind }) };
 }
 
 export function storePath(home: string, plan: string, attempt: string): string {

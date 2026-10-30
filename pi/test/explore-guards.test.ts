@@ -148,3 +148,14 @@ test("an unset CPD_JOB_KIND has no explore profile", () => {
   assert.equal(exploreKind({ CPD_JOB_KIND: "scout" }), "scout");
   assert.equal(exploreKind({ CPD_JOB_KIND: "research" }), "research");
 });
+
+test("a redirect is judged by the repository test whatever its path: /dev/shm is not a device", () => {
+  const shm = (p: string) => p.startsWith("/dev/shm/r/");
+  for (const k of KINDS) {
+    const run = (command: string) => exploreVerdict(k, { name: "bash", arguments: { command, timeout: 10 } }, { cwd: "/tmp", home: "/h", plan: "p" }, shm);
+    refused(run("echo x > /dev/shm/r/f"), "write", `${k} redirect into /dev/shm repo`);
+    allowed(run("echo x > /dev/null"), `${k} > /dev/null`);
+    allowed(run("echo x 2> /dev/null"), `${k} 2> /dev/null`);
+    allowed(run("echo x 2>&1"), `${k} 2>&1`);
+  }
+});

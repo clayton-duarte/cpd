@@ -58,7 +58,7 @@ function redirects(words: string[]): string[] {
     const m = /^(\d*)>>?(.*)$/.exec(words[i]!);
     if (!m) continue;
     const target = m[2] !== "" ? m[2]! : words[++i];
-    if (target !== undefined && !target.startsWith("&") && !target.startsWith("/dev/")) out.push(target);
+    if (target !== undefined && !target.startsWith("&")) out.push(target);
   }
   return out;
 }

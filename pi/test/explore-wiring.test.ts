@@ -7,7 +7,7 @@ import { CpdError } from "../lib/cpd.ts";
 import { exploreVerdict } from "../lib/explore.ts";
 import { parseConfig } from "../durable-worker/config.ts";
 import { workerVerdict } from "../durable-worker/guards.ts";
-import { Fixture, shown, waitFor } from "./fake.ts";
+import { Fixture, shown } from "./fake.ts";
 
 // R11: the explore profile of CPD_JOB_KIND is applied by the pi adapter and by the durable runner, to Workers only.
 
@@ -28,7 +28,7 @@ async function started(t: TestContext, role: string, kind: string | undefined) {
   f.respond("plan-show", { ok: true, plan: { id: "p1" }, jobs: [], escalations: [], review: null });
   f.load();
   await f.pi.fire("session_start");
-  await waitFor("the follower", () => f.follows().length > 0);
+  await f.followerStarted();
   return f;
 }
 
