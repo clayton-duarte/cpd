@@ -322,7 +322,7 @@ mod tests {
         let launch = lead(&LeadLaunch { home: &home, session: &session, plan: None, extensions: &extensions, plannotator: &plannotator, start });
         assert_eq!(
             launch.argv,
-            strs(&["pi", "--model", "m/x:high", "--no-mcp", "-e", "/opt/cpd/pi", "--session-id", ID, "-n", "ctx-manager", "--", "@/cpd-home/run/ctx/manager-message.md"])
+            strs(&["pi", "--model", "m/x:high", "--no-mcp", "--tools", "+codemode", "-e", "/opt/cpd/pi", "--session-id", ID, "-n", "ctx-manager", "--", "@/cpd-home/run/ctx/manager-message.md"])
         );
         assert_eq!(
             launch.env,
@@ -381,7 +381,7 @@ mod tests {
             launch.argv,
             strs(&[
                 "pi", "--model", "github-copilot/claude-opus-5.5:high",
-                "--no-mcp", "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
+                "--no-mcp", "--tools", "+codemode", "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
                 "--session-id", ID, "-n", "cpd rust lead", "--", "@/cpd-home/run/cpd2/lead-message.md",
             ])
         );
@@ -410,7 +410,7 @@ mod tests {
             launch.argv,
             strs(&[
                 "pi", "--model", "m/x:high",
-                "--no-mcp", "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
+                "--no-mcp", "--tools", "+codemode", "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
                 "--fork", "/s/2026_6f1c.jsonl", "--session-id", ID, "-n", "pay-4521", "--", "@/cpd-home/run/cpd2/messages/x.md",
             ])
         );
@@ -427,7 +427,7 @@ mod tests {
             launch.argv,
             strs(&[
                 "pi", "--model", "p/m:high", "--session", "/s/x.jsonl",
-                "--no-mcp", "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
+                "--no-mcp", "--tools", "+codemode", "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
             ])
         );
         assert_eq!(launch.env, lead_env(&[]));
@@ -466,7 +466,7 @@ mod tests {
             [crate::host::priority::idle_prefix(), &[
                 "pi", "--approve", "--no-skills", "--exclude-tools",
                 "ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox",
-                "--no-mcp", "-e", "/opt/cpd/pi",
+                "--no-mcp", "--tools", "+codemode", "-e", "/opt/cpd/pi",
                 "--model", "github-copilot/claude-sonnet-5.5:xhigh",
                 "--session-id", ID, "-n", "cpd2 rs-host a2", "--",
                 "Read /cpd-home/run/cpd2/specs/rs-host-a2.md and follow it exactly. Your attempt id is rs-host-a2.",
@@ -522,3 +522,7 @@ mod tests {
 #[cfg(test)]
 #[path = "launch_no_mcp_tests.rs"]
 mod no_mcp_tests;
+
+#[cfg(test)]
+#[path = "launch_codemode_tests.rs"]
+mod codemode_tests;

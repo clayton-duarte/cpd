@@ -53,7 +53,7 @@ fn fresh(first_message: Option<&str>) -> LeadStart {
 
 fn fresh_rest() -> Vec<String> {
     strs(&[
-        "pi", "--model", "m/x:high", "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
+        "pi", "--model", "m/x:high", "--tools", "+codemode", "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
         "--session-id", ID, "-n", "pay-4521", "--", "@/cpd-home/run/cpd2/lead-message.md",
     ])
 }
@@ -63,7 +63,7 @@ fn resume() -> LeadStart {
 }
 
 fn resume_rest() -> Vec<String> {
-    strs(&["pi", "--model", "p/m:high", "--session", "/s/x.jsonl", "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8"])
+    strs(&["pi", "--model", "p/m:high", "--session", "/s/x.jsonl", "--tools", "+codemode", "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8"])
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn a_side_fork_has_no_mcp_once_with_and_without_a_first_message() {
         source_file: "/s/2026_6f1c.jsonl".into(),
         first_message: first_message.map(Into::into),
     };
-    let base = ["pi", "--model", "m/x:high", "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8", "--fork", "/s/2026_6f1c.jsonl", "--session-id", ID, "-n", "pay-4521"];
+    let base = ["pi", "--model", "m/x:high", "--tools", "+codemode", "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8", "--fork", "/s/2026_6f1c.jsonl", "--session-id", ID, "-n", "pay-4521"];
     let with_message = [&base[..], &["--", "@/cpd-home/run/cpd2/messages/x.md"]].concat();
     assert_no_mcp_once(&lead_argv(Some("cpd2"), fork(Some("/cpd-home/run/cpd2/messages/x.md"))), &strs(&with_message));
     assert_no_mcp_once(&lead_argv(Some("cpd2"), fork(None)), &strs(&base));
@@ -102,7 +102,7 @@ fn a_side_fork_has_no_mcp_once_with_and_without_a_first_message() {
 
 fn worker_rest() -> Vec<String> {
     let mut rest: Vec<String> = crate::host::priority::idle_prefix().iter().map(|s| (*s).to_owned()).collect();
-    rest.extend(strs(&["pi", "--approve", "--no-skills", "--exclude-tools", WORKER_EXCLUDED_TOOLS, "-e", "/opt/cpd/pi", "--model", "p/m:high"]));
+    rest.extend(strs(&["pi", "--approve", "--no-skills", "--exclude-tools", WORKER_EXCLUDED_TOOLS, "--tools", "+codemode", "-e", "/opt/cpd/pi", "--model", "p/m:high"]));
     rest.extend(strs(&[
         "--session-id", ID, "-n", "cpd2 rs-host a2", "--",
         "Read /cpd-home/run/cpd2/specs/rs-host-a2.md and follow it exactly. Your attempt id is rs-host-a2.",
