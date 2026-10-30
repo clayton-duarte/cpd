@@ -138,7 +138,7 @@ pub(super) fn run(engine: &mut Engine) {
             }
             continue;
         }
-        match start(engine, &due, names) {
+        match start(engine, &due, names, policy.pr.jira.estimate_fields.clone()) {
             Ok(answer) => engine.jira.running = Some(Running { due, status, answer }),
             Err(failure) => {
                 engine.jira.failed_at.insert(due.id, now);
@@ -228,8 +228,8 @@ fn reopen_parked(engine: &mut Engine) {
 }
 
 /// Starts the helper for `due` on its own thread; returns where its answer will arrive.
-fn start(engine: &Engine, due: &Due, names: Names) -> Result<Receiver<Result<Done, Failure>>, Failure> {
-    let request = Request { ticket: due.ticket.clone(), target: due.target, names };
+fn start(engine: &Engine, due: &Due, names: Names, estimate_fields: Vec<String>) -> Result<Receiver<Result<Done, Failure>>, Failure> {
+    let request = Request { ticket: due.ticket.clone(), target: due.target, names, estimate_fields };
     let call = cpd_core::jira::call(&engine.config, &engine.home, &request, DEADLINE).map_err(|e| Failure::from(&e))?;
     let runner = Ports::current().runner;
     let argv: Vec<String> = std::iter::once(call.program.clone()).chain(call.args.iter().cloned()).collect();

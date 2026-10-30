@@ -3,6 +3,7 @@
 //   node pi/lib/jira-transition.ts --coding-agent <…/pi-coding-agent/dist/index.js>   (request JSON on stdin)
 //
 // Moves one ticket through the Atlassian MCP on pi's own MCP client; prints one JSON line.
+// For target `done` with a non-empty `estimate_fields`, it first writes 1 into each of those fields that reads null (one edit), then moves.
 import { loadPi, parseArgs, resultText, Refusal as SlackRefusal } from "./slack-channel.ts";
 
 export const CALL_TIMEOUT_MS = 30_000;
@@ -39,6 +40,8 @@ export type Request = {
   ticket: string;
   target: "in_progress" | "in_review" | "done";
   names: { in_progress: string; in_review: string; done: string };
+  /** Custom field ids (`customfield_N`, distinct); written as 1 when empty before a Done move. `[]` writes nothing. */
+  estimate_fields: string[];
 };
 
 export type Result =
@@ -48,7 +51,7 @@ export type Result =
 const authRefusal = (details: Record<string, unknown> = {}) => new Refusal("jira_auth", AUTH_MESSAGE, details);
 
 /** One tool call, its answer parsed as JSON; every failure class of the design is a Refusal. `notFound` makes a 404 the issue_not_found refusal. */
-async function tool(call: CallTool, name: string, args: Record<string, unknown>, notFound = false): Promise<any> {
+async function tool(call: CallTool, name: string, args: Record<string, unknown>, notFound = false, parse = true): Promise<any> {
   let answer: Answer;
   try {
     answer = await call(name, args, CALL_TIMEOUT_MS);
@@ -68,6 +71,7 @@ async function tool(call: CallTool, name: string, args: Record<string, unknown>,
     if (notFound && statusCode === 404) throw new Refusal("jira_refused", `${name}: the issue was not found.`, { tool: name, reason: "issue_not_found" });
     throw new Refusal("jira_failed", `${name} returned an error: ${answer.text.slice(0, 300)}`, { tool: name, ...(statusCode === undefined ? {} : { status_code: statusCode }) });
   }
+  if (!parse) return undefined;
   try {
     return JSON.parse(answer.text);
   } catch {
@@ -76,7 +80,18 @@ async function tool(call: CallTool, name: string, args: Record<string, unknown>,
 }
 
 const unexpected = (name: string) => new Refusal("jira_failed", `${name} answered a shape the helper does not know.`, { tool: name });
+const ESTIMATE_FIELD = /^customfield_[0-9]+$/;
 const str = (v: unknown): v is string => typeof v === "string" && v !== "";
+
+/** Writes 1 into each estimate field that reads null; absent keys and any other value are left alone. */
+async function writeEstimate(call: CallTool, cloudId: string, ticket: string, fields: string[]): Promise<void> {
+  const issue = await tool(call, "getJiraIssue", { cloudId, issueIdOrKey: ticket, fields });
+  if (typeof issue !== "object" || issue === null) throw unexpected("getJiraIssue");
+  const have = issue.fields ?? {};
+  const empty = fields.filter((f) => have[f] === null);
+  if (empty.length === 0) return;
+  await tool(call, "editJiraIssue", { cloudId, issueIdOrKey: ticket, fields: Object.fromEntries(empty.map((f) => [f, 1])) }, false, false);
+}
 
 export async function transition(call: CallTool, request: Request): Promise<Result> {
   const { ticket, target, names } = request;
@@ -107,6 +122,8 @@ export async function transition(call: CallTool, request: Request): Promise<Resu
   if (!chosen) throw new Refusal("jira_refused", `${ticket} has no transition to "${want}" from "${status}".`, { reason: "no_transition" });
   if (!str(String(chosen.id ?? ""))) throw unexpected("getTransitionsForJiraIssue");
 
+  if (target === "done" && request.estimate_fields.length > 0) await writeEstimate(call, cloudId, ticket, request.estimate_fields);
+
   const done = await tool(call, "transitionJiraIssue", { cloudId, issueIdOrKey: ticket, transition: { id: String(chosen.id) } });
   if (done?.success !== true || !str(done.statusName)) throw unexpected("transitionJiraIssue");
   return { ticket, target, outcome: "moved", from: status, to: done.statusName };
@@ -127,7 +144,9 @@ function parseRequest(stdin: string): Request {
   if (typeof r.names !== "object" || r.names === null || TARGETS.some((t) => typeof r.names[t] !== "string")) throw bad("names");
   if (r.names[r.target] === "") throw bad("names[target] is empty");
   if (typeof r.server !== "object" || r.server === null || typeof r.server.url !== "string" || !r.server.url) throw bad("server.url");
-  return { server: r.server, ticket: r.ticket, target: r.target, names: { in_progress: r.names.in_progress, in_review: r.names.in_review, done: r.names.done } };
+  const ef = r.estimate_fields;
+  if (!Array.isArray(ef) || ef.some((f: unknown) => typeof f !== "string" || !ESTIMATE_FIELD.test(f)) || new Set(ef).size !== ef.length) throw bad("estimate_fields");
+  return { server: r.server, ticket: r.ticket, target: r.target, names: { in_progress: r.names.in_progress, in_review: r.names.in_review, done: r.names.done }, estimate_fields: ef };
 }
 
 /** The `atlassian` connection of pi, built from the request's server (never from mcp.json). */

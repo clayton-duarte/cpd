@@ -370,7 +370,8 @@ fn a_due_row_runs_the_helper_with_the_request_and_settles_moved() {
             "server": {"url": "https://mcp.atlassian.com/v1/mcp/authv2", "exposure": "deferred"},
             "ticket": API,
             "target": "in_review",
-            "names": {"in_progress": "In Progress", "in_review": "In Review", "done": "Done"}
+            "names": {"in_progress": "In Progress", "in_review": "In Review", "done": "Done"},
+            "estimate_fields": []
         })
     );
     let env = |name: &str| calls[0].envs.iter().find(|(key, _)| key == name).map(|(_, value)| value.as_deref());
@@ -386,6 +387,21 @@ fn a_due_row_runs_the_helper_with_the_request_and_settles_moved() {
     assert_eq!((outcome.as_deref(), refused_at), (Some("moved"), None));
     assert_eq!(p.error_events(), vec![]);
     assert_eq!(p.events_but_errors(), Vec::<String>::new(), "a success appends no Event");
+}
+
+#[test]
+fn the_request_carries_the_estimate_fields_of_the_policy() {
+    let t = jira(LONG, true);
+    t.probe().owner_policy(&format!("{}estimate_fields = [\"customfield_10016\"]\n", names()));
+    t.queue("api", "done");
+    t.queue("web", "in_progress");
+    t.run(then_ticks(3, |p| p.settled("api", "done") && p.settled("web", "in_progress")));
+    let requests = t.probe().requests();
+
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    for request in &requests {
+        assert_eq!(request["estimate_fields"], json!(["customfield_10016"]), "{request}");
+    }
 }
 
 #[test]

@@ -27,6 +27,7 @@ pub struct Request {
     pub ticket: String,
     pub target: Target,
     pub names: Names,
+    pub estimate_fields: Vec<String>,
 }
 
 /// What an `ok` helper did.
@@ -59,6 +60,7 @@ fn stdin(server: &McpServer, request: &Request) -> Vec<u8> {
         "ticket": request.ticket,
         "target": request.target.as_str(),
         "names": {"in_progress": names.in_progress, "in_review": names.in_review, "done": names.done},
+        "estimate_fields": request.estimate_fields,
     });
     serde_json::to_vec(&value).expect("a JSON value serializes")
 }
@@ -91,7 +93,7 @@ mod tests {
     }
 
     fn request() -> Request {
-        Request { ticket: "A-1".into(), target: Target::InReview, names: Names { in_progress: "".into(), in_review: "In Review".into(), done: "Done".into() } }
+        Request { ticket: "A-1".into(), target: Target::InReview, names: Names { in_progress: "".into(), in_review: "In Review".into(), done: "Done".into() }, estimate_fields: vec!["customfield_10016".into()] }
     }
 
     #[test]
@@ -101,7 +103,7 @@ mod tests {
         assert_eq!(
             value,
             json!({"server": {"url": "https://x/mcp"}, "ticket": "A-1", "target": "in_review",
-                   "names": {"in_progress": "", "in_review": "In Review", "done": "Done"}})
+                   "names": {"in_progress": "", "in_review": "In Review", "done": "Done"}, "estimate_fields": ["customfield_10016"]})
         );
     }
 

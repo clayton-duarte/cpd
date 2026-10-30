@@ -24,8 +24,8 @@ const moved = (statusName: string): Answer => json({ success: true, statusName }
 
 type Table = Record<string, Answer | Error | ((args: Record<string, unknown>) => Answer | Error)>;
 
-function request(target: Request["target"] = "in_review", names: Request["names"] = NAMES): Request {
-  return { server: SERVER, ticket: "ABC-1", target, names };
+function request(target: Request["target"] = "in_review", names: Request["names"] = NAMES, estimate_fields: string[] = []): Request {
+  return { server: SERVER, ticket: "ABC-1", target, names, estimate_fields };
 }
 
 function scripted(table: Table) {
@@ -177,7 +177,7 @@ test("transition maps 429, 5xx, a 400 of the transition, a timeout and unparseab
 });
 
 function body(over: Record<string, unknown> = {}): string {
-  return JSON.stringify({ server: SERVER, ticket: "ABC-1", target: "in_review", names: NAMES, ...over });
+  return JSON.stringify({ server: SERVER, ticket: "ABC-1", target: "in_review", names: NAMES, estimate_fields: [], ...over });
 }
 
 test("main refuses a stdin that is not the request with usage before connecting", async () => {
@@ -256,4 +256,118 @@ test("run as a script it prints one usage line for an empty stdin", () => {
   const lines = r.stdout.trim().split("\n");
   assert.equal(lines.length, 1);
   assert.equal(JSON.parse(lines[0]!).error.code, "usage");
+});
+
+const EST = (over: Table = {}, fields: string[] = ["customfield_10016"]) => ({
+  req: request("done", NAMES, fields),
+  table: happy({
+    getJiraIssue: (args: Record<string, unknown>) => (JSON.stringify(args.fields) === '["status"]' ? issue("In Review") : json({ fields: { customfield_10016: null } })),
+    getTransitionsForJiraIssue: json({ transitions: [tr("31", "Done")] }),
+    editJiraIssue: json({ id: "1" }),
+    transitionJiraIssue: moved("Done"),
+    ...over,
+  }),
+});
+const C = (name: string, args: Record<string, unknown>) => ({ name, args, timeoutMs: 30000 });
+const base = { cloudId: CLOUD, issueIdOrKey: "ABC-1" };
+
+test("transition to done writes an empty estimate field with one edit and then moves the ticket", async () => {
+  const { req, table } = EST();
+  const f = scripted(table);
+  const out = await transition(f.call, req);
+  assert.deepEqual(f.calls, [
+    C("getAccessibleAtlassianResources", {}),
+    C("getJiraIssue", { ...base, fields: ["status"] }),
+    C("getTransitionsForJiraIssue", base),
+    C("getJiraIssue", { ...base, fields: ["customfield_10016"] }),
+    C("editJiraIssue", { ...base, fields: { customfield_10016: 1 } }),
+    C("transitionJiraIssue", { ...base, transition: { id: "31" } }),
+  ]);
+  assert.deepEqual(out, { ticket: "ABC-1", target: "done", outcome: "moved", from: "In Review", to: "Done" });
+});
+
+test("transition to done leaves a filled estimate field, zero included, and skips a field the issue does not carry", async () => {
+  for (const read of [json({ fields: { customfield_10016: 0 } }), json({ key: "ABC-1" })]) {
+    const { req, table } = EST({}, ["customfield_10016", "customfield_10030"]);
+    const f = scripted({ ...table, getJiraIssue: (a: Record<string, unknown>) => (JSON.stringify(a.fields) === '["status"]' ? issue("In Review") : read) });
+    await transition(f.call, req);
+    assert.deepEqual(f.calls.map((c) => c.name), ["getAccessibleAtlassianResources", "getJiraIssue", "getTransitionsForJiraIssue", "getJiraIssue", "transitionJiraIssue"]);
+    assert.deepEqual(f.calls[3], C("getJiraIssue", { ...base, fields: ["customfield_10016", "customfield_10030"] }));
+  }
+});
+
+test("transition to done writes every empty estimate field in one edit and only those", async () => {
+  const { req, table } = EST({}, ["customfield_10016", "customfield_10030", "customfield_10040"]);
+  const f = scripted({ ...table, getJiraIssue: (a: Record<string, unknown>) => (JSON.stringify(a.fields) === '["status"]' ? issue("In Review") : json({ fields: { customfield_10016: null, customfield_10030: 5, customfield_10040: null } })) });
+  await transition(f.call, req);
+  const edits = f.calls.filter((c) => c.name === "editJiraIssue");
+  assert.deepEqual(edits, [C("editJiraIssue", { ...base, fields: { customfield_10016: 1, customfield_10040: 1 } })]);
+});
+
+test("transition to done does not move the ticket when the estimate read or write fails", async () => {
+  const readFail = (a: Record<string, unknown>) => (JSON.stringify(a.fields) === '["status"]' ? issue("In Review") : failed(503));
+  const cases: Array<[Table, string, string, number | undefined]> = [
+    [{ getJiraIssue: readFail }, "jira_failed", "getJiraIssue", 503],
+    [{ editJiraIssue: failed(400, "Field 'customfield_10016' cannot be set") }, "jira_failed", "editJiraIssue", 400],
+    [{ editJiraIssue: failed(401) }, "jira_auth", "", undefined],
+    [{ editJiraIssue: new Error("timed out after 30000ms") }, "jira_failed", "editJiraIssue", undefined],
+  ];
+  for (const [i, [over, code, tool, status]] of cases.entries()) {
+    const { req, table } = EST(over);
+    const r = await refusal(table, req);
+    assert.equal(r.refusal.code, code, `case ${i}`);
+    assert.ok(!r.calls.some((c) => c.name === "transitionJiraIssue"), `case ${i}`);
+    if (code === "jira_auth") assert.equal(r.refusal.exit, 3);
+    else assert.equal(r.refusal.details.tool, tool, `case ${i}`);
+    if (status !== undefined) assert.equal(r.refusal.details.status_code, status, `case ${i}`);
+    if (i === 1) assert.ok(r.refusal.message.includes("cannot be set"));
+  }
+});
+
+test("transition to done takes a successful edit as success without parsing its answer", async () => {
+  const { req, table } = EST({ editJiraIssue: { isError: false, text: "ok, not JSON" } });
+  const f = scripted(table);
+  const out = await transition(f.call, req);
+  assert.ok(f.calls.some((c) => c.name === "editJiraIssue"));
+  assert.equal(out.outcome, "moved");
+});
+
+test("main refuses a request whose estimate_fields is missing, repeated or not a list of custom field ids with usage", async () => {
+  let opened = 0;
+  const open = (async () => {
+    opened++;
+    return { call: scripted(happy()).call, close: async () => {} };
+  }) as any;
+  const bad: unknown[] = [undefined, "customfield_1", ["summary"], ["customfield_"], ["customfield_1a"], [1], ["customfield_1", "customfield_1"]];
+  for (const [i, v] of bad.entries()) {
+    const r = await main(ARGS, ENV, "/cwd", body({ estimate_fields: v }), open);
+    assert.equal(r.exit, 2, `case ${i}`);
+    assert.equal((r.value as any).error.code, "usage", `case ${i}`);
+  }
+  assert.equal(opened, 0);
+  for (const v of [[], ["customfield_10016"]]) {
+    await main(ARGS, ENV, "/cwd", body({ estimate_fields: v }), open);
+  }
+  assert.equal(opened, 2);
+});
+
+test("transition writes no estimate for in_progress or in_review or with an empty list", async () => {
+  const f = scripted(happy());
+  await transition(f.call, request("in_review", NAMES, ["customfield_10016"]));
+  assert.equal(f.calls.length, 4);
+  const { req, table } = EST();
+  const g = scripted(table);
+  await transition(g.call, { ...req, estimate_fields: [] });
+  assert.equal(g.calls.length, 4);
+});
+
+test("transition makes no estimate call when the ticket is unchanged or has no transition", async () => {
+  const { req, table } = EST();
+  const f = scripted({ ...table, getJiraIssue: issue("Done", "done") });
+  await transition(f.call, req);
+  assert.equal(f.calls.length, 2);
+  const r = await refusal({ ...table, getTransitionsForJiraIssue: json({ transitions: [tr("2", "In Review")] }) }, req);
+  assert.equal(r.refusal.details.reason, "no_transition");
+  assert.ok(!r.calls.some((c) => c.name === "editJiraIssue"));
+  assert.equal(r.calls.filter((c) => c.name === "getJiraIssue").length, 1);
 });
