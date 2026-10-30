@@ -321,3 +321,8 @@ export function contextUpdate(context: string, sessionId: string, events: readon
     },
   };
 }
+
+/** STUB (red tests): the Lead's standing lines for PRs whose pull request closed without a merge. Not wired; adds nothing yet. */
+export function closedPrLines(_planShow: unknown): string[] {
+  return [];
+}
