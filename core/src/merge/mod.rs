@@ -278,7 +278,7 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
                 return Ok(Stepped::ends(end));
             }
         }
-        // An `open` Job whose pull request was merged on GitHub and never recorded adopts it (§7.7 submit step 1, §7.4 step 8b): it has no
+        // An `open` Job whose pull request was merged on GitHub and never recorded adopts it (§7.4 step 8b; the merge finds it, submit does not check it, §7.7): it has no
         // new commits to push, so steps 5 and 8 are skipped and step 10 writes the rows of `pr open` step 0.
         if target.kind == "open" && pull_request_is_merged(store, target)? {
             let pulled = open_pull_request(store, config, target)?;
@@ -506,7 +506,7 @@ fn is_refusal(code: ErrorCode) -> bool {
     matches!(code, ErrorCode::PrTitleRequired | ErrorCode::DescriptionRequired | ErrorCode::JiraRequired | ErrorCode::BaseNotFound)
 }
 
-/// Whether the newest pull request of the PR's Lead Branch is already merged on GitHub: the `open` Job adopts it (§7.7 submit step 1).
+/// Whether the newest pull request of the PR's Lead Branch is already merged on GitHub: the `open` Job adopts it at the merge (§7.4 step 8b; §7.7).
 fn pull_request_is_merged(store: &mut Store, target: &Attempt) -> Result<bool, CpdError> {
     let pr = pr_row(store, target)?;
     crate::pr::is_merged_on_github(&target.lead_worktree, &pr)
