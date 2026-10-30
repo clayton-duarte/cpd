@@ -37,7 +37,7 @@ fn row(kind: &str, tier: &str, n: u32, passed: u32, avg_cost: Option<f64>) -> Ro
 
 #[test]
 fn needs_the_minimum_sample() {
-    let rows = [row("work", "S1", 29, 29, Some(0.2)), row("work", "S2", 40, 40, Some(0.5))];
+    let rows = [row("work", "S1", 29, 29, Some(0.2)), row("work", "S2", 40, 40, Some(0.5)), row("work", "S3", 5, 5, Some(1.0))];
     let got = recommend(&rows[..1], 30, ladder());
     assert!(got.is_empty());
     let got = recommend(&rows, 30, ladder());
@@ -128,8 +128,8 @@ fn job(key: &str, kind: &str, status: &str) -> String {
 fn attempt(job: &str, number: u32, tier: &str, outcome: &str, cause: &str, metrics: &str) -> String {
     let (status, ended) = if outcome == "NULL" { ("running", "NULL") } else { ("ended", "'t'") };
     format!(
-        "INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, ended_at, branch, worktree, started_at, metrics)
-         VALUES ('pl', '{job}-a{number}', '{job}', {number}, '{tier}', 'initial', '{status}', {outcome}, {cause}, {ended}, 'cpd/pl--{job}-a{number}', '/w', 't', {metrics});"
+        "INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, ended_at, branch, worktree, started_at, metrics, merged_sha)
+         VALUES ('pl', '{job}-a{number}', '{job}', {number}, '{tier}', 'ladder', '{status}', {outcome}, {cause}, {ended}, 'cpd/pl--{job}-a{number}', '/w', 't', {metrics}, CASE WHEN {outcome} = 'merged' THEN 'abc' END);"
     )
 }
 
