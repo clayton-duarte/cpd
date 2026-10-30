@@ -1162,8 +1162,8 @@ pub(super) struct Gh {
     list: Seq,
     /// `gh pr create`.
     create: Seq,
-    /// `gh pr edit` (`pr describe` of an open pull request).
-    edit: Seq,
+    /// `gh api -X PATCH repos/<repo>/pulls/<n>` (`pr describe` of an open pull request).
+    patch: Seq,
     fail: Mutex<Option<String>>,
     /// The comments read (pr-comments): what it answers; None is an empty read of every pull request the query names.
     pub(super) comments: Mutex<Option<String>>,
@@ -1202,7 +1202,7 @@ impl Handler for Gh {
         match args[..] {
             ["pr", "list", ..] => self.list.get(),
             ["pr", "create", ..] => self.create.get(),
-            ["pr", "edit", ..] => self.edit.get(),
+            ["api", "-X", "PATCH", ..] => self.patch.get(),
             ["api", "graphql", "-f", query, ..] if query.contains("search(type: ISSUE") => self.search.get(),
             ["api", "graphql", "-f", query, ..] if query.contains("reviewThreads") => match &*self.comments.lock().unwrap() {
                 Some(text) => Reply::ok(&format!("{text}\n")),
@@ -1320,7 +1320,7 @@ fn poll_fx_branch(phase: &str, config_extra: &str, job: &str, branch: &str) -> P
         // `pr open` reads `createdAt` of the pull request it just opened (store-W5).
         list: Seq::new(Reply::ok("[]\n")),
         create: Seq::new(Reply::ok(&format!("{URL}\n"))),
-        edit: Seq::new(Reply::ok("")),
+        patch: Seq::new(Reply::ok("")),
         lookup: Slot::new(if phase == "dispatch" { Reply::ok(&format!("{}\n", lookup_answer(&[Some(pay("OPEN", None, None))]))) } else { Reply::ok("{\"data\":{}}\n") }),
         fail: Mutex::new(None),
         comments: Mutex::new(None),
@@ -1350,9 +1350,9 @@ impl Poll {
         self.gh.lookup.set(Reply::ok(&format!("{text}\n")));
     }
 
-    /// From now on `gh pr edit` fails with `text` on stderr.
-    pub(super) fn fail_edit(&self, text: &str) {
-        self.gh.edit.set(Reply::exit(1, "", &format!("{text}\n")));
+    /// From now on `gh api -X PATCH` fails with `text` on stderr.
+    pub(super) fn fail_patch(&self, text: &str) {
+        self.gh.patch.set(Reply::exit(1, "", &format!("{text}\n")));
     }
 
     /// Makes every call of the fake `gh` fail with `text` on stderr.

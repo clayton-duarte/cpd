@@ -117,7 +117,21 @@ fn pr_describe_refuses_an_adopted_or_closed_pr() {
 }
 
 #[test]
-fn pr_describe_on_an_open_pr_edits_the_pull_request_body() {
+fn pr_describe_sends_the_longest_body_on_stdin_not_in_argv() {
+    let fx = poll_fx("deploy");
+    let body = "x".repeat(65536);
+
+    fx.describe(&body).ok();
+
+    let calls = fx.calls("gh");
+    assert_eq!(calls.len(), 1, "{:?}", fx.gh_calls());
+    assert_eq!(calls[0].args, ["api", "-X", "PATCH", "repos/acme/pay/pulls/812", "-F", "body=@-"]);
+    assert_eq!(calls[0].stdin.as_deref(), Some(body.as_bytes()));
+    assert_eq!(fx.description().as_deref(), Some(body.as_str()));
+}
+
+#[test]
+fn pr_describe_on_an_open_pr_patches_the_body_through_the_rest_api() {
     {
         let fx = poll_fx("deploy");
         let body = "## What and why\n\nNew words.\n";
@@ -127,14 +141,14 @@ fn pr_describe_on_an_open_pr_edits_the_pull_request_body() {
         assert_eq!(out["pr"], json!({"key": "repo", "status": "open"}));
         let calls = fx.calls("gh");
         assert_eq!(calls.len(), 1, "{:?}", fx.gh_calls());
-        assert_eq!(calls[0].args, ["pr", "edit", "812", "--body-file", "-"]);
+        assert_eq!(calls[0].args, ["api", "-X", "PATCH", "repos/acme/pay/pulls/812", "-F", "body=@-"]);
         assert_eq!(calls[0].stdin.as_deref(), Some(body.as_bytes()));
         assert_eq!(fx.description().as_deref(), Some(body));
     }
     {
         // A failing GitHub update stores nothing.
         let fx = poll_fx("deploy");
-        fx.fail_edit("HTTP 422: nope");
+        fx.fail_patch("HTTP 422: nope");
         let txns = fx.txns();
 
         let run = fx.describe("New words.\n");
