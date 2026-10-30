@@ -126,7 +126,7 @@ test("a Manager's refused calls get block and the rule's reason; the others run"
   const f = await started("manager");
   t.after(() => f.close());
   for (const [input, isRefused] of CASES) {
-    const r = await call(f, input);
+    const r = await call(f, { ...input });
     if (isRefused) {
       assert.equal(r?.block, true, JSON.stringify(input));
       assert.match(r?.reason ?? "", /^φ: a Manager never blocks: .* refused: /);
@@ -144,7 +144,7 @@ test("a Lead refused calls get block and the Lead reason and the others run", as
   const f = await started("lead");
   t.after(() => f.close());
   for (const [input, isRefused] of CASES) {
-    const r = await call(f, input);
+    const r = await call(f, { ...input });
     if (isRefused) {
       assert.equal(r?.block, true, JSON.stringify(input));
       assert.match(r?.reason ?? "", /^φ: a Lead never blocks: .* refused: /);
@@ -155,7 +155,7 @@ test("a Lead refused calls get block and the Lead reason and the others run", as
 test("a Worker identical calls are never refused", async (t) => {
   const f = await started("worker");
   t.after(() => f.close());
-  for (const [input] of CASES) assert.equal(await call(f, input), undefined, `worker: ${JSON.stringify(input)}`);
+  for (const [input] of CASES) assert.equal(await call(f, { ...input }), undefined, `worker: ${JSON.stringify(input)}`);
 });
 
 test("a Lead other tools are never refused", async (t) => {
@@ -169,4 +169,45 @@ test("before session_start no call is refused", async (t) => {
   t.after(() => f.close());
   f.load();
   assert.equal(await call(f, { command: "sleep 60" }), undefined);
+});
+
+test("a Manager's bash call without timeout gets timeout 30 set in place", async (t) => {
+  const f = await started("manager");
+  t.after(() => f.close());
+  const input: Record<string, unknown> = { command: "cpd plan show" };
+  assert.equal(await call(f, input), undefined);
+  assert.equal(input.timeout, BOUND_SECONDS);
+});
+
+test("a Manager's bash call with timeout 10 keeps timeout 10", async (t) => {
+  const f = await started("manager");
+  t.after(() => f.close());
+  const input: Record<string, unknown> = { command: "cpd plan show", timeout: 10 };
+  assert.equal(await call(f, input), undefined);
+  assert.equal(input.timeout, 10);
+});
+
+test("a Lead's bash call without timeout gets timeout 30 set in place", async (t) => {
+  const f = await started("lead");
+  t.after(() => f.close());
+  const input: Record<string, unknown> = { command: "cpd plan show" };
+  assert.equal(await call(f, input), undefined);
+  assert.equal(input.timeout, BOUND_SECONDS);
+});
+
+test("a Lead's bash call with timeout 10 keeps timeout 10", async (t) => {
+  const f = await started("lead");
+  t.after(() => f.close());
+  const input: Record<string, unknown> = { command: "cpd plan show", timeout: 10 };
+  assert.equal(await call(f, input), undefined);
+  assert.equal(input.timeout, 10);
+});
+
+test("a Worker's bash call without timeout keeps timeout undefined", async (t) => {
+  const f = await started("worker");
+  t.after(() => f.close());
+  const input: Record<string, unknown> = { command: "cpd plan show" };
+  assert.equal(await call(f, input), undefined);
+  assert.equal(input.timeout, undefined);
+  assert.equal("timeout" in input, false);
 });
