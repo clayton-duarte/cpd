@@ -76,11 +76,12 @@ fn a_path_equal_to_any_one_of_several_refs_is_left_out() {
 
 #[test]
 fn a_file_deleted_in_the_attempt_is_listed_unless_a_ref_deleted_it_too() {
-    let (fx, repo) = repo();
+    let fx = Fx::with_ports();
+    let repo = fx.git_repo("pay");
     fx.commit_file(&repo, "d.txt", "d\n", "add d");
     fx.commit_file(&repo, "e.txt", "e\n", "add e");
-    fx.git(&repo, &["branch", "-f", "lead", "main"]);
-    fx.git(&repo, &["branch", "-f", "att", "main"]);
+    fx.git(&repo, &["branch", "lead"]);
+    fx.git(&repo, &["branch", "att"]);
     fx.git(&repo, &["switch", "-q", "lead"]);
     fx.git(&repo, &["rm", "-q", "e.txt"]);
     fx.git(&repo, &["commit", "-q", "-m", "lead removes e"]);
@@ -94,10 +95,11 @@ fn a_file_deleted_in_the_attempt_is_listed_unless_a_ref_deleted_it_too() {
 
 #[test]
 fn a_rename_lists_both_paths() {
-    let (fx, repo) = repo();
+    let fx = Fx::with_ports();
+    let repo = fx.git_repo("pay");
     fx.commit_file(&repo, "old.txt", "some content\n", "add old");
-    fx.git(&repo, &["branch", "-f", "lead", "main"]);
-    fx.git(&repo, &["branch", "-f", "att", "main"]);
+    fx.git(&repo, &["branch", "lead"]);
+    fx.git(&repo, &["branch", "att"]);
     fx.git(&repo, &["switch", "-q", "att"]);
     fx.git(&repo, &["mv", "old.txt", "new.txt"]);
     fx.git(&repo, &["commit", "-q", "-m", "rename"]);
@@ -108,9 +110,9 @@ fn a_rename_lists_both_paths() {
 #[test]
 fn the_list_is_in_the_diffs_bytewise_order() {
     let (fx, repo) = repo();
-    // Bytewise: "B" < "Z" < "a.txt" < "a/x" ('.' is 0x2e, '/' is 0x2f) < "b".
-    on(&fx, &repo, "att", &[("b", "1\n"), ("a/x", "2\n"), ("Z", "3\n"), ("a.txt", "4\n"), ("B", "5\n")]);
-    let expected = strings(&["B", "Z", "a.txt", "a/x", "b"]);
+    // Bytewise: "C" < "Z" < "a.txt" < "a/x" ('.' is 0x2e, '/' is 0x2f) < "b".
+    on(&fx, &repo, "att", &[("b", "1\n"), ("a/x", "2\n"), ("Z", "3\n"), ("a.txt", "4\n"), ("C", "5\n")]);
+    let expected = strings(&["C", "Z", "a.txt", "a/x", "b"]);
     assert_eq!(written(&fx, &repo, &[]), expected);
     assert_eq!(written(&fx, &repo, &["lead"]), expected);
 }
