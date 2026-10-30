@@ -78,7 +78,7 @@ mod tests {
 
     #[test]
     fn checks_are_summarised_failed_over_pending_over_passed() {
-        let summary = |checks: Vec<(&str, &str)>| ChecksSummary::of(view(checks).checks.as_deref().unwrap_or_default(), &[]);
+        let summary = |checks: Vec<(&str, &str)>| ChecksSummary::of(view(checks).checks.as_deref().unwrap_or_default(), &[], &[]);
         assert_eq!(summary(vec![]), ChecksSummary::None);
         assert_eq!(summary(vec![("a", "success")]), ChecksSummary::Passed);
         assert_eq!(summary(vec![("a", "SUCCESS"), ("b", "")]), ChecksSummary::Pending);

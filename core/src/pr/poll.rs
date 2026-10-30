@@ -93,7 +93,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     let mut unresolved = Vec::new();
     for (plan, key, row) in &owned {
         match super::pr_policy_resolved(&mut env, plan, key, crate::policy::resolve)? {
-            Ok(policy) => checks.push(Resolved { plan: plan.clone(), key: key.clone(), checks: policy.pr.feedback.checks, post_enabled: policy.pr.post.enabled, human_gated: policy.pr.human_gated_contexts.clone() }),
+            Ok(policy) => checks.push(Resolved { plan: plan.clone(), key: key.clone(), checks: policy.pr.feedback.checks, post_enabled: policy.pr.post.enabled, human_gated: policy.pr.human_gated_contexts.clone(), required: policy.pr.required_checks.clone() }),
             Err(error) => unresolved.push(Unresolved { plan: plan.clone(), pr: key.clone(), number: row.number, error }),
         }
     }
@@ -152,7 +152,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     // (GitHub rolls a CANCELLED check up as FAILURE), or whose rollup says `pending` while its `human_gated_contexts` is not
     // empty: one call, before anything is written. Each PR's summary is the one rule with its own list.
     let mut confirm: Vec<(String, i64)> = Vec::new();
-    let mut lists: Vec<Vec<String>> = Vec::new();
+    let mut lists: Vec<(Vec<String>, Vec<String>)> = Vec::new();
     for listed in &seen {
         let (repo, number) = (&listed.pr.repo, listed.pr.number);
         if listed.pr.state != PrState::Open || confirm.contains(&(repo.clone(), number)) {
@@ -166,13 +166,13 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
         };
         if let Some(r) = mine.find(wanted) {
             confirm.push((repo.clone(), number));
-            lists.push(r.human_gated.clone());
+            lists.push((r.human_gated.clone(), r.required.clone()));
         }
     }
     let confirmed = gh::read_checks(&*env.ports.runner, &root, &confirm)?;
     for listed in &mut seen {
         if let Some(i) = confirm.iter().position(|(repo, number)| *repo == listed.pr.repo && *number == listed.pr.number) {
-            listed.pr.checks = ChecksSummary::of(&confirmed[i], &lists[i]);
+            listed.pr.checks = ChecksSummary::of(&confirmed[i], &lists[i].0, &lists[i].1);
         }
     }
 
@@ -367,6 +367,7 @@ struct Resolved {
     checks: Checks,
     post_enabled: bool,
     human_gated: Vec<String>,
+    required: Vec<String>,
 }
 
 /// One `error` Event for each PR whose policy did not resolve (§7.6): `source` `pr poll`, the resolve error's `code`,

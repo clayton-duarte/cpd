@@ -27,7 +27,7 @@ impl ChecksSummary {
     /// The one rule (contract §7.6) of the poll and `pr view`: any failure wins; a CheckRun is pending when its conclusion is not
     /// final, a StatusContext when its state is PENDING or EXPECTED; a PENDING StatusContext named in `human_gated` counts as
     /// passed only when a CheckRun exists and none is pending; no checks is `none`.
-    pub fn of(checks: &[Check], human_gated: &[String]) -> ChecksSummary {
+    pub fn of(checks: &[Check], human_gated: &[String], _required: &[String]) -> ChecksSummary {
         let mut runs = 0;
         let mut run_pending = false;
         let mut failed = false;
@@ -227,6 +227,10 @@ impl MergeState {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "status_required_tests.rs"]
+mod status_required_tests;
 
 #[cfg(test)]
 mod tests {

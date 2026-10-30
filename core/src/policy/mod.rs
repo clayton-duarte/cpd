@@ -306,7 +306,7 @@ mod tests {
         write(
             &home,
             "acme/owner.toml",
-            "[pr]\nfeedback.checks = \"none\"\njira_required = true\nhuman_gated_contexts = []\ntext = \"owner pr\"\n[pr.post]\nenabled = true\nchannel = \"\"\ntemplate = \"{{ url }}\"\nmerged_reaction = \"\"\n[pr.jira]\nin_progress = \"\"\nin_review = \"\"\ndone = \"\"\n",
+            "[pr]\nfeedback.checks = \"none\"\njira_required = true\nhuman_gated_contexts = []\nrequired_checks = []\ntext = \"owner pr\"\n[pr.post]\nenabled = true\nchannel = \"\"\ntemplate = \"{{ url }}\"\nmerged_reaction = \"\"\n[pr.jira]\nin_progress = \"\"\nin_review = \"\"\ndone = \"\"\n",
         );
         write(&home, "acme/cpd.toml", "[pr]\n");
         let r = resolve(&home, &repo_key("acme", "cpd")).unwrap();
@@ -316,7 +316,7 @@ mod tests {
         assert_eq!(src.source, Source::Repo(real(&home, "acme/cpd.toml")));
         assert_eq!(
             src.left_out,
-            ["feedback.checks", "pr.post.enabled", "pr.post.channel", "pr.post.template", "pr.post.merged_reaction", "pr.jira_required", "pr.human_gated_contexts", "pr.jira.in_progress", "pr.jira.in_review", "pr.jira.done"]
+            ["feedback.checks", "pr.post.enabled", "pr.post.channel", "pr.post.template", "pr.post.merged_reaction", "pr.jira_required", "pr.human_gated_contexts", "pr.required_checks", "pr.jira.in_progress", "pr.jira.in_review", "pr.jira.done"]
         );
         assert!(src.to_string().ends_with(" (key default)"));
         // The owner file sets every typed key: no `(key default)`.
