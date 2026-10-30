@@ -53,6 +53,7 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
     (e) => failed("session state", e),
   );
   let follower: { start(): void; stop(): void } | undefined;
+  let opened: Conversation | undefined;
 
   const main = async (): Promise<void> => {
     const shownSession = await deps.cpd(["session", "show", config.session]);
@@ -65,6 +66,7 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
       { cwd: config.cwd, home: deps.homeDir() },
     );
     const conversation = await deps.open({ file: storePath(config.home, config.plan, config.attempt), cwd: config.cwd, model, extension });
+    opened = conversation;
     conversation.closed.then(
       (reason) => {
         failed("the harness closed", reason);
@@ -131,6 +133,13 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
   const code = await ended;
   over = true;
   follower?.stop();
+  if (code === 143 && opened) {
+    try {
+      await deps.writeReport(reportPath(config.home, config.plan, config.attempt), endReport(await opened.entries()));
+    } catch (e) {
+      failed("the end report at terminate", e);
+    }
+  }
   await reporter.close({ state: "stopped" });
   return code;
 }
