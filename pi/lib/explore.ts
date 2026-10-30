@@ -1,10 +1,10 @@
 /**
  * The explore guard profile (R11, commands.md §15.22): pattern refusals in the tool_call of a scout or research Worker, keyed on
- * CPD_JOB_KIND. Pure: the caller passes `isInsideRepo`. It is NOT an OS sandbox: it refuses patterns, it does not contain a process.
+ * CPD_JOB_KIND. Pure: the caller passes `isInsideRepo` (only `exploreGuard` binds the real one and reads the env). It is NOT an OS sandbox: it refuses patterns, it does not contain a process.
  */
 
 import { existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { BOUND_SECONDS } from "./noblock.ts";
 import { PREFIXES, simpleCommands } from "./shell.ts";
@@ -161,4 +161,11 @@ export function isInsideRepo(path: string): boolean {
     if (existsSync(resolve(dir, ".git"))) return true;
     if (dirname(dir) === dir) return false;
   }
+}
+
+/** The refusal of one tool call of a Worker started on an explore Job (CPD_JOB_KIND in `env`), or undefined: a Lead, a Manager or a Worker of another kind has no profile. */
+export function exploreGuard(role: string | undefined, env: Record<string, string | undefined>, call: { name: string; arguments: Record<string, unknown> }, cwd: string): Verdict {
+  const kind = role === "worker" ? exploreKind(env) : undefined;
+  if (kind === undefined) return undefined;
+  return exploreVerdict(kind, call, { cwd, home: env.CPD_HOME || `${homedir()}/.cpd`, plan: env.CPD_PLAN ?? "" }, isInsideRepo);
 }
