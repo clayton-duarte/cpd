@@ -359,7 +359,7 @@ test("the adapter registers one renderer per displayed customType once at load, 
   const f = new Fixture();
   try {
     f.load();
-    assert.deepEqual([...f.pi.renderers.keys()], ["cpd", "cpd-context", "cpd-plan-decision", "cpd-plan-summary"]);
+    assert.deepEqual([...f.pi.renderers.keys()], ["cpd", "cpd-context", "cpd-plan-decision", "cpd-plan-summary", "cpd-skills"]);
     assert.deepEqual([...f.pi.renderers.keys()], [...RENDERED_TYPES]);
     mkdirSync(f.agentDir);
     f.file("agent/compact-tools.json", '{"style": "codex"}');
