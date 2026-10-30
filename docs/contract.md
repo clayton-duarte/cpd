@@ -3615,7 +3615,7 @@ type Submission = { wait(): Promise<"done" | "unanswered"> };
 **`runWorker`, in order.**
 
 1. `resolveModel(config.model)` first: a `usage` error ends it before any effect.
-2. `cpd session show --session <session>`, read with `parseSession` of `pi/lib/run.ts` (its `registeredEvent` is the Event cursor). When the shown Session `state` is `stopped` (and only then), the runner sends `session state idle` before its first submission, as pi's adapter does at `session_start` (§3.6: `stopped -> idle`; `stopped -> working` is refused); after a crash restart the Session is not `stopped`, so it sends none, and the `working` that follows is the first submission's.
+2. `cpd session show <session>`, read with `parseSession` of `pi/lib/run.ts` (its `registeredEvent` is the Event cursor). When the shown Session `state` is `stopped` (and only then), the runner sends `session state idle` before its first submission, as pi's adapter does at `session_start` (§3.6: `stopped -> idle`; `stopped -> working` is refused); after a crash restart the Session is not `stopped`, so it sends none, and the `working` that follows is the first submission's.
 3. `cpd policy show` -> `policySection` of `pi/lib/policy.ts`. The context files -> one text, each file as `## <path>` and its content, blocks separated by a blank line (`undefined` when there are none). `zone` = `zoneLine(now())` of `pi/lib/time.ts`.
 4. `open({ file: storePath(...), cwd, model, extension: cpdExtension(...) })`.
 5. Submit the first message `Read <spec> and follow it exactly. Your attempt id is <attempt>.` with `requestId` = the Attempt id and `whenBusy: "followUp"`.
