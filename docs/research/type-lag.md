@@ -407,9 +407,81 @@ Result: it worked. The arm file was gone after the reload (consumed), the .txt (
 
 ## Trace
 
+Measured 2026-10-30 12:2x to 12:5x EDT at the branch base (origin/main 606f4b9f code), pi 1.3.0, 179x46, from this worktree, on a private tmux server, a private agent directory (`PI_CODING_AGENT_DIR`, three config files copied) and the COPY of the transcript. The recipe's `keys` mode types after pi settles, which cannot be lined up with the probe's window without editing the recipe block (not allowed), so for the traces I used a throwaway script (outside the repo) that does the same thing: `touch /tmp/type-lag-probe.arm`, `TYPE_LAG_PROBE_DELAY_S=40 TYPE_LAG_PROBE_SECONDS=12`, start pi with `-e <probe>` first, wait until 42 s after launch, then type the same 40 keys with the same `tmux send-keys -l <char>` calls. The ms-per-key numbers below are the unedited recipe (`keys`, 3 runs, median) with the same launches.
+
+- 22 ms run: `pi C -e CT -e EX --session-dir <tmp> --session <copy>` (copy + CT + EX).
+- 2 ms run: `pi C --no-session -e CT -e EX` (FRESH + CT + EX).
+- The probe is a third `-e`; its overhead is in the profile as `Intl.Segmenter.segment probe.ts` and `defaultPrepareStackTrace` (stack kept for 1 call in 16).
+
+| in the 12 s window around 40 keys | copy + CT + EX | FRESH + CT + EX |
+| --- | --- | --- |
+| `Intl.Segmenter.prototype.segment` calls (exact) | **439,603** | **2,477** |
+| input characters | 14,779,291 | 190,521 |
+| timers fired (clock `reschedule` at `compact-tools-clock.ts:23`, `TuiAltScreen.scheduleRender`) | 20 and 18 | 20 and 18 |
+| stdout writes, bytes | 21, 7,034 | 58, 17,686 |
+| samples not idle (probe overhead included) | 56 % (`truncateToWidth` 15.8 %, `visibleWidth` 11.8 %, `sliceWithWidth` about 4 %) | 1.3 % |
+
+The timers table is the same in both runs, so the timers are not the difference: the same number of frames cost very different amounts. The difference is how much text each frame segments.
+
+Segmenter call chains (nearest caller first; the share is of the sampled calls):
+
+| chain | copy + CT + EX | FRESH + CT + EX |
+| --- | --- | --- |
+| `truncateToWidth < fit` (`compact-tools-balloon.ts:34`) `< drawBalloon` (`:38`) `< drawnBalloon` (`compact-tools-silent.ts:126`) `< balloonOf` (`:84`) `< assistant override render` (`compact-tools-silent.ts:355`) `< AssistantMessageComponent.render` | **60.7 %** (about 267,000 calls) | absent |
+| the other chains through `balloonOf` (the user override at `compact-tools-silent.ts:340`, 2.0 %; `visibleWidth < wrapSingleLine < wrapTextWithAnsi < Markdown.render < drawnBalloon` at `:116`, 4.1 % and the table and list wraps) | 8.0 % | absent |
+| `compact-tools-layout.ts`: `CachedComponent.renderLines` (`:187`, `:192`, `hardWrapTextWithAnsi` `:244`, `hardSliceAnsi` `:383`) under `compact-tools.ts:346`, `:652` and `LiveCallContainer.render`, and `WithinWidth.render` (`:530`) | 27.6 % | absent |
+| `sliceWithWidth < compositeTuiLine < paintBox < renderLayoutFrame < TuiAltScreen.doRender` (pi-tui) | 1.1 % | 37.4 % (58 sampled calls) |
+| `sliceWithWidth < compositeTuiLine < HStack.render < measureHeight` (pi-tui) | not in the top 15 | 24.5 % |
+| `truncateToWidth < FooterComponent.render` (pi) | not in the top 15 | 16.8 % |
+| `visibleWidth < TuiAltScreen.extractCursorPosition` (pi-tui) | not in the top 15 | 5.8 % |
+
+(The 15 chains shown by the probe cover 97.9 % of the sampled calls of the 22 ms run.)
+
+The chain that explains the difference is the first: every message's balloon in the transcript (`balloonOf` in `pi/compact-tools/extensions/compact-tools-silent.ts`, drawn by `drawBalloon` in `compact-tools-balloon.ts`) is drawn again on each frame, 61 % of the 439,603 calls (69 % with the rest of `balloonOf`), plus the same pattern in `CachedComponent` of `compact-tools-layout.ts` (27.6 %). In the fresh session there are few messages, so the same frame segments about 60 times per key.
+
+Why they redraw: with the instrumented dev copy (below, reverted) I logged, per `balloonOf` call, which cache condition failed (code identifiers and numbers only, no text). Over one 40-key run: width differs 3,417 times, hit 850, no entry yet 68, external `invalidate()` 34, text, side, timestamp, margins and painter 0. So the painter lead of docs/contract.md (a mentions refresh publishing a new function) is REFUTED here: the painter never changed. The widths alternate 179 and 177 on the same Markdown child, every frame, and the cache holds one width. The stacks of the two calls differ at the bottom: width 179 comes from pi-tui's `layoutComponent < measureWidth < renderCached < VStack.render`, width 177 from `layoutComponent < measureHeight < renderCached < HStack.render`. The HStack is `PaddedRoot` of `pi/lib/pad.ts` (the 1-cell chat pad, hs-d684 item 3), installed by EX through `installChatPad` (`registerChatPad` hooks `TuiAltScreen.prototype.setLayoutRoot`): pi-tui lays the root out twice per frame, once at the full pane width to measure width and once inside the pad's HStack (width minus 2) to measure height, and renders the whole transcript both times. That is why the cost needs both factors: EX supplies the second width (CT alone only ever renders at 179: 2,086 hits and no width miss on the copy, 203 Segmenter calls in the window), and only the long transcript has enough balloons for the thrash to cost 22 ms.
+
+### Cause confirmed by experiments in a dev copy
+
+Each row is a throwaway edit in this worktree (reverted: `git status` clean before every run and at submit, `git diff --stat origin/main` is this doc only), then the unedited recipe `keys` mode on copy + CT + EX. Noise from this document: the same unchanged build gave medians 21.25, 23.50, 28.50 (single runs 20.5 to 48.0); today's unchanged build gave 33.75 (46.50, 21.25, 33.75) and 24.25 (22.25, 24.25, 24.25).
+
+| change | ms per key, median (runs) | Segmenter calls in the 12 s window |
+| --- | --- | --- |
+| none (unchanged) | 33.75 (46.50, 21.25, 33.75); again 24.25 (22.25, 24.25, 24.25) | 439,603 |
+| the pad off (`registerChatPad` returns at once): one width only | **2.00** (2.75, 2.00, 1.50); again 2.25 (2.25, 1.75, 2.50) | 205 |
+| `balloonCache` keeps one entry per width (`compact-tools-silent.ts`) | 18.75 (18.75, 26.50, 17.50) | not measured |
+| that, and `CachedComponent` and `CachedContainer` keep one entry per width (`compact-tools-layout.ts`) | 9.25 (8.75, 9.75, 9.25) | 15,697 |
+
+Confirmed: with the pad off the copy + CT + EX run falls from 24 to 34 ms to 2.0 to 2.25 ms per key, inside the fresh run's 2.0, far beyond the noise, and Segmenter calls drop 439,603 to 205. That the cost is the second width, and the single-width caches that cannot hold two, is confirmed by the width-keyed caches taking 439,603 calls to 15,697 and the time to 9.25 ms. The remaining 9 ms with the width-keyed caches is pi-tui's own work for the padded root (87 % of the remaining calls: `sliceWithWidth < compositeTuiLine < paintBox < renderLayoutFrame`, `HStack.render` compositing every transcript row, which is the pad's HStack itself); it needs the pad's layout to change, not a cache (UNVERIFIED which change).
+
+Not verified: IDLE. The 57 % idle burn of the live Manager is not reproduced by any of these runs (the copy idles at 0.00 %), so this finding does not yet explain it. A consistent but UNVERIFIED reading: the live pane redraws on the 80 ms clock (`compact-tools-clock.ts`, `TICK_MS`) while a working indicator or tool row runs, and each such frame costs about what a keystroke frame costs here (22 ms of 80 ms is 27 % of a core, same order as the 57 % seen). The live probe below shows whether the idle burn is the same chain.
+
 ## Proposed fix
 
+Options, in order. The pad is a decision (hs-d684 item 3) and pi-tui is never forked, so every option lives in our code.
+
+1. **Supported: make the render caches hold the two widths pi-tui asks for.** `balloonCache` in `pi/compact-tools/extensions/compact-tools-silent.ts` and `CachedComponent` and `CachedContainer` in `compact-tools-layout.ts` key their rows by width (a small map per component, the latest two widths) instead of one slot, and update the Render cache bullet of docs/contract.md (section 6.9) to say so. Why: pi-tui measures width and height with different widths in the same frame as a matter of course (measured: 179 through `measureWidth`, 177 through the padded `HStack`), so a one-slot cache is wrong for any padded layout, not only this transcript; the code is ours and it keeps the pad. Measured in the dev copy: 439,603 to 15,697 Segmenter calls, 24 to 34 ms to 9.25 ms per key. It does not reach 2 ms.
+2. **Make the pad cost nothing: lay the side columns out without an `HStack` over the whole transcript** (`PaddedRoot` in `pi/lib/pad.ts`). Floor measured by switching the pad off: 205 calls, 2.0 to 2.25 ms. How to keep the 1-cell pad without the second width is UNVERIFIED (not tried); it should be tried after option 1 since option 1 shows the rest of the cost is pi-tui compositing the padded `HStack`.
+3. **Drop the chat pad.** The verified floor (2.0 ms), but it reverses hs-d684 item 3; only the User can decide that. Not recommended.
+
+Regression test, at the `Intl.Segmenter` call level (a mocked-width pi-tui is not needed; pi-tui and its Markdown are real code here but no terminal, tmux or pi process is): build 50 `Markdown` children (25 user, 25 agent, with a few wrapped paragraphs and one table) and render them through the patched user and assistant overrides, the same calls the layout makes: for each of 10 frames, render every message at width W and then at W - 2 (the measure width and the padded width). Wrap `Intl.Segmenter.prototype.segment` with a counter for the test (a spy on a builtin, not an external dependency). What to count and what must hold: the calls in frame 1 are the cost of drawing 50 messages at two widths; the calls in frames 2 to 10 must be **zero** (not "fewer"), and total calls must not grow with the number of frames; then change one message's text and assert that only that message's calls reappear (constant, at most the calls for that one message at the two widths), and that a width change to a third value draws again once. The same shape for a `CachedComponent` with a `renderLines` that calls `truncateToWidth`: two alternating widths, zero calls after the first pair. Today this test fails with the counts of the 22 ms run (every frame draws every message twice).
+
 ## Live probe
+
+For the slow session. The probe only runs when `/tmp/type-lag-probe.arm` exists, and it deletes that file the moment it loads, so touch it right before the reload. It sees timers created after it loads (the profile sees everything); its window is 10 s from the reload. It does not touch the pane or open a port.
+
+1. Copy the `ts` block of `## Probe` to `~/.pi/agent/extensions/type-lag-probe.ts` (`awk '/^```ts$/{f=1;next} /^```$/{f=0} f' docs/research/type-lag.md > ~/.pi/agent/extensions/type-lag-probe.ts`, from a checkout of this branch).
+2. `touch /tmp/type-lag-probe.arm`.
+3. In the slow session run `/reload` (or `/cpd-reload-after-install` if that is what you use) and leave the session alone, idle, for about 15 s. Do not type: the point is the idle burn.
+4. Read `$TMPDIR/type-lag-probe-<pid>.txt` (`<pid>` is the pi's pid; `ls -t $TMPDIR/type-lag-probe-*.txt | head -1` is the newest; on macOS `$TMPDIR` is the `/var/folders/.../T/` directory of the shell that runs pi). Then `rm ~/.pi/agent/extensions/type-lag-probe.ts` and `/reload` again. The `.cpuprofile` beside it opens in Chrome DevTools if a person wants it.
+
+What to read, top to bottom:
+
+- Header, `stdout writes`: how many frames reached the terminal in 10 s. Near zero with a busy profile means the burn draws nothing the screen sees (the masked diff said the screen never changes).
+- `timers created after load`: which creation site fires most. About 125 per 10 s at `compact-tools-clock.ts:23` is the 80 ms clock; a different site names the timer that keeps requesting renders. A timer created before the reload is not listed; then read the next two sections.
+- `top 25 self-time functions`: if `truncateToWidth`, `visibleWidth` or `sliceWithWidth` lead, the burn is text measuring, as the native sample of pro-n190 said.
+- `Intl.Segmenter.prototype.segment` section: calls in 10 s and the chains. If the top chain is `balloonOf < drawnBalloon` (`compact-tools-silent.ts`) or `CachedComponent.renderLines` (`compact-tools-layout.ts`), the live burn is the same cause as the per-key cost (a cache that misses every frame) and the fix above applies. If it is another chain, that chain's top non-pi-tui frame is the owner.
+- `hottest CPU call chains`: the same by samples, including work with no Segmenter call. A chain ending in a frame of ours (`pi/...`, `compact-tools/...`) names the file and line.
 
 ## Candidates
 
