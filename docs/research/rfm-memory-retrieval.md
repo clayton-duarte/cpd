@@ -1,5 +1,20 @@
 # Context memory retrieval: findings (Plan `rfm-memory-retrieval`)
 
+## Summary
+
+- **Q1, holographic vs FTS5 + `sqlite-vec`:** the holographic bridge is live and the only search path; the native FTS5 table is designed but not built (section 1, Status today).
+- Its vectors are SHA-256 bag-of-words: `delete`/`remove` cosine 0.028, and FTS5 alone selects the candidates, so it adds no semantics (section 1 (a), (b)).
+- Every `cpd context search` spawns Python twice: 264-271 ms median over 15 runs, against about 20-25 ms predicted for in-process FTS5 (section 1 (d); the prediction is unverified).
+- Recommendation: replace the bridge with in-process FTS5 first, add `sqlite-vec` only later, behind FTS5, in shadow mode; reversing `context-holographic.md` needs the User (section 1, Recommendation).
+- **Q2, built vs proposed:** the pushed digest is already gone (a Manager gets about 75 tokens), so the proposal's pinned core is not needed; supersession exists, the `subject` key and any read log do not (section 2, verdict table).
+- No read is recorded anywhere, but 449 of 533 id-shaped tokens in 656 records cite a real record, so `used` can come from citations once reads are logged (section 2 part 1).
+- Not built on purpose: pinned core, `entry_stats`, a `contradicts` relation, the ranking formula and promotion jobs; each waits for read data or conflicts with "recency wins" (section 2 parts 3-5; section 3 preamble).
+- **Roadmap item 1, `ctx-quote`:** fix the present defect: `hs-d655`, `db.migrations`, `foo/bar`, `a:b`, `it's` all fail as `usage` today; a query sanitiser, no schema change (section 1 (c); section 3 item 1).
+- **Roadmap item 2, `ctx-reads`:** table `context_reads` and `cpd context reads`, an additive migration; starts the data that every ranking step needs (section 2 part 1; section 3 item 2).
+- **Roadmap item 3, `ctx-fts`:** in-process FTS5 table with an `id` column, a breaking migration and a one-way door; target median at most 60 ms against 271 ms (section 1 (d); section 3 item 3).
+- Later items: topics line, citation-based `used`, `--subject` (changes the git record format), bridge removal, shadow retrieval, `sqlite-vec` (section 3 items 4-9).
+- Five User decisions and twelve records for the Lead are listed at the end of section 3.
+
 Research only; no production code. Every number carries its method; anything not measured or read in source is labelled `unverified` in the same sentence. Sources: origin/main at `77b80a89` (fetched 2026-10-30); the holographic package read from `~/.local/share/cpd/holographic/venv/lib/python3.12/site-packages/holographic_memory/` (cited below as `hm/<file>:line`); measurements on 2026-10-30 EDT on the machine `pro` against its live store (Context `cpd`, 656 records, `cpd` 0.17.80-77b80a89).
 
 ## 1. Holographic vs native FTS5 + sqlite-vec
@@ -9,7 +24,7 @@ Research only; no production code. Every number carries its method; anything not
 - The holographic bridge is **current and the only search path**. `cpd context search` goes through `contrib/holographic/bridge.py` (`core/src/context/search.rs:133-141,167`; `core/src/context/engine.rs:168,174`), and `docs/contract.md:2434` ("The holographic engine rail", hs-d675, hs-d677) still specifies it. `git log origin/main` shows adoption (`cb06bc9a` "Search the Context through the holographic engine", `7f95d19b` design) and no commit that retires it.
 - **The native FTS5 path is not shipped.** `docs/research/context-holographic.md:7-11` says the planned `context_search` FTS5 table and its triggers "are **not** built", superseding `docs/research/context-retrieval-design.md`. No `context_search` table exists in `core/src`, and no migration creates one (`grep -rn context_search core/src cli/src engine/src` returns nothing; `cli/tests/flow/main.rs:24` only names a test module). So "in-process FTS5" below is the design in `context-retrieval-design.md`, with its measurements cited, not a shipped command.
 - The decisions hs-d655 (retrieve on demand), hs-d675 (adopt a local engine) and hs-d194 (cpd must not require a model) are cited by the docs (`context-holographic.md:7-9`, `context-memory.md:207`) but are **not in this machine's store** (`cpd context show --record hs-d655` returns `record_not_found` in Context `cpd`; ids here are `pro-*`). I read them only through the docs: unverified against the records themselves.
-- A **newer** decision overrules the "no model" line of `context-memory.md:207`: Notes `pro-n174` and `pro-n176` (Plan `rfm-curation-models`, 2026-10-30 02:20 UTC) set the v1 stack as hosted embeddings through Bifrost (`gemini-embedding-2`, 768-d) plus FTS5, no local model. Neither says the bridge is retired.
+- A **newer** decision overrules the "no model" line of `context-memory.md:207`: Notes `pro-n174` and `pro-n176` (Plan `rfm-curation-models`, 2026-10-29 22:20 EDT) set the v1 stack as hosted embeddings through Bifrost (`gemini-embedding-2`, 768-d) plus FTS5, no local model. Neither says the bridge is retired.
 
 ### (a) Vectors are SHA-256 bag-of-words phase vectors, no semantics
 
@@ -119,11 +134,11 @@ Method for every number below: the live store of Context `cpd` on machine `pro` 
 
 | # | Proposal feature | Verdict | Evidence | Smallest cpd-shaped addition |
 |---|---|---|---|---|
-| 1 | Read tracking: `entry_reads`, `entry_stats`, channels, `used`, dedupe, never-block | **missing** | No read row anywhere (above). Citations are already in the text: 533 id-shaped tokens in 656 records, 449 of them (84%) resolve to a record of this store (see 1a) | Table `context_reads` + `core/src/context/reads.rs`; log from `show.rs` and `search.rs`; flag-free; `used` from a citation scan at write time (SQL in 1b) |
+| 1 | Read tracking: `entry_reads`, `entry_stats`, channels, `used`, dedupe, never-block | **missing** | No read row anywhere (above). Citations are already in the text: 533 id-shaped tokens in 656 records, 449 of them (84%) resolve to a record of this store (see 1a) | Table `context_reads` + `core/src/context/reads.rs`; log from `show.rs` and `search.rs`; flag-free; `used` from a citation scan at write time (SQL in 1c) |
 | 2 | Deterministic `subject` + `scope` tags | **partly built**: explicit supersession is built, the key is not | `--supersedes <record>` on `decide`/`note` (`core/src/context/mod.rs:209-226`), validated at write (`core/src/context/contexts.rs:253-275`, `supersedes_invalid`, `record_not_found`), applied by `in_force` (`inforce.rs:35-47`). 30 of 438 decisions/notes use it | `--subject <key>` and `--scope <path>...` on `decide`/`note`; the write resolves a subject to a `supersedes` (SQL in 2) |
 | 3 | Pinned core + per-task / per-turn retrieval | **partly built; pinned core not needed**; relevance retrieval is manual | Pushed text today is about 75 tokens (Manager) or the brief (Lead); the always-injected core is `AGENTS.md` (`context-memory.md:226-229`). Recency pushes exist (`updates.ts:35,263,289-305`). Retrieval is `cpd context search`, 264-271 ms median (section 1 (d)), 20 shorts = 402-541 tokens (4 queries, one run each, below) | A topics-with-counts line in the Manager's turn-start message; a `--scope` filter on `search`; retrieval hook only after reads are logged (see 3) |
 | 4 | Write-time pairwise curation | **partly built** (curation and retire proposals exist; the neighbour window and a `contradicts` verdict do not) | `distill.rs:125-129` batch of at most 60 records / 48 KiB; `known.md` holds every curated record's short (`distill.rs:442-451`), so a batch reads 36 KB / about 9.1k tokens of context records at 395 records; reasons `duplicate`/`superseded`/`documented` (`curation.sql:12`) | Cut `known.md` to the nearest neighbours of the batch from the FTS5 index (section 1's recommendation); no schema delta; keep it asynchronous |
-| 5 | Ranking formula, promotion/demotion table | **missing; build only the log now**, ranking after data | No reads, no pinned tier, no `used`. The store is 8 days old; the proposal itself waits 2-3 weeks (`Rollout` step 6). Part of the table is built without reads: "suggest for repo docs" is `doc_candidate` + `git grep` of the id in docs (`distill.rs:421-423,624`) and "archive when superseded" is `record_retirements` | A read-count SQL view over `context_reads` (see 5); no decay, no `alpha`, no promotion job yet |
+| 5 | Ranking formula, promotion/demotion table | **missing; build only the log now**, ranking after data | No reads, no pinned tier, no `used`. The store is 8 days old; the proposal itself waits 2-3 weeks (`Rollout` step 6). Part of the table is built without reads: "suggest for repo docs" is `doc_candidate` + `git grep` of the id in docs (`distill.rs:421-423,624`) and "archive when superseded" is `record_retirements` | A read-count query over `context_reads` (see 5); no decay, no `alpha`, no promotion job yet |
 
 ### 1. Read tracking
 
@@ -239,7 +254,7 @@ Gaps that are real:
 | Piece | Build now? | Why |
 |---|---|---|
 | `context_reads` log | **yes** | Costs nothing to collect, ranks nothing; every later piece needs it (the proposal's step 1) |
-| Plain counts per record (`reads`, distinct sessions, `used`) as a SQL view | **yes**, a view only | Answers "what is read" by a query; no decay, no weights |
+| Plain counts per record (`reads`, distinct sessions, `used`) as a query (`cpd context reads`) | **yes**, a query only: an additive migration refuses a new view (`core/tests/migrations.rs:210`) | Answers "what is read" by a query; no decay, no weights |
 | Utility `U(e)` with channel weights and a 30-day half-life | after data | The weights (0.2/1.0/2.0/+2.0) are untuned guesses; with no `pinned` channel and citations as the only `used` source the formula has nothing to fit |
 | `score = rel * (1 + alpha*log(1+U)) * recency` | after data | `rel` needs FTS5 scores that are normalised to 0-1: section 1's backend is not built; alpha 0.1-0.3 can only be tuned against labelled queries |
 | Exploration slots | no | Retrieval is manual: the Manager chooses, so no entry is starved by a ranker |
@@ -249,7 +264,7 @@ Gaps that are real:
 | Suggest for `AGENTS.md` | no | `AGENTS.md` is the User's file; the proposal says never auto-written; the evidence it needs (reads across unrelated scopes) does not exist |
 | Demote after 60 days / archive after 180 days unread | no | Needs a tier that does not exist; the whole store is 8 days old |
 
-**Minimum data before ranking is worth building.** The proposal's promotion rule needs "at least 5 distinct sessions in 30 days" per record. cpd's store has 91 distinct writer sessions in 8 days (a floor for sessions that read; readers are not counted). Rough plan, an estimate not a measurement: 30 days of `context_reads` (so a full 30-day window exists) and at least 200 records with 3 or more distinct reading sessions, checked with the view above, before any weight is chosen. Until then the plain counts are the product. Before any ranking, build a labelled recall set (the proposal's "Validation") of about 30 real queries; tuning without it is guessing.
+**Minimum data before ranking is worth building.** The proposal's promotion rule needs "at least 5 distinct sessions in 30 days" per record. cpd's store has 91 distinct writer sessions in 8 days (a floor for sessions that read; readers are not counted). Rough plan, an estimate not a measurement: 30 days of `context_reads` (so a full 30-day window exists) and at least 200 records with 3 or more distinct reading sessions, checked with the query above, before any weight is chosen. Until then the plain counts are the product. Before any ranking, build a labelled recall set (the proposal's "Validation") of about 30 real queries; tuning without it is guessing.
 
 ### The four open questions, for cpd
 
@@ -257,3 +272,209 @@ Gaps that are real:
 2. **Who declares `scope`?** The writer, optional, via `--scope` on `decide`/`note` (2). Do not infer by model: cpd keeps the write path model-free (hs-d194, unverified). Build `--subject` first; `--scope` only with a search filter.
 3. **One store per Context or shared?** One per Context, as built: `context_records` is keyed `(context, id)` and the id carries the machine (`pro-d12`), so a read row is `(context, record)` (1c). Sharing across Contexts is a different feature (it touches record ids and ranking across owners); no evidence of need: the 51 `hs-` citations (measured, 1a) are ids written on another machine, a federation concern, not a sharing one; whether any belongs to another Context is unverified.
 4. **Retrieval budget per phase.** cpd's phases are grounding, plan, dispatch, deploy, not the proposal's Context/Plan/Dispatch. No budget is needed for push today (75 tokens). For pulled pages, the default `--limit 20` is already about 400-540 tokens (3). Recommendation: keep `--limit 20` and cap any future automatic block at one such page (about 500 tokens) per turn, with `--limit` for more; revisit with the logged read counts, not before.
+
+## 3. Follow-up roadmap
+
+Order rule: the proposal's own ("ship read logging first, ranking needs weeks of data"), adjusted by sections 1 and 2: first the present defect (a search that fails on any query holding `-`, `.`, `/`, `:` or `'`), then the item that starts collecting data, then the backend swap that also cheapens every later read. Nothing here changes a pushed message except `ctx-topics` and `ctx-shadow`. Migration facts that shape the items, read in source: an **additive** migration may create tables and non-unique indexes and may only `ADD COLUMN` to an existing table; it may not add a trigger or a unique index on an existing table, a view, or (by default-deny) a virtual table (`core/tests/migrations.rs:56-80,185-215`; `docs/research/migrations.md` for the file naming `<YYYYMMDDTHHMM>-<slug>.sql`, first line `-- cpd-migration: additive` or `breaking after <n>`, made by `scripts/new-migration.sh`). So FTS5 and `sqlite-vec` (virtual tables, triggers on `context_records`) are **breaking** migrations, and a CHECK list of a new table must be complete the day it is created: `context_reads` below carries the `shadow` channel for a later item because an existing table's SQL may not be rewritten. The SQL below is written from source and the design docs and was **not executed** (unverified until each item's red tests run it).
+
+| # | Plan id | Intent | Schema | Depends on | One-way door |
+|---|---|---|---|---|---|
+| 1 | `ctx-quote` | `cpd context search` no longer fails on ids, paths, dotted keys, apostrophes | no schema change | none | no |
+| 2 | `ctx-reads` | Log every read of a record (`show`, `search`, pushed updates) and count them | additive: `context_reads` | none | schema only (empty table) |
+| 3 | `ctx-fts` | Search from an in-process FTS5 table in `cpd.db` instead of the Python bridge | breaking: `context_search` + 5 triggers | 1, 2 | yes (breaking barrier) |
+| 4 | `ctx-topics` | A `Topics: name count, ...` line in the Manager's turn-start message | no schema change | 2 (to measure) | no |
+| 5 | `ctx-used` | Set `used = 1` from id citations, guarded by a read in the same session | no schema change | 2 | no |
+| 6 | `ctx-subject` | `--subject` on `decide`/`note`; same subject supersedes the holder | additive: `subject`, `scope` columns | none (5 is not required) | **yes** (record format) |
+| 7 | `ctx-bridge-rm` | Delete the holographic bridge, its config key, its 15.7 MB of copies | no schema change | 3 live for 14 days | no (code); the derived DBs rebuild |
+| 8 | `ctx-shadow` | Log what retrieval would push for a Manager turn, push nothing | no schema change (uses `shadow`) | 2, 3, 4, 5 and 14 days of data | no |
+| 9 | `ctx-vec` | `sqlite-vec` + hosted embeddings behind FTS5, only if shadow shows a synonym gap | breaking: `context_embeddings`, `context_vec` | 3, 8, User decision 2 | **yes** (data egress, alpha extension) |
+
+Not on the roadmap, on purpose (each is a gate, not a task): pinned core (section 2 part 3: `AGENTS.md` does it, adding one raises injected tokens); `entry_stats` rollup table (a `GROUP BY` is enough, part 1c); `contradicts` relation (recency wins, part 4); a model judge at write time (breaks "a write needs no model", part 4); the utility/ranking formula and promotion jobs (need the labelled set and 30 days of `context_reads`, part 5). Revisit them after item 8's data.
+
+### Item 1: `ctx-quote`
+
+- **Intent.** Fix the defect of section 1 (c): a sanitiser applied to the query before it reaches the backend. I also ran, single runs on `cpd` 0.17.80, `db.migrations` (`fts5: syntax error near "."`), `foo/bar` (near `/`), `a:b` (`no such column: a`) and `it's` (near `'`): all `usage`, so the fix covers more than the hyphen.
+- **Schema.** no schema change.
+- **CLI.** No new flag. Rule: split on whitespace; a token with a character outside `[A-Za-z0-9_*]` that is not already inside a `"..."` phrase becomes `"<token>"` (inner `"` doubled); `AND`, `OR`, `NOT`, `NEAR`, parentheses, quoted phrases and `term*` pass unchanged. An unterminated `"` still returns `usage` (`The search query is malformed`, the code `check_ok` already maps: `core/src/context/search.rs:56-68`). No new error code.
+- **Files.** `core/src/context/search.rs` (new `fn sanitise(query: &str) -> String` called at `:125`, before `search_request` at `:38-40`), its unit tests, `cli/tests/flow/context_search.rs`.
+- **Verification (red first).** Tests: `hyphenated_token_is_quoted`, `dotted_and_slashed_and_colon_tokens_are_quoted`, `apostrophe_token_is_quoted`, `quoted_phrase_or_and_prefix_pass_unchanged`, `unterminated_quote_stays_usage`, flow `search_by_record_id_exits_ok`. Acceptance: all seven commands of section 1 (c) plus the four above exit 0 (`ok: true`) on the shipped binary (method: one run each, `timeout 60`). `cpd context search hs-d655` returns `ok` with zero or more hits (the record is unreadable here, section 1).
+- **Rollback.** `git revert`; no data touched. Two-way door.
+
+### Item 2: `ctx-reads`
+
+- **Intent.** The proposal's step 1: a read log, no behaviour change (section 2 part 1).
+- **Schema** (`scripts/new-migration.sh context-reads additive`):
+
+```sql
+-- cpd-migration: additive
+CREATE TABLE context_reads (
+  context  TEXT NOT NULL REFERENCES contexts(id),
+  record   TEXT NOT NULL,
+  session  TEXT NOT NULL CHECK (length(session) >= 1),
+  channel  TEXT NOT NULL CHECK (channel IN ('pushed', 'search', 'show', 'shadow')),
+  read_at  TEXT NOT NULL,
+  rank     INTEGER CHECK (rank IS NULL OR rank >= 1),
+  score    REAL,
+  used     INTEGER CHECK (used IN (0, 1)),
+  PRIMARY KEY (context, record, session, channel),
+  FOREIGN KEY (context, record) REFERENCES context_records(context, id)
+) STRICT;
+CREATE INDEX context_reads_record ON context_reads(context, record, read_at);
+INSERT INTO history_tables (name, no_delete) VALUES ('context_reads', 0);
+```
+
+  Differences from section 2 part 1c: the index (the per-record count query), and `shadow` in the CHECK (item 8; not a read, so the counting query excludes it). `no_delete = 0` allows a later prune; how the runner treats the column is unverified (section 2).
+- **CLI.** `cpd context show --record <id>` and `--topic <t>` log channel `show`; `cpd context search` logs `search` with `rank` (1-based) and `score`. `cpd context show --since <seq> --pushed` (new flag; requires `--since`, conflicts with `--record` and `--topic`, else `usage`) logs `pushed`; `pi/lib/updates.ts` passes it. New read command: `cpd context reads [--context <c>] [--since <iso>] [--channel <c,c>] [--min-sessions <n>]`, one line per record: reads, distinct sessions, used. An unknown channel is `usage`; an unknown Context is the existing Context-not-found refusal of `Select`. No `CPD_SESSION`: nothing is logged, no error. A logging failure never changes the exit code (the one place "fail loud" is relaxed); it is reported as an `error` Event (mechanism per section 2; kind name unverified).
+- **Files.** `core/src/store/migrations/<ts>-context-reads.sql` (new), `core/src/context/reads.rs` (new), `core/src/context/mod.rs` (args, dispatch), `show.rs`, `search.rs`, `pi/lib/updates.ts:289-305` (the `--pushed` flag), `docs/commands.md`, `docs/contract.md` (schema section), the schema pin (`scripts/repin.sh`).
+- **Verification (red first).** Tests: `a_read_is_one_row_per_record_session_channel`, `a_repeat_read_adds_no_row`, `a_read_without_a_session_logs_nothing`, `a_failed_log_does_not_fail_show`, `search_logs_rank_and_score`, `pushed_flag_requires_since`, `reads_counts_distinct_sessions_and_excludes_shadow`, plus the additive-migration check in `core/tests/migrations.rs`. Acceptance: logging adds at most 5 ms to the median of `cpd context show --record pro-d217` (baseline 18.8 ms, 15 runs, section 1 (d); method: same harness, 15 runs, median). Data gate for items 8 and 9, not a test: after 14 days `cpd context reads --min-sessions 3` lists at least 200 records (section 2 part 5's threshold; an estimate).
+- **Rollback.** Revert the logging code; the table stays empty. The migration cannot be removed (a migration is never un-applied): one-way for the schema, harmless.
+
+### Item 3: `ctx-fts`
+
+- **Intent.** Section 1's recommendation: search in-process, find a record by its id, drop two Python spawns.
+- **Schema** (`scripts/new-migration.sh context-search breaking`; `after <n>` is computed by the script, **80** migration files at this base: `ls core/src/store/migrations/*.sql | wc -l`; the design's 49 in `context-retrieval-design.md` is stale):
+
+```sql
+-- cpd-migration: breaking after <n>
+CREATE VIRTUAL TABLE context_search USING fts5(
+  id, text, topic, short,
+  tokenize = 'porter unicode61', content = '', contentless_delete = 1
+);  -- rowid = context_records.seq
+INSERT INTO context_search(rowid, id, text, topic, short)
+  SELECT r.seq, r.id, r.text, k.topic, k.short
+    FROM context_records r
+    LEFT JOIN record_curations k ON k.context = r.context AND k.record = r.id;
+CREATE TRIGGER context_search_ai AFTER INSERT ON context_records BEGIN
+  INSERT INTO context_search(rowid, id, text) VALUES (new.seq, new.id, new.text);
+END;
+CREATE TRIGGER context_search_ad AFTER DELETE ON context_records BEGIN
+  DELETE FROM context_search WHERE rowid = old.seq;
+END;
+CREATE TRIGGER context_search_cur_ai AFTER INSERT ON record_curations BEGIN
+  DELETE FROM context_search WHERE rowid = (SELECT seq FROM context_records WHERE context = new.context AND id = new.record);
+  INSERT INTO context_search(rowid, id, text, topic, short)
+    SELECT seq, id, text, new.topic, new.short FROM context_records WHERE context = new.context AND id = new.record;
+END;
+CREATE TRIGGER context_search_cur_au AFTER UPDATE ON record_curations BEGIN
+  DELETE FROM context_search WHERE rowid = (SELECT seq FROM context_records WHERE context = new.context AND id = new.record);
+  INSERT INTO context_search(rowid, id, text, topic, short)
+    SELECT seq, id, text, new.topic, new.short FROM context_records WHERE context = new.context AND id = new.record;
+END;
+CREATE TRIGGER context_search_cur_ad AFTER DELETE ON record_curations BEGIN
+  DELETE FROM context_search WHERE rowid = (SELECT seq FROM context_records WHERE context = old.context AND id = old.record);
+  INSERT INTO context_search(rowid, id, text)
+    SELECT seq, id, text FROM context_records WHERE context = old.context AND id = old.record;
+END;
+```
+
+  Query: `SELECT r.id, bm25(context_search) FROM context_search s JOIN context_records r ON r.seq = s.rowid WHERE context_search MATCH ?1 AND r.context = ?2 ORDER BY bm25(context_search) LIMIT ?3`, then the existing in-force, kind and `--all` filters. The triggers are on existing tables, which is why the migration is breaking.
+- **CLI.** No new flag. `cpd context reindex` keeps its flags and now rebuilds `context_search` for the Context (so the 5-trigger design has a repair). `--limit`, `--kind`, `--all` unchanged. `engine_missing` and `engine_failed` are no longer raised by `search`. The queries of section 1 (c) still work, through item 1's sanitiser.
+- **Files.** `core/src/store/migrations/<ts>-context-search.sql` (new), `core/src/context/search.rs:125-180` (replace `bridge::run`, keep the bridge code compiled and unused until item 7), `core/src/context/reindex.rs:36`, `docs/contract.md:2434` ("The holographic engine rail"), schema pin, `core/tests/migrations.rs`.
+- **Verification (red first).** Tests: `a_record_is_found_by_its_own_id`, `a_new_record_is_searchable_in_the_same_transaction`, `a_curation_updates_topic_and_short_in_the_index`, `a_deleted_context_leaves_no_index_row`, `search_filters_by_context`, `porter_stems_decide_and_decision` (each a read of `context_search` after the real triggers fire), `reindex_rebuilds_a_dropped_row`, `breaking_migration_backfills_existing_rows`. Acceptance: median wall time of `cpd context search 'retriev*' --limit 20` at most 60 ms on the 656-record Context (15 runs, `subprocess.run`, same harness as section 1 (d); baseline 271.1 ms; the design predicts 20-25 ms, unverified); recall: for each of the 4 queries of section 2 part 3, the native top 20 contains at least 18 of the 20 records the bridge returned (method: one run each, set intersection), and `cpd context search '"pro-d217"'` returns `pro-d217` (today: only `pro-d219`).
+- **Rollback.** Revert the search code (the bridge is still in the tree until item 7); the table and triggers stay and cost an insert per write. A breaking migration is a barrier that closes the additive window: one-way door.
+
+### Item 4: `ctx-topics`
+
+- **Intent.** The proposal's "small pinned index (topics with counts)" for discovery, section 2 part 3.
+- **Schema.** no schema change.
+- **CLI.** New `cpd context show --topics` (conflicts with `--since`, `--record`, `--topic`: `usage`) prints `Topics: adapter 12, attempt 9, ...` for in-force curated records, most records first. `pi/lib/updates.ts` adds that line to the Manager's turn-start message only (not Lead, not Worker). A Context with no curation prints `Topics: none`.
+- **Files.** `core/src/context/curated.rs` (new `topic_counts` beside `topics` at `:55-58`), `core/src/context/show.rs`, `core/src/context/mod.rs` (`ShowArgs`), `pi/lib/updates.ts:289-305`, `docs/commands.md`.
+- **Verification (red first).** Tests: `topics_line_counts_in_force_curated_records`, `a_retired_record_is_not_counted`, `topics_conflicts_with_record`, a `pi` test `manager_update_carries_the_topics_line`, and `lead_update_has_no_topics_line`. Acceptance: the line is at most 300 bytes on the 20-topic store (section 2 part 3 estimates 150-250; measure once, `wc -c`). Effect, not a test: the share of Manager sessions with a `search` or `show` row in `context_reads` in the 14 days after, against the 14 days before (needs item 2). A rise is the evidence; no rise means remove it.
+- **Rollback.** Remove the line in `updates.ts`. Two-way door.
+
+### Item 5: `ctx-used`
+
+- **Intent.** Section 2 part 1b: `used = 1` from a citation, at write time.
+- **Schema.** no schema change (`context_reads.used` exists from item 2).
+- **CLI.** No flag. In the write path of `decide`, `note`, `ask`, `answer`, `plan new --brief`, `plan outline`, `job add --spec`, `session send`: scan the text with `\b([a-z][a-z0-9]*)-([dnqapb])([0-9]+)\b`; set `used = 1` on the row `(context, record, CPD_SESSION, any channel)` of each match only if `RecordId::parse` accepts it (`core/src/ids.rs:335-351`), the record exists in the Context, the session has a read row for it, it is not the record's own id and not its `supersedes`. No match, no write, no error.
+- **Files.** `core/src/context/contexts.rs:167,232-275`, `core/src/context/reads.rs`, `core/src/plan/new.rs`, `core/src/plan/outline.rs`, `core/src/job/` (the `job add` write; path unverified), `core/src/session/send.rs:22-29`.
+- **Verification (red first).** Tests: `a_cited_read_record_is_marked_used`, `a_cited_unread_record_is_not_marked`, `a_supersedes_target_is_not_a_use`, `an_attempt_id_is_not_a_record`, `a_foreign_machine_id_is_ignored`, `a_note_without_session_marks_nothing`. Acceptance: precision of `used = 1` at least 90% on 50 rows drawn at random from `context_reads` once item 2 has data, labelled by hand ("did the citing text rely on the record?"); an unlabelled run proves nothing. Write overhead at most 5 ms median over 15 `cpd context note` runs in a scratch Context.
+- **Rollback.** Revert the scan; `used` stays what was set. Two-way door.
+
+### Item 6: `ctx-subject`
+
+- **Intent.** Section 2 part 2: a named key that finds the record to supersede, with no model.
+- **Schema** (additive: `ADD COLUMN` nullable, a non-unique partial index on an existing table is allowed by `core/tests/migrations.rs:204-209`; a `CHECK` on an added column on a table with the `context_records_immutable` trigger is unverified):
+
+```sql
+-- cpd-migration: additive
+ALTER TABLE context_records ADD COLUMN subject TEXT
+  CHECK (subject IS NULL OR (subject GLOB '[a-z]*' AND length(subject) BETWEEN 1 AND 80));
+ALTER TABLE context_records ADD COLUMN scope TEXT
+  CHECK (scope IS NULL OR (json_valid(scope) AND json_type(scope) = 'array'));
+CREATE INDEX context_records_subject ON context_records(context, subject) WHERE subject IS NOT NULL;
+```
+
+  Note the parentheses: section 2's draft CHECK for `subject` mixes `OR` and `AND` without them; `AND` binds tighter, so it was equivalent, but the explicit form is the one to write.
+- **CLI.** `cpd context decide <text> --subject <key>` and `cpd context note <text> --subject <key>` (not `ask`, `answer`, `plan`, `brief`). A key that fails the CHECK is `usage`. Exactly one in-force holder (after retirements, `in_force_without`): its id becomes `supersedes`. None: nothing. More than one: refused with **new** code `subject_ambiguous` (class `Refused`, `core/src/error.rs:174` area; `details.records` lists the ids), the writer picks with `--supersedes`. A holder whose kind may not be superseded by the writer's kind: `supersedes_invalid` (existing). `--supersedes` and `--subject` together: `supersedes` wins, the subject is stored. `--scope` is **not** built here (YAGNI, section 2 part 2); the column is added now because an `ADD COLUMN` later costs another migration and an unknown JSONL field is the expensive part (below).
+- **Files.** `core/src/store/migrations/<ts>-record-subject.sql` (new), `core/src/context/record.rs:13,154` (`VERSION`, optional `subject`/`scope` in `Raw` and `Record::to_json`), `core/src/context/contexts.rs:167,232-275` (the lookup in the write transaction), `core/src/context/mod.rs:209-226` (`DecideArgs`, `NoteArgs`), `core/src/context/inforce.rs`, `core/src/error.rs`, `docs/contract.md`, `docs/commands.md`.
+- **One-way door, with a cost.** `Record::parse_line` has `deny_unknown_fields` (`record.rs:154`): a binary without this change fails on a git-store line that carries `subject`. The Context `cpd` is written from at least two machines (`pro-*` and `hs-*` ids, section 2 part 1a), so `hs` must run the new binary before the first record with a subject is written. Mitigation, not a guess: omit the field from the line when it is `None`, so records without a subject stay readable by old binaries; and a `cpd` that would write a subject runs `cpd --version`'s store check first (existing). Ask the User (decision 3).
+- **Verification (red first).** Tests: `a_subject_supersedes_the_in_force_holder`, `two_holders_refuse_with_subject_ambiguous_and_list_ids`, `a_retired_holder_does_not_hold_the_subject`, `supersedes_wins_over_subject`, `a_bad_subject_is_usage`, `a_record_without_subject_serialises_as_before`, `a_record_with_subject_roundtrips_the_jsonl`, `an_old_line_parses`, `subject_on_a_question_is_refused_by_the_type` (a compile-level test: no variant carries it). Acceptance: median of `cpd context decide --subject` at most 5 ms above the same command without it (15 runs, scratch Context). No backfill of the 656 existing records: they stay `NULL` (the proposal's model pass is not recommended; a wrong subject supersedes a true record).
+- **Rollback.** Stop passing `--subject`; the old rows are untouched (append-only), and a wrong supersession is undone by a new record with the same subject (recency wins). The column and the JSONL field stay forever: one-way door.
+
+### Item 7: `ctx-bridge-rm`
+
+- **Intent.** Delete first, after the replacement is proven (section 1 recommendation 1).
+- **Schema.** no schema change.
+- **CLI.** `cpd context reindex` keeps its flags (it now rebuilds `context_search`). The config key `context_engine_enabled` and the engine-dir setting go away; whether a config file that still holds them must keep loading is unverified, so a test decides (`an_old_config_with_engine_keys_loads`); if the reader rejects unknown keys the keys stay parsed and ignored for one release.
+- **Files.** `contrib/holographic/` (delete), `core/src/context/engine.rs`, `core/src/context/search.rs:133-180`, `core/src/config/file.rs:60,312,407,464-466`, `docs/contract.md:2434`, `docs/research/context-holographic.md` (mark superseded). Outside the repo and unverified: the dotfiles install of the Python venv.
+- **Dependency.** Item 3 live 14 days with no revert and item 1 shipped.
+- **Verification.** Tests: `search_spawns_no_process`, `an_old_config_with_engine_keys_loads`. Acceptance: `grep -rn "holographic" core cli engine pi | wc -l` prints 0 (docs excluded); the engine directory's 15.7 MB of copies (section 1 (e)) can be removed with no command depending on them.
+- **Rollback.** `git revert`. The derived engine DBs rebuild with the old code's `reset`. Two-way door for code; the dotfiles part is not in this repo.
+
+### Item 8: `ctx-shadow`
+
+- **Intent.** Section 2 part 3: run retrieval for each Manager turn and log what it would have pushed, push nothing; the proposal's "shadow mode".
+- **Schema.** no schema change (channel `shadow` is already in item 2's CHECK; `used` filled by item 5).
+- **CLI.** `cpd context search <query> --shadow`: logs the results as channel `shadow` (with `rank`, `score`) and prints only `{"shadow":<count>}`; conflicts with `--all` (`usage`). `pi/lib/updates.ts` builds the query from the latest message plus the pending plans text and calls it once per Manager turn.
+- **Files.** `core/src/context/search.rs`, `core/src/context/mod.rs` (`SearchArgs`), `core/src/context/reads.rs`, `pi/lib/updates.ts`.
+- **Verification (red first).** Tests: `shadow_logs_rows_and_prints_only_a_count`, `shadow_rows_are_not_counted_as_reads`, `shadow_conflicts_with_all`, a `pi` test `manager_turn_calls_shadow_search_once`. Acceptance: recall@10 on a hand-labelled set of 30 real Manager turns, where the target records are those the Manager cited in its next 3 turns (labelled by hand, set kept in `docs/research/`), compared with the recency baseline (the last 10 records by `seq`); proposed threshold, to be set by the User: retrieval recall@10 at least 0.7 and at least 2x the baseline. Cost: the query adds at most 60 ms per turn (item 3's budget).
+- **Rollback.** Stop calling `--shadow` from `updates.ts`; rows stay. Two-way door.
+
+### Item 9: `ctx-vec`
+
+- **Intent.** The synonym gain, only if item 8 shows FTS5 misses what a Manager then cited (at least 20% of cited records absent from the shadow top 20: proposed gate).
+- **Schema** (`breaking after <n>`; the `vec0` syntax is from the crate's documented usage and is **unverified**, not read in source here):
+
+```sql
+-- cpd-migration: breaking after <n>
+CREATE TABLE context_embeddings (
+  context     TEXT NOT NULL REFERENCES contexts(id),
+  record      TEXT NOT NULL,
+  model       TEXT NOT NULL CHECK (length(model) >= 1),
+  dims        INTEGER NOT NULL CHECK (dims = 768),
+  embedded_at TEXT NOT NULL,
+  PRIMARY KEY (context, record, model),
+  FOREIGN KEY (context, record) REFERENCES context_records(context, id)
+) STRICT;
+CREATE VIRTUAL TABLE context_vec USING vec0(embedding float[768]);  -- rowid = context_records.seq
+```
+
+- **CLI.** `cpd context reindex --embeddings` embeds records without a row for the configured model (768-d `gemini-embedding-2` through Bifrost, `pro-n176`); refuses with a **new** code `embedder_failed` (class `Failure`) when the provider errors. `cpd context search` merges FTS5 and vector results by reciprocal-rank fusion and **degrades to FTS5 alone**, with no error, when the embedder fails; an embedder change (`model` differs) leaves old rows unused until reindexed.
+- **Files.** New migration, `core/Cargo.toml` (pin `sqlite-vec = "=0.1.10-alpha.4"`; `sqlite3_auto_extension` before the first Connection, `core/src/store/mod.rs`), `core/src/context/search.rs`, `core/src/context/reindex.rs`, a new `core/src/context/embed.rs`, `core/src/error.rs`, release targets in `scripts/` (build on each: unverified).
+- **Dependency.** 3, 8, and the User's answer on sending record text to a hosted provider (decision 2, `pro-q1`).
+- **Verification (red first).** Tests (embedder mocked, as the policy requires): `search_degrades_to_fts_when_the_embedder_fails`, `a_changed_model_invalidates_vectors`, `rrf_orders_a_synonym_hit_above_no_hit`, `reindex_embeddings_is_idempotent`, `embedder_failure_is_embedder_failed`. Acceptance: on item 8's labelled set, recall@10 improves over FTS5 alone by at least 10 points (proposed); p50 of `cpd context search` at most 600 ms with the hosted call (p50 405 ms per call, `pro-n174`, plus item 3's budget); DB growth at 656 records is about 2 MB (656 x 768 x 4 bytes, arithmetic).
+- **Rollback.** Drop use of `context_vec` in `search.rs`; FTS5 stays, vectors are derived. One-way door: a breaking migration, an alpha C extension in the build, and record text already sent to the provider.
+
+### Decisions needed from the User
+
+1. Reverse `context-holographic.md` and replace the Python bridge by in-process FTS5 (items 3 and 7)? Yes unblocks item 3; no leaves the 270 ms spawns and the 15.7 MB copies.
+2. May the full text of records go to a hosted embedding provider through Bifrost (`pro-q1`, item 9)?
+3. May `ctx-subject` change the git record format (an optional `subject` field), given that every machine writing Context `cpd` must upgrade first?
+4. Confirm the two rejections of section 2: no pinned core (`AGENTS.md` stays the core) and no `contradicts` relation (recency wins)?
+5. Make `hs-d655`, `hs-d675` and `hs-d194` readable on this machine, so the three decisions the docs rely on can be checked against the records (today unverified)?
+
+### Records to write
+
+- note: rfm-memory-retrieval s1: cpd context search fails on ids, dotted, slashed and apostrophe queries (usage, FTS5 syntax); cause is no sanitiser at core/src/context/search.rs:125.
+- note: rfm-memory-retrieval s1: holographic vectors are SHA-256 bag-of-words (delete/remove cosine 0.028) and FTS5 gates stage 1, so they add no semantics; search median is 271 ms (2 Python spawns).
+- decide: replace the holographic bridge with in-process FTS5 in cpd.db (breaking migration, id column, porter); delete the bridge after 14 days. Needs the User (reverses context-holographic.md).
+- note: rfm-memory-retrieval s2: no read is logged anywhere; 449 of 533 id-shaped tokens in 656 records resolve to a record, so citations can supply used=1 once reads are logged.
+- decide: add table context_reads (additive, channels pushed/search/show/shadow, one row per record+session+channel) before any ranking; ranking waits for 14-30 days of data and a labelled set.
+- decide: no pinned core and no contradicts relation: AGENTS.md is the core and recency wins; cpd already pushes about 75 tokens per Manager first message. Awaiting the User's confirmation.
+- decide: subject key is sugar over supersedes: --subject on decide/note, one in-force holder supersedes, several refuse with subject_ambiguous; no model, no backfill of old records.
+- note: rfm-memory-retrieval: additive migrations refuse views, triggers on existing tables and virtual tables (core/tests/migrations.rs:56-80,185-215); FTS5 and sqlite-vec need breaking migrations.
+- note: rfm-memory-retrieval: Record::parse_line has deny_unknown_fields (record.rs:154), so a subject field breaks old binaries on other machines (hs); upgrade all before writing one.
+- ask: may record text go to a hosted embedding provider through Bifrost for sqlite-vec (pro-q1)? Gates the ctx-vec item of the rfm-memory-retrieval roadmap.
+- ask: hs-d655, hs-d675 and hs-d194 are not readable in this store (record_not_found); can they be synced so the docs that cite them can be checked?
+- decide: roadmap order of rfm-memory-retrieval: ctx-quote, ctx-reads, ctx-fts, ctx-topics, ctx-used, ctx-subject, ctx-bridge-rm, ctx-shadow, ctx-vec; each a small Plan with red tests first.
