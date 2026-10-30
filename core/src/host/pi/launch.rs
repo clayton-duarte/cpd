@@ -84,9 +84,13 @@ pub struct WorkerLaunch<'a> {
     pub extensions: &'a [String],
 }
 
-fn push_extensions(argv: &mut Vec<String>, extensions: &[String]) {
+/// Turns pi's `codemode` tool on, keeping its default tools (hs-d736, contract section `6.6 How cpd starts pi`).
+const CODEMODE_TOOLS: [&str; 2] = ["--tools", "+codemode"];
+
+fn push_mcp_codemode_extensions(argv: &mut Vec<String>, extensions: &[String]) {
     // pro-d7: pi's own MCP extension is off; the adapter mounts it with no file config.
     argv.push("--no-mcp".into());
+    argv.extend(CODEMODE_TOOLS.map(String::from));
     for source in extensions {
         argv.push("-e".into());
         argv.push(source.clone());
@@ -119,12 +123,12 @@ pub fn lead(launch: &LeadLaunch) -> Launch {
         LeadStart::Fork { model, name, source_file, first_message } => (model, name, Some(source_file), first_message.as_ref()),
         LeadStart::Resume { model, file } => {
             argv.extend(["--model".to_owned(), model.clone(), "--session".to_owned(), file.display().to_string()]);
-            push_extensions(&mut argv, launch.extensions);
+            push_mcp_codemode_extensions(&mut argv, launch.extensions);
             return Launch { argv, env: lead_env(launch) };
         }
     };
     argv.extend(["--model".to_owned(), model.clone()]);
-    push_extensions(&mut argv, launch.extensions);
+    push_mcp_codemode_extensions(&mut argv, launch.extensions);
     if let Some(source) = fork {
         argv.extend(["--fork".to_owned(), source.display().to_string()]);
     }
@@ -164,7 +168,7 @@ pub fn worker(launch: &WorkerLaunch) -> Launch {
     // hs-d528: tmux's server starts the pane, so the idle prefix goes in the argv.
     let mut argv: Vec<String> = crate::host::priority::idle_prefix().iter().map(|s| (*s).to_owned()).collect();
     argv.extend(["pi", "--approve", "--no-skills", "--exclude-tools", WORKER_EXCLUDED_TOOLS].map(str::to_owned));
-    push_extensions(&mut argv, launch.extensions);
+    push_mcp_codemode_extensions(&mut argv, launch.extensions);
     let attempt = launch.attempt;
     let spec = launch.home.worker_spec(launch.plan, attempt);
     argv.extend(["--model".to_owned(), launch.model.to_owned()]);
