@@ -87,13 +87,20 @@ export const MENTION_KINDS: ReadonlySet<string> = new Set([
   "context-archived",
 ]);
 
+/** §15.3: an Event id reaches pi at most once per activation; the check and the add are one synchronous step. */
+function deliverOnce(host: Host, r: Run, ev: CpdEvent, message: Parameters<typeof host.pi.sendMessage>[0], options: Parameters<typeof gated>[1]): void {
+  if (r.delivered.has(ev.id)) return;
+  r.delivered.add(ev.id);
+  host.pi.sendMessage(message, gated(r, options));
+}
+
 async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
   if (MENTION_KINDS.has(ev.kind)) void refreshMentions(host, r);
   const { pi } = host;
   const own = ev.session === r.id;
   if (ev.kind === "session-resumed") {
     // §15.15 L6: for its own Session while tripped, the trip is cleared and ONE message starts the turn that sees what queued; otherwise nothing.
-    if (own && (r.info.role === "lead" || r.info.role === "manager") && clearTrip(host, r)) pi.sendMessage(eventMessage(ev, r.id), gated(r, FOLLOW_UP(true)));
+    if (own && (r.info.role === "lead" || r.info.role === "manager") && clearTrip(host, r)) deliverOnce(host, r, ev, eventMessage(ev, r.id), FOLLOW_UP(true));
     return;
   }
   if (ev.kind === "session-message") {
@@ -123,12 +130,12 @@ async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
     return;
   }
   if (!r.info.planLead) {
-    if (ev.kind === "attempt-nudge" && own) pi.sendMessage(eventMessage(ev, r.id, ev.data.prompt), gated(r, FOLLOW_UP(true)));
+    if (ev.kind === "attempt-nudge" && own) deliverOnce(host, r, ev, eventMessage(ev, r.id, ev.data.prompt), FOLLOW_UP(true));
     return;
   }
   const rule = leadRule(ev);
   if (rule) {
-    pi.sendMessage(eventMessage(ev, r.id), gated(r, { triggerTurn: rule.turn, deliverAs: rule.deliverAs }));
+    deliverOnce(host, r, ev, eventMessage(ev, r.id), { triggerTurn: rule.turn, deliverAs: rule.deliverAs });
     if (ev.kind === "escalation" && r.facts.open(`escalation:${ev.data.escalation}`, QUESTION_LABEL, "agent")) host.refresh(r);
     return;
   }
@@ -169,5 +176,5 @@ async function deliverSessionMessage(host: Host, r: Run, ev: EventOf<"session-me
     }
   }
   if (host.run !== r) return;
-  host.pi.sendMessage(sessionMessage(ev, r.id, sender), gated(r, FOLLOW_UP(true)));
+  deliverOnce(host, r, ev, sessionMessage(ev, r.id, sender), FOLLOW_UP(true));
 }
