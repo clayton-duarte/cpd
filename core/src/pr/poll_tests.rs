@@ -98,7 +98,7 @@ impl Handler for OpenGh {
             }
             ["api", "graphql", "-f", query, ..] if query.contains("contexts(first: 100") => {
                 let page = serde_json::json!({"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": self.nodes});
-                let pull = serde_json::json!({"commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": page}}}]}});
+                let pull = serde_json::json!({"labels": {"nodes": []}, "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": page}}}]}});
                 Reply::ok(&serde_json::json!({"data": {"p0": {"pullRequest": pull}}}).to_string())
             }
             _ => Reply::exit(9, "", &format!("unexpected gh call: {}\n", args.join(" "))),

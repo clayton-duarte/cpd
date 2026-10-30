@@ -31,3 +31,5 @@ mod rows_tests;
 mod rows_review_tests;
 #[cfg(test)]
 mod unread_rows_tests;
+#[cfg(test)]
+mod closed_tests;

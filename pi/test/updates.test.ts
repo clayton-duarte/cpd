@@ -525,3 +525,93 @@ test("board posts show the local date, time and zone", async (t) => {
   const m = await beforeTurn(f);
   assert.deepEqual(m.content.split("\n").slice(1), ["", "Board:", "- User (2026-10-26 03:59 +05:30): hello"]);
 });
+
+// ---- the Lead's standing line for a PR whose pull request closed without a merge ----
+
+const planPr = (key: string, number: number, closed: boolean) => ({
+  key,
+  status: "open",
+  pull_request: { number, url: `https://github.com/o/r/pull/${number}`, state: closed ? "closed" : "open" },
+  closed_unmerged: closed,
+});
+const planWith = (...prs: ReturnType<typeof planPr>[]) => ({ ok: true, plan: { id: "p1" }, jobs: [], escalations: [], review: null, prs });
+const closedLine = (key: string, n: number) => `PR ${key}: its pull request #${n} (https://github.com/o/r/pull/${n}) is closed without a merge and cpd still lists the PR as open. Ask the User, or cpd pr cancel --pr ${key}.`;
+
+test("a Lead turn start carries a standing line for a PR whose pull request closed without a merge", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  nothingNew(f);
+  f.respond("plan-show", planWith(planPr("api", 623, true), planPr("web", 624, false), planPr("db", 625, true)));
+  const m = await beforeTurn(f);
+  assert.ok(m, "a message, though nothing else is new");
+  assert.equal(m.customType, "cpd-context");
+  assert.equal(m.display, true);
+  const lines: string[] = m.content.split("\n");
+  assert.ok(lines.includes(closedLine("api", 623)), m.content);
+  assert.ok(lines.includes(closedLine("db", 625)), m.content);
+  assert.equal(lines.filter((l) => l.includes("closed without a merge")).length, 2, "one line per closed PR, none for web");
+  assert.deepEqual(f.pi.sent, [], "it only returns the message: no turn");
+});
+
+test("the closed PR line repeats on the next turn while nothing else is new", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  nothingNew(f);
+  f.respond("plan-show", planWith(planPr("api", 623, true)));
+  const first = await beforeTurn(f);
+  const second = await beforeTurn(f);
+  assert.ok(first?.content.split("\n").includes(closedLine("api", 623)), "first turn");
+  assert.ok(second?.content.split("\n").includes(closedLine("api", 623)), "second turn: a standing line, not an event");
+});
+
+test("no closed PR line when no PR is closed unmerged", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  nothingNew(f);
+  f.respond("plan-show", planWith(planPr("api", 623, true)));
+  assert.ok((await beforeTurn(f))?.content.includes("closed without a merge"), "while closed: the line is there");
+  f.respond("plan-show", planWith(planPr("api", 623, false)));
+  assert.equal(await beforeTurn(f), undefined, "reopened: a Lead with nothing new gets no message");
+  f.respond("events-list@context-record", eventsList([1]));
+  f.respond("context-show", contextShow([decision(1, "Cut the wake.")]));
+  const m = await beforeTurn(f);
+  assert.ok(!m.content.includes("closed without a merge"));
+});
+
+test("a Manager and a Worker get no closed PR line", async (t) => {
+  const control = new Fixture();
+  t.after(() => control.close());
+  await lead(control);
+  nothingNew(control);
+  control.respond("plan-show", planWith(planPr("api", 623, true)));
+  assert.ok((await beforeTurn(control))?.content.includes("closed without a merge"), "a Lead gets it");
+
+  const manager = new Fixture();
+  t.after(() => manager.close());
+  await quietManager(manager);
+  manager.respond("plan-show", planWith(planPr("api", 623, true)));
+  assert.equal(await beforeTurn(manager), undefined);
+
+  const worker = new Fixture();
+  t.after(() => worker.close());
+  await lead(worker, { role: "worker", plan_lead: false });
+  worker.respond("plan-show", planWith(planPr("api", 623, true)));
+  assert.deepEqual(await worker.pi.fireWith("before_agent_start"), []);
+});
+
+test("a failing plan show gives one visible warning line", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  nothingNew(f);
+  f.respond("plan-show", { ok: false, error: { code: "store_busy", message: "database is locked\nretry later" } }, { exit: 1 });
+  const m = await beforeTurn(f);
+  assert.ok(m, "never silence");
+  const lines: string[] = m.content.split("\n");
+  assert.equal(lines.filter((l) => l.startsWith("could not read the Plan's PRs:")).length, 1);
+  assert.ok(lines.includes("could not read the Plan's PRs: database is locked"), m.content);
+  assert.ok(!m.content.includes("retry later"), "the error's first line only");
+});

@@ -17,6 +17,8 @@
 //! repair's Gate runs in the PR's Lead worktree at the gated commit (hs-d679).
 
 #[cfg(test)]
+mod closed_tests;
+#[cfg(test)]
 mod comments_tests;
 #[cfg(test)]
 mod deploys_tests;
@@ -30,6 +32,7 @@ mod poll_tests;
 mod add;
 pub mod auto_merge;
 mod cancel;
+pub mod closed;
 pub use cancel::{archived_with_drafts, cancel_archived_drafts};
 pub mod deploys;
 pub mod comments;

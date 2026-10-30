@@ -44,6 +44,8 @@ pub enum Kind {
     Deploy,
     /// A Plan has parked drafts its Lead did not resolve (hs-d731, hs-d733); always magenta, linked to the Plan and its Lead.
     DraftsParked,
+    /// An open PR of cpd whose pull request was closed without a merge; always red, linked to the Plan and its Lead.
+    PrClosed,
 }
 
 impl Kind {
@@ -67,12 +69,13 @@ impl Kind {
             Kind::ModelsChanged => "models-changed",
             Kind::Deploy => "deploy",
             Kind::DraftsParked => "drafts-parked",
+            Kind::PrClosed => "pr-closed",
         }
     }
 
     pub fn parse(s: &str) -> Option<Kind> {
         use Kind::*;
-        [Dialog, PlanReview, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested, CurateRetire, CurateDocs, LoopGuard, ModelsChanged, Deploy, DraftsParked]
+        [Dialog, PlanReview, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested, CurateRetire, CurateDocs, LoopGuard, ModelsChanged, Deploy, DraftsParked, PrClosed]
             .into_iter()
             .find(|k| k.as_str() == s)
     }
@@ -546,7 +549,7 @@ mod tests {
     fn kinds_and_urgencies_round_trip_their_names() {
         for name in [
             "dialog", "plan-review", "unread", "job-stuck", "engine-error", "engine-down", "question", "pr-failing",
-            "pr-changes", "pr-ready", "review-requested",
+            "pr-changes", "pr-ready", "review-requested", "pr-closed",
         ] {
             assert_eq!(Kind::parse(name).unwrap().as_str(), name);
         }

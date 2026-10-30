@@ -263,20 +263,22 @@ const header = (context: string, parts: readonly (readonly [number, string, stri
  * §15.7, Leads: the short message. New decision records by other Sessions (id and first sentence), the board posts taken in full, the Plan's opened PRs.
  * Undefined when none. `details.event` is the highest Event id read (records and PRs, own and non-decision included; 0 when none).
  */
-export function leadUpdate(context: string, sessionId: string, events: readonly RecordEvent[], records: readonly ContextRecord[], prs: readonly PrOpened[], posts: readonly BoardPost[]): Message | undefined {
+export function leadUpdate(context: string, sessionId: string, events: readonly RecordEvent[], records: readonly ContextRecord[], prs: readonly PrOpened[], posts: readonly BoardPost[], standing: readonly string[] = []): Message | undefined {
   const wanted = new Set(events.map((e) => e.record));
   const decisions = records.filter((r) => wanted.has(r.id) && r.by !== sessionId && r.kind === "decision").sort((a, b) => a.seq - b.seq);
-  if (decisions.length === 0 && prs.length === 0 && posts.length === 0) return undefined;
+  if (decisions.length === 0 && prs.length === 0 && posts.length === 0 && standing.length === 0) return undefined;
   const sections: string[][] = [
     decisions.map((r) => `- ${r.id}: ${firstSentence(r.text)}`),
     boardSection(posts),
     prs.length === 0 ? [] : ["PRs:", ...prs.map((p) => `- PR ${p.pr} opened: ${p.url}`)],
+    [...standing],
   ].filter((s) => s.length > 0);
   const counts = [[decisions.length, "decision", "decisions"], [posts.length, "board post", "board posts"], [prs.length, "PR opened", "PRs opened"]] as const;
-  const summary = `${CONTEXT_TYPE}: ${counts.filter(([n]) => n > 0).map(([n, one, many]) => plural(n, one, many)).join(" · ")}`;
+  const summary = counts.every(([n]) => n === 0) ? CONTEXT_TYPE : `${CONTEXT_TYPE}: ${counts.filter(([n]) => n > 0).map(([n, one, many]) => plural(n, one, many)).join(" · ")}`;
+  const onlyStanding = counts.every(([n]) => n === 0);
   return {
     customType: CONTEXT_TYPE,
-    content: [header(context, counts), ...sections.flatMap((s, i) => (i === 0 && decisions.length > 0 ? s : ["", ...s]))].join("\n"),
+    content: [...(onlyStanding ? [] : [header(context, counts)]), ...sections.flatMap((s, i) => (i === 0 && (decisions.length > 0 || onlyStanding) ? s : ["", ...s]))].join("\n"),
     display: true,
     details: { event: Math.max(0, ...events.map((e) => e.event), ...prs.map((p) => p.event)), delivered_to: sessionId, records: decisions.map((r) => r.id), summary },
   };
@@ -320,4 +322,14 @@ export function contextUpdate(context: string, sessionId: string, events: readon
       ...optional("errors", errors.length),
     },
   };
+}
+
+/** The Lead's standing lines for the PRs of `cpd plan show` whose pull request closed without a merge (`closed_unmerged`): one per PR, derived each turn, never consumed. */
+export function closedPrLines(planShow: unknown): string[] {
+  const prs = isObject(planShow) && Array.isArray(planShow.prs) ? planShow.prs : [];
+  return prs.flatMap((p) => {
+    if (!isObject(p) || p.closed_unmerged !== true || !isObject(p.pull_request)) return [];
+    const { number, url } = p.pull_request;
+    return [`PR ${p.key}: its pull request #${number} (${url}) is closed without a merge and cpd still lists the PR as open. Ask the User, or cpd pr cancel --pr ${p.key}.`];
+  });
 }

@@ -146,7 +146,7 @@ fn show_with_one_pr_lists_its_fields_and_its_jobs() {
     assert_eq!(prs.len(), 1);
     assert_eq!(
         prs[0],
-        json!({"key": "pay", "repo": "/r/pay", "base": "main", "base_pr": null, "needs": [], "status": "dispatch",
+        json!({"key": "pay", "repo": "/r/pay", "base": "main", "base_pr": null, "needs": [], "status": "dispatch", "closed_unmerged": false,
                "lead_branch": "cpd/pay-1/pay", "lead_worktree": "/r/pay.pay-1.pay",
                "pr": null, "pull_request": null, "all_merged_at": null, "start_failed_at": null,
                "created_at": "t", "started_at": "2000-01-01T00:00:01.000Z", "merged_at": null, "title": null, "shape": "free",
@@ -219,6 +219,7 @@ fn show_with_two_prs_lists_every_pr_in_key_order_with_its_jobs() {
     assert_eq!((&api["status"], &api["needs"], &api["jobs"]), (&json!("open"), &json!([]), &json!(["api-1", "api-2"])));
     assert_eq!(api["pr"], json!({"number": 7, "url": "https://github.com/acme/api/pull/7", "opened_at": "2000-01-01T00:00:02.000Z"}));
     assert_eq!(api["pull_request"], pull_request());
+    assert_eq!((&api["closed_unmerged"], &web["closed_unmerged"], &old["closed_unmerged"]), (&json!(false), &json!(false), &json!(false)));
     assert_eq!((&web["pull_request"], &old["pull_request"]), (&Value::Null, &Value::Null));
     assert_eq!((&old["status"], &old["jobs"]), (&json!("cancelled"), &json!(["old-1"])));
     assert_eq!(keys(&show["jobs"]), ["api-1", "api-2", "web-1", "old-1"], "Jobs in seq order");
@@ -311,4 +312,26 @@ fn a_waiting_pr_with_no_jobs_shows_the_open_job_placeholder_in_no_fingerprint() 
     let (again, text) = fx.render();
     assert!(text.contains("| open | S3 | — |"), "{text}");
     assert_eq!(again["fingerprint"], out["fingerprint"]);
+}
+
+// ---------- closed unmerged ----------
+
+#[test]
+fn a_closed_unmerged_pr_is_flagged_in_plan_show() {
+    let fx = fx("dispatch");
+    fx.pr("api", "open", &[]);
+    fx.pr("web", "waiting", &[]);
+    fx.env.sql("UPDATE pull_requests SET state = 'closed' WHERE number = 7");
+    let show = fx.show();
+    let flags: Vec<(&str, &Value)> = show["prs"].as_array().unwrap().iter().map(|p| (p["key"].as_str().unwrap(), &p["closed_unmerged"])).collect();
+    assert_eq!(flags, [("api", &json!(true)), ("web", &json!(false))]);
+}
+
+#[test]
+fn a_pr_with_an_open_pull_request_is_not_flagged_in_plan_show() {
+    let fx = fx("dispatch");
+    fx.pr("api", "open", &[]);
+    let show = fx.show();
+    assert_eq!(show["prs"][0]["closed_unmerged"], json!(false));
+    assert_eq!(show["prs"][0]["pull_request"]["state"], json!("open"));
 }

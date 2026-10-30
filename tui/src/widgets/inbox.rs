@@ -265,7 +265,7 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
         // hs-d731: the Lead of the Plan opens, as for a `plan-review` with no url
         Kind::DraftsParked => open_lead(tree, item.plan.as_ref()?).map(Jump::Run),
         // the label is a Link to the pull request; a click on the rest of the row opens the owning Plan's Lead (pro-d130)
-        Kind::PrReady => open_lead(tree, item.plan.as_ref()?).map(Jump::Run),
+        Kind::PrReady | Kind::PrClosed => open_lead(tree, item.plan.as_ref()?).map(Jump::Run),
         Kind::ReviewRequested => {
             item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))
         }
@@ -358,6 +358,14 @@ impl Entry {
     /// [`Choice`]s (every other kind has only those).
     pub fn entries(item: &Item, merging: bool) -> Vec<Entry> {
         let mut entries = Vec::new();
+        if item.kind == Kind::PrClosed {
+            if item.plan.is_some() {
+                entries.push(Entry::GoToLead);
+            }
+            if item.url.is_some() {
+                entries.push(Entry::CopyLink);
+            }
+        }
         if item.kind == Kind::PrReady {
             match Status::of_item(item) {
                 Some(Status::ReadyToMerge) => entries.push(if merging { Entry::Merging } else { Entry::Merge }),
@@ -400,7 +408,7 @@ fn open_lead(tree: &Tree, plan: &PlanId) -> Option<Action> {
 
 /// The kinds whose label is a `Link` to the item's `url`.
 fn is_link(kind: Kind) -> bool {
-    matches!(kind, Kind::PlanReview | Kind::PrReady | Kind::ReviewRequested | Kind::Deploy)
+    matches!(kind, Kind::PlanReview | Kind::PrReady | Kind::PrClosed | Kind::ReviewRequested | Kind::Deploy)
 }
 
 /// A label's two rows: the text before its one `\n`, and the subtitle after it (empty for a one-row label).

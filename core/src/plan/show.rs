@@ -17,6 +17,7 @@ use crate::error::CpdError;
 use crate::events::highest_id;
 use crate::ids::{PlanId, PrKey};
 use crate::output::Output;
+use crate::pr::closed::closed_unmerged;
 use crate::pr::pulls;
 
 /// Every PR of `plan` in key order, `cancelled` ones included, with every
@@ -30,6 +31,7 @@ pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, 
                 (SELECT q.plan || '/' || q.key FROM prs q WHERE q.repo = prs.repo AND q.lead_branch = prs.base), shape, head_ref, jira
            FROM prs WHERE plan = ?1 ORDER BY key",
     )?;
+    let closed = closed_unmerged(conn, Some(plan.as_str()))?;
     let rows = stmt
         .query_map([plan.as_str()], |r| {
             let pull = match (r.get::<_, Option<i64>>(6)?, r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?) {
@@ -39,7 +41,9 @@ pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, 
             Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(9)?, json!({
                 "key": r.get::<_, String>(0)?, "repo": r.get::<_, String>(1)?, "base": r.get::<_, String>(2)?,
                 "base_pr": r.get::<_, Option<String>>(16)?,
-                "status": r.get::<_, String>(3)?, "lead_branch": r.get::<_, String>(4)?,
+                "status": r.get::<_, String>(3)?,
+                "closed_unmerged": closed.iter().any(|c| c.pr.as_str() == r.get::<_, String>(0).as_deref().unwrap_or("")),
+                "lead_branch": r.get::<_, String>(4)?,
                 "lead_worktree": r.get::<_, Option<String>>(5)?, "pr": pull,
                 "all_merged_at": r.get::<_, Option<String>>(10)?,
                 "start_failed_at": r.get::<_, Option<String>>(11)?, "created_at": r.get::<_, String>(12)?,
