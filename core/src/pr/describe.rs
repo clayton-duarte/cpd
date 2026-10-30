@@ -21,8 +21,8 @@ const MAX_CHARS: usize = 65536;
 
 enum Decision {
     Already(String),
-    /// `open` is the number of the PR's open pull request, if any.
-    Update { status: String, open: Option<i64> },
+    /// `open` is the repo and number of the PR's open pull request, if any.
+    Update { status: String, open: Option<(String, i64)> },
 }
 
 pub(super) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
@@ -44,8 +44,8 @@ pub(super) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
     let (status, already) = match env.store.read(|conn| decide(conn, &plan, &key, Some(&text)))? {
         Decision::Already(status) => (status, true),
         Decision::Update { open, .. } => {
-            if let Some(number) = open {
-                gh::describe_pr(env.home.root(), number, &text)?;
+            if let Some((repo, number)) = open {
+                gh::describe_pr(env.home.root(), &repo, number, &text)?;
             }
             let status = env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, Some(&text))? {
                 Decision::Already(status) => Ok(status),
@@ -98,10 +98,10 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, text: Option<&str>) -> 
     }
     let open = conn
         .prepare(
-            "SELECT p.number FROM prs r JOIN pull_requests p ON p.id = r.pull_request
+            "SELECT p.repo, p.number FROM prs r JOIN pull_requests p ON p.id = r.pull_request
               WHERE r.plan = ?1 AND r.key = ?2 AND r.status = 'open' AND p.state = 'open'",
         )?
-        .query_row([plan.as_str(), key.as_str()], |r| r.get(0))
+        .query_row([plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
     Ok(Decision::Update { status: pr.status.clone(), open })
 }

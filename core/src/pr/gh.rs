@@ -365,10 +365,11 @@ pub fn retitle_pr(cwd: &Path, repo: &str, number: i64, title: &str) -> Result<()
     run(cwd, &["api", "-X", "PATCH", &endpoint, "-f", &field]).map(drop)
 }
 
-/// `gh pr edit <number> --body-file -` with `body` on stdin: replaces the pull request's body.
-pub fn describe_pr(cwd: &Path, number: i64, body: &str) -> Result<(), CpdError> {
-    let n = number.to_string();
-    let args = ["pr", "edit", &n, "--body-file", "-"];
+/// Replaces the body of the pull request `repo`#`number` (`owner/name`): `gh api -X PATCH repos/<repo>/pulls/<n> -F body=@-`, `body` on stdin.
+/// Not `gh pr edit`: it fails on repos with the deprecated classic Projects (hs-n260, hs-n569).
+pub fn describe_pr(cwd: &Path, repo: &str, number: i64, body: &str) -> Result<(), CpdError> {
+    let endpoint = format!("repos/{repo}/pulls/{number}");
+    let args = ["api", "-X", "PATCH", &endpoint, "-F", "body=@-"];
     let call = Call {
         tool: "gh".to_owned(),
         program: "gh".to_owned(),
