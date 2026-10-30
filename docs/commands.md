@@ -146,6 +146,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `internal` | 1 | a bug in cpd itself (for example a malformed Event built by a command), or a failed write to stdout other than EPIPE (no I/O error code exists). `store_failed` is for SQLite failures only |
 | `context_not_found`, `plan_not_found`, `pr_not_found`, `job_not_found`, `attempt_not_found`, `escalation_not_found`, `review_not_found`, `session_not_found` | 4 | the selected or named object does not exist. (A Context record that names a missing record is `record_not_found`, exit 3, §4.6) |
 | `merge_not_clean` | 3 | `pr merge` (§9.10) re-read the pull request and found it not `OPEN` or not `CLEAN`; `details` has `repo`, `number`, `state`, `merge_state` (hs-d272, hs-d274) |
+| `required_check_not_passed` | 3 | `pr merge` (§9.10) re-read the pull request's head commit and a required check name is missing, pending or failed; `details` has `repo`, `number`, `missing`, `pending`, `failed` (lists of check names; hs-d743, hs-n571) |
 | `mcp_unknown` | 4 | `mcp attach` (§24.1) named a server the machine policy does not list; `details: {name, machine, available}`, `available` the sorted server names (an empty array when none); nothing is written (pro-d8) |
 | `item_not_found` | 4 | `inbox show`, `snooze`, `dismiss`, `claim` or `approve` named an Inbox item that does not exist |
 | `item_closed` | 3 | `inbox snooze`, `dismiss`, `claim` or `approve` named an Inbox item that is closed (§21) |
@@ -2454,6 +2455,7 @@ Steps:
 |---|---|---|
 | the argument is `<owner>/<repo>#<n>`, `n` a positive integer | `usage` | 2 |
 | the re-check finds the pull request not `OPEN` or its `mergeStateStatus` not `CLEAN`; `details` is `{repo, number, state, merge_state}` (GitHub's words); when the precheck reads `MERGED` (hs-d526), it writes the merge transaction and is still refused | `merge_not_clean` | 3 |
+| with a non-empty repo policy `pr.required_checks`, when any required name is missing, pending or failed on the head commit; `details` is `{repo, number, missing: [names], pending: [names], failed: [names]}`; re-reads the head's checks fresh from GitHub as `pr merge` decides | `required_check_not_passed` | 3 |
 | each `gh` call succeeds (also when `--match-head-commit` makes GitHub refuse); `details` is `{argv, exit, stderr}` | `gh_failed` | 1 |
 
 The setting read of step 4 is never a `gh_failed`: a failed read is the `auto_delete_unread` warning, and the exit status does not change.
