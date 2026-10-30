@@ -1050,6 +1050,21 @@ impl Stale {
         self.ev(Kind::PrFeedback, plan, None, json!({"pr": pr, "reasons": reasons}))
     }
 
+    /// A `pr_posts` row for PR `pr` of `plan`: it was posted for review.
+    fn posted(&mut self, plan: &str, pr: &str) {
+        self.store
+            .write("posted", |tx| {
+                exec(
+                    tx,
+                    &format!(
+                        "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at)
+                         VALUES ('{plan}', '{pr}', 'C02JU6C2Z1D', '1793040197.490209', 'https://example.slack.com/p1', 'opened', NULL, NULL)"
+                    ),
+                )
+            })
+            .unwrap();
+    }
+
     /// The ids `cpd events follow <args> --since 0 --until-idle` prints.
     fn follow(&self, args: &[&str]) -> Vec<i64> {
         let args = if args.contains(&"--since") { args.to_vec() } else { [args, &["--since", "0"]].concat() };
@@ -1200,6 +1215,19 @@ fn follow_session_drops_a_pr_feedback_that_a_later_pr_merge_or_cancel_ends() {
     let f5 = s.feedback("pay", "g", json!(["checks_failed"])); // 8 feedback of g, pr-merged g in another Plan: streams
     let _other = s.ev(Kind::PrMerged, "other", None, json!({"pr": "g"}));
     assert_eq!(s.lead(), vec![pm1, pc2, f3, f4, pme, f5]);
+}
+
+#[test]
+fn follow_session_drops_a_ready_to_post_that_is_posted_or_no_longer_ready() {
+    let mut s = Stale::new();
+    s.pr("pay", "r1", "open", "none", "passed", Some("[]")); // ready, unposted: holds
+    s.pr("pay", "r2", "open", "none", "passed", Some("[]")); // posted
+    s.pr("pay", "r3", "open", "none", "failed", Some("[]")); // checks failed: no longer ready
+    let f1 = s.feedback("pay", "r1", json!(["ready_to_post"]));
+    let _f2 = s.feedback("pay", "r2", json!(["ready_to_post"]));
+    let _f3 = s.feedback("pay", "r3", json!(["ready_to_post"]));
+    s.posted("pay", "r2");
+    assert_eq!(s.lead(), vec![f1]);
 }
 
 #[test]

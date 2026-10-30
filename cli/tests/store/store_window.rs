@@ -8,11 +8,10 @@ use crate::common;
 use std::fs;
 
 use crate::home::{HasCpdHome, Home};
-use common::TestEnv;
+use common::{TestEnv, newer_migration};
 use cpd_core::error::ErrorCode;
 use cpd_core::home::CpdHome;
 use cpd_core::store::{Store, verdict};
-use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::json;
 
@@ -30,19 +29,8 @@ fn home(env: &impl HasCpdHome) -> CpdHome {
     CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
 }
 
-/// What a newer binary does: runs `sql` and records the migration `name` (cpd's own `cpd_txn()` is
-/// stood in by the id of the store's newest `txns` row).
 fn apply_newer(env: &impl HasCpdHome, name: &str, compat: &str, sql: &str) {
-    let conn = Connection::open(home(env).db()).unwrap();
-    let txn: i64 = conn.query_row("SELECT max(id) FROM txns", [], |r| r.get(0)).unwrap();
-    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, move |_| Ok(txn)).unwrap();
-    conn.execute_batch(sql).unwrap();
-    conn.execute(
-        "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted)
-         VALUES (?1, ?2, lower(hex(zeroblob(32))), (SELECT max(seq) + 1 FROM schema_migrations), ?3, 0)",
-        rusqlite::params![name, compat, txn],
-    )
-    .unwrap();
+    newer_migration::apply_newer(&env.cpd_home(), name, compat, sql);
 }
 
 /// A store with a new table and a new column of an additive migration this binary lacks.

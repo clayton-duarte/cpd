@@ -1,7 +1,7 @@
 //! The `@cpd_workers` step (contract §6.1; commands.md §12; User, hs-d149,
 //! hs-d198): the right side of the StatusBar, which tmux's status line cannot
-//! compute: the traffic-light text `workers Q·W·N/M` and its short form `Q·W·N/M`
-//! (hs-d740, hs-d741): the three numbers are coloured text on the pill's colour-8 block.
+//! compute: the plain text `workers Q󰞘W󰞘N/M` and its short form `Q󰞘W󰞘N/M`
+//! (hs-d749, hs-d750): no style, drawn in the pill's one reversed text colour on its colour-8 block.
 //! Every tick, `N` is the tenant Jobs of `workers` (the starter's count,
 //! contract §3.4 "Tenancy"), `M` is `concurrency`, `W` the Ready Jobs (E3's rule) and
 //! `Q` the `queued` Jobs; the options are set in one `tmux set` call only
@@ -18,8 +18,7 @@ use super::report::{About, Step};
 use super::restart;
 use super::schedule::READY;
 use cpd_core::config::Config;
-use cpd_core::host::tmux::{pill, RUNNER_OPTION};
-use cpd_core::pill::spec;
+use cpd_core::host::tmux::RUNNER_OPTION;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::incident::is_on;
 use rusqlite::OptionalExtension;
@@ -37,10 +36,8 @@ const HELD: &str = "SELECT count(*) FROM job_tenants WHERE pool = 'workers'";
 /// Every `queued` Job, the waiting ones included.
 const QUEUED: &str = "SELECT count(*) FROM jobs WHERE status = 'queued'";
 
-/// Base colours of the three numbers (hs-d740, hs-d741), not the bright clickable shades.
-const QUEUED_COLOUR: u8 = 1;
-const WAITING_COLOUR: u8 = 3;
-const RUNNING_COLOUR: u8 = 2;
+/// The glyph between the three numbers (User, hs-d749): a private-use Nerd Font glyph, one cell wide like the buttons' glyphs.
+const SEPARATOR: char = '\u{f0798}';
 
 /// The three numbers of the StatusBar.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -62,20 +59,14 @@ impl Counts {
         Ok(Counts { running: count(HELD)?, limit, waiting: count(&format!("SELECT count(*) FROM ({READY})"))?, queued: count(QUEUED)? })
     }
 
-    /// `workers Q·W·N/M`: the label, dots and `/M` in the pill's own style, each of the three numbers lit.
+    /// `workers Q󰞘W󰞘N/M`: the label and the short form, plain.
     pub(super) fn long(self) -> String {
-        format!("workers {}", self.numbers())
+        format!("workers {}", self.short())
     }
 
-    /// `Q·W·N/M`: the long form without the label.
+    /// `Q󰞘W󰞘N/M`: the three numbers and `/M`, plain, no label.
     pub(super) fn short(self) -> String {
-        self.numbers()
-    }
-
-    fn numbers(self) -> String {
-        let block = spec().meanings.nothing;
-        let lit = |colour: u8, n: u32| pill::lit(block, colour, &n.to_string());
-        format!("{}·{}·{}/{}", lit(QUEUED_COLOUR, self.queued), lit(WAITING_COLOUR, self.waiting), lit(RUNNING_COLOUR, self.running), self.limit)
+        format!("{}{SEPARATOR}{}{SEPARATOR}{}/{}", self.queued, self.waiting, self.running, self.limit)
     }
 }
 

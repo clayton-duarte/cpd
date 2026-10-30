@@ -499,12 +499,11 @@ fn the_statusbar_is_no_view() {
     assert_eq!(View::parse("nope"), None);
 }
 
-/// The real long and short workers texts of Counts{running 6, limit 6, waiting 4, queued 9}.
+/// The plain long and short workers texts of Counts{running 6, limit 6, waiting 4, queued 9}.
 #[test]
-fn the_status_row_keeps_its_width_with_the_styled_workers_texts() {
-    let lit = |c: u8, n: &str| format!("#[noreverse]#[fg=colour{c}]#[bg=colour8]{n}#[reverse]#[fg=colour8]#[bg=default]");
-    let short = format!("{}\u{b7}{}\u{b7}{}/6", lit(1, "9"), lit(3, "4"), lit(2, "6"));
-    let long = format!("workers {short}");
+fn the_status_row_keeps_its_width_with_the_plain_workers_texts() {
+    let short = "9\u{f0798}4\u{f0798}6/6".to_owned();
+    let long = "workers 9\u{f0798}4\u{f0798}6/6".to_owned();
     assert_eq!((display_width(&long), display_width(&short)), (15, 7));
     for width in [26usize, 34, 35, 60, 120] {
         let vars = |name: &str| {
