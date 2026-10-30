@@ -406,3 +406,76 @@ fn the_event_of_a_server_with_oauth_client_name_carries_the_entry_verbatim() {
     let entry = json!({"url": "https://mcp.figma.com/mcp", "exposure": "deferred", "oauth": {"clientName": "Claude Code"}});
     assert_eq!(sent[0]["data"], json!({"name": "figma", "server": entry}));
 }
+
+// ---------- k: a durable Worker has no MCP client (pro-d253) ----------
+
+fn set_runner(env: &TestEnv, runner: &str) {
+    env.sql(&format!("UPDATE attempts SET runner = '{runner}' WHERE id = 'api-a1'"));
+}
+
+fn details() -> Value {
+    json!({"name": "slack", "session": WORKER, "attempt": "api-a1", "runner": "durable"})
+}
+
+/// Fails now: the command answers ok:true and appends `mcp-attached`.
+#[test]
+fn mcp_attach_a_durable_worker_is_refused_runner_no_tools() {
+    let env = TestEnv::new();
+    fixture(&env);
+    set_runner(&env, "durable");
+    let run = attach(&env, WORKER, "slack");
+    let error = refused(&run, "runner_no_tools", 3);
+    assert_eq!(error["details"], details(), "runner_no_tools details");
+    assert!(attached(&env).is_empty(), "no mcp-attached Event: {:?}", attached(&env));
+}
+
+/// Fails now: no refusal, so no error Event and an `mcp-attached` one instead.
+#[test]
+fn mcp_attach_a_durable_worker_refusal_appends_one_error_event() {
+    let env = TestEnv::new();
+    fixture(&env);
+    set_runner(&env, "durable");
+    let before = all_events(&env);
+    let rows_before = row_counts(&env);
+    refused(&attach(&env, WORKER, "slack"), "runner_no_tools", 3);
+    let after = all_events(&env);
+    assert_eq!(after.len(), before.len() + 1, "exactly one new Event: {after:?}");
+    assert_eq!(after[..before.len()], before[..]);
+    let event = after.last().unwrap();
+    assert_eq!(event["kind"], "error");
+    assert_eq!(event["plan"], "pay");
+    assert_eq!(event["data"]["code"], "runner_no_tools");
+    assert_eq!(event["data"]["details"], details());
+    let rows_after = row_counts(&env);
+    let changed: Vec<_> = rows_before.iter().zip(&rows_after).filter(|(a, b)| a != b).collect();
+    assert!(changed.iter().all(|(a, _)| a.0 == "events" || a.0 == "txns"), "only events (and txns by its row) change: {changed:?}");
+}
+
+/// Passes now and after: a pi Worker attaches as before.
+#[test]
+fn mcp_attach_a_pi_worker_still_appends_one_event() {
+    let env = TestEnv::new();
+    fixture(&env);
+    set_runner(&env, "pi");
+    check_attach(&env, WORKER, json!("pay"));
+}
+
+/// Passes now and after: only the caller's own Attempt runner counts.
+#[test]
+fn mcp_attach_a_lead_still_attaches_while_a_worker_attempt_is_durable() {
+    let env = TestEnv::new();
+    fixture(&env);
+    set_runner(&env, "durable");
+    check_attach(&env, LEAD, json!("pay"));
+}
+
+/// Passes now and after: the unknown name is checked before the runner.
+#[test]
+fn mcp_attach_unknown_name_on_a_durable_worker_is_still_mcp_unknown() {
+    let env = TestEnv::new();
+    fixture(&env);
+    set_runner(&env, "durable");
+    let before = all_events(&env);
+    refused(&attach(&env, WORKER, "nothing"), "mcp_unknown", 4);
+    assert_eq!(all_events(&env), before);
+}
