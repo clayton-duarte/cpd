@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { getAgentDir, loadProjectContextFiles, ModelRuntime, resolveCliModel } from "@earendil-works/pi-coding-agent";
 import { callCpd, CpdError } from "../lib/cpd.ts";
 import { DEFAULT_TIMING, Follower } from "../lib/follower.ts";
 import { parseConfig } from "./config.ts";
 import { openConversation } from "./harness.ts";
+import { piMcpPort } from "./pi-mcp.ts";
 import { writeReport } from "./report.ts";
 import { runWorker, type Deps } from "./run.ts";
 
@@ -35,11 +37,7 @@ try {
       process.once("SIGTERM", handler);
       process.once("SIGINT", handler);
     },
-    mcp: {
-      connect: async () => {
-        throw new Error("mcp port: not implemented");
-      },
-    },
+    mcp: piMcpPort(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")), config.cwd),
     homeDir: homedir,
     now: () => new Date(),
     log: (line) => console.error(line),
