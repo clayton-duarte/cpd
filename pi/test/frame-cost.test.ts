@@ -114,7 +114,7 @@ test("frame cost: one changed message costs the same segmenting among 10 message
 			return probe.count() - before;
 		};
 		const ten = cost(10, "ten");
-		const fifty = cost(50, "fifty-changed");
+		const fifty = cost(50, "fif");
 		assert.ok(ten > 0, "the changed message is segmented");
 		assert.equal(fifty, ten);
 	});
