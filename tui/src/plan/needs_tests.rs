@@ -11,14 +11,13 @@ fn none_of(n: &crate::pump::Needs) {
     assert!(!n.frame && !n.second && n.at.is_none(), "frame {} second {} at {:?}", n.frame, n.second, n.at);
 }
 
-fn pull(lead_working: bool) -> Pull {
+fn pull() -> Pull {
     Pull {
         number: 1,
         state: PrState::Open,
         url: String::new(),
         conflicting: false,
         clean: false,
-        lead_working,
         draft: false,
         update: None,
     }
@@ -45,7 +44,8 @@ fn a_running_job_needs_the_frame_clock() {
 #[test]
 fn a_lead_working_dot_on_a_pr_box_title_needs_the_frame_clock() {
     let mut c = tests_centre(1);
-    c.plan.prs[0].pull = Some(pull(true));
+    c.plan.prs[0].pull = Some(pull());
+    c.plan.prs[0].lead_dot = Some(crate::read::Dot::working(false, None));
     let n = needs(&snap(Some(c), None), Instant::now());
     assert!(n.frame && !n.second && n.at.is_none());
 }
@@ -80,6 +80,7 @@ fn tests_centre(jobs: usize) -> Centre {
         superseded_by: None,
         elapsed_seconds: None,
         cost_usd: None,
+        lead_dot: None,
     };
     let job = |n: usize| JobNode {
         key: JobKey::parse(&format!("job-{n}")).unwrap(),

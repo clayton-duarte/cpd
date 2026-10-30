@@ -26,7 +26,7 @@ use crate::buffer::copy_cells;
 use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
 use crate::link::{CUE, Link, Links};
 use crate::palette::{self, Meaning};
-use crate::read::{Dot, Work, JobNode, JobStatus, NeedsUser, PrFacts, PrNode, PrStatus, Pull, pr_look};
+use crate::read::{JobNode, NeedsUser, PrFacts, PrNode, PrStatus, Pull, pr_look};
 
 /// Rows between two rows of boxes: the run of lines, then the row of the `│` above the needing box's top border, where the line lands in a `┴`.
 const GAP: u16 = 2;
@@ -375,7 +375,7 @@ mod tests {
 
     use super::*;
     use crate::test_text::rows;
-    use crate::read::PrState;
+    use crate::read::{JobStatus, PrState};
     use cpd_core::config::Tier;
     use cpd_core::ids::{JobKey, PrKey};
 
@@ -391,11 +391,12 @@ mod tests {
             superseded_by: None,
             elapsed_seconds: None,
             cost_usd: None,
+            lead_dot: None,
         }
     }
 
     fn pull(number: i64, state: PrState) -> Pull {
-        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, clean: false, lead_working: false, update: None, draft: false }
+        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, clean: false, update: None, draft: false }
     }
 
     fn job(pr: &str, key: &str, needs: &[&str]) -> JobNode {
@@ -620,14 +621,15 @@ mod tests {
     #[test]
     fn a_working_lead_puts_its_dot_after_the_state_word_and_turns_with_the_frame() {
         let mut p = pr("api", &[]);
-        p.pull = Some(Pull { lead_working: true, ..pull(12, PrState::Open) });
+        p.pull = Some(pull(12, PrState::Open));
+        p.lead_dot = Some(crate::read::Dot::working(false, None));
         for frame in 0..palette::SPINNER.len() {
             let t = title(&p, false, frame);
             assert_eq!(t.to_string(), format!(" api · api-repo 󱦰 main · #12 open {} 󱆭 ", palette::SPINNER[frame]), "frame {frame}");
             assert_eq!(t.spans[4].style.fg, palette::fg_clickable(palette::pr_state(PrState::Open)).fg, "the state keeps its colour");
         }
         // the dot goes with the state, in the waiting colour of `conflict` too
-        p.pull = Some(Pull { lead_working: true, conflicting: true, ..pull(12, PrState::Open) });
+        p.pull = Some(Pull { conflicting: true, ..pull(12, PrState::Open) });
         let t = title(&p, false, 3);
         assert_eq!(t.to_string(), format!(" api · api-repo 󱦰 main · #12 conflict {} 󱆭 ", palette::SPINNER[3]));
         assert_eq!(t.spans[4].style.fg, palette::fg_clickable(Meaning::Waiting).fg);
@@ -653,14 +655,14 @@ mod tests {
         let mut p = pr("api", &[]);
         p.pull = Some(pull(12, PrState::Open));
         let mut w = p.clone();
-        w.pull = Some(Pull { lead_working: true, ..pull(12, PrState::Open) });
+        w.lead_dot = Some(crate::read::Dot::working(false, None));
         let plain = layout(&[p], &[], &NeedsUser::default(), 5).chart;
         let working = layout(&[w], &[], &NeedsUser::default(), 5).chart;
         assert_eq!(working.buf.area.width, plain.buf.area.width + 2);
         let top: String = (0..working.buf.area.width).map(|x| working.buf[(x, 0)].symbol().to_owned()).collect();
         assert!(top.contains(palette::SPINNER[5]), "{top}");
         // one frame later: the next glyph
-        let w2 = layout(&[PrNode { pull: Some(Pull { lead_working: true, ..pull(12, PrState::Open) }), ..pr("api", &[]) }], &[], &NeedsUser::default(), 6).chart;
+        let w2 = layout(&[PrNode { pull: Some(pull(12, PrState::Open)), lead_dot: Some(crate::read::Dot::working(false, None)), ..pr("api", &[]) }], &[], &NeedsUser::default(), 6).chart;
         let top: String = (0..w2.buf.area.width).map(|x| w2.buf[(x, 0)].symbol().to_owned()).collect();
         assert!(top.contains(palette::SPINNER[6]) && !top.contains(palette::SPINNER[5]), "{top}");
     }

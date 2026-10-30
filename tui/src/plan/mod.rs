@@ -706,6 +706,7 @@ fn sample_pr(key: &str) -> read::PrNode {
         superseded_by: None,
         elapsed_seconds: None,
         cost_usd: None,
+        lead_dot: None,
     }
 }
 
@@ -891,6 +892,7 @@ mod tests {
             superseded_by: None,
             elapsed_seconds: None,
             cost_usd: None,
+            lead_dot: None,
         };
         let job = |n: usize| JobNode {
             key: JobKey::parse(&format!("job-{n}")).unwrap(),

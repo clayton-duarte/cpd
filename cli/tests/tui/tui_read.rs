@@ -417,7 +417,7 @@ fn a_plan_carries_its_stuck_jobs_and_whether_its_lead_asks_the_user() {
     let needs = |store: &mut Store, p: &str| read::plan_boxes(store, &plan(p)).unwrap().needs_user;
     assert_eq!(
         needs(&mut store, "ship"),
-        read::NeedsUser { lead_working: true, lead_work: Some(Work::Planning), lead_escalated: true, worked_on: vec![key("e")], ..Default::default() }, // a draft Job: Planning; an open Escalation
+        read::NeedsUser { lead_working: true, lead_work: Some(Work::Planning), worked_on: vec![key("e")], ..Default::default() }, // a draft Job: Planning; an open Escalation
         "no item: an agent handles everything"
     );
 
@@ -437,12 +437,12 @@ fn a_plan_carries_its_stuck_jobs_and_whether_its_lead_asks_the_user() {
     );
     assert_eq!(
         needs(&mut store, "ship"),
-        read::NeedsUser { stuck_jobs: vec![key("e")], lead_dialog: false, lead_working: true, lead_work: Some(Work::Planning), lead_escalated: true, worked_on: vec![key("e")] },
+        read::NeedsUser { stuck_jobs: vec![key("e")], lead_dialog: false, lead_working: true, lead_work: Some(Work::Planning), worked_on: vec![key("e")] },
         "a fork's dialog is not the Lead's"
     );
     assert_eq!(
         needs(&mut store, "sketch"),
-        read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: true, lead_working: false, lead_work: Some(Work::Planning), lead_escalated: false, worked_on: vec![] }
+        read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: true, lead_working: false, lead_work: Some(Work::Planning), worked_on: vec![] }
     );
     assert_eq!(
         needs(&mut store, "rel"),
@@ -454,7 +454,7 @@ fn a_plan_carries_its_stuck_jobs_and_whether_its_lead_asks_the_user() {
     sql(&mut store, "UPDATE inbox_items SET snoozed_until = '2999-01-01T00:00:00.000Z' WHERE subject = 'session:l-sketch';");
     assert_eq!(
         needs(&mut store, "sketch"),
-        read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: false, lead_working: false, lead_work: Some(Work::Planning), lead_escalated: false, worked_on: vec![] }
+        read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: false, lead_working: false, lead_work: Some(Work::Planning), worked_on: vec![] }
     );
 }
 
@@ -1123,7 +1123,7 @@ fn a_pull_request_is_worked_only_while_its_owners_lead_is_working() {
          VALUES ('acme/work', 70, 'https://github.com/acme/work/pull/70', 'Mine', 0, 'open', 'none', 'none',
                  '2026-01-07T00:00:00.000Z', NULL, '2026-01-07T00:00:00.000Z');",
     );
-    let worked = |store: &mut Store| read::plan_boxes(store, &plan("rel")).unwrap().prs[0].pull.as_ref().unwrap().lead_working;
+    let worked = |store: &mut Store| read::plan_boxes(store, &plan("rel")).unwrap().prs[0].lead_dot.is_some();
     for state in ["blocked", "idle", "waiting", "stopped"] {
         sql(&mut store, &format!(
                 "UPDATE sessions SET state = '{state}', state_label = CASE WHEN '{state}' IN ('waiting', 'blocked') THEN 'why' END WHERE id = 'l-rel'"
@@ -1131,7 +1131,10 @@ fn a_pull_request_is_worked_only_while_its_owners_lead_is_working() {
         assert!(!worked(&mut store), "{state}");
     }
     sql(&mut store, "UPDATE sessions SET state = 'working', state_label = NULL WHERE id = 'l-rel'");
-    assert!(worked(&mut store), "the Lead of acme/repo#7 works");
+    assert!(!worked(&mut store), "working, naming no Workflow: no dot");
+    let pr_key: String = read::plan_boxes(&mut store, &plan("rel")).unwrap().prs[0].key.to_string();
+    sql(&mut store, &format!("UPDATE sessions SET working_pr = '{pr_key}' WHERE id = 'l-rel'"));
+    assert!(worked(&mut store), "the Lead of acme/repo#7 works on it");
 }
 
 #[test]

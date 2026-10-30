@@ -31,6 +31,7 @@ fn pr() -> PrNode {
         superseded_by: None,
         elapsed_seconds: None,
         cost_usd: None,
+        lead_dot: None,
     }
 }
 
