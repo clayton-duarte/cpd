@@ -277,8 +277,6 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `dirty_tree`: you have uncommitted changes. Commit them (or delete files that do not belong), then submit again.
 - `no_commits`: you have not committed anything on top of the base. Commit your work, then submit again.
 - `gate_tampered`: your diff touches a protected path. Revert those files to the base version and commit, then submit again.
-- `check_failed`: the quick check failed; the output tail is in the error details. Fix the cause, commit, then submit again.
-- `check_error`: the quick check could not run. Ask the Lead.
 - `attempt_not_running`: the Attempt was stopped. Stop.
 
 Do not stop until `cpd attempt submit` has succeeded.
@@ -386,8 +384,6 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `dirty_tree`: you have uncommitted changes. Commit them (or delete files that do not belong), then submit again.
 - `no_commits`: you have not committed anything on top of the base. Commit your work, then submit again.
 - `gate_tampered`: your diff touches a protected path. Revert those files to the base version and commit, then submit again.
-- `check_failed`: the quick check failed; the output tail is in the error details. Fix the cause, commit, then submit again.
-- `check_error`: the quick check could not run. Ask the Lead.
 - `attempt_not_running`: the Attempt was stopped. Stop.
 
 Do not stop until `cpd attempt submit` has succeeded.

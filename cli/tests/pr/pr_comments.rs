@@ -102,17 +102,69 @@ fn an_owned_open_pr_whose_updated_at_moved_is_read_once_and_stored() {
 #[test]
 fn a_poll_whose_updated_at_did_not_move_makes_no_comments_call_and_writes_nothing() {
     let fx = poll_fx("deploy");
-    poll_with(&fx, "U1", vec![open_thread("T1", "C1")]);
+    poll_with(&fx, "U1", vec![]);
     assert_eq!(reads(&fx).len(), 1, "the first poll reads");
     let (txns, events) = (fx.txns(), fx.event_count());
 
-    // The same `updatedAt`, a different answer on GitHub's side: not asked.
+    // The same `updatedAt`, a different answer on GitHub's side: not asked (no open feedback is stored).
     let out = poll_with(&fx, "U1", vec![open_thread("T1", "C1"), open_thread("T2", "C9")]);
 
     assert_eq!(reads(&fx).len(), 1, "no second call");
     assert_eq!(out["feedback"], json!([]));
     assert_eq!((fx.txns(), fx.event_count()), (txns, events), "nothing written");
+    assert_eq!(stored_ids(&fx), Vec::<String>::new());
+}
+
+#[test]
+fn a_stored_open_thread_that_github_reports_resolved_is_cleared_at_the_next_poll_with_the_same_updated_at() {
+    let fx = fixture_with_open_thread();
     assert_eq!(stored_ids(&fx), ["T1"]);
+    let events = fx.events("pr-feedback").len();
+
+    let mut resolved = open_thread("T1", "C1");
+    resolved["isResolved"] = json!(true);
+    poll_with(&fx, "U1", vec![resolved]);
+
+    assert_eq!(reads(&fx).len(), 2, "a PR with open feedback is re-read");
+    assert_eq!(stored_ids(&fx), Vec::<String>::new());
+    assert_eq!(stored(&fx, 812).unwrap().0.as_deref(), Some("U1"));
+    assert_eq!(fx.events("pr-feedback").len(), events, "resolving tells nothing");
+}
+
+#[test]
+fn a_pr_that_holds_open_feedback_is_read_at_every_poll() {
+    let fx = fixture_with_open_thread();
+    let (txns, events) = (fx.txns(), fx.event_count());
+
+    poll_with(&fx, "U1", vec![open_thread("T1", "C1")]);
+    poll_with(&fx, "U1", vec![open_thread("T1", "C1")]);
+
+    assert_eq!(reads(&fx).len(), 3, "read at every poll");
+    assert_eq!((fx.txns(), fx.event_count()), (txns, events), "an unchanged read writes nothing");
+}
+
+#[test]
+fn a_failed_re_read_of_a_pr_with_open_feedback_fails_the_poll_and_writes_nothing() {
+    let fx = fixture_with_open_thread();
+    let (txns, events) = (fx.txns(), fx.event_count());
+    let mut over: Value = serde_json::from_str(&answer("U1", vec![open_thread("T1", "C1")])).unwrap();
+    over["data"]["p0"]["pullRequest"]["reviewThreads"] = json!({"totalCount": 101, "pageInfo": {"hasPreviousPage": true, "hasNextPage": true}, "nodes": [open_thread("T1", "C1")]});
+    read_says(&fx, over.to_string());
+    search_at(&fx, "U1");
+
+    let error = fx.pr("poll").error();
+
+    assert_eq!(error["code"], "gh_failed");
+    assert_eq!((fx.txns(), fx.event_count()), (txns, events), "nothing written");
+    assert_eq!(stored_ids(&fx), ["T1"]);
+}
+
+/// A fixture whose first poll, at `U1`, stored the open thread T1.
+fn fixture_with_open_thread() -> Poll {
+    let fx = poll_fx("deploy");
+    poll_with(&fx, "U1", vec![open_thread("T1", "C1")]);
+    assert_eq!(reads(&fx).len(), 1);
+    fx
 }
 
 #[test]
