@@ -249,16 +249,6 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `tests_failed`: a named test fails (the tail is in `details`): fix the implementation, commit, then submit again.
 - `tests_error`: the test commands could not run. Ask the Lead.
 {% elif kind == "open" or kind == "update" %}
-- `base_conflict`: the Lead Branch conflicts with its base (`details.files`). Merge the base, resolve, commit, then submit again.
-- `lead_branch_moved`: a Job merged into the Lead Branch since you began. Merge it (`details.next`), then submit again.
-{% if kind == "open" %}
-- `pr_title_required`, `jira_required`, `pr_closed`: ask the Lead.
-{% else %}
-- `illegal_transition`: the PR is not open. Ask the Lead.
-{% endif %}
-- `base_not_found`: the base branch is not on the remote. Ask the Lead.
-- `gate_failed`: the Gate failed on your head (the tail is in `details`). Fix it, commit, then submit again.
-- `gate_error`: the Gate could not run. Ask the Lead.
 - `owner_unset`, `owner_unconfirmed`, `policy_invalid`: the PR's policy does not resolve. Ask the Lead.
 {% endif %}
 {% endif %}

@@ -162,7 +162,8 @@ fn require_no_conflict(repo: &Path, worktree: &Path, pr: &PrRow, base_sha: &str,
 }
 
 /// The open pull request step 0 found, else a new one; when `gh pr create` fails, the head's pull request created at or after the
-/// PR's start (an adopted PR: any) is looked up again and adopted if it is open now (another `pr open` of the PR created it).
+/// PR's start (an adopted PR: any) is looked up again and adopted if it is open now (another `pr open` of the PR created it). This runs at
+/// the merge of an `open` Job (§7.4 step 8b), not at submit.
 fn find_or_create(lead: &Path, pr: &PrRow, existing: Option<PrRef>, title: &str, description: Option<&str>) -> Result<PrRef, CpdError> {
     if let Some(found) = existing {
         return Ok(found);
@@ -216,13 +217,13 @@ pub fn pull_request(lead: &Path, pr: &PrRow, stored_title: &str, description: Op
     }
 }
 
-/// Whether the newest pull request of the Lead Branch is already `merged` on GitHub and never recorded (§7.6 `pr open` step 0, §7.7 submit
-/// step 1): an `open` Job adopts it, with no Gate and no push.
+/// Whether the newest pull request of the Lead Branch is already `merged` on GitHub and never recorded (§7.6 `pr open` step 0): the merge of an
+/// `open` Job adopts it (§7.4 step 8b), with no Gate and no push.
 pub fn is_merged_on_github(lead: &Path, pr: &PrRow) -> Result<bool, CpdError> {
     Ok(gh::head_pr(lead, pr.remote_branch(), pr.bound_since()?)?.is_some_and(|head| head.state == HeadState::Merged))
 }
 
-/// `pr_closed` (exit 3): the newest pull request of the Lead Branch is closed without a merge (§7.6 `pr open` step 0, §7.7 submit check 1).
+/// `pr_closed` (exit 3): the newest pull request of the Lead Branch is closed without a merge (§7.6 `pr open` step 0): it is found at the merge of an `open` Job (§7.4 step 8b), not at submit.
 pub fn closed(key: &PrKey, branch: &str, head: &gh::HeadPr) -> CpdError {
     CpdError::new(
         ErrorCode::PrClosed,
@@ -387,7 +388,9 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pulled: &Pulled) -> R
     Ok(Some(Phase::Done))
 }
 
-/// What an `open` or `update` Job's `attempt submit` checks (contract §7.7 "An `open` or `update` Job at submit", hs-d340), in this
+/// What an `open` or `update` Job's `attempt submit` once checked (contract §7.7, hs-d340). It has had no caller since commit 84c274f
+/// (#425): submit now checks only the PR's policy (§7.7 "An `open` or `update` Job at submit"), and the checks listed here run at the
+/// merge (§7.4), where a refusal ends the Attempt, not the submit. They were, in this
 /// order, each refusal changing nothing: for an `open` Job the stored title (`pr_title_required`) and the newest pull request of the Lead
 /// Branch not closed without a merge (`pr_closed`; a merged one is adopted by the Job's merge, so nothing below it runs, as `pr open` runs no
 /// Gate for it); for an `update` Job the PR is `open`; the PR's policy resolves; and the Lead Branch's tip is an ancestor of HEAD

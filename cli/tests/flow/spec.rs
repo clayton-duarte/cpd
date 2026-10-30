@@ -472,7 +472,7 @@ fn an_impl_job_s_spec_names_the_test_jobs_the_guarded_files_and_the_approved_pat
 
 #[test]
 fn an_open_and_an_update_job_merge_the_base_only_on_a_conflict_and_leave_the_rest_to_cpd() {
-    for (kind, own, other) in [(JobKind::Open, "pr_title_required", "illegal_transition"), (JobKind::Update, "illegal_transition", "pr_title_required")] {
+    for kind in [JobKind::Open, JobKind::Update] {
         let text = kind_spec(kind);
         assert_has(
             &text,
@@ -480,16 +480,11 @@ fn an_open_and_an_update_job_merge_the_base_only_on_a_conflict_and_leave_the_res
                 "**only if the Lead Branch conflicts with it**",
                 "merely moved ahead is no reason",
                 "Do not push, do not run `gh`, do not run the Gate",
-                "- `base_conflict`:",
-                "- `lead_branch_moved`:",
-                "- `gate_failed`:",
-                "- `gate_error`:",
-                "- `base_not_found`:",
                 "- `owner_unset`, `owner_unconfirmed`, `policy_invalid`:",
-                own,
             ],
         );
-        assert_lacks(&text, &["- Commit your work.", "- `no_commits`:", "### Tests", "tests_", other]);
+        assert_lacks(&text, &["- Commit your work.", "- `no_commits`:", "### Tests", "tests_",
+                "`pr_title_required`", "`jira_required`", "`pr_closed`", "`illegal_transition`", "`lead_branch_moved`", "`base_not_found`", "`base_conflict`", "`gate_failed`", "`gate_error`"]);
     }
     assert_has(&kind_spec(JobKind::Open), &["This is the **open Job**"]);
     assert_has(&kind_spec(JobKind::Update), &["This is an **update Job**"]);
