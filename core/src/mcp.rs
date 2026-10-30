@@ -58,41 +58,6 @@ fn attach(args: AttachArgs) -> Result<Output, CpdError> {
         .with("machine", env.config.machine.as_str())
         .with("available", available));
     };
-    let held: Option<(String, String, String, Option<String>)> = env.store.read(|conn| {
-        Ok(conn
-            .query_row(
-                "SELECT a.id, a.runner, s.context, s.plan FROM sessions s JOIN attempts a ON a.id = s.attempt WHERE s.id = ?1",
-                [session.as_str()],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-            )
-            .optional()?)
-    })?;
-    if let Some((attempt, stored, context, plan)) = held {
-        let runner = crate::config::WorkerRunner::parse(&stored)
-            .map_err(|e| CpdError::new(ErrorCode::Usage, format!("Attempt {attempt} has a bad runner: {e}.")).with("attempt", attempt.as_str()))?;
-        if runner == crate::config::WorkerRunner::Durable {
-            let message = format!("Server {name} was not attached: Attempt {attempt} runs on the durable runner, which has no MCP client, so no tool would arrive.");
-            let mut details = serde_json::Map::new();
-            details.insert("name".to_owned(), json!(name));
-            details.insert("session".to_owned(), json!(session));
-            details.insert("attempt".to_owned(), json!(attempt));
-            details.insert("runner".to_owned(), json!(runner.as_str()));
-            env.store.write("mcp attach", |tx| {
-                let mut new = NewEvent::error(message.clone(), "mcp attach", ErrorCode::RunnerNoTools.as_str(), &message, &details)
-                    .context(crate::ids::ContextId::parse(&context)?);
-                if let Some(plan) = &plan {
-                    new = new.plan(crate::ids::PlanId::parse(plan)?);
-                }
-                append(tx, new)?;
-                Ok(())
-            })?;
-            let mut err = CpdError::new(ErrorCode::RunnerNoTools, message);
-            for (k, v) in details {
-                err = err.with(&k, v);
-            }
-            return Err(err);
-        }
-    }
     let event = env.store.write("mcp attach", |tx| {
         let (context, plan): (String, Option<String>) = tx
             .query_row("SELECT context, plan FROM sessions WHERE id = ?1", [session.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
