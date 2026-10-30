@@ -191,10 +191,28 @@ pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, C
     Ok(out)
 }
 
-/// The `pr-closed` conditions: one per closed-unmerged PR (`crate::pr::closed::closed_unmerged`). Stub: none yet.
+/// The `pr-closed` conditions: one red item per closed-unmerged PR (`crate::pr::closed::closed_unmerged`).
 pub fn closed_conditions(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
-    let _ = crate::pr::closed::closed_unmerged(conn, None)?;
-    Ok(Vec::new())
+    Ok(crate::pr::closed::closed_unmerged(conn, None)?
+        .into_iter()
+        .map(|c| {
+            let name = c.repo.split_once('/').map_or(c.repo.as_str(), |(_, name)| name);
+            Condition {
+                kind: Kind::PrClosed,
+                urgency: Urgency::Red,
+                subject: format!("pr:{}#{}", c.repo, c.number),
+                label: format!("{name}#{} closed without a merge\n{}", c.number, c.title),
+                url: Some(c.url.clone()),
+                context: Some(c.context),
+                plan: Some(c.plan),
+                job: None,
+                session: c.lead_session,
+                record: None,
+                event: None,
+                opened_at: None,
+            }
+        })
+        .collect())
 }
 
 #[cfg(test)]
