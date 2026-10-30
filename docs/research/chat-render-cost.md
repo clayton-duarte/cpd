@@ -121,4 +121,45 @@ Left:
 
 ## After the fix
 
-Measured after the fix by the verify Job of this PR.
+Measured on this branch (main with #644, `basis: 0`) against a same-time control (this branch's `pi/` with `pi/lib/pad.ts` from `9bfec3be~1`, the pre-fix pad; `diff` shows only the two `basis: 0` lines differ). One run per label, control and after back to back, one at a time.
+
+Columns: components = chat components while the bash row runs; CPU% = mean of the 4 windows with the running bash row; frame ms = mean / p50 of the window means; idle = focused idle CPU%; typing = median typing latency ms with the chat idle / with the bash row running.
+
+| label | run | components | bash-row CPU% | frame ms mean / p50 | idle CPU% | typing ms idle / busy | loadavg start -> end (1 min) |
+|---|---|---|---|---|---|---|---|
+| cut10 | control | 20 | 17.5 | 84.8 / 45.1 | 3.2 | 38.1 / 95.9 | 26.85 -> 34.26 |
+| cut10 | after | 20 | 19.7 | 13.6 / 11.5 | 2.0 | 27.7 / 15.2 | 37.20 -> 28.72 |
+| big | control | 364 | 80.9 | 61.5 / 55.0 | 9.95 | 66.5 / 87.8 | 25.89 -> 23.17 |
+| big | after | 364 | 35.5 | 18.4 / 16.2 | 4.05 | 64.3 / 34.1 | 21.84 -> 28.21 |
+| cut200 | after | 168 | 14.7 | 53.3 / 22.3 | 2.75 | 277.3 / 24.7 | 30.63 -> 30.19 |
+| cut200 | before (older run, reference only) | 168 | 53.7 | 27.5 / 26.2 | 4.8 | 42.1 / 25.7 | 22.57 -> 19.71 |
+
+Older before rows, same harness (not same-time): cut10 27.0% CPU, 19.1 / 15.7 ms; big 79.5% CPU, 34.7 / 34.5 ms.
+
+### Does the cost still grow with the chat components?
+
+Yes, but much less. Slope from cut10 (20) to big (364), 344 components apart:
+
+| | frame ms mean / component | frame ms p50 / component | bash-row CPU% / component |
+|---|---|---|---|
+| after | 0.014 | 0.014 | 0.046 |
+| control (same time) | -0.068 (not meaningful: cut10-control is inflated) | 0.029 | 0.184 |
+| before (older runs) | 0.045 | 0.055 | 0.153 |
+
+At big the bash row's CPU fell from 80.9% (control) to 35.5% (after), and its frame time from 61.5 to 18.4 ms. The CPU slope after is about a quarter of control and of before, so the fix removed most of the growth, not all of it: 364 components still cost about 16 points of CPU more than 20 components. cut200-after (168 components) is out of line with a linear fit (53 ms mean frame against p50 22 ms, and a 277 ms typing median with the chat idle): a few slow frames dominate it, and it was run once under load; it is not used for the slopes.
+
+### Noise
+
+The host was busy: load average was 22 to 37 during every run, and it changed by up to 8 within one run. One run per label, so no variance is measured. Evidence that noise is large: cut10-control and cut10-after have the same 20 components yet 85 vs 14 ms mean frame (the control mean is dragged by slow windows; p50 45 vs 11 ms), and cut200-after has the outlier above. The big pair (control and after at similar load, 23 to 28) shows the same direction as the cut10 pair, with a CPU halving and a frame-time drop of 3x, larger than the noise seen between runs, but a single pair does not prove a size. Typing latency at big is the same (66.5 vs 64.3 ms idle), so this run shows no typing improvement with the chat idle; with the bash row running it fell (87.8 to 34.1 ms), within what noise could partly explain. Idle CPU at cut10 (3.2 vs 2.0) is inside noise.
+
+### Commands run
+
+```
+mkdir -p /tmp/chat-render-verify && cp -r pi /tmp/chat-render-verify/pi-control
+git show 9bfec3be~1:pi/lib/pad.ts > /tmp/chat-render-verify/pi-control/lib/pad.ts
+ln -s "$PWD/node_modules" /tmp/chat-render-verify/node_modules
+# smoke (not recorded), then in this order, each appending to /tmp/chat-render-verify/results.jsonl:
+CPD_PI=<pi-control | $PWD/pi> SOCK=chat-render-verify timeout 300 \
+  /tmp/chat-render-cost/measure.sh /tmp/chat-render-cost/sessions/<label>.jsonl <label>-<control|after>
+# cut10-control, cut10-after, big-control, big-after, cut200-after
+```
