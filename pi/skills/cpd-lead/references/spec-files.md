@@ -57,7 +57,7 @@ Put these in the `context` of every Spec (they are a Worker's only rules):
 
 ## Tiers
 
-Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku), `G` (gemini, auxiliary only); effort 0–5, or `GX` for G. An invalid Tier is refused when you add the Job (`tier_invalid`, with the valid efforts in `error.details.efforts`). `cpd tiers` prints the efforts each model accepts. **A Worker Job's Tier is `H0`–`H3` or `S0`–`S3` only** (pro-d82); a Worker's ladder goes H0>H1>H2>H3>S1>S2>S3 and ends at `S3`. `cpd tiers` prints the efforts each model accepts; the catalog can cut further. G (written `GX`, no effort levels) is never a Job's Tier: it is for auxiliary one-shot pi runs only (the distiller, title writer, and similar helpers), never a Worker's, Lead's or Manager's.
+Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku), `G` (gemini, auxiliary only); effort 0–5, or `GX` for G. An invalid Tier is refused when you add the Job (`tier_invalid`, with the valid efforts in `error.details.efforts`). `cpd tiers` prints the efforts each model accepts. **A Worker Job's Tier is `H0`–`H3` or `S0`–`S3` only** (pro-d82; the explore kinds have their own ranges, [Explore Jobs](#explore-jobs)); a Worker's ladder goes H0>H1>H2>H3>S1>S2>S3 and ends at `S3`. `cpd tiers` prints the efforts each model accepts; the catalog can cut further. G (written `GX`, no effort levels) is never a Job's Tier: it is for auxiliary one-shot pi runs only (the distiller, title writer, and similar helpers), never a Worker's, Lead's or Manager's.
 
 | Work | Tier | Why |
 |---|---|---|
@@ -99,6 +99,63 @@ A PR that changes behaviour has a test Job and an implementation Job after its d
 Grounding that needs more than reading (a large codebase survey, comparing libraries, checking an API against its source) goes to a Worker as an ordinary Job.
 
 - Spec: the question as `goal`; where to look and what a good answer contains as `context`; `touches` is the one Markdown file for the findings (for example `docs/research/<topic>.md`); `acceptance` says what the file must answer and cite. Tier `S1` to `S3`.
-- Jobs run only after the lock, so a research Job cannot ground the Plan that contains it. Put it in the Plan first and add the follow-up drafts right after the lock with `--needs <research-job>` (same PR; `job add --draft`), listing them in its `context`: they wait on it. When it is Merged (`job-merged`), resolve them at once with what it found: edit each to a full Tier and Spec and start them with `cpd_plan_review` (with a `title`), or cancel it. Tell the User what the batch holds. A follow-up that is its own PR is added right after the lock with `cpd pr add <key> --repo <path> --title "<title>" --needs <research-pr>` so it waits on the research PR's merge, and its drafts wait on that PR; the research findings are read from main when it starts, and when the research PR merges you resolve its drafts. This is the exception to stacking ([Scoping](../SKILL.md#scoping)): the follow-up reads what is on `main`, so it does not stack (`--base`) on the research PR.
+- Put it in the Plan first and add the follow-up drafts right after the lock with `--needs <research-job>` (same PR; `job add --draft`), listing them in its `context`: they wait on it. When it is Merged (`job-merged`), resolve them at once with what it found: edit each to a full Tier and Spec and start them with `cpd_plan_review` (with a `title`), or cancel it. Tell the User what the batch holds. A follow-up that is its own PR is added right after the lock with `cpd pr add <key> --repo <path> --title "<title>" --needs <research-pr>` so it waits on the research PR's merge, and its drafts wait on that PR; the research findings are read from main when it starts, and when the research PR merges you resolve its drafts. This is the exception to stacking ([Scoping](../SKILL.md#scoping)): the follow-up reads what is on `main`, so it does not stack (`--base`) on the research PR.
 - A research Job obeys the [bounded commands](#bounded-commands): it commits its findings file early and measures only under `timeout`, with real data, never a synthetic benchmark.
 - If the question is cheap to answer by reading, read instead.
+- Promoting an explore finding into the repo (a `docs/research/*.md` file) is an ordinary docs Job the Lead adds ([Explore Jobs](#explore-jobs)).
+
+## Explore Jobs
+
+The explore kinds are `scout` and `research`; a Job of one is an explore Job. A **scout** answers one question from this machine only (Tier `H1`-`H3`); a **research** Job may also reach outside it (web, curl, attached MCP servers, registries, upstream docs; Tier `S1`-`S3`). They answer for you from a Worker's session, so the material stays out of yours ([Exploring](../SKILL.md#exploring)). An explore Job belongs to the Plan, not to a PR: add it with `--kind scout` or `--kind research` and no `--pr`, and with no `--draft`. It is `queued` at once, with no review and no lock.
+
+The file passed as `--spec` has exactly these four fields, all required, and no others (`spec_invalid`, exit 2, with the JSON path, for `touches`, `tests`, `test_files` or `resources`):
+
+| Field | What it holds |
+|---|---|
+| `goal` | The one question, in one sentence. |
+| `context` | Where to look and what a good answer contains. Absolute machine paths are allowed here: the repo-relative rule is waived for explore Jobs. The rules below go here too. |
+| `acceptance` | What the file must answer and cite, one checkable item each. |
+| `out_of_scope` | The adjacent temptations to refuse. May be empty. |
+
+cpd stores the artefact as the Job's `touches`: `run/<plan>/explore/<job-key>.md`, relative to `$CPD_HOME`. You name no file.
+
+Rules to put in the `context` of every explore Spec (they are the Worker's only rules):
+
+- **One question per Job.** A second question is a second explore Job.
+- **Scoped paths.** Name the paths the Worker may read, exactly. Never a search from `/`, `/Users`, `/home`, `~` or `$HOME`.
+- **The 30 s bound.** Every shell call sets a `timeout` of 30 s or less. Never start a command that does not exit: `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run`.
+- **Write only the artefact.** No file in a repo, no commit.
+- **The summary is at most 1500 characters** (counted as characters): `summary_too_long` (exit 3, never truncated) refuses a longer one, and the Worker shortens it. The summary reaches you; the file does not.
+
+`acceptance` says what the file must answer and cite: for this machine, each fact as path and line; for the outside, each claim as a URL. Two examples, one scout and one research Job, each a complete Spec file:
+
+```json
+{
+  "goal": "Which command runs the cpd Rust tests, and which CI job runs it?",
+  "context": "Read only /Users/<you>/projects/cpd/scripts and /Users/<you>/projects/cpd/.github (the checkout on this machine). Answer: the command a developer runs for the Rust tests, the script behind it, and the CI job that calls it, each cited as path:line. Every shell call sets a timeout of 30 s or less. Never search from /, /Users, /home or ~. One question only: do not survey the rest of the repo. Write nothing except your artefact. The summary is at most 1500 characters.",
+  "acceptance": [
+    "The file names the developer command, the script behind it and the CI job that runs it",
+    "Each fact cites its file and line, for example scripts/cargo.sh:12"
+  ],
+  "out_of_scope": ["Do not change the repo", "Do not run the test suite"]
+}
+```
+
+```json
+{
+  "goal": "Does zod 4 still export z.string().email(), and what do its release notes say about it?",
+  "context": "Upstream sources only: the docs at https://zod.dev and the release notes at https://github.com/colinhacks/zod/releases. Use curl on each call, with a timeout of 30 s or less. Answer: whether the call exists in the current major version, the version that changed it, and each claim cited by URL with the date the page was read. Never search from /, /Users, /home or ~: this question needs no file on this machine. One question only. Write nothing except your artefact. The summary is at most 1500 characters.",
+  "acceptance": [
+    "The file states whether the call exists in the current major version, with the URL that says so",
+    "The file names the version that changed it, or says that no source names one"
+  ],
+  "out_of_scope": ["Do not change the repo", "Do not install packages"]
+}
+```
+
+Add the Job and read its summary when it merges (`job-merged`). Its file stays where the Worker wrote it, `$CPD_HOME/run/<plan>/explore/<job-key>.md`: cite that path in the Spec of each Job that needs the finding.
+
+- **Dependencies.** An explore Job may need only other explore Jobs, and no other Job may need one (`explore_needs_mixed`, exit 3).
+- **Tier.** A scout is `H1`-`H3` and a research Job `S1`-`S3`; any other Tier is `tier_not_allowed` (exit 2, with the kind's range in `details`). A failed Attempt retries one rung up its own range (`H1` > `H2` > `H3`, `S1` > `S2` > `S3`); after the top rung the Job fails.
+- **Worker.** An explore Worker may `cpd ask`: answer it as any Escalation. It may read the Context's records, read-only.
+- **Refusals.** `explore_pr_forbidden` (`--pr`), `explore_no_draft` (`--draft`) and `illegal_phase` (in `done`): all exit 3.
