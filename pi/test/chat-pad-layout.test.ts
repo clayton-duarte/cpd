@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Container, HStack, ScrollView, Spacer, VStack, type Component } from "@earendil-works/pi-tui";
 import { getLayoutBoxesAt, getScrollViewsAt, renderLayoutFrame } from "@earendil-works/pi-tui/dist/layout.js";
-import { dispatchMouseEvent, type MouseEvent } from "@earendil-works/pi-tui/dist/tui.js";
+import { dispatchMouseEvent, type TuiMouseEvent } from "@earendil-works/pi-tui/dist/tui.js";
 import { paddedRoot } from "../lib/pad.ts";
 
 const HEIGHT = 12;
@@ -56,11 +56,11 @@ const rects = (box: Box): string[] => [
 ];
 
 /** pi-tui's `dispatchMouseToLayout`, which `TuiAltScreen` runs for a mouse event: the first box with a handler. */
-function route(layout: ReturnType<typeof renderLayoutFrame>, type: string, x: number, y: number, width: number): string[] {
+function route(layout: ReturnType<typeof renderLayoutFrame>, type: string, x: number, y: number): string[] {
 	const reached: string[] = [];
 	for (const box of getLayoutBoxesAt(layout, x, y) as Box[]) {
 		if (box.component instanceof Container && box.component.handleMouse === Container.prototype.handleMouse) continue;
-		const event = { type, screenX: x, screenY: y, x: x - box.rect.x, y: y - box.rect.y, width: box.rect.width, height: box.rect.height, button: 0 } as unknown as MouseEvent;
+		const event = { type, screenX: x, screenY: y, x: x - box.rect.x, y: y - box.rect.y, width: box.rect.width, height: box.rect.height, button: 0 } as unknown as TuiMouseEvent;
 		if (dispatchMouseEvent(box.component, event)) {
 			reached.push(box.component.constructor.name);
 			break;
@@ -81,7 +81,7 @@ for (const width of [80, 81]) {
 
 		const editorRow = HEIGHT - 2;
 		for (const [type, x, y] of [["wheel", 10, 3], ["click", 10, 3], ["click", 10, editorRow], ["click", 0, 3], ["click", width - 1, 3], ["click", 10, 0]] as const) {
-			assert.deepEqual(route(b, type, x, y, width), route(a, type, x, y, width), `${type} at ${x},${y}`);
+			assert.deepEqual(route(b, type, x, y), route(a, type, x, y), `${type} at ${x},${y}`);
 		}
 		assert.deepEqual(getScrollViewsAt(a, 10, 3), [plain.transcript]);
 		assert.deepEqual(route(b, "click", 10, editorRow), ["Clickable"], "a click on the editor row reaches the editor");
