@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -10,64 +10,52 @@ const REVIEW_LABEL = "blocked:φ: plan review";
 const pending = (id = "r1", over: Record<string, unknown> = {}) => planShow({ review: { id, status: "pending", fingerprint: "ff", current: true, ...over } });
 const reviewEvent = (id: number, review = "r1", status = "pending") => ev(id, "plan-review", { data: { review, fingerprint: "ff", status } });
 const entries = (f: Fixture) => f.pi.entries.filter((e: any) => e.type === "custom" && e.customType === "cpd-plan-review").map((e: any) => e.data);
-const requests = (f: Fixture, action?: string) => f.pi.emitted.filter((e) => e.channel === "plannotator:request" && (action === undefined || e.data.action === action));
+const summaries = (f: Fixture) => f.pi.sent.filter((s) => s.message.customType === "cpd-plan-summary");
+const chat = (over: Record<string, unknown> = {}) => ({ plan: "p1", review: "r1", surface: "chat", status: "pending", ...over });
 const decisions = (f: Fixture) => f.pi.sent.filter((s) => s.message.customType === "cpd-plan-decision");
-
-/** plannotator answers every request with `answer(request)`. */
-function plannotator(f: Fixture, answer: (req: any) => unknown) {
-  f.pi.events.on("plannotator:request", (req: any) => {
-    const a = answer(req);
-    if (a !== undefined) req.respond(a);
-  });
-}
-const opened = (reviewId = "pn-1") => ({ status: "handled", result: { status: "pending", reviewId } });
 
 async function lead(f: Fixture, show: unknown = pending()) {
   f.respond("plan-show", show);
-  f.planFile("p1", "r1", "# the plan\n");
+  f.summaryFile("p1", "r1", "# Review\nsummary\n");
   f.load();
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
 }
 
-test("a pending plan-review Event opens plannotator, records the entry and blocks the Lead; no message", async (t) => {
+test("a pending plan-review Event shows the summary, records the chat entry and blocks the Lead", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  plannotator(f, (req) => (req.action === "plan-review" ? opened() : undefined));
   await lead(f);
   f.emit(reviewEvent(101));
   await waitFor("the entry", () => entries(f).length === 1);
 
-  const [req] = requests(f, "plan-review");
-  assert.equal(typeof req!.data.requestId, "string");
-  assert.deepEqual(req!.data.payload, { planContent: "# the plan\n", planFilePath: `${f.cpdHome}/run/p1/plan-r1.md` });
-  assert.deepEqual(entries(f), [{ plan: "p1", review: "r1", plannotator_id: "pn-1", status: "pending" }]);
+  assert.deepEqual(entries(f), [chat()]);
+  assert.equal(summaries(f).length, 1);
   await waitFor("blocked", () => stateCalls(f).includes(REVIEW_LABEL));
-  assert.deepEqual(f.pi.sent, []);
+  assert.deepEqual(f.pi.sent, summaries(f), "no message but the summary");
   assert.deepEqual(f.argvs().filter((a) => a[0] === "plan"), [["plan", "show", "--plan", "p1"], ["plan", "show", "--plan", "p1"]], "start-up, then the latest-review check");
 });
 
 test("a replayed or superseded request is skipped", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  plannotator(f, () => opened());
   await lead(f);
   f.emit(reviewEvent(101));
   await waitFor("the entry", () => entries(f).length === 1);
 
   f.emit(reviewEvent(102)); // replay: the session already has an entry for r1
   await f.drain(); // marker 103
-  assert.equal(requests(f, "plan-review").length, 1);
+  assert.equal(summaries(f).length, 1);
 
   f.respond("plan-show", pending("r3")); // r2 is not the latest review
   f.emit(reviewEvent(110, "r2"));
   await f.drain(); // 111
-  assert.equal(requests(f, "plan-review").length, 1);
+  assert.equal(summaries(f).length, 1);
 
   f.respond("plan-show", pending("r3", { status: "approved" })); // decided meanwhile
   f.emit(reviewEvent(120, "r3"));
   await f.drain(); // 121
-  assert.equal(requests(f, "plan-review").length, 1);
+  assert.equal(summaries(f).length, 1);
 
   // a restart keeps the entry, so the replayed Event is still skipped, and the Lead is blocked at start-up
   await f.pi.fire("session_shutdown");
@@ -76,109 +64,82 @@ test("a replayed or superseded request is skipped", async (t) => {
   await waitFor("blocked at start-up", () => stateCalls(f).filter((s) => s === REVIEW_LABEL).length === 2);
   f.emit(reviewEvent(130));
   await f.drain();
-  assert.equal(requests(f, "plan-review").length, 1);
+  assert.equal(summaries(f).length, 1);
 });
 
 test("a decided (non-pending) plan-review Event is not opened", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  plannotator(f, () => opened());
   await lead(f);
   f.emit(reviewEvent(101, "r1", "approved"));
   await f.drain();
-  assert.equal(requests(f).length, 0);
+  assert.equal(summaries(f).length, 0);
   assert.deepEqual(f.pi.sent, []);
 });
 
-for (const [name, answer, code, text] of [
-  ["unavailable", { status: "unavailable" }, "plannotator_unavailable", /unavailable/],
-  ["an error", { status: "error", error: "Port 19432 in use after 5 retries" }, "plannotator_error", /Port 19432 in use after 5 retries/],
-  ["handled but not pending", { status: "handled", result: { status: "completed" } }, "plannotator_invalid", /did not open/],
-  ["no answer", undefined, "plannotator_timeout", /did not answer plan-review/],
-] as const) {
-  test(`plannotator answers ${name}: an error message without a turn, nothing written, the review stays pending`, async (t) => {
-    const f = new Fixture();
-    t.after(() => f.close());
-    plannotator(f, () => answer);
-    await lead(f);
-    f.emit(reviewEvent(101));
-    await waitFor("the error", () => adapterErrors(f).length === 1, 4000);
-    const e = adapterErrors(f)[0]!;
-    assert.match(e.message.content, new RegExp(`^φ adapter: plan review r1: ${code}: `));
-    assert.match(e.message.content, text);
-    assert.deepEqual(entries(f), []);
-    assert.equal(stateCalls(f).includes(REVIEW_LABEL), false);
-    assert.equal(f.argvs().some((a) => a[1] === "decide"), false);
-  });
-}
-
-test("an unreadable plan file is an error", async (t) => {
+test("an unreadable summary file is an error", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  plannotator(f, () => opened());
   f.respond("plan-show", pending());
   f.load();
   await f.pi.fire("session_start");
   f.emit(reviewEvent(101));
   await waitFor("the error", () => adapterErrors(f).length === 1);
   assert.match(adapterErrors(f)[0]!.message.content, /^φ adapter: plan review r1: file_unreadable: /);
-  assert.equal(requests(f).length, 0);
+  assert.equal(summaries(f).length, 0);
 });
 
 async function opens(f: Fixture) {
-  plannotator(f, () => opened());
   await lead(f);
   f.emit(reviewEvent(101));
+  const d = await waitFor("the select", () => f.pi.openDialog("select"));
   await waitFor("blocked", () => stateCalls(f).includes(REVIEW_LABEL));
+  return d;
 }
-const result = (f: Fixture, data: unknown) => f.pi.events.emit("plannotator:review-result", data);
+/** The User's answer in the dialog: Approve, or Change with `feedback` as the note. */
+async function answer(f: Fixture, d: { answer(v: string): void }, approved: boolean, feedback?: string) {
+  if (approved) return d.answer("Approve");
+  d.answer("Change");
+  const e = await waitFor("the editor", () => f.pi.openDialog("editor"));
+  e.answer(feedback ?? "");
+}
 
-test("approval: plan decide --approve with the feedback in a file, the entry, the reason closed, the Lead told", async (t) => {
+test("approval: plan decide --approve, the entry, the reason closed, the Lead told", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  await opens(f);
+  const d = await opens(f);
   f.respond("plan-decide", { ok: true, review: { id: "r1", status: "approved" }, current: true, next: "cpd plan lock" });
-  result(f, { reviewId: "pn-1", approved: true, feedback: "Looks good.\nShip it." });
+  await answer(f, d, true);
   await waitFor("the decision message", () => decisions(f).length === 1);
 
-  const call = f.calls().find((c) => c.phase === "end" && c.argv[1] === "decide")!;
-  assert.deepEqual(call.argv.slice(0, 4), ["plan", "decide", "r1", "--approve"]);
-  assert.equal(call.argv[4], "--feedback-file");
-  const file = join(f.cpdHome, "run", "p1", "feedback-r1.md");
-  assert.equal(call.argv[5], file);
-  assert.equal(readFileSync(file, "utf8"), "Looks good.\nShip it.", "kept in the Plan's run directory");
-  assert.deepEqual(call.argv.slice(6), ["--plan", "p1"]);
-  assert.equal(call.feedback, "Looks good.\nShip it.");
-
-  assert.deepEqual(entries(f).at(-1), { plan: "p1", review: "r1", plannotator_id: "pn-1", status: "approved" });
+  assert.deepEqual(f.argvs().find((a) => a[1] === "decide"), ["plan", "decide", "r1", "--approve", "--plan", "p1"]);
+  assert.deepEqual(entries(f).at(-1), chat({ status: "approved" }));
   await waitFor("unblocked", () => stateCalls(f).at(-1) === "idle");
-  const d = decisions(f)[0]!;
-  assert.equal(d.message.content, "Plan review r1 was APPROVED.\nFeedback from the reviewer:\nLooks good.\nShip it.\nNext: cpd plan lock");
-  assert.deepEqual(d.options, { triggerTurn: true, deliverAs: "followUp" });
+  const m = decisions(f)[0]!;
+  assert.equal(m.message.content, "Plan review r1 was APPROVED.\nNext: cpd plan lock");
+  assert.deepEqual(m.options, { triggerTurn: true, deliverAs: "followUp" });
   assert.equal(f.pi.delivered().length, 0, "the custom type differs from cpd, so it never moves the cursor");
-
-  result(f, { reviewId: "pn-1", approved: true }); // a duplicate result settles nothing
   await f.quiet();
   assert.equal(f.argvs().filter((a) => a[1] === "decide").length, 1);
 });
 
-test("rejection without feedback: no --feedback-file, and the Lead is told to revise", async (t) => {
+test("rejection: the note goes in a file, and the Lead is told to revise", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  await opens(f);
-  result(f, { reviewId: "pn-1", approved: false });
+  const d = await opens(f);
+  await answer(f, d, false, "no");
   await waitFor("the decision message", () => decisions(f).length === 1);
-  assert.deepEqual(f.argvs().find((a) => a[1] === "decide"), ["plan", "decide", "r1", "--reject", "--plan", "p1"]);
-  assert.equal(decisions(f)[0]!.message.content, "Plan review r1 was REJECTED.\nRevise the plan (job edit, job add, job cancel), then call cpd_plan_review again.");
+  assert.deepEqual(f.argvs().find((a) => a[1] === "decide"), ["plan", "decide", "r1", "--reject", "--feedback-file", join(f.cpdHome, "run", "p1", "feedback-r1.md"), "--plan", "p1"]);
+  assert.equal(decisions(f)[0]!.message.content, "Plan review r1 was REJECTED.\nFeedback from the reviewer:\nno\nRevise the plan (job edit, job add, job cancel), then call cpd_plan_review again.");
   assert.equal(entries(f).at(-1).status, "rejected");
 });
 
 test("an approval that is no longer current asks for a new review", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  await opens(f);
+  const d = await opens(f);
   f.respond("plan-decide", { ok: true, review: { id: "r1", status: "approved" }, current: false, next: "x" });
-  result(f, { reviewId: "pn-1", approved: true });
+  await answer(f, d, true);
   await waitFor("the decision message", () => decisions(f).length === 1);
   assert.equal(decisions(f)[0]!.message.content, "Plan review r1 was APPROVED.\nThe Jobs changed since that review. Call cpd_plan_review again for a new review.");
 });
@@ -186,22 +147,22 @@ test("an approval that is no longer current asks for a new review", async (t) =>
 test("review_decided: another caller decided it; the adapter continues with that decision", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  await opens(f);
+  const d = await opens(f);
   f.respond("plan-decide", { ok: false, error: { code: "review_decided", message: "Already decided.", details: {} } }, { exit: 3 });
   f.respond("plan-show", pending("r1", { status: "rejected", feedback: "Not yet." }));
-  result(f, { reviewId: "pn-1", approved: true });
+  await answer(f, d, true);
   await waitFor("the decision message", () => decisions(f).length === 1);
   assert.equal(decisions(f)[0]!.message.content, "Plan review r1 was REJECTED.\nFeedback from the reviewer:\nNot yet.\nRevise the plan (job edit, job add, job cancel), then call cpd_plan_review again.");
   assert.equal(entries(f).at(-1).status, "rejected");
   assert.equal(adapterErrors(f).length, 0);
 });
 
-test("any other failure of plan decide is an error and leaves the review pending, so a later result retries", async (t) => {
+test("any other failure of plan decide is an error and leaves the review pending, and the select opens again", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  await opens(f);
+  const d = await opens(f);
   f.respond("plan-decide", { ok: false, error: { code: "store_failed", message: "Disk full.", details: {} } }, { exit: 1 });
-  result(f, { reviewId: "pn-1", approved: true });
+  await answer(f, d, true);
   await waitFor("the error", () => adapterErrors(f).length === 1);
   assert.match(adapterErrors(f)[0]!.message.content, /^φ adapter: plan decide r1: store_failed: Disk full\.$/);
   assert.equal(entries(f).at(-1).status, "pending");
@@ -209,31 +170,21 @@ test("any other failure of plan decide is an error and leaves the review pending
   assert.equal(stateCalls(f).at(-1), REVIEW_LABEL, "still blocked");
 
   f.respond("plan-decide", { ok: true, current: true });
-  result(f, { reviewId: "pn-1", approved: true });
+  const again = await waitFor("the select again", () => f.pi.dialogs.filter((x) => x.kind === "select").length === 2 && f.pi.openDialog("select"));
+  await answer(f, again, true);
   await waitFor("the decision message", () => decisions(f).length === 1);
 });
 
-test("results for reviews this session did not open are ignored", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  await opens(f);
-  result(f, { reviewId: "someone-else", approved: true });
-  result(f, "garbage");
-  result(f, { reviewId: "pn-1" });
-  await f.quiet();
-  assert.equal(f.argvs().some((a) => a[1] === "decide"), false);
-});
+// ---- decided elsewhere (§15.5 "Deciding elsewhere") ----
 
-// ---- decided outside plannotator (§15.5 "Deciding elsewhere") ----
-
-const NOTE = "This review was decided outside plannotator. plannotator offers no way to close its review page from here, so the page stays open: ignore it or close the tab.";
+const NOTE = "This review was decided outside this adapter.";
 const decidedEvent = (id: number, status: string, feedback: string | null, review = "r1") => ev(id, "plan-review", { data: { review, fingerprint: "ff", status, feedback } });
 
 for (const [status, feedback, text] of [
   ["approved", "Ship it.", `Plan review r1 was APPROVED.\nFeedback from the reviewer:\nShip it.\nNext: cpd plan lock\n${NOTE}`],
   ["rejected", null, `Plan review r1 was REJECTED.\nRevise the plan (job edit, job add, job cancel), then call cpd_plan_review again.\n${NOTE}`],
 ] as const) {
-  test(`an Event-only ${status} unblocks the Lead and tells it once, without plan decide; a late plannotator result is ignored`, async (t) => {
+  test(`an Event-only ${status} unblocks the Lead and tells it once, without plan decide`, async (t) => {
     const f = new Fixture();
     t.after(() => f.close());
     await opens(f);
@@ -243,11 +194,10 @@ for (const [status, feedback, text] of [
 
     assert.equal(decisions(f)[0]!.message.content, text);
     assert.deepEqual(decisions(f)[0]!.options, { triggerTurn: true, deliverAs: "followUp" });
-    assert.deepEqual(entries(f).at(-1), { plan: "p1", review: "r1", plannotator_id: "pn-1", status });
+    assert.deepEqual(entries(f).at(-1), chat({ status }));
     await waitFor("unblocked", () => stateCalls(f).at(-1) === "idle");
 
     f.emit(decidedEvent(102, status, feedback)); // replayed
-    result(f, { reviewId: "pn-1", approved: status === "approved", feedback: "late" }); // plannotator's own result, later
     await f.drain();
     assert.equal(decisions(f).length, 1);
     assert.equal(f.argvs().some((a) => a[1] === "decide"), false, "never a second plan decide");
@@ -281,16 +231,16 @@ test("an Event-only decision for a review this session has no pending entry for 
 test("r3 then r4 pending: only r4 blocks; r4 approved leaves the Lead not blocked though r3 stays pending", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  let n = 0;
-  plannotator(f, (req) => (req.action === "plan-review" ? opened(`pn-${++n}`) : undefined));
-  f.planFile("p1", "r3", "# r3\n");
-  f.planFile("p1", "r4", "# r4\n");
+  f.summaryFile("p1", "r3", "# r3\n");
+  f.summaryFile("p1", "r4", "# r4\n");
   await lead(f, pending("r3"));
   f.emit(reviewEvent(101, "r3"));
   await waitFor("r3 blocks", () => stateCalls(f).includes(REVIEW_LABEL));
+  await waitFor("its select", () => f.pi.openDialog("select"));
   f.respond("plan-show", pending("r4"));
   f.emit(reviewEvent(102, "r4"));
   await waitFor("both entries", () => entries(f).length === 2);
+  await waitFor("the second select", () => f.pi.dialogs.filter((d) => d.kind === "select").length === 2);
   assert.deepEqual(stateCalls(f), ["idle", REVIEW_LABEL], "still blocked by r4, no state change");
 
   f.respond("plan-show", pending("r4", { status: "approved" }));
@@ -304,14 +254,15 @@ test("r3 then r4 pending: only r4 blocks; r4 approved leaves the Lead not blocke
 test("a replayed request for an older review does not close the newer reason", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  plannotator(f, (req) => (req.action === "plan-review" ? opened() : undefined));
-  f.planFile("p1", "r2", "# r2\n");
+  f.summaryFile("p1", "r2", "# r2\n");
   await lead(f, pending("r1"));
   f.emit(reviewEvent(101, "r1"));
   await waitFor("r1 blocks", () => stateCalls(f).includes(REVIEW_LABEL));
+  await waitFor("its select", () => f.pi.openDialog("select"));
   f.respond("plan-show", pending("r2"));
   f.emit(reviewEvent(102, "r2"));
   await waitFor("both entries", () => entries(f).length === 2);
+  await waitFor("the second select", () => f.pi.dialogs.filter((d) => d.kind === "select").length === 2);
   f.emit(reviewEvent(103, "r1")); // a replayed older request must not close the newer reason
   await f.drain(); // marker 104
   assert.deepEqual(stateCalls(f), ["idle", REVIEW_LABEL]);
@@ -320,20 +271,18 @@ test("a replayed request for an older review does not close the newer reason", a
 test("a restart with r3 and r4 entries and plan show reporting r4 approved: not blocked", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  plannotator(f, () => ({ status: "handled", result: { status: "pending" } }));
-  seeded(f, { review: "r3", plannotator_id: "pn-3" });
-  seeded(f, { review: "r4", plannotator_id: "pn-4", status: "approved" });
+  seeded(f, { review: "r3" });
+  seeded(f, { review: "r4", status: "approved" });
   await lead(f, pending("r4", { status: "approved" }));
-  await f.quiet(); // recovery starts inside the start-up that `lead` awaited
+  await f.quiet();
   assert.deepEqual(stateCalls(f), ["idle"]);
 });
 
 test("a restart with r3 and r4 both pending in the session: only r4 blocks, and r4's decision unblocks", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  plannotator(f, () => ({ status: "handled", result: { status: "pending" } }));
-  seeded(f, { review: "r3", plannotator_id: "pn-3" });
-  seeded(f, { review: "r4", plannotator_id: "pn-4" });
+  seeded(f, { review: "r3" });
+  seeded(f, { review: "r4" });
   await lead(f, pending("r4"));
   await waitFor("blocked", () => stateCalls(f).includes(REVIEW_LABEL));
   f.respond("plan-show", pending("r4", { status: "approved" }));
@@ -344,8 +293,7 @@ test("a restart with r3 and r4 both pending in the session: only r4 blocks, and 
 test("a restart with a single pending latest review still blocks", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  plannotator(f, () => ({ status: "handled", result: { status: "pending" } }));
-  seeded(f, { review: "r3", plannotator_id: "pn-3" });
+  seeded(f, { review: "r3" });
   await lead(f, pending("r3"));
   await waitFor("blocked", () => stateCalls(f).includes(REVIEW_LABEL));
 });
@@ -353,9 +301,8 @@ test("a restart with a single pending latest review still blocks", async (t) => 
 test("a failing plan show at start-up: the session's highest review stands for the latest", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  plannotator(f, () => ({ status: "handled", result: { status: "pending" } }));
-  seeded(f, { review: "r2", plannotator_id: "pn-2" });
-  seeded(f, { review: "r3", plannotator_id: "pn-3" });
+  seeded(f, { review: "r2" });
+  seeded(f, { review: "r3" });
   f.respond("plan-show", { ok: false, error: { code: "store_busy", message: "busy" } }, { exit: 1 });
   f.load();
   await f.pi.fire("session_start");
@@ -365,70 +312,20 @@ test("a failing plan show at start-up: the session's highest review stands for t
   assert.deepEqual(stateCalls(f), ["idle", REVIEW_LABEL]);
 });
 
-// ---- recovery ----
+// ---- restart ----
 
 const seeded = (f: Fixture, over: Record<string, unknown> = {}) =>
-  f.pi.entries.push({ type: "custom", customType: "cpd-plan-review", data: { plan: "p1", review: "r1", plannotator_id: "pn-1", status: "pending", ...over } });
+  f.pi.entries.push({ type: "custom", customType: "cpd-plan-review", data: chat(over) });
 
-test("recovery: review-status every pollMs until completed, which is handled as a result", async (t) => {
+test("a restart ignores another Plan's entries (a fork's file starts with its source's) and settled ones", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  let polls = 0;
-  let others = 0;
-  plannotator(f, (req) => {
-    if (req.action !== "review-status") return undefined;
-    if (req.payload.reviewId === "pn-2") return others++, { status: "handled", result: { status: "pending" } }; // a second review that keeps polling: its polls are the clock
-    assert.deepEqual(req.payload, { reviewId: "pn-1" });
-    return { status: "handled", result: ++polls < 3 ? { status: "pending" } : { status: "completed", approved: false, feedback: "no" } };
-  });
-  seeded(f);
-  seeded(f, { review: "r2", plannotator_id: "pn-2" });
-  await lead(f);
-  await waitFor("blocked at start-up", () => stateCalls(f).includes(REVIEW_LABEL));
-  await waitFor("the decision message", () => decisions(f).length === 1);
-  assert.equal(polls, 3);
-  assert.deepEqual(f.argvs().find((a) => a[1] === "decide")!.slice(0, 4), ["plan", "decide", "r1", "--reject"]);
-  assert.match(decisions(f)[0]!.message.content, /^Plan review r1 was REJECTED\./);
-  assert.equal(entries(f).at(-1).status, "rejected");
-  const seen = others;
-  await waitFor("three more polls of the other review", () => others >= seen + 3); // two poll intervals pass: r1's loop would have polled again
-  assert.equal(polls, 3, "polling stopped");
-});
-
-test("recovery: missing (plannotator restarted) records the entry as lost, unblocks, and tells the Lead", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  plannotator(f, () => ({ status: "handled", result: { status: "missing" } }));
-  seeded(f);
-  await lead(f);
-  await waitFor("the message", () => decisions(f).length === 1);
-  assert.equal(entries(f).at(-1).status, "lost");
-  assert.match(decisions(f)[0]!.message.content, /Call cpd_plan_review again\.$/);
-  await waitFor("unblocked", () => stateCalls(f).at(-1) === "idle");
-});
-
-test("recovery ignores another Plan's entries (a fork's file starts with its source's) and settled ones", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  plannotator(f, () => ({ status: "handled", result: { status: "missing" } }));
-  seeded(f, { plan: "other", review: "r9", plannotator_id: "pn-9" });
+  seeded(f, { plan: "other", review: "r9" });
   seeded(f, { review: "r2", status: "approved" });
   await lead(f);
-  await f.quiet(); // recovery starts inside the start-up that `lead` awaited
-  assert.equal(requests(f).length, 0);
+  await f.quiet();
+  assert.equal(f.pi.dialogs.length, 0);
   assert.deepEqual(stateCalls(f), ["idle"]);
-});
-
-test("recovery: plannotator not answering is reported once and polling goes on", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  seeded(f);
-  await lead(f);
-  await waitFor("the error", () => adapterErrors(f).length === 1, 4000);
-  // The error is delivered once, however often the polling goes on: wait for polls after it (each one times out, which would report again).
-  await waitFor("two more polls", () => requests(f, "review-status").length >= 3);
-  assert.equal(adapterErrors(f).length, 1);
-  assert.match(adapterErrors(f)[0]!.message.content, /plannotator_timeout/);
 });
 
 // ---- the tool ----
@@ -447,12 +344,12 @@ test("cpd_plan_review is registered for Plan Leads: it runs plan review and retu
   });
   assert.equal(tool.exposure, "model-only");
 
-  f.respond("plan-review", { ok: true, review: { id: "r1", status: "pending" }, path: `${f.cpdHome}/run/p1/plan-r1.md`, next: "The User reviews the plan in plannotator. Stop and wait for the decision message." });
+  f.respond("plan-review", { ok: true, review: { id: "r1", status: "pending" }, summary: `${f.cpdHome}/run/p1/summary-r1.md`, next: "The User reviews the plan summary in the chat. Stop and wait for the decision message." });
   const out = await f.pi.runTool(tool, { title: "T" });
   assert.deepEqual(f.argvs().find((a) => a[1] === "review"), ["plan", "review", "--plan", "p1", "--title", "T"]);
-  assert.equal(out.text, "The User reviews the plan in plannotator. Stop and wait for the decision message.");
+  assert.equal(out.text, "The User reviews the plan summary in the chat. Stop and wait for the decision message.");
   await f.quiet();
-  assert.equal(requests(f).length, 0, "a new request opens through its Event, not through the tool");
+  assert.equal(summaries(f).length, 0, "a new request opens through its Event, not through the tool");
 });
 
 test("the tool: a call without a title passes an empty --title, so cpd's usage refuses it", async (t) => {
@@ -477,9 +374,10 @@ test("the tool passes CPD_PLAN to plan review", async (t) => {
 test("the tool: `already` with no pending entry opens the review itself, so a review that failed to open can be retried", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  let answer: unknown = { status: "unavailable" };
-  plannotator(f, () => answer);
   await lead(f);
+  const file = join(f.cpdHome, "run", "p1", "summary-r1.md");
+  rmSync(file);
+  mkdirSync(file); // reading a directory fails: the open fails
   const tool = f.pi.tools[0]!;
   f.respond("plan-review", { ok: true, already: true, review: { id: "r1", status: "pending" }, next: "wait" });
 
@@ -489,12 +387,13 @@ test("the tool: `already` with no pending entry opens the review itself, so a re
   assert.equal(adapterErrors(f).length, 1);
   assert.deepEqual(entries(f), []);
 
-  answer = opened();
+  rmSync(file, { recursive: true });
+  f.summaryFile("p1", "r1", "# Review\nsummary\n");
   await f.pi.runTool(tool, { title: "T" });
-  assert.deepEqual(entries(f), [{ plan: "p1", review: "r1", plannotator_id: "pn-1", status: "pending" }]);
+  assert.deepEqual(entries(f), [chat()]);
 
   await f.pi.runTool(tool, { title: "T" }); // pending entry now: nothing to open
-  assert.equal(requests(f, "plan-review").length, 2);
+  assert.equal(summaries(f).length, 1);
 });
 
 test("the tool: a refusal of plan review is thrown with its code", async (t) => {
@@ -521,9 +420,9 @@ test("a decision, failing or not, creates no temp directory", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   const before = feedbackDirs();
-  await opens(f);
+  const d = await opens(f);
   f.respond("plan-decide", { error: { code: "store_error", message: "boom" } }, { exit: 1 });
-  result(f, { reviewId: "pn-1", approved: false, feedback: "Nope." });
+  await answer(f, d, false, "Nope.");
   await waitFor("the decide call", () => f.argvs().some((a) => a[1] === "decide"));
   await waitFor("the error", () => adapterErrors(f).length === 1);
   assert.deepEqual(feedbackDirs(), before);
@@ -539,7 +438,6 @@ test("an Event-only superseded closes the reason and the dialog, records the ent
   const f = new Fixture();
   t.after(() => f.close());
   f.respond("plan-show", pending());
-  f.planFile("p1", "r1", "# the plan\n");
   f.summaryFile("p1", "r1", "# Review\nsummary\n");
   f.load();
   await f.pi.fire("session_start");
@@ -565,7 +463,6 @@ test("a superseded Event for a review this session has no pending entry for chan
   const f = new Fixture();
   t.after(() => f.close());
   f.respond("plan-show", pending());
-  f.planFile("p1", "r1", "# the plan\n");
   f.summaryFile("p1", "r1", "# Review\nsummary\n");
   f.load();
   await f.pi.fire("session_start");
@@ -592,16 +489,12 @@ test("a superseded Event for a review this session has no pending entry for chan
 test("a restart with plan show reporting the latest review superseded does not block or reopen it", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  plannotator(f, () => ({ status: "handled", result: { status: "pending" } }));
   f.pi.entries.push({ type: "custom", customType: "cpd-plan-review", data: chatSeed({ review: "r2" }) });
-  seeded(f, { review: "r2", plannotator_id: "pn-2" }); // the same review's page: not polled as pending either
-  f.planFile("p1", "r2", "# r2\n");
   f.summaryFile("p1", "r2", "# Review\nsummary\n");
   await lead(f, pending("r2", { status: "superseded" }));
-  await f.quiet(); // recovery starts inside the start-up that `lead` awaited
+  await f.quiet();
   assert.deepEqual(stateCalls(f), ["idle"]);
   assert.equal(f.pi.dialogs.length, 0, "no dialog reopens");
-  assert.equal(requests(f).length, 0, "no plannotator request either");
 
   const before = { sent: f.pi.sent.length, entries: entries(f).length, dialogs: f.pi.dialogs.length };
   f.emit(supersededEvent(101, "r2")); // replayed

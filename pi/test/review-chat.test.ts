@@ -8,12 +8,12 @@ import { adapterErrors } from "./lead-errors.ts";
 /** Everything here is local and fast: a red test should fail in seconds. */
 const waitFor = <T>(what: string, fn: () => T | undefined | null | false, ms = 3000) => wait(what, fn, ms);
 
-// commands.md §15.5 "The Plan review in chat" (hs-d502): the summary in the Lead's chat and one dialog (Approve, Change, Open full plan).
+// commands.md §15.5 "The Plan review in chat" (hs-d502): the summary in the Lead's chat and one dialog (Approve, Change).
 
 const REVIEW_LABEL = "blocked:φ: plan review";
 const TITLE = "Review title";
-const SUMMARY = `# ${TITLE}\nPlan p1: Plan · review r1\n\nGoal: Show a review in chat\n\nApprove | Change | Open full plan (/x/plan-r1.md)\n`;
-const OPTIONS = ["Approve", "Change", "Open full plan"];
+const SUMMARY = `# ${TITLE}\nPlan p1: Plan · review r1\n\nGoal: Show a review in chat\n\nApprove | Change\n`;
+const OPTIONS = ["Approve", "Change"];
 const STILL_WAITING = (r: string) => `Plan review ${r} is still waiting: /plan-review reopens it`;
 const NONE_WAITING = "\x1b[1mφ\x1b[22m: no plan review is waiting in chat";
 
@@ -21,7 +21,6 @@ const pending = (id = "r1", over: Record<string, unknown> = {}) => planShow({ re
 const reviewEvent = (id: number, review = "r1", status = "pending") => ev(id, "plan-review", { data: { review, fingerprint: "ff", status, title: TITLE } });
 const decidedEvent = (id: number, status: string, feedback: string | null, review = "r1") => ev(id, "plan-review", { data: { review, fingerprint: "ff", status, feedback } });
 const entries = (f: Fixture) => f.pi.entries.filter((e: any) => e.type === "custom" && e.customType === "cpd-plan-review").map((e: any) => e.data);
-const requests = (f: Fixture, action?: string) => f.pi.emitted.filter((e) => e.channel === "plannotator:request" && (action === undefined || e.data.action === action));
 const decisions = (f: Fixture) => f.pi.sent.filter((s) => s.message.customType === "cpd-plan-decision");
 const summaries = (f: Fixture) => f.pi.sent.filter((s) => s.message.customType === "cpd-plan-summary");
 const decides = (f: Fixture) => f.argvs().filter((a) => a[1] === "decide");
@@ -30,18 +29,9 @@ const select = (f: Fixture) => waitFor("the select", () => f.pi.openDialog("sele
 const nSelects = (f: Fixture) => f.pi.dialogs.filter((d) => d.kind === "select").length;
 const feedbackFile = (f: Fixture, review = "r1") => join(f.cpdHome, "run", "p1", `feedback-${review}.md`);
 
-function plannotator(f: Fixture, answer: (req: any) => unknown) {
-  f.pi.events.on("plannotator:request", (req: any) => {
-    const a = answer(req);
-    if (a !== undefined) req.respond(a);
-  });
-}
-const opened = (reviewId = "pn-1") => ({ status: "handled", result: { status: "pending", reviewId } });
-
 async function lead(f: Fixture, show: unknown = pending(), files: string[] = ["r1"]) {
   f.respond("plan-show", show);
   for (const r of files) {
-    f.planFile("p1", r, `# the plan ${r}\n`);
     f.summaryFile("p1", r, SUMMARY.replaceAll("r1", r));
   }
   f.load();
@@ -77,7 +67,6 @@ test("a pending plan-review Event shows the summary in chat without a turn, reco
   assert.ok(d.signal, "a signal the adapter can abort");
   assert.deepEqual(entries(f), [chatEntry()]);
   await waitFor("blocked", () => stateCalls(f).includes(REVIEW_LABEL));
-  assert.equal(requests(f).length, 0, "plannotator is not asked");
   assert.deepEqual(f.pi.sent.filter((x) => x !== s), [], "no other message, no turn");
 
   f.emit(reviewEvent(102)); // replay: the session has an entry for r1
@@ -113,8 +102,7 @@ test("a failed read of the summary is an error without a turn; nothing is writte
   t.after(() => f.close());
   await lead(f);
   f.respond("plan-show", pending("r2"));
-  f.planFile("p1", "r2", "# r2\n");
-  // summary-r2.md exists as a directory: it exists, so no plannotator fallback, and reading it fails
+  // summary-r2.md exists as a directory: reading it fails
   const { mkdirSync } = await import("node:fs");
   mkdirSync(join(f.cpdHome, "run", "p1", "summary-r2.md"));
   f.emit(reviewEvent(101, "r2"));
@@ -226,79 +214,18 @@ test("review_decided from the dialog: the adapter continues with the decision cp
   assert.equal(adapterErrors(f).length, 0);
 });
 
-// ---- Open full plan ----
-
-test("Open full plan: the plannotator plan-review request for plan-<review>.md, the entry again with surface plannotator, the reason stays open", async (t) => {
+test("a review without summary-<review>.md is an error without a turn; nothing is written", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  plannotator(f, (req) => (req.action === "plan-review" ? opened() : undefined));
-  const d = await opens(f);
-  d.answer("Open full plan");
-  await waitFor("the plannotator entry", () => entries(f).length === 2);
-
-  const [req] = requests(f, "plan-review");
-  assert.equal(typeof req!.data.requestId, "string");
-  assert.deepEqual(req!.data.payload, { planContent: "# the plan r1\n", planFilePath: `${f.cpdHome}/run/p1/plan-r1.md` });
-  assert.deepEqual(entries(f).at(-1), { plan: "p1", review: "r1", surface: "plannotator", plannotator_id: "pn-1", status: "pending" });
-  assert.equal(stateCalls(f).at(-1), REVIEW_LABEL);
-  assert.equal(summaries(f).length, 1);
-  assert.deepEqual(decides(f), []);
-});
-
-test("after Open full plan, a plannotator review-result decides as today", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  plannotator(f, (req) => (req.action === "plan-review" ? opened() : undefined));
-  const d = await opens(f);
-  d.answer("Open full plan");
-  await waitFor("the plannotator entry", () => entries(f).length === 2);
-  f.respond("plan-decide", { ok: true, review: { id: "r1", status: "approved" }, current: true, next: "cpd plan lock" });
-  f.pi.events.emit("plannotator:review-result", { reviewId: "pn-1", approved: true, feedback: "Looks good." });
-  await waitFor("the decision message", () => decisions(f).length === 1);
-
-  const call = f.calls().find((c) => c.phase === "end" && c.argv[1] === "decide")!;
-  assert.deepEqual(call.argv, ["plan", "decide", "r1", "--approve", "--feedback-file", feedbackFile(f), "--plan", "p1"]);
-  assert.equal(call.feedback, "Looks good.");
-  assert.equal(entries(f).at(-1).status, "approved");
-  assert.equal(entries(f).at(-1).surface, "plannotator", "the entry keeps its surface");
-  assert.equal(decisions(f)[0]!.message.content, "Plan review r1 was APPROVED.\nFeedback from the reviewer:\nLooks good.\nNext: cpd plan lock");
-  await waitFor("unblocked", () => stateCalls(f).at(-1) === "idle");
-});
-
-for (const [name, answer] of [
-  ["is unavailable", { status: "unavailable" }],
-  ["errors", { status: "error", error: "Port 19432 in use after 5 retries" }],
-] as const) {
-  test(`Open full plan while plannotator ${name}: an error without a turn, nothing written, back to the select`, async (t) => {
-    const f = new Fixture();
-    t.after(() => f.close());
-    plannotator(f, () => answer);
-    const d = await opens(f);
-    d.answer("Open full plan");
-    await waitFor("the error", () => adapterErrors(f).length === 1, 4000);
-    assert.match(adapterErrors(f)[0]!.message.content, /^φ adapter: plan review r1: plannotator_/);
-      await waitFor("the select again", () => nSelects(f) === 2 && f.pi.openDialog("select"));
-    assert.deepEqual(entries(f), [chatEntry()]);
-    assert.deepEqual(decides(f), []);
-    assert.equal(stateCalls(f).at(-1), REVIEW_LABEL);
-  });
-}
-
-test("a review without summary-<review>.md opens in plannotator with no dialog and no summary message", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  plannotator(f, (req) => (req.action === "plan-review" ? opened() : undefined));
   f.respond("plan-show", pending());
-  f.planFile("p1", "r1", "# the plan r1\n"); // no summary file: a review made before cpd wrote it
   f.load();
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
   f.emit(reviewEvent(101));
-  await waitFor("the entry", () => entries(f).length === 1);
-  assert.equal(requests(f, "plan-review").length, 1);
-  assert.equal(entries(f)[0].plannotator_id, "pn-1");
+  await waitFor("the error", () => adapterErrors(f).length === 1);
+  assert.match(adapterErrors(f)[0]!.message.content, /^φ adapter: plan review r1: file_unreadable: /);
+  assert.deepEqual(entries(f), []);
   assert.equal(nSelects(f), 0);
-  assert.deepEqual(summaries(f), []);
 });
 
 // ---- Esc and /plan-review ----
@@ -387,7 +314,7 @@ for (const [status, feedback, text] of [
   ["approved", "Ship it.", "Plan review r1 was APPROVED.\nFeedback from the reviewer:\nShip it.\nNext: cpd plan lock"],
   ["rejected", null, "Plan review r1 was REJECTED.\nRevise the plan (job edit, job add, job cancel), then call cpd_plan_review again."],
 ] as const) {
-  test(`deciding elsewhere (${status}): the open select is aborted, the Lead is told once, no plan decide, no plannotator note`, async (t) => {
+  test(`deciding elsewhere (${status}): the open select is aborted, the Lead is told once, no plan decide and no note of a page`, async (t) => {
     const f = new Fixture();
     t.after(() => f.close());
     const d = await opens(f);
@@ -400,7 +327,6 @@ for (const [status, feedback, text] of [
     const content = decisions(f)[0]!.message.content;
     assert.ok(content.startsWith(`${text}\n`), content);
     assert.match(content, /decided outside/);
-    assert.doesNotMatch(content, /plannotator/, "a chat entry has no page to leave open");
     assert.deepEqual(decisions(f)[0]!.options, { triggerTurn: true, deliverAs: "followUp" });
     assert.deepEqual(entries(f).at(-1), chatEntry({ status }));
     await waitFor("unblocked", () => stateCalls(f).at(-1) === "idle");
@@ -456,7 +382,6 @@ test("recovery: a pending chat entry of the latest pending review reopens its di
   assert.equal(d.title, `Plan review r1: ${TITLE}`);
   assert.deepEqual(d.options, OPTIONS);
   assert.deepEqual(summaries(f), []);
-  assert.equal(requests(f).length, 0);
   await waitFor("blocked at start-up", () => stateCalls(f).includes(REVIEW_LABEL));
 
   f.respond("plan-decide", { ok: true, current: true, next: "cpd plan lock" });
@@ -495,27 +420,15 @@ test("recovery: a restart after a chat review was decided in the dialog opens no
   assert.equal(nSelects(f), 0);
 });
 
-test("an entry without surface is a plannotator one: recovery polls review-status and opens no dialog", async (t) => {
+test("an entry of an older plannotator page is a pending chat review: it blocks and reopens the dialog", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  plannotator(f, (req) => (req.action === "review-status" ? { status: "handled", result: { status: "completed", approved: false, feedback: "no" } } : undefined));
   f.pi.entries.push({ type: "custom", customType: "cpd-plan-review", data: { plan: "p1", review: "r1", plannotator_id: "pn-1", status: "pending" } });
   await lead(f);
-  await waitFor("the decision message", () => decisions(f).length === 1);
-  assert.deepEqual(requests(f, "review-status").at(0)!.data.payload, { reviewId: "pn-1" });
-  assert.deepEqual(decides(f)[0]!.slice(0, 4), ["plan", "decide", "r1", "--reject"]);
-  assert.equal(nSelects(f), 0);
-  assert.deepEqual(summaries(f), []);
-});
-
-test("recovery: a chat entry is not polled in plannotator", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  seeded(f);
-  await lead(f);
   await select(f);
-  await f.quiet();
-  assert.equal(requests(f).length, 0);
+  await waitFor("blocked", () => stateCalls(f).includes(REVIEW_LABEL));
+  assert.deepEqual(decides(f), []);
+  assert.deepEqual(summaries(f), []);
 });
 
 // ---- the tool ----

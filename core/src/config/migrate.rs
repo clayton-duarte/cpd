@@ -14,7 +14,7 @@ pub struct ConfigMigration {
 }
 
 /// The migrations in the order they are applied (contract §8.1): `distill-tier-gx` then
-/// `drop-test-concurrency`.
+/// `drop-test-concurrency`, then `drop-plannotator-ports`.
 pub const MIGRATIONS: &[ConfigMigration] = &[
     ConfigMigration {
         name: "distill-tier-gx",
@@ -23,6 +23,10 @@ pub const MIGRATIONS: &[ConfigMigration] = &[
     ConfigMigration {
         name: "drop-test-concurrency",
         run: drop_test_concurrency,
+    },
+    ConfigMigration {
+        name: "drop-plannotator-ports",
+        run: drop_plannotator_ports,
     },
 ];
 
@@ -104,11 +108,20 @@ fn distill_tier_gx(text: &str) -> Option<String> {
 /// `drop-test-concurrency` (hs-d679): the top-level `test_concurrency` line is removed; every
 /// other line, comment and the formatting survive.
 fn drop_test_concurrency(text: &str) -> Option<String> {
+    drop_top_level_key(text, "test_concurrency")
+}
+
+/// `drop-plannotator-ports` (hs-d739): the top-level `plannotator_ports` line is removed, as above.
+fn drop_plannotator_ports(text: &str) -> Option<String> {
+    drop_top_level_key(text, "plannotator_ports")
+}
+
+fn drop_top_level_key(text: &str, key: &str) -> Option<String> {
     let table: Table = text.parse().ok()?;
-    if !table.contains_key("test_concurrency") {
+    if !table.contains_key(key) {
         return None;
     }
-    let (start, _, line_end, _) = top_level_line(text, "test_concurrency")?;
+    let (start, _, line_end, _) = top_level_line(text, key)?;
     let mut out = String::with_capacity(text.len());
     out.push_str(&text[..start]);
     out.push_str(&text[line_end..]);

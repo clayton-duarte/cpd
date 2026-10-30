@@ -12,7 +12,7 @@ use common::{Run, TestEnv, refused};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::Reply;
-use cpd_core::ids::{PlanId, ReviewId};
+use cpd_core::ids::PlanId;
 use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -198,8 +198,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     let cwd = home_dir.canonicalize().unwrap().display().to_string();
 
     let args = ["plan", "new", "pay", "--context", "ctx", "--title", "Retry payouts", "--jira", "PAY-1", "--brief-file", brief.to_str().unwrap()];
-    let vars = [("PLANNOTATOR_PORT", "19432-19439"), ("PLANNOTATOR_REMOTE", "0"), ("PLANNOTATOR_URL_HOST", "review.test")];
-    let out = fx.cpd_with(&home_dir, &args, &vars).ok();
+    let out = fx.cpd_with(&home_dir, &args, &[]).ok();
     let session = out["plan"]["lead_session"].as_str().unwrap().to_owned();
     assert_eq!(
         out["plan"],
@@ -225,15 +224,12 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     let started = state.panes().into_iter().find(|p| p.id == pane).expect("the Lead's pane");
     assert_eq!(started.cwd, cwd, "the pane starts in the caller's cwd");
 
-    // The pane runs `cpd session run <id>` with the Plan's and plannotator's variables (§15.5).
+    // The pane runs `cpd session run <id>` with the Plan's variables (§15.5).
     let pane_vars = state.pane_env(pane);
     for (key, value) in [
         ("CPD_HOME", fx.env.cpd_home().display().to_string()),
         ("CPD_SESSION", session.clone()),
         ("CPD_PLAN", "pay".to_owned()),
-        ("PLANNOTATOR_PORT", "19432-19439".to_owned()),
-        ("PLANNOTATOR_REMOTE", "1".to_owned()),
-        ("PLANNOTATOR_URL_HOST", "review.test".to_owned()),
     ] {
         assert!(pane_vars.contains(&(key.to_owned(), value.clone())), "{key}={value} not in {pane_vars:?}");
     }
@@ -896,16 +892,16 @@ fn review_requests_a_pending_review_once_per_fingerprint() {
     fx.outline_for_review("pay");
     let out = fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     let fingerprint = fx.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"].clone();
-    let review_path = home(&fx.env).plan_review_md(&pid("pay"), ReviewId::parse("r1").unwrap());
+    let summary_path = home(&fx.env).plan_md(&pid("pay")).with_file_name("summary-r1.md");
     assert_eq!((&out["review"]["id"], &out["review"]["status"], &out["review"]["fingerprint"]), (&json!("r1"), &json!("pending"), &fingerprint));
-    assert_eq!(out["path"], review_path.display().to_string());
+    assert_eq!(out["summary"], summary_path.display().to_string());
+    assert!(out.get("path").is_none(), "{out}");
     assert_eq!(out["next"], "The User reviews the plan summary in your chat and decides there. Stop and wait for the decision message.");
-    // The review's copy opens with the review's title and the Plan line; `plan.md` keeps its own heading (hs-d291).
-    let (copy, plan_md) = (fs::read_to_string(&review_path).unwrap(), fs::read_to_string(home(&fx.env).plan_md(&pid("pay"))).unwrap());
+    // The review writes its summary copy, headed by the review's title; `plan.md` keeps its own heading (hs-d291).
+    let (copy, plan_md) = (fs::read_to_string(&summary_path).unwrap(), fs::read_to_string(home(&fx.env).plan_md(&pid("pay"))).unwrap());
     let plan_title = inproc::show(&fx, "pay")["plan"]["title"].as_str().unwrap().to_owned();
-    assert!(copy.starts_with(&format!("# Review title\n\nPlan pay: {plan_title} · review r1\n\n")), "{copy}");
+    assert!(copy.starts_with(&format!("# Review title\nPlan pay: {plan_title} · review r1\n")), "{copy}");
     assert!(plan_md.starts_with(&format!("# Plan: {plan_title}\n")), "{plan_md}");
-    assert_eq!(copy.split_once("\n\n").unwrap().1.split_once("\n\n").unwrap().1, plan_md.split_once("\n\n").unwrap().1, "the same content after the heading");
     let event = &inproc::events(&fx, "plan-review")[0];
     assert_eq!((&event["plan"], &event["data"]), (&json!("pay"), &json!({"review": "r1", "fingerprint": fingerprint, "status": "pending"})));
 
@@ -915,14 +911,14 @@ fn review_requests_a_pending_review_once_per_fingerprint() {
     assert_eq!(inproc::events(&fx, "plan-review").len(), 1);
 
     // Changed Jobs: a new review; the copy of r1 is what the User saw.
-    let r1 = fs::read_to_string(&review_path).unwrap();
+    let r1 = fs::read_to_string(&summary_path).unwrap();
     edit_goal(&fx.env, "pay", "a", "A new goal.");
     fx.outline_for_review("pay");
     let r2 = fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     assert_eq!(r2["review"]["id"], "r2");
     assert_ne!(r2["review"]["fingerprint"], fingerprint);
-    assert_eq!(fs::read_to_string(&review_path).unwrap(), r1);
-    assert!(fs::read_to_string(r2["path"].as_str().unwrap()).unwrap().contains("A new goal."));
+    assert_eq!(fs::read_to_string(&summary_path).unwrap(), r1);
+    assert!(fs::read_to_string(home(&fx.env).plan_md(&pid("pay"))).unwrap().contains("A new goal."));
     assert_eq!(inproc::show(&fx, "pay")["review"]["id"], "r2");
     refused(&fx.cpd(&["plan", "review", "--title", "Review title"]), "plan_required", 2);
 }
@@ -1025,7 +1021,8 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
     assert_eq!(inproc::events(&fx, "plan-review").last().unwrap()["data"], json!({"review": "r2", "fingerprint": fingerprint, "status": "pending"}));
 
     // The render marks the drafts under review, and the Locked Jobs as context.
-    let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
+    assert!(out.get("path").is_none(), "{out}");
+    let text = fs::read_to_string(home(&fx.env).plan_md(&pid("pay"))).unwrap();
     assert!(text.contains("| Key | Title | Kind | Tier | Status | Needs | Touches | Review |"), "{text}");
     assert!(text.contains("| `c` | Job c | work | S2 | draft | `a` | `src/c.rs` | **under review** |"), "{text}");
     assert!(text.contains("| `a` | Job a | work | S2 | queued | none | `src/a.rs` | Locked |"), "{text}");
@@ -1157,7 +1154,8 @@ fn a_draft_open_job_is_no_job_under_review() {
     fx.outline_for_review("pay");
     assert_eq!(fx.cpd(&["plan", "render", "--plan", "pay"]).ok()["draft_jobs"], 1);
     let out = fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
-    let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
+    assert!(out.get("path").is_none(), "{out}");
+    let text = fs::read_to_string(home(&fx.env).plan_md(&pid("pay"))).unwrap();
     let row = text.lines().find(|l| l.starts_with("| `open-pay-2` |")).unwrap_or_else(|| panic!("no row for the open Job: {text}"));
     assert!(!row.contains("**under review**"), "{row}");
     assert!(text.lines().any(|l| l.starts_with("| `c` |") && l.contains("**under review**")), "{text}");
@@ -1835,7 +1833,7 @@ fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_app
     assert_eq!(error["details"]["plan"], "pay");
     assert!(error["message"].as_str().unwrap().contains("next-1, next-2"), "{error}");
     assert_eq!((inproc::events(&fx, "plan-review").len(), fx.env.query::<i64>("SELECT count(*) FROM events")), (reviews, evs));
-    assert!(!home(&fx.env).plan_review_md(&pid("pay"), ReviewId::parse("r2").unwrap()).exists());
+    assert!(!home(&fx.env).plan_md(&pid("pay")).with_file_name("summary-r2.md").exists());
     // `plan render` still shows them, and the fingerprint covers them as they are.
     let before = fx.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"].clone();
 

@@ -20,14 +20,13 @@ use super::reload::{adapter_missing_with, may_exec, reload_due_with, reload_with
 use super::row::{self, Role, Row, State};
 use super::{Env, RunArgs, not_a_lead, state};
 use crate::error::{CpdError, ErrorCode};
-use crate::host::addr::review_host;
 use crate::host::exe::{Exe, Watched};
 use crate::host::limit::limit;
 use crate::host::git_guard;
 use crate::clock::Clock;
 use crate::ports::Ports;
 use crate::host::spawn::{Launch, Pid as SpawnPid, Signal as SpawnSignal, Spawn};
-use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
+use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs};
 use crate::host::{PaneId, Tmux};
 use crate::ids::SessionId;
 use crate::output::Output;
@@ -176,33 +175,20 @@ fn launch_pi(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<(PiProc, 
     })?;
     let candidates = pi::lead_candidates(&env.config.pi_adapter_dir()?, &env.config.lead_pi_packages);
     let extensions = pi::extensions_to_pass(&candidates, Path::new(&row.cwd), dirs, &mut std::io::stderr());
-    // The port is the configured range, whatever the environment holds; the host is the review host (§6.5).
-    let plannotator = Plannotator::from_config(&env.config, review_host(&mut std::io::stderr()));
     git_guard::install(&env.home)?;
     let launch = pi::lead(&LeadLaunch {
         home: &env.home,
         session: &row.id,
         plan: row.plan.as_ref(),
         extensions: &extensions,
-        plannotator: &plannotator,
         start,
     });
     let pi_install = dirs.watch_install();
     // pi owns the pane's terminal (`foreground`) and is this process's child, which the loop waits for by pid.
-    // Inherited `PLANNOTATOR_*` variables go, but a Context's Manager has no plannotator variable but the ones cpd sets
-    // (§6.5), whatever its caller holds.
-    let env_remove = match row.plan {
-        Some(_) => Vec::new(),
-        None => std::env::vars_os()
-            .map(|(key, _)| key.to_string_lossy().into_owned())
-            .filter(|key| key.starts_with("PLANNOTATOR_") && !launch.env.contains_key(key))
-            .collect(),
-    };
     let spawn = Launch {
         program: launch.argv[0].clone(),
         args: launch.argv[1..].to_vec(),
         env_set: launch.env.iter().map(|(key, value)| (key.clone(), value.clone())).collect(),
-        env_remove,
         cwd: Some(PathBuf::from(&row.cwd)),
         foreground: true,
         ..Launch::default()
