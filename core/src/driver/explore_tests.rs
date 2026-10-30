@@ -59,6 +59,7 @@ fn worker_env(rig: &Rig, target: &Target) -> Vec<(String, String)> {
     let adapter = rig.tmp.path().join("adapter");
     std::fs::create_dir_all(adapter.join("durable-worker")).unwrap();
     std::fs::write(adapter.join("durable-worker").join("main.ts"), "").unwrap();
+    std::fs::write(adapter.join("package.json"), "{}").unwrap();
     let text = format!("version = 1\nmachine = \"t\"\npi_adapter = \"{}\"\n", adapter.display());
     let config = Config::parse(&text, Path::new("config.toml")).unwrap().0;
     let session = SessionId::parse(WORKER).unwrap();
