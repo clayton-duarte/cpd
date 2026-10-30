@@ -23,7 +23,8 @@ use super::SOURCE;
 use super::log::Log;
 use cpd_core::error::CpdError;
 use cpd_core::events::{self, NewEvent};
-use cpd_core::ids::{AttemptId, JobKey, PlanId, SessionId};
+use cpd_core::ids::{AttemptId, JobKey, PlanId, PrKey, SessionId};
+use cpd_core::pr::jira_sync::Target;
 use cpd_core::inbox::rules::{StuckGroup, StuckJob, stuck_groups};
 use cpd_core::job::home::JobHome;
 use cpd_core::session::tell_managers;
@@ -96,6 +97,8 @@ pub(super) enum About {
     /// A Session's retitle run (E10): the Inbox scope and the command are the Session's, but the
     /// `error` Event sets no Session, so no Lead gets a turn for it (contract §3.7 E10).
     TitleRun(SessionId),
+    /// One E19 queue row (Plan, PR, target): scoped to the Plan, deduped per row (contract §3.7 E19).
+    Move(PlanId, PrKey, Target),
 }
 
 impl About {
@@ -106,6 +109,7 @@ impl About {
             About::Job(p, j) => format!("Job {j} of Plan {p}"),
             About::Attempt(p, a) => format!("Attempt {a} of Plan {p}"),
             About::Session(s) | About::TitleRun(s) => format!("Session {s}"),
+            About::Move(p, pr, t) => format!("the {} move of PR {pr} of Plan {p}", t.as_str()),
         }
     }
 
@@ -118,7 +122,7 @@ impl About {
     fn see(&self) -> String {
         match self {
             About::Machine => "cpd doctor".to_owned(),
-            About::Plan(p) => format!("cpd plan show --plan {p}"),
+            About::Plan(p) | About::Move(p, ..) => format!("cpd plan show --plan {p}"),
             About::Session(s) | About::TitleRun(s) => format!("cpd session show {s}"),
             About::Job(p, j) => format!("cpd job show {j} --plan {p}"),
             About::Attempt(p, a) => format!("cpd attempt show {a} --plan {p}"),
@@ -129,7 +133,7 @@ impl About {
         let event = NewEvent::error(text, SOURCE, &failure.code, &failure.message, &failure.details);
         match self {
             About::Machine | About::TitleRun(_) => event,
-            About::Plan(p) => event.plan(p.clone()),
+            About::Plan(p) | About::Move(p, ..) => event.plan(p.clone()),
             About::Session(s) => event.session(s.clone()),
             About::Job(p, j) => event.plan(p.clone()).job(j.clone()),
             About::Attempt(p, a) => event.plan(p.clone()).job(a.job().clone()).attempt(a.clone()),
@@ -359,6 +363,18 @@ mod tests {
         assert_eq!(about.see(), "cpd session show lead1");
         let event = about.event("x".to_owned(), &failure("title_failed"));
         assert_eq!(format!("{event:?}").matches("session: None").count(), 1, "{event:?}");
+    }
+
+    /// An E19 row failure is keyed per row: its lead names the PR and the target; the Event is scoped to the Plan.
+    #[test]
+    fn a_move_failure_is_per_row_and_plan_scoped() {
+        let plan = PlanId::parse("plan-a").unwrap();
+        let about = About::Move(plan.clone(), PrKey::parse("pr1").unwrap(), Target::InReview);
+        assert_eq!(about.see(), "cpd plan show --plan plan-a");
+        assert!(about.lead(Step::E19).contains(&format!("the {} move of PR pr1 of Plan plan-a", Target::InReview.as_str())));
+        assert_ne!(about, About::Move(plan, PrKey::parse("pr2").unwrap(), Target::InReview));
+        let event = about.event("x".to_owned(), &failure("jira_failed"));
+        assert_eq!(format!("{event:?}").matches("plan: Some").count(), 1, "{event:?}");
     }
 
     /// engine-G6: a failure that cleared leaves nothing in the maps once the repeat period has passed.

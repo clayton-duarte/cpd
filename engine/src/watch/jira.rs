@@ -3,14 +3,16 @@
 //! cancelled, detached on its own thread, one run at a time, 120 s deadline, as E17 does. The ticket, the target and the three
 //! status names are read when the row runs. A target whose name is empty settles the row `skipped` without a call. An `ok`
 //! answer settles it (`moved`, `unchanged`); a `jira_refused` answer parks it with one `error` Event, and each tick a parked row
-//! whose ticket or status name now differs from what was refused is reopened. Any other failure leaves the row PENDING: it is
-//! reported once per code and skipped for `watch.error_repeat_seconds` after the failed run's end; the rows behind it go on.
+//! whose ticket or status name now differs from what was refused is reopened. Any other failure leaves the row PENDING and is
+//! skipped for `watch.error_repeat_seconds` after the failed run's end; the rows behind it go on. A row failure is one `error`
+//! Event scoped to the row's Plan (`About::Move`), once per code until the row ends (settles, is skipped or parked), naming the
+//! ticket, the status and Jira's message; `jira_auth` and `jira_not_configured` stay one machine-wide Event each.
 
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::SOURCE;
 use super::engine::{Engine, incident_holds};
@@ -66,6 +68,29 @@ fn policy_of(engine: &mut Engine, plan: &str, pr: &str) -> Result<Policy, CpdErr
     engine.store.read(|conn| cpd_core::pr::policy_of_pr(conn, &home, &plan, &key))
 }
 
+fn move_about(due: &Due) -> About {
+    About::Move(PlanId::parse(&due.plan).expect("a stored Plan id"), PrKey::parse(&due.pr).expect("a stored PR key"), due.target)
+}
+
+/// Reports a failure of the row `due`: machine-wide for a missing sign-in or server, else one Event of the row's Plan.
+fn fail_row(engine: &mut Engine, due: &Due, status: &str, failure: Failure) {
+    if failure.code == "jira_auth" || failure.code == "jira_not_configured" {
+        engine.fail(Step::E19, About::Machine, failure);
+        return;
+    }
+    let mut details = match failure.details {
+        Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    details.insert("plan".into(), json!(due.plan));
+    details.insert("pr".into(), json!(due.pr));
+    details.insert("ticket".into(), json!(due.ticket));
+    details.insert("target".into(), json!(due.target.as_str()));
+    details.insert("status".into(), json!(status));
+    let message = format!("{} could not be moved to \"{status}\": {}", due.ticket, failure.message);
+    engine.fail(Step::E19, move_about(due), Failure { code: failure.code, message, details: Value::Object(details) });
+}
+
 pub(super) fn run(engine: &mut Engine) {
     if incident_holds(engine, Step::E19) {
         engine.log.line("E19: holding: incident mode is on");
@@ -104,9 +129,12 @@ pub(super) fn run(engine: &mut Engine) {
         let names = names_of(&policy);
         let status = name_of(&names, due.target).to_owned();
         if status.is_empty() {
-            if let Err(e) = engine.store.write("engine E19", |tx| jira_sync::mark_settled(tx, due.id, Outcome::Skipped)) {
-                engine.jira.failed_at.insert(due.id, now);
-                engine.fail(Step::E19, about(&due.plan), Failure::from(&e));
+            match engine.store.write("engine E19", |tx| jira_sync::mark_settled(tx, due.id, Outcome::Skipped)) {
+                Ok(_) => engine.clear(Step::E19, &move_about(&due)),
+                Err(e) => {
+                    engine.jira.failed_at.insert(due.id, now);
+                    engine.fail(Step::E19, about(&due.plan), Failure::from(&e));
+                }
             }
             continue;
         }
@@ -114,7 +142,7 @@ pub(super) fn run(engine: &mut Engine) {
             Ok(answer) => engine.jira.running = Some(Running { due, status, answer }),
             Err(failure) => {
                 engine.jira.failed_at.insert(due.id, now);
-                engine.fail(Step::E19, About::Machine, failure);
+                fail_row(engine, &due, &status, failure);
             }
         }
         return;
@@ -141,31 +169,33 @@ fn collect(engine: &mut Engine) {
                     engine.jira.failed_at.remove(&due.id);
                     engine.log.line(&format!("E19: {} {} {} ({}): {}", outcome.as_str(), due.ticket, due.target.as_str(), due.pr, status));
                     engine.clear(Step::E19, &About::Machine);
+                    engine.clear(Step::E19, &move_about(&due));
                 }
                 Err(e) => {
                     engine.jira.failed_at.insert(due.id, ended);
-                    engine.fail(Step::E19, About::Machine, Failure::from(&e));
+                    fail_row(engine, &due, &status, Failure::from(&e));
                 }
             }
         }
         Err(failure) if failure.code == "jira_refused" => {
             let reason = failure.details["reason"].as_str().unwrap_or("unknown").to_owned();
-            let refusal = Refusal { reason: reason.clone(), message: failure.message.clone(), ticket: due.ticket.clone(), status };
+            let refusal = Refusal { reason: reason.clone(), message: failure.message.clone(), ticket: due.ticket.clone(), status: status.clone() };
             match engine.store.write("engine E19", |tx| jira_sync::refuse(tx, SOURCE, due.id, &refusal)) {
                 Ok(_) => {
                     engine.jira.failed_at.remove(&due.id);
                     engine.log.line(&format!("E19: parked {} {} on {} of {}: {reason}", due.ticket, due.target.as_str(), due.pr, due.plan));
                     engine.clear(Step::E19, &About::Machine);
+                    engine.clear(Step::E19, &move_about(&due));
                 }
                 Err(e) => {
                     engine.jira.failed_at.insert(due.id, ended);
-                    engine.fail(Step::E19, About::Machine, Failure::from(&e));
+                    fail_row(engine, &due, &status, Failure::from(&e));
                 }
             }
         }
         Err(failure) => {
             engine.jira.failed_at.insert(due.id, ended);
-            engine.fail(Step::E19, About::Machine, failure);
+            fail_row(engine, &due, &status, failure);
         }
     }
 }
