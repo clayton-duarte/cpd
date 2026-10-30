@@ -452,6 +452,34 @@ mod tests {
         assert!(shown.iter().any(|s| s.ends_with(&precedence)), "{shown:?}");
     }
 
+    /// pro-d200: the five working spinner colours, each drawn by the palette call of the dot.
+    #[test]
+    fn dots_legend_lists_the_five_working_spinner_colours() {
+        let dots = &sections()[2];
+        assert_eq!(dots.title, "Session Dots");
+        let loader = |d: Dot| (0..palette::SPINNER.len()).map(|f| palette::dot_span(d, f, false)).collect::<Vec<_>>();
+        let expected = [
+            (Dot::Fixing, palette::numbered::C9, "the Lead is fixing a failed Job or answering a Worker's question"),
+            (Dot::Working(Some(Work::Review)), palette::numbered::C11, "the Lead is working on a pull request (open, conflict, deploy, landing)"),
+            (Dot::Working(Some(Work::Planning)), palette::numbered::C13, "the Lead is planning (grounding, drafts, a follow-up)"),
+            (Dot::Working(Some(Work::Dispatch)), palette::numbered::C14, "the Lead is working alongside running Jobs"),
+            (Dot::Working(None), palette::numbered::C15, "a working Session with no Plan"),
+        ];
+        for (dot, colour, label) in expected {
+            let row = dots
+                .rows
+                .iter()
+                .find(|r| r.get(1).is_some_and(|l| text(l).starts_with(label)))
+                .unwrap_or_else(|| panic!("a row labelled {label:?}"));
+            assert_eq!(row[0].spans, loader(dot), "{label}: drawn like the dot");
+            assert!(row[0].spans.iter().all(|s| s.style.fg == Some(colour)), "{label}: colour");
+        }
+        let says: Vec<String> = dots.rows.iter().filter_map(|r| r.get(1)).map(text).collect();
+        for old in ["grounding (one", "plan (one", "deploy (one", "done (one", "dispatch (a Session"] {
+            assert!(!says.iter().any(|s| s.starts_with("the Lead is working,") && s.contains(old)), "old row {old:?}: {says:?}");
+        }
+    }
+
     #[test]
     fn the_dots_say_what_needs_you_and_what_only_waits_for_an_agent() {
         let dots = &sections()[2];

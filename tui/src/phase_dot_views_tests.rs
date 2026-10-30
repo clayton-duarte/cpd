@@ -37,6 +37,29 @@ fn the_plan_view_reads_its_leads_plan_phase() {
     }
 }
 
+/// pro-d200: the PR box title's Lead dot follows what the Lead works on, and is red for a failed Job or an open Escalation.
+#[test]
+fn dots_plan_box_title_dot_follows_work() {
+    let needs = |work: Option<Work>, escalated: bool| NeedsUser { lead_working: true, lead_work: work, lead_escalated: escalated, ..NeedsUser::default() };
+    let pr = pr_node(true);
+    for (work, colour) in [
+        (Some(Work::Planning), palette::numbered::C13),
+        (Some(Work::Dispatch), palette::numbered::C14),
+        (Some(Work::Review), palette::numbered::C11),
+        (None, palette::numbered::C15),
+    ] {
+        for frame in [0, 5, 27] {
+            assert_eq!(title_dot(&pr, &[], &needs(work, false), frame), Some(colour), "{work:?} frame {frame}");
+        }
+    }
+    for work in [Some(Work::Planning), Some(Work::Review), None] {
+        assert_eq!(title_dot(&pr, &[failed_job()], &needs(work, false), 3), Some(palette::numbered::C9), "a failed Job beats {work:?}");
+        assert_eq!(title_dot(&pr, &[], &needs(work, true), 3), Some(palette::numbered::C9), "an Escalation beats {work:?}");
+    }
+    let idle = NeedsUser { lead_working: false, lead_work: Some(Work::Dispatch), ..NeedsUser::default() };
+    assert_eq!(title_dot(&pr_node(false), &[], &idle, 0), None, "a Lead not working: no spinner");
+}
+
 /// A PR of a Plan whose Lead works (or not), with one pull request.
 fn pr_node(lead_working: bool) -> PrNode {
     PrNode {
