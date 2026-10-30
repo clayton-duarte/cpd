@@ -1169,7 +1169,7 @@ fn show_returns_every_field_its_escalations_and_its_paths() {
             "plan": "pay", "id": "api-a1", "job": "api", "number": 1, "tier": "S2", "origin": "ladder", "status": "running",
             "outcome": null, "cause": null, "branch": "cpd/pay--api-a1", "worktree": fx.work.to_str().unwrap(),
             "base_sha": base, "driver_pid": 4242, "worker_session": "w1", "spec_path": "/specs/api-a1.md",
-            "submitted_sha": null, "submitted_at": null, "check_tail": null, "merged_sha": null, "nudged": true,
+            "submitted_sha": null, "submitted_at": null, "check_tail": null, "gate_hook": null, "gate_command": null, "gate_exit": null, "merged_sha": null, "nudged": true,
             "stop_request": null, "metrics": {"turns": 3}, "started_at": "t", "ended_at": null,
             "runner": "pi", "worker_pid": null,
         })
