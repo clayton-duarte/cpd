@@ -540,7 +540,7 @@ fn job_failed_texts(live: &Live) -> Vec<String> {
 }
 
 /// Runs `open-repo` against a hook that answers `reply`; returns the one `job-failed` Event's `(text, data.detail)`.
-fn gate_failure_text(reply: Reply) -> (String, String) {
+fn gate_failure_text(reply: Reply) -> (String, String, Live) {
     let live = open_live();
     live.gh_creates();
     live.hooks("[pre-merge]\ngate = \"make gate\"\n");
@@ -549,7 +549,7 @@ fn gate_failure_text(reply: Reply) -> (String, String) {
     let texts = job_failed_texts(&live);
     assert_eq!(texts.len(), 1, "{texts:?}");
     let failed = live.plan_events("job-failed");
-    (texts[0].clone(), failed[0].1["detail"].as_str().unwrap().to_string())
+    (texts[0].clone(), failed[0].1["detail"].as_str().unwrap().to_string(), live)
 }
 
 /// The last five non-blank lines of the scripted output, cut as the Event cuts them.
@@ -570,14 +570,14 @@ fn assert_five_lines_see_decide(text: &str) {
 
 #[test]
 fn a_gate_failed_events_text_stays_within_1500_characters_whatever_the_tail() {
-    let (text, _) = gate_failure_text(Reply::exit(1, &long_gate_output(), ""));
+    let (text, _, _live) = gate_failure_text(Reply::exit(1, &long_gate_output(), ""));
 
     assert!(text.chars().count() <= 1500, "{} characters", text.chars().count());
 }
 
 #[test]
 fn a_gate_failed_events_text_ends_with_see_the_log_which_holds_the_whole_output_and_the_detail_keeps_the_tail() {
-    let (text, detail) = gate_failure_text(Reply::exit(1, &long_gate_output(), ""));
+    let (text, detail, _live) = gate_failure_text(Reply::exit(1, &long_gate_output(), ""));
 
     let see = text.lines().find(|l| l.starts_with("See: ")).unwrap_or_else(|| panic!("no See: line in {} characters", text.chars().count()));
     let path = see.trim_start_matches("See: ");
@@ -596,7 +596,7 @@ fn a_gate_failed_events_text_ends_with_see_the_log_which_holds_the_whole_output_
 
 #[test]
 fn a_gate_failed_events_text_carries_the_last_five_non_blank_lines_cut_at_160_characters_and_none_before_them() {
-    let (text, _) = gate_failure_text(Reply::exit(1, &long_gate_output(), ""));
+    let (text, _, _live) = gate_failure_text(Reply::exit(1, &long_gate_output(), ""));
 
     assert!(text.starts_with("Job open-repo failed (gate_failed): pre-merge failed (exit 1)."), "{}", text.lines().next().unwrap_or(""));
     assert_five_lines_see_decide(&text);
@@ -607,7 +607,7 @@ fn a_gate_failed_events_text_carries_the_last_five_non_blank_lines_cut_at_160_ch
 
 #[test]
 fn a_gate_errors_events_text_is_short_the_same_way() {
-    let (text, _) = gate_failure_text(Reply::signal(9, &long_gate_output(), ""));
+    let (text, _, _live) = gate_failure_text(Reply::signal(9, &long_gate_output(), ""));
 
     assert!(text.chars().count() <= 1500, "{} characters", text.chars().count());
     assert!(text.starts_with("Job open-repo failed (gate_error): pre-merge could not be judged ("), "{}", text.lines().next().unwrap_or(""));
