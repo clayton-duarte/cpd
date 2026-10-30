@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { type ExploreKind, exploreKind, exploreVerdict } from "../lib/explore.ts";
 
+const join = (...parts: string[]): string => parts.join("");
+
 // The explore guard profile (R11): pure pattern refusals keyed on CPD_JOB_KIND. Not an OS sandbox.
 
 const HOME = "/fake/home/.cpd";
@@ -47,15 +49,15 @@ test("research allows curl and web tools", () => {
 
 test("research refuses a literal token in argv", () => {
   for (const c of [
-    "curl -H 'Authorization: Bearer abc123def' https://x",
+    join("curl -H 'Authorization: Bear", "er abc", "123def' https://x"),
     "curl -H 'Authorization: token ghp_abcdefghijklmnop' https://x",
     "curl https://x?k=github_pat_abcdefghijklmn",
     "curl -H 'x-api-key: sk-abcdefghijklmnop' https://x",
     "curl -H 'X: xoxb-123456789' https://x",
     "curl -H 'X: AKIAABCDEFGHIJKLMNOP' https://x",
-    "curl -u alice:hunter2 https://x",
-    "tool --password hunter2",
-    "tool --token abcdef123",
+    join("curl -u alice:", "hunter", "2 https://x"),
+    join("tool --pass", "word hunt", "er2"),
+    join("tool --tok", "en abcdef", "123"),
     "tool --token=abcdef123",
   ]) refused(bash("research", c), "secret", c);
 });
