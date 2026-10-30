@@ -608,7 +608,13 @@ fn next_rung(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder
     // pro-d280: a failed Gate requeues once at the Attempt's own Tier, and spends `retry_cap`.
     if cause == Cause::GateFailed {
         let (plan, job) = (attempt.plan.as_str(), attempt.job.as_str());
-        if automatic_attempts(tx, plan, job)? >= 1 + i64::from(ladder.retry_cap) {
+        // A failed Gate proves the Attempt ran: count this one even when its `driver_pid` is null.
+        let uncounted: bool = tx.query_row(
+            "SELECT driver_pid IS NULL FROM attempts WHERE plan = ?1 AND id = ?2",
+            params![plan, attempt.id.to_string()],
+            |r| r.get(0),
+        )?;
+        if automatic_attempts(tx, plan, job)? + i64::from(uncounted) >= 1 + i64::from(ladder.retry_cap) {
             return Ok(None);
         }
         return Ok((ended_with(tx, plan, job, cause)? <= GATE_RETRIES).then_some(attempt.tier));
