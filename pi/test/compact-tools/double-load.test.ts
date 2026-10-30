@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { mock } from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { otherCopy } from "../../compact-tools/extensions/compact-tools-double-load.ts";
+import { findOtherCopy, otherCopy } from "../../compact-tools/extensions/compact-tools-double-load.ts";
 import compactTools from "../../compact-tools/extensions/compact-tools.ts";
 
 // --- otherCopy: a pure function of the two lists ----------------------------------------------
@@ -177,4 +177,29 @@ test("with no other copy, or with other packages, the factory registers what it 
 			handlers.get("session_shutdown")?.forEach((handler) => handler({ reason: "quit" }, ctx));
 		});
 	}
+});
+
+test("findOtherCopy finds the other copy while pi holds the lock on the settings files", (t) => {
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	const made = (prefix: string) => {
+		const dir = mkdtempSync(join(tmpdir(), prefix));
+		t.after(() => rmSync(dir, { recursive: true, force: true }));
+		return dir;
+	};
+	const held = (file: string, packages: string[]) => {
+		writeFileSync(file, JSON.stringify({ packages }));
+		mkdirSync(`${file}.lock`);
+	};
+	t.after(() => { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; });
+	const agent = made("compact-double-lock-agent-");
+	held(join(agent, "settings.json"), ["npm:pi-compact-tools"]);
+	process.env.PI_CODING_AGENT_DIR = agent;
+	assert.deepEqual(findOtherCopy(made("compact-double-lock-cwd-"))?.copy, { source: "npm:pi-compact-tools", scope: "global" });
+	const bare = made("compact-double-lock-bare-");
+	writeFileSync(join(bare, "settings.json"), JSON.stringify({ packages: [] }));
+	process.env.PI_CODING_AGENT_DIR = bare;
+	const cwd = made("compact-double-lock-project-");
+	mkdirSync(join(cwd, ".pi"));
+	held(join(cwd, ".pi", "settings.json"), ["npm:pi-compact-tools"]);
+	assert.deepEqual(findOtherCopy(cwd)?.copy, { source: "npm:pi-compact-tools", scope: "project" });
 });
