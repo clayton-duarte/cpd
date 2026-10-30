@@ -291,7 +291,7 @@ fn decide(conn: &Connection, home: &CpdHome, catalog: &Catalog, plan: &PlanId, k
             let tier = job.require_tier()?;
             (Tier::parse(tier).map_err(|_| bad(format!("tier {tier:?} of Job {key}")))?, Origin::Ladder)
         }
-        (None, Some((number, tier, never_started, X {
+        (None, Some((number, tier, never_started, same_tier))) => {
             let last = Tier::parse(tier).map_err(|_| bad(format!("tier {tier:?} of Attempt {key}-a{number}")))?;
             if *never_started || *same_tier || !catalog.is_valid(last) {
                 // The ledger queued the Job at that Tier again: the Attempt was not a try (a provider error never raises the Tier, pro-d102; nor does a failed Gate, pro-d280).
