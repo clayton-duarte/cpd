@@ -95,7 +95,7 @@ fn migration_keeps_every_existing_job_row_and_dependency() {
         &mut old,
         &format!(
             "{} {} {}
-             INSERT INTO dependencies (plan, job, depends_on) VALUES ('pay', 'b', 'a');
+             INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'b', 'a');
              UPDATE jobs SET status = 'running' WHERE key = 'a';
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
                VALUES ('pay', 'a-a1', 'a', 1, 'S1', 'ladder', 'running', 'pay/api', '/w', 't');",
@@ -113,7 +113,7 @@ fn migration_keeps_every_existing_job_row_and_dependency() {
             Ok((
                 col("SELECT plan || '/' || key || '/' || kind || '/' || ifnull(pr, '') || '/' || status || '/' || ifnull(fingerprint, '') FROM jobs ORDER BY seq")?,
                 col("SELECT plan || '/' || id || '/' || job || '/' || status FROM attempts ORDER BY id")?,
-                col("SELECT plan || '/' || job || '/' || depends_on FROM dependencies ORDER BY 1")?,
+                col("SELECT plan || '/' || job || '/' || needs FROM dependencies ORDER BY 1")?,
                 col("SELECT type || ':' || name FROM sqlite_schema WHERE tbl_name IN ('jobs', 'attempts', 'dependencies') AND name NOT LIKE 'sqlite_%' AND type IN ('index', 'trigger') AND name NOT LIKE 'history_%' ORDER BY 1")?,
             ))
         })
