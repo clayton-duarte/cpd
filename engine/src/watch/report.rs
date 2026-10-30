@@ -25,6 +25,7 @@ use cpd_core::error::CpdError;
 use cpd_core::events::{self, NewEvent};
 use cpd_core::ids::{AttemptId, JobKey, PlanId, SessionId};
 use cpd_core::inbox::rules::{StuckGroup, StuckJob, stuck_groups};
+use cpd_core::job::home::JobHome;
 use cpd_core::session::tell_managers;
 use cpd_core::store::Store;
 
@@ -152,7 +153,10 @@ impl From<&CpdError> for Failure {
 
 /// What every message about a group's stuck Jobs begins with: the record that it was sent ([`tell_stuck_jobs`]).
 fn stuck_prefix(group: &StuckGroup) -> String {
-    format!("Jobs of PR {}/{} failed ", group.plan, group.pr)
+    match &group.home {
+        JobHome::Pr(pr) => format!("Jobs of PR {}/{pr} failed ", group.plan),
+        JobHome::Plan => format!("Explore Jobs of Plan {} failed ", group.plan),
+    }
 }
 
 /// The one message of a PR's stuck Jobs to its Context's Manager (contract §3.7 "A stuck Job", hs-d647): each Job with its
@@ -482,7 +486,7 @@ mod tests {
     fn stuck(context: &str, plan: &str, pr: &str, job: &str, event: i64, minutes: i64) -> StuckJob {
         StuckJob {
             plan: PlanId::parse(plan).unwrap(),
-            pr: PrKey::parse(pr).unwrap(),
+            home: JobHome::Pr(PrKey::parse(pr).unwrap()),
             job: JobKey::parse(job).unwrap(),
             context: ContextId::parse(context).unwrap(),
             event,
