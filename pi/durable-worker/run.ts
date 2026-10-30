@@ -9,10 +9,11 @@ import { zoneLine } from "../lib/time.ts";
 import { reportPath, storePath, type Config } from "./config.ts";
 import { inputOf, type Input } from "./deliver.ts";
 import { cpdExtension } from "./extension.ts";
+import { mcpHandler, type McpPort } from "./mcp.ts";
 import { endReport, type EndReport, type Entry } from "./report.ts";
 
 export type Submission = { wait(): Promise<"done" | "unanswered"> };
-export type Conversation = { submit(input: Input): Promise<Submission>; entries(): Promise<readonly Entry[]>; closed: Promise<unknown> };
+export type Conversation = { submit(input: Input): Promise<Submission>; install(extension: Extension): void; entries(): Promise<readonly Entry[]>; closed: Promise<unknown> };
 
 type Model = { provider: string; modelId: string; thinkingLevel?: string };
 
@@ -24,6 +25,7 @@ export type Deps = {
   follow(hooks: FollowerHooks): { start(): void; stop(): void };
   writeReport(file: string, report: EndReport): Promise<void>;
   onTerminate(handler: () => void): void;
+  mcp: McpPort;
   homeDir(): string;
   now(): Date;
   log(line: string): void;
@@ -54,6 +56,7 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
   );
   let follower: { start(): void; stop(): void } | undefined;
   let opened: Conversation | undefined;
+  let mcp: ReturnType<typeof mcpHandler> | undefined;
 
   const main = async (): Promise<void> => {
     const shownSession = await deps.cpd(["session", "show", config.session]);
@@ -63,7 +66,7 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
     const policy = policySection(await deps.cpd(["policy", "show"]));
     const extension = cpdExtension(
       { contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) },
-      { cwd: config.cwd, home: deps.homeDir(), kind: config.jobKind, plan: config.plan },
+      { cwd: config.cwd, home: deps.homeDir(), cpdHome: config.home, kind: config.jobKind, plan: config.plan },
     );
     const conversation = await deps.open({ file: storePath(config.home, config.plan, config.attempt), cwd: config.cwd, model, extension });
     opened = conversation;
@@ -101,6 +104,10 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
     if (shownState === "stopped") reporter.want({ state: "idle" });
     await submit({ content: `Read ${config.spec} and follow it exactly. Your attempt id is ${config.attempt}.`, requestId: config.attempt, whenBusy: "followUp" });
 
+    const handler = mcpHandler({ session: config.session, port: deps.mcp, install: (x) => conversation.install(x), cpd: deps.cpd, submit, log: deps.log, over: () => over });
+    mcp = handler;
+    await handler.replay();
+
     let cursor = session.registeredEvent;
     follower = deps.follow({
       before: async () => {},
@@ -112,6 +119,10 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
           return false;
         }
         cursor = line.event.id;
+        if (line.event.kind === "mcp-attached") {
+          handler.handle(line.event);
+          return true;
+        }
         const input = inputOf(line.event, config.session);
         if (input) submit(input).catch((e) => {
           failed("an event", e);
@@ -140,6 +151,7 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
       failed("the end report at terminate", e);
     }
   }
+  await mcp?.closeAll();
   await reporter.close({ state: "stopped" });
   return code;
 }

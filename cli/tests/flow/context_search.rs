@@ -325,3 +325,91 @@ fn a_search_syncs_only_the_new_and_changed_facts() {
     assert_eq!(indexed, [n1.as_str(), n3.as_str()], "the changed curation and the new record, never the unchanged one: {:?}", bridge.requests());
     assert!(!indexed.contains(&n2.as_str()), "{:?}", bridge.requests());
 }
+
+/// Runs a search for `typed` against a fake engine that returns one note; returns the answer and the
+/// query the engine received.
+fn search_typed(typed: &str) -> (Value, String, String) {
+    let (fx, bridge) = env();
+    let n1 = note(&fx, "A note about retrieval.");
+    bridge.reply("stats", &synced(1));
+    bridge.reply("search", &hits(&[(&n1, 0.5)]));
+    let out = fx.cpd(&["context", "search", typed, "--context", CTX]).ok();
+    let sent = searches(&bridge);
+    assert_eq!(sent.len(), 1, "one search request: {:?}", bridge.requests());
+    (out, sent[0].0.clone(), n1)
+}
+
+/// Asserts `typed` is answered ok with the engine's record and reaches the engine as `sent`.
+fn assert_reaches_engine(typed: &str, sent: &str) {
+    let (out, got, n1) = search_typed(typed);
+    assert_eq!(out["records"][0]["id"], n1.as_str(), "{out}");
+    assert_eq!(got, sent, "typed {typed:?}: {out}");
+}
+
+#[test]
+fn a_bare_id_reaches_the_engine_quoted() {
+    assert_reaches_engine("hs-d655", "\"hs-d655\"");
+}
+
+#[test]
+fn a_dotted_token_reaches_the_engine_quoted() {
+    assert_reaches_engine("db.migrations", "\"db.migrations\"");
+}
+
+#[test]
+fn a_slashed_token_reaches_the_engine_quoted() {
+    assert_reaches_engine("plan/key", "\"plan/key\"");
+}
+
+#[test]
+fn an_apostrophe_reaches_the_engine_quoted() {
+    assert_reaches_engine("don't", "\"don't\"");
+}
+
+#[test]
+fn an_id_among_plain_words_reaches_the_engine_quoted() {
+    assert_reaches_engine("retrieval of hs-d655 today", "retrieval of \"hs-d655\" today");
+}
+
+#[test]
+fn the_answer_echoes_the_query_as_typed() {
+    let (out, got, n1) = search_typed("hs-d655");
+    assert_eq!(out["records"][0]["id"], n1.as_str(), "{out}");
+    assert_eq!(out["query"], "hs-d655", "{out}");
+    assert_eq!(got, "\"hs-d655\"", "{out}");
+}
+
+#[test]
+fn a_short_page_retry_repeats_the_quoted_query() {
+    let (fx, bridge) = env();
+    let n1 = note(&fx, "The one live note.");
+    let n2 = note(&fx, "The hidden note.");
+    decide(&fx, "The new decision.", Some(&n2));
+    let gone = |from: usize, to: usize| -> Vec<(String, f64)> { (from..to).map(|i| (format!("hs-n{i}"), 0.1)).collect() };
+    let mut first = gone(1000, 1079);
+    first.push((n2.clone(), 0.2));
+    let mut second = gone(2000, 2399);
+    second.push((n1.clone(), 0.5));
+    bridge.reply("stats", &synced(1000));
+    bridge.reply_n("search", 1, &hits_owned(&first));
+    bridge.reply_n("search", 2, &hits_owned(&second));
+
+    let out = fx.cpd(&["context", "search", "hs-d655", "--context", CTX, "--limit", "1"]).ok();
+    assert_eq!(out["records"][0]["id"], n1.as_str(), "{out}");
+    assert_eq!(
+        searches(&bridge),
+        [("\"hs-d655\"".to_owned(), 80), ("\"hs-d655\"".to_owned(), 400)],
+        "both requests carry the quoted query: {:?}",
+        bridge.requests()
+    );
+}
+
+#[test]
+fn a_prefix_phrase_and_operator_reach_the_engine_as_typed() {
+    for typed in ["retriev*", "\"first message\" OR digest"] {
+        assert_reaches_engine(typed, typed);
+    }
+    // The prefix star and the operator stay outside the quotes of an id they follow or join.
+    assert_reaches_engine("pro-d217*", "\"pro-d217\"*");
+    assert_reaches_engine("\"first message\" OR hs-d655", "\"first message\" OR \"hs-d655\"");
+}

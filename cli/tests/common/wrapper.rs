@@ -233,9 +233,8 @@ pub struct Pane {
 impl Pane {
     /// A pane for `session`, in the cockpit of `fx` (a new window whose `@cpd_session` is `session`, as the command that
     /// creates a Lead's pane sets it); `installed` is the path the wrapper runs from (`FakeSpawn::self_exe`).
-    /// Exports `TMUX` and `TMUX_PANE` for the wrapper's `wrong_pane` check, and `PLANNOTATOR_URL_HOST` (so no socket is
-    /// asked for the review host) until `fx` drops. The stdin and the output of the process point at `/dev/null` and
-    /// the screen file until the `Pane` drops.
+    /// Exports `TMUX` and `TMUX_PANE` for the wrapper's `wrong_pane` check until `fx` drops. The stdin and the output of the process
+    /// point at `/dev/null` and the screen file until the `Pane` drops.
     pub fn new(fx: &Fx, session: &str, installed: &Path) -> Pane {
         if fx.tmux_state().is_none() {
             fx.cockpit();
@@ -255,7 +254,6 @@ impl Pane {
         let pane = pane.to_owned();
         fx.export("TMUX", &format!("{}/tmux-0/{},1,0", fx.env.tmux_tmpdir().display(), fx.env.tmux_socket()));
         fx.export("TMUX_PANE", &pane);
-        fx.export("PLANNOTATOR_URL_HOST", "localhost");
         fx.fakes.spawn.set_self_exe(installed);
 
         let spawn = Arc::new(PaneSpawn {

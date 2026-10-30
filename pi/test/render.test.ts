@@ -192,7 +192,7 @@ const decision = (approved: boolean): Message & { timestamp: number } => ({
   customType: "cpd-plan-decision",
   content: `Plan review rv-3 was ${approved ? "APPROVED" : "REJECTED"}.\nNext: cpd plan lock`,
   display: true,
-  details: { plan: "p1", review: "rv-3", plannotator_id: "x", approved, current: true },
+  details: { plan: "p1", review: "rv-3", approved, current: true },
   timestamp: TIME_MS,
 });
 
@@ -203,8 +203,8 @@ test("cpd-plan-decision: `Plan review <id> approved|rejected`", () => {
 });
 
 test("a review that is gone (no verdict) shows the first line of its content", () => {
-  const lost: Message & { timestamp: number } = { customType: "cpd-plan-decision", content: "Plan review rv-3 is gone (plannotator no longer knows it).\nCall cpd_plan_review again.", display: true, details: { review: "rv-3", lost: true }, timestamp: TIME_MS };
-  assert.equal(show(lost, false)[0], HEAD("Plan review rv-3 is gone (plannotator no longer knows it)."));
+  const lost: Message & { timestamp: number } = { customType: "cpd-plan-decision", content: "Plan review rv-3 is gone.\nCall cpd_plan_review again.", display: true, details: { review: "rv-3", lost: true }, timestamp: TIME_MS };
+  assert.equal(show(lost, false)[0], HEAD("Plan review rv-3 is gone."));
 });
 
 test("a customType the adapter starts to display later: the first line of its content", () => {
@@ -215,9 +215,9 @@ test("a customType the adapter starts to display later: the first line of its co
 // ---- cpd-plan-summary ----
 
 test("cpd-plan-summary: `Plan review <id> summary`, always open with its Markdown content in full, no closing row and no toggle", () => {
-  const content = "# Review title\nPlan p1: Plan · review r1\n\nGoal: Show a review in chat\n\nApprove | Change | Open full plan (/x/plan-r1.md)";
+  const content = "# Review title\nPlan p1: Plan · review r1\n\nGoal: Show a review in chat\n\nApprove | Change";
   const m: Message & { timestamp: number } = { customType: "cpd-plan-summary", content, display: true, details: { plan: "p1", review: "r1" }, timestamp: TIME_MS };
-  const expected = [HEAD("Plan review r1 summary"), rail("# Review title"), rail("Plan p1: Plan · review r1"), rail(""), rail("Goal: Show a review in chat"), rail(""), rail("Approve | Change | Open full plan (/x/plan-r1.md)"), TERM];
+  const expected = [HEAD("Plan review r1 summary"), rail("# Review title"), rail("Plan p1: Plan · review r1"), rail(""), rail("Goal: Show a review in chat"), rail(""), rail("Approve | Change"), TERM];
   assert.deepEqual(show(m, false), expected);
   assert.deepEqual(show(m, true), expected);
   const component = rendering().render(m, { expanded: false, outputPad: 1 }, theme) as Component & { handleMouse?: unknown };
@@ -359,7 +359,7 @@ test("the adapter registers one renderer per displayed customType once at load, 
   const f = new Fixture();
   try {
     f.load();
-    assert.deepEqual([...f.pi.renderers.keys()], ["cpd", "cpd-context", "cpd-plan-decision", "cpd-plan-summary"]);
+    assert.deepEqual([...f.pi.renderers.keys()], ["cpd", "cpd-context", "cpd-plan-decision", "cpd-plan-summary", "cpd-skills"]);
     assert.deepEqual([...f.pi.renderers.keys()], [...RENDERED_TYPES]);
     mkdirSync(f.agentDir);
     f.file("agent/compact-tools.json", '{"style": "codex"}');

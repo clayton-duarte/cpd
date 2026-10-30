@@ -1,6 +1,7 @@
 //! The `@cpd_workers` step (contract §6.1; commands.md §12; User, hs-d149,
 //! hs-d198): the right side of the StatusBar, which tmux's status line cannot
-//! compute: the `workers N/M · W waiting · Q queued` text and its short form `N/M·W·Q`.
+//! compute: the plain text `workers Q󰞘W󰞘N/M` and its short form `Q󰞘W󰞘N/M`
+//! (hs-d749, hs-d750): no style, drawn in the pill's one reversed text colour on its colour-8 block.
 //! Every tick, `N` is the tenant Jobs of `workers` (the starter's count,
 //! contract §3.4 "Tenancy"), `M` is `concurrency`, `W` the Ready Jobs (E3's rule) and
 //! `Q` the `queued` Jobs; the options are set in one `tmux set` call only
@@ -35,6 +36,9 @@ const HELD: &str = "SELECT count(*) FROM job_tenants WHERE pool = 'workers'";
 /// Every `queued` Job, the waiting ones included.
 const QUEUED: &str = "SELECT count(*) FROM jobs WHERE status = 'queued'";
 
+/// The glyph between the three numbers (User, hs-d749): a private-use Nerd Font glyph, one cell wide like the buttons' glyphs.
+const SEPARATOR: char = '\u{f0798}';
+
 /// The three numbers of the StatusBar.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(super) struct Counts {
@@ -55,14 +59,14 @@ impl Counts {
         Ok(Counts { running: count(HELD)?, limit, waiting: count(&format!("SELECT count(*) FROM ({READY})"))?, queued: count(QUEUED)? })
     }
 
-    /// `workers N/M · W waiting · Q queued`, with no style of its own.
+    /// `workers Q󰞘W󰞘N/M`: the label and the short form, plain.
     pub(super) fn long(self) -> String {
-        format!("workers {}/{} · {} waiting · {} queued", self.running, self.limit, self.waiting, self.queued)
+        format!("workers {}", self.short())
     }
 
-    /// `N/M·W·Q`, with no style of its own.
+    /// `Q󰞘W󰞘N/M`: the three numbers and `/M`, plain, no label.
     pub(super) fn short(self) -> String {
-        format!("{}/{}·{}·{}", self.running, self.limit, self.waiting, self.queued)
+        format!("{}{SEPARATOR}{}{SEPARATOR}{}/{}", self.queued, self.waiting, self.running, self.limit)
     }
 }
 
@@ -171,13 +175,6 @@ mod tests {
 
     fn counts(running: u32, limit: u32, waiting: u32, queued: u32) -> Counts {
         Counts { running, limit, waiting, queued }
-    }
-
-    #[test]
-    fn the_workers_texts_have_no_style() {
-        let c = counts(6, 6, 4, 9);
-        assert_eq!(c.long(), "workers 6/6 · 4 waiting · 9 queued");
-        assert_eq!(c.short(), "6/6·4·9");
     }
 
     /// The tables the Ready rule reads, with three Plans' worth of rows.

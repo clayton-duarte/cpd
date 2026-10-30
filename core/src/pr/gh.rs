@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::error::{CpdError, ErrorCode};
+use super::merge_method::{MergeMethods, Method};
 use super::comments;
 use super::status::{Approval, ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use crate::git::{TAIL_LINES, tail};
@@ -64,6 +65,12 @@ pub struct Check {
     /// A CheckRun's `detailsUrl`, else a StatusContext's `targetUrl`.
     #[serde(rename = "detailsUrl", alias = "targetUrl")]
     pub url: Option<String>,
+    /// A CheckRun's workflow name (`gh pr view`: `workflowName`); none for a third-party app.
+    #[serde(rename = "workflowName", default)]
+    pub workflow: Option<String>,
+    /// A CheckRun's `startedAt`, a StatusContext's `startedAt` (`gh pr view`) or `createdAt` (GraphQL); RFC 3339 UTC.
+    #[serde(rename = "startedAt", default)]
+    pub started_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -358,17 +365,21 @@ pub fn close_pr(cwd: &Path, repo: &str, number: i64) -> Result<(), CpdError> {
 }
 
 /// Retitles the pull request `repo`#`number` (`owner/name`): `gh api -X PATCH repos/<repo>/pulls/<n> -f title=<title>`.
-/// Not `gh pr edit`: it fails on repos with the deprecated classic Projects (commands.md §9.5, hs-d285).
+/// Not `gh pr edit`: it fails on repos with the deprecated classic Projects (commands.md §9.5, hs-d285). `describe_pr` shares that reason.
 pub fn retitle_pr(cwd: &Path, repo: &str, number: i64, title: &str) -> Result<(), CpdError> {
     let endpoint = format!("repos/{repo}/pulls/{number}");
     let field = format!("title={title}");
     run(cwd, &["api", "-X", "PATCH", &endpoint, "-f", &field]).map(drop)
 }
 
-/// `gh pr edit <number> --body-file -` with `body` on stdin: replaces the pull request's body.
-pub fn describe_pr(cwd: &Path, number: i64, body: &str) -> Result<(), CpdError> {
-    let n = number.to_string();
-    let args = ["pr", "edit", &n, "--body-file", "-"];
+/// Replaces the body of the pull request `repo`#`number` (`owner/name`): `gh api -X PATCH repos/<repo>/pulls/<n> --input -`
+/// with `{"body": <body>}` on stdin. Not `gh pr edit`: it fails on repos with the deprecated classic Projects
+/// (commands.md §9.5) and needs a repository cwd. A `repo` that is not `owner/name` is `gh_failed`, before any call.
+pub fn describe_pr(cwd: &Path, repo: &str, number: i64, body: &str) -> Result<(), CpdError> {
+    repo_parts(repo)
+        .ok_or_else(|| CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo.")).with("repo", repo))?;
+    let endpoint = format!("repos/{repo}/pulls/{number}");
+    let args = ["api", "-X", "PATCH", endpoint.as_str(), "--input", "-"];
     let call = Call {
         tool: "gh".to_owned(),
         program: "gh".to_owned(),
@@ -376,7 +387,7 @@ pub fn describe_pr(cwd: &Path, number: i64, body: &str) -> Result<(), CpdError> 
         envs: vec![("GH_PROMPT_DISABLED".to_owned(), Some("1".to_owned())), ("NO_COLOR".to_owned(), Some("1".to_owned()))],
         cwd: Some(cwd.to_path_buf()),
         deadline: TIMEOUT,
-        stdin: Some(body.as_bytes().to_vec()),
+        stdin: Some(serde_json::json!({"body": body}).to_string().into_bytes()),
         stderr_to: None,
     };
     let out = match Ports::current().runner.run(&call) {
@@ -414,6 +425,35 @@ pub fn view_for_merge(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) 
     parse(&args, &run_on(runner, cwd, &args)?)
 }
 
+/// `gh pr view <n> --repo <repo> --json statusCheckRollup`: the checks of the head, for `pr merge` when the repo policy requires some.
+pub fn checks_for_merge(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) -> Result<Vec<Check>, CpdError> {
+    #[derive(Deserialize)]
+    struct Rollup {
+        #[serde(rename = "statusCheckRollup")]
+        checks: Option<Vec<Check>>,
+    }
+    let n = number.to_string();
+    let args = ["pr", "view", &n, "--repo", repo, "--json", "statusCheckRollup"];
+    parse::<Rollup>(&args, &run_on(runner, cwd, &args)?).map(|r| r.checks.unwrap_or_default())
+}
+
+/// `gh repo view <repo> --json deleteBranchOnMerge`: whether the repo deletes a merged branch itself.
+pub fn delete_branch_on_merge(runner: &dyn Runner, cwd: &Path, repo: &str) -> Result<bool, CpdError> {
+    #[derive(Deserialize)]
+    struct Setting {
+        #[serde(rename = "deleteBranchOnMerge")]
+        on: bool,
+    }
+    let args = ["repo", "view", repo, "--json", "deleteBranchOnMerge"];
+    parse::<Setting>(&args, &run_on(runner, cwd, &args)?).map(|s| s.on)
+}
+
+/// `gh repo view <repo> --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed`: the methods the repo allows.
+pub fn merge_methods(runner: &dyn Runner, cwd: &Path, repo: &str) -> Result<MergeMethods, CpdError> {
+    let args = ["repo", "view", repo, "--json", "squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed"];
+    parse(&args, &run_on(runner, cwd, &args)?)
+}
+
 /// `headRefOid` of the pull request `number` of `repo`: its head commit, which GitHub keeps after a merge and the
 /// deletion of the branch (contract §7.2 "The recorded head").
 pub fn head_ref_oid(cwd: &Path, repo: &str, number: i64) -> Result<String, CpdError> {
@@ -427,11 +467,13 @@ pub fn head_ref_oid(cwd: &Path, repo: &str, number: i64) -> Result<String, CpdEr
     parse::<Head>(&args, &run(cwd, &args)?).map(|h| h.oid)
 }
 
-/// `gh pr merge <number> --repo <repo> --squash --delete-branch --match-head-commit <head>`: GitHub
-/// refuses when the branch is no longer at `head`.
-pub fn merge_pr(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64, head: &str) -> Result<(), CpdError> {
+/// `gh pr merge <number> --repo <repo> --<method> --match-head-commit <head>`: GitHub
+/// refuses when the branch is no longer at `head`. It does not pass `--delete-branch`: GitHub's own
+/// `delete_branch_on_merge` deletes the branch and repoints a stacked pull request (pro-d240).
+pub fn merge_pr(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64, method: Method, head: &str) -> Result<(), CpdError> {
     let n = number.to_string();
-    let args = ["pr", "merge", &n, "--repo", repo, "--squash", "--delete-branch", "--match-head-commit", head];
+    let flag = format!("--{}", method.as_str());
+    let args = ["pr", "merge", &n, "--repo", repo, flag.as_str(), "--match-head-commit", head];
     run_on(runner, cwd, &args).map(drop)
 }
 
@@ -883,6 +925,8 @@ pub struct AutoMergeRead {
     pub id: String,
     /// The pull request already has an auto-merge request (`autoMergeRequest` is set).
     pub requested: bool,
+    /// The merge methods the repo allows.
+    pub methods: MergeMethods,
 }
 
 #[derive(Deserialize)]
@@ -894,6 +938,8 @@ struct RawAutoRead {
 struct RawAutoRepo {
     #[serde(rename = "autoMergeAllowed")]
     allowed: bool,
+    #[serde(flatten)]
+    methods: MergeMethods,
     #[serde(rename = "pullRequest")]
     pull_request: Option<RawAutoPull>,
 }
@@ -910,7 +956,7 @@ pub fn auto_merge_read(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64)
     let (owner, name) = repo_parts(repo)
         .ok_or_else(|| CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo.")).with("repo", repo))?;
     let query = format!(
-        "query {{ repository(owner: \"{owner}\", name: \"{name}\") {{ autoMergeAllowed pullRequest(number: {number}) {{ id autoMergeRequest {{ enabledAt }} }} }} }}"
+        "query {{ repository(owner: \"{owner}\", name: \"{name}\") {{ autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed pullRequest(number: {number}) {{ id autoMergeRequest {{ enabledAt }} }} }} }}"
     );
     let (args, out) = graphql_with(runner, cwd, &query, &[])?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -923,13 +969,13 @@ pub fn auto_merge_read(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64)
         return Err(reply.fail(format!("gh api graphql answered with errors: {}", first.message.as_deref().unwrap_or("(no message)"))));
     }
     let pull = data.repository.pull_request.ok_or_else(|| reply.fail(format!("GitHub has no pull request {repo}#{number}.")))?;
-    Ok(AutoMergeRead { allowed: data.repository.allowed, id: pull.id, requested: pull.request.is_some() })
+    Ok(AutoMergeRead { allowed: data.repository.allowed, id: pull.id, requested: pull.request.is_some(), methods: data.repository.methods })
 }
 
-/// Turns on squash auto-merge for the pull request whose node id is `pull` (`enablePullRequestAutoMerge`, never `gh pr merge`).
+/// Turns on auto-merge with `method` for the pull request whose node id is `pull` (`enablePullRequestAutoMerge`, never `gh pr merge`).
 /// `Ok(Err(message))` is GitHub's refusal (GraphQL `errors`); a `gh` that failed or printed no usable answer is `gh_failed`.
-pub fn enable_auto_merge(runner: &dyn Runner, cwd: &Path, pull: &str) -> Result<Result<(), String>, CpdError> {
-    let query = "mutation($pull: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $pull, mergeMethod: SQUASH}) { pullRequest { autoMergeRequest { enabledAt } } } }";
+pub fn enable_auto_merge(runner: &dyn Runner, cwd: &Path, pull: &str, method: Method) -> Result<Result<(), String>, CpdError> {
+    let query = &format!("mutation($pull: ID!) {{ enablePullRequestAutoMerge(input: {{pullRequestId: $pull, mergeMethod: {}}})  {{ pullRequest {{ autoMergeRequest {{ enabledAt }} }} }} }}", method.graphql());
     let (args, out) = graphql_with(runner, cwd, query, &[("pull", pull)])?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let reply = Reply { args: &refs, out: &out };
@@ -1064,7 +1110,7 @@ pub fn read_comments(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], bot
 }
 
 /// One pull request's checks read: the head commit's contexts, 100 at a time (contract §7.6 step 3b).
-const CHECKS_FIELDS: &str = "nodes { __typename ... on CheckRun { name status conclusion } ... on StatusContext { context state } }";
+const CHECKS_FIELDS: &str = "nodes { __typename ... on CheckRun { name status conclusion startedAt checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state createdAt } }";
 
 /// The checks read's query: one alias `p<i>` per `(owner/name, number, after)`, `after` the cursor of the page wanted.
 fn checks_query(prs: &[(&str, i64, Option<&str>)]) -> String {
@@ -1105,7 +1151,47 @@ struct RawChecksRollup {
 struct RawContexts {
     #[serde(rename = "pageInfo")]
     page_info: RawPageInfo,
-    nodes: Vec<Check>,
+    nodes: Vec<RawCheck>,
+}
+/// A GraphQL node: the workflow name is nested and a StatusContext's time is `createdAt`.
+#[derive(Deserialize)]
+struct RawCheck {
+    name: Option<String>,
+    context: Option<String>,
+    conclusion: Option<String>,
+    state: Option<String>,
+    #[serde(rename = "startedAt", default)]
+    started_at: Option<String>,
+    #[serde(rename = "createdAt", default)]
+    created_at: Option<String>,
+    #[serde(rename = "checkSuite", default)]
+    check_suite: Option<RawSuite>,
+}
+#[derive(Deserialize)]
+struct RawSuite {
+    #[serde(rename = "workflowRun")]
+    workflow_run: Option<RawWorkflowRun>,
+}
+#[derive(Deserialize)]
+struct RawWorkflowRun {
+    workflow: Option<RawWorkflow>,
+}
+#[derive(Deserialize)]
+struct RawWorkflow {
+    name: Option<String>,
+}
+impl From<RawCheck> for Check {
+    fn from(r: RawCheck) -> Check {
+        Check {
+            name: r.name,
+            context: r.context,
+            conclusion: r.conclusion,
+            state: r.state,
+            url: None,
+            workflow: r.check_suite.and_then(|s| s.workflow_run).and_then(|w| w.workflow).and_then(|w| w.name),
+            started_at: r.started_at.or(r.created_at),
+        }
+    }
 }
 #[derive(Deserialize)]
 struct RawPageInfo {
@@ -1143,7 +1229,7 @@ fn parse_checks(reply: &Reply, count: usize) -> Result<Vec<(Vec<Check>, Option<S
                     (true, Some(cursor)) => Some(cursor),
                     (true, None) => return Err(reply.fail(format!("gh api graphql answered {alias} with a next page and no endCursor."))),
                 };
-                (r.contexts.nodes, next)
+                (r.contexts.nodes.into_iter().map(Check::from).collect(), next)
             }
         });
     }
@@ -1275,11 +1361,11 @@ mod tests {
         assert_eq!(
             checks_query(&[("o/a", 7, None), ("o/b", 8, Some("c1"))]),
             "query { p0: repository(owner: \"o\", name: \"a\") { pullRequest(number: 7) { commits(last: 1) { nodes { commit { statusCheckRollup { \
-             contexts(first: 100) { pageInfo { hasNextPage endCursor } nodes { __typename ... on CheckRun { name status conclusion } \
-             ... on StatusContext { context state } } } } } } } } } \
+             contexts(first: 100) { pageInfo { hasNextPage endCursor } nodes { __typename ... on CheckRun { name status conclusion startedAt checkSuite { workflowRun { workflow { name } } } } \
+             ... on StatusContext { context state createdAt } } } } } } } } } \
              p1: repository(owner: \"o\", name: \"b\") { pullRequest(number: 8) { commits(last: 1) { nodes { commit { statusCheckRollup { \
-             contexts(first: 100, after: \"c1\") { pageInfo { hasNextPage endCursor } nodes { __typename ... on CheckRun { name status conclusion } \
-             ... on StatusContext { context state } } } } } } } } } }"
+             contexts(first: 100, after: \"c1\") { pageInfo { hasNextPage endCursor } nodes { __typename ... on CheckRun { name status conclusion startedAt checkSuite { workflowRun { workflow { name } } } } \
+             ... on StatusContext { context state createdAt } } } } } } } } } }"
         );
     }
 
@@ -1299,6 +1385,26 @@ mod tests {
             pages[0].0.iter().map(|c| (c.name.as_deref().or(c.context.as_deref()), c.conclusion.as_deref(), c.state.as_deref())).collect();
         assert_eq!(got, [(Some("a"), Some("CANCELLED"), None), (Some("b"), None, None), (Some("c"), None, Some("PENDING"))]);
         assert!(pages[1].0.is_empty() && pages[2].0.is_empty() && pages[1].1.is_none());
+    }
+
+    #[test]
+    fn checks_carry_the_workflow_and_the_start_time() {
+        let body = r#"{"data":{"p0":{"pullRequest":{"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[
+            {"__typename":"CheckRun","name":"a","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-10-30T04:19:08Z","checkSuite":{"workflowRun":{"workflow":{"name":"W"}}}},
+            {"__typename":"CheckRun","name":"b","status":"COMPLETED","conclusion":null,"startedAt":null,"checkSuite":{"workflowRun":null}},
+            {"__typename":"StatusContext","context":"c","state":"SUCCESS","createdAt":"2026-10-30T14:39:33Z"}]}}}}]}}}}}"#;
+        let out = reply(body, 0);
+        let pages = parse_checks(&Reply { args: &ARGS, out: &out }, 1).unwrap();
+        let got: Vec<(Option<&str>, Option<&str>)> = pages[0].0.iter().map(|c| (c.workflow.as_deref(), c.started_at.as_deref())).collect();
+        assert_eq!(got, [(Some("W"), Some("2026-10-30T04:19:08Z")), (None, None), (None, Some("2026-10-30T14:39:33Z"))]);
+    }
+
+    #[test]
+    fn a_start_time_that_is_not_a_string_is_gh_failed() {
+        let body = r#"{"data":{"p0":{"pullRequest":{"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[
+            {"__typename":"CheckRun","name":"a","status":"COMPLETED","conclusion":"FAILURE","startedAt":5}]}}}}]}}}}}"#;
+        let out = reply(body, 0);
+        assert_eq!(parse_checks(&Reply { args: &ARGS, out: &out }, 1).unwrap_err().code(), ErrorCode::GhFailed);
     }
 
     #[test]

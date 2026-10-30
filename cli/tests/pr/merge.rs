@@ -1597,3 +1597,82 @@ fn a_merge_leaves_another_prs_orphan_in_its_repo_to_r() {
     assert_eq!(fx.job_row("api").0, "running");
 }
 
+
+// ------------------------------------------------------------ a base's commits keep their SHAs (§7.4 step 5, hs-d747)
+
+/// The Attempt of `api.txt`, `main` gaining `base.txt` (pushed), the Lead Branch gaining `lead.txt`, then `bring` run in
+/// the Attempt worktree to bring `origin/main` in, and the Attempt submitted again. Returns the Attempt, and `main`'s SHA.
+fn attempt_with_the_base(bring: &[&str]) -> (Fx, AttemptId, String) {
+    let (fx, _) = fx_origin();
+    let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
+    base_edits(&fx, "base.txt", Some("base\n"));
+    let main = fx.git(&fx.repo, &["rev-parse", "origin/main"]);
+    fx.advance_lead("lead.txt", "lead\n");
+    fx.git(&worktree, bring);
+    fx.resubmit(&attempt, &worktree);
+    (fx, attempt, main)
+}
+
+fn assert_lands_with_the_base(fx: &Fx, attempt: &AttemptId, main: &str) {
+    let result = fx.merge(attempt);
+
+    let End::Merged { sha } = &result.end else { panic!("{result:?}") };
+    assert_eq!(&fx.lead_sha(), sha);
+    assert_eq!(fx.git(&fx.repo, &["rev-list", "--count", main, "--not", sha]), "0", "the base's commit lost its SHA");
+    for (file, content) in [("api.txt", "api\n"), ("lead.txt", "lead\n"), ("base.txt", "base\n")] {
+        assert_eq!(fs::read_to_string(fx.lead.join(file)).unwrap(), content, "{file}");
+    }
+}
+
+#[test]
+fn an_attempt_that_rebased_onto_the_base_lands_the_bases_commits_under_their_own_shas() {
+    let (fx, attempt, main) = attempt_with_the_base(&["rebase", "origin/main"]);
+    assert_lands_with_the_base(&fx, &attempt, &main);
+}
+
+#[test]
+fn an_attempt_that_merged_the_base_lands_the_bases_commits_under_their_own_shas() {
+    let (fx, attempt, main) = attempt_with_the_base(&["merge", "-q", "--no-ff", "-m", "merge the base", "origin/main"]);
+    assert_lands_with_the_base(&fx, &attempt, &main);
+}
+
+#[test]
+fn a_stacked_prs_attempt_that_brought_in_the_root_base_lands_the_bases_commits_under_their_own_shas() {
+    let (fx, _, web, attempt, worktree) = stacked_job();
+    base_edits(&fx, "base.txt", Some("base\n"));
+    let main = fx.git(&fx.repo, &["rev-parse", "origin/main"]);
+    advance_and_push(&fx, &web, "lead.txt", "lead\n");
+    merge_ref(&fx, &attempt, &worktree, "origin/main");
+
+    let result = fx.merge(&attempt);
+
+    let End::Merged { sha } = &result.end else { panic!("{result:?}") };
+    assert_eq!(&fx.tip(&web), sha);
+    assert_eq!(fx.git(&fx.repo, &["rev-list", "--count", &main, "--not", sha]), "0", "the base's commit lost its SHA");
+}
+
+#[test]
+fn a_conflict_with_the_lead_tip_when_the_attempt_holds_base_commits_is_a_merge_conflict_with_the_files() {
+    let (fx, _) = fx_origin();
+    let (attempt, worktree) = fx.submitted("api", "shared.txt", "mine\n");
+    base_edits(&fx, "base.txt", Some("base\n"));
+    let old = fx.advance_lead("shared.txt", "theirs\n");
+    fx.git(&worktree, &["rebase", "origin/main"]);
+    fx.resubmit(&attempt, &worktree);
+    let before = fx.git(&worktree, &["rev-parse", "HEAD"]);
+
+    let result = fx.merge(&attempt);
+
+    let End::Failed { cause: Failure::MergeConflict, detail } = &result.end else { panic!("{result:?}") };
+    assert!(detail.contains("shared.txt"), "{detail}");
+    assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD"]), before);
+    assert_eq!(fx.status(&worktree), "");
+    assert_eq!(fx.lead_sha(), old);
+    assert_eq!(fx.job_row("api"), ("queued".into(), None, None));
+    let events = fx.events(&attempt);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].0, "attempt-retry");
+    assert_eq!(events[0].1["cause"], "merge_conflict");
+    assert_eq!(events[0].1["next_tier"], "S3");
+    assert!(events[0].1["feedback"].as_str().unwrap().contains("shared.txt"));
+}

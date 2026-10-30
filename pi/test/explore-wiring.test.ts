@@ -127,12 +127,12 @@ test("the durable workerVerdict applies the same explore profile", (t) => {
   ];
   for (const kind of ["scout", "research"] as const) {
     for (const c of calls) {
-      const where = { cwd: x.plain, home: join(x.tmp, "home"), plan: "p1", kind };
-      const want = exploreVerdict(kind, c, where, inside);
+      const where = { cwd: x.plain, home: x.tmp, cpdHome: join(x.tmp, "home"), plan: "p1", kind };
+      const want = exploreVerdict(kind, c, { cwd: where.cwd, home: where.cpdHome, plan: "p1" }, inside);
       assert.deepEqual(workerVerdict(c, where), want, `${kind} ${JSON.stringify(c)}`);
     }
   }
-  assert.notEqual(workerVerdict(calls[0]!, { cwd: x.plain, home: x.tmp, plan: "p1", kind: "scout" }), undefined, "an unbounded bash call is refused");
+  assert.notEqual(workerVerdict(calls[0]!, { cwd: x.plain, home: x.tmp, cpdHome: join(x.tmp, "home"), plan: "p1", kind: "scout" }), undefined, "an unbounded bash call is refused");
 });
 
 test("the durable config reads CPD_JOB_KIND and refuses an unknown value", () => {

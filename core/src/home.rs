@@ -9,7 +9,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use crate::error::{CpdError, ErrorCode};
-use crate::ids::{AttemptId, ContextId, PlanId, ReviewId, SessionId};
+use crate::ids::{AttemptId, ContextId, PlanId, SessionId};
 
 /// The repo hooks whose full output is logged per Attempt (contract §7.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -237,11 +237,6 @@ impl CpdHome {
     /// `run/<plan>/plan.md`: the last `plan render`.
     pub fn plan_md(&self, plan: &PlanId) -> PathBuf {
         self.plan_dir(plan).join("plan.md")
-    }
-
-    /// `run/<plan>/plan-<review>.md`: the copy a Plan review shows (commands.md §1.4).
-    pub fn plan_review_md(&self, plan: &PlanId, review: ReviewId) -> PathBuf {
-        self.plan_dir(plan).join(format!("plan-{review}.md"))
     }
 
     /// `run/<context>/manager-message.md`: a Context's Manager's first message (commands.md §3.10).
@@ -473,10 +468,6 @@ mod tests {
         let h = home();
         let session = SessionId::parse("596d007f-6775-4134-b77a-b356cc523842").unwrap();
         assert_eq!(h.lead_message(&plan()), p("/h/.cpd/run/pay-4521/lead-message.md"));
-        assert_eq!(
-            h.plan_review_md(&plan(), ReviewId::parse("r3").unwrap()),
-            p("/h/.cpd/run/pay-4521/plan-r3.md")
-        );
         assert_eq!(
             h.session_message(&plan(), &session),
             p("/h/.cpd/run/pay-4521/messages/596d007f-6775-4134-b77a-b356cc523842.md")

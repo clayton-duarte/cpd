@@ -12,6 +12,7 @@ fn phrase(reason: Reason) -> &'static str {
         Reason::ChangesRequested => "changes requested",
         Reason::Comments => "comments",
         Reason::Closed => "closed without a merge",
+        Reason::ReadyToPost => "ready to post for review",
         Reason::Approved => "approved",
     }
 }
@@ -68,6 +69,8 @@ mod tests {
                         conclusion: Some(conclusion.into()),
                         state: None,
                         url: None,
+                        workflow: None,
+                        started_at: None,
                     })
                     .collect(),
             ),
@@ -78,7 +81,7 @@ mod tests {
 
     #[test]
     fn checks_are_summarised_failed_over_pending_over_passed() {
-        let summary = |checks: Vec<(&str, &str)>| ChecksSummary::of(view(checks).checks.as_deref().unwrap_or_default(), &[]);
+        let summary = |checks: Vec<(&str, &str)>| ChecksSummary::of(view(checks).checks.as_deref().unwrap_or_default(), &[], &[]);
         assert_eq!(summary(vec![]), ChecksSummary::None);
         assert_eq!(summary(vec![("a", "success")]), ChecksSummary::Passed);
         assert_eq!(summary(vec![("a", "SUCCESS"), ("b", "")]), ChecksSummary::Pending);

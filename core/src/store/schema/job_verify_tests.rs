@@ -150,6 +150,10 @@ fn the_migration_keeps_every_job_dependency_and_attempt_row() {
             if let Some(row) = row.as_object_mut().filter(|_| *table == "attempts") {
                 assert_eq!(row.remove("runner"), Some(Value::from("pi")));
                 assert_eq!(row.remove("worker_pid"), Some(Value::Null));
+                // `gate_hook`, `gate_command` and `gate_exit` are the columns of `gate-facts`, later still: null.
+                for key in ["gate_hook", "gate_command", "gate_exit"] {
+                    assert_eq!(row.remove(key), Some(Value::Null));
+                }
             }
         }
         assert_eq!(after, want, "every row of {table}, column for column (`seq` kept)");

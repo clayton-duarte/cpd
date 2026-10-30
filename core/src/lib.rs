@@ -45,7 +45,6 @@ pub mod ports;
 pub mod pr;
 pub mod resource;
 pub mod prune;
-pub mod review;
 pub mod secret;
 pub mod jira;
 pub mod slack;

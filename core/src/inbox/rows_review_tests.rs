@@ -1,5 +1,5 @@
 //! Red tests of the review half of the two-row label and of the GraphQL `title` (pro-d171, assumption A3): the
-//! `review-requested` label carries the GitHub title on Row 2, `plan-review` its review title, `review-waiting` its subject.
+//! `review-requested` label carries the GitHub title on Row 2, `plan-review` its review title.
 
 use serde_json::{Value, json};
 use time::OffsetDateTime;
@@ -104,20 +104,6 @@ fn a_plan_review_label_has_the_review_title_on_row_two_and_none_without_a_title(
     sql(&mut store, &format!("{insert} VALUES ('pay', 'r1', 1, '{FP}', 'pending', '{T}', NULL);"));
     let untitled = of(&mut store, &home, Kind::PlanReview);
     assert_eq!(untitled.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(), ["pay plan review"]);
-}
-
-#[test]
-fn a_review_waiting_label_has_the_subject_on_row_two() {
-    let (_dir, home, mut store) = fixture();
-    sql(
-        &mut store,
-        &format!(
-            "INSERT INTO plannotator_reviews (session, pn_id, kind, subject, port, opened_at, closed_at, ended)
-             VALUES ('mgr', 'pn-0a1b2c', 'annotate', 'notes.md', 20002, '{T}', NULL, NULL);"
-        ),
-    );
-    let found = of(&mut store, &home, Kind::ReviewWaiting);
-    assert_eq!(found.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(), ["ctx review\nnotes.md"]);
 }
 
 fn fake(reply: Reply) -> FakeRunner {

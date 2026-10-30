@@ -325,7 +325,7 @@ fn a_cancelled_pr_or_job_of_this_plan_is_not_compared() {
 }
 
 #[test]
-fn the_plan_review_file_carries_the_overlaps_and_nothing_is_refused() {
+fn the_plan_review_summary_carries_the_overlaps_and_nothing_is_refused() {
     let fx = fixture();
     plan(&fx, "busy", "dispatch", false);
     pr(&fx, "busy", "svc", "/r/api", "dispatch");
@@ -333,6 +333,6 @@ fn the_plan_review_file_carries_the_overlaps_and_nothing_is_refused() {
 
     fx.env.outline_for_review("mine");
     let out = fx.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]).ok();
-    let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
-    assert!(text.contains("| `x` | `busy` | `svc` | `y` (queued) | `core/src/x.rs` |"), "{text}");
+    let text = fs::read_to_string(out["summary"].as_str().unwrap()).unwrap();
+    assert!(text.contains("\nOverlaps: 1\n- core/src/x.rs: busy/svc/y (queued)\n"), "{text}");
 }

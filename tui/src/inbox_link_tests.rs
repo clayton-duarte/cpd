@@ -1,5 +1,5 @@
 //! The Inbox rows of the link kinds and the `Link` widget (decision pro-d60, assumption A7): the label of an item of kind
-//! `plan-review`, `review-waiting`, `pr-ready` or `review-requested` that has a url is the `Link`'s text and the cue follows it
+//! `plan-review`, `pr-ready` or `review-requested` that has a url is the `Link`'s text and the cue follows it
 //! (`<label> 󱆭`, the label underlined, the whole output the click target); a plain left click on it opens the url through the
 //! `Runner` (`open <url>`) and runs no jump; a click elsewhere on the row jumps as before. The Dispatch column is driven as
 //! `widgets/column_link_tests.rs` drives it: a store, a scripted pump, the `ManualClock`, a `TestBackend` and a `FakeRunner`
@@ -164,10 +164,9 @@ fn cues(buf: &Buffer) -> usize {
     (0..buf.area.height).flat_map(|y| (0..buf.area.width).map(move |x| (x, y))).filter(|&(x, y)| buf[(x, y)].symbol() == CUE).count()
 }
 
-/// The four link kinds: (kind, subject, label), subjects that need no Plan or Session to exist.
-const KINDS: [(&str, &str, &str); 4] = [
+/// The three link kinds: (kind, subject, label), subjects that need no Plan or Session to exist.
+const KINDS: [(&str, &str, &str); 3] = [
     ("plan-review", "plan-review:ship", "ship plan review"),
-    ("review-waiting", "review-waiting:r1", "waiting review"),
     ("pr-ready", "pr:acme/api#12", "api#12 ready"),
     ("review-requested", "review-requested:acme/api#12", "api#12 failing"),
 ];
@@ -215,7 +214,7 @@ fn a_click_on_the_label_or_the_cue_opens_the_items_url_and_runs_no_jump() {
 #[test]
 fn a_click_elsewhere_on_a_link_kind_row_jumps_as_before() {
     // `review-requested` jumps by copying the url: the glyph, the gap before the age and the age do; the label does not
-    let (kind, subject, label) = KINDS[3];
+    let (kind, subject, label) = KINDS[2];
     let (_dir, home) = home_with(&[seed(kind, subject, label, Some(URL))]);
     let (x, y) = locate(&frame(&home), label);
     let width = u16::try_from(label.chars().count()).unwrap();

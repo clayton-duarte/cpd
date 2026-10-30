@@ -7,8 +7,7 @@ import type { Run } from "./run.ts";
 
 export const APPROVE = "Approve";
 export const CHANGE = "Change";
-export const OPEN_FULL_PLAN = "Open full plan";
-const OPTIONS = [APPROVE, CHANGE, OPEN_FULL_PLAN];
+const OPTIONS = [APPROVE, CHANGE];
 
 export const stillWaiting = (review: string): string => `Plan review ${review} is still waiting: /plan-review reopens it`;
 export const NONE_WAITING = boldPhi("φ: no plan review is waiting in chat");
@@ -31,14 +30,13 @@ export function closeOlderDialogs(r: Run, review: string): void {
   for (const [known, controller] of of(r)) if (reviewNumber(known) < reviewNumber(review)) controller.abort();
 }
 
-/** What the caller does with an answer. `openPlannotator` returns true when the review left the dialog (opened in plannotator, or no longer pending), false after a failure it has already reported: the select opens again. */
+/** What the caller does with an answer. */
 export type Answers = {
   decide(approved: boolean, feedback: string | undefined): Promise<void>;
-  openPlannotator(): Promise<boolean>;
 };
 
 /**
- * The dialog of a pending chat review: select; Approve and Change decide, Change with an empty note and a failed decision return to the select, Open full plan leaves for plannotator.
+ * The dialog of a pending chat review: select; Approve and Change decide, Change with an empty note and a failed decision return to the select.
  * Esc records nothing and says how to reopen. An abort (a newer review, a decision elsewhere) or a review that is no longer pending ends it silently, whatever it is waiting for.
  */
 export async function runDialog(host: Host, r: Run, review: string, title: string | undefined, answers: Answers): Promise<void> {
@@ -61,8 +59,6 @@ export async function runDialog(host: Host, r: Run, review: string, title: strin
         if (!waiting()) return; // decided elsewhere while the editor was open: its late note is ignored
         if (note === undefined || note.trim() === "") continue;
         await answers.decide(false, note);
-      } else if (choice === OPEN_FULL_PLAN) {
-        if (await answers.openPlannotator()) return;
       }
     }
   } finally {

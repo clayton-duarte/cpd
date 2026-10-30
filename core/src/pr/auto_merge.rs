@@ -1,5 +1,6 @@
-//! Squash auto-merge of a posted PR (commands.md §9.8b; pro-d115, pro-d117): the one read query and the GraphQL mutation
-//! `enablePullRequestAutoMerge`, never `gh pr merge`. `pr post` and the engine's E18 both run [`attempt`].
+//! Auto-merge of a posted PR (commands.md §9.8b; pro-d115, pro-d117): the one read query and the GraphQL mutation
+//! `enablePullRequestAutoMerge` with the first method the repo allows, never `gh pr merge`. `pr post` reads once before
+//! its send and runs [`after_read`]; the engine's E18 runs [`attempt`] (read, then [`after_read`]).
 
 use std::path::Path;
 
@@ -14,9 +15,9 @@ use crate::host::runner::Runner;
 pub enum Outcome {
     /// GitHub accepted the request, or the pull request already had one.
     Enabled,
-    /// The repo does not allow auto-merge: nothing was requested.
+    /// The repo does not allow auto-merge: nothing was requested, and that is a stated condition, not an error.
     NotAllowed,
-    /// GitHub answered the mutation with an error (its message); never retried.
+    /// GitHub answered the mutation with an error (its message), or the repo allows no merge method; never retried.
     Refused(String),
     /// `gh` itself failed (timeout, HTTP 5xx, bad JSON): retried later.
     Failed(CpdError),
@@ -31,19 +32,26 @@ pub fn stacked(conn: &Connection, plan: &str, pr: &str) -> Result<bool, CpdError
     )?)
 }
 
-/// The read query, then the mutation unless the repo disallows it or the request already exists. `cwd` is any directory of the repo.
+/// The read query, then [`after_read`]. `cwd` is any directory of the repo.
 pub fn attempt(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) -> Outcome {
-    let read = match gh::auto_merge_read(runner, cwd, repo, number) {
-        Ok(read) => read,
-        Err(e) => return Outcome::Failed(e),
-    };
+    match gh::auto_merge_read(runner, cwd, repo, number) {
+        Ok(read) => after_read(runner, cwd, &read),
+        Err(e) => Outcome::Failed(e),
+    }
+}
+
+/// What follows an already-made `read`: not allowed, already requested, no usable method, else the mutation.
+pub fn after_read(runner: &dyn Runner, cwd: &Path, read: &gh::AutoMergeRead) -> Outcome {
     if !read.allowed {
         return Outcome::NotAllowed;
     }
     if read.requested {
         return Outcome::Enabled;
     }
-    match gh::enable_auto_merge(runner, cwd, &read.id) {
+    let Some(method) = read.methods.choose() else {
+        return Outcome::Refused("the repo allows no merge method".to_owned());
+    };
+    match gh::enable_auto_merge(runner, cwd, &read.id, method) {
         Ok(Ok(())) => Outcome::Enabled,
         Ok(Err(message)) => Outcome::Refused(message),
         Err(e) => Outcome::Failed(e),

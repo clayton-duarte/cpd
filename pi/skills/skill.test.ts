@@ -374,7 +374,7 @@ function vocabulary(): { causes: Set<string>; reasons: Set<string>; configKeys: 
   for (const match of commandsDoc.matchAll(/^### \d+\.\d+ The pi tool `([a-z_]+)`/gm)) {
     piTools.push(match[1]!);
   }
-  const tools = [...contractTools.filter((t) => !t.startsWith("plannotator")), ...piTools];
+  const tools = [...contractTools, ...piTools];
   return {
     causes: new Set(ticks(section(contractDoc, "### 3.4 Attempt statuses, outcomes and causes"), /^[a-z]+(_[a-z]+)*$/)),
     reasons: new Set(reasons),
@@ -513,7 +513,7 @@ test("every Event kind of the Lead's Events table is one the adapter delivers to
 
 test("the skills' list of pr-feedback reasons and of ladder causes is the contract's", () => {
   const reasons = vocabulary().reasons;
-  assert.ok(reasons.size === 5); // reasons: checks_failed, changes_requested, comments, closed, approved (pro-d64; pro-d130 removed the post-readiness reason)
+  assert.ok(reasons.size === 6); // reasons: checks_failed, changes_requested, comments, closed, ready_to_post, approved (pro-d64; pro-d130 removed the post-readiness reason, pro-d225 restored it)
   const lead = skillFiles("cpd-lead")[0]!.text;
   const stated = /`data\.reasons` lists ((?:`[a-z_]+`(?:, | or )?)+)/.exec(lead);
   assert.ok(stated, "the pr-feedback row lists data.reasons");
@@ -673,7 +673,7 @@ for (const { skill } of skills) test(`${skill}: asks the User only with ask_user
   const text = skillFiles(skill)[0]!.text;
   assert.match(text, /To ask the User, use `ask_user_question`/);
   assert.match(text, /Never use `cpd context ask`: it records an open question in the Context and asks nobody\./);
-  assert.match(text, /plannotator|too big for a dialog/);
+  assert.match(text, /file outside the repo and point to it in chat/);
   const ask = text.split("\n").find((l) => l.trim().startsWith("cpd context ask "));
   assert.ok(ask, "the context ask line exists");
   assert.match(ask, /\(a record, not a question to the User\)/);
@@ -816,7 +816,7 @@ test("a PR is a substantial deliverable: cpd-lead gets parallelism from Jobs and
   assert.match(manager, /small follow-up goes into its area's existing PR, not a new one/);
 });
 
-test("both skills: decisions are ask rounds at any phase, G2 limit stays and G4 guard enforced, plannotator is for long documents", () => {
+test("both skills: decisions are ask rounds at any phase, G2 limit stays and G4 guard enforced, larger content goes to a file", () => {
   const lead = skillFiles("cpd-lead")[0]!.text;
   const manager = skillFiles("cpd-manager")[0]!.text;
   for (const text of [lead, manager]) {
@@ -830,7 +830,7 @@ test("both skills: decisions are ask rounds at any phase, G2 limit stays and G4 
   }
   const approving = section(lead, "### Orchestrating");
   assert.match(approving, /cpd plan outline --file/);
-  assert.match(approving, /`Approve`[\s\S]*`Change`[\s\S]*`Open full plan`/);
+  assert.match(approving, /`Approve` and `Change`/);
   assert.match(approving, /outline_missing[\s\S]*outline_incomplete/);
 });
 

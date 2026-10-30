@@ -15,6 +15,7 @@ mod harness;
 mod install_script;
 mod interface;
 mod layout;
+mod no_gh_pr_edit;
 mod no_repo_lock;
 mod pill_parity;
 mod pill_sites;

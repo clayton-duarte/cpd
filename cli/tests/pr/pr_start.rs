@@ -358,9 +358,9 @@ fn lock_starts_only_the_prs_without_needs() {
     assert_eq!(
         out,
         json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["open-api", "open-web", "schema", "ui"],
-               "prs": [{"key": "api", "status": "dispatch", "needs": [], "lead_branch": "pay/api",
+               "prs": [{"key": "api", "status": "dispatch", "needs": [], "base_pr": null, "lead_branch": "pay/api",
                         "lead_worktree": worktree.display().to_string(), "base_sha": base, "reused": false, "pushed": true},
-                       {"key": "web", "status": "waiting", "needs": ["api"], "lead_branch": "pay/web",
+                       {"key": "web", "status": "waiting", "needs": ["api"], "base_pr": null, "lead_branch": "pay/web",
                         "lead_worktree": null, "base_sha": null, "reused": null, "pushed": null}],
                "watch": {"started": true, "pane": "%9"}})
     );
@@ -396,7 +396,93 @@ fn lock_starts_only_the_prs_without_needs() {
     assert_eq!(again["already"], true);
     assert_eq!(again["prs"][0]["status"], "dispatch");
     assert_eq!(again["prs"][1]["status"], "waiting");
+    assert_eq!(again["prs"][0]["base_pr"], Value::Null);
+    assert_eq!(again["prs"][1]["base_pr"], Value::Null);
     assert_eq!(fx.events("pr-started").len(), 1);
+}
+
+#[test]
+fn lock_leaves_a_stacked_pr_waiting_and_starts_only_its_base_pr() {
+    let fx = fx();
+    let repo = fx.repo("pay");
+    fx.add("a1", &repo.path, &[]);
+    fx.add_with("b1", &repo.path, &["--base", "a1"]);
+    fx.job("schema", "a1");
+    fx.job("ui", "b1");
+    fx.approve();
+    let base = head(&fx, &repo.path, "HEAD");
+
+    let out = fx.lock().ok();
+
+    let worktree = fx.lead_path(&repo.path, "a1");
+    assert_eq!(
+        out,
+        json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["open-a1", "open-b1", "schema", "ui"],
+               "prs": [{"key": "a1", "status": "dispatch", "needs": [], "base_pr": null, "lead_branch": "pay/a1",
+                        "lead_worktree": worktree.display().to_string(), "base_sha": base, "reused": false, "pushed": true},
+                       {"key": "b1", "status": "waiting", "needs": [], "base_pr": "pay/a1", "lead_branch": "pay/b1",
+                        "lead_worktree": null, "base_sha": null, "reused": null, "pushed": null}],
+               "watch": {"started": true, "pane": "%9"}})
+    );
+    assert_eq!(fx.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "pay/a1");
+    assert_eq!(remote_branch(&fx, &repo.path, "pay/a1"), format!("{base}\trefs/heads/pay/a1"));
+    assert_eq!(fx.pr_status("a1"), "dispatch");
+    assert_eq!(fx.pr_status("b1"), "waiting");
+    assert!(!fx.lead_path(&repo.path, "b1").exists());
+    assert_eq!(fx.git(&repo.path, &["for-each-ref", "--format=%(refname:short)", "refs/heads/pay/"]), "pay/a1");
+    assert_eq!(remote_branch(&fx, &repo.path, "pay/b1"), "");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE status = 'queued' AND fingerprint IS NOT NULL"), 4);
+    assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "dispatch");
+
+    let phase = fx.events("plan-phase");
+    assert_eq!(phase.last().unwrap()["data"]["prs"], json!(["a1"]));
+    let started = fx.events("pr-started");
+    assert_eq!(started.len(), 1, "{started:?}");
+    assert_eq!(started[0]["data"]["pr"], "a1");
+    assert_eq!(started[0]["data"]["by"], "lock");
+    assert!(fx.events("error").is_empty());
+
+    // Again: `a1` is started, not open, so `b1` still waits on it.
+    let again = fx.lock().ok();
+    assert_eq!(again["already"], true);
+    assert_eq!(again["prs"][0]["base_pr"], Value::Null);
+    assert_eq!(again["prs"][1]["base_pr"], "pay/a1");
+    assert_eq!(fx.events("pr-started").len(), 1);
+}
+
+#[test]
+fn lock_starts_no_pr_down_a_stack_and_still_starts_an_independent_pr() {
+    let fx = fx();
+    let (api, web) = (fx.repo("api"), fx.repo("web"));
+    fx.add("a1", &api.path, &[]);
+    fx.add_with("b1", &api.path, &["--base", "a1"]);
+    fx.add_with("c1", &api.path, &["--base", "b1"]);
+    fx.add("w1", &web.path, &[]);
+    for (job, pr) in [("ja", "a1"), ("jb", "b1"), ("jc", "c1"), ("jw", "w1")] {
+        fx.job(job, pr);
+    }
+    fx.approve();
+
+    let out = fx.lock().ok();
+
+    let rows = out["prs"].as_array().unwrap();
+    let row = |key: &str| rows.iter().find(|p| p["key"] == key).unwrap_or_else(|| panic!("no row {key}: {out}"));
+    assert_eq!(row("a1")["status"], "dispatch");
+    assert_eq!(row("w1")["status"], "dispatch");
+    assert_eq!(row("b1")["status"], "waiting");
+    assert_eq!(row("c1")["status"], "waiting");
+    assert_eq!(row("b1")["base_pr"], "pay/a1");
+    assert_eq!(row("c1")["base_pr"], "pay/b1");
+    for key in ["b1", "c1"] {
+        assert_eq!(fx.pr_status(key), "waiting");
+        assert!(!fx.lead_path(&api.path, key).exists(), "{key}'s worktree");
+        assert_eq!(remote_branch(&fx, &api.path, &format!("pay/{key}")), "", "{key} on origin");
+    }
+    assert_eq!(fx.git(&api.path, &["for-each-ref", "--format=%(refname:short)", "refs/heads/pay/"]), "pay/a1");
+    assert_eq!(fx.git(&web.path, &["for-each-ref", "--format=%(refname:short)", "refs/heads/pay/"]), "pay/w1");
+    let mut started: Vec<String> = fx.events("pr-started").iter().map(|e| e["data"]["pr"].as_str().unwrap().to_owned()).collect();
+    started.sort();
+    assert_eq!(started, ["a1", "w1"]);
 }
 
 #[test]

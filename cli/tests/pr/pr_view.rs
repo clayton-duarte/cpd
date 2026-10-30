@@ -32,11 +32,17 @@ pub(super) struct AutoMerge {
     pub(super) already: bool,
     /// GitHub's error message for the mutation, when it refuses.
     pub(super) refuse: Option<String>,
+    /// The repo's allowed merge methods, read beside `autoMergeAllowed`: squash, merge commit, rebase.
+    pub(super) squash: bool,
+    pub(super) merge: bool,
+    pub(super) rebase: bool,
+    /// Only the mutation fails (gh exits 1), the read succeeds.
+    pub(super) fail_mutation: bool,
 }
 
 impl Default for AutoMerge {
     fn default() -> Self {
-        AutoMerge { allowed: true, already: false, refuse: None }
+        AutoMerge { allowed: true, already: false, refuse: None, squash: true, merge: false, rebase: false, fail_mutation: false }
     }
 }
 
@@ -50,6 +56,9 @@ impl Handler for Gh {
             let auto = self.auto.lock().unwrap();
             let text = args.join(" ");
             if text.contains("enablePullRequestAutoMerge") {
+                if auto.fail_mutation {
+                    return Reply::exit(1, "", "gh: HTTP 502\n");
+                }
                 return match &auto.refuse {
                     Some(message) => Reply::exit(
                         1,
@@ -66,7 +75,7 @@ impl Handler for Gh {
                 let request = if auto.already { json!({"enabledAt": "2026-10-27T17:00:00Z"}) } else { serde_json::Value::Null };
                 return Reply::ok(&format!(
                     "{}\n",
-                    json!({"data": {"repository": {"autoMergeAllowed": auto.allowed, "pullRequest": {"id": "PR_812", "autoMergeRequest": request}}}})
+                    json!({"data": {"repository": {"autoMergeAllowed": auto.allowed, "squashMergeAllowed": auto.squash, "mergeCommitAllowed": auto.merge, "rebaseMergeAllowed": auto.rebase, "pullRequest": {"id": "PR_812", "autoMergeRequest": request}}}})
                 ));
             }
         }
@@ -261,4 +270,29 @@ fn view_prints_the_post_of_a_posted_pr() {
         out["post"],
         json!({"channel": "C02JU6C2Z1D", "ts": "1793040197.490209", "link": link, "posted_at": "opened", "reaction": "git-merge", "reacted_at": null, "refusal": null})
     );
+}
+
+/// `pr view` of an open PR whose head holds `checks`, under the owner policy `body`: the checks summary it prints.
+fn summary_of(body: &str, checks: Vec<serde_json::Value>) -> serde_json::Value {
+    let fx = fx("open");
+    fx.fx.env.owner_policy("acme", body);
+    let view = json!({"state": "OPEN", "mergedAt": null, "title": "Pay the bills", "url": URL, "reviewDecision": null, "statusCheckRollup": checks, "reviews": [], "comments": []});
+    let _ = (*fx.fx.fakes.runner).clone().on("gh", |c| c.args.starts_with(&["pr".into(), "view".into()]), Reply::ok(&format!("{view}\n")));
+    fx.fx.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok()["pr"]["checks"].clone()
+}
+
+fn guardian() -> serde_json::Value {
+    json!({"__typename": "StatusContext", "context": "GitGuardian Security Checks", "state": "SUCCESS"})
+}
+
+#[test]
+fn view_reports_pending_checks_when_a_required_check_is_missing() {
+    assert_eq!(summary_of("[pr]\nrequired_checks = [\"gate\"]\n", vec![guardian()]), "pending");
+}
+
+#[test]
+fn view_with_an_empty_required_list_or_a_passed_required_check_reports_passed() {
+    assert_eq!(summary_of("[pr]\nrequired_checks = []\n", vec![guardian()]), "passed");
+    let gate = json!({"__typename": "CheckRun", "name": "gate", "status": "COMPLETED", "conclusion": "SUCCESS"});
+    assert_eq!(summary_of("[pr]\nrequired_checks = [\"gate\"]\n", vec![guardian(), gate]), "passed");
 }

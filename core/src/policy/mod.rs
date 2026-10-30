@@ -301,12 +301,23 @@ mod tests {
     }
 
     #[test]
+    fn required_checks_defaults_to_empty_and_the_repo_file_wins_over_the_owner_file() {
+        let (_d, home) = home();
+        write(&home, "acme/owner.toml", "");
+        assert_eq!(resolve(&home, &repo_key("acme", "cpd")).unwrap().policy.pr.required_checks, Vec::<String>::new());
+        write(&home, "acme/owner.toml", "[pr]\nrequired_checks = [\"owner-gate\"]\n");
+        assert_eq!(resolve(&home, &repo_key("acme", "cpd")).unwrap().policy.pr.required_checks, ["owner-gate"]);
+        write(&home, "acme/cpd.toml", "[pr]\nrequired_checks = [\"gate\"]\n");
+        assert_eq!(resolve(&home, &repo_key("acme", "cpd")).unwrap().policy.pr.required_checks, ["gate"]);
+    }
+
+    #[test]
     fn a_set_domain_replaces_the_whole_domain_and_left_out_keys_take_cpds_default() {
         let (_d, home) = home();
         write(
             &home,
             "acme/owner.toml",
-            "[pr]\nfeedback.checks = \"none\"\njira_required = true\nhuman_gated_contexts = []\ntext = \"owner pr\"\n[pr.post]\nenabled = true\nchannel = \"\"\ntemplate = \"{{ url }}\"\nmerged_reaction = \"\"\n[pr.jira]\nin_progress = \"\"\nin_review = \"\"\ndone = \"\"\n",
+            "[pr]\nfeedback.checks = \"none\"\njira_required = true\nhuman_gated_contexts = []\nrequired_checks = []\ntext = \"owner pr\"\n[pr.post]\nenabled = true\nchannel = \"\"\ntemplate = \"{{ url }}\"\nmerged_reaction = \"\"\n[pr.jira]\nin_progress = \"\"\nin_review = \"\"\ndone = \"\"\n",
         );
         write(&home, "acme/cpd.toml", "[pr]\n");
         let r = resolve(&home, &repo_key("acme", "cpd")).unwrap();
@@ -316,7 +327,7 @@ mod tests {
         assert_eq!(src.source, Source::Repo(real(&home, "acme/cpd.toml")));
         assert_eq!(
             src.left_out,
-            ["feedback.checks", "pr.post.enabled", "pr.post.channel", "pr.post.template", "pr.post.merged_reaction", "pr.jira_required", "pr.human_gated_contexts", "pr.jira.in_progress", "pr.jira.in_review", "pr.jira.done"]
+            ["feedback.checks", "pr.post.enabled", "pr.post.channel", "pr.post.template", "pr.post.merged_reaction", "pr.jira_required", "pr.human_gated_contexts", "pr.required_checks", "pr.jira.in_progress", "pr.jira.in_review", "pr.jira.done"]
         );
         assert!(src.to_string().ends_with(" (key default)"));
         // The owner file sets every typed key: no `(key default)`.

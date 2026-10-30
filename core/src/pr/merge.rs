@@ -1,4 +1,4 @@
-//! `pr merge` (commands.md §9.10): squash-merge one pull request on GitHub, after
+//! `pr merge` (commands.md §9.10): merge, with a method the repo allows, one pull request on GitHub, after
 //! re-reading it. It needs no Plan and no Context. It stores the merge (hs-d526) from its
 //! own success or from a precheck that reads MERGED, as the poll would: one transaction.
 
@@ -11,6 +11,8 @@ use serde_json::json;
 use super::gh;
 use super::poll;
 use super::pulls;
+use super::status::{Required, required_states};
+use crate::host::runner::Runner;
 use crate::home::CpdHome;
 use crate::store::Store;
 use crate::ids::{PlanId, PrKey};
@@ -81,7 +83,20 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
         .with("state", view.state)
         .with("merge_state", view.merge_state));
     }
-    gh::merge_pr(runner, cwd, &repo, number, &view.head)?;
+    refuse_unless_required_passed(runner, cwd, &repo, number)?;
+    let methods = gh::merge_methods(runner, cwd, &repo)?;
+    let Some(method) = methods.choose() else {
+        return Err(CpdError::new(
+            ErrorCode::NoMergeMethod,
+            format!("{repo} allows no merge method: squash, merge commit and rebase are all off in its settings, so cpd cannot merge #{number}. Allow one in the repo's settings."),
+        )
+        .with("repo", repo.as_str())
+        .with("number", number)
+        .with("squash", methods.squash)
+        .with("merge", methods.merge)
+        .with("rebase", methods.rebase));
+    };
+    gh::merge_pr(runner, cwd, &repo, number, method, &view.head)?;
     // The merge happened; store it only from what GitHub reads back (hs-d550). A failed read stores nothing.
     let stored = match gh::view_for_merge(runner, cwd, &repo, number) {
         Ok(read) if read.state == "MERGED" => {
@@ -90,7 +105,38 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
         }
         _ => false,
     };
-    Ok(Output::success(json!({"repo": repo, "number": number, "method": "squash", "branch_deleted": true, "stored": stored})))
+    let warnings: Vec<serde_json::Value> = match gh::delete_branch_on_merge(runner, cwd, &repo) {
+        Ok(true) => vec![],
+        Ok(false) => vec![json!({"code": "auto_delete_off", "text": format!(
+            "{repo} has delete_branch_on_merge off: the merged branch stays on GitHub and a pull request stacked on it is not repointed to the base. Turn the setting on in the repo's settings."
+        )})],
+        Err(e) => vec![json!({"code": "auto_delete_unread", "text": e.message()})],
+    };
+    Ok(Output::success(json!({"repo": repo, "number": number, "method": method.as_str(), "stored": stored, "warnings": warnings})))
+}
+
+/// `required_check_not_passed` when a name of the repo policy's `pr.required_checks` is missing, pending or failed on the head.
+fn refuse_unless_required_passed(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) -> Result<(), CpdError> {
+    let required = poll::repo_required(&CpdHome::from_env()?, repo)?;
+    if required.is_empty() {
+        return Ok(());
+    }
+    let checks = gh::checks_for_merge(runner, cwd, repo, number)?;
+    let states = required_states(&checks, &required);
+    let named = |wanted: Required| states.iter().filter(|(_, s)| *s == wanted).map(|(n, _)| *n).collect::<Vec<_>>();
+    let (missing, pending, failed) = (named(Required::Missing), named(Required::Pending), named(Required::Failed));
+    if missing.is_empty() && pending.is_empty() && failed.is_empty() {
+        return Ok(());
+    }
+    Err(CpdError::new(
+        ErrorCode::RequiredCheckNotPassed,
+        format!("{repo}#{number} has required checks that have not passed on its head (missing: {missing:?}, pending: {pending:?}, failed: {failed:?})."),
+    )
+    .with("repo", repo)
+    .with("number", number)
+    .with("missing", missing)
+    .with("pending", pending)
+    .with("failed", failed))
 }
 
 const STORE_BUSY_MS: u64 = 5000;
