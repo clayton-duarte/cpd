@@ -276,7 +276,7 @@ fn decide(conn: &Connection, home: &CpdHome, catalog: &Catalog, plan: &PlanId, k
     // `never_started`: the previous Attempt's driver never started (`driver_pid` null, §3.4).
     let previous: Option<(u32, String, bool, bool)> = conn
         .query_row(
-            "SELECT number, tier, driver_pid IS NULL, cause IS 'provider_error' FROM attempts WHERE plan = ?1 AND job = ?2 ORDER BY number DESC LIMIT 1",
+            "SELECT number, tier, driver_pid IS NULL, cause IN ('provider_error', 'gate_failed') FROM attempts WHERE plan = ?1 AND job = ?2 ORDER BY number DESC LIMIT 1",
             params![plan.as_str(), key.as_str()],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
@@ -291,10 +291,10 @@ fn decide(conn: &Connection, home: &CpdHome, catalog: &Catalog, plan: &PlanId, k
             let tier = job.require_tier()?;
             (Tier::parse(tier).map_err(|_| bad(format!("tier {tier:?} of Job {key}")))?, Origin::Ladder)
         }
-        (None, Some((number, tier, never_started, provider_error))) => {
+        (None, Some((number, tier, never_started, same_tier))) => {
             let last = Tier::parse(tier).map_err(|_| bad(format!("tier {tier:?} of Attempt {key}-a{number}")))?;
-            if *never_started || *provider_error || !catalog.is_valid(last) {
-                // The ledger queued the Job at that Tier again: the Attempt was not a try (a provider error never raises the Tier, pro-d102).
+            if *never_started || *same_tier || !catalog.is_valid(last) {
+                // The ledger queued the Job at that Tier again: the Attempt was not a try (a provider error never raises the Tier, pro-d102; nor does a failed Gate, pro-d280).
                 // A Tier the catalog refuses is left as is here: step_up below raises it.
                 (last, Origin::Ladder)
             } else {

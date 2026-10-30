@@ -4519,7 +4519,7 @@ Rendered by the driver at A3 to `run/<plan>/specs/<attempt>.md` from a template 
 
 **The `cpd ask` line** (pro-d274). The template adds, right after the sentence `Ask one real blocker at a time. Do not ask what this Spec or the code already answers.` (two spaces of indent, inside the same list item, for every kind of Job including explore), exactly this sentence: "Run `cpd ask` as a call of its own, in the foreground, with the bash tool's `timeout` input set to 7200 (seconds). Never put it under the `timeout` command, in a pipeline or in the background: it ends only when the Lead answers or the wait expires."
 
-**Gate causes in Previous Attempts.** For an Attempt that ended `failed` / `gate_failed` or `gate_error`, the entry names the failed Gate's hook (`pre-commit` or `pre-merge`) and log, read from the Attempt's end Event `detail`. When the detail has the hook and log:
+**Gate causes in Previous Attempts.** For an Attempt that ended `failed` / `gate_failed` or `gate_error`, the entry names the failed Gate's hook (`pre-commit` or `pre-merge`) and log, read from the Attempt's end Event `detail` or, for a requeued Attempt, `feedback`. When the detail has the hook and log:
 
 - **`gate_failed`, hook and log known:** "The Gate (`<hook>`) failed at its merge. Its whole output is in this log; read it and fix what it reports:"
 - **`gate_failed`, neither known:** "The Gate failed at its merge."
