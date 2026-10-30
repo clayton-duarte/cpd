@@ -115,6 +115,25 @@ test("both kinds refuse a bash call without a timeout or over 30 seconds", () =>
   }
 });
 
+test("both kinds let a lone cpd ask run past 30 seconds and refuse everything else past 30 seconds", () => {
+  for (const k of KINDS) {
+    const ask = 'cpd ask api-a1 "why?"';
+    for (const t of [31, 7200]) allowed(bash(k, ask, t), `${k} lone ask ${t} s`);
+    allowed(bash(k, '/opt/cpd/bin/cpd ask api-a1 "why?" --timeout-minutes 5', 7200), `${k} path ask`);
+    allowed(bash(k, 'FOO=1 cpd ask api-a1 "why?"', 7200), `${k} assignment ask`);
+    refused(bash(k, ask, null), "timeout", `${k} ask no timeout`);
+    refused(bash(k, ask, 0), "timeout", `${k} ask timeout 0`);
+    for (const c of ['timeout 600 cpd ask api-a1 "why?"', `${ask}; ls`, `${ask} && ls`, `${ask} | cat`, "cpd answer api-a1-q1 yes", "ls"]) {
+      refused(bash(k, c, 7200), "timeout", `${k} ${c}`);
+    }
+    allowed(bash(k, ask, 30), `${k} ask 30 s`);
+  }
+});
+
+test("a lone cpd ask is still judged by the other explore rules", () => {
+  for (const k of KINDS) refused(bash(k, `cpd ask api-a1 "why?" > ${REPO}/out.txt`, 7200), "write", `${k} ask redirected into the repo`);
+});
+
 test("both kinds refuse a git or shell write inside a repository", () => {
   for (const k of KINDS) {
     for (const c of [

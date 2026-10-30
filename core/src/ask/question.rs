@@ -159,6 +159,27 @@ fn resume(tx: &WriteTxn<'_>, asker: &Asker) -> Result<(), CpdError> {
     set_state(tx, asker, &state, "working", None, &name)
 }
 
+/// The Worker Session of an Attempt `working` again, once the Escalation that held it `waiting` is
+/// settled (engine E1, contract §3.7): nothing when the Attempt has no Worker Session or another of its
+/// Escalations is still `open`; a Session that is not `waiting` is left as it is.
+pub fn resume_attempt(tx: &WriteTxn<'_>, plan: &PlanId, attempt: &AttemptId) -> Result<(), CpdError> {
+    let session: Option<String> = tx
+        .query_row("SELECT worker_session FROM attempts WHERE plan = ?1 AND id = ?2", [plan.as_str(), &attempt.to_string()], |r| r.get(0))
+        .optional()?
+        .flatten();
+    let Some(session) = session else { return Ok(()) };
+    let session = SessionId::parse(&session).map_err(|_| CpdError::bad_row(format!("Attempt {attempt} has an invalid Worker Session")))?;
+    let still_open: bool = tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM escalations WHERE plan = ?1 AND attempt = ?2 AND status = 'open')",
+        [plan.as_str(), &attempt.to_string()],
+        |r| r.get(0),
+    )?;
+    if still_open {
+        return Ok(());
+    }
+    resume(tx, &Asker { plan: plan.clone(), attempt: attempt.clone(), job: attempt.job().clone(), session })
+}
+
 fn session_row(conn: &Connection, id: &SessionId) -> Result<(String, Option<String>, String), CpdError> {
     conn.query_row("SELECT state, state_label, name FROM sessions WHERE id = ?1", [id.as_str()], |r| {
         Ok((r.get(0)?, r.get(1)?, r.get(2)?))

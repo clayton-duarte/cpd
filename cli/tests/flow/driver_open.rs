@@ -1023,3 +1023,57 @@ fn a_gate_failure_after_a_spent_retry_cap_fails_the_job_at_once() {
     assert_eq!(live.job_status(JOB_KEY), "failed");
     assert_eq!(live.plan_events("job-failed").len(), 1);
 }
+
+const OPEN_ESCALATION: &str = "INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at) VALUES ('pay', 'api-a1-q1', 'api-a1', 1, 'Why?', 'open', 4242, 't');";
+const CLOSE_ESCALATION: &str = "UPDATE escalations SET status = 'answered', answer = 'ok', answered_at = 't' WHERE plan = 'pay' AND id = 'api-a1-q1';";
+const STOP: &str = "UPDATE attempts SET stop_request = 'timed_out' WHERE plan = 'pay' AND id = 'api-a1';";
+
+#[test]
+fn an_open_escalation_of_the_attempt_is_not_a_stall() {
+    let live = live("[timeouts]\nstall_seconds = 1");
+    let mut tool = None;
+    let (id, _) = live.drive("api", |live, _, nap| {
+        if nap == 1 {
+            tool = Some(start_tool_call(live, ""));
+            live.fixture(OPEN_ESCALATION);
+        }
+        assert!(live.fx.fakes.spawn.alive(tool.unwrap()), "the tool call was killed at poll {nap} with an open Escalation");
+        assert_eq!(live.fx.fakes.spawn.signals(), []);
+        if nap == 6 {
+            live.fixture(STOP);
+        }
+    });
+    assert_eq!(live.attempt(&id)["cause"], "timed_out");
+}
+
+#[test]
+fn a_stall_is_judged_again_once_the_escalation_closes() {
+    let live = live("[timeouts]\nstall_seconds = 2");
+    let mut tool = None;
+    let (id, _) = live.drive("api", |live, _, nap| {
+        match nap {
+            1 => {
+                tool = Some(start_tool_call(live, ""));
+                live.fixture(OPEN_ESCALATION);
+            }
+            7 => live.fixture(CLOSE_ESCALATION),
+            _ => {}
+        }
+        let tool = tool.unwrap();
+        match nap {
+            1..=8 => {
+                assert!(live.fx.fakes.spawn.alive(tool), "the tool call was killed at poll {nap}");
+                assert_eq!(live.fx.fakes.spawn.signals(), [], "signalled at poll {nap}");
+            }
+            9..=14 => {
+                if nap == 14 {
+                    assert!(!live.fx.fakes.spawn.alive(tool), "no stall judged within 6 polls after the close");
+                    live.fixture(STOP);
+                }
+            }
+            _ => {}
+        }
+    });
+    assert_eq!(live.fx.fakes.spawn.signals().len(), 1);
+    assert_eq!(live.attempt(&id)["cause"], "timed_out");
+}

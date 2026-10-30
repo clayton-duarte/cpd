@@ -170,10 +170,10 @@ fn write_puts_the_spec_where_the_home_says_and_rewrites_it() {
     let input = first_input(&plan, &attempt, &lists);
     let path = spec::write(&home, &input).unwrap();
     assert_eq!(path, home_dir.path().join("run/pay/specs/api-schema-a1.md"));
-    assert_eq!(fs::read_to_string(&path).unwrap(), FIRST);
+    assert_eq!(fs::read_to_string(&path).unwrap(), spec::render(&input).unwrap());
     fs::write(&path, "stale").unwrap();
     assert_eq!(spec::write(&home, &input).unwrap(), path);
-    assert_eq!(fs::read_to_string(&path).unwrap(), FIRST);
+    assert_eq!(fs::read_to_string(&path).unwrap(), spec::render(&input).unwrap());
 }
 
 /// The `hooks.pre-commit` pipeline of the repo policy file text `file`.
@@ -232,6 +232,7 @@ Your worktree is `/w/pay--api-schema-a1`. Your current directory is that worktre
       cpd ask api-schema-a1 "<your question>"
 
   Ask one real blocker at a time. Do not ask what this Spec or the code already answers.
+  Run `cpd ask` as a call of its own, in the foreground, with the bash tool's `timeout` input set to 7200 (seconds). Never put it under the `timeout` command, in a pipeline or in the background: it ends only when the Lead answers or the wait expires.
 - Commit a skeleton within 10 minutes of starting, then commit at least every 20 minutes.
 - Run only commands that exit. Wrap every test and measurement in `timeout`. Write no synthetic benchmarks. Never start `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run` or any other command that does not exit.
 - Run only the tests your change touches: the test files or modules of what you changed and your new tests, named in your Spec's acceptance. Never the full suite (`cargo test` or `nextest` with `--workspace` or no filter, `npm test` of everything): the Gate runs it, in the PR's open Job, and the adapter refuses it in a Worker session.
@@ -305,6 +306,7 @@ Your worktree is `/w/pay--api-schema-a3`. Your current directory is that worktre
       cpd ask api-schema-a3 "<your question>"
 
   Ask one real blocker at a time. Do not ask what this Spec or the code already answers.
+  Run `cpd ask` as a call of its own, in the foreground, with the bash tool's `timeout` input set to 7200 (seconds). Never put it under the `timeout` command, in a pipeline or in the background: it ends only when the Lead answers or the wait expires.
 - Commit a skeleton within 10 minutes of starting, then commit at least every 20 minutes.
 - Run only commands that exit. Wrap every test and measurement in `timeout`. Write no synthetic benchmarks. Never start `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run` or any other command that does not exit.
 - Run only the tests your change touches: the test files or modules of what you changed and your new tests, named in your Spec's acceptance. Never the full suite (`cargo test` or `nextest` with `--workspace` or no filter, `npm test` of everything): the Gate runs it, in the PR's open Job, and the adapter refuses it in a Worker session.
@@ -491,4 +493,32 @@ fn an_open_and_an_update_job_merge_the_base_only_on_a_conflict_and_leave_the_res
     }
     assert_has(&kind_spec(JobKind::Open), &["This is the **open Job**"]);
     assert_has(&kind_spec(JobKind::Update), &["This is an **update Job**"]);
+}
+
+#[test]
+fn the_spec_tells_the_worker_how_to_run_cpd_ask() {
+    let artefact = std::path::Path::new("scout.md");
+    let tests = strings(&["t::a"]);
+    let files = strings(&["a.rs"]);
+    let jobs = strings(&["j"]);
+    let kinds = [
+        JobKind::Work,
+        JobKind::Docs,
+        JobKind::Test { tests: &tests, test_files: &files },
+        JobKind::Impl { test_jobs: &jobs, tests: &tests, guarded: &files, approved: &[] },
+        JobKind::Open,
+        JobKind::Update,
+        JobKind::Explore { kind: "scout", artefact },
+    ];
+    for kind in kinds {
+        let text = kind_spec(kind);
+        assert_has(
+            &text,
+            &[
+                "as a call of its own, in the foreground",
+                "`timeout` input set to 7200",
+                "Never put it under the `timeout` command, in a pipeline or in the background",
+            ],
+        );
+    }
 }
