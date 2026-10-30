@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
 use super::{Env, RetryArgs, check_needs_not_cancelled, find, plan_phase};
@@ -23,10 +23,20 @@ enum Decision {
 }
 
 pub(super) fn retry(args: RetryArgs) -> Result<Output, CpdError> {
+    retry_in(&mut Env::open()?, args)
+}
+
+/// [`retry`] on an open `env`: what a test hands in.
+pub(super) fn retry_in(env: &mut Env, args: RetryArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let key = args.key;
     let tier = args.tier.to_string();
-    let mut env = Env::open()?;
+    let kind: Option<String> = env
+        .store
+        .read(|conn| Ok(conn.query_row("SELECT kind FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0)).optional()?))?;
+    if let Some(kind) = &kind {
+        super::check_kind_tier(kind, args.tier)?;
+    }
     env.check_tier(&plan, &key, None, args.tier)?;
 
     let already = match env.store.read(|conn| decide(conn, &plan, &key, &tier))? {

@@ -105,7 +105,7 @@ pub fn find(prs: &[PrRow], jobs: &[Job], others: &[Other]) -> Vec<Overlap> {
     open.sort_by(|a, b| a.key.cmp(&b.key));
     let mut out = Vec::new();
     for job in open {
-        let Some(pr) = prs.iter().find(|p| p.key.as_str() == job.pr && is_open(p)) else { continue };
+        let Some(pr) = prs.iter().find(|p| p.key.as_str() == job.pr_str() && is_open(p)) else { continue };
         let mut paths: Vec<&str> = Vec::new();
         // A stub draft has no Spec yet, so no files to compare.
         let touches = job.spec.as_ref().and_then(|s| s.touches.as_array());

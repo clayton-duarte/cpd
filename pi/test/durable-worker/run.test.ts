@@ -113,7 +113,7 @@ const MOVES: Record<string, readonly string[]> = {
 };
 const legalMove = (from: string, to: string): boolean => from === to || (MOVES[from]?.includes(to) ?? false);
 
-function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: Deps["resolveModel"]; sessionState?: string } = {}) {
+function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: Deps["resolveModel"]; sessionState?: string; entriesError?: Error; writeError?: Error; openGate?: Promise<void> } = {}) {
   const session = { state: over.sessionState ?? "stopped" };
   const store = over.store ?? new Store();
   const calls: string[][] = [];
@@ -161,7 +161,10 @@ function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: 
       effects.push("open");
       opens.push(o);
       notify();
-      return store.conversation();
+      await over.openGate;
+      const conversation = store.conversation();
+      if (over.entriesError) conversation.entries = async () => Promise.reject(over.entriesError);
+      return conversation;
     },
     follow: (hooks) => {
       effects.push("follow");
@@ -178,6 +181,7 @@ function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: 
     },
     writeReport: async (file, report) => {
       effects.push("writeReport");
+      if (over.writeError) throw over.writeError;
       reports.push({ file, report });
       notify();
     },
@@ -347,6 +351,70 @@ test("a terminate signal reports stopped, stops the follower and returns 143 wit
   assert.equal(r.follower.stopped, 1);
   assert.deepEqual(r.calls.at(-1), stoppedArgs);
   assert.equal(r.store.closeCalls, 0);
+});
+
+const assistant = (store: Store) => store.entries.push({ kind: "pi.assistant", model: [{ role: "assistant", stopReason: "toolUse", provider: "anthropic", model: "sonnet", usage: { input: 10, output: 5, cacheRead: 1, cacheWrite: 2, cost: { total: 0.5 } } }] });
+
+test("terminate with a submission still pending writes the end report from the entries so far, before stopped", { timeout: 20_000 }, async () => {
+  const r = rig();
+  await up(r);
+  assistant(r.store);
+  assert.equal(await stop(r), 143);
+  assert.equal(r.reports.length, 1);
+  assert.deepEqual(r.reports[0], { file: REPORT, report: endReport(r.store.entries) });
+  assert.equal(r.reports[0]!.report.turns, 1);
+  assert.equal(r.reports[0]!.report.stop_reason, "toolUse");
+  assert.deepEqual(r.calls.at(-1), stoppedArgs);
+  assert.ok(r.effects.lastIndexOf("writeReport") < r.effects.lastIndexOf("cpd"), "the report is written before the final stopped call");
+});
+
+test("terminate before the conversation opened writes no report and still reports stopped", { timeout: 20_000 }, async () => {
+  let openIt!: () => void;
+  const r = rig({ openGate: new Promise<void>((resolve) => { openIt = resolve; }) });
+  await r.until("the terminate handler", () => r.terminate.handler);
+  await r.until("open called", () => r.opens.length >= 1);
+  assert.equal(await stop(r), 143);
+  openIt();
+  assert.equal(r.reports.length, 0);
+  assert.deepEqual(r.calls.at(-1), stoppedArgs);
+});
+
+test("terminate with no assistant entry writes no report and does not throw", { timeout: 20_000 }, async () => {
+  const r = rig();
+  await up(r);
+  assert.equal(await stop(r), 143);
+  assert.equal(r.reports.length, 0);
+  assert.equal(r.ending.error, undefined);
+  assert.ok(r.logs.length >= 1);
+  assert.deepEqual(r.calls.at(-1), stoppedArgs);
+});
+
+test("entries rejecting at terminate is logged; exit 143 and stopped sent", { timeout: 20_000 }, async () => {
+  const r = rig({ entriesError: new Error("entries broke") });
+  await up(r);
+  assert.equal(await stop(r), 143);
+  assert.equal(r.reports.length, 0);
+  assert.ok(r.logs.some((l) => l.includes("entries broke")));
+  assert.deepEqual(r.calls.at(-1), stoppedArgs);
+});
+
+test("writeReport rejecting at terminate is logged; exit 143 and stopped sent", { timeout: 20_000 }, async () => {
+  const r = rig({ writeError: new Error("disk full") });
+  await up(r);
+  assistant(r.store);
+  assert.equal(await stop(r), 143);
+  assert.ok(r.logs.some((l) => l.includes("disk full")));
+  assert.deepEqual(r.calls.at(-1), stoppedArgs);
+});
+
+test("terminate after a settled turn replaces the report with an equal one", { timeout: 20_000 }, async () => {
+  const r = rig();
+  await up(r);
+  r.store.settle(CONFIG.attempt);
+  await r.until("a report", () => r.reports.length >= 1);
+  assert.equal(await stop(r), 143);
+  assert.equal(r.reports.length, 2);
+  assert.deepEqual(r.reports[1], r.reports[0]);
 });
 
 test("a harness that closed after a storage error reports stopped and returns 1", { timeout: 20_000 }, async () => {

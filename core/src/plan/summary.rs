@@ -105,7 +105,7 @@ pub fn markdown(kind: &Kind, i: &Input) -> String {
     counting.sort_by(|a, b| a.key.cmp(&b.key));
     let mut reviewed: Vec<&Job> = i.jobs.iter().filter(|j| under_review(j)).collect();
     reviewed.sort_by(|a, b| (&a.pr, &a.key).cmp(&(&b.pr, &b.key)));
-    let has_review = |pr: &PrRow| reviewed.iter().any(|j| j.pr == pr.key.as_str());
+    let has_review = |pr: &PrRow| reviewed.iter().any(|j| j.pr_str() == pr.key.as_str());
 
     let mut blocks: Vec<Vec<String>> = Vec::new();
     blocks.push(match kind {

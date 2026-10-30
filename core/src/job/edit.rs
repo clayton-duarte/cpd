@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
 use super::spec::{self, Spec};
@@ -41,6 +41,11 @@ enum Decision {
 }
 
 pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
+    edit_in(&mut Env::open()?, args)
+}
+
+/// [`edit`] on an open `env`: what a test hands in.
+pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     if args.title.is_none() && args.tier.is_none() && args.spec.is_none() && args.pr.is_none() && args.kind.is_none() && args.needs.is_none() && !args.no_needs {
         return Err(CpdError::new(
@@ -56,8 +61,16 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     if let Some(kind) = &args.kind {
         check_kind_not_reserved(kind)?;
     }
-    let spec = args.spec.as_ref().map(|path: &PathBuf| spec::read(path)).transpose()?;
-    let mut env = Env::open()?;
+    if args.kind.as_deref().is_some_and(jobs::is_explore) {
+        return Err(CpdError::new(ErrorCode::ExploreNeedsMixed, "A Job cannot be made an explore Job: add a scout or research Job with job add.")
+            .with("kind", args.kind.clone().unwrap_or_default()));
+    }
+    // An explore Job's Spec has its own four fields: the Job's stored kind says which.
+    let stored_kind: Option<String> = env
+        .store
+        .read(|conn| Ok(conn.query_row("SELECT kind FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), args.key.as_str()], |r| r.get(0)).optional()?))?;
+    let spec_kind = stored_kind.unwrap_or_else(|| "work".to_owned());
+    let spec = args.spec.as_ref().map(|path: &PathBuf| spec::read_for(path, &spec_kind)).transpose()?;
     if let Some(tier) = args.tier {
         let pr = args.pr.clone();
         env.check_tier(&plan, &args.key, pr.as_ref(), tier)?;
@@ -142,11 +155,18 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     if let Some(kind) = &edits.kind {
         after.kind = kind.clone();
     }
+    let explore = jobs::is_explore(&after.kind);
     if let Some(spec) = &edits.spec {
+        let mut spec = spec.clone();
         spec.check_kind(&after.kind)?;
-        // The Spec names no primary checkout of a PR of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
-        spec.check_primary_roots(&super::add::primary_roots(&load_prs(conn, plan)?), &std::env::home_dir().unwrap_or_default())?;
-        spec.check_files_relative()?;
+        if explore {
+            spec.touches = vec![spec::explore_artefact(plan.as_str(), key.as_str())];
+        } else {
+            // The Spec names no primary checkout of a PR of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
+            let user_home = std::env::home_dir().unwrap_or_default();
+            spec.without_artefacts(home.root(), plan.as_str(), &user_home).check_primary_roots(&super::add::primary_roots(&load_prs(conn, plan)?), &user_home)?;
+            spec.check_files_relative()?;
+        }
         after.spec = Some(spec.stored());
         after.tests = spec.tests.as_ref().map(|t| json!(t));
         after.test_files = spec.test_files.as_ref().map(|t| json!(t));
@@ -174,12 +194,12 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
                 .with("pr", pr.as_str()));
         }
         check_pr_live(&prs, plan, pr)?;
-        after.pr = pr.clone();
+        after.pr = Some(pr.clone());
     }
     let moved = after.pr != before.pr;
-    if let Some(spec) = &edits.spec {
+    if let (false, Some(spec)) = (explore, &edits.spec) {
         let prs = load_prs(conn, plan)?;
-        if let Some(pr) = prs.iter().find(|p| p.key.as_str() == after.pr) {
+        if let Some(pr) = prs.iter().find(|p| p.key.as_str() == after.pr_str()) {
             // A Lead Branch that is not in the repo (yet) is no tree to read: the Job starts from the PR's base.
             let mut pr = pr.clone();
             let lead_exists = crate::git::run::run(std::path::Path::new(&pr.repo), &["rev-parse", "--verify", "--quiet", &format!("{}^{{commit}}", pr.lead_branch)])
@@ -192,10 +212,10 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     }
     if edits.spec.is_some() || moved {
         let names: Option<Vec<String>> = after.resources.as_ref().and_then(|r| serde_json::from_value(r.clone()).ok());
-        super::add::check_resources_declared(conn, home, plan, &after.pr, key.as_str(), names.as_deref())?;
+        super::add::check_resources_declared(conn, home, plan, after.pr_str(), key.as_str(), names.as_deref())?;
     }
-    if moved || after.kind != before.kind {
-        check_shape_allows(&load_prs(conn, plan)?, plan, &after.pr, &after.kind)?;
+    if !explore && (moved || after.kind != before.kind) {
+        check_shape_allows(&load_prs(conn, plan)?, plan, after.pr_str(), &after.kind)?;
     }
     // A Job that changes PR keeps none of its old needs: they are checked against the new PR.
     if let Some(needs) = &edits.needs {
@@ -204,7 +224,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     }
     let needs = edits.needs.clone().unwrap_or_else(|| before.needs.clone());
     if edits.needs.is_some() || moved {
-        check_needs_same_pr(&all, plan, &after.pr, &needs)?;
+        check_needs_same_pr(&all, plan, after.pr_str(), &needs)?;
     }
     after.needs = needs;
     if moved {
@@ -215,7 +235,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
                 format!("Job {key} cannot change PR: {} need{} it.", needing.join(", "), if needing.len() == 1 { "s" } else { "" }),
             )
             .with("plan", plan.as_str())
-            .with("pr", after.pr.as_str())
+            .with("pr", after.pr_str())
             .with("jobs", needing));
         }
     }
@@ -288,7 +308,7 @@ fn update(tx: &Connection, plan: &PlanId, before: &Job, after: &Job) -> Result<(
     let mut written: Vec<(&str, bool, Option<String>)> =
         vec![("title", before.title != after.title, Some(after.title.clone())), ("kind", before.kind != after.kind, Some(after.kind.clone()))];
     written.extend(columns(before).into_iter().zip(columns(after)).map(|(b, a)| (a.0, b.1 != a.1, a.1)));
-    written.push(("pr", before.pr != after.pr, Some(after.pr.clone())));
+    written.push(("pr", before.pr != after.pr, after.pr.clone()));
     let changed: Vec<&(&str, bool, Option<String>)> = written.iter().filter(|(_, changed, _)| *changed).collect();
     let fingerprint = (!after.is_draft()).then(|| jobs::locked_fingerprint(after));
     if !changed.is_empty() {

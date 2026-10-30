@@ -15,6 +15,8 @@ pub struct Env {
     pub config: Config,
     pub store: Store,
     pub ports: Ports,
+    /// A fixed Catalog a test hands in; `None` reads pi's (what every command does).
+    pub catalog: Option<crate::config::Catalog>,
 }
 
 impl Env {
@@ -39,7 +41,7 @@ impl Env {
     pub fn open_home_with(ports: &Ports, home: CpdHome) -> Result<Env, CpdError> {
         let config = Config::load(&home)?;
         let store = Store::open_with(&*ports.clock, &home, u64::from(config.timeouts.store_busy_ms), None)?;
-        Ok(Env { home, config, store, ports: ports.clone() })
+        Ok(Env { home, config, store, ports: ports.clone(), catalog: None })
     }
 
     /// [`Env::open_home`] whose store persists through transient errors, the
@@ -47,7 +49,7 @@ impl Env {
     pub fn open_home_persistent(home: CpdHome, persist: Persist) -> Result<Env, CpdError> {
         let config = Config::load(&home)?;
         let store = Store::open_persistent(&home, u64::from(config.timeouts.store_busy_ms), persist)?;
-        Ok(Env { home, config, store, ports: Ports::current() })
+        Ok(Env { home, config, store, ports: Ports::current(), catalog: None })
     }
 }
 

@@ -108,7 +108,8 @@ async function lead(f: Fixture, over: Record<string, unknown> = {}) {
   await waitFor("the follower", () => f.follows().length > 0);
 }
 
-const updatesCalls = (f: Fixture) => f.calls().filter((c) => c.phase === "start").map((c) => c.argv).filter((a) => (a[0] === "events" && a[1] === "list") || (a[0] === "context" && a[1] === "show"));
+// the start-up MCP replay read (pro-d226) is not a Context-updates read
+const updatesCalls = (f: Fixture) => f.calls().filter((c) => c.phase === "start").map((c) => c.argv).filter((a) => !(a[0] === "events" && a[1] === "list" && a[a.indexOf("--kind") + 1] === "mcp-attached")).filter((a) => (a[0] === "events" && a[1] === "list") || (a[0] === "context" && a[1] === "show"));
 
 /** A Manager whose Plan Events and pending work are empty, so a test can focus on the records. */
 async function quietManager(f: Fixture) {

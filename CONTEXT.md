@@ -50,7 +50,7 @@ A self-contained unit of work defined by a Spec, executable by a fresh agent ses
 _Avoid_: card, step; task (except in the Jira analogy of the table)
 
 **Job kind** (new, hs-d340, hs-d341):
-What a Job is for, and so which checks its submit runs: `work` (the default), `docs` (the contract amended first), `test` (red tests, written from the docs by a Worker other than the implementer), `impl` (makes the tests of the test Jobs it needs pass), `verify` (adds checks that change no product behaviour; the Lead adds it by hand), and `open` and `update`, which only cpd adds. The kinds a Workflow may hold follow its Shape. Defined once in contract §2.2 "Job kinds".
+What a Job is for, and so which checks its submit runs: `work` (the default), `docs` (the contract amended first), `test` (red tests, written from the docs by a Worker other than the implementer), `impl` (makes the tests of the test Jobs it needs pass), `verify` (adds checks that change no product behaviour; the Lead adds it by hand), `open` and `update`, which only cpd adds, and the explore kinds `scout` and `research`, which the Lead adds to the Plan (see **Explore Job**). The kinds a Workflow may hold follow its Shape. Defined once in contract §2.2 "Job kinds".
 _Avoid_: type, category, role
 
 **Open Job** (new, hs-d340):
@@ -60,6 +60,18 @@ _Avoid_: opener, release Job
 **Update Job** (new, hs-d340):
 A Job of kind `update`, added by cpd for a Workflow whose pull request is already open and conflicts with its base (never for a base that merely moved, and never for feedback). Like the Open Job it merges the base, then cpd runs the Gate and pushes. `pr rebase` and `pr push` repair a failed one.
 _Avoid_: sync Job, rebase Job
+
+**Scout** (new, pro-d210):
+The Job kind `scout`: a Job of the explore kinds that answers one question from this machine only (where a checkout is, what a log or an Attempt transcript says, a code survey). Its deliverable is a Markdown artefact and a bounded summary, with no commit. Tier `H1`-`H3`. See contract §2.2 "Explore Jobs".
+_Avoid_: explorer, survey Job
+
+**Researcher** (new, pro-d215):
+The Job kind `research`: an Explore Job that may also reach outside this machine (upstream docs, a registry, a web page, an attached MCP server) to answer one question. Its deliverable is the same as a Scout's. Tier `S1`-`S3`. An ordinary research Job of a docs Workflow, whose findings are committed as `docs/research/*.md`, is a `work` Job, not a Researcher.
+_Avoid_: web Job, lookup Job
+
+**Explore Job** (new, pro-d210, pro-d215):
+A Job of kind Scout or Researcher. It belongs to the Plan, not to a Workflow (it has no PR), is queued at once with no draft, no review and no lock, and needs only other Explore Jobs. The Lead reads its summary when it merges; the artefact stays in the Plan's explore directory, and a Spec cites it by path. Defined in contract §2.2 "Explore Jobs".
+_Avoid_: explore task, exploration, side Job
 
 **Spec**:
 The complete, guess-free description of a Job: its `goal`, `context` (what the Worker needs to know), the files it touches, acceptance criteria and what is out of scope. The field `context` is the Spec's own and is not the Context entity.

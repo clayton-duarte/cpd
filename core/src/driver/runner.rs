@@ -65,6 +65,8 @@ pub(super) fn launch(home: &CpdHome, config: &Config, catalog: &Catalog, target:
     let model = catalog.model_arg(target.tier)?;
     git_guard::install(home)?;
     let spec = home.worker_spec(&target.plan, &target.id);
+    let mut env_set: std::collections::BTreeMap<String, String> = pi::worker_env(home, session, &target.plan, &target.id);
+    explore_env(&mut env_set, target);
     Ok(Launch {
         program: crate::config::catalog::node().display().to_string(),
         args: vec![
@@ -74,7 +76,7 @@ pub(super) fn launch(home: &CpdHome, config: &Config, catalog: &Catalog, target:
             "--spec".to_owned(),
             spec.display().to_string(),
         ],
-        env_set: pi::worker_env(home, session, &target.plan, &target.id).into_iter().collect(),
+        env_set: env_set.into_iter().collect(),
         env_remove: Vec::new(),
         cwd: Some(target.worktree.clone()),
         setsid: true,
@@ -83,6 +85,13 @@ pub(super) fn launch(home: &CpdHome, config: &Config, catalog: &Catalog, target:
         idle: true,
         foreground: false,
     })
+}
+
+/// An explore Worker's environment adds `CPD_JOB_KIND=<kind>` (contract §3.4 A3, explore variant); no other Worker has it.
+pub(super) fn explore_env(env: &mut std::collections::BTreeMap<String, String>, target: &Target) {
+    if crate::plan::jobs::is_explore(&target.kind) {
+        env.insert("CPD_JOB_KIND".to_owned(), target.kind.clone());
+    }
 }
 
 /// Starts the `durable` runner: `setup_failed` when the spawn fails, as every A2 or A3 failure does.

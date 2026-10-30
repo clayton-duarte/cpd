@@ -58,6 +58,8 @@ mod incident_tests;
 #[cfg(test)]
 mod provider_hold_e3_tests;
 #[cfg(test)]
+mod explore_tests;
+#[cfg(test)]
 mod janitor_tests;
 #[cfg(test)]
 mod inbox_tests;

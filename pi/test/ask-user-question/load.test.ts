@@ -9,12 +9,12 @@ const INDEX = new URL("../../ask-user-question/index.ts", import.meta.url);
 const PACKAGE = new URL("../../package.json", import.meta.url);
 
 /** Registered tool names after running the factory with exactly `env` for the CPD_* variables. */
-async function registeredFor(env: Record<string, string>): Promise<string[]> {
+async function registeredToolsFor(env: Record<string, string>): Promise<{ name: string; exposure?: string }[]> {
 	assert.ok(existsSync(INDEX), "pi/ask-user-question/index.ts exists");
-	const names: string[] = [];
+	const tools: { name: string; exposure?: string }[] = [];
 	const pi = new Proxy({} as Record<string, unknown>, {
 		get: (_t, method: string) => (...args: unknown[]) => {
-			if (method === "registerTool") names.push((args[0] as { name: string }).name);
+			if (method === "registerTool") tools.push(args[0] as { name: string; exposure?: string });
 		},
 	});
 	const keys = ["CPD_SESSION", "CPD_PLAN", "CPD_ATTEMPT", "PI_CODING_AGENT_DIR"];
@@ -29,7 +29,11 @@ async function registeredFor(env: Record<string, string>): Promise<string[]> {
 		for (const [key, value] of saved) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
 		rmSync(agentDir, { recursive: true, force: true });
 	}
-	return names;
+	return tools;
+}
+
+async function registeredFor(env: Record<string, string>): Promise<string[]> {
+	return (await registeredToolsFor(env)).map((tool) => tool.name);
 }
 
 test("the tool registers for a Lead and a Manager only", async () => {
@@ -37,6 +41,12 @@ test("the tool registers for a Lead and a Manager only", async () => {
 	assert.deepEqual(await registeredFor({ CPD_SESSION: "s" }), ["ask_user_question"], "Manager");
 	assert.deepEqual(await registeredFor({ CPD_SESSION: "s", CPD_PLAN: "p", CPD_ATTEMPT: "a" }), [], "Worker");
 	assert.deepEqual(await registeredFor({}), [], "none");
+});
+
+test("ask_user_question is registered model-only so codemode only keeps it declared", async () => {
+	const [tool] = await registeredToolsFor({ CPD_SESSION: "s", CPD_PLAN: "p" });
+	assert.equal(tool.name, "ask_user_question");
+	assert.equal(tool.exposure, "model-only");
 });
 
 test("the adapter package lists the copy and every listed extension file exists", () => {

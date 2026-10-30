@@ -39,7 +39,12 @@ impl Models {
 /// The models of the Job `job` of `plan`: its PR's repo key (contract §8.3 "Models" (5)). A Worker Attempt, a Job's
 /// Tier check, the ladder and the `open` and `update` Jobs read them here. A key that does not resolve is its error.
 pub fn models_of_job(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, job: &str) -> Result<Models, CpdError> {
-    let held: Option<i64> = conn.query_row("SELECT 1 FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job], |r| r.get(0)).optional()?;
+    let held: Option<Option<String>> = conn.query_row("SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job], |r| r.get(0)).optional()?;
+    // An explore Job has no PR: its models are the Plan's Lead's, from the Context's owner.
+    if let Some(None) = held {
+        let context: String = conn.query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?;
+        return models_of_context(conn, home, &context);
+    }
     if held.is_none() {
         return Err(CpdError::new(crate::error::ErrorCode::JobNotFound, format!("No Job {job} in Plan {plan}.")).with("plan", plan.as_str()).with("job", job));
     }

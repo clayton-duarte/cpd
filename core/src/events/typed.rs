@@ -166,6 +166,11 @@ impl NewEvent {
         make(Kind::JobMerged, text, data)
     }
 
+    /// The `job-merged` of an explore Job (§5.2): `sha` is the artefact's SHA-256, `artefact` its path relative to `$CPD_HOME`; `turn` is always true.
+    pub fn job_merged_explore(text: impl Into<String>, sha: &str, tier: &str, kind: &str, summary: &str, artefact: &str) -> NewEvent {
+        make(Kind::JobMerged, text, json!({"sha": sha, "tier": tier, "kind": kind, "turn": true, "summary": summary, "artefact": artefact}))
+    }
+
     pub fn job_failed(text: impl Into<String>, cause: &str, detail: &str, tier: &str, attempts: i64) -> NewEvent {
         make(Kind::JobFailed, text, json!({"cause": cause, "detail": detail, "tier": tier, "attempts": attempts}))
     }
@@ -543,7 +548,7 @@ mod tests {
                 NewEvent::job_added_by_cpd(T, s, s, s, s, s, Some(s)),
             ],
             Kind::JobEdited => vec![NewEvent::job_edited(T, [s])],
-            Kind::JobMerged => vec![NewEvent::job_merged(T, s, s, s, false, false, None), NewEvent::job_merged(T, s, s, s, true, true, Some((s, n, s)))],
+            Kind::JobMerged => vec![NewEvent::job_merged(T, s, s, s, false, false, None), NewEvent::job_merged(T, s, s, s, true, true, Some((s, n, s))), NewEvent::job_merged_explore(T, s, s, s, s, s)],
             Kind::JobFailed => vec![NewEvent::job_failed(T, s, s, s, n)],
             Kind::JobRetried => vec![NewEvent::job_retried(T, s)],
             Kind::JobCancelRequested => vec![NewEvent::job_cancel_requested(T, s)],

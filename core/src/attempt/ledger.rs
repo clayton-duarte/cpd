@@ -43,7 +43,14 @@ pub struct Attempt {
     /// The Job's kind (§2.2 "Job kinds"): `open` and `update` Jobs are merged without a rebase and with a push (§7.4).
     pub kind: String,
     /// The Job's PR (R34 A7).
-    pub pr: String,
+    pub pr: Option<String>,
+}
+
+impl Attempt {
+    /// The key of the Job's PR; empty for a Job with none (an explore Job), which no PR key equals.
+    pub fn pr_str(&self) -> &str {
+        self.pr.as_deref().unwrap_or_default()
+    }
 }
 
 pub(crate) fn corrupt(what: String) -> CpdError {
@@ -61,7 +68,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
             "SELECT a.job, a.tier, a.status, a.branch, a.worktree, a.worker_session, a.nudged, a.stop_request,
                     r.repo, r.lead_worktree, r.lead_branch, a.submitted_sha, j.kind, j.pr, r.head_ref, r.status
                FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-               JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+               LEFT JOIN prs r ON r.plan = j.plan AND r.key = j.pr
               WHERE a.plan = ?1 AND a.id = ?2",
             params![plan.as_str(), id.to_string()],
             |r| {
@@ -74,9 +81,9 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
                     r.get::<_, Option<String>>(5)?,
                     r.get::<_, bool>(6)?,
                     r.get::<_, Option<String>>(7)?,
-                    (r.get::<_, String>(8)?, r.get::<_, Option<String>>(9)?, r.get::<_, String>(10)?),
+                    (r.get::<_, Option<String>>(8)?, r.get::<_, Option<String>>(9)?, r.get::<_, Option<String>>(10)?),
                     r.get::<_, Option<String>>(11)?,
-                    (r.get::<_, String>(12)?, r.get::<_, String>(13)?, r.get::<_, Option<String>>(14)?, r.get::<_, String>(15)?),
+                    (r.get::<_, String>(12)?, r.get::<_, Option<String>>(13)?, r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?),
                 ))
             },
         )
@@ -87,13 +94,18 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
                 .with("attempt", id.to_string())
         })?;
     let (job, tier, status, branch, worktree, worker_session, nudged, stop_request, (repo, lead_worktree, lead_branch), submitted_sha, (kind, pr, head_ref, pr_status)) = row;
-    let lead_worktree = lead_worktree.ok_or_else(|| corrupt(format!("Plan {plan} has an Attempt but no Lead worktree")))?;
+    // An explore Attempt has no PR: its repo and Lead Branch are none (empty), its Lead worktree is its own directory.
+    let (repo, lead_worktree, lead_branch) = match (pr.is_some(), repo, lead_worktree, lead_branch) {
+        (true, Some(repo), Some(lead_worktree), Some(lead_branch)) => (repo, lead_worktree, lead_branch),
+        (true, ..) => return Err(corrupt(format!("Plan {plan} has an Attempt but no Lead worktree"))),
+        (false, ..) => (String::new(), worktree.clone(), String::new()),
+    };
     Ok(Attempt {
         plan: plan.clone(),
         context: ContextId::parse(&context).map_err(|_| corrupt(format!("context id {context:?}")))?,
         repo: PathBuf::from(repo),
         remote_branch: head_ref.clone().unwrap_or_else(|| lead_branch.clone()),
-        adopted: head_ref.is_some() && pr_status != "open",
+        adopted: head_ref.is_some() && pr_status.as_deref() != Some("open"),
         lead_branch,
         lead_worktree: PathBuf::from(lead_worktree),
         id: id.clone(),
@@ -304,6 +316,49 @@ pub fn end(tx: &WriteTxn<'_>, attempt: &Attempt, end: &End, metrics: Option<&Val
     end_opened(tx, attempt, end, metrics, ladder, stage, None)
 }
 
+/// A8 and the end of an explore Attempt (contract §7.7 "Explore kinds at submit"), in the caller's transaction: the Attempt
+/// `running` to `ended` / `merged`, the Job `merged` with its `summary`, and the `job-merged` Event of §5.2 with the three-line
+/// text of §5.3. `sha` is the artefact's SHA-256 (what was accepted; no commit exists). No compare-and-swap: `cas_lost` only when
+/// the Attempt or the Job is no longer `running`.
+pub fn end_explore(tx: &WriteTxn<'_>, attempt: &Attempt, sha: &str, summary: &str) -> Result<(), CpdError> {
+    let (plan, job, id) = (attempt.plan.as_str(), attempt.job.as_str(), attempt.id.to_string());
+    let cas_lost = |what: &str| {
+        CpdError::new(ErrorCode::CasLost, format!("{what} changed while the submit ran; nothing was written."))
+            .with("plan", plan)
+            .with("attempt", id.clone())
+    };
+    let changed = tx.execute(
+        "UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = ?3, submitted_sha = ?3,
+                submitted_at = (SELECT at FROM txns WHERE id = cpd_txn()), ended_at = (SELECT at FROM txns WHERE id = cpd_txn())
+          WHERE plan = ?1 AND id = ?2 AND status = 'running'",
+        params![plan, id, sha],
+    )?;
+    if changed == 0 {
+        return Err(cas_lost("The Attempt's status"));
+    }
+    let changed = tx.execute(
+        "UPDATE jobs SET status = 'merged', merged_sha = ?3, summary = ?4 WHERE plan = ?1 AND key = ?2 AND status = 'running'",
+        params![plan, job, sha, summary],
+    )?;
+    if changed == 0 {
+        return Err(cas_lost("The Job's status"));
+    }
+    let artefact = format!("run/{plan}/explore/{job}.md");
+    let shown = summary.trim_end();
+    let text = format!(
+        "Job {job} ({kind}) merged: findings in $CPD_HOME/{artefact}.\nSummary: {shown}\nNext: cite that path in the Specs that need it; add another explore Job when the summary is not enough. cpd job show {job} --plan {plan}",
+        kind = attempt.kind
+    );
+    events::append(
+        tx,
+        NewEvent::job_merged_explore(text, sha, &attempt.tier.to_string(), &attempt.kind, summary, &artefact)
+            .plan(attempt.plan.clone())
+            .job(attempt.job.clone())
+            .attempt(attempt.id.clone()),
+    )?;
+    Ok(())
+}
+
 /// The pull request an `open` Job's merge created or adopted (§7.4 step 8b): what `job-merged` says of it (§5.2).
 #[derive(Clone, Copy, Debug)]
 pub struct Pull<'a> {
@@ -368,22 +423,22 @@ pub fn end_opened(
                 text.push_str(" Its cancel request came too late: the merge had already happened.");
             }
             if let Some(pull) = pull {
-                text.push_str(&format!(" Pull request #{} of PR {} is open: {}.", pull.number, attempt.pr, pull.url));
+                text.push_str(&format!(" Pull request #{} of PR {} is open: {}.", pull.number, attempt.pr_str(), pull.url));
             }
             text.push_str(&format!(" Next: {show}"));
             if attempt.kind == "work" {
                 let open: i64 = tx.query_row(
                     "SELECT coalesce((SELECT json_array_length(r.feedback) FROM prs p JOIN pull_requests r ON r.id = p.pull_request
                                        WHERE p.plan = ?1 AND p.key = ?2 AND p.status = 'open'), 0)",
-                    params![plan, attempt.pr.as_str()],
+                    params![plan, attempt.pr_str()],
                     |r| r.get(0),
                 )?;
                 if open > 0 {
-                    let key = attempt.pr.as_str();
+                    let key = attempt.pr_str();
                     text.push_str(&format!(" PR {key} still has {open} open review comments: cpd pr view --pr {key}, then cpd pr reply."));
                 }
             }
-            let pull = pull.map(|p| (attempt.pr.as_str(), p.number, p.url));
+            let pull = pull.map(|p| (attempt.pr_str(), p.number, p.url));
             ("merged", None, NewEvent::job_merged(text, sha, &tier, &attempt.kind, turn, cancel_too_late, pull))
         }
         End::Cancelled => {
@@ -488,6 +543,12 @@ fn provider_errors(tx: &WriteTxn<'_>, plan: &str, job: &str) -> Result<u32, CpdE
 /// (`driver_pid` null, §3.4) does not raise the Tier: its own Tier again.
 /// (A `merging` Attempt always had a driver.) A `provider_error` is a retry cause: see below.
 fn next_tier(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder<'_>) -> Result<Option<Tier>, CpdError> {
+    let next = next_rung(tx, attempt, cause, ladder)?;
+    // An explore Job stays inside the letter of its kind (scout H, research S): after the top rung it fails.
+    Ok(next.filter(|t| !crate::plan::jobs::is_explore(&attempt.kind) || t.letter() == attempt.tier.letter()))
+}
+
+fn next_rung(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder<'_>) -> Result<Option<Tier>, CpdError> {
     // pro-d102: a provider error requeues at the Attempt's own Tier, never raising it, up to PROVIDER_RETRIES times.
     if cause == Cause::ProviderError {
         let used = provider_errors(tx, attempt.plan.as_str(), attempt.job.as_str())?;

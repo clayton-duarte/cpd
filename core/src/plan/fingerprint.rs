@@ -85,7 +85,7 @@ mod tests {
         Job {
             seq: 1,
             key: key.into(),
-            pr: "web".into(),
+            pr: Some("web".into()),
             title: format!("Title {key}"),
             tier: Some("S2".into()),
             spec: Some(JobSpec { goal: "g".into(), context: "c".into(), touches: json!(["a"]), acceptance: json!(["b"]), out_of_scope: json!([]) }),
@@ -125,7 +125,7 @@ mod tests {
         retiered.tier = Some("O3".into());
         assert_ne!(of(&[a.clone(), retiered], &prs), base);
         let mut moved = b;
-        moved.pr = "api".into();
+        moved.pr = Some("api".into());
         assert_ne!(of(&[a, moved], &prs), base, "a Job's PR counts");
         assert_eq!(of(&[], &[]), format!("{:x}", Sha256::digest(br#"{"jobs":[],"prs":[]}"#)));
     }
