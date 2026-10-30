@@ -23,10 +23,10 @@ function fake(answer: string | Refusal) {
   return { call, calls };
 }
 
-test("sends the message to the channel with unfurl on and answers channel, ts and link", async () => {
+test("sends the message to the channel with the app link preview off and answers channel, ts and link", async () => {
   const f = fake(REAL);
   const out = await postMessage(f.call, CHANNEL, "Title\nhttps://github.com/a/b/pull/1");
-  assert.deepEqual(f.calls, [{ name: "slack_send_message", args: { channel_id: CHANNEL, message: "Title\nhttps://github.com/a/b/pull/1", unfurl_app_links: true }, timeoutMs: 30000 }]);
+  assert.deepEqual(f.calls, [{ name: "slack_send_message", args: { channel_id: CHANNEL, message: "Title\nhttps://github.com/a/b/pull/1", unfurl_app_links: false }, timeoutMs: 30000 }]);
   assert.deepEqual(out, { channel: CHANNEL, ts: TS, link: LINK });
 });
 
