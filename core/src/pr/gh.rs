@@ -907,6 +907,8 @@ pub struct AutoMergeRead {
     pub id: String,
     /// The pull request already has an auto-merge request (`autoMergeRequest` is set).
     pub requested: bool,
+    /// The merge methods the repo allows.
+    pub methods: MergeMethods,
 }
 
 #[derive(Deserialize)]
@@ -918,6 +920,8 @@ struct RawAutoRead {
 struct RawAutoRepo {
     #[serde(rename = "autoMergeAllowed")]
     allowed: bool,
+    #[serde(flatten)]
+    methods: MergeMethods,
     #[serde(rename = "pullRequest")]
     pull_request: Option<RawAutoPull>,
 }
@@ -934,7 +938,7 @@ pub fn auto_merge_read(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64)
     let (owner, name) = repo_parts(repo)
         .ok_or_else(|| CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo.")).with("repo", repo))?;
     let query = format!(
-        "query {{ repository(owner: \"{owner}\", name: \"{name}\") {{ autoMergeAllowed pullRequest(number: {number}) {{ id autoMergeRequest {{ enabledAt }} }} }} }}"
+        "query {{ repository(owner: \"{owner}\", name: \"{name}\") {{ autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed pullRequest(number: {number}) {{ id autoMergeRequest {{ enabledAt }} }} }} }}"
     );
     let (args, out) = graphql_with(runner, cwd, &query, &[])?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -947,13 +951,13 @@ pub fn auto_merge_read(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64)
         return Err(reply.fail(format!("gh api graphql answered with errors: {}", first.message.as_deref().unwrap_or("(no message)"))));
     }
     let pull = data.repository.pull_request.ok_or_else(|| reply.fail(format!("GitHub has no pull request {repo}#{number}.")))?;
-    Ok(AutoMergeRead { allowed: data.repository.allowed, id: pull.id, requested: pull.request.is_some() })
+    Ok(AutoMergeRead { allowed: data.repository.allowed, id: pull.id, requested: pull.request.is_some(), methods: data.repository.methods })
 }
 
-/// Turns on squash auto-merge for the pull request whose node id is `pull` (`enablePullRequestAutoMerge`, never `gh pr merge`).
+/// Turns on auto-merge with `method` for the pull request whose node id is `pull` (`enablePullRequestAutoMerge`, never `gh pr merge`).
 /// `Ok(Err(message))` is GitHub's refusal (GraphQL `errors`); a `gh` that failed or printed no usable answer is `gh_failed`.
-pub fn enable_auto_merge(runner: &dyn Runner, cwd: &Path, pull: &str) -> Result<Result<(), String>, CpdError> {
-    let query = "mutation($pull: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $pull, mergeMethod: SQUASH}) { pullRequest { autoMergeRequest { enabledAt } } } }";
+pub fn enable_auto_merge(runner: &dyn Runner, cwd: &Path, pull: &str, method: Method) -> Result<Result<(), String>, CpdError> {
+    let query = &format!("mutation($pull: ID!) {{ enablePullRequestAutoMerge(input: {{pullRequestId: $pull, mergeMethod: {}}})  {{ pullRequest {{ autoMergeRequest {{ enabledAt }} }} }} }}", method.graphql());
     let (args, out) = graphql_with(runner, cwd, query, &[("pull", pull)])?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let reply = Reply { args: &refs, out: &out };
