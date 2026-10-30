@@ -875,3 +875,31 @@ test("cpd-manager pins the exact CLI of context decide, plan new, session send a
   assert.ok(subs[2]!.includes("always required") && subs[2]!.includes("broadcast"));
   assert.ok(subs[3]!.includes("always required"));
 });
+
+test("cpd-manager and cpd-lead carry the pro-d204 architecture rule and the four-step bug report protocol", () => {
+  const cases = [
+    { skill: "cpd-manager", scope: "Plan / PR / Job" },
+    { skill: "cpd-lead", scope: "PR / Job" },
+  ];
+  for (const c of cases) {
+    const lines = section(skillFiles(c.skill)[0]!.text, "## Rules").split("\n");
+    const arch = lines.find((l) => l.startsWith("- **Skills are for agent discovery; `cpd` commands provide deterministic execution (pro-d204).**"));
+    assert.ok(arch, `${c.skill}: architecture bullet`);
+    assert.ok(arch.includes("Skills teach the agent what exists and when to use it"), `${c.skill}: teach`);
+    assert.ok(arch.includes("never ad-hoc prose"), `${c.skill}: never ad-hoc prose`);
+    const at = lines.findIndex((l) => l.startsWith("- **Bug report protocol (pro-d204 — all steps required on every bug report):**"));
+    assert.ok(at >= 0, `${c.skill}: protocol bullet`);
+    const texts = [
+      "Debug, research and identify both the immediate mitigation and the long-term root-cause fix",
+      "Apply the mitigation ASAP",
+      `Queue the follow-up root-cause fix (${c.scope})`,
+      "Include regression tests so the bug can never be reintroduced",
+    ];
+    texts.forEach((t, i) => {
+      const line = lines[at + 1 + i] ?? "";
+      assert.ok(line.startsWith(`  ${i + 1}. `), `${c.skill}: step ${i + 1} numbered`);
+      assert.ok(line.includes(t), `${c.skill}: step ${i + 1} text`);
+    });
+    assert.ok(!/^ {2}5\. /.test(lines[at + 5] ?? ""), `${c.skill}: no fifth step`);
+  }
+});
