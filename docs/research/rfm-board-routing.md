@@ -4,10 +4,11 @@ Research and architecture only. No code, test or measurement changes with this d
 
 ## Contents
 
-1. What cpd already built (this section)
-2. Measurements (later Job)
-3. Evaluation (later Job)
-4. Roadmap (later Job)
+1. What cpd already built
+2. Measurements (Appendix A: commands)
+   - Appendix B: the extra queries of sections 3 and 4
+3. Evaluation of the proposal items
+4. Roadmap, and the Context notes
 
 ## Method and sources
 
@@ -93,7 +94,7 @@ What the board schema lacks next to Section 7: no `kind`, `thread_id`, `status`,
 
 ### 1.5 Failure cause map (baseline for the proposal's failure classes)
 
-`attempts.cause` values and what the code does next. "Fails the Job" appends `job-failed`, which turns the Lead (`pi/lib/delivery.ts:13`), is counted in the Manager digest (`pi/lib/updates.ts:56`, `:213`), and after `stuck_job_minutes` without work becomes one message per PR to the Manager (`core/src/inbox/rules.rs:486-568`).
+`attempts.cause` values and what the code does next. "Fails the Job" appends `job-failed`, which turns the Lead (`pi/lib/delivery.ts:12`), is counted in the Manager digest (`pi/lib/updates.ts:56`, `:213`), and after `stuck_job_minutes` without work becomes one message per PR to the Manager (`core/src/inbox/rules.rs:486-568`).
 
 | Cause | Set where | Next, in code | Wake | Evidence |
 |---|---|---|---|---|
@@ -110,7 +111,7 @@ What the board schema lacks next to Section 7: no `kind`, `thread_id`, `status`,
 | `merged`, `cancel_requested` | merge succeeds, or cancel | Not failures. A merge also requeues failed open/update Jobs it fixes. An incident-mode stop requeues at the same Tier | none | `core/src/attempt/ledger.rs:395-420`, `:501-503`; `core/src/job/fix_retry.rs:11-39` |
 | (not an Attempt cause) escalation | Worker `cpd ask` | Lead is steered; expires at `ask_minutes` or when the asker dies; no climb | Lead | `core/src/ask/question.rs:47-69`; `engine/src/watch/escalations.rs:1-75`; `pi/lib/delivery.ts:16` |
 | (not an Attempt cause) PR conflict | E5 poll sees `mergeable` become `conflicting` | Queues an `update` Job; no Lead wake | none | `core/src/pr/poll.rs:432-447` |
-| (not an Attempt cause) PR checks failed or review changed | E5 poll | `pr-feedback` Event: Lead steered | Lead | `pi/lib/delivery.ts:14`; `docs/contract.md:2573` |
+| (not an Attempt cause) PR checks failed or review changed | E5 poll | `pr-feedback` Event: Lead steered | Lead | `pi/lib/delivery.ts:13`; `docs/contract.md:2573` |
 | (not an Attempt cause) engine step error | any step | one `error` Event (deduped); Lead turned if about its Plan; Manager counts it | Lead (if its Plan) | `engine/src/watch/report.rs:231-292`; `pi/lib/delivery.ts:15` |
 
 Proposal's 7-row table against this map: "lint, format, simple compile -> Worker retry with the error" has no engine path: those fail at merge as `gate_failed` and the Lead decides (the Worker sees a refusal only for the tamper, red-test-guard and kind checks at submit, `core/src/attempt/submit.rs:228-236`). "Flaky -> engine retry" exists only for provider and spawn failures; a flaky test is `gate_failed`. "Requirement conflict" and "cross-feature dependency" have no class, only the manual `board post --to manager` and `session send`.
@@ -126,7 +127,7 @@ Proposal's 7-row table against this map: "lint, format, simple compile -> Worker
 | Typed messages: wake derived by rule from kind and priority | PARTLY | Wake is by Event kind (BUILT); no priority; `session send` always wakes and `board post` never does, so the sender picks the channel | `pi/lib/delivery.ts:11-21`; `core/src/session/send.rs:87-104`; `core/src/board.rs:1-3` |
 | Failure class: flaky or transient -> engine retry | PARTLY | provider errors, spawn failures and install kills retried by the engine; a flaky test is `gate_failed` and wakes the Lead | 1.5 rows `provider_error`, `crashed`, `gate_failed` |
 | Failure class: lint, format, simple compile -> Worker retry with the error | PARTLY | submit-time refusals (tamper, red-test guard, kind check) go to the Worker; the quick check and Gates run at merge and fail the Job | `core/src/attempt/submit.rs:3`, `:228-236`; `core/src/merge/mod.rs:413-423` |
-| Failure class: code bug or test failure -> Plan Lead | BUILT | `job-failed` turns the Lead | `pi/lib/delivery.ts:13` |
+| Failure class: code bug or test failure -> Plan Lead | BUILT | `job-failed` turns the Lead | `pi/lib/delivery.ts:12` |
 | Failure class: ambiguous spec, missing context -> Plan Lead | BUILT | Worker `ask` steers the Lead; `answer` returns to the Worker | `core/src/ask/question.rs:47-69`; `pi/lib/delivery.ts:16` |
 | Failure class: merge conflict across PRs -> Plan Lead | PARTLY (cpd routes differently) | conflict with base -> auto `update` Job; conflict in an Attempt -> ladder; Lead on failure only. No class for a conflict between two PRs | `core/src/pr/poll.rs:432-447`; `core/src/merge/mod.rs:235-255` |
 | Failure class: requirement conflict or scope change -> Context Manager | ABSENT as routing | no engine class; a Lead may `board post --to manager` or `session send` by hand | `core/src/board.rs:61-80`; `docs/commands.md:3048-3075` |
@@ -164,12 +165,12 @@ Proposal's 7-row table against this map: "lint, format, simple compile -> Worker
 
 ## 2. Measurements
 
-Snapshot: `/tmp/cpd-rfm-board-routing/` (Contexts `cpd` and `eec-general`, Events 2026-10-23 16:32 UTC to 2026-10-30 00:23 UTC, i.e. 2026-10-23 12:32 EDT to 2026-10-29 20:23 EDT; 29,194 + 7,085 Events, 1,083 + 217 Attempts, 77 + 32 board posts). Every table's source is a numbered command in Appendix A (`python3 m.py <n>` unless noted). Nothing here is estimated; a metric the snapshot cannot give says so. Percentages are of the column's own total. Wake rules cited: `pi/lib/delivery.ts:13-18`, `docs/commands.md:3847-3864` (the "Plan Lead" and "Worker" columns of the §15.3 table; the spec's "§5.3" is that table in this checkout).
+Snapshot: `/tmp/cpd-rfm-board-routing/` (Contexts `cpd` and `eec-general`, Events 2026-10-23 16:32 UTC to 2026-10-30 00:23 UTC, i.e. 2026-10-23 12:32 EDT to 2026-10-29 20:23 EDT; 29,194 + 7,085 Events, 1,083 + 217 Attempts, 77 + 32 board posts). Every table's source is a numbered command in Appendix A (`python3 m.py <n>` unless noted). Nothing here is estimated; a metric the snapshot cannot give says so. Percentages are of the column's own total. Wake rules cited: `pi/lib/delivery.ts:11-16`, `docs/commands.md:3847-3864` (the "Plan Lead" and "Worker" columns of the §15.3 table; the spec's "§5.3" is that table in this checkout).
 
 ### What the data says
 
 - **97.3% of Events wake no one.** 971 of 36,279 Events wake an agent (794 a Lead, 159 a Manager, 18 a Worker); 31,897 (87.9%) are written by the engine or adapter, and `session-state`, `attempt-status` and `session-moved` alone are 57.9%. Bears on *Digests*: volume is not the load; the wake kinds are (2.1).
-- **A Lead is woken mostly by escalations, failures and messages**: 212 escalations (26.7% of Lead wakes), 154 `job-failed` (19.4%), 150 `session-message` (18.9%). The wake is already derived from the Event kind by rule (`delivery.ts:13-18`); a `session-message` ignores its `wake` field and always starts a turn (`commands.md:3864`). Bears on *Typed messages* (2.1).
+- **A Lead is woken mostly by escalations, failures and messages**: 212 escalations (26.7% of Lead wakes), 154 `job-failed` (19.4%), 150 `session-message` (18.9%). The wake is already derived from the Event kind by rule (`delivery.ts:11-16`); a `session-message` ignores its `wake` field and always starts a turn (`commands.md:3864`). Bears on *Typed messages* (2.1).
 - **The failure mix is 47.3% transient/infra, 39.9% test failure, 3.9% lint or compile, 2.7% merge conflict, 6.2% fits no class; classes 4, 6 and 7 are 0 of 258 failure signals** (rubric, A.8). 113 of 154 `job-failed` (73.4%) are `gate_failed`, whose text is a log tail. Bears on *Failure classes* and the *failure summarizer/classifier* (2.3, 2.8).
 - **90.0% of Jobs (958 of 1,064) take one Attempt.** 106 Jobs took more, 24 used 3 or more Tiers, 38 had more than 3 Attempts. Bears on *Retry budgets*: `retry_cap` is 2 by default (`core/src/config/file.rs:273`) (2.2).
 - **24 candidate storms (3+ Jobs or Plans in 10 minutes), 98 failure Events, 98 Lead wakes; the largest is 9 Jobs; none reaches 12.** 16 are `gate_failed` windows whose log tails name different failing tests. Bears on *Storm grouping* and *root-cause clustering* (2.3).
@@ -213,9 +214,9 @@ Engine/adapter versus agent kinds:
 | agent/User kinds | 3567 | 12.2% | 815 | 11.5% | 4382 | 12.1% |
 | total | 29194 |  | 7085 |  | 36279 |  |
 
-Events that wake a Lead (rule of `pi/lib/delivery.ts:13-18`; `job-merged` only when `data.turn` is true; `error` only when it has a Plan, since a Lead is turned only for errors about its Plan, `engine/src/watch/report.rs:231-292`; `session-message` only when the recipient session is a Lead in `sessions-<context>.json`):
+Events that wake a Lead (rule of `pi/lib/delivery.ts:11-16`; `job-merged` only when `data.turn` is true; `error` only when it has a Plan, since a Lead is turned only for errors about its Plan, `engine/src/watch/report.rs:231-292`; `session-message` only when the recipient session is a Lead in `sessions-<context>.json`):
 
-| Lead-waking kind (pi/lib/delivery.ts:13-18) | cpd | eec-general | combined |
+| Lead-waking kind (pi/lib/delivery.ts:11-16) | cpd | eec-general | combined |
 |---|---|---|---|
 | job-merged (turn=true) | 12 | 4 | 16 |
 | job-failed | 150 | 4 | 154 |
@@ -358,7 +359,7 @@ Reading the clusters (`guess:` where marked): the 16 `gate_failed` windows (57 E
 | eec-general | 65 | 40 | 25 (38.5%) | 17 | adapter 22, watch 3 |
 | combined | 131 | 80 | 51 (38.9%) | 43 | adapter 42, attempt run 6, watch 3 |
 
-Reading: the duplicates left are almost all `source: adapter` (`session_mismatch` 11 on 2026-10-26, `model_unavailable` 26 on 2026-10-27); the engine's own `watch` source repeats 3 times. Whether pro-d187's dedup covers the `adapter` source is `unverified` (my audit, 1.5, cites the dedup at `engine/src/watch/report.rs:231-292`, the `watch` source). Whether the dedup was in force on those dates: not measurable from the snapshot (the Plan's merge Event is not in the snapshot).
+Reading: the duplicates left are almost all `source: adapter` (`session_mismatch` 11 on 2026-10-26, `model_unavailable` 26 on 2026-10-27); the engine's own `watch` source repeats 3 times. Whether pro-d187's dedup covers the `adapter` and `attempt run` sources is **verified in Job `design`: it does not.** The dedup is `Report::fail` (`engine/src/watch/report.rs:231-262`), which only the engine's own steps call. The `adapter` error is appended directly by `session report` (`core/src/session/report.rs:81`, no Plan column, no dedup) and the `attempt run` error by `append_error` (`core/src/attempt/ledger.rs:579-588`), guarded only per Attempt and code (`has_error`, `:590-598`), so the same error for another Attempt of the same Plan is appended again. Whether the dedup was in force on those dates: not measurable from the snapshot (the Plan's merge Event is not in the snapshot).
 
 ### 2.4 Escalations
 
@@ -369,12 +370,14 @@ Reading: the duplicates left are almost all `source: adapter` (`session_mismatch
 | expired (`escalation-expired`) | 11 (6.7%), all `asker_dead` | 18 (38.3%): 15 `asker_dead`, 3 `timeout` | 29 (13.7%) |
 | neither answered nor expired | 0 | 0 | 0 |
 | time to answer, median | 0.3 min | 1.2 min | n/a (not pooled) |
-| time to answer, p90 | 1.3 min | 10.0 min | n/a |
-| time to answer, max | 5,558.9 min (92.6 h) | 18.0 min | 5,558.9 min |
-| answered in under 1 minute | 131 | 12 | 143 |
+| time to answer, p90 | 1.1 min (corrected, see below) | 10.5 min | n/a |
+| time to answer, max | 5.6 min (corrected: was 5,558.9) | 18.0 min | 18.0 min |
+| answered in under 1 minute | 137 (corrected: was 131) | 12 | 149 |
 | Jobs with an escalation | 131 | 25 | 156 |
 | Jobs with 2 or more | 22 | 3 | 25 |
 | Jobs with 3 or more (ping-pong candidates) | 7 (`open-layout-2` 6, `expand-tests` 5, then 3 each: `open-dotfiles`, `open-italic`, `open-adopt`, `deploy-act-impl`, `sync-queue`) | 3 (`convert-snaps` 19, `succ-back-i2` 3, `routes2-i` 3) | 10 |
+
+**Correction (Job `design`, verified by Appendix B, R4).** An escalation id is `<attempt>-q<n>` and a Job key can repeat across Plans (6 repeated ids in cpd), so `m.py` section 4, which matched `escalation-answered` to `escalation` by id alone, paired some answers with another Plan's question: that made the cpd maximum 5,558.9 min (92.6 h) and inflated the p90. Keyed by `(plan, id)`, all 154 cpd answers pair: median 0.31, p90 1.06, p95 1.64, p99 5.4, max 5.6 min; eec-general (47 asked, 29 answered, no repeated ids) is unchanged: median 1.19, p90 10.5, max 18.0 min. The fix to `m.py` is the key `(e['plan'], e['data']['escalation'])` in section 4's `an` and `ex` maps; the cells above are corrected, the 92.6 h figure no longer exists.
 
 `escalation-answered` carries only the escalation id (`data.escalation`), so the answer text, the answerer and the answer's content are not in the snapshot. Unanswered escalations that climb after N minutes: none exist to measure (0 neither answered nor expired); "ping-pong" here is only repeated escalations on one Job, not agent-to-agent message exchange (a thread id does not exist: 1.4).
 
@@ -450,7 +453,7 @@ Recipients: cpd 138 to the Manager and 119 to Leads; eec-general 21 and 31. Plan
 
 | Role | Wake source | cpd | eec-general | Rule |
 |---|---|---|---|---|
-| Lead | the 7 kinds of 2.1 | 591 | 203 | `delivery.ts:13-18`; `commands.md:3849-3864` |
+| Lead | the 7 kinds of 2.1 | 591 | 203 | `delivery.ts:11-16`; `commands.md:3849-3864` |
 | Manager | `session-message` to the Manager | 138 | 21 | a Plan's Events never wake it (`commands.md:3885`) |
 | Worker | `attempt-nudge` | 14 | 4 | `commands.md:3863` |
 | (none) | all other Events | see 2.1 | | |
@@ -626,7 +629,7 @@ if sec=='1':
     for kd in ['job-merged (turn=true)','job-failed','pr-feedback','plan-done','error (plan set)','escalation','session-message (to a Lead)']:
         key=kd.split(' ')[0]
         rows.append((kd,W['cpd'][key],W['eec-general'][key],W['cpd'][key]+W['eec-general'][key]))
-    print(tab(['Lead-waking kind (pi/lib/delivery.ts:13-18)','cpd','eec-general','combined'],rows))
+    print(tab(['Lead-waking kind (pi/lib/delivery.ts:11-16)','cpd','eec-general','combined'],rows))
     tw={c:sum(W[c].values()) for c in CX}
     print(tab(['','cpd','eec-general','combined'],[('Lead-waking Events',tw['cpd'],tw['eec-general'],sum(tw.values())),('share of all Events',pct(tw['cpd'],n['cpd']),pct(tw['eec-general'],n['eec-general']),pct(sum(tw.values()),N)),('share of non-session-state/moved/attempt-status Events','','','')]))
     # job-merged turn true vs false
@@ -917,14 +920,600 @@ if sec=='3b':
     # (recompute from sec 3 output is manual)
 ```
 
+### Appendix B. Extra queries of sections 3 and 4
+
+Reuse of Section 2's data (`/tmp/cpd-rfm-board-routing/*.jsonl` and `sessions-*.json`); nothing else is read. `r.py` is kept outside the repo (not committed), standard library only; run `cd <dir with r.py> && timeout 60 python3 r.py <n>`. Each query feeds the table named:
+
+| n | Query | Feeds |
+|---|---|---|
+| `1` | `session-message` by sender, recipient, FYI-shaped and id-carrying; record and PR refs of board posts | 3.1 (a), 3.2, 3.6 |
+| `2` | what the Lead did after a `gate_failed` `job-failed`; exit codes; Event text size | 3.1 (b), 3.3, 3.6 |
+| `3 <window s> <threshold>` | the storm replay: `3 600 3`, `3 600 4`, `3 300 3`, `3 1800 3` | 3.4 |
+| `4` | answer times keyed by `(plan, id)`, escalations per Job, board latency, recipient `working`, alternating runs, failure to Lead action | 3.5, Section 2.4 correction |
+| `5` | the `error` dedup replay | 3.4 |
+| `6` | the three timed-out escalations and `convert-snaps` | 3.5 |
+| `7` | R-A and R-B replayed | 3.5 |
+| `8` | board posts taken together | 3.6 |
+| `9` | Event text size of the six Lead-waking kinds | 3.6, 3.7 |
+| `10` | the 8 FYI-shaped `session-message`s read by hand (seed 5) | 3.2 |
+
+Rubrics: FYI-shaped, record and PR ids, the 60-character question key and the `norm` mask are the `FYI`, `ASK`, `REC`, `PR` and `norm` lines of the script (the FYI and ASK regexes are those of Section 2's A.6). "Confirmed group" (3.4): one failing test name is shared by at least half of a group's members (the `FT` regex of Section 2's `m.py`). R-B's "Lead turned" is any `session-state` Event of the Plan's Lead to `working`, `waiting` or `blocked` after `asked_at`. Other commands used: `rg check_tail`, `ls core/src/store/migrations | wc -l`, `cpd context show --record <id>`, `cpd context search <text>` (pro-d78, pro-n64, pro-n94, pro-d88, pro-d89, pro-d101, pro-d102, pro-d24, pro-d187 read in this worktree).
+
+```python
+# r.py: the extra queries of sections 3 and 4 (python3 standard library only).
+# Run: cd <dir with r.py> && timeout 60 python3 r.py <n> [window_seconds threshold]
+import json, re, sys, statistics as st, collections as C
+from datetime import datetime, timedelta
+D = '/tmp/cpd-rfm-board-routing/'
+CX = ['cpd', 'eec-general']
+def jl(f): return [json.loads(l) for l in open(D + f)]
+def T(s): return datetime.fromisoformat(s.replace('Z', '+00:00'))
+ev = {c: jl(f'events-{c}.jsonl') for c in CX}
+bd = {c: jl(f'board-{c}.jsonl') for c in CX}
+at = {c: jl(f'attempts-{c}.jsonl') for c in CX}
+ss = {c: {s['id']: s for s in json.load(open(D + f'sessions-{c}.json'))['sessions']} for c in CX}
+allss = {}
+for c in CX: allss.update(ss[c])
+def q(x, p):
+    x = sorted(x); return x[min(len(x) - 1, int(p * len(x)))] if x else None
+def norm(s, n=30):
+    s = re.sub(r'[0-9a-f]{8}-[0-9a-f-]{27}', 'ID', s or ''); s = re.sub(r'/[^\s]+', 'PATH', s); s = re.sub(r'\d+', '#', s); return s.strip()[:n]
+FYI = re.compile(r'\bFYI\b|\b(DONE|done|merged|locked|approved|installed|resumed|ended|cancelled)\b')
+ASK = re.compile(r'\?|BUG|\bbug\b|\bneed|please|[Rr]equest|Decide|URGENT|\bask\b|question|infra')
+ENGTXT = re.compile(r'^Message for \S+ from the User: (Jobs of PR .* failed and their Lead|Drafts of Plan .* parked|.*engine)')
+REC = re.compile(r'\b(pro|hs|eec)-[dnpq]\d+\b'); PR = re.compile(r'\bPR #\d+|(?<![\w#])#\d{2,4}\b')
+FT = re.compile(r'(?:FAIL|LEAK-FAIL) +\[[^\]]*\] +\([^)]*\) +(\S+ +\S+)')
+sec = sys.argv[1]
+
+if sec == '1':   # FYI-shaped and id-carrying session-messages by sender and by recipient; record/PR refs of board posts
+    tot = C.Counter(); fy = C.Counter(); ids = C.Counter(); to = C.Counter(); fyto = C.Counter()
+    for c in CX:
+        for e in ev[c]:
+            if e['kind'] != 'session-message': continue
+            f = e['data']['from']; t = e['data']['text']
+            who = 'engine' if (f is None and ENGTXT.match(e['text'])) else ('user/engine-other' if f is None else (allss.get(f) or {}).get('role') or 'unknown')
+            tot[who] += 1
+            if who in ('lead', 'manager', 'unknown'):
+                r = (allss.get(e['session']) or {}).get('role', '?'); to[r] += 1
+                shaped = bool(FYI.search(t) and not ASK.search(t)); fy[who] += shaped; fyto[r] += shaped; ids[who] += bool(REC.search(t) or PR.search(t))
+    print('session-message by sender', dict(tot), '| agent-sent to', dict(to), '| FYI-shaped by sender', dict(fy), 'total', sum(fy.values()), 'by recipient', dict(fyto), '| with record or PR id', dict(ids), sum(ids.values()))
+    bt = [b['text'] for c in CX for b in bd[c]]
+    mt = [e['data']['text'] for c in CX for e in ev[c] if e['kind'] == 'session-message' and e['data']['from']]
+    for n, t in (('board', bt), ('agent session-message', mt)):
+        print(n, len(t), 'record id', sum(bool(REC.search(x)) for x in t), 'PR ref', sum(bool(PR.search(x)) for x in t))
+
+if sec == '2':   # what the Lead did after a gate_failed job-failed
+    for c in ['cpd']:
+        E = sorted(ev[c], key=lambda e: e['id']); byjob = C.defaultdict(list)
+        for e in E:
+            if e['job'] and e['plan']: byjob[(e['plan'], e['job'])].append(e)
+        n = 0; res = C.Counter(); gaps = []; edits = 0
+        for k, L in byjob.items():
+            for i, e in enumerate(L):
+                if e['kind'] == 'job-failed' and e['data']['cause'] == 'gate_failed':
+                    n += 1; nxt = next((x for x in L[i + 1:] if x['kind'] in ('job-retried', 'job-cancelled', 'job-failed')), None)
+                    if not nxt or nxt['kind'] != 'job-retried':
+                        res['cancelled' if nxt and nxt['kind'] == 'job-cancelled' else 'other'] += 1; continue
+                    gaps.append((T(nxt['at']) - T(e['at'])).total_seconds() / 60)
+                    edits += any(x['kind'] == 'job-edited' and x['id'] < nxt['id'] for x in L[i + 1:])
+                    end = next((x for x in L if x['id'] > nxt['id'] and x['kind'] in ('job-merged', 'job-failed', 'job-cancelled')), None)
+                    rel = 'same Tier' if e['data']['tier'] == nxt['data']['tier'] else 'other Tier'
+                    res[(rel, end['kind'] if end else None)] += 1
+        print(c, 'gate_failed job-failed', n, dict(res), 'Spec edits between failure and retry', edits)
+        print('  minutes failure->retry p50', round(st.median(gaps), 1), 'p90', round(q(gaps, .9), 1), 'p95', round(q(gaps, .95), 1), '>10 min', sum(g > 10 for g in gaps), 'of', len(gaps))
+        d = [(T(a['ended_at']) - T(a['started_at'])).total_seconds() / 60 for a in at[c] if a.get('ended_at') and a.get('started_at')]
+        dg = [(T(a['ended_at']) - T(a['started_at'])).total_seconds() / 60 for a in at[c] if a.get('ended_at') and a.get('started_at') and a['cause'] == 'gate_failed']
+        print('  Attempt minutes: all p50', round(st.median(d), 1), 'p90', round(q(d, .9), 1), '| gate_failed Attempts p50', round(st.median(dg), 1))
+        g = [e for e in E if e['kind'] == 'job-failed' and e['data']['cause'] == 'gate_failed']
+        print('  exit codes', C.Counter(re.findall(r'failed \(exit (\d+)\)', e['data']['detail'])[0] for e in g))
+        L = [len(e['text']) for e in g]; o = [len(e['text']) for e in E if e['kind'] == 'job-failed' and e['data']['cause'] != 'gate_failed']
+        print('  Event text chars: gate_failed median', st.median(L), 'p90', q(L, .9), 'max', max(L), 'total', sum(L), '| other job-failed median', st.median(o), 'n', len(o))
+
+if sec == '3':   # storm replay: key (cause or code, text[:30] masked); window from the first member; threshold in distinct Jobs
+    W = int(sys.argv[2]) if len(sys.argv) > 2 else 600; TH = int(sys.argv[3]) if len(sys.argv) > 3 else 3
+    before = after = groups_n = inside = mgr = 0; conf = unconf = 0; plans1 = plans2 = 0; nongate = []
+    for c in CX:
+        es = sorted([e for e in ev[c] if e['kind'] in ('job-failed', 'error') and e['plan']], key=lambda e: e['at'])
+        before += len(es); g = C.defaultdict(list)
+        for e in es:
+            d = e['data']
+            g[(d['cause'], norm(d.get('detail'))) if e['kind'] == 'job-failed' else (d['code'], norm(d.get('message')))].append(e)
+        for key, L in g.items():
+            i = 0
+            while i < len(L):
+                t0 = T(L[i]['at']); w = [L[i]]; j = i + 1
+                while j < len(L) and (T(L[j]['at']) - t0).total_seconds() <= W: w.append(L[j]); j += 1
+                jobs = []
+                for e in w:
+                    if (e['plan'], e['job']) not in jobs: jobs.append((e['plan'], e['job']))
+                if len(jobs) >= TH:
+                    first = set(jobs[:TH - 1]); kept = sum((e['plan'], e['job']) in first for e in w)
+                    after += kept; mgr += 1; groups_n += 1; inside += len(w)
+                    pl = {e['plan'] for e in w}; plans1 += len(pl) == 1; plans2 += len(pl) >= 2
+                    if key[0] == 'gate_failed':
+                        cn = C.Counter(t for e in w for t in set(FT.findall(e['data'].get('detail', ''))))
+                        if (max(cn.values()) if cn else 0) >= max(2, (len(w) + 1) // 2): conf += 1
+                        else: unconf += 1
+                    else: nongate.append((key[0], len(w), len(pl)))
+                else: after += len(w)
+                i = j
+    print(f'window {W}s, threshold {TH} Jobs: failure+error Events with a Plan (Lead wakes today) {before}; groups {groups_n}; Events inside groups {inside}; Lead wakes after {after}; Manager messages added {mgr}; total after {after + mgr}; saved {before - after - mgr}')
+    print('  gate_failed groups: a failing test shared by at least half the members', conf, '| no such test', unconf, '| groups of one Plan', plans1, 'of >=2 Plans', plans2, '| non-gate', nongate)
+
+if sec == '4':   # distributions behind the thresholds of 3.5
+    for c in CX:
+        E = ev[c]; S = ss[c]
+        es = {(e['plan'], e['data']['escalation']): e for e in E if e['kind'] == 'escalation'}
+        an = {(e['plan'], e['data']['escalation']): e for e in E if e['kind'] == 'escalation-answered'}
+        v = [(T(an[k]['at']) - T(es[k]['at'])).total_seconds() / 60 for k in an if k in es]
+        print(c, 'escalations', len(es), 'answered', len(an), 'paired', len(v), 'answer min p50', round(st.median(v), 2), 'p90', round(q(v, .9), 2), 'p95', round(q(v, .95), 2), 'p99', round(q(v, .99), 2), 'max', round(max(v), 1))
+        pj = C.Counter((e['plan'], e['job']) for e in es.values()); x = list(pj.values())
+        print('  escalations per Job p50', q(x, .5), 'p90', q(x, .9), 'p95', q(x, .95), 'p99', q(x, .99), 'max', max(x), '| Jobs with >=4', sum(i >= 4 for i in x))
+        lat = [(T(b['read_at']) - T(b['at'])).total_seconds() / 60 for b in bd[c] if b['read_at']]
+        print('  board read minutes p50', round(st.median(lat), 1), 'p90', round(q(lat, .9), 1), 'p95', round(q(lat, .95), 1))
+        wk = C.defaultdict(list)
+        for e in E:
+            if e['kind'] == 'session-state' and e['data'].get('to') == 'working': wk[e['session']].append(T(e['at']))
+        lag = []
+        for e in E:
+            if e['kind'] == 'session-message':
+                nx = [t for t in wk.get(e['session'], []) if t >= T(e['at'])]; lag.append((min(nx) - T(e['at'])).total_seconds() / 60 if nx else 1e9)
+        print('  session-message with no recipient `working` within 10/30/60/120 min:', {m: sum(l > m for l in lag) for m in (10, 30, 60, 120)}, 'of', len(lag))
+        msgs = sorted([e for e in E if e['kind'] == 'session-message' and e['data']['from']], key=lambda e: e['at'])
+        pair = C.defaultdict(list)
+        for e in msgs: pair[frozenset((e['data']['from'], e['session']))].append(e)
+        runs = C.Counter()
+        for L in pair.values():
+            run = mx = 1
+            for a, b in zip(L, L[1:]):
+                run = run + 1 if a['data']['from'] != b['data']['from'] and (T(b['at']) - T(a['at'])).total_seconds() <= 3600 else 1; mx = max(mx, run)
+            runs[mx] += 1
+        print('  pairs', len(pair), 'longest alternating run (gaps <= 60 min):', sorted(runs.items()))
+        byjob = C.defaultdict(list)
+        for e in sorted(E, key=lambda e: e['id']):
+            if e['job'] and e['plan']: byjob[(e['plan'], e['job'])].append(e)
+        gaps = []
+        for L in byjob.values():
+            for i, e in enumerate(L):
+                if e['kind'] == 'job-failed':
+                    n = next((y for y in L[i + 1:] if y['kind'] in ('job-retried', 'job-cancelled')), None)
+                    if n: gaps.append((T(n['at']) - T(e['at'])).total_seconds() / 60)
+        print('  job-failed -> retried/cancelled minutes: n', len(gaps), 'p50', round(q(gaps, .5), 1), 'p90', round(q(gaps, .9), 1), 'p95', round(q(gaps, .95), 1), '>10', sum(g > 10 for g in gaps), '>60', sum(g > 60 for g in gaps),
+              '| engine stuck-Job messages', sum(e['kind'] == 'session-message' and e['data']['from'] is None and e['data']['text'].startswith('Jobs of PR ') for e in E))
+
+if sec == '5':   # error dedup: key (code, plan, text[:60] masked) within 600 s of the previous one with the key
+    for src, kf in (('attempt run', lambda e: (e['data']['code'], e['plan'], norm(e['data'].get('message'), 60))), ('adapter', lambda e: (e['data']['code'], e['session'], norm(e['data'].get('message'), 60)))):
+        n = sup = same = 0; byplan = C.Counter()
+        for c in CX:
+            seen = {}
+            for e in sorted([e for e in ev[c] if e['kind'] == 'error' and e['data'].get('source') == src], key=lambda e: e['at']):
+                n += 1; k = kf(e)
+                if k in seen and (T(e['at']) - seen[k][0]).total_seconds() <= 600:
+                    sup += 1; same += seen[k][1] == e['job']; byplan[(c, e['plan'])] += 1
+                seen[k] = (T(e['at']), e['job'])
+        print(src, 'errors', n, 'suppressed', sup, 'same Job', same, 'other Job', sup - same, 'by Plan', byplan.most_common(3))
+    print('Lead-waking `error` Events (Plan set):', sum(1 for c in CX for e in ev[c] if e['kind'] == 'error' and e['plan']))
+
+if sec == '6':   # the three escalations that timed out, and the Job that holds them
+    for c in CX:
+        E = sorted(ev[c], key=lambda e: e['id']); S = ss[c]; lead = {s['plan']: s['id'] for s in S.values() if s['role'] == 'lead'}
+        es = {(e['plan'], e['data']['escalation']): e for e in E if e['kind'] == 'escalation'}
+        for e in E:
+            if e['kind'] == 'escalation-expired' and e['data']['reason'] == 'timeout':
+                k = (e['plan'], e['data']['escalation']); a = es[k]
+                st_ = [(x['at'][11:16], x['data']['to'], x['data'].get('label')) for x in E if x['kind'] == 'session-state' and x['session'] == lead.get(e['plan']) and a['at'] <= x['at'] <= e['at']]
+                print(c, k, 'asked', a['at'][:16], 'Lead states while open', st_[:4])
+        for j in ('convert-snaps',):
+            L = [e for e in E if e['job'] == j]
+            if L: print(c, j, C.Counter(e['kind'] for e in L if e['kind'] in ('escalation', 'escalation-answered', 'escalation-expired', 'attempt-started', 'job-merged')), 'distinct question prefixes', len({norm(e['data']['question'], 60) for e in L if e['kind'] == 'escalation'}), 'first', L[0]['at'][:16], 'last', L[-1]['at'][:16])
+
+if sec == '7':   # the predicates of 3.5 replayed: R-A same question 3x on a Job; R-B open >= 30 min and the Lead not turned in 30 min
+    for c in CX:
+        E = sorted(ev[c], key=lambda e: e['id']); S = ss[c]; lead = {s['plan']: s['id'] for s in S.values() if s['role'] == 'lead'}
+        es = [e for e in E if e['kind'] == 'escalation']
+        a = [(k[1], v) for k, v in C.Counter((e['plan'], e['job'], norm(e['data']['question'], 60)) for e in es).items() if v >= 3]
+        turned = C.defaultdict(list)
+        for e in E:
+            if e['kind'] == 'session-state' and e['data'].get('to') in ('working', 'waiting', 'blocked'): turned[e['session']].append(T(e['at']))
+        done = {(e['plan'], e['data']['escalation']): e for e in E if e['kind'] in ('escalation-answered', 'escalation-expired')}
+        fired = []; open30 = 0
+        for e in es:
+            k = (e['plan'], e['data']['escalation']); t0 = T(e['at']); d = done.get(k)
+            if d and (T(d['at']) - t0).total_seconds() / 60 < 30: continue
+            open30 += 1
+            if not any(t0 <= x <= t0 + timedelta(minutes=30) for x in turned.get(lead.get(e['plan']), [])): fired.append((k[1], d['kind'] if d else 'open'))
+        print(c, 'R-A fires', a, '| escalations open >= 30 min', open30, '| R-B fires', fired)
+
+if sec == '8':   # digest sizes: board posts taken together
+    for c in CX:
+        g = C.defaultdict(list)
+        for b in bd[c]:
+            if b['read_at']: g[(b['to_session'], b['read_at'])].append(len(b['text']))
+        n = [len(v) for v in g.values()]; ch = [sum(v) for v in g.values()]
+        print(c, 'takes', len(g), 'posts per take max', max(n), 'chars per take median', st.median(ch), 'p90', q(ch, .9), 'max', max(ch), '| longest post', max(len(b['text']) for b in bd[c]))
+
+if sec == '9':   # Event text size of the Lead-waking kinds (job-merged excluded: only turn=true wakes)
+    tot = {}
+    for k in ('job-failed', 'escalation', 'session-message', 'error', 'pr-feedback', 'plan-done'):
+        x = [len(e['text']) for c in CX for e in ev[c] if e['kind'] == k]
+        tot[k] = sum(x); print(k, len(x), 'median', st.median(x), 'p90', q(x, .9), 'max', max(x), 'total', sum(x))
+    print('job-failed share of these six kinds:', round(100 * tot['job-failed'] / sum(tot.values()), 1), '% of', sum(tot.values()), 'chars')
+
+if sec == '10':   # the 8 FYI-shaped session-messages read by hand (3.2): seed 5
+    import random
+    rows = []
+    for c in CX:
+        for e in ev[c]:
+            if e['kind'] == 'session-message' and e['data']['from'] and FYI.search(e['data']['text']) and not ASK.search(e['data']['text']):
+                rows.append(((allss.get(e['session']) or {}).get('role', '?'), e['data'].get('unblocks') or '', e['data']['text']))
+    random.seed(5)
+    for r, u, t in random.sample(rows, 8): print('-', r, '| unblocks:', u[:70], '|', t[:110].replace('\n', ' '))
+```
+
 ## 3. Evaluation of the proposal items
 
-(skeleton: written in the next commits)
+Every verdict is argued from Sections 1 and 2 and from the axioms: convention over configuration, YAGNI, KISS, DRY, one source of truth, validate at the boundary, make illegal states unrepresentable, prose is not enforcement, idempotence, "blocked means it needs the human", and the standing decision pro-d78 (2026-10-26, Context record, in force: `session send --unblocks` wakes, `board post` never wakes). Extra queries are in Appendix B (`r.py <n>`, run against `/tmp/cpd-rfm-board-routing/*.jsonl`). Cites are lines of the base `77b80a89` (the worktree; `git diff 77b80a89 origin/main` touches no file cited here).
+
+**Corrections this Job made to Sections 1 and 2, each verified.** (1) `pi/lib/delivery.ts`: `job-failed` is line 12 and `pr-feedback` line 13 (Section 1 said 13 and 14), the Lead rule is lines 11-16 (Section 2 said 13-18). (2) The escalation answer times of 2.4: matched by `(plan, id)` the cpd p90 is 1.1 min and the maximum 5.6 min, not 5,558.9 (the note in 2.4). (3) pro-d187's dedup does not cover the `adapter` and `attempt run` error writers (the note in 2.3).
+
+### Verdict summary
+
+- **(a) Typed messages, wake by rule: ADAPT, small.** Wake is already a rule by Event kind (`pi/lib/delivery.ts:10-20`); ship only typed `refs` on engine messages (no migration, no PROTOCOL bump) with the first rule that needs them; `kind`, `thread_id`, `status` stay out until a trigger (3.2).
+- **(b) Failure classes: ADAPT, one change.** The class is the Attempt `cause`, already set by code; the only data-backed change is one same-Tier engine retry of `gate_failed` (the Lead retried 107 of 113 unchanged, 0 Spec edits); classes 4, 6 and 7 are 0 of 258 failures: SKIP (3.3).
+- **(c) Storm grouping: SKIP the grouped message, ADOPT a per-Plan dedup.** No storm reaches 12 (max 9); grouping would save 22 of 234 Lead wakes with 12 of 16 gate groups unconfirmed, and needs PROTOCOL 18; a `(code, plan, text)` dedup of driver and adapter `error` Events saves 26 of 80 error wakes with no schema (3.4).
+- **(d) Stuck detection: ADAPT, two rules.** Same question 3 times on a Job, and an Escalation open 30 minutes with its Lead not turned, both through E8's Manager message; they fire on 1 Job in the snapshot (19 escalations, 7 Attempts). Ping-pong (max run 5), unacked posts and "Lead blocked on Manager" have no data: SKIP (3.5).
+- **Small local models: SKIP all seven jobs in this phase.** A deterministic rule exists for each (cause column, wake table, key dedup, text trim); the real bloat is `job-failed` text (74% of Lead-wake text, median 7,462 chars for `gate_failed`), fixed by pointing at the log; of the four metrics cpd computes one today (3.7).
+
+### 3.1 The four items
+
+| Item | Verdict | What cpd already has (Section 1) | What the data says (Section 2) | Cost and risk | Reversibility |
+|---|---|---|---|---|---|
+| (a) Typed messages, rule-derived wake | **ADAPT**: stage 1 `data.refs` on engine messages; stage 2 (`kind`, `refs` column, refusal table) deferred | Wake by Event kind (1.1 "Events and who they wake", `delivery.ts:10-20`); `session send` always wakes and needs `--unblocks` (`core/src/session/mod.rs:205-219`); `board post` never wakes (pro-d78); Escalations have id, status, answer, expiry (1.4); no kind, thread, status, refs (1.6) | 109 posts, 4 unread (3.7%), 0 engine-like; 68 (62.4%) name a record id and 28 (25.7%) a PR in prose; 63 of 309 `session-message`s (20.4%) are FYI-shaped by rubric, but 7 of 8 sampled name something the recipient waits for (`r.py 1`); one mis-channel incident (pro-d78) | Stage 1: a typed constructor and one JSON field, 1 PR. Stage 2: one additive migration, `SCHEMA_HASH` repin, contract 4.4, 2 PRs. Risk: a `kind` that wakes by itself would add a third wake path beside the two of pro-d78 | Stage 1: an unknown `data` field is ignored by every reader. Stage 2: a column can never be dropped (frozen migrations N5, `DROP` is breaking), so it waits for its trigger (3.2.6) |
+| (b) Failure classes, routed escalation | **ADAPT**: derive the route from `cause`; add `gate_failed` same-Tier retry once | `attempts.cause` CHECK column set by the code that sees the failure (`core/src/attempt/ledger.rs:163-186`); ladder, provider same-Tier (pro-d101/d102), fix-retry (pro-d89), Spec carries the cause (`core/src/spec/mod.rs:73-95`) | 258 failure signals: 47.3% transient, 39.9% test failure, 3.9% lint/compile, 2.7% conflict, classes 4/6/7 = 0; 113 `gate_failed`: Lead retried 107 (94.7%) with 0 Spec edits, median 1.2 min, 6 cancelled; next outcome merged 54 of 107; all 113 exit 64; Event text median 7,462 chars (`r.py 2`) | One branch in `next_rung`, one constant, one hold, a new User decision superseding `docs/contract.md:979` "the Lead decides". Risk: a second Gate run on a loaded host (load 17-68, pro-n64, pro-n94); 27 of 62 same-Tier retries failed again, so ~8 min (median `gate_failed` Attempt 7.9 min) is added before the Lead hears | Set the constant to 0: the old path. No schema, no stored class |
+| (c) Storm grouping | **SKIP** the grouped message (**ADOPT** the per-Plan dedup, below) | One stuck-Job message per PR (`core/src/inbox/rules.rs:540-568`); engine `error` dedup per (step, scope, code) (`engine/src/watch/report.rs:231-262`); per Attempt and code for the driver (`ledger.rs:590-598`) | 24 candidate windows, 98 Events, max 9; none reaches 12; replay: 234 to 212 Lead wakes (-22); 12 of 16 gate groups share no failing test; dedup by `(code, plan, text)`: 26 of 52 `attempt run` errors and 36 of 51 `adapter` errors suppressed (`r.py 3`, `r.py 5`) | Grouping: an Event field, an adapter rule, PROTOCOL 18, a message that can hide a real bug in a flaky window. Dedup: one query in the two writers, no schema | Dedup: a constant window (`watch.error_repeat_seconds`, 600) set to 0 turns it off; a suppressed `error` Event is not written, so it cannot be recovered, as pro-d187 already accepts |
+| (d) Stuck, ping-pong, unacked escalation | **ADAPT**: two rules on E8; SKIP the others | E8 tells the Manager of Jobs failed 10 min and not worked on (`inbox/rules.rs:486-568`, `engine/src/watch/inbox.rs:12-40`); Escalations expire at `ask_minutes` 60 or when the asker dies (`ask/question.rs:47-69`, `watch/escalations.rs:1-75`); loop guard (`session/mod.rs:54`) | Answers: p99 5.4 / 18.0 min, max 5.6 / 18.0; 3 timeouts, all one Job (`convert-snaps`: 19 escalations, 17 with the same question, 7 Attempts); ping-pong max run 5 of 84 pairs; 0 stuck candidates (`r.py 4`, `r.py 7`) | Two pure predicates and one message through `tell_managers`; no schema. Risk: a false alarm wakes a Manager (0 on 183 answered in the replay) | Remove the step: no state is kept, the message is its own record |
+
+Reading across (c): the proposal's "12 jobs, one cause, one message" targets a symptom where cpd already has a key. The nearest real defect is that pro-d187's dedup (pro-d187, 2026-10-29) never reached the two writers that produce most of the repeats (3.4).
+
+### 3.2 (a) Typed messages and rule-derived wake
+
+**Where each proposal field would live.**
+
+| Proposal field | cpd today | Decision |
+|---|---|---|
+| `kind` task, question, escalation, fyi, engine_event, relay | Event `kind` (closed lookup `event_kinds`, contract 4.5 K1); `session-message` and `board_posts` have none | ADAPT, stage 2: closed set `fyi`, `task`, `question`, `relay`. **Reject** `escalation` (an Escalation row already has id, status, answer, expiry and wakes the Lead by the `escalation` Event, `ask/question.rs:47-69`, `delivery.ts:16`) and `engine_event` (the Event log is the engine's typed message; 0 of 109 posts are engine-like, 2.6) |
+| `thread_id` | none; an Escalation id is `<attempt>-q<n>` (`core/src/ids.rs:212-218`) | SKIP: ping-pong is computable from `(from, to)` pairs (3.5); a Worker's thread is its Attempt |
+| `status` open, acked, resolved | `board_posts.read_at`; `escalations.status` open, answered, expired | SKIP: acked is `read_at` (board) or the recipient's next `working` (send); `resolved` needs an agent to call a command, which is prose, not enforcement; `escalations.status` already covers the one request and answer flow |
+| refs to entry ids, PRs, jobs | Event columns `plan`, `job`, `attempt`, `session`; texts end in `Next:` or `See:` (1.4) | ADAPT, stage 1 for engine messages, stage 2 for `board_posts` |
+| wake from `kind` and priority | wake by Event kind; `send` wakes, `board` never; `--unblocks <reason>` is the sender's stated reason | ADAPT: one pure function (below). Priority: SKIP, the data has no priority axis and `--unblocks` is the declared reason |
+
+**Stage 1 (ships with the first engine rule that needs it; no SQL).** An engine-written `session-message` gains `data.refs`, an array of typed refs parsed at the boundary by the existing id newtypes (`PlanId`, `JobKey`, `PrKey`, `EscalationId`, `AttemptId`, `core/src/ids.rs:97-258`); the `record` ref is checked against `context_records`:
+
+```json
+{"from": null, "text": "Job convert-snaps of Plan vitest-migration asked the same question 3 times ...", "wake": true,
+ "refs": [{"type": "job", "plan": "vitest-migration", "key": "convert-snaps"},
+          {"type": "escalation", "plan": "vitest-migration", "id": "convert-snaps-a2-q4"}]}
+```
+
+The once-record of an engine message (E8 `untold`, `engine/src/watch/report.rs:175-190`; E20, `core/src/plan/parked_wake.rs` prefix) is today `instr(json_extract(data, '$.text'), prefix) = 1`: a text match. With refs it is `json_extract(data, '$.refs')` equality, which survives a rewording of the text. The adapter reads `data.text` and `data.unblocks` only, so an added field raises no PROTOCOL (`docs/contract.md:2619`: "An addition the adapter ignores ... does not raise protocol").
+
+**Stage 2 (deferred; SQL ready).** `session-message` is an Event and Events are immutable (`events_no_update`, contract 4.4), so its typed fields live in `data`, not in columns. Only `board_posts` is a mutable table:
+
+```sql
+-- cpd-migration: additive
+-- file core/src/store/migrations/<YYYYMMDDTHHMM>-board-refs.sql, made by `scripts/new-migration.sh board-refs additive`
+ALTER TABLE board_posts ADD COLUMN kind TEXT NOT NULL DEFAULT 'fyi'
+  CHECK (kind IN ('fyi', 'task', 'question', 'relay'));
+ALTER TABLE board_posts ADD COLUMN refs TEXT
+  CHECK (refs IS NULL OR (json_valid(refs) AND json_type(refs) = 'array'));
+```
+
+Both statements are what additive allows: `ALTER TABLE <existing> ADD COLUMN`, `NOT NULL` with a constant `DEFAULT`, a `CHECK` on it (`docs/contract.md:2190`, A1). `board_posts` is already in `history_tables` (`20261021T1200-board-posts.sql:12`), so the reconcile (K4) regenerates its history triggers; no trigger is written by hand. Old posts read `kind = 'fyi'`, which is what they are (a board post never wakes). No table is added: a `messages` table would be a third store beside Events and `board_posts`, with a mutable `status` that Events cannot hold.
+
+**Wake as a pure function.** `kind` does not wake by itself; the channel and the kind must agree, and the function refuses what pro-d78 forbids (a question on the board, which never wakes; an FYI by `send`, which always wakes). It does not take the recipient's state: state only decides when (start now, or after its turn, `deliverAs` in `delivery.ts:10`), not whether.
+
+```rust
+pub enum Channel { Board, Send, Engine }
+pub enum Delivery { Wake, Wait, Refuse(ErrorCode) }
+/// Pure. Both `board post` and `session send` call it before they write; so does `tell_managers`.
+pub fn wakes(channel: Channel, kind: MessageKind, to: Role) -> Delivery
+```
+
+| channel | kind | to | result | Today |
+|---|---|---|---|---|
+| Board | `fyi` | Lead, Manager | `Wait`: taken at the next turn start (`board take`) | the only behaviour |
+| Board | `task`, `question`, `relay` | any | `Refuse(kind_wakes)`: "send it with `session send --unblocks`" (pro-d78) | accepted silently |
+| Send | `task` | Lead | `Wake` | any text wakes |
+| Send | `question` | Lead, Manager | `Wake` | any text wakes |
+| Send | `relay` | Manager | `Wake` | any text wakes |
+| Send | `task` or `relay` | the other role | `Refuse(kind_recipient)`: a task is for a Lead, a relay is for a Manager | accepted |
+| Send | `fyi` | any | `Refuse(kind_never_wakes)`: "post it to the board" | accepted: the 63 FYI-shaped messages, at most |
+| Engine | `task` | Lead (`tell`), Manager (`tell_managers`) | `Wake` | `core/src/session/send.rs:111-130` |
+
+The recipient is the same role set as today: `session send` takes a Lead or Manager only (`session/mod.rs:205-210`), a Worker is never a recipient.
+
+**Why stage 2 waits (the measured case is thin).** The FYI-shaped share is 63 of 309 (20.4%; 37 to a Lead, 26 to a Manager) by a text rubric. I read 8 at random (`seed 5`): 7 name, in `--unblocks`, something the recipient was waiting for ("confirms pr-adopt is ended", "Manager asked to confirm ..."): legitimate wakes; 1 ("bug report received") is a bare acknowledgement. `guess:` about 1 in 8 is avoidable, so about 8 wakes in 6 days. The refusal also relies on the sender declaring `kind`: a sender who writes `--kind fyi` over "please fix X" is not stopped, because prose is not enforcement. One mis-channel incident is on record (pro-d78: a Lead posted an escalation to the board and the User sent the Manager an empty message). Trigger for stage 2: a second such incident, or a digest that renders refs. Measure first: label 30 of the 63 by hand.
+
+**What typed refs buy that the free-text Event text does not.**
+
+| Need | Free text today | Typed ref |
+|---|---|---|
+| Once-record of an engine message | text prefix match (`report.rs:175-190`); a rewording re-sends the message | equality on `refs` |
+| Validation | none: a post can name a PR that does not exist | refused at the boundary by the id newtypes (62.4% of posts cite a record id, 25.7% a PR number, by hand) |
+| Rendering | digest prints the whole post (`updates.ts:262-290`); the reader copies the id into a command | digest prints `ref` and its command (`cpd job show`, `cpd context show --record`) |
+| Closing | none | a ref to a Job is resolved when that Job merges: derived, so no `resolve` command; this is why `status` is not stored |
+
+Measured: in agent-sent `session-message`s 131 of 258 (50.8%) cite a record id and 85 (32.9%) a PR; in 109 board posts 68 (62.4%) and 28 (25.7%) (`r.py 1`). Agents already write refs; typing them is validation, not new information.
+
+**Migration (stage 2).** Additive, versioned by `scripts/new-migration.sh board-refs additive` (contract 4.5 N1-N3); `scripts/sync-version.sh` then raises the migration count in `Cargo.toml` (`docs/versioning.md`: the version is `0.<protocol>.<migrations>`); `SCHEMA_HASH` is re-pinned with `scripts/repin.sh`; contract 4.4's `board_posts` block gains the two columns; the additive, orders and schema tests (A2, A3) cover it. PROTOCOL stays 17: `parseTaken` reads `at`, `from_session`, `text` only (`pi/lib/updates.ts:126-132`). Note: `docs/versioning.md:3-4` says "Today it is 13" and "45"; the code says `PROTOCOL = 17` (`core/src/events/kind.rs:38`) and `ls core/src/store/migrations | wc -l` is 80 (the doc's numbers are stale; not mine to fix).
+
+**Rejected, because it duplicates what exists.** `escalation` kind and `thread_id` (Escalations: `docs/contract.md:1697-1713`); `engine_event` kind (the Event log); a `status` column (`escalations.status`, `read_at`); a new `messages` table (Events plus `board_posts`).
+
+**Verdict (a): ADAPT.** Argued from: pro-d78 (two channels, decided), "one source of truth" (wake is `delivery.ts`), "validate at the boundary" (typed refs), YAGNI (no consumer for `kind`, `thread_id`, `status` in the data).
+
+### 3.3 (b) Failure classes and routed escalation
+
+**The class is the cause; the route is a pure function of it.** cpd tags a failure when it happens, in a CHECK-constrained column filled by the code that sees it (`ledger.rs:163-186`; driver `core/src/driver/run.rs:385-817`; merge `core/src/merge/mod.rs:148-423`). A model or a regex over a log would re-derive what is stored. What the proposal calls a class is, in cpd, *who acts next*, so the enum to add is the route, derived and never stored:
+
+```rust
+pub enum Route { Retry, Climb, Lead }   // Retry: same Tier, budgeted, no one woken. Climb: one Tier up. Lead: the Job fails.
+pub fn route(cause: Cause, driver_started: bool) -> Route   // replaces `is_ladder` and the provider special case of `next_rung`
+```
+
+```mermaid
+flowchart TD
+  A[Attempt ends failed] --> B{cause}
+  B -->|provider_error| R1[Retry: same Tier, 3 times, 30 s hold]
+  B -->|gate_failed, NEW| R2[Retry: same Tier, once, 30 s hold]
+  B -->|crashed, no_submit, merge_conflict| C1[Climb: one Tier up while automatic Attempts < 1 + retry_cap]
+  B -->|setup_failed, timed_out, cas_lost, dirty_target, tampered, gate_error| L1[Lead: job-failed]
+  R1 --> Q[attempt-retry: wakes no one]
+  R2 --> Q
+  C1 --> Q
+  R1 -->|budget spent| L1
+  R2 -->|budget spent| L1
+  C1 -->|ladder spent| L1
+```
+
+**Every current failure cause, one row each.**
+
+| Cause (or non-Attempt failure) | Class (route) | Today's handler | Proposed handler | File to change |
+|---|---|---|---|---|
+| `provider_error` | Retry | same Tier, at most 3, 30 s hold, then the Lead (pro-d101, pro-d102) | unchanged | none (`ledger.rs:239-242`, `:551-556`; `watch/provider_hold.rs:10-31`) |
+| `crashed`, driver never started or ended by an install | Retry (uncounted) | same Tier, uncounted, E3 back-off | unchanged | none (`ledger.rs:462-495`, `:551-575`; `watch/schedule.rs:25-64`) |
+| `crashed`, otherwise | Climb | one Tier up while automatic Attempts < 1 + `retry_cap` (2) | unchanged | none |
+| `no_submit` | Climb | as `crashed` | unchanged | none |
+| `merge_conflict` | Climb | as `crashed`; the next Spec lists the conflict files (`spec/mod.rs:71-72`) | unchanged | none |
+| `gate_failed` | Lead today | `job-failed` wakes the Lead (`delivery.ts:12`); the retry Spec carries the log path (`spec/mod.rs:83-87`) only after the Lead's `job retry` | **Retry once**, same Tier, 30 s hold; then the Lead as today | `core/src/attempt/ledger.rs` (constant `GATE_RETRIES = 1` beside `:239-242`; a branch in `next_rung` `:551-575`; `automatic_attempts` `:517-531` excludes gate retries as it excludes `provider_error`); `engine/src/watch/provider_hold.rs` (hold the cause list); `docs/contract.md:979` |
+| `gate_error` | Lead | Job fails ("a problem of the Gate", `spec/mod.rs:91-95`) | unchanged: 0 occurrences in the snapshot (2.2) | none |
+| `setup_failed` | Lead | Job fails | unchanged: 6 `job-failed` (0.5%) | none |
+| `timed_out` | Lead | Job fails | unchanged: 3 | none |
+| `cas_lost`, `dirty_target`, `tampered` | Lead | Job fails | unchanged: 0 in the snapshot; `dirty_target` has no producer (1.5) | none |
+| in-Plan need cancelled (`its need X was cancelled`, not an Attempt cause) | Lead | `job-failed` from `core/src/job/cancel.rs:151` | unchanged: 6 | none |
+| Worker `ask` (not a failure) | Lead, steered | Escalation (`ask/question.rs:47-69`) | unchanged; R-A and R-B in 3.5 add the stuck case | `inbox/rules.rs`, `watch/inbox.rs` |
+| PR conflict with the base | engine | `update` Job (`pr/poll.rs:432-447`) | unchanged | none |
+| PR checks failed, review changed | Lead, steered | `pr-feedback` (`delivery.ts:13`) | unchanged | none |
+| engine step error | Lead if its Plan | `error` Event, deduped (`watch/report.rs:231-262`) | dedup extended to the driver and adapter writers (3.4) | `ledger.rs:579-598`, `core/src/session/report.rs:81` |
+
+**Classes that exist only in the proposal.**
+
+- Requirement conflict or scope change, cross-feature dependency: 0 of 258 failure signals (2.8). They arrive as `session send` and board posts (pro-d78), not as failures; nothing in a failure row could carry the tag. SKIP as classes. The `relay` message kind of 3.2 is the only place they would appear, and has no incident to justify it.
+- Reasoning or code bug versus lint or compile error: this splits `gate_failed`, and only the log tail separates them.
+
+| Signal | Separates a test failure from a lint or compile error? | Evidence |
+|---|---|---|
+| Gate exit code | No: 113 of 113 are `exit 64` (the quick check ends `|| exit 64`) | `r.py 2` |
+| `attempts.check_tail` | No: `rg check_tail core engine` finds readers (`attempt/row.rs:80`, `job/show.rs:119-135`) and migrations, no writer; the docs say it holds the quick check at submit, but the check moved to the merge (`attempt/submit.rs:3`, hs-d679) | `rg`, run in this worktree |
+| Gate tail (`detail`, up to 60 lines, `git::TAIL_LINES`) | Yes, by regex, per repo: of 16 tails I read, 14 test failures (`FAIL [`, `# fail`) and 2 compile errors | 2.8, rubric A.8 |
+| Failing-test names across a window | Separates a host flake from a real bug: 12 of 16 gate windows share no test | 2.3 |
+| Load and free disk at failure | Would separate environment (pro-n64: load 68, 3 flaky tests on a diff with no Rust; pro-n94: 38 tests, "No space left on device") | not recorded today |
+
+**Deterministic classifier: none, and none is needed.** The handler for lint, compile and test failure is the same (retry once with the log, then the Lead), so a sub-class changes no route. If sub-classes ever need different routes, the patterns belong to the repo's policy (the Gate commands are the repo's), not to core, because cargo, vitest and eslint print different tails.
+
+**Where a class changes the ladder: one place, `gate_failed`.** It does not violate the two decisions:
+
+- **pro-d101/pro-d102 (provider errors do not climb, same Tier, 3 times).** `next_rung` tests `Cause::ProviderError` first (`ledger.rs:553-556`) and its counter `provider_errors` counts `cause = 'provider_error'` only (`:533-541`). The gate retry has its own counter of `cause = 'gate_failed'` since the last `job retry` and its own budget; the two never share a count; both stay on the Attempt's Tier.
+- **pro-d89 fix-retry (the engine retries a failed `open`/`update` Job when its fix merges).** `retry_after_fix` selects Jobs with `status = 'failed'` and `NOT queued_or_running_after_failure` (`core/src/job/fix_retry.rs:17-23`). A gate-retried Job is `queued` at that moment, so it is never selected; if the retry fails the Job is `failed` and fix-retry applies as before. Both are idempotent.
+- **pro-d88 (a failed Job being worked on is not stuck).** A queued retry already counts as worked on (`core/src/job/worked_on.rs:1-47`).
+- **`docs/contract.md:979`** ("`gate_failed` and `gate_error` are not ladder causes: the Lead decides") stays true for the ladder (a gate retry does not climb) but not for "the Lead decides": a new User decision must supersede it (recency wins: supersede, do not edit).
+
+**The evidence for the one change.** In cpd, of 113 `gate_failed` `job-failed` Events (Jobs failed once: 39; twice: 16; three or more: 11), the Lead retried 107 (94.7%), cancelled 6, and edited no Spec between failure and retry (0 `job-edited`); the median reaction is 1.2 min (p90 10.5, p95 21.3). The next outcome after the retry was `job-merged` for 54 (50.5%): 34 of 62 retries at the same Tier (54.8%), 20 of 45 at another Tier (44.4%): no sign that climbing helps. So an engine retry at the same Tier would have avoided at most 34 Lead wakes (4.3% of 794) and delayed 27 by one Attempt (median `gate_failed` Attempt 7.9 min). The Lead's decision, in 94.7% of cases, added nothing the engine could not do. Cost: a second Gate run on a host whose gate windows coincide with load 17-68 (pro-n64, 2.3 `guess:`); hence the 30 s hold of pro-d102 (convention, no new constant) and the measure-first Plan `gate-load-stamp` (Section 4).
+
+**The proposal's 7-row table, row by row.**
+
+| # | Proposal row | cpd's real handler | Measured | Verdict |
+|---|---|---|---|---|
+| 1 | Flaky test, transient infra: engine retry, wakes no one unless the budget is spent | Built for provider, spawn and install failures (`ledger.rs:239-242`, `:551-575`); a flaky test is `gate_failed` and wakes the Lead | class 1 is 122 of 258 (47.3%), nearly all by `cause`; gate flakes go to the Lead | ADAPT: gate retry once |
+| 2 | Lint, format, simple compile: Worker retries with the error, wakes no one | the Gate runs at the merge, the Worker never sees it; the retry Spec carries the log, after the Lead's `job retry` | class 2 is 10 of 258 (3.9%) | ADAPT: the same gate retry gives the Worker the log without a Lead turn; no separate class |
+| 3 | Code bug or test failure: Plan Lead | `job-failed` turns the Lead (`delivery.ts:12`) | class 3 is 103 of 258 (39.9%); but 107 of 113 gate failures were retried unchanged | KEEP, after the one retry |
+| 4 | Ambiguous spec, missing context: Plan Lead | Worker `ask`: Escalation, Lead steered (`delivery.ts:16`), `answer` returns | 212 escalations, 183 answered (86.3%), median 0.3 / 1.2 min; 0 as failures | BUILT: keep |
+| 5 | Merge conflict across PRs: Plan Lead | a conflict with the base queues an `update` Job (`pr/poll.rs:432-447`); a conflict in an Attempt climbs the ladder (`ledger.rs:233-235`) | 7 `merge_conflict` Attempts (0.5%) | SKIP: a Lead wake on each would add wakes |
+| 6 | Requirement conflict or scope change: Context Manager | no failure carries it; a Lead sends `session send --unblocks` (pro-d78) | 0 of 258 | SKIP as a class |
+| 7 | Cross-feature dependency: Manager relays | no relay path; `cpd context pending` is read-side (`pi/lib/updates.ts:226-240`) | 0 of 258; no signal in 309 messages | SKIP (YAGNI) |
+
+**Verdict (b): ADAPT.** Convention over configuration (the cause enum is the upstream default), "fix the cause" (a class derived from `cause` cannot disagree with it), and measured: one handler changes.
+
+### 3.4 (c) Storm grouping
+
+**Verdict: SKIP the proposal's grouped message; ADOPT the per-Plan dedup of repeated `error` Events.** First the proposal's algorithm, replayed, then what to build.
+
+**Algorithm P (the proposal's, specified so it can be replayed).**
+
+| Part | Specification |
+|---|---|
+| Rows | `job-failed` and `error` Events with a Plan (the Lead-waking failures, 234 in the snapshot) |
+| Key | (class = `cause` of a `job-failed`, `code` of an `error`; fingerprint = first 30 characters of the text with UUIDs, paths and digits masked, hashed; scope = the Context). The proposal's "repo/base sha or provider" is not in a failure Event: `base_sha` is an Attempt column and a provider name is only in the message text (`guess:` parse `bifrost` from it) |
+| Window | 10 minutes from the group's first member |
+| Threshold | 3 distinct Jobs |
+| Emission | in E8 (`engine/src/watch/inbox.rs:35-37`), after `tell_stuck_jobs`: one `tell_managers` message (`core/src/session/send.rs:111-124`) listing the members with `refs`; the message is its own once-record, as `untold` (`report.rs:175-190`) |
+| Suppression | at append: the ledger (`ledger.rs:480-495`) writes the third and later `job-failed` of a key inside the window with `data.storm = <first Event id>`; `leadRule` (`delivery.ts:20`) turns no Lead for an Event with `data.storm` (the adapter reads a new field: **PROTOCOL 18**). The first two members still wake their Lead |
+| Closed | when the window passes with no new member; a later member opens a new group and a new message; the `job-failed` rows stay and reach the Lead's next turn-start digest as counts (`updates.ts:56`) |
+| Tests (mock only) | a pure `group(events, now, window, threshold)` over literal Event rows; a ledger test on an in-memory store with a fake clock that the third failure is written with `storm`; an E8 test that one message goes per group and none on a quiet tick; a `leadRule` fixture in `pi/test`. No provider, GitHub or tmux: they appear only as scripted Events |
+
+**Replay over the Section 2 storms** (`r.py 3 <window> <threshold>`; same key as the Section 2.3 candidates):
+
+| Window | Threshold | Groups | Events in groups | Lead wakes before | Lead wakes + Manager messages after | Saved | Gate groups with a shared failing test / without |
+|---|---|---|---|---|---|---|---|
+| 10 min | 3 Jobs | 24 | 98 | 234 | 188 + 24 = 212 | **22 (9.4%)** | 4 / 12 |
+| 10 min | 4 Jobs | 7 | 43 | 234 | 213 + 7 = 220 | 14 | 1 / 2 |
+| 5 min | 3 Jobs | 20 | 75 | 234 | 200 + 20 = 220 | 14 | 2 / 9 |
+| 30 min | 3 Jobs | 23 | 132 | 234 | 164 + 23 = 187 | 47 | 3 / 13 |
+
+For the 24 groups of the first row: the 98 Events in them cost 98 Lead wakes before and 76 wakes after (52 Lead plus 24 Manager), minus 22. **False groups** (a group whose members share no failing test in at least half of them): 12 of 16 `gate_failed` groups (75%); the 8 other groups share a text prefix and a code but no verified root cause (`guess:` same cause, 2.3). 19 of the 24 groups span two or more Plans. So 4 of 24 groups (16.7%) are confirmed one-cause by the data, and the saving is 22 of 794 Lead wakes (2.8%).
+
+**Why SKIP.** The two largest storms are 9 and 9 `tool_timeout` Events of one Plan (`vitest-migration`, 2026-10-29 14:56 and 15:07 UTC): a per-Plan matter, not a cross-Plan one. The 16 gate windows are `guess:` host load (pro-n64 load 68; Section 2.3) that no group message can fix; the Manager would be woken to learn "gate red on N Jobs". A grouped message that suppresses Lead wakes can also hide a real code bug inside a flaky window. The cost is an Event field, an adapter rule and PROTOCOL 18, for 2.8% of wakes. No storm reaches 12; the proposal's example does not occur.
+
+**What to build (ADOPT): Algorithm D, the per-Plan dedup.** pro-d187's dedup is `Report::fail` (`engine/src/watch/report.rs:231-262`) and only the engine's own steps call it. Two writers bypass it: `append_error` for the driver (`ledger.rs:579-588`, guarded by `has_error`, `:590-598`, per Attempt and code only) and `session report` for the adapter (`core/src/session/report.rs:81`, no Plan, no guard).
+
+| Part | Specification |
+|---|---|
+| Key | `attempt run`: (`code`, `plan`, text[:60] with paths and digits masked); `adapter`: (`code`, `session`, same text) |
+| Window | `watch.error_repeat_seconds` (default 600, `core/src/config/file.rs:196,347`): the same window the engine uses; no new key |
+| Threshold | the second occurrence inside the window is not appended |
+| Where | the two writers, in the caller's transaction (a read of `events` then a skipped `append`): idempotent, no engine step, no new Event |
+| Suppressed | the repeat `error` Event only; the Attempt's `attempt-retry` and `job-failed` Events are untouched, so each Job's own failure is still recorded and woken |
+| Closed | stateless: the previous Event is the record (as `Report::recent`, `report.rs:231-262`); a repeat after the window is appended |
+| Tests (mock only) | an in-memory store and a fake clock: two errors of one key inside the window write one Event; one after the window writes two; another Plan or text writes its own; a new writer test for `session report`. No tmux, no provider |
+
+Replay (`r.py 5`): of 52 `attempt run` errors, **26 suppressed** (6 for the same Job, 20 for another Job; 19 of them in `vitest-migration`); Lead-waking `error` Events fall from 80 to 54 (-32.5%), and 794 Lead wakes by 26 (-3.3%), more than the 22 of grouping, with no schema, no adapter change and no PROTOCOL bump. Of 51 `adapter` errors, **36 suppressed** (all the same session and message); they carry no Plan, wake no Lead, and leave the Manager's `Errors: N (code xK)` count (`updates.ts:242-250`). False groups: 0 by construction (the key holds the code, the scope and the text); the 20 cross-Job suppressions hide only the Event, not the Jobs' own `job-failed`.
+
+**Also (measure first): `gate-load-stamp`.** Append load average, core count and free disk to the Gate failure `detail` after its tail (so `parse_gate_detail`, `core/src/merge/mod.rs:380-391`, which reads the log between `LOG` and `TAIL`, is unaffected). It turns Section 2.3's `guess:` into a count and makes "environment" a deterministic fact for the retry and for any later cap on concurrent Gates.
+
+**Verdict (c): SKIP grouping, ADOPT dedup.** "Fix the cause, not the symptom", "no flakes, no leaks": the repeats come from two writers that skip a dedup that already exists.
+
+### 3.5 (d) Stuck, ping-pong and unacknowledged-escalation detection
+
+**Verdict: ADAPT, two rules (R-A, R-B); SKIP R-C to R-F; R-G is built.** Thresholds come from the distributions of Section 2 and `r.py 4`, `r.py 6`, `r.py 7`.
+
+**Measured distributions.**
+
+| Measure | cpd | eec-general | Source |
+|---|---|---|---|
+| Escalation answer time p50 / p90 / p95 / p99 / max (min) | 0.31 / 1.06 / 1.64 / 5.4 / 5.6 (154 answered) | 1.19 / 10.5 / 10.9 / 18.0 / 18.0 (29 answered) | `r.py 4` |
+| Escalations open 30 minutes or more | 0 | 3, all timeouts (60 min), all one Job | `r.py 7` |
+| Escalations per Job p50 / p90 / p95 / p99 / max | 1 / 2 / 3 / 5 / 6 | 1 / 3 / 3 / 19 / 19 | `r.py 4` |
+| Jobs with 4 or more escalations | 2 (`open-layout-2` 6 and `expand-tests` 5, all different questions) | 1 (`convert-snaps` 19, 3 different questions: one asked 17 times) | `r.py 4`, `r.py 6` |
+| Longest alternating run of `session-message`s between two Sessions (gaps of 60 min or less) | 5 (2 pairs, 70 and 73 min), 4 (1 pair), 3 (3 pairs); of 67 pairs | 2; of 17 pairs | `r.py 4` |
+| `session-message`s with no recipient `working` within 60 min | 24 of 257 | 2 of 52 | `r.py 4` |
+| Board post read latency p50 / p90 / p95 (min) | 11.0 / 358 / 794 | 19.6 / 1,655 / 2,473 | `r.py 4` |
+| `job-failed` to `job-retried` or `job-cancelled` p50 / p90 / p95 (min); over 10 min | 1.9 / 51 / 622; 46 of 150 | 7.9 / 10.8 / 10.8; 1 of 4 | `r.py 4` |
+| Engine stuck-Job messages sent | 38 | 1 | `r.py 4` |
+
+**The three escalations that timed out** are `convert-snaps-a2-q4` (asked 2026-10-29 17:31 UTC), `-a5-q5` (19:38) and `-a6-q5` (21:21): the same question ("which method, A or B?") of one Job, which asked it 17 times in 19 escalations over about 7.4 h (15:07 to 22:32 UTC) across 7 Attempts and then merged. For the first two the Lead session recorded no state change while the Escalation was open (`guess:` the session was stopped, so nobody was turned); for the third the Lead went `idle` then `waiting` ("Worker question") 20 minutes in, i.e. it had seen it and was waiting on the User. This is the one incident of the proposal's "unacknowledged escalation" and of "ping-pong" in the whole snapshot.
+
+**Predicates** (each pure over rows cpd already has; each raises one waking message to the Context's Manager, `from` null, through `tell_managers` (`core/src/session/send.rs:111-124`); each is evaluated by E8):
+
+| Rule | Predicate over rows | Threshold, from the data | Raises | Replay on the snapshot |
+|---|---|---|---|---|
+| **R-A repeated question** (ADOPT) | a Job with 3 or more `escalations` rows (any status) whose first 60 characters, digits masked, are equal | 3 = the p95 of escalations per Job in both Contexts; productive dialogues (`open-layout-2` 6, `expand-tests` 5) never repeat a question | `session-message` kind `task`, refs `[job]`: "Job J of Plan P asked the same question N times: answer it, nudge the Lead or ask the User"; once, until a newer escalation of the Job | fires on 1 Job (`convert-snaps`, at its 3rd ask); 0 on the other 155 Jobs with an escalation |
+| **R-B unanswered escalation** (ADOPT) | an `escalations` row `status = 'open'`, `now - asked_at >= ask_minutes / 2` (30), and no `session-state` Event to `working`, `waiting` or `blocked` of the Plan's Lead since `asked_at` | 30 min = 1.7 times the longest answer in 183 (18.0 min) and half the Worker's own timeout (`ask_minutes` 60, `core/src/config/file.rs:330`): no new key | the same message, refs `[escalation]` | fires on 2 of the 3 escalations open 30 minutes (the third had a Lead turn at 20 min); 0 of 183 answered |
+| R-C ping-pong (SKIP) | 6 or more alternating `session-message`s between the same two Sessions, each gap 60 min or less | 6 = one more than the longest observed run (5): it would fire 0 times | would be a `loop-guard`-style item | 2 pairs reach 5 (Manager and Lead, 70 and 73 min), 0 reach 6: no incident to catch |
+| R-D unacked `session-message` (SKIP) | no `working` of the recipient within 60 min of a message | would be 60 min | none | 26 of 309 (8.4%), 20 of them to Leads; `guess:` stopped or asleep Leads, which `session send` starts (`send.rs:133`), or a Lead already mid-turn: the data cannot tell a lost wake from a busy recipient |
+| R-E unacked board post (SKIP) | `read_at` null | none: by design it waits for the next turn | none | 4 unread (3.7%), median age 78-82 h: dormant recipients (`guess:`); an alert would wake no one |
+| R-F Lead blocked on Manager (SKIP) | none: no row relates a Lead's state to a Manager message | n/a | n/a | a `blocked` Lead is an Inbox `dialog` for the User (`inbox/rules.rs:297-316`); 0 observed |
+| R-G failed Job nobody handles (BUILT) | E8: `failed`, latest `job-failed` at least `stuck_job_minutes` (10) old, not worked on (`inbox/rules.rs:486-568`, pro-d88) | 10 min against p50 1.9 / p90 51 min to a Lead action | one message per PR | 39 messages in 6 days; keep |
+
+**Why E8 and not a new step.** E8 already reads the store for "agent-clearable states that need a message", holds the once-record pattern (`untold`, `report.rs:175-190`) and sends through `tell_managers`; the sub-step `tell_stuck_asks` goes beside `tell_stuck_jobs` in `reconcile_inbox` (`engine/src/watch/inbox.rs:35-37`). E1 (`engine/src/watch/escalations.rs:1-75`) only tests whether the asker's pid is alive and writes Escalation rows; adding a message there would give E1 a second job. The predicates are pure functions in `core/src/inbox/rules.rs` beside `stuck_jobs` (`:486-520`), so they test on rows with a fake clock.
+
+**Comparison with what exists.**
+
+| Existing | What it does | Why the rules above are not duplicates |
+|---|---|---|
+| Inbox rules (`inbox/rules.rs:67-91`) | conditions for the User: `dialog`, `loop-guard`, `plan-review`, `unread`, `pr-ready` ... | R-A and R-B are agent-clearable (a Manager or Lead can act), and "blocked means it needs the human" (hs-d318, `docs/contract.md:653`): the engine sends the stuck Job to the Manager, not to the Inbox. A new Inbox kind is also a **breaking** migration (the CHECK list is rebuilt: `20261102T1600-drafts-parked-kind.sql:1` is `breaking after 77`) |
+| Escalation expiry (`ask_minutes` 60; E1 `asker_dead`) | ends an Escalation: the Worker's `ask` exits 5 `ask_timeout` (`ask/question.rs:47-69`) | expiry ends the question; it tells no one that a Lead never turned. R-B fires at 30 min, 30 min before the Worker gives up |
+| Loop guard (`session/mod.rs:54`, 20 self-started turns in 10 min) | blocks one Session | counts one Session's turns, not a pair, and not a repeated question |
+| `session send` duplicate guard (`send.rs:56-81`) | refuses the same text twice in 60 min | R-A matches the same question in different words of the same 60 characters across Attempts |
+
+**Verdict (d): ADAPT.** The two rules are measured against the only incident; the others are SKIP by YAGNI (no data) and by "guards only for proven bad behaviour". R-A would have told the Manager at the 3rd identical ask (16:10 UTC, during Attempt 1); 16 more escalations and 6 more Attempts followed in the next 6.4 h before the Job merged (`guess:` the Manager would have acted).
+
+### 3.6 Other elements of Section 7
+
+Same five columns, plus the element.
+
+| Element | Verdict | What cpd already has | What the data says | Cost and risk | Reversibility |
+|---|---|---|---|---|---|
+| **Retry budgets (K before anyone is woken) and timeouts (N)** | **ADAPT**: one new K (`gate_failed`, K = 1) and one N (30 min, R-B). A K per class in config: SKIP | `retry_cap` 2 (`core/src/config/file.rs:273`); 3 provider retries and a 30 s hold (`ledger.rs:239-242`); spawn back-off `min(2^k, 300)` s (`watch/schedule.rs:25-64`); `attempt-retry` wakes no one (`delivery.ts:8`); `ask_minutes` 60 (`file.rs:330`); stuck Job 10 min (`file.rs:357`) | 958 of 1,064 Jobs (90.0%) take one Attempt; 106 take more; 24 use 3 or more Tiers; 38 have more than 3 Attempts (2.2); answers p99 5.4 / 18.0 min (3.5) | A per-class K table duplicates the ledger's own counters (`automatic_attempts`, `provider_errors`, `ledger.rs:517-541`) and adds config for 11 causes with 0 or 1 handler each. N = `ask_minutes / 2` adds no key | Constants; `GATE_RETRIES = 0` restores today |
+| **Digests with a token cap** | **SKIP** the cap; **ADOPT** a text trim (Plan `gate-text-trim`) | Turn-start digests: Lead (records, board posts in full, PRs), Manager (counts per kind, `Pending work:`, `Errors: N (code xK)`), cap `MAX_LISTED = 20` lines (`pi/lib/updates.ts:35`, `:196-290`; `docs/commands.md:4011-4062`; contract 15.7) | Board posts taken together: at most 4 posts and 3,147 characters (cpd), 3 and 1,579 (eec-general), the longest post 1,943 (`r.py 8`): about 800 tokens (`guess:` 4 characters per token), nowhere near a cap. The bloat is the wake text: `job-failed` is 731,679 of 990,709 characters (73.9%) of the six Lead-waking kinds' Event text, and `gate_failed` has median 7,462 characters (61 lines) against 241 for other causes (`r.py 2`, `r.py 9`) | A cap that never binds is code for nothing (YAGNI). The trim cuts the Event text of a gate failure to its first line, the log path and `See: cpd job show <key>`; `data.detail` keeps the tail and `job show` prints it (the adapter renders `event.text` only, `docs/contract.md:2672`); `rg` finds no consumer of the tail inside the Event text (unverified beyond `rg` of `core`, `engine`, `pi/lib`, `tui`: check at the implementation) | Text only; one function in `ledger.rs:485`; the full tail stays in the data |
+| **Reference, don't copy; `entry_reads`** (interface only) | **ADAPT**: the interface is `refs[{type: "record", id}]`; the memory design is the sibling Plan `rfm-memory-retrieval`'s | Lead update lists `- <id>: <first sentence>` with `cpd context show --record <id>` (`pi/lib/updates.ts:262-290`); `rg entry_reads core pi engine` finds only `docs/research/rfm-curation-*` | 62.4% of board posts cite a record id and 25.7% a PR; 50.8% / 32.9% of agent `session-message`s (`r.py 1`): agents already reference, in prose | The board guarantees only that a `record` ref parses against `context_records` at write (3.2). Whether following a ref writes an `entry_reads` row (`via = 'board'`), and whether a Lead's bundle of entries for a Worker is logged, is the memory Plan's; a bundle is a Spec, not a message | None now: stage 2 only |
+| **Structured completions** | **SKIP** | `job-merged` `{sha, tier, kind, turn}`; explore Attempts carry `summary` and `artefact` (`core/src/attempt/submit.rs:146-175`; the adapter reads neither, `docs/contract.md:2672`); the Gate at the merge is the proof (`core/src/merge/mod.rs:413-423`) and `pr open` requires a description (`description_required`); `check_tail` has no writer | 1,002 merged Attempts, none escalated or failed for a missing proof (0 of 258 failure signals); cpd Workers produce no screenshots | Typed proof fields with no producer and no consumer. The proof-based review is the planning-ladder sibling's (`rfm-planning-ladder`): cited only | n/a |
+
+### 3.7 The small local model (all seven jobs, adoption order, metrics)
+
+Local models and their runner belong to the sibling `rfm-curation-models`; this table judges only whether a Section 7 job is needed once a rule exists. All seven are SKIP in this phase.
+
+| Job | Verdict | What cpd already has | What the data says | Cost and risk | Reversibility |
+|---|---|---|---|---|---|
+| Failure summarizer and classifier | **SKIP** | the `cause` column replaces the classifier (1.5); the Spec states each cause in a rule-built sentence (`spec/mod.rs:60-95`); the log path is in the Event | 113 gate failures carry a median 7,462 characters; class by `cause` alone covers 47.3% transient, and 4, 6, 7 are 0; the one open split (test vs compile, 14 vs 2 of 16) changes no route | A model reading a 60-line tail to re-derive a stored cause; the bloat is fixed deterministically by the trim of 3.6 | n/a: nothing built |
+| Message triage | **SKIP** | wake is a pure table by Event kind (`delivery.ts:10-20`); `--unblocks` is required; the wake function of 3.2 | 63 of 309 FYI-shaped, 7 of 8 sampled legitimate; one mis-channel incident | A classifier that overrides senders needs ground truth cpd does not hold (no label); `session send` already refuses broadcasts and duplicates | n/a |
+| Root-cause clustering | **SKIP** | key dedup (3.4) | 12 of 16 gate groups share no failing test: the common cause is the host, not the text (`guess:`); embeddings would group by text | An embedding model to find what a load average states | n/a |
+| Inbox digest | **SKIP** | the Manager's counts and `Errors:` (`updates.ts:196-250`) | board takes at most 3,147 characters | A lossy summary can drop refs; counts keep structure | n/a |
+| Worker first-line responder | **SKIP** | the Lead's rule "Resolve first, ask second" (`pi/skills/cpd-lead/SKILL.md:45`, `:289`): prose, not enforced | 212 escalations, 86.3% answered, median 0.3 / 1.2 min: no latency to remove; of 10 sampled, 10 are a Spec/test contradiction or missing context (`guess:` reasoning, not a quotable passage, 2.4) | "Quote the plan" is retrieval: the memory Plan's. A wrong auto-answer costs a Worker Attempt | n/a |
+| GitHub event summary | **SKIP**: already rule-built | the poll writes `pr-feedback` Events with Rust text (`core/src/pr/poll.rs:432-447`) | 85 `pr-feedback` Events, median 160 characters, max 209 (`r.py 9`): short already | nothing to compress | n/a |
+| Plan coverage check (brief to PR) | out of scope | `rg -n coverage core/src/plan` finds nothing (1.6) | not measured here | planning-ladder sibling's | n/a |
+
+**Adoption order (classification, triage, grouping, each in shadow mode).** Not needed: the first label is free. A classifier's agreement with `cause` is 100% by construction for the 11 causes; the only unlabelled split is the gate tail, which has no handler. Shadow mode for triage needs a human label for each wake, which cpd does not store; grouping's truth is the host load, which `gate-load-stamp` records. If a model is ever wanted, run it as `off | shadow | on` like the curator (`docs/research/rfm-curation-models.md`, cited only).
+
+**The four metrics, and what cpd computes today.**
+
+| Metric | Computable today? | From | Value |
+|---|---|---|---|
+| Wake-ups per feature (Plan), by role | **Yes** | Events by the wake rule (`delivery.ts:11-16`; `session-message` to a Lead or Manager; `attempt-nudge`), 2.8 | Lead 794 (591 + 203), Manager 159 (138 + 21), Worker 18 (14 + 4); Lead wakes per Plan median 4.0, p90 14 (cpd). The script restates the TS rule: a recurring metric should read the one rule, so no Rust copy is proposed (DRY) |
+| Tokens read per Lead and Manager turn | **No** | no token count in Events, board or sessions; `attempts.metrics` is Worker tokens only (`core/src/metrics/mod.rs:1-12`) | Proxy only: Event text characters, `job-failed` 731,679 of 990,709 |
+| Share of escalations that reached a higher level than needed | **No** | no level, need marker or answerer on an Escalation; `escalation-answered` has the id only | With R-A and R-B, "reached the Manager" becomes a message with `refs`, countable from then on |
+| Classifier agreement with a human label | **No** | no classifier, no label | The 40-row sample in 2.8 is a rubric's labels, not a human's |
 
 ## 4. Roadmap
 
-(skeleton: written in the next commits)
+Follow-up Plans in priority order, by the axiom "make it work, make it fast, make it good": first the holes and defects (1, 2), then measured performance (3 to 5), then quality (6). Plan ids are suggestions (lowercase, at most 24 characters). Every Plan is independent of the three sibling research Plans (`rfm-memory-retrieval`, `rfm-curation-models`, `rfm-planning-ladder`) except where the table says so. No Plan builds a local model (3.7).
+
+### 4.1 The Plans
+
+| # | Plan id | Goal | Verdict | Size | Depends on | Expected measured gain (6 days, cpd and eec-general) |
+|---|---|---|---|---|---|---|
+| 1 | `error-dedup-plan` | Repeated driver and adapter `error` Events are written once per window | ADOPT | 1 PR, 2 Jobs (test, impl; docs with impl) | none | Lead-waking `error` Events 80 to 54 (-26, -32.5%; -3.3% of 794 Lead wakes); 36 of 51 adapter errors leave the Manager's `Errors:` count |
+| 2 | `stuck-asks` | Tell the Manager when a Job asks the same question 3 times, or an Escalation is open 30 minutes with its Lead not turned | ADAPT | 1 PR, 3 Jobs (predicates, E8 step with typed `refs`, docs) | none (carries stage 1 of 3.2) | catches the 1 incident (`convert-snaps`) 6.4 h before its merge; up to 16 escalations and 6 Attempts avoided (`guess:`); 0 false fires on 183 answered |
+| 3 | `gate-text-trim` | A gate failure's wake text is one line, the log path and `See:`, not the 60-line tail | ADOPT | 1 PR, 2 Jobs | none | `gate_failed` Event text median 7,462 to about 300 characters: about -95% of 721,072 characters (about 180k tokens, `guess:` 4 characters per token) of Lead wake text |
+| 4 | `gate-load-stamp` | Record load average, cores and free disk in every Gate failure (measure first) | ADAPT | 1 PR, 2 Jobs | none (before 5) | turns the `guess:` that the 16 gate windows (57 Events) are host load into a count; decides the hold and any cap on concurrent Gates |
+| 5 | `gate-retry-once` | The engine retries a `gate_failed` Job once at the same Tier; the Lead hears only the second failure | ADAPT | 1 PR, 3 Jobs (decision record first, then test, impl) | 4 (soft); a User decision superseding `docs/contract.md:979` | at most 34 Lead wakes avoided (4.3% of 794); +7.9 min (median `gate_failed` Attempt) on the 27 retries that fail again |
+| 6 | `board-refs` (deferred) | Typed `kind` and `refs` on `board_posts`; the refusal table of 3.2 | ADAPT | 2 PRs (migration, command and digest) | none to start; `rfm-memory-retrieval` for the `record` ref and `entry_reads` (interface only) | not claimed: about 8 avoidable wakes (`guess:`) until its trigger |
+
+### 4.2 Exact changes, files and tests
+
+| Plan | Schema and rule changes | Files touched | Tests (mocks only: fake clock, in-memory store, scripted Events; no tmux, git, gh, pi, network) |
+|---|---|---|---|
+| `error-dedup-plan` | **No schema.** Rule: a writer does not append an `error` Event when the store holds one of the same key appended less than `watch.error_repeat_seconds` (600) ago. Key `attempt run`: (`code`, `plan`, text[:60] with paths and digits masked); `adapter`: (`code`, `session`, same text). Read the Plan's or Session's `error` Events inside the window (index `events_plan`, `events_session`), mask in Rust, compare. The Attempt's own `attempt-retry` and `job-failed` are untouched | `core/src/attempt/ledger.rs:579-598` (`append_error`, `has_error`); `core/src/session/report.rs:68-83`; one text-mask function in `core` used by both writers (one source of truth); `docs/contract.md` §5.2 `error`; `docs/commands.md` `session report` | two errors of one key inside the window write one Event; one after the window writes two; another Plan, Session or text writes its own; `session report` twice writes once; the engine's `Report` tests keep passing |
+| `stuck-asks` | **No schema.** Rules R-A and R-B of 3.5 as pure functions over `escalations` and `events`; the message is a `session-message` from the User's side with `data.refs` (typed `Ref`: `job`, `escalation`, `pr`, `record`, `attempt`, parsed with the id newtypes; no `kind` yet). Once-record: a message newer than the newest escalation of the Job whose `refs` contain it. Threshold `ask_minutes / 2`: no new config key | `core/src/inbox/rules.rs` (`repeated_asks`, `unanswered_asks`, beside `stuck_jobs` `:486-520`); `core/src/events/typed.rs:446-453` (`refs` on the two `session_message` constructors); `engine/src/watch/report.rs` (`tell_stuck_asks`; `untold` reads `refs`); `engine/src/watch/inbox.rs:35-37`; `docs/contract.md` §3.7 E8 and §5.2 `session-message`; `docs/commands.md` | predicates on literal rows (the `convert-snaps` shape: 19 asks, 17 equal, 2 answered, a Lead with no state change; a Lead turned at 20 min does not fire; `open-layout-2`: 6 different questions does not fire); E8 sends one message per Job and none on a quiet tick or after an engine restart (as `report_restart_tests.rs`); a `Ref` with an invalid id is refused; the adapter fixture still parses a message with `refs` |
+| `gate-text-trim` | **No schema.** `job-failed` `text` for `gate_failed` and `gate_error`: first line (`pre-merge failed (exit N)`), `log: <path>`, then `See: cpd job show <key> --plan <plan>` (the `Next:`/`See:` convention of every other text); `data.detail` keeps the full tail; the failure `Decide:` line stays | `core/src/attempt/ledger.rs:480-488` (the one format string); `docs/contract.md` §5.2 `job-failed`; a check of `tui/src`, `pi/lib` and `core/src` for a reader of the tail inside the text (`rg` found none, unverified) | the Event text is at most 400 characters, holds the path and `See:`; `data.detail` is unchanged; `parse_gate_detail` (`core/src/merge/mod.rs:380-391`) and the Spec of the retry still read the tail |
+| `gate-load-stamp` | **No schema.** After the tail, `detail` gains one line `host: load <1m> <5m> <15m>, <n> cores, <free> free on <dir>`; `parse_gate_detail` reads the log between `LOG` and `TAIL`, so it is unaffected | `core/src/merge/mod.rs:368-376` (`gate_detail`); a `HostLoad` port in `core/src/host/` beside `spawn` (real: `uptime` and `df` through the existing `Runner`); `docs/contract.md` §7.4 | `gate_detail` with a scripted `HostLoad` ends with the line; a `HostLoad` that fails writes `host: unknown` and the Gate result is unchanged; `parse_gate_detail` of the new detail returns the same hook and log |
+| `gate-retry-once` | **No schema** (`attempts.cause` CHECK is unchanged). Rule: `Route::Retry` for `gate_failed`: `GATE_RETRIES = 1` since the last `job retry`, same Tier, hold `PROVIDER_RETRY_SECONDS` (30, reuse); the retry Attempt is excluded from `automatic_attempts` as `provider_error` is; `gate_error` is not retried. First Job: a `decision` record superseding the clause of `docs/contract.md:979` | `core/src/attempt/ledger.rs` (`GATE_RETRIES` beside `:239-242`; `next_rung` `:551-575`; `automatic_attempts` `:517-531`; a `gate_failures` counter beside `provider_errors` `:533-541`); `engine/src/watch/provider_hold.rs:10-31` (cause list); `docs/contract.md:979` and §3.4; `core/src/spec/mod.rs:83-87` (unchanged: the retry Spec already names the log) | first `gate_failed` requeues at the same Tier with `attempt-retry` and no Lead wake; the second ends `job-failed`; `job retry` resets the count; `provider_error` and `gate_failed` counts are independent; a failed `open` Job retried by this and then by a merged fix is requeued once (`fix_retry` selects `failed` only); E3 holds 30 s on a fake clock |
+| `board-refs` | **Additive migration** of 3.2 (`kind`, `refs` on `board_posts`) and the `wakes` function of 3.2 called by `board post`, `session send` and `tell_managers`; `--kind` and `--ref` flags | `core/src/store/migrations/<ts>-board-refs.sql` (by `scripts/new-migration.sh board-refs additive`); `core/src/board.rs:84-105`; `core/src/session/send.rs:87-130`; `core/src/session/mod.rs:205-219`; `docs/contract.md` §4.4 and `SCHEMA_HASH` (`scripts/repin.sh`); `docs/commands.md` §10.13 and §10a; the skills `cpd-lead` and `cpd-manager`. **Trigger**: a second mis-channel incident after pro-d78, or a digest that renders refs. **Measure first**: label 30 of the 63 FYI-shaped `session-message`s by hand | `wakes` table-driven test over the 8 rows of 3.2; `board post --kind question` refused `kind_wakes`; `session send --kind fyi` refused `kind_never_wakes`; a store before the migration keeps every post with `kind = 'fyi'`; the additive, orders and schema tests (A2, A3) |
+
+### 4.3 What to SKIP, because cpd already solved it better
+
+| Proposal element | Skip because | Proof |
+|---|---|---|
+| Escalations in the Manager digest | already dropped (pro-d24); the Manager has no action on them | `pi/lib/updates.ts:56` (the six counted kinds) |
+| A retry budget K per failure class | each cause has one fixed K in code, and the counters exist | `core/src/attempt/ledger.rs:239-242`, `:517-541`, `:545-575`; `engine/src/watch/provider_hold.rs:10-31` |
+| A model, regex or stored column to classify a failure | the class is the `cause` column, set where the failure is seen | `core/src/attempt/ledger.rs:163-186`; `core/src/driver/run.rs:385-817` |
+| Wake triage by a model, or a `kind` that wakes by itself | wake is a pure table by Event kind; the two channels are a User decision | `pi/lib/delivery.ts:10-20`; pro-d78 |
+| "Merge conflict across PRs wakes the Plan Lead" | the engine handles it first and the Lead hears only when the ladder is spent | `core/src/pr/poll.rs:432-447`; `core/src/attempt/ledger.rs:233-235`; `core/src/spec/mod.rs:71-72` |
+| An escalation climb for failed Jobs | already built, with the false-alarm guard | `core/src/inbox/rules.rs:486-568`; `core/src/job/worked_on.rs:1-47` (pro-d88) |
+| "Your fix merged, retry" to a Lead | the engine retries it | `core/src/job/fix_retry.rs:11-39` (pro-d89) |
+| Grouped storm message, cross-Plan grouping | 22 of 234 wakes saved, 12 of 16 gate groups unconfirmed, PROTOCOL 18 | Section 3.4; `r.py 3` |
+| `thread_id`, `status` open/acked/resolved, an `escalation` or `engine_event` kind | Escalations, `read_at`, the Event log | `docs/contract.md:1697-1713`; `core/src/board.rs:147`; `core/src/events/typed.rs:327-336` |
+| A token cap on digests | the longest board take is 3,147 characters; the digest already caps lines and counts kinds | `pi/lib/updates.ts:35`, `:196-290`; `r.py 8` |
+| Ping-pong and unacked-post rules | no run over 5, no data on unacked posts; duplicates and loops are already guarded | `core/src/session/send.rs:56-81`; `core/src/session/mod.rs:54`; `r.py 4` |
+| Worker first-line responder | answers arrive in a median 0.3 / 1.2 min; the Lead's "resolve first, ask second" is the rule | `pi/skills/cpd-lead/SKILL.md:45`, `:289`; `core/src/ask/question.rs:47-69` |
+| GitHub event summary model | the poll writes 160-character texts in Rust | `core/src/pr/poll.rs:432-447`; `r.py 9` |
+| Structured proof fields | the Gate at the merge is the proof; no producer for screenshots | `core/src/merge/mod.rs:413-423`; `core/src/attempt/submit.rs:3` |
 
 ### Context notes
 
-NOTE: skeleton, replaced in the next commits.
+NOTE: pro-d187 error dedup lives only in engine Report::fail (watch/report.rs:231-262); driver errors (ledger.rs:579-598) and adapter errors (session/report.rs:81) bypass it: 26 of 52 attempt-run and 36 of 51 adapter errors repeat within 600 s (6 days). Plan error-dedup-plan.
+NOTE: 113 of 113 gate_failed Jobs exit 64; the Lead retried 107 (94.7%) with 0 Spec edits, median 1.2 min; 54 merged next (34 of 62 at the same Tier). Candidate: engine retries gate_failed once at the same Tier; needs a decision superseding contract.md:979.
+NOTE: job-failed Event text is 731,679 of 990,709 chars (73.9%) of the Lead-waking kinds' text in 6 days: gate_failed median 7,462 chars (61 lines) vs 241 for other causes, since ledger.rs:485 inlines the Gate tail. Plan gate-text-trim: first line, log path, See:.
+NOTE: Escalation answer times matched by (plan,id): cpd p50 0.31, p90 1.06, max 5.6 min; eec-general p50 1.19, max 18.0. The 92.6 h max in Section 2 came from id-only matching (6 ids repeat across Plans). Key every escalation metric by (plan,id).
+NOTE: The one stuck-escalation incident in 6 days: Job convert-snaps (eec-general) asked one question 17 times in 19 escalations, 17 expired, 7 Attempts, 7.4 h, Lead silent. Rules: same question 3x per Job; open >= ask_minutes/2 with no Lead turn; E8 tell_managers.
+NOTE: Storm grouping saves 22 of 234 Lead failure wakes (10 min, 3 Jobs), 12 of 16 gate groups share no failing test, needs PROTOCOL 18; no storm reaches 12 (max 9). Gate windows match host load (pro-n64 load 68, pro-n94 disk full): record load and disk in the Gate detail first.
+NOTE: Decision pro-d78 stands: session send --unblocks wakes, board post never wakes. A kind-driven wake would add a third path; 7 of 8 sampled FYI-shaped session-messages name what the recipient waits for. Defer typed kind and board columns until a second mis-channel incident.
+NOTE: An Inbox kind is a CHECK list: a new one is a breaking migration (20261102T1600-drafts-parked-kind.sql, breaking after 77); agent-clearable states go to the Manager as a message (hs-d318, contract.md:653), so new stuck rules need no Inbox kind.
