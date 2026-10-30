@@ -103,7 +103,7 @@ fn pr_node(pull: Pull) -> PrNode {
 fn failed_job() -> JobNode {
     JobNode {
         key: JobKey::parse("api-1").unwrap(),
-        pr: PrKey::parse("api").unwrap(),
+        pr: Some(PrKey::parse("api").unwrap()),
         seq: 0,
         title: String::new(),
         status: JobStatus::Failed,

@@ -214,7 +214,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
     LAYOUTS.with(|n| n.set(n.get() + 1));
     let charts: Vec<Chart> = prs
         .iter()
-        .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key), &needs_user.worked_on), frame))
+        .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr.as_ref() == Some(&p.key)), &needs_user.worked_on), frame))
         .collect();
     // the tree's rule: the Plan has a failed Job
     let plan_failed = jobs.iter().any(|j| j.status == JobStatus::Failed);
@@ -400,7 +400,7 @@ mod tests {
     fn job(pr: &str, key: &str, needs: &[&str]) -> JobNode {
         JobNode {
             key: JobKey::parse(key).unwrap(),
-            pr: PrKey::parse(pr).unwrap(),
+            pr: Some(PrKey::parse(pr).unwrap()),
             seq: 0,
             title: String::new(),
             status: JobStatus::Queued,

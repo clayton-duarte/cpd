@@ -89,7 +89,7 @@ fn pr_node(lead_working: bool) -> PrNode {
 fn failed_job() -> JobNode {
     JobNode {
         key: JobKey::parse("j1").unwrap(),
-        pr: PrKey::parse("api").unwrap(),
+        pr: Some(PrKey::parse("api").unwrap()),
         seq: 0,
         title: String::new(),
         status: JobStatus::Failed,

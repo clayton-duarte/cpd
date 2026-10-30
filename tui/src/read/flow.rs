@@ -189,8 +189,8 @@ fn conflicting(what: &str, mergeable: &str) -> Result<bool, CpdError> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobNode {
     pub key: JobKey,
-    /// The Job's PR (`jobs.pr`).
-    pub pr: PrKey,
+    /// The Job's PR (`jobs.pr`); none for an explore Job, which belongs to the Plan.
+    pub pr: Option<PrKey>,
     pub seq: i64,
     pub title: String,
     pub status: JobStatus,
@@ -352,11 +352,13 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool, lead: &str, jo
     let blocked = active::blocked_spans(&events, now_ms);
     let mut spans: BTreeMap<&str, Vec<(i64, i64)>> = BTreeMap::new();
     for job in jobs {
+        // an explore Job has no PR whose time it could count in
+        let Some(pr) = &job.pr else { continue };
         for a in &job.attempts {
             let what = format!("Attempt {}", a.id);
             let start = active::parse_ms(&what, &a.started_at)?;
             let end = a.ended_at.as_deref().map(|e| active::parse_ms(&what, e)).transpose()?.unwrap_or(now_ms);
-            spans.entry(job.pr.as_str()).or_default().push((start, end.max(start)));
+            spans.entry(pr.as_str()).or_default().push((start, end.max(start)));
         }
     }
     let mut costs: BTreeMap<String, Vec<Option<f64>>> = BTreeMap::new();
@@ -461,12 +463,11 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
     rows.iter()
         .zip(waiting_on)
         // An explore Job belongs to the Plan, not to a PR: it has no node in a PR's flow.
-        .filter(|(j, _)| j.pr.is_some())
-        .map(|(j, waiting_on)| {
+                .map(|(j, waiting_on)| {
             let what = format!("Job {plan}/{}", j.key);
             let key = id("Job key", &j.key, JobKey::parse)?;
             Ok(JobNode {
-                pr: id("PR key", j.pr_str(), PrKey::parse)?,
+                pr: j.pr.as_deref().map(|pr| id("PR key", pr, PrKey::parse)).transpose()?,
                 status: JobStatus::parse(&format!("{what} has status"), &j.status)?,
                 tier: j.tier.as_deref().map(|t| tier(&what, t)).transpose()?,
                 needs: shown_needs(&rows, j).iter().map(|n| id("Job key", n, JobKey::parse)).collect::<Result<_, _>>()?,
