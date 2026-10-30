@@ -151,7 +151,7 @@ $CPD_HOME/
     <plan>/specs/<attempt>.md     rendered Worker Spec
     <plan>/logs/attempt-<attempt>.log      the Attempt driver's stderr
     <plan>/logs/worker-<attempt>.log       a `durable` Worker's stdout and stderr, appended (§3.4 "The Worker runner and its seam")
-    <plan>/attempts/<attempt>.report.json  a `durable` Worker's end report, replaced after every settle (§6.12); read by the driver (§3.4)
+    <plan>/attempts/<attempt>.report.json  a `durable` Worker's end report, replaced after every settle and once more at terminate (§6.12 step 8); read by the driver (§3.4)
     <plan>/logs/<attempt>.<hook>.log       full output of a hook run (§7.3)
     <plan>/logs/<attempt>.tests-build.log, <attempt>.tests-run.log   full output of the repo's `[test-commands]` commands at a `test` or `impl` Job's submit (§7.7, hs-d341)
     <plan>/logs/pr-<key>.pre-merge.log     full output of the last Gate run by `pr open`, `pr rebase` or `pr push` on PR <key> (§7.6)
@@ -3641,7 +3641,8 @@ type Submission = { wait(): Promise<"done" | "unanswered"> };
 5. Submit the first message `Read <spec> and follow it exactly. Your attempt id is <attempt>.` with `requestId` = the Attempt id and `whenBusy: "followUp"`.
 6. Start the follower with the cursor `registeredEvent`: each line is parsed with `parseLine` of `pi/lib/event.ts`, an Event goes through `inputOf`, and an input is submitted; the cursor advances to the Event's id.
 7. Track every submission: while any is pending the Session state is `working`; when the last settles it is `idle` and the report is written to `reportPath(...)` (its directory is created, recursively, before the temp file is written: nothing else creates `run/<plan>/attempts/` before the first report) from `endReport(await conversation.entries())`, after every settle (the file is replaced, so rerunning is safe). States go through `cpd session state` with `stateArgs` and `Reporter` of `pi/lib/state.ts`.
-8. The run ends on the first of: `onTerminate` (stop the follower, report `stopped`, return 143, **without closing the harness**); `conversation.closed` settling, which pi-durable does after a storage error (log it, stop the follower, report `stopped`, return 1: the driver restarts the runner and the store resumes); or an error thrown by steps 1 to 7 (stop the follower if started, report `stopped` best effort, return 1).
+8. The run ends on the first of: `onTerminate` (stop the follower, **write the end report once more**, report `stopped`, return 143, **without closing the harness**); `conversation.closed` settling, which pi-durable does after a storage error (log it, stop the follower, report `stopped`, return 1: the driver restarts the runner and the store resumes); or an error thrown by steps 1 to 7 (stop the follower if started, report `stopped` best effort, return 1).
+   **The report at terminate** (User bug, 2026-10-30 EDT: a Worker that submits inside its first turn is stopped before any submission settles, so step 7 never wrote its report and its cost was lost): when `onTerminate` fires and the conversation is open and holds at least one assistant entry, the runner writes the end report from `await conversation.entries()` to `reportPath(...)`, as step 7 does, after the follower is stopped and before it reports `stopped`; the file of an earlier settle is replaced, and its stop reason is the last assistant entry's (`toolUse` when the turn was cut inside its tool call). With the conversation not yet open, or with no assistant entry, nothing is written. A failure to read the entries or to write the file is logged and never changes the exit code (143) or the `stopped` report.
 
 A Worker does not exit when its first turn ends: it stays up and idle, because the driver's nudge (commands.md §16.1) arrives as an Event. The driver ends an Attempt by signalling the process, as it kills a Worker's window today. So `runWorker` resolves only in the three cases of step 8. `main.ts` exits with that code, and with 2 for a `usage` error.
 
@@ -3653,7 +3654,7 @@ A Worker does not exit when its first turn ends: it stays up and idle, because t
 
 **Delivery to the Worker.** A Worker gets only `attempt-nudge` (and `session-message`) as Events (commands.md §15.3). A Worker's Escalation answer does not arrive as an Event: the Worker's own `cpd ask` bash call polls for it (commands.md §6, `escalation-answered`), so the runner delivers none.
 
-**The report.** `reportPath` is `run/<plan>/attempts/<attempt>.report.json`, the path the driver reads for A5 and A9 (§3.4); the file holds the `EndReport` above and is replaced atomically after every settle. The runner is unchanged beyond that path.
+**The report.** `reportPath` is `run/<plan>/attempts/<attempt>.report.json`, the path the driver reads for A5 and A9 (§3.4); the file holds the `EndReport` above and is replaced atomically after every settle and at terminate (step 8). The runner is unchanged beyond that path.
 
 **Model and credentials.** The model is resolved with pi's `ModelRuntime` and `resolveCliModel` over the User's `~/.pi/agent` (`models.json`, `auth.json`), so the durable runner uses the same logins as pi.
 
