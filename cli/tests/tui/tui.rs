@@ -202,14 +202,14 @@ fn assert_window_title(fx: &Fx) {
     assert_eq!(shown(fx, &["display", "-p", &format]), "φ · m1");
 }
 
-/// The left group of the status line (hs-d479): the leading `━`, then each button as a pill (its glyph between the two caps),
+/// The left group of the status line (hs-d479): the leading `━`, then each button as a pill (its glyph and one space between the two caps, 4 cells),
 /// each in its range, joined by a single `━` outside the ranges.
 fn buttons() -> String {
     format!(
-        "#[fg=colour8]\u{2501}#[default]#[range=user|reset]#[fg=colour15]\u{e0b6}#[reverse]{RESET_GLYPH}#[noreverse]\u{e0b4}#[default]#[norange]\
-         #[fg=colour8]\u{2501}#[default]#[range=user|legend]#[fg=colour15]\u{e0b6}#[reverse]{LEGEND_GLYPH}#[noreverse]\u{e0b4}#[default]#[norange]\
-         #[fg=colour8]\u{2501}#[default]#[range=user|logs]#[fg=colour15]\u{e0b6}#[reverse]{LOGS_GLYPH}#[noreverse]\u{e0b4}#[default]#[norange]\
-         #[fg=colour8]\u{2501}#[default]#[range=user|costs]#[fg=colour15]\u{e0b6}#[reverse]\u{EEC1}#[noreverse]\u{e0b4}#[default]#[norange]"
+        "#[fg=colour8]\u{2501}#[default]#[range=user|reset]#[fg=colour15]\u{e0b6}#[reverse]{RESET_GLYPH} #[noreverse]\u{e0b4}#[default]#[norange]\
+         #[fg=colour8]\u{2501}#[default]#[range=user|legend]#[fg=colour15]\u{e0b6}#[reverse]{LEGEND_GLYPH} #[noreverse]\u{e0b4}#[default]#[norange]\
+         #[fg=colour8]\u{2501}#[default]#[range=user|logs]#[fg=colour15]\u{e0b6}#[reverse]{LOGS_GLYPH} #[noreverse]\u{e0b4}#[default]#[norange]\
+         #[fg=colour8]\u{2501}#[default]#[range=user|costs]#[fg=colour15]\u{e0b6}#[reverse]\u{EEC1} #[noreverse]\u{e0b4}#[default]#[norange]"
     )
 }
 
@@ -1058,7 +1058,7 @@ fn tui_view_routes_by_name() {
     }
 }
 
-/// The left group (hs-d479): the leading `━`, then each button as a pill (its glyph between the two caps, 3 cells),
+/// The left group (hs-d479): the leading `━`, then each button as a pill (its glyph and one space between the two caps, 4 cells),
 
 #[test]
 fn an_unfaked_gh_is_denied_with_exit_97() {
