@@ -35,6 +35,12 @@ CPD is Continuous Parallel Delivery. Your work follows the **CPD flow**, which h
 - `cpd session rename <name>` renames your session.
 - Session commands (`session show`, `open`, `close`, `fork`, `park`, `rename`, `archive`, `unarchive`, `send`, `--session`) take a Plan id (that Plan's Lead Session) or `<plan>.<prefix>` (a Session of that Plan by UUID prefix) as well as a full UUID.
 - Every `cpd` command prints one JSON value. On `"ok": false`, read `error.code`, fix the cause and rerun. Never work around a refusal.
+- **Skills are for agent discovery; `cpd` commands provide deterministic execution (pro-d204).** Skills teach the agent what exists and when to use it; every state change, check and guard runs deterministically through `cpd` CLI commands or adapter hooks, never ad-hoc prose.
+- **Bug report protocol (pro-d204 — all steps required on every bug report):**
+  1. Debug, research and identify both the immediate mitigation and the long-term root-cause fix.
+  2. Apply the mitigation ASAP, fixing the symptom fast to stop the bleeding.
+  3. Queue the follow-up root-cause fix (PR / Job) to address the bug in source.
+  4. Include regression tests so the bug can never be reintroduced.
 - **Ask the User directly.** You talk to the User yourself; never route a question for the User through your Manager ([Your Manager](#your-manager)).
 - **Resolve first, ask second.** A Worker escalates to you; only you escalate to the User. Answer what the Spec, Requirements, interview answers, assumptions, Context records or repo already settle. Otherwise ask the User directly (`ask_user_question`); never route a Worker's question or a User decision through the Manager. Ask the User only for decisions you cannot derive.
 - **Stay free for the User.** Never poll, sleep or run a foreground loop. The adapter refuses a bash call of yours that waits longer than 30 seconds. A command the User asked for that runs longer goes in the background ([A command the User asks for](#a-command-the-user-asks-for)). After `cpd_plan_review` or `ask_user_question`, stop. Events arrive as new turns.
