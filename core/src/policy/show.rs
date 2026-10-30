@@ -105,7 +105,7 @@ fn key_of_pr(conn: &Connection, plan: &str, pr: &str) -> Result<PolicyKey, CpdEr
     pr_key(context_owner(conn, &context)?, name)
 }
 
-/// The Session's role and key (no flag): a Manager or a Lead its Context's owner, a Worker its Job's PR.
+/// The Session's role and key (no flag): a Manager or a Lead its Context's owner, a Worker its Job's PR (an explore Job has none: its Context's owner, as a Lead's).
 pub(crate) fn key_of_session(conn: &Connection, session: &SessionId) -> Result<(&'static str, PolicyKey), CpdError> {
     let row: Option<(String, String, Option<String>, Option<String>)> = conn
         .query_row("SELECT role, context, plan, attempt FROM sessions WHERE id = ?1", [session.as_str()], |r| {
@@ -121,7 +121,7 @@ pub(crate) fn key_of_session(conn: &Connection, session: &SessionId) -> Result<(
         ("worker", Some(plan), Some(attempt)) => {
             let name: Option<String> = conn.query_row(
                 "SELECT p.name FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-                   JOIN prs p ON p.plan = j.plan AND p.key = j.pr WHERE a.plan = ?1 AND a.id = ?2",
+                   LEFT JOIN prs p ON p.plan = j.plan AND p.key = j.pr WHERE a.plan = ?1 AND a.id = ?2",
                 [&plan, &attempt],
                 |r| r.get(0),
             )?;

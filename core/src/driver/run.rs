@@ -378,47 +378,55 @@ impl Driver {
             let pr = crate::ids::PrKey::parse(job.pr_str()).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", job.key, job.pr_str())))?;
             crate::pr::start::unstack_for_open_job(&mut self.store, SOURCE, &self.plan, &pr)?;
         }
-        // A2 (hs-d680): a linear Attempt reuses the PR's workflow worktree as it is; a parallel sibling creates
-        // its own worktree from the Lead Branch HEAD and runs pre-start. A linear Attempt never runs pre-start.
-        let linear = git::worktree::is_linear(&target.branch, &target.lead_branch);
-        log(if linear { "A2: reusing the workflow worktree on the Lead Branch" } else { "A2: creating the worktree and running pre-start" });
-        let setup = Setup {
-            timeout: Duration::from_secs(u64::from(self.config.timeouts.setup_minutes) * 60),
-            log: self.home.hook_log(&self.plan, &self.id, Hook::PreStart),
-        };
-        let policy = match self.store.read(|conn| crate::pr::policy_of_job(conn, &self.home, &self.plan, &job.key)) {
-            Ok(policy) => policy,
-            Err(e) => {
-                let detail = format!("Reading the policy of the PR failed: {}", e.message());
-                return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
-            }
-        };
-        let base_sha = if linear {
-            match verify_linear_worktree(target) {
-                Ok(sha) => sha,
-                Err(e) => {
-                    let detail = format!("The workflow worktree is not usable: {}", e.message());
-                    return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
-                }
+        if crate::plan::jobs::is_explore(&job.kind) {
+            // A2 of an explore Attempt (R7): no worktree, no pre-start, no base_sha; only the explore directory.
+            log("A2: preparing the explore directory");
+            if let Err(e) = super::explore::prepare(&self.ports, &self.home, target) {
+                return self.end(target, End::Failed { cause: Cause::SetupFailed, detail: e.message().to_owned() }, dirs);
             }
         } else {
-            let created = match git::create_attempt_worktree_with(&target.repo, &target.lead_worktree, &self.plan, &self.id, &setup, &policy.hooks.pre_start) {
-                Ok(created) => created,
+            // A2 (hs-d680): a linear Attempt reuses the PR's workflow worktree as it is; a parallel sibling creates
+            // its own worktree from the Lead Branch HEAD and runs pre-start. A linear Attempt never runs pre-start.
+            let linear = git::worktree::is_linear(&target.branch, &target.lead_branch);
+            log(if linear { "A2: reusing the workflow worktree on the Lead Branch" } else { "A2: creating the worktree and running pre-start" });
+            let setup = Setup {
+                timeout: Duration::from_secs(u64::from(self.config.timeouts.setup_minutes) * 60),
+                log: self.home.hook_log(&self.plan, &self.id, Hook::PreStart),
+            };
+            let policy = match self.store.read(|conn| crate::pr::policy_of_job(conn, &self.home, &self.plan, &job.key)) {
+                Ok(policy) => policy,
                 Err(e) => {
-                    let detail = format!("Setting up the worktree failed: {}", e.message());
+                    let detail = format!("Reading the policy of the PR failed: {}", e.message());
                     return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
                 }
             };
-            created.base_sha
-        };
-        let (plan, id) = (&self.plan, &self.id);
-        self.store.write(SOURCE, |tx| {
-            tx.execute(
-                "UPDATE attempts SET base_sha = ?3 WHERE plan = ?1 AND id = ?2 AND status = 'starting'",
-                params![plan.as_str(), id.to_string(), base_sha],
-            )?;
-            Ok(())
-        })?;
+            let base_sha = if linear {
+                match verify_linear_worktree(target) {
+                    Ok(sha) => sha,
+                    Err(e) => {
+                        let detail = format!("The workflow worktree is not usable: {}", e.message());
+                        return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
+                    }
+                }
+            } else {
+                let created = match git::create_attempt_worktree_with(&target.repo, &target.lead_worktree, &self.plan, &self.id, &setup, &policy.hooks.pre_start) {
+                    Ok(created) => created,
+                    Err(e) => {
+                        let detail = format!("Setting up the worktree failed: {}", e.message());
+                        return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
+                    }
+                };
+                created.base_sha
+            };
+            let (plan, id) = (&self.plan, &self.id);
+            self.store.write(SOURCE, |tx| {
+                tx.execute(
+                    "UPDATE attempts SET base_sha = ?3 WHERE plan = ?1 AND id = ?2 AND status = 'starting'",
+                    params![plan.as_str(), id.to_string(), base_sha],
+                )?;
+                Ok(())
+            })?;
+        }
 
         // The safe point before A3.
         if self.store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
@@ -678,6 +686,11 @@ impl Driver {
             match now.status.as_str() {
                 "running" => self.reload_if_installed()?,
                 "merging" => return self.merge(dirs),
+                // A8, explore variant: `attempt submit` ended the Attempt and the Job itself; only A9 is left.
+                "ended" if crate::plan::jobs::is_explore(&now.kind) => {
+                    self.cleanup(&now, true);
+                    return Ok(Ended { outcome: "merged", cause: "merged" });
+                }
                 other => {
                     return Err(CpdError::new(
                         ErrorCode::IllegalTransition,
@@ -868,6 +881,10 @@ impl Driver {
             if now.status == "merging" {
                 return Ok(true);
             }
+            if now.status == "ended" {
+                // An explore Attempt that submitted meanwhile: its end is written (A8, explore variant).
+                return Ok(false);
+            }
             ledger::end(tx, &now, &end, metrics.as_ref(), &ladder, Stage::Driver)?;
             Ok(false)
         })?;
@@ -919,7 +936,9 @@ impl Driver {
     fn cleanup(&mut self, target: &Target, merged: bool) {
         let linear = git::worktree::is_linear(&target.branch, &target.lead_branch);
         let mut result = self.stop_worker();
-        if linear {
+        if crate::plan::jobs::is_explore(&target.kind) {
+            // A9, explore variant: no worktree and no branch to remove; the explore directory and its artefacts stay.
+        } else if linear {
             // A9 (hs-d680): a merged linear Attempt keeps the workflow worktree and the Lead Branch. A failed or
             // cancelled one resets the Lead Branch to its `base_sha` and discards what the Attempt left, then keeps
             // the worktree.
