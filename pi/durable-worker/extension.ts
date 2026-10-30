@@ -1,9 +1,10 @@
+import type { ExploreKind } from "../lib/explore.ts";
 import { defineExtension, hook, section, ToolTask, type Extension } from "@earendil-works/pi-durable";
 import { POLICY_SECTION } from "../lib/policy.ts";
 import { TIME_ZONE_SECTION } from "../lib/time.ts";
 import { workerVerdict } from "./guards.ts";
 
-export function cpdExtension(prompt: { contextFiles: string | undefined; policy: string | undefined; zone: string }, where: { cwd: string; home: string }): Extension {
+export function cpdExtension(prompt: { contextFiles: string | undefined; policy: string | undefined; zone: string }, where: { cwd: string; home: string; kind?: ExploreKind; plan?: string }): Extension {
   const texts: [string, string | undefined][] = [
     ["cpd-context-files", prompt.contextFiles],
     [POLICY_SECTION, prompt.policy],

@@ -8,6 +8,7 @@ import { PERMANENT_CODES } from "./follower.ts";
 import { boldPhi } from "./phi.ts";
 import { policySection } from "./policy.ts";
 import { holdTrip, trippedIn } from "./loop-guard.ts";
+import { replayServers } from "./mcp.ts";
 import { followerHooks } from "./handle.ts";
 import type { Host } from "./host.ts";
 import type { Ctx, ModelCtx } from "./pi.ts";
@@ -189,6 +190,8 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
     registerHostApproveTool(host);
     registerPlanReviewCommand(host);
   }
+  // 5a. MCP replay
+  await replayServers(host, r);
   if (host.run !== r) return;
   if (trippedIn(entries)) holdTrip(r); // §15.15 L7: a trip survives a reload; the reason and the gate are back before the follower starts
   host.refresh(r);

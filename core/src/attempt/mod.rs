@@ -23,6 +23,9 @@ mod cancel_tests;
 mod incident_tests;
 
 #[cfg(test)]
+pub(crate) mod explore_tests;
+
+#[cfg(test)]
 mod submit_tests;
 
 use crate::args::PlanArg;
@@ -52,6 +55,9 @@ pub struct SubmitArgs {
     /// The Attempt id
     #[arg(value_name = "attempt")]
     attempt: AttemptId,
+    /// An explore Attempt's summary (at most 1500 characters)
+    #[arg(long, value_name = "path")]
+    summary_file: Option<std::path::PathBuf>,
     #[command(flatten)]
     plan: PlanArg,
 }

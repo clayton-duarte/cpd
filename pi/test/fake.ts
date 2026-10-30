@@ -383,7 +383,7 @@ export class Fixture {
   }
 
   follows(): Call[] {
-    return this.calls().filter((c) => c.phase === "start" && c.argv[0] === "events");
+    return this.calls().filter((c) => c.phase === "start" && c.argv[0] === "events" && c.argv[1] === "follow");
   }
 
   /** Resolves when the adapter started its Event follower. */
@@ -408,6 +408,7 @@ export class Fixture {
   /** Start the adapter under test with fast timing; into `pi` (default the fixture's) to run a second adapter on the same fake `cpd`. */
   load(options: Options = {}, pi: FakePi = this.pi, adapterFn: typeof adapter = adapter): void {
     const start = options.spawn ?? this.cpd.spawn;
+    if (pi !== this.pi) this.others.add(pi);
     // The caller's own `reload` object, completed: the adapter reads it at every poll, so a test can change `timeoutMs` while it runs.
     const reload = options.reload ?? {};
     if (!("dir" in reload)) reload.dir = this.adapterDir; // an explicit `dir: undefined` leaves the adapter's own default path
@@ -447,7 +448,11 @@ export class Fixture {
     await this.quiet();
   }
 
+  /** The other pis `load` was given: `close` shuts them down too, so no follower of theirs outlives the test. */
+  private readonly others = new Set<FakePi>();
+
   async close(): Promise<void> {
+    for (const other of this.others) await other.fire("session_shutdown").catch(() => {});
     // A reload command still running (its `reload()` shuts down and starts the adapter) would start a follower after this shutdown.
     do {
       await Promise.allSettled([...this.pi.commandsRunning]);
@@ -663,10 +668,13 @@ export class FakePi implements PiApi {
   /** The `registerMcpServer` calls (commands.md §15.3 `mcp-attached`), in order; `mcpThrows` is thrown by each when set. */
   readonly registeredMcp: { name: string; config: unknown }[] = [];
   mcpThrows?: Error;
+  /** Names `registerMcpServer` refuses (throws for), the others are accepted. */
+  readonly mcpThrowsFor = new Set<string>();
   registerMcpServer(name: string, config: unknown): void {
     this.registeredMcp.push({ name, config });
     notify();
     if (this.mcpThrows) throw this.mcpThrows;
+    if (this.mcpThrowsFor.has(name)) throw new Error(`pi refuses: ${name}`);
   }
   /** What `setModel` answers: false is pi's "no authentication for the model's provider". */
   modelAccepted = true;

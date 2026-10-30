@@ -17,7 +17,7 @@ mod origin;
 mod jira;
 mod post;
 mod resolve;
-mod show;
+pub(crate) mod show;
 
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{ContextId, OwnerLogin, RepoName};

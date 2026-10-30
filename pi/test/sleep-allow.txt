@@ -23,6 +23,7 @@ pi/test/loop-guard.test.ts 24  # m-pi: sleep or wall-clock wait
 pi/test/mainguard.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/mainguard-tools.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/manager-errors.test.ts 3  # m-pi: sleep or wall-clock wait
+pi/test/mcp-replay.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/noblock.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/pi-check.test.ts 3  # m-pi: sleep or wall-clock wait
 pi/test/plan-review.test.ts 47  # m-pi: sleep or wall-clock wait

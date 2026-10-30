@@ -39,6 +39,8 @@ struct Active {
     status: String,
     stop_request: Option<String>,
     cancel_requested: bool,
+    /// The Job is an explore Job (`scout`, `research`): its limit is `explore_minutes`.
+    explore: bool,
 }
 
 impl Active {
@@ -55,7 +57,7 @@ pub(super) fn run(engine: &mut Engine) {
 fn attempts(engine: &mut Engine) {
     let active = engine.store.read(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT a.plan, a.id, a.status, a.stop_request, j.cancel_requested_at IS NOT NULL
+            "SELECT a.plan, a.id, a.status, a.stop_request, j.cancel_requested_at IS NOT NULL, j.kind IN ('scout', 'research')
                FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
               WHERE a.status <> 'ended' ORDER BY a.plan, a.id",
         )?;
@@ -67,17 +69,19 @@ fn attempts(engine: &mut Engine) {
                     r.get::<_, String>(2)?,
                     r.get::<_, Option<String>>(3)?,
                     r.get::<_, bool>(4)?,
+                    r.get::<_, bool>(5)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
-            .map(|(plan, id, status, stop_request, cancel_requested)| {
+            .map(|(plan, id, status, stop_request, cancel_requested, explore)| {
                 Ok(Active {
                     plan: PlanId::parse(&plan)?,
                     id: AttemptId::parse(&id)?,
                     status,
                     stop_request,
                     cancel_requested,
+                    explore,
                 })
             })
             .collect::<Result<Vec<_>, CpdError>>()
@@ -209,7 +213,7 @@ fn recover(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
 
 /// A live driver: `stop_request = cancelled` when the Job has a cancel
 /// request, else `timed_out` when a `running` Attempt's active time is over
-/// `attempt_minutes`. A data write for the driver, no Event (§5.1): the
+/// `attempt_minutes` (`explore_minutes` for an explore Job). A data write for the driver, no Event (§5.1): the
 /// driver's end appends it. A request already set is left alone; a `merging`
 /// Attempt is the merge's, which checks for a cancel itself (§7.4).
 fn stop_request(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
@@ -219,7 +223,9 @@ fn stop_request(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
     let request = if active.cancel_requested {
         "cancelled"
     } else {
-        let limit = Duration::from_secs(u64::from(engine.config.timeouts.attempt_minutes) * 60);
+        let timeouts = &engine.config.timeouts;
+        let minutes = if active.explore { timeouts.explore_minutes } else { timeouts.attempt_minutes };
+        let limit = Duration::from_secs(u64::from(minutes) * 60);
         if active.status != "running" || active_time(engine, active)? <= limit {
             return Ok(());
         }

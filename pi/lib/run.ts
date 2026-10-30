@@ -27,6 +27,8 @@ export class Run {
   cursor = 0;
   /** Event ids delivered to pi in this activation (§15.3): an id is delivered at most once. */
   readonly delivered = new Set<number>();
+  /** Ids of the own `mcp-attached` Events the start-up replay read (§15.2 step 5a): the follower's later delivery of one registers nothing. */
+  readonly replayed = new Set<number>();
   reviews = new Map<string, ReviewEntry>();
   opening = new Set<string>();
   deciding = new Set<string>();

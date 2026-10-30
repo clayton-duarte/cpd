@@ -1,4 +1,4 @@
-import { errorOfEnvelope, isObject, type CpdError } from "./cpd.ts";
+import { CpdError, errorOfEnvelope, isObject } from "./cpd.ts";
 
 /**
  * The adapter/cpd protocol this adapter speaks (commands.md §1.2, §15.2). Equal to `PROTOCOL` in `core/src/events/kind.rs`:
@@ -95,4 +95,14 @@ export function parseLine(text: string): Line {
   if (kind === "mcp-attached" && !isObject(json.data.server)) return bad("mcp-attached: `data.server` is not an object");
   if (kind === "session-message" && json.data.from !== null && typeof json.data.from !== "string") return bad("session-message: `data.from` is neither a string nor null");
   return { type: "event", event: json as unknown as CpdEvent };
+}
+
+/** `cpd events list --kind mcp-attached` at the boundary: every entry is a valid `mcp-attached` Event, or the whole read fails (commands.md §15.2 step 5a). */
+export function parseMcpEvents(out: Record<string, unknown>): EventOf<"mcp-attached">[] {
+  if (!Array.isArray(out.events)) throw new CpdError("bad_output", "cpd events list: `events` is not a list");
+  return out.events.map((e) => {
+    const line = parseLine(JSON.stringify(e));
+    if (line.type !== "event" || line.event.kind !== "mcp-attached") throw new CpdError("bad_output", "cpd events list: an entry is not a valid mcp-attached Event");
+    return line.event;
+  });
 }

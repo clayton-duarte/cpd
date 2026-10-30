@@ -79,17 +79,23 @@ function balloonOf(child: MarkdownLike, side: BalloonSide, width: number, at?: n
 	}
 	const paint = painter();
 	const text = (child as { text?: string }).text;
-	const hit = balloonCache.get(child);
-	if (hit && hit.text === text && hit.side === side && hit.width === width && hit.at === at && hit.margins === margins && hit.paint === paint) return hit.rows;
+	const entries = balloonCache.get(child) ?? [];
+	const at0 = entries.findIndex((e) => e.text === text && e.side === side && e.width === width && e.at === at && e.margins === margins && e.paint === paint);
+	if (at0 >= 0) {
+		const [hit] = entries.splice(at0, 1);
+		entries.unshift(hit);
+		return hit.rows;
+	}
 	const rows = drawnBalloon(child, side, width, at, margins, paint);
 	watchInvalidate(child);
-	balloonCache.set(child, { text, side, width, at, margins, paint, rows });
+	// Most recently used first; the two latest are kept, the least recently used goes.
+	balloonCache.set(child, [{ text, side, width, at, margins, paint, rows }, ...entries].slice(0, 2));
 	return rows;
 }
 
 interface BalloonEntry { text: string | undefined; side: BalloonSide; width: number; at: number | undefined; margins: boolean; paint: ((line: string) => string) | undefined; rows: string[] }
-/** The finished balloon rows per Markdown child (docs/contract.md 6.9, Render cache). */
-const balloonCache = new WeakMap<object, BalloonEntry>();
+/** The finished balloon rows per Markdown child, the two latest (docs/contract.md 6.9, Render cache). */
+const balloonCache = new WeakMap<object, BalloonEntry[]>();
 /** Children whose `invalidate` is wrapped, and whether the balloon itself is calling it. */
 const watched = new WeakSet<object>();
 let ownInvalidate = false;

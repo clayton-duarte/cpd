@@ -22,8 +22,8 @@ import { normalizeLineEndings } from "./compact-tools-core.ts";
 import type { ToolArgs } from "./compact-tools-types.ts";
 
 export class CachedComponent implements Component {
-	private cachedWidth?: number;
-	private cachedLines?: string[];
+	/** Most recently used first; at most two widths. */
+	private cached: { width: number; lines: string[] }[] = [];
 
 	private readonly renderLines: (width: number) => string[];
 	private readonly invalidateSource?: () => void;
@@ -34,17 +34,20 @@ export class CachedComponent implements Component {
 	}
 
 	render(width: number): string[] {
-		if (this.cachedWidth !== width || !this.cachedLines) {
-			this.cachedWidth = width;
-			this.cachedLines = this.renderLines(width);
+		const i = this.cached.findIndex((e) => e.width === width);
+		if (i >= 0) {
+			const [hit] = this.cached.splice(i, 1);
+			this.cached.unshift(hit);
+			return hit.lines;
 		}
-		return this.cachedLines;
+		const lines = this.renderLines(width);
+		this.cached = [{ width, lines }, ...this.cached].slice(0, 2);
+		return lines;
 	}
 
 	invalidate(): void {
 		this.invalidateSource?.();
-		this.cachedWidth = undefined;
-		this.cachedLines = undefined;
+		this.cached = [];
 	}
 }
 
@@ -54,9 +57,8 @@ export class CachedComponent implements Component {
  * says they depend on, until a child is added, removed, or invalidated.
  */
 export class CachedContainer extends Container {
-	private cachedWidth?: number;
-	private cachedKey?: unknown;
-	private cachedLines?: string[];
+	/** Most recently used first; at most two widths. */
+	private cached: { width: number; key: unknown; lines: string[] }[] = [];
 
 	/** What besides the width the lines depend on, read as each frame is drawn. */
 	protected cacheKey(): unknown {
@@ -64,9 +66,7 @@ export class CachedContainer extends Container {
 	}
 
 	private clearRenderCache(): void {
-		this.cachedWidth = undefined;
-		this.cachedKey = undefined;
-		this.cachedLines = undefined;
+		this.cached = [];
 	}
 
 	override addChild(component: Component): void {
@@ -86,12 +86,15 @@ export class CachedContainer extends Container {
 
 	override render(width: number): string[] {
 		const key = this.cacheKey();
-		if (this.cachedWidth !== width || this.cachedKey !== key || !this.cachedLines) {
-			this.cachedWidth = width;
-			this.cachedKey = key;
-			this.cachedLines = super.render(width);
+		const i = this.cached.findIndex((e) => e.width === width && e.key === key);
+		if (i >= 0) {
+			const [hit] = this.cached.splice(i, 1);
+			this.cached.unshift(hit);
+			return hit.lines;
 		}
-		return this.cachedLines;
+		const lines = super.render(width);
+		this.cached = [{ width, key, lines }, ...this.cached].slice(0, 2);
+		return lines;
 	}
 
 	override invalidate(): void {
