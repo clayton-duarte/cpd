@@ -30,6 +30,8 @@ pub mod parked_wake;
 #[cfg(test)]
 mod parked_tests;
 #[cfg(test)]
+mod tier_advice_tests;
+#[cfg(test)]
 mod parked_wake_tests;
 mod phase;
 mod prs;
@@ -40,6 +42,7 @@ pub mod row;
 pub(crate) mod shape;
 mod show;
 mod summary;
+pub mod tier_advice;
 #[cfg(test)]
 mod sql_trace;
 
