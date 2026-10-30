@@ -14,7 +14,7 @@ use super::deploys;
 use super::feedback;
 use super::gh::{self, Listed};
 use super::posts;
-use super::pulls::{self, Change, PostFacts, Reason};
+use super::pulls::{self, Change, Excused, PostFacts, Reason};
 use super::row::PlanPrs;
 use super::start::unstack;
 use super::status::{ChecksSummary, PrState};
@@ -93,7 +93,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     let mut unresolved = Vec::new();
     for (plan, key, row) in &owned {
         match super::pr_policy_resolved(&mut env, plan, key, crate::policy::resolve)? {
-            Ok(policy) => checks.push(Resolved { plan: plan.clone(), key: key.clone(), checks: policy.pr.feedback.checks, post_enabled: policy.pr.post.enabled, human_gated: policy.pr.human_gated_contexts.clone(), required: policy.pr.required_checks.clone() }),
+            Ok(policy) => checks.push(Resolved { plan: plan.clone(), key: key.clone(), checks: policy.pr.feedback.checks, post_enabled: policy.pr.post.enabled, human_gated: policy.pr.human_gated_contexts.clone(), excused_labels: policy.pr.excused_labels.clone(), excused: false, required: policy.pr.required_checks.clone() }),
             Err(error) => unresolved.push(Unresolved { plan: plan.clone(), pr: key.clone(), number: row.number, error }),
         }
     }
@@ -170,7 +170,14 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     let confirmed = gh::read_checks(&*env.ports.runner, &root, &confirm)?;
     for listed in &mut seen {
         if let Some(i) = confirm.iter().position(|(repo, number)| *repo == listed.pr.repo && *number == listed.pr.number) {
-            listed.pr.checks = ChecksSummary::of(&confirmed[i], &lists[i].0, &lists[i].1);
+            listed.pr.checks = ChecksSummary::of(&confirmed[i].checks, &lists[i].0, &lists[i].1);
+        }
+    }
+
+    for (plan, key, row) in &owned {
+        let Some(i) = confirm.iter().position(|(repo, number)| *repo == row.repo && *number == row.number) else { continue };
+        if let Some(r) = checks.iter_mut().find(|r| r.plan == *plan && r.key == *key) {
+            r.excused = confirmed[i].labels.iter().any(|l| r.excused_labels.iter().any(|x| x.eq_ignore_ascii_case(l)));
         }
     }
 
@@ -379,6 +386,9 @@ struct Resolved {
     checks: Checks,
     post_enabled: bool,
     human_gated: Vec<String>,
+    excused_labels: Vec<String>,
+    /// Set once the checks are read: the PR carries one of `excused_labels`. A PR not read is never excused.
+    excused: bool,
     required: Vec<String>,
 }
 
@@ -433,7 +443,7 @@ fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, resolved: &Resolved, chan
     let open = change.after.feedback.as_deref().unwrap_or_default();
     let new = comments::new_items(change.before.as_ref().and_then(|b| b.feedback.as_deref()), open);
     let post = PostFacts { enabled: resolved.post_enabled, posted: posts::find(tx, plan.as_str(), key.as_str())?.is_some() };
-    let reasons: Vec<Reason> = pulls::attention(change.before.as_ref(), &change.after, resolved.checks, &new, post);
+    let reasons: Vec<Reason> = pulls::attention(change.before.as_ref(), &change.after, resolved.checks, &new, post, Excused(resolved.excused));
     if reasons.is_empty() {
         return Ok(false);
     }

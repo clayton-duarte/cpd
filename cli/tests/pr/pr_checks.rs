@@ -35,8 +35,15 @@ pub(super) fn status_context(context: &str, state: &str) -> Value {
 
 /// One pull request's contexts of the checks read: its `nodes` and the page's `hasNextPage` and `endCursor`.
 pub(super) fn contexts(nodes: Vec<Value>, next: Option<&str>) -> Value {
-    json!({"commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {
+    json!({"labels": {"nodes": []}, "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {
         "pageInfo": {"hasNextPage": next.is_some(), "endCursor": next}, "nodes": nodes}}}}]}})
+}
+
+/// `pull` (from [`contexts`]) carrying the pull request's `labels`.
+pub(super) fn with_labels(mut pull: Value, labels: &[&str]) -> Value {
+    let nodes: Vec<Value> = labels.iter().map(|name| json!({"name": name})).collect();
+    pull["labels"] = json!({"nodes": nodes});
+    pull
 }
 
 /// The answer of the checks read: one alias `p<i>` per entry.
@@ -50,7 +57,7 @@ pub(super) fn one_page(nodes: Vec<Value>) -> String {
     answer(vec![contexts(nodes, None)])
 }
 
-fn is_checks_read(call: &Call) -> bool {
+pub(super) fn is_checks_read(call: &Call) -> bool {
     call.args.get(3).is_some_and(|q| q.contains("contexts(first: 100"))
 }
 

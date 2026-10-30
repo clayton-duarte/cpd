@@ -94,6 +94,7 @@ pub struct Pr {
     pub jira: Jira,
     pub jira_required: bool,
     pub human_gated_contexts: Vec<String>,
+    pub excused_labels: Vec<String>,
     pub required_checks: Vec<String>,
     pub text: String,
 }
@@ -142,6 +143,7 @@ pub struct PrSet {
     pub jira: Option<JiraSet>,
     pub jira_required: Option<bool>,
     pub human_gated_contexts: Option<Vec<String>>,
+    pub excused_labels: Option<Vec<String>>,
     pub required_checks: Option<Vec<String>>,
     pub text: Option<String>,
 }
@@ -378,6 +380,7 @@ pub const POST_TEMPLATE: &str = "pr.post.template";
 pub const POST_MERGED_REACTION: &str = "pr.post.merged_reaction";
 pub const JIRA_REQUIRED: &str = "pr.jira_required";
 pub const HUMAN_GATED_CONTEXTS: &str = "pr.human_gated_contexts";
+pub const EXCUSED_LABELS: &str = "pr.excused_labels";
 pub const REQUIRED_CHECKS: &str = "pr.required_checks";
 pub const JIRA_IN_PROGRESS: &str = "pr.jira.in_progress";
 pub const JIRA_IN_REVIEW: &str = "pr.jira.in_review";
@@ -418,6 +421,7 @@ impl Set for PrSet {
             (POST_MERGED_REACTION, post.and_then(|p| p.merged_reaction.as_ref()).is_none()),
             (JIRA_REQUIRED, self.jira_required.is_none()),
             (HUMAN_GATED_CONTEXTS, self.human_gated_contexts.is_none()),
+            (EXCUSED_LABELS, self.excused_labels.is_none()),
             (REQUIRED_CHECKS, self.required_checks.is_none()),
             (JIRA_IN_PROGRESS, jira.and_then(|j| j.in_progress.as_ref()).is_none()),
             (JIRA_IN_REVIEW, jira.and_then(|j| j.in_review.as_ref()).is_none()),
@@ -439,6 +443,7 @@ impl Set for PrSet {
             },
             jira_required: self.jira_required.unwrap_or(base.jira_required),
             human_gated_contexts: self.human_gated_contexts.clone().unwrap_or_else(|| base.human_gated_contexts.clone()),
+            excused_labels: self.excused_labels.clone().unwrap_or_else(|| base.excused_labels.clone()),
             required_checks: self.required_checks.clone().unwrap_or_else(|| base.required_checks.clone()),
             text: self.text.clone().unwrap_or_else(|| base.text.clone()),
         };
@@ -463,6 +468,7 @@ impl Set for PrSet {
             },
             jira_required: self.jira_required?,
             human_gated_contexts: self.human_gated_contexts.clone()?,
+            excused_labels: self.excused_labels.clone()?,
             required_checks: self.required_checks.clone()?,
             text: self.text.clone()?,
         })

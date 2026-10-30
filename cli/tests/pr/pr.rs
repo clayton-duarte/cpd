@@ -1244,7 +1244,7 @@ impl Handler for Gh {
                         serde_json::json!({"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"})
                     };
                     let page = serde_json::json!({"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": [run]});
-                    let pull = serde_json::json!({"commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": page}}}]}});
+                    let pull = serde_json::json!({"labels": {"nodes": []}, "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": page}}}]}});
                     data.insert(format!("p{i}"), serde_json::json!({"pullRequest": pull}));
                 }
                 Reply::ok(&format!("{}\n", serde_json::json!({"data": data})))
