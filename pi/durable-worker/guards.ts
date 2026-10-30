@@ -1,3 +1,4 @@
+import type { ExploreKind } from "../lib/explore.ts";
 import { hostApproveBypass, reasonText as hostReason } from "../lib/hostapprove.ts";
 import { primaryCheckoutMove, primaryCheckoutWrite, reasonText as mainReason } from "../lib/mainguard.ts";
 import { reasonText as secretReason, secretBypass } from "../lib/secretguard.ts";
@@ -5,7 +6,7 @@ import { reasonText as testReason, unfilteredTestRun } from "../lib/testguard.ts
 
 export type Verdict = { block: string } | undefined;
 
-export function workerVerdict(call: { name: string; arguments: Record<string, unknown> }, where: { cwd: string; home: string }): Verdict {
+export function workerVerdict(call: { name: string; arguments: Record<string, unknown> }, where: { cwd: string; home: string; kind?: ExploreKind; plan?: string }): Verdict {
   if (call.name === "edit" || call.name === "write") {
     const written = primaryCheckoutWrite(call.name, call.arguments, where.cwd, where.home);
     return written === undefined ? undefined : { block: mainReason(written) };

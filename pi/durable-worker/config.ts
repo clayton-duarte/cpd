@@ -1,7 +1,8 @@
 import { join } from "node:path";
 import { CpdError } from "../lib/cpd.ts";
+import type { ExploreKind } from "../lib/explore.ts";
 
-export type Config = { home: string; session: string; plan: string; attempt: string; cwd: string; spec: string; model: string };
+export type Config = { home: string; session: string; plan: string; attempt: string; cwd: string; spec: string; model: string; jobKind?: ExploreKind };
 
 const VARIABLES = ["CPD_HOME", "CPD_SESSION", "CPD_PLAN", "CPD_ATTEMPT"] as const;
 
