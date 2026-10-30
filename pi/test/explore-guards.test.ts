@@ -14,8 +14,8 @@ const KINDS: ExploreKind[] = ["scout", "research"];
 
 const verdict = (kind: ExploreKind, name: string, args: Record<string, unknown>, cwd = EXPLORE) =>
   exploreVerdict(kind, { name, arguments: args }, { ...where, cwd }, inRepo);
-const bash = (kind: ExploreKind, command: string, timeout: number | undefined = 20, cwd = EXPLORE) =>
-  verdict(kind, "bash", timeout === undefined ? { command } : { command, timeout }, cwd);
+const bash = (kind: ExploreKind, command: string, timeout: number | null = 20, cwd = EXPLORE) =>
+  verdict(kind, "bash", timeout === null ? { command } : { command, timeout }, cwd);
 
 const refused = (v: ReturnType<typeof exploreVerdict>, rule: string, what: string) => {
   assert.notEqual(v, undefined, `${what} must be refused`);
@@ -107,7 +107,7 @@ test("both kinds allow scoped find, grep -r and rg", () => {
 
 test("both kinds refuse a bash call without a timeout or over 30 seconds", () => {
   for (const k of KINDS) {
-    refused(bash(k, "ls", undefined), "timeout", `${k} no timeout`);
+    refused(bash(k, "ls", null), "timeout", `${k} no timeout`);
     refused(bash(k, "ls", 31), "timeout", `${k} 31 s`);
     refused(bash(k, "ls", 600), "timeout", `${k} 600 s`);
     allowed(bash(k, "ls", 30), `${k} 30 s`);
