@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { Fixture, planShow, shown, waitFor } from "./fake.ts";
+import { Fixture, planShow, shown } from "./fake.ts";
 
 /** commands.md §15.23: a Lead or a Manager is told, at its next turn, which of its skill files changed since its baseline. */
 
@@ -165,7 +165,8 @@ test("an unreadable skills directory is reported to the ledger for a Lead and fo
       else remove(f, SKILL[role], "SKILL.md");
       await f.pi.fire("session_start", { reason: "resume" });
       await f.followerStarted();
-      await waitFor(`the report of ${role}, ${how}`, () => skillReports(f).length >= 1);
+      await f.quiet();
+      assert.equal(skillReports(f).length, 1);
       const [r] = skillReports(f);
       assert.equal(r!.what, "skills check");
       assert.match(r!.message ?? "", /^cannot read |holds no SKILL\.md$/);
@@ -173,7 +174,8 @@ test("an unreadable skills directory is reported to the ledger for a Lead and fo
       if (role === "manager") assert.ok(f.pi.errors().length >= 1, "a Manager also gets the chat error");
 
       await f.pi.fire("session_start", { reason: "reload" });
-      await waitFor(`the report of the reload of ${role}, ${how}`, () => skillReports(f).length >= 2);
+      await f.quiet();
+      assert.equal(skillReports(f).length, 2);
     }
   }
 });
@@ -182,7 +184,6 @@ test("an entry that does not parse is reported as entry_invalid and replaced by 
   const f = fixture(t);
   f.pi.entries = [{ type: "custom", customType: "cpd-skills", data: { skill: "cpd-lead", files: { "SKILL.md": "nothex" } } }];
   await f.pi.fire("session_start", { reason: "resume" });
-  await waitFor("the entry_invalid report", () => skillReports(f, "entry_invalid").length >= 1);
   await f.quiet();
   assert.equal(skillReports(f, "entry_invalid").length, 1);
   assert.deepEqual(notices(await turn(f)), []);
