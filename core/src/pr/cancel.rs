@@ -84,6 +84,7 @@ pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
                 };
                 append(tx, event.plan(plan.clone()))?;
                 moved_to = if gave.is_some() { finish(tx, &plan, &key)? } else { advance(tx, &plan, &key)? };
+                crate::session::working_pr::name(tx, &plan, &key)?;
                 released = gave;
                 Ok(false)
             }

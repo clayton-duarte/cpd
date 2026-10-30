@@ -128,6 +128,9 @@ pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
                     .plan(plan.clone())
                     .job(wanted.key.clone()),
                 )?;
+                if let Some(pr) = &job.pr {
+                    crate::session::working_pr::name(tx, &plan, &crate::ids::PrKey::parse(pr)?)?;
+                }
                 Ok((job, false))
             }
         })?,

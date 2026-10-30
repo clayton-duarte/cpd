@@ -7,6 +7,7 @@ mod common;
 mod ask;
 mod attempt;
 mod worker_runner;
+mod working_pr;
 mod worker_runner_durable;
 mod worker_runner_report;
 mod config;
