@@ -870,7 +870,7 @@ fn show_has_every_field_the_needs_and_the_attempts_with_their_escalations() {
     assert_eq!((attempt["status"].as_str(), attempt["outcome"].as_str(), attempt["cause"].as_str()), (Some("ended"), Some("failed"), Some("timed_out")));
     assert_eq!(attempt["check_tail"], "tail");
     assert_eq!(attempt["metrics"], json!({"turns": 3}));
-    for field in ["number", "tier", "origin", "branch", "worktree", "base_sha", "driver_pid", "worker_session", "spec_path", "submitted_sha", "submitted_at", "merged_sha", "gate_hook", "gate_command", "gate_exit", "nudged", "stop_request", "started_at", "ended_at"] {
+    for field in ["number", "tier", "origin", "branch", "worktree", "base_sha", "driver_pid", "worker_session", "spec_path", "submitted_sha", "submitted_at", "merged_sha", "gate_hook", "gate_command", "gate_exit", "nudged", "stop_request", "started_at", "ended_at", "actual_files"] {
         assert!(attempt.get(field).is_some(), "{field}");
     }
     let escalations = attempt["escalations"].as_array().unwrap();
@@ -886,6 +886,24 @@ fn show_has_every_field_the_needs_and_the_attempts_with_their_escalations() {
     refused(&job(&fx, &["show", "b"], "nope"), "plan_not_found", 4);
     refused(&fx.cpd(&["job", "show", "b"]), "plan_required", 2);
     refused(&fx.cpd(&["job", "show", "B", "--plan", "pl"]), "invalid_job_id", 2);
+}
+
+#[test]
+fn show_prints_the_same_actual_files_as_attempt_show() {
+    let fx = Fx::new();
+    drafted(&fx);
+    lock(&fx.env, "pl");
+    fixture(
+        &fx.env,
+        "UPDATE jobs SET status = 'running' WHERE key = 'a';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, actual_files, started_at)
+         VALUES ('pl', 'a-a1', 'a', 1, 'S2', 'ladder', 'running', 'cpd/pl--a-a1', '/w', '[\"a.rs\",\"docs/x.md\"]', 't');",
+    );
+    let out = job(&fx, &["show", "a"], "pl").ok();
+    let printed = out["attempts"][0]["actual_files"].clone();
+    assert_eq!(printed, json!(["a.rs", "docs/x.md"]));
+    let shown = fx.cpd(&["attempt", "show", "a-a1", "--plan", "pl"]).ok();
+    assert_eq!(shown["attempt"]["actual_files"], printed);
 }
 
 // ---------- --pr (R34, commands.md §1.3, §5.1, §5.2) ----------

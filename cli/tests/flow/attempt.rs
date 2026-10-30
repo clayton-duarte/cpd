@@ -1247,7 +1247,7 @@ fn show_returns_every_field_its_escalations_and_its_paths() {
             "base_sha": base, "driver_pid": 4242, "worker_session": "w1", "spec_path": "/specs/api-a1.md",
             "submitted_sha": null, "submitted_at": null, "check_tail": null, "gate_hook": null, "gate_command": null, "gate_exit": null, "merged_sha": null, "nudged": true,
             "stop_request": null, "metrics": {"turns": 3}, "started_at": "t", "ended_at": null,
-            "runner": "pi", "worker_pid": null,
+            "runner": "pi", "worker_pid": null, "actual_files": null,
         })
     );
     assert_eq!(
@@ -1283,6 +1283,26 @@ fn show_names_the_check_log_once_a_quick_check_has_run() {
     assert!(check.ends_with("run/pay/logs/api-a1.pre-commit.log"), "{check}");
     assert_eq!(out["paths"]["worker_file"], Value::Null);
     assert_eq!(out["paths"]["spec"], Value::Null);
+}
+
+#[test]
+fn show_prints_the_captured_actual_files_as_an_array() {
+    let fx = rows();
+    fx.fx.env.sql("UPDATE attempts SET actual_files = '[\"a.rs\",\"docs/x.md\"]' WHERE id = 'api-a1'");
+    let out = fx.cpd(&["show", "api-a1"]).ok();
+    assert_eq!(out["attempt"]["actual_files"], json!(["a.rs", "docs/x.md"]));
+    fx.fx.env.sql("UPDATE attempts SET actual_files = '[]' WHERE id = 'api-a1'");
+    let out = fx.cpd(&["show", "api-a1"]).ok();
+    assert_eq!(out["attempt"]["actual_files"], json!([]));
+}
+
+#[test]
+fn show_prints_null_actual_files_for_an_attempt_that_never_captured() {
+    let fx = rows();
+    fx.fx.env.sql("UPDATE attempts SET actual_files = NULL WHERE id = 'api-a1'");
+    let out = fx.cpd(&["show", "api-a1"]).ok();
+    assert!(out["attempt"].as_object().unwrap().contains_key("actual_files"), "{out}");
+    assert_eq!(out["attempt"]["actual_files"], Value::Null);
 }
 
 #[test]
