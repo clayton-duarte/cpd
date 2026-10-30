@@ -249,6 +249,330 @@ Facts only, each with its evidence above; design belongs to the later Jobs.
 
 ## Data analysis
 
+This section turns the Lead's measurements of the live store into tables and numbered findings, and checks each finding that depends on semantics against the code audited above (items 1-6 of the audit are cited as "audit item N"). This Job had no access to `cpd.db`: it only interprets the figures it was given, and derives new ones by arithmetic from them.
+
+### Method and caveats
+
+**Source.** Every database figure is from the Lead's read-only SQL on the live cpd.db, 2026-10-29 EDT: 1,874 Attempts, 2,055 Jobs and 280 PRs of this repo (the repo is cpd itself, so the workload is a Rust CLI developed with cpd: unverified that it transfers to other repos). The footprint and overlap figures are from the Lead's scripts run on the same date (2026-10-29 EDT), over the repo's git history and `jobs.touches`.
+
+**Definitions.**
+
+- `pass%` = merged / (merged + failed). Cancelled Attempts are outside the denominator.
+- `cost` = sum of `attempts.metrics.cost_usd`. `active` = `metrics.duration_s`, which is **the pi session's last timestamp minus its first** (`core/src/metrics/mod.rs:8,213`): it is session span, not CPU or busy time, so a Worker that waits inside its session still accrues it. `wall` = `ended_at - started_at`, which also covers the merge step and the Gate (audit item 1, driver step A8; I infer this, because `duration_s` stops at the session's last entry).
+- Role = Job kind (`docs`, `test`, `impl`, `verify`, `open`, `update`); `work` stands for every other Job.
+- First-Attempt tables (T4, T5) exclude cause `provider_error` and `cancel_requested`. The all-Attempt tables (T6) do not state an exclusion, so I infer that their `pass%` counts `provider_error` as a failure (F8).
+- Table labels T1-T11 are the Lead's. Counts I rebuilt from a rounded percentage are marked "(rebuilt, ±1)".
+
+**Biases and limits I can name.**
+
+1. **Tier is chosen, not assigned.** The Lead sets `jobs.tier` per Job (audit item 4), so tier comparisons are confounded with Job type and difficulty. Most code Jobs start at S1; docs and the cpd-owned `open`/`update` Jobs start at H3 (the `open_tier` code default, audit item 4); S2 and S3 are chosen for harder Jobs or reached by retry.
+2. **`open` and `update` are cpd's own gate runs**, not Worker coding tasks, and they dominate the failure count (F3). A pooled tier pass rate mixes two different things.
+3. **No Job ended `failed`**: failed Jobs were all retried or cancelled, so Job-level failure is invisible and only Attempt-level failure exists.
+4. **Selection after failure.** A second Attempt exists only because the first failed, and the Lead picks its tier by hand in most cases (F6), so "k-th Attempt" rates are not like-for-like with first Attempts.
+5. **Data gaps.** 52 of 1,874 Attempts have no `metrics` (2.8%), so cost and time are understated by an unknown amount. One Attempt was still running. Several rows are small (n < 40) and carry wide error: for a proportion near 50% at n = 35 one standard error is about 8 points.
+6. **Pooled over time.** No figure is split by date, and cpd's own policy and defaults changed during the period (for example `open_tier`: `docs/research/opener-tier.md`; the Gates moved to the merge in hs-d679, audit item 4). Which `gate.pr` setting was in force when each `gate_failed` happened is unknown (F3).
+7. **Attempts of one Job are not independent**, so no figure here carries a significance claim.
+8. **Footprint measure caveat, stronger than the Lead's.** The script diffs `<merged_sha>^1..<merged_sha>`. The Lead states that the first parent is the Lead Branch before the merge. The code says otherwise for a normal Attempt: `merged_sha` is the Attempt's rebased HEAD, advanced onto the Lead Branch by `git update-ref` (a fast-forward, no merge commit), and for a linear Attempt it is `HEAD` itself (`core/src/merge/mod.rs:281-300`, audit item 1; the Worker is told to commit at least every 20 minutes, `core/src/spec/worker.md:74`). So for an Attempt of two or more commits, `^1` is its own previous commit, and the script saw **only the last commit**. Whether Jobs usually have several commits was not measured here (unverified). If they do, `undeclared_write` is a lower bound (a file written in an earlier commit is missed) and `match` and `subset` are inflated. Also unverified: whether any diff includes a base merge.
+9. **Parallel-pair measure caveat.** "Parallel" means no dependency path in the DAG. It does not mean the two Jobs ran at the same time: with `concurrency` 3 and the count-based allocation (audit item 1) many such pairs ran one after the other.
+
+**Figures I could not reproduce** (they are used as given only where stated):
+
+| Figure | Check | Result |
+| --- | --- | --- |
+| "1,362 of 1,433 merged Jobs merged on their first Attempt (95.0%)" | T3 rows with status merged: 1,362 + 51 + 35 + 19 + 11 + 3 + 2 = 1,483, which equals the merged Attempts in T2 (1,483) | The denominator should be 1,483, so the rate is 1,362 / 1,483 = **91.8%**. I use 91.8% and treat 1,433 / 95.0% as a typo in the input (guess) |
+| T4 H3 n = 424 | T5 H3 rows: 128 + 13 + 237 + 44 = 422 | 2 Attempts not in T5; no effect on any finding |
+| #1 Attempt n = 1,162 (docs/test/impl/work) | T5 first-Attempt n of those four roles: 289 + 364 + 275 + 231 = 1,159 | 3 apart; I use the Lead's 96.6% / 1,162 |
+| T1 active hours | 26.4 + 0.0 + 58.7 + 193.1 + 60.6 = 338.8 vs T2 216.5 + 68.2 + 54.0 = 338.7 | rounding |
+| T1 cost | 101.72 + 0.10 + 175.83 + 188.93 + 263.97 = 730.55 = 643.22 + 67.08 + 20.25 | reproduces |
+| T6 against T1 | Sum of n x average minutes over T6 = 20,322 min = 338.7 h; per-tier sums also match T1 (S2: 192.9 h of 193.1) | reproduces; T6 averages are consistent with T1 |
+
+Total Attempts: 1,483 + 311 + 79 = 1,873, plus the one running = 1,874. T3 Attempts: 1,362 + 82 + 1 + 2 x 62 + 3 x 40 + 4 x 22 + 5 x 11 + 6 x 3 + 7 x 2 + 10 = 1,874, so T3 reconciles with T1.
+
+### Tables
+
+**Table 1 (T1 plus derived): Attempts by tier.**
+
+| Tier | n | Share of n | merged | failed | cancelled | pass% | Cost $ | Cost per Attempt | Active h | Active min per Attempt |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| H3 | 485 | 25.9% | 363 | 115 | 7 | 75.9 | 101.72 | 0.21 | 26.4 | 3.3 |
+| S0 | 1 | 0.1% | 1 | 0 | 0 | 100 | 0.10 | 0.10 | 0.0 | - |
+| S1 | 811 | 43.3% | 682 | 96 | 32 | 87.7 | 175.83 | 0.22 | 58.7 | 4.3 |
+| S2 | 335 | 17.9% | 248 | 57 | 30 | 81.3 | 188.93 | 0.56 | 193.1 | 34.6 |
+| S3 | 242 | 12.9% | 189 | 43 | 10 | 81.5 | 263.97 | 1.09 | 60.6 | 15.0 |
+
+Arithmetic: share = n / 1,874; cost per Attempt = cost / n (S3: 263.97 / 242 = 1.09); minutes = hours x 60 / n (S2: 193.1 x 60 / 335 = 34.6). S3 carries 36.1% of spend (263.97 / 730.55) with 12.9% of Attempts. There are **no Attempts at H0, H1, H2**, and one at S0.
+
+**Table 2 (T2 plus derived): Attempts by outcome.**
+
+| Outcome | n | Cost $ | Share of cost | Active h | Share of active time |
+| --- | --- | --- | --- | --- | --- |
+| merged | 1,483 | 643.22 | 88.0% | 216.5 | 63.9% |
+| failed | 311 | 67.08 | 9.2% | 68.2 | 20.1% |
+| cancelled | 79 | 20.25 | 2.8% | 54.0 | 15.9% |
+
+Arithmetic: 67.08 / 730.55 = 9.2%; 68.2 / 338.7 = 20.1%; 54.0 / 338.7 = 15.9%. Origin: 1,703 `ladder`, 171 `retry`. Failed Attempts by cause, with the share of 311: `gate_failed` 134 (43.1%), `crashed` 62 (19.9%), `provider_error` 60 (19.3%), `no_submit` 25 (8.0%), `merge_conflict` 15 (4.8%), `timed_out` 8 (2.6%), `setup_failed` 7 (2.3%); the 79 `cancel_requested` are outcome cancelled, not failed.
+
+**Table 3 (T4 and T5): first-Attempt pass rate, by tier and by role x tier** (n, pass%; excludes `provider_error` and cancelled).
+
+| Role | H3 | S1 | S2 | S3 |
+| --- | --- | --- | --- | --- |
+| docs | 128, 95.3 | 66, 100 | 80, 92.5 | 15, 100 |
+| impl | - | 265, 97.7 | 64, 98.4 | 35, 100 |
+| test | - | 218, 99.5 | 34, 97.1 | 23, 78.3 |
+| work | 13, 100 | 84, 91.7 | 24, 91.7 | 110, 96.4 |
+| open | 237, 70.0 | 11, 100 | 29, 65.5 | - |
+| update | 44, 68.2 | 2, 50 | 11, 72.7 | - |
+| verify | - | 3, 100 | 1, 100 | - |
+| **all (T4)** | **424, 78.5** | **649, 97.7** | **243, 90.5** | **183, 95.1** |
+
+Derived, code roles only (docs + impl + test + work; counts rebuilt, ±1):
+
+| Tier | n | passed | pass% | Arithmetic |
+| --- | --- | --- | --- | --- |
+| S1 | 633 | 619 | 97.8 | n = 66 + 265 + 218 + 84; passed = 66 + 259 + 217 + 77 |
+| S2 | 202 | 192 | 95.0 | n = 80 + 64 + 34 + 24; passed = 74 + 63 + 33 + 22 |
+| S3 | 183 | 174 | 95.1 | n = 15 + 35 + 23 + 110; passed = 15 + 35 + 18 + 106 |
+
+Check: the same rebuild for the S1 column of T4 gives 619 + (11 open + 3 verify + 1 update) = 634 = 97.7% of 649, so the rebuild matches T4. H3 without `open`/`update`: docs 122 of 128 plus work 13 of 13 = 135 of 141 (95.7%); `open` + `update` at H3: 166 + 30 = 196 of 281 (69.8%). The H3 headline of 78.5% is therefore entirely the opener: (135 + 196) / 422 = 78.4%.
+
+**Table 4 (T6, condensed plus derived): all Attempts by role x tier** (n, pass%, average cost $, average active minutes).
+
+| Role | H3 | S1 | S2 | S3 | Cost $ of role (derived) | Share of spend | Active h (derived) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| docs | 139, 92.7, 0.48, 3.8 | 73, 94.5, 0.31, 2.6 | 88, 92.9, 0.93, 14.1 | 21, 71.4, 1.59, 17.9 | 204.5 | 28.0% | 38.9 |
+| impl | - | 275, 97.4, 0.22, 5.1 | 74, 93.0, 0.60, 9.4 | 41, 90.0, 0.74, 6.1 | 135.2 | 18.5% | 39.1 |
+| test | - | 253, 92.1, 0.25, 4.5 | 36, 94.3, 0.50, 5.4 | 32, 71.9, 1.48, 10.8 | 128.7 | 17.6% | 28.0 |
+| work | 13, 100, 0.06, 1.5 | 124, 71.7, 0.16, 3.9 | 39, 80.6, 0.29, 14.5 | 117, 94.8, 1.26, 13.8 | 179.3 | 24.5% | 44.7 |
+| open | 284, 67.9, 0.10, 3.4 | 72, 55.6, 0.09, 3.5 | 69, 48.3, 0.39, 112.2 | 27, 15.0, 0.18, 33.0 | 66.7 | 9.1% | 164.2 |
+| update | 47, 67.4, 0.11, 1.5 | 11, 50, 0.19, 5.1 | 28, 63.2, 0.25, 40.6 | 4, 66.7, 0.18, 40.9 | 15.0 | 2.1% | 23.8 |
+
+Arithmetic: role cost = sum of n x average cost over its tiers (docs: 139 x 0.48 + 73 x 0.31 + 88 x 0.93 + 21 x 1.59 = 204.5); share = that / 730.55; role hours = sum of n x average minutes / 60 (open: (284 x 3.4 + 72 x 3.5 + 69 x 112.2 + 27 x 33.0) / 60 = 164.2). The six roles sum to $729.3 (the rest is `verify` and rounding of the averages). `open` + `update` = 188.0 h = **55.5% of all active hours** (164.2 + 23.8 over 338.7) for 11.2% of spend (66.7 + 15.0 over 730.55). `open` at S2 alone is 69 x 112.2 / 60 = 129.0 h, 66.8% of all S2 hours (129.0 / 193.1). `work` at S3 is 117 x 1.26 = $147.4, 20.2% of all spend, the largest single role x tier cell.
+
+**Table 5 (T7): failed Attempts by cause x role** (count).
+
+| Cause | open | update | docs | impl | test | work | Total |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| gate_failed | 114 | 17 | 3 | 0 | 0 | 0 | 134 |
+| crashed | 21 | 4 | 12 | 12 | 2 | 11 | 62 |
+| provider_error | 4 | 0 | 8 | 1 | 18 | 29 | 60 |
+| no_submit | 19 | 1 | 0 | 0 | 2 | 3 | 25 |
+| merge_conflict | 3 | 1 | 0 | 1 | 7 | 3 | 15 |
+| timed_out | 3 | 0 | 3 | 0 | 1 | 1 | 8 |
+| setup_failed | 1 | 4 | 0 | 2 | 0 | 0 | 7 |
+| **Total** | 165 | 27 | 26 | 16 | 30 | 47 | 311 |
+
+Every row and column sum reproduces (for example `gate_failed` 114 + 17 + 3 = 134; the open column 165). For the four code roles the non-provider failures are 119 - 56 = 63: `crashed` 37 (58.7%), `merge_conflict` 11, `no_submit` 5, `timed_out` 5, `gate_failed` 3, `setup_failed` 2.
+
+**Table 6 (T7 cells that carry cost and time; derived per Attempt).** The Lead gave cost and active minutes only for these cells, so every share below is a **lower bound**.
+
+| Cell | n | Cost $ | Active min | Cost per Attempt $ | Active min per Attempt |
+| --- | --- | --- | --- | --- | --- |
+| open `gate_failed` | 114 | 11.14 | 191 | 0.10 | 1.7 |
+| update `gate_failed` | 17 | 3.09 | 37 | 0.18 | 2.2 |
+| open `no_submit` | 19 | 10.13 | 2,038 | 0.53 | 107.3 |
+| test `no_submit` | 2 | 3.18 | - | 1.59 | - |
+| open `timed_out` | 3 | 1.93 | 474 | 0.64 | 158.0 |
+| docs `timed_out` | 3 | 1.27 | 93 | 0.42 | 31.0 |
+| test `timed_out` | 1 | 10.86 | 90 | 10.86 | 90.0 |
+| test `merge_conflict` | 7 | 7.97 | 54 | 1.14 | 7.7 |
+| impl `merge_conflict` | 1 | 0.67 | - | 0.67 | - |
+| open `crashed` | 21 | 2.91 | 149 | 0.14 | 7.1 |
+| work `crashed` | 11 | 3.95 | 105 | 0.36 | 9.5 |
+| impl `crashed` | 12 | 1.07 | - | 0.09 | - |
+
+Lower-bound shares of failed spend ($67.08) and failed active time (68.2 h = 4,092 min):
+
+| Cause | Listed $ | Share of failed $ | Listed min | Share of failed time | Share of failed count |
+| --- | --- | --- | --- | --- | --- |
+| `gate_failed` | 14.23 | 21.2% | 228 | 5.6% | 43.1% |
+| `no_submit` | 13.31 | 19.8% | 2,038 | 49.8% | 8.0% |
+| `timed_out` | 14.06 | 21.0% | 657 | 16.1% | 2.6% |
+| `merge_conflict` | 8.64 | 12.9% | 54 | 1.3% | 4.8% |
+| `crashed` | 7.93 | 11.8% | 254 | 6.2% | 19.9% |
+
+Arithmetic: `gate_failed` $ = 11.14 + 3.09; `no_submit` $ = 10.13 + 3.18 and min = 2,038; `timed_out` $ = 1.93 + 1.27 + 10.86 and min = 474 + 93 + 90; `merge_conflict` $ = 7.97 + 0.67; `crashed` $ = 2.91 + 1.07 + 3.95 and min = 149 + 105; shares are over 67.08 and 4,092. An open `no_submit` Attempt takes 2,038 / 19 = 107.3 min against 191 / 114 = 1.7 min for an open `gate_failed`: about 64 times as long. The five causes together cover at least 58.17 of 67.08 dollars (86.7%) and 3,231 of 4,092 minutes (79.0%).
+
+**Table 7 (T8 plus derived): failed Attempts of Jobs that eventually merged ("waste before success").**
+
+| Role | Failed Attempts | Cost $ | Active min | Wall min |
+| --- | --- | --- | --- | --- |
+| open | 122 | 13.73 | 530 | 1,308 |
+| test | 27 | 8.89 | 90 | - |
+| work | 45 | 4.61 | 499 | - |
+| docs | 24 | 3.08 | 41 | - |
+| update | 16 | 2.06 | 37 | - |
+| impl | 15 | 1.86 | 26 | - |
+| **Total** | **249** | **34.23** | **1,223 (20.4 h)** | - |
+
+Arithmetic: 13.73 + 8.89 + 4.61 + 3.08 + 2.06 + 1.86 = 34.23; 34.23 / 730.55 = 4.7% of spend (5.3% of the 643.22 merged-Attempt spend); 1,223 / 60 = 20.4 h. The 249 reproduces from T3: Jobs that merged after more than one Attempt (51 + 35 + 19 + 11 + 3 + 2 = 121) used 51 x 1 + 35 x 2 + 19 x 3 + 11 x 4 + 3 x 5 + 2 x 6 = 249 earlier Attempts. So T8 is every non-final Attempt of a merged Job (I infer, from the equal count). Per rescued Job: $34.23 / 121 = $0.28 and 1,223 / 121 = 10.1 active minutes. Wall for `open` is 1,308 / 122 = 10.7 min per failed Attempt against 530 / 122 = 4.3 active, so about 6.4 min per failed `open` Attempt is outside the session (the Gate and merge; I infer).
+
+**Table 8 (T9): merged Attempts, average active vs wall minutes.** docs 7.5 / 7.8; impl 6.3 / 6.5; test 4.9 / 5.1; work 8.4 / 8.8; open 16.7 / 19.8; update 17.0 / 18.7; verify 2.1 / 2.3. Wall minus active: 0.2 to 0.4 min for code roles, 3.1 min for `open`, 1.7 for `update`.
+
+**Table 9 (T10 plus derived): what happens after a non-provider failure.** The Lead gave the 15 largest transitions (163 Attempts; the smallest has n = 5, so rows below that are omitted; a transition is the failed Attempt's tier and cause, then the next Attempt's tier, outcome and origin).
+
+| Group | Transitions | Next Attempt merged | Next failed | Merged% |
+| --- | --- | --- | --- | --- |
+| After `gate_failed`, same tier (H3 -> H3, S1 -> S1, S2 -> S2) | 26 m + 15 f, 11 m + 10 f, 0 m + 6 f | 37 | 31 | 54.4 |
+| of which H3 -> H3 | 41 | 26 | 15 | 63.4 |
+| After `gate_failed`, promoted (H3 -> S1, H3 -> S2) | 14 m + 17 f, 0 m + 8 f | 14 | 25 | 35.9 |
+| of which H3 -> S1 | 31 | 14 | 17 | 45.2 |
+| After `crashed` or `no_submit`, automatic climb (origin `ladder`: S1 -> S2, S2 -> S3) | 16 f, 10 f + 5 m, 7 f | 5 | 33 | 13.2 |
+| After `crashed` at S3, manual retry at a lower tier (S3 -> S2, S3 -> S1; origin `retry`) | 8 m, 5 m | 13 | 0 | 100 |
+| After `merge_conflict` at S3, manual retry at S3 | 5 m | 5 | 0 | 100 |
+
+Pass rate of the k-th Attempt of a docs/test/impl/work Job (excludes `provider_error` and cancelled): #1 96.6% (n 1,162), #2 51.4% (35), #3 73.7% (19), #4 100% (13), #5 83.3% (6). Arithmetic: Attempts #2 to #5 pass 18 + 14 + 13 + 5 = 50 of 35 + 19 + 13 + 6 = 73 (68.5%). Follow-up Attempts: 1,874 Attempts - 1,586 Jobs that have one = 288 Attempts that are not a Job's first; 171 of them are origin `retry` (the Lead's manual `job retry --tier`, audit item 4), so **59.4% of follow-ups are manual** and at most 117 (40.6%) came from the automatic ladder, which also includes the same-tier requeue after `provider_error`. Retry depth (T3): 71 of the 249 wasted Attempts (28.5%) sit in the 16 merged Jobs that took five or more Attempts (11 x 4 + 3 x 5 + 2 x 6), 1.1% of merged Jobs (16 / 1,483); the 35 Jobs with four or more Attempts hold 128 of 249 (51.4%).
+
+**Table 10 (footprint accuracy; Lead's script, 2026-10-29 EDT; see caveat 8).** 1,010 merged docs/test/impl/work/verify Jobs; a `touches` entry matches a file if equal or a directory prefix.
+
+| Kind | Jobs | match (changed == declared) | subset (declared paths untouched) | undeclared_write |
+| --- | --- | --- | --- | --- |
+| docs | 279 | 195 (69.9%) | 69 (24.7%) | 15 (5.4%) |
+| test | 254 | 165 (65.0%) | 66 (26.0%) | 23 (9.1%) |
+| impl | 316 | 97 (30.7%) | 84 (26.6%) | 135 (42.7%) |
+| work | 157 | 36 (22.9%) | 76 (48.4%) | 45 (28.7%) |
+| verify | 4 | 4 | 0 | 0 |
+| **all** | **1,010** | **497 (49.2%)** | **295 (29.2%)** | **218 (21.6%)** |
+
+Arithmetic: row sums 279 + 254 + 316 + 157 + 4 = 1,010 and 195 + 165 + 97 + 36 + 4 = 497, 69 + 66 + 84 + 76 = 295, 15 + 23 + 135 + 45 = 218, all reproduce. Declared set differs from the changed set in 295 + 218 = 513 Jobs (50.8%). Declared `touches` per Job (T11): median 3, p90 9, max 36; spec size of 1,369 code/doc Jobs: median 6,438 characters, p90 10,484, max 23,069.
+
+Most frequent undeclared files (Jobs in which each was written outside `touches`; share of the 218 Jobs; class is my reading of the path, not measured):
+
+| File | Jobs | Share of 218 | Class (guess) |
+| --- | --- | --- | --- |
+| `cli/tests/pr/pr.rs` | 19 | 8.7% | test file |
+| `pi/skills/cpd-lead/SKILL.md` | 19 | 8.7% | skill doc |
+| `cli/tests/flow/config.rs` | 16 | 7.3% | test file |
+| `Cargo.toml` | 16 | 7.3% | manifest |
+| `cli/tests/tui/tui_read.rs` | 16 | 7.3% | test file |
+| `cli/tests/pr/main.rs` | 16 | 7.3% | test entry (module list) |
+| `CONTEXT.md` | 15 | 6.9% | glossary |
+| `Cargo.lock` | 15 | 6.9% | lockfile |
+| `cli/tests/engine/watch.rs` | 15 | 6.9% | test file |
+| `pi/skills/skill.test.ts` | 15 | 6.9% | test file |
+| `tui/src/lib.rs` | 15 | 6.9% | module root |
+| `pi/skills/cpd-lead/references/spec-files.md` | 15 | 6.9% | skill doc |
+| `core/src/error.rs` | 14 | 6.4% | shared type |
+| `tui/src/read/flow.rs` | 14 | 6.4% | source file |
+| `cli/src/interface.rs` | 14 | 6.4% | shared type |
+
+**Table 11 (same-PR parallel overlap; Lead's script, 2026-10-29 EDT).**
+
+| Measure | Value | Arithmetic |
+| --- | --- | --- |
+| PRs / Job pairs | 262 / 3,824 | |
+| Pairs with no dependency path ("parallel") | 1,995 | 52.2% of 3,824 |
+| Parallel pairs declaring overlapping `touches` | 573 across 39 Plans | 573 / 1,995 = 28.7%; 573 / 3,824 = 15.0% |
+| Merge-conflict Attempts in total | 15 | 15 / 1,874 = 0.8% |
+| of which `open` / `update` | 4 | 3 + 1 |
+| of which docs/test/impl/work | 11 | 0 + 7 + 1 + 3 |
+
+Overlapping paths by pairs that name them: directory prefixes `docs/` 221, `core/src/` 22, `cli/` 13, `core/` 13, `engine/` 13, `tui/` 13 (295 in all); exact files `core/src/store/schema.rs` 26, `Cargo.lock` 21, `docs/contract.md` 20, `Cargo.toml` 20, `docs/commands.md` 15, `docs/implementing.md` 15 (117 in all). A pair may name more than one path, so these are not additive with the 573. Of the 412 path mentions, 295 (71.6%) are directory prefixes.
+
+### Findings
+
+**F1. The ladder's low rungs are unused, and the proposal's "every job starts at Haiku without reasoning" is false in the data.**
+- Claim: of 1,874 Attempts, 0 ran at H0, H1 or H2 and 1 at S0. Starts are spread over H3 (25.9%), S1 (43.3%), S2 (17.9%) and S3 (12.9%). The proposal's sentence ("Today every job starts at Haiku without reasoning...") describes 0 Attempts.
+- Evidence: Table 1.
+- Confidence: high (a count).
+- Code check: agrees with audit item 5: the starting Tier is `jobs.tier`, set by the Lead (`core/src/driver/start.rs:291-293`); H0-H2 are valid (`core/src/config/tier.rs:67,121`) and the automatic climb from H0 would stop at H2 (`1 + retry_cap` Attempts, `core/src/attempt/ledger.rs:517,572`).
+- Implies: H0-H2 and S0 do not appear in any outcome here, so the data neither shows them failing nor supports keeping them. It cannot say whether they would pass. Four tiers carry the whole workload: H3, S1, S2, S3. Whether to drop the rest is a design question.
+
+**F2. Tier pass rates are confounded by role: coding Jobs pass about 96-98% at S1, and the low pass rates are the opener's.**
+- Claim: first-Attempt pass is 97.8% at S1, 95.0% at S2 and 95.1% at S3 for code roles (633, 202, 183 Attempts). The T4 headline H3 78.5% is explained by `open` (70.0%, n 237) and `update` (68.2%, n 44); H3 docs pass 95.3% and H3 `work` 13 of 13. A higher tier did not give a higher first pass: S2 and S3 are about 2.7 points below S1, which is within about two standard errors for S2 (about 1.5 points) and is confounded because the Lead gives harder Jobs to higher tiers (selection, I infer). `test` at S3 passes 78.3% (n 23, five failures) against 99.5% at S1 (n 218).
+- Evidence: Table 3; Table 4.
+- Confidence: medium for the code roles (large n, but tier is chosen); low for any cell under n = 40.
+- Code check: `open`/`update` run at `open_tier`, default H3 (audit item 4); the tier is not what makes them fail (F3, F6).
+- Implies: there is no usable evidence that a higher tier raises first-Attempt success on code Jobs; the tier is a price and speed choice. No impl or test Job ran at H3, so the data says nothing about H3 for them.
+
+**F3. The PR-Gate failures (`gate_failed` of `open`/`update`) dominate failure count, while `no_submit` and `timed_out` dominate failure time, and the costliest single failures are other causes.**
+- Claim by count: `gate_failed` is 134 of 311 failed Attempts (43.1%); 114 are `open`, 17 `update`, 3 docs, 0 `test`/`impl`/`work`. Each is cheap and quick: $0.10 and 1.7 active min for `open`. Across the four code roles `crashed` is the main non-provider cause (37 of 63).
+- Claim by time: `no_submit` is at least 49.8% of failed active time (2,038 of 4,092 min, all from 19 `open` Attempts at 107 min each), `timed_out` at least 16.1% (657 min from 7 Attempts) and `gate_failed` at most about 5.6% of listed time (228 min from 131 Attempts). By dollars the five causes are close (`gate_failed` 21.2%, `timed_out` 21.0%, `no_submit` 19.8%, `merge_conflict` 12.9%, `crashed` 11.8%, all lower bounds).
+- By role: `open` holds the failures in every column (165 of 311), and `open`/`update` hold 55.5% of all active hours (Table 4), most of it at S2 (129.0 h for 69 Attempts, 112 min each). `test` carries the dollar outliers: one `timed_out` at $10.86, seven `merge_conflict` at $7.97 ($1.14 each), two `no_submit` at $3.18. T7 gives no tier per cell, so whether those are S2 or S3 is unverified; guess: S3-heavy, because the S3 `test` average is $1.48 against $0.50 at S2 (Table 4). The single costliest failure is therefore a `timed_out` of a `test` Job (Table 6), not a Gate failure.
+- Evidence: Tables 5 and 6. Reconciliation: T6 gives `open` S2 129.0 h, but T7 lists at most 47.5 h of failed `open` time (191 + 149 + 2,038 + 474 min), cancelled Attempts total 54.0 h and merged `open` Attempts average 16.7 min (T9), so at least about 18 h of the 129.0 h I cannot account for from the given tables.
+- Confidence: high for the counts; medium for the time and cost shares (cell data is partial, so they are lower bounds, and `duration_s` is session span).
+- Code check: `gate_failed` is produced only in `run_gate` at merge step 6 (`core/src/merge/mod.rs:400-425`, audit item 4). That the 114 + 17 are "the PR Gate" is the Lead's reading and is **not confirmed** by the code audit: the hook behind a `gate_failed` is `pre-commit` (the quick check) at every merge, and `pre-merge` (the PR Gate) only for `open`/`update` when `gate.pr = local`; the repo's policy has `gate.pr = none` today (audit item 4), so under today's policy these would be quick-check failures on the Lead Branch at the opener's merge. If the policy had `gate.pr = local` earlier, the PR Gate reading holds for that period. The Attempt row does not record which hook (no `check_tail`, written by no code since hs-d679, audit item 4); the hook name is in the `attempt-retry`/`job-failed` Event detail (`merge/mod.rs:370-377`), which was not queried (unverified). That 0 of the 134 are `test`/`impl`/`work` agrees with the Worker running the quick check before submitting (I infer; not tested).
+- Implies: the number of failures and the time they cost are different problems with different owners. The count problem is the opener's Gate; the time problem is idle or stuck Workers (`no_submit`, `timed_out`), and the dollar tail is a few expensive `test`/`work` Attempts.
+
+**F4. Waste before success is small in dollars; most failed time is in Jobs that never merged.**
+- Claim: the 249 failed Attempts that preceded a merge cost $34.23 (4.7% of $730.55) and 1,223 active min (20.4 h); that is $0.28 and 10.1 min per rescued Job. Failed Attempts as a whole are $67.08 and 68.2 h, so the other 62 failed Attempts (311 - 249), in Jobs that were cancelled or are running, hold $32.85 (49%) and 47.8 h (70%): about $0.53 and 46 min each. Costs are concentrated: a `test` Job's `timed_out`, `merge_conflict` and `no_submit` cells list $22.01, more than all of T8's `test` waste ($8.89), so at least $13.12 of those belong to Jobs that did not merge.
+- Evidence: Tables 2, 6 and 7. Concentration: 128 of the 249 wasted Attempts (51.4%) are in the 35 merged Jobs with four or more Attempts.
+- Confidence: high for T8 totals (they reproduce from T3); medium for the 62-Attempt remainder (it is a difference of two given figures; its Job status is not broken out).
+- Code check: no Job ended `failed` because a failed Job goes to the Lead, who retries or cancels (`job retry --tier`, `job cancel`; audit item 4). The 62 therefore end in Lead cancellation or are in flight.
+- Implies: a start-tier predictor can recover at most the $34.23 and 20.4 h of pre-success waste, 4.7% of spend. The larger loss of time sits in Jobs the Lead abandoned, which no tier choice at start would avoid.
+
+**F5. Starting every code Job higher would not pay back (an estimate).**
+- Claim: starting S1-run code Jobs at S2 costs about $229 more and about 59 hours more than the $34 and 11 hours of waste all of them together produced.
+- Method: expected cost of an S1 start is c1 + p x c2 (a failed S1 Attempt priced as an average S1 Attempt, then a rescue at S2); starting at S2 costs c2. Break-even failure probability p* = (c2 - c1) / c2, using Table 4 averages:
+
+| Role | c1 (S1) | c2 (S2) | c3 (S3) | p* for S2 start | p* for S3 start | S1 first-Attempt failure (T5) | S1 all-Attempt failure (T6) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| impl | 0.22 | 0.60 | 0.74 | 63.3% | 70.3% | 2.3% | 2.6% |
+| test | 0.25 | 0.50 | 1.48 | 50.0% | 83.1% | 0.5% | 7.9% |
+| docs | 0.31 | 0.93 | 1.59 | 66.7% | 80.5% | 0.0% | 5.5% |
+| work | 0.16 | 0.29 | 1.26 | 44.8% | 87.3% | 8.3% | 28.3% |
+
+- Arithmetic (impl): (0.60 - 0.22) / 0.60 = 63.3%; (0.74 - 0.22) / 0.74 = 70.3%. In every role the observed S1 failure rate (at most 28.3%, and that figure includes `provider_error`, F8) is far below p*. Aggregate: the 725 S1 code Attempts (impl 275, docs 73, test 253, work 124) cost 275 x 0.22 + 73 x 0.31 + 253 x 0.25 + 124 x 0.16 = $166.2 (T1's S1 total is $175.83, of which the opener is the rest). Priced at S2 they would cost 275 x 0.60 + 73 x 0.93 + 253 x 0.50 + 124 x 0.29 = $395.4, a premium of $229.1, or $0.32 per Job. Even if every dollar of waste in T8 (all roles, $34.23) were removed, the premium would need to fall to $34.23 / 725 = $0.047 per Job (about one seventh) to break even. Time: S2 minus S1 active minutes over the same Attempts is 275 x (9.4 - 5.1) + 73 x (14.1 - 2.6) + 253 x (5.4 - 4.5) + 124 x (14.5 - 3.9) = 3,564 min (59.4 h), against 656 min (10.9 h) of waste of the four code roles (41 + 26 + 90 + 499).
+- Confidence: medium that the direction is right, low on the amounts. The S2 averages include harder Jobs (selection), so the true premium for the same Job is lower, and a failed Attempt may cost more than an average one (`no_submit` and `timed_out` do). Neither bias is large enough to close a gap of $229 against $34 (about 6.7 times) unless the S2 premium is mostly selection, which I cannot test.
+- Code check: costs are `attempts.metrics.cost_usd` (`core/src/metrics/mod.rs`), the same source as T1.
+- Implies: a threshold rule that starts the lowest tier whose predicted success clears 70% would start essentially every code Job at the cheapest tier the Lead already uses (S1: 97.8%), so the data gives it little to learn; the exceptions would be where cost and time are the target, not pass rate.
+
+**F6. Promotion is not shown to help; recovery is mostly manual, and a stronger tier does not fix a Gate failure.**
+- Claim: (i) after `gate_failed`, the same tier merged 54.4% of the time (37 of 68; H3 63.4%) against 35.9% after promotion (14 of 39); (ii) after `crashed` or `no_submit`, the automatic climb merged 5 of 38 (13.2%) while the Lead's manual retry at a lower tier after an S3 `crashed` merged 13 of 13 and a retry at S3 after an S3 `merge_conflict` merged 5 of 5; (iii) the Attempt after a failure passes 68.5% (#2 to #5: 50 of 73) and #2 alone only 51.4% (18 of 35, about 16 points of error each side), against 96.6% for #1; (iv) 171 of 288 follow-up Attempts (59.4%) are manual `retry`, at most 117 (40.6%) are automatic.
+- Evidence: Table 9. T10 lists only the top 15 transitions, so these groups are partial (163 of at most 251 non-provider failures).
+- Confidence: low to medium. n is small (39 promoted after a gate failure), the Lead chooses the next tier with knowledge of the cause (selection), and a "failed" next Attempt can be any cause.
+- Code check: `gate_failed` is not a ladder cause (`core/src/attempt/ledger.rs:233`, `docs/contract.md:979`), so every `gate_failed` follow-up in Table 9 is origin `retry`, the Lead's `job retry --tier` (`core/src/driver/start.rs:289`; unverified whether a person or a script issued each). `crashed`, `no_submit` and `merge_conflict` do climb automatically (audit item 4), so cpd's own rule promotes on causes the proposal calls non-reasoning, and the data shows that promotion rarely succeeds on them. Any retry starts from a clean tree with a text summary (`core/src/git/worktree.rs:706`, audit item 4).
+- Implies: failure and tier are only weakly related in this data. The cases that recovered were same-tier or lower-tier retries on a clean tree after a cause that is not about model strength.
+
+**F7. `provider_error` is a distinct class and it depresses all-Attempt pass rates.**
+- Claim: 60 of 311 failures (19.3%) are `provider_error`: `work` 29, `test` 18, `docs` 8, `open` 4, `impl` 1. First-Attempt tables exclude them; Table 4 does not (I infer). That explains why `work` S1 is 91.7% on first Attempts (T5) but 71.7% over all Attempts, and `test` S1 99.5% against 92.1%. Excluding them, the code-role non-provider failures are 63 of 119.
+- Evidence: Tables 3, 4 and 5.
+- Confidence: medium (the definition of T6 is inferred; T7 has no tier column to confirm per cell).
+- Code check: `provider_error` is retried at the same tier up to three times after a 30 s hold (`core/src/attempt/ledger.rs:239-242,553-557`, audit item 4), so it already matches the proposal's "infra errors retry at the same tier".
+- Implies: any pass rate used to choose a tier must exclude infra failures or it will mis-rank roles.
+
+**F8. Declared `touches` is an incomplete footprint: half of the Jobs differ from their declaration and 1 in 5 wrote an undeclared file.**
+- Claim: 49.2% of 1,010 Jobs match exactly, 29.2% touch fewer files than declared (over-declaration), 21.6% wrote at least one file outside `touches`. By kind the undeclared rate is 5.4% for docs, 9.1% for test, 28.7% for work and 42.7% for impl (135 of 316).
+- Evidence: Table 10.
+- Confidence: medium. The method may have seen only the last commit of each Job (caveat 8): if so the undeclared figure is a lower bound, and match and subset are not reliable. Matching by directory prefix also makes broad declarations (`docs/`) match easily.
+- Code check: nothing enforces `touches` at submit or merge, and the Worker contract allows leaving it when a test needs it (`docs/commands.md:4495`; audit item 2), so an undeclared write is permitted behaviour, not a violation. `job add` only checks that each entry exists in the start tree (`core/src/job/add.rs:420`), so a Job that creates a file must declare an existing parent directory; that is why a directory prefix counts as a match.
+- Implies: declared footprint is a hint and not a write set: a serializer or lint that trusts it would be wrong for about one Job in five and two in five for `impl`. Declared-versus-actual cannot be judged correct until it is measured over the whole Attempt diff.
+
+**F9. The undeclared files are a long tail with a recognisable head, and most of it is not the proposal's "hot file" list.**
+- Claim: the 15 most frequent undeclared files each appear in 14 to 19 of the 218 Jobs (6.4% to 8.7%). By my reading of their paths (not measured): 6 are test files or test entry points, 4 are shared source (`core/src/error.rs`, `cli/src/interface.rs`, `tui/src/lib.rs`, `tui/src/read/flow.rs`), 3 are docs or skills (`CONTEXT.md`, `SKILL.md`, `spec-files.md`) and only 2 are the manifests the proposal names (`Cargo.toml`, `Cargo.lock`). Cargo.toml (16) and Cargo.lock (15) differ by one Job, so the lockfile follows the manifest as expected. Guess: the test entry points and module roots (`main.rs`, `lib.rs`) are registration files that change whenever a Job adds a module; I did not read the diffs.
+- Evidence: Table 10 (files) and Table 11 (`Cargo.lock` and `Cargo.toml` appear among the declared overlaps too, 21 and 20 pairs).
+- Confidence: medium for the counts; low for the classification.
+- Code check: cpd has no hot-file list (audit item 5) and its migration numbering hot spot was removed at the source (`scripts/new-migration.sh:4`). The proposal's examples cover lockfiles and manifests, but the head of this data is mostly test registries and shared modules, so a fixed list from the proposal would miss most of it.
+- Implies: footprint-as-measured (what changed) finds files that footprint-as-declared misses, and the measured list is repo-specific.
+
+**F10. Declared overlap between parallel Jobs of one PR is common, but merge conflicts are rare, so declared overlap is a poor predictor of conflict.**
+- Claim: 573 of 1,995 parallel pairs (28.7%) declare overlapping `touches`, mostly broad directories (295 of 412 path mentions, 71.6%, led by `docs/` at 221). Only 15 of 1,874 Attempts (0.8%) ended `merge_conflict`, and 4 of those are `open`/`update`, so at most 11 can come from two Jobs of one PR. That is at least 52 declared-overlap pairs per conflict (573 / 11), and the conflicts listed cost at least $8.64 (`test` $7.97, `impl` $0.67; 1.2% of spend, other cells not given).
+- Evidence: Table 11; Table 6; Table 9 (5 of 5 merged after a same-tier retry).
+- Confidence: medium for "declared overlap over-predicts conflict"; low for any causal link (the conflicting Jobs are not matched to the overlapping pairs, and pairs that never ran together count as parallel, caveat 9).
+- What this does and does not prove: it shows that declared overlap is an upper bound: git's three-way rebase resolves non-adjacent edits to a shared file, and many pairs never ran concurrently (I infer; not tested). It does **not** show that actual-file overlap is low: undeclared writes (F8) mean actual overlap could be higher, and over-declaration (29.2% subset) means it could be lower. Actual-file overlap between parallel Attempts was not measured.
+- Code check: `merge_conflict` is produced at the rebase step and, for `open`/`update`, when the Lead Branch moved (`core/src/merge/mod.rs:235,240,255`, audit item 1). Same-PR overlap is checked nowhere at lock or render (`core/src/plan/overlap.rs` skips the Plan's own Jobs, audit item 2), so this overlap is not currently warned about and has still cost almost nothing.
+- Implies: serialization on declared overlap would serialize 28.7% of parallel pairs to avoid at most a few conflicts that a clean-tree retry resolves at once; its benefit must be weighed against the parallelism it removes, which was not measured here.
+
+**F11. What the data cannot say.**
+- Granularity inside `gate_failed` (build, test, lint, flake): not recorded in the Attempt row. `check_tail` is dead (0 of 134, written by no code, audit item 4), and the quick check runs once (`run_gate`), so a flake is indistinguishable from a real failure. The Event detail may hold the hook name (unverified; not queried).
+- Diff inheritance: it cannot be estimated because cpd has never done it. A promoted Attempt always starts from a clean tree with a text summary (audit item 4), so there is no treatment arm, not only a missing column.
+- Per-tier causes and per-tier cost of failed Attempts (T7 has no tier), the failed share by plan date, the language or size of a Job, and per-lead footprint accuracy (the Lead's script did not split by Lead).
+- Tier causality: tier is chosen by the Lead with knowledge of the Job (F2, F6).
+- Size for a learned estimator: the proposal says a few hundred Jobs are enough. There are 1,586 Jobs with Attempts, but the event to predict is rare: about 40 first-Attempt failures among the 1,162 code first Attempts (1,162 x 3.4% = 40, rebuilt). With about 40 events a model can support only a few features (guess: a common rule of thumb is about ten events per feature), so the number of Jobs is not the constraint; the number of failures is.
+- Confidence: high that these gaps exist (each follows from the cited code or the Lead's definitions).
+
+### What the data implies
+
+For the design Job; each bullet is a finding, not a design.
+
+- First-Attempt success is already high (91.8% of merged Jobs pass first time; code roles 96.6%), and waste before success is $34.23 (4.7% of spend). A start-tier predictor has little to recover (F4, F5); starting higher costs about 6.7 times what it could save.
+- The two largest failure classes are not model-strength problems: the opener's Gate failures (count) and idle or stuck Workers (time). A ladder that promotes on tier alone does not address either (F3, F6).
+- Evidence that promotion helps is absent (F6): same-tier retries after `gate_failed` and lower-tier retries after S3 `crashed` did better than climbs. The proposal's "only reasoning failures promote" is consistent with this direction, but cpd's `cause` cannot separate reasoning from other failures, and its own rule promotes on `crashed`, `no_submit` and `merge_conflict`.
+- Telemetry that is missing and cheap: which hook or command failed in a `gate_failed`, a tier on every cost-by-cause cell, the whole-Attempt changed-file list, and Job commit count. Those are the information the questions in the proposal need; whether to store them as columns or in Events is for the design Job.
+- Declared footprints are unreliable as a write set (21.6% undeclared, 42.7% for `impl`) and the undeclared head is repo-specific (F8, F9); a proposal that depends on them needs measured actual files, not declarations, and a re-measurement over the whole Attempt diff first (caveat 8).
+- Declared overlap predicts conflict poorly (573 overlapping pairs against at most 11 conflicts), so the value of serialization on footprints must be argued from lost parallelism, not from conflicts avoided (F10).
+- Failures are too rare for a learned difficulty model (about 40 first-Attempt code failures, F11); per-role lookup is the most the data supports, and infra failures (`provider_error`, 19.3%) must be excluded from any pass rate.
+- The unused tiers (H0-H2, S0) have no data either way, and 55.5% of active hours are the opener and updater, so the largest wall-clock lever in this data is the `open`/`update` runtime and the `no_submit`/`timed_out` tail, not the tier ladder (F1, F3).
+
 ## Evaluation of the three sub-proposals
 
 ## Roadmap
