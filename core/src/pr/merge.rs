@@ -1,4 +1,4 @@
-//! `pr merge` (commands.md §9.10): squash-merge one pull request on GitHub, after
+//! `pr merge` (commands.md §9.10): merge, with a method the repo allows, one pull request on GitHub, after
 //! re-reading it. It needs no Plan and no Context. It stores the merge (hs-d526) from its
 //! own success or from a precheck that reads MERGED, as the poll would: one transaction.
 
@@ -81,7 +81,19 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
         .with("state", view.state)
         .with("merge_state", view.merge_state));
     }
-    gh::merge_pr(runner, cwd, &repo, number, &view.head)?;
+    let methods = gh::merge_methods(runner, cwd, &repo)?;
+    let Some(method) = methods.choose() else {
+        return Err(CpdError::new(
+            ErrorCode::NoMergeMethod,
+            format!("{repo} allows no merge method: squash, merge commit and rebase are all off in its settings, so cpd cannot merge #{number}. Allow one in the repo's settings."),
+        )
+        .with("repo", repo.as_str())
+        .with("number", number)
+        .with("squash", methods.squash)
+        .with("merge", methods.merge)
+        .with("rebase", methods.rebase));
+    };
+    gh::merge_pr(runner, cwd, &repo, number, method, &view.head)?;
     // The merge happened; store it only from what GitHub reads back (hs-d550). A failed read stores nothing.
     let stored = match gh::view_for_merge(runner, cwd, &repo, number) {
         Ok(read) if read.state == "MERGED" => {
@@ -97,7 +109,7 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
         )})],
         Err(e) => vec![json!({"code": "auto_delete_unread", "text": e.message()})],
     };
-    Ok(Output::success(json!({"repo": repo, "number": number, "method": "squash", "stored": stored, "warnings": warnings})))
+    Ok(Output::success(json!({"repo": repo, "number": number, "method": method.as_str(), "stored": stored, "warnings": warnings})))
 }
 
 const STORE_BUSY_MS: u64 = 5000;

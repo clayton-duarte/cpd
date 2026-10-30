@@ -222,7 +222,7 @@ What a person says on a pull request on GitHub: a review with a body or a verdic
 _Avoid_: Reviewing, review (alone)
 
 **squash-merged** (state, pro-d144):
-What GitHub did to a pull request: it landed on the base as one commit. The Workflow's status `merged` follows it, and the Plan is `done` when every Workflow's pull request is. Not **Merged**, which is a Job's state.
+What GitHub did to a pull request: it landed on the base (as one commit when the repo squash-merges; by the repo's merge commit or rebase otherwise). The Workflow's status `merged` follows it, and the Plan is `done` when every Workflow's pull request is. Not **Merged**, which is a Job's state.
 _Avoid_: merged (for a pull request)
 
 **GitHub Actions workflow** (other, pro-d136, pro-d143):

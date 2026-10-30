@@ -156,6 +156,9 @@ impl Handler for Gh {
                     code => Reply::exit(code, "", "merge said no\n"),
                 }
             }
+            ["repo", "view", _, _, json] if json.contains("squashMergeAllowed") => {
+                Reply::ok("{\"squashMergeAllowed\":true,\"mergeCommitAllowed\":false,\"rebaseMergeAllowed\":false}\n")
+            }
             ["repo", "view", ..] => Reply::ok("{\"deleteBranchOnMerge\":true}\n"),
             ["api", "graphql", _, query, ..] => {
                 note("poll");
@@ -196,8 +199,8 @@ fn the_action_merges_then_polls_and_a_success_says_nothing() {
     gh_route(&fx, Poll::Merged);
     act(&fx, CLIENT);
     let order = order_of(args_of(&fx, "gh"));
-    assert_eq!(order[..4], ["pr view", "pr merge", "pr view", "repo view"], "{order:?}");
-    assert!(order.len() > 4 && order[4..].iter().all(|c| c == "api graphql"), "{order:?}");
+    assert_eq!(order[..5], ["pr view", "repo view", "pr merge", "pr view", "repo view"], "{order:?}");
+    assert!(order.len() > 5 && order[5..].iter().all(|c| c == "api graphql"), "{order:?}");
     assert_eq!(merges_of(args_of(&fx, "gh")).len(), 1);
     let tmux = args_of(&fx, "tmux");
     assert!(naming(tmux.clone(), "display-popup").is_empty() && naming(tmux.clone(), "display-message").is_empty(), "{tmux:?}");
@@ -210,7 +213,7 @@ fn a_poll_that_fails_after_a_merge_is_a_log_line_and_no_dialog() {
     gh_route(&fx, Poll::Fails);
     act(&fx, CLIENT);
     // the pull request did merge: the poll ran after it, and its failure is a line of the log, nothing else
-    assert_eq!(order_of(args_of(&fx, "gh"))[..5], ["pr view", "pr merge", "pr view", "repo view", "api graphql"]);
+    assert_eq!(order_of(args_of(&fx, "gh"))[..6], ["pr view", "repo view", "pr merge", "pr view", "repo view", "api graphql"]);
     let log = merge_log(&fx.env);
     assert_eq!(log.len(), 1, "{log:?}");
     assert!(log[0].starts_with("pr poll after merge o/r#7: gh_failed: "), "{log:?}");

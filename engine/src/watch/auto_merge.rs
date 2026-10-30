@@ -1,7 +1,8 @@
 //! E18, the pending auto-merge requests (commands.md §9.8b; pro-d115, pro-d117): a posted PR whose request is `pending`
 //! (deferred because it was stacked, or its `gh` call failed) is retried through the core function `pr post` runs, detached
-//! on its own thread, its answer collected at a later tick. `enabled` sets the row `enabled`; `not_allowed` and `refused`
-//! set it `refused` with one `error` Event for the Plan (`auto_merge_refused`); a failure leaves it `pending`, reported
+//! on its own thread, its answer collected at a later tick. `enabled` sets the row `enabled`; `not_allowed` (the repo lacks
+//! auto-merge) sets it `none` with no Event; `refused` (GitHub's refusal, or no merge method) sets it `refused` with one
+//! `error` Event for the Plan (`auto_merge_refused`); a failure leaves it `pending`, reported
 //! once per code and tried again `watch.error_repeat_seconds` after the failed run's end.
 
 use std::path::Path;
@@ -77,9 +78,9 @@ pub(super) fn run(engine: &mut Engine) {
 /// Records `outcome` of `post`: the row, and for a refusal the Event, in one transaction.
 fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
     let about = About::Plan(PlanId::parse(&post.plan).expect("a stored Plan id"));
+    let not_allowed = matches!(outcome, Outcome::NotAllowed);
     let refused = match outcome {
-        Outcome::Enabled => None,
-        Outcome::NotAllowed => Some("the repo does not allow auto-merge".to_owned()),
+        Outcome::Enabled | Outcome::NotAllowed => None,
         Outcome::Refused(why) => Some(why.split_whitespace().collect::<Vec<_>>().join(" ")),
         Outcome::Failed(e) => {
             engine.auto_merge.last_end = Some(engine.ports.clock.now());
@@ -92,7 +93,11 @@ fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
         }
     };
     let written = engine.store.write("engine E18", |tx| {
-        posts::set_auto_merge(tx, &post.plan, &post.pr, if refused.is_some() { "refused" } else { "enabled" })?;
+        posts::set_auto_merge(tx, &post.plan, &post.pr, match (&refused, &not_allowed) {
+            (Some(_), _) => "refused",
+            (None, true) => "none",
+            (None, false) => "enabled",
+        })?;
         if let Some(why) = &refused {
             let failure = Failure::from(&CpdError::new(
                 ErrorCode::AutoMergeRefused,
@@ -108,7 +113,9 @@ fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
         Ok(()) => {
             engine.auto_merge.last_end = None;
             engine.clear(Step::E18, &about);
-            if refused.is_none() {
+            if not_allowed {
+                engine.log.line(&format!("E18: the repo of PR {}/{} does not allow auto-merge: row set to none", post.plan, post.pr));
+            } else if refused.is_none() {
                 engine.log.line(&format!("E18: enabled auto-merge for PR {}/{}", post.plan, post.pr));
             }
         }
