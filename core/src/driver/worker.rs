@@ -127,7 +127,17 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
         (spec::quick_check(&policy.hooks.pre_commit), policy.protected.paths.clone())
     };
     let artefact = super::explore::artefact_in(&target.worktree, &job.key);
-    let job_spec = job.require_spec()?;
+    let job_spec = if matches!(job.kind.as_str(), "open" | "update") {
+        let prs = crate::plan::fingerprint::load_prs(conn, &target.plan)?;
+        let pr = prs
+            .iter()
+            .find(|p| p.key.as_str() == job.pr_str())
+            .ok_or_else(|| CpdError::bad_row(format!("Job {} has no PR row {} in Plan {}", job.key, job.pr_str(), target.plan)))?;
+        // The stored text keeps the base of the insert; A3 tells the Worker the live one.
+        crate::job::open::fixed_spec(pr, job.kind == "update")
+    } else {
+        job.require_spec()?.clone()
+    };
     let (touches, acceptance, out_of_scope) = (
         strings(&job_spec.touches, "touches")?,
         strings(&job_spec.acceptance, "acceptance")?,

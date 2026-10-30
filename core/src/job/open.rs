@@ -1,6 +1,7 @@
 //! The `open` Job (contract §2.2 "Job kinds", §3.7 E4, hs-d340): the last Job of a started PR, which cpd adds and the Lead never does.
 //! Its Spec is fixed text compiled into the binary and rendered from the PR's repo, base and Lead Branch, so nothing in a repo changes
-//! it; it has no Dependency rows (its Ready rule is derived, [`waiting_for`]); its fingerprint is stored at the insert.
+//! it; the stored copy is written at the insert (its fingerprint with it) and the Worker's Spec is rendered again at A3 from the live PR row;
+//! it has no Dependency rows (its Ready rule is derived, [`waiting_for`]).
 
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -88,6 +89,11 @@ fn adopted_spec(pr: &PrRow, head_ref: &str) -> JobSpec {
         rest = spec.context.split_once("\n\n").map_or("", |(_, rest)| rest),
     );
     spec
+}
+
+/// The fixed Spec of `pr`'s `open` Job, or its `update` Job when `update`: the one choice, for the insert and for the render at A3.
+pub(crate) fn fixed_spec(pr: &PrRow, update: bool) -> JobSpec {
+    if update { update_spec(pr) } else { spec(pr) }
 }
 
 /// The fixed Spec of an `update` Job of `pr` (§2.2 "Job kinds", §3.4 A3): the open Job's work for a pull request that exists.
@@ -179,7 +185,7 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, 
         pr: Some(pr.key.as_str().to_owned()),
         title,
         tier: Some(tier.clone()),
-        spec: Some(if update { update_spec(pr) } else { spec(pr) }),
+        spec: Some(fixed_spec(pr, update)),
         status: if draft { "draft" } else { "queued" }.to_owned(),
         appended: true,
         kind: kind.to_owned(),
