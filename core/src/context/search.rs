@@ -32,7 +32,7 @@ type Curation = (String, String, Option<String>);
 /// `context search <query> [--context <c>] [--limit <n>] [--kind <k,k>] [--all]`.
 #[derive(Args, Debug)]
 pub struct SearchArgs {
-    /// The query (FTS5 syntax; a trailing `*` is a prefix match)
+    /// The query: words are text (an id like hs-d655, a path or don't is quoted for you); "a phrase", AND, OR, NOT, NEAR(..), parentheses and a trailing `*` (prefix match) are kept
     query: Text,
     #[command(flatten)]
     select: Select,
