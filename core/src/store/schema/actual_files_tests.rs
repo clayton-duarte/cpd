@@ -38,9 +38,12 @@ fn fresh() -> (tempfile::TempDir, Store) {
 }
 
 fn attempt(n: u32, columns: &str, values: &str) -> String {
+    // One Attempt per Job may be active (`attempts_one_active`): the first runs, the later ones are ended.
+    let (status, ended) = if n == 1 { ("running", "") } else { ("ended", ", 'cancelled', 'cancel_requested', 't'") };
+    let ended_columns = if n == 1 { "" } else { ", outcome, cause, ended_at" };
     format!(
-        "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at{columns})
-         VALUES ('pay', 'j-a{n}', 'j', {n}, 'S2', 'ladder', 'running', 'pay/api', '/w', 't'{values});"
+        "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at{ended_columns}{columns})
+         VALUES ('pay', 'j-a{n}', 'j', {n}, 'S2', 'ladder', '{status}', 'pay/api', '/w', 't'{ended}{values});"
     )
 }
 
