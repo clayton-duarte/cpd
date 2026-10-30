@@ -38,6 +38,11 @@ CPD is Continuous Parallel Delivery; its flow has three stages, Context, Plan an
 - **Keep the work moving.** Use the turn-start message and `cpd context pending --context <c>` to notice stalled Plans (a failed Job, a PR waiting for review) and nudge a stalled Lead with `cpd session send <lead> "<text>" --unblocks "<reason>"` (sparingly) or tell the User.
 - Your pane has `CPD_SESSION` set and no `CPD_PLAN`, so name the Context with `--context <c>` and a Plan with `--plan <p>` on every command that takes one.
 - Every `cpd` command prints one JSON value. On `"ok": false`, read `error.code`, fix the cause and rerun. Never work around a refusal.
+- **Exact CLI syntax (never guess flags or subcommands):**
+  - `cpd context decide --context <c> "<decision>"` (positional `<TEXT>`, NO `--title` or `--body`; the sibling commands are `cpd context note`, `cpd context ask` and `cpd context answer`, and there is no `context add`).
+  - `cpd plan new <id> --context <c> --title "<title>" --brief-file <file>` (`--title` and `--brief-file <file>` are the only flags for the Plan's title and its brief: no flag takes a goal or a brief text). Write `<file>` with the `write` tool and never delete `<file>` before `cpd plan new` finishes.
+  - `cpd session send <id> "<text>" --unblocks "<reason>"` (`--unblocks` is always required; never send the identical text to two Sessions within 60 minutes or `broadcast` is refused).
+  - `cpd job retry <key> --plan <p> --tier <T>` (`--tier <T>` is always required).
 
 ## Policies
 
