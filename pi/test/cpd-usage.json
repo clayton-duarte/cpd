@@ -1,0 +1,1772 @@
+{
+  "": {
+    "flags": {
+      "--help": false,
+      "--version": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "answer": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 2,
+      "min": 2
+    },
+    "required": []
+  },
+  "ask": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--timeout-minutes": true
+    },
+    "positionals": {
+      "max": 2,
+      "min": 2
+    },
+    "required": []
+  },
+  "attempt list": {
+    "flags": {
+      "--active": false,
+      "--help": false,
+      "--job": true,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "attempt read": {
+    "flags": {
+      "--help": false,
+      "--lines": true,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "attempt run": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "attempt show": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "attempt submit": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--summary-file": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "board list": {
+    "flags": {
+      "--all": false,
+      "--help": false,
+      "--session": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "board post": {
+    "flags": {
+      "--help": false,
+      "--to": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "board take": {
+    "flags": {
+      "--help": false,
+      "--session": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "config": {
+    "flags": {
+      "--help": false,
+      "--migrate": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "context answer": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 2,
+      "min": 2
+    },
+    "required": []
+  },
+  "context archive": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "context ask": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "context curation": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--limit": true,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "context decide": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--plan": true,
+      "--supersedes": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "context delete": {
+    "flags": {
+      "--help": false,
+      "--yes": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "context distill": {
+    "flags": {
+      "--batch": true,
+      "--context": true,
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "context docs": {
+    "flags": {
+      "--context": true,
+      "--dismiss": true,
+      "--help": false,
+      "--plan": true,
+      "--send": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "context list": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "context manager": {
+    "flags": {
+      "--by-user": false,
+      "--context": true,
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "context new": {
+    "flags": {
+      "--confirm-fallback": false,
+      "--help": false,
+      "--jira": true,
+      "--owner": true,
+      "--title": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "context note": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--plan": true,
+      "--supersedes": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "context owner": {
+    "flags": {
+      "--confirm-fallback": false,
+      "--context": true,
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "context pending": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--markdown": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "context reindex": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "context rename": {
+    "flags": {
+      "--help": false,
+      "--title": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "context retire": {
+    "flags": {
+      "--approve": true,
+      "--context": true,
+      "--help": false,
+      "--plan": true,
+      "--reject": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "context search": {
+    "flags": {
+      "--all": false,
+      "--context": true,
+      "--help": false,
+      "--kind": true,
+      "--limit": true,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "context show": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--plan": true,
+      "--record": true,
+      "--since": true,
+      "--topic": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "context unarchive": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "doctor": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "events follow": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--kind": true,
+      "--plan": true,
+      "--session": true,
+      "--since": true,
+      "--until-idle": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "events list": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--kind": true,
+      "--limit": true,
+      "--plan": true,
+      "--session": true,
+      "--since": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "gate finish": {
+    "flags": {
+      "--help": false,
+      "--run": true,
+      "--status": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "host approve": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "host repair": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "inbox approve": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "inbox claim": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "inbox dismiss": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "inbox list": {
+    "flags": {
+      "--all": false,
+      "--closed": false,
+      "--context": true,
+      "--help": false,
+      "--limit": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "inbox show": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "inbox snooze": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 2,
+      "min": 2
+    },
+    "required": []
+  },
+  "incident end": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "incident start": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--reason": true,
+      "--until-pr": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "incident status": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "install": {
+    "flags": {
+      "--help": false,
+      "--root": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "janitor": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "job add": {
+    "flags": {
+      "--draft": false,
+      "--help": false,
+      "--kind": true,
+      "--needs": true,
+      "--plan": true,
+      "--pr": true,
+      "--spec": true,
+      "--tier": true,
+      "--title": true,
+      "--urgent": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": [
+      "--title"
+    ]
+  },
+  "job approve-tests": {
+    "flags": {
+      "--help": false,
+      "--path": true,
+      "--plan": true,
+      "--reason": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": [
+      "--path",
+      "--reason"
+    ]
+  },
+  "job cancel": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--reason": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": [
+      "--reason"
+    ]
+  },
+  "job dispatch": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "job edit": {
+    "flags": {
+      "--help": false,
+      "--kind": true,
+      "--needs": true,
+      "--no-needs": false,
+      "--plan": true,
+      "--pr": true,
+      "--spec": true,
+      "--tier": true,
+      "--title": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "job list": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--status": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "job retry": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--tier": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": [
+      "--tier"
+    ]
+  },
+  "job show": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "job urgent": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "mcp attach": {
+    "flags": {
+      "--help": false,
+      "--session": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "models refresh": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "models show": {
+    "flags": {
+      "--help": false,
+      "--provider": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "plan archive": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "plan cancel": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--reason": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "plan decide": {
+    "flags": {
+      "--approve": false,
+      "--feedback-file": true,
+      "--help": false,
+      "--plan": true,
+      "--reject": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "plan delete": {
+    "flags": {
+      "--help": false,
+      "--yes": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "plan list": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--phase": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "plan lock": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "plan new": {
+    "flags": {
+      "--brief-file": true,
+      "--by-user": false,
+      "--context": true,
+      "--help": false,
+      "--jira": true,
+      "--name": true,
+      "--tier": true,
+      "--title": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "plan outline": {
+    "flags": {
+      "--file": true,
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": [
+      "--file"
+    ]
+  },
+  "plan phase": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "plan rename": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--title": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": [
+      "--title"
+    ]
+  },
+  "plan render": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "plan review": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--title": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": [
+      "--title"
+    ]
+  },
+  "plan show": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "plan unarchive": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "policy show": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--owner": true,
+      "--plan": true,
+      "--pr": true,
+      "--repo": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "pr add": {
+    "flags": {
+      "--adopt": true,
+      "--base": true,
+      "--confirm-author": true,
+      "--help": false,
+      "--jira": true,
+      "--jobs": true,
+      "--needs": true,
+      "--no-needs": false,
+      "--plan": true,
+      "--repo": true,
+      "--shape": true,
+      "--title": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": [
+      "--repo",
+      "--title"
+    ]
+  },
+  "pr cancel": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--superseded-by": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "pr describe": {
+    "flags": {
+      "--file": true,
+      "--help": false,
+      "--plan": true,
+      "--pr": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": [
+      "--file",
+      "--pr"
+    ]
+  },
+  "pr edit": {
+    "flags": {
+      "--base": true,
+      "--help": false,
+      "--jira": true,
+      "--needs": true,
+      "--no-needs": false,
+      "--plan": true,
+      "--repo": true,
+      "--title": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "pr merge": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "pr open": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--pr": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "pr poll": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "pr post": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--pr": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "pr push": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--pr": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "pr rebase": {
+    "flags": {
+      "--abort": false,
+      "--continue": false,
+      "--help": false,
+      "--plan": true,
+      "--pr": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "pr reply": {
+    "flags": {
+      "--body": true,
+      "--body-file": true,
+      "--help": false,
+      "--plan": true,
+      "--pr": true,
+      "--to": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": [
+      "--to"
+    ]
+  },
+  "pr rerun": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--pr": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "pr start": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "pr view": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--pr": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "prune": {
+    "flags": {
+      "--apply": false,
+      "--drop": true,
+      "--help": false
+    },
+    "positionals": {
+      "max": null,
+      "min": 1
+    },
+    "required": []
+  },
+  "resource list": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "resource run": {
+    "flags": {
+      "--help": false,
+      "--wait": true
+    },
+    "positionals": {
+      "max": null,
+      "min": 1
+    },
+    "required": []
+  },
+  "review submit": {
+    "flags": {
+      "--event": true,
+      "--head": true,
+      "--help": false,
+      "--input": true,
+      "--pr": true,
+      "--slack": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "secret allow": {
+    "flags": {
+      "--attempt": true,
+      "--field": true,
+      "--help": false,
+      "--vault": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "secret approve": {
+    "flags": {
+      "--action": true,
+      "--field": true,
+      "--help": false,
+      "--item": true,
+      "--vault": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "secret create": {
+    "flags": {
+      "--field": true,
+      "--help": false,
+      "--vault": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "secret delete": {
+    "flags": {
+      "--help": false,
+      "--vault": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "secret edit": {
+    "flags": {
+      "--field": true,
+      "--help": false,
+      "--vault": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "secret get": {
+    "flags": {
+      "--field": true,
+      "--help": false,
+      "--vault": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "secret list": {
+    "flags": {
+      "--help": false,
+      "--vault": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "session archive": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "session close": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "session first-message": {
+    "flags": {
+      "--help": false,
+      "--session": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "session fork": {
+    "flags": {
+      "--help": false,
+      "--message-file": true,
+      "--name": true,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "session history": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "session list": {
+    "flags": {
+      "--archived": false,
+      "--context": true,
+      "--help": false,
+      "--plan": true,
+      "--role": true,
+      "--state": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "session open": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "session park": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 0
+    },
+    "required": []
+  },
+  "session rename": {
+    "flags": {
+      "--help": false,
+      "--session": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "session report": {
+    "flags": {
+      "--code": true,
+      "--details": true,
+      "--help": false,
+      "--message": true,
+      "--session": true,
+      "--what": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "session resume": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "session retier": {
+    "flags": {
+      "--all": false,
+      "--help": false,
+      "--tier": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 0
+    },
+    "required": []
+  },
+  "session retitle": {
+    "flags": {
+      "--help": false,
+      "--width": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "session run": {
+    "flags": {
+      "--adopt": true,
+      "--help": false,
+      "--pi-stale": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "session send": {
+    "flags": {
+      "--file": true,
+      "--help": false,
+      "--unblocks": true
+    },
+    "positionals": {
+      "max": 2,
+      "min": 1
+    },
+    "required": []
+  },
+  "session show": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 0
+    },
+    "required": []
+  },
+  "session state": {
+    "flags": {
+      "--help": false,
+      "--label": true,
+      "--reply": false,
+      "--session": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "session switch-failed": {
+    "flags": {
+      "--code": true,
+      "--help": false,
+      "--message": true,
+      "--session": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "session switched": {
+    "flags": {
+      "--help": false,
+      "--session": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "session unarchive": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "tag": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "test build": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "test changed": {
+    "flags": {
+      "--dry-run": false,
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 0
+    },
+    "required": []
+  },
+  "test list": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "test run": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": null,
+      "min": 1
+    },
+    "required": []
+  },
+  "tiers": {
+    "flags": {
+      "--context": true,
+      "--help": false,
+      "--owner": true,
+      "--plan": true,
+      "--pr": true,
+      "--repo": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "tui": {
+    "flags": {
+      "--attach": false,
+      "--help": false,
+      "--respawn": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "tui action": {
+    "flags": {
+      "--client": true,
+      "--help": false
+    },
+    "positionals": {
+      "max": 2,
+      "min": 0
+    },
+    "required": []
+  },
+  "tui view chat": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "tui view dialog checklist": {
+    "flags": {
+      "--help": false,
+      "--items": true,
+      "--out": true,
+      "--title": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": [
+      "--items"
+    ]
+  },
+  "tui view dialog confirm": {
+    "flags": {
+      "--help": false,
+      "--out": true,
+      "--text": true,
+      "--title": true,
+      "--yes-label": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": [
+      "--text"
+    ]
+  },
+  "tui view dialog form": {
+    "flags": {
+      "--help": false,
+      "--input-label": true,
+      "--option": true,
+      "--out": true,
+      "--select-label": true,
+      "--title": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": [
+      "--input-label",
+      "--option",
+      "--select-label"
+    ]
+  },
+  "tui view dialog input": {
+    "flags": {
+      "--help": false,
+      "--initial": true,
+      "--out": true,
+      "--prompt": true,
+      "--title": true,
+      "--validate": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": [
+      "--prompt",
+      "--validate"
+    ]
+  },
+  "tui view dialog select": {
+    "flags": {
+      "--help": false,
+      "--option": true,
+      "--out": true,
+      "--prompt": true,
+      "--title": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": [
+      "--option",
+      "--prompt"
+    ]
+  },
+  "tui view dialog text": {
+    "flags": {
+      "--body": true,
+      "--help": false,
+      "--out": true,
+      "--title": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": [
+      "--body"
+    ]
+  },
+  "tui view history": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "tui view legend": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "tui view logs": {
+    "flags": {
+      "--event": true,
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "tui view plan": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "tui view tree": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "tui view widgets": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "version sync": {
+    "flags": {
+      "--help": false,
+      "--print": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
+  "watch": {
+    "flags": {
+      "--check": false,
+      "--ensure": false,
+      "--help": false,
+      "--mark-restart": false,
+      "--restart-tmux": false,
+      "--wait": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  }
+}

@@ -33,9 +33,12 @@ async function contextUpdates(host: Host, r: Run, ctx: Ctx): Promise<{ message: 
       let standing: string[] = [];
       if (plan !== null) {
         try {
-          standing = closedPrLines(await call(["plan", "show", plan]));
+          standing = closedPrLines(await call(["plan", "show", "--plan", plan]));
         } catch (e) {
-          standing = [`could not read the Plan's PRs: ${toCpdError(e).message.split("\n")[0]}`];
+          // A `usage` refusal is the adapter's own bug: reported, not rendered. A condition (a missing Plan, a busy store) is the Lead's to see.
+          const err = toCpdError(e);
+          if (err.code === "usage") host.deliver("closed-unmerged PR line", err);
+          else standing = [`could not read the Plan's PRs: ${err.message.split("\n")[0]}`];
         }
       }
       message = leadUpdate(context, r.id, events, records, prs, parseTaken(await call(["board", "take", "--session", r.id])), standing);
