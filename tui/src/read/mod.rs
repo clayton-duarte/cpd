@@ -42,9 +42,9 @@ mod logs;
 #[cfg(test)]
 mod elapsed_tests;
 #[cfg(test)]
-mod workflow_cost_tests;
-#[cfg(test)]
 mod explore_attempt_tests;
+#[cfg(test)]
+mod workflow_cost_tests;
 #[cfg(test)]
 mod look_tests;
 #[cfg(test)]

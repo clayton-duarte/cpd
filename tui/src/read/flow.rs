@@ -362,10 +362,11 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool, lead: &str, jo
         }
     }
     let mut costs: BTreeMap<String, Vec<Option<f64>>> = BTreeMap::new();
+    // An explore Job belongs to the Plan, not to a PR: its Attempts are in the Plan's cost, in no Workflow's (pro-d237).
     let mut stmt = conn.prepare(
         "SELECT j.pr, json_extract(a.metrics, '$.cost_usd'), a.metrics IS NULL, s.file
            FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job LEFT JOIN sessions s ON s.id = a.worker_session
-          WHERE a.plan = ?1",
+          WHERE a.plan = ?1 AND j.pr IS NOT NULL",
     )?;
     for row in stmt.query_map([plan.as_str()], |r| {
         Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<rusqlite::types::Value>>(1)?, r.get::<_, bool>(2)?, r.get::<_, Option<String>>(3)?))
