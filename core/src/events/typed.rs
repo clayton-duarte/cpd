@@ -548,7 +548,7 @@ mod tests {
                 NewEvent::job_added_by_cpd(T, s, s, s, s, s, Some(s)),
             ],
             Kind::JobEdited => vec![NewEvent::job_edited(T, [s])],
-            Kind::JobMerged => vec![NewEvent::job_merged(T, s, s, s, false, false, None), NewEvent::job_merged(T, s, s, s, true, true, Some((s, n, s)))],
+            Kind::JobMerged => vec![NewEvent::job_merged(T, s, s, s, false, false, None), NewEvent::job_merged(T, s, s, s, true, true, Some((s, n, s))), NewEvent::job_merged_explore(T, s, s, s, s, s)],
             Kind::JobFailed => vec![NewEvent::job_failed(T, s, s, s, n)],
             Kind::JobRetried => vec![NewEvent::job_retried(T, s)],
             Kind::JobCancelRequested => vec![NewEvent::job_cancel_requested(T, s)],
