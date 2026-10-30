@@ -131,21 +131,23 @@ fn border_format_title_pills_follow_the_rule() {
 #[test]
 fn status_line_pills_follow_the_rule() {
     const JOIN: &str = "#[fg=colour8]\u{2501}#[default]";
-    let button = |range: &str, colour: &str, glyph: &str| {
-        format!("#[range=user|{range}]#[fg={colour}]\u{e0b6}#[reverse]{glyph}#[noreverse]\u{e0b4}#[default]#[norange]")
+    let pill_button = |range: &str, colour: &str, text: &str| {
+        format!("#[range=user|{range}]#[fg={colour}]\u{e0b6}#[reverse]{text}#[noreverse]\u{e0b4}#[default]#[norange]")
     };
+    // a glyph button's pill text is the glyph and one space; the runner's is text, with none
+    let button = |range: &str, colour: &str, glyph: &str| pill_button(range, colour, &format!("{glyph} "));
     let pill = |colour: &str, text: &str| {
         format!("#[fg={colour}]\u{e0b6}#[reverse]{text}#[noreverse]\u{e0b4}#[default]")
     };
     let italic_pill = |colour: &str, text: &str| {
         format!("#[fg={colour}]\u{e0b6}#[reverse]#[italics]{text}#[noitalics]#[noreverse]\u{e0b4}#[default]")
     };
-    let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},18},#{?@cpd_runner,#{e|+:#{n:@cpd_runner},3},0}},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}}";
+    let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},22},#{?@cpd_runner,#{e|+:#{n:@cpd_runner},3},0}},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}}";
     let want = format!(
         "{JOIN}{}{JOIN}{}{JOIN}{}{JOIN}{}\
          #{{?@cpd_runner,{JOIN}{},}}\
          #{{?#{{@cpd_preview}},#[fg=colour8]\u{2501}{},}}\
-         #[fg=colour8]#{{R:\u{2501},#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},16}},#{{?@cpd_runner,#{{e|+:#{{n:@cpd_runner}},3}},0}}}},#{{?#{{@cpd_preview}},#{{e|+:#{{n:@cpd_preview}},12}},0}}}},#{{?@cpd_version,#{{e|+:#{{n:@cpd_version}},3}},0}}}},#{{?@cpd_incident,#{{e|+:#{{n:@cpd_incident}},18}},0}}}},\
+         #[fg=colour8]#{{R:\u{2501},#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},20}},#{{?@cpd_runner,#{{e|+:#{{n:@cpd_runner}},3}},0}}}},#{{?#{{@cpd_preview}},#{{e|+:#{{n:@cpd_preview}},12}},0}}}},#{{?@cpd_version,#{{e|+:#{{n:@cpd_version}},3}},0}}}},#{{?@cpd_incident,#{{e|+:#{{n:@cpd_incident}},18}},0}}}},\
          #{{e|+:#{{?{long},#{{e|+:#{{w:@cpd_workers}},2}},#{{e|+:#{{w:@cpd_workers_short}},2}}}},1}}}}}}\
          #[default]\
          #{{?@cpd_incident,{}{JOIN},}}\
@@ -156,7 +158,7 @@ fn status_line_pills_follow_the_rule() {
         button("legend", "colour15", super::LEGEND_GLYPH),
         button("logs", "colour15", super::LOGS_GLYPH),
         button("costs", "colour15", "\u{EEC1}"),
-        button("runner", "colour15", "#{@cpd_runner}"),
+        pill_button("runner", "colour15", "#{@cpd_runner}"),
         pill("colour3", "preview: #{@cpd_preview}"),
         format!("#[range=user|incident]{}#[norange]", italic_pill("colour9", "Incident Mode: #{@cpd_incident}")),
         pill("colour8", &format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
@@ -252,18 +254,18 @@ fn a_right_click_is_left_to_tmuxs_default_binding_and_the_status_click_runs_cpd_
 /// The status line's format, exactly (hs-d479): one grey `━` line across the row, starting and ending with a `━`; the
 /// three button pills each in its own range, joined by a single `━` outside the ranges; the optional unpadded
 /// preview pill after a join; the fill; then the workers' pill and the closing `━`
-/// (long form from `#{w:@cpd_workers}` plus its two caps and 14: the left group's 12, the closing `━` and a fill of 1).
+/// (long form from `#{w:@cpd_workers}` plus its two caps and 22: the left group's 20, the closing `━` and a fill of 1).
 #[test]
 fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
     let prefix = format!(
             "#[fg=colour8]\u{2501}#[default]\
-             #[range=user|reset]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
+             #[range=user|reset]#[fg=colour15]\u{e0b6}#[reverse]{} #[noreverse]\u{e0b4}#[default]#[norange]\
              #[fg=colour8]\u{2501}#[default]\
-             #[range=user|legend]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
+             #[range=user|legend]#[fg=colour15]\u{e0b6}#[reverse]{} #[noreverse]\u{e0b4}#[default]#[norange]\
              #[fg=colour8]\u{2501}#[default]\
-             #[range=user|logs]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
+             #[range=user|logs]#[fg=colour15]\u{e0b6}#[reverse]{} #[noreverse]\u{e0b4}#[default]#[norange]\
              #[fg=colour8]\u{2501}#[default]\
-             #[range=user|costs]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]",
+             #[range=user|costs]#[fg=colour15]\u{e0b6}#[reverse]{} #[noreverse]\u{e0b4}#[default]#[norange]",
             super::RESET_GLYPH,
             super::LEGEND_GLYPH,
             super::LOGS_GLYPH,
@@ -277,7 +279,7 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
     let suffix = "#[default]\
          #{?@cpd_incident,#[range=user|incident]#[fg=colour9]\u{e0b6}#[reverse]#[italics]Incident Mode: #{@cpd_incident}#[noitalics]#[noreverse]\u{e0b4}#[default]#[norange]#[fg=colour8]\u{2501}#[default],}\
          #[fg=colour8]\u{e0b6}#[reverse]\
-         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},18},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
+         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},22},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
          #[noreverse]\u{e0b4}#[default]\
          #{?#{@cpd_host_alert},#[fg=colour8]\u{2501}#[range=user|host]#[fg=colour9]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default]#[norange],#{?#{@cpd_version},#[fg=colour8]\u{2501}#[fg=colour8]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default],}}\
          #[fg=colour8]\u{2501}#[default]";
@@ -435,29 +437,50 @@ impl Row<'_> {
     }
 }
 
-/// The row is exactly `#{client_width}` cells with the runner pill showing `pi`, `durable` or not at all, at every
-/// width the long and the short workers form cover, and the pill's text is on the row exactly when the option is set.
+/// The row is exactly `#{client_width}` cells with the runner pill showing `pi`, `durable` or not at all, with and without
+/// the preview pill, at every width the long and the short workers form cover; the pill's text is on the row exactly when
+/// the option is set, and the row begins with the left group of 4-cell glyph buttons.
 #[test]
 fn the_status_row_keeps_its_width_with_pi_with_durable_and_with_no_runner_option() {
+    const PREVIEW: &str = "cpd.tui-visuals.box-order 6c43886";
+    let glyphs = [super::RESET_GLYPH, super::LEGEND_GLYPH, super::LOGS_GLYPH, "\u{EEC1}"];
     for runner in [Some("pi"), Some("durable"), None] {
-        for width in [60usize, 80, 120, 215] {
-            let vars = |name: &str| {
-                Some(match name {
-                    "client_width" => width.to_string(),
-                    "window_zoomed_flag" => "1".to_owned(),
-                    "@cpd_workers" => "2 running 1 waiting".to_owned(),
-                    "@cpd_workers_short" => "2 1".to_owned(),
-                    "@cpd_version" => "1.2.3".to_owned(),
-                    "@cpd_runner" => runner?.to_owned(),
-                    _ => return None,
-                })
+        let runner_width = runner.map_or(0, |r| r.chars().count() + 3);
+        for preview in [None, Some(PREVIEW)] {
+            let widths: Vec<usize> = match preview {
+                None => [60, 80, 120, 215].to_vec(),
+                Some(_) => [79, 95, 96, 120].iter().map(|w| w + runner_width).collect(),
             };
-            let row = Row { vars: &vars }.expand(&STATUS_FORMAT);
-            assert_eq!(display_width(&row), width, "runner {runner:?}, width {width}: {row:?}");
-            let pill = runner.map(|r| format!("\u{e0b6}{r}\u{e0b4}"));
-            for r in ["pi", "durable"] {
-                let marker = format!("\u{e0b6}{r}\u{e0b4}");
-                assert_eq!(row.contains(&marker), pill.as_deref() == Some(marker.as_str()), "runner {runner:?}: {row:?}");
+            for width in widths {
+                let vars = |name: &str| {
+                    Some(match name {
+                        "client_width" => width.to_string(),
+                        "window_zoomed_flag" => "1".to_owned(),
+                        "@cpd_workers" => "2 running 1 waiting".to_owned(),
+                        "@cpd_workers_short" => "2 1".to_owned(),
+                        "@cpd_version" => "1.2.3".to_owned(),
+                        "@cpd_runner" => runner?.to_owned(),
+                        "@cpd_preview" => preview?.to_owned(),
+                        _ => return None,
+                    })
+                };
+                let row = Row { vars: &vars }.expand(&STATUS_FORMAT);
+                let what = format!("runner {runner:?}, preview {preview:?}, width {width}: {row:?}");
+                assert_eq!(display_width(&row), width, "{what}");
+                if preview.is_some() {
+                    assert_eq!(row.contains("2 running 1 waiting"), width >= 96 + runner_width, "{what}");
+                }
+                let mut left = String::from("\u{2501}");
+                left.push_str(&glyphs.map(|g| format!("\u{e0b6}{g} \u{e0b4}")).join("\u{2501}"));
+                if let Some(r) = runner {
+                    left.push_str(&format!("\u{2501}\u{e0b6}{r}\u{e0b4}"));
+                }
+                assert!(row.starts_with(&left), "the row begins with the left group {left:?}: {what}");
+                let pill = runner.map(|r| format!("\u{e0b6}{r}\u{e0b4}"));
+                for r in ["pi", "durable"] {
+                    let marker = format!("\u{e0b6}{r}\u{e0b4}");
+                    assert_eq!(row.contains(&marker), pill.as_deref() == Some(marker.as_str()), "{what}");
+                }
             }
         }
     }
@@ -487,8 +510,8 @@ fn the_costs_button_is_the_fourth_and_looks_the_same_whatever_the_state() {
     let pill = &format[from..from + format[from..].find("#[norange]").expect("a closed range") + "#[norange]".len()];
     assert_eq!(
         pill,
-        "#[range=user|costs]#[fg=colour15]\u{e0b6}#[reverse]\u{EEC1}#[noreverse]\u{e0b4}#[default]#[norange]",
-        "the pill text is the glyph alone"
+        "#[range=user|costs]#[fg=colour15]\u{e0b6}#[reverse]\u{EEC1} #[noreverse]\u{e0b4}#[default]#[norange]",
+        "the pill text is the glyph and one space"
     );
 }
 
@@ -505,7 +528,7 @@ fn the_status_row_keeps_its_width_with_the_plain_workers_texts() {
     let short = "9\u{f0798}4\u{f0798}6/6".to_owned();
     let long = "workers 9\u{f0798}4\u{f0798}6/6".to_owned();
     assert_eq!((display_width(&long), display_width(&short)), (15, 7));
-    for width in [26usize, 34, 35, 60, 120] {
+    for width in [30usize, 38, 39, 60, 120] {
         let vars = |name: &str| {
             Some(match name {
                 "client_width" => width.to_string(),
@@ -517,7 +540,67 @@ fn the_status_row_keeps_its_width_with_the_plain_workers_texts() {
         };
         let row = Row { vars: &vars }.expand(&STATUS_FORMAT);
         assert_eq!(display_width(&row), width, "width {width}: {row:?}");
-        assert_eq!(row.contains("workers "), width >= 35, "the long text is drawn from 35 columns: {row:?}");
+        assert_eq!(row.contains("workers "), width >= 39, "the long text is drawn from 39 columns: {row:?}");
         assert!(row.contains(&short), "{row:?}");
     }
+}
+
+/// The substring of `STATUS_FORMAT` from `#[range=user|<name>]` to its `#[norange]`, inclusive.
+fn range_of(name: &str) -> &'static str {
+    let format = STATUS_FORMAT.as_str();
+    let from = format.find(&format!("#[range=user|{name}]")).unwrap_or_else(|| panic!("no {name} range"));
+    let len = format[from..].find("#[norange]").expect("a closed range") + "#[norange]".len();
+    &format[from..from + len]
+}
+
+/// Each glyph button is the left cap, the glyph, ONE SPACE inside the pill, the right cap: 4 cells; the left group is 20.
+#[test]
+fn each_glyph_button_is_cap_glyph_space_cap_and_the_left_group_is_20_cells() {
+    use super::{LEGEND_GLYPH, LOGS_GLYPH, RESET_GLYPH};
+    for (name, glyph) in [("reset", RESET_GLYPH), ("legend", LEGEND_GLYPH), ("logs", LOGS_GLYPH), ("costs", "\u{EEC1}")] {
+        let pill = range_of(name);
+        assert_eq!(
+            pill,
+            format!("#[range=user|{name}]#[fg=colour15]\u{e0b6}#[reverse]{glyph} #[noreverse]\u{e0b4}#[default]#[norange]"),
+            "{name}: cap, glyph, one space, cap"
+        );
+        assert_eq!(display_width(pill), 4, "{name}");
+    }
+    let format = STATUS_FORMAT.as_str();
+    let costs = range_of("costs");
+    let end = format.find(costs).unwrap() + costs.len();
+    assert_eq!(display_width(&format[..end]), 20, "the left group: `━`, 4 buttons of 4 cells and 3 joins");
+    assert_eq!(
+        range_of("runner"),
+        "#[range=user|runner]#[fg=colour15]\u{e0b6}#[reverse]#{@cpd_runner}#[noreverse]\u{e0b4}#[default]#[norange]",
+        "the runner pill is text, with no space"
+    );
+}
+
+/// A click range wraps its whole pill (caps included); tmux's range also owns the cell after it, the join. The space is
+/// inside the range, so the four ranges start at columns 1, 6, 11 and 16 and own 5 cells each, without overlap.
+#[test]
+fn a_click_range_wraps_its_whole_pill_and_the_space_shifts_no_other_range() {
+    const JOIN: &str = "#[fg=colour8]\u{2501}#[default]";
+    let format = STATUS_FORMAT.as_str();
+    let mut owned: Vec<std::ops::RangeInclusive<usize>> = Vec::new();
+    let mut previous_end = 0;
+    for (name, start) in [("reset", 1), ("legend", 6), ("logs", 11), ("costs", 16)] {
+        let pill = range_of(name);
+        let at = format.find(pill).unwrap();
+        assert_eq!(display_width(&format[..at]), start, "{name} starts at column {start}");
+        assert!(pill.starts_with(&format!("#[range=user|{name}]#[fg=colour15]\u{e0b6}")), "the range opens before the left cap: {pill}");
+        assert!(pill.ends_with("\u{e0b4}#[default]#[norange]"), "the range closes after the right cap: {pill}");
+        assert_eq!(display_width(pill), 4, "{name} covers 4 cells");
+        let own = start..=start + 4;
+        assert!(owned.iter().all(|o| o.end() < own.start()), "{name} owns {own:?}, overlapping {owned:?}");
+        owned.push(own);
+        if previous_end > 0 {
+            assert_eq!(&format[previous_end..at], JOIN, "exactly one join outside every range before {name}");
+        } else {
+            assert_eq!(&format[..at], JOIN, "the leading `━` (col 0) is outside every range");
+        }
+        previous_end = at + pill.len();
+    }
+    assert_eq!(owned, [1..=5, 6..=10, 11..=15, 16..=20]);
 }
