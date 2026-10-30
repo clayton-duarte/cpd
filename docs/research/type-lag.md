@@ -485,4 +485,20 @@ What to read, top to bottom:
 
 ## Candidates
 
+| Change | Median ms per key, before | after | Kept |
+|---|---|---|---|
+| Balloon cache, CachedComponent and CachedContainer hold the two latest widths (CT + EX on a copy of the Manager transcript; `keys`, 3 runs, two A/B rounds in one window) | 22.75 and 27.00 (runs 21.75 to 30.25) | 9.25 and 10.00 (runs 9.25 to 10.25) | kept |
+
 ## After
+
+Recipe `keys` mode, unedited, one window (2026-10-30 afternoon EDT), CT + EX on a copy of the Manager transcript (a separate copy per build, in `mktemp -d`; the original untouched), BEFORE built in a throwaway worktree at 41fed448 (tip of PR `trace`, the merge-base with this branch), AFTER at this head (95f562d4), CONTROL `--no-session`.
+
+| Build | Run 1 | Run 2 | Run 3 | Median ms per key | Ratio to CONTROL |
+| --- | --- | --- | --- | --- | --- |
+| BEFORE (41fed448) | 23.75 | 23.00 | 23.25 | 23.25 | 31.0x |
+| AFTER (95f562d4) | 9.50 | 8.25 | 9.50 | 9.50 | 12.7x |
+| CONTROL | 0.75 | 0.75 | 0.50 | 0.75 | 1.0x |
+
+Factor BEFORE/AFTER: 23.25 / 9.50 = 2.4x (AFTER is 41 % of BEFORE, below half).
+
+Validity: the BEFORE still reproduces (23.25 ms per key, above 15). The printed pid was the pane's child, whose CPU (0.92 to 0.95 s per 40 keys at BEFORE) matches pi's, not a transient; unverified beyond that. The remaining 9.5 ms is pi-tui compositing the padded `HStack` (see Cause confirmed); IDLE is not covered here.
