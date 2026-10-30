@@ -108,38 +108,48 @@ fn flat(reasons: &[Vec<String>]) -> Vec<&str> {
 }
 
 #[test]
-fn a_pr_that_becomes_ready_tells_the_lead_nothing() {
+fn a_pr_that_becomes_ready_tells_the_lead_ready_to_post_once() {
     let fx = fixture(Posting::Enabled, false, "any");
-    assert_eq!(becomes_ready(&fx), told(&[]));
+    assert_eq!(becomes_ready(&fx), told(&[&["ready_to_post"]]));
     step(&fx, "U2", "SUCCESS", None, vec![]);
     step(&fx, "U2", "SUCCESS", None, vec![]);
-    assert_eq!(reasons(&fx), told(&[]));
+    assert_eq!(reasons(&fx), told(&[&["ready_to_post"]]));
 }
 
 #[test]
-fn an_answered_bot_comment_that_makes_the_pr_ready_tells_the_lead_nothing() {
+fn an_answered_bot_comment_that_makes_the_pr_ready_tells_comments_then_ready_to_post() {
     let fx = fixture(Posting::Enabled, false, "any");
     step(&fx, "U1", "SUCCESS", None, vec![thread("T1", "review-bot[bot]")]);
     assert_eq!(reasons(&fx), told(&[&["comments"]]), "the open bot thread is a comment");
     step(&fx, "U2", "SUCCESS", None, vec![]);
-    assert_eq!(reasons(&fx), told(&[&["comments"]]), "the bot thread is answered: no ready_to_post, nothing new");
+    assert_eq!(reasons(&fx), told(&[&["comments"], &["ready_to_post"]]), "the bot thread is answered: the PR is ready");
 }
 
 #[test]
-fn a_pr_that_becomes_ready_with_a_new_comment_is_told_comments_alone() {
+fn a_ready_pr_with_an_open_bot_comment_is_not_told_ready_to_post() {
+    let fx = fixture(Posting::Enabled, false, "any");
+    step(&fx, "U1", "SUCCESS", None, vec![thread("T1", "review-bot[bot]")]);
+    step(&fx, "U2", "SUCCESS", None, vec![thread("T1", "review-bot[bot]")]);
+    assert_eq!(reasons(&fx), told(&[&["comments"]]));
+}
+
+#[test]
+fn a_pr_that_becomes_ready_with_a_new_human_comment_is_told_both_in_one_event() {
     let fx = fixture(Posting::Enabled, false, "any");
     step(&fx, "U1", "PENDING", None, vec![]);
     step(&fx, "U2", "SUCCESS", None, vec![thread("T1", "rev")]);
     let events = fx.events("pr-feedback");
     assert_eq!(events.len(), 1, "{events:?}");
-    assert_eq!(events[0].1["reasons"], json!(["comments"]));
-    assert!(events[0].0.contains("needs attention: comments."), "{}", events[0].0);
-    assert!(!events[0].0.contains("ready to post"), "{}", events[0].0);
+    assert_eq!(events[0].1["reasons"], json!(["comments", "ready_to_post"]));
+    assert!(events[0].0.contains("ready to post for review"), "{}", events[0].0);
 }
 
 #[test]
-fn no_posting_state_or_authorship_ever_raises_ready_to_post() {
-    for (posting, posted) in [(Posting::Enabled, false), (Posting::Enabled, true), (Posting::Disabled, false), (Posting::Absent, false)] {
+fn ready_to_post_needs_an_enabled_unposted_authored_pr() {
+    let fx = fixture(Posting::Enabled, false, "any");
+    assert_eq!(becomes_ready(&fx), told(&[&["ready_to_post"]]));
+    drop(fx);
+    for (posting, posted) in [(Posting::Enabled, true), (Posting::Disabled, false), (Posting::Absent, false)] {
         let fx = fixture(posting, posted, "any");
         assert_eq!(becomes_ready(&fx), told(&[]));
         drop(fx);
@@ -148,6 +158,15 @@ fn no_posting_state_or_authorship_ever_raises_ready_to_post() {
     poll(&fx, "U1", "PENDING", None, vec![], "requested");
     poll(&fx, "U2", "SUCCESS", None, vec![], "requested");
     assert_eq!(reasons(&fx), told(&[]));
+}
+
+#[test]
+fn a_pr_that_stops_being_ready_and_is_ready_again_is_told_again() {
+    let fx = fixture(Posting::Enabled, false, "any");
+    step(&fx, "U1", "SUCCESS", None, vec![]);
+    step(&fx, "U2", "FAILURE", None, vec![]);
+    step(&fx, "U3", "SUCCESS", None, vec![]);
+    assert_eq!(reasons(&fx), told(&[&["ready_to_post"], &["checks_failed"], &["ready_to_post"]]));
 }
 
 #[test]
