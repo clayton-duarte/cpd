@@ -1121,12 +1121,13 @@ Effects (§3.1, §3.8, §7.2; R34, A8): every PR's `draft` Jobs are approved at 
 - **Open Jobs:** the lock adds none. Engine E4 adds each started PR's `open` Job in the first tick after the lock (contract §3.7, hs-d340).
 - **tmux:** `watch --ensure` (§12): starts `cpd watch` in `cpd-work:watch` when `locks/watch.lock` is free.
 
-`prs` lists every PR that is not `cancelled`, in key order: a started PR with its Lead worktree, `base_sha`, `reused` and `pushed` (R35); a `waiting` one with its `needs`, and null for the rest.
+`prs` lists every PR that is not `cancelled`, in key order: a started PR with its Lead worktree, `base_sha`, `reused` and `pushed` (R35); a `waiting` one with its `needs`, and null for the rest. Every row has `base_pr`: the base PR the PR still waits for, as `<plan>/<key>` (its base PR, contract §2.2 "The base PR", has not opened: it is `waiting` or `dispatch`), else null. It is what `details.base_pr` of `pr start`'s `pr_not_ready` is (§9.7), so a stacked PR the lock leaves `waiting` shows its base PR, where `needs` alone would be empty; a started PR has null.
 
 ```json
 {"ok": true, "plan": "pay-4521", "phase": "dispatch", "jobs": ["api-schema", "worker", "ui"],
- "prs": [{"key": "api", "status": "dispatch", "needs": [], "lead_branch": "pay-4521/api", "lead_worktree": "/home/clayton/projects/pay.pay-4521.api", "base_sha": "4b825dc…", "reused": false, "pushed": true},
-         {"key": "ui", "status": "waiting", "needs": ["api"], "lead_branch": "pay-4521/ui", "lead_worktree": null, "base_sha": null, "reused": null, "pushed": null}],
+ "prs": [{"key": "api", "status": "dispatch", "needs": [], "base_pr": null, "lead_branch": "pay-4521/api", "lead_worktree": "/home/clayton/projects/pay.pay-4521.api", "base_sha": "4b825dc…", "reused": false, "pushed": true},
+         {"key": "ui", "status": "waiting", "needs": ["api"], "base_pr": null, "lead_branch": "pay-4521/ui", "lead_worktree": null, "base_sha": null, "reused": null, "pushed": null},
+         {"key": "ui2", "status": "waiting", "needs": [], "base_pr": "pay-4521/api", "lead_branch": "pay-4521/ui2", "lead_worktree": null, "base_sha": null, "reused": null, "pushed": null}],
  "watch": {"started": true, "pane": "%3"}}
 ```
 
