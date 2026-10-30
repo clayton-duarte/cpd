@@ -20,14 +20,13 @@ use ratatui::{
     widgets::Widget,
 };
 
-use cpd_core::plan::Phase;
 
 use super::flow::{self, Chart, Mask, Pill, free_row, glyph};
 use crate::buffer::copy_cells;
 use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
 use crate::link::{CUE, Link, Links};
 use crate::palette::{self, Meaning};
-use crate::read::{Dot, JobNode, JobStatus, NeedsUser, PrFacts, PrNode, PrStatus, Pull, pr_look};
+use crate::read::{Dot, Work, JobNode, JobStatus, NeedsUser, PrFacts, PrNode, PrStatus, Pull, pr_look};
 
 /// Rows between two rows of boxes: the run of lines, then the row of the `│` above the needing box's top border, where the line lands in a `┴`.
 const GAP: u16 = 2;
@@ -156,7 +155,7 @@ pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
 
 /// [`title`] for a Plan that has a failed Job (`plan_failed`) and is in phase `lead_phase`: its working Lead's dot is
 /// the red loader when a Job failed, else the bright pair of the phase's colour.
-fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, lead_phase: Option<Phase>, frame: usize) -> Line<'static> {
+fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, lead_work: Option<Work>, frame: usize) -> Line<'static> {
     let read_only = palette::read_only_text();
     let mut spans: Vec<Span<'static>> = vec![
         " ".into(),
@@ -170,7 +169,7 @@ fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, lead_phase: Option<Phas
             let (word, meaning) = word(pull, asked);
             spans.push(Span::styled(word, palette::fg_clickable(meaning)));
             if pull.lead_working {
-                spans.extend([" ".into(), palette::dot_span(Dot::working(plan_failed, lead_phase), frame, false)]);
+                spans.extend([" ".into(), palette::dot_span(Dot::working(plan_failed, lead_work), frame, false)]);
             }
             spans.push(Span::styled(format!(" {CUE}"), palette::clickable_text()));
         }
@@ -219,7 +218,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         .collect();
     // the tree's rule: the Plan has a failed Job
     let plan_failed = jobs.iter().any(|j| j.status == JobStatus::Failed);
-    let titles: Vec<Line> = prs.iter().map(|p| title_of(p, needs_user.lead_dialog, plan_failed, needs_user.lead_phase, frame)).collect();
+    let titles: Vec<Line> = prs.iter().map(|p| title_of(p, needs_user.lead_dialog, plan_failed || needs_user.lead_escalated, needs_user.lead_work, frame)).collect();
     let footers: Vec<Option<String>> = prs.iter().map(footer_text).collect();
     let footer_w: Vec<u16> = footers.iter().map(|f| f.as_ref().map_or(0, |t| Line::from(t.as_str()).width() as u16)).collect();
     // each box: its walls and padding around the chart, or around `no Jobs`, and at least as wide as its title plus 4 (the

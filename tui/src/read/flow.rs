@@ -22,6 +22,7 @@ use cpd_core::session::State;
 use cpd_core::store::Store;
 
 use super::active;
+use super::dot::Work;
 use super::tree::visible_items;
 use super::shared::{
     AttemptStatus, JobStatus, Origin, Outcome, PlanHead, PrState, ReviewStatus, SHOWN_STATUS, bad_row, id, stored_cause, plan_heads, tier,
@@ -69,14 +70,16 @@ pub struct NeedsUser {
     /// The Plan's Lead is working (`sessions.state = 'working'`, hs-d586): every failed pill turns while it does.
     pub lead_working: bool,
     /// The phase of the Plan its Lead works in (`None`: no Plan, or not a Lead). Read from the Plan by dot-impl-views.
-    pub lead_phase: Option<Phase>,
+    pub lead_work: Option<Work>,
+    /// The Plan has an open Worker Escalation.
+    pub lead_escalated: bool,
     /// The Plan's failed Jobs being worked on (pro-d88), sorted: their pills turn.
     pub worked_on: Vec<JobKey>,
 }
 
 impl NeedsUser {
-    /// Of the `visible` items (not snoozed, not dismissed) of `plan`, whose Lead is `lead` and whose phase is `lead_phase`.
-    fn of(visible: &[Item], plan: &PlanId, lead: &SessionId, lead_working: bool, lead_phase: Option<Phase>, worked_on: Vec<JobKey>) -> NeedsUser {
+    /// Of the `visible` items (not snoozed, not dismissed) of `plan`, whose Lead is `lead` and whose Lead works on `lead_work` (pro-d200); `lead_escalated`: the Plan has an open Worker Escalation.
+    fn of(visible: &[Item], plan: &PlanId, lead: &SessionId, lead_working: bool, lead_work: Option<Work>, lead_escalated: bool, worked_on: Vec<JobKey>) -> NeedsUser {
         NeedsUser {
             stuck_jobs: visible
                 .iter()
@@ -85,7 +88,8 @@ impl NeedsUser {
                 .collect(),
             lead_dialog: visible.iter().any(|i| i.kind == Kind::Dialog && i.session.as_ref() == Some(lead)),
             lead_working,
-            lead_phase,
+            lead_work,
+            lead_escalated,
             worked_on,
         }
     }
@@ -306,7 +310,8 @@ fn boxes(conn: &Connection, plan: &PlanId, now: Option<String>, now_ms: i64) -> 
             )
             .optional()?
             .ok_or_else(|| plan_not_found(plan))?;
-        let phase = Phase::parse(&phase).ok_or_else(|| bad_row(format!("Plan {plan} has phase {phase:?}")))?;
+        Phase::parse(&phase).ok_or_else(|| bad_row(format!("Plan {plan} has phase {phase:?}")))?;
+        let head = plan_heads(conn, Some(plan))?.pop().ok_or_else(|| plan_not_found(plan))?;
         let now: String = match now {
             Some(now) => now,
             None => conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?,
@@ -317,7 +322,8 @@ fn boxes(conn: &Connection, plan: &PlanId, now: Option<String>, now_ms: i64) -> 
             plan,
             &id("Session id", &lead, SessionId::parse)?,
             lead_working,
-            Some(phase),
+            Some(head.work()),
+            lead_working && head.open_escalations > 0,
             worked_on,
         );
         let jobs = job_nodes(conn, plan)?;

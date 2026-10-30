@@ -8,7 +8,7 @@ use ratatui::style::{Color, Style};
 
 use crate::palette::{self, Meaning, dot_span, frame};
 use crate::plan::flow::{FlowJob, Live, layout};
-use crate::read::{Dot, JobStatus};
+use crate::read::{Dot, JobStatus, Work};
 use crate::widgets::legend;
 
 const MOONS: [&str; 28] = [
@@ -74,12 +74,23 @@ fn the_waiting_dot_is_circle_opacity_in_the_waiting_colour() {
     assert_eq!(span.style, Style::new().fg(palette::color_clickable(Meaning::Waiting)));
 }
 
+/// pro-d200: the loader of each of the five working colours, from the numbers of the terminal's palette.
 #[test]
-fn the_working_dot_turns_through_the_28_moon_alt_phases_in_bright_cyan() {
-    let glyphs: Vec<String> = (0..57).map(|f| dot_span(Dot::Working(None), f, false).content.into_owned()).collect();
-    assert_eq!(glyphs, [MOONS, MOONS].concat().into_iter().chain([MOONS[0]]).map(str::to_owned).collect::<Vec<_>>());
-    for f in 0..28 {
-        assert_eq!(dot_span(Dot::Working(None), f, false).style, Style::new().fg(Color::LightCyan), "frame {f}");
+fn dots_moon_loader_frames_in_every_working_colour() {
+    let table = [
+        (Dot::Working(Some(Work::Planning)), Color::LightMagenta),
+        (Dot::Working(Some(Work::Dispatch)), Color::LightCyan),
+        (Dot::Working(Some(Work::Review)), Color::LightYellow),
+        (Dot::Working(None), Color::White),
+        (Dot::Fixing, Color::LightRed),
+    ];
+    for (dot, colour) in table {
+        for f in 0..57 {
+            let span = dot_span(dot, f, false);
+            assert_eq!(span.content, MOONS[f % 28], "{dot:?} frame {f}");
+            assert_eq!(span.style, Style::new().fg(colour), "{dot:?} frame {f}");
+            assert_eq!(span.content, pill_icon(Live::Running, f), "{dot:?} frame {f}: the Job pill's running spinner");
+        }
     }
 }
 

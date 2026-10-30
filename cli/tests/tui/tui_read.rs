@@ -20,7 +20,7 @@ use cpd_core::plan::{Phase, plan_fingerprint};
 use cpd_core::session::State;
 use cpd_core::store::Store;
 use nix::fcntl::{Flock, FlockArg};
-use cpd_tui::read::{
+use cpd_tui::read::{Work, 
     self, AttemptStatus, Checks, Dot, Engine, JobStatus, Origin, Outcome, Place, PlanNode, PrState,
     ReviewStatus,
 };
@@ -417,7 +417,7 @@ fn a_plan_carries_its_stuck_jobs_and_whether_its_lead_asks_the_user() {
     let needs = |store: &mut Store, p: &str| read::plan_boxes(store, &plan(p)).unwrap().needs_user;
     assert_eq!(
         needs(&mut store, "ship"),
-        read::NeedsUser { lead_working: true, lead_phase: Some(Phase::Dispatch), worked_on: vec![key("e")], ..Default::default() },
+        read::NeedsUser { lead_working: true, lead_work: Some(Work::Planning), lead_escalated: true, worked_on: vec![key("e")], ..Default::default() }, // a draft Job: Planning; an open Escalation
         "no item: an agent handles everything"
     );
 
@@ -437,16 +437,16 @@ fn a_plan_carries_its_stuck_jobs_and_whether_its_lead_asks_the_user() {
     );
     assert_eq!(
         needs(&mut store, "ship"),
-        read::NeedsUser { stuck_jobs: vec![key("e")], lead_dialog: false, lead_working: true, lead_phase: Some(Phase::Dispatch), worked_on: vec![key("e")] },
+        read::NeedsUser { stuck_jobs: vec![key("e")], lead_dialog: false, lead_working: true, lead_work: Some(Work::Planning), lead_escalated: true, worked_on: vec![key("e")] },
         "a fork's dialog is not the Lead's"
     );
     assert_eq!(
         needs(&mut store, "sketch"),
-        read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: true, lead_working: false, lead_phase: Some(Phase::Plan), worked_on: vec![] }
+        read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: true, lead_working: false, lead_work: Some(Work::Planning), lead_escalated: false, worked_on: vec![] }
     );
     assert_eq!(
         needs(&mut store, "rel"),
-        read::NeedsUser { lead_phase: Some(Phase::Deploy), ..Default::default() },
+        read::NeedsUser { lead_work: Some(Work::Review), ..Default::default() },
         "another Plan's items are not its own"
     );
 
@@ -454,7 +454,7 @@ fn a_plan_carries_its_stuck_jobs_and_whether_its_lead_asks_the_user() {
     sql(&mut store, "UPDATE inbox_items SET snoozed_until = '2999-01-01T00:00:00.000Z' WHERE subject = 'session:l-sketch';");
     assert_eq!(
         needs(&mut store, "sketch"),
-        read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: false, lead_working: false, lead_phase: Some(Phase::Plan), worked_on: vec![] }
+        read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: false, lead_working: false, lead_work: Some(Work::Planning), lead_escalated: false, worked_on: vec![] }
     );
 }
 
@@ -500,7 +500,7 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
     assert!(all.iter().all(|(_, d)| !d.needs_you()), "no item, never a filled dot: {all:?}");
     assert_eq!(
         (dot(&all, "l-red"), dot(&all, "l-wrk"), dot(&all, "l-idl"), dot(&all, "l-stp")),
-        (Dot::Idle, Dot::Working(Some(Phase::Dispatch)), Dot::Idle, Dot::Stopped)
+        (Dot::Idle, Dot::Working(Some(Work::Dispatch)), Dot::Idle, Dot::Stopped)
     );
     // A Lead waiting for an agent (hs-d303) shows the waiting dot: not the idle glyph, and never red.
     assert_eq!(dot(&all, "l-wai"), Dot::Waiting);
@@ -528,7 +528,7 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
         ("f-yel", Dot::Working(None)), // a fork shows no item of the Plan
         ("l-mag", Dot::Magenta),
         ("l-whi", Dot::White),
-        ("l-wrk", Dot::Working(Some(Phase::Dispatch))), // working shows the spinner, not its red dialog
+        ("l-wrk", Dot::Working(Some(Work::Dispatch))), // working shows the spinner, not its red dialog
         ("l-blk", Dot::Idle),
         ("l-wai", Dot::Waiting), // waiting with no item: its own calm dot, not idle and not red
         ("l-idl", Dot::Red),
@@ -586,8 +586,8 @@ fn a_working_lead_of_a_plan_with_a_failed_job_shows_the_red_loader() {
     // (i) a working Lead, a failed Job: the red loader
     assert_eq!(dot(&mut store, "l-fx"), Dot::Fixing);
     assert!(!Dot::Fixing.needs_you(), "the loader is no needs-you dot");
-    // (iv) no failed Job: the cyan loader
-    assert_eq!(dot(&mut store, "l-nf"), Dot::Working(Some(Phase::Dispatch)));
+    // (iv) no failed Job, a draft Job: the magenta loader (Planning)
+    assert_eq!(dot(&mut store, "l-nf"), Dot::Working(Some(Work::Planning)));
     // (v) idle, waiting, stopped: their usual dot
     assert_eq!((dot(&mut store, "l-idl"), dot(&mut store, "l-wai"), dot(&mut store, "l-stp")), (Dot::Idle, Dot::Waiting, Dot::Stopped));
     // (vi) a working fork is not the Plan's Lead
@@ -606,7 +606,7 @@ fn a_working_lead_of_a_plan_with_a_failed_job_shows_the_red_loader() {
     assert_eq!(dot(&mut store, "l-fxr"), Dot::Red);
     assert_eq!(dot(&mut store, "l-fxw"), Dot::Fixing);
     // (iv) no failed Job: own state first, whatever the items (hs-d183)
-    assert_eq!(dot(&mut store, "l-nfr"), Dot::Working(Some(Phase::Dispatch)));
+    assert_eq!(dot(&mut store, "l-nfr"), Dot::Working(Some(Work::Planning)));
     assert_eq!(dot(&mut store, "l-fx"), Dot::Fixing);
 
     // (viii) an archived Lead keeps its glyph
@@ -615,7 +615,7 @@ fn a_working_lead_of_a_plan_with_a_failed_job_shows_the_red_loader() {
 
     // (vii) the failed Job is queued again: the cyan loader
     sql(&mut store, "UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE plan = 'fx';");
-    assert_eq!(dot(&mut store, "l-fx"), Dot::Working(Some(Phase::Dispatch)));
+    assert_eq!(dot(&mut store, "l-fx"), Dot::Working(Some(Work::Dispatch)));
 }
 
 #[test]

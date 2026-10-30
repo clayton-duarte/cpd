@@ -18,7 +18,7 @@ use ratatui::{
     text::Span,
 };
 
-use super::read::{AttemptStatus, Checks, Dot, JobStatus, Kind, PrState};
+use super::read::{AttemptStatus, Checks, Dot, JobStatus, Kind, PrState, Work};
 use cpd_core::inbox::model::Urgency;
 use cpd_core::pill::spec;
 use cpd_core::plan::Phase;
@@ -499,9 +499,14 @@ pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
         Dot::Magenta => (NEEDS_YOU, fg_clickable(Meaning::Planning)),
         Dot::Cyan => (NEEDS_YOU, fg_clickable(Meaning::Notice)),
         Dot::White => (NEEDS_YOU, clickable_text()),
-        Dot::Working(p) => (
+        Dot::Working(work) => (
             SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }],
-            fg_clickable(if p.is_none() { Meaning::InProgress } else { phase(p) }),
+            match work {
+                Some(Work::Planning) => fg_clickable(Meaning::Planning),
+                Some(Work::Dispatch) => fg_clickable(Meaning::InProgress),
+                Some(Work::Review) => fg_clickable(Meaning::Review),
+                None => clickable_text(),
+            },
         ),
         Dot::Fixing => (SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }], fg_clickable(Meaning::Failed)),
         Dot::Waiting => (WAITING, fg_clickable(Meaning::Waiting)),
@@ -691,13 +696,34 @@ mod tests {
     }
 
     #[test]
-    fn a_working_dot_turns_with_the_frame_in_bright_cyan() {
-        let glyphs: Vec<_> = (0..=SPINNER.len()).map(|f| dot_span(Dot::Working(None), f, false).content.into_owned()).collect();
-        assert_eq!(glyphs, [SPINNER.to_vec(), vec![SPINNER[0]]].concat());
-        assert_eq!(dot_span(Dot::Working(None), 2, false).style, Style::new().fg(Color::LightCyan));
+    fn the_spinner_is_28_frames_and_the_static_dots_are_its_ends() {
         assert_eq!(SPINNER.len(), 28);
         assert_eq!((SPINNER[0], SPINNER[14]), ("\u{E3E3}", "\u{E3D5}"));
         assert_eq!((IDLE, STOPPED, NEEDS_YOU), (SPINNER[14], SPINNER[14], SPINNER[0]));
+    }
+
+    /// pro-d200: the five spinner colours: what the Lead works on.
+    #[test]
+    fn dots_palette_working_dot_colours() {
+        use crate::read::Work;
+        let table = [
+            (Dot::Working(Some(Work::Planning)), numbered::C13, "planning"),
+            (Dot::Working(Some(Work::Dispatch)), numbered::C14, "dispatch"),
+            (Dot::Working(Some(Work::Review)), numbered::C11, "review"),
+            (Dot::Working(None), numbered::C15, "no Plan"),
+            (Dot::Fixing, numbered::C9, "fixing"),
+        ];
+        for (dot, colour, what) in table {
+            for f in 0..2 * SPINNER.len() + 1 {
+                let span = dot_span(dot, f, false);
+                assert_eq!(span.content, SPINNER[f % 28], "{what} frame {f}");
+                assert_eq!(span.style, Style::new().fg(colour), "{what} frame {f}: fg only, no modifier");
+            }
+            for f in 0..SPINNER.len() {
+                assert_eq!(dot_span(dot, f, true), Span::styled("\u{E3D5}", Style::new().fg(numbered::C8)), "{what} archived frame {f}");
+            }
+        }
+        assert_eq!(dot_span(Dot::Working(None), 0, false).style, clickable_text());
     }
 
     #[test]

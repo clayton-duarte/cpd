@@ -12,10 +12,11 @@ use super::fixture::{context, plan, session, tree};
 use super::rows::{Scroll, draw, open_new};
 use super::view::View;
 use crate::palette::dot_span;
-use crate::palette::numbered::{C14, C9};
+use crate::palette::numbered::{C15, C9};
 use crate::read::{Dot, Place, Tree};
 use cpd_core::plan::Phase;
 use cpd_core::session::State;
+use crate::read::Work;
 
 const MOONS: [&str; 28] = [
     "\u{E3E3}", "\u{E3C8}", "\u{E3C9}", "\u{E3CA}", "\u{E3CB}", "\u{E3CC}", "\u{E3CD}",
@@ -46,7 +47,7 @@ fn dot_cell(t: &Tree, frame: usize) -> (String, Color) {
 fn a_leads_red_loader_turns_with_the_frame_on_its_row() {
     for frame in 0..58 {
         assert_eq!(dot_cell(&with_dot(Dot::Fixing), frame), (MOONS[frame % 28].to_owned(), C9), "frame {frame}");
-        assert_eq!(dot_cell(&with_dot(Dot::Working(None)), frame), (MOONS[frame % 28].to_owned(), C14), "working, frame {frame}");
+        assert_eq!(dot_cell(&with_dot(Dot::Working(None)), frame), (MOONS[frame % 28].to_owned(), C15), "working, frame {frame}");
     }
 }
 
@@ -63,14 +64,67 @@ fn the_legend_lists_the_red_loader_after_the_working_one() {
     let sections = crate::widgets::legend::sections();
     let dots = sections.iter().find(|s| s.title == "Session Dots").expect("the Session Dots section");
     let first = |row: &Vec<ratatui::text::Line<'static>>| row.first().map(|l| l.spans.clone()).unwrap_or_default();
-    let cyan: Vec<_> = (0..28).map(|f| dot_span(Dot::Working(None), f, false)).collect();
-    let at = dots.rows.iter().position(|r| first(r) == cyan).expect("the row of the 28 cyan frames");
-    let row = dots.rows.get(at + 1).expect("a row after the working one");
     let red: Vec<_> = (0..28).map(|f| dot_span(Dot::Fixing, f, false)).collect();
-    assert_eq!(first(row), red, "the 28 red frames");
-    for (i, (c, r)) in cyan.iter().zip(&red).enumerate() {
-        assert_eq!((c.content.as_ref(), r.content.as_ref()), (MOONS[i], MOONS[i]), "frame {i}");
+    let at = dots.rows.iter().position(|r| first(r) == red).expect("the row of the 28 red frames");
+    let row = &dots.rows[at];
+    let white: Vec<_> = (0..28).map(|f| dot_span(Dot::Working(None), f, false)).collect();
+    assert!(dots.rows.iter().any(|r| first(r) == white), "the white loader row is in the legend");
+    let after = dots.rows.get(at + 1).expect("a row after the red one");
+    let yellow: Vec<_> = (0..28).map(|f| dot_span(Dot::Working(Some(Work::Review)), f, false)).collect();
+    assert_eq!(first(after), yellow, "the yellow loader follows the red one");
+    for (i, r) in red.iter().enumerate() {
+        assert_eq!(r.content.as_ref(), MOONS[i], "frame {i}");
     }
     let text: String = row[1].spans.iter().map(|s| s.content.as_ref()).collect();
-    assert_eq!(text, "a Plan's failed Job is being worked on (one frame every 50 ms)");
+    assert_eq!(text, "the Lead is fixing a failed Job or answering a Worker's question (one frame every 50 ms)");
+}
+
+/// A store of Plan `px` in dispatch whose working Lead `l-x` has a running Job, its Attempt and one Worker
+/// Escalation in `status` (`open`, `answered` or `expired`); no failed Job. No tmux, git or gh.
+fn escalated(status: &str) -> Tree {
+    let dir = tempfile::tempdir().unwrap();
+    let home = cpd_core::home::CpdHome::resolve(Some(dir.path().to_path_buf().into()), None).unwrap();
+    let mut store = cpd_core::store::Store::open(&home, 5000).unwrap();
+    let t = "'2026-01-02T01:00:00.000Z'";
+    let (answer, answered, expired) = match status {
+        "answered" => ("'a'", t, "NULL"),
+        "expired" => ("NULL", "NULL", t),
+        _ => ("NULL", "NULL", "NULL"),
+    };
+    let fp = "a".repeat(64);
+    let sql = format!(
+        "INSERT INTO contexts (id, title, jira, created_at, created_on) VALUES ('ctx', 'T', NULL, '2026-01-01T00:00:00.000Z', 'm1');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('l-x', 'lead', 'ctx', NULL, 'l-x', '/repo', 'O3', 'working', {t}, '2026-01-02T00:00:00.000Z');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+           VALUES ('px', 'ctx', 'X', 'dispatch', 'l-x', {t}, {t}, NULL);
+         UPDATE sessions SET plan = 'px' WHERE id = 'l-x';
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+           VALUES ('px', 'work', '/repo', 'main', 'dispatch', 'cpd/px/work', '/wt', cpd_txn(), {t}, {t});
+         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+                           created_txn, created_at)
+           VALUES ('px', 'work', 'j1', 'J', 'S1', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'running', 0, '{fp}', cpd_txn(), {t});
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+           VALUES ('px', 'j1-a1', 'j1', 1, 'S1', 'ladder', 'running', 'cpd/px--j1-a1', '/w/j1', {t});
+         INSERT INTO escalations (plan, id, attempt, number, question, status, answer, asker_pid, asked_at, answered_at, expired_at)
+           VALUES ('px', 'j1-a1-q1', 'j1-a1', 1, 'which?', '{status}', {answer}, 1, {t}, {answered}, {expired});"
+    );
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(&sql)?;
+            Ok::<(), cpd_core::error::CpdError>(())
+        })
+        .unwrap();
+    crate::read::tree(&mut store).unwrap()
+}
+
+/// `dots_tree_open_escalation_is_red_loader`: a working Lead whose Plan has an open Worker Escalation (no failed
+/// Job) shows the red loader; once the question is answered or expired it shows its Work dot again.
+#[test]
+fn dots_tree_open_escalation_is_red_loader() {
+    let lead = |t: &Tree| t.contexts[0].plans[0].lead().expect("the Lead").dot;
+    assert_eq!(lead(&escalated("open")), Dot::Fixing, "an open escalation");
+    for status in ["answered", "expired"] {
+        assert_eq!(lead(&escalated(status)), Dot::Working(Some(crate::read::Work::Dispatch)), "{status}");
+    }
 }

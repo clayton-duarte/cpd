@@ -67,7 +67,7 @@ pub use shared::{
     AttemptStatus, Checks, JobCounts, JobStatus, Origin, Outcome, Place, PlanHead, Pr,
     PrState, ReviewStatus, SessionNode,
 };
-pub use dot::{Dot, OrderKey};
+pub use dot::{Dot, OrderKey, Work};
 pub use pr_look::{PrFacts, PrLook, pr_look};
 pub use follow::{Changes, Follow};
 pub use logs::{Logs, logs, logs_after};

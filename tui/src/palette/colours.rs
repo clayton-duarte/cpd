@@ -172,5 +172,5 @@ fn the_red_loader_is_the_28_moon_frames_in_red_and_archived_the_hollow_ring_in_c
         assert_eq!(archived.style, archived_text(), "archived, frame {f}");
         assert_eq!(archived.style, text(C8));
     }
-    assert_eq!(dot_span(Dot::Working(None), 3, false).style, text(C14), "the working loader stays cyan");
+    assert_eq!(dot_span(Dot::Working(None), 3, false).style, clickable_text(), "a working Session with no Plan is white");
 }

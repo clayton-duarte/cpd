@@ -18,7 +18,6 @@ use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
 use cpd_core::error::CpdError;
 use cpd_core::inbox::model::Urgency;
 use cpd_core::output::Output;
-use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
 use crate::buffer::copy_cells;
 use crate::cells;
@@ -26,7 +25,7 @@ use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
 use crate::pill::pill;
 use crate::popup;
-use crate::read::{Dot, JobCounts, JobStatus, PrState};
+use crate::read::{Dot, Work, JobCounts, JobStatus, PrState};
 use crate::box_widget::SectionTitle;
 use crate::view_ports::Ctx;
 use crate::{Capture, run_view_on};
@@ -162,16 +161,13 @@ pub(crate) fn sections() -> Vec<Section> {
     let jobs = Section { title: "Jobs: Plan Pills And Context Counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
     let dot = |d: Dot, frame: usize| Line::from(palette::dot_span(d, frame, false));
     let loader = |d: Dot| Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(d, f, false)).collect::<Vec<_>>());
-    // the working loader once per phase (hs-d622): the cyan row is dispatch, which a Session with no Plan shares
-    let frames = loader(Dot::Working(None));
-    let fixing = loader(Dot::Fixing);
     let dots = Section {
         title: DOTS_TITLE,
         header: None,
         rows: vec![
             vec![plain(palette::NEEDS_YOU), plain("the Session needs you (colour below)")],
-            vec![frames, plain("the Lead is working, dispatch (a Session with no Plan too) (one frame every 50 ms)")],
-            vec![fixing, plain("a Plan's failed Job is being worked on (one frame every 50 ms)")],
+            vec![loader(Dot::Fixing), plain("the Lead is fixing a failed Job or answering a Worker's question (one frame every 50 ms)")],
+            vec![loader(Dot::Working(Some(Work::Review))), plain("the Lead is working on a pull request (open, conflict, deploy, landing) (one frame every 50 ms)")],
             vec![dot(Dot::Waiting, 0), plain("waiting: an agent waits for another agent (a Worker for its Lead), not for you")],
             vec![dot(Dot::Idle, 0), plain("idle, nothing needed")],
             vec![dot(Dot::Stopped, 0), plain("pi stopped")],
@@ -180,10 +176,9 @@ pub(crate) fn sections() -> Vec<Section> {
             vec![dot(Dot::Magenta, 0), plain("magenta: blocked while grounding, planning or done, or the Plan's review is pending")],
             vec![dot(Dot::Cyan, 0), plain("cyan: a cpd notice that blocks nothing: curation")],
             vec![dot(Dot::White, 0), plain("white: idle, not seen since it last went idle")],
-            vec![loader(Dot::Working(Some(Phase::Grounding))), plain("the Lead is working, grounding (one frame every 50 ms)")],
-            vec![loader(Dot::Working(Some(Phase::Plan))), plain("the Lead is working, plan (one frame every 50 ms)")],
-            vec![loader(Dot::Working(Some(Phase::Deploy))), plain("the Lead is working, deploy (one frame every 50 ms)")],
-            vec![loader(Dot::Working(Some(Phase::Done))), plain("the Lead is working, done (one frame every 50 ms)")],
+            vec![loader(Dot::Working(Some(Work::Planning))), plain("the Lead is planning (grounding, drafts, a follow-up) (one frame every 50 ms)")],
+            vec![loader(Dot::Working(Some(Work::Dispatch))), plain("the Lead is working alongside running Jobs (one frame every 50 ms)")],
+            vec![loader(Dot::Working(None)), plain("a working Session with no Plan (one frame every 50 ms)")],
             vec![plain(""), plain(&precedence())],
         ],
     };
@@ -451,6 +446,34 @@ mod tests {
         );
         let shown: Vec<String> = dots.rows.iter().map(|r| text(&r[1])).collect();
         assert!(shown.iter().any(|s| s.ends_with(&precedence)), "{shown:?}");
+    }
+
+    /// pro-d200: the five working spinner colours, each drawn by the palette call of the dot.
+    #[test]
+    fn dots_legend_lists_the_five_working_spinner_colours() {
+        let dots = &sections()[2];
+        assert_eq!(dots.title, "Session Dots");
+        let loader = |d: Dot| (0..palette::SPINNER.len()).map(|f| palette::dot_span(d, f, false)).collect::<Vec<_>>();
+        let expected = [
+            (Dot::Fixing, palette::numbered::C9, "the Lead is fixing a failed Job or answering a Worker's question"),
+            (Dot::Working(Some(Work::Review)), palette::numbered::C11, "the Lead is working on a pull request (open, conflict, deploy, landing)"),
+            (Dot::Working(Some(Work::Planning)), palette::numbered::C13, "the Lead is planning (grounding, drafts, a follow-up)"),
+            (Dot::Working(Some(Work::Dispatch)), palette::numbered::C14, "the Lead is working alongside running Jobs"),
+            (Dot::Working(None), palette::numbered::C15, "a working Session with no Plan"),
+        ];
+        for (dot, colour, label) in expected {
+            let row = dots
+                .rows
+                .iter()
+                .find(|r| r.get(1).is_some_and(|l| text(l).starts_with(label)))
+                .unwrap_or_else(|| panic!("a row labelled {label:?}"));
+            assert_eq!(row[0].spans, loader(dot), "{label}: drawn like the dot");
+            assert!(row[0].spans.iter().all(|s| s.style.fg == Some(colour)), "{label}: colour");
+        }
+        let says: Vec<String> = dots.rows.iter().filter_map(|r| r.get(1)).map(text).collect();
+        for old in ["grounding (one", "plan (one", "deploy (one", "done (one", "dispatch (a Session"] {
+            assert!(!says.iter().any(|s| s.starts_with("the Lead is working,") && s.contains(old)), "old row {old:?}: {says:?}");
+        }
     }
 
     #[test]
