@@ -90,6 +90,12 @@ pub fn changed_paths(dir: &Path, diff_base: &str, branch: &str) -> Result<Vec<St
     Ok(changed.split('\0').filter(|p| !p.is_empty()).map(str::to_owned).collect())
 }
 
+/// The paths `diff_base...sha` changes that differ from EVERY ref of `compare_with` (contract §7.3, "The written files"), in
+/// the range diff's order: one range diff plus one `git diff --name-only --no-renames -z <ref> <sha>` per ref.
+pub fn written_paths(_dir: &Path, _diff_base: &str, _sha: &str, _compare_with: &[&str]) -> Result<Vec<String>, CpdError> {
+    todo!()
+}
+
 /// The red-test guard (§7.5 "The red tests", §7.7): the paths `diff_base...branch` changes that an entry of `guarded` matches
 /// and no entry of `approved` does, except a path whose version on `branch` is the one on `lead` (a merge brought it).
 pub fn touched_guarded(
