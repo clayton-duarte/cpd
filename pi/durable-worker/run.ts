@@ -9,7 +9,7 @@ import { zoneLine } from "../lib/time.ts";
 import { reportPath, storePath, type Config } from "./config.ts";
 import { inputOf, type Input } from "./deliver.ts";
 import { cpdExtension } from "./extension.ts";
-import type { McpPort } from "./mcp.ts";
+import { mcpHandler, type McpPort } from "./mcp.ts";
 import { endReport, type EndReport, type Entry } from "./report.ts";
 
 export type Submission = { wait(): Promise<"done" | "unanswered"> };
@@ -56,6 +56,7 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
   );
   let follower: { start(): void; stop(): void } | undefined;
   let opened: Conversation | undefined;
+  let mcp: ReturnType<typeof mcpHandler> | undefined;
 
   const main = async (): Promise<void> => {
     const shownSession = await deps.cpd(["session", "show", config.session]);
@@ -103,6 +104,10 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
     if (shownState === "stopped") reporter.want({ state: "idle" });
     await submit({ content: `Read ${config.spec} and follow it exactly. Your attempt id is ${config.attempt}.`, requestId: config.attempt, whenBusy: "followUp" });
 
+    const handler = mcpHandler({ session: config.session, port: deps.mcp, install: (x) => conversation.install(x), cpd: deps.cpd, submit, log: deps.log, over: () => over });
+    mcp = handler;
+    await handler.replay();
+
     let cursor = session.registeredEvent;
     follower = deps.follow({
       before: async () => {},
@@ -114,6 +119,10 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
           return false;
         }
         cursor = line.event.id;
+        if (line.event.kind === "mcp-attached") {
+          handler.handle(line.event);
+          return true;
+        }
         const input = inputOf(line.event, config.session);
         if (input) submit(input).catch((e) => {
           failed("an event", e);
@@ -142,6 +151,7 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
       failed("the end report at terminate", e);
     }
   }
+  await mcp?.closeAll();
   await reporter.close({ state: "stopped" });
   return code;
 }
