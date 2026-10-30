@@ -256,6 +256,10 @@ export class Fixture {
     mkdirSync(this.cpdHome);
     this.watcher = watch(this.cpdHome, { recursive: true }, () => notify());
     mkdirSync(this.adapterDir);
+    for (const skill of ["cpd-lead", "cpd-manager"]) {
+      mkdirSync(join(this.adapterDir, "skills", skill), { recursive: true });
+      writeFileSync(join(this.adapterDir, "skills", skill, "SKILL.md"), `the ${skill} skill\n`); // a readable skills directory (commands.md §15.23)
+    }
     writeFileSync(join(this.dir, "bin", "pi"), FAKE_PI);
     chmodSync(join(this.dir, "bin", "pi"), 0o755);
     writeFileSync(join(this.dir, "bin", "cpd"), CPD_FILE);

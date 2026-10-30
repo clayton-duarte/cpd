@@ -22,6 +22,7 @@ import { QUESTION_LABEL, registerTool, showDialog } from "./review.ts";
 import { Run, parseSession, type SessionInfo } from "./run.ts";
 import { Facts } from "./state.ts";
 import { firstMessageDelivered, registerFirstMessage } from "./first-message.ts";
+import { checkSkills, skillOf } from "./skills.ts";
 import { registerUpdates } from "./turns.ts";
 import { clearMentions, refreshMentions } from "./mentions-refresh.ts";
 
@@ -193,6 +194,8 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
   // 5a. MCP replay
   await replayServers(host, r);
   if (host.run !== r) return;
+  const skill = skillOf(info.role);
+  if (skill !== undefined) checkSkills(host, r, ctx.sessionManager.getBranch(), skill, join(options.reload?.dir ?? adapterPath(), "skills", skill)); // commands.md §15.23
   if (trippedIn(entries)) holdTrip(r); // §15.15 L7: a trip survives a reload; the reason and the gate are back before the follower starts
   host.refresh(r);
 

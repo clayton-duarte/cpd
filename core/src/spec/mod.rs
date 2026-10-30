@@ -22,6 +22,9 @@ use crate::ids::{AttemptId, EscalationId, PlanId};
 #[cfg(test)]
 mod resources_tests;
 
+#[cfg(test)]
+mod refusals_tests;
+
 /// The most characters of an explore Job's summary (R8).
 pub const SUMMARY_CAP: usize = 1500;
 

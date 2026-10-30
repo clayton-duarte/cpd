@@ -2,7 +2,7 @@
 //! `pre-commit` (the quick check) and `pre-merge` (the Gate), given as the
 //! hook's [`Pipeline`], rendered, run, and their output captured.
 //!
-//! What a result means (`setup_failed`, `check_failed`, `gate_failed`, …) is the
+//! What a result means (`setup_failed`, `gate_failed`, …) is the
 //! caller's: [`HookOutcome`] only says how the hook ended.
 
 mod def;

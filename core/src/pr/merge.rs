@@ -11,6 +11,8 @@ use serde_json::json;
 use super::gh;
 use super::poll;
 use super::pulls;
+use super::status::{Required, required_states};
+use crate::host::runner::Runner;
 use crate::home::CpdHome;
 use crate::store::Store;
 use crate::ids::{PlanId, PrKey};
@@ -81,6 +83,7 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
         .with("state", view.state)
         .with("merge_state", view.merge_state));
     }
+    refuse_unless_required_passed(runner, cwd, &repo, number)?;
     let methods = gh::merge_methods(runner, cwd, &repo)?;
     let Some(method) = methods.choose() else {
         return Err(CpdError::new(
@@ -110,6 +113,30 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
         Err(e) => vec![json!({"code": "auto_delete_unread", "text": e.message()})],
     };
     Ok(Output::success(json!({"repo": repo, "number": number, "method": method.as_str(), "stored": stored, "warnings": warnings})))
+}
+
+/// `required_check_not_passed` when a name of the repo policy's `pr.required_checks` is missing, pending or failed on the head.
+fn refuse_unless_required_passed(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) -> Result<(), CpdError> {
+    let required = poll::repo_required(&CpdHome::from_env()?, repo)?;
+    if required.is_empty() {
+        return Ok(());
+    }
+    let checks = gh::checks_for_merge(runner, cwd, repo, number)?;
+    let states = required_states(&checks, &required);
+    let named = |wanted: Required| states.iter().filter(|(_, s)| *s == wanted).map(|(n, _)| *n).collect::<Vec<_>>();
+    let (missing, pending, failed) = (named(Required::Missing), named(Required::Pending), named(Required::Failed));
+    if missing.is_empty() && pending.is_empty() && failed.is_empty() {
+        return Ok(());
+    }
+    Err(CpdError::new(
+        ErrorCode::RequiredCheckNotPassed,
+        format!("{repo}#{number} has required checks that have not passed on its head (missing: {missing:?}, pending: {pending:?}, failed: {failed:?})."),
+    )
+    .with("repo", repo)
+    .with("number", number)
+    .with("missing", missing)
+    .with("pending", pending)
+    .with("failed", failed))
 }
 
 const STORE_BUSY_MS: u64 = 5000;

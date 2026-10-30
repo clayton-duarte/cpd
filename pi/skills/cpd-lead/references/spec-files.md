@@ -31,7 +31,7 @@ The file passed as `--spec` when you add a Job is JSON with exactly these fields
 
 Write the text in GFM only: tables, lists, code and Mermaid. Footnotes render as literal text and raw HTML is not rendered, so the User would see them broken in the Plan.
 
-The Worker's submit runs only the repo's quick check (its `pre-commit` hook) and, for a test or implementation Job, the named tests ([Test Jobs](#test-jobs)). The Gate (its `pre-merge` hook) runs later, on the whole Lead Branch, in the submit of the PR's open Job, so an acceptance item that needs the Gate must name the command itself.
+The Worker's submit runs only the tamper check and, for a test or implementation Job, the named tests ([Test Jobs](#test-jobs)). The repo's quick check (its `pre-commit` hook) runs at the Job's merge, and the Gate (its `pre-merge` hook) runs later, on the whole Lead Branch, at the merge of the PR's open Job, so an acceptance item that needs the Gate must name the command itself.
 
 ## Size
 
@@ -63,7 +63,7 @@ Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku), `G` (gem
 |---|---|---|
 | Coding, tests, refactors | `S1` | The User's default. Start low: each failed Attempt that the ladder retries (`crashed`, `no_submit`, `merge_conflict`) raises effort by one on the next Attempt, up to `retry_cap` retries (default 2, so 3 Attempts). A provider error retries the same Tier up to 3 times first and uses no try. |
 | Docs, config, mechanical edits | `H3` | Cheap and enough. |
-| A PR's open and update Jobs | `open_tier` (default `S1`) | cpd sets it, you never choose it; if one fails, retry higher with `cpd job retry <k> --tier <T>`. |
+| A PR's open and update Jobs | `open_tier` (default `H3`) | cpd sets it, you never choose it; if one fails, retry higher with `cpd job retry <k> --tier <T>`. |
 
 ## A feedback fix Job
 
