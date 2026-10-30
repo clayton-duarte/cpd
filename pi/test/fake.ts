@@ -675,10 +675,13 @@ export class FakePi implements PiApi {
   /** The `registerMcpServer` calls (commands.md §15.3 `mcp-attached`), in order; `mcpThrows` is thrown by each when set. */
   readonly registeredMcp: { name: string; config: unknown }[] = [];
   mcpThrows?: Error;
+  /** Names `registerMcpServer` refuses (throws for), the others are accepted. */
+  readonly mcpThrowsFor = new Set<string>();
   registerMcpServer(name: string, config: unknown): void {
     this.registeredMcp.push({ name, config });
     notify();
     if (this.mcpThrows) throw this.mcpThrows;
+    if (this.mcpThrowsFor.has(name)) throw new Error(`pi refuses: ${name}`);
   }
   /** What `setModel` answers: false is pi's "no authentication for the model's provider". */
   modelAccepted = true;
