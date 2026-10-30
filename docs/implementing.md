@@ -62,6 +62,8 @@ Within your area you may add files (`<crate>/src/<area>/foo.rs`, declared in you
 
 **The pill spec (hs-d598)** lives in the `pill` area (`core/src/pill.rs`, the loader; contract §6.1.1). The one source is `pi/lib/pill-spec.json`, read at compile time by Rust (`include_str!`) and at load time by pi (`readFileSync`). Both readers reject an unknown or missing key and an index outside 1-15. The spec file holds the caps (U+E0B6, U+E0B4), the colour number for each meaning key (plain, in_progress, review, done, failed, planning, nothing, focus), and the clickable rule (base colour n in 1-7 becomes n+8; 8 stays 8). The three adapters call functions and constants from the spec: ratatui `tui/src/pill.rs` (`pill(text, block)` returns three `Span`s, `cap_style(block)`, and `CAPS_COLUMNS` = 2); tmux `core/src/host/tmux/pill.rs` (pure string functions `fg(index)`, `fg_if(cond, then, otherwise)`, `pill(fg, lead, text)`, `range(name, inner)`, which print colours as `colourN`); pi `pi/lib/pill.ts` (`pill(index, text)` builds an ANSI string, `clickable(n)` applies the rule, `meaning(name)` maps spec keys to indices). The Rust `Meaning` enum in `palette.rs` stays and only maps domain facts to spec keys, so the palette always reads the spec. Padding is 0 (a code constant in each adapter, not data) and reverse video is always used for blocks (code constant, pinned by tests). The guard of contract §6.1.1: no U+E0B6 or U+E0B4 in non-test source outside `pi/lib/pill-spec.json`, and no hand-assembled pill.
 
+**The measure script (hs-d737)** lives in `pi/measure/` (not part of the adapter's extensions, not loaded by pi). The one file is `pi/measure/session-bloat.ts`, a read-only script over pi's session files that measures how much tool-result text reaches each kind of agent (role: worker, manager, lead, other). It reads every `.jsonl` file one directory below pi's agent sessions directory (default `~/.pi/agent/sessions`), never writes or changes a file, and reports text and token counts per role, the tool breakdown, and the largest results.
+
 ## The command tree
 
 `cli/src/cli.rs` holds the root `Command` enum; each variant delegates to its area (`cpd_core::context::run(cmd)`, `cpd_engine::watch::run(args)`, …, and `cpd_tui` for the cockpit). Each area owns its subcommand enum and its argument types. Every command of commands.md §2 is implemented, and `cli/tests/tooling/interface.rs` keeps docs/interface.md, the index of commands.md §2, equal to `cpd --help`'s tree, both ways, and every command in `cli/src/interface.rs`'s table.
@@ -701,3 +703,29 @@ Contract §6.12 fixes what the durable Worker runner is: its modules, the `Deps`
 **3. The pins and `engines.node`.** `@earendil-works/pi-durable`, `@earendil-works/chord` and `@earendil-works/pi-ai` are pinned at exactly `1.3.0`, the version of the installed pi (contract §6.12, "Packages"). The root `package.json` `engines.node` becomes `>=22.19.0`, the minimum the three packages declare; it is `>=22.18` today.
 
 **4. `durable-verify`: the one Job that proves the resume.** It runs `main.ts` over a real pi-durable store (SQLite, in a temporary directory that it removes on exit), with pi-ai's faux provider passed to `openConversation`. It kills the runner during a `bash` tool call, starts the runner again for the same Attempt, and checks the outcomes of contract §6.12's "Crash resume": the first message is not sent twice, no Event is delivered twice, the interrupted tool call is reported as interrupted, and the run settles `done`. No unit test opens a store or kills a process; `durable-verify` is the only place that does.
+
+## Measuring tool-result bloat (hs-d737)
+
+**Command.** `node pi/measure/session-bloat.ts [--root <dir>] [--since <ISO time>] [--until <ISO time>] [--top <n>] [--json]`; it reads every `*.jsonl` file one directory below `--root` (default: pi's agent sessions directory, `~/.pi/agent/sessions`), never writes or changes a file, and exits 0 with a report. A bad option, a bad time or an unreadable root exits 2 with one line on stderr (no silent default).
+
+**Window.** A session is in the window when its header `timestamp` is >= `--since` and < `--until` (both optional).
+
+**Role** of a session, from the last `session_info` `name` in its file (a heuristic): a name of two words and `a<digits>` (`<plan> <job> a<n>`) is `worker`; a name ending `-manager` is `manager`; any other name is `lead`; no name is `other`.
+
+**Per role** it reports:
+- `sessions`: the number of sessions.
+- `turns`: the number of assistant messages.
+- `tool_results`: the number of toolResult messages.
+- `result_chars`: the sum of the text blocks of every toolResult; images count 0.
+- `result_tokens_est`: ceil(result_chars / 4), pi's own estimate (pi docs/settings.md `codemode.inlineBudget`, not the provider's count).
+- `usage`: `{input, output, cache_read, cache_write, cost_usd}` summed over the assistant messages.
+- `by_tool`: `[{tool, calls, chars}]` sorted by chars, largest first, cut to `--top` (default 10).
+- `top_commands`: `[{key, calls, chars}]` the same way, where the key of a `bash` result is the first two whitespace-separated words of the `command` of the toolCall with the same id (`bash ?` when no call has that id) and the key of any other result is its tool name.
+- `largest`: the `--top` single results `[{chars, tool, command, file, entry}]` (command = the first 80 characters of the call's `command`, or empty; file = the file's base name; entry = the message entry's `id`).
+- `codemode`: `{calls, output_chars, nested: [{name, calls}]}` (the `codemode` toolResults, their output size, and the calls they made by tool name from `nestedCalls.calls[].name`, sorted by calls).
+
+**Report.** With `--json` one JSON object `{window: {since, until}, files, skipped_lines, roles: {worker, manager, lead, other}}` where each role holds the fields above (a role with no session is present with zeros and empty lists), `since` and `until` null when not given; without `--json` the same numbers as plain text, one line per row. `skipped_lines` counts the lines that are not JSON in all files (a live session's last line may be cut): they are skipped and the count is in the report, never hidden.
+
+**What it cannot measure.** What a codemode script read and filtered away (nested results are never stored), so the saving shows only as a change in `result_chars`, `turns` and `cost_usd` between two windows of comparable work; sessions differ, so compare medians over many sessions, not one pair.
+
+**How to use it for the experiment.** The baseline is `--until <time the project setting reached the machine>`, the comparison `--since` that time.
