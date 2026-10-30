@@ -896,3 +896,5 @@ mod reaction_refusal_tests;
 mod jira_transitions_tests;
 #[cfg(test)]
 mod explore_kinds_tests;
+#[cfg(test)]
+mod working_pr_tests;
