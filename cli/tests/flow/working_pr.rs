@@ -13,12 +13,16 @@ const LEAD: &str = "lead-pl";
 
 /// Plan `pl` in phase `plan` with PRs `a` and `b` (and `repo`), the Lead `working` and naming `before`.
 fn world(before: Option<&str>) -> Fx {
-    let fx = Fx::new();
+    world_shaped(before, "config")
+}
+
+/// [`world`] where PR `b` has the shape `shape`.
+fn world_shaped(before: Option<&str>, shape: &str) -> Fx {
+    let fx = Fx::with_ports();
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
-    for key in ["a", "b"] {
-        shaped_pr(&fx.env, "pl", key, "config");
-    }
+    shaped_pr(&fx.env, "pl", "a", "config");
+    shaped_pr(&fx.env, "pl", "b", shape);
     fixture(&fx.env, &format!("UPDATE sessions SET state = 'working' WHERE id = '{LEAD}';"));
     if let Some(pr) = before {
         fixture(&fx.env, &format!("UPDATE sessions SET working_pr = '{pr}' WHERE id = '{LEAD}';"));
@@ -94,7 +98,7 @@ fn working_pr_cmd_job_urgent_names_the_leads_workflow() {
 
 #[test]
 fn working_pr_cmd_job_approve_tests_names_the_leads_workflow() {
-    let fx = world(Some("a"));
+    let fx = world_shaped(Some("a"), "tdd");
     add_needing(&fx, "pl", "t", "test", &[], "b").ok();
     add_needing(&fx, "pl", "i", "impl", &["t"], "b").ok();
     lock(&fx.env, "pl");
@@ -189,8 +193,10 @@ fn working_pr_cmd_a_worker_or_the_user_names_nothing() {
          VALUES ('mgr', 'manager', 'ctx', NULL, 'Manager', '/', 'O5', 'working', 't', 't');",
     );
     for (n, session) in [None, Some("w1"), Some("mgr")].into_iter().enumerate() {
-        // Each run is a real write (a new title), so a naming would have happened.
-        as_session(&fx, session, &["job", "edit", "k", "--title", &format!("Title {n}"), "--plan", "pl"]).ok();
+        // Each run is a real write (a new Job appended to `b`), so a naming would have happened.
+        let spec = spec_file(&fx.env);
+        let key = format!("n{n}");
+        as_session(&fx, session, &["job", "add", &key, "--title", "New", "--tier", "S2", "--spec", &spec, "--pr", "b", "--plan", "pl"]).ok();
         assert_eq!(named(&fx), None, "{session:?}");
     }
 }
