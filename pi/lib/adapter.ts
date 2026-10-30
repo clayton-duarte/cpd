@@ -5,7 +5,7 @@ import { createHost, type Options } from "./host.ts";
 import { registerLoopGuard } from "./loop-guard.ts";
 import { homedir } from "node:os";
 import { primaryCheckoutMove, primaryCheckoutWrite, reasonText as mainReasonText } from "./mainguard.ts";
-import { blockingReason, reasonText } from "./noblock.ts";
+import { BOUND_SECONDS, blockingReason, reasonText } from "./noblock.ts";
 import type { PiApi } from "./pi.ts";
 import { installHint } from "./hint.ts";
 import { installChatPad, registerChatPad } from "./pad.ts";
@@ -85,7 +85,9 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     const command = typeof input.command === "string" ? input.command : "";
     if (role === "manager" || role === "lead") {
       const matched = blockingReason(command, typeof input.timeout === "number" ? input.timeout : undefined);
-      return matched === undefined ? undefined : { block: true, reason: reasonText(matched, role) };
+      if (matched !== undefined) return { block: true, reason: reasonText(matched, role) };
+      if (input.timeout === undefined) input.timeout = BOUND_SECONDS; // pro-d202: pi's bash tool has no default timeout
+      return undefined;
     }
     const matched = unfilteredTestRun(command);
     return matched === undefined ? undefined : { block: true, reason: testReasonText(matched) };
