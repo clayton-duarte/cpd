@@ -375,7 +375,7 @@ Searches the Context's curated records by topic and short form against the query
 
 | Flag | Meaning |
 |---|---|
-| `<query>` | search string to match against topics and short forms of curated records |
+| `<query>` | search string to match against topics and short forms of curated records. Punctuation in the query is text, not FTS5 syntax; the operators kept and the rewrite are in docs/research/context-holographic.md `## Search contract`. |
 
 **Callers** (Plan `explore-roles`, R10): as `context show` (§3.3): the Lead, the Manager and the **Worker**. An explore Worker (`scout` or `research`) may run it read-only, as its Spec's Deliverable section says; nothing enforces it (§2).
 
