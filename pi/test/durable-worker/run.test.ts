@@ -103,7 +103,18 @@ class Store {
 
 type Rig = ReturnType<typeof rig>;
 
-function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: Deps["resolveModel"] } = {}) {
+/** Contract §3.6: the moves `session state` accepts (the same state is a no-op, always legal). */
+const MOVES: Record<string, readonly string[]> = {
+  stopped: ["idle"],
+  idle: ["working", "blocked", "waiting", "stopped"],
+  working: ["idle", "blocked", "waiting", "stopped"],
+  waiting: ["working", "idle", "blocked", "waiting", "stopped"],
+  blocked: ["working", "idle", "waiting", "stopped"],
+};
+const legalMove = (from: string, to: string): boolean => from === to || (MOVES[from]?.includes(to) ?? false);
+
+function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: Deps["resolveModel"]; sessionState?: string } = {}) {
+  const session = { state: over.sessionState ?? "stopped" };
   const store = over.store ?? new Store();
   const calls: string[][] = [];
   const opens: Parameters<Deps["open"]>[0][] = [];
@@ -121,11 +132,14 @@ function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: 
       const line = args.join(" ");
       if (line === ["session", "show", CONFIG.session].join(" ")) {
         if (over.sessionShowError) throw over.sessionShowError;
-        return shown({ registered_event: 41 });
+        return shown({ registered_event: 41, state: session.state });
       }
       if (line === "policy show") return POLICY;
       const state = new RegExp(`^session state (working|stopped|idle( --reply)?|(waiting|blocked) --label .+) --session ${CONFIG.session}$`);
       if (state.test(line)) {
+        const to = args[2]!;
+        if (!legalMove(session.state, to)) throw new CpdError("illegal_transition", `Session ${CONFIG.session} cannot go from ${session.state} to ${to} (contract §3.6).`);
+        session.state = to;
         notify();
         return { ok: true };
       }
@@ -195,7 +209,7 @@ function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: 
       return fn();
     });
   const states = () => calls.filter((a) => a[0] === "session" && a[1] === "state").map((a) => a.slice(2).join(" "));
-  return { store, calls, opens, reports, logs, effects, follower, terminate, ending, until, states };
+  return { session, store, calls, opens, reports, logs, effects, follower, terminate, ending, until, states };
 }
 
 /** Waits until the runner is fully up: first message submitted, follower started, terminate handler set. */
@@ -305,8 +319,8 @@ test("the Session is working while a submission is pending and idle when the las
   r.store.settle(CONFIG.attempt);
   await r.until("the first report", () => r.reports.length >= 1);
   r.store.settle("event:42");
-  await r.until("idle", () => r.states().includes(`idle --session ${CONFIG.session}`));
-  assert.deepEqual(r.states(), [`working --session ${CONFIG.session}`, `idle --session ${CONFIG.session}`], "idle only once the last submission settled");
+  await r.until("idle", () => r.states().length >= 3);
+  assert.deepEqual(r.states(), [`idle --session ${CONFIG.session}`, `working --session ${CONFIG.session}`, `idle --session ${CONFIG.session}`], "idle only once the last submission settled");
   assert.equal(await stop(r), 143);
 });
 
@@ -360,7 +374,7 @@ test("the runner stays up after the first turn ends and resolves only on termina
   const r = rig();
   const hooks = await up(r);
   r.store.settle(CONFIG.attempt);
-  await r.until("idle", () => r.states().includes(`idle --session ${CONFIG.session}`));
+  await r.until("idle", () => r.states().length >= 3);
   await r.until("a report", () => r.reports.length >= 1);
   assert.equal(r.ending.code, undefined, "still running after the turn ended");
   deliver(hooks, nudge(43, "The driver's nudge."));
@@ -368,4 +382,40 @@ test("the runner stays up after the first turn ends and resolves only on termina
   assert.equal(r.ending.code, undefined, "still running and taking input");
   assert.equal(r.follower.stopped, 0);
   assert.equal(await stop(r), 143);
+});
+
+const idleArgs = `idle --session ${CONFIG.session}`;
+const workingArgs = `working --session ${CONFIG.session}`;
+
+test("a first start from stopped moves the Session idle, then working, and no move is refused", { timeout: 20_000 }, async () => {
+  const r = rig();
+  await up(r);
+  await r.until("working", () => r.session.state === "working");
+  assert.deepEqual(r.states(), [idleArgs, workingArgs]);
+  assert.deepEqual(r.logs, []);
+  assert.equal(await stop(r), 143);
+});
+
+for (const state of ["working", "idle", "waiting", "blocked"]) {
+  test(`a restart whose Session is ${state} sends no idle and goes working`, { timeout: 20_000 }, async () => {
+    const r = rig({ sessionState: state });
+    await up(r);
+    await r.until("working", () => r.session.state === "working");
+    assert.deepEqual(r.states(), [workingArgs]);
+    assert.deepEqual(r.logs, []);
+    assert.equal(await stop(r), 143);
+  });
+}
+
+test("the rig refuses stopped -> working with the real message", () => {
+  assert.equal(legalMove("stopped", "working"), false);
+  assert.equal(legalMove("stopped", "idle"), true);
+  assert.equal(legalMove("working", "working"), true);
+});
+
+test("a show whose state is not a Session state is a bad_output and the runner ends 1", { timeout: 20_000 }, async () => {
+  const r = rig({ sessionState: "asleep" });
+  const code = await r.until("the runner to end", () => r.ending.code);
+  assert.equal(code, 1);
+  assert.equal(r.opens.length, 0);
 });

@@ -29,6 +29,8 @@ export type Deps = {
   log(line: string): void;
 };
 
+const STATES = ["working", "waiting", "blocked", "idle", "stopped"];
+
 const contextText = (files: readonly { path: string; content: string }[]): string | undefined =>
   files.length === 0 ? undefined : files.map((f) => `## ${f.path}\n${f.content}`).join("\n\n");
 
@@ -53,7 +55,10 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
   let follower: { start(): void; stop(): void } | undefined;
 
   const main = async (): Promise<void> => {
-    const session = parseSession(await deps.cpd(["session", "show", config.session]));
+    const shownSession = await deps.cpd(["session", "show", config.session]);
+    const session = parseSession(shownSession);
+    const shownState = (shownSession.session as { state?: unknown }).state;
+    if (typeof shownState !== "string" || !STATES.includes(shownState)) throw new CpdError("bad_output", "cpd session show: the session state is not one of working, waiting, blocked, idle or stopped");
     const policy = policySection(await deps.cpd(["policy", "show"]));
     const extension = cpdExtension(
       { contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) },
@@ -90,6 +95,8 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
         });
     };
 
+    // §3.6 allows `stopped -> idle`, never `stopped -> working`; after a crash restart the Session is not `stopped`.
+    if (shownState === "stopped") reporter.want({ state: "idle" });
     await submit({ content: `Read ${config.spec} and follow it exactly. Your attempt id is ${config.attempt}.`, requestId: config.attempt, whenBusy: "followUp" });
 
     let cursor = session.registeredEvent;

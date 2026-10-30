@@ -1,3 +1,5 @@
+import { mkdir, rename, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { CpdError } from "../lib/cpd.ts";
 
 export type EndReport = {
@@ -38,4 +40,12 @@ export function endReport(entries: readonly Entry[]): EndReport {
     cost_usd: sum((m) => m.usage.cost.total),
     model: `${last.provider}/${last.model}`,
   };
+}
+
+/** Writes the end report atomically (contract §6.12): creates the directory, writes a temp file, renames it over `file`. */
+export async function writeReport(file: string, report: EndReport): Promise<void> {
+  await mkdir(dirname(file), { recursive: true });
+  const temp = `${file}.${process.pid}.tmp`;
+  await writeFile(temp, JSON.stringify(report));
+  await rename(temp, file);
 }

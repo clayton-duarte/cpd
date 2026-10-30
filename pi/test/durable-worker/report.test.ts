@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, test } from "node:test";
 import { CpdError } from "../../lib/cpd.ts";
-import { endReport, type Entry } from "../../durable-worker/report.ts";
+import { endReport, writeReport, type EndReport, type Entry } from "../../durable-worker/report.ts";
 
 type Over = { stopReason?: string; errorMessage?: string; provider?: string; model?: string; input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number };
 
@@ -59,4 +62,23 @@ test("endReport refuses entries with no assistant entry", () => {
     }
     assert.fail("did not throw");
   }
+});
+
+const roots: string[] = [];
+after(async () => {
+  await Promise.all(roots.map((r) => rm(r, { recursive: true, force: true })));
+});
+
+test("writeReport creates the missing directory, replaces an earlier report and leaves no temp file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "report-"));
+  roots.push(root);
+  const dir = join(root, "run", "plan", "attempts");
+  const file = join(dir, "a1.report.json");
+  const first = endReport([assistant({ input: 1 })]);
+  await writeReport(file, first);
+  assert.deepEqual(JSON.parse(await readFile(file, "utf8")) as EndReport, first);
+  const second = endReport([assistant({ input: 1 }), assistant({ input: 2 })]);
+  await writeReport(file, second);
+  assert.deepEqual(JSON.parse(await readFile(file, "utf8")) as EndReport, second);
+  assert.deepEqual(await readdir(dir), ["a1.report.json"]);
 });

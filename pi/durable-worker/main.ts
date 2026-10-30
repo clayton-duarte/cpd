@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
-import { rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { getAgentDir, loadProjectContextFiles, ModelRuntime, resolveCliModel } from "@earendil-works/pi-coding-agent";
 import { callCpd, CpdError } from "../lib/cpd.ts";
 import { DEFAULT_TIMING, Follower } from "../lib/follower.ts";
 import { parseConfig } from "./config.ts";
 import { openConversation } from "./harness.ts";
+import { writeReport } from "./report.ts";
 import { runWorker, type Deps } from "./run.ts";
 
 const exec = (command: string, args: string[], options: { timeout?: number; signal?: AbortSignal } = {}) =>
@@ -30,11 +30,7 @@ try {
     contextFiles: (cwd) => loadProjectContextFiles({ cwd, agentDir: getAgentDir() }),
     open: (o) => openConversation(models as never, o),
     follow: (hooks) => new Follower(config.session, hooks, DEFAULT_TIMING),
-    writeReport: async (file, report) => {
-      const temp = `${file}.${process.pid}.tmp`;
-      await writeFile(temp, JSON.stringify(report));
-      await rename(temp, file);
-    },
+    writeReport,
     onTerminate: (handler) => {
       process.once("SIGTERM", handler);
       process.once("SIGINT", handler);
