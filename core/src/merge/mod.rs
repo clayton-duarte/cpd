@@ -235,7 +235,18 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
             return Ok(Stepped::ends(End::Failed { cause: Failure::MergeConflict, detail }));
         }
         if !contained {
-            if let Some(files) = rebase(&target.worktree, &old)? {
+            // hs-d747: an Attempt holding the base's commits takes the Lead tip by merge, so those commits keep their SHAs.
+            let conflicts = if holds_base_commits(&target.worktree, &old, &base_refs)? {
+                let head = git::run::rev_parse(&target.worktree, "HEAD")?;
+                let found = git::worktree::merge_conflicts(&target.worktree, &old, &head)?;
+                if found.is_none() {
+                    git::run::ok(&target.worktree, &["merge", "-q", "--no-edit", &old])?;
+                }
+                found
+            } else {
+                rebase(&target.worktree, &old)?
+            };
+            if let Some(files) = conflicts {
                 let detail = format!("The rebase onto the Lead Branch conflicted in: {}.", files.join(", "));
                 return Ok(Stepped::ends(End::Failed { cause: Failure::MergeConflict, detail }));
             }
@@ -512,6 +523,21 @@ fn contains(worktree: &std::path::Path, commit: &str) -> Result<bool, CpdError> 
             .with("exit", code)
             .with("stderr", git::tail(&out.stderr, git::TAIL_LINES))),
     }
+}
+
+/// Whether `worktree`'s HEAD holds commits of the base refs that `old` lacks (hs-d747).
+fn holds_base_commits(worktree: &std::path::Path, old: &str, base_refs: &[&str]) -> Result<bool, CpdError> {
+    let count = |extra: &[&str]| -> Result<u64, CpdError> {
+        let mut args = vec!["rev-list", "--count", "HEAD", "--not", old];
+        args.extend_from_slice(extra);
+        let out = run(worktree, &args)?;
+        out.stdout.trim().parse::<u64>().ok().filter(|_| out.code == 0).ok_or_else(|| {
+            CpdError::new(ErrorCode::GitFailed, "git rev-list --count failed.")
+                .with("exit", out.code)
+                .with("stderr", git::tail(&out.stderr, git::TAIL_LINES))
+        })
+    };
+    Ok(count(&[])? > count(base_refs)?)
 }
 
 /// `git rebase <onto>` in `worktree`. `Some(files)` on a conflict (after
