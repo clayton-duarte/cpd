@@ -158,8 +158,8 @@ pub struct Pull {
     pub conflicting: bool,
     /// The PR is ready to merge (pro-d118: `cpd_core::pr::pulls::ready_to_merge_sql`, not GitHub's CLEAN alone); its `open` is yellow.
     pub clean: bool,
-    /// The Plan's Lead Session has `state = 'working'` (contract §3.6), read with the rest: the title shows the Lead's
-    /// working dot beside the state (hs-d335).
+    /// The Plan's Lead Session has `state = 'working'` (contract §3.6) and the PR is not merged: the title shows the Lead's
+    /// working dot beside the state (hs-d335); a merged box never does (docs/commands.md §13.2).
     pub lead_working: bool,
     /// The PR's not-ended update Job, if any: a conflict reads `updating` while it is `Some` (hs-d532).
     /// `pull_requests.draft`.
@@ -417,7 +417,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool, lead: &str, jo
                     url,
                     conflicting: conflicting(&what, &mergeable)?,
                     clean,
-                    lead_working,
+                    lead_working: lead_working && status != PrStatus::Merged,
                     update: update_state(&what, update.as_deref())?,
                     draft,
                 })

@@ -45,6 +45,8 @@ mod elapsed_tests;
 mod workflow_cost_tests;
 #[cfg(test)]
 mod look_tests;
+#[cfg(test)]
+mod lead_dot_box_tests;
 pub mod pr_look;
 mod pulse;
 #[cfg(test)]
