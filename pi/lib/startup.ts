@@ -13,7 +13,6 @@ import type { Host } from "./host.ts";
 import type { Ctx, ModelCtx } from "./pi.ts";
 import { ENTRY_TYPE, highestReview, plannotatorId, REVIEW_LABEL, reviewsFromEntries } from "./plan-review.ts";
 import { registerPlanReviewCommand } from "./plan-review-command.ts";
-import { createTracker, type Tracker } from "./pntrack.ts";
 import { parseResult } from "./plannotator.ts";
 import { adapterPath, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, refusal, reloadLogPath, RELOAD_TRIGGER, validatePackage } from "./reload.ts";
 import { guardOf } from "./reload-command.ts";
@@ -27,9 +26,6 @@ import { registerUpdates } from "./turns.ts";
 import { clearMentions, refreshMentions } from "./mentions-refresh.ts";
 
 // Start-up and shutdown (§15.2).
-
-/** The tracker of each active Lead or Manager run (§15 "Every plannotator session is tracked"). */
-export const trackers = new WeakMap<Run, Tracker>();
 
 export async function start(host: Host, ctx: ModelCtx, reason: string): Promise<void> {
   if (ctx.mode !== "tui") return;
@@ -217,22 +213,6 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
     longRefusalMs: options.reload?.longRefusalMs,
     now: options.reload?.now,
   });
-
-  // Every plannotator session this Session opens is tracked (§15): reconcile now, then poll and on each plannotator result (adapter.ts).
-  if (info.role === "lead" || info.role === "manager") {
-    const tracker = createTracker({
-      session: id,
-      store: globalThis as Record<string, unknown>,
-      cpd: async (argv) => (await host.exec("cpd", argv, { timeout: host.timing.callTimeoutMs, signal: host.abort.signal })).stdout,
-      report: (m) => host.deliver("plannotator tracker", new CpdError("registry_changed", m)),
-    });
-    trackers.set(r, tracker);
-    const poll = () => void tracker.poll().catch((e) => host.deliver("plannotator tracker", e));
-    void tracker.start().catch((e) => host.deliver("plannotator tracker", e));
-    const timer = setInterval(poll, host.timing.pollMs);
-    timer.unref();
-    r.unsubscribe.push(() => clearInterval(timer));
-  }
 
   // Recovery of the reviews this session opened (§15.5), in the background.
   r.unsubscribe.push(

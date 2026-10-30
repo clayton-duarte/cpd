@@ -398,11 +398,6 @@ export class Fixture {
     await waitFor("the follower", () => this.follows().length > 0);
   }
 
-  /** Resolves when the tracker ran `cpd review list` (started after the follower, not awaited by it). */
-  async trackerListed(): Promise<void> {
-    await waitFor("the tracker's review list", () => this.argvs().some((a) => a[0] === "review" && a[1] === "list"));
-  }
-
   /** `--since` of every follower start. */
   sinces(): number[] {
     return this.follows().map((c) => Number(c.since));
