@@ -12,19 +12,19 @@ use super::testkit::{Fx, ago};
 const GUARD: &str = "φ: loop guard";
 
 /// Plan `pay` in `dispatch`, its Lead `lead1` `working`, a tick of E8 and `stuck_job_minutes = 1`.
-fn fx() -> Fx {
+pub(super) fn fx() -> Fx {
     let mut fx = Fx::with_plan("[inbox]\nstuck_job_minutes = 1\n");
     fx.fixture("UPDATE sessions SET state = 'working' WHERE id = 'lead1';");
     fx
 }
 
 /// One tick of E8.
-fn tick(fx: &mut Fx) {
+pub(super) fn tick(fx: &mut Fx) {
     inbox::run(&mut fx.engine);
 }
 
 /// A `failed` Job `key` of Plan `pay` whose `job-failed` Event is `minutes` old.
-fn failed_job(fx: &mut Fx, key: &str, minutes: i64) {
+pub(super) fn failed_job(fx: &mut Fx, key: &str, minutes: i64) {
     fx.fixture(&format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                            fingerprint, failed_cause, created_txn, created_at)
@@ -37,7 +37,7 @@ fn failed_job(fx: &mut Fx, key: &str, minutes: i64) {
 }
 
 /// The open items: `(kind, urgency, subject, label)`.
-fn open_items(fx: &mut Fx) -> Vec<(String, String, String, String)> {
+pub(super) fn open_items(fx: &mut Fx) -> Vec<(String, String, String, String)> {
     fx.engine
         .store
         .read(|conn| {
@@ -62,12 +62,12 @@ fn item(fx: &mut Fx, kind: &str) -> Option<(String, String, Option<String>, Stri
     open_sessions(fx).into_iter().find(|i| i.0 == kind)
 }
 
-fn data(fx: &mut Fx, kind: &str) -> Vec<Value> {
+pub(super) fn data(fx: &mut Fx, kind: &str) -> Vec<Value> {
     fx.events(kind).into_iter().map(|e| e.3).collect()
 }
 
 /// A live Manager Session `mgr1` of Context `ctx`, idle.
-fn manager(fx: &mut Fx) {
+pub(super) fn manager(fx: &mut Fx) {
     fx.fixture(
         "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
            VALUES ('mgr1', 'manager', 'ctx', 'Mgr', '/', 'O3', 'idle', 't', 't');",
@@ -75,7 +75,7 @@ fn manager(fx: &mut Fx) {
 }
 
 /// The `session-message` Events, oldest first: `(session, from, wake, text)`.
-fn messages(fx: &mut Fx) -> Vec<(String, Option<String>, bool, String)> {
+pub(super) fn messages(fx: &mut Fx) -> Vec<(String, Option<String>, bool, String)> {
     fx.engine
         .store
         .read(|conn| {
@@ -124,7 +124,7 @@ fn a_phi_plan_review_blocked_session_is_not_a_dialog() {
 
 /// The text of the one message for a PR's stuck Jobs (contract §3.7 "A stuck Job"): `<key>` and `<T>` stay for the
 /// Manager to choose.
-fn stuck_text(key: &str, minutes: i64, cause: &str) -> String {
+pub(super) fn stuck_text(key: &str, minutes: i64, cause: &str) -> String {
     format!(
         "Jobs of PR pay/repo failed and their Lead has not retried or cancelled them: \
          pay/{key} ({minutes} min ago, {cause}). \

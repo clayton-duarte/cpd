@@ -21,7 +21,7 @@ const MAX_CHARS: usize = 65536;
 
 enum Decision {
     Already(String),
-    /// `open` is the repo and number of the PR's open pull request, if any.
+    /// `open` is the `(repo, number)` of the PR's open pull request, if any.
     Update { status: String, open: Option<(String, i64)> },
 }
 

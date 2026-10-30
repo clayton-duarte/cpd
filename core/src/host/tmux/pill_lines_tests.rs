@@ -320,6 +320,23 @@ fn the_runner_pill_follows_the_costs_button_in_its_own_range() {
     assert!(after.starts_with(",}"), "{format}");
 }
 
+/// Display columns as tmux's format_width counts them: a closed `#[..]` is 0 cells, `##` is 1, every other char is 1.
+fn display_width(s: &str) -> usize {
+    let (mut n, mut rest) = (0, s);
+    while let Some(c) = rest.chars().next() {
+        if let Some(run) = rest.strip_prefix("#[") {
+            rest = &run[run.find(']').expect("a closed #[") + 1..];
+        } else if let Some(run) = rest.strip_prefix("##") {
+            n += 1;
+            rest = run;
+        } else {
+            n += 1;
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    n
+}
+
 /// A tiny evaluator of the subset of tmux's format language the status format uses, on a zoomed window (the plain
 /// fill): `#[..]` styles cost no cell; `#{?c,a,b}`, `#{e|op:a,b}`, `#{n:x}`, `#{w:x}`, `#{R:s,n}`, `#{var}`.
 struct Row<'a> {
@@ -379,7 +396,8 @@ impl Row<'_> {
             .to_string();
         }
         if let Some(name) = inner.strip_prefix("n:").or_else(|| inner.strip_prefix("w:")) {
-            return self.var(name.trim_start_matches('#')).chars().count().to_string();
+            let value = self.var(name.trim_start_matches('#'));
+            return if inner.starts_with("w:") { display_width(&value) } else { value.chars().count() }.to_string();
         }
         if let Some(rest) = inner.strip_prefix("R:") {
             let args = Self::split(rest);
@@ -435,7 +453,7 @@ fn the_status_row_keeps_its_width_with_pi_with_durable_and_with_no_runner_option
                 })
             };
             let row = Row { vars: &vars }.expand(&STATUS_FORMAT);
-            assert_eq!(row.chars().count(), width, "runner {runner:?}, width {width}: {row:?}");
+            assert_eq!(display_width(&row), width, "runner {runner:?}, width {width}: {row:?}");
             let pill = runner.map(|r| format!("\u{e0b6}{r}\u{e0b4}"));
             for r in ["pi", "durable"] {
                 let marker = format!("\u{e0b6}{r}\u{e0b4}");
@@ -479,4 +497,28 @@ fn the_statusbar_is_no_view() {
     assert_eq!(View::parse("statusbar"), None);
     assert!(View::ALL.iter().all(|v| v.as_str() != "statusbar"));
     assert_eq!(View::parse("nope"), None);
+}
+
+/// The real long and short workers texts of Counts{running 6, limit 6, waiting 4, queued 9}.
+#[test]
+fn the_status_row_keeps_its_width_with_the_styled_workers_texts() {
+    let lit = |c: u8, n: &str| format!("#[noreverse]#[fg=colour{c}]#[bg=colour8]{n}#[reverse]#[fg=colour8]#[bg=default]");
+    let short = format!("{}\u{b7}{}\u{b7}{}/6", lit(1, "9"), lit(3, "4"), lit(2, "6"));
+    let long = format!("workers {short}");
+    assert_eq!((display_width(&long), display_width(&short)), (15, 7));
+    for width in [26usize, 34, 35, 60, 120] {
+        let vars = |name: &str| {
+            Some(match name {
+                "client_width" => width.to_string(),
+                "window_zoomed_flag" => "1".to_owned(),
+                "@cpd_workers" => long.clone(),
+                "@cpd_workers_short" => short.clone(),
+                _ => return None,
+            })
+        };
+        let row = Row { vars: &vars }.expand(&STATUS_FORMAT);
+        assert_eq!(display_width(&row), width, "width {width}: {row:?}");
+        assert_eq!(row.contains("workers "), width >= 35, "the long text is drawn from 35 columns: {row:?}");
+        assert!(row.contains(&short), "{row:?}");
+    }
 }

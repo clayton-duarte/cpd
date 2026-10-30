@@ -252,13 +252,59 @@ cpd context search <query> [--context <c>] [--limit <n>] [--kind <k,k>] [--all]
 cpd context reindex [--context <c>]
 ```
 
-**What a query matches.** `holographic`'s `FactRetriever.search` passes the query, unchanged, to
-SQLite FTS5 `MATCH` over `content` (= cpd `text` + `topic` + `short`; `tags` is empty). So:
+**What a query matches.** `cpd context search` rewrites the query once, before the bridge sees it,
+and the bridge runs the rewritten string as SQLite FTS5 `MATCH` over `content` (= cpd `text` +
+`topic` + `short`; `tags` is empty). Punctuation in a word is **text**, not FTS5 syntax (`hs-d655`,
+`don't`, `plan/key`); the deliberate operators are kept. The rewrite is the contract below.
+
+The query is trimmed, then scanned left to right and rewritten into the FTS5 `MATCH` string cpd
+sends:
+
+- **R1.** Whitespace separates words and is kept as written.
+- **R2.** A `"` opens a phrase that runs to the next `"` (a doubled `""` inside is a literal quote).
+  The phrase is sent unchanged, and a `*` right after its closing `"` stays (prefix on the phrase).
+  A `"` with no closing `"` is sent as written and FTS5 refuses the query (R9).
+- **R3.** Outside phrases a word is a run of characters that are neither whitespace nor `"`. Each
+  leading `(` of a word opens a group and is sent unchanged; `NEAR(` at the start of a word (after
+  those) is the NEAR operator, opens a NEAR group and is sent unchanged. Each trailing `)` of a word
+  closes one open group, as many as there are open groups; a `)` with no open group to close stays
+  in the word. A `(` inside a word stays in the word.
+- **R4.** Inside a NEAR group a `,` ends a word and is sent unchanged (the `, N` distance); anywhere
+  else `,` is an ordinary word character.
+- **R5.** A word that is exactly `AND`, `OR` or `NOT` (uppercase) is an operator, sent unchanged;
+  lowercase `and`, `or`, `not`, `near` are ordinary words.
+- **R6.** A bare word, made only of ASCII letters, digits, `_` and non-ASCII characters (at least one),
+  with at most one trailing `*`, is sent unchanged (`retriev*` is a prefix match).
+- **R7.** Any other word is text: it is wrapped in `"..."`; one trailing `*` stays outside the quotes
+  (`pro-d217*` becomes `"pro-d217"*`); a lone `*` or lone punctuation becomes `"*"`, `"-"`.
+- **R8.** FTS5 column filters (`col:x`), `-x`, `^x` and `+` are not kept: R7 makes them text.
+- **R9.** Still refused `usage` (exit 2, `details: {query, message}`, the query as typed): an empty
+  query, an unterminated phrase, an unclosed `(` and a misplaced operator (a leading NOT, a trailing
+  AND). No new error code.
+- **R10.** The rewrite is idempotent: rewriting its own output changes nothing. The answer's `query`
+  field and `details.query` are the query as typed (trimmed), never the rewritten form.
+
+| typed | sent to FTS5 | note |
+|---|---|---|
+| `hs-d655` | `"hs-d655"` | |
+| `db.migrations` | `"db.migrations"` | |
+| `plan/key` | `"plan/key"` | |
+| `don't` | `"don't"` | |
+| `a:b` | `"a:b"` | |
+| `first-message digests` | `"first-message" digests` | |
+| `retrieval of hs-d655 today` | `retrieval of "hs-d655" today` | |
+| `pro-d217*` | `"pro-d217"*` | |
+| `retriev*` | `retriev*` | |
+| `"first message" OR hs-d655` | `"first message" OR "hs-d655"` | |
+| `(hs-d655 OR pro-n210) NOT draft` | `("hs-d655" OR "pro-n210") NOT draft` | |
+| `NEAR(plan/key hs-d655, 3)` | `NEAR("plan/key" "hs-d655", 3)` | |
+| `f(x)` | `"f(x)"` | |
+| `-` | `"-"` | |
+| `"unterminated` | `"unterminated` | refused `usage`: FTS5 refuses the unterminated phrase (R9) |
+| `(a` | `(a` | refused `usage`: FTS5 refuses the unclosed group (R9) |
 
 - several terms are **ANDed** (all must match) — the old behaviour;
 - a trailing `*` is a **prefix** match (`retriev*`) — the old behaviour;
-- `OR`, `NEAR`, `NOT`, quoted phrases and parentheses are FTS5 syntax, passed through — the old
-  behaviour;
 - **there is no stemming.** `facts_fts` uses FTS5's **default** tokenizer (`unicode61`), not
   `porter unicode61`, so `retrieve` does **not** match `retrieval`; the caller uses `retriev*`. This
   is the one honest gap versus the old design (which chose `porter`); cpd does not fight it, it

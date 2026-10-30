@@ -29,11 +29,14 @@ mod record;
 mod reindex;
 pub(crate) mod render;
 mod rename;
+mod query;
 mod search;
 mod show;
 mod write;
 #[cfg(test)]
 mod distill_git_tests;
+#[cfg(test)]
+mod query_tests;
 
 use std::fmt;
 use std::str::FromStr;

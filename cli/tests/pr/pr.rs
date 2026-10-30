@@ -1162,8 +1162,10 @@ pub(super) struct Gh {
     list: Seq,
     /// `gh pr create`.
     create: Seq,
-    /// `gh api -X PATCH repos/<repo>/pulls/<n>` (`pr describe` of an open pull request).
-    patch: Seq,
+    /// `gh api -X PATCH repos/<repo>/pulls/<n> --input -` (`pr describe` of an open pull request).
+    update: Seq,
+    /// The test environment's root: the walk looking for a `.git` stops there.
+    root: PathBuf,
     fail: Mutex<Option<String>>,
     /// The comments read (pr-comments): what it answers; None is an empty read of every pull request the query names.
     pub(super) comments: Mutex<Option<String>>,
@@ -1193,8 +1195,20 @@ impl Seq {
     }
 }
 
+/// Whether `cwd` or one of its ancestors below `root` holds a `.git` (the walk stops at `root`: the temp dir can sit in a checkout).
+pub(super) fn in_git_repo(cwd: &Path, root: &Path) -> bool {
+    cwd.ancestors().take_while(|dir| *dir != root).any(|dir| dir.join(".git").exists())
+}
+
 impl Handler for Gh {
     fn handle(&self, call: &Call) -> Reply {
+        // Like gh: a call that resolves its repo from the cwd fails outside a git repository.
+        let first = call.args.first().map(String::as_str);
+        let named = call.args.iter().any(|a| a == "--repo" || a == "-R") || call.envs.iter().any(|(k, v)| k == "GH_REPO" && v.is_some());
+        let placeholder = first == Some("api") && call.args.iter().any(|a| a.contains("{owner}") || a.contains("{repo}"));
+        if ((first == Some("pr") && !named) || placeholder) && call.cwd.as_deref().is_some_and(|cwd| !in_git_repo(cwd, &self.root)) {
+            return Reply::exit(1, "", "failed to run git: fatal: not a git repository (or any of the parent directories): .git\n");
+        }
         if let Some(text) = self.fail.lock().unwrap().as_ref() {
             return Reply::exit(1, "", &format!("{text}\n"));
         }
@@ -1202,7 +1216,7 @@ impl Handler for Gh {
         match args[..] {
             ["pr", "list", ..] => self.list.get(),
             ["pr", "create", ..] => self.create.get(),
-            ["api", "-X", "PATCH", ..] => self.patch.get(),
+            ["api", "-X", "PATCH", _, "--input", "-"] => self.update.get(),
             ["api", "graphql", "-f", query, ..] if query.contains("search(type: ISSUE") => self.search.get(),
             ["api", "graphql", "-f", query, ..] if query.contains("reviewThreads") => match &*self.comments.lock().unwrap() {
                 Some(text) => Reply::ok(&format!("{text}\n")),
@@ -1320,7 +1334,8 @@ fn poll_fx_branch(phase: &str, config_extra: &str, job: &str, branch: &str) -> P
         // `pr open` reads `createdAt` of the pull request it just opened (store-W5).
         list: Seq::new(Reply::ok("[]\n")),
         create: Seq::new(Reply::ok(&format!("{URL}\n"))),
-        patch: Seq::new(Reply::ok("")),
+        update: Seq::new(Reply::ok("")),
+        root: fx.env.root().to_path_buf(),
         lookup: Slot::new(if phase == "dispatch" { Reply::ok(&format!("{}\n", lookup_answer(&[Some(pay("OPEN", None, None))]))) } else { Reply::ok("{\"data\":{}}\n") }),
         fail: Mutex::new(None),
         comments: Mutex::new(None),
@@ -1350,9 +1365,9 @@ impl Poll {
         self.gh.lookup.set(Reply::ok(&format!("{text}\n")));
     }
 
-    /// From now on `gh api -X PATCH` fails with `text` on stderr.
-    pub(super) fn fail_patch(&self, text: &str) {
-        self.gh.patch.set(Reply::exit(1, "", &format!("{text}\n")));
+    /// From now on the `gh api -X PATCH` update of a pull request fails with `text` on stderr.
+    pub(super) fn fail_update(&self, text: &str) {
+        self.gh.update.set(Reply::exit(1, "", &format!("{text}\n")));
     }
 
     /// Makes every call of the fake `gh` fail with `text` on stderr.
