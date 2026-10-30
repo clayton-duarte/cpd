@@ -2185,17 +2185,90 @@ fn e5_polls_at_its_due_time_not_at_the_next_tick() {
             ended_rx.recv_timeout(WAIT).expect("the poll ended");
             ticks.len() >= 3
         },
-        move || ended_tx.lock().unwrap().send(()).unwrap(),
+        move || {
+            let _ = ended_tx.lock().unwrap().send(());
+        },
     )
     .unwrap();
 
     let ticks = ticks.lock().unwrap();
     for pair in ticks.windows(2) {
         let gap = pair[1].duration_since(pair[0]).unwrap();
-        assert!((Duration::from_millis(300)..Duration::from_secs(4)).contains(&gap), "a poll every 0.3 s (0.1 s poll + 0.2 s), not every 5 s tick: {ticks:?}");
+        assert_eq!(gap.as_millis(), 300, "a poll every 0.3 s (0.1 s poll + 0.2 s), not every 5 s tick: {ticks:?}");
     }
     assert_eq!(fx.calls("cpd").len(), 3);
     assert_eq!(fx.events("error").len(), 0);
+}
+
+/// The poll thread hands its result over late: the hook of the second poll (it runs when the poll thread has exited, after its
+/// send) parks that thread until the third tick has begun. With the hook before the send, the engine naps through its 5 s tick
+/// without the result and the third tick begins at ~5.3 s; with the hook after the send, at 0.6 s.
+#[test]
+fn e5_a_poll_handed_over_late_does_not_slip_to_the_next_tick() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+    const WAIT: Duration = Duration::from_secs(10);
+
+    let fx = engine_home("");
+    let config = fx.env.cpd_home().join("config.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    let tick = format!("tick_seconds = 1\n");
+    assert!(text.contains(&tick), "{text}");
+    fs::write(&config, text.replace(&tick, "tick_seconds = 5\n")).unwrap();
+    fx.engine_base_routes();
+    fx.export("CPD_TEST_PR_POLL", "0.2");
+    let (entered_tx, entered_rx) = channel::<()>();
+    let (go_tx, go_rx) = channel::<()>();
+    let (ended_tx, ended_rx) = channel::<()>();
+    let (release_tx, release_rx) = channel::<()>();
+    let (entered_tx, go_rx, ended_tx, release_rx) = (Mutex::new(entered_tx), Mutex::new(go_rx), Mutex::new(ended_tx), Mutex::new(release_rx));
+    let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2099-01-01T00:00:00.000Z"}});
+    fx.route_fn("cpd", move |_| {
+        let _ = entered_tx.lock().unwrap().send(());
+        go_rx.lock().unwrap().recv_timeout(WAIT).expect("the engine held at its nap lets the poll go");
+        Reply::ok(&poll.to_string()).takes(Duration::from_millis(100))
+    });
+
+    let lock = fx.home().watch_lock();
+    let ticks = Arc::new(Mutex::new(Vec::<SystemTime>::new()));
+    let seen = ticks.clone();
+    let hooks = AtomicUsize::new(0);
+    fx.watch_gated(
+        move |_| {
+            let began = fs::metadata(&lock).unwrap().modified().unwrap();
+            let mut ticks = seen.lock().unwrap();
+            if ticks.last() == Some(&began) {
+                return false;
+            }
+            ticks.push(began);
+            if ticks.len() >= 3 {
+                // The third tick began: let the parked poll thread go, and any third poll (it waits for a `go`).
+                let _ = release_tx.send(());
+                let _ = go_tx.send(());
+                return true;
+            }
+            entered_rx.recv_timeout(WAIT).unwrap_or_else(|_| panic!("a tick began and no poll started in it (E5 was not due): ticks at {ticks:?}"));
+            go_tx.send(()).unwrap();
+            ended_rx.recv_timeout(WAIT).expect("the poll ended");
+            false
+        },
+        move || {
+            let _ = ended_tx.lock().unwrap().send(());
+            // The second poll's thread stays parked until the third tick has begun (its sender drops if the test panics).
+            if hooks.fetch_add(1, Ordering::SeqCst) == 1 {
+                let _ = release_rx.lock().unwrap().recv();
+            }
+        },
+    )
+    .unwrap();
+
+    let ticks = ticks.lock().unwrap();
+    assert_eq!(ticks.len(), 3, "{ticks:?}");
+    for pair in ticks.windows(2) {
+        let gap = pair[1].duration_since(pair[0]).unwrap();
+        assert_eq!(gap.as_millis(), 300, "a poll handed over late slipped to the next 5 s tick instead of 0.3 s: ticks at {ticks:?}");
+    }
 }
 
 /// The one test of `pr_poll_seconds` itself, the config key (no test override): whole seconds.

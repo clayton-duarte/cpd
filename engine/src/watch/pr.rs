@@ -63,6 +63,9 @@ pub(super) fn start(engine: &mut Engine) {
 
 /// E5, second step: applies the poll that ended, if one did.
 pub(super) fn reap(engine: &mut Engine) {
+    if engine.outgrown() {
+        return;
+    }
     let Some(finished) = engine.poll.as_mut().and_then(PollRun::try_take) else { return };
     engine.poll = None;
     apply(engine, finished);
@@ -73,6 +76,13 @@ pub(super) fn finish(engine: &mut Engine) {
     let Some(finished) = engine.poll.as_mut().and_then(PollRun::wait) else { return };
     engine.poll = None;
     apply(engine, finished);
+}
+
+/// At a stand-down: waits for a running poll and drops its result, applying nothing.
+pub(super) fn discard(engine: &mut Engine) {
+    if let Some(mut poll) = engine.poll.take() {
+        let _ = poll.wait();
+    }
 }
 
 fn apply(engine: &mut Engine, finished: Finished) {

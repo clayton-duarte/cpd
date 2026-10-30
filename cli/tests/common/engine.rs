@@ -9,6 +9,7 @@
 //! runs the engine until a state it can read (a file, a row) holds. A step that never says so ends the test after
 //! [`MAX_NAPS`] naps, with a panic: virtual time, no wall clock.
 
+use std::cell::RefCell;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -59,9 +60,26 @@ struct Stepped {
     inner: ManualClock,
     until: Arc<AtomicBool>,
     step: Mutex<Step>,
-    /// The thread that runs the engine, and what to do when another thread reads the clock ([`Fx::watch_gated`]).
+    /// The thread that runs the engine, and what to run once per other thread, at that thread's exit, after its last
+    /// statement (so after the poll's send): registered on the thread's first clock read ([`Fx::watch_gated`]).
     engine_thread: ThreadId,
-    on_other_thread: Option<Box<dyn Fn() + Send + Sync>>,
+    on_other_thread: Option<Hook>,
+}
+
+type Hook = Arc<dyn Fn() + Send + Sync>;
+
+/// Runs its hook when dropped: a thread-local, so at the exit of the thread that read the clock. The hook must not panic
+/// (a panic in a thread-local destructor aborts the process).
+struct Guard(Hook);
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        (self.0)()
+    }
+}
+
+thread_local! {
+    static ENDED: RefCell<Option<Guard>> = const { RefCell::new(None) };
 }
 
 impl Clock for Stepped {
@@ -70,7 +88,9 @@ impl Clock for Stepped {
         if let Some(hook) = &self.on_other_thread
             && std::thread::current().id() != self.engine_thread
         {
-            hook();
+            ENDED.with(|ended| {
+                ended.borrow_mut().get_or_insert_with(|| Guard(hook.clone()));
+            });
         }
         now
     }
@@ -239,16 +259,16 @@ impl Fx {
         self.watch_steps_on(step, None)
     }
 
-    /// [`Fx::watch_steps`] where `poll_ended` runs each time a thread other than the test's reads the engine's clock. The
-    /// engine's only other thread is E5's poll, and it reads the clock once, to stamp the end of the poll, as the last thing
-    /// it does before it hands the result over: a `step` that waits for what `poll_ended` signals stops the engine's
-    /// virtual time while a poll runs, so the poll ends at a time the test knows (the engine's own thread would otherwise
-    /// nap through virtual time while the poll thread is starting).
+    /// [`Fx::watch_steps`] where `poll_ended` runs once per thread other than the test's that reads the engine's clock, at
+    /// that thread's exit, after its last statement. The engine's only other thread is E5's poll: it reads the clock to
+    /// stamp the end of the poll, then sends its result, so `poll_ended` runs at the poll thread's exit, after its send,
+    /// and the result is already on the channel. A `step` that waits for what `poll_ended` signals stops the engine's
+    /// virtual time while a poll runs, so the poll ends at a time the test knows. `poll_ended` must not panic.
     pub fn watch_gated(&self, step: impl FnMut(usize) -> bool + Send + 'static, poll_ended: impl Fn() + Send + Sync + 'static) -> Result<Output, CpdError> {
-        self.watch_steps_on(step, Some(Box::new(poll_ended)))
+        self.watch_steps_on(step, Some(Arc::new(poll_ended)))
     }
 
-    fn watch_steps_on(&self, step: impl FnMut(usize) -> bool + Send + 'static, on_other_thread: Option<Box<dyn Fn() + Send + Sync>>) -> Result<Output, CpdError> {
+    fn watch_steps_on(&self, step: impl FnMut(usize) -> bool + Send + 'static, on_other_thread: Option<Hook>) -> Result<Output, CpdError> {
         let until = Arc::new(AtomicBool::new(false));
         let stepped = Stepped {
             inner: (*self.fakes.clock).clone(),
