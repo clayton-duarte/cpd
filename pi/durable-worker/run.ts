@@ -53,7 +53,7 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
   let follower: { start(): void; stop(): void } | undefined;
 
   const main = async (): Promise<void> => {
-    const session = parseSession(await deps.cpd(["session", "show", "--session", config.session]));
+    const session = parseSession(await deps.cpd(["session", "show", config.session]));
     const policy = policySection(await deps.cpd(["policy", "show"]));
     const extension = cpdExtension(
       { contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) },

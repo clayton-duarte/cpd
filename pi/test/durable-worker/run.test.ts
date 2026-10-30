@@ -118,12 +118,14 @@ function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: 
     cpd: async (args) => {
       effects.push("cpd");
       calls.push([...args]);
-      if (args[0] === "session" && args[1] === "show") {
+      const line = args.join(" ");
+      if (line === ["session", "show", CONFIG.session].join(" ")) {
         if (over.sessionShowError) throw over.sessionShowError;
         return shown({ registered_event: 41 });
       }
-      if (args[0] === "policy" && args[1] === "show") return POLICY;
-      if (args[0] === "session" && args[1] === "state") {
+      if (line === "policy show") return POLICY;
+      const state = new RegExp(`^session state (working|stopped|idle( --reply)?|(waiting|blocked) --label .+) --session ${CONFIG.session}$`);
+      if (state.test(line)) {
         notify();
         return { ok: true };
       }
@@ -272,7 +274,7 @@ test("the store is run/<plan>/durable/<attempt>.sqlite and the extension carries
     zoneLine(NOW),
   ]);
   assert.deepEqual(r.calls.filter((a) => a[1] === "show").map((a) => a.slice(0, 2)), [["session", "show"], ["policy", "show"]]);
-  assert.deepEqual(r.calls.find((a) => a[0] === "session" && a[1] === "show")!.slice(2), ["--session", CONFIG.session]);
+  assert.deepEqual(r.calls.find((a) => a[0] === "session" && a[1] === "show")!.slice(2), [CONFIG.session]);
   assert.equal(await stop(r), 143);
 });
 
