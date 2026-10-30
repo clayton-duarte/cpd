@@ -16,6 +16,9 @@ use crate::ports::Ports;
 /// concurrent install that has built it and not yet linked it is not undone.
 const KEEP_SECONDS: i64 = 60 * 60;
 
+/// A pin is a symlink `<share>/pi.pin.<pid>` whose target is the bare name of the version that pid loaded.
+const PIN_PREFIX: &str = "pi.pin.";
+
 /// `<home>/.local/share/cpd`: where cpd finds the adapter.
 fn share(install: &Install) -> PathBuf {
     install.home.join(".local/share/cpd")
@@ -145,8 +148,8 @@ fn is_version(name: &str) -> bool {
     id == "legacy" || (id.starts_with(|c: char| c.is_ascii_digit()) && id.match_indices('-').any(|(i, _)| id[i + 1..].starts_with(|c: char| c.is_ascii_digit())))
 }
 
-/// The cleanup: versions that are neither current, nor displaced, nor modified in the last 60 minutes, and the
-/// scratch of pids that are gone. A failure is a warning, never a failed install.
+/// The cleanup: versions that are neither current, nor displaced, nor pinned by a live pid, nor modified in the
+/// last 60 minutes, the pins and the scratch of pids that are gone. A failure is a warning, never a failed install.
 pub(super) fn cleanup(ports: &Ports, install: &Install, displaced: Option<&str>, err: &mut dyn Write) {
     let share = share(install);
     let current = fs::read_link(share.join("pi")).ok().map(|t| t.to_string_lossy().into_owned());
@@ -159,11 +162,31 @@ pub(super) fn cleanup(ports: &Ports, install: &Install, displaced: Option<&str>,
             return;
         }
     };
-    for entry in entries.flatten() {
+    let entries: Vec<_> = entries.flatten().collect();
+    let mut protected: Vec<String> = Vec::new();
+    for entry in &entries {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with(PIN_PREFIX) {
+            continue;
+        }
+        let alive = name.rsplit('.').next().and_then(|p| p.parse::<u32>().ok()).is_some_and(|p| ports.spawn.alive(Pid(p)));
+        if !alive {
+            cleaned &= remove_any(&entry.path()).is_ok();
+        } else if let Ok(target) = fs::read_link(entry.path()) {
+            let target = target.to_string_lossy().into_owned();
+            if is_version(&target) {
+                protected.push(target);
+            }
+        }
+    }
+    for entry in &entries {
         let name = entry.file_name().to_string_lossy().into_owned();
         let path = entry.path();
+        if name.starts_with(PIN_PREFIX) {
+            continue;
+        }
         if is_version(&name) {
-            if Some(name.as_str()) == current.as_deref() || Some(name.as_str()) == displaced {
+            if Some(name.as_str()) == current.as_deref() || Some(name.as_str()) == displaced || protected.contains(&name) {
                 continue;
             }
             let modified = fs::symlink_metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok());
