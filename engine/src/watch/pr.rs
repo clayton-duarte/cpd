@@ -196,7 +196,7 @@ mod failing {
 
     pub(super) fn write(engine: &mut Engine, call: &str, since: &str) {
         let path = path(engine);
-        let written = std::fs::create_dir_all(engine.home.run_dir()).and_then(|()| std::fs::write(&path, json!({"call": call, "since": since}).to_string()));
+        let written = cpd_core::atomic::write_atomic(&path, json!({"call": call, "since": since}).to_string());
         if let Err(e) = written {
             engine.log.line(&format!("pr poll: cannot write {}: {e}", path.display()));
         }

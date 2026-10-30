@@ -70,7 +70,7 @@ pub fn config(args: ConfigArgs) -> Result<Output, CpdError> {
 }
 
 /// `cpd config --migrate` (commands.md §14.2): applies the migrations to `$CPD_HOME/config.toml`,
-/// validates the result as plain `config` does, and writes only when the text changed and is valid.
+/// validates the result as plain `config` does, and writes only when the text changed and is valid, atomically (a temporary file and a rename).
 fn migrate(home: &CpdHome) -> Result<Output, CpdError> {
     let path = home.config();
     let text = match std::fs::read_to_string(&path) {
@@ -90,7 +90,7 @@ fn migrate(home: &CpdHome) -> Result<Output, CpdError> {
     let (migrated, applied) = migrate::apply(&text);
     Config::parse(&migrated, &path)?;
     if migrated != text {
-        std::fs::write(&path, &migrated)
+        crate::atomic::write_atomic(&path, &migrated)
             .map_err(|e| CpdError::new(ErrorCode::Internal, format!("cannot write config.toml: {e}.")))?;
     }
     Ok(Output::success(json!({
