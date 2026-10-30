@@ -162,14 +162,12 @@ fn policy_of_an_explore_worker_resolves_from_the_contexts_owner() {
            VALUES ('{WORKER}', 'worker', 'ctx', 'pay', '{id}', 'pay look a1', '/', 'S1', 'working', 't', 't');"
     ));
     let worker = SessionId::parse(WORKER).unwrap();
-    let lead = SessionId::parse("lead1").ok();
     let owner = PolicyKey::Owner(OwnerLogin::parse("acme").unwrap());
 
     let found = rig.env.store.read(|conn| crate::policy::show::key_of_session(conn, &worker));
     assert_eq!(found.as_ref().ok().map(|(_, key)| key), Some(&owner), "the Context owner's policy, no PR and no error: {found:?}");
     assert_eq!(found.as_ref().ok().map(|(role, _)| *role), Some("worker"));
     // As a Lead's does.
-    assert!(lead.is_none(), "the fixture's Lead id is not a uuid: read it by its row");
     let lead_key = rig.env.store.read(|conn| {
         let id: String = conn.query_row("SELECT id FROM sessions WHERE role = 'lead'", [], |r| r.get(0))?;
         Ok(id)

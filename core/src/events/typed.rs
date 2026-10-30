@@ -166,6 +166,11 @@ impl NewEvent {
         make(Kind::JobMerged, text, data)
     }
 
+    /// The `job-merged` of an explore Job (§5.2): `sha` is the artefact's SHA-256, `artefact` its path relative to `$CPD_HOME`; `turn` is always true.
+    pub fn job_merged_explore(text: impl Into<String>, sha: &str, tier: &str, kind: &str, summary: &str, artefact: &str) -> NewEvent {
+        make(Kind::JobMerged, text, json!({"sha": sha, "tier": tier, "kind": kind, "turn": true, "summary": summary, "artefact": artefact}))
+    }
+
     pub fn job_failed(text: impl Into<String>, cause: &str, detail: &str, tier: &str, attempts: i64) -> NewEvent {
         make(Kind::JobFailed, text, json!({"cause": cause, "detail": detail, "tier": tier, "attempts": attempts}))
     }

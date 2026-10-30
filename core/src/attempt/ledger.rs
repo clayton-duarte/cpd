@@ -316,6 +316,49 @@ pub fn end(tx: &WriteTxn<'_>, attempt: &Attempt, end: &End, metrics: Option<&Val
     end_opened(tx, attempt, end, metrics, ladder, stage, None)
 }
 
+/// A8 and the end of an explore Attempt (contract §7.7 "Explore kinds at submit"), in the caller's transaction: the Attempt
+/// `running` to `ended` / `merged`, the Job `merged` with its `summary`, and the `job-merged` Event of §5.2 with the three-line
+/// text of §5.3. `sha` is the artefact's SHA-256 (what was accepted; no commit exists). No compare-and-swap: `cas_lost` only when
+/// the Attempt or the Job is no longer `running`.
+pub fn end_explore(tx: &WriteTxn<'_>, attempt: &Attempt, sha: &str, summary: &str) -> Result<(), CpdError> {
+    let (plan, job, id) = (attempt.plan.as_str(), attempt.job.as_str(), attempt.id.to_string());
+    let cas_lost = |what: &str| {
+        CpdError::new(ErrorCode::CasLost, format!("{what} changed while the submit ran; nothing was written."))
+            .with("plan", plan)
+            .with("attempt", id.clone())
+    };
+    let changed = tx.execute(
+        "UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = ?3, submitted_sha = ?3,
+                submitted_at = (SELECT at FROM txns WHERE id = cpd_txn()), ended_at = (SELECT at FROM txns WHERE id = cpd_txn())
+          WHERE plan = ?1 AND id = ?2 AND status = 'running'",
+        params![plan, id, sha],
+    )?;
+    if changed == 0 {
+        return Err(cas_lost("The Attempt's status"));
+    }
+    let changed = tx.execute(
+        "UPDATE jobs SET status = 'merged', merged_sha = ?3, summary = ?4 WHERE plan = ?1 AND key = ?2 AND status = 'running'",
+        params![plan, job, sha, summary],
+    )?;
+    if changed == 0 {
+        return Err(cas_lost("The Job's status"));
+    }
+    let artefact = format!("run/{plan}/explore/{job}.md");
+    let shown = summary.trim_end();
+    let text = format!(
+        "Job {job} ({kind}) merged: findings in $CPD_HOME/{artefact}.\nSummary: {shown}\nNext: cite that path in the Specs that need it; add another explore Job when the summary is not enough. cpd job show {job} --plan {plan}",
+        kind = attempt.kind
+    );
+    events::append(
+        tx,
+        NewEvent::job_merged_explore(text, sha, &attempt.tier.to_string(), &attempt.kind, summary, &artefact)
+            .plan(attempt.plan.clone())
+            .job(attempt.job.clone())
+            .attempt(attempt.id.clone()),
+    )?;
+    Ok(())
+}
+
 /// The pull request an `open` Job's merge created or adopted (§7.4 step 8b): what `job-merged` says of it (§5.2).
 #[derive(Clone, Copy, Debug)]
 pub struct Pull<'a> {

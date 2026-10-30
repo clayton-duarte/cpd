@@ -28,6 +28,12 @@ pub(super) fn submit_in(env: &mut Env, args: SubmitArgs) -> Result<Output, CpdEr
     let plan = args.plan.require()?.clone();
     let id = args.attempt;
     let attempt = env.store.read(|conn| row::load(conn, &plan, &id))?;
+    let kind: String = env.store.read(|conn| {
+        Ok(conn.query_row("SELECT kind FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), attempt.job.as_str()], |r| r.get(0))?)
+    })?;
+    if crate::plan::jobs::is_explore(&kind) {
+        return submit_explore(env, &plan, &attempt, args.summary_file.as_deref());
+    }
     let worktree = PathBuf::from(&attempt.worktree);
 
     // 1. The Attempt is running; a submit that already happened is `already`.
@@ -133,6 +139,67 @@ pub(super) fn submit_in(env: &mut Env, args: SubmitArgs) -> Result<Output, CpdEr
         }
     };
     Ok(done(&id, &sha, outcome))
+}
+
+/// `attempt submit` of an explore Attempt (contract §7.7 "Explore kinds at submit"): three refusals, no check, no git; on a pass the
+/// Attempt, the Job and the `job-merged` Event end in one transaction. The Worker is stopped by the driver's A9, never here.
+fn submit_explore(env: &mut Env, plan: &PlanId, attempt: &Attempt, summary_file: Option<&Path>) -> Result<Output, CpdError> {
+    use sha2::{Digest, Sha256};
+
+    let id = AttemptId::parse(&attempt.id).map_err(|_| CpdError::bad_row(format!("attempt id {:?}", attempt.id)))?;
+    if attempt.status != "running" {
+        let accepted = attempt.status == "ended" && attempt.outcome.as_deref() == Some("merged");
+        return match attempt.submitted_sha.as_deref().filter(|_| accepted) {
+            Some(sha) => Ok(done(&id, sha, true)),
+            None => Err(not_running(attempt)),
+        };
+    }
+    let artefact = crate::driver::explore_dir(&env.home, plan).join(format!("{}.md", attempt.job));
+    let body = match std::fs::read(&artefact) {
+        Ok(body) if !body.is_empty() => body,
+        _ => {
+            return Err(CpdError::new(
+                ErrorCode::ArtefactMissing,
+                format!("There is no non-empty artefact at {}: write your findings there, then submit again.", artefact.display()),
+            )
+            .with("attempt", attempt.id.as_str())
+            .with("artefact", artefact.display().to_string()));
+        }
+    };
+    let missing = |why: &str| {
+        CpdError::new(ErrorCode::SummaryMissing, format!("{why}: pass --summary-file <path> with a non-empty summary, then submit again."))
+            .with("attempt", attempt.id.as_str())
+    };
+    let path = summary_file.ok_or_else(|| missing("No --summary-file was given"))?;
+    let summary = match std::fs::read_to_string(path) {
+        Ok(text) if !text.trim().is_empty() => text,
+        Ok(_) => return Err(missing(&format!("The summary file {} is empty", path.display()))),
+        Err(e) => return Err(missing(&format!("The summary file {} cannot be read ({e})", path.display()))),
+    };
+    let length = summary.chars().count();
+    if length > crate::spec::SUMMARY_CAP {
+        return Err(CpdError::new(
+            ErrorCode::SummaryTooLong,
+            format!("The summary has {length} characters, more than {}: shorten it, then submit again.", crate::spec::SUMMARY_CAP),
+        )
+        .with("attempt", attempt.id.as_str())
+        .with("length", length as u64)
+        .with("cap", crate::spec::SUMMARY_CAP as u64));
+    }
+    let sha: String = Sha256::digest(&body).iter().map(|b| format!("{b:02x}")).collect();
+    let written = env.store.write(COMMAND, |tx| {
+        let now = crate::attempt::ledger::load(tx, plan, &id)?;
+        crate::attempt::ledger::end_explore(tx, &now, &sha, &summary)
+    });
+    match written {
+        Ok(()) => Ok(done(&id, &sha, false)),
+        Err(e) if e.code() == ErrorCode::CasLost => {
+            // Rolled back: another submit or an end came first.
+            let now = env.store.read(|conn| row::load(conn, plan, &id))?;
+            Err(not_running(&now))
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// The checks of a Job, in order: the tamper check, the guard of the `test` Jobs' files and the kind's check

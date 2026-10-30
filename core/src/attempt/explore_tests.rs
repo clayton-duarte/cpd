@@ -307,7 +307,7 @@ fn explore_job_merges_without_a_git_merge_and_stores_the_summary() {
     assert_eq!(rig.fakes.runner.calls().len(), before, "no git call was made");
 
     // Both ends are one transaction: the Job's and the Attempt's rows, and the Event, carry one txn.
-    let ends = "SELECT txn FROM history WHERE tbl = 'jobs' AND op = 'update' AND json_extract(after, '$.status') = 'merged' AND json_extract(after, '$.key') = 'look'
+    let ends = "SELECT txn FROM history WHERE tbl = 'jobs' AND op = 'update' AND json_extract(after, '$.status') = 'merged' AND json_extract(after, '$.seq') = (SELECT seq FROM jobs WHERE plan = 'pay' AND key = 'look')
                 UNION ALL SELECT txn FROM history WHERE tbl = 'attempts' AND op = 'update' AND json_extract(after, '$.status') = 'ended' AND json_extract(after, '$.id') = 'look-a1'
                 UNION ALL SELECT txn FROM events WHERE kind = 'job-merged'";
     assert_eq!(rig.one::<i64>(&format!("SELECT count(*) FROM ({ends})")), 3, "the Job's end, the Attempt's end and the Event are all recorded");
