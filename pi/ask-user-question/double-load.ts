@@ -4,8 +4,9 @@
  * function of the `packages` lists of the two settings files, and `standDown` registers the one `session_start` handler that says so.
  */
 import { join } from "node:path";
-import { CONFIG_DIR_NAME, getAgentDir, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, PackageSource } from "@earendil-works/pi-coding-agent";
+import { readOnlySettings } from "../lib/settings-read.ts";
 
 const PACKAGE = "@juicesharp/rpiv-ask-user-question";
 /** Survives /reload, which evaluates the factory anew in the same process: the line is said once per process. */
@@ -45,7 +46,7 @@ export function otherCopy(packages: PackageLists): OtherCopy | undefined {
 
 /** The other copy the pi settings of the agent directory and of `cwd` list, if any. */
 export function findOtherCopy(cwd: string): { copy: OtherCopy; file: string } | undefined {
-	const settings = SettingsManager.create(cwd, getAgentDir());
+	const settings = readOnlySettings(cwd, getAgentDir());
 	const copy = otherCopy({
 		global: settings.getGlobalSettings().packages ?? [],
 		project: settings.getProjectSettings().packages ?? [],

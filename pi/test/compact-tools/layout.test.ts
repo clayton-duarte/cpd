@@ -41,13 +41,13 @@ test("pi/package.json lists the adapter and the compact-tools extension, each a 
 test("extensions/ holds the fork's source files under their names, but compact-tools-release.ts, and the double-load module, importing nothing else", () => {
 	const names = readdirSync(join(EXTENSION, "extensions")).filter((name) => name.endsWith(".ts")).sort();
 	assert.deepEqual(names, [...SOURCES].sort());
-	// ...which import only pi, pi-tui, node: modules, each other and the shared dependency-free atoms (lib/pill.ts, lib/time.ts, lib/italic.ts), so the package gains no dependency.
+	// ...which import only pi, pi-tui, node: modules, each other and the shared dependency-free atoms (lib/pill.ts, lib/time.ts, lib/italic.ts, lib/settings-read.ts), so the package gains no dependency.
 	const found: string[] = [];
 	for (const name of names) {
 		const source = readFileSync(join(EXTENSION, "extensions", name), "utf8");
 		for (const match of source.matchAll(/(?:from\s+|import\(\s*)["']([^"']+)["']/gu)) {
 			const specifier = match[1]!;
-			if (!(specifier.startsWith("./") || specifier === "../../lib/pill.ts" || specifier === "../../lib/time.ts" || specifier === "../../lib/italic.ts" || specifier.startsWith("node:") || specifier === "@earendil-works/pi-coding-agent" || specifier === "@earendil-works/pi-tui")) found.push(`${name}: ${specifier}`);
+			if (!(specifier.startsWith("./") || specifier === "../../lib/pill.ts" || specifier === "../../lib/time.ts" || specifier === "../../lib/italic.ts" || specifier === "../../lib/settings-read.ts" || specifier.startsWith("node:") || specifier === "@earendil-works/pi-coding-agent" || specifier === "@earendil-works/pi-tui")) found.push(`${name}: ${specifier}`);
 		}
 	}
 	assert.deepEqual(found, []);
