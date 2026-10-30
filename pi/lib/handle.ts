@@ -112,7 +112,7 @@ async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
     return;
   }
   if (ev.kind === "mcp-attached") {
-    if (own) {
+    if (own && !r.replayed.has(ev.id)) {
       try {
         attachServer(pi, ev.data.name, ev.data.server as unknown as McpServerConfig);
       } catch (e) {
