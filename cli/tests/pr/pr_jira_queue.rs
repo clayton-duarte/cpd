@@ -41,7 +41,7 @@ fn a_merge_of_a_pr_with_no_ticket_queues_the_same_row() {
 fn merging_twice_queues_one_done_row() {
     let fx = fixture(None);
     merge(&fx);
-    // Merged on GitHub now: a second `pr merge` records it again (a no-op) and refuses.
+    // Merged on GitHub now: a second `pr merge` records it again (a no-op) and refuses before the merge-method read.
     let _ = fx.cpd(&["pr", "merge", REF]);
     assert_eq!(queue(&fx.env), json!([row("pay-1", "api", "done")]));
 }

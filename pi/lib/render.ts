@@ -7,6 +7,7 @@ import { isObject } from "./cpd.ts";
 import { localTime } from "./time.ts";
 import { DECISION_TYPE, SUMMARY_TYPE } from "./plan-review.ts";
 import type { MessageRenderer, RenderedMessage, Theme } from "./pi.ts";
+import { SKILLS_TYPE } from "./skills.ts";
 import { CONTEXT_TYPE, countsOf, summaryLine } from "./updates.ts";
 
 /**
@@ -19,7 +20,7 @@ import { CONTEXT_TYPE, countsOf, summaryLine } from "./updates.ts";
  */
 
 /** Every `customType` the adapter sends with `display: true`. */
-export const RENDERED_TYPES: readonly string[] = ["cpd", CONTEXT_TYPE, DECISION_TYPE, SUMMARY_TYPE];
+export const RENDERED_TYPES: readonly string[] = ["cpd", CONTEXT_TYPE, DECISION_TYPE, SUMMARY_TYPE, SKILLS_TYPE];
 
 // ---- the style: the extension's effective config, read once ----
 

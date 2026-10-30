@@ -35,6 +35,9 @@ pub(super) struct Attempt {
     pub ended_at: Option<String>,
     pub runner: String,
     pub worker_pid: Option<i64>,
+    pub gate_hook: Option<String>,
+    pub gate_command: Option<String>,
+    pub gate_exit: Option<i64>,
 }
 
 impl Attempt {
@@ -48,14 +51,15 @@ impl Attempt {
             "submitted_sha": self.submitted_sha, "submitted_at": self.submitted_at, "check_tail": self.check_tail,
             "merged_sha": self.merged_sha, "nudged": self.nudged, "stop_request": self.stop_request,
             "metrics": self.metrics, "started_at": self.started_at, "ended_at": self.ended_at,
-            "runner": self.runner, "worker_pid": self.worker_pid,
+            "runner": self.runner, "worker_pid": self.worker_pid, "gate_hook": self.gate_hook,
+            "gate_command": self.gate_command, "gate_exit": self.gate_exit,
         })
     }
 }
 
 const COLUMNS: &str = "id, job, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, driver_pid,
     worker_session, spec_path, submitted_sha, submitted_at, check_tail, merged_sha, nudged, stop_request, metrics,
-    started_at, ended_at, runner, worker_pid";
+    started_at, ended_at, runner, worker_pid, gate_hook, gate_command, gate_exit";
 
 /// One row; `metrics` is still text.
 fn raw(plan: &PlanId, r: &Row<'_>) -> rusqlite::Result<(Attempt, Option<String>)> {
@@ -86,6 +90,9 @@ fn raw(plan: &PlanId, r: &Row<'_>) -> rusqlite::Result<(Attempt, Option<String>)
         ended_at: r.get(22)?,
         runner: r.get(23)?,
         worker_pid: r.get(24)?,
+        gate_hook: r.get(25)?,
+        gate_command: r.get(26)?,
+        gate_exit: r.get(27)?,
     };
     Ok((attempt, r.get(20)?))
 }

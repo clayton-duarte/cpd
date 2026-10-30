@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::attempt::ledger::{self, Stage};
+use crate::attempt::ledger::{self, GateFacts, Stage};
 use crate::config::{Catalog, Config};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, run::run, HookOutcome, Pipeline};
@@ -461,9 +461,9 @@ fn run_gate(home: &CpdHome, config: &Config, target: &Attempt, hook: Hook, pipel
             let tail = result.tail.unwrap_or_default();
             match result.outcome {
                 HookOutcome::Passed => Ok(None),
-                HookOutcome::Failed { exit } => Ok(Some(End::Failed {
-                    cause: Failure::GateFailed,
+                HookOutcome::Failed { exit, command } => Ok(Some(End::GateFailed {
                     detail: gate_detail(hook, &log, GateEnd::Failed { exit, tail: &tail }),
+                    facts: GateFacts { hook: hook.as_str().to_owned(), command, exit, tail },
                 })),
                 HookOutcome::Error(why) => Ok(Some(End::Failed {
                     cause: Failure::GateError,

@@ -22,7 +22,7 @@ use super::{Env, PollArgs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{BasePull, NewEvent, append};
 use crate::inbox::model as inbox;
-use crate::ids::{JobKey, PlanId, PrKey};
+use crate::ids::{JobKey, OwnerLogin, PlanId, PrKey, RepoName};
 use crate::config::Tier;
 use crate::job::open::{self, Cause};
 use crate::plan::fingerprint::load_prs;
@@ -93,7 +93,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     let mut unresolved = Vec::new();
     for (plan, key, row) in &owned {
         match super::pr_policy_resolved(&mut env, plan, key, crate::policy::resolve)? {
-            Ok(policy) => checks.push(Resolved { plan: plan.clone(), key: key.clone(), checks: policy.pr.feedback.checks, post_enabled: policy.pr.post.enabled, human_gated: policy.pr.human_gated_contexts.clone() }),
+            Ok(policy) => checks.push(Resolved { plan: plan.clone(), key: key.clone(), checks: policy.pr.feedback.checks, post_enabled: policy.pr.post.enabled, human_gated: policy.pr.human_gated_contexts.clone(), required: policy.pr.required_checks.clone() }),
             Err(error) => unresolved.push(Unresolved { plan: plan.clone(), pr: key.clone(), number: row.number, error }),
         }
     }
@@ -142,29 +142,35 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
 
     // The checks of each owned open pull request (§7.6 step 3b) whose `pr.feedback.checks` is `any` and whose rollup says `failed`
     // (GitHub rolls a CANCELLED check up as FAILURE), or whose rollup says `pending` while its `human_gated_contexts` is not
-    // empty: one call, before anything is written. Each PR's summary is the one rule with its own list.
+    // empty, or whose rollup says `passed` or `none` while its `required_checks` is not empty (hs-d743): one call, before anything is written. Each PR's summary is the one rule with its own list.
     let mut confirm: Vec<(String, i64)> = Vec::new();
-    let mut lists: Vec<Vec<String>> = Vec::new();
+    let mut lists: Vec<(Vec<String>, Vec<String>)> = Vec::new();
     for listed in &seen {
         let (repo, number) = (&listed.pr.repo, listed.pr.number);
         if listed.pr.state != PrState::Open || confirm.contains(&(repo.clone(), number)) {
             continue;
         }
-        let mut mine = owned.iter().filter(|(_, _, row)| row.repo == *repo && row.number == number).filter_map(|(plan, key, _)| checks_of(&checks, plan, key));
-        let wanted = |r: &&Resolved| match listed.pr.checks {
-            ChecksSummary::Failed => r.checks == Checks::Any,
-            ChecksSummary::Pending => !r.human_gated.is_empty(),
-            _ => false,
+        let mine = owned.iter().filter(|(_, _, row)| row.repo == *repo && row.number == number).filter_map(|(plan, key, _)| checks_of(&checks, plan, key));
+        // (`checks` is `any`, `human_gated_contexts`, `required_checks`) of each owner; a PR no Plan resolved a policy for has its repo's `required_checks` alone.
+        let mut policies: Vec<(bool, Vec<String>, Vec<String>)> =
+            mine.map(|r| (r.checks == Checks::Any, r.human_gated.clone(), r.required.clone())).collect();
+        if policies.is_empty() {
+            policies.push((false, Vec::new(), repo_required(&env.home, repo).unwrap_or_default())); // an unreadable policy is reported for the owned PRs above
+        }
+        let wanted = |(any, gated, required): &&(bool, Vec<String>, Vec<String>)| match listed.pr.checks {
+            ChecksSummary::Failed => *any,
+            ChecksSummary::Pending => !gated.is_empty(),
+            ChecksSummary::Passed | ChecksSummary::None => !required.is_empty(),
         };
-        if let Some(r) = mine.find(wanted) {
+        if let Some((_, gated, required)) = policies.iter().find(wanted) {
             confirm.push((repo.clone(), number));
-            lists.push(r.human_gated.clone());
+            lists.push((gated.clone(), required.clone()));
         }
     }
     let confirmed = gh::read_checks(&*env.ports.runner, &root, &confirm)?;
     for listed in &mut seen {
         if let Some(i) = confirm.iter().position(|(repo, number)| *repo == listed.pr.repo && *number == listed.pr.number) {
-            listed.pr.checks = ChecksSummary::of(&confirmed[i], &lists[i]);
+            listed.pr.checks = ChecksSummary::of(&confirmed[i], &lists[i].0, &lists[i].1);
         }
     }
 
@@ -352,6 +358,20 @@ fn checks_of<'a>(checks: &'a [Resolved], plan: &PlanId, key: &PrKey) -> Option<&
     checks.iter().find(|r| &r.plan == plan && &r.key == key)
 }
 
+/// `required_checks` of `repo`'s own policy (hs-d743): resolved with the owner's file, or, when the owner has none, from the repo's
+/// file alone.
+pub(super) fn repo_required(home: &crate::home::CpdHome, repo: &str) -> Result<Vec<String>, CpdError> {
+    use crate::policy::{Domain, PolicyKey, ScopeKind, Source, load_scope_file, repo_path, resolve_unowned_row};
+    let bad = || CpdError::new(ErrorCode::Usage, format!("{repo:?} is not an owner/name repo.")).with("repo", repo);
+    let (owner, name) = repo.split_once('/').ok_or_else(bad)?;
+    let (owner, name) = (OwnerLogin::parse(owner)?, RepoName::parse(name)?);
+    let resolved = resolve_unowned_row(home, &PolicyKey::Repo(owner.clone(), name.clone()))?;
+    if resolved.sources.get(Domain::Pr).source != Source::DefaultNoOwnerFile {
+        return Ok(resolved.policy.pr.required_checks);
+    }
+    Ok(load_scope_file(&repo_path(home, &owner, &name), ScopeKind::Repo)?.and_then(|(_, scope)| scope.pr).and_then(|pr| pr.required_checks).unwrap_or_default())
+}
+
 /// What the poll resolved of an owned PR's policy: `pr.feedback.checks` and `pr.post.enabled`.
 struct Resolved {
     plan: PlanId,
@@ -359,6 +379,7 @@ struct Resolved {
     checks: Checks,
     post_enabled: bool,
     human_gated: Vec<String>,
+    required: Vec<String>,
 }
 
 /// One `error` Event for each PR whose policy did not resolve (§7.6): `source` `pr poll`, the resolve error's `code`,

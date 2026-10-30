@@ -106,7 +106,7 @@ fn the_output_has_exactly_the_documented_fields() {
     assert_eq!(out["policy"]["deploy"]["keys"], json!({}));
     let mut keys: Vec<&str> = out["policy"]["pr"]["keys"].as_object().unwrap().keys().map(String::as_str).collect();
     keys.sort_unstable();
-    assert_eq!(keys, ["feedback.checks", "pr.human_gated_contexts", "pr.jira.done", "pr.jira.in_progress", "pr.jira.in_review", "pr.jira_required", "pr.post.channel", "pr.post.enabled", "pr.post.merged_reaction", "pr.post.template"]);
+    assert_eq!(keys, ["feedback.checks", "pr.human_gated_contexts", "pr.jira.done", "pr.jira.in_progress", "pr.jira.in_review", "pr.jira_required", "pr.post.channel", "pr.post.enabled", "pr.post.merged_reaction", "pr.post.template", "pr.required_checks"]);
     let mut gate: Vec<&str> = out["policy"]["gate"]["keys"].as_object().unwrap().keys().map(String::as_str).collect();
     gate.sort_unstable();
     assert_eq!(gate, ["merge", "pr"]);
