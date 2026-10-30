@@ -195,7 +195,7 @@ test("loop guard: session-resumed clears the trip and delivers one message with 
   assert.equal(stateCalls(f).at(-1), LABEL);
   assert.equal(f.pi.delivered().filter((s) => (s.message.details as any).kind === "session-resumed").length, 0);
 
-  const id = nextId++;
+  const id = ++nextId;
   f.emit(ev(id, "session-resumed", { session: ID, text: `Loop guard of Session ${ID} resumed.` }));
   const sent = await waitFor("the resume message", () => f.pi.sent.find((s) => (s.message.details as any)?.id === id));
   assert.equal(sent.message.content, `Loop guard of Session ${ID} resumed.`);
@@ -226,7 +226,7 @@ test("loop guard: session-resumed while not tripped does nothing", async (t) => 
   // the control: the same Event delivers once the breaker is tripped
   await selfTurn(f, 21);
   await waitFor("the blocked state", () => stateCalls(f).includes(LABEL));
-  const id = nextId++;
+  const id = ++nextId;
   f.emit(ev(id, "session-resumed", { session: ID, text: `Loop guard of Session ${ID} resumed.` }));
   const sent = await waitFor("the resume message", () => f.pi.sent.find((s) => (s.message.details as any)?.id === id));
   assert.deepEqual(sent.options, TURNS);
