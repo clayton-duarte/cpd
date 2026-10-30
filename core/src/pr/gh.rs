@@ -425,6 +425,18 @@ pub fn view_for_merge(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) 
     parse(&args, &run_on(runner, cwd, &args)?)
 }
 
+/// `gh pr view <n> --repo <repo> --json statusCheckRollup`: the checks of the head, for `pr merge` when the repo policy requires some.
+pub fn checks_for_merge(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) -> Result<Vec<Check>, CpdError> {
+    #[derive(Deserialize)]
+    struct Rollup {
+        #[serde(rename = "statusCheckRollup")]
+        checks: Option<Vec<Check>>,
+    }
+    let n = number.to_string();
+    let args = ["pr", "view", &n, "--repo", repo, "--json", "statusCheckRollup"];
+    parse::<Rollup>(&args, &run_on(runner, cwd, &args)?).map(|r| r.checks.unwrap_or_default())
+}
+
 /// `gh repo view <repo> --json deleteBranchOnMerge`: whether the repo deletes a merged branch itself.
 pub fn delete_branch_on_merge(runner: &dyn Runner, cwd: &Path, repo: &str) -> Result<bool, CpdError> {
     #[derive(Deserialize)]

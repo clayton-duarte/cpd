@@ -463,3 +463,74 @@ fn a_poll_that_lists_a_stored_merge_open_opens_no_write_transaction_hs_d550() {
     assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns, "no write transaction");
     assert_eq!(env.query::<String>(row), before);
 }
+
+/// The `pr view` answer of a clean open pull request whose head's rollup is `rollup`.
+fn view_with_rollup(rollup: serde_json::Value) -> String {
+    json!({"state": "OPEN", "mergeStateStatus": "CLEAN", "headRefOid": SHA, "title": "Add the thing", "statusCheckRollup": rollup}).to_string()
+}
+
+fn guardian() -> serde_json::Value {
+    json!({"__typename": "StatusContext", "context": "GitGuardian Security Checks", "state": "SUCCESS"})
+}
+
+fn gate(status: &str, conclusion: serde_json::Value) -> serde_json::Value {
+    json!({"__typename": "CheckRun", "name": "gate", "status": status, "conclusion": conclusion})
+}
+
+const REQUIRED: &str = "[pr]\nrequired_checks = [\"gate\"]\n";
+
+fn merged(fx: &Fx) -> bool {
+    calls(fx).iter().any(|c| c[..2] == ["pr", "merge"])
+}
+
+/// Merges `acme/api#7` under the repo policy `policy` whose head's rollup is `rollup`; the refusal's details when it is refused.
+fn refused_with(rollup: serde_json::Value, policy: &str) -> (serde_json::Value, Fx) {
+    let fx = Fx::with_ports();
+    fx.env.repo_policy("acme", "api", policy);
+    gh(&fx, &view_with_rollup(rollup), 0);
+    let error = refused(&fx.cpd(&["pr", "merge", REF]), "required_check_not_passed", 3);
+    (error["details"].clone(), fx)
+}
+
+#[test]
+fn merge_refuses_a_clean_pr_whose_required_check_is_missing() {
+    let (details, fx) = refused_with(json!([guardian()]), REQUIRED);
+    assert_eq!(details, json!({"repo": "acme/api", "number": 7, "missing": ["gate"], "pending": [], "failed": []}));
+    assert!(!merged(&fx), "{:?}", calls(&fx));
+}
+
+#[test]
+fn merge_refuses_a_clean_pr_whose_required_check_is_pending() {
+    let (details, fx) = refused_with(json!([guardian(), gate("IN_PROGRESS", json!(null))]), REQUIRED);
+    assert_eq!(details, json!({"repo": "acme/api", "number": 7, "missing": [], "pending": ["gate"], "failed": []}));
+    assert!(!merged(&fx), "{:?}", calls(&fx));
+}
+
+#[test]
+fn merge_refuses_a_clean_pr_whose_required_check_failed() {
+    let (details, fx) = refused_with(json!([guardian(), gate("COMPLETED", json!("FAILURE"))]), REQUIRED);
+    assert_eq!(details, json!({"repo": "acme/api", "number": 7, "missing": [], "pending": [], "failed": ["gate"]}));
+    assert!(!merged(&fx), "{:?}", calls(&fx));
+}
+
+#[test]
+fn merge_proceeds_when_the_required_check_passed() {
+    let fx = Fx::with_ports();
+    fx.env.repo_policy("acme", "api", REQUIRED);
+    gh(&fx, &view_with_rollup(json!([guardian(), gate("COMPLETED", json!("SUCCESS"))])), 0);
+    assert_eq!(fx.cpd(&["pr", "merge", REF]).ok()["ok"], true);
+    assert!(merged(&fx));
+}
+
+#[test]
+fn merge_with_an_empty_required_list_ignores_the_head_checks() {
+    for policy in ["[pr]\nrequired_checks = []\n", ""] {
+        let fx = Fx::with_ports();
+        if !policy.is_empty() {
+            fx.env.repo_policy("acme", "api", policy);
+        }
+        gh(&fx, &view_with_rollup(json!([guardian()])), 0);
+        assert_eq!(fx.cpd(&["pr", "merge", REF]).ok()["ok"], true, "{policy:?}");
+        assert!(merged(&fx), "{policy:?}");
+    }
+}
