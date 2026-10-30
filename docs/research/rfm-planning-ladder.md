@@ -575,4 +575,10 @@ For the design Job; each bullet is a finding, not a design.
 
 ## Evaluation of the three sub-proposals
 
+(skeleton: P1, P2, P3, questions table)
+
 ## Roadmap
+
+(skeleton)
+
+## Context notes
