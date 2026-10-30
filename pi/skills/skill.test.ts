@@ -843,3 +843,35 @@ test("cpd-lead merges the base only on a conflict; ready is its own Gate and no 
   assert.doesNotMatch(lead, /base_behind/);
   assert.doesNotMatch(lead, /contains (the|its) base|if it moved/i);
 });
+
+test("cpd-manager pins the exact CLI of context decide, plan new, session send and job retry", () => {
+  const rules = section(skillFiles("cpd-manager")[0]!.text, "## Rules");
+  const lines = rules.split("\n");
+  const head = lines.indexOf("- **Exact CLI syntax (never guess flags or subcommands):**");
+  assert.ok(head >= 0, "the Exact CLI syntax bullet");
+  const subs: string[] = [];
+  for (const l of lines.slice(head + 1)) {
+    if (!/^  - /.test(l)) break;
+    subs.push(l);
+  }
+  const expected = [
+    { words: "context decide", flags: ["--context"] },
+    { words: "plan new", flags: ["--context", "--title", "--brief-file"] },
+    { words: "session send", flags: ["--unblocks"] },
+    { words: "job retry", flags: ["--plan", "--tier"] },
+  ];
+  assert.equal(subs.length, expected.length, "exactly four sub-bullets");
+  const syn = synopses();
+  expected.forEach((e, i) => {
+    const span = /^  - `(cpd [^`]+)`/.exec(subs[i]!)?.[1];
+    assert.ok(span?.startsWith(`cpd ${e.words} `), `bullet ${i + 1} starts with cpd ${e.words}`);
+    const flags = [...span!.matchAll(/--[a-z][a-z-]*/g)].map((m) => m[0]);
+    for (const f of e.flags) assert.ok(flags.includes(f), `${e.words} carries ${f}`);
+    const allowed = syn.get(e.words);
+    assert.ok(allowed, `synopsis of ${e.words}`);
+    for (const f of flags) assert.ok(allowed.has(f), `${f} is a flag of ${e.words}`);
+  });
+  assert.ok(subs[0]!.includes("positional") && subs[0]!.includes("NO `--title` or `--body`"));
+  assert.ok(subs[2]!.includes("always required") && subs[2]!.includes("broadcast"));
+  assert.ok(subs[3]!.includes("always required"));
+});
