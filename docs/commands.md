@@ -4476,7 +4476,7 @@ Rendered by the driver at A3 to `run/<plan>/specs/<attempt>.md` from a template 
 | Answers already given | new: every `answered` Escalation of earlier Attempts, question and answer, so a Worker does not ask again |
 | Finish | `cpd attempt submit <attempt>`; on success stop at once; on a refusal, what each code means: `wrong_worktree` (run it from the worktree), `dirty_tree`, `no_commits`, `gate_tampered` (revert the protected paths), `check_failed` (fix, commit, submit again; the tail is in `details`), `check_error` (the check could not run: ask the Lead), `attempt_not_running` (the Attempt was stopped: stop) |
 
-**Gate causes in Previous Attempts.** For an Attempt that ended `failed` / `gate_failed` or `gate_error`, the entry names the failed Gate's hook (`pre-commit` or `pre-merge`) and log, read from the Attempt's end Event `detail`. When the detail has the hook and log:
+**Gate causes in Previous Attempts.** For an Attempt that ended `failed` / `gate_failed` or `gate_error`, the entry names the failed Gate's hook (`pre-commit` or `pre-merge`) and log, read from the Attempt's end Event `detail` or, for a requeued Attempt, `feedback`. When the detail has the hook and log:
 
 - **`gate_failed`, hook and log known:** "The Gate (`<hook>`) failed at its merge. Its whole output is in this log; read it and fix what it reports:"
 - **`gate_failed`, neither known:** "The Gate failed at its merge."
