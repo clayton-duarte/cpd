@@ -388,6 +388,7 @@ fn the_adapter_directory_needs_a_package_json() {
 fn lead_packages_say_how_a_lead_gets_each() {
     {
         let fx = healthy();
+        write_config(&fx, "lead_pi_packages = [\"npm:@example/ext@0.28.17\"]");
         let adapter = fx.env.root().join("adapter").display().to_string();
         let settings = fx.env.home().join(".pi/agent/settings.json");
         fs::create_dir_all(settings.parent().unwrap()).unwrap();
