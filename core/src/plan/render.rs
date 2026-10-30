@@ -1,4 +1,4 @@
-//! The plan markdown the User reviews in plannotator (commands.md §4.5, kept
+//! The plan markdown the User reviews in the chat (commands.md §4.5, kept
 //! from cpd 1 §11 `plan render`, grouped by PR): title, Context and phase; a
 //! table of the PRs not `cancelled` and, from two, a Mermaid graph of their
 //! needs; then a section per PR with its Jobs' table, their Dependencies graph

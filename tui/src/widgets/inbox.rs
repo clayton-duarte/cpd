@@ -572,8 +572,8 @@ mod tests {
         let steps = |action| Some(Jump::Steps(vec![Action::Open(sid("l-ship")), action]));
         assert_eq!(
             jump(&tree, &with(Kind::PlanReview, &owned)),
-            steps(Action::CopyUrl("https://example.com".into())),
-            "the Lead of the review's Plan, then the page's url"
+            Some(Jump::Run(Action::Open(sid("l-ship")))),
+            "the Lead of the review's Plan, and nothing is copied (a plan-review has no url, hs-d739)"
         );
         assert_eq!(
             jump(&tree, &with(Kind::PlanReview, &plan)),

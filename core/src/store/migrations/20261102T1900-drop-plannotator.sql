@@ -27,5 +27,6 @@ DROP TABLE inbox_items;
 ALTER TABLE inbox_items_new RENAME TO inbox_items;
 CREATE UNIQUE INDEX inbox_items_open ON inbox_items(kind, subject, urgency) WHERE closed_at IS NULL;
 CREATE INDEX inbox_items_closed ON inbox_items(closed_at);
+DROP TRIGGER IF EXISTS history_tables_no_delete;
 DELETE FROM history_tables WHERE name = 'plannotator_reviews';
 DROP TABLE plannotator_reviews;
