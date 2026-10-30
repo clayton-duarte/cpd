@@ -393,6 +393,18 @@ export default function (_pi: unknown): void {
 }
 ```
 
+
+### Probe check: loaded by `/reload` from a private agent directory
+
+Done 2026-10-30 12:43 EDT, pi 1.3.0 (`PI_CODING_AGENT_DIR` relocates the agent directory, `docs/environment-variables.md`). Nothing was written under `~/.pi/agent`. Steps, all in a private tmux server:
+
+1. `AD=$(mktemp -d); mkdir $AD/extensions`; copy only `auth.json`, `models.json`, `settings.json` from `~/.pi/agent` into `$AD`; extract the `ts` block above to `$AD/extensions/type-lag-probe.ts`; `rm -f /tmp/type-lag-probe.arm`.
+2. `export PI_CODING_AGENT_DIR=$AD TYPE_LAG_PROBE_SECONDS=5`, then `tmux -L type-lag-$$ new-session -d -s type-lag-$$ -x 179 -y 46 "pi --offline --no-mcp --no-skills --no-session"`, with `trap cleanup EXIT INT TERM` killing that server and removing `$AD`.
+3. Wait (bounded poll) until the pane is non-empty, `touch /tmp/type-lag-probe.arm`, then `tmux send-keys -l "/reload"` and `Enter`.
+4. Poll (bounded, 30 s) for `$TMPDIR/type-lag-probe-<pane pid>.txt`.
+
+Result: it worked. The arm file was gone after the reload (consumed), the .txt (6880 bytes) and the .cpuprofile appeared within the 5 s window, and the .txt had the header (`pid`, `node`, `window 5 s`, `stdout writes 2  bytes 1787`), the timers table (`TuiAltScreen.scheduleRender ... 1`), the 25 self-time functions, the Segmenter section (`2 calls (exact)`, chain `truncateToWidth < FooterComponent.render`) and the hot chains. The pi was killed and the server with it; `ps` showed no pi and no tmux server of mine afterwards. Two things I hit and fixed in the probe: V8 shows no frame for the Segmenter builtin, so a profile-only chain table came out empty (hence the wrapper); and `pgrep -P <pane pid>` can return a transient child instead of pi, so use the pane pid itself (pi is the pane's process) when reading the output file by pid. That second point also applies to the recipe's `pid=$(pgrep -P "$shpid" | head -n 1)`: on a run where a child of pi exists at that instant, it would sample the child. The recipe was not edited; in the three runs below the pids printed were pi's own (cost per key in the expected range).
+
 ## Trace
 
 ## Proposed fix
