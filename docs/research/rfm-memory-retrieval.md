@@ -102,7 +102,7 @@ Columns: **H** = the shipped holographic bridge; **F** = in-process FTS5 table i
 
 ## 2. What cpd built vs what the proposal adds
 
-Method for every number below: the live store of Context `cpd` on machine `pro` (all 656 records are `pro-*`), read with the shipped CLI on 2026-10-30 EDT: `cpd context show --since 0 --context cpd` (one run, saved to a temp file outside the worktree, then counted with a short Python script: kinds, `supersedes` fields, text sizes, id regex) and `cpd context show --topic <t>` for each of the 20 topics. Tokens are bytes/4 (an estimate, not a tokenizer count). `~/.cpd/cpd.db` was not read directly, so the `record_retirements` rows are not counted: every "in force" count below is therefore an upper bound that ignores approved retirements, except the curated count, which the CLI computes with retirements applied (`core/src/context/curated.rs:34-40`).
+Method for every number below: the live store of Context `cpd` on machine `pro` (all 656 records are `pro-*`), read with the shipped CLI on 2026-10-30 EDT: `cpd context show --since 0 --context cpd` (one run, saved to a temp file outside the worktree, then counted with a short Python script: kinds, `supersedes` fields, text sizes, id regex) and `cpd context show --topic <t>` for each of the 20 topics. Tokens are bytes/4 (an estimate, not a tokenizer count). `~/.cpd/cpd.db` was not read directly, so the `record_retirements` rows are not counted: every "in force" count below is therefore an upper bound that ignores approved retirements, except the curated count, which the CLI computes with retirements applied (`core/src/context/curated.rs:33-40`).
 
 ### What cpd already built (the baseline)
 
@@ -123,7 +123,7 @@ Method for every number below: the live store of Context `cpd` on machine `pro` 
 | 2 | Deterministic `subject` + `scope` tags | **partly built**: explicit supersession is built, the key is not | `--supersedes <record>` on `decide`/`note` (`core/src/context/mod.rs:209-226`), validated at write (`core/src/context/contexts.rs:253-275`, `supersedes_invalid`, `record_not_found`), applied by `in_force` (`inforce.rs:35-47`). 30 of 438 decisions/notes use it | `--subject <key>` and `--scope <path>...` on `decide`/`note`; the write resolves a subject to a `supersedes` (SQL in 2) |
 | 3 | Pinned core + per-task / per-turn retrieval | **partly built; pinned core not needed**; relevance retrieval is manual | Pushed text today is about 75 tokens (Manager) or the brief (Lead); the always-injected core is `AGENTS.md` (`context-memory.md:226-229`). Recency pushes exist (`updates.ts:35,263,289-305`). Retrieval is `cpd context search`, 264-271 ms median (section 1 (d)), 20 shorts = 402-541 tokens (4 queries, one run each, below) | A topics-with-counts line in the Manager's turn-start message; a `--scope` filter on `search`; retrieval hook only after reads are logged (see 3) |
 | 4 | Write-time pairwise curation | **partly built** (curation and retire proposals exist; the neighbour window and a `contradicts` verdict do not) | `distill.rs:125-129` batch of at most 60 records / 48 KiB; `known.md` holds every curated record's short (`distill.rs:442-451`), so a batch reads 36 KB / about 9.1k tokens of context records at 395 records; reasons `duplicate`/`superseded`/`documented` (`curation.sql:12`) | Cut `known.md` to the nearest neighbours of the batch from the FTS5 index (section 1's recommendation); no schema delta; keep it asynchronous |
-| 5 | Ranking formula, promotion/demotion table | **missing; build only the log now**, ranking after data | No reads, no pinned tier, no `used`. The store is 8 days old; the proposal itself waits 2-3 weeks (`Rollout` step 6). Part of the table is built without reads: "suggest for repo docs" is `doc_candidate` + `git grep` of the id in docs (`distill.rs:622-645`) and "archive when superseded" is `record_retirements` | A read-count SQL view over `context_reads` (see 5); no decay, no `alpha`, no promotion job yet |
+| 5 | Ranking formula, promotion/demotion table | **missing; build only the log now**, ranking after data | No reads, no pinned tier, no `used`. The store is 8 days old; the proposal itself waits 2-3 weeks (`Rollout` step 6). Part of the table is built without reads: "suggest for repo docs" is `doc_candidate` + `git grep` of the id in docs (`distill.rs:421-423,624`) and "archive when superseded" is `record_retirements` | A read-count SQL view over `context_reads` (see 5); no decay, no `alpha`, no promotion job yet |
 
 ### 1. Read tracking
 
@@ -138,12 +138,12 @@ Method for every number below: the live store of Context `cpd` on machine `pro` 
 
 209 of the 656 records are cited at least once by another record, 99 at least twice, 12 at least five times (most cited: `pro-d179` 11, `pro-d30` 8, `pro-d126` 8). So a citation count is computable now with no new table, as a shadow of the proposal's `used_30d`; it measures what writers cite, not what readers read.
 
-**(b) Where cpd would detect `used = 1`.** At write time, in the one function every record passes through, `Contexts::write` (`contexts.rs:232-275`, it already parses and validates `supersedes`), after the record is accepted, in the same transaction:
+**(b) Where cpd would detect `used = 1`.** At write time, in `Contexts::write` (`contexts.rs:167`), next to `check_links` (`contexts.rs:232-275`, which already validates `supersedes`), after the record is accepted, in the same transaction:
 
 - `context decide` / `note` / `ask` / `answer`: scan `text`. Exclude the record's own `supersedes` (a replacement is not a use).
 - `plan new --brief` and `plan outline` (`core/src/plan/outline.rs`): scan the brief and the outline JSON string fields.
 - `job add --spec` (Spec text a Lead writes): scan; the Lead is the user, the Worker never searches.
-- `session send` (`core/src/session/send.rs`): scan the message; the sender is `CPD_SESSION`/`PI_SESSION_ID` (`send.rs:19-27`).
+- `session send` (`core/src/session/send.rs`): scan the message; the sender is `CPD_SESSION`/`PI_SESSION_ID` (`send.rs:22-29`).
 
 Rule: a match counts only if (1) `RecordId::parse` accepts it (`ids.rs:335-351`, machine, letter `d n q a p`), (2) the id exists in `context_records` for that Context, (3) the citing session has a **read row** for that record in the same session (this ties `used` to an actual read; without it a copied id is not a use), and (4) it is not the record's own id. Rule (2) drops the `hs-` and `pro-` misses above; rule (3) removes the rest of the Attempt-id collisions, because an Attempt id `x-a1` would need a record `x-a1` that the session read. Residual false positives: a record cited only to contradict it (a "supersedes" in prose), or copy-pasted from a brief (the Lead repeating the Manager's ids): 46 of 107 briefs contain an id (measured), so the Manager's briefs already make Leads "cite". Dedupe below handles the repeat, not the intent. The post-session check (reading the diff for reflected content) needs a model and is not recommended now.
 
@@ -182,7 +182,7 @@ CREATE TABLE context_reads (
 
 **Append-only and retirements.** Nothing is updated: `subject` and `scope` are new columns on the record, set at insert, so `context_records_immutable` still holds. A subject on the new row, plus a `supersedes` on it, leaves the old row untouched. `record_retirements` stay separate (an approved retirement is the User's decision on duplicates/documented records and is not needed for a subject supersession, which the writer made). A retired record with subject X must not count as the holder of X: the lookup uses `in_force_without`.
 
-**Schema delta.** The record is also a line of the git store: `Record::parse_line` rejects unknown fields (`record.rs:187`, `deny_unknown_fields`) and is versioned (`VERSION = 1`, `record.rs:12`). A subject that only lives in an SQL side table would be lost on a rebuild from git (`0001-initial.sql:44`: "rebuildable"). So it belongs in the record:
+**Schema delta.** The record is also a line of the git store: `Record::parse_line` rejects unknown fields (`record.rs:154`, `deny_unknown_fields`) and is versioned (`VERSION = 1`, `record.rs:13`). A subject that only lives in an SQL side table would be lost on a rebuild from git (`0001-initial.sql:44`: "rebuildable"). So it belongs in the record:
 
 ```sql
 ALTER TABLE context_records ADD COLUMN subject TEXT
@@ -211,7 +211,7 @@ The proposal's target "under 5k injected tokens per session at 1,000+ entries" i
 
 Gaps that are real:
 
-- **Discovery.** The model does not know what it does not know. cpd's pointer line lists commands, not topics. Cheapest fix: one line `Topics: adapter 12, attempt 9, ...` in the Manager's turn-start message (20 topics, about 150-250 bytes; `curated::topics` already exists, `curated.rs:52-58`, and the same list appears in the `topic_not_found` error). Count per topic needs one more function. This is the proposal's "small pinned index (topics with counts)".
+- **Discovery.** The model does not know what it does not know. cpd's pointer line lists commands, not topics. Cheapest fix: one line `Topics: adapter 12, attempt 9, ...` in the Manager's turn-start message (20 topics, about 150-250 bytes; `curated::topics` already exists, `curated.rs:55-58`, and the same list appears in the `topic_not_found` error). Count per topic needs one more function. This is the proposal's "small pinned index (topics with counts)".
 - **Search is broken for ids and hyphenated queries** (section 1 (c)): `cpd context search hs-d655` is a `usage` error. Any retrieval that sends ids or paths to FTS5 needs the sanitiser first.
 - **Adherence is unmeasured.** Whether Managers and Leads actually search before acting is not known, because no read is logged. That is the argument for table `context_reads` (1c) before any retrieval hook.
 
@@ -244,7 +244,7 @@ Gaps that are real:
 | `score = rel * (1 + alpha*log(1+U)) * recency` | after data | `rel` needs FTS5 scores that are normalised to 0-1: section 1's backend is not built; alpha 0.1-0.3 can only be tuned against labelled queries |
 | Exploration slots | no | Retrieval is manual: the Manager chooses, so no entry is starved by a ranker |
 | Promote to pinned core | no | There is no pinned tier and none is needed (3) |
-| Suggest for repo docs | **already built** | `doc_candidate` and the `git grep` of the id in each repo's docs (`distill.rs:622-645`) |
+| Suggest for repo docs | **already built** | `doc_candidate` and the `git grep` of the id in each repo's docs (`distill.rs:421-423,624`) |
 | Archive when superseded | **already built** | `supersedes` leaves force (`inforce.rs`); `record_retirements` for duplicate/documented with the User's approval |
 | Suggest for `AGENTS.md` | no | `AGENTS.md` is the User's file; the proposal says never auto-written; the evidence it needs (reads across unrelated scopes) does not exist |
 | Demote after 60 days / archive after 180 days unread | no | Needs a tier that does not exist; the whole store is 8 days old |
@@ -255,5 +255,5 @@ Gaps that are real:
 
 1. **How should `used` be detected?** Citation scan at write time (1b), with the two guards (id exists in the Context; the citing session read it), and nothing else. Reject the post-session model check for now: it needs a model per session and its only gain is to catch reflected content, not measurable here. Expected precision is not measured: label 50 citation rows by hand once the log has data.
 2. **Who declares `scope`?** The writer, optional, via `--scope` on `decide`/`note` (2). Do not infer by model: cpd keeps the write path model-free (hs-d194, unverified). Build `--subject` first; `--scope` only with a search filter.
-3. **One store per Context or shared?** One per Context, as built: `context_records` is keyed `(context, id)` and the id carries the machine (`pro-d12`), so a read row is `(context, record)` (1c). Sharing across Contexts is a different feature (it touches record ids and ranking across owners); no evidence of need: none of the 656 records names a record of another Context (measured: 51 `hs-` ids are all of the same project written on another machine, a federation concern, not a sharing one; unverified that none belongs to another Context).
+3. **One store per Context or shared?** One per Context, as built: `context_records` is keyed `(context, id)` and the id carries the machine (`pro-d12`), so a read row is `(context, record)` (1c). Sharing across Contexts is a different feature (it touches record ids and ranking across owners); no evidence of need: the 51 `hs-` citations (measured, 1a) are ids written on another machine, a federation concern, not a sharing one; whether any belongs to another Context is unverified.
 4. **Retrieval budget per phase.** cpd's phases are grounding, plan, dispatch, deploy, not the proposal's Context/Plan/Dispatch. No budget is needed for push today (75 tokens). For pulled pages, the default `--limit 20` is already about 400-540 tokens (3). Recommendation: keep `--limit 20` and cap any future automatic block at one such page (about 500 tokens) per turn, with `--limit` for more; revisit with the logged read counts, not before.
