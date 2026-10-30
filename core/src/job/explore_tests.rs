@@ -33,7 +33,14 @@ struct Fixture {
 /// Plan `pay` in `phase` with `prs` PRs (`api`, `web`), in a temp `$CPD_HOME` whose Catalog has every effort 0-5 of every model.
 /// `repo` is the PRs' repo path.
 fn fixture_at(phase: &str, prs: &[&str], repo: Option<&std::path::Path>) -> Fixture {
+    fixture_with(phase, prs, repo, false)
+}
+
+/// [`fixture_at`], or, with `repo_is_temp_dir`, with the PRs' repo the temp dir that holds `$CPD_HOME` (known once the dir exists,
+/// and fixed at insert: the `prs_locked` trigger refuses a later change of `repo`).
+fn fixture_with(phase: &str, prs: &[&str], repo: Option<&std::path::Path>, repo_is_temp_dir: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
+    let dir_path = dir.path().to_owned();
     let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
     std::fs::create_dir_all(home.config().parent().unwrap()).unwrap();
     std::fs::write(home.config(), "version = 1\nmachine = \"m1\"\n").unwrap();
@@ -51,7 +58,7 @@ fn fixture_at(phase: &str, prs: &[&str], repo: Option<&std::path::Path>) -> Fixt
     });
     let locked = if matches!(phase, "grounding" | "plan") { "NULL".to_owned() } else { format!("'{T}'") };
     let done = if phase == "done" { format!("'{T}'") } else { "NULL".to_owned() };
-    let repo = repo.map_or("/r".to_owned(), |p| p.display().to_string());
+    let repo = if repo_is_temp_dir { dir_path.display().to_string() } else { repo.map_or("/r".to_owned(), |p| p.display().to_string()) };
     let waiting = matches!(phase, "grounding" | "plan");
     let status = if waiting { "waiting" } else { "dispatch" };
     let (worktree, started) = if waiting { ("NULL".to_owned(), "NULL".to_owned()) } else { ("'/lw'".to_owned(), format!("'{T}'")) };
@@ -411,9 +418,8 @@ fn explore_needs_only_explore_jobs() {
 #[test]
 fn work_spec_may_cite_an_explore_artefact_path() {
     // The PRs' repo is the directory that holds `$CPD_HOME`, so the artefact path lies inside a primary checkout by name.
-    let mut f = fixture("dispatch");
+    let mut f = fixture_with("dispatch", &["api"], None, true);
     let root = f.dir.path().display().to_string();
-    f.sql(&format!("UPDATE prs SET repo = '{root}' WHERE plan = 'pay';"));
     let artefact = format!("{}/run/pay/explore/s1.md", f.env.home.root().display());
     let mut spec = work_spec();
     spec["context"] = json!(format!("Read $CPD_HOME/run/pay/explore/s1.md first, or {artefact}."));
