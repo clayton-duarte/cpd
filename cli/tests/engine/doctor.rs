@@ -318,16 +318,6 @@ fn pi_node_must_run() {
     assert_fails(&run, "pi_node", "error", "exited 7");
 }
 
-#[test]
-fn doctor_has_no_plannotator_port_check() {
-    let fx = healthy();
-    for vars in [&[][..], &[("PLANNOTATOR_REMOTE", "1")][..], &[("PLANNOTATOR_REMOTE", "1"), ("PLANNOTATOR_PORT", "19432")][..]] {
-        let run = doctor_with(&fx, vars);
-        let checks = run.ok()["checks"].clone();
-        assert!(checks.as_array().unwrap().iter().all(|c| c["name"] != "plannotator_port"), "{checks}");
-    }
-}
-
 // ------------------------------------------------------------ pi and tiers
 
 #[test]
@@ -401,7 +391,7 @@ fn lead_packages_say_how_a_lead_gets_each() {
         let adapter = fx.env.root().join("adapter").display().to_string();
         let settings = fx.env.home().join(".pi/agent/settings.json");
         fs::create_dir_all(settings.parent().unwrap()).unwrap();
-        fs::write(&settings, r#"{"packages": ["npm:@plannotator/pi-extension@0.1.0"]}"#).unwrap();
+        fs::write(&settings, r#"{"packages": ["npm:@example/ext@0.1.0"]}"#).unwrap();
         let run = doctor(&fx);
         let c = check(&run, "lead_packages");
         assert_eq!(c["ok"], true, "{c}");
@@ -410,7 +400,7 @@ fn lead_packages_say_how_a_lead_gets_each() {
             c["found"],
             json!([
                 {"package": adapter, "by": "-e"},
-                {"package": "npm:@plannotator/pi-extension@0.28.17", "by": by_settings["by"], "settings": by_settings["settings"]},
+                {"package": "npm:@example/ext@0.28.17", "by": by_settings["by"], "settings": by_settings["settings"]},
             ])
         );
     }

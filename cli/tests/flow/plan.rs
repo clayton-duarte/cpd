@@ -198,8 +198,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     let cwd = home_dir.canonicalize().unwrap().display().to_string();
 
     let args = ["plan", "new", "pay", "--context", "ctx", "--title", "Retry payouts", "--jira", "PAY-1", "--brief-file", brief.to_str().unwrap()];
-    let vars = [("PLANNOTATOR_PORT", "19432-19439"), ("PLANNOTATOR_REMOTE", "0"), ("PLANNOTATOR_URL_HOST", "review.test")];
-    let out = fx.cpd_with(&home_dir, &args, &vars).ok();
+    let out = fx.cpd_with(&home_dir, &args, &[]).ok();
     let session = out["plan"]["lead_session"].as_str().unwrap().to_owned();
     assert_eq!(
         out["plan"],
@@ -225,15 +224,12 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     let started = state.panes().into_iter().find(|p| p.id == pane).expect("the Lead's pane");
     assert_eq!(started.cwd, cwd, "the pane starts in the caller's cwd");
 
-    // The pane runs `cpd session run <id>` with the Plan's and plannotator's variables (§15.5).
+    // The pane runs `cpd session run <id>` with the Plan's variables (§15.5).
     let pane_vars = state.pane_env(pane);
     for (key, value) in [
         ("CPD_HOME", fx.env.cpd_home().display().to_string()),
         ("CPD_SESSION", session.clone()),
         ("CPD_PLAN", "pay".to_owned()),
-        ("PLANNOTATOR_PORT", "19432-19439".to_owned()),
-        ("PLANNOTATOR_REMOTE", "1".to_owned()),
-        ("PLANNOTATOR_URL_HOST", "review.test".to_owned()),
     ] {
         assert!(pane_vars.contains(&(key.to_owned(), value.clone())), "{key}={value} not in {pane_vars:?}");
     }

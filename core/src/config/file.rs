@@ -69,45 +69,11 @@ pub struct Config {
     pub context_engine_timeout_ms: u32,
     /// The deadline of a full reindex spawn.
     pub context_engine_reindex_timeout_ms: u32,
-    /// One port per Plan's plannotator review (§6.5).
-    pub plannotator_ports: PortRange,
     pub timeouts: Timeouts,
     pub watch: Watch,
     pub inbox: Inbox,
     pub events: Events,
     pub tmux: Tmux,
-}
-
-/// `plannotator_ports`: an inclusive range of ports, `<first>-<last>`, `first <= last`.
-/// Shown as that text.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PortRange {
-    pub first: u16,
-    pub last: u16,
-}
-
-impl PortRange {
-    pub fn parse(text: &str) -> Result<PortRange, String> {
-        let bad = || format!("{text:?} is not \"<first>-<last>\" with first <= last, both ports 1-65535");
-        let (first, last) = text.split_once('-').ok_or_else(bad)?;
-        let port = |s: &str| s.parse::<u16>().ok().filter(|p| *p != 0 && s.bytes().all(|b| b.is_ascii_digit()));
-        match (port(first), port(last)) {
-            (Some(first), Some(last)) if first <= last => Ok(PortRange { first, last }),
-            _ => Err(bad()),
-        }
-    }
-}
-
-impl std::fmt::Display for PortRange {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}-{}", self.first, self.last)
-    }
-}
-
-impl Serialize for PortRange {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -227,8 +193,6 @@ pub struct Tmux {
     pub work_session: String,
 }
 
-const DEFAULT_LEAD_PI_PACKAGES: [&str; 1] = ["npm:@plannotator/pi-extension@0.28.17"];
-
 impl Config {
     /// Reads `$CPD_HOME/config.toml`. `config_missing` when there is no file,
     /// `config_invalid` (with `details.key`) for anything wrong inside it.
@@ -291,7 +255,7 @@ impl Config {
         })?;
         let lead_pi_packages = r.get(
             "lead_pi_packages",
-            DEFAULT_LEAD_PI_PACKAGES.map(str::to_owned).to_vec(),
+            Vec::new(),
             |v| match v {
                 Value::Array(items) => items.iter().map(|i| non_empty(text_of(i)?)).collect(),
                 other => Err(format!("must be an array of text, not {}", other.type_str())),
@@ -316,10 +280,6 @@ impl Config {
         let context_engine_dir = r.get("context_engine_dir", String::new(), |v| Ok(text_of(&v)?.to_owned()))?;
         let context_engine_timeout_ms = r.get("context_engine_timeout_ms", 30000, |v| int(v, 1, u32::MAX))?;
         let context_engine_reindex_timeout_ms = r.get("context_engine_reindex_timeout_ms", 600000, |v| int(v, 1, u32::MAX))?;
-
-        let plannotator_ports = r.get("plannotator_ports", PortRange { first: 19432, last: 19456 }, |v| {
-            PortRange::parse(text_of(&v)?)
-        })?;
 
         let positive = |r: &mut Reader, key: &str, default: u32| r.get(key, default, |v| int(v, 1, u32::MAX));
         let timeouts = Timeouts {
@@ -407,7 +367,6 @@ impl Config {
             context_engine_dir,
             context_engine_timeout_ms,
             context_engine_reindex_timeout_ms,
-            plannotator_ports,
             timeouts,
             watch,
             inbox,
@@ -603,11 +562,9 @@ fn tmux_name(s: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    // The retired `@juicesharp/rpiv-ask-user-question` package is no default of `lead_pi_packages`.
     #[test]
-    fn default_lead_pi_packages_is_plannotator_only() {
-        const PLANNOTATOR: &str = "npm:@plannotator/pi-extension@0.28.17";
+    fn default_lead_pi_packages_is_empty() {
         let (config, _) = Config::parse("version = 1\nmachine = \"hs\"\n", Path::new("/config.toml")).unwrap();
-        assert_eq!(config.lead_pi_packages, [PLANNOTATOR]);
+        assert!(config.lead_pi_packages.is_empty());
     }
 }

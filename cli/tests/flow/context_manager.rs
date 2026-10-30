@@ -3,8 +3,8 @@
 //! fake tmux: the Manager's window is the one `new-window` call that `context manager` makes, so the tests assert that
 //! command (`cpd session run <id>`, its directory and its `-e` variables) and what `context manager` writes itself
 //! (the Session row, the Events, the first-message file). What `session run` does with the Session row (pi's argv:
-//! `--model`, `--session-id`, `-n`, `-- @<path>`, the plannotator variables) is the session area's (`launch_pi`,
-//! `host/pi/launch.rs`, `host/pi/plannotator_env_tests.rs`), not asserted here.
+//! `--model`, `--session-id`, `-n`, `-- @<path>`) is the session area's (`launch_pi`,
+//! `host/pi/launch.rs`), not asserted here.
 
 use crate::common;
 
@@ -118,35 +118,6 @@ fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
 
     // The chat slot did not move (hs-d103).
     assert_eq!(slot(&fx), placeholder);
-}
-
-#[test]
-fn a_managers_pi_gets_no_plannotator_variable_from_its_callers() {
-    let fx = Fx::with_ports();
-    setup(&fx);
-    fx.cockpit();
-    // The tmux server's global environment is what every new pane starts from.
-    for (name, value) in [("PLANNOTATOR_DATA_DIR", "/tmp/x"), ("PLANNOTATOR_PORT", "1"), ("PLANNOTATOR_REMOTE", "1")] {
-        let out = fx.tmux(&["set-environment", "-g", name, value]);
-        assert!(out.status.success(), "tmux set-environment {name}");
-    }
-    // The caller of `cpd context manager` has them too.
-    let caller = [("PLANNOTATOR_DATA_DIR", "/tmp/x"), ("PLANNOTATOR_PORT", "1"), ("PLANNOTATOR_REMOTE", "1")];
-    let out = fx.cpd_with(fx.env.root(), &["context", "manager", "--context", "ctx"], &caller).ok();
-    let id = out["manager"]["session"].as_str().unwrap().to_owned();
-
-    // On our side: the window's command and environment carry no plannotator variable (`session run` sets the
-    // Manager's own, and takes the caller's out of pi's environment: the session area's, `launch_pi`).
-    let (argv, _, vars) = started(&fx, out["manager"]["pane"].as_str().unwrap());
-    assert_eq!(argv, ["cpd", "session", "run", id.as_str()]);
-    let names: Vec<&str> = vars.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(names, ["CPD_HOME", "CPD_SESSION"], "no PLANNOTATOR_*: {names:?}");
-    let new_window = new_windows(&fx).remove(0);
-    assert!(!new_window.iter().any(|a| a.contains("PLANNOTATOR")), "the new-window command names none: {new_window:?}");
-    assert!(
-        fx.calls("tmux").iter().all(|c| c.envs.iter().all(|(name, value)| !name.starts_with("PLANNOTATOR_") || value.is_none())),
-        "no tmux call sets one"
-    );
 }
 
 #[test]
