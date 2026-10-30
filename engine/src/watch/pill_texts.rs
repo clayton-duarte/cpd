@@ -46,9 +46,13 @@ fn each_workers_number_is_its_own_base_colour_and_the_rest_keeps_the_pills_style
             if i > 0 {
                 expected.push(Ok("·".to_string()));
             }
-            expected.push(Err(format!("#[noreverse]#[fg=colour{colour}]#[bg=colour8]")));
+            expected.push(Err("#[noreverse]".to_string()));
+            expected.push(Err(format!("#[fg=colour{colour}]")));
+            expected.push(Err("#[bg=colour8]".to_string()));
             expected.push(Ok(number.to_string()));
-            expected.push(Err("#[reverse]#[fg=colour8]#[bg=default]".to_string()));
+            expected.push(Err("#[reverse]".to_string()));
+            expected.push(Err("#[fg=colour8]".to_string()));
+            expected.push(Err("#[bg=default]".to_string()));
         }
         expected.push(Ok("/16".to_string()));
         let got: Vec<Result<String, String>> = parts(&text).into_iter().map(|p| p.map(str::to_string).map_err(str::to_string)).collect();
