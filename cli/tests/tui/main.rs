@@ -30,6 +30,7 @@ mod tui_read;
 mod tui_reset_layout;
 mod tui;
 mod tui_runner;
+mod tui_runner_toggle;
 mod tui_tree;
 mod tui_tree_delete;
 mod tui_tree_no_inbox;

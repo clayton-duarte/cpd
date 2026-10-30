@@ -154,6 +154,9 @@ fn failed(engine: &mut Engine, error: &CpdError) {
 mod no_inbox;
 
 #[cfg(test)]
+mod runner_tests;
+
+#[cfg(test)]
 mod tests {
     use super::Counts;
     use rusqlite::Connection;
