@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::error::{CpdError, ErrorCode};
+use super::merge_method::{MergeMethods, Method};
 use super::comments;
 use super::status::{Approval, ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use crate::git::{TAIL_LINES, tail};
@@ -429,6 +430,12 @@ pub fn delete_branch_on_merge(runner: &dyn Runner, cwd: &Path, repo: &str) -> Re
     parse::<Setting>(&args, &run_on(runner, cwd, &args)?).map(|s| s.on)
 }
 
+/// `gh repo view <repo> --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed`: the methods the repo allows.
+pub fn merge_methods(runner: &dyn Runner, cwd: &Path, repo: &str) -> Result<MergeMethods, CpdError> {
+    let args = ["repo", "view", repo, "--json", "squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed"];
+    parse(&args, &run_on(runner, cwd, &args)?)
+}
+
 /// `headRefOid` of the pull request `number` of `repo`: its head commit, which GitHub keeps after a merge and the
 /// deletion of the branch (contract §7.2 "The recorded head").
 pub fn head_ref_oid(cwd: &Path, repo: &str, number: i64) -> Result<String, CpdError> {
@@ -442,12 +449,13 @@ pub fn head_ref_oid(cwd: &Path, repo: &str, number: i64) -> Result<String, CpdEr
     parse::<Head>(&args, &run(cwd, &args)?).map(|h| h.oid)
 }
 
-/// `gh pr merge <number> --repo <repo> --squash --match-head-commit <head>`: GitHub
+/// `gh pr merge <number> --repo <repo> --<method> --match-head-commit <head>`: GitHub
 /// refuses when the branch is no longer at `head`. It does not pass `--delete-branch`: GitHub's own
 /// `delete_branch_on_merge` deletes the branch and repoints a stacked pull request (pro-d240).
-pub fn merge_pr(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64, head: &str) -> Result<(), CpdError> {
+pub fn merge_pr(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64, method: Method, head: &str) -> Result<(), CpdError> {
     let n = number.to_string();
-    let args = ["pr", "merge", &n, "--repo", repo, "--squash", "--match-head-commit", head];
+    let flag = format!("--{}", method.as_str());
+    let args = ["pr", "merge", &n, "--repo", repo, flag.as_str(), "--match-head-commit", head];
     run_on(runner, cwd, &args).map(drop)
 }
 
