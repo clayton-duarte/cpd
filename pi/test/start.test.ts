@@ -49,7 +49,7 @@ test("start-up follows from the highest delivered id when messages were delivere
   f.respond("plan-show", planShow());
   f.load();
   await f.pi.fire("session_start");
-  await waitFor("the follower", () => f.follows().length > 0);
+  await f.followerStarted();
   await f.trackerListed();
 
   assert.deepEqual(f.sinces(), [130]);

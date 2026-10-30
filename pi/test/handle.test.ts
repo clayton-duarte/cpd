@@ -96,7 +96,7 @@ test("a Lead is delivered an Event id once when the follower prints it twice", a
   f.respond("plan-show", planShow());
   f.load();
   await f.pi.fire("session_start");
-  await waitFor("the follower", () => f.follows().length > 0);
+  await f.followerStarted();
   await f.pi.busy();
 
   const feedback = ev(101, "pr-feedback", { data: { reason: "checks-failed" } });
@@ -104,7 +104,6 @@ test("a Lead is delivered an Event id once when the follower prints it twice", a
   const message = ev(103, "session-message", { session: ID, data: { from: null, text: "ship it", wake: false } });
   const other = ev(104, "job-merged", { data: { turn: true } });
   f.emit(feedback, feedback, merged, merged, message, message, other);
-  await waitFor("four deliveries", () => f.pi.delivered().length >= 4);
   await f.drain();
 
   const sent = f.pi.delivered();
@@ -120,11 +119,10 @@ test("a Worker is delivered an attempt-nudge id once when the follower prints it
   f.respond("session-show", shown({ role: "worker", plan_lead: false }));
   f.load();
   await f.pi.fire("session_start");
-  await waitFor("the follower", () => f.follows().length > 0);
+  await f.followerStarted();
 
   const nudge = ev(101, "attempt-nudge", { session: ID, data: { prompt: "Submit your work.", turns: 1 } });
   f.emit(nudge, nudge);
-  await waitFor("the nudge", () => f.pi.delivered().length >= 1);
   await f.drain(nudge2);
 
   assert.deepEqual(f.pi.delivered().map((s) => (s.message.details as any).id), [101]);
