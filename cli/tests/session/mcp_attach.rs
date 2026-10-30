@@ -413,39 +413,24 @@ fn set_runner(env: &TestEnv, runner: &str) {
     env.sql(&format!("UPDATE attempts SET runner = '{runner}' WHERE id = 'api-a1'"));
 }
 
-fn details() -> Value {
-    json!({"name": "slack", "session": WORKER, "attempt": "api-a1", "runner": "durable"})
-}
-
-/// Fails now: the command answers ok:true and appends `mcp-attached`.
+/// Fails now: the command refuses `runner_no_tools`. A durable Worker attaches like any Session (pro-d263, pro-d269).
 #[test]
-fn mcp_attach_a_durable_worker_is_refused_runner_no_tools() {
-    let env = TestEnv::new();
-    fixture(&env);
-    set_runner(&env, "durable");
-    let run = attach(&env, WORKER, "slack");
-    let error = refused(&run, "runner_no_tools", 3);
-    assert_eq!(error["details"], details(), "runner_no_tools details");
-    assert!(attached(&env).is_empty(), "no mcp-attached Event: {:?}", attached(&env));
-}
-
-/// Fails now: no refusal, so no error Event and an `mcp-attached` one instead.
-#[test]
-fn mcp_attach_a_durable_worker_refusal_appends_one_error_event() {
+fn mcp_attach_a_durable_worker_attaches_like_any_other_session() {
     let env = TestEnv::new();
     fixture(&env);
     set_runner(&env, "durable");
     let before = all_events(&env);
     let rows_before = row_counts(&env);
-    refused(&attach(&env, WORKER, "slack"), "runner_no_tools", 3);
+    let out = attach(&env, WORKER, "slack").ok();
     let after = all_events(&env);
     assert_eq!(after.len(), before.len() + 1, "exactly one new Event: {after:?}");
     assert_eq!(after[..before.len()], before[..]);
     let event = after.last().unwrap();
-    assert_eq!(event["kind"], "error");
-    assert_eq!(event["plan"], "pay");
-    assert_eq!(event["data"]["code"], "runner_no_tools");
-    assert_eq!(event["data"]["details"], details());
+    assert_eq!(event["kind"], "mcp-attached", "no error Event: {event}");
+    assert_eq!(event["session"], WORKER);
+    assert_eq!(event["data"], json!({"name": "slack", "server": slack()}));
+    assert_eq!(out["attached"], json!({"name": "slack", "session": WORKER, "event": event["id"]}), "{out}");
+    assert_eq!(attached(&env).len(), 1);
     let rows_after = row_counts(&env);
     let changed: Vec<_> = rows_before.iter().zip(&rows_after).filter(|(a, b)| a != b).collect();
     assert!(changed.iter().all(|(a, _)| a.0 == "events" || a.0 == "txns"), "only events (and txns by its row) change: {changed:?}");
