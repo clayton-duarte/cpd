@@ -1176,7 +1176,7 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
         out,
         json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["a", "b"],
                "prs": [{"key": "pay", "status": "dispatch", "needs": [], "lead_branch": "pay/pay", "lead_worktree": worktree.display().to_string(),
-                        "base_sha": head, "reused": false, "pushed": false}],
+                        "base_sha": head, "reused": false, "pushed": false, "base_pr": null}],
                "watch": {"started": true, "pane": "%9"}})
     );
     assert_eq!(fx.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "pay/pay");
