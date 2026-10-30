@@ -116,7 +116,7 @@ Method: read the shorts of the 50 `policy` and 47 `tui` records in order, then t
 
 Also seen: pro-d132 "supersedes the no-lock half of pro-d116" (partial, and pro-d116 sits in topic `testing`, not `policy`).
 
-Text-level measurement over the 379 decision and note records: 56 mentions of a link verb followed by a record id (`refines` 28, `supersedes` 16, `replaces` 7, `overrules` 2, `completes` 2, `overruled by` 1) in 53 records; 214 records name some other record id; 45 name an `hs-` id (another Context). Pattern `(supersedes|overrules|replaces|refines|completes|overruled by|void)` within 40 characters of `pro-`/`hs-` plus `[dnqa]<n>`, case-insensitive (`nb.py` shows the neighbour checks). Reading:
+Text-level measurement over the 379 decision and note records: 56 mentions of a link verb followed by a record id (`refines` 28, `supersedes` 16, `replaces` 7, `overrules` 2, `completes` 2, `overruled by` 1) in 53 records; 214 records name some other record id; 45 name an `hs-` id (another Context). Pattern `(supersedes|overrules|replaces|refines|completes|overruled by|void)` within 40 characters of `pro-`/`hs-` plus `[dnqa]<n>`, case-insensitive (an inline script, not kept). Reading:
 
 - **Partial supersession is the norm**: `refines` plus `completes` (30) outnumber `supersedes` (16). Whole-record `supersedes` loses in-force status for the old record entirely (`inforce.rs`), which is wrong for #1, #2, #5.
 - **Authors already declare links in prose** but the `supersedes` field (decision, note) carries only whole-record ones. 26 records say supersedes/overrules/replaces; 21 point at a `cpd` record. Whether the field was also set is unverified (not in the copy).
