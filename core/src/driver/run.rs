@@ -758,7 +758,17 @@ impl Driver {
                 // The stall rule (§3.4 A4): pi is the pane's process, alive here. tmux
                 // gives a live pane's pid; it is empty only for a dead or dying pane (hs-n102).
                 // Not while the Worker's `attempt submit` holds a check span (§7.7): it is silent for as long as its Gate runs.
-                let span_open = lock::check_span_open(&self.home, &self.plan, &self.id)?;
+                // Nor while an Escalation of this Attempt is open: a pending `cpd ask` is quiet by design.
+                let span_open = lock::check_span_open(&self.home, &self.plan, &self.id)? || {
+                    let (plan, attempt) = (self.plan.as_str().to_owned(), self.id.to_string());
+                    self.store.read(|conn| {
+                        Ok(conn.query_row(
+                            "SELECT EXISTS (SELECT 1 FROM escalations WHERE plan = ?1 AND attempt = ?2 AND status = 'open')",
+                            params![plan, attempt],
+                            |r| r.get::<_, bool>(0),
+                        )?)
+                    })?
+                };
                 let descendants = |pi: u32| self.ports.spawn.descendants(SpawnPid(pi)).into_iter().map(|p| p.0).collect();
                 if let Some(line) = pi.and_then(|pi| stall.check_with(&self.ports, &descendants, file, pi, span_open)) {
                     log(&line);

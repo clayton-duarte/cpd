@@ -74,8 +74,8 @@ impl Watch {
 
     /// One tick: when `file` has been quiet for the limit and pi (`pi`) is
     /// inside a tool call, kills pi's descendants and returns the driver-log
-    /// line; None when there is nothing to do. While a check span is open
-    /// (`span_open`, §7.7) nothing is killed and the quiet starts over.
+    /// line; None when there is nothing to do. While a check span is open, or an
+    /// Escalation of the Attempt is `open` (`span_open`, §7.7: true for either), nothing is killed and the quiet starts over.
     /// [`Watch::check`] on `ports`: the quiet of `file` is its modification time against `ports.clock.utc()`, the signals
     /// and the waits of `terminate_with` go to `ports.spawn` and naps of `ports.clock`, the command lines come from
     /// `ports.spawn.cmdline`, and `descendants` names pi's live descendants (the `/proc` or `libproc` walk, in production).

@@ -8,6 +8,8 @@
 pub(crate) mod question;
 mod reply;
 
+pub use question::resume_attempt;
+
 use crate::args::{PlanArg, Text};
 use crate::env::Env;
 use crate::error::CpdError;

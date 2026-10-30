@@ -123,7 +123,7 @@ Rules to put in the `context` of every explore Spec (they are the Worker's only 
 
 - **One question per Job.** A second question is a second explore Job.
 - **Scoped paths.** Name the paths the Worker may read, exactly. Never a search from `/`, `/Users`, `/home`, `~` or `$HOME`.
-- **The 30 s bound.** Every shell call sets a `timeout` of 30 s or less. Never start a command that does not exit: `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run`.
+- **The 30 s bound.** Every shell call sets a `timeout` of 30 s or less, except `cpd ask`, which the Worker runs alone in the foreground with the `timeout` input at 7200 (its Spec says how). Never start a command that does not exit: `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run`.
 - **Write only the artefact.** No file in a repo, no commit.
 - **The summary is at most 1500 characters** (counted as characters): `summary_too_long` (exit 3, never truncated) refuses a longer one, and the Worker shortens it. The summary reaches you; the file does not.
 
