@@ -1,4 +1,4 @@
-STOP: under `codemode.mode: only` pi hides `ask_user_question` from the model (it is `direct`); `model-only` tools stay declared. `.pi/settings.json` was not written.
+PASS: under `codemode.mode: only` pi keeps `ask_user_question` declared and no longer reachable from a script, because it is `model-only` since the Job `only-ask` (hs-d737); run 1 (before) was STOP. `.pi/settings.json` was written.
 
 # codemode.mode only: what it hides (hs-d737)
 
@@ -12,6 +12,8 @@ Labels: `read` = read in source, `ran` = ran with no model, `unverified` = not c
 
 "Declared" = in `session.agent.state.tools` minus `session._hiddenDeclarations` (a private field; `state.tools` alone does not show the hiding). "Reachable" = in `ALL_TOOLS` of a `codemode` script. pi 1.3.0, Node v22.23.2, `ask_user_question` loaded from the real `pi/ask-user-question/index.ts` (its factory registers only with `CPD_SESSION` set and `CPD_ATTEMPT` unset, which the script sets in its own process; no cpd session is started).
 
+### Run 1: before the change (STOP)
+
 | tool | declared, `on` | reachable, `on` | declared, `only` | reachable, `only` |
 |---|---|---|---|---|
 | read | yes | yes | no | yes |
@@ -22,18 +24,81 @@ Labels: `read` = read in source, `ran` = ran with no model, `unverified` = not c
 | model-only stub (stands for cpd_plan_review, cpd_secret_approve, cpd_host_approve) | yes | no | yes | no |
 | codemode | yes | no | yes | no |
 
-Verdict rule (Job): `only` is set only if `ask_user_question` and the model-only stub both stay declared. The stub does, `ask_user_question` does not: STOP. The Lead decides (for example `exposure: "model-only"` on cpd's copy of `ask_user_question`).
+Verdict rule (Job): `only` is set only if `ask_user_question` and the model-only stub both stay declared. The stub did, `ask_user_question` did not: STOP.
+
+Output:
+
+```
+mode on: state.tools=["read","bash","edit","write","codemode","ask_user_question","model_only_stub"] hidden=[]
+mode on: declared(all)=["read","bash","edit","write","codemode","ask_user_question","model_only_stub"]
+mode on: reachable(all)=["read","bash","edit","write","ask_user_question"]
+  read: declared=true reachable=true
+  bash: declared=true reachable=true
+  edit: declared=true reachable=true
+  write: declared=true reachable=true
+  ask_user_question: declared=true reachable=true
+  model_only_stub: declared=true reachable=false
+  codemode: declared=true reachable=false
+mode only: state.tools=["read","bash","edit","write","codemode","ask_user_question","model_only_stub"] hidden=["read","bash","edit","write","ask_user_question"]
+mode only: declared(all)=["codemode","model_only_stub"]
+mode only: reachable(all)=["read","bash","edit","write","ask_user_question"]
+  read: declared=false reachable=true
+  bash: declared=false reachable=true
+  edit: declared=false reachable=true
+  write: declared=false reachable=true
+  ask_user_question: declared=false reachable=true
+  model_only_stub: declared=true reachable=false
+  codemode: declared=true reachable=false
+```
+
+### Run 2: after the change (PASS)
+
+Same script, run on the branch after the Job `only-ask` (`ask_user_question` registered `exposure: "model-only"`). Under `only`, `ask_user_question` and the stub are declared and neither is reachable from a script (`ran`): PASS.
+
+| tool | declared, `on` | reachable, `on` | declared, `only` | reachable, `only` |
+|---|---|---|---|---|
+| read | yes | yes | no | yes |
+| bash | yes | yes | no | yes |
+| edit | yes | yes | no | yes |
+| write | yes | yes | no | yes |
+| ask_user_question | yes | no | **yes** | no |
+| model-only stub (stands for cpd_plan_review, cpd_secret_approve, cpd_host_approve) | yes | no | yes | no |
+| codemode | yes | no | yes | no |
+
+Output:
+
+```
+mode on: state.tools=["read","bash","edit","write","codemode","ask_user_question","model_only_stub"] hidden=[]
+mode on: declared(all)=["read","bash","edit","write","codemode","ask_user_question","model_only_stub"]
+mode on: reachable(all)=["read","bash","edit","write"]
+  read: declared=true reachable=true
+  bash: declared=true reachable=true
+  edit: declared=true reachable=true
+  write: declared=true reachable=true
+  ask_user_question: declared=true reachable=false
+  model_only_stub: declared=true reachable=false
+  codemode: declared=true reachable=false
+mode only: state.tools=["read","bash","edit","write","codemode","ask_user_question","model_only_stub"] hidden=["read","bash","edit","write"]
+mode only: declared(all)=["codemode","ask_user_question","model_only_stub"]
+mode only: reachable(all)=["read","bash","edit","write"]
+  read: declared=false reachable=true
+  bash: declared=false reachable=true
+  edit: declared=false reachable=true
+  write: declared=false reachable=true
+  ask_user_question: declared=true reachable=false
+  model_only_stub: declared=true reachable=false
+  codemode: declared=true reachable=false
+```
 
 ## Not checked (`unverified`)
 
 - The plannotator tools (external package): not loaded; their exposure is unknown, so whether `only` hides them is unverified.
 - The real `cpd_plan_review`, `cpd_secret_approve`, `cpd_host_approve`: not loaded; a stub stands for them. Their `exposure: "model-only"` is `read` in pi/lib, so by the rule above they stay declared.
 - That `.pi/settings.json` loads only when the project is trusted, and the mac-pro's `defaultProjectTrust`: `unverified` (docs say project settings load after trust).
-- Whether a model could ask the User by calling `tools.ask_user_question` from a script (it is in `ALL_TOOLS`): not run; `unverified`.
 
 ## The throwaway script
 
-Ran as `WT=<worktree> timeout 120 node $(mktemp -d)/probe.mjs`; the directory and its temp home were deleted afterwards.
+Ran as `WT=<worktree> timeout 120 node $(mktemp -d)/probe.mjs`, both runs; the directory and its temp home were deleted afterwards.
 
 ```js
 import { mkdtempSync, rmSync } from "node:fs";
@@ -68,29 +133,4 @@ for (const mode of ["on", "only"]) {
   session.dispose();
 }
 rmSync(dir, { recursive: true, force: true });
-```
-
-## Output
-
-```
-mode on: state.tools=["read","bash","edit","write","codemode","ask_user_question","model_only_stub"] hidden=[]
-mode on: declared(all)=["read","bash","edit","write","codemode","ask_user_question","model_only_stub"]
-mode on: reachable(all)=["read","bash","edit","write","ask_user_question"]
-  read: declared=true reachable=true
-  bash: declared=true reachable=true
-  edit: declared=true reachable=true
-  write: declared=true reachable=true
-  ask_user_question: declared=true reachable=true
-  model_only_stub: declared=true reachable=false
-  codemode: declared=true reachable=false
-mode only: state.tools=["read","bash","edit","write","codemode","ask_user_question","model_only_stub"] hidden=["read","bash","edit","write","ask_user_question"]
-mode only: declared(all)=["codemode","model_only_stub"]
-mode only: reachable(all)=["read","bash","edit","write","ask_user_question"]
-  read: declared=false reachable=true
-  bash: declared=false reachable=true
-  edit: declared=false reachable=true
-  write: declared=false reachable=true
-  ask_user_question: declared=false reachable=true
-  model_only_stub: declared=true reachable=false
-  codemode: declared=true reachable=false
 ```
