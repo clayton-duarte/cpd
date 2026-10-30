@@ -60,7 +60,7 @@ fn last_line(path: &Path) -> String {
 }
 
 #[test]
-fn drop_plannotator_plan_review_writes_the_summary_copy_and_no_full_render() {
+fn plan_review_writes_the_summary_copy_and_no_full_render() {
     let fx = Fx::with_ports();
     plan_with_one_draft(&fx);
     review(&fx);
@@ -71,7 +71,7 @@ fn drop_plannotator_plan_review_writes_the_summary_copy_and_no_full_render() {
 }
 
 #[test]
-fn drop_plannotator_plan_review_output_has_no_path_and_the_summary_ends_with_approve_change() {
+fn plan_review_output_has_no_path_and_the_summary_ends_with_approve_change() {
     let fx = Fx::with_ports();
     plan_with_one_draft(&fx);
     let out = review(&fx);

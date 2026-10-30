@@ -256,16 +256,21 @@ fn plan_review() -> Condition {
     linked(Kind::PlanReview, Urgency::Magenta, "review:ship/r1", "ship plan review", None, Some(REVIEW))
 }
 
+/// A plan-review item as cpd writes it now: no url (hs-d738, commands.md §13.2).
+fn plan_review_without_url() -> Condition {
+    linked(Kind::PlanReview, Urgency::Magenta, "review:ship/r1", "ship plan review", None, None)
+}
+
 #[test]
-fn a_click_on_a_plan_review_item_opens_its_lead_and_copies_the_review_page() {
-    let fx = rig(vec![plan_review()]);
+fn a_click_on_a_plan_review_item_opens_its_lead_and_copies_nothing() {
+    let fx = rig(vec![plan_review_without_url()]);
     let _engine = engine(&fx);
     let chat = cockpit(&fx);
     let screen = first_rows(&fx);
     run(&fx, vec![click_glyph_of(&screen, "ship plan review")]);
     assert_eq!(cpd_calls(&fx), [words(&["session", "open", "l-ship"])], "the Lead of the item's Plan is opened");
     assert_eq!(focused(&fx), [chat]);
-    assert_eq!(copies(&fx), [REVIEW]);
+    assert_eq!(copies(&fx), Vec::<String>::new(), "a plan-review has no url to copy");
     assert!(popups(&fx).is_empty(), "{:?}", popups(&fx));
 }
 
