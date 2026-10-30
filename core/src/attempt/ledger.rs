@@ -174,7 +174,7 @@ causes! {
     MergeConflict = "merge_conflict",
     /// Merge step 8: the Lead Branch kept moving.
     CasLost = "cas_lost",
-    /// Merge step 3: the Lead worktree is not clean.
+    /// Declared, never produced since hs-d243 (merge step 3, the clean Lead worktree check, was removed).
     DirtyTarget = "dirty_target",
     /// Merge step 4: the diff touches protected paths (§7.5).
     Tampered = "tampered",
