@@ -916,3 +916,15 @@ if sec=='3b':
     # storm totals
     # (recompute from sec 3 output is manual)
 ```
+
+## 3. Evaluation of the proposal items
+
+(skeleton: written in the next commits)
+
+## 4. Roadmap
+
+(skeleton: written in the next commits)
+
+### Context notes
+
+NOTE: skeleton, replaced in the next commits.
