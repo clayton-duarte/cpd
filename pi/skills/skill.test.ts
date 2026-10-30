@@ -843,3 +843,63 @@ test("cpd-lead merges the base only on a conflict; ready is its own Gate and no 
   assert.doesNotMatch(lead, /base_behind/);
   assert.doesNotMatch(lead, /contains (the|its) base|if it moved/i);
 });
+
+test("cpd-manager pins the exact CLI of context decide, plan new, session send and job retry", () => {
+  const rules = section(skillFiles("cpd-manager")[0]!.text, "## Rules");
+  const lines = rules.split("\n");
+  const head = lines.indexOf("- **Exact CLI syntax (never guess flags or subcommands):**");
+  assert.ok(head >= 0, "the Exact CLI syntax bullet");
+  const subs: string[] = [];
+  for (const l of lines.slice(head + 1)) {
+    if (!/^  - /.test(l)) break;
+    subs.push(l);
+  }
+  const expected = [
+    { words: "context decide", flags: ["--context"] },
+    { words: "plan new", flags: ["--context", "--title", "--brief-file"] },
+    { words: "session send", flags: ["--unblocks"] },
+    { words: "job retry", flags: ["--plan", "--tier"] },
+  ];
+  assert.equal(subs.length, expected.length, "exactly four sub-bullets");
+  const syn = synopses();
+  expected.forEach((e, i) => {
+    const span = /^  - `(cpd [^`]+)`/.exec(subs[i]!)?.[1];
+    assert.ok(span?.startsWith(`cpd ${e.words} `), `bullet ${i + 1} starts with cpd ${e.words}`);
+    const flags = [...span!.matchAll(/--[a-z][a-z-]*/g)].map((m) => m[0]);
+    for (const f of e.flags) assert.ok(flags.includes(f), `${e.words} carries ${f}`);
+    const allowed = syn.get(e.words);
+    assert.ok(allowed, `synopsis of ${e.words}`);
+    for (const f of flags) assert.ok(allowed.has(f), `${f} is a flag of ${e.words}`);
+  });
+  assert.ok(subs[0]!.includes("positional") && subs[0]!.includes("NO `--title` or `--body`"));
+  assert.ok(subs[2]!.includes("always required") && subs[2]!.includes("broadcast"));
+  assert.ok(subs[3]!.includes("always required"));
+});
+
+test("cpd-manager and cpd-lead carry the pro-d204 architecture rule and the four-step bug report protocol", () => {
+  const cases = [
+    { skill: "cpd-manager", scope: "Plan / PR / Job" },
+    { skill: "cpd-lead", scope: "PR / Job" },
+  ];
+  for (const c of cases) {
+    const lines = section(skillFiles(c.skill)[0]!.text, "## Rules").split("\n");
+    const arch = lines.find((l) => l.startsWith("- **Skills are for agent discovery; `cpd` commands provide deterministic execution (pro-d204).**"));
+    assert.ok(arch, `${c.skill}: architecture bullet`);
+    assert.ok(arch.includes("Skills teach the agent what exists and when to use it"), `${c.skill}: teach`);
+    assert.ok(arch.includes("never ad-hoc prose"), `${c.skill}: never ad-hoc prose`);
+    const at = lines.findIndex((l) => l.startsWith("- **Bug report protocol (pro-d204 — all steps required on every bug report):**"));
+    assert.ok(at >= 0, `${c.skill}: protocol bullet`);
+    const texts = [
+      "Debug, research and identify both the immediate mitigation and the long-term root-cause fix",
+      "Apply the mitigation ASAP",
+      `Queue the follow-up root-cause fix (${c.scope})`,
+      "Include regression tests so the bug can never be reintroduced",
+    ];
+    texts.forEach((t, i) => {
+      const line = lines[at + 1 + i] ?? "";
+      assert.ok(line.startsWith(`  ${i + 1}. `), `${c.skill}: step ${i + 1} numbered`);
+      assert.ok(line.includes(t), `${c.skill}: step ${i + 1} text`);
+    });
+    assert.ok(!/^ {2}5\. /.test(lines[at + 5] ?? ""), `${c.skill}: no fifth step`);
+  }
+});
