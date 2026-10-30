@@ -13,3 +13,4 @@ The changes cpd made on top:
 (5) The role gate and the stand-down: double-load.ts, and the factory of index.ts registers nothing unless CPD_SESSION is set and CPD_ATTEMPT is not, and stands down while the settings list the npm package.
 (6) Comments that cited the removed packages are reworded; no comment cites a record id.
 (7) Relative imports end in .ts, not .js (every file that has one), so node runs the copy as the tests import it; one comment of tool/response-envelope.ts is reworded so the import scan of pi/test/ask-user-question/notice.test.ts does not read it as an import.
+(8) The tool is registered with exposure "model-only" (pi/ask-user-question/ask-user-question.ts): it is declared to the model but never callable from a codemode script, so pi's codemode mode `only`, which hides every direct tool, keeps it; a script can no longer call tools.ask_user_question.
