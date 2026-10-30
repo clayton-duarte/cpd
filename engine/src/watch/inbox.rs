@@ -11,16 +11,21 @@ use cpd_core::clock::timestamp;
 use super::report::{About, Step, tell_stuck_jobs};
 use cpd_core::error::CpdError;
 use cpd_core::inbox::model::{Changes, reconcile};
+use super::asks::tell_repeated_asks;
+use cpd_core::inbox::asks::repeated_asks;
 use cpd_core::inbox::rules::{conditions_on, stuck_jobs};
 
 pub(super) fn run(engine: &mut Engine) {
     match reconcile_inbox(engine) {
-        Ok((changes, told)) => {
+        Ok((changes, told, asked)) => {
             if !changes.is_empty() {
                 engine.log.line(&format!("E8: opened {} Inbox item(s), closed {}", changes.opened.len(), changes.closed.len()));
             }
             if told > 0 {
                 engine.log.line(&format!("E8: told the Manager of {told} stuck Job PR(s)"));
+            }
+            if asked > 0 {
+                engine.log.line(&format!("E8: told the Manager of {asked} repeated ask(s)"));
             }
             engine.clear(Step::E8, &About::Machine);
         }
@@ -29,12 +34,14 @@ pub(super) fn run(engine: &mut Engine) {
 }
 
 /// The Inbox's changes, and how many stuck-Job messages were sent to their Manager (hs-d318, hs-d647).
-fn reconcile_inbox(engine: &mut Engine) -> Result<(Changes, usize), CpdError> {
+fn reconcile_inbox(engine: &mut Engine) -> Result<(Changes, usize, usize), CpdError> {
     let now = engine.ports.clock.utc();
     let found = conditions_on(&engine.ports, &mut engine.store, &engine.home)?;
     let changes = reconcile(&mut engine.store, &found, &timestamp(now))?;
     let stuck_after = Duration::from_secs(u64::from(engine.config.inbox.stuck_job_minutes) * 60);
     let stuck = stuck_jobs(&mut engine.store, now, stuck_after)?;
     let told = tell_stuck_jobs(&mut engine.store, &stuck)?;
-    Ok((changes, told))
+    let asks = repeated_asks(&mut engine.store, now)?;
+    let asked = tell_repeated_asks(&mut engine.store, &asks)?;
+    Ok((changes, told, asked))
 }

@@ -23,7 +23,7 @@ use super::SOURCE;
 use super::log::Log;
 use cpd_core::error::CpdError;
 use cpd_core::events::{self, NewEvent};
-use cpd_core::ids::{AttemptId, JobKey, PlanId, SessionId};
+use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
 use cpd_core::inbox::rules::{StuckGroup, StuckJob, stuck_groups};
 use cpd_core::job::home::JobHome;
 use cpd_core::session::tell_managers;
@@ -177,21 +177,29 @@ fn stuck_text(group: &StuckGroup) -> String {
 /// `job-failed` Event whose text begins [`stuck_prefix`]. A later failure of a Job of the PR is a newer Event, so the group
 /// is told again.
 fn untold(conn: &Connection, group: &StuckGroup) -> Result<bool, CpdError> {
-    let manager: Option<String> = conn
+    let Some(manager) = live_manager(conn, &group.context)? else { return Ok(false) };
+    Ok(!message_exists(conn, &manager, Some(group.event), &stuck_prefix(group))?)
+}
+
+/// The id of the Context's live Manager (role `manager`, not archived), if there is one.
+pub(super) fn live_manager(conn: &Connection, context: &ContextId) -> Result<Option<String>, CpdError> {
+    Ok(conn
         .query_row(
             "SELECT id FROM sessions WHERE role = 'manager' AND archived_at IS NULL AND context = ?1",
-            [group.context.as_str()],
+            [context.as_str()],
             |r| r.get(0),
         )
-        .optional()?;
-    let Some(manager) = manager else { return Ok(false) };
-    let sent: bool = conn.query_row(
+        .optional()?)
+}
+
+/// Whether a message from the User's side (`from` null) to `manager`, newer than Event `after` when given, begins with `prefix`.
+pub(super) fn message_exists(conn: &Connection, manager: &str, after: Option<i64>, prefix: &str) -> Result<bool, CpdError> {
+    Ok(conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM events WHERE session = ?1 AND id > ?2 AND kind = 'session-message'
                          AND json_extract(data, '$.from') IS NULL AND instr(json_extract(data, '$.text'), ?3) = 1)",
-        params![manager, group.event, stuck_prefix(group)],
+        params![manager, after.unwrap_or(0), prefix],
         |r| r.get(0),
-    )?;
-    Ok(!sent)
+    )?)
 }
 
 /// Tells the live Manager of each group's Context one message per PR, by the path of a step's failure (one waking message

@@ -1,6 +1,7 @@
 //! The Inbox (contract §2.2 "Inbox item", §3.7 E8, §4.4; commands.md §21): the
 //! stored items of what needs the User, and the reconcile that opens and closes them.
 
+pub mod asks;
 pub mod cmd;
 pub mod model;
 pub mod models;

@@ -110,6 +110,11 @@ fn write(tx: &WriteTxn<'_>, target: &Row, from: &Option<SessionId>, text: &str, 
 /// Event has none. Returns how many it sent (0 or 1); none when there is no Manager.
 pub fn tell_managers(tx: &WriteTxn<'_>, error: i64, text: &str) -> Result<usize, CpdError> {
     let context: Option<String> = tx.query_row("SELECT context FROM events WHERE id = ?1", [error], |r| r.get(0))?;
+    tell_manager_of(tx, context.as_deref(), text)
+}
+
+/// [`tell_managers`] for a known Context (`None`: any Context): the message to one live Manager of it. Returns 0 or 1.
+pub fn tell_manager_of(tx: &WriteTxn<'_>, context: Option<&str>, text: &str) -> Result<usize, CpdError> {
     let ids = {
         let mut stmt = tx.prepare(
             "SELECT id FROM sessions WHERE role = 'manager' AND archived_at IS NULL AND (?1 IS NULL OR context = ?1) ORDER BY created_at, id LIMIT 1",
