@@ -832,6 +832,81 @@ fn a_linear_attempt_that_changes_a_protected_path_is_refused_gate_tampered() {
     assert_eq!(fx.fx.env.query::<String>("SELECT status FROM attempts WHERE id = 'ui-a1'"), "running");
 }
 
+fn written(fx: &Git) -> Option<String> {
+    fx.fx.env.query("SELECT actual_files FROM attempts WHERE id = 'api-a1'")
+}
+
+#[test]
+fn submit_stores_the_written_paths_in_the_update_that_makes_the_attempt_merging() {
+    let fx = git_fixture(&[]);
+    fx.commit("src/b.rs", "fn b() {}\n");
+    fx.commit("a.md", "# a\n");
+    fx.submit().ok();
+    assert_eq!(written(&fx).as_deref(), Some(r#"["a.md","src/b.rs"]"#));
+    let update = "SELECT count(*) FROM history WHERE tbl = 'attempts' AND op = 'update' AND json_extract(after, '$.status') = 'merging' AND json_extract(after, '$.actual_files') IS NOT NULL";
+    assert_eq!(fx.fx.env.query::<i64>(update), 1, "the update to merging holds the list");
+}
+
+#[test]
+fn submit_leaves_out_the_files_a_merge_of_the_lead_branch_brought() {
+    let fx = git_fixture(&[]);
+    fx.commit_in(&fx.lead, "lead.rs", "fn lead() {}\n");
+    fx.commit("mine.rs", "fn mine() {}\n");
+    fx.fx.git(&fx.work, &["merge", "-q", "--no-ff", "-m", "merge the lead", "cpd/pay"]);
+    fx.submit().ok();
+    assert_eq!(written(&fx).as_deref(), Some(r#"["mine.rs"]"#));
+}
+
+#[test]
+fn submit_of_a_linear_attempt_stores_what_its_commits_wrote() {
+    let fx = git_fixture(&[]);
+    let web = fx.add_pr("web");
+    fx.attempt_needing(&web, "ui", "running", "work", None, None);
+    let base = fx.fx.git(&web.lead, &["rev-parse", "HEAD"]);
+    fx.fx.env.sql(&format!(
+        "UPDATE attempts SET branch = 'cpd/pay/web', worktree = '{}', base_sha = '{base}' WHERE id = 'ui-a1'",
+        web.lead.display()
+    ));
+    fx.commit_in(&web.lead, "src/own.rs", "fn own() {}\n");
+    fx.fx.cpd_in(&web.lead, &["attempt", "submit", "ui-a1", "--plan", PLAN]).ok();
+    assert_eq!(
+        fx.fx.env.query::<Option<String>>("SELECT actual_files FROM attempts WHERE id = 'ui-a1'").as_deref(),
+        Some(r#"["src/own.rs"]"#)
+    );
+}
+
+#[test]
+fn submit_of_an_open_job_with_no_commit_stores_an_empty_list() {
+    let fx = git_fixture_kind(&[], "open");
+    fx.fx.env.sql("UPDATE prs SET title = 'Pay' WHERE plan = 'pay' AND key = 'repo'");
+    fx.fx.fake_gh(Reply::ok("[]"));
+    fx.fx.env.repo_policy("acme", "pay", "[pr]\ngate = \"local\"\n");
+    fx.submit().ok();
+    assert_eq!(written(&fx).as_deref(), Some("[]"));
+}
+
+#[test]
+fn submit_never_refuses_a_job_for_a_file_outside_its_touches() {
+    let fx = git_fixture(&[]);
+    fx.commit("zzz/other.rs", "fn other() {}\n");
+    let out = fx.submit().ok();
+    assert_eq!(out["submitted"], true, "{out}");
+    assert_eq!(written(&fx).as_deref(), Some(r#"["zzz/other.rs"]"#));
+}
+
+#[test]
+fn submit_whose_capture_fails_is_git_failed_and_writes_nothing() {
+    let fx = git_fixture(&[]);
+    fx.commit("src/a.rs", "fn a() {}\n");
+    // The capture's `diff` is the one call with no `...` range argument.
+    let capture = |call: &cpd_core::host::runner::Call| call.args.iter().any(|a| a == "diff") && !call.args.iter().any(|a| a.contains("..."));
+    let _ = (*fx.fx.fakes.runner).clone().once("git", capture, Reply::exit(128, "", "fatal: boom\n"));
+    refused(&fx.submit(), "git_failed", 1);
+    assert_eq!(fx.status(), "running");
+    assert_eq!(fx.fx.env.query::<Option<String>>("SELECT submitted_sha FROM attempts WHERE id = 'api-a1'"), None);
+    assert_eq!(written(&fx), None);
+}
+
 #[test]
 fn a_test_or_impl_job_in_a_repo_with_no_tests_table_is_refused_tests_unconfigured() {
     {
