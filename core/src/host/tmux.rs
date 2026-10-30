@@ -77,6 +77,8 @@ pub const OPT_SESSION: &str = "@cpd_session";
 pub const OPT_TITLE: &str = "@cpd_title";
 /// The pane option naming the TUI view a pane runs (contract §6.2, amendment 2).
 pub const OPT_VIEW: &str = "@cpd_view";
+/// The global tmux option holding the Worker runner (`pi` or `durable`) the status line's runner pill shows.
+pub const RUNNER_OPTION: &str = "@cpd_runner";
 /// The pane option naming the Session a history pane shows (commands.md §10.12).
 pub const OPT_HISTORY: &str = "@cpd_history";
 

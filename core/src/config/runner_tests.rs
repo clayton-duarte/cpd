@@ -165,3 +165,84 @@ fn read_with_maps_a_scripted_timeout_to_tool_timeout() {
     assert_eq!(err.details()["deadline_seconds"], 30);
     assert_eq!(clock.elapsed(), DEADLINE);
 }
+
+// ---------- the runner toggle (pro-d199) ----------
+
+use super::{Config, TOGGLE_COMMENT, WorkerRunner, set_in_text, toggle};
+use crate::home::CpdHome;
+
+fn home_with(text: &str) -> (tempfile::TempDir, CpdHome) {
+    let dir = tempfile::tempdir().unwrap();
+    let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
+    std::fs::write(home.config(), text).unwrap();
+    (dir, home)
+}
+
+fn line(to: &str) -> String {
+    format!("worker_runner = \"{to}\" # {TOGGLE_COMMENT}")
+}
+
+#[test]
+fn flipped_swaps_pi_and_durable() {
+    assert_eq!(WorkerRunner::Pi.flipped(), WorkerRunner::Durable);
+    assert_eq!(WorkerRunner::Durable.flipped(), WorkerRunner::Pi);
+}
+
+#[test]
+fn set_in_text_replaces_the_whole_line_and_its_comment_and_keeps_every_other_byte() {
+    let before = "# mine\r\nversion = 1\nmachine = \"hs\"\nworker_runner = \"pi\"   # old comment\nconcurrency = 5\n\n[timeouts]\nattempt_minutes = 30";
+    let want = format!("# mine\r\nversion = 1\nmachine = \"hs\"\n{}\nconcurrency = 5\n\n[timeouts]\nattempt_minutes = 30", line("durable"));
+    assert_eq!(set_in_text(before, WorkerRunner::Durable), want);
+}
+
+#[test]
+fn set_in_text_inserts_the_line_before_the_first_table_when_it_is_absent() {
+    let before = "version = 1\nmachine = \"hs\"  # the machine\n\n# timeouts\n[timeouts]\nattempt_minutes = 30\n";
+    let want = format!("version = 1\nmachine = \"hs\"  # the machine\n{}\n\n# timeouts\n[timeouts]\nattempt_minutes = 30\n", line("durable"));
+    assert_eq!(set_in_text(before, WorkerRunner::Durable), want);
+}
+
+#[test]
+fn set_in_text_inserts_the_line_at_the_end_when_there_is_no_table() {
+    let want = format!("version = 1\nmachine = \"hs\"\n{}\n", line("pi"));
+    assert_eq!(set_in_text("version = 1\nmachine = \"hs\"\n", WorkerRunner::Pi), want);
+    let want = format!("version = 1\nmachine = \"hs\"\n{}\n", line("pi"));
+    assert_eq!(set_in_text("version = 1\nmachine = \"hs\"", WorkerRunner::Pi), want);
+}
+
+#[test]
+fn set_in_text_leaves_a_worker_runner_key_of_a_table_alone() {
+    let before = "version = 1\nmachine = \"hs\"\n\n[tmux]\nworker_runner = \"pi\"\n";
+    let want = format!("version = 1\nmachine = \"hs\"\n{}\n\n[tmux]\nworker_runner = \"pi\"\n", line("durable"));
+    assert_eq!(set_in_text(before, WorkerRunner::Durable), want);
+}
+
+#[test]
+fn toggle_writes_the_other_value_atomically_and_returns_it() {
+    let (dir, home) = home_with("version = 1\nmachine = \"hs\"\n\n[timeouts]\nattempt_minutes = 30\n");
+    assert_eq!(toggle(&home).unwrap(), WorkerRunner::Durable);
+    let text = std::fs::read_to_string(home.config()).unwrap();
+    assert_eq!(text, set_in_text("version = 1\nmachine = \"hs\"\n\n[timeouts]\nattempt_minutes = 30\n", WorkerRunner::Durable));
+    assert_eq!(Config::load(&home).unwrap().worker_runner, WorkerRunner::Durable);
+    // Atomic: the temporary file was renamed away, so the directory holds config.toml alone.
+    let names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(names, ["config.toml"]);
+}
+
+#[test]
+fn toggle_flips_back_on_the_second_call() {
+    let (_dir, home) = home_with("version = 1\nmachine = \"hs\"\nworker_runner = \"durable\"\n");
+    assert_eq!(toggle(&home).unwrap(), WorkerRunner::Pi);
+    assert_eq!(Config::load(&home).unwrap().worker_runner, WorkerRunner::Pi);
+    assert_eq!(toggle(&home).unwrap(), WorkerRunner::Durable);
+    assert_eq!(Config::load(&home).unwrap().worker_runner, WorkerRunner::Durable);
+}
+
+#[test]
+fn toggle_refuses_a_config_that_does_not_parse_and_leaves_the_file() {
+    let broken = "version = 1\nmachine = \"hs\"\nconcurrency = \"many\"\n";
+    let (_dir, home) = home_with(broken);
+    let err = toggle(&home).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+    assert_eq!(std::fs::read_to_string(home.config()).unwrap(), broken);
+}

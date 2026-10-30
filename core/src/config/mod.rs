@@ -33,7 +33,7 @@ use crate::policy::PolicyKey;
 pub use catalog::{PiInstall, load as load_catalog, load_with as load_catalog_with, locate_pi};
 pub use file::{Config, Events, Inbox, Source, Sources, TickSeconds, Timeouts, Tmux, Watch};
 pub use repo::RepoTests;
-pub use runner::WorkerRunner;
+pub use runner::{TOGGLE_COMMENT, WorkerRunner, set_in_text, toggle};
 pub use tier::{Catalog, Letter, Tier, TierModel};
 
 /// `cpd config` takes no arguments.
