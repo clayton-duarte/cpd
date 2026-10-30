@@ -1055,6 +1055,29 @@ A Job with no Attempts and no `tier` has no displayed Tier (shown as `—` in di
 
 **Readers of the displayed Tier:** the Plan view (tui/src/read/flow.rs `job_nodes` calls `core/src/plan/display.rs` `Display::load`), `plan render` (§4.5), and `context pending` (§3.11). The JSON output of `plan show` and `job show` (§4.3, §5.7) remains unchanged: they print `tier` and `retry_tier` as raw field values, not derived.
 
+### 3.4b Tier advice (pro-d278, pro-d292)
+
+The **Tier advice** names, for each Job kind, the Worker Tier whose history says that a Job of the kind merges at the lowest expected cost. It exists to avoid over-tiering: starting code Jobs at S2 instead of S1 costs more than all the waste before success (pro-n253). Its design and figures are in `docs/research/rfm-planning-ladder.md`, "Priority 3: tier-advice"; this section is the one statement of the rule. Its two constants are `FLOOR = 30` and `MIN_LOWER = 0.70`; the rules below refer to them by name.
+
+1. **Rows.** A row is the first Attempt (`number = 1`) of a Job whose status is `merged` or `failed` and whose cause is not `provider_error` (§3.4). A first Attempt that was cancelled, still running, or ended `provider_error` is not judged. The rows are grouped by the Job's kind and the Attempt's Tier, one cell `(kind, tier)` each, with: `n`, the number of rows; `passed`, the rows whose outcome is `merged`; `avg_cost`, the average of `metrics.cost_usd` over the rows that have one, NULL when none has. A row with no cost counts in `n` and not in the average.
+2. **Qualifying.** A cell qualifies when all of these hold:
+   - `n >= FLOOR`;
+   - the Wilson 95% lower bound of `passed / n` is at least `MIN_LOWER`. With `p = passed / n` and `z = 1.96`, the bound is `(p + z²/(2n) − z·√(p(1−p)/n + z²/(4n²))) / (1 + z²/n)`, clamped to [0, 1], and 0 when `n = 0`. For `n = 30`, 26 passes qualify and 25 do not;
+   - the Tier is one a Worker may have (`Tier::is_worker_allowed`, §9 "Tier rules"); a cell on any other Tier is never advised;
+   - the cell has an expected cost (rule 3).
+3. **Expected cost.** Let `next(t)` be the next rung of the ladder (§9 "Ladder", `Catalog::next`). The expected cost of cell `(kind, t)` is `avg_cost(t) + (1 − passed/n) × avg_cost(next(t))`, where:
+   - `avg_cost(next(t))` is taken from the cell `(kind, next(t))` whatever its `n`;
+   - when `next(t)` is none (S3), the failure term is 0;
+   - when the cell `(kind, next(t))` does not exist or its `avg_cost` is NULL, or the cell's own `avg_cost` is NULL, the cell has no expected cost and does not qualify.
+4. **Choice.** The advice for a kind is the qualifying cell with the lowest expected cost. Scan the cells in ascending order `H0 < H1 < H2 < H3 < S0 < S1 < S2 < S3` and replace the choice only on a strictly lower cost, so a tie goes to the lower Tier.
+5. **No silent default.** A kind with no qualifying cell has no advice: no entry, and no fallback Tier. Nothing is substituted for a missing or unqualified cell.
+
+**Where it lives.** The computation is pure and lives in cpd-core, `core/src/plan/tier_advice.rs`. Its items are `Row` (one `(kind, tier)` cell as read from the store), `Advice` (the chosen cell of one kind), `FLOOR`, `MIN_LOWER`, `wilson_lower` (rule 2), `qualifying` (rules 2 and 3), `recommend` (rules 4 and 5), and `first_attempts`, the one function that holds the SQL of rule 1. The ladder is passed in as a function, so the module needs no pi catalog; apart from `first_attempts`, it reads nothing.
+
+**The limit.** The advice is history, never cause. The Lead chooses harder Jobs for higher Tiers (selection), so a cell's pass rate says what happened to the Jobs that ran on that Tier, not what the Tier does to a Job. The cells are also small: the floor and the lower bound are guards against small samples, not proof that a Tier is the cheapest one that works.
+
+**Readers:** none yet. The computation is specified here; no command or lint rule reads it.
+
 ### 3.5 Escalation states
 
 | From | To | Moved by | Event |
