@@ -3,7 +3,7 @@ import type { Host } from "./host.ts";
 import type { Ctx, Message } from "./pi.ts";
 import { lastAssistantText, needsReminder, planKeys, REMINDER_TEXT, REMINDER_TYPE } from "./reminder.ts";
 import type { Run } from "./run.ts";
-import { contextCursorFrom, contextUpdate, type ErrorEvent, leadUpdate, parseErrorEvents, parsePending, parsePlanEvents, parsePrOpened, parseRecordEvents, parseRecords, parseTaken, PLAN_KINDS } from "./updates.ts";
+import { closedPrLines, contextCursorFrom, contextUpdate, type ErrorEvent, leadUpdate, parseErrorEvents, parsePending, parsePlanEvents, parsePrOpened, parseRecordEvents, parseRecords, parseTaken, PLAN_KINDS } from "./updates.ts";
 
 // ---- Context updates at turn start (§15.7) ----
 
@@ -30,7 +30,15 @@ async function contextUpdates(host: Host, r: Run, ctx: Ctx): Promise<{ message: 
     if (r.info.role === "lead") {
       const plan = r.info.plan;
       const prs = plan === null ? [] : parsePrOpened(await call(["events", "list", "--context", context, "--kind", "pr-opened", "--since", String(cursor)])).filter((p) => p.plan === plan);
-      message = leadUpdate(context, r.id, events, records, prs, parseTaken(await call(["board", "take", "--session", r.id])));
+      let standing: string[] = [];
+      if (plan !== null) {
+        try {
+          standing = closedPrLines(await call(["plan", "show", plan]));
+        } catch (e) {
+          standing = [`could not read the Plan's PRs: ${toCpdError(e).message.split("\n")[0]}`];
+        }
+      }
+      message = leadUpdate(context, r.id, events, records, prs, parseTaken(await call(["board", "take", "--session", r.id])), standing);
     } else {
       const plans = parsePlanEvents(await call(["events", "list", "--context", context, ...PLAN_KINDS.flatMap((k) => ["--kind", k]), "--since", String(cursor)]));
       const pending = parsePending(await call(["context", "pending", "--context", context]));
