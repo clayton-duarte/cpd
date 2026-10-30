@@ -1,7 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { basename, join } from "node:path";
 
 export type Usage = { input: number; output: number; cache_read: number; cache_write: number; cost_usd: number };
 export type Row = { tool: string; calls: number; chars: number };
@@ -263,7 +262,7 @@ export function main(argv: string[], io: { out(text: string): void; err(text: st
   return 0;
 }
 
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   process.exitCode = main(process.argv.slice(2), {
     out: (t) => process.stdout.write(t + "\n"),
     err: (t) => process.stderr.write(t + "\n"),
