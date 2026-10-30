@@ -82,7 +82,7 @@ function textOf(content: unknown, stopAt?: (b: Rec) => boolean): string[] {
   return out;
 }
 
-/** G4: the reason when a cited label is stated nowhere (not in the call's text, not in the visible chat); else undefined. `branch` is the session's branch, `toolCallId` the call's id. */
+/** G4: the reason when a cited label is stated nowhere (not in the call's text, not in the visible chat); else undefined. `branch` is the session's branch, `toolCallId` the call's id; a nested (codemode) call passes its parent call's id. */
 export function unseen(input: unknown, toolCallId: string, branch: readonly unknown[]): string | undefined {
   const isCall = (b: Rec) => b.type === "toolCall" && b.id === toolCallId;
   let at = branch.findLastIndex((e) => isRec(e) && isRec(e.message) && Array.isArray(e.message.content) && e.message.content.some((b) => isRec(b) && isCall(b)));
