@@ -152,7 +152,7 @@ fn run_tests(
     if let Some(e) = error("build", &build, tests) {
         return Err(e);
     }
-    if let HookOutcome::Failed { exit } = build.outcome {
+    if let HookOutcome::Failed { exit, .. } = build.outcome {
         return Err(refuse(
             ErrorCode::TestsBuildFailed,
             format!("The repo's [test-commands] `build` failed (exit {exit}): the branch does not build. Fix it, commit, and submit again; the tail is in details.tail."),
@@ -203,7 +203,7 @@ fn run_tests(
             &run,
             tests,
         )),
-        ("impl", HookOutcome::Failed { exit }) => Err(refuse(
+        ("impl", HookOutcome::Failed { exit, .. }) => Err(refuse(
             ErrorCode::TestsFailed,
             format!("The named tests still fail (exit {exit}): fix the code, not the tests, commit, and submit again; the tail is in details.tail."),
             &run,

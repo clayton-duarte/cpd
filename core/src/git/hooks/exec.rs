@@ -37,6 +37,8 @@ pub struct Executed {
     /// The first command that did not exit 0, in file order; `None` if all did
     /// (and for a pipeline stopped by a block, that block's).
     pub failure: Option<Ended>,
+    /// The rendered text of the command `failure` is of; `None` exactly when `failure` is.
+    pub failed_command: Option<String>,
     /// The last `tail_lines` lines of the output, one per element.
     pub tail: Vec<String>,
     /// The I/O error that stopped the log being written, if any.
@@ -105,6 +107,7 @@ pub fn run_on(
     let removed: Vec<String> =
         std::env::vars_os().map(|(k, _)| k.to_string_lossy().into_owned()).filter(|k| is_withheld(k)).collect();
     let mut failure = None;
+    let mut failed_command = None;
     for block in blocks.iter().filter(|b| !b.is_empty()) {
         let prefixed = block.len() > 1;
         // The first block has all of it: the clock starts with it.
@@ -121,6 +124,7 @@ pub fn run_on(
             threads.into_iter().map(|t| t.join().expect("a hook's thread does not panic")).collect()
         });
         failure = None;
+        failed_command = None;
         for (hook, (end, text)) in block.iter().zip(ended) {
             let prefix = match (&hook.name, prefixed) {
                 (Some(name), true) => format!("{name} │ "),
@@ -131,13 +135,14 @@ pub fn run_on(
             }
             if failure.is_none() && end != Ended::Exit(0) {
                 failure = Some(end);
+                failed_command = Some(hook.command.clone());
             }
         }
         if failure.is_some() {
             break;
         }
     }
-    Executed { failure, tail: output.tail.drain(..).collect(), log_error: output.log_error.take() }
+    Executed { failure, failed_command, tail: output.tail.drain(..).collect(), log_error: output.log_error.take() }
 }
 
 /// The call of one hook: `TMUX`, `TMUX_PANE` and the other withheld variables removed, then `env` added.

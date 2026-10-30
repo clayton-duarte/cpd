@@ -9,7 +9,7 @@
 //! - `rerun`: the failed GitHub Actions workflow runs of the PR's head commit, re-run (`pr rerun`);
 //! - `rebase`: the Lead Branch onto the base, the Gate and the push (`pr rebase`);
 //! - `push`: the Gate and a plain push of the Lead Branch (`pr push`);
-//! - `merge`: a clean pull request squash-merged on GitHub (`pr merge`);
+//! - `merge`: a clean pull request merged on GitHub with a method the repo allows (`pr merge`);
 //! - `gh`: the one gateway to `gh`; `status`: the PR status enums; `row`: the Plan as these commands read it.
 //!
 //! `pr open`, `pr rebase` and `pr push` take no lock (hs-d243): each runs its Gate and pushes
@@ -40,6 +40,7 @@ mod feedback;
 mod gh;
 pub(crate) use gh::head_ref_oid;
 mod merge;
+pub mod merge_method;
 pub mod review;
 mod open;
 pub(crate) mod poll;
@@ -108,7 +109,7 @@ pub enum Command {
     Rerun(Args),
     /// Post the PR's pull request to Slack for review (§9.8b)
     Post(post::PostArgs),
-    /// Squash-merge a clean pull request on GitHub (§9.10)
+    /// Merge a clean pull request on GitHub with a method the repo allows (§9.10)
     Merge(merge::MergeArgs),
 }
 
@@ -536,7 +537,7 @@ fn refusal(plan: &PlanId, pr: &PrRow, sha: &str, refused: Refused, then: &str) -
     let log = refused.log.display().to_string();
     let hook = refused.hook.as_str();
     let error = match (refused.hook, &refused.outcome) {
-        (Hook::PreMerge, HookOutcome::Failed { exit }) => CpdError::new(
+        (Hook::PreMerge, HookOutcome::Failed { exit, .. }) => CpdError::new(
             ErrorCode::GateFailed,
             format!(
                 "The Gate failed on {} at {} (exit {exit}): nothing was pushed. {then}",
@@ -552,7 +553,7 @@ fn refusal(plan: &PlanId, pr: &PrRow, sha: &str, refused: Refused, then: &str) -
             )
             .with("reason", outcome.to_string());
             match outcome {
-                HookOutcome::Failed { exit } => error.with("exit", *exit),
+                HookOutcome::Failed { exit, .. } => error.with("exit", *exit),
                 _ => error,
             }
         }

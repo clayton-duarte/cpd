@@ -209,6 +209,28 @@ fn the_failure_of_a_block_is_the_first_in_file_order() {
 }
 
 #[test]
+fn the_failed_command_is_the_first_failing_one_of_a_table_in_file_order() {
+    let runner = answers(answers(runner(), "build", Reply::exit(7, "", "")), "test", Reply::exit(9, "", ""))
+        .on("sh", |_| true, Reply::ok(""));
+    let block = vec![hook(Some("lint"), "lint"), hook(Some("build"), "build"), hook(Some("test"), "test")];
+    let r = run(&runner, &[block], LIMIT, 60);
+    assert_eq!((r.done.failure, r.done.failed_command), (Some(Ended::Exit(7)), Some("build".to_owned())));
+}
+
+#[test]
+fn the_failed_command_of_a_pipeline_is_the_failing_blocks() {
+    let runner = answers(runner(), "second", Reply::exit(4, "", "")).on("sh", |_| true, Reply::ok(""));
+    let r = run(&runner, &[vec![hook(None, "first")], vec![hook(None, "second")]], LIMIT, 60);
+    assert_eq!(r.done.failed_command.as_deref(), Some("second"));
+}
+
+#[test]
+fn a_passing_run_has_no_failed_command() {
+    let runner = runner().on("sh", |_| true, Reply::ok(""));
+    assert_eq!(one(&runner, "true").done.failed_command, None);
+}
+
+#[test]
 fn the_output_of_the_hooks_of_a_block_is_prefixed_with_their_names() {
     let runner = answers(runner(), "lint", Reply::ok("lint-ok\n")).on("sh", |_| true, Reply::ok("test-ok\n"));
     let mut tail = run(&runner, &[vec![hook(Some("lint"), "lint"), hook(Some("test"), "test")]], LIMIT, 60).done.tail;

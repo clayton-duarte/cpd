@@ -61,7 +61,7 @@ pub enum HookOutcome {
     /// Exit 0, or no commands.
     Passed,
     /// The first failing command's exit code, in file order.
-    Failed { exit: i32 },
+    Failed { exit: i32, command: String },
     Error(HookError),
 }
 
@@ -69,7 +69,7 @@ impl fmt::Display for HookOutcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             HookOutcome::Passed => f.write_str("passed"),
-            HookOutcome::Failed { exit } => write!(f, "exit {exit}"),
+            HookOutcome::Failed { exit, .. } => write!(f, "exit {exit}"),
             HookOutcome::Error(e) => e.fmt(f),
         }
     }
@@ -229,7 +229,9 @@ fn run_rendered(
     };
     let outcome = match (done.failure, written) {
         (None, Ok(())) => HookOutcome::Passed,
-        (Some(exec::Ended::Exit(exit)), _) => HookOutcome::Failed { exit },
+        (Some(exec::Ended::Exit(exit)), _) => {
+            HookOutcome::Failed { exit, command: done.failed_command.expect("a failure has its command") }
+        }
         (Some(exec::Ended::Signal(n)), _) => HookOutcome::Error(HookError::Signal(n)),
         (Some(exec::Ended::TimedOut), _) => HookOutcome::Error(HookError::Timeout),
         (Some(exec::Ended::NotStarted(why)), _) => HookOutcome::Error(HookError::Io(why)),

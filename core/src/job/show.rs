@@ -116,7 +116,7 @@ pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError>
 fn attempts(conn: &Connection, plan: &PlanId, job: &str) -> Result<Vec<Value>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT id, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, driver_pid, worker_session,
-                spec_path, submitted_sha, submitted_at, check_tail, merged_sha, nudged, stop_request, metrics, started_at, ended_at, runner, worker_pid
+                spec_path, submitted_sha, submitted_at, check_tail, merged_sha, nudged, stop_request, metrics, started_at, ended_at, runner, worker_pid, gate_hook, gate_command, gate_exit
            FROM attempts WHERE plan = ?1 AND job = ?2 ORDER BY number",
     )?;
     let rows = stmt
@@ -136,6 +136,8 @@ fn attempts(conn: &Connection, plan: &PlanId, job: &str) -> Result<Vec<Value>, C
                     "nudged": r.get::<_, bool>(17)?, "stop_request": r.get::<_, Option<String>>(18)?,
                     "started_at": r.get::<_, String>(20)?, "ended_at": r.get::<_, Option<String>>(21)?,
                     "runner": r.get::<_, String>(22)?, "worker_pid": r.get::<_, Option<i64>>(23)?,
+                    "gate_hook": r.get::<_, Option<String>>(24)?, "gate_command": r.get::<_, Option<String>>(25)?,
+                    "gate_exit": r.get::<_, Option<i64>>(26)?,
                 }),
             ))
         })?

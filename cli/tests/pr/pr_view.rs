@@ -32,11 +32,17 @@ pub(super) struct AutoMerge {
     pub(super) already: bool,
     /// GitHub's error message for the mutation, when it refuses.
     pub(super) refuse: Option<String>,
+    /// The repo's allowed merge methods, read beside `autoMergeAllowed`: squash, merge commit, rebase.
+    pub(super) squash: bool,
+    pub(super) merge: bool,
+    pub(super) rebase: bool,
+    /// Only the mutation fails (gh exits 1), the read succeeds.
+    pub(super) fail_mutation: bool,
 }
 
 impl Default for AutoMerge {
     fn default() -> Self {
-        AutoMerge { allowed: true, already: false, refuse: None }
+        AutoMerge { allowed: true, already: false, refuse: None, squash: true, merge: false, rebase: false, fail_mutation: false }
     }
 }
 
@@ -50,6 +56,9 @@ impl Handler for Gh {
             let auto = self.auto.lock().unwrap();
             let text = args.join(" ");
             if text.contains("enablePullRequestAutoMerge") {
+                if auto.fail_mutation {
+                    return Reply::exit(1, "", "gh: HTTP 502\n");
+                }
                 return match &auto.refuse {
                     Some(message) => Reply::exit(
                         1,
@@ -66,7 +75,7 @@ impl Handler for Gh {
                 let request = if auto.already { json!({"enabledAt": "2026-10-27T17:00:00Z"}) } else { serde_json::Value::Null };
                 return Reply::ok(&format!(
                     "{}\n",
-                    json!({"data": {"repository": {"autoMergeAllowed": auto.allowed, "pullRequest": {"id": "PR_812", "autoMergeRequest": request}}}})
+                    json!({"data": {"repository": {"autoMergeAllowed": auto.allowed, "squashMergeAllowed": auto.squash, "mergeCommitAllowed": auto.merge, "rebaseMergeAllowed": auto.rebase, "pullRequest": {"id": "PR_812", "autoMergeRequest": request}}}})
                 ));
             }
         }

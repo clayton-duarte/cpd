@@ -454,3 +454,98 @@ fn the_next_spec_after_a_gate_error_says_the_gate_could_not_be_judged_and_names_
     assert!(spec.contains(&format!("- {}\n", gate_error_sentence("pre-commit"))), "{spec}");
     assert!(spec.contains(&format!("\n  - `{}`\n", log.display())), "the Spec does not list the log {} as an item:\n{spec}", log.display());
 }
+
+// ---------- the Gate facts (Plan gate-fail-facts): a failed Gate writes its facts on its Attempt ----------
+
+impl Fx {
+    /// `quote(gate_hook)|quote(gate_command)|quote(gate_exit)|quote(check_tail is null)`; `NULL` is a NULL column.
+    fn gate_facts(&self) -> String {
+        self.env.query(
+            "SELECT quote(gate_hook) || '|' || quote(gate_command) || '|' || quote(gate_exit) || '|' || quote(check_tail IS NULL)
+               FROM attempts WHERE id = 'api-a1'",
+        )
+    }
+
+    fn check_tail(&self) -> Option<String> {
+        self.env.query("SELECT check_tail FROM attempts WHERE id = 'api-a1'")
+    }
+
+    /// Submits and merges the Attempt with the current policy.
+    fn merged(&self) {
+        self.commit("a.txt", "a\n");
+        self.submit().ok();
+        assert_eq!(self.status(), "merging");
+        self.merge().unwrap();
+    }
+}
+
+#[test]
+fn a_failed_merge_gate_records_its_hook_command_exit_and_tail() {
+    let fx = fx();
+    fx.policy(&work_gate("echo the merge gate is red; exit 3"));
+    fx.merged();
+
+    assert_eq!(fx.ended(), "failed|gate_failed");
+    assert_eq!(fx.gate_facts(), "'pre-commit'|'echo the merge gate is red; exit 3'|3|0");
+    let tail = fx.check_tail().expect("check_tail is written");
+    assert!(tail.contains("the merge gate is red"), "{tail:?}");
+}
+
+#[test]
+fn a_failed_pr_gate_records_pre_merge_as_its_hook() {
+    let fx = fixture("open", "");
+    gh_no_pr(&fx.env);
+    fx.policy(&pr_gate("echo the PR gate is red; exit 3"));
+    fx.merged();
+
+    assert_eq!(fx.ended(), "failed|gate_failed");
+    assert_eq!(fx.gate_facts(), "'pre-merge'|'echo the PR gate is red; exit 3'|3|0");
+    let tail = fx.check_tail().expect("check_tail is written");
+    assert!(tail.contains("the PR gate is red"), "{tail:?}");
+}
+
+#[test]
+fn the_recorded_command_is_the_first_failing_one_in_file_order() {
+    let fx = fx();
+    fx.policy("[gate]\nmerge = \"local\"\n\n[hooks.pre-commit]\nlint = \"true\"\nbuild = \"echo build is red; exit 7\"\ntest = \"echo test is red; exit 9\"\n");
+    fx.merged();
+
+    assert_eq!(fx.ended(), "failed|gate_failed");
+    assert_eq!(fx.gate_facts(), "'pre-commit'|'echo build is red; exit 7'|7|0");
+}
+
+#[test]
+fn a_passing_gate_records_no_gate_facts() {
+    let fx = fx();
+    fx.policy(&work_gate("true"));
+    fx.merged();
+
+    assert_eq!(fx.ended(), "merged|merged");
+    assert_eq!(fx.gate_facts(), "NULL|NULL|NULL|1");
+}
+
+#[test]
+fn a_gate_that_cannot_run_records_no_gate_facts() {
+    let fx = fx();
+    fx.policy(&work_gate("{{ no_such_gate_variable }}"));
+    fx.merged();
+
+    assert_eq!(fx.ended(), "failed|gate_error");
+    assert_eq!(fx.gate_facts(), "NULL|NULL|NULL|1");
+}
+
+#[test]
+fn attempt_show_and_job_show_print_the_gate_facts() {
+    let fx = fx();
+    fx.policy(&work_gate("echo the merge gate is red; exit 3"));
+    fx.merged();
+
+    let shown = fx.env.cpd(&["attempt", "show", ATTEMPT, "--plan", PLAN]).ok();
+    let job = fx.env.cpd(&["job", "show", "api", "--plan", PLAN]).ok();
+    for (what, row) in [("attempt show", &shown["attempt"]), ("job show", &job["attempts"][0])] {
+        assert_eq!(row["gate_hook"], json!("pre-commit"), "{what}: {row}");
+        assert_eq!(row["gate_command"], json!("echo the merge gate is red; exit 3"), "{what}: {row}");
+        assert_eq!(row["gate_exit"], json!(3), "{what}: {row}");
+        assert!(row["check_tail"].as_str().is_some_and(|t| t.contains("the merge gate is red")), "{what}: {row}");
+    }
+}
