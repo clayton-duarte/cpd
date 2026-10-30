@@ -5,7 +5,7 @@ export const LIMIT = 1500;
 
 /** G2's reason, one line (§15.13). */
 export const longReason = (characters: number): string =>
-  `φ: ask_user_question is for a few short choices; put anything larger in plannotator; refused: ${characters} characters (limit ${LIMIT})`;
+  `φ: ask_user_question is for a few short choices; write anything larger to a file outside the repo and point to it in chat; refused: ${characters} characters (limit ${LIMIT})`;
 
 const length = (v: unknown): number => (typeof v === "string" ? v.length : 0);
 
