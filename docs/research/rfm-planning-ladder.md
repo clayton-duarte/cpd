@@ -774,7 +774,7 @@ ALTER TABLE attempts ADD COLUMN gate_exit    INTEGER CHECK (gate_exit IS NULL OR
 - The coupling that a column CHECK cannot state (`gate_*` set only when `cause` is `gate_failed`/`gate_error`) is kept by the single writer and pinned by a test; a cross-column CHECK in `ADD COLUMN`, or a trigger, would state it, but I have not verified that SQLite accepts a cross-column CHECK in `ADD COLUMN` (unverified), so the design does not depend on it.
 - **Backfill rule: none.** Existing rows keep `NULL`. The 134 historical `gate_failed` rows ended under `gate.pr` settings the data cannot recover (data caveat 6), and the trigger `attempts_ended` (present in each rebuild above: `BEFORE UPDATE ... WHEN OLD.status = 'ended'`) makes a post-hoc `UPDATE` of an ended row abort, so a backfill would have to drop and recreate a trigger inside a migration for facts that are inferred, not measured. A query that needs history reads the Events (`parse_gate_detail`, `merge/mod.rs:381`, already parses the hook and log path; the exit can be parsed the same way).
 - Classifying on read: `GROUP BY gate_command` answers "build vs test vs lint" in the repo's own vocabulary (`typecheck`, `cargo` are this repo's, per its quick check); a policy mapping from command name to class is not built until a question needs more than the name (YAGNI).
-- Not in the migration: `actual_files` (P1) is a separate, independent additive migration (`ALTER TABLE attempts ADD COLUMN actual_files TEXT CHECK (...)`, Roadmap P2) written by the **submit** UPDATE, because the ending UPDATE is the last write an Attempt accepts (`attempts_ended`).
+- Not in the migration: `actual_files` (P1) is a separate, independent additive migration (`ALTER TABLE attempts ADD COLUMN actual_files TEXT CHECK (...)`, Roadmap `attempt-footprint`) written by the **submit** UPDATE, because the ending UPDATE is the last write an Attempt accepts (`attempts_ended`).
 
 *2. "Only reasoning failures promote; the rest retry at the same tier with the error attached"* against cpd's actual ladder and the data:
 
@@ -816,7 +816,7 @@ SELECT j.kind, a.tier, count(*) AS n,
 | Question (Proposal, "Job log schema") | Today? | Query or missing capture |
 | --- | --- | --- |
 | At which tier does each job kind usually pass, and what does a failed first tier cost in wall-clock time? | **Yes** | The query above gives pass by (`kind`, `tier`) (Table 3 is that result); cost of a failed first tier is `sum(json_extract(metrics,'$.cost_usd'))` and `sum(ended_at - started_at)` over `number < max(number)` of merged Jobs (Table 7: $34.23, 1,223 active minutes, $0.28 and 10.1 min per rescued Job). Gap: failure causes by tier (T7 has no tier; F3); a timestamp subtraction needs the stored `TEXT` times parsed (unverified format, `started_at` is `TEXT NOT NULL`, `docs/contract.md` §4.4 `attempts`) |
-| How often does the declared footprint match the real diff, per lead? | **No** | Needs `actual_files` (P1 capture, Roadmap P2). "Per lead" is per Plan: the Lead is the Plan's `lead_session` (`plans.lead_session`, `core/src/session/row.rs:90`); whether a Session id is stable across a person's Plans is unverified. History can be re-measured from git over `base_sha...submitted_sha` (P1, false-positive risks) |
+| How often does the declared footprint match the real diff, per lead? | **No** | Needs `actual_files` (P1 capture, Roadmap `attempt-footprint`). "Per lead" is per Plan: the Lead is the Plan's `lead_session` (`plans.lead_session`, `core/src/session/row.rs:90`); whether a Session id is stable across a person's Plans is unverified. History can be re-measured from git over `base_sha...submitted_sha` (P1, false-positive risks) |
 | Which hot files caused unplanned conflicts? | **Barely, and it does not need a schema** | 15 `merge_conflict` Attempts in total, at most 11 from one PR (F10); the conflicting files are listed in the next Attempt's Spec text and the Event (`core/src/spec/mod.rs:54-103`), not in a column. Eleven events are read by hand; a column for 0.6% of Attempts is not justified (YAGNI). The overlap rule (P1) is the preventive form |
 | Does inheriting the failed diff improve the second-tier pass rate? | **No, and cannot yet** | No treatment arm exists (F11, finding 6); the power estimate above says one experiment needs about 3.5 times the history's second Attempts |
 
@@ -824,18 +824,18 @@ SELECT j.kind, a.tier, count(*) AS n,
 
 Order: **make it work** (capture what is missing, correct what is stale), **make it fast** (the only speed lever in this scope is the Lead seeing problems at draft time instead of after a failed Attempt), **make it good** (advice, thresholds). Within a tier, by value per cost from the data. Every Plan below is a **Plan of cpd** (follow-up work, not part of this research Plan), small enough for one PR unless noted, in the `tdd` shape (docs, tests, impl, open) unless noted. Test names are red-first: each fails before its impl Job for the stated reason. Only authored code is under test: SQLite is the store under test, git and hook commands are not run (the hook runner is exercised through `FakeRunner`, `core/src/git/hooks/exec.rs`; a git diff list is passed into the function under test as data).
 
-| Pri | Plan id | Title | Size | Depends on | Replaces or deletes |
+| Priority | Plan id | Title | Size | Depends on | Replaces or deletes |
 | --- | --- | --- | --- | --- | --- |
-| P0 | `gate-fail-facts` | Record which Gate command failed, with its exit and tail | S | none | The dead `check_tail` writer gap; stale contract text for it |
-| P0 | `gate-text-drift` | Fix the three stale statements the audit found | S | none | `check_failed`/`check_error` in `core/src/spec/worker.md:236-237` and `ErrorCode::CheckFailed`; contract `open_tier` `S1`; the `dirty_target` text |
-| P1 | `plan-lint` | `cpd plan lint`, run before `plan review`; same-PR overlap warning | M | none | The first-failure-only `plan review` checks (folded into one pass); `pr_empty` moves from lock to review |
-| P2 | `attempt-footprint` | Capture `actual_files` at submit; derive the footprint class | M | `plan-lint` for the shared-file predicate (or one Job that adds it first) | Nothing (adds the one datum the proposal's questions need) |
-| P3 | `tier-advice` | Starting-tier advice as a lint warning | S | `plan-lint` | Nothing |
-| P3 | `lint-job-size` | `job_wide` warning, thresholds calibrated on `attempts.metrics` | S | `plan-lint`; better after `attempt-footprint` | Nothing |
-| P4 | `ladder-same-tier` | Retry `crashed` and `merge_conflict` at the same tier | S | `gate-fail-facts` (to read the effect); User decision D4 | Two of the three `is_ladder` causes |
-| P5 | `opener-time` | Why `open` Jobs take 16.7 min merged and 107 min on `no_submit` | S (research) | `gate-fail-facts` | Beyond Section 8: F3 and the data's last bullet name it as the largest wall-clock lever |
+| 0 | `gate-fail-facts` | Record which Gate command failed, with its exit and tail | S | none | The dead `check_tail` writer gap; stale contract text for it |
+| 0 | `gate-text-drift` | Fix the three stale statements the audit found | S | none | `check_failed`/`check_error` in `core/src/spec/worker.md:236-237` and `ErrorCode::CheckFailed`; contract `open_tier` `S1`; the `dirty_target` text |
+| 1 | `plan-lint` | `cpd plan lint`, run before `plan review`; same-PR overlap warning | M | none | The first-failure-only `plan review` checks (folded into one pass); `pr_empty` moves from lock to review |
+| 2 | `attempt-footprint` | Capture `actual_files` at submit; derive the footprint class | M | `plan-lint` for the shared-file predicate (or one Job that adds it first) | Nothing (adds the one datum the proposal's questions need) |
+| 3 | `tier-advice` | Starting-tier advice as a lint warning | S | `plan-lint` | Nothing |
+| 3 | `lint-job-size` | `job_wide` warning, thresholds calibrated on `attempts.metrics` | S | `plan-lint`; better after `attempt-footprint` | Nothing |
+| 4 | `ladder-same-tier` | Retry `crashed` and `merge_conflict` at the same tier | S | `gate-fail-facts` (to read the effect); User decision D4 | Two of the three `is_ladder` causes |
+| 5 | `opener-time` | Why `open` Jobs take 16.7 min merged and 107 min on `no_submit` | S (research) | `gate-fail-facts` | Beyond Section 8: F3 and the data's last bullet name it as the largest wall-clock lever |
 
-### P0 `gate-fail-facts`
+### Priority 0: `gate-fail-facts`
 
 *Why first.* `gate_failed` is 134 of 311 failures (43.1%, F3) and nothing in the row says which command failed or why; `check_tail` is NULL for all 134 (finding 8). Every later question about "compile vs test vs lint" needs this one fact, and it is a few lines at one writer.
 
@@ -856,7 +856,7 @@ ALTER TABLE attempts ADD COLUMN gate_exit    INTEGER CHECK (gate_exit IS NULL OR
 - **Verification.** After deployment, on the live store, new rows satisfy `SELECT count(*) FROM attempts WHERE cause = 'gate_failed' AND started_at > '<deploy>' AND (gate_command IS NULL OR gate_exit IS NULL OR check_tail IS NULL)` = 0 (a `NULL` `gate_command` is expected only for an unnamed command; unverified how many of this repo's hooks are unnamed). `SELECT gate_command, count(*) FROM attempts WHERE cause = 'gate_failed' GROUP BY 1` answers F3's open question (what the 114 opener failures run).
 - **Risk.** An unnamed command leaves `gate_command` NULL (unverified how many of the repo's hooks are named); the migration is additive, so an older binary keeps working inside the window.
 
-### P0 `gate-text-drift`
+### Priority 0: `gate-text-drift`
 
 - **PR/Jobs.** One PR, shape `docs` plus one `work` Job: `drift-docs` (contract: `open_tier` default `H3`, `check_tail` and the quick check at the merge, `dirty_target` "declared, not produced"), `drift-work` (delete `ErrorCode::CheckFailed` and the `check_failed`/`check_error` lines of `worker.md` after checking `docs/commands.md` §6.1 and the interface test), `open-drift`.
 - **DDL.** None. (`dirty_target` stays in the `cause` CHECK: removing it is a rebuild, and nothing in the data is wrong with an unused value.)
@@ -864,7 +864,7 @@ ALTER TABLE attempts ADD COLUMN gate_exit    INTEGER CHECK (gate_exit IS NULL OR
 - **Verification.** The three statements agree with `core/src/config/file.rs:289` and `core/src/merge/mod.rs`; `rg` for the deleted code is empty.
 - **Fence check before deleting.** `ErrorCode::CheckFailed` may be reserved by a decision I did not find; the Job must grep the contract for "check_failed" and cite why it is safe, or keep the code and fix only the text.
 
-### P1 `plan-lint`
+### Priority 1: `plan-lint`
 
 - **PRs/Jobs.** Two PRs.
   - PR `lint-engine` (`tdd`): `lint-docs` (commands.md §4 `plan lint`, contract rule catalogue), `lint-tests`, `lint-impl` (new `core/src/plan/lint.rs`: `Finding`, the pure `run(prs, jobs, outline) -> Vec<Finding>`, the closure of `needs`; command `cpd plan lint`; `overlap::overlaps` made `pub(crate)`), `open-lint`.
@@ -876,7 +876,7 @@ ALTER TABLE attempts ADD COLUMN gate_exit    INTEGER CHECK (gate_exit IS NULL OR
 - **Verification.** (1) Replay: run `plan lint` on the drafts of the 262 historical PRs or, if drafts are gone (unverified), on their `touches` and `needs` from `jobs`/`dependencies`: the number of `parallel_write_overlap` findings is at most 117 pairs (5.9% of 1,995), with `Cargo.lock` removed at most 96 mentions; a count far above that falsifies the exact-file assumption. (2) Idempotence: two runs on one Plan give byte-equal JSON. (3) `plan review` with an error finding is refused with the same code and exit as before the change (existing CLI tests unchanged). (4) A review with one warning is created and the warning appears in the rendered review text.
 - **Replaces.** The `plan review` checks that stop at the first failure are folded into the lint function, so there is one list of checks (DRY); `jobs::cycle` and `shape::check` stay as the implementation the rules call.
 
-### P2 `attempt-footprint`
+### Priority 2: `attempt-footprint`
 
 - **PR/Jobs.** One PR, `tdd`: `fp-docs`, `fp-tests`, `fp-impl`, `open-fp`. Optionally a first `work` Job `fp-shared` that adds the shared-file predicate (`core/src/plan/shared.rs`) if `plan-lint` has not landed.
 - **DDL.**
@@ -896,7 +896,7 @@ ALTER TABLE attempts ADD COLUMN actual_files TEXT
 - **Verification.** (1) After deployment, `SELECT count(*) FROM attempts WHERE status = 'ended' AND submitted_sha IS NOT NULL AND actual_files IS NULL AND started_at > '<deploy>'` = 0. (2) After one month, recompute Table 10 from the captured whole diffs: the undeclared share is at least the 21.6% (lower-bound claim of caveat 8) or the claim is wrong and the doc is corrected. (3) The shared-file list for a policy key is generated from `SELECT value, count(*) FROM attempts, json_each(actual_files) ...` for files undeclared in at least 5% of Jobs (a threshold chosen here, not measured), then reviewed by the User (D3).
 - **Risk.** False positives (a)-(d) of P1 (iv.3); a Worker that merges the base into its branch inflates the list. Mitigation to verify in the tests: compare blobs with the Lead as `touched_guarded` does (unverified that it is worth the extra git calls).
 
-### P3 `tier-advice`
+### Priority 3: `tier-advice`
 
 - **PR/Jobs.** One PR, `tdd`: docs, tests, impl (`core/src/plan/tier_advice.rs`: pure `recommend(rows, floor) -> Vec<Advice>`, the SQL above in one function), `open`.
 - **DDL.** None.
@@ -906,7 +906,7 @@ ALTER TABLE attempts ADD COLUMN actual_files TEXT
 - **Verification.** Run on the live store: the advice for `impl`, `test`, `work` is S1 (F2: 97.8% at n = 633) and for `docs` is S1 or H3 as the expected-cost rule yields; a different answer for code roles falsifies the reading of F5. Warnings appear only for Jobs whose tier differs.
 - **Risk.** Self-selection: the Lead picks harder Jobs for higher tiers (F2), so a recommendation that "S1 passes more" is partly a statement about the Jobs. The text says "history", not "causes".
 
-### P3 `lint-job-size`
+### Priority 3: `lint-job-size`
 
 - **PR/Jobs.** One PR, `tdd`.
 - **DDL.** None.
@@ -914,7 +914,7 @@ ALTER TABLE attempts ADD COLUMN actual_files TEXT
 - **Tests (red first).** `lint::job_wide_warns_above_twelve_touches_entries`; `lint::job_wide_counts_spec_characters`; `lint::job_wide_is_never_an_error`; `lint::job_wide_threshold_is_one_constant` (the calibration changes one value).
 - **Verification.** The warning count over history is reported before enabling (expected: a few percent of Jobs by construction of p90; a rate above 20% means the thresholds are wrong). After calibration, the share of `timed_out` Attempts that had a `job_wide` warning is reported (8 events: no claim of significance).
 
-### P4 `ladder-same-tier` (needs a User decision, D4)
+### Priority 4: `ladder-same-tier` (needs a User decision, D4)
 
 - **PR/Jobs.** One PR, `tdd`.
 - **DDL.** None.
@@ -923,7 +923,7 @@ ALTER TABLE attempts ADD COLUMN actual_files TEXT
 - **Verification.** After 3 months, compare the next-Attempt pass rate after `crashed`/`merge_conflict` with the 13.2% (5 of 38) of T10; a rate that is not higher means revert (a one-line change).
 - **Replaces.** Two of the three `is_ladder` causes (`ledger.rs:233`) and the sentence of the contract that lists them (`docs/contract.md:979`).
 
-### P5 `opener-time` (beyond Section 8)
+### Priority 5: `opener-time` (beyond Section 8)
 
 - **Why here.** The data's last bullet: `open`/`update` hold 55.5% of active hours for 11.2% of spend, `open` at S2 alone is 66.8% of S2 hours, and 19 `open` `no_submit` Attempts took 107 minutes each (F3). None of P1-P3 touches it.
 - **Plan.** One research Job reading `gate_command`, `gate_exit` and `metrics` of `open`/`update` Attempts after `gate-fail-facts` has run for a month; output: a table of why an `open` Attempt takes 16.7 minutes and what an idle `open` Worker was waiting for. No code, no DDL.
@@ -948,7 +948,7 @@ ALTER TABLE attempts ADD COLUMN actual_files TEXT
 | Logistic regression / gradient boosting for the starting tier | **Defer** | About 40 first-Attempt failures (F11), ten events per feature (guess) | Several hundred failures |
 | Removing H0-H2 or S0 | **Reject** | Unused, not shown dead; decisions pro-d82/pro-d83 | A Lead's statement that they are never wanted |
 | `instr_tokens`, `language`, `loc_changed`, proposal `kind` values | **Reject** | Computable on demand or no decision changes (P3 table) | A question that needs them |
-| `plan.shared_files` policy key | **Defer** | F9's head is a guess until `actual_files` exist; lockfile default only | One month of `actual_files` (P2 verification 3) |
+| `plan.shared_files` policy key | **Defer** | F9's head is a guess until `actual_files` exist; lockfile default only | One month of `actual_files` (`attempt-footprint` verification 3) |
 | `cpd tiers` command | **Defer** | One warning first (YAGNI) | The warning is used and a Lead asks for the table |
 | Cross-PR same-Plan overlap | **Defer** | Not in Table 11; unmeasured | A measurement of same-Plan, different-PR conflicts |
 
