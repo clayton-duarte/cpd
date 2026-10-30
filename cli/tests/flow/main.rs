@@ -11,6 +11,7 @@ mod worker_runner_durable;
 mod worker_runner_report;
 mod config;
 mod drop_plannotator_config;
+mod drop_plannotator_review;
 mod context_curation;
 mod gate;
 mod context_on_demand;
