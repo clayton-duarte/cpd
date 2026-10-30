@@ -6,6 +6,7 @@
 mod append;
 mod kind;
 mod select;
+mod stale;
 mod typed;
 
 use std::ffi::OsString;
@@ -182,15 +183,29 @@ pub fn follow_loop(
         if seen != Some(version) {
             seen = Some(version);
             loop {
-                let batch = store.read(|conn| selection.fetch(conn, cursor, until, BATCH))?;
-                let Some(last) = batch.last() else { break };
-                let next = last.id;
-                let lines: String = batch.iter().map(to_line).collect();
-                if let Err(e) = print(&mut *out, &lines) {
-                    return e.map(|()| Output::Owned);
+                // The fetch and the stale checks share one read transaction: one consistent view (§5.4).
+                let (fetched, last, kept) = store.read(|conn| {
+                    let batch = selection.fetch(conn, cursor, until, BATCH)?;
+                    let fetched = batch.len() as i64;
+                    let last = batch.last().map(|e| e.id);
+                    let mut kept = Vec::with_capacity(batch.len());
+                    for event in batch {
+                        if !(selection.drops_stale() && stale::is_stale(conn, &event)?) {
+                            kept.push(event);
+                        }
+                    }
+                    Ok((fetched, last, kept))
+                })?;
+                let Some(last) = last else { break };
+                if !kept.is_empty() {
+                    let lines: String = kept.iter().map(to_line).collect();
+                    if let Err(e) = print(&mut *out, &lines) {
+                        return e.map(|()| Output::Owned);
+                    }
                 }
-                cursor = next;
-                if (batch.len() as i64) < BATCH {
+                // The cursor passes every Event read, printed or dropped; a full batch is read again at once.
+                cursor = last;
+                if fetched < BATCH {
                     break;
                 }
             }

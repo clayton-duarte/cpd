@@ -11,10 +11,10 @@ const cpdMessage = (id: number | undefined, deliveredTo: string | undefined) => 
   details: { ...(id !== undefined ? { id } : {}), ...(deliveredTo !== undefined ? { delivered_to: deliveredTo } : {}) },
 });
 
-test("cursor: the greater of registered_event and the last message delivered to this Session", () => {
+test("cursor: the greater of registered_event and the highest Event id delivered to this Session", () => {
   assert.equal(cursorFrom(100, [], ID), 100);
   assert.equal(cursorFrom(100, [cpdMessage(90, ID)], ID), 100, "never at or below session-registered");
-  assert.equal(cursorFrom(100, [cpdMessage(90, ID), cpdMessage(130, ID), cpdMessage(120, ID)], ID), 120, "the last one");
+  assert.equal(cursorFrom(100, [cpdMessage(90, ID), cpdMessage(130, ID), cpdMessage(120, ID)], ID), 130, "the highest one, not the last in file order");
   assert.equal(cursorFrom(100, [cpdMessage(500, OTHER)], ID), 100, "a fork's file starts with its source's messages");
   assert.equal(cursorFrom(100, [cpdMessage(500, undefined)], ID), 100, "a message without delivered_to does not count");
   assert.equal(cursorFrom(100, [cpdMessage(undefined, ID)], ID), 100, "the adapter's own error message has no id");
@@ -40,6 +40,20 @@ test("start-up runs §15.2's steps in order and follows from the cursor", async 
   ]);
   assert.deepEqual(f.follows()[0]!.argv, ["events", "follow", "--session", ID, "--since", "130"]);
   assert.equal(f.pi.sessionName, "the lead", "step 3: the Session's name applies when pi's differs");
+});
+
+test("start-up follows from the highest delivered id when messages were delivered out of id order", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.pi.entries = [cpdMessage(130, ID), cpdMessage(120, ID)];
+  f.respond("plan-show", planShow());
+  f.load();
+  await f.pi.fire("session_start");
+  await f.followerStarted();
+  await f.trackerListed();
+
+  assert.deepEqual(f.sinces(), [130]);
+  assert.deepEqual(f.follows()[0]!.argv.slice(-2), ["--since", "130"]);
 });
 
 test("no replay at or below session-registered: a source's messages never lift the cursor", async (t) => {

@@ -25,6 +25,8 @@ export function parseSession(show: Record<string, unknown>): SessionInfo {
 export class Run {
   /** Highest Event id handled; the next `--since`. */
   cursor = 0;
+  /** Event ids delivered to pi in this activation (§15.3): an id is delivered at most once. */
+  readonly delivered = new Set<number>();
   reviews = new Map<string, ReviewEntry>();
   opening = new Set<string>();
   deciding = new Set<string>();

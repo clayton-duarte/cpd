@@ -95,6 +95,11 @@ impl Selection {
         self
     }
 
+    /// Whether a line about to be printed is checked for staleness (§5.4): only a follower of a Session.
+    pub fn drops_stale(&self) -> bool {
+        self.follower && matches!(self.filter, Filter::Lead { .. } | Filter::Session(_))
+    }
+
     /// Up to `limit` matching Events with `after < id` (and `id <= up_to` when
     /// given), in increasing `id`.
     pub fn fetch(&self, conn: &Connection, after: i64, up_to: Option<i64>, limit: i64) -> Result<Vec<Event>, CpdError> {
@@ -126,7 +131,7 @@ impl Selection {
                 params.push(text(session.as_str()));
             }
         }
-        if self.follower && matches!(self.filter, Filter::Lead { .. } | Filter::Session(_)) {
+        if self.drops_stale() {
             sql.push_str(" AND NOT (kind = 'error' AND json_extract(data, '$.source') = 'adapter')");
         }
         if !self.kinds.is_empty() {
