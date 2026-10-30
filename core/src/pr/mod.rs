@@ -108,7 +108,7 @@ pub enum Command {
     Rerun(Args),
     /// Post the PR's pull request to Slack for review (§9.8b)
     Post(post::PostArgs),
-    /// Squash-merge a clean pull request on GitHub and delete its branch (§9.10)
+    /// Squash-merge a clean pull request on GitHub (§9.10)
     Merge(merge::MergeArgs),
 }
 

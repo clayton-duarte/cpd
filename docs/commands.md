@@ -2444,9 +2444,11 @@ Steps:
 
 1. Read the pull request fresh from GitHub: `gh pr view <n> --repo <owner/repo> --json state,mergeStateStatus,headRefOid,title,mergedAt`. The stored `pull_requests.merge_state` is not trusted: it can lag.
 2. Refuse, failing loud, unless `state` is `OPEN` and `mergeStateStatus` is `CLEAN`.
-3. `gh pr merge <n> --repo <owner/repo> --squash --delete-branch --match-head-commit <headRefOid>`. `--match-head-commit` makes GitHub refuse when the branch moved after step 1's check. The method is always squash and the branch is deleted on GitHub after the merge. cpd's own clean-up never touches remote branches (§9.2 "After a PR is merged") and nothing in cpd runs `git fetch --prune`, so the local clean-up is unaffected.
+3. `gh pr merge <n> --repo <owner/repo> --squash --match-head-commit <headRefOid>`. `--match-head-commit` makes GitHub refuse when the branch moved after step 1's check. The method is always squash, and cpd never passes `--delete-branch` and never deletes a remote branch: the branch is deleted by the repo's own `delete_branch_on_merge` setting, which repoints a pull request stacked on it to the base before it deletes the branch (contract §3.8 "Stacked PRs" step 8; pro-d240). cpd's own clean-up never touches remote branches (§9.2 "After a PR is merged") and nothing in cpd runs `git fetch --prune`, so the local clean-up is unaffected.
 
 **Effects** (hs-d550 B1): after `gh pr merge` succeeds, one store transaction: read the pull request back once with `gh pr view <n> --repo <owner/repo> --json state,mergeStateStatus,headRefOid,title,mergedAt` (the precheck, hs-d550 B1: `gh::view_for_merge`). When it reads `state` `MERGED` the store transaction writes: the `pull_requests` row of <owner>/<repo>#<n>, when one exists, gets `state` `merged` and `merged_at` GitHub's `mergedAt` (else the transaction's time, changed_at now); when a `prs` row points to it, exactly the poll's merge (contract §7.6 pr poll step 6: `prs` `merged` with `merged_at`, `pr-merged`, the PR's `draft` Jobs `cancelled` with reason `pr merged` and one `job-cancelled` each (hs-d731, §9.2), Plan `done` with `plan-done` when it was the last PR, the unstack of PRs stacked on it). The open `pr-ready` item of subject `pr:<owner>/<repo>#<n>` is closed (closed_at, `inbox-closed`, as E8's reconcile closes one). The command output's `stored` is true. When it reads anything else, or the read fails, nothing is written and `stored` is false. The command succeeds either way. No stored row: nothing is written and the merge still succeeds. (hs-d550 B2: the precheck reading MERGED writes the merge as (A) does, with GitHub's `mergedAt`.) A row already stored merged writes nothing (idempotent). (hs-d550 B1, C: a failing `cpd pr poll` after the merge no longer matters, the merge is already stored; `pr merge` now opens the store.) GitHub's search listed the PR after its merge (hs-n415: evidence of why B1 changed the contract).
+
+4. **The setting read** (pro-d240): once the merge is stored, or the read-back said otherwise, run `gh repo view <owner/repo> --json deleteBranchOnMerge`. `true` adds nothing. `false` adds the warning `auto_delete_off`: the merged branch stays on GitHub, and a pull request stacked on it is not repointed to the base, so turn the repo's setting on. A failed or unparseable read adds the warning `auto_delete_unread`, whose `text` carries the `gh` error's message. This read never fails the command: the merge, the store write and the exit status are the same whatever it says. It is skipped when the merge is refused or fails.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -2454,11 +2456,15 @@ Steps:
 | the re-check finds the pull request not `OPEN` or its `mergeStateStatus` not `CLEAN`; `details` is `{repo, number, state, merge_state}` (GitHub's words); when the precheck reads `MERGED` (hs-d526), it writes the merge transaction and is still refused | `merge_not_clean` | 3 |
 | each `gh` call succeeds (also when `--match-head-commit` makes GitHub refuse); `details` is `{argv, exit, stderr}` | `gh_failed` | 1 |
 
+The setting read of step 4 is never a `gh_failed`: a failed read is the `auto_delete_unread` warning, and the exit status does not change.
+
 Output:
 
 ```json
-{"ok": true, "repo": "<owner/repo>", "number": 31, "method": "squash", "branch_deleted": true, "stored": true}
+{"ok": true, "repo": "<owner/repo>", "number": 31, "method": "squash", "stored": true, "warnings": []}
 ```
+
+`warnings` is always present: `[]` when there is nothing to say, else a list of objects `{"code": ..., "text": ...}` with the codes of step 4, `auto_delete_off` and `auto_delete_unread` (pro-d240). The former field that said whether the branch was deleted is gone: cpd does not report it; `warnings` reports the repo's setting.
 
 **Rows** (hs-d550 B1): one store transaction, recorded immediately after `gh pr merge` succeeds (when the precheck reads `MERGED`, hs-d550 B2), never delayed to the next poll. The `pull_requests` row of <owner>/<repo>#<n>: when it exists, `state` becomes `merged` and `merged_at` is GitHub's `mergedAt` from the precheck's `gh pr view`, or the transaction's time when GitHub was not read or did not return it (changed_at now); when a `prs` row points to it, the PR `dispatch → open → merged` or `waiting → merged` with `merged_at`, Events `pr-merged`, the cancelled drafts' `job-cancelled` (above) and, when every PR that is not `cancelled` is then `merged`, the Plan `deploy → done` with `plan-done` (contract §7.6 poll step 6). The same transaction queues the PR's `done` Jira transition (§21.11, J4c), next to the merge reaction. The open `pr-ready` Inbox item of subject `pr:<owner>/<repo>#<n>` is closed in the same transaction (closed_at, `inbox-closed`, hs-d550 B1, hs-n404). When no row exists, nothing is written and the merge still succeeds. No Event otherwise.
 
