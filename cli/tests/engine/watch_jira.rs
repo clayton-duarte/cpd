@@ -2,8 +2,9 @@
 //! decisions pro-d126, pro-d128): the engine runs the helper `pi/lib/jira-transition.ts` once, detached, for the oldest
 //! PENDING `jira_transitions` row whose PR has a ticket and is not cancelled. The row is then SETTLED (`moved`,
 //! `unchanged`, `skipped`), PARKED (the helper refused it: nothing is tried again until the ticket or the status name
-//! changes) or left PENDING (any other failure: reported once per code, tried again `watch.error_repeat_seconds` after
-//! the failed run's end).
+//! changes) or left PENDING (any other failure, tried again `watch.error_repeat_seconds` after the failed run's end). A
+//! failure of the row itself is one Plan-scoped `error` Event per (Plan, PR, target, code) until the row ends; `jira_auth`
+//! and `jira_not_configured` stay one machine-wide Event each (contract §3.7 E19, rules R1-R5).
 //!
 //! In-process, on virtual time, like `watch_react.rs` (whose harness this file copies, not widens): the engine runs on
 //! the `Fx`'s `ManualClock`, `FakeRunner` and `FakeSpawn`; the helper is the `node` route of the `FakeRunner`. No process,
@@ -50,6 +51,10 @@ const UNCHANGED: &str = r#"0 {"ok":true,"ticket":"ABC-123","target":"done","outc
 const REFUSED: &str = r#"1 {"ok":false,"error":{"code":"jira_refused","message":"No transition leads to In Review.","details":{"reason":"no_transition","tool":"getTransitionsForJiraIssue"}}}"#;
 const AUTH: &str = r#"3 {"ok":false,"error":{"code":"jira_auth","message":"Atlassian needs a sign-in. Run: pi mcp login atlassian","details":{}}}"#;
 const FAILED: &str = r#"1 {"ok":false,"error":{"code":"jira_failed","message":"transitionJiraIssue failed.","details":{"tool":"transitionJiraIssue","status_code":503}}}"#;
+const FAILED_POINTS: &str = r#"1 {"ok":false,"error":{"code":"jira_failed","message":"transitionJiraIssue returned an error: Please add story points","details":{"tool":"transitionJiraIssue","status_code":400}}}"#;
+const HELPER_FAILED: &str = r#"1 {"ok":false,"error":{"code":"jira_helper_failed","message":"The helper failed.","details":{}}}"#;
+/// The fake prints the text after the exit status: stdout is not JSON.
+const NO_JSON: &str = "70 the helper crashed";
 
 /// The naps of the engine between two ticks: a tick is a second (`tick_seconds = 1`) and a nap a tenth of one.
 const NAPS_PER_TICK: usize = 10;
@@ -760,4 +765,161 @@ fn incident_mode_holds_the_jira_step() {
     assert!(log.contains("E19: holding: incident mode is on"), "{log}");
     assert_eq!(p.calls().len(), 1, "off again: it runs");
     assert!(p.settled("api", "in_progress"));
+}
+
+#[test]
+fn a_failed_run_is_one_error_event_scoped_to_the_plan_naming_the_ticket_the_status_and_jiras_message() {
+    let t = jira(LONG, true);
+    t.probe().says(FAILED_POINTS);
+    t.queue("api", "done");
+    let mut tail = then_ticks(3, |p| !p.error_events().is_empty());
+    t.run(move |p, nap| tail(p, nap));
+    let p = t.probe();
+
+    let events = p.error_events();
+    assert_eq!(events.len(), 1, "one Event: {events:?}");
+    let (plan, text, data) = &events[0];
+    assert_eq!(plan.as_deref(), Some("pay"), "scoped to the Plan: {text}");
+    assert_eq!((data["source"].as_str(), data["code"].as_str()), (Some("watch"), Some("jira_failed")));
+    assert_eq!(
+        data["message"].as_str(),
+        Some(r#"ABC-123 could not be moved to "Done": transitionJiraIssue returned an error: Please add story points"#)
+    );
+    assert_eq!(
+        data["details"],
+        json!({"tool": "transitionJiraIssue", "status_code": 400, "plan": "pay", "pr": "api", "ticket": API, "target": "done", "status": "Done"})
+    );
+    assert!(
+        text.starts_with(r#"The engine failed at E19 (Jira transitions) for the done move of PR api of Plan pay: ABC-123 could not be moved to "Done""#),
+        "{text}"
+    );
+    assert!(text.ends_with("See: cpd plan show --plan pay"), "{text}");
+    assert!(p.pending("api", "done"), "the row stays PENDING");
+    let items: i64 = p.store().query_row("SELECT count(*) FROM inbox_items", [], |r| r.get(0)).unwrap();
+    assert_eq!(items, 0, "no Inbox item");
+}
+
+#[test]
+fn two_rows_failing_with_the_same_code_are_two_events_one_each() {
+    let t = jira(LONG, true);
+    t.probe().says_for(API, FAILED_POINTS);
+    t.probe().says_for(WEB, FAILED_POINTS);
+    t.queue("api", "done");
+    t.queue("web", "done");
+    t.run(then_ticks(5, |p| p.tickets().len() >= 2));
+    let events = t.probe().error_events();
+
+    assert_eq!(events.len(), 2, "one Event each: {events:?}");
+    for (plan, _, data) in &events {
+        assert_eq!((plan.as_deref(), data["code"].as_str()), (Some("pay"), Some("jira_failed")));
+    }
+    let who: Vec<(&str, &str)> = events.iter().map(|(_, _, d)| (d["details"]["ticket"].as_str().unwrap_or(""), d["details"]["pr"].as_str().unwrap_or(""))).collect();
+    assert_eq!(who, [(API, "api"), (WEB, "web")]);
+}
+
+#[test]
+fn a_row_that_keeps_failing_is_one_event_per_code_until_it_settles() {
+    let t = jira(REPEAT, true);
+    t.probe().says(FAILED_POINTS);
+    t.queue("api", "done");
+    // Phases: 0 first Event; 1-3 skip a period and wait for one more call; 4 the code changes; 5 the row settles.
+    // A call is followed by two ticks, so that the end of its run was seen before the next skip.
+    let phase = Arc::new(Mutex::new(0usize));
+    let after_three = Arc::new(Mutex::new(None));
+    let after_code = Arc::new(Mutex::new(None));
+    let (a3, ac) = (after_three.clone(), after_code.clone());
+    let (mut base, mut seen_at) = (0usize, None::<usize>);
+    let mut tail = then_ticks(3, |p| p.settled("api", "done"));
+    t.run(move |p, nap| {
+        let mut ph = phase.lock().unwrap();
+        let skip = |p: &Probe| p.skip(u64::from(REPEAT) + 1);
+        match *ph {
+            0 => {
+                if !p.error_events().is_empty() {
+                    base = p.calls().len();
+                    skip(p);
+                    *ph = 1;
+                }
+            }
+            1..=4 => {
+                if seen_at.is_none() && p.calls().len() > base {
+                    seen_at = Some(nap);
+                }
+                if seen_at.is_some_and(|at| nap >= at + 2 * NAPS_PER_TICK) {
+                    seen_at = None;
+                    base = p.calls().len();
+                    match *ph {
+                        3 => {
+                            *a3.lock().unwrap() = Some((p.calls().len(), p.error_events()));
+                            p.says(HELPER_FAILED);
+                        }
+                        4 => {
+                            *ac.lock().unwrap() = Some(p.error_events());
+                            p.says(MOVED);
+                        }
+                        _ => {}
+                    }
+                    skip(p);
+                    *ph += 1;
+                }
+            }
+            _ => return tail(p, nap),
+        }
+        false
+    });
+    let p = t.probe();
+
+    let (calls, events) = after_three.lock().unwrap().take().expect("three more calls");
+    assert!(calls >= 4, "{calls} calls");
+    assert_eq!(events.len(), 1, "one Event for the one code: {events:?}");
+    assert_eq!((events[0].0.as_deref(), events[0].2["code"].as_str()), (Some("pay"), Some("jira_failed")));
+
+    let events = after_code.lock().unwrap().take().expect("a call with another code");
+    let codes: Vec<&str> = events.iter().map(|(_, _, d)| d["code"].as_str().unwrap()).collect();
+    assert_eq!(codes, ["jira_failed", "jira_helper_failed"], "{events:?}");
+    assert!(events.iter().all(|(plan, ..)| plan.as_deref() == Some("pay")), "{events:?}");
+
+    assert_eq!(p.error_events().len(), 2, "settling appends no Event");
+    assert_eq!(p.row("api", "done").1.as_deref(), Some("moved"));
+}
+
+#[test]
+fn a_helper_that_prints_no_json_line_is_a_plan_error_event_with_the_spawn_failed_code() {
+    let t = jira(LONG, true);
+    t.probe().says(NO_JSON);
+    t.queue("api", "in_progress");
+    t.run(then_ticks(3, |p| !p.error_events().is_empty()));
+    let events = t.probe().error_events();
+
+    assert_eq!(events.len(), 1, "{events:?}");
+    let (plan, _, data) = &events[0];
+    assert_eq!((plan.as_deref(), data["code"].as_str()), (Some("pay"), Some("spawn_failed")));
+    let d = &data["details"];
+    let keys: Vec<&str> = ["plan", "pr", "ticket", "target", "status"].iter().map(|k| d[*k].as_str().unwrap_or("")).collect();
+    assert_eq!(keys, ["pay", "api", API, "in_progress", "In Progress"], "{d}");
+    let message = data["message"].as_str().unwrap();
+    assert!(message.starts_with(r#"ABC-123 could not be moved to "In Progress": "#), "{message}");
+}
+
+#[test]
+fn jira_auth_is_one_machine_wide_event_however_many_rows_fail() {
+    let t = jira(LONG, true);
+    t.probe().says(AUTH);
+    t.queue("api", "in_progress");
+    t.queue("web", "in_progress");
+    t.run(then_ticks(5, |p| p.tickets().len() >= 2));
+    let events = t.probe().error_events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!((events[0].0.as_deref(), events[0].2["code"].as_str()), (None, Some("jira_auth")));
+}
+
+#[test]
+fn jira_not_configured_is_one_machine_wide_event_however_many_rows_fail() {
+    let t = jira(LONG, false);
+    t.queue("api", "in_progress");
+    t.queue("web", "in_progress");
+    t.run(then_ticks(5, |p| !p.error_events().is_empty()));
+    let events = t.probe().error_events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!((events[0].0.as_deref(), events[0].2["code"].as_str()), (None, Some("jira_not_configured")));
 }

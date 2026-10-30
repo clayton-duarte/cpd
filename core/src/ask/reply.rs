@@ -54,6 +54,13 @@ pub(super) fn answer(args: AnswerArgs) -> Result<Output, CpdError> {
                 .job(job.clone())
                 .attempt(AttemptId::clone(&attempt)),
         )?;
+        let pr: Option<String> = tx
+            .query_row("SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.as_str()], |r| r.get(0))
+            .optional()?
+            .flatten();
+        if let Some(pr) = pr {
+            crate::session::working_pr::name(tx, &plan, &crate::ids::PrKey::parse(&pr)?)?;
+        }
         Ok(at)
     })?;
     Ok(Output::success(json!({"escalation": id, "attempt": attempt, "answered_at": answered_at})))

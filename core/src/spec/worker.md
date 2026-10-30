@@ -68,6 +68,7 @@ This is an **update Job** of a PR whose pull request is open: you bring the PR's
       cpd ask {{ attempt }} "<your question>"
 
   Ask one real blocker at a time. Do not ask what this Spec or the code already answers.
+  Run `cpd ask` as a call of its own, in the foreground, with the bash tool's `timeout` input set to 7200 (seconds). Never put it under the `timeout` command, in a pipeline or in the background: it ends only when the Lead answers or the wait expires.
 {% if explore %}
 - Save a first draft of the artefact within 10 minutes of starting, then save at least every 20 minutes.
 {% else %}

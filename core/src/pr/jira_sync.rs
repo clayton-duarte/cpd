@@ -11,7 +11,7 @@ use crate::ids::PlanId;
 use crate::store::WriteTxn;
 
 /// The status a row moves its PR's ticket to (the policy key `pr.jira.<target>` names it).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Target {
     InProgress,
     InReview,

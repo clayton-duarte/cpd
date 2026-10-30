@@ -107,6 +107,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
                     update(tx, &plan, &before, &after, edits.name.as_ref(), edits.title.as_deref(), edits.jira.as_deref())?;
                     let text = format!("PR {key} of Plan {plan} edited ({}). Next: cpd plan render --plan {plan}", fields.join(", "));
                     append(tx, NewEvent::pr_edited(text, &key, &fields).plan(plan.clone()))?;
+                    crate::session::working_pr::name(tx, &plan, &key)?;
                     Ok((after, fields, false))
                 }
             })?

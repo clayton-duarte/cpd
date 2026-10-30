@@ -35,6 +35,7 @@ mod row;
 pub(crate) mod run;
 pub(crate) mod send;
 mod state;
+pub(crate) mod working_pr;
 
 use std::path::PathBuf;
 

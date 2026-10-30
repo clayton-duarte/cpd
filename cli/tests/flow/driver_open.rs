@@ -333,7 +333,12 @@ fn merge_the_base_and_submit(live: &Live, id: &str) -> Value {
 /// both Gates `local` (`[gate] merge` and `pr`, contract §8.3) with a `pre-commit` and a `pre-merge` hook that note the commit they run on, Job `api` merged (its commit `api.txt` is on
 /// the Lead Branch, **not pushed**), and the PR's `open` Job `open-repo` queued. `gh` is the test's to script.
 pub(super) fn open_live() -> Live {
-    let live = live("");
+    open_live_with("")
+}
+
+/// [`open_live`] with `config_extra` appended to the home config (`retry_cap = 0`, ...).
+fn open_live_with(config_extra: &str) -> Live {
+    let live = live(config_extra);
     live.fx.env.owner_policy("acme", "[gate]\nmerge = \"local\"\npr = \"local\"\n");
     let merged = live.commit(&live.lead, "api.txt", "api\n", "api");
     live.fixture(&format!(
@@ -492,7 +497,8 @@ fn an_open_job_with_a_conflicting_base_fails_its_merge_merge_conflict_until_the_
 /// written. `gate_failed` is no ladder cause: the Job fails and the Lead decides.
 #[test]
 fn an_open_jobs_gate_failure_ends_its_merge_gate_failed_and_pushes_nothing_creates_nothing_and_fails_the_attempt() {
-    let live = open_live();
+    // pro-d280: a gate_failed Attempt is retried once by default; retry_cap = 0 keeps this test on the Lead-decides path.
+    let live = open_live_with("retry_cap = 0");
     live.gh_creates();
     live.hooks("[pre-merge]\ngate = \"echo the gate says no; exit 1\"\n");
     *live.hooks.reply.lock().unwrap() = Reply::exit(1, "the gate says no\n", "");
@@ -541,7 +547,8 @@ fn job_failed_texts(live: &Live) -> Vec<String> {
 
 /// Runs `open-repo` against a hook that answers `reply`; returns the one `job-failed` Event's `(text, data.detail)`.
 fn gate_failure_text(reply: Reply) -> (String, String, Live) {
-    let live = open_live();
+    // pro-d280: retry_cap = 0, so the failure is the Lead's (`job-failed`), not retried.
+    let live = open_live_with("retry_cap = 0");
     live.gh_creates();
     live.hooks("[pre-merge]\ngate = \"make gate\"\n");
     *live.hooks.reply.lock().unwrap() = reply;
@@ -824,4 +831,249 @@ fn stall_seconds_0_kills_nothing() {
     let live = live("[timeouts]\nstall_seconds = 0");
     // The file is quiet for an hour, inside a tool call: only stall_seconds = 0 keeps the call alive.
     assert_not_killed(&live, "", 6);
+}
+
+// ---------- the Gate retry (contract §3.4 `A Gate retry`, pro-d280) ----------
+
+const JOB_KEY: &str = "open-repo";
+
+/// An open Job whose Gate exits 1 with `output`, with `config_extra` in the config.
+fn failing_gate(config_extra: &str, output: &str) -> Live {
+    let live = open_live_with(config_extra);
+    live.gh_creates();
+    live.hooks("[pre-merge]\ngate = \"make gate\"\n");
+    *live.hooks.reply.lock().unwrap() = Reply::exit(1, output, "");
+    live
+}
+
+/// One Attempt of `open-repo`, whose Worker submits at once: the Attempt id.
+fn attempt_once(live: &Live) -> String {
+    live.drive(JOB_KEY, |live, id, nap| {
+        if nap == 1 {
+            submit_only(live, id);
+        }
+    })
+    .0
+}
+
+fn attempt_count(live: &Live) -> i64 {
+    live.value("SELECT count(*) FROM attempts WHERE plan = 'pay' AND job = 'open-repo'")
+}
+
+fn text_of(live: &Live, id: &str, kind: &str) -> String {
+    live.event(id, kind)["text"].as_str().unwrap().to_owned()
+}
+
+fn assert_gate_failed(live: &Live, id: &str) {
+    let attempt = live.attempt(id);
+    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("failed"), &json!("gate_failed")), "{attempt}");
+}
+
+/// After Attempt 1's Gate failure the Job is queued again (a clear message before anything else is read).
+fn assert_queued(live: &Live, after: &str) {
+    assert_eq!(live.job_status(JOB_KEY), "queued", "a gate_failed Attempt ({after}) is retried: the Job is queued again, not failed");
+}
+
+#[test]
+fn a_gate_failed_attempt_is_retried_once_at_the_same_tier_with_no_lead_turn_between() {
+    let live = failing_gate("", "the gate says no\n");
+
+    let a1 = attempt_once(&live);
+
+    assert_gate_failed(&live, &a1);
+    assert_queued(&live, &a1);
+    let a2 = attempt_once(&live);
+    assert_eq!(a2, "open-repo-a2");
+    let (t1, t2): (String, String) = (
+        live.value("SELECT tier FROM attempts WHERE plan = 'pay' AND id = 'open-repo-a1'"),
+        live.value("SELECT tier FROM attempts WHERE plan = 'pay' AND id = 'open-repo-a2'"),
+    );
+    assert_eq!(t2, t1, "the same Tier");
+    let origin: String = live.value("SELECT origin FROM attempts WHERE plan = 'pay' AND id = 'open-repo-a2'");
+    assert_eq!(origin, "ladder");
+    assert!(live.plan_events("job-retried").is_empty(), "no `job retry` happened");
+    let retries = live.plan_events("attempt-retry");
+    assert!(!retries.is_empty(), "an attempt-retry Event is the trace");
+    let first = live.event(&a1, "attempt-retry");
+    assert_eq!(first["data"]["cause"], "gate_failed", "{first}");
+    assert_eq!(first["data"]["next_tier"], t1.as_str(), "{first}");
+    assert!(live.events(&a1).iter().all(|e| e["kind"] != "job-failed"), "no job-failed for Attempt 1");
+}
+
+#[test]
+fn a_second_gate_failure_fails_the_job_and_sends_the_one_job_failed_event() {
+    let live = failing_gate("", "the gate says no\n");
+
+    let a1 = attempt_once(&live);
+    assert_queued(&live, &a1);
+    let a2 = attempt_once(&live);
+
+    assert_gate_failed(&live, &a2);
+    assert_eq!(live.job_status(JOB_KEY), "failed");
+    let cause: Option<String> = live.value("SELECT failed_cause FROM jobs WHERE plan = 'pay' AND key = 'open-repo'");
+    assert_eq!(cause.as_deref(), Some("gate_failed"));
+    let failed = live.plan_events("job-failed");
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert_eq!(failed[0].1["attempts"], 2, "{}", failed[0].1);
+    let text = text_of(&live, &a2, "job-failed");
+    assert!(text.starts_with("Job open-repo failed (gate_failed): pre-merge failed (exit 1)."), "{text}");
+    let see = text.lines().find(|l| l.starts_with("See: ")).unwrap_or_else(|| panic!("no See: line in {text}"));
+    assert!(see.ends_with("open-repo-a2.pre-merge.log"), "{see}");
+    assert_eq!(live.plan_events("attempt-retry").len(), 1);
+    assert_eq!(attempt_count(&live), 2);
+}
+
+#[test]
+fn a_gate_retry_leaves_the_failed_attempt_and_an_attempt_retry_event_with_the_gate_body() {
+    let live = failing_gate("", &long_gate_output());
+
+    let a1 = attempt_once(&live);
+
+    assert_queued(&live, &a1);
+    assert_gate_failed(&live, &a1);
+    let event = live.event(&a1, "attempt-retry");
+    let text = event["text"].as_str().unwrap();
+    assert!(text.chars().count() <= 1500, "{} characters", text.chars().count());
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 8, "{text}");
+    assert!(lines[0].starts_with("Attempt open-repo-a1 of Job open-repo failed (gate_failed): pre-merge failed (exit 1)."), "{}", lines[0]);
+    assert!(lines[0].ends_with("Its last 5 lines:"), "{}", lines[0]);
+    assert_eq!(lines[1..6], last_five_cut()[..]);
+    assert!(lines[6].starts_with("See: ") && lines[6].ends_with("open-repo-a1.pre-merge.log"), "{}", lines[6]);
+    assert!(lines[7].starts_with("The Job is queued again at Tier S2."), "{}", lines[7]);
+    let path = lines[6].trim_start_matches("See: ");
+    let feedback = event["data"]["feedback"].as_str().unwrap();
+    assert!(feedback.contains("pre-merge failed (exit 1)"), "{feedback}");
+    assert!(feedback.contains(&format!("log: {path}")), "{feedback}");
+}
+
+#[test]
+fn the_retry_attempts_spec_names_the_failed_gate_and_its_log() {
+    let live = failing_gate("", "the gate says no\n");
+
+    let a1 = attempt_once(&live);
+
+    assert_queued(&live, &a1);
+    let text = text_of(&live, &a1, "attempt-retry");
+    let log = text.lines().find_map(|l| l.strip_prefix("See: ")).unwrap_or_else(|| panic!("no See: line in {text}")).to_owned();
+    attempt_once(&live);
+    let spec_path: String = live.value("SELECT spec_path FROM attempts WHERE plan = 'pay' AND id = 'open-repo-a2'");
+    let spec = fs::read_to_string(&spec_path).unwrap();
+    assert!(spec.contains("- Cause: gate_failed\n"), "{spec}");
+    assert!(spec.contains(&format!("\n  - `{log}`\n")), "the Spec does not list the log {log} as an item:\n{spec}");
+}
+
+#[test]
+fn a_job_retry_opens_a_new_window_for_one_more_gate_retry() {
+    let live = failing_gate("", "the gate says no\n");
+    let a1 = attempt_once(&live);
+    assert_queued(&live, &a1);
+    attempt_once(&live);
+    assert_eq!(live.job_status(JOB_KEY), "failed");
+
+    live.fx.cpd(&["job", "retry", JOB_KEY, "--tier", "S2", "--plan", PLAN]).ok();
+    let a3 = attempt_once(&live);
+
+    assert_eq!(a3, "open-repo-a3");
+    let origin: String = live.value("SELECT origin FROM attempts WHERE plan = 'pay' AND id = 'open-repo-a3'");
+    assert_eq!(origin, "retry");
+    assert_gate_failed(&live, &a3);
+    assert_queued(&live, &a3);
+    let a4 = attempt_once(&live);
+    assert_eq!(a4, "open-repo-a4");
+    let (t3, t4): (String, String) = (
+        live.value("SELECT tier FROM attempts WHERE plan = 'pay' AND id = 'open-repo-a3'"),
+        live.value("SELECT tier FROM attempts WHERE plan = 'pay' AND id = 'open-repo-a4'"),
+    );
+    assert_eq!(t4, t3);
+    assert_eq!(live.job_status(JOB_KEY), "failed");
+    assert_eq!(live.plan_events("job-failed").len(), 2);
+}
+
+/// Guard: `retry_cap = 0` means no gate retry.
+#[test]
+fn retry_cap_zero_leaves_a_gate_failure_to_the_lead() {
+    let live = failing_gate("retry_cap = 0", "the gate says no\n");
+
+    let a1 = attempt_once(&live);
+
+    assert_gate_failed(&live, &a1);
+    assert_eq!(live.job_status(JOB_KEY), "failed");
+    assert_eq!(live.plan_events("job-failed").len(), 1);
+    assert!(live.plan_events("attempt-retry").is_empty());
+}
+
+/// Guard: with `retry_cap = 1` a crash and a Gate failure are 2 automatic Attempts, `1 + retry_cap`: the Job fails at once.
+#[test]
+fn a_gate_failure_after_a_spent_retry_cap_fails_the_job_at_once() {
+    let live = failing_gate("retry_cap = 1", "the gate says no\n");
+    let (crashed, _) = live.drive(JOB_KEY, |live, id, nap| {
+        if nap == 1 {
+            let window = format!("{PLAN}--{id}");
+            let pane = live.fx.panes().into_iter().find(|p| p.window_name == window).expect("the Worker's pane");
+            assert!(live.fx.tmux(&["__ctl", "pane-exit", &pane.pane, "--status", "4"]).status.success());
+        }
+    });
+    assert_eq!(live.attempt(&crashed)["cause"], "crashed");
+    assert_eq!(live.job_status(JOB_KEY), "queued");
+
+    let a2 = attempt_once(&live);
+
+    assert_gate_failed(&live, &a2);
+    assert_eq!(live.job_status(JOB_KEY), "failed");
+    assert_eq!(live.plan_events("job-failed").len(), 1);
+}
+
+const OPEN_ESCALATION: &str = "INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at) VALUES ('pay', 'api-a1-q1', 'api-a1', 1, 'Why?', 'open', 4242, 't');";
+const CLOSE_ESCALATION: &str = "UPDATE escalations SET status = 'answered', answer = 'ok', answered_at = 't' WHERE plan = 'pay' AND id = 'api-a1-q1';";
+const STOP: &str = "UPDATE attempts SET stop_request = 'timed_out' WHERE plan = 'pay' AND id = 'api-a1';";
+
+#[test]
+fn an_open_escalation_of_the_attempt_is_not_a_stall() {
+    let live = live("[timeouts]\nstall_seconds = 1");
+    let mut tool = None;
+    let (id, _) = live.drive("api", |live, _, nap| {
+        if nap == 1 {
+            tool = Some(start_tool_call(live, ""));
+            live.fixture(OPEN_ESCALATION);
+        }
+        assert!(live.fx.fakes.spawn.alive(tool.unwrap()), "the tool call was killed at poll {nap} with an open Escalation");
+        assert_eq!(live.fx.fakes.spawn.signals(), []);
+        if nap == 6 {
+            live.fixture(STOP);
+        }
+    });
+    assert_eq!(live.attempt(&id)["cause"], "timed_out");
+}
+
+#[test]
+fn a_stall_is_judged_again_once_the_escalation_closes() {
+    let live = live("[timeouts]\nstall_seconds = 2");
+    let mut tool = None;
+    let (id, _) = live.drive("api", |live, _, nap| {
+        match nap {
+            1 => {
+                tool = Some(start_tool_call(live, ""));
+                live.fixture(OPEN_ESCALATION);
+            }
+            7 => live.fixture(CLOSE_ESCALATION),
+            _ => {}
+        }
+        let tool = tool.unwrap();
+        match nap {
+            1..=8 => {
+                assert!(live.fx.fakes.spawn.alive(tool), "the tool call was killed at poll {nap}");
+                assert_eq!(live.fx.fakes.spawn.signals(), [], "signalled at poll {nap}");
+            }
+            9..=14 => {
+                if nap == 14 {
+                    assert!(!live.fx.fakes.spawn.alive(tool), "no stall judged within 6 polls after the close");
+                    live.fixture(STOP);
+                }
+            }
+            _ => {}
+        }
+    });
+    assert_eq!(live.fx.fakes.spawn.signals().len(), 1);
+    assert_eq!(live.attempt(&id)["cause"], "timed_out");
 }

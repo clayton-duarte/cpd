@@ -51,6 +51,7 @@ fn plan_boxes(failed: bool) -> (tempfile::TempDir, PlanBoxes) {
                VALUES ('pay', 'new', 'j1', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'failed', 0, '{FP}', cpd_txn(), {AT}, 'crashed', NULL);"
         ));
     }
+    sql.push_str("UPDATE sessions SET working_pr = 'new' WHERE id = 'lead1';");
     store
         .write("fixture", |tx| {
             tx.execute_batch(&sql)?;
@@ -72,13 +73,6 @@ fn title_dot(b: &PlanBoxes, pr: &PrNode, frame: usize) -> Option<ratatui::style:
         .map(|x| &chart.buf[(x, 0)])
         .find(|cell| palette::SPINNER.iter().any(|glyph| cell.symbol().contains(glyph)))
         .map(|cell| cell.fg)
-}
-
-#[test]
-fn lead_dot_box_merged_pr_of_a_working_lead_has_no_working_flag() {
-    let (_dir, b) = plan_boxes(false);
-    assert!(!node(&b, "old").pull.as_ref().unwrap().lead_working, "merged box");
-    assert!(node(&b, "new").pull.as_ref().unwrap().lead_working, "open box");
 }
 
 #[test]

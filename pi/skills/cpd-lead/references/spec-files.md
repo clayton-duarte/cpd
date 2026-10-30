@@ -61,7 +61,7 @@ Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku), `G` (gem
 
 | Work | Tier | Why |
 |---|---|---|
-| Coding, tests, refactors | `S1` | The User's default. Start low: each failed Attempt that the ladder retries (`crashed`, `no_submit`, `merge_conflict`) raises effort by one on the next Attempt, up to `retry_cap` retries (default 2, so 3 Attempts). A provider error retries the same Tier up to 3 times first and uses no try. |
+| Coding, tests, refactors | `S1` | The User's default. Start low: each failed Attempt that the ladder retries (`crashed`, `no_submit`, `merge_conflict`) raises effort by one on the next Attempt, up to `retry_cap` retries (default 2, so 3 Attempts). A provider error retries the same Tier up to 3 times first and uses no try. A `gate_failed` is retried once at the same Tier and uses a try. |
 | Docs, config, mechanical edits | `H3` | Cheap and enough. |
 | A PR's open and update Jobs | `open_tier` (default `H3`) | cpd sets it, you never choose it; if one fails, retry higher with `cpd job retry <k> --tier <T>`. |
 
@@ -123,7 +123,7 @@ Rules to put in the `context` of every explore Spec (they are the Worker's only 
 
 - **One question per Job.** A second question is a second explore Job.
 - **Scoped paths.** Name the paths the Worker may read, exactly. Never a search from `/`, `/Users`, `/home`, `~` or `$HOME`.
-- **The 30 s bound.** Every shell call sets a `timeout` of 30 s or less. Never start a command that does not exit: `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run`.
+- **The 30 s bound.** Every shell call sets a `timeout` of 30 s or less, except `cpd ask`, which the Worker runs alone in the foreground with the `timeout` input at 7200 (its Spec says how). Never start a command that does not exit: `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run`.
 - **Write only the artefact.** No file in a repo, no commit.
 - **The summary is at most 1500 characters** (counted as characters): `summary_too_long` (exit 3, never truncated) refuses a longer one, and the Worker shortens it. The summary reaches you; the file does not.
 

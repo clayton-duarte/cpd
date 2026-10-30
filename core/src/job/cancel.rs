@@ -73,6 +73,9 @@ pub(super) fn cancel_in(env: &mut Env, plan: &PlanId, key: JobKey, reason: &str,
                 append(tx, NewEvent::job_cancelled(text, &reason).plan(plan.clone()).job(key.clone()))?;
                 // The dependents fail or are cancelled in the same transaction (contract §3.2 "Cancel", hs-d647).
                 let failed = fail_dependents(tx, &plan, &key, &reason)?;
+                if let Some(pr) = &job.pr {
+                    crate::session::working_pr::name(tx, &plan, &crate::ids::PrKey::parse(pr)?)?;
+                }
                 Ok(("cancelled".to_owned(), false, false, failed))
             }
             Decision::Request(job, attempt) => {
@@ -91,6 +94,9 @@ pub(super) fn cancel_in(env: &mut Env, plan: &PlanId, key: JobKey, reason: &str,
                         .job(key.clone())
                         .attempt(attempt),
                 )?;
+                if let Some(pr) = &job.pr {
+                    crate::session::working_pr::name(tx, &plan, &crate::ids::PrKey::parse(pr)?)?;
+                }
                 Ok(("running".to_owned(), true, false, Failed::default()))
             }
         })?,

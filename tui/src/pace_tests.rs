@@ -13,7 +13,7 @@ use crate::pace::Reads;
 use crate::pump::Pump;
 use crate::plan::boxes::{self, LAYOUTS};
 use crate::plan::{CHART_MARGIN, Centre};
-use crate::read::{JobNode, JobStatus, NeedsUser, PlanBoxes, PrNode, PrState, PrStatus, Pull, ChatSlot};
+use crate::read::{Dot, JobNode, JobStatus, NeedsUser, PlanBoxes, PrNode, PrState, PrStatus, Pull, ChatSlot};
 use cpd_core::config::Tier;
 use cpd_core::ids::{ContextId, JobKey, PlanId, PrKey, SessionId};
 
@@ -68,7 +68,7 @@ fn one_read_runs_at_a_time_and_the_newest_waiting_request_wins() {
     assert_eq!(reads.take(), None);
 }
 
-fn pr_node(pull: Option<Pull>) -> PrNode {
+fn pr_node(pull: Option<Pull>, lead_dot: Option<Dot>) -> PrNode {
     PrNode {
         key: PrKey::parse("web").unwrap(),
         repo_name: "repo".into(),
@@ -80,11 +80,12 @@ fn pr_node(pull: Option<Pull>) -> PrNode {
         superseded_by: None,
         elapsed_seconds: None,
         cost_usd: None,
+        lead_dot,
     }
 }
 
-fn pull(lead_working: bool) -> Pull {
-    Pull { number: 12, state: PrState::Open, url: "https://github.com/acme/repo/pull/12".into(), conflicting: false, clean: false, lead_working, update: None, draft: false }
+fn pull() -> Pull {
+    Pull { number: 12, state: PrState::Open, url: "https://github.com/acme/repo/pull/12".into(), conflicting: false, clean: false, update: None, draft: false }
 }
 
 fn job_node(key: &str, status: JobStatus) -> JobNode {
@@ -108,11 +109,11 @@ fn job_node(key: &str, status: JobStatus) -> JobNode {
 }
 
 /// A centre built the way a snapshot builds it: one layout.
-fn centre(pull: Option<Pull>, jobs: Vec<JobNode>) -> Centre {
+fn centre(lead_dot: Option<Dot>, jobs: Vec<JobNode>) -> Centre {
     let plan = PlanBoxes {
         plan: PlanId::parse("plan-a").unwrap(),
         context: ContextId::parse("ctx").unwrap(),
-        prs: vec![pr_node(pull)],
+        prs: vec![pr_node(Some(pull()), lead_dot)],
         jobs,
         needs_user: NeedsUser::default(),
         events_cursor: 0,
@@ -130,15 +131,15 @@ fn centre(pull: Option<Pull>, jobs: Vec<JobNode>) -> Centre {
 #[test]
 fn the_plan_view_spins_for_a_lead_dot_with_no_running_job() {
     let queued = || vec![job_node("job-1", JobStatus::Queued)];
-    assert!(centre(Some(pull(true)), queued()).spins(), "a working Lead's dot spins");
-    assert!(!centre(Some(pull(false)), queued()).spins(), "a Lead not working, no running Job");
-    assert!(centre(Some(pull(false)), vec![job_node("job-1", JobStatus::Running)]).spins(), "a running Job spins");
+    assert!(centre(Some(Dot::working(false, None)), queued()).spins(), "a working Lead's dot spins");
+    assert!(!centre(None, queued()).spins(), "a Lead not working, no running Job");
+    assert!(centre(None, vec![job_node("job-1", JobStatus::Running)]).spins(), "a running Job spins");
 }
 
 #[test]
 fn the_plan_view_lays_out_once_per_snapshot_and_a_frame_change_draws_the_same_cells() {
     let before = LAYOUTS.with(|n| n.get());
-    let mut c = centre(Some(pull(true)), vec![job_node("job-1", JobStatus::Running), job_node("job-2", JobStatus::Queued)]);
+    let mut c = centre(Some(Dot::working(false, None)), vec![job_node("job-1", JobStatus::Running), job_node("job-2", JobStatus::Queued)]);
     assert_eq!(LAYOUTS.with(|n| n.get()), before + 1, "one layout for the snapshot");
 
     let mut cells = Vec::new();

@@ -2148,13 +2148,14 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
     assert_eq!(store.schema_mismatch(), None);
     assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-waiting-state")));
     let conn = connection(&home.db());
-    // `asleep_at` is a later migration's column (`session-asleep`), null on every row; so is `by_user` (`session-by-user`), 0, and `switch_failed` (`switch-failed`), null.
+    // `asleep_at` is a later migration's column (`session-asleep`), null on every row; so is `by_user` (`session-by-user`), 0, `switch_failed` (`switch-failed`), null, and `working_pr` (`session-working-pr`), null.
     let after: Vec<Value> = session_rows(&conn)
         .into_iter()
         .map(|mut row| {
             assert_eq!(row.as_object_mut().unwrap().remove("asleep_at"), Some(Value::Null));
             assert_eq!(row.as_object_mut().unwrap().remove("by_user"), Some(Value::from(0)));
             assert_eq!(row.as_object_mut().unwrap().remove("switch_failed"), Some(Value::Null));
+            assert_eq!(row.as_object_mut().unwrap().remove("working_pr"), Some(Value::Null));
             row
         })
         .collect();
@@ -2220,12 +2221,13 @@ fn session_title_length_keeps_every_session_and_title_and_raises_the_limit_to_20
     assert_eq!(store.schema_mismatch(), None);
     assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-session-title-length")));
     let conn = connection(&home.db());
-    // `by_user` is a later migration's column (`session-by-user`), 0 on every row; `switch_failed` (`switch-failed`), null.
+    // `by_user` is a later migration's column (`session-by-user`), 0 on every row; `switch_failed` (`switch-failed`), null; `working_pr` (`session-working-pr`), null.
     let after: Vec<Value> = session_rows(&conn)
         .into_iter()
         .map(|mut row| {
             assert_eq!(row.as_object_mut().unwrap().remove("by_user"), Some(Value::from(0)));
             assert_eq!(row.as_object_mut().unwrap().remove("switch_failed"), Some(Value::Null));
+            assert_eq!(row.as_object_mut().unwrap().remove("working_pr"), Some(Value::Null));
             row
         })
         .collect();

@@ -79,7 +79,6 @@ fn pull(state: PrState) -> Pull {
         url: "https://github.com/acme/repo/pull/12".into(),
         conflicting: false,
         clean: false,
-        lead_working: false,
         update: None,
         draft: false,
     }
@@ -97,6 +96,7 @@ fn pr_node(pull: Pull) -> PrNode {
         superseded_by: None,
         elapsed_seconds: None,
         cost_usd: None,
+        lead_dot: None,
     }
 }
 
@@ -122,7 +122,11 @@ fn failed_job() -> JobNode {
 
 /// The plan box's top row (its title) of one PR box, as cells.
 fn box_top(pull: Pull, jobs: &[JobNode], frame: usize) -> Vec<ratatui::buffer::Cell> {
-    let chart = boxes::layout(&[pr_node(pull)], jobs, &NeedsUser::default(), frame).chart;
+    box_top_dot(pull, None, jobs, frame)
+}
+
+fn box_top_dot(pull: Pull, lead_dot: Option<Dot>, jobs: &[JobNode], frame: usize) -> Vec<ratatui::buffer::Cell> {
+    let chart = boxes::layout(&[PrNode { lead_dot, ..pr_node(pull)}], jobs, &NeedsUser::default(), frame).chart;
     (0..chart.buf.area.width).map(|x| chart.buf[(x, 0)].clone()).collect()
 }
 
@@ -172,14 +176,14 @@ fn spinner_fg(cells: &[ratatui::buffer::Cell]) -> Option<ratatui::style::Color> 
 
 #[test]
 fn a_working_lead_of_a_plan_with_a_failed_job_shows_the_red_loader_in_the_plan_box() {
-    let cells = box_top(Pull { lead_working: true, ..pull(PrState::Open) }, &[failed_job()], 2);
+    let cells = box_top_dot(pull(PrState::Open), Some(Dot::working(true, None)), &[failed_job()], 2);
     assert_eq!(spinner_fg(&cells), palette::dot_span(Dot::Fixing, 2, false).style.fg);
 }
 
 #[test]
 fn a_working_lead_of_a_plan_without_a_failed_job_shows_the_plain_spinner_in_the_plan_box() {
     assert_eq!(Dot::working(false, None), Dot::Working(None));
-    let cells = box_top(Pull { lead_working: true, ..pull(PrState::Open) }, &[], 2);
+    let cells = box_top_dot(pull(PrState::Open), Some(Dot::working(false, None)), &[], 2);
     assert_eq!(spinner_fg(&cells), palette::dot_span(Dot::Working(None), 2, false).style.fg);
 }
 

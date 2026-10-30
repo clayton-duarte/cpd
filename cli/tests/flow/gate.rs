@@ -54,13 +54,18 @@ struct Fx {
 }
 
 fn fixture(kind: &str, policy: &str) -> Fx {
+    fixture_with(kind, policy, "")
+}
+
+/// [`fixture`] with `config_extra` (TOML, e.g. `retry_cap = 0`) in the machine config.
+fn fixture_with(kind: &str, policy: &str, config_extra: &str) -> Fx {
     let env = TestEnv::new();
     let repo = env.git_repo("pay").canonicalize().unwrap();
     for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
         env.git(&repo, &["config", key, value]);
     }
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
+    fs::write(home.config(), format!("version = 1\nmachine = \"t\"\n{config_extra}\n")).unwrap();
     env.repo_policy("acme", "pay", policy);
     let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("setup.log") };
     let lead = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap().path;
@@ -221,7 +226,8 @@ fn the_merge_gate_runs_the_pre_commit_at_a_job_merge() {
 
 #[test]
 fn the_merge_gate_failure_fails_the_job_with_gate_failed() {
-    let fx = fx();
+    // pro-d280: retry_cap = 0, so the gate failure is not retried and the Job fails.
+    let fx = fixture_with("work", "", "retry_cap = 0");
     fx.policy(&work_gate("echo the merge gate is red; exit 3"));
     fx.commit("a.txt", "a\n");
     fx.submit().ok();
@@ -232,6 +238,27 @@ fn the_merge_gate_failure_fails_the_job_with_gate_failed() {
     assert_eq!(end.end.outcome(), "failed", "{end:?}");
     assert_eq!(fx.ended(), "failed|gate_failed", "the merge gate failure is the Attempt's cause");
     assert_eq!(fx.job(), "failed|gate_failed");
+}
+
+#[test]
+fn the_merge_gate_failure_requeues_the_job_at_the_same_tier() {
+    let fx = fx();
+    fx.policy(&work_gate("echo the merge gate is red; exit 3"));
+    fx.commit("a.txt", "a\n");
+    fx.submit().ok();
+    assert_eq!(fx.status(), "merging");
+
+    fx.merge().unwrap();
+
+    assert_eq!(fx.ended(), "failed|gate_failed");
+    assert_eq!(fx.job(), "queued|", "a gate_failed Attempt is retried once: the Job is queued again");
+    let retries: i64 = fx.env.query("SELECT count(*) FROM events WHERE plan = 'pay' AND kind = 'attempt-retry'");
+    assert_eq!(retries, 1);
+    let (next, tier): (String, String) = (
+        fx.env.query("SELECT json_extract(data, '$.next_tier') FROM events WHERE plan = 'pay' AND kind = 'attempt-retry'"),
+        fx.env.query("SELECT tier FROM attempts WHERE id = 'api-a1'"),
+    );
+    assert_eq!(next, tier);
 }
 
 #[test]
@@ -312,7 +339,8 @@ fn the_pr_gate_runs_the_pre_merge_at_an_open_job_merge() {
 
 #[test]
 fn the_pr_gate_failure_fails_the_open_job_with_gate_failed() {
-    let fx = fixture("open", "");
+    // pro-d280: retry_cap = 0, so the gate failure is not retried and the Job fails.
+    let fx = fixture_with("open", "", "retry_cap = 0");
     gh_no_pr(&fx.env);
     fx.policy(&pr_gate("echo the PR gate is red; exit 3"));
     fx.commit("a.txt", "a\n");
