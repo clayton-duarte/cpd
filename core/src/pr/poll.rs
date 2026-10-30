@@ -135,17 +135,9 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
         }
     }
 
-    // The comments of the owned open pull requests whose `updatedAt` moved (§7.6 step 3a): one call, before anything is
+    // The comments of the owned open pull requests whose `updatedAt` moved or whose stored feedback holds an open item (§7.6 step 3a): one call, before anything is
     // written, so that a failed read writes nothing.
-    let mut due: Vec<(String, i64)> = Vec::new();
-    for (_, _, row) in &owned {
-        let moved = seen.iter().any(|l| {
-            l.pr.repo == row.repo && l.pr.number == row.number && l.pr.state == PrState::Open && row.updated_at.as_deref() != Some(l.pr.updated_at.as_str())
-        });
-        if moved && !due.contains(&(row.repo.clone(), row.number)) {
-            due.push((row.repo.clone(), row.number));
-        }
-    }
+    let due = due_reads(&owned, &seen);
     let reads = gh::read_comments(&*env.ports.runner, &root, &due, &env.config.inbox.bot_reviewers)?;
 
     // The checks of each owned open pull request (§7.6 step 3b) whose `pr.feedback.checks` is `any` and whose rollup says `failed`
@@ -535,4 +527,150 @@ fn cas_lost(id: &PlanId, key: &PrKey) -> CpdError {
     CpdError::new(ErrorCode::CasLost, format!("PR {key} of Plan {id} changed while it was being polled: rerun the command."))
         .with("plan", id.as_str())
         .with("pr", key.as_str())
+}
+
+/// The pull requests whose comments are read (§7.6 step 3a): an owned pull request listed `open` in `seen` whose `updatedAt` moved, or
+/// whose stored feedback holds an open item (resolving a thread does not move `updatedAt`, pro-d231). No duplicates.
+fn due_reads(owned: &[(PlanId, PrKey, pulls::PullRequest)], seen: &[Listed]) -> Vec<(String, i64)> {
+    let mut due: Vec<(String, i64)> = Vec::new();
+    for (_, _, row) in owned {
+        let open_feedback = row.feedback.as_ref().is_some_and(|items| !items.is_empty());
+        let is_due = seen.iter().any(|l| {
+            l.pr.repo == row.repo
+                && l.pr.number == row.number
+                && l.pr.state == PrState::Open
+                && (open_feedback || row.updated_at.as_deref() != Some(l.pr.updated_at.as_str()))
+        });
+        if is_due && !due.contains(&(row.repo.clone(), row.number)) {
+            due.push((row.repo.clone(), row.number));
+        }
+    }
+    due
+}
+
+#[cfg(test)]
+mod due_reads_tests {
+    use super::super::comments::{Item, Kind};
+    use super::super::status::{MergeState, Mergeable, ReviewDecision};
+    use super::*;
+
+    fn item() -> Item {
+        Item {
+            id: "t1".into(),
+            kind: Kind::Thread,
+            last: "x".into(),
+            author: "a".into(),
+            bot: false,
+            path: None,
+            outdated: false,
+            url: "u".into(),
+            excerpt: "e".into(),
+        }
+    }
+
+    fn row(updated: &str, feedback: Option<Vec<Item>>) -> (PlanId, PrKey, pulls::PullRequest) {
+        let pr = pulls::PullRequest {
+            id: 1,
+            repo: "o/r".into(),
+            number: 7,
+            url: "u".into(),
+            title: "t".into(),
+            draft: false,
+            state: "open".into(),
+            review_decision: "none".into(),
+            checks: "none".into(),
+            created_at: "c".into(),
+            merged_at: None,
+            changed_at: "c".into(),
+            mergeable: "unknown".into(),
+            merge_state: "unknown".into(),
+            authored: true,
+            review_requested: false,
+            updated_at: Some(updated.into()),
+            feedback,
+            base_ref: None,
+            default_branch: None,
+        };
+        (
+            PlanId::parse("plan").unwrap(),
+            PrKey::parse("web").unwrap(),
+            pr,
+        )
+    }
+
+    fn listed(updated: &str, state: PrState) -> Listed {
+        Listed {
+            pr: gh::PolledPr {
+                repo: "o/r".into(),
+                number: 7,
+                url: "u".into(),
+                title: "t".into(),
+                draft: false,
+                state,
+                review_decision: ReviewDecision::None,
+                checks: ChecksSummary::None,
+                mergeable: Mergeable::Unknown,
+                merge_state: MergeState::Unknown,
+                created_at: "c".into(),
+                updated_at: updated.into(),
+                merged_at: None,
+                base_ref: None,
+                default_branch: None,
+            },
+            membership: Default::default(),
+        }
+    }
+
+    fn key() -> Vec<(String, i64)> {
+        vec![("o/r".to_string(), 7)]
+    }
+
+    #[test]
+    fn a_moved_updated_at_is_due() {
+        assert_eq!(
+            due_reads(&[row("1", None)], &[listed("2", PrState::Open)]),
+            key()
+        );
+    }
+
+    #[test]
+    fn open_feedback_is_due_with_an_unmoved_updated_at() {
+        assert_eq!(
+            due_reads(
+                &[row("1", Some(vec![item()]))],
+                &[listed("1", PrState::Open)]
+            ),
+            key()
+        );
+    }
+
+    #[test]
+    fn empty_feedback_with_an_unmoved_updated_at_is_not_due() {
+        assert!(due_reads(&[row("1", Some(vec![]))], &[listed("1", PrState::Open)]).is_empty());
+    }
+
+    #[test]
+    fn null_feedback_with_an_unmoved_updated_at_is_not_due() {
+        assert!(due_reads(&[row("1", None)], &[listed("1", PrState::Open)]).is_empty());
+    }
+
+    #[test]
+    fn a_closed_pr_is_not_due_even_with_open_feedback() {
+        assert!(
+            due_reads(
+                &[row("1", Some(vec![item()]))],
+                &[listed("2", PrState::Closed)]
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_pr_owned_twice_is_due_once() {
+        let r = row("1", Some(vec![item()]));
+        assert_eq!(
+            due_reads(&[r.clone(), r], &[listed("2", PrState::Open)]),
+            key()
+        );
+    }
 }
