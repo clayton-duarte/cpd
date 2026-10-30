@@ -513,3 +513,17 @@ Recipe `keys` mode, unedited, one window (2026-10-30 afternoon EDT), CT + EX on 
 Factor BEFORE/AFTER: 23.25 / 9.50 = 2.4x (AFTER is 41 % of BEFORE, below half).
 
 Validity: the BEFORE still reproduces (23.25 ms per key, above 15). The printed pid was the pane's child, whose CPU (0.92 to 0.95 s per 40 keys at BEFORE) matches pi's, not a transient; unverified beyond that. The remaining 9.5 ms is pi-tui compositing the padded `HStack` (see Cause confirmed); IDLE is not covered here.
+
+### padroot
+
+Recipe `keys` mode, unedited, one window (2026-10-30 afternoon EDT), CT + EX on a copy of the Manager transcript (a separate copy per build, in `mktemp -d`; the original untouched), 3 runs each. Base is e2a6e940 (tip of PR `cachefix`, built in a throwaway worktree, since removed); head is 418ec5fc (this PR); CONTROL is `--no-session`.
+
+| Build | Run 1 | Run 2 | Run 3 | Median ms per key | Ratio to CONTROL |
+| --- | --- | --- | --- | --- | --- |
+| base (e2a6e940, cachefix) | 9.25 | 10.00 | 9.00 | 9.25 | 12.3x |
+| head (418ec5fc, padroot) | 5.25 | 6.25 | 5.50 | 5.50 | 7.3x |
+| CONTROL | 1.00 | 0.75 | 0.50 | 0.75 | 1.0x |
+
+Factors: head against the original BEFORE (unmodified origin/main, CT + EX on the copy, 22.50 ms in the first Before table's per-key 2x2): 22.50 / 5.50 = 4.1x. Head against the cachefix AFTER (9.50 ms above): 9.50 / 5.50 = 1.7x; against the base measured in this window: 9.25 / 5.50 = 1.7x. The 2 ms floor is not reached: C2 was dropped by the Lead.
+
+Validity: head is clearly below base (every head run, 5.25 to 6.25, is below every base run, 9.00 to 10.00), and the base reproduces the cachefix AFTER (9.25 against 9.50). The printed pids were the pane's child (pgrep -P of the pane pid), CPU 0.36 to 0.40 s per 40 keys at base, which matches pi; unverified beyond that. IDLE is not covered here.
