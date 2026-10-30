@@ -3,7 +3,7 @@ resolver = "3"
 members = ["core", "engine", "cli", "tui"]
 
 [workspace.package]
-version = "0.17.81"
+version = "0.17.82"
 edition = "2024"
 publish = false
 

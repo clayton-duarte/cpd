@@ -32,6 +32,9 @@ impl Handler for Gh {
         match args[..2] {
             ["pr", "view"] if *self.merged.lock().unwrap() => view("MERGED", "UNKNOWN", Some(MERGED_AT)),
             ["pr", "view"] => view("OPEN", "CLEAN", None),
+            ["repo", "view"] if args.contains(&"squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed") => {
+                Reply::ok("{\"squashMergeAllowed\":true,\"mergeCommitAllowed\":false,\"rebaseMergeAllowed\":false}\n")
+            }
             ["pr", "merge"] => {
                 *self.merged.lock().unwrap() = true;
                 Reply::ok("")

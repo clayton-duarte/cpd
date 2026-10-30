@@ -12,6 +12,7 @@ fn phrase(reason: Reason) -> &'static str {
         Reason::ChangesRequested => "changes requested",
         Reason::Comments => "comments",
         Reason::Closed => "closed without a merge",
+        Reason::ReadyToPost => "ready to post for review",
         Reason::Approved => "approved",
     }
 }

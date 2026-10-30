@@ -84,6 +84,9 @@ fn enables_squash_auto_merge_on_an_unstacked_pr_after_posting() {
     let calls = gh(&pay);
     assert_eq!(calls.len(), 2, "{calls:?}");
     assert!(calls[0].contains("autoMergeAllowed") && calls[0].contains("autoMergeRequest"), "the read query first: {calls:?}");
+    for field in ["squashMergeAllowed", "mergeCommitAllowed", "rebaseMergeAllowed"] {
+        assert!(calls[0].contains(field), "the read query asks {field}: {calls:?}");
+    }
     assert!(calls[1].contains("enablePullRequestAutoMerge") && calls[1].contains("SQUASH"), "then the mutation: {calls:?}");
     assert_eq!(out["auto_merge"], json!({"state": "enabled", "reason": null}));
     let (state, at) = row(&pay).expect("the post row");
@@ -112,27 +115,111 @@ fn a_repo_that_does_not_allow_auto_merge_still_posts_and_says_not_allowed() {
     let out = post_cmd(&pay).ok();
 
     assert_eq!(out["auto_merge"]["state"], "not_allowed");
-    assert!(out["auto_merge"]["reason"].as_str().is_some_and(|r| !r.is_empty()), "{out}");
+    let reason = out["auto_merge"]["reason"].as_str().unwrap_or_default();
+    assert!(reason.contains("does not allow auto-merge") && reason.contains("cpd pr merge"), "{out}");
     assert!(mutations(&pay).is_empty(), "nothing is requested");
     assert_eq!(row(&pay), Some(("none".to_owned(), None)));
     assert_eq!(pay.fx.calls("node").len(), 1);
+    assert_eq!(events(&pay, "error"), 0, "no error Event");
 }
 
-#[test]
-fn a_stacked_pr_is_deferred_with_no_gh_call() {
-    let pay = post();
+fn stack(pay: &Pay) {
     sql(
-        &pay,
+        pay,
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('pay', 'base', '/nowhere', 'main', 'dispatch', 'cpd/pay/base', '/nowhere-base', cpd_txn(), 't', 't');
          UPDATE prs SET base = 'cpd/pay/base' WHERE plan = 'pay' AND key = 'repo';",
     );
+}
+
+fn events(pay: &Pay, kind: &str) -> i64 {
+    pay.store().read(|c| Ok(c.query_row("SELECT count(*) FROM events WHERE kind = ?1", [kind], |r| r.get(0))?)).unwrap()
+}
+
+fn methods(pay: &Pay, squash: bool, merge: bool, rebase: bool) {
+    let mut auto = pay.gh.auto.lock().unwrap();
+    auto.squash = squash;
+    auto.merge = merge;
+    auto.rebase = rebase;
+}
+
+#[test]
+fn a_repo_that_allows_only_rebase_enables_rebase_auto_merge() {
+    let pay = post();
+    methods(&pay, false, false, true);
+
+    let out = post_cmd(&pay).ok();
+
+    let sent = mutations(&pay);
+    assert_eq!(sent.len(), 1, "{:?}", gh(&pay));
+    assert!(sent[0].contains("REBASE") && !sent[0].contains("SQUASH"), "{sent:?}");
+    assert_eq!(out["auto_merge"]["state"], "enabled");
+}
+
+#[test]
+fn a_repo_that_allows_merge_commit_and_rebase_enables_merge_auto_merge() {
+    let pay = post();
+    methods(&pay, false, true, true);
+
+    post_cmd(&pay).ok();
+
+    let sent = mutations(&pay);
+    assert_eq!(sent.len(), 1, "{:?}", gh(&pay));
+    assert!(sent[0].contains("MERGE") && !sent[0].contains("SQUASH") && !sent[0].contains("REBASE"), "{sent:?}");
+}
+
+#[test]
+fn a_stacked_pr_is_deferred_after_the_one_read_with_no_mutation() {
+    let pay = post();
+    stack(&pay);
 
     let out = post_cmd(&pay).ok();
 
     assert_eq!(out["auto_merge"]["state"], "deferred");
     assert_eq!(row(&pay), Some(("pending".to_owned(), None)));
-    assert!(gh(&pay).is_empty(), "no gh call: {:?}", gh(&pay));
+    assert_eq!(gh(&pay).len(), 1, "only the read: {:?}", gh(&pay));
+    assert!(mutations(&pay).is_empty());
+}
+
+#[test]
+fn a_stacked_pr_on_a_repo_without_auto_merge_says_not_allowed_and_stores_none() {
+    let pay = post();
+    stack(&pay);
+    pay.gh.auto.lock().unwrap().allowed = false;
+
+    let out = post_cmd(&pay).ok();
+
+    assert_eq!(out["auto_merge"]["state"], "not_allowed");
+    assert_eq!(row(&pay), Some(("none".to_owned(), None)));
+    assert_eq!(gh(&pay).len(), 1, "only the read: {:?}", gh(&pay));
+    assert!(mutations(&pay).is_empty());
+}
+
+#[test]
+fn a_repo_that_allows_no_merge_method_refuses_before_the_send() {
+    let pay = post();
+    methods(&pay, false, false, false);
+
+    let run = post_cmd(&pay);
+
+    let error = refused(&run, "no_merge_method", 3);
+    assert_eq!(error["details"], json!({"repo": "acme/pay", "number": 812, "squash": false, "merge": false, "rebase": false}));
+    assert!(error["message"].as_str().is_some_and(|m| m.contains("acme/pay")), "{error}");
+    assert_eq!(pay.fx.calls("node").len(), 0, "nothing is sent");
+    assert_eq!(posts(&pay), 0);
+    assert_eq!(row(&pay), None);
+}
+
+#[test]
+fn a_failing_read_refuses_gh_failed_before_the_send() {
+    let pay = post();
+    pay.gh_fails("gh: HTTP 502");
+
+    refused(&post_cmd(&pay), "gh_failed", 1);
+
+    assert_eq!(pay.fx.calls("node").len(), 0, "nothing is sent");
+    assert_eq!(posts(&pay), 0);
+    assert_eq!(row(&pay), None);
 }
 
 #[test]
@@ -151,9 +238,9 @@ fn a_github_refusal_of_the_mutation_is_stored_refused_and_reported() {
 }
 
 #[test]
-fn a_gh_failure_leaves_the_request_pending_and_the_post_stands() {
+fn a_gh_failure_of_the_mutation_leaves_the_request_pending_and_the_post_stands() {
     let pay = post();
-    pay.gh_fails("gh: HTTP 502");
+    pay.gh.auto.lock().unwrap().fail_mutation = true;
 
     let out = post_cmd(&pay).ok();
 
@@ -177,12 +264,13 @@ fn an_already_enabled_request_counts_as_enabled_without_a_second_mutation() {
 }
 
 #[test]
-fn a_failed_slack_send_makes_no_gh_call_and_writes_no_row() {
+fn a_failed_slack_send_makes_only_the_read_call_and_writes_no_row() {
     let pay = post_with_node(Reply::exit(3, &format!("{AUTH}\n"), ""));
 
     refused(&post_cmd(&pay), "slack_auth", 3);
 
-    assert!(gh(&pay).is_empty(), "{:?}", gh(&pay));
+    assert_eq!(gh(&pay).len(), 1, "only the read: {:?}", gh(&pay));
+    assert!(mutations(&pay).is_empty());
     assert_eq!(posts(&pay), 0);
     assert_eq!(row(&pay), None, "no pr_posts row, auto_merge column included");
 }

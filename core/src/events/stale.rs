@@ -117,6 +117,16 @@ fn pr_feedback(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
                 },
             },
             "closed" => state == "closed",
+            "ready_to_post" => {
+                let posted = exists(conn, "SELECT 1 FROM pr_posts WHERE plan = ?1 AND pr = ?2 LIMIT 1", params![plan, pr])?;
+                let id: i64 = conn.query_row(
+                    "SELECT pull_request FROM prs WHERE plan = ?1 AND key = ?2",
+                    params![plan, pr],
+                    |r| r.get(0),
+                )?;
+                let row = crate::pr::pulls::load(conn, id)?;
+                !posted && crate::pr::postable::unready(&row).is_empty()
+            }
             "approved" => state == "open" && review == "approved",
             _ => return Ok(false),
         };

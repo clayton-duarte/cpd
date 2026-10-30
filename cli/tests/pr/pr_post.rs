@@ -1,3 +1,4 @@
+//! Its `gh` answers the three merge-method flags through the shared `Gh` fake in pr_view.rs (default: squash only).
 //! `pr post` (commands.md §9.8b, §21.8): posts a PR's stored pull request to Slack through the helper (`node`, a scripted
 //! fake here) and records it in `pr_posts`. Its GitHub calls (auto-merge, §9.8b) are tested in `pr_post_auto_merge`; a refusal makes none.
 

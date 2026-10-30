@@ -1,6 +1,7 @@
 //! The engine's loop (contract §3.7; commands.md §12): `locks/watch.lock`,
 //! `watch-started`, then E1–E5, E7–E11, E12–E16 (E6 was removed) every
-//! `tick_seconds` until SIGTERM, SIGINT or SIGHUP, then `watch-stopped`.
+//! `tick_seconds` until SIGTERM, SIGINT or SIGHUP, then `watch-stopped`; or until the store outgrows the binary
+//! (its verdict no longer opens, contract §3.7), when the engine stands down: it writes nothing, logs one line and exits 0.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -90,6 +91,10 @@ pub(super) struct Engine {
     pub restart_started: Option<Instant>,
     /// The detached runs whose pid file the engine removes when it sees them end ([`super::sweep_detached`]).
     pub detached: Vec<(Pid, std::path::PathBuf)>,
+    /// The `data_version` at the last verdict read (`None` before the first).
+    verdict_seen: Option<i64>,
+    /// The refusal once the store outgrew this binary: it stays set, and nothing reads the verdict again.
+    outgrown: Option<CpdError>,
 }
 
 impl Engine {
@@ -135,6 +140,8 @@ impl Engine {
             janitor_started: None,
             restart_started: None,
             detached: Vec::new(),
+            verdict_seen: None,
+            outgrown: None,
         }
     }
 
@@ -144,8 +151,34 @@ impl Engine {
         self.fixed_catalog = Some(catalog);
     }
 
-    /// Reports a failure of `step` for `about` (once until it clears).
+    /// Whether the store outgrew this binary: its verdict does not open (contract §3.7). Reads the verdict only
+    /// when `data_version` changed since the last check; once true it stays true. A failed read is no answer: false.
+    pub(super) fn outgrown(&mut self) -> bool {
+        if self.outgrown.is_some() {
+            return true;
+        }
+        let Ok(version) = self.store.data_version() else { return false };
+        if self.verdict_seen == Some(version) {
+            return false;
+        }
+        match self.store.read(|conn| Ok(cpd_core::store::verdict(conn)?.refusal().cloned())) {
+            Ok(refusal) => {
+                self.verdict_seen = Some(version);
+                self.outgrown = refusal;
+            }
+            Err(_) => {}
+        }
+        self.outgrown.is_some()
+    }
+
+    /// Reports a failure of `step` for `about` (once until it clears). When the store outgrew the binary the
+    /// failure is only logged: the engine stands down and writes nothing.
     pub(super) fn fail(&mut self, step: Step, about: About, failure: impl Into<Failure>) {
+        if self.outgrown() {
+            let failure = failure.into();
+            self.log.line(&format!("{step:?}: {} ({}); not reported: the store outgrew this binary", failure.message, failure.code));
+            return;
+        }
         self.report.fail(&mut self.store, &mut self.log, step, about, failure);
     }
 
@@ -208,7 +241,7 @@ impl Engine {
             janitor::run,
         ];
         for step in steps {
-            if stopping() {
+            if stopping() || self.outgrown() {
                 return;
             }
             step(self);
@@ -512,7 +545,7 @@ fn serve(ports: &Ports, home: &CpdHome, until: &AtomicBool, catch: impl FnOnce()
 
     let tick = engine.config.watch.tick_seconds.duration();
     let mut failing = false;
-    while !until.load(Ordering::SeqCst) {
+    while !until.load(Ordering::SeqCst) && !engine.outgrown() {
         let began = clock.now();
         // The next engine says when this one stopped from it when it leaves no `watch-stopped`.
         if let Err(e) = lock.touch_with(clock) {
@@ -524,7 +557,7 @@ fn serve(ports: &Ports, home: &CpdHome, until: &AtomicBool, catch: impl FnOnce()
         let mut committed = false;
         // The next tick comes at the earliest of a tick from its start, E5's due time and, when another process
         // committed, half a second from its start (§3.7). A finished poll is applied at the next nap.
-        while !until.load(Ordering::SeqCst) {
+        while !until.load(Ordering::SeqCst) && !engine.outgrown() {
             pr::reap(&mut engine);
             if !committed {
                 match (&seen, engine.store.data_version()) {
@@ -551,6 +584,15 @@ fn serve(ports: &Ports, home: &CpdHome, until: &AtomicBool, catch: impl FnOnce()
         }
     }
 
+    if let Some(refusal) = engine.outgrown.clone() {
+        engine.log.line(&format!(
+            "standing down: this binary can no longer open the store ({}: {}); the engine of the installed binary takes over",
+            refusal.code().as_str(),
+            refusal.message()
+        ));
+        pr::discard(&mut engine);
+        return Ok(Output::success(json!({"stopped": true})));
+    }
     engine.log.line("stopping on a signal");
     pr::finish(&mut engine);
     // `watch-stopped` is not lost to a busy store: it waits for as long as that lasts.
