@@ -9,7 +9,7 @@ type Question = { question: string; header: string; options: Option[]; multiSele
 type Verdict = { block?: boolean; reason?: string } | undefined;
 
 const LIMIT = 1500;
-const G2 = (n: number) => `φ: ask_user_question is for a few short choices; put anything larger in plannotator; refused: ${n} characters (limit ${LIMIT})`;
+const G2 = (n: number) => `φ: ask_user_question is for a few short choices; write anything larger to a file outside the repo and point to it in chat; refused: ${n} characters (limit ${LIMIT})`;
 
 const job = (key: string, status: string) => ({ key, pr: "api", title: key, status, tier: "S3", needs: [] });
 const withJobs = (...statuses: string[]) => {

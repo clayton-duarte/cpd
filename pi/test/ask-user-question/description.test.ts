@@ -8,7 +8,7 @@ import { LIMIT } from "../../lib/askguard.ts";
 
 const ROOT = new URL("../../ask-user-question/", import.meta.url);
 const INDEX = new URL("index.ts", ROOT);
-const SENTENCE = `The whole call holds at most ${LIMIT} characters, summed over every question, header, option label, description and preview; a longer call is refused before the User sees it. Put larger content in plannotator.`;
+const SENTENCE = `The whole call holds at most ${LIMIT} characters, summed over every question, header, option label, description and preview; a longer call is refused before the User sees it. Put larger content in a file outside the repo and point to it in chat.`;
 const NOTE = `Counts toward the call's ${LIMIT}-character total.`;
 
 type Tool = { name: string; description: string; promptGuidelines: string[]; parameters: any };

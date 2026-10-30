@@ -3,7 +3,6 @@
 //! and how cpd starts pi. A library: the commands that use it are other areas'.
 //!
 //! - [`tmux`]: `tmux -L <socket>` calls (§6.1, §6.3);
-//! - [`addr`]: the review host (§6.5);
 //! - [`deadline`]: the one subprocess runner with a deadline (contract §1.2 `tool_timeout`);
 //! - [`git_guard`]: the `git` wrapper that refuses `git stash` and the `PATH` that puts it first (§6.5, hs-d310);
 //! - [`install_state`]: the install state file `$CPD_HOME/run/cpd-install.json` (§1.4, §3.7 E6, hs-d618);
@@ -14,7 +13,6 @@
 //! - [`priority`]: the idle priority prefix of an Attempt's processes (hs-d528);
 //! - [`pi`]: pi's argv and environment per role, and the `[-e …]` rule (§6.5).
 
-pub mod addr;
 pub mod deadline;
 pub mod exe;
 pub mod git_guard;

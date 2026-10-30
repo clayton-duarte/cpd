@@ -17,8 +17,7 @@ fn lead_argv(plan: Option<&str>, start: LeadStart) -> Vec<String> {
     let session = SessionId::parse(ID).unwrap();
     let plan = plan.map(|p| PlanId::parse(p).unwrap());
     let extensions = strs(&["/opt/cpd/pi", "npm:@juicesharp/rpiv-ask-user-question@2.13.8"]);
-    let plannotator = Plannotator { port: "19432-19456".into(), url_host: "192.168.3.3".into() };
-    lead(&LeadLaunch { home: &home, session: &session, plan: plan.as_ref(), extensions: &extensions, plannotator: &plannotator, start }).argv
+    lead(&LeadLaunch { home: &home, session: &session, plan: plan.as_ref(), extensions: &extensions, start }).argv
 }
 
 fn worker_argv() -> Vec<String> {

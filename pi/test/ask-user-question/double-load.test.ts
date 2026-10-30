@@ -29,7 +29,7 @@ test("otherCopy finds the npm package, with or without a version, as a string or
 test("otherCopy answers the first entry of the global list, then of the project list, with its scope", async () => {
 	assert.deepEqual(await otherCopy({ global: [], project: [`${NAME}@2.13.8`] }), { source: `${NAME}@2.13.8`, scope: "project" });
 	assert.deepEqual(
-		await otherCopy({ global: ["npm:@plannotator/pi-extension@0.28.17", `${NAME}@2.13.8`], project: [NAME] }),
+		await otherCopy({ global: ["npm:some-other-pkg@1.0.0", `${NAME}@2.13.8`], project: [NAME] }),
 		{ source: `${NAME}@2.13.8`, scope: "global" },
 	);
 });

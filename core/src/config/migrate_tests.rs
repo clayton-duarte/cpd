@@ -1,5 +1,5 @@
 //! The config migrations (contract §8.1 "Config migrations", commands.md §14.2, hs-d722):
-//! `distill-tier-gx` and `drop-test-concurrency`, the ordered, additive, idempotent,
+//! `distill-tier-gx`, `drop-test-concurrency` and `drop-plannotator-ports`, the ordered, additive, idempotent,
 //! comment-preserving transforms `cpd config --migrate` applies before the binary is replaced.
 
 use super::migrate::{MIGRATIONS, apply};
@@ -11,14 +11,14 @@ const STALE: &str = "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"H2\
 const MIGRATED: &str = "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"GX\"  # stale\nconcurrency = 5\n";
 
 /// Migrations run in the order of [`MIGRATIONS`], whose first two entries are the two
-/// named in the contract.
+/// named in the contract, then `drop-plannotator-ports`.
 #[test]
 fn migrate_reports_the_applied_names_in_order() {
     let (_, names) = apply(STALE);
     assert_eq!(names, vec!["distill-tier-gx", "drop-test-concurrency"]);
     assert_eq!(
         MIGRATIONS.iter().map(|m| m.name).collect::<Vec<_>>(),
-        vec!["distill-tier-gx", "drop-test-concurrency"]
+        vec!["distill-tier-gx", "drop-test-concurrency", "drop-plannotator-ports"]
     );
 
     // A config only one migration touches reports only that one.
@@ -70,4 +70,13 @@ fn migrate_leaves_a_non_h2_value_alone() {
         assert_eq!(text, input, "{value}");
         assert!(names.is_empty(), "{value}: {names:?}");
     }
+}
+
+/// The top-level `plannotator_ports` line is removed, its neighbours and comments kept.
+#[test]
+fn migrate_drops_plannotator_ports() {
+    let input = "version = 1\n# keep\nplannotator_ports = \"19432-19456\"  # old\nconcurrency = 5\n";
+    let (text, names) = apply(input);
+    assert_eq!(text, "version = 1\n# keep\nconcurrency = 5\n");
+    assert_eq!(names, vec!["drop-plannotator-ports"]);
 }

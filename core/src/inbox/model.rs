@@ -21,8 +21,6 @@ use crate::store::Store;
 pub enum Kind {
     Dialog,
     PlanReview,
-    /// A tracked plannotator session is open (hs-d496); E8 computes none yet.
-    ReviewWaiting,
     Unread,
     JobStuck,
     EngineError,
@@ -54,7 +52,6 @@ impl Kind {
         match self {
             Kind::Dialog => "dialog",
             Kind::PlanReview => "plan-review",
-            Kind::ReviewWaiting => "review-waiting",
             Kind::Unread => "unread",
             Kind::JobStuck => "job-stuck",
             Kind::EngineError => "engine-error",
@@ -75,7 +72,7 @@ impl Kind {
 
     pub fn parse(s: &str) -> Option<Kind> {
         use Kind::*;
-        [Dialog, PlanReview, ReviewWaiting, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested, CurateRetire, CurateDocs, LoopGuard, ModelsChanged, Deploy, DraftsParked]
+        [Dialog, PlanReview, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested, CurateRetire, CurateDocs, LoopGuard, ModelsChanged, Deploy, DraftsParked]
             .into_iter()
             .find(|k| k.as_str() == s)
     }

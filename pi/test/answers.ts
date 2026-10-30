@@ -30,7 +30,6 @@ export const answers = (): Record<string, unknown> => ({
   "session-show": shown(),
   "context-pending": { ok: true, context: "ctx", plans: [] }, // a Manager reads it at every turn start (§15.7)
   "policy-show": policyShow(), // no text anywhere: no section
-  "review-list": { ok: true, reviews: [] }, // a Lead or Manager reconciles its tracked plannotator sessions at start
   "--version": { ok: true, version: "0.0.0", schema: 6, store_schema: 6, protocol: PROTOCOL },
 });
 

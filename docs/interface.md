@@ -77,10 +77,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd pr rerun` | Re-run the failed GitHub Actions workflow runs of the PR's head commit (§9.8c) | Lead | |
 | `cpd pr post` | Post the PR's pull request to Slack for review (§9.8b) | Lead | |
 | `cpd pr merge` | Squash-merge a clean pull request on GitHub and delete its branch (§9.10) | Lead | yes |
-| `cpd review` | Plannotator sessions a Session has open (hs-d496) | | |
-| `cpd review open` | Record an open plannotator session | Lead, Manager | |
-| `cpd review close` | Close one or every open plannotator session | Lead, Manager | |
-| `cpd review list` | List the open plannotator sessions of a Session | Lead, Manager | |
+| `cpd review` | The GitHub review (commands.md §31.1) | | |
 | `cpd review submit` | Post a GitHub review (APPROVE or REQUEST_CHANGES) and, with --slack, queue its reaction (§31.1) | Lead, Manager | |
 | `cpd policy` | Policies (commands.md §22) | | |
 | `cpd policy show` | Show the resolved policy of a key (§22.1) | Lead, Manager, Worker | |
