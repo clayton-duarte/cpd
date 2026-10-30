@@ -93,6 +93,9 @@ fn pr_merge_cancels_drafts() {
             let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
             match args[..2] {
                 ["pr", "view"] => Reply::ok(&format!("{}\n", if self.2.load(SeqCst) { &self.1 } else { &self.0 })),
+                ["repo", "view"] if args.contains(&"squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed") => {
+                    Reply::ok("{\"squashMergeAllowed\":true,\"mergeCommitAllowed\":false,\"rebaseMergeAllowed\":false}\n")
+                }
                 ["pr", "merge"] => {
                     self.2.store(true, SeqCst);
                     Reply::ok("")

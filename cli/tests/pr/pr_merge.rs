@@ -26,6 +26,8 @@ struct Gh {
     graphql: Mutex<Reply>,
     /// What `repo view` answers; `{"deleteBranchOnMerge": true}` unless a test sets it.
     repo: Mutex<Reply>,
+    /// What `repo view ... squashMergeAllowed,...` answers; squash allowed only unless a test sets it.
+    methods: Mutex<Reply>,
     merged: Mutex<bool>,
 }
 
@@ -36,6 +38,10 @@ impl Gh {
 
     fn set_repo(&self, reply: Reply) {
         *self.repo.lock().unwrap() = reply;
+    }
+
+    fn set_methods(&self, reply: Reply) {
+        *self.methods.lock().unwrap() = reply;
     }
 }
 
@@ -48,6 +54,7 @@ impl Handler for Gh {
                 *self.merged.lock().unwrap() = true;
                 if self.merge_exit == 0 { Reply::ok("") } else { Reply::exit(self.merge_exit, "", "merge said no\n") }
             }
+            ["repo", "view"] if args.contains(&"squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed") => self.methods.lock().unwrap().clone(),
             ["repo", "view"] => self.repo.lock().unwrap().clone(),
             ["api", "graphql"] => self.graphql.lock().unwrap().clone(),
             _ => Reply::exit(9, "", ""),
@@ -57,9 +64,37 @@ impl Handler for Gh {
 
 /// Installs a [`Gh`] on `fx`'s runner and returns it, for the test that changes what the poll's `api graphql` says.
 fn install(fx: &Fx, before: &str, after: &str, merge_exit: i32, graphql: Reply) -> Arc<Gh> {
-    let gh = Arc::new(Gh { before: before.to_owned(), after: after.to_owned(), merge_exit, graphql: Mutex::new(graphql), repo: Mutex::new(Reply::ok("{\"deleteBranchOnMerge\": true}\n")), merged: Mutex::new(false) });
+    let gh = Arc::new(Gh { before: before.to_owned(), after: after.to_owned(), merge_exit, graphql: Mutex::new(graphql), repo: Mutex::new(Reply::ok("{\"deleteBranchOnMerge\": true}\n")), methods: Mutex::new(methods(true, false, false)), merged: Mutex::new(false) });
     let _ = (*fx.fakes.runner).clone().route("gh", gh.clone());
     gh
+}
+
+/// The answer of `gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed`.
+fn methods(squash: bool, merge: bool, rebase: bool) -> Reply {
+    Reply::ok(&format!("{}\n", json!({"squashMergeAllowed": squash, "mergeCommitAllowed": merge, "rebaseMergeAllowed": rebase})))
+}
+
+const METHODS_JSON: &str = "squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed";
+
+fn methods_call() -> Vec<String> {
+    argv(&["repo", "view", "acme/api", "--json", METHODS_JSON])
+}
+
+fn merge_call(flag: &str) -> Vec<String> {
+    argv(&["pr", "merge", "7", "--repo", "acme/api", flag, "--match-head-commit", SHA])
+}
+
+fn merge_calls(fx: &Fx) -> Vec<Vec<String>> {
+    calls(fx).into_iter().filter(|c| c[..2] == ["pr", "merge"]).collect()
+}
+
+/// A merge on a repo allowing exactly these methods; returns the output and the fx.
+fn merge_with(squash: bool, merge: bool, rebase: bool) -> (Fx, serde_json::Value) {
+    let fx = Fx::with_ports();
+    let gh = install(&fx, &view("OPEN", "CLEAN"), &view("OPEN", "CLEAN"), 0, Reply::exit(9, "", ""));
+    gh.set_methods(methods(squash, merge, rebase));
+    let out = fx.cpd(&["pr", "merge", REF]).ok();
+    (fx, out)
 }
 
 /// A `gh` that answers `pr view` with `view`, and `pr merge` with `merge_exit`.
@@ -90,11 +125,58 @@ fn a_clean_open_pull_request_is_squash_merged_with_the_head_it_was_checked_at() 
         calls(&fx),
         [
             argv(&["pr", "view", "7", "--repo", "acme/api", "--json", "state,mergeStateStatus,headRefOid,title,mergedAt"]),
-            argv(&["pr", "merge", "7", "--repo", "acme/api", "--squash", "--match-head-commit", SHA]),
+            methods_call(),
+            merge_call("--squash"),
             argv(&["pr", "view", "7", "--repo", "acme/api", "--json", "state,mergeStateStatus,headRefOid,title,mergedAt"]),
             argv(&["repo", "view", "acme/api", "--json", "deleteBranchOnMerge"]),
         ]
     );
+}
+
+#[test]
+fn squash_is_used_whenever_the_repo_allows_it() {
+    let (fx, out) = merge_with(true, true, true);
+    assert_eq!(out["method"], "squash", "{out}");
+    let all = calls(&fx);
+    assert_eq!(all.len(), 5, "{all:?}");
+    assert_eq!(all[1], methods_call());
+    assert_eq!(all[2], merge_call("--squash"));
+}
+
+#[test]
+fn a_repo_that_allows_only_rebase_is_rebase_merged() {
+    let (fx, out) = merge_with(false, false, true);
+    assert_eq!(out["method"], "rebase", "{out}");
+    assert_eq!(merge_calls(&fx), [merge_call("--rebase")]);
+}
+
+#[test]
+fn a_repo_that_allows_merge_commit_and_rebase_is_merge_committed() {
+    let (fx, out) = merge_with(false, true, true);
+    assert_eq!(out["method"], "merge", "{out}");
+    assert_eq!(merge_calls(&fx), [merge_call("--merge")]);
+}
+
+#[test]
+fn a_repo_that_allows_no_merge_method_is_refused_before_any_merge() {
+    let fx = Fx::with_ports();
+    let gh = install(&fx, &view("OPEN", "CLEAN"), &view("OPEN", "CLEAN"), 0, Reply::exit(9, "", ""));
+    gh.set_methods(methods(false, false, false));
+    let error = refused(&fx.cpd(&["pr", "merge", REF]), "no_merge_method", 3);
+    assert_eq!(error["details"], json!({"repo": "acme/api", "number": 7, "squash": false, "merge": false, "rebase": false}));
+    assert!(error["message"].as_str().unwrap().contains("acme/api"), "{error}");
+    assert!(merge_calls(&fx).is_empty(), "{:?}", calls(&fx));
+}
+
+#[test]
+fn a_repo_whose_merge_methods_cannot_be_read_is_gh_failed_before_any_merge() {
+    for reply in [Reply::exit(1, "", "HTTP 502\n"), Reply::ok("not json\n")] {
+        let fx = Fx::with_ports();
+        let gh = install(&fx, &view("OPEN", "CLEAN"), &view("OPEN", "CLEAN"), 0, Reply::exit(9, "", ""));
+        gh.set_methods(reply);
+        refused(&fx.cpd(&["pr", "merge", REF]), "gh_failed", 1);
+        assert!(merge_calls(&fx).is_empty(), "{:?}", calls(&fx));
+    }
 }
 
 #[test]
@@ -144,7 +226,7 @@ fn a_failing_pr_merge_is_gh_failed() {
     );
     assert_eq!(error["details"]["exit"], 1);
     assert_eq!(error["details"]["stderr"], "merge said no");
-    assert_eq!(calls(&fx).len(), 2);
+    assert_eq!(calls(&fx).len(), 3);
 }
 
 #[test]
