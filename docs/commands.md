@@ -147,6 +147,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `context_not_found`, `plan_not_found`, `pr_not_found`, `job_not_found`, `attempt_not_found`, `escalation_not_found`, `review_not_found`, `session_not_found` | 4 | the selected or named object does not exist. (A Context record that names a missing record is `record_not_found`, exit 3, §4.6) |
 | `merge_not_clean` | 3 | `pr merge` (§9.10) re-read the pull request and found it not `OPEN` or not `CLEAN`; `details` has `repo`, `number`, `state`, `merge_state` (hs-d272, hs-d274) |
 | `mcp_unknown` | 4 | `mcp attach` (§24.1) named a server the machine policy does not list; `details: {name, machine, available}`, `available` the sorted server names (an empty array when none); nothing is written (pro-d8) |
+| `runner_no_tools` | 3 | `mcp attach` (§24.1) was run by a Worker whose Attempt runs on the durable runner, which has no MCP client; `details: {name, session, attempt, runner}`; it appends one `error` Event (the same code and details, §24.1) and no `mcp-attached` Event (pro-d253) |
 | `item_not_found` | 4 | `inbox show`, `snooze`, `dismiss`, `claim` or `approve` named an Inbox item that does not exist |
 | `item_closed` | 3 | `inbox snooze`, `dismiss`, `claim` or `approve` named an Inbox item that is closed (§21) |
 | `not_claimable` | 3 | `inbox claim` (§21.7): the item is not `review-requested` or is dismissed (C4); `details.kind` |
@@ -5774,6 +5775,7 @@ The caller's Session is selected as §1.3 says (`--session <id>`, else `CPD_SESS
 | the Session exists | `session_not_found` | 4 |
 | the machine file, `$CPD_HOME/policy/host.toml`, is valid TOML and its `[mcp]` table has known keys and types (contract §8.3 "MCP servers of the machine scope"; the file's other domains are the policy scope's and an invalid one is `policy_invalid` too); `details.file`, `details.key`; nothing is appended | `policy_invalid` | 1 |
 | the machine file's `[mcp]` lists `<name>`; `details` `{name, machine, available}` (`machine` is the config key `machine`), `available` the sorted server names (an empty array when none); the message names the machine and lists what is available, or says none | `mcp_unknown` | 4 |
+| the calling Session is not a Worker whose Attempt runs on the durable runner (`attempts.runner` = `durable`), checked after `mcp_unknown`; `details` `{name, session, attempt, runner}`; it appends one `error` Event in its own transaction, code `runner_no_tools`, addressed to the Worker's Plan, with the same `details`, and no `mcp-attached` Event. The durable runner has no MCP client, so an attach there would answer `ok` and deliver nothing (pro-d253). Leads, Managers and pi-runner Workers attach as before | `runner_no_tools` | 3 |
 
 **Effects**, one transaction:
 - **Event** `mcp-attached` (contract §5.2) addressed to the caller's Session (`session` set, with its `context` and `plan` when it has one), `data` `{name, server}`: `server` is the entry exactly as the machine policy gives it (pi's key names; a key left out is absent). `text`: `Server <name> attached to Session <id>.`
