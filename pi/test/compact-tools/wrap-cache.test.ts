@@ -17,7 +17,7 @@ function spy(): { count: () => number } {
 	return { count: () => count };
 }
 
-const plain = (rows: Segment[][]) => JSON.parse(JSON.stringify(rows));
+const plain = (rows: readonly (readonly Readonly<Segment>[])[]) => JSON.parse(JSON.stringify(rows));
 
 test("wrap cache returns the identical rows for an unchanged array", () => {
 	const segments: Segment[] = [{ text: "same-array alpha beta gamma delta" }];
@@ -125,7 +125,7 @@ test("wrap cache serves frozen rows", () => {
 		assert.ok(Object.isFrozen(row), "row");
 		for (const piece of row) assert.ok(Object.isFrozen(piece), "segment");
 	}
-	assert.throws(() => { rows[0]![0]!.text = "changed"; }, TypeError);
+	assert.throws(() => { (rows[0]![0] as { text: string }).text = "changed"; }, TypeError);
 });
 
 test("wrap cache drops the least recently used rows past its character limit", () => {
