@@ -242,8 +242,7 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
 }
 
 /// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts, but a row of the old `engine-error` or `job-stuck` kind (hs-d314, hs-d318) or the terminator `╰󰬪` (hs-d574). `engine-down`
-/// starts the engine; `pr-ready` has none (the label is a link; Merge is in its menu); `plan-review` opens the Lead of its Plan and copies the review page's `url` (when there is
-/// one); `review-waiting` opens its Session, then copies the `url` likewise; the `url` is copied for `review-requested` (a click on the label of a link kind opens its page instead, see [`Link`]). `None` only for an item without what its jump needs.
+/// starts the engine; `pr-ready` has none (the label is a link; Merge is in its menu); `plan-review` opens the Lead of its Plan; the `url` is copied for `review-requested` (a click on the label of a link kind opens its page instead, see [`Link`]). `None` only for an item without what its jump needs.
 pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     match item.kind {
         Kind::Dialog | Kind::Unread => item.session.as_ref().map(|s| Jump::Run(open_or_history(tree, s))),
@@ -252,20 +251,8 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
         Kind::EngineDown => Some(Jump::Run(Action::EnsureWatch)),
         Kind::Question => item.context.as_ref().map(|c| Jump::Run(Action::OpenManager(c.clone()))),
         Kind::PlanReview => {
-            let open = open_lead(tree, item.plan.as_ref()?)?;
-            // with no port file yet there is no page to copy: the Lead opens, and nothing else happens
-            Some(match item.url.as_ref() {
-                Some(url) => Jump::Steps(vec![open, Action::CopyUrl(url.clone())]),
-                None => Jump::Run(open),
-            })
-        }
-        // hs-d496: the Session that opened the plannotator session, then the review page's url (when known)
-        Kind::ReviewWaiting => {
-            let open = open_or_history(tree, item.session.as_ref()?);
-            Some(match item.url.as_ref() {
-                Some(url) => Jump::Steps(vec![open, Action::CopyUrl(url.clone())]),
-                None => Jump::Run(open),
-            })
+            // a plan-review has no url (hs-d739): the Lead of its Plan opens
+            open_lead(tree, item.plan.as_ref()?).map(Jump::Run)
         }
         Kind::CurateRetire | Kind::CurateDocs => item.context.as_ref().map(|c| Jump::Curate(item.kind, c.clone())),
         // one background `session resume`: the pane does not open; a refusal is the failure dialog
@@ -413,7 +400,7 @@ fn open_lead(tree: &Tree, plan: &PlanId) -> Option<Action> {
 
 /// The kinds whose label is a `Link` to the item's `url`.
 fn is_link(kind: Kind) -> bool {
-    matches!(kind, Kind::PlanReview | Kind::ReviewWaiting | Kind::PrReady | Kind::ReviewRequested | Kind::Deploy)
+    matches!(kind, Kind::PlanReview | Kind::PrReady | Kind::ReviewRequested | Kind::Deploy)
 }
 
 /// A label's two rows: the text before its one `\n`, and the subtitle after it (empty for a one-row label).
@@ -620,41 +607,14 @@ mod tests {
         );
     }
 
-    // ---- review-waiting (hs-d496): the click opens the item's Session then copies its url ----
-
-    #[test]
-    fn a_review_waiting_click_opens_its_session_then_copies_its_url() {
-        let tree = sample();
-        let mut waiting = item(1, Kind::ReviewWaiting, Urgency::Magenta, "pn:m-alpha/pn-0a1b2c", OPENED);
-        waiting.session = Some(sid("m-alpha"));
-        waiting.url = Some("http://review.example:20000/".into());
-        assert_eq!(
-            jump(&tree, &waiting),
-            Some(Jump::Steps(vec![Action::Open(sid("m-alpha")), Action::CopyUrl("http://review.example:20000/".into())])),
-            "the Session first, then the page's url"
-        );
-        waiting.url = None;
-        assert_eq!(jump(&tree, &waiting), Some(Jump::Run(Action::Open(sid("m-alpha")))), "no url: the Session opens and nothing else happens");
-        waiting.session = None;
-        assert_eq!(jump(&tree, &waiting), None, "no Session: nowhere to go");
-        let mut archived_session = item(2, Kind::ReviewWaiting, Urgency::Magenta, "pn:f-blocked/pn-0a1b2c", OPENED);
-        archived_session.session = Some(sid("f-blocked"));
-        assert_eq!(jump(&archived(), &archived_session), Some(Jump::Run(Action::History(sid("f-blocked")))), "an archived Session shows its history");
-    }
-
     // ---- plan-review with an optional url (hs-d502) ----
 
     #[test]
-    fn a_plan_review_with_no_url_opens_the_lead_and_copies_nothing_hs_d502() {
+    fn a_plan_review_opens_the_lead_and_copies_nothing() {
         let tree = sample();
         let mut review = item(1, Kind::PlanReview, Urgency::Magenta, "ship plan review", OPENED);
         review.plan = Some(PlanId::parse("ship").unwrap());
         assert_eq!(jump(&tree, &review), Some(Jump::Run(Action::Open(sid("l-ship")))));
-        review.url = Some("http://review.example:20000/".into());
-        assert_eq!(
-            jump(&tree, &review),
-            Some(Jump::Steps(vec![Action::Open(sid("l-ship")), Action::CopyUrl("http://review.example:20000/".into())]))
-        );
     }
 
     fn curate_click(kind: Kind, label: &str, reply: serde_json::Value, title: &str, rows: [(&str, &str, &str); 2], command: [&str; 5]) {

@@ -14,7 +14,6 @@ use crate::store::Store;
 const KINDS: &[(&str, &str)] = &[
     ("dialog", "red"),
     ("plan-review", "magenta"),
-    ("review-waiting", "magenta"),
     ("unread", "white"),
     ("job-stuck", "red"),
     ("engine-error", "red"),

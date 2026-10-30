@@ -104,7 +104,6 @@ pub(super) fn delete(args: DeleteArgs) -> Result<Output, CpdError> {
                 // The rows of the whole Context first (an Inbox item points to an Event), then each Plan's, then
                 // the records and the Managers.
                 for sql in [
-                    "DELETE FROM plannotator_reviews WHERE session IN (SELECT id FROM sessions WHERE context = ?1)",
                     "DELETE FROM board_posts WHERE to_session IN (SELECT id FROM sessions WHERE context = ?1)",
                     "DELETE FROM inbox_items WHERE context = ?1",
                     "DELETE FROM events WHERE context = ?1",

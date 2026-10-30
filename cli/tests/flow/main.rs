@@ -64,7 +64,6 @@ mod plan_overlap;
 mod plan;
 mod plan_show;
 mod review_close;
-mod review_plannotator;
 mod policy;
 mod policy_fallback;
 mod policy_machine;

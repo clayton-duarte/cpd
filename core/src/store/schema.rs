@@ -456,7 +456,6 @@ fn delete_owner(table: &str) -> Option<String> {
         "prs" | "pr_posts" | "job_pools" | "pr_needs" | "plan_reviews" | "jobs" | "dependencies" | "attempts" | "escalations" => plan_deleted("OLD.plan"),
         "context_records" | "record_retirements" | "record_curations" => context_deleted("OLD.context"),
         "events" | "inbox_items" | "sessions" => plan_row(),
-        "plannotator_reviews" => session_row("session"),
         "board_posts" => session_row("to_session"),
         _ => return None,
     })
