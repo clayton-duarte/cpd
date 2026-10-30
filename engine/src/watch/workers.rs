@@ -185,7 +185,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE job_tenants (plan TEXT, job TEXT, pool TEXT);
-             CREATE TABLE plans (id TEXT, phase TEXT);
+             CREATE TABLE plans (id TEXT, phase TEXT, archived_at TEXT);
              CREATE TABLE prs (plan TEXT, key TEXT, status TEXT);
              CREATE TABLE jobs (plan TEXT, key TEXT, pr TEXT, status TEXT, seq INTEGER, skipped_n INTEGER, urgent INTEGER NOT NULL DEFAULT 0, kind TEXT NOT NULL DEFAULT 'work');
              CREATE TABLE dependencies (plan TEXT, job TEXT, needs TEXT);
