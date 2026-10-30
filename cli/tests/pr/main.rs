@@ -5,6 +5,7 @@
 mod common;
 
 mod git;
+mod live_spec;
 mod git_guard;
 mod git_lead_branch;
 mod merge;
