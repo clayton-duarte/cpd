@@ -39,6 +39,7 @@ export type Request = {
   ticket: string;
   target: "in_progress" | "in_review" | "done";
   names: { in_progress: string; in_review: string; done: string };
+  estimate_fields: string[];
 };
 
 export type Result =
@@ -127,7 +128,7 @@ function parseRequest(stdin: string): Request {
   if (typeof r.names !== "object" || r.names === null || TARGETS.some((t) => typeof r.names[t] !== "string")) throw bad("names");
   if (r.names[r.target] === "") throw bad("names[target] is empty");
   if (typeof r.server !== "object" || r.server === null || typeof r.server.url !== "string" || !r.server.url) throw bad("server.url");
-  return { server: r.server, ticket: r.ticket, target: r.target, names: { in_progress: r.names.in_progress, in_review: r.names.in_review, done: r.names.done } };
+  return { server: r.server, ticket: r.ticket, target: r.target, names: { in_progress: r.names.in_progress, in_review: r.names.in_review, done: r.names.done }, estimate_fields: [] };
 }
 
 /** The `atlassian` connection of pi, built from the request's server (never from mcp.json). */
