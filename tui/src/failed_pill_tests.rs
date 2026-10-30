@@ -170,7 +170,7 @@ fn the_legend_names_the_failed_loader_a_failed_job_being_worked_on() {
     let (jobs, dots) = (texts(jobs), texts(dots));
     assert!(jobs.iter().any(|t| t == "red loader: a failed Job being worked on"), "Jobs rows: {jobs:?}");
     assert!(!jobs.iter().any(|t| t == "red loader: a failed Job, its Lead working"), "the old Jobs text is gone");
-    assert!(dots.iter().any(|t| t == "a Plan's failed Job is being worked on (one frame every 50 ms)"), "Dots rows: {dots:?}");
+    assert!(dots.iter().any(|t| t == "the Lead is fixing a failed Job or answering a Worker's question (one frame every 50 ms)"), "Dots rows: {dots:?}");
     assert!(!dots.iter().any(|t| t.starts_with("the Lead is working on a Plan with a failed Job")), "the old Dots text is gone");
 }
 

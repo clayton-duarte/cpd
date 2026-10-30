@@ -323,7 +323,7 @@ fn boxes(conn: &Connection, plan: &PlanId, now: Option<String>, now_ms: i64) -> 
             &id("Session id", &lead, SessionId::parse)?,
             lead_working,
             Some(head.work()),
-            head.open_escalations > 0,
+            lead_working && head.open_escalations > 0,
             worked_on,
         );
         let jobs = job_nodes(conn, plan)?;

@@ -187,7 +187,7 @@ pub(super) fn fill_dots(visible: &[Item], heads: &[PlanHead], sessions: &mut [Se
     for s in sessions.iter_mut().filter(|s| !s.is_archived()) {
         let lead_of = s.plan.as_ref().filter(|_| s.plan_lead);
         let head = lead_of.and_then(|p| heads.iter().find(|h| &h.id == p));
-        let failed = head.is_some_and(|h| h.failing());
+        let failed = head.is_some_and(|h| h.failing(s.state == cpd_core::session::State::Working));
         let work = head.map(PlanHead::work);
         s.dot = Dot::of(s.state, dot::urgency(visible, &s.id, lead_of), failed, work);
     }

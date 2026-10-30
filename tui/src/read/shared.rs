@@ -341,9 +341,9 @@ impl PlanHead {
         self.archived_at.is_some()
     }
 
-    /// The Lead's dot is the red loader (pro-d200): a failed Job is worked on, or a Worker Escalation is open.
-    pub fn failing(&self) -> bool {
-        self.fixing || self.open_escalations > 0
+    /// The Lead's dot is the red loader (pro-d200): a failed Job is worked on, or a Worker Escalation is open while the Lead is `working`.
+    pub fn failing(&self, working: bool) -> bool {
+        self.fixing || (working && self.open_escalations > 0)
     }
 
     /// What the Lead is working on (pro-d200).

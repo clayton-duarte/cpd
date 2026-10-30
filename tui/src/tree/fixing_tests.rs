@@ -12,10 +12,11 @@ use super::fixture::{context, plan, session, tree};
 use super::rows::{Scroll, draw, open_new};
 use super::view::View;
 use crate::palette::dot_span;
-use crate::palette::numbered::{C14, C9};
+use crate::palette::numbered::{C15, C9};
 use crate::read::{Dot, Place, Tree};
 use cpd_core::plan::Phase;
 use cpd_core::session::State;
+use crate::read::Work;
 
 const MOONS: [&str; 28] = [
     "\u{E3E3}", "\u{E3C8}", "\u{E3C9}", "\u{E3CA}", "\u{E3CB}", "\u{E3CC}", "\u{E3CD}",
@@ -46,7 +47,7 @@ fn dot_cell(t: &Tree, frame: usize) -> (String, Color) {
 fn a_leads_red_loader_turns_with_the_frame_on_its_row() {
     for frame in 0..58 {
         assert_eq!(dot_cell(&with_dot(Dot::Fixing), frame), (MOONS[frame % 28].to_owned(), C9), "frame {frame}");
-        assert_eq!(dot_cell(&with_dot(Dot::Working(None)), frame), (MOONS[frame % 28].to_owned(), C14), "working, frame {frame}");
+        assert_eq!(dot_cell(&with_dot(Dot::Working(None)), frame), (MOONS[frame % 28].to_owned(), C15), "working, frame {frame}");
     }
 }
 
@@ -63,16 +64,19 @@ fn the_legend_lists_the_red_loader_after_the_working_one() {
     let sections = crate::widgets::legend::sections();
     let dots = sections.iter().find(|s| s.title == "Session Dots").expect("the Session Dots section");
     let first = |row: &Vec<ratatui::text::Line<'static>>| row.first().map(|l| l.spans.clone()).unwrap_or_default();
-    let cyan: Vec<_> = (0..28).map(|f| dot_span(Dot::Working(None), f, false)).collect();
-    let at = dots.rows.iter().position(|r| first(r) == cyan).expect("the row of the 28 cyan frames");
-    let row = dots.rows.get(at + 1).expect("a row after the working one");
     let red: Vec<_> = (0..28).map(|f| dot_span(Dot::Fixing, f, false)).collect();
-    assert_eq!(first(row), red, "the 28 red frames");
-    for (i, (c, r)) in cyan.iter().zip(&red).enumerate() {
-        assert_eq!((c.content.as_ref(), r.content.as_ref()), (MOONS[i], MOONS[i]), "frame {i}");
+    let at = dots.rows.iter().position(|r| first(r) == red).expect("the row of the 28 red frames");
+    let row = &dots.rows[at];
+    let white: Vec<_> = (0..28).map(|f| dot_span(Dot::Working(None), f, false)).collect();
+    assert!(dots.rows.iter().any(|r| first(r) == white), "the white loader row is in the legend");
+    let after = dots.rows.get(at + 1).expect("a row after the red one");
+    let yellow: Vec<_> = (0..28).map(|f| dot_span(Dot::Working(Some(Work::Review)), f, false)).collect();
+    assert_eq!(first(after), yellow, "the yellow loader follows the red one");
+    for (i, r) in red.iter().enumerate() {
+        assert_eq!(r.content.as_ref(), MOONS[i], "frame {i}");
     }
     let text: String = row[1].spans.iter().map(|s| s.content.as_ref()).collect();
-    assert_eq!(text, "a Plan's failed Job is being worked on (one frame every 50 ms)");
+    assert_eq!(text, "the Lead is fixing a failed Job or answering a Worker's question (one frame every 50 ms)");
 }
 
 /// A store of Plan `px` in dispatch whose working Lead `l-x` has a running Job, its Attempt and one Worker
