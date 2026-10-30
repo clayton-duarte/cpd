@@ -206,10 +206,10 @@ pub enum Command {
     Action(ActionArgs),
 }
 
-/// `cpd tui action <reset|legend|logs|costs|host|incident> --client <name>`, `cpd tui action merge <owner>/<repo>#<n> --client <name>`.
+/// `cpd tui action <reset|legend|logs|costs|runner|host|incident> --client <name>`, `cpd tui action merge <owner>/<repo>#<n> --client <name>`.
 #[derive(clap::Args, Debug)]
 pub struct ActionArgs {
-    /// `reset`, `legend`, `logs`, `costs`, `host` or `incident`: the button's range; or `merge`, a merge started at once. Optional and free
+    /// `reset`, `legend`, `logs`, `costs`, `runner`, `host` or `incident`: the button's range; or `merge`, a merge started at once. Optional and free
     /// text, so that any value, an empty `#{mouse_status_range}` included, reaches the command and fails with
     /// `display-message`, never a usage error on stdout
     pub action: Option<String>,

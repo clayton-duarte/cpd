@@ -16,6 +16,8 @@ use super::engine::Engine;
 use super::report::{About, Step};
 use super::restart;
 use super::schedule::READY;
+use cpd_core::config::Config;
+use cpd_core::host::tmux::RUNNER_OPTION;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::incident::is_on;
 use rusqlite::OptionalExtension;
@@ -73,12 +75,17 @@ pub(super) fn run(engine: &mut Engine) {
         Err(e) => return engine.fail(Step::Workers, About::Machine, &e),
     };
     let (long, short) = (counts.long(), counts.short());
+    // pro-d199: read afresh every tick; a config that does not parse sets nothing (no stale fallback).
+    let runner = match Config::load(&engine.home) {
+        Ok(fresh) => fresh.worker_runner,
+        Err(e) => return engine.fail(Step::Workers, About::Machine, &e),
+    };
     // What was last set: the two workers texts and the incident value, one string (no value holds a newline).
     let incident_state = match &incident {
         Some(elapsed) => format!("on:{elapsed}"),
         None => "off".to_string(),
     };
-    let state = format!("{long}\n{short}\n{incident_state}");
+    let state = format!("{long}\n{short}\n{incident_state}\n{}", runner.as_str());
     if engine.workers.as_deref() == Some(state.as_str()) {
         return;
     }
@@ -93,6 +100,7 @@ pub(super) fn run(engine: &mut Engine) {
     }
     // One call, so a status line never draws a text that belongs to another.
     let mut args: Vec<String> = ["set", "-g", LONG, &long, ";", "set", "-g", SHORT, &short].map(str::to_owned).to_vec();
+    args.extend([";", "set", "-g", RUNNER_OPTION, runner.as_str()].map(str::to_owned));
     args.push(";".to_string());
     match &incident {
         Some(elapsed) => args.extend(["set", "-g", INCIDENT, elapsed].map(str::to_owned)),

@@ -336,6 +336,7 @@ enum Action {
     Legend,
     Logs,
     Costs,
+    Runner,
     Merge,
     Host,
     Incident,
@@ -348,6 +349,7 @@ impl Action {
             "legend" => Some(Action::Legend),
             "logs" => Some(Action::Logs),
             "costs" => Some(Action::Costs),
+            "runner" => Some(Action::Runner),
             "merge" => Some(Action::Merge),
             "host" => Some(Action::Host),
             "incident" => Some(Action::Incident),
@@ -356,7 +358,7 @@ impl Action {
     }
 }
 
-/// `cpd tui action <reset|legend|logs|costs|host|incident> --client <name>` and `cpd tui action
+/// `cpd tui action <reset|legend|logs|costs|runner|host|incident> --client <name>` and `cpd tui action
 /// merge <owner>/<repo>#<n> --client <name>` (commands.md §13.2): runs the
 /// click of a StatusBar button, or the merge a click started, on
 /// client `client`. It prints nothing, on stdout or stderr, and always exits
@@ -366,7 +368,8 @@ impl Action {
 /// the merge action's own, [`merge::action`]).
 pub(super) fn action(ports: &Ports, name: Option<&str>, pull: Option<&str>, client: &str, run_command: RunCommand, run_on: RunOn) -> Output {
     if let Err(e) = run_action(ports, name, pull, client, run_command, run_on) {
-        if let Ok(tmux) = action_tmux(ports) {
+        {
+            let tmux = failure_tmux(ports);
             let message = format!("cpd tui action: {}", e.message());
             // `-l`: the message is shown as is, not expanded as a format.
             let _ = tmux.run(&["display-message".to_owned(), "-l".to_owned(), "-c".to_owned(), client.to_owned(), message]);
@@ -380,11 +383,21 @@ fn action_tmux(ports: &Ports) -> Result<Tmux, CpdError> {
     Ok(Tmux::new(Config::load(&CpdHome::from_env()?)?.tmux.socket).with_runner(ports.runner.clone()))
 }
 
+/// The tmux a failure is shown on when the config does not parse (so names no socket): the default socket `cpd`.
+fn failure_tmux(ports: &Ports) -> Tmux {
+    action_tmux(ports).unwrap_or_else(|_| Tmux::new("cpd".to_owned()).with_runner(ports.runner.clone()))
+}
+
 fn run_action(ports: &Ports, name: Option<&str>, pull: Option<&str>, client: &str, run_command: RunCommand, run_on: RunOn) -> Result<(), CpdError> {
     let action = name.and_then(Action::parse).ok_or_else(|| {
-        CpdError::new(ErrorCode::Usage, format!("unknown action {:?}: reset, legend, logs, costs, host or incident.", name.unwrap_or("")))
+        CpdError::new(ErrorCode::Usage, format!("unknown action {:?}: reset, legend, logs, costs, runner, host or incident.", name.unwrap_or("")))
     })?;
     let home = CpdHome::from_env()?;
+    // The runner click reads the config itself: a config that does not parse is its error, not a failed load here.
+    if let (Action::Runner, None) = (action, pull) {
+        let tmux = failure_tmux(ports);
+        return toggle_runner(&home, &tmux, client);
+    }
     let config = Config::load(&home)?;
     let tmux = Tmux::new(config.tmux.socket.clone()).with_runner(ports.runner.clone());
     let popup = match (action, pull) {
@@ -399,9 +412,17 @@ fn run_action(ports: &Ports, name: Option<&str>, pull: Option<&str>, client: &st
         (Action::Reset, None) => return reset_layout(&tmux, &config.tmux.cockpit_session),
         (Action::Legend, None) => legend::popup_args(client_size(&tmux, client)?),
         (Action::Costs, None) => return toggle_costs(&tmux, &config.tmux.cockpit_session),
+        (Action::Runner, None) => unreachable!("handled above"),
         (Action::Logs, None) => logs::popup_args(client_size(&tmux, client)?, None),
     };
     tmux.run(&on_client(popup, client)).map(drop)
+}
+
+/// The runner pill (pro-d199): flips `worker_runner` in config.toml, sets `@cpd_runner` at once and redraws the client.
+fn toggle_runner(home: &CpdHome, tmux: &Tmux, client: &str) -> Result<(), CpdError> {
+    let to = cpd_core::config::toggle(home)?;
+    tmux.run(&["set".to_owned(), "-g".to_owned(), cpd_core::host::tmux::RUNNER_OPTION.to_owned(), to.as_str().to_owned()])?;
+    tmux.run(&["refresh-client", "-S", "-c", client].map(str::to_owned)).map(drop)
 }
 
 /// The costs button (pro-d189, pro-d196): sends the literal key `$` to the live tree pane, whose view flips its cost
