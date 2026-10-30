@@ -261,8 +261,10 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd version sync` (§26.2) | Lead | no | no |
 | `cpd resource list` (§30) | Manager, Lead, Worker | no | no |
 | `cpd resource run` (§30) | Manager, Lead, Worker | no | no |
+| `cpd context show` (§3.3) | Manager, Lead, Worker | no | no |
+| `cpd context search` (§3.4) | Manager, Lead, Worker | no | no |
 
-`context new` gains `--owner` (§3.1), and `pr add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `pr add` gains `--shape` (§9.4), hs-d340 and hs-d341.
+`context show` and `context search` gain `Worker` (§3.3, §3.4; Plan `explore-roles`): an explore Worker reads the Context with them, read-only. `context new` gains `--owner` (§3.1), and `pr add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `pr add` gains `--shape` (§9.4), hs-d340 and hs-d341.
 
 ## 3. `context`
 
@@ -332,6 +334,8 @@ cpd context show [--context <id>] [--since <seq>] [--record <id>] [--topic <t>]
 | `--record <id>` | print that one record in full (B3-A4): `records` has only it, `markdown` renders only it with its whole `text`. Exclusive with `--since` (`usage`). A record not in the Context: `record_not_found` (exit 3, §4.6) |
 | `--topic <t>` | print every curated record in force of that topic, one per line `- [<id>] <short>` (contract §4.6, hs-d549, hs-d551), below. Exclusive with `--since` and `--record` (`usage`) |
 
+**Callers** (Plan `explore-roles`, R10): the Lead and the Manager, as before, and the **Worker**. An explore Worker (`scout` or `research`, §5.1) may run `context show` read-only, as its Spec's Deliverable section says; nothing enforces it (§2: anyone may run any command). Every other Worker's rule stays the Spec-only rule of the skill.
+
 Effects: none. Output: the Context, its records in index order, and `markdown`, the rendering of §2.2 "Context record" (title and Jira key; Plans; active decisions; superseded decisions with their successor; open questions; answered questions with their answers; active notes; superseded notes with their successor, labelled as a superseded decision is; a record retired by an approved retirement (contract §4.6 "Retirement", hs-d549, hs-d551) is labelled `retired (<reason> <target>)`, in the section of its kind, as a superseded one is labelled with its successor, and is in no digest; each item with its id and date; briefs under their Plan, see below). With `--since`, `markdown` renders only those records, in the same order of sections.
 
 **Briefs** (B3-A4): a record of kind `brief` is listed **short**, in `markdown` and in `records`: its id and the first line of its `text`, under its Plan (the Plan's section), never in full. In `records` its `text` is that first line and the entry has `"short": true`; its `plan` is `{id, machine}`. The full text is `cpd context show --record <id>`. `--record` is the only way to get a brief whole.
@@ -373,6 +377,8 @@ Searches the Context's curated records by topic and short form against the query
 | Flag | Meaning |
 |---|---|
 | `<query>` | search string to match against topics and short forms of curated records |
+
+**Callers** (Plan `explore-roles`, R10): as `context show` (§3.3): the Lead, the Manager and the **Worker**. An explore Worker (`scout` or `research`) may run it read-only, as its Spec's Deliverable section says; nothing enforces it (§2).
 
 Effects: none. Output: records with curated topics or short forms matching the query, in topic order, then index order. `markdown` renders results; `records` is the list of matching `{id, topic, short}` entries.
 
@@ -885,6 +891,8 @@ Output: every field of the Plan (§2.2), `outline` included (hs-d502: the outlin
  "tamper": [], "events_cursor": 48213}
 ```
 
+An explore Job (`scout` or `research`, §5.1) is in `jobs` like any Job, with `pr` null and its `kind`; `job show` (§5.7) shows its `summary` and `artefact`. Its `counts` entry is its status as for any Job.
+
 Idempotent: read-only. `tamper` non-empty is not an error (cpd 1 §11 `workflow show`, kept).
 
 ### 4.4 `plan phase`
@@ -922,6 +930,19 @@ Effects: writes `run/<plan>/plan.md` and `run/<plan>/summary.md` (§1.4), nothin
 The overlaps are grouped: **one overlap per (this Job, other Plan, other PR)**. It lists every Job of that other PR that overlaps this Job, with its status, and the paths of this Job that overlap one of them, each path once, in the order of the Job's `touches`. A broad path (`core/src/`) or a shared file is one entry of a row, not a row of its own for every pair of paths and Jobs (hs-n201: on a busy Context that made thousands of rows, and nobody could read them in a Plan review).
 
 `plan.md` has the section `## Overlaps` after the PRs table (and its graph), before the PR sections: a table with one row per overlap, ordered by this Job's key, then the other Plan, then the PR; or, when there is none, the line `No other active Plan touches these files.` A Plan with no PR yet has no PRs table and no section.
+
+**The Explore section** (Plan `explore-roles`, R3, R9). When the Plan has explore Jobs (`scout`, `research`, §5.1), `plan.md` has the section `## Explore` after `## Overlaps` and before the PR sections: a table with the columns exactly `Job | Kind | Tier | Status | Needs | Question | Artefact`, one row per explore Job in key order (`Needs` its needs joined by `, `, `—` when none; `Question` the first line of its `goal`, at most 100 characters; `Artefact` `run/<plan>/explore/<key>.md`); then, for each merged explore Job, a `### <key>` heading and its `summary`. Both are absent when the Plan has no explore Job. Explore Jobs are in no other block of the render: not the Jobs of a PR's table, not a PR's Mermaid graph.
+
+```
+## Explore
+
+| Job | Kind | Tier | Status | Needs | Question | Artefact |
+|---|---|---|---|---|---|---|
+| `cache-key` | `scout` | H2 | merged | — | Where is the cache key built? | `run/pay-4521/explore/cache-key.md` |
+
+### cache-key
+The key is built in `core/src/cache.rs` from the repo path and the schema version.
+```
 
 ```
 ## Overlaps
@@ -1015,6 +1036,8 @@ cpd plan review [--plan <id>] --title <text>
 
 Requests the User's approval of the draft Jobs (§2.2 Plan review). In phase `plan` the review covers the whole plan, as before; in every phase after `plan` it covers **exactly the draft Jobs** the Lead added: its fingerprint is over those drafts only (§2.3; a `draft` `open` Job is not one of them, so engine E4 adding one never voids a pending review, hs-d573), and the rendered plan marks them under review and shows the Locked Jobs as context (§4.5). A Lead that planned several batches adds the later ones as drafts (`job add --draft`, §5.1) and asks for one review per batch. The Lead runs it through its tool `cpd_plan_review` or directly; either way the pi adapter shows the summary in the Lead's chat, with the approval dialog, when the `plan-review` Event arrives (§15.5), so the review opens from any caller, in whatever phase the Plan is. The User approves, asks for a change, or opens the full render in plannotator (hs-d502).
 
+Explore Jobs (`scout`, `research`) are in no review (Plan `explore-roles`, R3): they are never `draft`, are in no block of the review's copy (the Jobs block counts only the Jobs under review and the locked ones of the PRs, and the Explore section of §4.5 is not in the copy) and are in no fingerprint (§2.3), so adding one never voids a pending review.
+
 | Precondition | Code | Exit |
 |---|---|---|
 | the phase is `plan`, or any phase after it (not `grounding`) | `illegal_phase` | 3 |
@@ -1089,6 +1112,8 @@ cpd plan lock [--plan <id>]
 | for each PR with no needs and no base PR: its Lead Branch and its parent path do not exist in its repo, except a leftover of an interrupted start (§2.1); `details.pr` | `branch_exists` | 3 |
 | for each PR with no needs and no base PR: `origin/<lead branch>` does not exist, or it does not conflict with `origin/<base>` (`git merge-tree`, §7.2, hs-d490; `details.files` the conflicted paths); a repo with no `origin` has no remote check; `details.pr` | `branch_exists` | 3 |
 | for each PR with no needs and no base PR: `pre-start` passed in its new Lead worktree (§7.3); `details.pr`, `details.tail`, `details.log` | `setup_failed` | 1 |
+
+**Explore Jobs** (Plan `explore-roles`, R3) are invisible to the lock. A Plan whose only Jobs are explore Jobs has no `draft` Job and is refused `no_draft_jobs`, as a Plan with no `draft` Job is. An explore Job is `queued` from its `job add` and is not queued again here.
 
 Effects (§3.1, §3.8, §7.2; R34, A8): every PR's `draft` Jobs are approved at once, and the PRs with no needs and no base PR **start**, all or nothing; the PRs with needs, and the **stacked** PRs (contract §2.2 "The base PR"; a base PR of the same Plan included: the lock orders no worktrees), stay `waiting` until engine E7 (or `pr start`, §9.7) starts them once their needs are `merged` and their base PR is `open`.
 - **git**, for each PR with no needs and no base PR, in its repo (§7.2, R35 per PR branch, A5): `fetch origin <base>`; `ls-remote --exit-code --heads origin <lead branch>`. When it is on the remote and does not conflict with `origin/<base>` (`merge-tree --write-tree --name-only` exits 0; a base that merely moved ahead is no conflict, hs-d490): reuse it, `fetch origin <lead branch>` and `worktree add --no-track -b <lead branch> <lead worktree> origin/<lead branch>`. When it is absent: `worktree add --no-track -b <lead branch> <lead worktree> origin/<base>`. A repo with no `origin` (A3): no remote check and no push, `worktree add --no-track` from `<base>`. `--no-track`: a Lead Branch has no upstream, so nothing writes `.git/config` (hs-d243, contract §7.2). Then `pre-start` in the worktree, output in `run/<plan>/logs/lead-<key>.pre-start.log`. Every started PR's worktree is created and its `pre-start` run before anything is pushed; if one fails, every worktree and branch the lock created is removed, nothing is pushed, nothing in the database changes, and the lock fails with that PR's refusal. When all have passed, each new Lead Branch is pushed, `push origin <lead branch>` from its Lead worktree (no `-u`, hs-d243). A failed push does not fail the lock: one `error` Event with code `push_failed` and `details.pr` is appended per failed PR, and the next merge or `pr open` pushes again.
@@ -1196,7 +1221,7 @@ A Session `working`, `waiting` or `blocked` and a Job `running` do not block (un
 Effects, in this order; each step is idempotent, so a rerun after any failure continues where it stopped:
 1. **Check** the preconditions above that need no write.
 2. **Plan reviews:** every pending review of the Plan becomes `superseded` with `decided_at` = now and `feedback` null, **Event** `plan-review` `{review, fingerprint, status: "superseded"}` (reason: "Plan review r<k> of Plan P is superseded: the Plan was cancelled.") The User sees the reason in the Event's `text` (contract §5.2) and the dialog closes in the pi adapter (§15.5).
-3. **Jobs**, as `job cancel` (§5.3) for every Job not `merged` and not `cancelled`, with the reason, **but no Job is refused `shape_incomplete`**, in particular not the last `test` or `impl` Job of a `tdd` PR (cancelling a Plan is never refused by the shape check, hs-d573; the skip is an internal parameter of the path, never a flag, option or environment variable): `draft`, `queued` and `failed` become `cancelled` with **Event** `job-cancelled`; a `running` Job gets `job-cancel-requested`, and engine E2 or the driver ends its Attempt `cancelled` at the next safe point (contract §3.4). The command then waits, polling, up to 60 s until no Attempt of the Plan is not `ended`. Dependents cannot start, as for `job cancel`; they are cancelled themselves by this step.
+3. **Jobs**, as `job cancel` (§5.3) for every Job not `merged` and not `cancelled` (the explore Jobs, `scout` and `research`, included: they have no PR, so step 5 does not touch them), with the reason, **but no Job is refused `shape_incomplete`**, in particular not the last `test` or `impl` Job of a `tdd` PR (cancelling a Plan is never refused by the shape check, hs-d573; the skip is an internal parameter of the path, never a flag, option or environment variable): `draft`, `queued` and `failed` become `cancelled` with **Event** `job-cancelled`; a `running` Job gets `job-cancel-requested`, and engine E2 or the driver ends its Attempt `cancelled` at the next safe point (contract §3.4). The command then waits, polling, up to 60 s until no Attempt of the Plan is not `ended`. Dependents cannot start, as for `job cancel`; they are cancelled themselves by this step.
 4. **Escalations:** each `open` Escalation of the Plan becomes `expired`, **Event** `escalation-expired`.
 5. **Pull requests:** for each PR of the Plan with status `open` whose pull request is not `merged`, `gh pr close <number> --repo <owner/repo>`. The PR rows keep their status (`open`; PR statuses never end this way, contract §3.8); the next `pr poll` reads the closure and appends no `pr-feedback` for an archived Plan. A `waiting` PR has no pull request: nothing. A `merged` PR is never touched. A PR with `head_ref` (adopted, §9.4) is never closed: its pull request stays open and is listed under `left_open` (`[{pr, number}]`).
 6. **tmux:** close every live Lead pane as `session close` does (§10.9).
