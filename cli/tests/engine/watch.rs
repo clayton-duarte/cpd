@@ -856,7 +856,7 @@ fn an_engine_that_died_without_a_watch_stopped_sends_no_notice() {
 // ---------- @cpd_workers ----------
 
 // Each fixture's dispatch PR has its `open` Job, which E4 adds at the first tick and which waits for the PR's other Jobs: one queued Job.
-const NO_WORKERS: &str = "workers #[noreverse]#[fg=colour1]#[bg=colour8]1#[reverse]#[fg=colour8]#[bg=default]·#[noreverse]#[fg=colour3]#[bg=colour8]0#[reverse]#[fg=colour8]#[bg=default]·#[noreverse]#[fg=colour2]#[bg=colour8]0#[reverse]#[fg=colour8]#[bg=default]/3";
+const NO_WORKERS: &str = "workers 1\u{f0798}0\u{f0798}0/3";
 
 /// The engine in-process on the fake tmux server of `fx.tmux(..)`: Plan `pay` in `dispatch` (its `open` Job is the one queued
 /// Job of [`NO_WORKERS`]), no tmux server yet ([`Ip::tmux_server`]).
@@ -935,8 +935,8 @@ fn the_engine_counts_waiting_and_queued_jobs() {
     // The second tick counts the `open` Job the first adds.
     fx.watch_ticks(OVER_ONE_TICK).unwrap();
 
-    assert_eq!(fx.tmux_option("@cpd_workers"), "workers #[noreverse]#[fg=colour1]#[bg=colour8]3#[reverse]#[fg=colour8]#[bg=default]·#[noreverse]#[fg=colour3]#[bg=colour8]1#[reverse]#[fg=colour8]#[bg=default]·#[noreverse]#[fg=colour2]#[bg=colour8]1#[reverse]#[fg=colour8]#[bg=default]/1");
-    assert_eq!(fx.tmux_option("@cpd_workers_short"), "#[noreverse]#[fg=colour1]#[bg=colour8]3#[reverse]#[fg=colour8]#[bg=default]·#[noreverse]#[fg=colour3]#[bg=colour8]1#[reverse]#[fg=colour8]#[bg=default]·#[noreverse]#[fg=colour2]#[bg=colour8]1#[reverse]#[fg=colour8]#[bg=default]/1");
+    assert_eq!(fx.tmux_option("@cpd_workers"), "workers 3\u{f0798}1\u{f0798}1/1");
+    assert_eq!(fx.tmux_option("@cpd_workers_short"), "3\u{f0798}1\u{f0798}1/1");
     // The engine sets no widths: tmux measures the texts (#347).
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
@@ -955,8 +955,8 @@ fn watch_cpd_workers_option_counts_are_unchanged_with_workers_as_a_resource() {
 
     fx.watch_ticks(OVER_ONE_TICK).unwrap();
 
-    assert_eq!(fx.tmux_option("@cpd_workers"), "workers #[noreverse]#[fg=colour1]#[bg=colour8]3#[reverse]#[fg=colour8]#[bg=default]·#[noreverse]#[fg=colour3]#[bg=colour8]1#[reverse]#[fg=colour8]#[bg=default]·#[noreverse]#[fg=colour2]#[bg=colour8]1#[reverse]#[fg=colour8]#[bg=default]/1");
-    assert_eq!(fx.tmux_option("@cpd_workers_short"), "#[noreverse]#[fg=colour1]#[bg=colour8]3#[reverse]#[fg=colour8]#[bg=default]·#[noreverse]#[fg=colour3]#[bg=colour8]1#[reverse]#[fg=colour8]#[bg=default]·#[noreverse]#[fg=colour2]#[bg=colour8]1#[reverse]#[fg=colour8]#[bg=default]/1");
+    assert_eq!(fx.tmux_option("@cpd_workers"), "workers 3\u{f0798}1\u{f0798}1/1");
+    assert_eq!(fx.tmux_option("@cpd_workers_short"), "3\u{f0798}1\u{f0798}1/1");
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
     // The ready Job waits for `workers`, whose one tenant is the one Attempt the `1/1` counts.
     let shown = fx.cpd(&["job", "show", "free", "--plan", PLAN]).ok();
@@ -988,8 +988,8 @@ fn watch_cpd_workers_option_counts_tenant_jobs_including_a_failed_one() {
 
     fx.watch_ticks(OVER_ONE_TICK).unwrap();
 
-    assert_eq!(fx.tmux_option("@cpd_workers"), "workers #[noreverse]#[fg=colour1]#[bg=colour8]1#[reverse]#[fg=colour8]#[bg=default]·#[noreverse]#[fg=colour3]#[bg=colour8]0#[reverse]#[fg=colour8]#[bg=default]·#[noreverse]#[fg=colour2]#[bg=colour8]2#[reverse]#[fg=colour8]#[bg=default]/3");
-    assert_eq!(fx.tmux_option("@cpd_workers_short"), "#[noreverse]#[fg=colour1]#[bg=colour8]1#[reverse]#[fg=colour8]#[bg=default]·#[noreverse]#[fg=colour3]#[bg=colour8]0#[reverse]#[fg=colour8]#[bg=default]·#[noreverse]#[fg=colour2]#[bg=colour8]2#[reverse]#[fg=colour8]#[bg=default]/3");
+    assert_eq!(fx.tmux_option("@cpd_workers"), "workers 1\u{f0798}0\u{f0798}2/3");
+    assert_eq!(fx.tmux_option("@cpd_workers_short"), "1\u{f0798}0\u{f0798}2/3");
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
 
