@@ -14,7 +14,12 @@ use crate::ids::PlanId;
 pub const STATUSES: [&str; 6] = ["draft", "queued", "running", "merged", "failed", "cancelled"];
 
 /// The kinds of Job (`jobs.kind`, §2.2 "Job kinds"): `open` and `update` are cpd's, the others the Lead's.
-pub const KINDS: [&str; 7] = ["work", "docs", "test", "impl", "verify", "open", "update"];
+pub const KINDS: [&str; 9] = ["work", "docs", "test", "impl", "verify", "open", "update", "scout", "research"];
+
+/// The explore kinds (`scout`, `research`): Jobs of the Plan, not of a PR.
+pub fn is_explore(kind: &str) -> bool {
+    matches!(kind, "scout" | "research")
+}
 
 /// The Spec of a Job (§2.2): all five fields, or none (a stub, below). The
 /// arrays are kept as the JSON values stored, so a fingerprint hashes exactly
@@ -35,7 +40,7 @@ pub struct Job {
     pub seq: i64,
     pub key: String,
     /// The key of the PR the Job belongs to (`jobs.pr`, §2.2).
-    pub pr: String,
+    pub pr: Option<String>,
     pub title: String,
     pub tier: Option<String>,
     pub spec: Option<JobSpec>,
@@ -65,6 +70,11 @@ pub struct Job {
 }
 
 impl Job {
+    /// The key of the Job's PR; empty for a Job with none (an explore Job), which no PR key equals.
+    pub fn pr_str(&self) -> &str {
+        self.pr.as_deref().unwrap_or_default()
+    }
+
     pub fn is_draft(&self) -> bool {
         self.status == "draft"
     }
@@ -163,7 +173,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
     let rows = stmt
         .query_map([plan.as_str()], |r| {
             Ok((
-                (r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?),
+                (r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?),
                 (r.get::<_, Option<String>>(5)?, r.get::<_, Option<String>>(6)?),
                 (r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?, r.get::<_, Option<String>>(9)?),
                 (r.get::<_, String>(10)?, r.get::<_, bool>(11)?, r.get::<_, Option<String>>(12)?, r.get::<_, Option<String>>(13)?),
@@ -309,7 +319,7 @@ mod tests {
         Job {
             seq: 1,
             key: key.into(),
-            pr: "web".into(),
+            pr: Some("web".into()),
             title: format!("Title {key}"),
             tier: Some("S2".into()),
             spec: Some(JobSpec { goal: "g".into(), context: "c".into(), touches: json!(["a"]), acceptance: json!(["b"]), out_of_scope: json!([]) }),

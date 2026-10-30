@@ -289,7 +289,7 @@ fn check_outline(id: &PlanId, s: &Snapshot) -> Result<(), CpdError> {
     let mut without: Vec<&str> = s
         .prs
         .iter()
-        .filter(|p| p.status != "cancelled" && s.jobs.iter().any(|j| j.is_draft() && j.pr == p.key.as_str()))
+        .filter(|p| p.status != "cancelled" && s.jobs.iter().any(|j| j.is_draft() && j.pr_str() == p.key.as_str()))
         .map(|p| p.key.as_str())
         .filter(|key| !outline.done_when.contains_key(*key))
         .collect();

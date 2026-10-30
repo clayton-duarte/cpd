@@ -434,7 +434,7 @@ pub fn markdown(heading: &Heading, context: &str, phase: &str, prs: &[PrRow], jo
     let mut cancelled = cancelled;
     cancelled.sort_by(|a, b| a.key.cmp(&b.key));
     for pr in order.into_iter().chain(cancelled) {
-        let jobs: Vec<&Job> = jobs.iter().filter(|j| j.pr == pr.key.as_str()).collect();
+        let jobs: Vec<&Job> = jobs.iter().filter(|j| j.pr_str() == pr.key.as_str()).collect();
         pr_section(&mut out, pr, &jobs, later, open_tier, &shown);
     }
     out.join("\n")
@@ -504,7 +504,7 @@ mod tests {
         Job {
             seq: 1,
             key: key.into(),
-            pr: pr.into(),
+            pr: Some(pr.into()),
             title: format!("Title {key}"),
             tier: Some("S2".into()),
             spec: Some(JobSpec { goal: "g".into(), context: "c".into(), touches: serde_json::json!(["a"]), acceptance: serde_json::json!(["b"]), out_of_scope: serde_json::json!([]) }),

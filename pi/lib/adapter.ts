@@ -3,8 +3,11 @@ import { registerAgentState } from "./agent-state.ts";
 import { registerCompactionRatio } from "./compaction-ratio.ts";
 import { createHost, type Options } from "./host.ts";
 import { registerLoopGuard } from "./loop-guard.ts";
+import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { exploreKind, exploreVerdict, isInsideRepo } from "./explore.ts";
+import { fileURLToPath } from "node:url";
+import { pinAdapter } from "./adapter-pin.ts";
 import { primaryCheckoutMove, primaryCheckoutWrite, reasonText as mainReasonText } from "./mainguard.ts";
 import { BOUND_SECONDS, blockingReason, reasonText } from "./noblock.ts";
 import type { PiApi } from "./pi.ts";
@@ -27,6 +30,11 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   registerCompactionRatio(); // §15.19: pi's SettingsManager derives the reserve from the compaction ratio
   registerChatPad(); // §15.9: hook the fullscreen root before pi's first mount, so the pad catches it too
   const host = createHost(pi, options);
+  try {
+    pinAdapter(join(dirname(fileURLToPath(import.meta.url)), ".."));
+  } catch (e) {
+    host.deliver("adapter pin", e); // a pin that cannot be written must not stop pi
+  }
 
   // commands.md §15.9: one renderer for every cpd customType; its style is read at `session_start` (startup.ts).
   for (const type of RENDERED_TYPES) pi.registerMessageRenderer(type, host.rendering.render);

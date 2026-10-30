@@ -77,7 +77,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     tamper.extend(jobs::tampered(&id, &jobs));
     for pr in &mut prs {
         let key = pr["key"].as_str().expect("a PR key").to_owned();
-        pr["jobs"] = json!(jobs.iter().filter(|j| j.pr == key).map(|j| j.key.as_str()).collect::<Vec<_>>());
+        pr["jobs"] = json!(jobs.iter().filter(|j| j.pr_str() == key).map(|j| j.key.as_str()).collect::<Vec<_>>());
     }
     let job_values: Vec<Value> = jobs
         .iter()

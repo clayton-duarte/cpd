@@ -84,7 +84,10 @@ fn jobs_triggers(store: &mut Store) -> Vec<(String, String)> {
                     let code: Vec<&str> = sql.lines().map(|l| l.split("--").next().unwrap_or_default()).collect();
                     (name, code.join(" ").split_whitespace().collect::<Vec<_>>().join(" ").replace(" ,", ",").replace(" )", ")").replace(", 'skipped_n', OLD.skipped_n", "").replace(", 'skipped_n', NEW.skipped_n", "")
                         .replace(" UNION ALL SELECT 'skipped_n', OLD.skipped_n WHERE OLD.skipped_n IS NOT NEW.skipped_n", "")
-                        .replace(" UNION ALL SELECT 'skipped_n', NEW.skipped_n WHERE OLD.skipped_n IS NOT NEW.skipped_n", ""))
+                        .replace(" UNION ALL SELECT 'skipped_n', NEW.skipped_n WHERE OLD.skipped_n IS NOT NEW.skipped_n", "")
+                        .replace(", 'summary', OLD.summary", "").replace(", 'summary', NEW.summary", "")
+                        .replace(" UNION ALL SELECT 'summary', OLD.summary WHERE OLD.summary IS NOT NEW.summary", "")
+                        .replace(" UNION ALL SELECT 'summary', NEW.summary WHERE OLD.summary IS NOT NEW.summary", ""))
                 })
                 .collect())
         })
@@ -140,6 +143,8 @@ fn the_migration_keeps_every_job_dependency_and_attempt_row() {
             // `skipped_n` is the column of `job-tenancy`, which sorts after this migration: null in every row.
             if let Some(row) = row.as_object_mut().filter(|_| *table == "jobs") {
                 assert_eq!(row.remove("skipped_n"), Some(Value::Null));
+                // `summary` is the column of `explore-kinds`, which sorts after this migration: null in every row.
+                assert_eq!(row.remove("summary"), Some(Value::Null));
             }
             // `runner` and `worker_pid` are the columns of `worker-runner`, which sorts after this migration: `pi` and null.
             if let Some(row) = row.as_object_mut().filter(|_| *table == "attempts") {

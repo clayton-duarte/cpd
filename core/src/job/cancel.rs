@@ -33,7 +33,7 @@ enum Decision {
 /// Whether the cancel keeps the shape of a `tdd` PR (`shape_incomplete`). Only `plan cancel` skips it, by calling
 /// [`cancel_without_shape`]: it is a parameter of the function, never a flag or an option of the command.
 #[derive(Clone, Copy)]
-enum Shape {
+pub(super) enum Shape {
     Keep,
     Skip,
 }
@@ -49,8 +49,12 @@ pub(crate) fn cancel_without_shape(plan: &PlanId, key: JobKey, reason: &str) -> 
 }
 
 fn cancel_with(plan: &PlanId, key: JobKey, reason: &str, shape: Shape) -> Result<Output, CpdError> {
+    cancel_in(&mut Env::open()?, plan, key, reason, shape)
+}
+
+/// [`cancel_with`] on an open `env`: what a test hands in.
+pub(super) fn cancel_in(env: &mut Env, plan: &PlanId, key: JobKey, reason: &str, shape: Shape) -> Result<Output, CpdError> {
     let (plan, reason) = (plan.clone(), reason.to_owned());
-    let mut env = Env::open()?;
 
     let decision = env.store.read(|conn| decide(conn, &plan, &key, shape))?;
     let (status, requested, already, failed) = match decision {
@@ -202,7 +206,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, shape: Shape) -> Resul
 /// (`shape_incomplete`, §5.3, hs-d497).
 fn keeps_the_shape(conn: &Connection, plan: &PlanId, all: &[Job], job: &Job) -> Result<(), CpdError> {
     let prs = crate::plan::fingerprint::load_prs(conn, plan)?;
-    let Some(pr) = prs.iter().find(|p| p.key.as_str() == job.pr) else { return Ok(()) };
+    let Some(pr) = prs.iter().find(|p| p.key.as_str() == job.pr_str()) else { return Ok(()) };
     let lacks = crate::plan::shape::missing(pr, all, Some(job.key.as_str()));
     // Only what this cancel would take away: a PR that already lacked a kind is not this Job's doing.
     let kept = crate::plan::shape::missing(pr, all, None);

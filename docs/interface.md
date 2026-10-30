@@ -7,8 +7,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd context` | Contexts and their records (commands.md §3) | | |
 | `cpd context new` | Create a Context (§3.1) | Lead | yes |
 | `cpd context list` | List the Contexts (§3.2) | Lead, Manager | |
-| `cpd context show` | Show a Context and its records (§3.3) | Lead, Manager | |
-| `cpd context search` | Search the Context's records, ranked by the holographic engine (§3.3) | Lead, Manager | |
+| `cpd context show` | Show a Context and its records (§3.3) | Lead, Manager, Worker | |
+| `cpd context search` | Search the Context's records, ranked by the holographic engine (§3.3) | Lead, Manager, Worker | |
 | `cpd context reindex` | Rebuild the Context's holographic engine index (§3.3) | Lead, Manager | |
 | `cpd context decide` | Record a decision (§3.4) | Lead, Manager | |
 | `cpd context note` | Record a note (§3.4) | Lead, Manager | |

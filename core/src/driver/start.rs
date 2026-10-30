@@ -251,7 +251,7 @@ fn decide(conn: &Connection, home: &CpdHome, catalog: &Catalog, plan: &PlanId, k
     )?;
     require_ready(&all, job, plan, &phase, &pr_status)?;
     if job.kind == "open" {
-        let pr = crate::ids::PrKey::parse(&job.pr).map_err(|e| CpdError::bad_row(format!("Job {key} has the PR key {:?}: {e}", job.pr)))?;
+        let pr = crate::ids::PrKey::parse(job.pr_str()).map_err(|e| CpdError::bad_row(format!("Job {key} has the PR key {:?}: {e}", job.pr_str())))?;
         crate::pr::stored_description_of(conn, plan, &pr)?;
         crate::pr::jira_required_of(conn, home, plan, &pr)?;
     }
@@ -306,19 +306,19 @@ fn decide(conn: &Connection, home: &CpdHome, catalog: &Catalog, plan: &PlanId, k
     // A linear Attempt (hs-d680, pro-d52) is the PR's only live Attempt for its whole life: it runs in the PR's one
     // workflow worktree on the Lead Branch, which a parallel Attempt's merge would move under it. Counted here, inside
     // the same transaction that inserts the Attempt, so two concurrent starts cannot both take the workflow worktree.
-    if pr_has_live_linear(conn, plan, job.pr.as_str(), &attempt.to_string())? {
+    if pr_has_live_linear(conn, plan, job.pr_str(), &attempt.to_string())? {
         return Err(CpdError::new(
             ErrorCode::CasLost,
-            format!("Attempt {attempt} of Job {key} cannot start: the workflow worktree of PR {} is held by a live linear Attempt.", job.pr),
+            format!("Attempt {attempt} of Job {key} cannot start: the workflow worktree of PR {} is held by a live linear Attempt.", job.pr_str()),
         )
         .with("plan", plan.as_str())
         .with("job", key.as_str())
-        .with("pr", job.pr.as_str()));
+        .with("pr", job.pr_str()));
     }
     let live: i64 = conn.query_row(
         "SELECT count(*) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
           WHERE a.plan = ?1 AND j.pr = ?2 AND a.status <> 'ended' AND a.id <> ?3",
-        params![plan.as_str(), job.pr.as_str(), attempt.to_string()],
+        params![plan.as_str(), job.pr_str(), attempt.to_string()],
         |r| r.get(0),
     )?;
     // E3's derived allocation wins when it passed one; otherwise the starter derives it from the live Attempts.
@@ -326,10 +326,10 @@ fn decide(conn: &Connection, home: &CpdHome, catalog: &Catalog, plan: &PlanId, k
     // so the caller re-reads and retries (§3.7 E3, hs-d680/hs-d682/hs-d683).
     let linear = match allocation {
         Some(Allocation::Linear) if live > 0 => {
-            return Err(CpdError::new(ErrorCode::CasLost, format!("Attempt {attempt} of Job {key} cannot be linear: another Attempt of PR {} is live.", job.pr))
+            return Err(CpdError::new(ErrorCode::CasLost, format!("Attempt {attempt} of Job {key} cannot be linear: another Attempt of PR {} is live.", job.pr_str()))
                 .with("plan", plan.as_str())
                 .with("job", key.as_str())
-                .with("pr", job.pr.as_str()));
+                .with("pr", job.pr_str()));
         }
         Some(Allocation::Linear) => true,
         Some(Allocation::Parallel) => false,
@@ -338,11 +338,11 @@ fn decide(conn: &Connection, home: &CpdHome, catalog: &Catalog, plan: &PlanId, k
     let (branch, worktree) = if linear {
         let (lead_branch, lead_worktree): (String, Option<String>) = conn.query_row(
             "SELECT lead_branch, lead_worktree FROM prs WHERE plan = ?1 AND key = ?2",
-            params![plan.as_str(), job.pr.as_str()],
+            params![plan.as_str(), job.pr_str()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         let lead_worktree = lead_worktree.ok_or_else(|| {
-            CpdError::new(ErrorCode::StoreFailed, format!("PR {} of Plan {plan} has no workflow worktree.", job.pr)).with("pr", job.pr.as_str())
+            CpdError::new(ErrorCode::StoreFailed, format!("PR {} of Plan {plan} has no workflow worktree.", job.pr_str())).with("pr", job.pr_str())
         })?;
         (lead_branch, PathBuf::from(lead_worktree))
     } else {
@@ -371,15 +371,15 @@ fn require_ready(all: &[Job], job: &Job, plan: &PlanId, phase: &str, pr_status: 
     } else if !matches!(phase, "dispatch" | "deploy") {
         format!("Plan {plan} is in phase {phase}")
     } else if !matches!(pr_status, "dispatch" | "open") {
-        format!("its PR {} is {pr_status}", job.pr)
+        format!("its PR {} is {pr_status}", job.pr_str())
     } else if job.kind == "open" && pr_status != "dispatch" {
-        format!("its PR {} is {pr_status}, and an open Job runs only while its PR is dispatch", job.pr)
+        format!("its PR {} is {pr_status}, and an open Job runs only while its PR is dispatch", job.pr_str())
     } else if !waiting.is_empty() && derived.is_some() {
         format!("it waits for {}, not finished yet", waiting.join(", "))
     } else if !waiting.is_empty() {
         format!("it needs {}, not merged yet", waiting.join(", "))
     } else if job.kind == "open" && crate::job::open::nothing_merged(all, job) {
-        format!("no other Job of its PR {} is merged: there is nothing to open", job.pr)
+        format!("no other Job of its PR {} is merged: there is nothing to open", job.pr_str())
     } else {
         return Ok(());
     };
@@ -388,7 +388,7 @@ fn require_ready(all: &[Job], job: &Job, plan: &PlanId, phase: &str, pr_status: 
         .with("job", job.key.as_str())
         .with("status", job.status.as_str())
         .with("phase", phase)
-        .with("pr", job.pr.as_str())
+        .with("pr", job.pr_str())
         .with("pr_status", pr_status)
         .with("waiting_for", waiting))
 }

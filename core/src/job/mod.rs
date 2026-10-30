@@ -21,6 +21,8 @@ pub(crate) mod cancel;
 mod edit;
 pub(crate) mod fix_retry;
 #[cfg(test)]
+mod explore_tests;
+#[cfg(test)]
 mod fix_retry_tests;
 pub mod guard;
 pub mod open;
@@ -229,12 +231,61 @@ impl Env {
             plan_phase(conn, plan)?;
             match pr {
                 Some(pr) => crate::policy::model::models_of_pr(conn, &home, plan, pr),
-                None => crate::policy::model::models_of_job(conn, &home, plan, job.as_str()),
+                None => {
+                    let pr: Option<Option<String>> = conn
+                        .query_row("SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.as_str()], |r| r.get(0))
+                        .optional()?;
+                    match pr {
+                        Some(None) => explore_models(conn, &home, plan),
+                        _ => crate::policy::model::models_of_job(conn, &home, plan, job.as_str()),
+                    }
+                }
             }
         })?;
-        config::catalog::load_with(&models, &mut self.store)?.check(tier)?;
+        self.check_tier_models(&models, tier)
+    }
+
+    /// [`Env::check_tier`] for an explore Job, which has no PR: the models are the Context owner's.
+    fn check_explore_tier(&mut self, plan: &PlanId, tier: Tier) -> Result<(), CpdError> {
+        let home = self.home.clone();
+        let models = self.store.read(|conn| {
+            plan_phase(conn, plan)?;
+            explore_models(conn, &home, plan)
+        })?;
+        self.check_tier_models(&models, tier)
+    }
+
+    fn check_tier_models(&mut self, models: &crate::policy::model::Models, tier: Tier) -> Result<(), CpdError> {
+        let catalog = match &self.catalog {
+            Some(fixed) => fixed.clone(),
+            None => config::catalog::load_with(models, &mut self.store)?,
+        };
+        catalog.check(tier)?;
         tier.check_worker()
     }
+}
+
+/// The models of an explore Job (it has no PR): its Context owner's.
+fn explore_models(conn: &Connection, home: &crate::home::CpdHome, plan: &PlanId) -> Result<crate::policy::model::Models, CpdError> {
+    let context: String = conn.query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?;
+    crate::policy::model::models_of_context(conn, home, &context)
+}
+
+/// `tier_not_allowed` (exit 2, `details` name the kind and its range) unless `tier` is in the range of `kind`:
+/// H1-H3 for `scout`, S1-S3 for `research`; every other kind has no range of its own.
+pub(crate) fn check_kind_tier(kind: &str, tier: Tier) -> Result<(), CpdError> {
+    let (letter, range) = match kind {
+        "scout" => (config::Letter::H, "H1-H3"),
+        "research" => (config::Letter::S, "S1-S3"),
+        _ => return Ok(()),
+    };
+    if tier.letter() == letter && (1..=3).contains(&tier.effort()) {
+        return Ok(());
+    }
+    Err(CpdError::new(ErrorCode::TierNotAllowed, format!("Tier {tier} is not allowed for a {kind} Job: its Tiers are {range}."))
+        .with("tier", tier.to_string())
+        .with("kind", kind)
+        .with("allowed", range))
 }
 
 /// The Plan's phase, else `plan_not_found`.
@@ -339,7 +390,7 @@ fn check_test_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(),
     }
     Err(CpdError::new(
         ErrorCode::TestJobRequired,
-        format!("The impl Job {} must need a test Job of its PR {}: its tests are the ones its test Jobs name.", job.key, job.pr),
+        format!("The impl Job {} must need a test Job of its PR {}: its tests are the ones its test Jobs name.", job.key, job.pr_str()),
     )
     .with("plan", plan.as_str())
     .with("job", job.key.as_str())
@@ -354,7 +405,7 @@ fn check_impl_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(),
     }
     Err(CpdError::new(
         ErrorCode::ImplJobRequired,
-        format!("The verify Job {} must need an impl Job of its PR {}: it checks the code those Jobs build.", job.key, job.pr),
+        format!("The verify Job {} must need an impl Job of its PR {}: it checks the code those Jobs build.", job.key, job.pr_str()),
     )
     .with("plan", plan.as_str())
     .with("job", job.key.as_str())
@@ -404,7 +455,7 @@ pub(crate) fn check_needs_not_cancelled(jobs: &[Job], plan: &PlanId, needs: &[St
 
 /// Every Job of `needs` is in PR `pr` (`needs_other_pr`; `details.jobs` lists the others) (A7).
 fn check_needs_same_pr(jobs: &[Job], plan: &PlanId, pr: &str, needs: &[String]) -> Result<(), CpdError> {
-    let others: Vec<&str> = jobs.iter().filter(|j| needs.contains(&j.key) && j.pr != pr).map(|j| j.key.as_str()).collect();
+    let others: Vec<&str> = jobs.iter().filter(|j| needs.contains(&j.key) && j.pr_str() != pr).map(|j| j.key.as_str()).collect();
     if !others.is_empty() {
         return Err(CpdError::new(
             ErrorCode::NeedsOtherPr,

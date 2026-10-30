@@ -176,7 +176,7 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, 
     let mut job = Job {
         seq: 0,
         key: key.as_str().to_owned(),
-        pr: pr.key.as_str().to_owned(),
+        pr: Some(pr.key.as_str().to_owned()),
         title,
         tier: Some(tier.clone()),
         spec: Some(if update { update_spec(pr) } else { spec(pr) }),
@@ -291,7 +291,7 @@ mod tests {
         Job {
             seq: 1,
             key: key.into(),
-            pr: pr.into(),
+            pr: Some(pr.into()),
             title: format!("Title {key}"),
             tier: Some("S2".into()),
             spec: None,

@@ -21,7 +21,7 @@ pub(crate) fn missing(pr: &PrRow, jobs: &[Job], without: Option<&str>) -> Vec<&'
     }
     ["test", "impl"]
         .into_iter()
-        .filter(|kind| !jobs.iter().any(|j| j.pr == pr.key.as_str() && j.kind == *kind && j.status != "cancelled" && Some(j.key.as_str()) != without))
+        .filter(|kind| !jobs.iter().any(|j| j.pr_str() == pr.key.as_str() && j.kind == *kind && j.status != "cancelled" && Some(j.key.as_str()) != without))
         .collect()
 }
 

@@ -88,7 +88,7 @@ pub(super) fn plan_cancel(args: CancelArgs) -> Result<Output, CpdError> {
 
 /// Step 3: `job cancel`, without its shape check, for every Job that is not `merged` and not `cancelled`. The keys it newly
 /// cancelled, or asked the engine to stop.
-fn cancel_jobs(store: &mut Store, plan: &PlanId, reason: &str) -> Result<Vec<String>, CpdError> {
+pub(super) fn cancel_jobs(store: &mut Store, plan: &PlanId, reason: &str) -> Result<Vec<String>, CpdError> {
     let all = store.read(|conn| jobs::load(conn, plan))?;
     let mut keys = Vec::new();
     for job in all.iter().filter(|j| !matches!(j.status.as_str(), "merged" | "cancelled")) {
