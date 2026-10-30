@@ -7,6 +7,43 @@ use crate::error::{CpdError, ErrorCode};
 /// Check conclusions that count as failing. CANCELLED is neither failing nor pending (a cancelled run is no failure).
 const FAILING: [&str; 5] = ["FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"];
 
+/// What one required name is on the head's rollup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Required {
+    Missing,
+    Pending,
+    Failed,
+    Passed,
+}
+
+/// The state of each name in `required` on `checks`, in order: the same classification of conclusions as [`ChecksSummary::of`];
+/// of several entries named alike, failed wins, then pending, then passed.
+pub(super) fn required_states<'a>(checks: &[Check], required: &'a [String]) -> Vec<(&'a str, Required)> {
+    required
+        .iter()
+        .map(|name| {
+            let states = checks.iter().filter_map(|c| {
+                let state = if c.name.is_none() && c.context.as_deref() == Some(name) {
+                    let state = c.state.as_deref().unwrap_or_default().to_ascii_uppercase();
+                    if failing(&state) { Required::Failed } else if matches!(state.as_str(), "PENDING" | "EXPECTED") { Required::Pending } else { Required::Passed }
+                } else if c.name.as_deref() == Some(name) {
+                    let conclusion = c.conclusion.clone().filter(|s| !s.is_empty()).or_else(|| c.state.clone()).unwrap_or_default().to_ascii_uppercase();
+                    if failing(&conclusion) { Required::Failed } else if PENDING.contains(&conclusion.as_str()) { Required::Pending } else { Required::Passed }
+                } else {
+                    return None;
+                };
+                Some(state)
+            });
+            let state = states.reduce(|a, b| match (a, b) {
+                (Required::Failed, _) | (_, Required::Failed) => Required::Failed,
+                (Required::Pending, _) | (_, Required::Pending) => Required::Pending,
+                _ => Required::Passed,
+            });
+            (name.as_str(), state.unwrap_or(Required::Missing))
+        })
+        .collect()
+}
+
 pub(super) fn failing(conclusion: &str) -> bool {
     FAILING.contains(&conclusion.to_ascii_uppercase().as_str())
 }
@@ -26,8 +63,9 @@ pub(super) enum ChecksSummary {
 impl ChecksSummary {
     /// The one rule (contract §7.6) of the poll and `pr view`: any failure wins; a CheckRun is pending when its conclusion is not
     /// final, a StatusContext when its state is PENDING or EXPECTED; a PENDING StatusContext named in `human_gated` counts as
-    /// passed only when a CheckRun exists and none is pending; no checks is `none`.
-    pub fn of(checks: &[Check], human_gated: &[String], _required: &[String]) -> ChecksSummary {
+    /// passed only when a CheckRun exists and none is pending; no checks is `none`. A name in `required` that is missing from `checks` or
+    /// not final makes it `pending` (a failure still wins).
+    pub fn of(checks: &[Check], human_gated: &[String], required: &[String]) -> ChecksSummary {
         let mut runs = 0;
         let mut run_pending = false;
         let mut failed = false;
@@ -44,11 +82,15 @@ impl ChecksSummary {
                 run_pending |= PENDING.contains(&conclusion.as_str());
             }
         }
+        let required = required_states(checks, required);
+        if failed || required.iter().any(|(_, s)| *s == Required::Failed) {
+            return ChecksSummary::Failed;
+        }
+        if required.iter().any(|(_, s)| matches!(s, Required::Missing | Required::Pending)) {
+            return ChecksSummary::Pending;
+        }
         if runs + contexts.len() == 0 {
             return ChecksSummary::None;
-        }
-        if failed {
-            return ChecksSummary::Failed;
         }
         let gated_ok = runs > 0 && !run_pending;
         let context_pending = contexts.iter().any(|(name, pending)| *pending && !(gated_ok && human_gated.iter().any(|g| g == name)));
