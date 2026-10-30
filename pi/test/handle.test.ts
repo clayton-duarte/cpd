@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ev, Fixture, ID, planShow, waitFor } from "./fake.ts";
+import { ev, Fixture, ID, planShow, shown, waitFor } from "./fake.ts";
 
 // commands.md §15.2: a `store_too_new` failure line of a follower started before an install is not delivered (the restart runs the new cpd).
 
@@ -89,3 +89,45 @@ test("mentions: a plan-created Event refreshes the ids", async (t) => {
   await f.quiet();
   assert.deepEqual(lists(f).slice(3).sort(), ["context", "plan", "session"], "once each");
 });
+
+test("a Lead is delivered an Event id once when the follower prints it twice", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("plan-show", planShow());
+  f.load();
+  await f.pi.fire("session_start");
+  await waitFor("the follower", () => f.follows().length > 0);
+  await f.pi.busy();
+
+  const feedback = ev(101, "pr-feedback", { data: { reason: "checks-failed" } });
+  const merged = ev(102, "job-merged", { data: { turn: true } });
+  const message = ev(103, "session-message", { session: ID, data: { from: null, text: "ship it", wake: false } });
+  const other = ev(104, "job-merged", { data: { turn: true } });
+  f.emit(feedback, feedback, merged, merged, message, message, other);
+  await waitFor("four deliveries", () => f.pi.delivered().length >= 4);
+  await f.drain();
+
+  const sent = f.pi.delivered();
+  assert.deepEqual(sent.map((s) => (s.message.details as any).id), [101, 102, 103, 104]);
+  assert.deepEqual(sent[0]!.options, { triggerTurn: true, deliverAs: "steer" });
+  assert.deepEqual(sent[1]!.options, { triggerTurn: true, deliverAs: "followUp" });
+});
+
+test("a Worker is delivered an attempt-nudge id once when the follower prints it twice", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("plan-show", planShow());
+  f.respond("session-show", shown({ role: "worker", plan_lead: false }));
+  f.load();
+  await f.pi.fire("session_start");
+  await waitFor("the follower", () => f.follows().length > 0);
+
+  const nudge = ev(101, "attempt-nudge", { session: ID, data: { prompt: "Submit your work.", turns: 1 } });
+  f.emit(nudge, nudge);
+  await waitFor("the nudge", () => f.pi.delivered().length >= 1);
+  await f.drain(nudge2);
+
+  assert.deepEqual(f.pi.delivered().map((s) => (s.message.details as any).id), [101]);
+});
+
+const nudge2 = (id: number) => ev(id, "attempt-nudge", { session: ID, data: { prompt: "Submit your work.", turns: 1 } });
