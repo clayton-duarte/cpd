@@ -242,11 +242,11 @@ macro_rules! runner_width { () => { "#{?@cpd_runner,#{e|+:#{n:@cpd_runner},3},0}
 // The preview pill's width (0 without a preview): a join, two caps and `preview:` (12 cells) plus the value.
 macro_rules! preview_width { () => { "#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}" }; }
 // Whether the long workers form fits: the long workers pill's width (tmux's `#{w:@cpd_workers}` plus its two caps,
-// whose one space is the join), the closing `━`'s cell, the left group's 16 and a fill of at least 1 (18 in all), the
+// whose one space is the join), the closing `━`'s cell, the left group's 20 and a fill of at least 1 (22 in all), the
 // preview, the version pill and the incident pill.
 macro_rules! long_fits {
     () => {
-        concat!("#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},18},", runner_width!(), "},", preview_width!(), "},", version_width!(), "},", incident_width!(), "}}")
+        concat!("#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},22},", runner_width!(), "},", preview_width!(), "},", version_width!(), "},", incident_width!(), "}}")
     };
 }
 // The version pill's width (0 while `@cpd_version` is unset): a join, two caps and the version.
@@ -254,14 +254,14 @@ macro_rules! version_width { () => { "#{?@cpd_version,#{e|+:#{n:@cpd_version},3}
 // The incident pill's width (0 while `@cpd_incident` is unset): a join, two caps and the 15-cell label
 // `Incident Mode: ` plus the value.
 macro_rules! incident_width { () => { "#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}" }; }
-// The fill's first column, F0: the left group's 16 cells and the preview pill.
-macro_rules! fill_start { () => { concat!("#{e|+:#{e|+:16,", runner_width!(), "},", preview_width!(), "}") }; }
-// The fill's cell count: `#{client_width}` minus the left group's 16, the preview pill, the version pill, the incident
+// The fill's first column, F0: the left group's 20 cells and the preview pill.
+macro_rules! fill_start { () => { concat!("#{e|+:#{e|+:20,", runner_width!(), "},", preview_width!(), "}") }; }
+// The fill's cell count: `#{client_width}` minus the left group's 20, the preview pill, the version pill, the incident
 // pill and the right group's workers pill in the form drawn plus the closing `━`.
 macro_rules! fill_count {
     () => {
         concat!(
-            "#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},16},", runner_width!(), "},", preview_width!(), "},", version_width!(), "},", incident_width!(), "},",
+            "#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},20},", runner_width!(), "},", preview_width!(), "},", version_width!(), "},", incident_width!(), "},",
             "#{e|+:#{?", long_fits!(), ",#{e|+:#{w:@cpd_workers},2},#{e|+:#{w:@cpd_workers_short},2}},1}}"
         )
     };
@@ -292,17 +292,19 @@ macro_rules! join { () => { "#[fg=colour8]\u{2501}#[default]" }; }
 /// The StatusBar (contract §6.1, hs-d479): the cockpit session's `status-format[0]`,
 /// one grey (colour 8) `\u{2501}` line across the full width that starts and ends with a
 /// `\u{2501}`. Every item is a pill, its text between the caps with no padding. At the
-/// left, the four one-glyph buttons (a cap `\u{e0b6}`, the glyph as a grey block, a cap
-/// `\u{e0b4}`, 3 cells), each in its own click range, joined by a single `\u{2501}` outside
+/// left, the four one-glyph buttons (a cap `\u{e0b6}`, the glyph and one space as a grey block, a cap
+/// `\u{e0b4}`, 4 cells), each in its own click range, joined by a single `\u{2501}` outside
 /// the ranges (a range also owns the cell after it, so the join does what the space did;
-/// the leading `\u{2501}` is outside the first range): the left group is 16 cells.
+/// the leading `\u{2501}` is outside the first range): the left group is 20 cells. The space is there because a terminal draws a Nerd Font glyph full size
+/// only with an empty cell after it (hs-d730, pro-d296); the click range wraps the whole 4-cell pill, caps and
+/// space, and owns the join after it as before.
 /// Then the `\u{2501}` fill over the free width: `#{client_width}` minus
-/// the left group's 16, the preview pill and the right group in the form drawn (the
+/// the left group's 20, the preview pill and the right group in the form drawn (the
 /// workers pill's width, `#{w:@cpd_workers}` plus its two caps, plus the closing `\u{2501}`).
 /// At the right, each its own pill on
 /// bg 8 (text 0), joined by a single `\u{2501}`: the workers counts (User, hs-d198): the long form in
 /// `@cpd_workers` when the fill would still be at least 1 cell (`#{client_width}` at
-/// least `#{w:@cpd_workers}` plus the two caps and 18), else the short form in
+/// least `#{w:@cpd_workers}` plus the two caps and 22), else the short form in
 /// `@cpd_workers_short`, whose width is `#{w:@cpd_workers_short}`.
 ///
 /// The fill is split by a `#{P/i/:}` loop over the window's panes in index order (tmux 3.6+): each
@@ -339,6 +341,9 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
     let button = |range: &str, glyph: &str, base: u8| {
         pill::range(range, &format!("{}#[default]", pill::pill(&pill::fg(spec().clickable(base)), "", glyph)))
     };
+    // A glyph button: the glyph and ONE space inside the pill, because a terminal draws a Nerd Font glyph full size
+    // only with an empty cell after it (hs-d730, pro-d296). The runner pill is text and takes no space.
+    let glyph_button = |range: &str, glyph: &str| button(range, &format!("{glyph} "), BUTTON_BASE);
     let status = |index: u8, text: &str| format!("{}#[default]", pill::pill(&pill::fg(index), "", text));
     // The incident pill is red on a red block in the `incident` click range: the contract (§6.1.1) gives it the
     // `Meaning::Failed` bright pair (index 9).
@@ -346,10 +351,10 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
     format!(
         "{join}{reset}{join}{legend}{join}{logs}{join}{costs}#{{?@cpd_runner,{join}{runner},}}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2501}{preview},}}#[fg=colour8]{fill}#[default]#{{?@cpd_incident,{incident}{join},}}{workers}#{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2501}{alert},{plain}}}{join}",
         join = join!(),
-        reset = button("reset", reset_glyph!(), BUTTON_BASE),
-        legend = button("legend", legend_glyph!(), BUTTON_BASE),
-        logs = button("logs", logs_glyph!(), BUTTON_BASE),
-        costs = button("costs", costs_glyph!(), BUTTON_BASE),
+        reset = glyph_button("reset", reset_glyph!()),
+        legend = glyph_button("legend", legend_glyph!()),
+        logs = glyph_button("logs", logs_glyph!()),
+        costs = glyph_button("costs", costs_glyph!()),
         runner = button("runner", "#{@cpd_runner}", BUTTON_BASE),
         preview = status(m.review, "preview: #{@cpd_preview}"),
         fill = fill!(),
