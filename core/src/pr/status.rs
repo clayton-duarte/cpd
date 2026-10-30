@@ -23,6 +23,48 @@ pub(super) enum ChecksSummary {
     Failed,
 }
 
+/// An entry's verdict word, upper-cased: a CheckRun's conclusion (else its state), a StatusContext's state.
+fn verdict(c: &Check) -> String {
+    if c.name.is_some() {
+        c.conclusion.clone().filter(|s| !s.is_empty()).or_else(|| c.state.clone()).unwrap_or_default().to_ascii_uppercase()
+    } else {
+        c.state.clone().unwrap_or_default().to_ascii_uppercase()
+    }
+}
+
+/// The reduction (contract §7.6 step 3b): one entry per check identity, (workflow name, `name`) for a CheckRun and `context` for a
+/// StatusContext. CANCELLED and SKIPPED entries carry no verdict and are set aside while another entry of the identity exists; of
+/// the others the newest wins (no time is older than any time), the worst verdict on equal times.
+fn newest_runs(checks: &[Check]) -> Vec<&Check> {
+    let mut groups: Vec<((Option<&str>, &str), Vec<&Check>)> = Vec::new();
+    for c in checks {
+        let key = match (c.name.as_deref(), c.context.as_deref()) {
+            (Some(name), _) => (Some(c.workflow.as_deref().unwrap_or("")), name),
+            (None, Some(context)) => (None, context),
+            (None, None) => continue,
+        };
+        match groups.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, g)) => g.push(c),
+            None => groups.push((key, vec![c])),
+        }
+    }
+    groups
+        .into_iter()
+        .filter_map(|(_, g)| {
+            let rank = |c: &Check| {
+                let v = verdict(c);
+                if failing(&v) { 2 } else if PENDING.contains(&v.as_str()) || v == "PENDING" { 1 } else { 0 }
+            };
+            let best = g
+                .iter()
+                .copied()
+                .filter(|c| !matches!(verdict(c).as_str(), "CANCELLED" | "SKIPPED"))
+                .max_by_key(|c| (c.started_at.as_deref(), rank(c)));
+            best.or_else(|| g.first().copied())
+        })
+        .collect()
+}
+
 impl ChecksSummary {
     /// The one rule (contract §7.6) of the poll and `pr view`: any failure wins; a CheckRun is pending when its conclusion is not
     /// final, a StatusContext when its state is PENDING or EXPECTED; a PENDING StatusContext named in `human_gated` counts as
@@ -32,7 +74,7 @@ impl ChecksSummary {
         let mut run_pending = false;
         let mut failed = false;
         let mut contexts: Vec<(&str, bool)> = Vec::new();
-        for c in checks {
+        for c in newest_runs(checks) {
             if let Some(context) = c.name.is_none().then_some(c.context.as_deref()).flatten() {
                 let state = c.state.as_deref().unwrap_or_default().to_ascii_uppercase();
                 failed |= failing(&state);
@@ -231,6 +273,80 @@ impl MergeState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn run(workflow: Option<&str>, name: &str, conclusion: &str, at: Option<&str>) -> Check {
+        Check {
+            name: Some(name.into()),
+            context: None,
+            conclusion: Some(conclusion.into()),
+            state: None,
+            url: None,
+            workflow: workflow.map(Into::into),
+            started_at: at.map(Into::into),
+        }
+    }
+
+    fn status(context: &str, state: &str, at: Option<&str>) -> Check {
+        Check { name: None, context: Some(context.into()), conclusion: None, state: Some(state.into()), url: None, workflow: None, started_at: at.map(Into::into) }
+    }
+
+    fn summary(checks: &[Check]) -> ChecksSummary {
+        ChecksSummary::of(checks, &[])
+    }
+
+    const T1: &str = "2026-10-30T01:00:00Z";
+    const T2: &str = "2026-10-30T02:00:00Z";
+
+    #[test]
+    fn the_newest_run_of_a_check_decides() {
+        assert_eq!(summary(&[run(Some("w"), "a", "FAILURE", Some(T1)), run(Some("w"), "a", "SUCCESS", Some(T2))]), ChecksSummary::Passed);
+        assert_eq!(summary(&[run(Some("w"), "a", "SUCCESS", Some(T2)), run(Some("w"), "a", "FAILURE", Some(T1))]), ChecksSummary::Passed);
+        assert_eq!(summary(&[run(Some("w"), "a", "SUCCESS", Some(T1)), run(Some("w"), "a", "FAILURE", Some(T2))]), ChecksSummary::Failed);
+    }
+
+    #[test]
+    fn a_newer_pending_run_supersedes_an_older_failure() {
+        assert_eq!(summary(&[run(Some("w"), "a", "FAILURE", Some(T1)), run(Some("w"), "a", "IN_PROGRESS", Some(T2))]), ChecksSummary::Pending);
+    }
+
+    #[test]
+    fn the_workflow_is_part_of_the_identity() {
+        assert_eq!(summary(&[run(Some("w1"), "a", "FAILURE", Some(T1)), run(Some("w2"), "a", "SUCCESS", Some(T2))]), ChecksSummary::Failed);
+        assert_eq!(summary(&[run(None, "a", "FAILURE", Some(T1)), run(Some("w"), "a", "SUCCESS", Some(T2))]), ChecksSummary::Failed);
+        assert_eq!(summary(&[run(None, "a", "FAILURE", Some(T1)), run(None, "a", "SUCCESS", Some(T2))]), ChecksSummary::Passed);
+    }
+
+    #[test]
+    fn cancelled_and_skipped_runs_supersede_nothing() {
+        for set_aside in ["CANCELLED", "SKIPPED"] {
+            assert_eq!(summary(&[run(None, "a", "FAILURE", Some(T1)), run(None, "a", set_aside, Some(T2))]), ChecksSummary::Failed, "{set_aside}");
+        }
+        assert_eq!(summary(&[run(None, "a", "CANCELLED", Some(T2)), run(None, "a", "SUCCESS", Some(T1))]), ChecksSummary::Passed);
+    }
+
+    #[test]
+    fn only_set_aside_runs_make_a_check_neither_failing_nor_pending() {
+        assert_eq!(summary(&[run(None, "a", "CANCELLED", Some(T1)), run(None, "a", "CANCELLED", Some(T2))]), ChecksSummary::Passed);
+    }
+
+    #[test]
+    fn an_entry_with_no_time_is_older_than_any_with_one() {
+        assert_eq!(summary(&[run(None, "a", "FAILURE", None), run(None, "a", "SUCCESS", Some(T1))]), ChecksSummary::Passed);
+        assert_eq!(summary(&[run(None, "a", "SUCCESS", None), run(None, "a", "FAILURE", Some(T1))]), ChecksSummary::Failed);
+    }
+
+    #[test]
+    fn on_equal_times_the_worst_verdict_wins() {
+        assert_eq!(summary(&[run(None, "a", "SUCCESS", Some(T1)), run(None, "a", "FAILURE", Some(T1))]), ChecksSummary::Failed);
+        assert_eq!(summary(&[run(None, "a", "SUCCESS", Some(T1)), run(None, "a", "IN_PROGRESS", Some(T1))]), ChecksSummary::Pending);
+        assert_eq!(summary(&[run(None, "a", "FAILURE", Some(T1)), run(None, "a", "IN_PROGRESS", Some(T1))]), ChecksSummary::Failed);
+    }
+
+    #[test]
+    fn a_status_context_is_decided_by_its_newest_state() {
+        assert_eq!(summary(&[status("d", "FAILURE", Some(T1)), status("d", "SUCCESS", Some(T2))]), ChecksSummary::Passed);
+        assert_eq!(summary(&[status("d", "SUCCESS", Some(T1)), status("d", "FAILURE", Some(T2))]), ChecksSummary::Failed);
+    }
 
     #[test]
     fn the_rollup_maps_to_checks() {

@@ -68,6 +68,8 @@ mod tests {
                         conclusion: Some(conclusion.into()),
                         state: None,
                         url: None,
+                        workflow: None,
+                        started_at: None,
                     })
                     .collect(),
             ),
