@@ -140,11 +140,12 @@ fn status_line_pills_follow_the_rule() {
     let italic_pill = |colour: &str, text: &str| {
         format!("#[fg={colour}]\u{e0b6}#[reverse]#[italics]{text}#[noitalics]#[noreverse]\u{e0b4}#[default]")
     };
-    let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},18},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}}";
+    let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},18},#{?@cpd_runner,#{e|+:#{n:@cpd_runner},3},0}},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}}";
     let want = format!(
         "{JOIN}{}{JOIN}{}{JOIN}{}{JOIN}{}\
+         #{{?@cpd_runner,{JOIN}{},}}\
          #{{?#{{@cpd_preview}},#[fg=colour8]\u{2501}{},}}\
-         #[fg=colour8]#{{R:\u{2501},#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},16}},#{{?#{{@cpd_preview}},#{{e|+:#{{n:@cpd_preview}},12}},0}}}},#{{?@cpd_version,#{{e|+:#{{n:@cpd_version}},3}},0}}}},#{{?@cpd_incident,#{{e|+:#{{n:@cpd_incident}},18}},0}}}},\
+         #[fg=colour8]#{{R:\u{2501},#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},16}},#{{?@cpd_runner,#{{e|+:#{{n:@cpd_runner}},3}},0}}}},#{{?#{{@cpd_preview}},#{{e|+:#{{n:@cpd_preview}},12}},0}}}},#{{?@cpd_version,#{{e|+:#{{n:@cpd_version}},3}},0}}}},#{{?@cpd_incident,#{{e|+:#{{n:@cpd_incident}},18}},0}}}},\
          #{{e|+:#{{?{long},#{{e|+:#{{w:@cpd_workers}},2}},#{{e|+:#{{w:@cpd_workers_short}},2}}}},1}}}}}}\
          #[default]\
          #{{?@cpd_incident,{}{JOIN},}}\
@@ -155,6 +156,7 @@ fn status_line_pills_follow_the_rule() {
         button("legend", "colour15", super::LEGEND_GLYPH),
         button("logs", "colour15", super::LOGS_GLYPH),
         button("costs", "colour15", "\u{EEC1}"),
+        button("runner", "colour15", "#{@cpd_runner}"),
         pill("colour3", "preview: #{@cpd_preview}"),
         format!("#[range=user|incident]{}#[norange]", italic_pill("colour9", "Incident Mode: #{@cpd_incident}")),
         pill("colour8", &format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
