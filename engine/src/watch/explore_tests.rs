@@ -209,42 +209,73 @@ fn tiers_retried(fx: &mut Fx) -> Vec<String> {
 
 #[test]
 fn explore_ladder_stays_inside_the_kind_range() {
-    // A scout climbs H1 > H2 > H3, then fails: after H3 the ladder would leave H for S1, and an explore Job never does.
+    // A scout climbs (only `no_submit` climbs) H1 > H2 > H3, then fails: after H3 the ladder would leave H for S1, and an explore Job never does.
     let (mut fx, _fakes) = fx_with_fakes("dispatch", "");
     add_explore(&mut fx, "scout", "H1", "look", &[], &running("look"));
-    assert!(fail_attempt(&mut fx, "look", 1, "H1", Cause::Crashed, 5), "the ledger ends an explore Attempt");
+    assert!(fail_attempt(&mut fx, "look", 1, "H1", Cause::NoSubmit, 5), "the ledger ends an explore Attempt");
     assert_eq!(fx.job_status("look"), "queued");
     assert!(tiers_retried(&mut fx).last().is_some_and(|d| d.contains("H2")), "{:?}", tiers_retried(&mut fx));
     fx.fixture(&running("look"));
-    assert!(fail_attempt(&mut fx, "look", 2, "H2", Cause::Crashed, 5));
+    assert!(fail_attempt(&mut fx, "look", 2, "H2", Cause::NoSubmit, 5));
     assert_eq!(fx.job_status("look"), "queued");
     assert!(tiers_retried(&mut fx).last().is_some_and(|d| d.contains("H3")), "{:?}", tiers_retried(&mut fx));
     fx.fixture(&running("look"));
-    assert!(fail_attempt(&mut fx, "look", 3, "H3", Cause::Crashed, 5));
+    assert!(fail_attempt(&mut fx, "look", 3, "H3", Cause::NoSubmit, 5));
     assert_eq!(fx.job_status("look"), "failed", "after H3 the scout fails, it never becomes S1");
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM jobs WHERE key = 'look' AND failed_cause = 'crashed'"), 1);
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM jobs WHERE key = 'look' AND failed_cause = 'no_submit'"), 1);
 
     // A research Job climbs S1 > S2 > S3, then fails: it never leaves S.
     add_explore(&mut fx, "research", "S1", "web", &[], &running("web"));
-    assert!(fail_attempt(&mut fx, "web", 1, "S1", Cause::Crashed, 5));
+    assert!(fail_attempt(&mut fx, "web", 1, "S1", Cause::NoSubmit, 5));
     assert_eq!(fx.job_status("web"), "queued");
     fx.fixture(&running("web"));
-    assert!(fail_attempt(&mut fx, "web", 2, "S2", Cause::Crashed, 5));
+    assert!(fail_attempt(&mut fx, "web", 2, "S2", Cause::NoSubmit, 5));
     assert_eq!(fx.job_status("web"), "queued");
     fx.fixture(&running("web"));
-    assert!(fail_attempt(&mut fx, "web", 3, "S3", Cause::Crashed, 5));
+    assert!(fail_attempt(&mut fx, "web", 3, "S3", Cause::NoSubmit, 5));
     assert_eq!(fx.job_status("web"), "failed", "after S3 the research Job fails: S4 is not a Worker Tier");
 
     // retry_cap is unchanged: with retry_cap 1 a scout fails at its second Attempt, though H3 is left on the ladder.
     add_explore(&mut fx, "scout", "H1", "capped", &[], &running("capped"));
-    assert!(fail_attempt(&mut fx, "capped", 1, "H1", Cause::Crashed, 1));
+    assert!(fail_attempt(&mut fx, "capped", 1, "H1", Cause::NoSubmit, 1));
     assert_eq!(fx.job_status("capped"), "queued");
     fx.fixture(&running("capped"));
-    assert!(fail_attempt(&mut fx, "capped", 2, "H2", Cause::Crashed, 1));
+    assert!(fail_attempt(&mut fx, "capped", 2, "H2", Cause::NoSubmit, 1));
     assert_eq!(fx.job_status("capped"), "failed", "1 + retry_cap Attempts at most");
 
     // provider_error is unchanged: it requeues the Job at the same Tier and uses no rung.
     add_explore(&mut fx, "scout", "H3", "flaky", &[], &running("flaky"));
     assert!(fail_attempt(&mut fx, "flaky", 1, "H3", Cause::ProviderError, 2));
     assert_eq!(fx.job_status("flaky"), "queued", "a provider error at the top rung retries in place");
+}
+
+#[test]
+fn explore_crash_at_the_top_rung_is_retried_in_place_under_the_cap() {
+    // A `crashed` Attempt is retried at its own Tier (pro-d265), also at H3 or S3, until 1 + retry_cap Attempts.
+    let (mut fx, _fakes) = fx_with_fakes("dispatch", "");
+    for (kind, tier, key) in [("scout", "H3", "look"), ("research", "S3", "web")] {
+        add_explore(&mut fx, kind, tier, key, &[], &running(key));
+        for number in 1..=2 {
+            if number > 1 {
+                fx.fixture(&running(key));
+            }
+            assert!(fail_attempt(&mut fx, key, number, tier, Cause::Crashed, 2));
+            assert_eq!(fx.job_status(key), "queued", "{key} attempt {number}: retried in place");
+            let last = tiers_retried(&mut fx).pop().unwrap_or_default();
+            let data: serde_json::Value = serde_json::from_str(&last).unwrap();
+            assert_eq!(data["next_tier"], tier, "{last}");
+        }
+        fx.fixture(&running(key));
+        assert!(fail_attempt(&mut fx, key, 3, tier, Cause::Crashed, 2));
+        assert_eq!(fx.job_status(key), "failed", "{key}: the cap ends it");
+        assert_eq!(fx.query::<i64>(&format!("SELECT count(*) FROM jobs WHERE key = '{key}' AND failed_cause = 'crashed'")), 1);
+    }
+
+    // A scout at H2 that crashed stays at H2.
+    add_explore(&mut fx, "scout", "H2", "mid", &[], &running("mid"));
+    assert!(fail_attempt(&mut fx, "mid", 1, "H2", Cause::Crashed, 2));
+    assert_eq!(fx.job_status("mid"), "queued");
+    let last = tiers_retried(&mut fx).pop().unwrap_or_default();
+    let data: serde_json::Value = serde_json::from_str(&last).unwrap();
+    assert_eq!(data["next_tier"], "H2", "{last}");
 }

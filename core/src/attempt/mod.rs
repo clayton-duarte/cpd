@@ -23,6 +23,9 @@ mod cancel_tests;
 mod incident_tests;
 
 #[cfg(test)]
+mod ladder_tests;
+
+#[cfg(test)]
 pub(crate) mod explore_tests;
 
 #[cfg(test)]

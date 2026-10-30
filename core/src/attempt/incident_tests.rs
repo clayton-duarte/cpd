@@ -15,12 +15,12 @@ use crate::store::Store;
 use super::ledger::{self, End, Ladder, Stage};
 
 /// A temporary store with a Plan `pay`, its PR `api` and the Job `a`, whose Attempts the tests add.
-struct Fixture {
+pub(super) struct Fixture {
     _dir: tempfile::TempDir,
-    store: Store,
+    pub(super) store: Store,
 }
 
-fn fixture() -> Fixture {
+pub(super) fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
@@ -59,7 +59,7 @@ fn running_attempt(f: &mut Fixture) {
 }
 
 /// A catalog the ladder can climb without pi (the Interrupted end uses the same Tier, not the ladder).
-fn catalog() -> Catalog {
+pub(super) fn catalog() -> Catalog {
     let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![1, 2, 3] };
     Catalog {
         pi_version: "1.0.0".to_owned(),
