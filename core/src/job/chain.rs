@@ -14,12 +14,12 @@ pub(super) fn leaves(all: &[Job], plan: &PlanId, pr: &str, pr_status: &str, key:
     if pr_status != "open" {
         return Ok(None);
     }
-    let Some(open) = all.iter().find(|j| j.pr == pr && j.kind == "open" && j.status == "merged") else { return Ok(None) };
+    let Some(open) = all.iter().find(|j| j.pr_str() == pr && j.kind == "open" && j.status == "merged") else { return Ok(None) };
     let descendants = |root: &str| {
         let mut seen: BTreeSet<String> = BTreeSet::from([root.to_owned()]);
         loop {
             let before = seen.len();
-            let next: Vec<String> = all.iter().filter(|j| j.pr == pr && j.needs.iter().any(|n| seen.contains(n))).map(|j| j.key.clone()).collect();
+            let next: Vec<String> = all.iter().filter(|j| j.pr_str() == pr && j.needs.iter().any(|n| seen.contains(n))).map(|j| j.key.clone()).collect();
             seen.extend(next);
             if seen.len() == before {
                 return seen;

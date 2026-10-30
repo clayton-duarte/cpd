@@ -154,7 +154,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
     let mut job = Job {
         seq: 0,
         key: wanted.key.as_str().to_owned(),
-        pr,
+        pr: Some(pr),
         title: wanted.title.clone(),
         tier: wanted.tier.clone(),
         spec: wanted.spec.as_ref().map(Spec::stored),
@@ -190,14 +190,14 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
     if let Some(spec) = &wanted.spec {
         spec.check_primary_roots(&primary_roots(&prs), &std::env::home_dir().unwrap_or_default())?;
         spec.check_files_relative()?;
-        check_resources_declared(conn, home, plan, &job.pr, &job.key, spec.resources.as_deref())?;
+        check_resources_declared(conn, home, plan, job.pr_str(), &job.key, spec.resources.as_deref())?;
     }
     if let Some(spec) = &wanted.spec {
-        let pr = prs.iter().find(|p| p.key.as_str() == job.pr).expect("check_pr_live found the PR");
+        let pr = prs.iter().find(|p| p.key.as_str() == job.pr_str()).expect("check_pr_live found the PR");
         check_touches(pr, &prs, &spec.touches)?;
     }
     check_needs_known(&all, plan, &job.needs)?;
-    check_needs_same_pr(&all, plan, &job.pr, &job.needs)?;
+    check_needs_same_pr(&all, plan, job.pr_str(), &job.needs)?;
     if !draft {
         check_impl_job_required(&all, plan, &job)?;
     }

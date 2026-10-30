@@ -174,12 +174,12 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
                 .with("pr", pr.as_str()));
         }
         check_pr_live(&prs, plan, pr)?;
-        after.pr = pr.clone();
+        after.pr = Some(pr.clone());
     }
     let moved = after.pr != before.pr;
     if let Some(spec) = &edits.spec {
         let prs = load_prs(conn, plan)?;
-        if let Some(pr) = prs.iter().find(|p| p.key.as_str() == after.pr) {
+        if let Some(pr) = prs.iter().find(|p| p.key.as_str() == after.pr_str()) {
             // A Lead Branch that is not in the repo (yet) is no tree to read: the Job starts from the PR's base.
             let mut pr = pr.clone();
             let lead_exists = crate::git::run::run(std::path::Path::new(&pr.repo), &["rev-parse", "--verify", "--quiet", &format!("{}^{{commit}}", pr.lead_branch)])
@@ -192,10 +192,10 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     }
     if edits.spec.is_some() || moved {
         let names: Option<Vec<String>> = after.resources.as_ref().and_then(|r| serde_json::from_value(r.clone()).ok());
-        super::add::check_resources_declared(conn, home, plan, &after.pr, key.as_str(), names.as_deref())?;
+        super::add::check_resources_declared(conn, home, plan, after.pr_str(), key.as_str(), names.as_deref())?;
     }
     if moved || after.kind != before.kind {
-        check_shape_allows(&load_prs(conn, plan)?, plan, &after.pr, &after.kind)?;
+        check_shape_allows(&load_prs(conn, plan)?, plan, after.pr_str(), &after.kind)?;
     }
     // A Job that changes PR keeps none of its old needs: they are checked against the new PR.
     if let Some(needs) = &edits.needs {
@@ -204,7 +204,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     }
     let needs = edits.needs.clone().unwrap_or_else(|| before.needs.clone());
     if edits.needs.is_some() || moved {
-        check_needs_same_pr(&all, plan, &after.pr, &needs)?;
+        check_needs_same_pr(&all, plan, after.pr_str(), &needs)?;
     }
     after.needs = needs;
     if moved {
@@ -215,7 +215,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
                 format!("Job {key} cannot change PR: {} need{} it.", needing.join(", "), if needing.len() == 1 { "s" } else { "" }),
             )
             .with("plan", plan.as_str())
-            .with("pr", after.pr.as_str())
+            .with("pr", after.pr_str())
             .with("jobs", needing));
         }
     }
@@ -288,7 +288,7 @@ fn update(tx: &Connection, plan: &PlanId, before: &Job, after: &Job) -> Result<(
     let mut written: Vec<(&str, bool, Option<String>)> =
         vec![("title", before.title != after.title, Some(after.title.clone())), ("kind", before.kind != after.kind, Some(after.kind.clone()))];
     written.extend(columns(before).into_iter().zip(columns(after)).map(|(b, a)| (a.0, b.1 != a.1, a.1)));
-    written.push(("pr", before.pr != after.pr, Some(after.pr.clone())));
+    written.push(("pr", before.pr != after.pr, after.pr.clone()));
     let changed: Vec<&(&str, bool, Option<String>)> = written.iter().filter(|(_, changed, _)| *changed).collect();
     let fingerprint = (!after.is_draft()).then(|| jobs::locked_fingerprint(after));
     if !changed.is_empty() {

@@ -1556,7 +1556,7 @@ CREATE TABLE plan_reviews (
 CREATE TABLE jobs (
   seq                 INTEGER PRIMARY KEY AUTOINCREMENT,
   plan                TEXT NOT NULL REFERENCES plans(id),
-  pr                  TEXT NOT NULL,          -- R34: the Job's PR (A7)
+  pr                  TEXT,                   -- R34: the Job's PR (A7); NULL exactly for an explore Job (CHECK below)
   review              INTEGER NOT NULL DEFAULT 0 CHECK (review IN (0, 1)),  -- inert since pro-d163: nothing reads or writes it (B2, migration 4)
   key                 TEXT NOT NULL CHECK (length(key) BETWEEN 1 AND 32),
   title               TEXT NOT NULL CHECK (length(title) >= 1),
@@ -1577,12 +1577,13 @@ CREATE TABLE jobs (
   merged_sha          TEXT,
   created_at          TEXT NOT NULL,
   urgent              INTEGER NOT NULL DEFAULT 0 CHECK (urgent IN (0, 1)),  -- the urgent flag (§2.2); not in jobs_locked, not in a fingerprint; added by the migration 20261019T0451-job-urgent (an ADD COLUMN, so last among the columns)
-  kind                TEXT NOT NULL DEFAULT 'work' CHECK (kind IN ('work', 'docs', 'test', 'impl', 'verify', 'open', 'update')),  -- the Job's kind (§2.2 "Job kinds"); named migration `job-kinds` (hs-d341), an ADD COLUMN, so after `urgent`, rebuilt by `job-verify-kind` (§4.5); a Locked field, guarded by jobs_locked, in no fingerprint
+  kind                TEXT NOT NULL DEFAULT 'work' CHECK (kind IN ('work', 'docs', 'test', 'impl', 'verify', 'open', 'update', 'scout', 'research')),  -- the Job's kind (§2.2 "Job kinds"); named migration `job-kinds` (hs-d341), an ADD COLUMN, so after `urgent`, rebuilt by `job-verify-kind` (§4.5); a Locked field, guarded by jobs_locked, in no fingerprint
   tests               TEXT CHECK (tests IS NULL OR (json_valid(tests) AND json_type(tests) = 'array' AND json_array_length(tests) >= 1)),            -- a `test` Job's named tests (Spec); guarded by jobs_locked, in no fingerprint
   test_files          TEXT CHECK (test_files IS NULL OR (json_valid(test_files) AND json_type(test_files) = 'array' AND json_array_length(test_files) >= 1)),  -- the files that hold them (Spec); the guard of §7.5
   test_approved       TEXT CHECK (test_approved IS NULL OR (json_valid(test_approved) AND json_type(test_approved) = 'array')),                      -- an `impl` Job's approved red-test paths; NOT Locked: `job approve-tests` changes it after the lock
   resources           TEXT CHECK (resources IS NULL OR (json_valid(resources) AND json_type(resources) = 'array' AND json_array_length(resources) >= 1)),  -- the exclusive resources the Job takes (Spec, optional; §2.2); guarded by jobs_locked, in no fingerprint; added by the migration job-resources
   skipped_n           INTEGER CHECK (skipped_n IS NULL OR skipped_n >= 1),  -- E3's skip order (§3.7): set the first time E3 skips a Ready Job for want of a pool, cleared when it starts; NOT Locked (E3 writes it after the lock); added by the migration job-tenancy
+  summary             TEXT CHECK (summary IS NULL OR length(summary) >= 1),  -- an explore Job's bounded summary (§2.2 "Explore Jobs"); NOT NULL exactly when an explore Job is merged; added by the migration explore-kinds
   UNIQUE (plan, key),
   FOREIGN KEY (plan, pr) REFERENCES prs(plan, key),
   CHECK (status <> 'draft' OR fingerprint IS NULL),
@@ -1592,7 +1593,9 @@ CREATE TABLE jobs (
   CHECK ((status = 'merged') = (merged_sha IS NOT NULL)),
   CHECK ((status = 'failed') = (failed_cause IS NOT NULL)),
   CHECK ((cancel_reason IS NULL) = (cancel_requested_at IS NULL)),
-  CHECK (status <> 'cancelled' OR cancel_reason IS NOT NULL)
+  CHECK (status <> 'cancelled' OR cancel_reason IS NOT NULL),
+  CHECK ((pr IS NULL) = (kind IN ('scout', 'research'))),  -- an explore Job belongs to the Plan, not to a PR (migration explore-kinds)
+  CHECK ((kind IN ('scout', 'research') AND status = 'merged') = (summary IS NOT NULL))
 ) STRICT;
 CREATE INDEX jobs_plan_status ON jobs(plan, status);   -- migration read-indexes (sql-F4)
 CREATE UNIQUE INDEX jobs_skipped_n ON jobs(skipped_n) WHERE skipped_n IS NOT NULL;   -- the skip order has no ties (migration job-tenancy)

@@ -835,7 +835,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
             let mut job = Job {
                 seq: 0,
                 key: stub.key.clone(),
-                pr: wanted.key.as_str().to_owned(),
+                pr: Some(wanted.key.as_str().to_owned()),
                 title: stub.title.clone(),
                 tier: Some(tier.to_string()),
                 spec: Some(spec.stored()),

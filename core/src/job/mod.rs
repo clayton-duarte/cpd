@@ -339,7 +339,7 @@ fn check_test_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(),
     }
     Err(CpdError::new(
         ErrorCode::TestJobRequired,
-        format!("The impl Job {} must need a test Job of its PR {}: its tests are the ones its test Jobs name.", job.key, job.pr),
+        format!("The impl Job {} must need a test Job of its PR {}: its tests are the ones its test Jobs name.", job.key, job.pr_str()),
     )
     .with("plan", plan.as_str())
     .with("job", job.key.as_str())
@@ -354,7 +354,7 @@ fn check_impl_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(),
     }
     Err(CpdError::new(
         ErrorCode::ImplJobRequired,
-        format!("The verify Job {} must need an impl Job of its PR {}: it checks the code those Jobs build.", job.key, job.pr),
+        format!("The verify Job {} must need an impl Job of its PR {}: it checks the code those Jobs build.", job.key, job.pr_str()),
     )
     .with("plan", plan.as_str())
     .with("job", job.key.as_str())
@@ -404,7 +404,7 @@ pub(crate) fn check_needs_not_cancelled(jobs: &[Job], plan: &PlanId, needs: &[St
 
 /// Every Job of `needs` is in PR `pr` (`needs_other_pr`; `details.jobs` lists the others) (A7).
 fn check_needs_same_pr(jobs: &[Job], plan: &PlanId, pr: &str, needs: &[String]) -> Result<(), CpdError> {
-    let others: Vec<&str> = jobs.iter().filter(|j| needs.contains(&j.key) && j.pr != pr).map(|j| j.key.as_str()).collect();
+    let others: Vec<&str> = jobs.iter().filter(|j| needs.contains(&j.key) && j.pr_str() != pr).map(|j| j.key.as_str()).collect();
     if !others.is_empty() {
         return Err(CpdError::new(
             ErrorCode::NeedsOtherPr,

@@ -460,11 +460,13 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
     let mut attempts = attempts(conn, plan)?;
     rows.iter()
         .zip(waiting_on)
+        // An explore Job belongs to the Plan, not to a PR: it has no node in a PR's flow.
+        .filter(|(j, _)| j.pr.is_some())
         .map(|(j, waiting_on)| {
             let what = format!("Job {plan}/{}", j.key);
             let key = id("Job key", &j.key, JobKey::parse)?;
             Ok(JobNode {
-                pr: id("PR key", &j.pr, PrKey::parse)?,
+                pr: id("PR key", j.pr_str(), PrKey::parse)?,
                 status: JobStatus::parse(&format!("{what} has status"), &j.status)?,
                 tier: j.tier.as_deref().map(|t| tier(&what, t)).transpose()?,
                 needs: shown_needs(&rows, j).iter().map(|n| id("Job key", n, JobKey::parse)).collect::<Result<_, _>>()?,
