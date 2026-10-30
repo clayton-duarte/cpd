@@ -4087,7 +4087,7 @@ Decision (User, 2026-10-19). Neither a Manager nor a Lead blocks on a wait: no s
 
 This rule is extended to a Lead (User, 2026-10-25, pro-d39). Evidence: during incident gatemac (pro-d29) the Lead of Plan tests-mock ran `for i in 1 2; do git fetch ...; sleep 280; done` in its own turn; the 280 s duration trips the 30 s bound and is refused. A Lead's wait holds the User's conversation as a Manager's does. A Worker keeps its own rule (§15.12), unchanged.
 
-**When.** At pi's `tool_call`, for a `bash` call (`event.toolName` is `bash`, `event.input.command` and `event.input.timeout`), of a Session of role `manager` or `lead`. The handler is registered once at load (`pi.on` has no unsubscribe) and reads the role of the active run at each call; for a Worker, or before `session_start` has read the role, it returns nothing. A call that matches nothing runs as before.
+**When.** At pi's `tool_call`, for a `bash` call (`event.toolName` is `bash`, `event.input.command` and `event.input.timeout`), of a Session of role `manager` or `lead`. The handler is registered once at load (`pi.on` has no unsubscribe) and reads the role of the active run at each call; for a Worker, or before `session_start` has read the role, it returns nothing. A call that matches nothing runs, with an omitted `timeout` set to the bound as **The omitted timeout** says.
 
 **The bound** is **30 seconds**, one constant of the adapter (`pi/lib/noblock.ts`); there is no config key. The bound and the patterns are the same for both Manager and Lead.
 
@@ -4107,6 +4107,8 @@ A pattern counts where a command runs: a command word of a simple command (after
 
 A `for` loop is not a loop of this rule; the `sleep` in its body is judged by its own duration like any `sleep`, so `for i in 1 2; do git fetch origin; sleep 280; done` is refused (`sleep 280`) and `for i in 1 2; do sleep 5; done` passes.
 
+**The omitted timeout.** Decision pro-d202 (2026-10-29). pi's `bash` tool has no default timeout: a call with no `timeout` waits as long as the command runs. Evidence: two Leads (rfm-memory-retrieval, rfm-curation-models) ran `grep -rl` and `find` across the home directory without `timeout` and hung on `~/Library/Group Containers` for 1 h 32 min. So when a Manager's or a Lead's `bash` call is not refused (`blockingReason` returns `undefined`) and `event.input.timeout` is `undefined`, the adapter sets `event.input.timeout = BOUND_SECONDS` (30) in place, before the call runs, so that no foreground `bash` call of a Manager or a Lead can ever hang past 30 seconds. An explicit `timeout` of 30 or less (for example `timeout: 10`) is kept unchanged; an explicit `timeout` above 30 is refused as before (`bash timeout <n>`). The bound is still the one constant `BOUND_SECONDS` of `pi/lib/noblock.ts`; there is no config key. A call that is refused is not mutated. A Worker's call is unaffected: its `timeout` stays as given, an omitted one omitted.
+
 **The refusal** is `{block: true, reason}` (pi's `ToolCallEventResult`), with the reason on one line naming the rule by role:
 
 ```
@@ -4118,7 +4120,7 @@ reasonText(matched, role) {
 
 `<what matched>` is the matched command (`sleep 1m`, `watch`, `tail -f`, `cpd events follow`, `gh run watch`, `gh pr checks --watch`, `timeout 60`, `while … sleep`) or, for the tool's input, `bash timeout 120`.
 
-**Not affected:** a Worker, whatever it runs; every other tool; every `cpd` command's own timeout. A Lead's command that the User explicitly asked for and that waits over the bound runs in the background, as section 15.20 says.
+**Not affected:** a Worker, whatever it runs; every other tool; every `cpd` command's own timeout. A Worker's `bash` call keeps its `timeout` as given (an omitted one stays omitted), and so does any call before `session_start` has read the role. A Lead's command that the User explicitly asked for and that waits over the bound runs in the background, as section 15.20 says.
 
 ### 15.12 A Worker runs targeted tests
 
