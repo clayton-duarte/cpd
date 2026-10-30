@@ -4,6 +4,7 @@ import { registerCompactionRatio } from "./compaction-ratio.ts";
 import { createHost, type Options } from "./host.ts";
 import { registerLoopGuard } from "./loop-guard.ts";
 import { homedir } from "node:os";
+import { exploreKind, exploreVerdict, isInsideRepo } from "./explore.ts";
 import { primaryCheckoutMove, primaryCheckoutWrite, reasonText as mainReasonText } from "./mainguard.ts";
 import { BOUND_SECONDS, blockingReason, reasonText } from "./noblock.ts";
 import type { PiApi } from "./pi.ts";
@@ -60,6 +61,12 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     const role = host.run?.info.role;
     const pn = pnVerdict({ env: host.env, live: host.run !== undefined, store: globalThis as Record<string, unknown> }, event);
     if (pn) return pn;
+    const kind = role === "worker" ? exploreKind(host.env) : undefined;
+    if (kind !== undefined) {
+      const home = host.env.CPD_HOME || `${homedir()}/.cpd`;
+      const refused = exploreVerdict(kind, { name: event.toolName, arguments: event.input as Record<string, unknown> }, { cwd: ctx.cwd, home, plan: host.env.CPD_PLAN ?? "" }, isInsideRepo);
+      if (refused !== undefined) return { block: true, reason: refused.block };
+    }
     if (host.run && (event.toolName === "edit" || event.toolName === "write")) {
       const written = primaryCheckoutWrite(event.toolName, event.input, ctx.cwd, homedir());
       if (written !== undefined) return { block: true, reason: mainReasonText(written) };

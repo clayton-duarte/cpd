@@ -3,8 +3,9 @@
  * CPD_JOB_KIND. Pure: the caller passes `isInsideRepo`. It is NOT an OS sandbox: it refuses patterns, it does not contain a process.
  */
 
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { BOUND_SECONDS } from "./noblock.ts";
 import { PREFIXES, simpleCommands } from "./shell.ts";
 
@@ -147,8 +148,17 @@ export function exploreVerdict(
     const explore = resolve(where.home, "run", where.plan, "explore");
     const under = (dir: string): boolean => target === dir || target.startsWith(`${dir}/`);
     if (!under(explore) && !under(resolve(tmpdir()))) return refuse("write", `${call.name} only under ${explore}/ or the temp dir: ${p}`);
+    if (!under(explore) && isInsideRepo(target)) return refuse("write", `${call.name} inside a git repository: ${p}`);
     return undefined;
   }
   if (name === "bash") return bashVerdict(kind, call.arguments, where, isInsideRepo);
   return undefined;
+}
+
+/** The real `isInsideRepo`: a lexical walk up from the path looking for a `.git` entry; no subprocess. */
+export function isInsideRepo(path: string): boolean {
+  for (let dir = resolve(path); ; dir = dirname(dir)) {
+    if (existsSync(resolve(dir, ".git"))) return true;
+    if (dirname(dir) === dir) return false;
+  }
 }
