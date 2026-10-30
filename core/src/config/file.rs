@@ -114,7 +114,7 @@ impl Serialize for PortRange {
 pub struct Timeouts {
     /// Active time per Attempt (§3.4).
     pub attempt_minutes: u32,
-    /// Active time per explore Attempt (a `scout` or `research` Job), instead of `attempt_minutes`. STUB: not yet read by anything.
+    /// Active time per explore Attempt (a `scout` or `research` Job), instead of `attempt_minutes`.
     pub explore_minutes: u32,
     /// An Escalation expires after this.
     pub ask_minutes: u32,
@@ -326,7 +326,7 @@ impl Config {
         let positive = |r: &mut Reader, key: &str, default: u32| r.get(key, default, |v| int(v, 1, u32::MAX));
         let timeouts = Timeouts {
             attempt_minutes: positive(&mut r, "timeouts.attempt_minutes", 30)?,
-            explore_minutes: r.get("timeouts.explore_minutes", 0, |v| int(v, 0, u32::MAX))?,
+            explore_minutes: positive(&mut r, "timeouts.explore_minutes", 20)?,
             ask_minutes: positive(&mut r, "timeouts.ask_minutes", 60)?,
             setup_minutes: positive(&mut r, "timeouts.setup_minutes", 15)?,
             gate_minutes: positive(&mut r, "timeouts.gate_minutes", 30)?,

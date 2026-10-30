@@ -244,12 +244,20 @@ fn decide(conn: &Connection, home: &CpdHome, catalog: &Catalog, plan: &PlanId, k
             .with("job", key.as_str())
     })?;
     // The repo and status of the Job's PR (R34 A7).
-    let (repo, pr_status): (String, String) = conn.query_row(
-        "SELECT r.repo, r.status FROM jobs j JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE j.plan = ?1 AND j.key = ?2",
-        [plan.as_str(), key.as_str()],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
-    require_ready(&all, job, plan, &phase, &pr_status)?;
+    // An explore Job has no PR: it is Ready by its own rule (`require_ready_explore`).
+    let explore = jobs::is_explore(&job.kind);
+    let (repo, pr_status): (String, String) = if explore {
+        require_ready_explore(conn, &all, job, plan, &phase)?;
+        (String::new(), String::new())
+    } else {
+        let pr: (String, String) = conn.query_row(
+            "SELECT r.repo, r.status FROM jobs j JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE j.plan = ?1 AND j.key = ?2",
+            [plan.as_str(), key.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        require_ready(&all, job, plan, &phase, &pr.1)?;
+        pr
+    };
     if job.kind == "open" {
         let pr = crate::ids::PrKey::parse(job.pr_str()).map_err(|e| CpdError::bad_row(format!("Job {key} has the PR key {:?}: {e}", job.pr_str())))?;
         crate::pr::stored_description_of(conn, plan, &pr)?;
@@ -306,6 +314,11 @@ fn decide(conn: &Connection, home: &CpdHome, catalog: &Catalog, plan: &PlanId, k
     // A linear Attempt (hs-d680, pro-d52) is the PR's only live Attempt for its whole life: it runs in the PR's one
     // workflow worktree on the Lead Branch, which a parallel Attempt's merge would move under it. Counted here, inside
     // the same transaction that inserts the Attempt, so two concurrent starts cannot both take the workflow worktree.
+    if explore {
+        // No worktree, no branch of git: the Attempt row holds a branch name no git branch has and the explore directory (R7).
+        let worktree = explore_dir(home, plan);
+        return Ok(Next { branch: git::attempt_branch(plan, &attempt), attempt, tier, origin, worktree });
+    }
     if pr_has_live_linear(conn, plan, job.pr_str(), &attempt.to_string())? {
         return Err(CpdError::new(
             ErrorCode::CasLost,
@@ -349,6 +362,34 @@ fn decide(conn: &Connection, home: &CpdHome, catalog: &Catalog, plan: &PlanId, k
         (git::attempt_branch(plan, &attempt), git::attempt_worktree_path(std::path::Path::new(&repo), plan, &attempt)?)
     };
     Ok(Next { branch, attempt, tier, origin, worktree })
+}
+
+/// The explore directory of `plan`: `$CPD_HOME/run/<plan>/explore/`, the cwd of its explore Workers.
+pub fn explore_dir(home: &CpdHome, plan: &PlanId) -> PathBuf {
+    home.run_dir().join(plan.as_str()).join("explore")
+}
+
+/// Ready for an explore Job (R3): `queued`, in a Plan not archived in `grounding`, `plan`, `dispatch` or `deploy`, every
+/// Dependency `merged`; else `job_not_ready`.
+fn require_ready_explore(conn: &Connection, all: &[Job], job: &Job, plan: &PlanId, phase: &str) -> Result<(), CpdError> {
+    let waiting: Vec<&str> =
+        job.needs.iter().filter(|n| !all.iter().any(|j| j.key == **n && j.status == "merged")).map(String::as_str).collect();
+    let archived: bool = conn.query_row("SELECT archived_at IS NOT NULL FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?;
+    let why = if job.status != "queued" {
+        format!("it is {}, not queued", job.status)
+    } else if archived || !matches!(phase, "grounding" | "plan" | "dispatch" | "deploy") {
+        format!("Plan {plan} is in phase {phase}{}", if archived { " and archived" } else { "" })
+    } else if !waiting.is_empty() {
+        format!("it needs {}, not merged yet", waiting.join(", "))
+    } else {
+        return Ok(());
+    };
+    Err(CpdError::new(ErrorCode::JobNotReady, format!("Job {} is not Ready: {why}.", job.key))
+        .with("plan", plan.as_str())
+        .with("job", job.key.as_str())
+        .with("status", job.status.as_str())
+        .with("phase", phase)
+        .with("waiting_for", waiting))
 }
 
 /// Ready (§3.2): `queued`, in a Plan in phase `dispatch` or `deploy`, whose PR is

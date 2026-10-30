@@ -68,7 +68,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
             "SELECT a.job, a.tier, a.status, a.branch, a.worktree, a.worker_session, a.nudged, a.stop_request,
                     r.repo, r.lead_worktree, r.lead_branch, a.submitted_sha, j.kind, j.pr, r.head_ref, r.status
                FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-               JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+               LEFT JOIN prs r ON r.plan = j.plan AND r.key = j.pr
               WHERE a.plan = ?1 AND a.id = ?2",
             params![plan.as_str(), id.to_string()],
             |r| {
@@ -81,9 +81,9 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
                     r.get::<_, Option<String>>(5)?,
                     r.get::<_, bool>(6)?,
                     r.get::<_, Option<String>>(7)?,
-                    (r.get::<_, String>(8)?, r.get::<_, Option<String>>(9)?, r.get::<_, String>(10)?),
+                    (r.get::<_, Option<String>>(8)?, r.get::<_, Option<String>>(9)?, r.get::<_, Option<String>>(10)?),
                     r.get::<_, Option<String>>(11)?,
-                    (r.get::<_, String>(12)?, r.get::<_, String>(13)?, r.get::<_, Option<String>>(14)?, r.get::<_, String>(15)?),
+                    (r.get::<_, String>(12)?, r.get::<_, Option<String>>(13)?, r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?),
                 ))
             },
         )
@@ -94,13 +94,18 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
                 .with("attempt", id.to_string())
         })?;
     let (job, tier, status, branch, worktree, worker_session, nudged, stop_request, (repo, lead_worktree, lead_branch), submitted_sha, (kind, pr, head_ref, pr_status)) = row;
-    let lead_worktree = lead_worktree.ok_or_else(|| corrupt(format!("Plan {plan} has an Attempt but no Lead worktree")))?;
+    // An explore Attempt has no PR: its repo and Lead Branch are none (empty), its Lead worktree is its own directory.
+    let (repo, lead_worktree, lead_branch) = match (pr.is_some(), repo, lead_worktree, lead_branch) {
+        (true, Some(repo), Some(lead_worktree), Some(lead_branch)) => (repo, lead_worktree, lead_branch),
+        (true, ..) => return Err(corrupt(format!("Plan {plan} has an Attempt but no Lead worktree"))),
+        (false, ..) => (String::new(), worktree.clone(), String::new()),
+    };
     Ok(Attempt {
         plan: plan.clone(),
         context: ContextId::parse(&context).map_err(|_| corrupt(format!("context id {context:?}")))?,
         repo: PathBuf::from(repo),
         remote_branch: head_ref.clone().unwrap_or_else(|| lead_branch.clone()),
-        adopted: head_ref.is_some() && pr_status != "open",
+        adopted: head_ref.is_some() && pr_status.as_deref() != Some("open"),
         lead_branch,
         lead_worktree: PathBuf::from(lead_worktree),
         id: id.clone(),
@@ -116,7 +121,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
         stop_request,
         submitted_sha,
         kind,
-        pr: Some(pr),
+        pr,
     })
 }
 
