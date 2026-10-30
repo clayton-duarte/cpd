@@ -41,6 +41,11 @@ enum Decision {
 }
 
 pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
+    edit_in(&mut Env::open()?, args)
+}
+
+/// [`edit`] on an open `env`: what a test hands in.
+pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     if args.title.is_none() && args.tier.is_none() && args.spec.is_none() && args.pr.is_none() && args.kind.is_none() && args.needs.is_none() && !args.no_needs {
         return Err(CpdError::new(
@@ -57,7 +62,6 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
         check_kind_not_reserved(kind)?;
     }
     let spec = args.spec.as_ref().map(|path: &PathBuf| spec::read(path)).transpose()?;
-    let mut env = Env::open()?;
     if let Some(tier) = args.tier {
         let pr = args.pr.clone();
         env.check_tier(&plan, &args.key, pr.as_ref(), tier)?;

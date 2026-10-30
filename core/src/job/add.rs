@@ -51,6 +51,11 @@ enum Decision {
 }
 
 pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
+    add_in(&mut Env::open()?, args)
+}
+
+/// [`add`] on an open `env`: what a test hands in.
+pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let needs = sorted_needs(&args.needs)?;
     let kind = args.kind.clone().unwrap_or_else(|| "work".to_owned());
@@ -60,7 +65,6 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     if let Some(spec) = &spec {
         spec.check_kind(&kind)?;
             }
-    let mut env = Env::open()?;
     if let Some(tier) = args.tier {
         let prs = env.store.read(|conn| {
             super::plan_phase(conn, &plan)?;

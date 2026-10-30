@@ -23,10 +23,14 @@ enum Decision {
 }
 
 pub(super) fn retry(args: RetryArgs) -> Result<Output, CpdError> {
+    retry_in(&mut Env::open()?, args)
+}
+
+/// [`retry`] on an open `env`: what a test hands in.
+pub(super) fn retry_in(env: &mut Env, args: RetryArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let key = args.key;
     let tier = args.tier.to_string();
-    let mut env = Env::open()?;
     env.check_tier(&plan, &key, None, args.tier)?;
 
     let already = match env.store.read(|conn| decide(conn, &plan, &key, &tier))? {

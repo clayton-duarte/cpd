@@ -21,6 +21,8 @@ pub(crate) mod cancel;
 mod edit;
 pub(crate) mod fix_retry;
 #[cfg(test)]
+mod explore_tests;
+#[cfg(test)]
 mod fix_retry_tests;
 pub mod guard;
 pub mod open;
@@ -232,9 +234,19 @@ impl Env {
                 None => crate::policy::model::models_of_job(conn, &home, plan, job.as_str()),
             }
         })?;
-        config::catalog::load_with(&models, &mut self.store)?.check(tier)?;
+        let catalog = match &self.catalog {
+            Some(fixed) => fixed.clone(),
+            None => config::catalog::load_with(&models, &mut self.store)?,
+        };
+        catalog.check(tier)?;
         tier.check_worker()
     }
+}
+
+/// `tier_not_allowed` (exit 2, `details` name the kind and its range) unless `tier` is in the range of `kind`:
+/// H1-H3 for `scout`, S1-S3 for `research`; every other kind has no range of its own. STUB: allows everything.
+pub(crate) fn check_kind_tier(_kind: &str, _tier: Tier) -> Result<(), CpdError> {
+    Ok(())
 }
 
 /// The Plan's phase, else `plan_not_found`.

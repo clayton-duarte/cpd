@@ -105,7 +105,7 @@ pub fn running(home: &CpdHome, context: &ContextId) -> Result<bool, CpdError> {
 }
 /// `context distill` (§3.12).
 pub(super) fn distill(args: DistillArgs) -> Result<Output, CpdError> {
-    let Env { home, config, mut store, ports } = Env::open()?;
+    let Env { home, config, mut store, ports, .. } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     store.read(|conn| ContextRow::require(conn, &context))?;
     let floor = config.context_curation_min_records;
