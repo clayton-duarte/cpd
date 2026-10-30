@@ -25,6 +25,7 @@ mod explore_tests;
 #[cfg(test)]
 mod fix_retry_tests;
 pub mod guard;
+pub mod home;
 pub mod open;
 mod retry;
 pub(crate) mod show;

@@ -14,6 +14,7 @@ use cpd_core::events::highest_id;
 use cpd_core::inbox::model::{Item, Kind};
 use cpd_core::job::open::shown_needs;
 use cpd_core::job::worked_on::failed_worked_on;
+use cpd_core::job::home::JobHome;
 use cpd_core::ids::{AttemptId, ContextId, EscalationId, JobKey, PlanId, PrKey, SessionId};
 use cpd_core::plan::display::Display;
 use cpd_core::plan::fingerprint::load_prs;
@@ -351,6 +352,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool, lead: &str, jo
     }
     let blocked = active::blocked_spans(&events, now_ms);
     let mut spans: BTreeMap<&str, Vec<(i64, i64)>> = BTreeMap::new();
+    // `jobs` are JobNodes, so they hold only PR Jobs (job_nodes drops the Plan-level ones).
     for job in jobs {
         for a in &job.attempts {
             let what = format!("Attempt {}", a.id);
@@ -366,10 +368,14 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool, lead: &str, jo
           WHERE a.plan = ?1",
     )?;
     for row in stmt.query_map([plan.as_str()], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, Option<rusqlite::types::Value>>(1)?, r.get::<_, bool>(2)?, r.get::<_, Option<String>>(3)?))
+        Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<rusqlite::types::Value>>(1)?, r.get::<_, bool>(2)?, r.get::<_, Option<String>>(3)?))
     })? {
         let (pr, stored, no_metrics, file) = row?;
-        costs.entry(pr).or_default().push(super::cost::attempt_cost(stored, no_metrics, file.as_deref()));
+        let JobHome::Pr(pr) = JobHome::of("PR key", pr.as_deref())? else {
+            // An explore Attempt belongs to no PR box (contract §2.2 Totals): only the Plan's cost holds it.
+            continue;
+        };
+        costs.entry(pr.to_string()).or_default().push(super::cost::attempt_cost(stored, no_metrics, file.as_deref()));
     }
     let display = Display::load(conn, plan)?;
     let pr_rows = load_prs(conn, plan)?;
@@ -460,13 +466,15 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
     let mut attempts = attempts(conn, plan)?;
     rows.iter()
         .zip(waiting_on)
-        // An explore Job belongs to the Plan, not to a PR: it has no node in a PR's flow.
-        .filter(|(j, _)| j.pr.is_some())
         .map(|(j, waiting_on)| {
             let what = format!("Job {plan}/{}", j.key);
+            // An explore Job belongs to the Plan, not to a PR: it has no node in a PR's flow.
+            let JobHome::Pr(pr) = JobHome::of("PR key", j.pr.as_deref())? else {
+                return Ok(None);
+            };
             let key = id("Job key", &j.key, JobKey::parse)?;
-            Ok(JobNode {
-                pr: id("PR key", j.pr_str(), PrKey::parse)?,
+            Ok(Some(JobNode {
+                pr,
                 status: JobStatus::parse(&format!("{what} has status"), &j.status)?,
                 tier: j.tier.as_deref().map(|t| tier(&what, t)).transpose()?,
                 needs: shown_needs(&rows, j).iter().map(|n| id("Job key", n, JobKey::parse)).collect::<Result<_, _>>()?,
@@ -481,8 +489,9 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
                 cancel_reason: j.cancel_reason.clone(),
                 merged_sha: j.merged_sha.clone(),
                 key,
-            })
+            }))
         })
+        .filter_map(Result::transpose)
         .collect()
 }
 
