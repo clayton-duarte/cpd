@@ -485,4 +485,8 @@ What to read, top to bottom:
 
 ## Candidates
 
+| Change | Median ms per key, before | after | Kept |
+|---|---|---|---|
+| Balloon cache, CachedComponent and CachedContainer hold the two latest widths (CT + EX on a copy of the Manager transcript; `keys`, 3 runs, two A/B rounds in one window) | 22.75 and 27.00 (runs 21.75 to 30.25) | 9.25 and 10.00 (runs 9.25 to 10.25) | kept |
+
 ## After
