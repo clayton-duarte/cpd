@@ -908,3 +908,406 @@ fn follow_re_execs_when_its_binary_is_replaced_and_loses_and_repeats_no_event() 
     assert_eq!(restarted.next().unwrap()["id"].as_i64().unwrap(), b);
     assert_eq!(restarted.next().unwrap()["id"].as_i64().unwrap(), c);
 }
+
+// ------------------------------------------------- stale Events (contract §5.4)
+
+/// A store with the fixture (Plans `pay`, Lead `lead1`; `other`, Lead `lead2`) and no Event, and the `follow`s of it.
+struct Stale {
+    fx: Fx,
+    store: Store,
+    pulls: i64,
+}
+
+fn kind_data(kind: Kind) -> Value {
+    use Kind::*;
+    match kind {
+        PlanDone => json!({"prs": []}),
+        PlanPhase => json!({"from": "dispatch", "to": "deploy"}),
+        PlanReview => json!({"review": "r1", "fingerprint": "f", "status": "pending"}),
+        JobFailed => json!({"cause": "gate", "detail": "d", "tier": "S1", "attempts": 1}),
+        JobRetried => json!({"tier": "S1"}),
+        JobMerged => json!({"sha": "c0ffee1", "tier": "S1", "kind": "work"}),
+        JobCancelled => json!({"reason": "r"}),
+        AttemptStarted => json!({"number": 2, "tier": "S1", "origin": "ladder"}),
+        AttemptNudge => json!({"prompt": "p"}),
+        Escalation => json!({"escalation": "e1", "question": "q"}),
+        EscalationAnswered => json!({"escalation": "e1"}),
+        EscalationExpired => json!({"escalation": "e1", "reason": "timeout"}),
+        Error => json!({"source": "engine", "code": "push_failed", "message": "m", "details": {}}),
+        PrFeedback => json!({
+            "pr": "r1", "number": 1, "url": "u", "state": "open", "checks": "failed", "review_decision": "none",
+            "mergeable": "mergeable", "merge_state": "clean", "conflict": false, "reasons": ["checks_failed"]
+        }),
+        PrMerged => json!({"pr": "r1", "number": 1, "url": "u", "merged_at": "t"}),
+        PrCancelled => json!({"pr": "r1"}),
+        PrStarted => json!({
+            "pr": "r1", "repo": "/r", "base": "main", "lead_branch": "b", "lead_worktree": "/w", "base_sha": "s",
+            "reused": false, "pushed": false, "by": "cpd"
+        }),
+        other => panic!("no data for {other:?}"),
+    }
+}
+
+impl Stale {
+    fn new() -> Stale {
+        let fx = Fx::new();
+        fx.env.write_config(CONFIG);
+        let mut store = open(&fx.env);
+        fixture(&mut store);
+        Stale { fx, store, pulls: 0 }
+    }
+
+    /// Appends `kind` of `plan` (and `job`) with the data of `kind_data` patched by `patch` (a null value removes a key);
+    /// returns its id.
+    fn ev(&mut self, kind: Kind, plan: &str, job: Option<&str>, patch: Value) -> i64 {
+        let mut data = kind_data(kind);
+        for (k, v) in patch.as_object().unwrap() {
+            if v.is_null() {
+                data.as_object_mut().unwrap().remove(k);
+            } else {
+                data[k] = v.clone();
+            }
+        }
+        let mut e = NewEvent::new(kind, "t", data).plan(plan_id(plan));
+        if let Some(job) = job {
+            e = e.job(JobKey::parse(job).unwrap());
+            if matches!(
+                kind,
+                Kind::JobMerged | Kind::AttemptStarted | Kind::AttemptNudge | Kind::Escalation | Kind::EscalationAnswered | Kind::EscalationExpired
+            ) {
+                e = e.attempt(AttemptId::parse(&format!("{job}-a1")).unwrap());
+            }
+        }
+        if kind == Kind::AttemptNudge {
+            e = e.session(session("worker1"));
+        }
+        append_one(&mut self.store, e).unwrap()
+    }
+
+    /// An Event the typed API refuses (no Job, or no Plan, where the kind has one), written as a row; returns its id.
+    fn raw(&mut self, kind: Kind, plan: Option<&str>, job: Option<&str>, patch: Value) -> i64 {
+        let mut data = kind_data(kind);
+        for (k, v) in patch.as_object().unwrap() {
+            if v.is_null() {
+                data.as_object_mut().unwrap().remove(k);
+            } else {
+                data[k] = v.clone();
+            }
+        }
+        let quote = |v: Option<&str>| v.map_or("NULL".to_string(), |v| format!("'{v}'"));
+        let sql = format!(
+            "INSERT INTO events (txn, at, kind, context, plan, job, text, data)
+             VALUES (cpd_txn(), '2026-01-03T00:00:00.000Z', '{}', 'ctx', {}, {}, 'x', '{data}');",
+            kind.as_str(),
+            quote(plan),
+            quote(job)
+        );
+        self.store.write("raw", |tx| exec(tx, &sql)).unwrap();
+        self.store.read(|conn| Ok(conn.query_row("SELECT max(id) FROM events", [], |r| r.get(0))?)).unwrap()
+    }
+
+    /// An open PR `key` of `plan` with its `pull_requests` row.
+    fn pr(&mut self, plan: &str, key: &str, state: &str, review: &str, checks: &str, feedback: Option<&str>) {
+        self.pulls += 1;
+        let n = self.pulls;
+        let feedback = feedback.map_or("NULL".to_string(), |f| format!("'{f}'"));
+        self.store
+            .write("pr", |tx| {
+                exec(
+                    tx,
+                    &format!(
+                        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, feedback)
+                           VALUES ('o/r', {n}, 'u{n}', 't', 0, '{state}', '{review}', '{checks}', 't', 't', {feedback});
+                         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+                                          pull_request, created_txn, created_at, started_at)
+                           VALUES ('{plan}', '{key}', '/r', 'main', 'open', 'cpd/{plan}/{key}', '/w/{key}', {n}, 'u{n}', 't',
+                                   (SELECT id FROM pull_requests WHERE number = {n}), {id}, 't', 't');",
+                        id = tx.id()
+                    ),
+                )
+            })
+            .unwrap();
+    }
+
+    /// A PR of `plan` that was never opened: its `prs` row has no `pull_request`.
+    fn waiting_pr(&mut self, plan: &str, key: &str) {
+        self.store
+            .write("pr", |tx| {
+                exec(
+                    tx,
+                    &format!(
+                        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                         VALUES ('{plan}', '{key}', '/r', 'main', 'waiting', 'cpd/{plan}/{key}', {}, 't');",
+                        tx.id()
+                    ),
+                )
+            })
+            .unwrap();
+    }
+
+    /// A `pr-feedback` of PR `pr` of `plan` for `reasons`.
+    fn feedback(&mut self, plan: &str, pr: &str, reasons: Value) -> i64 {
+        self.ev(Kind::PrFeedback, plan, None, json!({"pr": pr, "reasons": reasons}))
+    }
+
+    /// The ids `cpd events follow <args> --since 0 --until-idle` prints.
+    fn follow(&self, args: &[&str]) -> Vec<i64> {
+        let args = if args.contains(&"--since") { args.to_vec() } else { [args, &["--since", "0"]].concat() };
+        ids(&Value::Array(follow_until_idle(&self.fx, &args)))
+    }
+
+    fn lead(&self) -> Vec<i64> {
+        self.follow(&["--session", "lead1"])
+    }
+}
+
+fn plan_id(id: &str) -> PlanId {
+    plan(id)
+}
+
+#[test]
+fn follow_session_drops_a_plan_done_that_a_later_plan_done_or_a_reopen_supersedes() {
+    let mut s = Stale::new();
+    let _a = s.ev(Kind::PlanDone, "pay", None, json!({})); // 1 plan-done, superseded by 2
+    let _b = s.ev(Kind::PlanDone, "pay", None, json!({})); // 2 plan-done, superseded by the reopen 3
+    let c = s.ev(Kind::PlanPhase, "pay", None, json!({"from": "done", "to": "dispatch"})); // 3 reopen
+    let d = s.ev(Kind::PlanDone, "pay", None, json!({})); // 4 plan-done, the last: streams
+    let e = s.ev(Kind::PlanPhase, "pay", None, json!({"from": "deploy", "to": "done"})); // 5 another `from`: drops nothing
+    assert_eq!(s.lead(), vec![c, d, e]);
+}
+
+#[test]
+fn follow_session_drops_a_job_failed_that_a_later_retry_merge_or_cancel_answers() {
+    let mut s = Stale::new();
+    let _f1 = s.ev(Kind::JobFailed, "pay", Some("j1"), json!({})); // 1 failed, retried by 2
+    let r1 = s.ev(Kind::JobRetried, "pay", Some("j1"), json!({}));
+    let _f2 = s.ev(Kind::JobFailed, "pay", Some("j2"), json!({})); // 3 failed, merged by 4
+    let m2 = s.ev(Kind::JobMerged, "pay", Some("j2"), json!({}));
+    let _f3 = s.ev(Kind::JobFailed, "pay", Some("j3"), json!({})); // 5 failed, cancelled by 6
+    let c3 = s.ev(Kind::JobCancelled, "pay", Some("j3"), json!({}));
+    let f4 = s.ev(Kind::JobFailed, "pay", Some("j4"), json!({})); // 7 failed, the retry is of j5: streams
+    let r5 = s.ev(Kind::JobRetried, "pay", Some("j5"), json!({}));
+    let f5 = s.ev(Kind::JobFailed, "pay", Some("j7"), json!({})); // 9 failed, the retry is of j7 in another Plan: streams
+    let _other = s.ev(Kind::JobRetried, "other", Some("j7"), json!({}));
+    assert_eq!(s.lead(), vec![r1, m2, c3, f4, r5, f5]);
+}
+
+#[test]
+fn follow_session_drops_an_escalation_that_a_later_answer_expiry_merge_or_cancel_settles() {
+    let mut s = Stale::new();
+    let _e1 = s.ev(Kind::Escalation, "pay", Some("j1"), json!({"escalation": "e1"})); // 1, answered by 2
+    let a1 = s.ev(Kind::EscalationAnswered, "pay", Some("j1"), json!({"escalation": "e1"}));
+    let _e2 = s.ev(Kind::Escalation, "pay", Some("j2"), json!({"escalation": "e2"})); // 3, expired by 4
+    let x2 = s.ev(Kind::EscalationExpired, "pay", Some("j2"), json!({"escalation": "e2"}));
+    let _e3 = s.ev(Kind::Escalation, "pay", Some("j3"), json!({"escalation": "e3"})); // 5, its Job merged by 6
+    let m3 = s.ev(Kind::JobMerged, "pay", Some("j3"), json!({}));
+    let _e4 = s.ev(Kind::Escalation, "pay", Some("j4"), json!({"escalation": "e4"})); // 7, its Job cancelled by 8
+    let c4 = s.ev(Kind::JobCancelled, "pay", Some("j4"), json!({}));
+    let e5 = s.ev(Kind::Escalation, "pay", Some("j5"), json!({"escalation": "e5"})); // 9, the answer names e6: streams
+    let a6 = s.ev(Kind::EscalationAnswered, "pay", Some("j5"), json!({"escalation": "e6"}));
+    assert_eq!(s.lead(), vec![a1, x2, m3, c4, e5, a6]);
+}
+
+#[test]
+fn follow_session_drops_an_attempt_nudge_that_a_later_attempt_merge_failure_or_cancel_follows() {
+    let mut s = Stale::new();
+    let _n1 = s.ev(Kind::AttemptNudge, "pay", Some("j1"), json!({})); // 1 nudge, attempt-started 2
+    let st1 = s.ev(Kind::AttemptStarted, "pay", Some("j1"), json!({}));
+    let _n2 = s.ev(Kind::AttemptNudge, "pay", Some("j2"), json!({})); // 3 nudge, job-merged 4
+    let m2 = s.ev(Kind::JobMerged, "pay", Some("j2"), json!({}));
+    let _n3 = s.ev(Kind::AttemptNudge, "pay", Some("j3"), json!({})); // 5 nudge, job-failed 6
+    let f3 = s.ev(Kind::JobFailed, "pay", Some("j3"), json!({}));
+    let _n4 = s.ev(Kind::AttemptNudge, "pay", Some("j4"), json!({})); // 7 nudge, job-cancelled 8
+    let c4 = s.ev(Kind::JobCancelled, "pay", Some("j4"), json!({}));
+    let n5 = s.ev(Kind::AttemptNudge, "pay", Some("j5"), json!({})); // 9 nudge, attempt-started of j6: streams
+    let st6 = s.ev(Kind::AttemptStarted, "pay", Some("j6"), json!({}));
+    let n7 = s.ev(Kind::AttemptNudge, "pay", Some("j7"), json!({})); // 11 nudge, job-retried: not a listed Event, streams
+    let r7 = s.ev(Kind::JobRetried, "pay", Some("j7"), json!({}));
+    assert_eq!(s.lead(), vec![st1, m2, f3, c4, n5, st6, n7, r7]);
+}
+
+#[test]
+fn follow_session_drops_a_job_error_that_a_later_attempt_merge_or_cancel_clears_and_keeps_one_after_the_merge() {
+    let mut s = Stale::new();
+    let _er1 = s.ev(Kind::Error, "pay", Some("j1"), json!({})); // 1 error, attempt-started 2
+    let st1 = s.ev(Kind::AttemptStarted, "pay", Some("j1"), json!({}));
+    let _er2 = s.ev(Kind::Error, "pay", Some("j2"), json!({})); // 3 error, job-merged 4
+    let m2 = s.ev(Kind::JobMerged, "pay", Some("j2"), json!({}));
+    let _er3 = s.ev(Kind::Error, "pay", Some("j3"), json!({})); // 5 error, job-cancelled 6
+    let c3 = s.ev(Kind::JobCancelled, "pay", Some("j3"), json!({}));
+    let m4 = s.ev(Kind::JobMerged, "pay", Some("j4"), json!({})); // 7 merged
+    let er4 = s.ev(Kind::Error, "pay", Some("j4"), json!({"code": "push_failed"})); // 8 error after the merge: streams
+    let er5 = s.ev(Kind::Error, "pay", Some("j5"), json!({})); // 9 error, attempt-started of j6: streams
+    let st6 = s.ev(Kind::AttemptStarted, "pay", Some("j6"), json!({}));
+    assert_eq!(s.lead(), vec![st1, m2, c3, m4, er4, er5, st6]);
+}
+
+#[test]
+fn follow_session_drops_a_pr_error_that_a_later_pr_start_merge_or_cancel_clears() {
+    let mut s = Stale::new();
+    let err = |pr: &str| json!({"details": {"pr": pr}});
+    let _e1 = s.ev(Kind::Error, "pay", None, err("a")); // 1 error of PR a, pr-started a 2
+    let ps1 = s.ev(Kind::PrStarted, "pay", None, json!({"pr": "a"}));
+    let _e2 = s.ev(Kind::Error, "pay", None, err("b")); // 3 error of PR b, pr-merged b 4
+    let pm2 = s.ev(Kind::PrMerged, "pay", None, json!({"pr": "b"}));
+    let _e3 = s.ev(Kind::Error, "pay", None, err("c")); // 5 error of PR c, pr-cancelled c 6
+    let pc3 = s.ev(Kind::PrCancelled, "pay", None, json!({"pr": "c"}));
+    let e4 = s.ev(Kind::Error, "pay", None, err("d")); // 7 error of PR d, pr-started e: streams
+    let pse = s.ev(Kind::PrStarted, "pay", None, json!({"pr": "e"}));
+    let e5 = s.ev(Kind::Error, "pay", None, err("f")); // 9 error of PR f, pr-merged f in another Plan: streams
+    let _other = s.ev(Kind::PrMerged, "other", None, json!({"pr": "f"}));
+    assert_eq!(s.lead(), vec![ps1, pm2, pc3, e4, pse, e5]);
+}
+
+#[test]
+fn follow_session_keeps_every_other_error_and_every_kind_that_reports_a_completed_fact() {
+    let mut s = Stale::new();
+    let _p1 = s.ev(Kind::PlanDone, "pay", None, json!({})); // 1 plan-done, superseded by the last Event: the one dropped
+    let mut live = vec![];
+    live.push(s.ev(Kind::Error, "pay", None, json!({}))); // error with no Job and no details.pr
+    live.push(s.ev(Kind::Error, "pay", None, json!({"details": {"pr": 5}}))); // details.pr not a string
+    live.push(s.ev(Kind::JobMerged, "pay", Some("j1"), json!({})));
+    live.push(s.ev(Kind::PrMerged, "pay", None, json!({"pr": "x"})));
+    live.push(s.ev(Kind::JobCancelled, "pay", Some("j1"), json!({})));
+    live.push(s.ev(Kind::PrStarted, "pay", None, json!({"pr": "x"})));
+    live.push(s.ev(Kind::AttemptStarted, "pay", Some("j1"), json!({})));
+    live.push(s.ev(Kind::PlanReview, "pay", None, json!({})));
+    live.push(s.ev(Kind::EscalationAnswered, "pay", Some("j1"), json!({})));
+    // Later Events about the same objects:
+    live.push(s.ev(Kind::JobMerged, "pay", Some("j1"), json!({})));
+    live.push(s.ev(Kind::PrMerged, "pay", None, json!({"pr": "5"})));
+    live.push(s.ev(Kind::PrMerged, "pay", None, json!({"pr": "x"})));
+    live.push(s.ev(Kind::PrStarted, "pay", None, json!({"pr": "x"})));
+    live.push(s.ev(Kind::PlanReview, "pay", None, json!({"status": "approved"})));
+    live.push(s.ev(Kind::EscalationAnswered, "pay", Some("j1"), json!({})));
+    live.push(s.ev(Kind::PlanDone, "pay", None, json!({}))); // supersedes 1
+    assert_eq!(s.lead(), live);
+}
+
+#[test]
+fn follow_session_drops_a_pr_feedback_that_a_later_pr_merge_or_cancel_ends() {
+    let mut s = Stale::new();
+    for key in ["a", "b", "c", "d", "g"] {
+        s.pr("pay", key, "open", "none", "failed", Some("[]")); // every row still says checks failed
+    }
+    let _f1 = s.feedback("pay", "a", json!(["checks_failed"])); // 1 feedback of a, pr-merged a 2
+    let pm1 = s.ev(Kind::PrMerged, "pay", None, json!({"pr": "a"}));
+    let _f2 = s.feedback("pay", "b", json!(["checks_failed"])); // 3 feedback of b, pr-cancelled b 4
+    let pc2 = s.ev(Kind::PrCancelled, "pay", None, json!({"pr": "b"}));
+    let f3 = s.feedback("pay", "c", json!(["checks_failed"])); // 5 feedback of c, nothing after: streams
+    let f4 = s.feedback("pay", "d", json!(["checks_failed"])); // 6 feedback of d, pr-merged e: streams
+    let pme = s.ev(Kind::PrMerged, "pay", None, json!({"pr": "e"}));
+    let f5 = s.feedback("pay", "g", json!(["checks_failed"])); // 8 feedback of g, pr-merged g in another Plan: streams
+    let _other = s.ev(Kind::PrMerged, "other", None, json!({"pr": "g"}));
+    assert_eq!(s.lead(), vec![pm1, pc2, f3, f4, pme, f5]);
+}
+
+#[test]
+fn follow_session_drops_a_pr_feedback_none_of_whose_reasons_holds_in_the_pr_row() {
+    let mut s = Stale::new();
+    s.pr("pay", "k1", "open", "none", "passed", Some("[]"));
+    s.pr("pay", "k2", "open", "none", "failed", Some("[]"));
+    s.pr("pay", "k3", "open", "none", "passed", Some("[]"));
+    s.pr("pay", "k4", "open", "none", "passed", Some("[]"));
+    s.pr("pay", "k5", "open", "none", "passed", Some("[]"));
+    s.pr("pay", "k6", "open", "none", "passed", Some("[]"));
+    s.pr("pay", "k7", "open", "none", "failed", Some("[]"));
+    let _f1 = s.feedback("pay", "k1", json!(["checks_failed"])); // checks passed
+    let _f2 = s.feedback("pay", "k2", json!(["changes_requested"])); // review none
+    let _f3 = s.feedback("pay", "k3", json!(["comments"])); // feedback []
+    let _f4 = s.feedback("pay", "k4", json!(["closed"])); // state open
+    let _f5 = s.feedback("pay", "k5", json!(["approved"])); // state open, review none
+    let _f6 = s.feedback("pay", "k6", json!(["checks_failed", "changes_requested", "comments", "closed", "approved"])); // none holds
+    let f7 = s.feedback("pay", "k7", json!(["checks_failed"])); // 7 checks failed: streams
+    assert_eq!(s.lead(), vec![f7]);
+}
+
+#[test]
+fn follow_session_keeps_a_pr_feedback_while_one_reason_holds() {
+    let mut s = Stale::new();
+    let all = json!(["checks_failed", "changes_requested", "comments", "closed", "approved"]);
+    s.pr("pay", "h1", "open", "none", "failed", Some("[]")); // only checks_failed holds
+    s.pr("pay", "h2", "open", "changes_requested", "passed", Some("[]")); // only changes_requested
+    s.pr("pay", "h3", "open", "none", "passed", Some("[{\"body\":\"x\"}]")); // only comments
+    s.pr("pay", "h4", "closed", "none", "passed", Some("[]")); // only closed
+    s.pr("pay", "h5", "open", "approved", "passed", Some("[]")); // only approved
+    s.pr("pay", "h6", "open", "none", "passed", Some("[]"));
+    s.pr("pay", "h7", "open", "none", "passed", Some("[]"));
+    s.pr("pay", "h8", "open", "none", "passed", Some("[]"));
+    let mut live = vec![];
+    for key in ["h1", "h2", "h3", "h4", "h5"] {
+        live.push(s.feedback("pay", key, all.clone()));
+    }
+    live.push(s.feedback("pay", "h6", json!(["mergeable"]))); // a reason the docs do not know
+    live.push(s.feedback("pay", "h7", json!(["checks_failed", "mergeable"]))); // one known, none holds, one unknown
+    let _dropped = s.feedback("pay", "h8", json!(["checks_failed"])); // checks passed: dropped
+    assert_eq!(s.lead(), live);
+}
+
+#[test]
+fn follow_session_fails_open_when_the_object_or_a_data_field_is_missing() {
+    let mut s = Stale::new();
+    s.waiting_pr("pay", "w1");
+    for key in ["p1", "p2", "p3", "p4", "p5"] {
+        s.pr("pay", key, "open", "none", "passed", Some("[]")); // nothing holds: dropped if the reasons were read
+    }
+    s.pr("pay", "p6", "open", "none", "passed", None);
+    let _dropped = s.ev(Kind::PlanDone, "pay", None, json!({})); // 1 plan-done, superseded by the last Event
+    let mut live = vec![];
+    live.push(s.feedback("pay", "nopr", json!(["checks_failed"]))); // no prs row
+    live.push(s.feedback("pay", "w1", json!(["checks_failed"]))); // prs.pull_request NULL
+    live.push(s.feedback("pay", "p6", json!(["comments"]))); // feedback NULL
+    live.push(s.raw(Kind::PrFeedback, Some("pay"), None, json!({"pr": "p1", "reasons": null}))); // reasons missing
+    live.push(s.feedback("pay", "p2", json!([]))); // reasons empty
+    live.push(s.feedback("pay", "p3", json!("checks_failed"))); // reasons not an array
+    live.push(s.feedback("pay", "p4", json!([5]))); // reasons not strings
+    live.push(s.raw(Kind::JobFailed, Some("pay"), None, json!({}))); // job-failed with no job
+    live.push(s.ev(Kind::JobRetried, "pay", Some("j1"), json!({})));
+    live.push(s.raw(Kind::PlanDone, None, None, json!({}))); // plan-done with no plan
+    live.push(s.ev(Kind::PlanDone, "pay", None, json!({}))); // the last plan-done
+    assert_eq!(s.lead(), live);
+}
+
+#[test]
+fn follow_session_filters_for_a_lead_and_for_another_session_and_the_other_scopes_keep_the_history() {
+    let mut s = Stale::new();
+    let d1 = s.ev(Kind::PlanDone, "pay", None, json!({})); // 1 plan-done, superseded by 4
+    let n1 = s.ev(Kind::AttemptNudge, "pay", Some("api"), json!({})); // 2 nudge to worker1, superseded by 3
+    let st = s.ev(Kind::AttemptStarted, "pay", Some("api"), json!({})); // 3
+    let d2 = s.ev(Kind::PlanDone, "pay", None, json!({})); // 4 plan-done
+    let n2 = s.ev(Kind::AttemptNudge, "pay", Some("api"), json!({})); // 5 nudge to worker1: streams
+    let history = vec![d1, n1, st, d2, n2];
+
+    assert_eq!(s.lead(), vec![st, d2, n2]);
+    assert_eq!(s.follow(&["--session", "worker1"]), vec![n2]);
+    assert_eq!(s.follow(&["--session", "lead1", "--kind", "plan-done"]), vec![d2]);
+    assert_eq!(s.follow(&["--session", "lead1", "--since", &d1.to_string()]), vec![st, d2, n2]);
+    assert_eq!(s.follow(&["--plan", "pay"]), history);
+    assert_eq!(s.follow(&["--context", "ctx"]), history);
+    assert_eq!(s.follow(&[]), history);
+    assert_eq!(ids(&list(&s.fx, &["--plan", "pay"])["events"]), history);
+}
+
+#[test]
+fn follow_session_reads_past_a_full_batch_of_stale_events() {
+    let mut s = Stale::new();
+    s.store
+        .write("bulk", |tx| {
+            let failed = |n: i64| {
+                NewEvent::new(Kind::JobFailed, "t", kind_data(Kind::JobFailed)).plan(plan("pay")).job(JobKey::parse(&format!("j{n}")).unwrap())
+            };
+            for n in 0..520 {
+                append(tx, failed(n))?; // ids 1..=520, each retried below
+            }
+            for n in 0..520 {
+                let retried = NewEvent::new(Kind::JobRetried, "t", kind_data(Kind::JobRetried))
+                    .plan(plan("pay"))
+                    .job(JobKey::parse(&format!("j{n}")).unwrap());
+                append(tx, retried)?; // ids 521..=1040
+            }
+            append(tx, failed(520))?; // id 1041, live
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(s.lead(), (521..=1041).collect::<Vec<i64>>());
+}
