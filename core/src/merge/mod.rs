@@ -395,6 +395,47 @@ pub fn parse_gate_detail(detail: &str) -> Option<(Hook, PathBuf)> {
     (!log.is_empty() && !log.contains('\n')).then(|| (hook, PathBuf::from(log)))
 }
 
+const TEXT_LINES: usize = 5;
+const TEXT_LINE_CHARS: usize = 160;
+
+/// `line` without trailing whitespace, cut to [`TEXT_LINE_CHARS`] characters (a longer one ends with `…`).
+fn cut_line(line: &str) -> String {
+    let line = line.trim_end();
+    if line.chars().count() <= TEXT_LINE_CHARS {
+        return line.to_string();
+    }
+    line.chars().take(TEXT_LINE_CHARS - 1).chain(std::iter::once('…')).collect()
+}
+
+/// The compact body of the text of a Gate cause's `job-failed` Event: what happened, the last [`TEXT_LINES`] non-blank lines
+/// of the tail, and `See: <log>`. `None` for a `detail` that is not of a shape [`gate_detail`] writes.
+pub fn gate_text_body(detail: &str) -> Option<String> {
+    let (hook, log) = parse_gate_detail(detail)?;
+    let hook = hook.as_str();
+    let rest = detail.strip_prefix(hook)?;
+    let (head, tail) = rest.split_once(TAIL).unwrap_or((rest, ""));
+    let what = if let Some(r) = head.strip_prefix(FAILED) {
+        format!("{hook}{FAILED}{}).", r.split_once(')')?.0)
+    } else if let Some(r) = head.strip_prefix(UNJUDGED) {
+        format!("{hook}{UNJUDGED}{}).", cut_line(&r[..r.rfind(&format!("){LOG}"))?]))
+    } else {
+        let r = head.strip_prefix(COULD_NOT_RUN)?;
+        format!("{hook}{COULD_NOT_RUN}{}", cut_line(&r[..r.rfind(LOG)?]))
+    };
+    let lines: Vec<&str> = tail.lines().filter(|l| !l.trim().is_empty()).collect();
+    let last = &lines[lines.len().saturating_sub(TEXT_LINES)..];
+    let mut body = what;
+    if !last.is_empty() {
+        body.push_str(&format!(" Its last {} lines:", last.len()));
+    }
+    for l in last {
+        body.push('\n');
+        body.push_str(&cut_line(l));
+    }
+    body.push_str(&format!("\nSee: {}", log.display()));
+    Some(body)
+}
+
 /// Runs the Gate `hook` for `target` in its Attempt worktree at HEAD (§7.4 step 6, hs-d679). `None` when it passed or has no
 /// commands; `Some(end)` when it failed (`gate_failed`) or could not be judged (`gate_error`), carrying the hook tail and log.
 fn run_gate(home: &CpdHome, config: &Config, target: &Attempt, hook: Hook, pipeline: &Pipeline) -> Result<Option<End>, CpdError> {
