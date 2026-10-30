@@ -894,3 +894,5 @@ mod restack_tests;
 mod reaction_refusal_tests;
 #[cfg(test)]
 mod jira_transitions_tests;
+#[cfg(test)]
+mod explore_kinds_tests;
