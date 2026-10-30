@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
-import type { PromptSection } from "@earendil-works/pi-durable";
+import type { PromptSection, ToolHooks } from "@earendil-works/pi-durable";
 import { CpdError } from "../../lib/cpd.ts";
 import { parseLine } from "../../lib/event.ts";
 import type { FollowerHooks } from "../../lib/follower.ts";
+import { reasonText } from "../../lib/mainguard.ts";
 import { POLICY_SECTION, policySection } from "../../lib/policy.ts";
 import { TIME_ZONE_SECTION, zoneLine } from "../../lib/time.ts";
 import type { Config } from "../../durable-worker/config.ts";
@@ -113,7 +117,8 @@ const MOVES: Record<string, readonly string[]> = {
 };
 const legalMove = (from: string, to: string): boolean => from === to || (MOVES[from]?.includes(to) ?? false);
 
-function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: Deps["resolveModel"]; sessionState?: string; entriesError?: Error; writeError?: Error; openGate?: Promise<void> } = {}) {
+function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: Deps["resolveModel"]; sessionState?: string; entriesError?: Error; writeError?: Error; openGate?: Promise<void>; config?: Config; homeDir?: string } = {}) {
+  const config = over.config ?? CONFIG;
   const session = { state: over.sessionState ?? "stopped" };
   const store = over.store ?? new Store();
   const calls: string[][] = [];
@@ -154,7 +159,7 @@ function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: 
       }),
     contextFiles: (cwd) => {
       effects.push("contextFiles");
-      assert.equal(cwd, CONFIG.cwd);
+      assert.equal(cwd, config.cwd);
       return FILES;
     },
     open: async (o) => {
@@ -190,14 +195,14 @@ function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: 
       terminate.handler = handler;
       notify();
     },
-    homeDir: () => "/home/user",
+    homeDir: () => over.homeDir ?? "/home/user",
     now: () => NOW,
     log: (line) => {
       logs.push(line);
     },
   };
 
-  runWorker(CONFIG, deps).then(
+  runWorker(config, deps).then(
     (code) => {
       ending.code = code;
       notify();
@@ -486,4 +491,53 @@ test("a show whose state is not a Session state is a bad_output and the runner e
   const code = await r.until("the runner to end", () => r.ending.code);
   assert.equal(code, 1);
   assert.equal(r.opens.length, 0);
+});
+
+const hookOf = (r: Rig) => {
+  const reg = r.opens[0]!.extension.hooks?.[0];
+  assert.ok(reg, "one hook");
+  return (reg.handlers as ToolHooks).beforeTool;
+};
+const call = (name: string, args: Record<string, string>) => ({ type: "toolCall" as const, id: "c1", name, arguments: args });
+
+// These two paths are on purpose OUTSIDE os.tmpdir() and different from each other (record pro-d250):
+// exploreVerdict also allows the OS temp dir, so a fixture under it hides the bug, and a CPD_HOME equal
+// to the home directory hides it too. Nobody may move these paths into a temp directory or make the two equal.
+test("a durable explore Worker may write its artefact under CPD_HOME when the home directory differs", { timeout: 20_000 }, async () => {
+  const right = "/cpd-home/run/plan-1/explore/job-1.md";
+  const wrong = "/home/user/run/plan-1/explore/job-1.md";
+  for (const p of [right, wrong]) assert.ok(!p.startsWith(tmpdir()), `${p} is outside the temp dir`);
+  assert.notEqual(CONFIG.home, "/home/user");
+  for (const kind of ["scout", "research"] as const) {
+    const r = rig({ config: { ...CONFIG, jobKind: kind }, homeDir: "/home/user" });
+    await up(r);
+    const hook = hookOf(r);
+    const run = (name: string, path: string) => hook(call(name, { path }), undefined as never, undefined as never);
+    assert.equal(await run("write", right), undefined, `${kind} write`);
+    assert.equal(await run("edit", right), undefined, `${kind} edit`);
+    const refused = (await run("write", wrong)) as { block: string } | undefined;
+    assert.ok(refused && "block" in refused, `${kind} wrong root refused`);
+    assert.ok(refused.block.includes("/cpd-home/run/plan-1/explore/"), refused.block);
+    assert.equal(await stop(r), 143);
+  }
+});
+
+test("a durable Worker resolves tilde and HOME against the home directory when CPD_HOME differs", { timeout: 20_000 }, async (t) => {
+  const tmp = mkdtempSync(join(tmpdir(), "durable-run-"));
+  t.after(() => rmSync(tmp, { recursive: true, force: true }));
+  const home = join(tmp, "home");
+  const primary = join(home, "projects", "repo");
+  mkdirSync(join(primary, ".git"), { recursive: true });
+  const plain = join(tmp, "plain");
+  mkdirSync(plain);
+  const r = rig({ config: { ...CONFIG, cwd: plain }, homeDir: home });
+  await up(r);
+  const hook = hookOf(r);
+  const run = (name: string, args: Record<string, string>) => hook(call(name, args), undefined as never, undefined as never);
+  const abs = join(primary, "f");
+  assert.deepEqual(await run("write", { path: "~/projects/repo/f" }), { block: reasonText(`write ${abs} in ${primary}`) });
+  assert.deepEqual(await run("bash", { command: "echo x > ~/projects/repo/f" }), { block: reasonText(`> ${abs} in ${primary}`) });
+  assert.deepEqual(await run("bash", { command: "echo x > $HOME/projects/repo/f" }), { block: reasonText(`> ${abs} in ${primary}`) });
+  assert.deepEqual(await run("bash", { command: "cd ~/projects/repo && git checkout main" }), { block: reasonText(`git checkout in ${primary}`) });
+  assert.equal(await stop(r), 143);
 });
