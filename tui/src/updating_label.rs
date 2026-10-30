@@ -28,7 +28,6 @@ fn node(update: Option<UpdateState>) -> PrNode {
             url: "https://github.com/acme/repo/pull/12".into(),
             conflicting: true,
             clean: false,
-            lead_working: false,
             update,
             draft: false,
         }),
@@ -36,6 +35,7 @@ fn node(update: Option<UpdateState>) -> PrNode {
         superseded_by: None,
         elapsed_seconds: None,
         cost_usd: None,
+        lead_dot: None,
     }
 }
 

@@ -1001,7 +1001,8 @@ mod tests {
             let failure = rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_TRIGGER);
             let err = CpdError::from(rusqlite::Error::SqliteFailure(failure, Some(message.clone())));
             // `review_pending` guards a code path that forgot to close the Plan's reviews: a bug, so untyped by design.
-            let untyped = message.starts_with("append_only: ") || message.ends_with(" must be cpd_txn()") || message == "review_pending";
+            // `working_pr_invalid` is the same: the writer checks the Lead and the PR first, so it never fires in practice.
+            let untyped = message.starts_with("append_only: ") || message.ends_with(" must be cpd_txn()") || message == "review_pending" || message == "working_pr_invalid";
             assert_eq!(err.code() == ErrorCode::StoreFailed, untyped, "{message}: {err:?}");
             assert_eq!(err.details()["sqlite_message"], message);
         }

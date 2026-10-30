@@ -97,6 +97,9 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
                 let state = if before.is_draft() { "" } else { " (queued, Locked)" };
                 let text = format!("Job {key} of Plan {plan}{state} edited ({}). Next: cpd plan render --plan {plan}", fields.join(", "));
                 append(tx, NewEvent::job_edited(text, &fields).plan(plan.clone()).job(key.clone()))?;
+                if let Some(pr) = &after.pr {
+                    crate::session::working_pr::name(tx, &plan, &crate::ids::PrKey::parse(pr)?)?;
+                }
                 Ok((after, fields, false))
             }
         })?,

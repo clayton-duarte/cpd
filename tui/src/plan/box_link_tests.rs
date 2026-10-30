@@ -15,14 +15,13 @@ use crate::read::{Pull, PrState};
 use cpd_core::host::runner::{FakeRunner, Reply};
 use cpd_core::ports::Fakes;
 
-fn pull(number: i64, lead_working: bool) -> Pull {
+fn pull(number: i64) -> Pull {
     Pull {
         number,
         state: PrState::Open,
         url: format!("https://github.com/acme/repo/pull/{number}"),
         conflicting: false,
         clean: false,
-        lead_working,
         update: None,
         draft: false,
     }
@@ -77,7 +76,9 @@ fn opened(runner: &FakeRunner) -> Vec<String> {
 }
 
 fn one_box(number: i64, working: bool) -> Centre {
-    sample_centre(vec![pr_with("api", Some(pull(number, working)))], Vec::new())
+    let mut api = pr_with("api", Some(pull(number)));
+    api.lead_dot = working.then(|| crate::read::Dot::working(false, None));
+    sample_centre(vec![api], Vec::new())
 }
 
 #[test]
@@ -120,7 +121,7 @@ fn a_left_click_on_a_pr_box_titles_text_or_cue_opens_its_pull_request_url() {
 
 #[test]
 fn a_click_on_the_title_does_nothing_else_than_open_the_page() {
-    let centre = sample_centre(vec![pr_with("api", Some(pull(12, false)))], vec![sample_job("api", "a")]);
+    let centre = sample_centre(vec![pr_with("api", Some(pull(12)))], vec![sample_job("api", "a")]);
     let mut ui = Ui::default();
     let buf = draw(&mut ui, &centre, 12);
     let (x, y) = title_x(&buf, 12).expect("the title shows #12");
@@ -149,9 +150,9 @@ fn the_lead_working_dot_stays_between_the_state_and_the_cue_inside_the_link() {
 
 #[test]
 fn after_the_chart_scrolled_a_click_opens_the_url_of_the_title_now_under_the_pointer() {
-    let mut web = pr_with("web", Some(pull(2, false)));
+    let mut web = pr_with("web", Some(pull(2)));
     web.needs = vec![cpd_core::ids::PrKey::parse("api").unwrap()];
-    let centre = sample_centre(vec![pr_with("api", Some(pull(1, false))), web], Vec::new());
+    let centre = sample_centre(vec![pr_with("api", Some(pull(1))), web], Vec::new());
     let mut ui = Ui::default();
     let first = draw(&mut ui, &centre, 8);
     let (ax, ay) = title_x(&first, 1).expect("api's title");
@@ -173,7 +174,7 @@ fn after_the_chart_scrolled_a_click_opens_the_url_of_the_title_now_under_the_poi
 
 #[test]
 fn a_pr_box_with_no_pull_request_has_no_link() {
-    let mut web = pr_with("web", Some(pull(2, false)));
+    let mut web = pr_with("web", Some(pull(2)));
     web.needs = vec![cpd_core::ids::PrKey::parse("api").unwrap()];
     let centre = sample_centre(vec![pr_with("api", None), web], Vec::new());
     let mut ui = Ui::default();

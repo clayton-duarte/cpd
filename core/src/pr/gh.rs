@@ -1118,8 +1118,10 @@ fn checks_query(prs: &[(&str, i64, Option<&str>)]) -> String {
     for (i, (repo, number, after)) in prs.iter().enumerate() {
         let (owner, name) = repo_parts(repo).unwrap_or_default();
         let page = after.map_or(String::new(), |c| format!(", after: \"{c}\""));
+        // The labels are read once, on the first page.
+        let labels = if after.is_none() { " labels(first: 100) { nodes { name } }" } else { "" };
         query.push_str(&format!(
-            " p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ commits(last: 1) {{ nodes {{ commit {{ statusCheckRollup {{ contexts(first: 100{page}) {{ pageInfo {{ hasNextPage endCursor }} {CHECKS_FIELDS} }} }} }} }} }} }} }}"
+            " p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{{labels} commits(last: 1) {{ nodes {{ commit {{ statusCheckRollup {{ contexts(first: 100{page}) {{ pageInfo {{ hasNextPage endCursor }} {CHECKS_FIELDS} }} }} }} }} }} }} }}"
         ));
     }
     query.push_str(" }");
@@ -1128,7 +1130,17 @@ fn checks_query(prs: &[(&str, i64, Option<&str>)]) -> String {
 
 #[derive(Deserialize)]
 struct RawChecksPr {
+    #[serde(default)]
+    labels: Option<RawLabels>,
     commits: RawChecksCommits,
+}
+#[derive(Deserialize)]
+struct RawLabels {
+    nodes: Vec<RawLabel>,
+}
+#[derive(Deserialize)]
+struct RawLabel {
+    name: String,
 }
 #[derive(Deserialize)]
 struct RawChecksCommits {
@@ -1202,7 +1214,8 @@ struct RawPageInfo {
 }
 
 /// One page of one pull request: its checks and the cursor of the next page, if any. A null commit or rollup is no checks.
-fn parse_checks(reply: &Reply, count: usize) -> Result<Vec<(Vec<Check>, Option<String>)>, CpdError> {
+fn parse_checks(reply: &Reply, firsts: &[bool]) -> Result<Vec<(Vec<Check>, Option<String>, Vec<String>)>, CpdError> {
+    let count = firsts.len();
     #[derive(Deserialize)]
     struct Repo {
         #[serde(rename = "pullRequest")]
@@ -1220,28 +1233,41 @@ fn parse_checks(reply: &Reply, count: usize) -> Result<Vec<(Vec<Check>, Option<S
             .ok_or_else(|| reply.fail(format!("gh api graphql answered without {alias}.")))?
             .and_then(|r| r.pull_request)
             .ok_or_else(|| reply.fail(format!("gh api graphql answered null for {alias}.")))?;
+        // A first page without `labels` is a broken reply; later pages do not ask for them.
+        let labels = match (pull.labels, firsts[i]) {
+            (Some(l), _) => l.nodes.into_iter().map(|l| l.name).collect(),
+            (None, false) => Vec::new(),
+            (None, true) => return Err(reply.fail(format!("gh api graphql answered {alias} without labels."))),
+        };
         let rollup = pull.commits.nodes.into_iter().next().and_then(|n| n.commit).and_then(|c| c.rollup);
         pages.push(match rollup {
-            None => (Vec::new(), None),
+            None => (Vec::new(), None, labels),
             Some(r) => {
                 let next = match (r.contexts.page_info.has_next_page, r.contexts.page_info.end_cursor) {
                     (false, _) => None,
                     (true, Some(cursor)) => Some(cursor),
                     (true, None) => return Err(reply.fail(format!("gh api graphql answered {alias} with a next page and no endCursor."))),
                 };
-                (r.contexts.nodes.into_iter().map(Check::from).collect(), next)
+                (r.contexts.nodes.into_iter().map(Check::from).collect(), next, labels)
             }
         });
     }
     Ok(pages)
 }
 
+/// One pull request's checks read: its contexts and its label names.
+#[derive(Default)]
+pub struct PrChecks {
+    pub checks: Vec<Check>,
+    pub labels: Vec<String>,
+}
+
 /// The checks of the pull requests `(owner/name, number)` (contract §7.6 step 3b): one alias each, in one call, 15 s at
 /// most; each pull request with more than 100 contexts is read again, page by page, with those only. Each result is the
 /// PR's typed checks (a CheckRun has `name`, a StatusContext `context`). Any failure
 /// is `gh_failed` with the poll's `details` (`call` `lookup`). An empty `prs` makes no call.
-pub fn read_checks(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Vec<Check>>, CpdError> {
-    let mut all: Vec<Vec<Check>> = prs.iter().map(|_| Vec::new()).collect();
+pub fn read_checks(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<PrChecks>, CpdError> {
+    let mut all: Vec<PrChecks> = prs.iter().map(|_| PrChecks::default()).collect();
     let mut pending: Vec<(usize, Option<String>)> = (0..prs.len()).map(|i| (i, None)).collect();
     while !pending.is_empty() {
         let page = || {
@@ -1260,12 +1286,16 @@ pub fn read_checks(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)]) -> Re
                 let errors = json.as_ref().is_ok_and(|v| v.get("errors").is_some());
                 return Err(reply.fail_unless_transient(format!("gh {} exited {}.", refs[0], out.exit.map_or("with a signal".to_owned(), |c| c.to_string())), errors, json.is_err()));
             }
-            parse_checks(&reply, asked.len())
+            let firsts: Vec<bool> = asked.iter().map(|(_, _, after)| after.is_none()).collect();
+            parse_checks(&reply, &firsts)
         };
         let pages = page().map_err(|e| polled_call("lookup", e))?;
         let mut next = Vec::new();
-        for ((i, _), (checks, cursor)) in pending.iter().zip(pages) {
-            all[*i].extend(checks);
+        for ((i, after), (checks, cursor, labels)) in pending.iter().zip(pages) {
+            all[*i].checks.extend(checks);
+            if after.is_none() {
+                all[*i].labels = labels;
+            }
             if let Some(cursor) = cursor {
                 next.push((*i, Some(cursor)));
             }
@@ -1360,7 +1390,7 @@ mod tests {
     fn the_checks_query_is_pinned() {
         assert_eq!(
             checks_query(&[("o/a", 7, None), ("o/b", 8, Some("c1"))]),
-            "query { p0: repository(owner: \"o\", name: \"a\") { pullRequest(number: 7) { commits(last: 1) { nodes { commit { statusCheckRollup { \
+            "query { p0: repository(owner: \"o\", name: \"a\") { pullRequest(number: 7) { labels(first: 100) { nodes { name } } commits(last: 1) { nodes { commit { statusCheckRollup { \
              contexts(first: 100) { pageInfo { hasNextPage endCursor } nodes { __typename ... on CheckRun { name status conclusion startedAt checkSuite { workflowRun { workflow { name } } } } \
              ... on StatusContext { context state createdAt } } } } } } } } } \
              p1: repository(owner: \"o\", name: \"b\") { pullRequest(number: 8) { commits(last: 1) { nodes { commit { statusCheckRollup { \
@@ -1379,12 +1409,22 @@ mod tests {
             "p1":{"pullRequest":{"commits":{"nodes":[{"commit":null}]}}},
             "p2":{"pullRequest":{"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}}}}"#;
         let out = reply(body, 0);
-        let pages = parse_checks(&Reply { args: &ARGS, out: &out }, 3).unwrap();
+        let pages = parse_checks(&Reply { args: &ARGS, out: &out }, &[false; 3]).unwrap();
         assert_eq!(pages[0].1.as_deref(), Some("c1"));
         let got: Vec<(Option<&str>, Option<&str>, Option<&str>)> =
             pages[0].0.iter().map(|c| (c.name.as_deref().or(c.context.as_deref()), c.conclusion.as_deref(), c.state.as_deref())).collect();
         assert_eq!(got, [(Some("a"), Some("CANCELLED"), None), (Some("b"), None, None), (Some("c"), None, Some("PENDING"))]);
         assert!(pages[1].0.is_empty() && pages[2].0.is_empty() && pages[1].1.is_none());
+    }
+
+    #[test]
+    fn labels_are_parsed_and_a_first_page_without_them_is_gh_failed() {
+        let with = r#"{"data":{"p0":{"pullRequest":{"labels":{"nodes":[{"name":"dont merge"}]},"commits":{"nodes":[]}}}}}"#;
+        let out = reply(with, 0);
+        assert_eq!(parse_checks(&Reply { args: &ARGS, out: &out }, &[true]).unwrap()[0].2, ["dont merge"]);
+        let without = r#"{"data":{"p0":{"pullRequest":{"commits":{"nodes":[]}}}}}"#;
+        let out = reply(without, 0);
+        assert_eq!(parse_checks(&Reply { args: &ARGS, out: &out }, &[true]).unwrap_err().code(), ErrorCode::GhFailed);
     }
 
     #[test]
@@ -1394,7 +1434,7 @@ mod tests {
             {"__typename":"CheckRun","name":"b","status":"COMPLETED","conclusion":null,"startedAt":null,"checkSuite":{"workflowRun":null}},
             {"__typename":"StatusContext","context":"c","state":"SUCCESS","createdAt":"2026-10-30T14:39:33Z"}]}}}}]}}}}}"#;
         let out = reply(body, 0);
-        let pages = parse_checks(&Reply { args: &ARGS, out: &out }, 1).unwrap();
+        let pages = parse_checks(&Reply { args: &ARGS, out: &out }, &[false]).unwrap();
         let got: Vec<(Option<&str>, Option<&str>)> = pages[0].0.iter().map(|c| (c.workflow.as_deref(), c.started_at.as_deref())).collect();
         assert_eq!(got, [(Some("W"), Some("2026-10-30T04:19:08Z")), (None, None), (None, Some("2026-10-30T14:39:33Z"))]);
     }
@@ -1404,14 +1444,14 @@ mod tests {
         let body = r#"{"data":{"p0":{"pullRequest":{"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[
             {"__typename":"CheckRun","name":"a","status":"COMPLETED","conclusion":"FAILURE","startedAt":5}]}}}}]}}}}}"#;
         let out = reply(body, 0);
-        assert_eq!(parse_checks(&Reply { args: &ARGS, out: &out }, 1).unwrap_err().code(), ErrorCode::GhFailed);
+        assert_eq!(parse_checks(&Reply { args: &ARGS, out: &out }, &[false]).unwrap_err().code(), ErrorCode::GhFailed);
     }
 
     #[test]
     fn a_checks_reply_missing_an_alias_or_with_a_null_pull_request_is_gh_failed() {
         for body in [r#"{"data":{}}"#, r#"{"data":{"p0":{"pullRequest":null}}}"#, r#"{"data":{"p0":null}}"#] {
             let out = reply(body, 0);
-            assert_eq!(parse_checks(&Reply { args: &ARGS, out: &out }, 1).unwrap_err().code(), ErrorCode::GhFailed, "{body}");
+            assert_eq!(parse_checks(&Reply { args: &ARGS, out: &out }, &[false]).unwrap_err().code(), ErrorCode::GhFailed, "{body}");
         }
     }
 

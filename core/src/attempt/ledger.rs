@@ -238,6 +238,9 @@ impl Cause {
 /// How many times a Job is requeued at the same Tier after a `provider_error`, counted since its last `job retry` (pro-d102 A1).
 pub const PROVIDER_RETRIES: u32 = 3;
 
+/// How many times a Job is retried at the same Tier after a `gate_failed`, counted since its last `job retry` (pro-d280).
+pub const GATE_RETRIES: u32 = 1;
+
 /// How long E3 holds a Job after an Attempt that ended `provider_error` (pro-d102 A2).
 pub const PROVIDER_RETRY_SECONDS: u64 = 30;
 
@@ -497,14 +500,21 @@ pub fn end_opened(
                 let said = match cause {
                     Cause::ProviderError => format!(
                         "{detail} Retry {} of {PROVIDER_RETRIES} at the same Tier, not before {PROVIDER_RETRY_SECONDS} s have passed.",
-                        provider_errors(tx, plan, job)?
+                        ended_with(tx, plan, job, Cause::ProviderError)?
                     ),
                     _ => detail.clone(),
                 };
-                let text = format!(
-                    "Attempt {id} of Job {job} failed ({}): {said} The Job is queued again at Tier {next}. Next: {show}",
-                    cause.as_str()
-                );
+                let gate = (*cause == Cause::GateFailed).then(|| crate::merge::gate_text_body(detail)).flatten();
+                let text = match gate {
+                    Some(body) => format!(
+                        "Attempt {id} of Job {job} failed ({}): {body}\nThe Job is queued again at Tier {next}. Next: {show}",
+                        cause.as_str()
+                    ),
+                    None => format!(
+                        "Attempt {id} of Job {job} failed ({}): {said} The Job is queued again at Tier {next}. Next: {show}",
+                        cause.as_str()
+                    ),
+                };
                 ("queued", None, NewEvent::attempt_retry(text, "failed", cause.as_str(), &next.to_string(), detail))
             }
             None => {
@@ -566,14 +576,14 @@ pub(crate) fn automatic_attempts(tx: &WriteTxn<'_>, plan: &str, job: &str) -> Re
     )?)
 }
 
-/// The Attempts of Job `job` that ended `provider_error` since the last `job retry` (that one included): the window of
-/// [`automatic_attempts`], for the provider-error retries (pro-d102).
-fn provider_errors(tx: &WriteTxn<'_>, plan: &str, job: &str) -> Result<u32, CpdError> {
+/// The Attempts of Job `job` that ended with `cause` since the last `job retry` (that one included): the window of
+/// [`automatic_attempts`], for the provider-error (pro-d102) and gate (pro-d280) retries.
+fn ended_with(tx: &WriteTxn<'_>, plan: &str, job: &str, cause: Cause) -> Result<u32, CpdError> {
     Ok(tx.query_row(
         "SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2
            AND number >= coalesce((SELECT max(number) FROM attempts WHERE plan = ?1 AND job = ?2 AND origin = 'retry'), 1)
-           AND status = 'ended' AND cause = 'provider_error'",
-        params![plan, job],
+           AND status = 'ended' AND cause = ?3",
+        params![plan, job, cause.as_str()],
         |r| r.get(0),
     )?)
 }
@@ -592,8 +602,22 @@ fn next_tier(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder
 fn next_rung(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder<'_>) -> Result<Option<Tier>, CpdError> {
     // pro-d102: a provider error requeues at the Attempt's own Tier, never raising it, up to PROVIDER_RETRIES times.
     if cause == Cause::ProviderError {
-        let used = provider_errors(tx, attempt.plan.as_str(), attempt.job.as_str())?;
+        let used = ended_with(tx, attempt.plan.as_str(), attempt.job.as_str(), cause)?;
         return Ok((used <= PROVIDER_RETRIES).then_some(attempt.tier));
+    }
+    // pro-d280: a failed Gate requeues once at the Attempt's own Tier, and spends `retry_cap`.
+    if cause == Cause::GateFailed {
+        let (plan, job) = (attempt.plan.as_str(), attempt.job.as_str());
+        // A failed Gate proves the Attempt ran: count this one even when its `driver_pid` is null.
+        let uncounted: bool = tx.query_row(
+            "SELECT driver_pid IS NULL FROM attempts WHERE plan = ?1 AND id = ?2",
+            params![plan, attempt.id.to_string()],
+            |r| r.get(0),
+        )?;
+        if automatic_attempts(tx, plan, job)? + i64::from(uncounted) >= 1 + i64::from(ladder.retry_cap) {
+            return Ok(None);
+        }
+        return Ok((ended_with(tx, plan, job, cause)? <= GATE_RETRIES).then_some(attempt.tier));
     }
     if !cause.is_ladder() {
         return Ok(None);
