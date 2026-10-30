@@ -17,6 +17,7 @@ use super::team::{self, GhPr, Lookup, Memo, Post, Status};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::job::home::JobHome;
 use crate::job::worked_on::failed_worked_on;
 use crate::ids::{ContextId, JobKey, PlanId, PrKey, SessionId};
 use crate::plan::Phase;
@@ -426,8 +427,8 @@ fn plan_reviews(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StuckJob {
     pub plan: PlanId,
-    /// The Job's PR key: E8 groups the stuck Jobs of one PR into one message (hs-d647).
-    pub pr: PrKey,
+    /// Where the Job belongs: E8 groups the stuck Jobs of one PR, or of the Plan's explore Jobs, into one message (hs-d647).
+    pub home: JobHome,
     pub job: JobKey,
     /// The Plan's Context.
     pub context: ContextId,
@@ -456,7 +457,7 @@ pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration)
         let mut rows = stmt.query([])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
-            let (plan, pr, key, context, event, at, cause): (String, String, String, String, i64, String, String) =
+            let (plan, pr, key, context, event, at, cause): (String, Option<String>, String, String, i64, String, String) =
                 (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?);
             let age = now - time_of("Event time", &at)?;
             if age < stuck_after {
@@ -468,7 +469,7 @@ pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration)
             }
             out.push(StuckJob {
                 plan,
-                pr: id("PR key", &pr, PrKey::parse)?,
+                home: JobHome::of("PR key", pr.as_deref())?,
                 job,
                 context: id("Context id", &context, ContextId::parse)?,
                 event,
@@ -484,7 +485,7 @@ pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StuckGroup {
     pub plan: PlanId,
-    pub pr: PrKey,
+    pub home: JobHome,
     /// The Plan's Context, and its Manager's.
     pub context: ContextId,
     /// The group's newest `job-failed` Event id: the once-record must be newer than it.
@@ -499,14 +500,14 @@ pub struct StuckGroup {
 pub fn stuck_groups(jobs: Vec<StuckJob>) -> Vec<StuckGroup> {
     let mut groups: Vec<StuckGroup> = Vec::new();
     for job in jobs {
-        match groups.iter_mut().find(|g| g.plan == job.plan && g.pr == job.pr) {
+        match groups.iter_mut().find(|g| g.plan == job.plan && g.home == job.home) {
             Some(group) => {
                 group.event = group.event.max(job.event);
                 group.jobs.push(job);
             }
             None => groups.push(StuckGroup {
                 plan: job.plan.clone(),
-                pr: job.pr.clone(),
+                home: job.home.clone(),
                 context: job.context.clone(),
                 event: job.event,
                 jobs: vec![job],
@@ -1042,7 +1043,7 @@ mod tests {
             stuck,
             [StuckJob {
                 plan: PlanId::parse("pay").unwrap(),
-                pr: PrKey::parse("p1").unwrap(),
+                home: JobHome::Pr(PrKey::parse("p1").unwrap()),
                 job: JobKey::parse("a").unwrap(),
                 context: ContextId::parse("ctx").unwrap(),
                 event: latest,
@@ -1069,7 +1070,7 @@ mod tests {
         let groups = stuck_groups(f.stuck());
         assert_eq!(groups.len(), 1, "one PR, one group");
         let group = &groups[0];
-        assert_eq!((&group.plan, &group.pr, group.event), (&PlanId::parse("pay").unwrap(), &PrKey::parse("p1").unwrap(), b));
+        assert_eq!((&group.plan, &group.home, group.event), (&PlanId::parse("pay").unwrap(), &JobHome::Pr(PrKey::parse("p1").unwrap()), b));
         assert_eq!(group.jobs.iter().map(|j| j.job.as_str()).collect::<Vec<_>>(), ["a", "b"], "oldest Event first");
         assert_eq!(group.jobs[0].event, a);
     }
@@ -1091,7 +1092,7 @@ mod tests {
         f.event("job-failed", None, Some("b"), "2026-01-01T22:00:00.000Z", r#"{}"#);
         f.event("job-failed", None, Some("a"), "2026-01-01T23:50:00.000Z", r#"{}"#);
         let groups = stuck_groups(f.stuck());
-        assert_eq!(groups.iter().map(|g| g.pr.as_str()).collect::<Vec<_>>(), ["p2", "p1"], "the group of the oldest first Event leads");
+        assert_eq!(groups.iter().map(|g| g.home.clone()).collect::<Vec<_>>(), [JobHome::Pr(PrKey::parse("p2").unwrap()), JobHome::Pr(PrKey::parse("p1").unwrap())], "the group of the oldest first Event leads");
     }
 
     #[test]
