@@ -126,6 +126,17 @@ fn an_answered_bot_comment_that_makes_the_pr_ready_tells_comments_then_ready_to_
 }
 
 #[test]
+fn a_resolved_bot_thread_with_an_unchanged_updated_at_tells_the_lead_ready_to_post() {
+    let fx = fixture(Posting::Enabled, false, "any");
+    step(&fx, "U1", "SUCCESS", None, vec![thread("T1", "review-bot[bot]")]);
+    assert_eq!(reasons(&fx), told(&[&["comments"]]));
+    let mut resolved = thread("T1", "review-bot[bot]");
+    resolved["isResolved"] = json!(true);
+    step(&fx, "U1", "SUCCESS", None, vec![resolved]);
+    assert_eq!(reasons(&fx), told(&[&["comments"], &["ready_to_post"]]));
+}
+
+#[test]
 fn a_ready_pr_with_an_open_bot_comment_is_not_told_ready_to_post() {
     let fx = fixture(Posting::Enabled, false, "any");
     step(&fx, "U1", "SUCCESS", None, vec![thread("T1", "review-bot[bot]")]);
