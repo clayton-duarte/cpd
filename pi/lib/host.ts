@@ -81,14 +81,18 @@ export function createHost(pi: PiApi, options: Options): Host {
     },
     report(what, code, message, extra = {}) {
       const r = host.run;
-      if (r) {
+      // A refused MCP registration is never deduplicated and never touches the memory (one report per Event or start).
+      const refused = code === "mcp_register_failed";
+      if (r && !refused) {
         const key = `${what}\n${code}`;
         if (r.lastError === key) return;
         r.lastError = key;
       }
       // A Lead's errors go to the log and to the Manager, never to its chat. Before a run there is no role: CPD_PLAN is a Lead's pane (§6.5).
       const id = r?.id ?? host.env.CPD_SESSION;
-      if (id && (r ? r.info.role === "lead" : !!host.env.CPD_PLAN)) {
+      const lead = !!id && (r ? r.info.role === "lead" : !!host.env.CPD_PLAN);
+      // The ledger report: a Lead's, and a refused registration's for every role.
+      if (id && (lead || refused)) {
         const log = (line: string) => {
           if (r) return r.log(line);
           try {
@@ -98,13 +102,13 @@ export function createHost(pi: PiApi, options: Options): Host {
           }
         };
         const oneLine = (s: string) => s.replace(/\s*\n\s*/g, " ");
-        log(`error: ${oneLine(what)}: ${code}: ${oneLine(message)}`);
+        if (lead) log(`error: ${oneLine(what)}: ${oneLine(code)}: ${oneLine(message)}`);
         const args = ["session", "report", "--what", what, "--code", code, "--message", message, ...(Object.keys(extra).length > 0 ? ["--details", JSON.stringify(extra)] : []), "--session", id];
         host.call(args).catch((e) => {
           const err = toCpdError(e);
           log(`report failed: ${err.code}: ${oneLine(err.message)}`);
         });
-        return;
+        if (lead) return;
       }
       const m = errorMessage(what, code, message, extra);
       pi.sendMessage(m.message, gated(r, m.options));

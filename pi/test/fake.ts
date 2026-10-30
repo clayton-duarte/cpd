@@ -671,6 +671,10 @@ export class FakePi implements PiApi {
   /** Names `registerMcpServer` refuses (throws for), the others are accepted. */
   readonly mcpThrowsFor = new Set<string>();
   registerMcpServer(name: string, config: unknown): void {
+    if (this.mcpThrowsFor.has(name)) {
+      notify();
+      throw new Error(`pi refuses: ${name}`);
+    }
     this.registeredMcp.push({ name, config });
     notify();
     if (this.mcpThrows) throw this.mcpThrows;

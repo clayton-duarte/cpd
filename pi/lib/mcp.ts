@@ -47,7 +47,7 @@ export async function replayServers(host: Host, r: Run): Promise<void> {
     try {
       attachServer(host.pi, e.data.name, e.data.server as unknown as McpServerConfig);
     } catch (err) {
-      host.deliver("mcp attach", err, { name: e.data.name });
+      host.deliver(`mcp attach ${e.data.name}`, err, { name: e.data.name });
     }
   }
 }
