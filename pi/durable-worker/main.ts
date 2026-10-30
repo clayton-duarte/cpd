@@ -35,6 +35,11 @@ try {
       process.once("SIGTERM", handler);
       process.once("SIGINT", handler);
     },
+    mcp: {
+      connect: async () => {
+        throw new Error("mcp port: not implemented");
+      },
+    },
     homeDir: homedir,
     now: () => new Date(),
     log: (line) => console.error(line),

@@ -9,10 +9,11 @@ import { zoneLine } from "../lib/time.ts";
 import { reportPath, storePath, type Config } from "./config.ts";
 import { inputOf, type Input } from "./deliver.ts";
 import { cpdExtension } from "./extension.ts";
+import type { McpPort } from "./mcp.ts";
 import { endReport, type EndReport, type Entry } from "./report.ts";
 
 export type Submission = { wait(): Promise<"done" | "unanswered"> };
-export type Conversation = { submit(input: Input): Promise<Submission>; entries(): Promise<readonly Entry[]>; closed: Promise<unknown> };
+export type Conversation = { submit(input: Input): Promise<Submission>; install(extension: Extension): void; entries(): Promise<readonly Entry[]>; closed: Promise<unknown> };
 
 type Model = { provider: string; modelId: string; thinkingLevel?: string };
 
@@ -24,6 +25,7 @@ export type Deps = {
   follow(hooks: FollowerHooks): { start(): void; stop(): void };
   writeReport(file: string, report: EndReport): Promise<void>;
   onTerminate(handler: () => void): void;
+  mcp: McpPort;
   homeDir(): string;
   now(): Date;
   log(line: string): void;

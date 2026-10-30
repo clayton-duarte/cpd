@@ -31,6 +31,7 @@ export async function openConversation(
       const submission = await root.submit({ type: "input", content: input.content, requestId: input.requestId, whenBusy: input.whenBusy }, BACKGROUND_CONTEXT);
       return { wait: async () => (await submission.wait(BACKGROUND_CONTEXT)).status };
     },
+    install: (extension) => registry.install(extension),
     entries: async () => (await root.viewState(BACKGROUND_CONTEXT)).value.entries as never,
     closed: harness.closed,
   };

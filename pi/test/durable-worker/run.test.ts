@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { PromptSection, ToolHooks } from "@earendil-works/pi-durable";
+import type { Extension, PromptSection, ToolHooks } from "@earendil-works/pi-durable";
 import { CpdError } from "../../lib/cpd.ts";
 import { parseLine } from "../../lib/event.ts";
 import type { FollowerHooks } from "../../lib/follower.ts";
@@ -12,6 +12,7 @@ import { POLICY_SECTION, policySection } from "../../lib/policy.ts";
 import { TIME_ZONE_SECTION, zoneLine } from "../../lib/time.ts";
 import type { Config } from "../../durable-worker/config.ts";
 import type { Input } from "../../durable-worker/deliver.ts";
+import type { McpConnection } from "../../durable-worker/mcp.ts";
 import { endReport, type EndReport, type Entry } from "../../durable-worker/report.ts";
 import { runWorker, type Conversation, type Deps, type Submission } from "../../durable-worker/run.ts";
 import { policyShow, shown } from "../answers.ts";
@@ -61,6 +62,8 @@ class Store {
   readonly submitted: Input[] = [];
   readonly entries: Entry[] = [];
   closeCalls = 0;
+  /** As pi-durable's Registry.install: keyed by extension name, an existing name replaced in place. */
+  readonly installed = new Map<string, Extension>();
   private closeIt!: (v: unknown) => void;
   readonly closed = new Promise<unknown>((resolve) => {
     this.closeIt = resolve;
@@ -81,6 +84,10 @@ class Store {
         }
         notify();
         return pending.submission;
+      },
+      install: (extension) => {
+        this.installed.set(extension.name, extension);
+        notify();
       },
       entries: async () => [...this.entries],
       closed: this.closed,
@@ -105,6 +112,50 @@ class Store {
   }
 }
 
+type FakeTool = { tool: string; name: string; description: string; inputSchema: Record<string, unknown> };
+type FakeConn = { conn: McpConnection; calls: { tool: string; args: Record<string, unknown> }[]; closed: number };
+/** The fake MCP port and the fake `cpd` answers for MCP, all set by the test. */
+class FakeMcp {
+  readonly connects: { name: string; server: Record<string, unknown> }[] = [];
+  readonly conns: FakeConn[] = [];
+  readonly tools = new Map<string, FakeTool[]>();
+  readonly answers = new Map<string, { text: string; isError: boolean }>();
+  connectError: Error | undefined;
+  listed: unknown[] = [];
+  listError: Error | undefined;
+  reportError: Error | undefined;
+  readonly reportCalls: string[][] = [];
+  readonly listCalls: string[][] = [];
+
+  toolsOf(name: string): FakeTool[] {
+    return this.tools.get(name) ?? [mk(name, "getIssue"), mk(name, "search")];
+  }
+  connect = async (name: string, server: Record<string, unknown>): Promise<McpConnection> => {
+    this.connects.push({ name, server });
+    notify();
+    if (this.connectError) throw this.connectError;
+    const entry: FakeConn = {
+      calls: [],
+      closed: 0,
+      conn: {
+        tools: this.toolsOf(name),
+        call: async (tool, args) => {
+          entry.calls.push({ tool, args });
+          notify();
+          return this.answers.get(name) ?? { text: "ok", isError: false };
+        },
+        close: async () => {
+          entry.closed++;
+          notify();
+        },
+      },
+    };
+    this.conns.push(entry);
+    return entry.conn;
+  };
+}
+const mk = (server: string, tool: string): FakeTool => ({ tool, name: `mcp__${server}__${tool}`, description: `${tool} of ${server}`, inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] } });
+
 type Rig = ReturnType<typeof rig>;
 
 /** Contract §3.6: the moves `session state` accepts (the same state is a no-op, always legal). */
@@ -117,7 +168,9 @@ const MOVES: Record<string, readonly string[]> = {
 };
 const legalMove = (from: string, to: string): boolean => from === to || (MOVES[from]?.includes(to) ?? false);
 
-function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: Deps["resolveModel"]; sessionState?: string; entriesError?: Error; writeError?: Error; openGate?: Promise<void>; config?: Config; homeDir?: string } = {}) {
+function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: Deps["resolveModel"]; sessionState?: string; entriesError?: Error; writeError?: Error; openGate?: Promise<void>; config?: Config; homeDir?: string; mcp?: FakeMcp } = {}) {
+  const mcp = over.mcp ?? new FakeMcp();
+  const order: string[] = [];
   const config = over.config ?? CONFIG;
   const session = { state: over.sessionState ?? "stopped" };
   const store = over.store ?? new Store();
@@ -140,6 +193,19 @@ function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: 
         return shown({ registered_event: 41, state: session.state });
       }
       if (line === "policy show") return POLICY;
+      if (args[0] === "session" && args[1] === "report") {
+        mcp.reportCalls.push([...args]);
+        notify();
+        if (mcp.reportError) throw mcp.reportError;
+        return { ok: true };
+      }
+      if (args[0] === "events" && args[1] === "list") {
+        mcp.listCalls.push([...args]);
+        order.push("events list");
+        notify();
+        if (mcp.listError) throw mcp.listError;
+        return { ok: true, events: mcp.listed };
+      }
       const state = new RegExp(`^session state (working|stopped|idle( --reply)?|(waiting|blocked) --label .+) --session ${CONFIG.session}$`);
       if (state.test(line)) {
         const to = args[2]!;
@@ -177,6 +243,7 @@ function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: 
       return {
         start: () => {
           follower.started++;
+          order.push("follower started");
           notify();
         },
         stop: () => {
@@ -184,6 +251,7 @@ function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: 
         },
       };
     },
+    mcp: { connect: mcp.connect },
     writeReport: async (file, report) => {
       effects.push("writeReport");
       if (over.writeError) throw over.writeError;
@@ -218,7 +286,7 @@ function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: 
       return fn();
     });
   const states = () => calls.filter((a) => a[0] === "session" && a[1] === "state").map((a) => a.slice(2).join(" "));
-  return { session, store, calls, opens, reports, logs, effects, follower, terminate, ending, until, states };
+  return { mcp, order, session, store, calls, opens, reports, logs, effects, follower, terminate, ending, until, states };
 }
 
 /** Waits until the runner is fully up: first message submitted, follower started, terminate handler set. */
@@ -539,5 +607,178 @@ test("a durable Worker resolves tilde and HOME against the home directory when C
   assert.deepEqual(await run("bash", { command: "echo x > ~/projects/repo/f" }), { block: reasonText(`> ${abs} in ${primary}`) });
   assert.deepEqual(await run("bash", { command: "echo x > $HOME/projects/repo/f" }), { block: reasonText(`> ${abs} in ${primary}`) });
   assert.deepEqual(await run("bash", { command: "cd ~/projects/repo && git checkout main" }), { block: reasonText(`git checkout in ${primary}`) });
+  assert.equal(await stop(r), 143);
+});
+
+const attached = (id: number, name: string, over: Record<string, unknown> = {}) =>
+  JSON.stringify(ev(id, "mcp-attached", { session: CONFIG.session, data: { name, server: { url: "https://mcp.example/" + name } }, ...over }));
+const attachedEvent = (id: number, name: string, url = "https://mcp.example/" + name) => ev(id, "mcp-attached", { session: CONFIG.session, data: { name, server: { url } } });
+const toolsOf = (r: Rig, ext: string) => ((r.store.installed.get(ext)?.tools ?? []) as unknown as { name: string; description: string; parameters: unknown; execute(a: unknown, b: never, c: never): Promise<unknown> }[]);
+const namesOf = (r: Rig, ext: string) => toolsOf(r, ext).map((t) => t.name);
+const installedAfter = (r: Rig, ext: string, n: number) => r.until(`${ext} with ${n} tools`, () => toolsOf(r, ext).length >= n);
+
+test("an mcp-attached Event of the Session connects the server and installs one mcp__<server>__<tool> tool per server tool", { timeout: 10_000 }, async () => {
+  const r = rig();
+  const hooks = await up(r);
+  deliver(hooks, attached(42, "atlassian"));
+  await installedAfter(r, "mcp-atlassian", 2);
+  assert.deepEqual(r.mcp.connects, [{ name: "atlassian", server: { url: "https://mcp.example/atlassian" } }]);
+  assert.deepEqual(namesOf(r, "mcp-atlassian"), ["mcp__atlassian__getIssue", "mcp__atlassian__search"]);
+  for (const [i, t] of toolsOf(r, "mcp-atlassian").entries()) {
+    assert.deepEqual(t.parameters, r.mcp.toolsOf("atlassian")[i]!.inputSchema);
+    assert.equal(t.description, r.mcp.toolsOf("atlassian")[i]!.description);
+  }
+  assert.equal(await stop(r), 143);
+});
+
+test("an mcp-attached Event of another Session connects nothing", { timeout: 10_000 }, async () => {
+  const r = rig();
+  const hooks = await up(r);
+  deliver(hooks, attached(42, "atlassian", { session: "other" }));
+  await r.until("the cursor moved", () => hooks.cursor() === 42);
+  assert.equal(r.mcp.connects.length, 0);
+  assert.equal(r.store.installed.size, 0);
+  deliver(hooks, attached(43, "jira"));
+  await r.until("the own Event connected", () => r.mcp.connects.length >= 1);
+  assert.deepEqual(r.mcp.connects.map((c) => c.name), ["jira"], "only the Event of this Session connects");
+  assert.equal(await stop(r), 143);
+});
+
+test("running an installed MCP tool calls the server's own tool name and returns its text as the output", { timeout: 10_000 }, async () => {
+  const r = rig();
+  r.mcp.answers.set("atlassian", { text: "issue A-1", isError: false });
+  const hooks = await up(r);
+  deliver(hooks, attached(42, "atlassian"));
+  await installedAfter(r, "mcp-atlassian", 2);
+  const tool = toolsOf(r, "mcp-atlassian").find((t) => t.name === "mcp__atlassian__getIssue")!;
+  const result = await tool.execute({ id: "A-1" }, undefined as never, undefined as never);
+  assert.deepEqual(r.mcp.conns[0]!.calls, [{ tool: "getIssue", args: { id: "A-1" } }]);
+  assert.deepEqual(result, { output: [{ type: "text", text: "issue A-1" }], isError: false });
+  assert.equal(await stop(r), 143);
+});
+
+test("an isError answer of the server is an error result of the tool", { timeout: 10_000 }, async () => {
+  const r = rig();
+  r.mcp.answers.set("atlassian", { text: "nope", isError: true });
+  const hooks = await up(r);
+  deliver(hooks, attached(42, "atlassian"));
+  await installedAfter(r, "mcp-atlassian", 2);
+  const result = (await toolsOf(r, "mcp-atlassian")[0]!.execute({ id: "A-1" }, undefined as never, undefined as never)) as { output: unknown; isError: boolean };
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.output, [{ type: "text", text: "nope" }]);
+  assert.equal(await stop(r), 143);
+});
+
+test("a server that fails to connect is reported as mcp_register_failed, told to the Worker and installs nothing", { timeout: 10_000 }, async () => {
+  const r = rig();
+  r.mcp.connectError = new Error("needs sign-in");
+  const hooks = await up(r);
+  deliver(hooks, attached(42, "atlassian"));
+  await r.until("the follow-up", () => r.store.submitted.length >= 2);
+  assert.equal(r.store.installed.size, 0);
+  assert.deepEqual(r.calls.filter((a) => a[0] === "session" && a[1] === "report"), [
+    ["session", "report", "--what", "mcp attach atlassian", "--code", "mcp_register_failed", "--message", "needs sign-in", "--details", '{"name":"atlassian","message":"needs sign-in"}', "--session", "s-worker"],
+  ]);
+  const input = r.store.submitted[1]!;
+  assert.equal(r.store.submitted.length, 2);
+  assert.equal(input.requestId, "mcp-failed:42");
+  assert.equal(input.whenBusy, "followUp");
+  assert.ok(input.content.startsWith("cpd adapter: mcp attach atlassian failed"), input.content);
+  assert.ok(input.content.includes("needs sign-in"), input.content);
+  assert.equal(await stop(r), 143);
+});
+
+test("a failed mcp_register_failed report is one log line and the run goes on", { timeout: 10_000 }, async () => {
+  const r = rig();
+  r.mcp.connectError = new Error("needs sign-in");
+  r.mcp.reportError = new CpdError("x_failed", "boom");
+  const hooks = await up(r);
+  deliver(hooks, attached(42, "atlassian"));
+  await r.until("the log line", () => r.logs.includes("report failed: x_failed: boom"));
+  deliver(hooks, nudge(43, "Carry on."));
+  await r.until("the nudge submitted", () => r.store.submitted.some((i) => i.requestId === "event:43"));
+  assert.equal(r.logs.filter((l) => l.startsWith("report failed")).length, 1);
+  assert.equal(await stop(r), 143);
+});
+
+test("a re-attach of a server replaces its tools and closes the old connection", { timeout: 10_000 }, async () => {
+  const r = rig();
+  const hooks = await up(r);
+  deliver(hooks, attached(42, "atlassian"));
+  await installedAfter(r, "mcp-atlassian", 2);
+  r.mcp.tools.set("atlassian", [mk("atlassian", "other")]);
+  deliver(hooks, attached(43, "atlassian"));
+  await r.until("the old connection closed", () => r.mcp.conns[0]?.closed === 1);
+  await r.until("the new tools", () => namesOf(r, "mcp-atlassian").join() === "mcp__atlassian__other");
+  assert.equal(r.mcp.conns[1]!.closed, 0);
+  deliver(hooks, attached(44, "jira"));
+  await installedAfter(r, "mcp-jira", 2);
+  assert.deepEqual([...r.store.installed.keys()].sort(), ["mcp-atlassian", "mcp-jira"]);
+  assert.deepEqual(namesOf(r, "mcp-atlassian"), ["mcp__atlassian__other"]);
+  assert.equal(r.mcp.conns[0]!.closed, 1);
+  assert.equal(await stop(r), 143);
+});
+
+const replayList = () => [attachedEvent(50, "a", "https://mcp.example/a-old"), attachedEvent(51, "b"), attachedEvent(52, "a", "https://mcp.example/a-new")];
+const LIST_ARGS = ["events", "list", "--session", "s-worker", "--kind", "mcp-attached", "--limit", "5000"];
+
+test("at start the runner replays the latest own mcp-attached Event of each name before it follows", { timeout: 10_000 }, async () => {
+  const mcp = new FakeMcp();
+  mcp.listed = replayList();
+  const r = rig({ mcp });
+  await up(r);
+  await r.until("both connected", () => mcp.connects.length >= 2);
+  assert.deepEqual(mcp.listCalls, [LIST_ARGS]);
+  assert.deepEqual(mcp.connects, [
+    { name: "b", server: { url: "https://mcp.example/b" } },
+    { name: "a", server: { url: "https://mcp.example/a-new" } },
+  ]);
+  assert.ok(r.order.indexOf("events list") >= 0 && r.order.indexOf("events list") < r.order.indexOf("follower started"), r.order.join());
+  assert.equal(await stop(r), 143);
+});
+
+test("an Event the replay handled is not connected again when the follower delivers it", { timeout: 10_000 }, async () => {
+  const mcp = new FakeMcp();
+  mcp.listed = replayList();
+  const r = rig({ mcp });
+  const hooks = await up(r);
+  await r.until("both connected", () => mcp.connects.length >= 2);
+  deliver(hooks, attached(52, "a"));
+  await r.until("the cursor moved", () => hooks.cursor() === 52);
+  assert.equal(mcp.connects.length, 2);
+  assert.equal(await stop(r), 143);
+});
+
+test("a failed replay read is one log line and the run goes on", { timeout: 10_000 }, async () => {
+  const mcp = new FakeMcp();
+  mcp.listError = new Error("list broke");
+  const r = rig({ mcp });
+  const hooks = await up(r);
+  await r.until("the log line", () => r.logs.some((l) => l.includes("mcp replay")));
+  assert.equal(r.logs.filter((l) => l.includes("mcp replay")).length, 1);
+  assert.equal(r.follower.started, 1);
+  deliver(hooks, nudge(43, "Carry on."));
+  await r.until("the nudge submitted", () => r.store.submitted.some((i) => i.requestId === "event:43"));
+  assert.equal(await stop(r), 143);
+});
+
+test("every connection is closed once when the run ends", { timeout: 10_000 }, async () => {
+  const r = rig();
+  const hooks = await up(r);
+  deliver(hooks, attached(42, "atlassian"));
+  deliver(hooks, attached(43, "jira"));
+  await r.until("both connected", () => r.mcp.conns.length >= 2);
+  assert.equal(await stop(r), 143);
+  assert.deepEqual(r.mcp.conns.map((c) => c.closed), [1, 1]);
+});
+
+test("an mcp-attached Event is never submitted as input", { timeout: 10_000 }, async () => {
+  const r = rig();
+  const hooks = await up(r);
+  deliver(hooks, attached(42, "atlassian"));
+  await r.until("the server connected", () => r.mcp.connects.length >= 1);
+  deliver(hooks, nudge(43, "Carry on."));
+  await r.until("the nudge submitted", () => r.store.submitted.some((i) => i.requestId === "event:43"));
+  assert.equal(r.store.submitted.some((i) => i.requestId === "event:42"), false);
   assert.equal(await stop(r), 143);
 });
