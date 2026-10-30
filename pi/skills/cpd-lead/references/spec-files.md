@@ -31,7 +31,7 @@ The file passed as `--spec` when you add a Job is JSON with exactly these fields
 
 Write the text in GFM only: tables, lists, code and Mermaid. Footnotes render as literal text and raw HTML is not rendered, so the User would see them broken in the Plan.
 
-The Worker's submit runs only the repo's quick check (its `pre-commit` hook) and, for a test or implementation Job, the named tests ([Test Jobs](#test-jobs)). The Gate (its `pre-merge` hook) runs later, on the whole Lead Branch, in the submit of the PR's open Job, so an acceptance item that needs the Gate must name the command itself.
+The Worker's submit runs only the tamper check and, for a test or implementation Job, the named tests ([Test Jobs](#test-jobs)). The repo's quick check (its `pre-commit` hook) runs at the Job's merge, and the Gate (its `pre-merge` hook) runs later, on the whole Lead Branch, at the merge of the PR's open Job, so an acceptance item that needs the Gate must name the command itself.
 
 ## Size
 
