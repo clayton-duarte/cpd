@@ -23,6 +23,7 @@
 //! - [`lock`]: `locks/watch.lock`; [`log`]: stderr and `run/watch.log`.
 
 mod archive;
+mod asks;
 mod archive_leads;
 mod auto_merge;
 mod open;
@@ -66,6 +67,8 @@ mod janitor_tests;
 mod inbox_tests;
 #[cfg(test)]
 mod stuck_explore_tests;
+#[cfg(test)]
+mod repeated_asks_tests;
 #[cfg(test)]
 mod parked_tests;
 #[cfg(test)]

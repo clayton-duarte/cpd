@@ -2807,7 +2807,7 @@ Effects, in this order:
 cpd session send <id> (<text> | --file <f>) --unblocks <reason>
 ```
 
-Sends one message to a Lead or a Manager Session (hs-d92, hs-d133, hs-d514). It appends an Event; the target's adapter delivers it (§15.3). The message always wakes: when the target is idle it starts a turn at once; a working, waiting or blocked target gets it after its running turn, never interrupted. It carries a required statement of what it unblocks (hs-d507, hs-d514). The command is not the User's only way to write one: the engine writes the same Event, from the User's side (`from` null), to a Context's Manager for each of its own step errors (contract §3.7, hs-d314) and for each stuck Job (contract §3.7 "A stuck Job", hs-d318).
+Sends one message to a Lead or a Manager Session (hs-d92, hs-d133, hs-d514). It appends an Event; the target's adapter delivers it (§15.3). The message always wakes: when the target is idle it starts a turn at once; a working, waiting or blocked target gets it after its running turn, never interrupted. It carries a required statement of what it unblocks (hs-d507, hs-d514). The command is not the User's only way to write one: the engine writes the same Event, from the User's side (`from` null), to a Context's Manager for each of its own step errors (contract §3.7, hs-d314) and for each stuck Job (contract §3.7 "A stuck Job", hs-d318) and for each repeated ask (contract section 3.7 "A repeated ask").
 
 | Argument | Meaning |
 |---|---|

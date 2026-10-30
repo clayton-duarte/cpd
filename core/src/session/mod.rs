@@ -54,7 +54,7 @@ pub(crate) use moves::lead_spawn;
 pub use row::{Role, State};
 pub use resume::LOOP_GUARD_LABEL;
 pub use state::Label;
-pub use send::{plan_inactive, sender, tell, tell_managers};
+pub use send::{plan_inactive, sender, tell, tell_manager_of, tell_managers};
 
 /// The Session `reference` names (commands.md §1.3), for the commands outside this module.
 pub fn resolve(conn: &rusqlite::Connection, reference: &SessionRef) -> Result<SessionId, CpdError> {

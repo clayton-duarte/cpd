@@ -200,7 +200,7 @@ pub(super) fn id<T>(what: &str, value: &str, parse: fn(&str) -> Result<T, CpdErr
     parse(value).map_err(|_| corrupt(what, value))
 }
 
-fn time_of(what: &str, value: &str) -> Result<OffsetDateTime, CpdError> {
+pub(super) fn time_of(what: &str, value: &str) -> Result<OffsetDateTime, CpdError> {
     OffsetDateTime::parse(value, &Rfc3339).map_err(|_| corrupt(what, value))
 }
 
