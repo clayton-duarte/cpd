@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
-import { Fixture, planShow, shown, waitFor } from "./fake.ts";
+import { Fixture, planShow, shown } from "./fake.ts";
 
 // commands.md §15 with the plannotator tracker and guard removed (hs-d738, hs-d739).
 
@@ -12,7 +12,7 @@ async function started(f: Fixture, manager: boolean) {
   if (manager) f.respond("session-show", shown({ role: "manager", plan: null, plan_lead: false }));
   f.load();
   await f.pi.fire("session_start");
-  await waitFor("the follower", () => f.follows().length > 0);
+  await f.followerStarted();
   await f.quiet();
 }
 
