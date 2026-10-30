@@ -432,6 +432,7 @@ function wrapRanges(characters: readonly string[], first: number, rest: number):
 	return rows;
 }
 
+export const WRAP_CACHE_CHARS = 1_000_000;
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /** Segments word-wrapped into rows, each piece keeping its color. */
