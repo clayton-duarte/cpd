@@ -2978,7 +2978,7 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | PR box title: `merged` | yes | fg 10 | palette: bright meaning |
 | PR box title: `closed`, its Lead handles it / asks the User | yes | fg 14 / fg 9 | palette: bright meaning |
 | PR box title: `conflict` and `updating` (every box PR has a Lead) | yes | fg 14 | palette: bright meaning |
-| PR box title: Lead-working dot | yes (inside the link) | the Lead's colour of pro-d200 (the five Dot rows above: fg 9 while its Plan has a failed Job being worked on or an open Worker Escalation (hs-d581, pro-d200); fg 13 while the Lead plans; fg 11 for PR, deploy and landing work; fg 14 for dispatch; fg 15 with no Plan; superseding hs-d622 and hs-d624) | palette: bright meaning |
+| PR box title: Lead-working dot | yes (inside the link) | the Lead's colour of pro-d200 (the five Dot rows above: fg 9 while its Plan has a failed Job being worked on or an open Worker Escalation (hs-d581, pro-d200); fg 13 while the Lead plans; fg 11 for PR, deploy and landing work; fg 14 for dispatch; fg 15 with no Plan; superseding hs-d622 and hs-d624); a merged or cancelled box has none | palette: bright meaning |
 | PR box title: link cue `󱆭` | yes | fg 15 | palette: clickable text |
 | PR box title: PR status before a pull request exists (`waiting`, `dispatch`) | no | fg 8 | palette: muted |
 | ` no Jobs ` in an empty box | no | fg 8 | palette: muted |
