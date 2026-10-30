@@ -48,7 +48,7 @@ export type Host = {
   readonly mismatched: Set<string>;
   readonly versionFailures: Set<string>;
   /** pi has no way to remove a handler or a tool: each is registered once. */
-  registered: { tool: boolean; updates: boolean; reminder: boolean; firstMessage: boolean };
+  registered: { tool: boolean; updates: boolean; reminder: boolean; firstMessage: boolean; skills: boolean };
   call(args: string[]): ReturnType<typeof callCpd>;
   /** Delivers a failure as an error message to the Lead. */
   deliver(what: string, e: unknown, extra?: Record<string, unknown>): void;
@@ -73,7 +73,7 @@ export function createHost(pi: PiApi, options: Options): Host {
     showRetry: undefined,
     mismatched: new Set(),
     versionFailures: new Set(),
-    registered: { tool: false, updates: false, reminder: false, firstMessage: false },
+    registered: { tool: false, updates: false, reminder: false, firstMessage: false, skills: false },
     call: (args) => callCpd(host.exec, args, { timeoutMs: timing.callTimeoutMs, signal: host.abort.signal }),
     deliver(what, e, extra = {}) {
       const err = toCpdError(e);
@@ -91,8 +91,8 @@ export function createHost(pi: PiApi, options: Options): Host {
       // A Lead's errors go to the log and to the Manager, never to its chat. Before a run there is no role: CPD_PLAN is a Lead's pane (§6.5).
       const id = r?.id ?? host.env.CPD_SESSION;
       const lead = !!id && (r ? r.info.role === "lead" : !!host.env.CPD_PLAN);
-      // The ledger report: a Lead's, and a refused registration's for every role.
-      if (id && (lead || refused)) {
+      // The ledger report: a Lead's, and a refused registration's or an unreadable skills directory's (commands.md §15.23) for every role.
+      if (id && (lead || refused || code === "skills_unreadable")) {
         const log = (line: string) => {
           if (r) return r.log(line);
           try {

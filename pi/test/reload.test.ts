@@ -23,6 +23,10 @@ const install = (f: Fixture, files: Record<string, string> = { "extension.ts": G
   rmSync(f.adapterDir, { recursive: true });
   mkdirSync(f.adapterDir);
   for (const [name, content] of Object.entries(files)) writeFileSync(join(f.adapterDir, name), content);
+  for (const skill of ["cpd-lead", "cpd-manager"]) {
+    mkdirSync(join(f.adapterDir, "skills", skill), { recursive: true });
+    writeFileSync(join(f.adapterDir, "skills", skill, "SKILL.md"), `the ${skill} skill\n`);
+  }
   touch(f.adapterDir);
 };
 
