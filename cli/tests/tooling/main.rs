@@ -28,5 +28,6 @@ mod testkit;
 mod testkit_hosts;
 mod testkit_screen;
 mod testkit_tree;
+mod usage_grammar;
 mod tripwire_script;
 mod version;
