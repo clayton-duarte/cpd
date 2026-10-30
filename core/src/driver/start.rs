@@ -468,8 +468,11 @@ fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &N
     if moved == 0 {
         return Err(CpdError::new(ErrorCode::CasLost, format!("Job {key} changed while its Attempt was being started: try again.")));
     }
-    let pr: String = tx.query_row("SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2", params![plan.as_str(), key.as_str()], |r| r.get(0))?;
-    crate::pr::jira_sync::queue(tx, plan.as_str(), &pr, crate::pr::jira_sync::Target::InProgress)?;
+    // An explore Job has no PR, so no Jira transition.
+    let pr: Option<String> = tx.query_row("SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2", params![plan.as_str(), key.as_str()], |r| r.get(0))?;
+    if let Some(pr) = pr {
+        crate::pr::jira_sync::queue(tx, plan.as_str(), &pr, crate::pr::jira_sync::Target::InProgress)?;
+    }
     let attempt = &next.attempt;
     let text = format!(
         "Attempt {attempt} of Job {key} started at Tier {} ({}). See: cpd attempt show {attempt} --plan {plan}",

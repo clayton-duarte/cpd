@@ -164,6 +164,11 @@ fn explore_attempt_times_out_at_explore_minutes() {
     let started = timestamp(fakes.clock.utc());
     add_explore(&mut fx, "scout", "H1", "look", &[], &format!("{}{}", running("look"), running_attempt("look", 1, "H1", &started)));
     let stop = |fx: &mut Fx| fx.query::<Option<String>>("SELECT stop_request FROM attempts WHERE id = 'look-a1'");
+    // A held driver lock is what a live driver looks like to E2; the sessions step runs on the in-process tmux.
+    let _driver = cpd_core::driver::lock::take_free_driver_lock(&fx.engine.home, &PlanId::parse("pay").unwrap(), &AttemptId::parse("look-a1").unwrap())
+        .unwrap()
+        .expect("free");
+    fx.on_fake_tmux();
 
     fakes.clock.advance(Duration::from_secs(50));
     liveness::run(&mut fx.engine);
@@ -172,6 +177,7 @@ fn explore_attempt_times_out_at_explore_minutes() {
     fakes.clock.advance(Duration::from_secs(11));
     liveness::run(&mut fx.engine);
     assert_eq!(stop(&mut fx).as_deref(), Some("timed_out"), "one active minute passed: attempt_minutes (90) does not apply");
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.events("error"));
 }
 
 /// The catalog of the testkit (contract §9): H0-H3, S0-S5.

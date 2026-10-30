@@ -500,6 +500,12 @@ fn provider_errors(tx: &WriteTxn<'_>, plan: &str, job: &str) -> Result<u32, CpdE
 /// (`driver_pid` null, §3.4) does not raise the Tier: its own Tier again.
 /// (A `merging` Attempt always had a driver.) A `provider_error` is a retry cause: see below.
 fn next_tier(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder<'_>) -> Result<Option<Tier>, CpdError> {
+    let next = next_rung(tx, attempt, cause, ladder)?;
+    // An explore Job stays inside the letter of its kind (scout H, research S): after the top rung it fails.
+    Ok(next.filter(|t| !crate::plan::jobs::is_explore(&attempt.kind) || t.letter() == attempt.tier.letter()))
+}
+
+fn next_rung(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder<'_>) -> Result<Option<Tier>, CpdError> {
     // pro-d102: a provider error requeues at the Attempt's own Tier, never raising it, up to PROVIDER_RETRIES times.
     if cause == Cause::ProviderError {
         let used = provider_errors(tx, attempt.plan.as_str(), attempt.job.as_str())?;
