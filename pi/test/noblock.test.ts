@@ -95,6 +95,40 @@ test("the Lead reason names a Lead and leaves the wait to the background or the 
   assert.match(reasonText(blockingReason("ls", 120)!, "lead"), /refused: bash timeout 120$/);
 });
 
+test("a heredoc body is not judged: prose, backticked words and waits inside it pass", () => {
+  passes("cat << EOF\nrun `watch` to follow\nsleep 60\nEOF");
+  passes("cat <<'EOF'\nrun `watch` to follow\nsleep 60\nEOF");
+  passes("cat <<\"EOF\"\nrun `watch` to follow\nsleep 60\nEOF");
+  passes("cat <<\\EOF\nrun `watch` to follow\nsleep 60\nEOF");
+  passes("cat > /tmp/x <<EOF\nwhile true; do sleep 5; done\nEOF");
+  passes("cat <<-EOF\n\twatch\n\tEOF");
+  passes("cat <<EOF\ndon't watch\nEOF");
+  passes("cat <<EOF\ntimeout 60 cmd\nEOF");
+});
+
+test("a heredoc ends at its own delimiter line: only an exact line ends it and the command after it is judged", () => {
+  assert.equal(blockingReason("cat <<EOF\nhi\nEOF\nwatch"), "watch");
+  passes("cat <<EOF\n EOF\nwatch\nEOF");
+  passes("cat <<EOF\nEOFX\nwatch\nEOF");
+  assert.equal(blockingReason("cat <<-EOF\n\tEOF\nwatch"), "watch");
+});
+
+test("an unterminated heredoc runs to the end of the call", () => {
+  passes("cat <<EOF\nwatch");
+  passes("echo hi; cat <<EOF\nsleep 60");
+});
+
+test("two heredocs on one line skip both bodies in order", () => {
+  passes("cat <<A <<B\nwatch\nA\nsleep 60\nB\nls");
+  assert.equal(blockingReason("cat <<A <<B\nx\nA\ny\nB\nwatch"), "watch");
+});
+
+test("the line of a heredoc operator and a here-string are still judged", () => {
+  assert.equal(blockingReason("cat <<EOF; sleep 60\nbody\nEOF"), "sleep 60");
+  assert.equal(blockingReason("cat <<EOF | watch\nbody\nEOF"), "watch");
+  assert.equal(blockingReason('cat <<< "hi"\nwatch'), "watch");
+});
+
 // ---- through the adapter ----
 
 async function started(role: string) {

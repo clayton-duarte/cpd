@@ -18,8 +18,18 @@ export function simpleCommands(line: string): string[][] {
     if (words.length > 0) commands.push(words);
     words = [];
   };
+  const pending: { delim: string; strip: boolean }[] = [];
   for (let i = 0; i < line.length; i++) {
     const c = line[i]!;
+    if (quote === undefined && c === "<" && line[i + 1] === "<" && line[i + 2] !== "<" && line[i - 1] !== "<") {
+      const op = heredocOperator(line, i + 2);
+      if (op) pending.push(op);
+    }
+    if (c === "\n" && quote === undefined && pending.length > 0) {
+      endCommand();
+      i = skipBodies(line, i + 1, pending.splice(0)) - 1;
+      continue;
+    }
     if (quote === "'") {
       if (c === "'") quote = undefined;
       else word += c;
@@ -44,4 +54,45 @@ export function simpleCommands(line: string): string[][] {
   }
   endCommand();
   return commands;
+}
+
+/** The delimiter after a `<<` (at `from`, just past it), read as a word with its quotes taken off. */
+function heredocOperator(line: string, from: number): { delim: string; strip: boolean } | undefined {
+  let i = from;
+  const strip = line[i] === "-";
+  if (strip) i++;
+  while (line[i] === " " || line[i] === "\t") i++;
+  let delim = "";
+  let quote: string | undefined;
+  for (; i < line.length; i++) {
+    const c = line[i]!;
+    if (quote === "'") {
+      if (c === "'") quote = undefined;
+      else delim += c;
+    } else if (quote === '"') {
+      if (c === '"') quote = undefined;
+      else if (c === "\\" && i + 1 < line.length) delim += line[++i];
+      else delim += c;
+    } else if (c === "'" || c === '"') quote = c;
+    else if (c === "\\" && i + 1 < line.length) delim += line[++i];
+    else if (" \t\n;&|<>()".includes(c)) break;
+    else delim += c;
+  }
+  return delim === "" ? undefined : { delim, strip };
+}
+
+/** The index just past the bodies of `heredocs`, in order, from the start of the first body at `from`. */
+function skipBodies(line: string, from: number, heredocs: { delim: string; strip: boolean }[]): number {
+  let i = from;
+  for (const { delim, strip } of heredocs) {
+    while (i < line.length) {
+      let end = line.indexOf("\n", i);
+      if (end === -1) end = line.length;
+      let text = line.slice(i, end);
+      if (strip) text = text.replace(/^\t+/, "");
+      i = Math.min(end + 1, line.length);
+      if (text === delim) break;
+    }
+  }
+  return i;
 }
