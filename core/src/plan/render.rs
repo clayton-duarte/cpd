@@ -431,13 +431,52 @@ pub fn markdown(heading: &Heading, context: &str, phase: &str, prs: &[PrRow], jo
         out.extend([graph("LR", "p", &nodes), String::new()]);
     }
     overlaps_section(&mut out, overlaps);
+    // the review's copy has no Explore section (§4.5)
+    if let Heading::Plan { plan, .. } = heading {
+        explore_section(&mut out, plan, jobs, display);
+    }
     let mut cancelled = cancelled;
     cancelled.sort_by(|a, b| a.key.cmp(&b.key));
     for pr in order.into_iter().chain(cancelled) {
-        let jobs: Vec<&Job> = jobs.iter().filter(|j| j.pr_str() == pr.key.as_str()).collect();
+        let jobs: Vec<&Job> = jobs.iter().filter(|j| j.pr.is_some() && j.pr_str() == pr.key.as_str()).collect();
         pr_section(&mut out, pr, &jobs, later, open_tier, &shown);
     }
     out.join("\n")
+}
+
+/// The `## Explore` section (commands.md §4.5, R3, R9): the explore Jobs' table and the summary of each merged one; nothing without them.
+fn explore_section(out: &mut Vec<String>, plan: &str, jobs: &[Job], display: &Display) {
+    let mut explore: Vec<&Job> = jobs.iter().filter(|j| j.pr.is_none()).collect();
+    if explore.is_empty() {
+        return;
+    }
+    explore.sort_by(|a, b| a.key.cmp(&b.key));
+    out.extend([
+        "## Explore".to_owned(),
+        String::new(),
+        "| Job | Kind | Tier | Status | Needs | Question | Artefact |".to_owned(),
+        "|---|---|---|---|---|---|---|".to_owned(),
+    ]);
+    for j in &explore {
+        let tier = display.job_tier(j).unwrap_or_else(|| MISSING_TIER.to_owned());
+        let needs = if j.needs.is_empty() { MISSING_TIER.to_owned() } else { j.needs.iter().map(|n| tcode(n)).collect::<Vec<_>>().join(", ") };
+        let goal = j.spec.as_ref().map_or("", |s| s.goal.lines().next().unwrap_or(""));
+        let question: String = goal.chars().take(100).collect();
+        out.push(format!(
+            "| {} | {} | {tier} | {} | {needs} | {} | {} |",
+            tcode(&j.key),
+            tcode(&j.kind),
+            j.status,
+            cell(&question),
+            tcode(&format!("run/{plan}/explore/{}.md", j.key))
+        ));
+    }
+    out.push(String::new());
+    for j in explore.iter().filter(|j| j.status == "merged") {
+        if let Some(summary) = &j.summary {
+            out.extend([format!("### {}", j.key), block(summary), String::new()]);
+        }
+    }
 }
 
 #[cfg(test)]

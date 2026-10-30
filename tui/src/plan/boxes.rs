@@ -32,6 +32,8 @@ use crate::read::{Dot, Work, JobNode, JobStatus, NeedsUser, PrFacts, PrNode, PrS
 const GAP: u16 = 2;
 /// What the box of a PR with no Jobs says (the widget's padding is the space around it).
 const NO_JOBS: &str = "no Jobs";
+/// The title of the box of the Plan's explore Jobs.
+const EXPLORE: &str = "explore";
 
 /// The body of a PR box: the chart's buffer blitted at the body's corner, or [`NO_JOBS`] when the PR has none.
 struct ChartBody<'a> {
@@ -287,9 +289,19 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         hs.push((run(lc - 1), x, land(c)));
         vs.push((land(c), run(lc - 1), ys[lc] - 1));
     }
-    let boxes_w = (0..prs.len()).map(|i| at[i].0 + size[i].0).max().unwrap_or(0);
+    let lines = palette::muted_text();
+    // the explore box: the level below the last PR box, no connector to it
+    let explore_chart = {
+        let explore: Vec<&JobNode> = jobs.iter().filter(|j| j.pr.is_none()).collect();
+        (!explore.is_empty()).then(|| flow::layout(&flow::flow_jobs(explore, &needs_user.worked_on), frame))
+    };
+    let explore_title = Line::from(Span::styled(format!(" {EXPLORE} "), lines));
+    let prs_h = if nrows == 0 { 0 } else { ys[nrows - 1] + row_h[nrows - 1] };
+    let explore_at = (0, if nrows == 0 { 0 } else { prs_h + GAP });
+    let explore_size = explore_chart.as_ref().map(|c| ((c.buf.area.width + 2 + 2 * spacing::PAD_X).max(explore_title.width() as u16 + 4), c.buf.area.height + 2));
+    let boxes_w = (0..prs.len()).map(|i| at[i].0 + size[i].0).chain(explore_size.map(|s| s.0)).max().unwrap_or(0);
     let width = vs.iter().map(|v| v.0 + 1).fold(boxes_w, u16::max);
-    let height = if nrows == 0 { 0 } else { ys[nrows - 1] + row_h[nrows - 1] };
+    let height = explore_size.map_or(prs_h, |s| explore_at.1 + s.1);
     let mut mask = Mask::new(width, height);
     for &(y, x1, x2) in &hs {
         mask.h(y, x1, x2);
@@ -299,7 +311,6 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
     }
 
     let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
-    let lines = palette::muted_text();
     let mut links = Links::default();
     for (i, chart) in charts.iter().enumerate() {
         let rect = Rect::new(at[i].0, at[i].1, size[i].0, size[i].1);
@@ -315,6 +326,10 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
             let area = Rect::new(rect.x + 1 + titles[i].width() as u16 - link.width(), rect.y, link.width(), 1);
             links.draw(link, area, &mut buf);
         }
+    }
+    if let (Some(chart), Some(size)) = (&explore_chart, explore_size) {
+        let rect = Rect::new(explore_at.0, explore_at.1, size.0, size.1);
+        BoxWidget::new(Walls::Full, lines, ChartBody { chart }).title(explore_title.clone()).render(rect, &mut buf);
     }
     // the lines lie between the boxes, never on them (a line's end on a border is replaced by the exit below)
     for y in 0..height {
@@ -348,6 +363,11 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
             rect: Rect { x: p.rect.x + body[i].0, y: p.rect.y + body[i].1, ..p.rect },
         }));
     }
+    if let (Some(chart), Some(size)) = (&explore_chart, explore_size) {
+        let inner = geometry(&Walls::Full, Rect::new(explore_at.0, explore_at.1, size.0, size.1)).inner;
+        base.push(pills.len());
+        pills.extend(chart.pills.iter().map(|p| Pill { key: p.key.clone(), rect: Rect { x: p.rect.x + inner.x, y: p.rect.y + inner.y, ..p.rect } }));
+    }
     let mut columns: Vec<Vec<usize>> = Vec::new();
     for r in &rows {
         for &i in r {
@@ -355,6 +375,10 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
                 columns.push(column.iter().map(|&p| base[i] + p).collect());
             }
         }
+    }
+    if let Some(chart) = &explore_chart {
+        let b = base[prs.len()];
+        columns.extend(chart.columns.iter().map(|c| c.iter().map(|&p| b + p).collect::<Vec<_>>()));
     }
     Boxes { chart: Chart { buf, pills, columns }, links, links_origin: (0, 0) }
 }
