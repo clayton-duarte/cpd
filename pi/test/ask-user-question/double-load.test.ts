@@ -1,6 +1,6 @@
 /** A double load of the npm package @juicesharp/rpiv-ask-user-question: cpd's copy stands down and says so once per process. */
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { mock } from "node:test";
@@ -86,4 +86,30 @@ test("a found copy registers only session_start and says so once per process", a
 		delete (globalThis as Record<symbol, unknown>)[FLAG];
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+test("findOtherCopy finds the other copy while pi holds the lock on the settings files", async (t) => {
+	const { findOtherCopy } = await import(DOUBLE.href);
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	const made = (prefix: string) => {
+		const dir = mkdtempSync(join(tmpdir(), prefix));
+		t.after(() => rmSync(dir, { recursive: true, force: true }));
+		return dir;
+	};
+	const held = (file: string, packages: string[]) => {
+		writeFileSync(file, JSON.stringify({ packages }));
+		mkdirSync(`${file}.lock`);
+	};
+	t.after(() => { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; });
+	const agent = made("ask-double-lock-agent-");
+	held(join(agent, "settings.json"), [`${NAME}@2.13.8`]);
+	process.env.PI_CODING_AGENT_DIR = agent;
+	assert.deepEqual(findOtherCopy(made("ask-double-lock-cwd-"))?.copy, { source: `${NAME}@2.13.8`, scope: "global" });
+	const bare = made("ask-double-lock-bare-");
+	writeFileSync(join(bare, "settings.json"), JSON.stringify({ packages: [] }));
+	process.env.PI_CODING_AGENT_DIR = bare;
+	const cwd = made("ask-double-lock-project-");
+	mkdirSync(join(cwd, ".pi"));
+	held(join(cwd, ".pi", "settings.json"), [`${NAME}@2.13.8`]);
+	assert.deepEqual(findOtherCopy(cwd)?.copy, { source: `${NAME}@2.13.8`, scope: "project" });
 });

@@ -376,6 +376,8 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
 export function registerAskUserQuestionTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: ASK_USER_QUESTION_TOOL_NAME,
+		// Declared to the model but never callable from a script, because pi's codemode mode "only" hides every direct tool.
+		exposure: "model-only",
 		label: "Ask User Question",
 		description: DEFAULT_TOOL_DESCRIPTION,
 		promptSnippet: DEFAULT_PROMPT_SNIPPET,
