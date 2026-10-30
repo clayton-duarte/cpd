@@ -1,8 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { Container, HStack, Spacer, TuiAltScreen, truncateToWidth, VStack, visibleWidth } from "@earendil-works/pi-tui";
-import { getLayoutNode, LAYOUT_NODE } from "@earendil-works/pi-tui/dist/layout-node.js";
-import { dispatchMouseEvent, type TuiMouseEvent } from "@earendil-works/pi-tui/dist/tui.js";
+import { HStack, Spacer, TuiAltScreen, truncateToWidth, VStack, visibleWidth } from "@earendil-works/pi-tui";
 import { hookMethod } from "../compact-tools/extensions/compact-tools-hook.ts";
 
 /**
@@ -21,38 +19,6 @@ const padRow = (): { component: Component; basis: number; minSize: number; maxSi
   ({ component: new Spacer(1), basis: 1, minSize: 1, maxSize: 1 });
 
 /**
- * What the `HStack` holds in place of a root that has a layout node. pi-tui renders an `HStack` child once to measure
- * its height and lays it out again (rendering the whole transcript a second time); the height is unused here (a
- * `basis: 0` stretched `HStack`), so this renders nothing, and `layoutComponent` walks the real root's layout node:
- * the real boxes (the `ScrollView`, the dock, the editor) are laid out and rendered once. Mouse events that the
- * real root handles itself are forwarded to it; a root with the default container `handleMouse` is skipped by
- * pi-tui, as this stand-in is.
- */
-class RootStandIn extends Container {
-  private readonly root: Component;
-
-  constructor(root: Component) {
-    super();
-    this.root = root;
-    if (root.handleMouse !== Container.prototype.handleMouse) {
-      this.handleMouse = (event: TuiMouseEvent) => dispatchMouseEvent(root, event);
-    }
-  }
-
-  override render(): string[] {
-    return [];
-  }
-
-  override invalidate(): void {
-    this.root.invalidate?.();
-  }
-
-  [LAYOUT_NODE]() {
-    return getLayoutNode(this.root);
-  }
-}
-
-/**
  * The layout root with one blank cell on each side. It is a `VStack`/`HStack` so the real root stays a laid-out child
  * (the transcript's `ScrollView` keeps its rect) and grows into the middle; `render` is the same inset for a direct
  * call, with no compositor resets around the side columns.
@@ -66,7 +32,7 @@ class PaddedRoot extends VStack {
       {
         component: new HStack([
           padRow(),
-          { component: getLayoutNode(root) ? new RootStandIn(root) : root, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+          { component: root, basis: 0, grow: 1, shrink: 1, minSize: 1 },
           padRow(),
         ]),
         basis: 0,

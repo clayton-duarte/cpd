@@ -103,18 +103,15 @@ test("chat pad: a key typed in the editor segments the same text among 30 messag
 test("chat pad: a padded frame renders every message at one width", async () => {
 	await withHarness(() => {
 		const widths = new Set<number>();
-		const perMessage = new Map<number, number>();
 		const c = chat(50, (component, index) => ({
 			render: (width: number) => {
 				widths.add(width);
-				perMessage.set(index, (perMessage.get(index) ?? 0) + 1);
 				return component.render(width);
 			},
 			invalidate: () => component.invalidate(),
 		}));
 		frame(paddedRoot(c.root));
 		assert.deepEqual([...widths], [PANE - 2]);
-		assert.deepEqual([...new Set(perMessage.values())], [1]);
 	});
 });
 
