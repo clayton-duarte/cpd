@@ -63,7 +63,7 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
     const policy = policySection(await deps.cpd(["policy", "show"]));
     const extension = cpdExtension(
       { contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) },
-      { cwd: config.cwd, home: deps.homeDir() },
+      { cwd: config.cwd, home: deps.homeDir(), kind: config.jobKind, plan: config.plan },
     );
     const conversation = await deps.open({ file: storePath(config.home, config.plan, config.attempt), cwd: config.cwd, model, extension });
     opened = conversation;

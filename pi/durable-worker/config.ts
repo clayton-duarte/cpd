@@ -1,7 +1,8 @@
 import { join } from "node:path";
 import { CpdError } from "../lib/cpd.ts";
+import { exploreKind, type ExploreKind } from "../lib/explore.ts";
 
-export type Config = { home: string; session: string; plan: string; attempt: string; cwd: string; spec: string; model: string };
+export type Config = { home: string; session: string; plan: string; attempt: string; cwd: string; spec: string; model: string; jobKind?: ExploreKind };
 
 const VARIABLES = ["CPD_HOME", "CPD_SESSION", "CPD_PLAN", "CPD_ATTEMPT"] as const;
 
@@ -20,7 +21,13 @@ function flag(argv: readonly string[], name: string): string {
 
 export function parseConfig(argv: readonly string[], env: Record<string, string | undefined>, cwd: string): Config {
   const [home, session, plan, attempt] = VARIABLES.map((n) => required(env, n)) as [string, string, string, string];
-  return { home, session, plan, attempt, cwd, spec: flag(argv, "--spec"), model: flag(argv, "--model") };
+  let jobKind: ExploreKind | undefined;
+  try {
+    jobKind = exploreKind(env);
+  } catch (e) {
+    throw new CpdError("usage", (e as Error).message);
+  }
+  return { home, session, plan, attempt, cwd, spec: flag(argv, "--spec"), model: flag(argv, "--model"), ...(jobKind === undefined ? {} : { jobKind }) };
 }
 
 export function storePath(home: string, plan: string, attempt: string): string {
