@@ -32,8 +32,8 @@ async function started(t: { after(fn: () => Promise<void>): void }, role: Role, 
 
 const CHAT = /adapter: mcp attach slack: mcp_register_failed: /;
 
-for (const role of ["manager", "worker"] as const) {
-  test(`a ${role} whose registration is refused reports one error Event and still shows the chat message`, async (t) => {
+async function refusedFor(t: { after(fn: () => Promise<void>): void }, role: Role) {
+  {
     const f = await started(t, role);
     f.pi.mcpThrows = new Error("pi refuses: bad server");
     f.emit(attached(200));
@@ -50,8 +50,11 @@ for (const role of ["manager", "worker"] as const) {
     assert.equal(errors.length, 1, "the one chat message");
     assert.match(errors[0]!.message.content, CHAT);
     assert.deepEqual(errors[0]!.options, { triggerTurn: false, deliverAs: "followUp" }, "no turn");
-  });
+  }
 }
+
+test("a manager whose registration is refused reports one error Event and still shows the chat message", (t) => refusedFor(t, "manager"));
+test("a worker whose registration is refused reports one error Event and still shows the chat message", (t) => refusedFor(t, "worker"));
 
 test("two servers refused in a row are two reports naming the server in what", async (t) => {
   const f = await started(t, "lead");
