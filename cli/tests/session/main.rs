@@ -5,6 +5,7 @@
 mod common;
 
 mod board;
+mod drop_plannotator_env;
 mod host;
 mod host_pill;
 mod mcp_attach;
