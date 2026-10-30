@@ -118,7 +118,7 @@ Common flags `C` = `--no-extensions --offline --no-mcp --no-skills` (pi 1.3.0: `
 - CONTROL: `pi C --no-session`
 - OURS-FRESH: `pi C --no-session CT`
 - REPRODUCER: `pi C CT --session-dir <tmp> --session <copy>`, where `<copy>` is a COPY (in `mktemp -d`) of the eec-general Manager transcript (id prefix 4d2ca838, 2321243 bytes, 965 lines). Only the copy is ever opened.
-- Code under test is origin/main (606f4b9f); this branch changes only this doc, so the worktree is that code.
+- Code under test is origin/main as of the branch base (606f4b9f); this branch changes only this doc, so the worktree is that code.
 
 The original session file is the live Manager's own transcript, so it grew while I worked, by the live process and not by me (I only ever copied it and opened the copy): `ls -l` before was 2321243 bytes, Oct 30 11:05; after it was 2322026 bytes, Oct 30 11:55. It was never opened, written, moved or deleted by this work; the copy was taken at 2321243 bytes.
 
