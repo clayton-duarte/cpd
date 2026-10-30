@@ -259,7 +259,7 @@ pub(super) fn view_with(checks: Vec<Value>) -> String {
 }
 
 /// `pr view` of a PR whose `gh pr view` holds `checks`: its output.
-fn view(checks: Vec<Value>) -> Value {
+pub(super) fn view(checks: Vec<Value>) -> Value {
     let fx = pr_view::fx("open");
     let _ = (*fx.fx.fakes.runner).clone().on("gh", |c| c.args.starts_with(&["pr".into(), "view".into()]), Reply::ok(&view_with(checks)));
     fx.fx.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok()
