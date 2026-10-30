@@ -550,6 +550,7 @@ const MERGE_GATE: &str = "[gate]\nmerge = \"local\"\n";
 fn failed(merged: &merge::Merge) -> (Failure, &str) {
     match &merged.end {
         End::Failed { cause, detail } => (*cause, detail),
+        End::GateFailed { detail, .. } => (Failure::GateFailed, detail),
         other => panic!("the merge did not fail the Attempt: {other:?}"),
     }
 }
