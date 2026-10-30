@@ -65,7 +65,7 @@ mod tests {
         Job {
             seq: 0,
             key: key.to_owned(),
-            pr: "p".to_owned(),
+            pr: Some("p".to_owned()),
             title: String::new(),
             tier: None,
             spec: None,

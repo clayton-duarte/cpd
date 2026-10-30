@@ -69,7 +69,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     };
     let live: Vec<&PrRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
     let empty: Vec<&str> =
-        live.iter().filter(|p| !drafts.iter().any(|j| j.pr == p.key.as_str())).map(|p| p.key.as_str()).collect();
+        live.iter().filter(|p| !drafts.iter().any(|j| j.pr_str() == p.key.as_str())).map(|p| p.key.as_str()).collect();
     if live.is_empty() || !empty.is_empty() {
         let message = if live.is_empty() {
             format!("Plan {id} has no PR: add one with cpd pr add.")

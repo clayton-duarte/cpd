@@ -51,17 +51,40 @@ enum Decision {
 }
 
 pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
+    add_in(&mut Env::open()?, args)
+}
+
+/// [`add`] on an open `env`: what a test hands in.
+pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let needs = sorted_needs(&args.needs)?;
     let kind = args.kind.clone().unwrap_or_else(|| "work".to_owned());
     check_kind_not_reserved(&kind)?;
+    let explore = jobs::is_explore(&kind);
+    if explore {
+        // An explore Job belongs to the Plan, and is never a draft (R2, R3).
+        if let Some(pr) = &args.pr.pr {
+            return Err(CpdError::new(ErrorCode::ExplorePrForbidden, format!("A {kind} Job belongs to the Plan, not to a PR: drop --pr {pr}."))
+                .with("kind", kind.as_str())
+                .with("pr", pr.as_str()));
+        }
+        if args.draft {
+            return Err(CpdError::new(ErrorCode::ExploreNoDraft, format!("A {kind} Job has no draft, no review and no lock: it is queued at once; drop --draft."))
+                .with("kind", kind.as_str()));
+        }
+    }
     require_tier_and_spec(&args)?;
-    let spec = args.spec.as_deref().map(spec::read).transpose()?;
-    if let Some(spec) = &spec {
+    let mut spec = args.spec.as_deref().map(|p| spec::read_for(p, &kind)).transpose()?;
+    if let Some(spec) = &mut spec {
         spec.check_kind(&kind)?;
-            }
-    let mut env = Env::open()?;
-    if let Some(tier) = args.tier {
+        if explore {
+            spec.touches = vec![spec::explore_artefact(plan.as_str(), args.key.as_str())];
+        }
+    }
+    if let (true, Some(tier)) = (explore, args.tier) {
+        super::check_kind_tier(&kind, tier)?;
+        env.check_explore_tier(&plan, tier)?;
+    } else if let Some(tier) = args.tier {
         let prs = env.store.read(|conn| {
             super::plan_phase(conn, &plan)?;
             load_prs(conn, &plan)
@@ -130,6 +153,9 @@ fn require_tier_and_spec(args: &AddArgs) -> Result<(), CpdError> {
 
 fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> Result<Decision, CpdError> {
     let phase = plan_phase(conn, plan)?;
+    if jobs::is_explore(&wanted.kind) {
+        return decide_explore(conn, plan, wanted, &phase);
+    }
     if phase == "grounding" || (phase == "done" && !wanted.draft) {
         return Err(CpdError::new(
             ErrorCode::IllegalPhase,
@@ -154,7 +180,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
     let mut job = Job {
         seq: 0,
         key: wanted.key.as_str().to_owned(),
-        pr,
+        pr: Some(pr),
         title: wanted.title.clone(),
         tier: wanted.tier.clone(),
         spec: wanted.spec.as_ref().map(Spec::stored),
@@ -188,16 +214,18 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
     }
     // The Spec names no primary checkout of a PR of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
     if let Some(spec) = &wanted.spec {
-        spec.check_primary_roots(&primary_roots(&prs), &std::env::home_dir().unwrap_or_default())?;
+        let user_home = std::env::home_dir().unwrap_or_default();
+        spec.without_artefacts(home.root(), plan.as_str(), &user_home).check_primary_roots(&primary_roots(&prs), &user_home)?;
         spec.check_files_relative()?;
-        check_resources_declared(conn, home, plan, &job.pr, &job.key, spec.resources.as_deref())?;
+        check_resources_declared(conn, home, plan, job.pr_str(), &job.key, spec.resources.as_deref())?;
     }
     if let Some(spec) = &wanted.spec {
-        let pr = prs.iter().find(|p| p.key.as_str() == job.pr).expect("check_pr_live found the PR");
+        let pr = prs.iter().find(|p| p.key.as_str() == job.pr_str()).expect("check_pr_live found the PR");
         check_touches(pr, &prs, &spec.touches)?;
     }
     check_needs_known(&all, plan, &job.needs)?;
-    check_needs_same_pr(&all, plan, &job.pr, &job.needs)?;
+    check_needs_explore_only(&all, plan, &job.key, false, &job.needs)?;
+    check_needs_same_pr(&all, plan, job.pr_str(), &job.needs)?;
     if !draft {
         check_impl_job_required(&all, plan, &job)?;
     }
@@ -212,6 +240,79 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
         crate::plan::parked::door(conn, plan, &phase, &all, &job)?;
     }
     Ok(Decision::Insert(job))
+}
+
+/// An explore Job (R2-R5): of the Plan, no PR, queued at once with its fingerprint, in every phase but `done`.
+fn decide_explore(conn: &Connection, plan: &PlanId, wanted: &Wanted, phase: &str) -> Result<Decision, CpdError> {
+    if phase == "done" {
+        return Err(CpdError::new(
+            ErrorCode::IllegalPhase,
+            format!("Plan {plan} is in phase done: explore Jobs ({}) are added in the phases grounding, plan, dispatch and deploy.", wanted.kind),
+        )
+        .with("plan", plan.as_str())
+        .with("phase", phase));
+    }
+    let all = jobs::load(conn, plan)?;
+    if wanted.needs.iter().any(|n| n == wanted.key.as_str()) {
+        return Err(CpdError::new(ErrorCode::DependencyCycle, format!("Job {} needs itself.", wanted.key))
+            .with("plan", plan.as_str())
+            .with("cycle", [wanted.key.as_str(), wanted.key.as_str()]));
+    }
+    check_needs_known(&all, plan, &wanted.needs)?;
+    check_needs_explore_only(&all, plan, wanted.key.as_str(), true, &wanted.needs)?;
+    let mut job = Job {
+        seq: 0,
+        key: wanted.key.as_str().to_owned(),
+        pr: None,
+        title: wanted.title.clone(),
+        tier: wanted.tier.clone(),
+        spec: wanted.spec.as_ref().map(Spec::stored),
+        status: "queued".to_owned(),
+        appended: true,
+        kind: wanted.kind.clone(),
+        tests: None,
+        test_files: None,
+        resources: None,
+        test_approved: None,
+        urgent: wanted.urgent,
+        fingerprint: None,
+        retry_tier: None,
+        cancel_reason: None,
+        cancel_requested_at: None,
+        failed_cause: None,
+        merged_sha: None,
+        created_at: String::new(),
+        needs: wanted.needs.clone(),
+    };
+    if let Some(existing) = all.iter().find(|j| j.key == job.key) {
+        if same_locked_fields(existing, &job) {
+            return Ok(Decision::Already(existing.clone()));
+        }
+        return Err(CpdError::new(ErrorCode::JobKeyExists, format!("Plan {plan} already has a Job {} with other Locked fields.", job.key))
+            .with("plan", plan.as_str())
+            .with("job", job.key.as_str()));
+    }
+    check_needs_available(&all, plan, &wanted.needs)?;
+    check_needs_not_draft(&all, plan, &job)?;
+    job.fingerprint = Some(locked_fingerprint(&job));
+    Ok(Decision::Insert(job))
+}
+
+/// An explore Job needs only explore Jobs, and no other Job needs one (`explore_needs_mixed`, exit 3, `details.jobs`
+/// the Jobs on the other side). `explore` is whether the Job `key` is one.
+pub(super) fn check_needs_explore_only(all: &[Job], plan: &PlanId, key: &str, explore: bool, needs: &[String]) -> Result<(), CpdError> {
+    let others: Vec<&str> =
+        all.iter().filter(|j| needs.contains(&j.key) && jobs::is_explore(&j.kind) != explore).map(|j| j.key.as_str()).collect();
+    if others.is_empty() {
+        return Ok(());
+    }
+    Err(CpdError::new(
+        ErrorCode::ExploreNeedsMixed,
+        format!("Job {key} needs {}: an explore Job needs only explore Jobs, and no other Job needs one.", others.join(", ")),
+    )
+    .with("plan", plan.as_str())
+    .with("job", key)
+    .with("jobs", others))
 }
 
 /// Every resource of a Spec is declared by the policy of the PR's repo (`resource_undeclared`, commands.md §5.1):

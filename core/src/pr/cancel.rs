@@ -264,7 +264,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, superseded: Option<&str
     // Only a `running` Job holds the PR, and a `merged` one unless superseded (its work another PR carried): `draft`, `queued` and `failed` Jobs
     // go with the PR (`cancel_jobs`).
     let holds = |j: &jobs::Job| j.status == "running" || (j.status == "merged" && superseded.is_none());
-    let live_jobs: Vec<String> = jobs::load(conn, plan)?.into_iter().filter(|j| j.pr == key.as_str() && holds(j)).map(|j| j.key).collect();
+    let live_jobs: Vec<String> = jobs::load(conn, plan)?.into_iter().filter(|j| j.pr_str() == key.as_str() && holds(j)).map(|j| j.key).collect();
     if !live_jobs.is_empty() || !needing.is_empty() {
         return Err(in_use(live_jobs));
     }

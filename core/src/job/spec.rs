@@ -86,6 +86,31 @@ impl Spec {
         Ok(())
     }
 
+    /// The Spec with every citation of an explore artefact directory (`run/<plan>/explore/` under `cpd_home`, in the
+    /// forms of [`Spec::check_primary_roots`]) taken out, so that a path under `$CPD_HOME` is no primary checkout.
+    pub fn without_artefacts(&self, cpd_home: &Path, plan: &str, user_home: &Path) -> Spec {
+        let tail = format!("run/{plan}/explore/");
+        let mut forms = vec![format!("{}/{tail}", cpd_home.display())];
+        if let Ok(rest) = cpd_home.strip_prefix(user_home).map(|r| r.to_string_lossy().into_owned()) {
+            if !user_home.as_os_str().is_empty() {
+                let rest = if rest.is_empty() { String::new() } else { format!("/{rest}") };
+                forms.extend(["~", "$HOME", "${HOME}"].map(|p| format!("{p}{rest}/{tail}")));
+            }
+        }
+        let strip = |s: &str| forms.iter().fold(s.to_owned(), |acc, f| acc.replace(f.as_str(), ""));
+        let strips = |v: &[String]| v.iter().map(|s| strip(s)).collect::<Vec<_>>();
+        Spec {
+            goal: strip(&self.goal),
+            context: strip(&self.context),
+            touches: strips(&self.touches),
+            acceptance: strips(&self.acceptance),
+            out_of_scope: strips(&self.out_of_scope),
+            tests: self.tests.as_deref().map(strips),
+            test_files: self.test_files.as_deref().map(strips),
+            resources: self.resources.clone(),
+        }
+    }
+
     /// `test_files` are repo-relative: no leading `/` (commands.md §5, the rule of the `protected` list,
     /// contract §7.5). Checked after [`Spec::check_primary_roots`], which reports a primary checkout first.
     pub fn check_files_relative(&self) -> Result<(), CpdError> {
@@ -110,13 +135,46 @@ impl Spec {
     }
 }
 
-/// Reads and validates the file: `file_unreadable` when it is not UTF-8 text
-/// (commands.md §1.5), else [`parse`]'s `spec_invalid`.
-pub fn read(path: &Path) -> Result<Spec, CpdError> {
+/// Reads and validates the file: `file_unreadable` when it is not UTF-8 text (commands.md §1.5), else the parse's `spec_invalid`.
+/// For a Job of `kind`: an explore Job's Spec has exactly four fields ([`parse_explore`]).
+pub fn read_for(path: &Path, kind: &str) -> Result<Spec, CpdError> {
     let text = std::fs::read_to_string(path).map_err(|e| {
         CpdError::file_unreadable(path, e)
     })?;
-    parse(&text).map_err(|e| e.with("file", path.display().to_string()))
+    let spec = if crate::plan::jobs::is_explore(kind) { parse_explore(&text) } else { parse(&text) };
+    spec.map_err(|e| e.with("file", path.display().to_string()))
+}
+
+/// The artefact of explore Job `key` of `plan`, relative to `$CPD_HOME`: its derived `touches`.
+pub fn explore_artefact(plan: &str, key: &str) -> String {
+    format!("run/{plan}/explore/{key}.md")
+}
+
+/// The Spec of an explore Job: `goal`, `context`, `acceptance` and `out_of_scope` only; `touches`, `tests`, `test_files`
+/// and `resources` are `spec_invalid`. `touches` is empty: the caller derives it ([`explore_artefact`]).
+pub fn parse_explore(text: &str) -> Result<Spec, CpdError> {
+    let value: Value = serde_json::from_str(text).map_err(|e| invalid("$", format!("not JSON: {e}")))?;
+    let Value::Object(mut fields) = value else {
+        return Err(invalid("$", "expected an object"));
+    };
+    if let Some(bad) = fields.keys().find(|k| !["goal", "context", "acceptance", "out_of_scope"].contains(&k.as_str())) {
+        let why = if FIELDS.contains(&bad.as_str()) || TEST_FIELDS.contains(&bad.as_str()) || OPTIONAL_FIELDS.contains(&bad.as_str()) {
+            "not a field of an explore Job's Spec: cpd derives touches, and it has no tests, test_files or resources"
+        } else {
+            "unknown field"
+        };
+        return Err(invalid(&format!("$.{bad}"), why));
+    }
+    Ok(Spec {
+        resources: None,
+        tests: None,
+        test_files: None,
+        goal: text_field(&mut fields, "goal", true)?,
+        context: text_field(&mut fields, "context", false)?,
+        touches: Vec::new(),
+        acceptance: list_field(&mut fields, "acceptance", true)?,
+        out_of_scope: list_field(&mut fields, "out_of_scope", false)?,
+    })
 }
 
 fn invalid(path: &str, why: impl std::fmt::Display) -> CpdError {

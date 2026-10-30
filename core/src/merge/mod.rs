@@ -86,7 +86,7 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
     };
     let metrics = (ctx.metrics)(&target);
     let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
-    let pr = crate::ids::PrKey::parse(&target.pr).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", target.job, target.pr)))?;
+    let pr = crate::ids::PrKey::parse(target.pr_str()).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", target.job, target.pr_str())))?;
     // Step 10, and every other end. An `open` Job's merge writes the PR's rows in the same transaction (§7.7).
     store.write(ctx.source, |tx| {
         let pull = pulled.as_ref().map(|p| ledger::Pull { number: p.number(), url: p.url() });
@@ -430,7 +430,7 @@ fn run_gate(home: &CpdHome, config: &Config, target: &Attempt, hook: Hook, pipel
 fn pr_row(store: &mut Store, target: &Attempt) -> Result<crate::plan::PrRow, CpdError> {
     store.read(|conn| {
         let prs = crate::plan::fingerprint::load_prs(conn, &target.plan)?;
-        prs.into_iter().find(|p| p.key.as_str() == target.pr).ok_or_else(|| CpdError::bad_row(format!("Plan {} has no PR {}", target.plan, target.pr)))
+        prs.into_iter().find(|p| p.key.as_str() == target.pr_str()).ok_or_else(|| CpdError::bad_row(format!("Plan {} has no PR {}", target.plan, target.pr_str())))
     })
 }
 

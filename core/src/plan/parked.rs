@@ -22,7 +22,7 @@ impl Waits<'_> {
     /// `job` needs, directly or through drafts that wait themselves, a Job that is `queued`, `running` or `failed`;
     /// or its PR waits for another PR.
     fn waiting(&self, job: &Job, seen: &mut BTreeSet<String>) -> bool {
-        if self.pr_waits.contains(&job.pr) {
+        if self.pr_waits.contains(job.pr_str()) {
             return true;
         }
         job.needs.iter().any(|need| {
@@ -113,6 +113,6 @@ pub fn door(conn: &Connection, plan: &PlanId, phase: &str, others: &[Job], job: 
     )
     .with("plan", plan.as_str())
     .with("job", job.key.as_str())
-    .with("pr", job.pr.as_str())
+    .with("pr", job.pr_str())
     .with("needs", job.needs.clone()))
 }

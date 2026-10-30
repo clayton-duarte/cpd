@@ -21,8 +21,8 @@ pub type Entry = (&'static str, &'static [Caller], bool);
 pub const TABLE: &[Entry] = &[
     ("context new", &[Lead], true),
     ("context list", &[Lead, Manager], false),
-    ("context show", &[Lead, Manager], false),
-    ("context search", &[Lead, Manager], false),
+    ("context show", &[Lead, Manager, Worker], false),
+    ("context search", &[Lead, Manager, Worker], false),
     ("context reindex", &[Lead, Manager], false),
     ("context decide", &[Lead, Manager], false),
     ("context note", &[Lead, Manager], false),

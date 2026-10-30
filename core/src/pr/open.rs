@@ -394,7 +394,7 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pulled: &Pulled) -> R
 /// (`lead_branch_moved`: a Job merged into it since this Attempt began, and A8 never rebases these kinds). The base check and the Gates run
 /// at the merge (§7.4 step 6, hs-d679). `root` is the Attempt worktree, `sha` its HEAD.
 pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jobs::Job, root: &Path, sha: &str) -> Result<(), CpdError> {
-    let key = PrKey::parse(&job.pr).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", job.key, job.pr)))?;
+    let key = PrKey::parse(job.pr_str()).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", job.key, job.pr_str())))?;
     let prs = env.plan(plan)?;
     let pr = pr_of(&prs, &key);
     let lead = pr.lead(plan)?.clone();
@@ -547,7 +547,7 @@ pub(super) fn require_jobs_done(env: &mut Env, plan: &PlanPrs, key: &PrKey) -> R
         .store
         .read(|conn| jobs::load(conn, &plan.plan.id))?
         .into_iter()
-        .filter(|j| j.pr == key.as_str() && !matches!(j.kind.as_str(), "open" | "update"))
+        .filter(|j| j.pr_str() == key.as_str() && !matches!(j.kind.as_str(), "open" | "update"))
         .collect();
     let open: Vec<_> = all
         .iter()
