@@ -44,6 +44,8 @@ mod elapsed_tests;
 #[cfg(test)]
 mod workflow_cost_tests;
 #[cfg(test)]
+mod explore_attempt_tests;
+#[cfg(test)]
 mod look_tests;
 #[cfg(test)]
 mod lead_dot_box_tests;
