@@ -75,7 +75,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     if (host.run && event.toolName === "ask_user_question") {
       const long = tooLong(event.input);
       if (long !== undefined) return { block: true, reason: long };
-      const unseenReason = role === "lead" || role === "manager" ? unseen(event.input, event.toolCallId, ctx.sessionManager.getBranch()) : undefined;
+      const unseenReason = role === "lead" || role === "manager" ? unseen(event.input, event.parentToolCallId ?? event.toolCallId, ctx.sessionManager.getBranch()) : undefined;
       if (unseenReason !== undefined) return { block: true, reason: unseenReason };
       host.run.facts.hold(event.input); // §15.4: not refused, so a Verdict option names the dialog it opens
       return undefined;
