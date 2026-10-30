@@ -40,8 +40,13 @@ fn attempt_counts(conn: &Connection, plan: &PlanId) -> Result<Vec<(String, i64)>
 
 /// `job show` (§5.7).
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
-    let plan = args.plan.require()?.clone();
     let mut env = Env::open()?;
+    show_in(&mut env, args)
+}
+
+/// [`show`] on an open `env`: what a test hands in.
+pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError> {
+    let plan = args.plan.require()?.clone();
     let home = env.home.clone();
     let concurrency = env.config.concurrency;
     let (job, needed_by, attempts, needs, waiting_for) = env.store.read(|conn| {

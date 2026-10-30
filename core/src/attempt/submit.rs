@@ -18,9 +18,15 @@ const COMMAND: &str = "attempt submit";
 const NEXT: &str = "Stop now. Do not make more changes.";
 
 pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
+    let mut env = Env::open()?;
+    submit_in(&mut env, args)
+}
+
+/// [`submit`] on an open `env`: what a test hands in.
+pub(super) fn submit_in(env: &mut Env, args: SubmitArgs) -> Result<Output, CpdError> {
+    let mut env = env;
     let plan = args.plan.require()?.clone();
     let id = args.attempt;
-    let mut env = Env::open()?;
     let attempt = env.store.read(|conn| row::load(conn, &plan, &id))?;
     let worktree = PathBuf::from(&attempt.worktree);
 

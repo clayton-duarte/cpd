@@ -106,7 +106,7 @@ fn key_of_pr(conn: &Connection, plan: &str, pr: &str) -> Result<PolicyKey, CpdEr
 }
 
 /// The Session's role and key (no flag): a Manager or a Lead its Context's owner, a Worker its Job's PR.
-fn key_of_session(conn: &Connection, session: &SessionId) -> Result<(&'static str, PolicyKey), CpdError> {
+pub(crate) fn key_of_session(conn: &Connection, session: &SessionId) -> Result<(&'static str, PolicyKey), CpdError> {
     let row: Option<(String, String, Option<String>, Option<String>)> = conn
         .query_row("SELECT role, context, plan, attempt FROM sessions WHERE id = ?1", [session.as_str()], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
