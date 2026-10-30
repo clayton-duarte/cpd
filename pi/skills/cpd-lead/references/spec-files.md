@@ -61,7 +61,7 @@ Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku), `G` (gem
 
 | Work | Tier | Why |
 |---|---|---|
-| Coding, tests, refactors | `S1` | The User's default. Start low: each failed Attempt that the ladder retries (`crashed`, `no_submit`, `merge_conflict`) raises effort by one on the next Attempt, up to `retry_cap` retries (default 2, so 3 Attempts). A provider error retries the same Tier up to 3 times first and uses no try. A `gate_failed` is retried once at the same Tier and uses a try. |
+| Coding, tests, refactors | `S1` | The User's default. Start low: each failed Attempt that the ladder retries (`no_submit`) raises effort by one on the next Attempt, and a `crashed` or `merge_conflict` Attempt is retried at the same Tier, up to `retry_cap` retries (default 2, so 3 Attempts). A provider error retries the same Tier up to 3 times first and uses no try. A `gate_failed` is retried once at the same Tier and uses a try. |
 | Docs, config, mechanical edits | `H3` | Cheap and enough. |
 | A PR's open and update Jobs | `open_tier` (default `H3`) | cpd sets it, you never choose it; if one fails, retry higher with `cpd job retry <k> --tier <T>`. |
 
@@ -156,6 +156,6 @@ Rules to put in the `context` of every explore Spec (they are the Worker's only 
 Add the Job and read its summary when it merges (`job-merged`). Its file stays where the Worker wrote it, `$CPD_HOME/run/<plan>/explore/<job-key>.md`: cite that path in the Spec of each Job that needs the finding.
 
 - **Dependencies.** An explore Job may need only other explore Jobs, and no other Job may need one (`explore_needs_mixed`, exit 3).
-- **Tier.** A scout is `H1`-`H3` and a research Job `S1`-`S3`; any other Tier is `tier_not_allowed` (exit 2, with the kind's range in `details`). A failed Attempt retries one rung up its own range (`H1` > `H2` > `H3`, `S1` > `S2` > `S3`); after the top rung the Job fails.
+- **Tier.** A scout is `H1`-`H3` and a research Job `S1`-`S3`; any other Tier is `tier_not_allowed` (exit 2, with the kind's range in `details`). A `no_submit` Attempt retries one rung up its own range (`H1` > `H2` > `H3`, `S1` > `S2` > `S3`); a `crashed` or `merge_conflict` Attempt retries at the same Tier; after the top rung a `no_submit` fails the Job.
 - **Worker.** An explore Worker may `cpd ask`: answer it as any Escalation. It may read the Context's records, read-only.
 - **Refusals.** `explore_pr_forbidden` (`--pr`), `explore_no_draft` (`--draft`) and `illegal_phase` (in `done`): all exit 3.

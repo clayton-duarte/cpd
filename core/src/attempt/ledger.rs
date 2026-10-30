@@ -229,9 +229,15 @@ impl Cause {
         Cause::ALL.iter().copied().find(|c| c.as_str() == value)
     }
 
-    /// A ladder cause sends the Job back to `queued` while the ladder allows (§3.4, §9).
+    /// A ladder cause climbs one rung when the Job is requeued (§3.4, §9): `no_submit` only.
     pub fn is_ladder(self) -> bool {
-        matches!(self, Cause::Crashed | Cause::NoSubmit | Cause::MergeConflict)
+        matches!(self, Cause::NoSubmit)
+    }
+
+    /// The causes whose retry keeps the Attempt's own Tier: `provider_error`, `crashed`, `merge_conflict`
+    /// (pro-d102, pro-d265). The ledger and the starter both rely on this one rule.
+    pub fn retries_same_tier(self) -> bool {
+        matches!(self, Cause::ProviderError | Cause::Crashed | Cause::MergeConflict)
     }
 }
 
@@ -588,14 +594,14 @@ fn ended_with(tx: &WriteTxn<'_>, plan: &str, job: &str, cause: Cause) -> Result<
     )?)
 }
 
-/// The ladder (§3.2, §9): when `cause` is a ladder cause, the next Tier if the
-/// ladder has one and the automatic Attempts since the last `job retry` are
-/// fewer than `1 + retry_cap`. An Attempt whose driver never started
+/// The next Tier (§3.2, §9) for a `no_submit` (a ladder cause: `catalog.next`, if the
+/// ladder has one) or a `crashed` / `merge_conflict` (the Attempt's own Tier), while the
+/// automatic Attempts since the last `job retry` are fewer than `1 + retry_cap`. An Attempt whose driver never started
 /// (`driver_pid` null, §3.4) does not raise the Tier: its own Tier again.
 /// (A `merging` Attempt always had a driver.) A `provider_error` is a retry cause: see below.
 fn next_tier(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder<'_>) -> Result<Option<Tier>, CpdError> {
     let next = next_rung(tx, attempt, cause, ladder)?;
-    // An explore Job stays inside the letter of its kind (scout H, research S): after the top rung it fails.
+    // An explore Job stays inside the letter of its kind (scout H, research S): a `no_submit` after the top rung fails.
     Ok(next.filter(|t| !crate::plan::jobs::is_explore(&attempt.kind) || t.letter() == attempt.tier.letter()))
 }
 
@@ -619,7 +625,7 @@ fn next_rung(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder
         }
         return Ok((ended_with(tx, plan, job, cause)? <= GATE_RETRIES).then_some(attempt.tier));
     }
-    if !cause.is_ladder() {
+    if !cause.is_ladder() && !matches!(cause, Cause::Crashed | Cause::MergeConflict) {
         return Ok(None);
     }
     let never_started: bool = tx.query_row(
@@ -637,7 +643,12 @@ fn next_rung(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder
     if automatic_attempts(tx, attempt.plan.as_str(), attempt.job.as_str())? >= 1 + i64::from(ladder.retry_cap) {
         return Ok(None);
     }
-    ladder.catalog.next(attempt.tier)
+    // pro-d265: a crash or a conflict is not a capability problem: same Tier. Only `no_submit` climbs.
+    if cause.is_ladder() {
+        ladder.catalog.next(attempt.tier)
+    } else {
+        Ok(Some(attempt.tier))
+    }
 }
 
 /// Appends an `error` Event about `attempt` (§5.2) for `error`, from `source`.

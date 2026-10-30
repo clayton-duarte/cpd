@@ -441,7 +441,7 @@ fn an_open_jobs_checks_are_one_span_that_ends_in_the_transaction_that_makes_the_
 }
 
 /// With a base that conflicts with the Lead Branch, the submit is accepted (it runs no base check, no Gate: #425) and the base check is
-/// the first step of the Attempt's merge (§7.4 step 6), before both Gates: the Attempt ends `failed` / `merge_conflict`, a ladder cause,
+/// the first step of the Attempt's merge (§7.4 step 6), before both Gates: the Attempt ends `failed` / `merge_conflict` (retried at the same Tier),
 /// the conflicted files and the command that merges the base in its detail, and nothing is gated, pushed or opened. The Job goes back to
 /// `queued`; the next Attempt's Worker merges the base and resolves it, its merge commit lands as it is (no rebase), both Gates run on
 /// it, and the pull request opens.
@@ -466,7 +466,7 @@ fn an_open_job_with_a_conflicting_base_fails_its_merge_merge_conflict_until_the_
     assert!(detail.contains("README.md") && detail.contains(&base[..7]), "the conflicted file and the base are named: {retry}");
     assert!(detail.contains("merge it into your branch") && detail.contains("cpd attempt submit open-repo-a1"), "what the Worker does is named: {retry}");
     assert!(detail.contains("Nothing was gated, pushed or opened"), "{retry}");
-    assert_eq!(live.job_status("open-repo"), "queued", "a ladder cause");
+    assert_eq!(live.job_status("open-repo"), "queued", "retried at the same Tier");
     // Before the Gates: nothing gated, pushed, created or written.
     assert_eq!(live.gate_runs(), Vec::<String>::new(), "no Gate ran on a head the base refuses");
     assert_eq!((live.lead_sha(), live.remote("cpd/pay/repo")), (tip.clone(), remote));
@@ -622,7 +622,7 @@ fn a_gate_errors_events_text_is_short_the_same_way() {
 }
 
 /// A `gh` failure after the fast-forward ends the Attempt `failed` / `crashed` with the detail `gh_failed`: the push stands, the PR stays
-/// `dispatch`, and the Job goes through the ladder (the next Attempt finds the pull request, or creates it).
+/// `dispatch`, and the Job is retried at the same Tier (the next Attempt finds the pull request, or creates it).
 #[test]
 fn an_open_jobs_gh_failure_after_the_push_ends_the_attempt_crashed_with_gh_failed_and_the_pr_stays_dispatch() {
     let live = open_live();
@@ -634,7 +634,7 @@ fn an_open_jobs_gh_failure_after_the_push_ends_the_attempt_crashed_with_gh_faile
     assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("failed"), &json!("crashed")), "{attempt}");
     let retry = live.event("open-repo-a1", "attempt-retry");
     assert!(retry["data"]["feedback"].as_str().unwrap().contains("gh_failed"), "{retry}");
-    assert_eq!(live.job_status("open-repo"), "queued", "a ladder cause");
+    assert_eq!(live.job_status("open-repo"), "queued", "retried at the same Tier");
     assert_eq!(live.remote("cpd/pay/repo"), tip, "the push happened before gh");
     assert_eq!((live.pr_row().0.as_str(), live.phase().as_str()), ("dispatch", "dispatch"));
     assert!(live.plan_events("pr-opened").is_empty());
@@ -660,7 +660,7 @@ fn an_update_job_with_a_conflicting_base_fails_its_merge_until_the_next_attempt_
     let retry = live.event("up-repo-a1", "attempt-retry");
     let detail = retry["data"]["feedback"].as_str().unwrap();
     assert!(detail.contains("README.md") && detail.contains(&base[..7]), "{retry}");
-    assert_eq!(live.job_status("up-repo"), "queued", "a ladder cause");
+    assert_eq!(live.job_status("up-repo"), "queued", "retried at the same Tier");
     assert_eq!(live.gate_runs(), Vec::<String>::new(), "the base check is before the Gates");
     assert_eq!((live.lead_sha(), live.remote("cpd/pay/repo")), (tip.clone(), remote), "nothing merged, nothing pushed");
 

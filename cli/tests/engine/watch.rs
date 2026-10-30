@@ -1095,7 +1095,7 @@ fn e2_removes_the_lock_of_a_dead_driver_it_ends_and_does_not_recreate_it() {
 }
 
 #[test]
-fn e2_climbs_the_ladder_for_a_dead_driver() {
+fn e2_retries_a_dead_driver_at_the_same_tier() {
     let fx = engine_with_plan("concurrency = 1");
     // A live Attempt holds the only slot; `api` is a tenant already, so E3 starts its next Attempt at once, competing for nothing.
     let _busy = fx.live_driver("busy-a1");
@@ -1105,13 +1105,13 @@ fn e2_climbs_the_ladder_for_a_dead_driver() {
     fx.watch_first_tick().unwrap();
 
     assert_eq!(fx.attempt("api-a1").0, "ended");
-    // The Attempt E2 ended climbs the ladder once; the next one started at once (this engine has no installed binary, so its driver
+    // The Attempt E2 ended is retried at the same Tier once; the next one started at once (this engine has no installed binary, so its driver
     // could not start: its own `attempt-retry`, which is not E2's).
     let retry: Vec<_> = fx.events("attempt-retry").into_iter().filter(|e| e.2.as_deref() == Some("api-a1")).collect();
     assert_eq!(retry.len(), 1);
-    assert_eq!((&retry[0].3["cause"], &retry[0].3["next_tier"]), (&json!("crashed"), &json!("S3")));
+    assert_eq!((&retry[0].3["cause"], &retry[0].3["next_tier"]), (&json!("crashed"), &json!("S2")));
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api' AND number <= 2"), 2);
-    assert_eq!(fx.env.query::<String>("SELECT tier FROM attempts WHERE id = 'api-a2'"), "S3");
+    assert_eq!(fx.env.query::<String>("SELECT tier FROM attempts WHERE id = 'api-a2'"), "S2");
 }
 
 /// hs-n465, hs-d632: the catalog refuses the Tier of an Attempt whose driver died (`S2` when
@@ -1708,7 +1708,7 @@ fn e2_counts_only_attempts_whose_driver_started() {
         ago(1)
         )
     };
-    // `web`: spawn failure, then a started driver that died: one try used, the ladder climbs.
+    // `web`: spawn failure, then a started driver that died: one try used, the same Tier.
     fx.add_job("web", &[], &(ended_attempt("web", 1, "S2", None, &ago(2)) + &running("web", 2, "S2")));
     // `api`: a started driver that crashed, then another that died: both tries used, the Job fails.
     fx.add_job("api", &[], &(ended_attempt("api", 1, "S2", Some(4242), &ago(2)) + &running("api", 2, "S3")));
@@ -1720,7 +1720,7 @@ fn e2_counts_only_attempts_whose_driver_started() {
     assert_eq!(fx.job_status("web"), "queued");
     let retry = fx.events("attempt-retry");
     assert_eq!(retry.len(), 1, "{retry:?}");
-    assert_eq!((retry[0].1.as_deref(), &retry[0].3["next_tier"]), (Some("web"), &json!("S3")));
+    assert_eq!((retry[0].1.as_deref(), &retry[0].3["next_tier"]), (Some("web"), &json!("S2")));
     assert_eq!(fx.job_status("api"), "failed");
     let failed = fx.events("job-failed");
     assert_eq!((failed.len(), failed[0].1.as_deref(), &failed[0].3["cause"]), (1, Some("api"), &json!("crashed")));
@@ -1728,9 +1728,9 @@ fn e2_counts_only_attempts_whose_driver_started() {
 
 /// hs-n278: a driver that an install or a store migration ended (it left its `.infra` marker) is not its Worker's
 /// failure: E2 ends it as one whose driver never started, so the Job is queued at the same Tier and `retry_cap`
-/// does not count it. A driver that died with no marker still climbs the ladder and counts.
+/// does not count it. A driver that died with no marker still counts.
 #[test]
-fn e2_ends_a_driver_ended_by_the_store_at_the_same_tier_uncounted_and_other_crashes_still_climb() {
+fn e2_ends_a_driver_ended_by_the_store_at_the_same_tier_uncounted_and_other_crashes_still_count() {
     let fx = fx("concurrency = 1\nretry_cap = 1");
     let _busy = fx.live_driver("busy-a1");
     fx.add_running("busy", "running", &ago(1));
@@ -1746,7 +1746,7 @@ fn e2_ends_a_driver_ended_by_the_store_at_the_same_tier_uncounted_and_other_cras
     // Worker's failures, more than `retry_cap = 1` allows if they counted.
     let before = ended_attempt("web", 1, "S2", None, &ago(5)) + &ended_attempt("web", 2, "S2", None, &ago(4));
     fx.add_job("web", &[], &(before + &running("web", 3, "S2")));
-    // `api`: the same Attempts, but its last driver died with no marker: the ladder counts it.
+    // `api`: the same Attempts, but its last driver died with no marker: it counts.
     fx.add_job("api", &[], &(ended_attempt("api", 1, "S2", Some(4242), &ago(2)) + &running("api", 2, "S3")));
     let plan = PlanId::parse(PLAN).unwrap();
     fx.home().leave_infra(&plan, &AttemptId::parse("web-a3").unwrap(), Infra::StoreTooNew, "The store is newer than this cpd.").unwrap();

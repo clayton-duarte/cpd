@@ -132,7 +132,7 @@ fn a_fourth_provider_error_fails_the_job_with_cause_provider_error() {
 }
 
 #[test]
-fn provider_errors_use_no_try_of_the_retry_cap_and_a_later_crash_still_climbs() {
+fn provider_errors_use_no_try_of_the_retry_cap_and_a_later_crash_retries_the_same_tier() {
     let live = live_s1();
     for _ in 0..3 {
         provider_stop(&live);
@@ -148,7 +148,7 @@ fn provider_errors_use_no_try_of_the_retry_cap_and_a_later_crash_still_climbs() 
 
     assert_eq!(live.attempt(&id)["cause"], "crashed");
     assert_eq!(live.job_status(JOB), "queued");
-    assert_eq!(event_of(&live, &id, "attempt-retry")["data"]["next_tier"], "S2");
+    assert_eq!(event_of(&live, &id, "attempt-retry")["data"]["next_tier"], "S1");
     assert_eq!(failed_cause(&live), None);
 }
 
@@ -173,7 +173,7 @@ fn provider_error_is_told_apart_from_other_stop_errors() {
     for (reason, message, provider) in table {
         let live = live_s1();
         let id = drive_stop(&live, reason, message);
-        let (cause, next) = if provider { ("provider_error", "S1") } else { ("crashed", "S2") };
+        let (cause, next) = if provider { ("provider_error", "S1") } else { ("crashed", "S1") };
         let what = format!("stopReason {reason:?}, errorMessage {message:?}");
         assert_eq!(live.attempt(&id)["cause"], cause, "{what}");
         assert_eq!(event_of(&live, &id, "attempt-retry")["data"]["next_tier"], next, "{what}");

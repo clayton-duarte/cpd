@@ -148,8 +148,7 @@ fn close_dead_span(engine: &mut Engine, active: &Active) -> Result<(), CpdError>
 }
 
 /// The driver of `active` (`starting` or `running`) is dead: end the Attempt
-/// `cancelled` if its Job has a cancel request, else `failed` / `crashed` (a
-/// ladder cause), as the driver would (§3.4), then kill its window (A9).
+/// `cancelled` if its Job has a cancel request, else `failed` / `crashed`, as the driver would (§3.4), then kill its window (A9).
 /// Holds the driver lock meanwhile, so no one else ends it at the same time.
 fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdError> {
     let (plan, id) = (&active.plan, &active.id);

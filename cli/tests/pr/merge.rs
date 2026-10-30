@@ -587,7 +587,7 @@ fn an_attempt_that_already_contains_the_lead_tip_lands_as_is_with_its_merge_comm
 }
 
 #[test]
-fn merge_conflict_aborts_the_rebase_and_goes_up_the_ladder() {
+fn merge_conflict_aborts_the_rebase_and_retries_at_the_same_tier() {
     let fx = fx();
     let (attempt, worktree) = fx.submitted("api", "README.md", "mine\n");
     let before = fx.git(&worktree, &["rev-parse", "HEAD"]);
@@ -603,7 +603,7 @@ fn merge_conflict_aborts_the_rebase_and_goes_up_the_ladder() {
     let rebasing = fx.git(&worktree, &["rev-parse", "--path-format=absolute", "--git-path", "rebase-merge"]);
     assert!(!worktree.join(rebasing).exists(), "a rebase is still in progress");
     assert_eq!(fx.lead_sha(), old);
-    // A ladder cause: the Job is queued again at the next Tier.
+    // Retried at the same Tier: the Job is queued again.
     let (status, outcome, cause, merged, _) = fx.attempt_row(&attempt);
     assert_eq!((status.as_str(), outcome.as_deref(), cause.as_deref(), merged), ("ended", Some("failed"), Some("merge_conflict"), None));
     assert_eq!(fx.job_row("api"), ("queued".into(), None, None));
@@ -612,7 +612,7 @@ fn merge_conflict_aborts_the_rebase_and_goes_up_the_ladder() {
     assert_eq!(events[0].0, "attempt-retry");
     assert_eq!(events[0].1["outcome"], "failed");
     assert_eq!(events[0].1["cause"], "merge_conflict");
-    assert_eq!(events[0].1["next_tier"], "S3");
+    assert_eq!(events[0].1["next_tier"], "S2");
     assert!(events[0].1["feedback"].as_str().unwrap().contains("README.md"));
 }
 
@@ -1101,7 +1101,7 @@ fn a_remote_rejected_push_the_origin_does_not_contain_puts_git_s_reason_in_the_p
 
 /// Step 5 never rebases for these kinds: the Gate ran on the submitted HEAD, and a rebase would drop its merge commit and replay the base's
 /// commits. The Lead tip must already be an ancestor of HEAD, else the Attempt ends `failed` / `merge_conflict` with the detail
-/// `lead_branch_moved` (a ladder cause: the next Attempt starts from the newer tip). Nothing moves: no rebase, no fast-forward, no push.
+/// `lead_branch_moved` (retried at the same Tier: the next Attempt starts from the newer tip). Nothing moves: no rebase, no fast-forward, no push.
 #[test]
 fn an_update_jobs_merge_never_rebases_and_ends_merge_conflict_lead_branch_moved() {
     let (fx, origin) = fx_origin();
@@ -1119,7 +1119,7 @@ fn an_update_jobs_merge_never_rebases_and_ends_merge_conflict_lead_branch_moved(
     assert_ne!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), old, "nothing was pushed");
     let (status, outcome, cause, merged, _) = fx.attempt_row(&attempt);
     assert_eq!((status.as_str(), outcome.as_deref(), cause.as_deref(), merged), ("ended", Some("failed"), Some("merge_conflict"), None));
-    assert_eq!(fx.job_row("up-repo"), ("queued".into(), None, None), "a ladder cause: the next Attempt starts from the newer tip");
+    assert_eq!(fx.job_row("up-repo"), ("queued".into(), None, None), "retried at the same Tier: the next Attempt starts from the newer tip");
 }
 
 /// An `update` Job whose Worker merged the base (the Lead tip is its ancestor) lands as it is, `new` = HEAD, and its push is the point:
@@ -1160,7 +1160,7 @@ fn a_failed_push_of_an_update_job_ends_the_attempt_crashed_with_push_failed_afte
     assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), before);
     let (status, outcome, cause, merged, _) = fx.attempt_row(&attempt);
     assert_eq!((status.as_str(), outcome.as_deref(), cause.as_deref(), merged), ("ended", Some("failed"), Some("crashed"), None));
-    assert_eq!(fx.job_row("up-repo"), ("queued".into(), None, None), "crashed is a ladder cause");
+    assert_eq!(fx.job_row("up-repo"), ("queued".into(), None, None), "crashed is retried at the same Tier");
 }
 
 // ------------------------------------------------------------ R
@@ -1203,7 +1203,7 @@ fn r_after_step_8_ends_merged_at_the_tip_and_finishes_the_stale_lead_worktree() 
 }
 
 #[test]
-fn r_before_step_8_ends_crashed_through_the_ladder() {
+fn r_before_step_8_ends_crashed_and_retries_at_the_same_tier() {
     let fx = fx();
     let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
     let old = fx.lead_sha();
@@ -1218,7 +1218,7 @@ fn r_before_step_8_ends_crashed_through_the_ladder() {
     assert_eq!(fx.job_row("api"), ("queued".into(), None, None));
     let events = fx.events(&attempt);
     assert_eq!(events.len(), 1);
-    assert_eq!((events[0].0.as_str(), &events[0].1["cause"], &events[0].1["next_tier"]), ("attempt-retry", &json!("crashed"), &json!("S3")));
+    assert_eq!((events[0].0.as_str(), &events[0].1["cause"], &events[0].1["next_tier"]), ("attempt-retry", &json!("crashed"), &json!("S2")));
     // Kept for debugging.
     assert!(worktree.exists());
 }
@@ -1673,6 +1673,6 @@ fn a_conflict_with_the_lead_tip_when_the_attempt_holds_base_commits_is_a_merge_c
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].0, "attempt-retry");
     assert_eq!(events[0].1["cause"], "merge_conflict");
-    assert_eq!(events[0].1["next_tier"], "S3");
+    assert_eq!(events[0].1["next_tier"], "S2");
     assert!(events[0].1["feedback"].as_str().unwrap().contains("shared.txt"));
 }

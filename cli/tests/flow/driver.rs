@@ -414,7 +414,7 @@ fn dispatch_refuses_a_job_of_a_pr_that_has_not_started() {
 // ---------- failures ----------
 
 #[test]
-fn a_merge_conflict_ends_failed_and_the_ladder_queues_the_next_attempt_with_the_files() {
+fn a_merge_conflict_ends_failed_and_the_next_attempt_retries_the_same_tier_with_the_files() {
     let live = live("");
     // The Worker edits README.md while another Job's merge edits it on the Lead Branch.
     let (_, ran) = drive_parallel_with_out(&live, JOB, |live, id, nap| {
@@ -430,18 +430,18 @@ fn a_merge_conflict_ends_failed_and_the_ladder_queues_the_next_attempt_with_the_
     assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("failed"), &json!("merge_conflict")));
     assert_eq!(live.job_status(JOB), "queued");
     let retry = event(&live, ATTEMPT, "attempt-retry");
-    assert_eq!(retry["data"]["next_tier"], "S3");
+    assert_eq!(retry["data"]["next_tier"], "S2");
     assert!(retry["data"]["feedback"].as_str().unwrap().contains("README.md"), "{retry}");
     // Failed Attempts keep their worktree for debugging.
     assert!(live.worktree(ATTEMPT).exists());
 
-    // The next Attempt is at the next Tier and its Spec names the files; its Worker's pi ends without submitting.
+    // The next Attempt is at the same Tier and its Spec names the files; its Worker's pi ends without submitting.
     let (next, _) = drive_with_out(&live, JOB, |live, id, nap| {
         if nap == 1 {
             worker_exits(live, id, 4);
         }
     });
-    assert_eq!((&next["attempt"], &next["tier"], &next["origin"]), (&json!("api-a2"), &json!("S3"), &json!("ladder")));
+    assert_eq!((&next["attempt"], &next["tier"], &next["origin"]), (&json!("api-a2"), &json!("S2"), &json!("ladder")));
     assert_eq!(live.attempt("api-a2")["cause"], "crashed");
     let spec = fs::read_to_string(live.fx.env.cpd_home().join("run/pay/specs/api-a2.md")).unwrap();
     assert!(spec.contains("### Attempt 1 (Tier `S2`)"), "{spec}");

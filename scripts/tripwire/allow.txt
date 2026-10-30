@@ -5,7 +5,7 @@
 # Exception: a test that landed after the inventory may be listed in an urgent PR, by its full name, and is migrated later.
 cpd::engine watch::watch_holds_the_lock_refuses_a_second_and_stops_on_sigterm  # m-engine: engine tests on a real tmux server
 cpd::engine watch::e2_counts_only_attempts_whose_driver_started  # m-engine: engine tests on a real tmux server
-cpd::engine watch::e2_ends_a_driver_ended_by_the_store_at_the_same_tier_uncounted_and_other_crashes_still_climb  # m-engine: engine tests on a real tmux server
+cpd::engine watch::e2_ends_a_driver_ended_by_the_store_at_the_same_tier_uncounted_and_other_crashes_still_count  # m-engine: engine tests on a real tmux server
 cpd::store store_asleep::  # m-engine: store commands that may reach a real tmux
 cpd::store store_local_needs::  # m-engine: store commands that may reach a real tmux
 cpd::store store_window::  # m-engine: store commands that may reach a real tmux
