@@ -36,6 +36,8 @@ const CAP: usize = 1500;
 /// How GitHub answers.
 struct Script {
     allowed: bool,
+    /// The repo's `squashMergeAllowed`, `mergeCommitAllowed` and `rebaseMergeAllowed` (default: squash only).
+    methods: [bool; 3],
     /// The message of a GraphQL error answering the mutation.
     refuse: Option<String>,
     /// `gh` itself fails (exit 1, this on stderr) on every auto-merge call.
@@ -75,7 +77,7 @@ impl Handler for Gh {
         if text.contains("autoMergeAllowed") {
             return Reply::ok(&format!(
                 "{}\n",
-                json!({"data": {"repository": {"autoMergeAllowed": script.allowed, "pullRequest": {"id": "PR_7", "autoMergeRequest": null}}}})
+                json!({"data": {"repository": {"autoMergeAllowed": script.allowed, "squashMergeAllowed": script.methods[0], "mergeCommitAllowed": script.methods[1], "rebaseMergeAllowed": script.methods[2], "pullRequest": {"id": "PR_7", "autoMergeRequest": null}}}})
             ));
         }
         Reply::exit(9, "", &format!("unexpected gh call: {text}\n"))
@@ -174,7 +176,7 @@ fn merge(repeat: u32) -> Merge {
     fx.env.quiet_models(fx.fakes.clock.utc());
     fx.engine_routes();
     fx.install_pi();
-    let gh = Arc::new(Gh { script: Mutex::new(Script { allowed: true, refuse: None, fail: None }), seen: Mutex::new(Vec::new()) });
+    let gh = Arc::new(Gh { script: Mutex::new(Script { allowed: true, methods: [true, false, false], refuse: None, fail: None }), seen: Mutex::new(Vec::new()) });
     let _ = (*fx.fakes.runner).clone().route("gh", gh.clone());
     let now = fx.stamp_ago(0);
     fx.env.sql(&format!(
@@ -366,23 +368,49 @@ fn a_github_refusal_marks_the_row_refused_raises_one_error_event_and_is_not_retr
 }
 
 #[test]
-fn a_repo_that_stopped_allowing_auto_merge_is_refused_the_same_way() {
+fn a_repo_that_stopped_allowing_auto_merge_gets_none_and_no_error_event() {
     let t = merge(LONG);
     t.script(|s| s.allowed = false);
     t.pending("repo", 7);
-    t.run(then_ticks(5, |p| p.state("repo") == "refused"));
+    t.run(then_ticks(5, |p| p.state("repo") != "pending"));
     let p = t.probe();
 
-    let (state, at) = p.row("repo");
-    assert_eq!(state, "refused");
-    assert!(at.is_some_and(|at| !at.is_empty()), "auto_merge_at is set");
+    assert_eq!(p.row("repo"), ("none".to_owned(), None), "a settled row without a time");
+    assert!(p.mutations().is_empty(), "nothing is requested: {:?}", p.calls());
+    assert_eq!(p.reads(), 1, "never retried: {:?}", p.calls());
+    assert_eq!(p.errors(), Vec::<Value>::new(), "no error Event for a repo that lacks auto-merge");
+}
+
+#[test]
+fn a_pending_request_is_enabled_with_the_method_the_repo_allows() {
+    let t = merge(LONG);
+    t.script(|s| s.methods = [false, false, true]);
+    t.pending("repo", 7);
+    t.run(then_ticks(3, |p| p.state("repo") != "pending"));
+    let p = t.probe();
+
+    let mutations = p.mutations();
+    assert_eq!(mutations.len(), 1, "{:?}", p.calls());
+    assert!(mutations[0].contains("REBASE") && !mutations[0].contains("SQUASH"), "{mutations:?}");
+    assert_eq!(p.state("repo"), "enabled");
+}
+
+#[test]
+fn a_repo_that_allows_no_merge_method_is_refused_with_one_error_event() {
+    let t = merge(LONG);
+    t.script(|s| s.methods = [false, false, false]);
+    t.pending("repo", 7);
+    t.run(then_ticks(5, |p| p.state("repo") != "pending"));
+    let p = t.probe();
+
+    assert_eq!(p.state("repo"), "refused");
     assert!(p.mutations().is_empty(), "nothing is requested: {:?}", p.calls());
     assert_eq!(p.reads(), 1, "never retried: {:?}", p.calls());
     let refused = p.errors_of("auto_merge_refused");
     assert_eq!(refused.len(), 1, "ONE error Event: {:?}", p.errors());
-    assert_eq!(refused[0].0.as_deref(), Some("pay"));
     let message = refused[0].2["message"].as_str().unwrap();
-    assert!(message.contains("repo") && message.contains('7'), "{message}");
+    assert!(message.contains("the repo allows no merge method"), "{message}");
+    assert_eq!(p.errors().len(), 1, "no other error: {:?}", p.errors());
 }
 
 #[test]
