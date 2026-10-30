@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 82
+-- cpd-migration: breaking after 83
 -- The Inbox kind `pr-closed` (closed-unmerged PR): `inbox_items` is rebuilt with it in the kind check, as `drop-plannotator` rebuilt it.
 CREATE TABLE inbox_items_new (
   id            INTEGER PRIMARY KEY,

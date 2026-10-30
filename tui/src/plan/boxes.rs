@@ -26,7 +26,7 @@ use crate::buffer::copy_cells;
 use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
 use crate::link::{CUE, Link, Links};
 use crate::palette::{self, Meaning};
-use crate::read::{Dot, Work, JobNode, JobStatus, NeedsUser, PrFacts, PrNode, PrStatus, Pull, pr_look};
+use crate::read::{JobNode, NeedsUser, PrFacts, PrNode, PrStatus, Pull, pr_look};
 
 /// Rows between two rows of boxes: the run of lines, then the row of the `│` above the needing box's top border, where the line lands in a `┴`.
 const GAP: u16 = 2;
@@ -145,17 +145,15 @@ fn footer_text(pr: &PrNode) -> Option<String> {
 
 /// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󱆭` once the PR has
 /// a pull request, the state in the palette's PR state colour (`conflict`, waiting, for an open one that conflicts; `closed`,
-/// waiting, red when the Plan's Lead `asked` the User, see [`pr_look`]), else the PR's status, muted. While the Plan's Lead
-/// works and the PR is not merged (`Pull::lead_working`) the Lead's dot, `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󱆭`. The dot's
-/// colour is [`Dot::working`]: `plan_failed` makes it the red loader, else `lead_phase` (the Plan's phase; `None`: cyan).
+/// waiting, red when the Plan's Lead `asked` the User, see [`pr_look`]), else the PR's status, muted. The Lead's dot
+/// (`PrNode::lead_dot`, already the red loader or the phase's colour), `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󱆭`, or the status text when there is no pull request.
 #[cfg(test)]
 pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
-    title_of(pr, asked, false, None, frame)
+    title_of(pr, asked, frame)
 }
 
-/// [`title`] for a Plan that has a failed Job (`plan_failed`) and is in phase `lead_phase`: its working Lead's dot is
-/// the red loader when a Job failed, else the bright pair of the phase's colour.
-fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, lead_work: Option<Work>, frame: usize) -> Line<'static> {
+/// [`title`] at spinner `frame`: the box's own `lead_dot`, if any, after the state word or the status text.
+fn title_of(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
     let read_only = palette::read_only_text();
     let mut spans: Vec<Span<'static>> = vec![
         " ".into(),
@@ -168,8 +166,8 @@ fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, lead_work: Option<Work>
             spans.push(Span::styled(format!("#{} ", pull.number), palette::clickable_text()));
             let (word, meaning) = word(pull, asked);
             spans.push(Span::styled(word, palette::fg_clickable(meaning)));
-            if pull.lead_working {
-                spans.extend([" ".into(), palette::dot_span(Dot::working(plan_failed, lead_work), frame, false)]);
+            if let Some(dot) = pr.lead_dot {
+                spans.extend([" ".into(), palette::dot_span(dot, frame, false)]);
             }
             spans.push(Span::styled(format!(" {CUE}"), palette::clickable_text()));
         }
@@ -180,6 +178,11 @@ fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, lead_work: Option<Work>
             }
             (status, _) => Span::styled(status.as_str(), palette::muted_text()),
         }),
+    }
+    if pr.pull.is_none() {
+        if let Some(dot) = pr.lead_dot {
+            spans.extend([" ".into(), palette::dot_span(dot, frame, false)]);
+        }
     }
     spans.push(" ".into());
     if pr.status == PrStatus::Cancelled {
@@ -216,9 +219,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         .iter()
         .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key), &needs_user.worked_on), frame))
         .collect();
-    // the tree's rule: the Plan has a failed Job
-    let plan_failed = jobs.iter().any(|j| j.status == JobStatus::Failed);
-    let titles: Vec<Line> = prs.iter().map(|p| title_of(p, needs_user.lead_dialog, plan_failed || needs_user.lead_escalated, needs_user.lead_work, frame)).collect();
+    let titles: Vec<Line> = prs.iter().map(|p| title_of(p, needs_user.lead_dialog, frame)).collect();
     let footers: Vec<Option<String>> = prs.iter().map(footer_text).collect();
     let footer_w: Vec<u16> = footers.iter().map(|f| f.as_ref().map_or(0, |t| Line::from(t.as_str()).width() as u16)).collect();
     // each box: its walls and padding around the chart, or around `no Jobs`, and at least as wide as its title plus 4 (the
@@ -374,7 +375,7 @@ mod tests {
 
     use super::*;
     use crate::test_text::rows;
-    use crate::read::PrState;
+    use crate::read::{JobStatus, PrState};
     use cpd_core::config::Tier;
     use cpd_core::ids::{JobKey, PrKey};
 
@@ -390,11 +391,12 @@ mod tests {
             superseded_by: None,
             elapsed_seconds: None,
             cost_usd: None,
+            lead_dot: None,
         }
     }
 
     fn pull(number: i64, state: PrState) -> Pull {
-        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, clean: false, lead_working: false, update: None, draft: false }
+        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, clean: false, update: None, draft: false }
     }
 
     fn job(pr: &str, key: &str, needs: &[&str]) -> JobNode {
@@ -619,14 +621,15 @@ mod tests {
     #[test]
     fn a_working_lead_puts_its_dot_after_the_state_word_and_turns_with_the_frame() {
         let mut p = pr("api", &[]);
-        p.pull = Some(Pull { lead_working: true, ..pull(12, PrState::Open) });
+        p.pull = Some(pull(12, PrState::Open));
+        p.lead_dot = Some(crate::read::Dot::working(false, None));
         for frame in 0..palette::SPINNER.len() {
             let t = title(&p, false, frame);
             assert_eq!(t.to_string(), format!(" api · api-repo 󱦰 main · #12 open {} 󱆭 ", palette::SPINNER[frame]), "frame {frame}");
             assert_eq!(t.spans[4].style.fg, palette::fg_clickable(palette::pr_state(PrState::Open)).fg, "the state keeps its colour");
         }
         // the dot goes with the state, in the waiting colour of `conflict` too
-        p.pull = Some(Pull { lead_working: true, conflicting: true, ..pull(12, PrState::Open) });
+        p.pull = Some(Pull { conflicting: true, ..pull(12, PrState::Open) });
         let t = title(&p, false, 3);
         assert_eq!(t.to_string(), format!(" api · api-repo 󱦰 main · #12 conflict {} 󱆭 ", palette::SPINNER[3]));
         assert_eq!(t.spans[4].style.fg, palette::fg_clickable(Meaning::Waiting).fg);
@@ -652,14 +655,14 @@ mod tests {
         let mut p = pr("api", &[]);
         p.pull = Some(pull(12, PrState::Open));
         let mut w = p.clone();
-        w.pull = Some(Pull { lead_working: true, ..pull(12, PrState::Open) });
+        w.lead_dot = Some(crate::read::Dot::working(false, None));
         let plain = layout(&[p], &[], &NeedsUser::default(), 5).chart;
         let working = layout(&[w], &[], &NeedsUser::default(), 5).chart;
         assert_eq!(working.buf.area.width, plain.buf.area.width + 2);
         let top: String = (0..working.buf.area.width).map(|x| working.buf[(x, 0)].symbol().to_owned()).collect();
         assert!(top.contains(palette::SPINNER[5]), "{top}");
         // one frame later: the next glyph
-        let w2 = layout(&[PrNode { pull: Some(Pull { lead_working: true, ..pull(12, PrState::Open) }), ..pr("api", &[]) }], &[], &NeedsUser::default(), 6).chart;
+        let w2 = layout(&[PrNode { pull: Some(pull(12, PrState::Open)), lead_dot: Some(crate::read::Dot::working(false, None)), ..pr("api", &[]) }], &[], &NeedsUser::default(), 6).chart;
         let top: String = (0..w2.buf.area.width).map(|x| w2.buf[(x, 0)].symbol().to_owned()).collect();
         assert!(top.contains(palette::SPINNER[6]) && !top.contains(palette::SPINNER[5]), "{top}");
     }

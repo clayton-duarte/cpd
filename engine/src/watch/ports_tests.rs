@@ -491,6 +491,122 @@ fn e1_keeps_an_escalation_whose_asker_runs_in_the_spawn_and_expires_it_when_it_e
     assert_eq!(status(&mut fx, "api-a1-q1"), "expired", "its asker exited");
 }
 
+// ---- E1: the asking Worker's Session goes back to working -------------------------------------------------------------
+
+fn worker_session(fx: &mut Fx, session: &str, job: &str, state: &str, label: Option<&str>) {
+    let label = label.map_or("NULL".to_string(), |l| format!("'{l}'"));
+    fx.fixture(&format!(
+        "INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_label, state_at, created_at)
+           VALUES ('{session}', 'worker', 'ctx', 'pay', '{job}-a1', 'Worker', '/', 'S1', '{state}', {label}, 't', 't');
+         UPDATE attempts SET worker_session = '{session}' WHERE plan = 'pay' AND id = '{job}-a1';"
+    ));
+}
+
+fn waiting_worker(fx: &mut Fx) {
+    worker_session(fx, "w1", "api", "waiting", Some("φ: question to the Lead"));
+}
+
+fn session_state(fx: &mut Fx, id: &str) -> String {
+    fx.query(&format!("SELECT state FROM sessions WHERE id = '{id}'"))
+}
+
+fn session_label(fx: &mut Fx, id: &str) -> Option<String> {
+    fx.query(&format!("SELECT state_label FROM sessions WHERE id = '{id}'"))
+}
+
+fn asker_that_runs(w: &World) -> Pid {
+    w.spawn.spawn(&Launch { program: "cpd".into(), args: vec!["ask".into()], ..Launch::default() }).unwrap()
+}
+
+#[test]
+fn e1_puts_the_worker_session_back_to_working_when_it_expires_an_escalation_whose_asker_is_gone() {
+    let w = world();
+    let mut fx = plan_on(&w, "");
+    running_attempt()(&mut fx);
+    waiting_worker(&mut fx);
+    escalation(&mut fx, "api-a1-q1", std::process::id());
+
+    escalations::run(&mut fx.engine);
+
+    assert_eq!(status(&mut fx, "api-a1-q1"), "expired");
+    assert_eq!(session_state(&mut fx, "w1"), "working");
+    assert_eq!(session_label(&mut fx, "w1"), None);
+    let changes = fx.events("session-state");
+    assert_eq!(changes.len(), 1, "{changes:?}");
+    assert_eq!(changes[0].0.as_deref(), Some("pay"));
+    assert_eq!(changes[0].3["from"], "waiting");
+    assert_eq!(changes[0].3["to"], "working");
+    assert!(changes[0].3["label"].is_null());
+    assert_eq!(fx.events("escalation-expired").len(), 1);
+}
+
+#[test]
+fn e1_keeps_the_worker_session_waiting_while_another_escalation_of_the_attempt_is_open() {
+    let w = world();
+    let mut fx = plan_on(&w, "");
+    running_attempt()(&mut fx);
+    waiting_worker(&mut fx);
+    escalation(&mut fx, "api-a1-q1", std::process::id());
+    let asker = asker_that_runs(&w);
+    escalation(&mut fx, "api-a1-q2", asker.0);
+
+    escalations::run(&mut fx.engine);
+
+    assert_eq!(status(&mut fx, "api-a1-q1"), "expired");
+    assert_eq!(status(&mut fx, "api-a1-q2"), "open");
+    assert_eq!(session_state(&mut fx, "w1"), "waiting");
+    assert_eq!(session_label(&mut fx, "w1").as_deref(), Some("φ: question to the Lead"));
+    assert!(fx.events("session-state").is_empty());
+
+    w.spawn.exit(asker, 0);
+    escalations::run(&mut fx.engine);
+
+    assert_eq!(status(&mut fx, "api-a1-q2"), "expired");
+    assert_eq!(session_state(&mut fx, "w1"), "working");
+    assert_eq!(fx.events("session-state").len(), 1);
+}
+
+#[test]
+fn e1_puts_the_session_back_to_working_once_when_it_expires_every_open_escalation_of_the_attempt_in_one_run() {
+    let w = world();
+    let mut fx = plan_on(&w, "");
+    running_attempt()(&mut fx);
+    waiting_worker(&mut fx);
+    escalation(&mut fx, "api-a1-q1", std::process::id());
+    escalation(&mut fx, "api-a1-q2", std::process::id());
+
+    escalations::run(&mut fx.engine);
+
+    assert_eq!(status(&mut fx, "api-a1-q1"), "expired");
+    assert_eq!(status(&mut fx, "api-a1-q2"), "expired");
+    assert_eq!(session_state(&mut fx, "w1"), "working");
+    assert_eq!(fx.events("session-state").len(), 1);
+}
+
+#[test]
+fn e1_puts_a_waiting_session_back_to_working_and_leaves_an_idle_one_as_it_is() {
+    let w = world();
+    let mut fx = plan_on(&w, "");
+    running_attempt()(&mut fx);
+    fx.add_running("web", "running", "t");
+    waiting_worker(&mut fx);
+    worker_session(&mut fx, "w2", "web", "idle", None);
+    escalation(&mut fx, "api-a1-q1", std::process::id());
+    fx.fixture(&format!(
+        "INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
+           VALUES ('pay', 'web-a1-q1', 'web-a1', 1, 'Why?', 'open', {}, 't');",
+        std::process::id()
+    ));
+
+    escalations::run(&mut fx.engine);
+
+    assert_eq!(status(&mut fx, "api-a1-q1"), "expired");
+    assert_eq!(status(&mut fx, "web-a1-q1"), "expired");
+    assert_eq!(session_state(&mut fx, "w1"), "working");
+    assert_eq!(session_state(&mut fx, "w2"), "idle");
+    assert_eq!(fx.events("session-state").len(), 1);
+}
+
 // ---- E9: the distill run is started through the spawn ---------------------------------------------------------------
 
 /// A Context `ctx` whose newest uncurated record was written at `at`; one record is enough (`context_curation_min_records`).

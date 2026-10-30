@@ -229,7 +229,6 @@ fn a_box_keeps_a_dash_after_its_title() {
             url: "https://github.com/acme/repo/pull/12".into(),
             conflicting: false,
             clean: false,
-            lead_working: false,
             update: None,
             draft: false,
         }),

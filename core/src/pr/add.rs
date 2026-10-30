@@ -518,6 +518,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                         };
                         append(tx, event.plan(plan.clone()).job(JobKey::parse(&stub.key)?))?;
                     }
+                    crate::session::working_pr::name(tx, &plan, &wanted.key)?;
                     Ok(("waiting".to_owned(), lead_branch, appended, base, base_pr, needs, false))
                 }
             })?

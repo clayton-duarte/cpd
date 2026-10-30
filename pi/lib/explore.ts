@@ -87,12 +87,15 @@ function literalSecret(words: string[]): string | undefined {
 
 function bashVerdict(kind: ExploreKind, args: Record<string, unknown>, where: { cwd: string }, isInsideRepo: (p: string) => boolean): Verdict {
   const timeout = args.timeout;
-  if (typeof timeout !== "number" || !(timeout > 0) || timeout > BOUND_SECONDS) {
-    return refuse("timeout", `every bash call carries a timeout of at most ${BOUND_SECONDS} s; got ${timeout === undefined ? "none" : String(timeout)}`);
-  }
   const command = typeof args.command === "string" ? args.command : "";
+  const simples = simpleCommands(command);
+  const only = simples.length === 1 ? strip(simples[0]!) : undefined;
+  const loneAsk = only?.name === "cpd" && only.args[0] === "ask";
+  if (typeof timeout !== "number" || !(timeout > 0) || (!loneAsk && timeout > BOUND_SECONDS)) {
+    return refuse("timeout", `every bash call carries a timeout above 0 and at most ${BOUND_SECONDS} s, except a lone cpd ask, which has no upper bound; got ${timeout === undefined ? "none" : String(timeout)}`);
+  }
   const inRepo = (p: string): boolean => isInsideRepo(absolute(p, where.cwd));
-  for (const words of simpleCommands(command)) {
+  for (const words of simples) {
     for (const t of redirects(words)) {
       if (inRepo(t)) return refuse("write", `redirection into a git repository: ${t}`);
     }

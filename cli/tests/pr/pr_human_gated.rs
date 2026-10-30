@@ -1,3 +1,4 @@
+//! Its `gh` answers the three merge-method flags through the shared `Gh` fake in pr_view.rs (default: squash only).
 //! The human-gated checks rule (pro-d151, pro-d153): a PENDING StatusContext named in `pr.human_gated_contexts` counts as
 //! passed when the PR has a CheckRun, none pending and none failing. The poll's checks read of a PENDING rollup, `pr post`
 //! after it and `pr view`'s summary, all in-process over a mocked `gh` and a mocked Slack helper: no real GitHub.

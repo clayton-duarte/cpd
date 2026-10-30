@@ -68,6 +68,7 @@ This is an **update Job** of a PR whose pull request is open: you bring the PR's
       cpd ask {{ attempt }} "<your question>"
 
   Ask one real blocker at a time. Do not ask what this Spec or the code already answers.
+  Run `cpd ask` as a call of its own, in the foreground, with the bash tool's `timeout` input set to 7200 (seconds). Never put it under the `timeout` command, in a pipeline or in the background: it ends only when the Lead answers or the wait expires.
 {% if explore %}
 - Save a first draft of the artefact within 10 minutes of starting, then save at least every 20 minutes.
 {% else %}
@@ -233,8 +234,6 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `no_commits`: you have not committed anything on top of the base. Commit your work, then submit again.
 {% endif %}
 - `gate_tampered`: your diff touches a protected path. Revert those files to the base version and commit, then submit again.
-- `check_failed`: the quick check failed; the output tail is in the error details. Fix the cause, commit, then submit again.
-- `check_error`: the quick check could not run. Ask the Lead.
 {% if kind == "test" %}
 - `test_files_missing`: a file of "Tests" matches nothing you changed. Write the tests in those files (`details.paths`), commit, then submit again.
 - `tests_unconfigured`: the repo's policy has no `[test-commands]`. Ask the Lead.
@@ -253,7 +252,7 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `base_conflict`: the Lead Branch conflicts with its base (`details.files`). Merge the base, resolve, commit, then submit again.
 - `lead_branch_moved`: a Job merged into the Lead Branch since you began. Merge it (`details.next`), then submit again.
 {% if kind == "open" %}
-- `pr_title_required`, `description_required`, `jira_required`, `pr_closed`: ask the Lead.
+- `pr_title_required`, `jira_required`, `pr_closed`: ask the Lead.
 {% else %}
 - `illegal_transition`: the PR is not open. Ask the Lead.
 {% endif %}

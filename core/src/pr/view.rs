@@ -34,7 +34,7 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     let inline = gh::inline_comments(&*env.ports.runner, lead, number)?;
 
     let state = PrState::of_graphql(&view.state)?;
-    let summary = ChecksSummary::of(view.checks.as_deref().unwrap_or_default(), &policy.pr.human_gated_contexts);
+    let summary = ChecksSummary::of(view.checks.as_deref().unwrap_or_default(), &policy.pr.human_gated_contexts, &policy.pr.required_checks);
     let checks: Vec<Value> = view
         .checks
         .iter()

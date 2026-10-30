@@ -15,7 +15,7 @@ use ratatui::style::Color;
 
 use crate::palette;
 use crate::plan::boxes;
-use crate::read::{self, Work, JobNode, JobStatus, NeedsUser, PrNode, PrState, PrStatus, Pull};
+use crate::read::{self, Dot, Work, JobNode, JobStatus, NeedsUser, PrNode, PrState, PrStatus, Pull};
 
 /// Each Plan of the fixture: its phase, its id and its Lead Session.
 const PHASES: [(Phase, &str, &str); 5] = [
@@ -40,8 +40,9 @@ fn the_plan_view_reads_its_leads_plan_phase() {
 /// pro-d200: the PR box title's Lead dot follows what the Lead works on, and is red for a failed Job or an open Escalation.
 #[test]
 fn dots_plan_box_title_dot_follows_work() {
-    let needs = |work: Option<Work>, escalated: bool| NeedsUser { lead_working: true, lead_work: work, lead_escalated: escalated, ..NeedsUser::default() };
-    let pr = pr_node(true);
+    let needs = |work: Option<Work>| NeedsUser { lead_working: true, lead_work: work, ..NeedsUser::default() };
+    // the read model hands the box its dot: `PrNode::lead_dot`, red when a Job of the box failed or an Escalation is open
+    let pr = |failed_here: bool, work: Option<Work>| pr_node(Some(Dot::working(failed_here, work)));
     for (work, colour) in [
         (Some(Work::Planning), palette::numbered::C13),
         (Some(Work::Dispatch), palette::numbered::C14),
@@ -49,19 +50,19 @@ fn dots_plan_box_title_dot_follows_work() {
         (None, palette::numbered::C15),
     ] {
         for frame in [0, 5, 27] {
-            assert_eq!(title_dot(&pr, &[], &needs(work, false), frame), Some(colour), "{work:?} frame {frame}");
+            assert_eq!(title_dot(&pr(false, work), &[], &needs(work), frame), Some(colour), "{work:?} frame {frame}");
         }
     }
     for work in [Some(Work::Planning), Some(Work::Review), None] {
-        assert_eq!(title_dot(&pr, &[failed_job()], &needs(work, false), 3), Some(palette::numbered::C9), "a failed Job beats {work:?}");
-        assert_eq!(title_dot(&pr, &[], &needs(work, true), 3), Some(palette::numbered::C9), "an Escalation beats {work:?}");
+        assert_eq!(title_dot(&pr(true, work), &[failed_job()], &needs(work), 3), Some(palette::numbered::C9), "a failed Job beats {work:?}");
+        assert_eq!(title_dot(&pr(true, work), &[], &needs(work), 3), Some(palette::numbered::C9), "an Escalation beats {work:?}");
     }
     let idle = NeedsUser { lead_working: false, lead_work: Some(Work::Dispatch), ..NeedsUser::default() };
-    assert_eq!(title_dot(&pr_node(false), &[], &idle, 0), None, "a Lead not working: no spinner");
+    assert_eq!(title_dot(&pr_node(None), &[], &idle, 0), None, "a Lead not working: no spinner");
 }
 
 /// A PR of a Plan whose Lead works (or not), with one pull request.
-fn pr_node(lead_working: bool) -> PrNode {
+fn pr_node(lead_dot: Option<Dot>) -> PrNode {
     PrNode {
         key: PrKey::parse("api").unwrap(),
         repo_name: "api-repo".into(),
@@ -74,7 +75,6 @@ fn pr_node(lead_working: bool) -> PrNode {
             url: "https://github.com/acme/repo/pull/12".into(),
             conflicting: false,
             clean: false,
-            lead_working,
             update: None,
             draft: false,
         }),
@@ -82,6 +82,7 @@ fn pr_node(lead_working: bool) -> PrNode {
         superseded_by: None,
         elapsed_seconds: None,
         cost_usd: None,
+        lead_dot,
     }
 }
 

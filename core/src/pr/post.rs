@@ -1,5 +1,5 @@
 //! `pr post` (commands.md §9.8b): posts the PR's stored pull request to Slack through the helper and records it in
-//! `pr_posts`, then turns on squash auto-merge for the pull request on GitHub (`auto_merge`: deferred while the PR is
+//! `pr_posts`, then turns on auto-merge for the pull request on GitHub (`auto_merge`: deferred while the PR is
 //! stacked; its outcome never undoes or fails the post). It appends no Event. No lock: two simultaneous runs could both
 //! send, and the second's insert then fails as `already_posted`.
 
@@ -94,6 +94,23 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
         .with("url", pull.url.as_str())
         .with("reasons", json!(names)));
     }
+    // (g2) one read of the repo and the pull request: a repo with no merge method refuses before the send
+    let read = super::gh::auto_merge_read(&*env.ports.runner, Path::new("."), &pull.repo, pull.number)?;
+    if read.methods.choose().is_none() {
+        let m = read.methods;
+        return Err(CpdError::new(
+            ErrorCode::NoMergeMethod,
+            format!(
+                "{} allows no merge method: squash, merge commit and rebase are all off in its settings, so cpd cannot merge #{}. Allow one in the repo's settings.",
+                pull.repo, pull.number
+            ),
+        )
+        .with("repo", pull.repo.as_str())
+        .with("number", pull.number)
+        .with("squash", m.squash)
+        .with("merge", m.merge)
+        .with("rebase", m.rebase));
+    }
     // (h)
     let message = crate::policy::render_post(&policy.pr.post.template, &pull.title, &pull.url).map_err(|e| {
         CpdError::new(ErrorCode::PolicyInvalid, format!("The pr.post.template does not render: {e}."))
@@ -148,23 +165,32 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
             .with("ts", record.ts.as_str()));
         }
     }
-    let merge = request_auto_merge(&mut env, &id, &key, &pull.repo, pull.number)?;
+    let merge = request_auto_merge(&mut env, &id, &key, &read)?;
     Ok(Output::success(json!({
         "plan": id, "pr": key, "number": pull.number, "url": pull.url,
         "post": record_json(&record), "message": message, "auto_merge": merge,
     })))
 }
 
-/// The GitHub attempt, after the post is stored: `{state, reason}` (commands.md §9.8b). A stacked PR makes no call.
-fn request_auto_merge(env: &mut Env, id: &PlanId, key: &PrKey, repo: &str, number: i64) -> Result<Value, CpdError> {
+/// The GitHub attempt, after the post is stored, on the read made before the send: `{state, reason}` (commands.md §9.8b).
+fn request_auto_merge(env: &mut Env, id: &PlanId, key: &PrKey, read: &super::gh::AutoMergeRead) -> Result<Value, CpdError> {
     let stacked = env.store.read(|conn| auto_merge::stacked(conn, id.as_str(), key.as_str()))?;
-    if stacked {
+    let outcome = if !read.allowed {
+        Outcome::NotAllowed
+    } else if stacked {
         return Ok(state("deferred", Some("the PR is stacked on another PR's branch: the request waits until it is unstacked")));
-    }
-    let outcome = auto_merge::attempt(&*env.ports.runner, Path::new("."), repo, number);
+    } else {
+        auto_merge::after_read(&*env.ports.runner, Path::new("."), read)
+    };
     let (stored, reported) = match outcome {
         Outcome::Enabled => (Some("enabled"), state("enabled", None)),
-        Outcome::NotAllowed => (Some("none"), state("not_allowed", Some("the repo does not allow auto-merge"))),
+        Outcome::NotAllowed => (
+            Some("none"),
+            state(
+                "not_allowed",
+                Some("the repo does not allow auto-merge: cpd merges the PR when it is ready (the cockpit's Merge, or the Lead with `cpd pr merge` after a human approves)"),
+            ),
+        ),
         Outcome::Refused(why) => (Some("refused"), state("refused", Some(&why))),
         Outcome::Failed(e) => (None, state("failed", Some(e.message()))),
     };
