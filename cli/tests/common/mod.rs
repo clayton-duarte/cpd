@@ -55,6 +55,7 @@ pub mod engine;
 pub mod fx;
 pub mod healthy;
 pub mod inbox;
+pub mod newer_migration;
 pub mod pi;
 pub mod screen;
 pub mod session;

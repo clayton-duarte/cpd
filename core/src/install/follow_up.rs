@@ -153,11 +153,14 @@ impl FollowUps<'_> {
         let target = format!("={}:watch", conf.work);
         let killed = self.tmux(&conf.socket, &["kill-window", "-t", &target]);
         if !killed.ok() {
-            self.fail(format!(
-                "tmux kill-window {}:watch failed: {}{}; the engine was not stopped and still runs the old binary",
-                conf.work, killed.stdout, killed.stderr
-            ));
-            return;
+            if self.has_window(&conf.socket, &conf.work, "watch") {
+                self.fail(format!(
+                    "tmux kill-window {}:watch failed: {}{}; the engine was not stopped and still runs the old binary",
+                    conf.work, killed.stdout, killed.stderr
+                ));
+                return;
+            }
+            let _ = writeln!(self.err, "the engine had already left; nothing to kill");
         }
         // The killed engine releases its lock a moment later, possibly well after: wait for the lock itself,
         // bounded, then start the engine once and check that it holds the lock (hs-n288).

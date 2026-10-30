@@ -12,6 +12,7 @@ mod watch_host_alert;
 mod watch_jira;
 mod watch_parked;
 mod watch_sleep;
+mod watch_stand_down;
 mod watch;
 mod watch_durable;
 mod watch_worker_archive;

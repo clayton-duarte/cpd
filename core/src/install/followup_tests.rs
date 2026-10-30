@@ -107,6 +107,8 @@ enum Kill {
     HoldsForEver,
     /// `kill-window` fails: `no such window`.
     Fails,
+    /// `kill-window` fails `no such window`: the engine stood down first, its window and lock are already gone.
+    AlreadyGone,
 }
 
 /// The `tmux` route: a table of windows (session, name). `list-windows` answers one session's, `kill-window`
@@ -131,6 +133,12 @@ impl Handler for Tmux {
             let now = self.clock.elapsed();
             match kill {
                 Kill::Fails => return Reply::exit(1, "", "no such window"),
+                Kill::AlreadyGone => {
+                    self.old.release_at(now, now);
+                    let (session, window) = target.split_once(':').unwrap_or((target, ""));
+                    self.windows.lock().unwrap().retain(|(s, w)| !(s == session && w == window));
+                    return Reply::exit(1, "", "no such window");
+                }
                 Kill::EndsTheEngine => self.old.release_at(now, now),
                 Kill::HoldsFor(d) => self.old.release_at(now + d, now),
                 Kill::HoldsForEver => {}
@@ -564,6 +572,23 @@ fn a_kill_window_that_fails_says_the_engine_was_not_stopped_and_still_runs_the_o
     assert!(run.stderr.contains("cpd install follow-up failed: tmux kill-window work:watch failed: "), "{}", run.stderr);
     assert!(run.stderr.contains("the engine was not stopped and still runs the old binary"), "{}", run.stderr);
     rig.assert_old_engine_runs(&run);
+}
+
+#[test]
+fn a_kill_window_that_fails_because_the_engine_already_left_is_not_a_failure() {
+    let rig = Rig::with(Script { kill: Kill::AlreadyGone, ..Script::default() });
+    rig.running_old_engine();
+
+    let run = rig.run();
+
+    let log = rig.order();
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    assert!(!run.stderr.contains("cpd install follow-up failed"), "{}", run.stderr);
+    let ensures = lines_with(&log, "cpd watch --ensure");
+    assert_eq!(ensures.len(), 1, "{log:?}");
+    let at = |word: &str| log.iter().position(|l| l.contains(word)).unwrap_or_else(|| panic!("no `{word}` in {log:?}"));
+    assert!(at("kill-window") < at("cpd watch --ensure"), "{log:?}");
+    assert!(rig.lock_held(), "the new engine holds the lock");
 }
 
 #[test]
