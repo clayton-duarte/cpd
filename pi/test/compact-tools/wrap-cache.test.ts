@@ -2,20 +2,10 @@
 import "./pinned-themes.ts";
 import assert from "node:assert/strict";
 import test, { afterEach, mock } from "node:test";
+import { spy } from "./segmenter-spy.ts";
 import { WRAP_CACHE_CHARS, wrapSegments, type Segment } from "../../compact-tools/extensions/compact-tools-codex.ts";
 
 afterEach(() => mock.restoreAll());
-
-/** Counts every Intl.Segmenter segment call until the mocks are restored. */
-function spy(): { count: () => number } {
-	let count = 0;
-	const original = Intl.Segmenter.prototype.segment;
-	mock.method(Intl.Segmenter.prototype, "segment", function (this: Intl.Segmenter, ...args: Parameters<Intl.Segmenter["segment"]>) {
-		count++;
-		return original.apply(this, args);
-	});
-	return { count: () => count };
-}
 
 const plain = (rows: readonly (readonly Readonly<Segment>[])[]) => JSON.parse(JSON.stringify(rows));
 
