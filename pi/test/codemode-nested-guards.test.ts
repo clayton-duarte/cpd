@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { Fixture, shown, waitFor } from "./fake.ts";
+import { Fixture, shown } from "./fake.ts";
 
 // commands.md §15.21 (hs-d736): a call a codemode script makes (toolCallId `<parent>/<n>`, parentToolCallId) is judged like a direct one.
 
@@ -15,7 +15,7 @@ async function started(role: string) {
   f.respond("plan-show", { ok: true, plan: { id: "p1" }, jobs: [], escalations: [], review: null });
   f.load();
   await f.pi.fire("session_start");
-  await waitFor("the follower", () => f.follows().length > 0);
+  await f.followerStarted();
   return f;
 }
 
