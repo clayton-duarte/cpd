@@ -1,22 +1,19 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { CpdError, isObject, toCpdError } from "./cpd.ts";
 import { FOLLOW_UP, gated } from "./delivery.ts";
 import type { EventOf } from "./event.ts";
 import type { Host } from "./host.ts";
-import { DECISION_TYPE, decisionText, ELSEWHERE_CHAT_NOTE, ELSEWHERE_NOTE, ENTRY_TYPE, lostText, plannotatorId, reviewNumber, REVIEW_LABEL, SUMMARY_TYPE, type ReviewEntry } from "./plan-review.ts";
-import { parseOpened, parseStatus, request } from "./plannotator.ts";
+import { DECISION_TYPE, decisionText, ELSEWHERE_CHAT_NOTE, ENTRY_TYPE, reviewNumber, REVIEW_LABEL, SUMMARY_TYPE, type ReviewEntry } from "./plan-review.ts";
 import { closeDialog, closeOlderDialogs, runDialog } from "./review-chat.ts";
 import type { Run } from "./run.ts";
 
-// The Plan review in chat, and through plannotator when the User opens the full plan (§15.5).
+// The Plan review in chat (§15.5).
 
 export const QUESTION_LABEL = "φ: Worker question";
 
 const runDir = (host: Host, plan: string) => join(host.env.CPD_HOME || join(homedir(), ".cpd"), "run", plan);
-const planFile = (host: Host, plan: string, review: string) => join(runDir(host, plan), `plan-${review}.md`);
 const summaryFile = (host: Host, plan: string, review: string) => join(runDir(host, plan), `summary-${review}.md`);
 const feedbackFile = (host: Host, plan: string, review: string) => join(runDir(host, plan), `feedback-${review}.md`);
 
@@ -35,32 +32,12 @@ function readText(file: string): string {
   }
 }
 
-/** Opens the full render in plannotator and returns plannotator's id of the page. */
-async function openPage(host: Host, planFilePath: string): Promise<string> {
-  const planContent = readText(planFilePath);
-  return parseOpened(await request(host.pi, "plan-review", { planContent, planFilePath }, host.timing.requestTimeoutMs));
-}
-
 /** §15.5 "The dialog": the answers of a chat review, run detached by `showDialog`. */
 function answersOf(host: Host, r: Run, review: string) {
   return {
     async decide(approved: boolean, feedback: string | undefined) {
       const entry = r.reviews.get(review);
       if (entry) await decide(host, r, entry, approved, feedback);
-    },
-    /** "Open full plan": the review is now a plannotator one. A failure is delivered and returns to the select. */
-    async openPlannotator(): Promise<boolean> {
-      try {
-        const id = await openPage(host, planFile(host, r.plan, review));
-        if (host.run !== r || r.reviews.get(review)?.status !== "pending") return true; // decided meanwhile
-        const entry: ReviewEntry = { plan: r.plan, review, surface: "plannotator", plannotator_id: id, status: "pending" };
-        r.reviews.set(review, entry);
-        host.pi.appendEntry(ENTRY_TYPE, entry);
-        return true;
-      } catch (e) {
-        host.deliver(`plan review ${review}`, e);
-        return false;
-      }
     },
   };
 }
@@ -70,8 +47,8 @@ export function showDialog(host: Host, r: Run, review: string, title: string | u
   void runDialog(host, r, review, title, answersOf(host, r, review)).catch((e) => host.deliver(`plan review ${review}`, e));
 }
 
-/** Opens a pending review: its summary and dialog in chat, or plannotator when there is no UI or no summary file (a review made before cpd wrote it). Errors are delivered here; nothing is written to the session on failure. */
-export async function openReview(host: Host, r: Run, review: string, via: "event" | "tool", paths: { plan?: string; summary?: string } = {}): Promise<void> {
+/** Opens a pending review: its summary and dialog in chat. Errors are delivered here; nothing is written to the session on failure. */
+export async function openReview(host: Host, r: Run, review: string, via: "event" | "tool", paths: { summary?: string } = {}): Promise<void> {
   const { pi } = host;
   const plan = r.plan;
   const known = r.reviews.get(review);
@@ -82,26 +59,16 @@ export async function openReview(host: Host, r: Run, review: string, via: "event
     const latest = (await host.call(["plan", "show", "--plan", plan])).review;
     if (!isObject(latest) || latest.id !== review || latest.status === "approved" || latest.status === "rejected" || latest.status === "superseded") return;
     const summaryPath = paths.summary ?? summaryFile(host, plan, review);
-    const chat = host.ctx !== undefined && existsSync(summaryPath);
-    let entry: ReviewEntry;
-    if (chat) {
-      const content = readText(summaryPath);
-      if (host.run !== r) return;
-      pi.sendMessage({ customType: SUMMARY_TYPE, content, display: true, details: { plan, review } }, { triggerTurn: false });
-      entry = { plan, review, surface: "chat", status: "pending" };
-    } else {
-      const plannotatorId = await openPage(host, paths.plan ?? planFile(host, plan, review));
-      if (host.run !== r) return;
-      entry = { plan, review, plannotator_id: plannotatorId, status: "pending" };
-    }
+    const content = readText(summaryPath);
+    if (host.run !== r) return;
+    pi.sendMessage({ customType: SUMMARY_TYPE, content, display: true, details: { plan, review } }, { triggerTurn: false });
+    const entry: ReviewEntry = { plan, review, surface: "chat", status: "pending" };
     r.reviews.set(review, entry);
     pi.appendEntry(ENTRY_TYPE, entry);
     r.facts.open(`plan-review:${review}`, REVIEW_LABEL, "human");
     host.refresh(r);
-    if (chat) {
-      await r.reporter.settled(); // the blocked state is reported before the dialog takes the editor
-      if (host.run === r) showDialog(host, r, review, typeof latest.title === "string" ? latest.title : undefined);
-    }
+    await r.reporter.settled(); // the blocked state is reported before the dialog takes the editor
+    if (host.run === r) showDialog(host, r, review, typeof latest.title === "string" ? latest.title : undefined);
   } catch (e) {
     host.deliver(`plan review ${review}`, e);
   } finally {
@@ -119,11 +86,9 @@ function settle(host: Host, r: Run, entry: ReviewEntry, verdict: boolean, text: 
   host.pi.appendEntry(ENTRY_TYPE, done);
   if (r.facts.close(`plan-review:${entry.review}`)) host.refresh(r);
   closeDialog(r, entry.review);
-  const page = plannotatorId(entry);
-  tell(host, r, decisionText(entry.review, verdict, text, current, elsewhere ? (page === undefined ? ELSEWHERE_CHAT_NOTE : ELSEWHERE_NOTE) : undefined), {
+  tell(host, r, decisionText(entry.review, verdict, text, current, elsewhere ? ELSEWHERE_CHAT_NOTE : undefined), {
     plan: entry.plan,
     review: entry.review,
-    ...(page !== undefined ? { plannotator_id: page } : {}),
     approved: verdict,
     current,
     ...(text !== undefined ? { feedback: text } : {}),
@@ -132,8 +97,7 @@ function settle(host: Host, r: Run, entry: ReviewEntry, verdict: boolean, text: 
 }
 
 /**
- * §15.5 "Deciding elsewhere": a `plan-review` Event with status `approved` or `rejected` for a pending entry means a caller other than
- * plannotator decided it. cpd already has the decision, so there is no `plan decide`. A failure leaves the entry pending.
+ * §15.5 "Deciding elsewhere": a `plan-review` Event with status `approved` or `rejected` for a pending entry means another caller decided it. cpd already has the decision, so there is no `plan decide`. A failure leaves the entry pending.
  */
 export async function decidedElsewhere(host: Host, r: Run, entry: ReviewEntry, ev: EventOf<"plan-review">): Promise<void> {
   if (entry.status !== "pending" || r.deciding.has(entry.review)) return;
@@ -202,39 +166,6 @@ export async function decide(host: Host, r: Run, entry: ReviewEntry, approved: b
   }
 }
 
-/** §15.5 "Recovery": `review-status` every `pollMs` until the review is not pending in plannotator. */
-export async function recover(host: Host, r: Run, review: string): Promise<void> {
-  let reported = false;
-  for (;;) {
-    const entry = r.reviews.get(review);
-    if (host.run !== r || !entry || entry.status !== "pending") return;
-    const page = plannotatorId(entry);
-    if (page === undefined) return; // a chat entry: its dialog, not plannotator, decides
-    try {
-      const status = parseStatus(await request(host.pi, "review-status", { reviewId: page }, host.timing.requestTimeoutMs));
-      reported = false;
-      if (host.run !== r || r.reviews.get(review)?.status !== "pending") return;
-      if (status.status === "completed") return await decide(host, r, entry, status.approved, status.feedback);
-      if (status.status === "missing") {
-        const lost: ReviewEntry = { ...entry, status: "lost" };
-        r.reviews.set(review, lost);
-        host.pi.appendEntry(ENTRY_TYPE, lost);
-        if (r.facts.close(`plan-review:${review}`)) host.refresh(r);
-        tell(host, r, lostText(review), { plan: entry.plan, review, plannotator_id: page, lost: true });
-        return;
-      }
-    } catch (e) {
-      if (!reported) host.deliver(`plan review ${review}`, e);
-      reported = true;
-    }
-    try {
-      await sleep(host.timing.pollMs, undefined, { signal: r.abort.signal });
-    } catch {
-      return; // shut down
-    }
-  }
-}
-
 export function registerTool(host: Host): void {
   if (host.registered.tool) return;
   host.registered.tool = true;
@@ -242,7 +173,7 @@ export function registerTool(host: Host): void {
     name: "cpd_plan_review",
     label: "cpd plan review",
     description:
-      "Ask the User to review and approve the current cpd Plan (its draft Jobs): a short summary in the chat and one dialog (Approve, Change, Open full plan). Returns at once; the decision arrives later as a cpd message. Call it once per revision.",
+      "Ask the User to review and approve the current cpd Plan (its draft Jobs): a short summary in the chat and one dialog (Approve, Change). Returns at once; the decision arrives later as a cpd message. Call it once per revision.",
     parameters: {
       type: "object",
       properties: { title: { type: "string", description: "One line of at most 72 characters naming what the drafts under review do" } },
@@ -258,7 +189,7 @@ export function registerTool(host: Host): void {
       const already = out.already === true;
       if (review !== undefined && already) {
         const known = r.reviews.get(review);
-        if (known?.status !== "pending") await openReview(host, r, review, "tool", { plan: typeof out.path === "string" ? out.path : undefined, summary: typeof out.summary === "string" ? out.summary : undefined });
+        if (known?.status !== "pending") await openReview(host, r, review, "tool", { summary: typeof out.summary === "string" ? out.summary : undefined });
       }
       const next = typeof out.next === "string" ? out.next : "The User reviews the plan summary in the chat. Stop and wait for the decision message.";
       return { content: [{ type: "text" as const, text: next }], details: { review, already } };

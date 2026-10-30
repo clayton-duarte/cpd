@@ -8,13 +8,8 @@ export const SUMMARY_TYPE = "cpd-plan-summary";
 export const REVIEW_LABEL = "φ: plan review";
 
 export type EntryStatus = "pending" | "approved" | "rejected" | "superseded" | "lost";
-/** Where the User decides: `chat` (the dialog) or plannotator, which alone has a page id. An entry without `surface` is a plannotator one (written before the chat review existed); it keeps that shape. */
-export type ReviewEntry =
-  | { plan: string; review: string; surface: "chat"; status: EntryStatus }
-  | { plan: string; review: string; surface?: "plannotator"; plannotator_id: string; status: EntryStatus };
-
-/** The plannotator page id of an entry, or undefined for a chat entry. */
-export const plannotatorId = (e: ReviewEntry): string | undefined => (e.surface === "chat" ? undefined : e.plannotator_id);
+/** A review of this session: the User decides in the chat dialog. */
+export type ReviewEntry = { plan: string; review: string; surface: "chat"; status: EntryStatus };
 
 const STATUSES: readonly string[] = ["pending", "approved", "rejected", "superseded", "lost"];
 
@@ -33,15 +28,13 @@ export function reviewsFromEntries(entries: readonly unknown[], plan: string): {
       continue;
     }
     const status = d.status as EntryStatus;
-    let entry: ReviewEntry;
-    if (d.surface === "chat") entry = { plan: d.plan, review: d.review, surface: "chat", status };
-    else if ((d.surface === undefined || d.surface === "plannotator") && typeof d.plannotator_id === "string") {
-      entry = { plan: d.plan, review: d.review, ...(d.surface === "plannotator" ? { surface: "plannotator" as const } : {}), plannotator_id: d.plannotator_id, status };
-    } else {
+    // An older entry of a plannotator page (`surface: "plannotator"` or none, with a `plannotator_id`) reads as a chat review.
+    const older = (d.surface === undefined || d.surface === "plannotator") && typeof d.plannotator_id === "string";
+    if (d.surface !== "chat" && !older) {
       invalid += 1;
       continue;
     }
-    if (d.plan === plan) reviews.set(d.review, entry);
+    if (d.plan === plan) reviews.set(d.review, { plan: d.plan, review: d.review, surface: "chat", status });
   }
   return { reviews, invalid };
 }
@@ -56,10 +49,7 @@ export function highestReview(reviews: Iterable<string>): string | undefined {
   return best;
 }
 
-/** plannotator's event API has no request that closes a review (`plannotator-events.ts` handles plan-mode, plan-review, review-status, code-review, annotate, annotate-last, archive), so the page stays open. */
-export const ELSEWHERE_NOTE = "This review was decided outside plannotator. plannotator offers no way to close its review page from here, so the page stays open: ignore it or close the tab.";
-
-/** The last line of a chat entry's "decided elsewhere" message: there is no plannotator page to leave open. */
+/** The last line of the "decided elsewhere" message. */
 export const ELSEWHERE_CHAT_NOTE = "This review was decided outside this adapter.";
 
 /** cpd 1's `decisionText`, kept (commands.md §15.5, "Deciding" step 3). `elsewhere` is the note to end with, when the review was decided by another caller. */
@@ -72,6 +62,3 @@ export function decisionText(review: string, approved: boolean, feedback: string
   if (elsewhere !== undefined) lines.push(elsewhere);
   return lines.join("\n");
 }
-
-export const lostText = (review: string): string =>
-  `Plan review ${review} is gone (plannotator no longer knows it, for example after a restart), so no decision was recorded. Call cpd_plan_review again.`;

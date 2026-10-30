@@ -11,14 +11,13 @@ import { holdTrip, trippedIn } from "./loop-guard.ts";
 import { followerHooks } from "./handle.ts";
 import type { Host } from "./host.ts";
 import type { Ctx, ModelCtx } from "./pi.ts";
-import { ENTRY_TYPE, highestReview, plannotatorId, REVIEW_LABEL, reviewsFromEntries } from "./plan-review.ts";
+import { ENTRY_TYPE, highestReview, REVIEW_LABEL, reviewsFromEntries } from "./plan-review.ts";
 import { registerPlanReviewCommand } from "./plan-review-command.ts";
-import { parseResult } from "./plannotator.ts";
 import { adapterPath, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, refusal, reloadLogPath, RELOAD_TRIGGER, validatePackage } from "./reload.ts";
 import { guardOf } from "./reload-command.ts";
 import { registerSecretTool } from "./secret.ts";
 import { registerHostApproveTool } from "./hostapprove.ts";
-import { decide, QUESTION_LABEL, recover, registerTool, showDialog } from "./review.ts";
+import { QUESTION_LABEL, registerTool, showDialog } from "./review.ts";
 import { Run, parseSession, type SessionInfo } from "./run.ts";
 import { Facts } from "./state.ts";
 import { firstMessageDelivered, registerFirstMessage } from "./first-message.ts";
@@ -151,8 +150,7 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
   }
   void refreshMentions(host, r);
 
-  // 5. blocking reasons (Plan Lead only; a Manager has none and opens no plannotator)
-  let decidedLatest: string | undefined; // the latest review `plan show` reports decided or superseded: no reason, dialog or recovery
+  // 5. blocking reasons (Plan Lead only; a Manager has none)
   let chatToReopen: { reviews: string[]; title: string | undefined } = { reviews: [], title: undefined };
   if (info.role !== "manager" && info.planLead && info.plan !== null) {
     const plan = info.plan;
@@ -175,17 +173,14 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
     }
     // A chat review that cpd reports decided opens nothing: its Event, replayed from the cursor, is "Deciding elsewhere" (§15.5 "Recovery").
     const decidedStatus = latestStatus === "approved" || latestStatus === "rejected" || latestStatus === "superseded";
-    if (decidedStatus) decidedLatest = latest;
     const shownEntry = latest === undefined ? undefined : r.reviews.get(latest);
     if (latestStatus === "superseded" && shownEntry?.status === "pending") r.reviews.set(shownEntry.review, { ...shownEntry, status: "superseded" }); // in memory: a replayed Event then changes nothing
     const reopen: string[] = [];
     for (const entry of r.reviews.values()) {
       if (entry.status !== "pending" || entry.review !== latest) continue;
       if (decidedStatus) continue;
-      if (entry.surface === "chat") {
-        if (latestStatus !== undefined && latestStatus !== "pending") continue;
-        reopen.push(entry.review);
-      }
+      if (latestStatus !== undefined && latestStatus !== "pending") continue;
+      reopen.push(entry.review);
       facts.open(`plan-review:${entry.review}`, REVIEW_LABEL, "human");
     }
     chatToReopen = { reviews: reopen, title: latestTitle };
@@ -214,18 +209,6 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
     now: options.reload?.now,
   });
 
-  // Recovery of the reviews this session opened (§15.5), in the background.
-  r.unsubscribe.push(
-    pi.events.on("plannotator:review-result", (data) => {
-      const result = parseResult(data);
-      if (!result || host.run !== r) return;
-      const entry = [...r.reviews.values()].find((e) => e.status === "pending" && plannotatorId(e) === result.reviewId);
-      if (entry) void decide(host, r, entry, result.approved, result.feedback).catch((e) => host.deliver("plan decision", e));
-    }),
-  );
-  for (const entry of r.reviews.values()) {
-    if (entry.status === "pending" && entry.surface !== "chat" && entry.review !== decidedLatest) void recover(host, r, entry.review).catch((e) => host.deliver("plan review recovery", e));
-  }
   for (const review of chatToReopen.reviews) showDialog(host, r, review, chatToReopen.title);
 }
 

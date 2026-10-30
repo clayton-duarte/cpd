@@ -207,7 +207,7 @@ test("a Worker does not read the Plan", async (t) => {
   assert.deepEqual(f.pi.tools, [], "cpd_plan_review is for Plan Leads only");
 });
 
-test("a Manager reads no Plan, registers no plan-review tool, opens no plannotator and has no blocking reason", async (t) => {
+test("a Manager reads no Plan, registers no plan-review tool, has no blocking reason", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   f.respond("session-show", shown({ role: "manager", plan: null, plan_lead: false }));
@@ -221,7 +221,7 @@ test("a Manager reads no Plan, registers no plan-review tool, opens no plannotat
   assert.deepEqual(f.argvs().map((a) => a.slice(0, 2).join(" ")), ["session show", "session state"], "no plan show");
   assert.deepEqual(stateCalls(f), ["idle"], "never blocked");
   assert.deepEqual(f.pi.tools, []);
-  assert.deepEqual(f.pi.emitted, [], "nothing is asked of plannotator");
+  assert.deepEqual(f.pi.emitted, [], "nothing is emitted");
   assert.deepEqual(f.pi.delivered(), []);
 });
 
