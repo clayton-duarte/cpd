@@ -358,17 +358,21 @@ pub fn close_pr(cwd: &Path, repo: &str, number: i64) -> Result<(), CpdError> {
 }
 
 /// Retitles the pull request `repo`#`number` (`owner/name`): `gh api -X PATCH repos/<repo>/pulls/<n> -f title=<title>`.
-/// Not `gh pr edit`: it fails on repos with the deprecated classic Projects (commands.md §9.5, hs-d285).
+/// Not `gh pr edit`: it fails on repos with the deprecated classic Projects (commands.md §9.5, hs-d285). `describe_pr` shares that reason.
 pub fn retitle_pr(cwd: &Path, repo: &str, number: i64, title: &str) -> Result<(), CpdError> {
     let endpoint = format!("repos/{repo}/pulls/{number}");
     let field = format!("title={title}");
     run(cwd, &["api", "-X", "PATCH", &endpoint, "-f", &field]).map(drop)
 }
 
-/// `gh pr edit <number> --body-file -` with `body` on stdin: replaces the pull request's body.
-pub fn describe_pr(cwd: &Path, number: i64, body: &str) -> Result<(), CpdError> {
-    let n = number.to_string();
-    let args = ["pr", "edit", &n, "--body-file", "-"];
+/// Replaces the body of the pull request `repo`#`number` (`owner/name`): `gh api -X PATCH repos/<repo>/pulls/<n> --input -`
+/// with `{"body": <body>}` on stdin. Not `gh pr edit`: it fails on repos with the deprecated classic Projects
+/// (commands.md §9.5) and needs a repository cwd. A `repo` that is not `owner/name` is `gh_failed`, before any call.
+pub fn describe_pr(cwd: &Path, repo: &str, number: i64, body: &str) -> Result<(), CpdError> {
+    repo_parts(repo)
+        .ok_or_else(|| CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo.")).with("repo", repo))?;
+    let endpoint = format!("repos/{repo}/pulls/{number}");
+    let args = ["api", "-X", "PATCH", endpoint.as_str(), "--input", "-"];
     let call = Call {
         tool: "gh".to_owned(),
         program: "gh".to_owned(),
@@ -376,7 +380,7 @@ pub fn describe_pr(cwd: &Path, number: i64, body: &str) -> Result<(), CpdError> 
         envs: vec![("GH_PROMPT_DISABLED".to_owned(), Some("1".to_owned())), ("NO_COLOR".to_owned(), Some("1".to_owned()))],
         cwd: Some(cwd.to_path_buf()),
         deadline: TIMEOUT,
-        stdin: Some(body.as_bytes().to_vec()),
+        stdin: Some(serde_json::json!({"body": body}).to_string().into_bytes()),
         stderr_to: None,
     };
     let out = match Ports::current().runner.run(&call) {
