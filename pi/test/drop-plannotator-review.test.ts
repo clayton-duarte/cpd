@@ -21,7 +21,7 @@ async function opens(f: Fixture) {
   f.emit(reviewEvent(101));
   await f.drain();
   const d = f.pi.openDialog("select");
-  assert.ok(d, "the dialog is open");
+  assert.ok(d, "the select is open once the Event is handled");
   return d;
 }
 

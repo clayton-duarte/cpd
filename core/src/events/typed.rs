@@ -600,7 +600,7 @@ mod tests {
             Kind::WatchStarted => vec![NewEvent::watch_started(T, 1)],
             Kind::WatchStopped => vec![NewEvent::watch_stopped(T, 1)],
             Kind::Error => vec![NewEvent::error(T, s, s, s, serde_json::Value::Null)],
-            // past Events hold these kinds; nothing writes them any more (hs-d739)
+            // retired (hs-d738): past Events hold these kinds, nothing writes them, so no constructor (see `RETIRED`)
             Kind::ReviewOpened | Kind::ReviewClosed => vec![],
             Kind::IncidentStarted => vec![
                 NewEvent::incident_started(T, s, s, s, [s], None),
@@ -614,6 +614,9 @@ mod tests {
         }
     }
 
+    /// The retired kinds (contract §5.2): valid in `event_kinds`, written by nothing, so they have no constructor.
+    const RETIRED: [Kind; 2] = [Kind::ReviewOpened, Kind::ReviewClosed];
+
     /// `kind.rs`'s table is the oracle: every constructor of a kind carries the kind's required
     /// `data` fields and no field the kind does not list.
     #[test]
@@ -621,7 +624,7 @@ mod tests {
         for &kind in Kind::ALL {
             let spec = kind.spec();
             let samples = samples(kind);
-            assert!(!samples.is_empty(), "no constructor for {kind}");
+            assert!(samples.is_empty() == RETIRED.contains(&kind), "{kind}: a constructor exists exactly for a kind that is not retired");
             for event in samples {
                 assert_eq!(event.kind(), kind);
                 let keys: BTreeSet<&str> = event.data().as_object().expect("data is an object").keys().map(String::as_str).collect();

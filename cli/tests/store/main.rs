@@ -4,7 +4,6 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-mod drop_plannotator_review_cmd;
 mod events;
 mod home;
 mod store_pr_posts;
