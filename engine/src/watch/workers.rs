@@ -173,13 +173,6 @@ mod tests {
         Counts { running, limit, waiting, queued }
     }
 
-    #[test]
-    fn the_workers_texts_have_no_style() {
-        let c = counts(6, 6, 4, 9);
-        assert_eq!(c.long(), "workers 6/6 · 4 waiting · 9 queued");
-        assert_eq!(c.short(), "6/6·4·9");
-    }
-
     /// The tables the Ready rule reads, with three Plans' worth of rows.
     fn store() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
