@@ -6,7 +6,7 @@ use std::fs;
 
 use serde_json::json;
 
-use super::pr::{DESCRIPTION, Poll, Rows, code, open_jobs, poll_fx};
+use super::pr::{DESCRIPTION, Poll, Rows, code, in_git_repo, open_jobs, poll_fx};
 
 impl Poll {
     /// `cpd pr describe --pr repo --file <file holding text> --plan pay`.
@@ -127,14 +127,15 @@ fn pr_describe_on_an_open_pr_edits_the_pull_request_body() {
         assert_eq!(out["pr"], json!({"key": "repo", "status": "open"}));
         let calls = fx.calls("gh");
         assert_eq!(calls.len(), 1, "{:?}", fx.gh_calls());
-        assert_eq!(calls[0].args, ["pr", "edit", "812", "--body-file", "-"]);
-        assert_eq!(calls[0].stdin.as_deref(), Some(body.as_bytes()));
+        assert_eq!(calls[0].args, ["api", "-X", "PATCH", "repos/acme/pay/pulls/812", "--input", "-"]);
+        let sent: serde_json::Value = serde_json::from_slice(calls[0].stdin.as_deref().expect("a JSON body on stdin")).unwrap();
+        assert_eq!(sent, json!({"body": body}));
         assert_eq!(fx.description().as_deref(), Some(body));
     }
     {
         // A failing GitHub update stores nothing.
         let fx = poll_fx("deploy");
-        fx.fail_edit("HTTP 422: nope");
+        fx.fail_update("HTTP 422: nope");
         let txns = fx.txns();
 
         let run = fx.describe("New words.\n");
@@ -190,4 +191,33 @@ fn pr_open_refuses_description_required_without_a_body() {
     fx.pr("open").ok();
 
     assert_eq!(open_jobs(&fx).len(), 1, "the open Job is queued");
+}
+
+#[test]
+fn pr_describe_of_an_open_pr_succeeds_from_a_cwd_that_is_not_a_repository() {
+    let fx = poll_fx("deploy");
+    let body = "## What and why\n\nFrom anywhere.\n";
+
+    let out = fx.describe(body).ok();
+
+    assert_eq!(out["pr"], json!({"key": "repo", "status": "open"}));
+    let calls = fx.calls("gh");
+    assert_eq!(calls.len(), 1, "{:?}", fx.gh_calls());
+    let cwd = calls[0].cwd.clone().expect("gh runs with a cwd");
+    assert!(!in_git_repo(&cwd, fx.env.root()), "{cwd:?} must not be a git repository: the fake's refusal is live");
+    assert_eq!(fx.description().as_deref(), Some(body));
+}
+
+#[test]
+fn pr_describe_refuses_an_open_pull_request_repo_that_is_not_owner_name() {
+    let fx = poll_fx("deploy");
+    fx.exec("UPDATE pull_requests SET repo = 'acme/pay x'");
+    let txns = fx.txns();
+
+    let run = fx.describe("New words.\n");
+
+    assert_eq!(code(&run), ("gh_failed".into(), 1));
+    assert_eq!(run.error()["details"]["repo"], "acme/pay x");
+    assert!(fx.gh_calls().is_empty(), "nothing sent: {:?}", fx.gh_calls());
+    assert_eq!((fx.description().as_deref(), fx.txns()), (Some(DESCRIPTION), txns));
 }
