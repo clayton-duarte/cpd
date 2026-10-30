@@ -309,6 +309,10 @@ pub(super) fn printed(out: &Output, argv: &[&str]) -> Result<Value, Failure> {
 }
 
 #[cfg(test)]
+#[path = "pr_failing_tests.rs"]
+mod failing_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
