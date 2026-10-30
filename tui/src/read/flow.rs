@@ -22,7 +22,7 @@ use cpd_core::session::State;
 use cpd_core::store::Store;
 
 use super::active;
-use super::dot::Work;
+use super::dot::{Dot, Work};
 use super::tree::visible_items;
 use super::shared::{
     AttemptStatus, JobStatus, Origin, Outcome, PlanHead, PrState, ReviewStatus, SHOWN_STATUS, bad_row, id, stored_cause, plan_heads, tier,
@@ -71,15 +71,13 @@ pub struct NeedsUser {
     pub lead_working: bool,
     /// The phase of the Plan its Lead works in (`None`: no Plan, or not a Lead). Read from the Plan by dot-impl-views.
     pub lead_work: Option<Work>,
-    /// The Plan has an open Worker Escalation.
-    pub lead_escalated: bool,
     /// The Plan's failed Jobs being worked on (pro-d88), sorted: their pills turn.
     pub worked_on: Vec<JobKey>,
 }
 
 impl NeedsUser {
-    /// Of the `visible` items (not snoozed, not dismissed) of `plan`, whose Lead is `lead` and whose Lead works on `lead_work` (pro-d200); `lead_escalated`: the Plan has an open Worker Escalation.
-    fn of(visible: &[Item], plan: &PlanId, lead: &SessionId, lead_working: bool, lead_work: Option<Work>, lead_escalated: bool, worked_on: Vec<JobKey>) -> NeedsUser {
+    /// Of the `visible` items (not snoozed, not dismissed) of `plan`, whose Lead is `lead` and whose Lead works on `lead_work` (pro-d200).
+    fn of(visible: &[Item], plan: &PlanId, lead: &SessionId, lead_working: bool, lead_work: Option<Work>, worked_on: Vec<JobKey>) -> NeedsUser {
         NeedsUser {
             stuck_jobs: visible
                 .iter()
@@ -89,7 +87,6 @@ impl NeedsUser {
             lead_dialog: visible.iter().any(|i| i.kind == Kind::Dialog && i.session.as_ref() == Some(lead)),
             lead_working,
             lead_work,
-            lead_escalated,
             worked_on,
         }
     }
@@ -138,6 +135,9 @@ pub struct PrNode {
     pub elapsed_seconds: Option<u64>,
     /// `None` when no Attempt of the Workflow has cost data, else its cost in USD, see Context record pro-d179.
     pub cost_usd: Option<f64>,
+    /// The Lead's dot on this box, see commands.md §13.2: `Some` only while the Plan's Lead works, `working_pr` is this PR and its
+    /// status is neither `merged` nor `cancelled`; the red loader when a Job of this PR failed or an Escalation of one of its Jobs is open.
+    pub lead_dot: Option<Dot>,
 }
 
 /// The state of a PR's update Job (`jobs.kind = 'update'`) that is not ended (hs-d532).
@@ -158,9 +158,6 @@ pub struct Pull {
     pub conflicting: bool,
     /// The PR is ready to merge (pro-d118: `cpd_core::pr::pulls::ready_to_merge_sql`, not GitHub's CLEAN alone); its `open` is yellow.
     pub clean: bool,
-    /// The Plan's Lead Session has `state = 'working'` (contract §3.6) and the PR is not merged: the title shows the Lead's
-    /// working dot beside the state (hs-d335); a merged box never does (docs/commands.md §13.2).
-    pub lead_working: bool,
     /// The PR's not-ended update Job, if any: a conflict reads `updating` while it is `Some` (hs-d532).
     /// `pull_requests.draft`.
     pub draft: bool,
@@ -302,11 +299,11 @@ pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdErro
 /// The body of both reads: `now` is the database clock text (read here when `None`), `now_ms` the elapsed time's clock.
 fn boxes(conn: &Connection, plan: &PlanId, now: Option<String>, now_ms: i64) -> Result<PlanBoxes, CpdError> {
     {
-        let (context, lead, lead_working, phase): (String, String, bool, String) = conn
+        let (context, lead, lead_working, phase, working_pr): (String, String, bool, String, Option<String>) = conn
             .query_row(
-                "SELECT p.context, p.lead_session, s.state = 'working', p.phase FROM plans p JOIN sessions s ON s.id = p.lead_session WHERE p.id = ?1",
+                "SELECT p.context, p.lead_session, s.state = 'working', p.phase, s.working_pr FROM plans p JOIN sessions s ON s.id = p.lead_session WHERE p.id = ?1",
                 [plan.as_str()],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
             .optional()?
             .ok_or_else(|| plan_not_found(plan))?;
@@ -323,14 +320,13 @@ fn boxes(conn: &Connection, plan: &PlanId, now: Option<String>, now_ms: i64) -> 
             &id("Session id", &lead, SessionId::parse)?,
             lead_working,
             Some(head.work()),
-            lead_working && head.open_escalations > 0,
             worked_on,
         );
         let jobs = job_nodes(conn, plan)?;
         Ok(PlanBoxes {
             needs_user,
             context: id("Context id", &context, ContextId::parse)?,
-            prs: pr_nodes(conn, plan, lead_working, &lead, &jobs, now_ms)?,
+            prs: pr_nodes(conn, plan, lead_working.then_some(working_pr).flatten().as_deref(), Some(head.work()), &lead, &jobs, now_ms)?,
             jobs,
             events_cursor: highest_id(conn)?,
             plan: plan.clone(),
@@ -338,8 +334,8 @@ fn boxes(conn: &Connection, plan: &PlanId, now: Option<String>, now_ms: i64) -> 
     }
 }
 
-/// The PRs of `plan` that are not `cancelled`, in key order, with their needs; `lead_working`: the Plan's Lead is working.
-fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool, lead: &str, jobs: &[JobNode], now_ms: i64) -> Result<Vec<PrNode>, CpdError> {
+/// The PRs of `plan` that are not `cancelled`, in key order, with their needs; `working_pr`: the PR the working Lead's turn concerns, `lead_work` the Plan phase's work.
+fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_work: Option<Work>, lead: &str, jobs: &[JobNode], now_ms: i64) -> Result<Vec<PrNode>, CpdError> {
     let mut events = Vec::new();
     let mut stmt = conn.prepare("SELECT at, json_extract(data, '$.to') FROM events WHERE session = ?1 AND kind = 'session-state' ORDER BY id")?;
     for row in stmt.query_map([lead], |r| Ok((r.get::<_, String>(0)?, r.get::<_, rusqlite::types::Value>(1)?)))? {
@@ -370,6 +366,15 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool, lead: &str, jo
     })? {
         let (pr, stored, no_metrics, file) = row?;
         costs.entry(pr).or_default().push(super::cost::attempt_cost(stored, no_metrics, file.as_deref()));
+    }
+    let mut failed_prs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut stmt = conn.prepare(
+        "SELECT pr FROM jobs WHERE plan = ?1 AND status = 'failed'
+         UNION SELECT j.pr FROM escalations e JOIN attempts a ON a.id = e.attempt JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+          WHERE e.status = 'open' AND j.plan = ?1",
+    )?;
+    for row in stmt.query_map([plan.as_str()], |r| r.get::<_, String>(0))? {
+        failed_prs.insert(row?);
     }
     let display = Display::load(conn, plan)?;
     let pr_rows = load_prs(conn, plan)?;
@@ -417,7 +422,6 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool, lead: &str, jo
                     url,
                     conflicting: conflicting(&what, &mergeable)?,
                     clean,
-                    lead_working: lead_working && status != PrStatus::Merged,
                     update: update_state(&what, update.as_deref())?,
                     draft,
                 })
@@ -428,7 +432,10 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool, lead: &str, jo
             .map(|n| n.to_string_lossy().into_owned())
             .ok_or_else(|| bad_row(format!("{what} has repo {repo:?}")))?;
         let row = pr_rows.iter().find(|p| p.key.as_str() == key);
+        let lead_dot = (working_pr == Some(key.as_str()) && !matches!(status, PrStatus::Merged | PrStatus::Cancelled))
+            .then(|| Dot::working(failed_prs.contains(&key), lead_work));
         out.push(PrNode {
+            lead_dot,
             waiting_on: row.map(|p| display.pr_blockers(p)).unwrap_or_default(),
             superseded_by: display.superseded_by(&key).map(str::to_owned),
             needs: {

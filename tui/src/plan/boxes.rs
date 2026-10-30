@@ -145,17 +145,15 @@ fn footer_text(pr: &PrNode) -> Option<String> {
 
 /// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󱆭` once the PR has
 /// a pull request, the state in the palette's PR state colour (`conflict`, waiting, for an open one that conflicts; `closed`,
-/// waiting, red when the Plan's Lead `asked` the User, see [`pr_look`]), else the PR's status, muted. While the Plan's Lead
-/// works and the PR is not merged (`Pull::lead_working`) the Lead's dot, `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󱆭`. The dot's
-/// colour is [`Dot::working`]: `plan_failed` makes it the red loader, else `lead_phase` (the Plan's phase; `None`: cyan).
+/// waiting, red when the Plan's Lead `asked` the User, see [`pr_look`]), else the PR's status, muted. The Lead's dot
+/// (`PrNode::lead_dot`, already the red loader or the phase's colour), `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󱆭`, or the status text when there is no pull request.
 #[cfg(test)]
 pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
-    title_of(pr, asked, false, None, frame)
+    title_of(pr, asked, frame)
 }
 
-/// [`title`] for a Plan that has a failed Job (`plan_failed`) and is in phase `lead_phase`: its working Lead's dot is
-/// the red loader when a Job failed, else the bright pair of the phase's colour.
-fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, lead_work: Option<Work>, frame: usize) -> Line<'static> {
+/// [`title`] at spinner `frame`: the box's own `lead_dot`, if any, after the state word or the status text.
+fn title_of(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
     let read_only = palette::read_only_text();
     let mut spans: Vec<Span<'static>> = vec![
         " ".into(),
@@ -168,8 +166,8 @@ fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, lead_work: Option<Work>
             spans.push(Span::styled(format!("#{} ", pull.number), palette::clickable_text()));
             let (word, meaning) = word(pull, asked);
             spans.push(Span::styled(word, palette::fg_clickable(meaning)));
-            if pull.lead_working {
-                spans.extend([" ".into(), palette::dot_span(Dot::working(plan_failed, lead_work), frame, false)]);
+            if let Some(dot) = pr.lead_dot {
+                spans.extend([" ".into(), palette::dot_span(dot, frame, false)]);
             }
             spans.push(Span::styled(format!(" {CUE}"), palette::clickable_text()));
         }
@@ -180,6 +178,11 @@ fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, lead_work: Option<Work>
             }
             (status, _) => Span::styled(status.as_str(), palette::muted_text()),
         }),
+    }
+    if pr.pull.is_none() {
+        if let Some(dot) = pr.lead_dot {
+            spans.extend([" ".into(), palette::dot_span(dot, frame, false)]);
+        }
     }
     spans.push(" ".into());
     if pr.status == PrStatus::Cancelled {
@@ -216,9 +219,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         .iter()
         .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key), &needs_user.worked_on), frame))
         .collect();
-    // the tree's rule: the Plan has a failed Job
-    let plan_failed = jobs.iter().any(|j| j.status == JobStatus::Failed);
-    let titles: Vec<Line> = prs.iter().map(|p| title_of(p, needs_user.lead_dialog, plan_failed || needs_user.lead_escalated, needs_user.lead_work, frame)).collect();
+    let titles: Vec<Line> = prs.iter().map(|p| title_of(p, needs_user.lead_dialog, frame)).collect();
     let footers: Vec<Option<String>> = prs.iter().map(footer_text).collect();
     let footer_w: Vec<u16> = footers.iter().map(|f| f.as_ref().map_or(0, |t| Line::from(t.as_str()).width() as u16)).collect();
     // each box: its walls and padding around the chart, or around `no Jobs`, and at least as wide as its title plus 4 (the

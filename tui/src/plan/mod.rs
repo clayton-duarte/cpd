@@ -88,10 +88,9 @@ pub(crate) struct Centre {
 impl Centre {
     /// Whether a spinner is on screen (R1): the ONE function that names every spinner the plan view draws, one line each.
     pub(crate) fn spins(&self) -> bool {
-        let pulls = || self.plan.prs.iter().filter_map(|p| p.pull.as_ref());
         false
             || spins(&self.plan.jobs, &self.plan.needs_user) // a running Job's pill icon, or a failed one's while the Lead works
-            || pulls().any(|p| p.lead_working) // a PR box title's Lead dot
+            || self.plan.prs.iter().any(|p| p.lead_dot.is_some()) // a PR box title's Lead dot
     }
 
     /// Turn the spinners to `frame`, from the layout already done (R2: no layout at a frame change), when a spinner is on
