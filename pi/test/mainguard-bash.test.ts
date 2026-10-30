@@ -183,3 +183,10 @@ test("passes the other git commands in a primary checkout and every refused one 
       assert.equal(at(x, `git -C ${dir} ${s} x`), undefined, `${dir} ${s}`);
     }
 });
+
+test("a heredoc body is not read as a git command or a write, the line of the operator and what follows are", (t) => {
+  const x = fixtures(t);
+  assert.equal(at(x, "cat <<EOF\ngit checkout main\n> f\nEOF", x.primary), undefined);
+  assert.notEqual(at(x, "cat > f <<EOF\nbody\nEOF", x.primary), undefined);
+  assert.notEqual(at(x, "cat <<EOF\nx\nEOF\ngit checkout main", x.primary), undefined);
+});

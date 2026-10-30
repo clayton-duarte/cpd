@@ -180,3 +180,8 @@ test("before session_start no call is refused", async (t) => {
   f.load();
   assert.equal(await call(f, "npm run verify"), undefined);
 });
+
+test("a heredoc body is not read as a test run, the command after it is", () => {
+  assert.equal(unfilteredTestRun("cat <<EOF\ncargo test --workspace\nnpm test\nEOF"), undefined);
+  assert.equal(unfilteredTestRun("cat <<EOF\nx\nEOF\ncargo test --workspace"), "cargo test --workspace");
+});
