@@ -53,6 +53,7 @@ pub(super) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
                     tx.execute("UPDATE prs SET description = ?1 WHERE plan = ?2 AND key = ?3", [text.as_str(), plan.as_str(), key.as_str()])?;
                     let message = format!("PR {key} of Plan {plan} described. Next: cpd plan render --plan {plan}");
                     append(tx, NewEvent::pr_described(message, &key).plan(plan.clone()))?;
+                    crate::session::working_pr::name(tx, &plan, &key)?;
                     Ok(status)
                 }
             })?;
