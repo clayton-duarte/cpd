@@ -410,7 +410,7 @@ fn crash_the_worker(live: &Live) -> String {
 }
 
 #[test]
-fn c6_h3_retries_to_s1_of_the_same_repos_models() {
+fn c6_a_crash_at_h3_retries_at_h3_of_the_same_repos_model() {
     let live = live_without_tiers(&["repo", "owner", "other"]);
     policy_file(&live.fx.env, "acme/owner.toml", &table("owner"));
     policy_file(&live.fx.env, "acme/pay.toml", &table("repo"));
@@ -423,24 +423,11 @@ fn c6_h3_retries_to_s1_of_the_same_repos_models() {
     let calls = pi_calls(&live);
     assert_eq!(calls.len(), 2, "{calls:?}");
     assert_eq!(model_of(&calls[0]), "github-copilot/repo-h:high");
-    assert_eq!(model_of(&calls[1]), "github-copilot/repo-s:low");
+    assert_eq!(model_of(&calls[1]), "github-copilot/repo-h:high");
 }
 
 #[test]
-fn c6_a_repo_whose_cached_s_efforts_stop_at_2_never_gets_s3() {
-    let live = live_without_tiers(&["owner"]);
-    policy_file(&live.fx.env, "acme/pay.toml", &table("repo"));
-    cache(&live.fx.env, "repo", ["[0,1,2,3,4,5]", "[0,1,2]", "[0,1,2,3]"]);
-    h3_job(&live);
-
-    crash_the_worker(&live);
-
-    let retries: Vec<Value> = live.events("hi-a1").into_iter().filter(|e| e["kind"] == "attempt-retry").collect();
-    assert!(retries.iter().all(|e| e["data"]["next_tier"] == "S1"), "{retries:?}");
-}
-
-#[test]
-fn c6_a_repo_with_no_s_effort_from_1_up_has_no_retry_after_h3() {
+fn c6_a_crash_at_h3_is_retried_at_h3_even_when_the_repo_has_no_s_effort_from_1_up() {
     let live = live_without_tiers(&["owner"]);
     policy_file(&live.fx.env, "acme/pay.toml", &table("repo"));
     cache(&live.fx.env, "repo", ["[0,1,2,3,4,5]", "[0]", "[0,1,2,3]"]);
@@ -449,6 +436,7 @@ fn c6_a_repo_with_no_s_effort_from_1_up_has_no_retry_after_h3() {
     crash_the_worker(&live);
 
     let retries: Vec<Value> = live.events("hi-a1").into_iter().filter(|e| e["kind"] == "attempt-retry").collect();
-    assert!(retries.is_empty(), "{retries:?}");
-    assert_ne!(live.job_status("hi"), "queued", "no S step to retry on");
+    assert_eq!(retries.len(), 1, "{retries:?}");
+    assert_eq!(retries[0]["data"]["next_tier"], "H3");
+    assert_eq!(live.job_status("hi"), "queued");
 }
