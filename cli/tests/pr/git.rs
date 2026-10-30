@@ -579,8 +579,18 @@ fn a_failing_hook_reports_its_exit_status_and_output() {
     let h = hooked("pre-merge = \"echo broken; exit 7\"\n");
     h.sh(Reply::exit(7, "broken\n", ""));
     let result = h.run(Hook::PreMerge);
-    assert_eq!(result.outcome, HookOutcome::Failed { exit: 7 });
+    assert_eq!(result.outcome, HookOutcome::Failed { exit: 7, command: "echo broken; exit 7".to_owned() });
     assert_eq!(result.tail.as_deref(), Some("broken"));
+}
+
+#[test]
+fn a_failing_hook_reports_its_rendered_command_not_the_template() {
+    let h = hooked("pre-merge = \"echo {{ branch }}; exit 4\"\n");
+    h.sh(Reply::exit(4, "", ""));
+    let HookOutcome::Failed { exit, command } = h.run(Hook::PreMerge).outcome else { panic!("the hook fails") };
+    assert_eq!(exit, 4);
+    assert_eq!(command, h.commands()[0]);
+    assert!(!command.contains("{{"), "{command}");
 }
 
 #[test]
@@ -619,7 +629,7 @@ fn a_table_runs_together_waits_for_all_and_fails_with_the_first_in_file_order() 
         }
     });
     let result = h.run(Hook::PreMerge);
-    assert_eq!(result.outcome, HookOutcome::Failed { exit: 5 });
+    assert_eq!(result.outcome, HookOutcome::Failed { exit: 5, command: "zeta".to_owned() });
     assert!(result.tail.unwrap().contains("slow │ slow-done"));
 }
 
@@ -643,7 +653,7 @@ fn a_pipeline_runs_its_blocks_in_order_and_a_failing_block_stops_it() {
     );
     h.script(|command| if command == "exit 4" { Reply::exit(4, "", "") } else { Reply::ok("") });
     let result = h.run(Hook::PreMerge);
-    assert_eq!(result.outcome, HookOutcome::Failed { exit: 4 });
+    assert_eq!(result.outcome, HookOutcome::Failed { exit: 4, command: "exit 4".to_owned() });
     let commands = h.commands();
     // The second block started after the first ended (`two` reads the file `one` writes), and ran whole.
     assert_eq!(commands[0], "echo one > one.txt");

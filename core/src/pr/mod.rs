@@ -536,7 +536,7 @@ fn refusal(plan: &PlanId, pr: &PrRow, sha: &str, refused: Refused, then: &str) -
     let log = refused.log.display().to_string();
     let hook = refused.hook.as_str();
     let error = match (refused.hook, &refused.outcome) {
-        (Hook::PreMerge, HookOutcome::Failed { exit }) => CpdError::new(
+        (Hook::PreMerge, HookOutcome::Failed { exit, .. }) => CpdError::new(
             ErrorCode::GateFailed,
             format!(
                 "The Gate failed on {} at {} (exit {exit}): nothing was pushed. {then}",
@@ -552,7 +552,7 @@ fn refusal(plan: &PlanId, pr: &PrRow, sha: &str, refused: Refused, then: &str) -
             )
             .with("reason", outcome.to_string());
             match outcome {
-                HookOutcome::Failed { exit } => error.with("exit", *exit),
+                HookOutcome::Failed { exit, .. } => error.with("exit", *exit),
                 _ => error,
             }
         }

@@ -254,6 +254,20 @@ pub enum End {
     Interrupted,
     /// `failed` / `cause`; `detail` explains it (for `merge_conflict`, the files).
     Failed { cause: Cause, detail: String },
+    /// `failed` / `gate_failed`: a Gate that exited non-zero, with the facts written in the same UPDATE as the end.
+    GateFailed { detail: String, facts: GateFacts },
+}
+
+/// What a failing Gate leaves on its Attempt (`gate_hook`, `gate_command`, `gate_exit`, `check_tail`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GateFacts {
+    /// `pre-commit` or `pre-merge`.
+    pub hook: String,
+    /// The rendered text of the first command that exited non-zero.
+    pub command: String,
+    pub exit: i32,
+    /// The Gate output's last lines.
+    pub tail: String,
 }
 
 impl End {
@@ -261,7 +275,7 @@ impl End {
         match self {
             End::Merged { .. } => "merged",
             End::Cancelled | End::Interrupted => "cancelled",
-            End::Failed { .. } => "failed",
+            End::Failed { .. } | End::GateFailed { .. } => "failed",
         }
     }
 
@@ -270,6 +284,15 @@ impl End {
             End::Merged { .. } => "merged",
             End::Cancelled | End::Interrupted => "cancel_requested",
             End::Failed { cause, .. } => cause.as_str(),
+            End::GateFailed { .. } => Cause::GateFailed.as_str(),
+        }
+    }
+
+    fn failure(&self) -> Option<(Cause, &str)> {
+        match self {
+            End::Failed { cause, detail } => Some((*cause, detail)),
+            End::GateFailed { detail, .. } => Some((Cause::GateFailed, detail)),
+            _ => None,
         }
     }
 }
@@ -394,12 +417,19 @@ pub fn end_opened(
     // An Interrupted Attempt does not use up a try (contract §3.7): its `driver_pid` is cleared in the same
     // UPDATE (an `attempts` trigger refuses a second one), so the ladder's `automatic_attempts` leaves it out.
     let interrupted = matches!(end, End::Interrupted);
+    let facts = match end {
+        End::GateFailed { facts, .. } => Some(facts),
+        _ => None,
+    };
     let changed = tx.execute(
         "UPDATE attempts SET status = 'ended', outcome = ?4, cause = ?5, merged_sha = ?6, metrics = ?7,
                 driver_pid = CASE WHEN ?8 THEN NULL ELSE driver_pid END,
+                gate_hook = ?9, gate_command = ?10, gate_exit = ?11, check_tail = ?12,
                 ended_at = (SELECT at FROM txns WHERE id = cpd_txn())
           WHERE plan = ?1 AND id = ?2 AND status = ?3",
-        params![plan, id, attempt.status, end.outcome(), end.cause(), merged_sha, metrics.map(Value::to_string), interrupted],
+        params![plan, id, attempt.status, end.outcome(), end.cause(), merged_sha, metrics.map(Value::to_string), interrupted,
+            facts.map(|f| f.hook.as_str()), facts.map(|f| f.command.as_str()), facts.map(|f| f.exit), facts.map(|f| f.tail.as_str())
+        ],
     )?;
     if changed == 0 {
         return Err(cas_lost("The Attempt's status"));
@@ -459,7 +489,10 @@ pub fn end_opened(
             );
             ("queued", None, NewEvent::attempt_retry(text, "cancelled", "cancel_requested", &next, &feedback))
         }
-        End::Failed { cause, detail } => match next_tier(tx, attempt, *cause, ladder)? {
+        End::Failed { .. } | End::GateFailed { .. } => {
+        let (cause, detail) = end.failure().expect("a failed end");
+        let (cause, detail) = (&cause, &detail.to_owned());
+        match next_tier(tx, attempt, *cause, ladder)? {
             Some(next) => {
                 let said = match cause {
                     Cause::ProviderError => format!(
@@ -487,7 +520,8 @@ pub fn end_opened(
                 );
                 ("failed", Some(cause.as_str()), NewEvent::job_failed(text, cause.as_str(), detail, &tier, attempts))
             }
-        },
+        }
+        }
     };
     let changed = tx.execute(
         "UPDATE jobs SET status = ?3, merged_sha = ?4, failed_cause = ?5 WHERE plan = ?1 AND key = ?2 AND status = 'running'",
