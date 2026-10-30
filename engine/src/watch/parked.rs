@@ -54,7 +54,7 @@ fn cancel(engine: &mut Engine, plan: &PlanId) -> Result<(), CpdError> {
 }
 
 /// The live Plans not held by an incident whose Lead is a live Lead in state `idle`.
-fn leads(engine: &mut Engine) -> Result<Vec<(PlanId, SessionId)>, CpdError> {
+pub(super) fn leads(engine: &mut Engine) -> Result<Vec<(PlanId, SessionId)>, CpdError> {
     engine.store.read(|conn| {
         let mut stmt = conn.prepare(
             "SELECT p.id, p.lead_session FROM plans p JOIN sessions s ON s.id = p.lead_session

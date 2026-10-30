@@ -40,6 +40,7 @@ mod lock;
 mod log;
 mod models;
 mod parked;
+mod closed;
 mod poll_run;
 mod pr;
 mod provider_hold;
@@ -67,6 +68,8 @@ mod inbox_tests;
 mod stuck_explore_tests;
 #[cfg(test)]
 mod parked_tests;
+#[cfg(test)]
+mod closed_tests;
 #[cfg(test)]
 mod stacked_ready_tests;
 #[cfg(test)]

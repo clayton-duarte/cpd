@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { lastAssistantText, namesKey, needsReminder, PHRASES, REMINDER_TEXT } from "../lib/reminder.ts";
-import { Fixture, planShow, shown, waitFor } from "./fake.ts";
+import { Fixture, ID, planShow, shown, waitFor } from "./fake.ts";
 
 test("every phrase of the list makes a message talk of future work, in any case", () => {
   for (const p of PHRASES) {
@@ -97,17 +97,30 @@ test("a later run that ends cleanly takes the reminder back", async (t) => {
 test("a run that ends with no assistant text checks nothing", async (t) => {
   const f = await started();
   t.after(() => f.close());
+  const plans = () => f.argvs().filter((a) => a[0] === "plan").length;
+  const atStart = plans();
   await f.pi.fire("agent_end", { messages: [{ role: "assistant", content: [{ type: "toolCall" }] }] });
+  assert.equal(plans(), atStart, "the reminder ran no plan show for that run");
   assert.deepEqual(hidden(await f.pi.fireWith("before_agent_start")), []);
-  assert.equal(f.argvs().filter((a) => a[0] === "plan").length, 1, "only the start-up plan show");
 });
 
-test("a failing plan show adds nothing and says nothing", async (t) => {
+test("a failing plan show: the reminder adds nothing and says nothing", async (t) => {
   const f = await started();
   t.after(() => f.close());
   f.respond("plan-show", { ok: false, error: { code: "plan_not_found", message: "No.", details: {} } }, { exit: 4 });
   await f.pi.fire("agent_end", ended("Next batch: the docs."));
-  assert.deepEqual(hidden(await f.pi.fireWith("before_agent_start")), []);
+  const out = hidden(await f.pi.fireWith("before_agent_start"));
+  assert.deepEqual(out, [
+    {
+      message: {
+        customType: "cpd-context",
+        display: true,
+        content: "could not read the Plan's PRs: No.",
+        details: { event: 0, delivered_to: ID, records: [], summary: "cpd-context" },
+      },
+    },
+  ], "only the turn line's warning");
+  assert.ok(!JSON.stringify(out).includes("cpd-reminder"), "no reminder message");
   await f.quiet(); // the failed plan show is done and its result handled
   assert.deepEqual(f.pi.sent, [], "no error message in the chat");
   assert.deepEqual(f.pi.errorNotices, []);
