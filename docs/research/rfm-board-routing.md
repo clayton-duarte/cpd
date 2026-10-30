@@ -204,6 +204,7 @@ Top 20 kinds (both Contexts). "Written by" is the rubric of A.1 (kind name only;
 | `escalation` | 165 | 0.6% | 47 | 0.7% | 212 | 0.6% | Worker/Lead/Manager/User |
 | `pr-added` | 164 | 0.6% | 30 | 0.4% | 194 | 0.5% | Worker/Lead/Manager/User |
 | `escalation-answered` | 154 | 0.5% | 29 | 0.4% | 183 | 0.5% | engine/adapter |
+
 Engine/adapter versus agent kinds:
 
 | Writer | cpd | % | eec-general | % | combined | % |
@@ -211,6 +212,7 @@ Engine/adapter versus agent kinds:
 | engine/adapter kinds | 25627 | 87.8% | 6270 | 88.5% | 31897 | 87.9% |
 | agent/User kinds | 3567 | 12.2% | 815 | 11.5% | 4382 | 12.1% |
 | total | 29194 |  | 7085 |  | 36279 |  |
+
 Events that wake a Lead (rule of `pi/lib/delivery.ts:13-18`; `job-merged` only when `data.turn` is true; `error` only when it has a Plan, since a Lead is turned only for errors about its Plan, `engine/src/watch/report.rs:231-292`; `session-message` only when the recipient session is a Lead in `sessions-<context>.json`):
 
 | Lead-waking kind (pi/lib/delivery.ts:13-18) | cpd | eec-general | combined |
@@ -222,11 +224,12 @@ Events that wake a Lead (rule of `pi/lib/delivery.ts:13-18`; `job-merged` only w
 | error (plan set) | 39 | 41 | 80 |
 | escalation | 165 | 47 | 212 |
 | session-message (to a Lead) | 119 | 31 | 150 |
+
 |  | cpd | eec-general | combined |
 |---|---|---|---|
 | Lead-waking Events | 591 | 203 | 794 |
 | share of all Events | 2.0% | 2.9% | 2.2% |
-| share of non-session-state/moved/attempt-status Events |  |  |  |
+
 `job-merged`: 827 + 159 have `turn` false (no wake). `error` with no Plan: 27 (cpd) and 24 (eec-general), no Lead wake.
 
 ### 2.2 Attempt outcomes by cause
@@ -247,6 +250,7 @@ Events that wake a Lead (rule of `pi/lib/delivery.ts:13-18`; `job-merged` only w
 | `cancel_requested` | 36 | 3.3% | 9 | 4.1% | 45 | 3.5% |
 | `running (no cause yet)` | 1 | 0.1% | 0 | 0.0% | 1 | 0.1% |
 | total | 1083 |  | 217 |  | 1300 |  |
+
 Origin and outcome (`cause` of `merged` and `cancel_requested` are not failures):
 
 | origin x outcome | cpd | eec-general |
@@ -258,6 +262,7 @@ Origin and outcome (`cause` of `merged` and `cancel_requested` are not failures)
 | retry/cancelled | 1 | 0 |
 | retry/failed | 56 | 1 |
 | retry/merged | 72 | 2 |
+
 Attempts per Job (a Job is a `(plan, job)` pair). "Whole ladder" is measured two ways: Jobs that used 3 or more distinct Tiers (the Tier range of a kind has 3 rungs, `docs/contract.md:974`), and `job-failed` Events with `attempts` of 2 or more.
 
 | Attempts of one Job | cpd | eec-general | combined |
@@ -270,6 +275,7 @@ Attempts per Job (a Job is a `(plan, job)` pair). "Whole ladder" is measured two
 | 6+ | 4 | 2 | 6 |
 | Jobs | 891 | 173 | 1064 |
 | Attempts / Job | 1.22 | 1.25 | 1.22 |
+
 | Whole-ladder measure | cpd | eec-general |
 |---|---|---|
 | Jobs with 3 or more distinct Tiers among their Attempts | 22 | 2 |
@@ -294,6 +300,7 @@ Counts: cpd 150 `job-failed` and 66 `error` (39 with a Plan); eec-general 4 `job
 | `its need review-ready-tests was cancelled` | 3 | 0 | 3 |
 | `its need inbox-link-docs was cancelled` | 2 | 0 | 2 |
 | `its need tiers-use-tests was cancelled` | 1 | 0 | 1 |
+
 | error cause/code | cpd | eec-general | combined |
 |---|---|---|---|
 | `model_unavailable` | 7 | 21 | 28 |
@@ -311,6 +318,7 @@ Counts: cpd 150 `job-failed` and 66 `error` (39 with a Plan); eec-general 4 `job
 | `lead_worktree_stale` | 2 | 0 | 2 |
 | `protocol_mismatch` | 1 | 0 | 1 |
 | `jira_required` | 0 | 1 | 1 |
+
 **Candidate storms**: 3 or more distinct Jobs or Plans with one (cause or code, text prefix) inside a 10-minute window anchored at the window's first Event. 24 windows (21 cpd, 3 eec-general), 98 Events, 98 Lead wakes (every Event has a Plan). Times are UTC; subtract 4 hours for EDT. The text prefix is the first 30 characters with digits and paths masked (A.3).
 
 | Context | Window start (UTC) | Window end | cause/code, text prefix | Events | Jobs | Plans | Lead wakes | Probable root cause (Event text) |
@@ -339,6 +347,7 @@ Counts: cpd 150 `job-failed` and 66 `error` (39 with a Plan); eec-general 4 `job
 | eec-general | 2026-10-29T14:56 | 15:04 | `tool_timeout` `git ran past its deadline of #` | 9 | 9 | vitest-migration (1) | 9 | git ran past its deadline of 60s and was killed: git -C /Users/Clayton.Duarte/projects/card-dashboard.vitest-migration.c |
 | eec-general | 2026-10-29T15:06 | 15:10 | `push_failed` `git push of vitest-migrationPA` | 3 | 3 | vitest-migration (1) | 3 | git push of vitest-migration/convert to origin failed: git push exited 1. |
 | eec-general | 2026-10-29T15:07 | 15:14 | `tool_timeout` `git ran past its deadline of #` | 9 | 9 | vitest-migration (1) | 9 | git ran past its deadline of 60s and was killed: git -C /Users/Clayton.Duarte/projects/card-dashboard.vitest-migration.c |
+
 Reading the clusters (`guess:` where marked): the 16 `gate_failed` windows (57 Events) show failing-test sets that differ from Job to Job (for example 109 distinct names in 4 tails), so no single failing test is the cause; `guess:` they come from the shared host's load, which three board posts name (load 17-23, "load 30.8 on 14 cores", LEAK-FAIL with 4-5 Gates running; `board posts 35, 139, 150, 187 and 220 in `board-cpd.jsonl`). The eec-general `tool_timeout` and `push_failed` windows are all one Plan (`vitest-migration`), one cause: `git` past its 60 s deadline.
 
 **Duplicates (baseline for pro-d187 dedup)**: an `error` that repeats an earlier one with the same (code, message, Plan, Job).
@@ -432,6 +441,7 @@ Every `session-message` always starts a turn (`commands.md:3864`). Sender kind: 
 | engine (text rule) | 48 | 1 | 49 |
 | sender not in the snapshot sessions | 56 | 5 | 61 |
 | total | 257 | 52 | 309 |
+
 Recipients: cpd 138 to the Manager and 119 to Leads; eec-general 21 and 31. Plans receiving a Lead message: cpd 45 of 97 Plans with Events (median 2.0, max 12: `pr-adopt` 12, `italic` 12, `policy-scopes` 10, `repo-config` 9); eec-general 6 of 12 (median 3.0, max 16: `preco-connected-flow` 16, `vitest-migration` 5). "Sender not in the snapshot sessions" (61) are sessions that are in neither Context's list, `guess:` another Context's Manager or Lead (for example `gatemac`); unverified.
 
 ### 2.8 What the proposal's metrics need
@@ -459,6 +469,7 @@ Lead wakes per Plan (Plans with at least one): cpd 96 of 97 Plans, median 4.0, p
 | pr-links (cpd) | 17 | 1 | 10 | 0 | 1 | 1 | 2 | 2 |
 | jira-sync (cpd) | 16 | 1 | 1 | 0 | 1 | 2 | 8 | 3 |
 | pr-post (cpd) | 15 | 0 | 7 | 0 | 1 | 3 | 4 | 0 |
+
 The Manager is woken only by messages, so the Manager's per-Plan split is not defined (its messages are not tied to a Plan: `session-message` has no `plan`); the Worker's wakes are the engine's own nudges (the Worker's `cpd ask` unblock, 183 `escalation-answered`, is not counted as a wake, `guess:` it is a returned command, not a turn).
 
 **Not measurable from the snapshot:**
@@ -483,6 +494,7 @@ The Manager is woken only by messages, so the Manager's per-Plan split is not de
 | 6 requirement conflict / scope change | 0 | 0 | 0 | 0.0% |
 | 7 cross-feature dependency | 0 | 0 | 0 | 0.0% |
 | total | 213 | 45 | 258 |  |
+
 Classes 4, 6 and 7 are 0: no failure signal expresses them. A Worker's class-4 problems arrive as escalations (2.4: 10 of 10 in the sample), and class 6 and 7 arrive as board posts and `session-message` (2.6, 2.7), not as failures. `merge_conflict` is a rebase onto the Lead Branch (`core/src/merge/mod.rs:235-255`, 1.5), so class 5 "across PRs" is `guess:` only partly the same thing.
 
 Labelled sample of 40 (`random.seed(7)`, sorted by time). I read the log tail of all 16 `gate_failed` rows: 14 hold `FAIL [`/`# fail N` lines (class 3), 2 a cargo compile error (class 2).
@@ -529,6 +541,7 @@ Labelled sample of 40 (`random.seed(7)`, sorted by time). I read the log tail of
 | 38 | eec-general | 57025 | attempt-retry | crashed | 1 | cause crashed | `Attempt cleanup-docs-fix-3-a2 of Job cleanup-docs-fix-3 failed (crashed): The durable runn` |
 | 39 | cpd | 57069 | attempt-retry | crashed | 1 | cause crashed | `Attempt durable-cpd-args-config-a1 of Job durable-cpd-args-config failed (crashed): The du` |
 | 40 | cpd | 57074 | attempt-retry | crashed | 1 | cause crashed | `Attempt durable-cpd-args-config-a2 of Job durable-cpd-args-config failed (crashed): The du` |
+
 
 ### Appendix A. Commands (reproduce the tables)
 
