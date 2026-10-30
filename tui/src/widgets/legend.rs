@@ -161,16 +161,13 @@ pub(crate) fn sections() -> Vec<Section> {
     let jobs = Section { title: "Jobs: Plan Pills And Context Counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
     let dot = |d: Dot, frame: usize| Line::from(palette::dot_span(d, frame, false));
     let loader = |d: Dot| Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(d, f, false)).collect::<Vec<_>>());
-    // the working loader once per phase (hs-d622): the cyan row is dispatch, which a Session with no Plan shares
-    let frames = loader(Dot::Working(None));
-    let fixing = loader(Dot::Fixing);
     let dots = Section {
         title: DOTS_TITLE,
         header: None,
         rows: vec![
             vec![plain(palette::NEEDS_YOU), plain("the Session needs you (colour below)")],
-            vec![frames, plain("the Lead is working, dispatch (a Session with no Plan too) (one frame every 50 ms)")],
-            vec![fixing, plain("a Plan's failed Job is being worked on (one frame every 50 ms)")],
+            vec![loader(Dot::Fixing), plain("the Lead is fixing a failed Job or answering a Worker's question (one frame every 50 ms)")],
+            vec![loader(Dot::Working(Some(Work::Review))), plain("the Lead is working on a pull request (open, conflict, deploy, landing) (one frame every 50 ms)")],
             vec![dot(Dot::Waiting, 0), plain("waiting: an agent waits for another agent (a Worker for its Lead), not for you")],
             vec![dot(Dot::Idle, 0), plain("idle, nothing needed")],
             vec![dot(Dot::Stopped, 0), plain("pi stopped")],
@@ -179,10 +176,9 @@ pub(crate) fn sections() -> Vec<Section> {
             vec![dot(Dot::Magenta, 0), plain("magenta: blocked while grounding, planning or done, or the Plan's review is pending")],
             vec![dot(Dot::Cyan, 0), plain("cyan: a cpd notice that blocks nothing: curation")],
             vec![dot(Dot::White, 0), plain("white: idle, not seen since it last went idle")],
-            vec![loader(Dot::Working(Some(Work::Planning))), plain("the Lead is working, grounding (one frame every 50 ms)")],
-            vec![loader(Dot::Working(Some(Work::Planning))), plain("the Lead is working, plan (one frame every 50 ms)")],
-            vec![loader(Dot::Working(Some(Work::Review))), plain("the Lead is working, deploy (one frame every 50 ms)")],
-            vec![loader(Dot::Working(Some(Work::Planning))), plain("the Lead is working, done (one frame every 50 ms)")],
+            vec![loader(Dot::Working(Some(Work::Planning))), plain("the Lead is planning (grounding, drafts, a follow-up) (one frame every 50 ms)")],
+            vec![loader(Dot::Working(Some(Work::Dispatch))), plain("the Lead is working alongside running Jobs (one frame every 50 ms)")],
+            vec![loader(Dot::Working(None)), plain("a working Session with no Plan (one frame every 50 ms)")],
             vec![plain(""), plain(&precedence())],
         ],
     };

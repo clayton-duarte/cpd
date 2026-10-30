@@ -18,7 +18,7 @@ use ratatui::{
     text::Span,
 };
 
-use super::read::{AttemptStatus, Checks, Dot, JobStatus, Kind, PrState};
+use super::read::{AttemptStatus, Checks, Dot, JobStatus, Kind, PrState, Work};
 use cpd_core::inbox::model::Urgency;
 use cpd_core::pill::spec;
 use cpd_core::plan::Phase;
@@ -499,9 +499,14 @@ pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
         Dot::Magenta => (NEEDS_YOU, fg_clickable(Meaning::Planning)),
         Dot::Cyan => (NEEDS_YOU, fg_clickable(Meaning::Notice)),
         Dot::White => (NEEDS_YOU, clickable_text()),
-        Dot::Working(p) => (
+        Dot::Working(work) => (
             SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }],
-            fg_clickable(if p.is_none() { Meaning::InProgress } else { phase(p.map(|w| match w { crate::read::Work::Planning => Phase::Plan, crate::read::Work::Dispatch => Phase::Dispatch, crate::read::Work::Review => Phase::Deploy })) }),
+            match work {
+                Some(Work::Planning) => fg_clickable(Meaning::Planning),
+                Some(Work::Dispatch) => fg_clickable(Meaning::InProgress),
+                Some(Work::Review) => fg_clickable(Meaning::Review),
+                None => clickable_text(),
+            },
         ),
         Dot::Fixing => (SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }], fg_clickable(Meaning::Failed)),
         Dot::Waiting => (WAITING, fg_clickable(Meaning::Waiting)),
