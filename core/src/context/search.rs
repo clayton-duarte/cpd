@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 
 use super::engine::{Bridge, ContextEngine};
 use super::inforce;
+use super::query;
 use super::render::Indexed;
 use super::{ContextRow, Record, Select};
 use crate::args::Text;
@@ -126,6 +127,7 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
     if query.is_empty() {
         return Err(CpdError::new(ErrorCode::Usage, "A search query must not be empty.").with("query", args.query.as_str()));
     }
+    let sent = query::sanitise(&query);
     let kinds = kinds(&args.kind)?;
     let Env { home, config, mut store, .. } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
@@ -163,7 +165,7 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
     }
 
     let n = over_fetch(total, args.limit);
-    requests.push(search_request(&query, n));
+    requests.push(search_request(&sent, n));
     let responses = bridge.run(&db, &requests)?;
     for response in &responses {
         check_ok(response, &query)?;
@@ -177,7 +179,7 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
         && n < total
     {
         let m = n.saturating_mul(5).min(total);
-        let again = bridge.run(&db, &[search_request(&query, m)])?;
+        let again = bridge.run(&db, &[search_request(&sent, m)])?;
         check_ok(&again[0], &query)?;
         hits = hits_of(&again[0], &snap, &kinds, args.all);
     }
