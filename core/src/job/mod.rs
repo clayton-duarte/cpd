@@ -27,7 +27,7 @@ mod fix_retry_tests;
 pub mod guard;
 pub mod open;
 mod retry;
-mod show;
+pub(crate) mod show;
 pub(crate) mod spec;
 mod urgent;
 pub mod worked_on;
@@ -199,9 +199,9 @@ pub struct ListArgs {
 pub struct ShowArgs {
     /// The Job key
     #[arg(value_name = "key")]
-    key: JobKey,
+    pub(crate) key: JobKey,
     #[command(flatten)]
-    plan: PlanArg,
+    pub(crate) plan: PlanArg,
 }
 
 pub fn run(command: Command) -> Result<Output, CpdError> {

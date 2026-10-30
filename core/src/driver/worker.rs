@@ -118,9 +118,15 @@ fn strings(value: &Value, what: &str) -> Result<Vec<String>, CpdError> {
 pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job) -> Result<PathBuf, CpdError> {
     let previous = previous(conn, target)?;
     let answers = answers(conn, target)?;
-    let policy = crate::pr::policy_of_job(conn, home, &target.plan, &job.key)?;
-    let quick_check = spec::quick_check(&policy.hooks.pre_commit);
-    let protected = policy.protected.paths.clone();
+    // An explore Job has no PR, no quick check and no protected path of a policy: its Worker works in no repository.
+    let explore = crate::plan::jobs::is_explore(&job.kind);
+    let (quick_check, protected) = if explore {
+        (Vec::new(), Vec::new())
+    } else {
+        let policy = crate::pr::policy_of_job(conn, home, &target.plan, &job.key)?;
+        (spec::quick_check(&policy.hooks.pre_commit), policy.protected.paths.clone())
+    };
+    let artefact = super::explore::artefact_in(&target.worktree, &job.key);
     let job_spec = job.require_spec()?;
     let (touches, acceptance, out_of_scope) = (
         strings(&job_spec.touches, "touches")?,
@@ -140,6 +146,7 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
         "verify" => JobKind::Verify,
         "open" => JobKind::Open,
         "update" => JobKind::Update,
+        "scout" | "research" => JobKind::Explore { kind: &job.kind, artefact: &artefact },
         other => return Err(bad(format!("kind {other:?} of Job {}", job.key))),
     };
     let path = spec::write(
@@ -189,7 +196,7 @@ pub fn start(
     let adapter = config.pi_adapter_dir()?;
     let extensions = extensions_to_pass(&worker_candidates(&adapter), &target.worktree, dirs, &mut std::io::stderr());
     git_guard::install(home)?;
-    let launch = pi::worker(&WorkerLaunch {
+    let mut launch = pi::worker(&WorkerLaunch {
         home,
         session,
         plan: &target.plan,
@@ -197,6 +204,7 @@ pub fn start(
         model: &model,
         extensions: &extensions,
     });
+    super::runner::explore_env(&mut launch.env, target);
     let spawn = launch.spawn(&target.worktree);
     let work = config.tmux.work_session.as_str();
     let name = attempt_window(&target.plan, &target.id);

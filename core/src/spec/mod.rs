@@ -22,6 +22,9 @@ use crate::ids::{AttemptId, EscalationId, PlanId};
 #[cfg(test)]
 mod resources_tests;
 
+/// The most characters of an explore Job's summary (R8).
+pub const SUMMARY_CAP: usize = 1500;
+
 const TEMPLATE: &str = include_str!("worker.md");
 
 /// What no Attempt may touch, whatever the PR's `protected.paths` say (§7.5).
@@ -128,10 +131,12 @@ pub enum JobKind<'a> {
     Verify,
     Open,
     Update,
+    /// A `scout` or `research` Job (§2.2 "Job kinds"): its `kind` and the artefact the Worker writes (R7, R8).
+    Explore { kind: &'a str, artefact: &'a Path },
 }
 
-impl JobKind<'_> {
-    fn as_str(&self) -> &'static str {
+impl<'a> JobKind<'a> {
+    fn as_str(&self) -> &'a str {
         match self {
             JobKind::Work => "work",
             JobKind::Docs => "docs",
@@ -140,6 +145,7 @@ impl JobKind<'_> {
             JobKind::Verify => "verify",
             JobKind::Open => "open",
             JobKind::Update => "update",
+            JobKind::Explore { kind, .. } => kind,
         }
     }
 }
@@ -246,6 +252,12 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
     };
     let vars = Value::from_pairs([
         ("kind", Value::from(input.kind.as_str())),
+        ("explore", Value::from(matches!(input.kind, JobKind::Explore { .. }))),
+        ("artefact", Value::from(match input.kind {
+            JobKind::Explore { artefact, .. } => artefact.display().to_string(),
+            _ => String::new(),
+        })),
+        ("summary_cap", Value::from(SUMMARY_CAP)),
         ("tests", Value::from(tests.to_vec())),
         ("test_files", Value::from(test_files.to_vec())),
         ("test_jobs", Value::from(test_jobs)),

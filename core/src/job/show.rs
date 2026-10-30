@@ -40,11 +40,16 @@ fn attempt_counts(conn: &Connection, plan: &PlanId) -> Result<Vec<(String, i64)>
 
 /// `job show` (§5.7).
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
-    let plan = args.plan.require()?.clone();
     let mut env = Env::open()?;
+    show_in(&mut env, args)
+}
+
+/// [`show`] on an open `env`: what a test hands in.
+pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError> {
+    let plan = args.plan.require()?.clone();
     let home = env.home.clone();
     let concurrency = env.config.concurrency;
-    let (job, needed_by, attempts, needs, waiting_for) = env.store.read(|conn| {
+    let (job, needed_by, attempts, needs, waiting_for, summary) = env.store.read(|conn| {
         plan_phase(conn, &plan)?;
         let all = jobs::load(conn, &plan)?;
         let job = find(&all, &plan, &args.key)?.clone();
@@ -87,11 +92,18 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         } else {
             None
         };
-        Ok((job, needed_by, attempts, needs, waiting_for))
+        let summary: Option<String> =
+            conn.query_row("SELECT summary FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.key.as_str()], |r| r.get(0))?;
+        Ok((job, needed_by, attempts, needs, waiting_for, summary))
     })?;
     let tamper = jobs::tampered(&plan, std::slice::from_ref(&job));
     let mut fields = job.to_json();
     fields["needs"] = json!(needs);
+    // An explore Job's bounded summary and its artefact (a path relative to `$CPD_HOME`), §5.7.
+    if jobs::is_explore(&job.kind) {
+        fields["summary"] = json!(summary);
+        fields["artefact"] = json!(format!("run/{plan}/explore/{}.md", job.key));
+    }
     if let Some(waiting_for) = waiting_for {
         fields["waiting_for"] = json!(waiting_for);
     }

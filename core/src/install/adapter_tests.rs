@@ -423,6 +423,103 @@ fn the_cleanup_removes_the_scratch_of_dead_pids_and_spares_a_live_install_and_a_
     assert!(fs::symlink_metadata(share.join(format!("pi.link.{live}"))).is_ok(), "pi.link.<live pid> is another install's");
 }
 
+/// Two pids: the first runs, the second exited.
+fn live_and_dead_pids(rig: &Rig) -> (u32, u32) {
+    let launch = Launch { program: "install".into(), ..Launch::default() };
+    let spawn = &rig.fakes.spawn;
+    let (live, dead) = (spawn.spawn(&launch).unwrap(), spawn.spawn(&launch).unwrap());
+    spawn.exit(dead, 0);
+    assert!(spawn.alive(live) && !spawn.alive(dead));
+    (live.0, dead.0)
+}
+
+/// One install after every version of `share/` was last modified two hours ago (the clock is set, not waited for).
+fn install_once_everything_is_old(rig: &Rig) -> Run {
+    for name in rig.versions() {
+        rig.age(&rig.share().join(name), HOUR2);
+    }
+    rig.fakes.clock.advance(Duration::from_secs(1));
+    let run = rig.run();
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    run
+}
+
+/// Installs once (version V1), pins V1 with `pi.pin.<pid>`, adds an old unpinned version V2, then installs twice more
+/// with everything old, so V1 is neither current nor displaced. Returns V1, V2 and the pin's path.
+fn pin_v1_then_install_twice(rig: &Rig, pid: u32) -> (String, String, PathBuf) {
+    assert_eq!(rig.install_again().exit, 0);
+    let v1 = rig.linked_version();
+    let share = rig.share();
+    let pin = share.join(format!("pi.pin.{pid}"));
+    symlink(&v1, &pin).unwrap();
+    let v2 = "pi.20260101T000000-1".to_string();
+    fs::create_dir_all(share.join(&v2)).unwrap();
+    install_once_everything_is_old(rig);
+    install_once_everything_is_old(rig);
+    assert_ne!(rig.linked_version(), v1);
+    (v1, v2, pin)
+}
+
+#[test]
+fn a_version_a_live_pid_pins_survives_two_later_installs_once_it_is_old() {
+    let rig = Rig::new();
+    let (live, _) = live_and_dead_pids(&rig);
+
+    let (v1, v2, pin) = pin_v1_then_install_twice(&rig, live);
+
+    let share = rig.share();
+    assert!(share.join(&v1).join("package.json").exists(), "{v1}, pinned by a live pid, is kept whatever its age");
+    assert_eq!(fs::read_link(&pin).unwrap().to_string_lossy(), v1, "the live pin is kept");
+    assert!(!share.join(&v2).exists(), "{v2}, old and unpinned, is removed");
+}
+
+#[test]
+fn a_pin_of_a_dead_pid_is_removed_and_the_old_version_it_named_is_swept() {
+    let rig = Rig::new();
+    let (_, dead) = live_and_dead_pids(&rig);
+
+    let (v1, _, pin) = pin_v1_then_install_twice(&rig, dead);
+
+    assert!(fs::symlink_metadata(&pin).is_err(), "the pin of a dead pid is removed");
+    assert!(!rig.share().join(&v1).exists(), "{v1}, old and no longer pinned, is removed");
+}
+
+#[test]
+fn a_pin_that_names_no_pid_is_removed() {
+    let rig = Rig::new();
+    let share = rig.share();
+    fs::create_dir_all(&share).unwrap();
+    let version = "pi.20260101T000100-2";
+    fs::create_dir_all(share.join(version)).unwrap();
+    let pin = share.join("pi.pin.abc");
+    symlink(version, &pin).unwrap();
+
+    let run = rig.run();
+
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    assert!(fs::symlink_metadata(&pin).is_err(), "pi.pin.abc names no pid and is removed");
+}
+
+#[test]
+fn a_pin_naming_something_that_is_not_a_version_is_removed_and_never_followed() {
+    let rig = Rig::new();
+    let (_, dead) = live_and_dead_pids(&rig);
+    let share = rig.share();
+    fs::create_dir_all(&share).unwrap();
+    // A real directory with a file, outside `share/` and inside the rig's temp dir.
+    let outside = rig.install.home.parent().unwrap().join("outside-dir");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("keep.txt"), "mine\n").unwrap();
+    let pin = share.join(format!("pi.pin.{dead}"));
+    symlink(&outside, &pin).unwrap();
+
+    let run = rig.run();
+
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    assert!(fs::symlink_metadata(&pin).is_err(), "the pin of an exited pid is removed");
+    assert_eq!(fs::read_to_string(outside.join("keep.txt")).unwrap(), "mine\n", "the target was never followed");
+}
+
 #[test]
 fn a_pi_that_is_a_regular_file_is_refused_before_the_binary_is_replaced() {
     let rig = Rig::new();
