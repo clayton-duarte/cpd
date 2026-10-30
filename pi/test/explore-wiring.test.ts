@@ -79,7 +79,7 @@ test("the adapter applies the explore profile of CPD_JOB_KIND to a worker, for b
   inCwd(r, x.plain);
   assert.equal(await call(r, "mcp__docs__search", {}), undefined, "research mcp tool");
   assert.equal(await call(r, "bash", { command: "curl https://example.com", timeout: 10 }), undefined, "research curl");
-  blocked(await call(r, "bash", { command: "curl -H 'Authorization: Bearer abc123def456' https://example.com", timeout: 10 }), "secret", "research secret");
+  blocked(await call(r, "bash", { command: "curl -H 'Authorization: Bearer totally_fake_curl_bearer_secret' https://example.com", timeout: 10 }), "secret", "research secret");
 });
 
 test("the adapter applies no explore profile to a lead or a manager", async (t) => {
@@ -120,7 +120,7 @@ test("the durable workerVerdict applies the same explore profile", (t) => {
     { name: "bash", arguments: { command: "ls", timeout: 10 } },
     { name: "bash", arguments: { command: `echo x > ${join(x.repo, "f")}`, timeout: 10 } },
     { name: "bash", arguments: { command: "curl https://example.com", timeout: 10 } },
-    { name: "bash", arguments: { command: "curl -H 'Authorization: Bearer abc123def456' https://example.com", timeout: 10 } },
+    { name: "bash", arguments: { command: "curl -H 'Authorization: Bearer totally_fake_curl_bearer_secret' https://example.com", timeout: 10 } },
     { name: "edit", arguments: { path: join(x.repo, "f") } },
     { name: "write", arguments: { path: join(x.tmp, "home", "run", "p1", "explore", "a.md") } },
     { name: "mcp__docs__search", arguments: {} },
