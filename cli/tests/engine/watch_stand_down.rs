@@ -73,10 +73,6 @@ fn migration_txn(fx: &Fx, name: &str) -> i64 {
     fx.env.query(&format!("SELECT txn FROM schema_migrations WHERE name = '{name}'"))
 }
 
-fn count_after(fx: &Fx, txn: i64, what: &str) -> i64 {
-    fx.env.query(&format!("SELECT count(*) FROM {what} AND txn > {txn}"))
-}
-
 fn log(fx: &Fx) -> String {
     fs::read_to_string(CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap().watch_log()).unwrap_or_default()
 }
@@ -110,7 +106,7 @@ fn stand_down_between_ticks_runs_no_step_and_writes_nothing() {
     let txn = migration_txn(&fx, BREAKING);
     assert_eq!(out, Output::success(json!({"stopped": true})), "{out:?}");
     assert!(naps < BOUND, "the engine went on ticking on a store it cannot open: {naps} naps, the test's bound is {BOUND}");
-    assert_eq!(count_after(&fx, txn, "txns WHERE command = 'watch'"), 0, "a command `watch` wrote after the migration");
+    assert_eq!(fx.env.query::<i64>(&format!("SELECT count(*) FROM txns WHERE command = 'watch' AND id > {txn}")), 0, "a command `watch` wrote after the migration");
     assert_eq!(items(&fx), 0, "E8 ran after the migration and opened an Inbox item");
     let after = fx.env.query::<i64>(&format!("SELECT count(*) FROM events WHERE txn > {txn} AND kind IN ('error', 'watch-stopped')"));
     assert_eq!(after, 0, "an `error` or `watch-stopped` Event was appended after the migration");
