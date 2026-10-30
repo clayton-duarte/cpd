@@ -1646,6 +1646,9 @@ CREATE TABLE attempts (
   ended_at         TEXT,
   runner           TEXT NOT NULL DEFAULT 'pi' CHECK (runner IN ('pi', 'durable')),  -- migration `worker-runner` (pro-d165, §4.5; an ADD COLUMN, so after `ended_at`): the Worker runner, `worker_runner` of §8.2 read when the Attempt was created; existing rows read `pi`
   worker_pid       INTEGER,  -- migration `worker-runner` (§4.5): the pid of a `durable` Worker's process, null for `pi` and before the start (§3.4)
+  gate_hook        TEXT CHECK (gate_hook IN ('pre-commit', 'pre-merge')),  -- migration `gate-facts` (pro-d267, §4.5; an ADD COLUMN): the hook of the failed Gate, §2.2
+  gate_command     TEXT,  -- migration `gate-facts`: the rendered `sh -c` text of the first command that exited non-zero, §2.2
+  gate_exit        INTEGER,  -- migration `gate-facts`: that command's exit code, §2.2
   PRIMARY KEY (plan, id),
   UNIQUE (plan, job, number),
   FOREIGN KEY (plan, job) REFERENCES jobs(plan, key),
