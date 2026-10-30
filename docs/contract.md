@@ -476,7 +476,7 @@ One execution of a Job by one fresh Worker session, in its own worktree.
 | `tier` | text | §9 |
 | `origin` | text | `ladder` (created by the engine) or `retry` (after `job retry`) |
 | `status` | text | §3.4 |
-| `outcome`, `cause` | text?, text? | set together, exactly when `status = ended` (§3.4) |
+| `outcome`, `cause` | text?, text? | set together, exactly when `status = ended` (§3.4). `dirty_target` stays in the `attempts.cause` CHECK for the Attempts that ended with it before hs-d243; it is never produced now (§3.4), and removing it from the CHECK is a table rebuild |
 | `branch`, `worktree` | text | §2.1 |
 | `base_sha` | text? | Lead Branch HEAD the worktree was cut from |
 | `driver_pid` | int? | pid of `cpd attempt run` |

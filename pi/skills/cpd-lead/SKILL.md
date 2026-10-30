@@ -323,7 +323,7 @@ Find the cause in the message text or `cpd job show <k>` (it lists Attempts with
 | `provider_error` (the 3 retries of the same Tier are used up) | `cpd job retry <k> --tier <T>`, the SAME Tier as the last Attempt, once the provider answers again (check with the User if unsure); it never means the Spec or the Tier is wrong. |
 | `setup_failed` | Worktree setup failed (the repo's `pre-start`). Tell the User; retry after they fix it. |
 | `cas_lost` | The Lead Branch moved during the merge: `cpd job retry <k> --tier <T>`, same Tier. |
-| `dirty_target` | The Lead worktree is dirty. Tell the User. Never touch the Lead worktree. |
+| `dirty_target` | Declared, never produced since the User's decision of 2026-10-19 that removed the merge's Lead worktree check. Only an old Attempt's row can show it. Nothing is to be done. |
 | `tampered` | The Attempt changed a protected path (`.cpd/` or paths in the repo's policy file `[protected]`), or an implementation Job changed a red test that no `cpd job approve-tests` approved. Retry once; if it recurs the Job needs such a change: for a red test, decide as in [Escalations](#escalations); for a protected path cancel and ask the User. |
 
 - The retry ladder already raised the Tier on every automatic Attempt (at most `retry_cap`, default 2, retries). If the Job failed at `S3`, no higher Tier exists: change the Spec (cancel and append) or ask the User.
@@ -367,7 +367,7 @@ What reaches you is a decision, not a step:
 
 - **`job-failed` of the open Job** (an Attempt out of retries, or `gate_error`: the Gate itself broke, only under `gate.pr = local`): diagnose ([Failed Jobs](#failed-jobs)), then when the cause needs a fix append it and the engine retries the Job when that fix merges, otherwise run `cpd job retry <k> --tier <T>`, never cancel it (a cancel stands: commands.md §5.3). Tell the User when the cause is theirs (the repo's hooks, the remote).
 - **An escalation from its Worker** (`pr_closed`, `pr_title_required`, a policy refusal): [Escalations](#escalations).
-- **The repair, `cpd pr open --pr <key>`**: the same steps by hand, for a failed open Job you do not want to retry or an engine that is down. It is refused `open_job_live` while the PR's open Job is queued or running. It refuses `base_conflict` (exit 3) only for a conflict, `gate_failed` (exit 3; only under `gate.pr = local`: nothing was pushed; the last 60 lines are in `error.details.tail`, the log is `error.details.log`: append one fix Job per cause as for `pr-feedback`, and run it again when they are Merged), `pr_title_required` (exit 3: `cpd pr edit <key> --title "<title>"`, then again) and `gate_error` (exit 1). `dirty_target` (the Lead worktree is dirty): tell the User. `lock_timeout`: run it again. `gh_failed`: tell the User.
+- **The repair, `cpd pr open --pr <key>`**: the same steps by hand, for a failed open Job you do not want to retry or an engine that is down. It is refused `open_job_live` while the PR's open Job is queued or running. It refuses `base_conflict` (exit 3) only for a conflict, `gate_failed` (exit 3; only under `gate.pr = local`: nothing was pushed; the last 60 lines are in `error.details.tail`, the log is `error.details.log`: append one fix Job per cause as for `pr-feedback`, and run it again when they are Merged), `pr_title_required` (exit 3: `cpd pr edit <key> --title "<title>"`, then again) and `gate_error` (exit 1). `lock_timeout`: run it again. `gh_failed`: tell the User.
 
 #### PR
 
