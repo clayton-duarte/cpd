@@ -2,7 +2,9 @@
 
 use serde::Serialize;
 
-use crate::error::CpdError;
+use super::Config;
+use super::migrate::top_level_line;
+use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 
 /// `pi` (pi in a tmux pane, the default) or `durable` (the durable runner, `pi/durable-worker/`).
@@ -32,7 +34,10 @@ impl WorkerRunner {
 
     /// The other runner: `Pi` becomes `Durable` and back.
     pub fn flipped(self) -> WorkerRunner {
-        todo!("not implemented")
+        match self {
+            WorkerRunner::Pi => WorkerRunner::Durable,
+            WorkerRunner::Durable => WorkerRunner::Pi,
+        }
     }
 }
 
@@ -40,13 +45,44 @@ impl WorkerRunner {
 pub const TOGGLE_COMMENT: &str = "set by a click on the status line's runner pill (pro-d199); a started Attempt keeps its runner";
 
 /// The text of a `config.toml` whose top-level `worker_runner` line is `worker_runner = "<to>" # <TOGGLE_COMMENT>`.
+/// The old line is replaced whole; when absent, the line goes after the last top-level `key = value` line before the
+/// first table (at the end when there is no table). Every other byte is unchanged.
 pub fn set_in_text(text: &str, to: WorkerRunner) -> String {
-    let _ = (text, to);
-    todo!("not implemented")
+    let line = format!("worker_runner = \"{}\" # {TOGGLE_COMMENT}", to.as_str());
+    if let Some((start, body_end, _, _)) = top_level_line(text, "worker_runner") {
+        return format!("{}{line}{}", &text[..start], &text[body_end..]);
+    }
+    // The end of the last top-level `key = value` line (after its newline), before the first table header.
+    let mut at = 0;
+    let mut start = 0;
+    for l in text.split_inclusive('\n') {
+        let trimmed = l.trim_start();
+        if trimmed.starts_with('[') {
+            break;
+        }
+        start += l.len();
+        if !trimmed.starts_with('#') && l.contains('=') {
+            at = start;
+        }
+    }
+    let (head, tail) = text.split_at(at);
+    let sep = if head.is_empty() || head.ends_with('\n') { "" } else { "\n" };
+    format!("{head}{sep}{line}\n{tail}")
 }
 
 /// Flips `worker_runner` in `$CPD_HOME/config.toml` atomically and returns the new value.
 pub fn toggle(home: &CpdHome) -> Result<WorkerRunner, CpdError> {
-    let _ = home;
-    todo!("not implemented")
+    let path = home.config();
+    let text = std::fs::read_to_string(&path).map_err(|e| {
+        let code = if e.kind() == std::io::ErrorKind::NotFound { ErrorCode::ConfigMissing } else { ErrorCode::ConfigInvalid };
+        CpdError::new(code, format!("cannot read config.toml: {e}.")).with("path", path.display().to_string())
+    })?;
+    let (config, _) = Config::parse(&text, &path)?;
+    let to = config.worker_runner.flipped();
+    let new = set_in_text(&text, to);
+    Config::parse(&new, &path)?;
+    crate::atomic::write_atomic(&path, &new).map_err(|e| {
+        CpdError::new(ErrorCode::ConfigInvalid, format!("cannot write config.toml: {e}.")).with("path", path.display().to_string())
+    })?;
+    Ok(to)
 }
