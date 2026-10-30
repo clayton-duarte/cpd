@@ -26,13 +26,13 @@ pi/test/manager-errors.test.ts 3  # m-pi: sleep or wall-clock wait
 pi/test/mcp-replay.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/noblock.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/pi-check.test.ts 3  # m-pi: sleep or wall-clock wait
-pi/test/plan-review.test.ts 47  # m-pi: sleep or wall-clock wait
+pi/test/plan-review.test.ts 46  # m-pi: sleep or wall-clock wait
 pi/test/protocol.test.ts 6  # m-pi: sleep or wall-clock wait
 pi/test/reload.test.ts 10  # m-pi: sleep or wall-clock wait
 pi/test/reminder.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/reply.test.ts 9  # m-pi: sleep or wall-clock wait
 pi/test/retier.test.ts 11  # m-pi: sleep or wall-clock wait
-pi/test/review-chat.test.ts 45  # m-pi: sleep or wall-clock wait
+pi/test/review-chat.test.ts 39  # m-pi: sleep or wall-clock wait
 pi/test/slack-channel.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/start.test.ts 20  # m-pi: sleep or wall-clock wait
 pi/test/state.test.ts 31  # m-pi: sleep or wall-clock wait

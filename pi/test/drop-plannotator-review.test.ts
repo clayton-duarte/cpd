@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
-import { Fixture, ev, planShow, waitFor as wait } from "./fake.ts";
+import { Fixture, ev, planShow } from "./fake.ts";
 import { reviewsFromEntries } from "../lib/plan-review.ts";
 
 // hs-d738, hs-d739: plannotator is removed; the review is the chat dialog (Approve, Change) and its summary.
 
-const waitFor = <T>(what: string, fn: () => T | undefined | null | false, ms = 3000) => wait(what, fn, ms);
 const TITLE = "Review title";
 const SUMMARY = `# ${TITLE}\nPlan p1: Plan · review r1\n\nGoal: Show a review in chat\n\nApprove | Change\n`;
 const pending = () => planShow({ review: { id: "r1", status: "pending", fingerprint: "ff", current: true, title: TITLE } });
@@ -18,9 +17,12 @@ async function opens(f: Fixture) {
   f.summaryFile("p1", "r1", SUMMARY);
   f.load();
   await f.pi.fire("session_start");
-  await waitFor("the follower", () => f.follows().length > 0);
+  await f.followerStarted();
   f.emit(reviewEvent(101));
-  return waitFor("the select", () => f.pi.openDialog("select"));
+  await f.drain();
+  const d = f.pi.openDialog("select");
+  assert.ok(d, "the dialog is open");
+  return d;
 }
 
 test("drop-plannotator the review dialog offers Approve and Change only", async (t) => {
@@ -66,7 +68,7 @@ test("drop-plannotator the adapter listens to no plannotator event and the plann
   f.respond("plan-show", pending());
   f.load();
   await f.pi.fire("session_start");
-  await waitFor("the follower", () => f.follows().length > 0);
+  await f.followerStarted();
   assert.deepEqual(names.filter((n) => n.startsWith("plannotator:")), []);
   assert.equal(existsSync(new URL("../lib/plannotator.ts", import.meta.url)), false);
 });
