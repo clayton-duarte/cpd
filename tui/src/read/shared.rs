@@ -332,7 +332,7 @@ pub struct PlanHead {
     pub archived_at: Option<String>,
     /// The Plan has a failed Job being worked on (pro-d88): its Lead's dot is the red loader.
     pub fixing: bool,
-    /// STUB: always false.
+    /// Git/PR work of the Plan (pro-d200): any PR is open or conflicting, or an open/update Job is queued or running.
     pub git_active: bool,
 }
 
@@ -341,12 +341,12 @@ impl PlanHead {
         self.archived_at.is_some()
     }
 
-    /// STUB: only `fixing`.
+    /// The Lead's dot is the red loader (pro-d200): a failed Job is worked on, or a Worker Escalation is open.
     pub fn failing(&self) -> bool {
-        self.fixing
+        self.fixing || self.open_escalations > 0
     }
 
-    /// STUB: through the stub `Work::of`.
+    /// What the Lead is working on (pro-d200).
     pub fn work(&self) -> Work {
         Work::of(self.phase, self.counts.draft > 0, self.git_active || self.counts.merging > 0)
     }
@@ -383,6 +383,18 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
     }
 
     let fixing: BTreeSet<PlanId> = failed_worked_on(conn, only_plan)?.into_iter().map(|(plan, _)| plan).collect();
+
+    let mut git: BTreeSet<String> = BTreeSet::new();
+    let mut stmt = conn.prepare(
+        "SELECT r.plan FROM prs r LEFT JOIN pull_requests q ON q.id = r.pull_request
+          WHERE (?1 IS NULL OR r.plan = ?1) AND (r.status = 'open' OR q.mergeable = 'conflicting')
+         UNION
+         SELECT j.plan FROM jobs j
+          WHERE (?1 IS NULL OR j.plan = ?1) AND j.kind IN ('open', 'update') AND j.status IN ('queued', 'running')",
+    )?;
+    for row in stmt.query_map([&only], |r| r.get::<_, String>(0))? {
+        git.insert(row?);
+    }
 
     let mut open: BTreeMap<String, usize> = BTreeMap::new();
     let mut stmt = conn.prepare(
@@ -445,7 +457,7 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
             done_at: r.get(14)?,
             archived_at: r.get(15)?,
             fixing: fixing.contains(&plan),
-            git_active: false,
+            git_active: git.contains(&pid),
             phase,
             pr,
             id: plan,

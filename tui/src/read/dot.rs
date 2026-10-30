@@ -16,9 +16,18 @@ pub enum Work {
 }
 
 impl Work {
-    /// STUB (deliberately wrong): always `Dispatch`.
-    pub fn of(_phase: Phase, _drafts: bool, _git: bool) -> Work {
-        Work::Dispatch
+    /// What a Plan's Lead works on (pro-d200): drafts -> Planning; else git (or phase Deploy) -> Review; else
+    /// Grounding, Plan or Done -> Planning; else Dispatch.
+    pub fn of(phase: Phase, drafts: bool, git: bool) -> Work {
+        if drafts {
+            Work::Planning
+        } else if git || phase == Phase::Deploy {
+            Work::Review
+        } else if phase == Phase::Dispatch {
+            Work::Dispatch
+        } else {
+            Work::Planning
+        }
     }
 }
 

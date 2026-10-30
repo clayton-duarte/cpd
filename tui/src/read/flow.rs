@@ -78,7 +78,7 @@ pub struct NeedsUser {
 }
 
 impl NeedsUser {
-    /// Of the `visible` items (not snoozed, not dismissed) of `plan`, whose Lead is `lead` and whose phase is `lead_phase`.
+    /// Of the `visible` items (not snoozed, not dismissed) of `plan`, whose Lead is `lead` and whose Lead works on `lead_work` (pro-d200); `lead_escalated`: the Plan has an open Worker Escalation.
     fn of(visible: &[Item], plan: &PlanId, lead: &SessionId, lead_working: bool, lead_work: Option<Work>, lead_escalated: bool, worked_on: Vec<JobKey>) -> NeedsUser {
         NeedsUser {
             stuck_jobs: visible
@@ -310,7 +310,8 @@ fn boxes(conn: &Connection, plan: &PlanId, now: Option<String>, now_ms: i64) -> 
             )
             .optional()?
             .ok_or_else(|| plan_not_found(plan))?;
-        let phase = Phase::parse(&phase).ok_or_else(|| bad_row(format!("Plan {plan} has phase {phase:?}")))?;
+        Phase::parse(&phase).ok_or_else(|| bad_row(format!("Plan {plan} has phase {phase:?}")))?;
+        let head = plan_heads(conn, Some(plan))?.pop().ok_or_else(|| plan_not_found(plan))?;
         let now: String = match now {
             Some(now) => now,
             None => conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?,
@@ -321,8 +322,8 @@ fn boxes(conn: &Connection, plan: &PlanId, now: Option<String>, now_ms: i64) -> 
             plan,
             &id("Session id", &lead, SessionId::parse)?,
             lead_working,
-            Some(Work::of(phase, false, false)),
-            false,
+            Some(head.work()),
+            head.open_escalations > 0,
             worked_on,
         );
         let jobs = job_nodes(conn, plan)?;
