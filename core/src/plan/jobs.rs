@@ -14,7 +14,12 @@ use crate::ids::PlanId;
 pub const STATUSES: [&str; 6] = ["draft", "queued", "running", "merged", "failed", "cancelled"];
 
 /// The kinds of Job (`jobs.kind`, §2.2 "Job kinds"): `open` and `update` are cpd's, the others the Lead's.
-pub const KINDS: [&str; 7] = ["work", "docs", "test", "impl", "verify", "open", "update"];
+pub const KINDS: [&str; 9] = ["work", "docs", "test", "impl", "verify", "open", "update", "scout", "research"];
+
+/// The explore kinds (`scout`, `research`): Jobs of the Plan, not of a PR.
+pub fn is_explore(kind: &str) -> bool {
+    matches!(kind, "scout" | "research")
+}
 
 /// The Spec of a Job (§2.2): all five fields, or none (a stub, below). The
 /// arrays are kept as the JSON values stored, so a fingerprint hashes exactly

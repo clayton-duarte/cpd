@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
 use super::spec::{self, Spec};
@@ -61,7 +61,16 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
     if let Some(kind) = &args.kind {
         check_kind_not_reserved(kind)?;
     }
-    let spec = args.spec.as_ref().map(|path: &PathBuf| spec::read(path)).transpose()?;
+    if args.kind.as_deref().is_some_and(jobs::is_explore) {
+        return Err(CpdError::new(ErrorCode::ExploreNeedsMixed, "A Job cannot be made an explore Job: add a scout or research Job with job add.")
+            .with("kind", args.kind.clone().unwrap_or_default()));
+    }
+    // An explore Job's Spec has its own four fields: the Job's stored kind says which.
+    let stored_kind: Option<String> = env
+        .store
+        .read(|conn| Ok(conn.query_row("SELECT kind FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), args.key.as_str()], |r| r.get(0)).optional()?))?;
+    let spec_kind = stored_kind.unwrap_or_else(|| "work".to_owned());
+    let spec = args.spec.as_ref().map(|path: &PathBuf| spec::read_for(path, &spec_kind)).transpose()?;
     if let Some(tier) = args.tier {
         let pr = args.pr.clone();
         env.check_tier(&plan, &args.key, pr.as_ref(), tier)?;
@@ -146,11 +155,18 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     if let Some(kind) = &edits.kind {
         after.kind = kind.clone();
     }
+    let explore = jobs::is_explore(&after.kind);
     if let Some(spec) = &edits.spec {
+        let mut spec = spec.clone();
         spec.check_kind(&after.kind)?;
-        // The Spec names no primary checkout of a PR of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
-        spec.check_primary_roots(&super::add::primary_roots(&load_prs(conn, plan)?), &std::env::home_dir().unwrap_or_default())?;
-        spec.check_files_relative()?;
+        if explore {
+            spec.touches = vec![spec::explore_artefact(plan.as_str(), key.as_str())];
+        } else {
+            // The Spec names no primary checkout of a PR of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
+            let user_home = std::env::home_dir().unwrap_or_default();
+            spec.without_artefacts(home.root(), plan.as_str(), &user_home).check_primary_roots(&super::add::primary_roots(&load_prs(conn, plan)?), &user_home)?;
+            spec.check_files_relative()?;
+        }
         after.spec = Some(spec.stored());
         after.tests = spec.tests.as_ref().map(|t| json!(t));
         after.test_files = spec.test_files.as_ref().map(|t| json!(t));
@@ -181,7 +197,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
         after.pr = Some(pr.clone());
     }
     let moved = after.pr != before.pr;
-    if let Some(spec) = &edits.spec {
+    if let (false, Some(spec)) = (explore, &edits.spec) {
         let prs = load_prs(conn, plan)?;
         if let Some(pr) = prs.iter().find(|p| p.key.as_str() == after.pr_str()) {
             // A Lead Branch that is not in the repo (yet) is no tree to read: the Job starts from the PR's base.
@@ -198,7 +214,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
         let names: Option<Vec<String>> = after.resources.as_ref().and_then(|r| serde_json::from_value(r.clone()).ok());
         super::add::check_resources_declared(conn, home, plan, after.pr_str(), key.as_str(), names.as_deref())?;
     }
-    if moved || after.kind != before.kind {
+    if !explore && (moved || after.kind != before.kind) {
         check_shape_allows(&load_prs(conn, plan)?, plan, after.pr_str(), &after.kind)?;
     }
     // A Job that changes PR keeps none of its old needs: they are checked against the new PR.
