@@ -82,16 +82,21 @@ fn render(fx: &Crud, job: &str) -> String {
 }
 
 /// The three fragments of a base in a rendered Spec.
-fn base_fragments(base: &str) -> [String; 3] {
-    [format!("fit its base {base}"), format!("git fetch origin {base}"), format!("origin/{base} HEAD")]
+fn base_fragments(base: &str, first: &str) -> [String; 3] {
+    [format!("{first} {base}"), format!("git fetch origin {base}"), format!("origin/{base} HEAD")]
 }
 
 /// The live base is named and the insert-time one is not; the stored row of `job` is as it was.
 fn assert_names(spec: &str, live: &str, old: &str) {
-    for f in base_fragments(live) {
+    assert_names_with(spec, live, old, "fit its base");
+}
+
+/// As [`assert_names`], with the goal's own words before the base (an update Spec says "up to date with its base").
+fn assert_names_with(spec: &str, live: &str, old: &str, first: &str) {
+    for f in base_fragments(live, first) {
         assert!(spec.contains(&f), "the Spec lacks {f:?}:\n{spec}");
     }
-    for f in base_fragments(old) {
+    for f in base_fragments(old, first) {
         assert!(!spec.contains(&f), "the Spec still has {f:?}:\n{spec}");
     }
 }
@@ -194,6 +199,6 @@ fn an_update_jobs_worker_spec_names_the_base_a_pr_edit_set() {
     assert_eq!(base_of(&fx, "b"), "main");
 
     let spec = render(&fx, &job);
-    assert_names(&spec, "main", "develop");
+    assert_names_with(&spec, "main", "develop", "up to date with its base");
     assert_eq!(stored(&fx, &job).0, before.0);
 }
