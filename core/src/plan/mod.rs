@@ -18,6 +18,8 @@ pub mod jobs;
 #[cfg(test)]
 mod display_tier_tests;
 #[cfg(test)]
+mod explore_render_tests;
+#[cfg(test)]
 mod explore_tests;
 mod lead;
 mod list;

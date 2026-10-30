@@ -194,6 +194,7 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, 
         cancel_requested_at: None,
         failed_cause: None,
         merged_sha: None,
+        summary: None,
         created_at: String::new(),
         needs: Vec::new(),
     };
@@ -309,6 +310,7 @@ mod tests {
             cancel_requested_at: None,
             failed_cause: None,
             merged_sha: None,
+            summary: None,
             created_at: "t".into(),
             needs: vec!["unused".into()],
         }

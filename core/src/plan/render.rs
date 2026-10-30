@@ -375,7 +375,7 @@ fn overlaps_section(out: &mut Vec<String>, overlaps: &[Overlap]) {
 /// is headed by the Plan, a review's copy by the review's own title and then a
 /// line naming the Plan and the review.
 pub enum Heading<'a> {
-    Plan { title: &'a str },
+    Plan { title: &'a str, plan: &'a str },
     Review { title: &'a str, plan: &'a str, plan_title: &'a str, review: &'a str },
 }
 
@@ -388,7 +388,7 @@ pub fn markdown(heading: &Heading, context: &str, phase: &str, prs: &[PrRow], jo
     let shown = Shown { all_jobs: jobs, display, anchors: Anchors::new(jobs) };
     let (cancelled, prs): (Vec<&PrRow>, Vec<&PrRow>) = prs.iter().partition(|p| p.status == "cancelled");
     let mut out = match heading {
-        Heading::Plan { title } => vec![format!("# Plan: {}", inline(title)), String::new()],
+        Heading::Plan { title, plan: _ } => vec![format!("# Plan: {}", inline(title)), String::new()],
         Heading::Review { title, plan, plan_title, review } => {
             vec![format!("# {}", inline(title)), String::new(), format!("Plan {plan}: {} · review {review}", inline(plan_title)), String::new()]
         }
@@ -476,7 +476,7 @@ mod tests {
 
     #[test]
     fn a_plan_without_prs_says_so() {
-        assert_eq!(markdown(&Heading::Plan { title: "T" }, "ctx", "plan", &[], &[], &[], "S2", &Display::default()), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n");
+        assert_eq!(markdown(&Heading::Plan { title: "T", plan: "p1" }, "ctx", "plan", &[], &[], &[], "S2", &Display::default()), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n");
     }
 
     #[test]
@@ -522,6 +522,7 @@ mod tests {
             cancel_requested_at: None,
             failed_cause: None,
             merged_sha: None,
+            summary: None,
             created_at: "t".into(),
             needs: Vec::new(),
         }
@@ -529,7 +530,7 @@ mod tests {
 
     /// The Plan `T` as `markdown` renders it for `prs` and `jobs` alone: no needs of other Plans, nothing superseded.
     fn plain(phase: &str, prs: &[PrRow], jobs: &[Job], open_tier: &str) -> String {
-        markdown(&Heading::Plan { title: "T" }, "ctx", phase, prs, jobs, &[], open_tier, &Display::of(prs))
+        markdown(&Heading::Plan { title: "T", plan: "p1" }, "ctx", phase, prs, jobs, &[], open_tier, &Display::of(prs))
     }
 
     fn titled_pr(key: &str, status: &str) -> PrRow {

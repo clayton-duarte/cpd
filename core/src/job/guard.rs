@@ -83,6 +83,7 @@ mod tests {
             cancel_requested_at: None,
             failed_cause: None,
             merged_sha: None,
+            summary: None,
             created_at: String::new(),
             needs: needs.iter().map(|n| (*n).to_owned()).collect(),
         }
