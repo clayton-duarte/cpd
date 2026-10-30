@@ -429,7 +429,7 @@ fn lock_leaves_a_stacked_pr_waiting_and_starts_only_its_base_pr() {
     assert_eq!(fx.pr_status("a1"), "dispatch");
     assert_eq!(fx.pr_status("b1"), "waiting");
     assert!(!fx.lead_path(&repo.path, "b1").exists());
-    assert_eq!(fx.git(&repo.path, &["branch", "--list", "pay/*"]), "pay/a1");
+    assert_eq!(fx.git(&repo.path, &["for-each-ref", "--format=%(refname:short)", "refs/heads/pay/"]), "pay/a1");
     assert_eq!(remote_branch(&fx, &repo.path, "pay/b1"), "");
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE status = 'queued' AND fingerprint IS NOT NULL"), 4);
     assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "dispatch");
@@ -478,8 +478,8 @@ fn lock_starts_no_pr_down_a_stack_and_still_starts_an_independent_pr() {
         assert!(!fx.lead_path(&api.path, key).exists(), "{key}'s worktree");
         assert_eq!(remote_branch(&fx, &api.path, &format!("pay/{key}")), "", "{key} on origin");
     }
-    assert_eq!(fx.git(&api.path, &["branch", "--list", "pay/*"]), "pay/a1");
-    assert_eq!(fx.git(&web.path, &["branch", "--list", "pay/*"]), "pay/w1");
+    assert_eq!(fx.git(&api.path, &["for-each-ref", "--format=%(refname:short)", "refs/heads/pay/"]), "pay/a1");
+    assert_eq!(fx.git(&web.path, &["for-each-ref", "--format=%(refname:short)", "refs/heads/pay/"]), "pay/w1");
     let mut started: Vec<String> = fx.events("pr-started").iter().map(|e| e["data"]["pr"].as_str().unwrap().to_owned()).collect();
     started.sort();
     assert_eq!(started, ["a1", "w1"]);
