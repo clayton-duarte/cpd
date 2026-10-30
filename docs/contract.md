@@ -488,6 +488,7 @@ One execution of a Job by one fresh Worker session, in its own worktree.
 | `worker_session` | text? | the Worker's Session |
 | `spec_path` | text? | rendered Worker Spec |
 | `submitted_sha`, `submitted_at` | text?, time? | set by `attempt submit` |
+| `actual_files` | json? | the repo-relative paths the Attempt wrote, a JSON array of strings in the order of `git diff --name-only --no-renames -z`; set by `attempt submit` in the same UPDATE as `submitted_sha` (§7.3 "The written files"); an explore Attempt (§7.7) sets `[]`; null only for an Attempt that submitted before the migration `actual-files` (pro-d304) and for one that never submitted |
 | `check_tail` | text? | last 60 lines of the Gate that failed at the merge (§7.4 step 6); set and null together with `gate_hook` (so `attempt submit` writes none) |
 | `merged_sha` | text? | set exactly when the outcome is `merged` |
 | `nudged` | bool | the "you ended your turn without submitting" message was sent (§3.4) |
