@@ -301,6 +301,17 @@ mod tests {
     }
 
     #[test]
+    fn required_checks_defaults_to_empty_and_the_repo_file_wins_over_the_owner_file() {
+        let (_d, home) = home();
+        write(&home, "acme/owner.toml", "");
+        assert_eq!(resolve(&home, &repo_key("acme", "cpd")).unwrap().policy.pr.required_checks, Vec::<String>::new());
+        write(&home, "acme/owner.toml", "[pr]\nrequired_checks = [\"owner-gate\"]\n");
+        assert_eq!(resolve(&home, &repo_key("acme", "cpd")).unwrap().policy.pr.required_checks, ["owner-gate"]);
+        write(&home, "acme/cpd.toml", "[pr]\nrequired_checks = [\"gate\"]\n");
+        assert_eq!(resolve(&home, &repo_key("acme", "cpd")).unwrap().policy.pr.required_checks, ["gate"]);
+    }
+
+    #[test]
     fn a_set_domain_replaces_the_whole_domain_and_left_out_keys_take_cpds_default() {
         let (_d, home) = home();
         write(
