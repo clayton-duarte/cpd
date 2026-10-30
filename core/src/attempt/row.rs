@@ -38,6 +38,7 @@ pub(super) struct Attempt {
     pub gate_hook: Option<String>,
     pub gate_command: Option<String>,
     pub gate_exit: Option<i64>,
+    pub actual_files: Value,
 }
 
 impl Attempt {
@@ -52,17 +53,17 @@ impl Attempt {
             "merged_sha": self.merged_sha, "nudged": self.nudged, "stop_request": self.stop_request,
             "metrics": self.metrics, "started_at": self.started_at, "ended_at": self.ended_at,
             "runner": self.runner, "worker_pid": self.worker_pid, "gate_hook": self.gate_hook,
-            "gate_command": self.gate_command, "gate_exit": self.gate_exit,
+            "gate_command": self.gate_command, "gate_exit": self.gate_exit, "actual_files": self.actual_files,
         })
     }
 }
 
 const COLUMNS: &str = "id, job, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, driver_pid,
     worker_session, spec_path, submitted_sha, submitted_at, check_tail, merged_sha, nudged, stop_request, metrics,
-    started_at, ended_at, runner, worker_pid, gate_hook, gate_command, gate_exit";
+    started_at, ended_at, runner, worker_pid, gate_hook, gate_command, gate_exit, actual_files";
 
-/// One row; `metrics` is still text.
-fn raw(plan: &PlanId, r: &Row<'_>) -> rusqlite::Result<(Attempt, Option<String>)> {
+/// One row; `metrics` and `actual_files` are still text.
+fn raw(plan: &PlanId, r: &Row<'_>) -> rusqlite::Result<(Attempt, Option<String>, Option<String>)> {
     let attempt = Attempt {
         plan: plan.clone(),
         id: r.get(0)?,
@@ -93,8 +94,9 @@ fn raw(plan: &PlanId, r: &Row<'_>) -> rusqlite::Result<(Attempt, Option<String>)
         gate_hook: r.get(25)?,
         gate_command: r.get(26)?,
         gate_exit: r.get(27)?,
+        actual_files: Value::Null,
     };
-    Ok((attempt, r.get(20)?))
+    Ok((attempt, r.get(20)?, r.get(28)?))
 }
 
 /// The Attempts of `plan` that satisfy `filter` (SQL over `attempts`, with `?2…`
@@ -105,11 +107,16 @@ fn query(conn: &Connection, plan: &PlanId, filter: &str, args: &[&str]) -> Resul
     let bound = std::iter::once(plan.as_str()).chain(args.iter().copied());
     let rows = stmt.query_map(params_from_iter(bound), |r| raw(plan, r))?.collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|(mut attempt, metrics)| {
+        .map(|(mut attempt, metrics, files)| {
             attempt.metrics = match metrics {
                 None => Value::Null,
                 Some(text) => serde_json::from_str(&text)
                     .map_err(|_| CpdError::bad_row(format!("Attempt {plan}/{} has metrics {text:?}", attempt.id)))?,
+            };
+            attempt.actual_files = match files {
+                None => Value::Null,
+                Some(text) => serde_json::from_str(&text)
+                    .map_err(|_| CpdError::bad_row(format!("Attempt {plan}/{} has actual_files {text:?}", attempt.id)))?,
             };
             Ok(attempt)
         })

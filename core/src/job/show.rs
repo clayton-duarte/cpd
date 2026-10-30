@@ -116,7 +116,7 @@ pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError>
 fn attempts(conn: &Connection, plan: &PlanId, job: &str) -> Result<Vec<Value>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT id, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, driver_pid, worker_session,
-                spec_path, submitted_sha, submitted_at, check_tail, merged_sha, nudged, stop_request, metrics, started_at, ended_at, runner, worker_pid, gate_hook, gate_command, gate_exit
+                spec_path, submitted_sha, submitted_at, check_tail, merged_sha, nudged, stop_request, metrics, started_at, ended_at, runner, worker_pid, gate_hook, gate_command, gate_exit, actual_files
            FROM attempts WHERE plan = ?1 AND job = ?2 ORDER BY number",
     )?;
     let rows = stmt
@@ -124,6 +124,7 @@ fn attempts(conn: &Connection, plan: &PlanId, job: &str) -> Result<Vec<Value>, C
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, Option<String>>(19)?,
+                r.get::<_, Option<String>>(27)?,
                 json!({
                     "id": r.get::<_, String>(0)?, "number": r.get::<_, i64>(1)?, "tier": r.get::<_, String>(2)?,
                     "origin": r.get::<_, String>(3)?, "status": r.get::<_, String>(4)?,
@@ -143,10 +144,14 @@ fn attempts(conn: &Connection, plan: &PlanId, job: &str) -> Result<Vec<Value>, C
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut out = Vec::new();
-    for (id, metrics, mut attempt) in rows {
+    for (id, metrics, files, mut attempt) in rows {
         attempt["metrics"] = match metrics {
             None => Value::Null,
             Some(text) => serde_json::from_str(&text).map_err(|_| CpdError::bad_row(format!("Attempt {plan}/{id} has metrics {text:?}")))?,
+        };
+        attempt["actual_files"] = match files {
+            None => Value::Null,
+            Some(text) => serde_json::from_str(&text).map_err(|_| CpdError::bad_row(format!("Attempt {plan}/{id} has actual_files {text:?}")))?,
         };
         attempt["escalations"] = json!(escalations(conn, plan, &id)?);
         out.push(attempt);
