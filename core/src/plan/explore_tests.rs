@@ -215,9 +215,8 @@ fn plan_review_counts_no_explore_job() {
     f.explore("s1", "scout", "queued");
     f.explore("r1", "research", "queued");
     let out = fields(review());
-    let md = std::fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
     let summary = std::fs::read_to_string(out["summary"].as_str().unwrap()).unwrap();
-    for text in [&md, &summary] {
+    for text in [&summary] {
         assert!(text.contains("d1"), "the draft is listed: {text}");
         assert!(!text.contains("Explore s1") && !text.contains("Explore r1"), "no explore Job in the review: {text}");
     }

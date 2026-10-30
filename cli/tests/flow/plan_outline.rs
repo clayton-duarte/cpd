@@ -129,7 +129,7 @@ fn full_outline() -> Value {
         "assumptions": ["The Lead writes the outline"],
         "risks": ["The dialog API differs between modes"],
         "done_when": {"ui": ["The summary is written", "The dialog opens"]},
-        "out_of_scope": ["Changing plannotator"],
+        "out_of_scope": ["Changing the dialog API"],
         "decided": ["t-d1", "t-d2"]
     })
 }
@@ -343,13 +343,12 @@ fn changing_the_outline_after_a_review_makes_the_review_not_current() {
 // ---------- plan review refusals (D3) ----------
 
 /// Nothing a refused review could write: the rows, the Events and the files of the review.
-fn state(fx: &Fx) -> (i64, i64, bool, bool, bool, bool) {
+fn state(fx: &Fx) -> (i64, i64, bool, bool, bool) {
     (
         count(fx, "SELECT count(*) FROM plan_reviews"),
         count(fx, "SELECT count(*) FROM events"),
         run_file(fx, "mine", "plan.md").exists(),
         run_file(fx, "mine", "summary.md").exists(),
-        run_file(fx, "mine", "plan-r1.md").exists(),
         run_file(fx, "mine", "summary-r1.md").exists(),
     )
 }
@@ -361,7 +360,7 @@ fn a_review_of_a_plan_without_an_outline_is_refused_and_writes_nothing() {
     let error = refused(&fx.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]), "outline_missing", 3);
     assert_eq!(error["details"]["next"], "cpd plan outline --file <outline.json>");
     assert_eq!(state(&fx), before);
-    assert_eq!(before, (0, before.1, false, false, false, false));
+    assert_eq!(before, (0, before.1, false, false, false));
 }
 
 #[test]
@@ -434,17 +433,15 @@ fn two_pr_plan() -> Fx {
 }
 
 #[test]
-fn a_review_writes_summary_r1_with_every_row_in_order_and_returns_its_path() {
+fn a_review_writes_summary_r1_with_every_row_in_order_and_returns_no_path() {
     let fx = two_pr_plan();
     outline(&fx, &full_outline()).ok();
     let out = fx.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]).ok();
     let summary = run_file(&fx, "mine", "summary-r1.md");
-    let full = run_file(&fx, "mine", "plan-r1.md");
     assert_eq!(out["summary"], summary.display().to_string());
-    assert_eq!(out["path"], full.display().to_string());
+    assert!(out.get("path").is_none(), "{out}");
 
-    let expected = format!(
-        "# Review title
+    let expected = "# Review title
 Plan mine: Title of mine · review r1
 
 Goal: Show the review in chat
@@ -480,12 +477,11 @@ Later: PR api
 R1 The dialog API differs between modes
 
 ## Out of scope
-- Changing plannotator
+- Changing the dialog API
 
-Approve | Change | Open full plan ({})
-",
-        full.display()
-    );
+Approve | Change
+"
+    .to_owned();
     assert_eq!(fs::read_to_string(&summary).unwrap(), expected);
 
     // Asking again returns the pending review and its paths, and changes nothing.

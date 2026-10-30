@@ -372,11 +372,9 @@ fn overlaps_section(out: &mut Vec<String>, overlaps: &[Overlap]) {
 }
 
 /// What the document opens with (commands.md §4.5, §4.6; hs-d291): `plan.md`
-/// is headed by the Plan, a review's copy by the review's own title and then a
-/// line naming the Plan and the review.
+/// is headed by the Plan.
 pub enum Heading<'a> {
     Plan { title: &'a str },
-    Review { title: &'a str, plan: &'a str, plan_title: &'a str, review: &'a str },
 }
 
 /// The plan markdown for `prs` and `jobs` (every one of the Plan); `cancelled`
@@ -389,9 +387,6 @@ pub fn markdown(heading: &Heading, context: &str, phase: &str, prs: &[PrRow], jo
     let (cancelled, prs): (Vec<&PrRow>, Vec<&PrRow>) = prs.iter().partition(|p| p.status == "cancelled");
     let mut out = match heading {
         Heading::Plan { title } => vec![format!("# Plan: {}", inline(title)), String::new()],
-        Heading::Review { title, plan, plan_title, review } => {
-            vec![format!("# {}", inline(title)), String::new(), format!("Plan {plan}: {} · review {review}", inline(plan_title)), String::new()]
-        }
     };
     out.extend([format!("Context: `{context}` · Phase: `{phase}`"), String::new()]);
     let later = !matches!(phase, "grounding" | "plan");
@@ -477,15 +472,6 @@ mod tests {
     #[test]
     fn a_plan_without_prs_says_so() {
         assert_eq!(markdown(&Heading::Plan { title: "T" }, "ctx", "plan", &[], &[], &[], "S2", &Display::default()), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n");
-    }
-
-    #[test]
-    fn a_review_document_opens_with_the_review_title_and_the_plan_line() {
-        let heading = Heading::Review { title: "Add retries", plan: "pay-1", plan_title: "Payouts", review: "r2" };
-        assert_eq!(
-            markdown(&heading, "ctx", "plan", &[], &[], &[], "S2", &Display::default()),
-            "# Add retries\n\nPlan pay-1: Payouts · review r2\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n"
-        );
     }
 
     fn pr(key: &str, needs: &[&str]) -> PrRow {

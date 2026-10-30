@@ -19,7 +19,8 @@ const OVERLAPS_SHOWN: usize = 5;
 
 /// Which summary: the Plan's own (`plan render`) or a review's.
 pub enum Kind<'a> {
-    Plan,
+    /// `full_plan` is the absolute path of `plan.md`, which the last line names.
+    Plan { full_plan: &'a Path },
     Review { title: &'a str, review: &'a str },
 }
 
@@ -31,8 +32,6 @@ pub struct Input<'a> {
     pub overlaps: &'a [Overlap],
     /// The base PR (`<plan>/<key>`) of each stacked PR, by PR key (contract §2.2 "The base PR").
     pub base_prs: &'a BTreeMap<String, String>,
-    /// The absolute path of the full render the last line names: `plan-<review>.md` or `plan.md`.
-    pub full_plan: &'a Path,
 }
 
 /// A Job under review: a `draft` with its Tier and its Spec.
@@ -109,7 +108,7 @@ pub fn markdown(kind: &Kind, i: &Input) -> String {
 
     let mut blocks: Vec<Vec<String>> = Vec::new();
     blocks.push(match kind {
-        Kind::Plan => vec![format!("# Plan: {}", inline(&plan.title)), format!("Plan {} · phase {}", plan.id, plan.phase.as_str())],
+        Kind::Plan { .. } => vec![format!("# Plan: {}", inline(&plan.title)), format!("Plan {} · phase {}", plan.id, plan.phase.as_str())],
         Kind::Review { title, review } => {
             vec![format!("# {}", inline(title)), format!("Plan {}: {} · review {review}", plan.id, inline(&plan.title))]
         }
@@ -161,10 +160,9 @@ pub fn markdown(kind: &Kind, i: &Input) -> String {
     blocks.push(list("## Risks", risks.map(|(n, r)| format!("R{} {}", n + 1, inline(r))).collect()));
     blocks.push(list("## Out of scope", outline.iter().flat_map(|o| &o.out_of_scope).map(|s| format!("- {}", inline(s))).collect()));
 
-    let path = i.full_plan.display();
     blocks.push(vec![match kind {
-        Kind::Plan => format!("Full plan ({path})"),
-        Kind::Review { .. } => format!("Approve | Change | Open full plan ({path})"),
+        Kind::Plan { full_plan } => format!("Full plan ({})", full_plan.display()),
+        Kind::Review { .. } => "Approve | Change".to_owned(),
     }]);
 
     let blocks: Vec<String> = blocks.into_iter().filter(|b| !b.is_empty()).map(|b| b.join("\n")).collect();
