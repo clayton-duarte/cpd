@@ -481,10 +481,17 @@ pub fn end_opened(
                     Cause::ProviderError => format!(" The {PROVIDER_RETRIES} retries are used up."),
                     _ => String::new(),
                 };
-                let text = format!(
-                    "Job {job} failed ({}): {detail}{used_up} Decide: cpd job retry {job} --tier <T> --plan {plan}, or cpd job cancel {job} --reason <text> --plan {plan}",
-                    cause.as_str()
-                );
+                let gate = matches!(cause, Cause::GateFailed | Cause::GateError).then(|| crate::merge::gate_text_body(detail)).flatten();
+                let text = match gate {
+                    Some(body) => format!(
+                        "Job {job} failed ({}): {body}\nDecide: cpd job retry {job} --tier <T> --plan {plan}, or cpd job cancel {job} --reason <text> --plan {plan}",
+                        cause.as_str()
+                    ),
+                    None => format!(
+                        "Job {job} failed ({}): {detail}{used_up} Decide: cpd job retry {job} --tier <T> --plan {plan}, or cpd job cancel {job} --reason <text> --plan {plan}",
+                        cause.as_str()
+                    ),
+                };
                 ("failed", Some(cause.as_str()), NewEvent::job_failed(text, cause.as_str(), detail, &tier, attempts))
             }
         },
