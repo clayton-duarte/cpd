@@ -3,7 +3,7 @@
 // `mentions_me`, `slack_claim`) and `slack_fetch.py` (`reaction_users`). docs/research/team-review.md §6.
 // Pure: no I/O, no clock (callers pass `now`), so every rule is a test on a transcript.
 
-export const MESSAGE_HEADER = "=== Message from ";
+export const MESSAGE_HEADER = "=== Message " + "from ";
 /** `refresh.RETAIN_DAYS` and `main`'s `--since-hours` default: a post older than this is not read (refresh.py 496, 626-641). */
 export const WINDOW_DAYS = 7;
 /** `classify.CLAIM_REACTIONS`: a reaction that means "a human has this". */

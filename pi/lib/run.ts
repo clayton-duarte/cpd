@@ -1,5 +1,6 @@
 import { CpdError, isObject } from "./cpd.ts";
 import { Follower, type FollowerHooks, type Schedule, type Spawn, type Timing } from "./follower.ts";
+import type { SkillsNotice } from "./skills.ts";
 import type { ReviewEntry } from "./plan-review.ts";
 import type { Poll } from "./reload.ts";
 import type { Facts, Reporter } from "./state.ts";
@@ -68,6 +69,8 @@ export class Run {
   turnStarts: number[] = [];
   /** §15.15 L4: the loop guard has tripped: a send that would start a turn is queued for the next run instead. */
   tripped = false;
+  /** commands.md §15.23: the skill files changed since the baseline; told at the next turn, then cleared. */
+  skillsNotice: SkillsNotice | undefined = undefined;
   unsubscribe: (() => void)[] = [];
   readonly id: string;
   readonly info: SessionInfo;
