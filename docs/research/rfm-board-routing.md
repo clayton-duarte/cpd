@@ -1,4 +1,4 @@
-# Board routing: audit of what cpd already built (Plan rfm-board-routing, research 3 of 4)
+# Board routing: audit, measurements, evaluation and roadmap (Plan rfm-board-routing, research 3 of 4)
 
 Research and architecture only. No code, test or measurement changes with this document.
 
@@ -16,7 +16,7 @@ Research and architecture only. No code, test or measurement changes with this d
 - Code first, docs second. Where `docs/contract.md` (`contract`) and code disagree, the code line is cited and the disagreement is named.
 - Context record ids come from `cpd context search` and `cpd context show --record <id>` (run in this worktree). The Lead's brief gave five ids; four were wrong (see 1.2).
 - Section 7 was read whole from the extract `/tmp/cpd-rfm-board-routing/section7.md`.
-- Not done: no `~/.cpd/cpd.db` read, no ledger numbers (Job `measure`), no evaluation of the proposal (Job `design`).
+- Not done by Section 1 (its method; Sections 2 to 4 are the later Jobs `measure` and `design`): no `~/.cpd/cpd.db` read, no ledger numbers, no evaluation of the proposal.
 - Labels: `unverified` = not checked in code or by command; `guess:` = inference.
 
 ## Source
@@ -1164,6 +1164,20 @@ Every verdict is argued from Sections 1 and 2 and from the axioms: convention ov
 - **(d) Stuck detection: ADAPT, two rules.** Same question 3 times on a Job, and an Escalation open 30 minutes with its Lead not turned, both through E8's Manager message; they fire on 1 Job in the snapshot (19 escalations, 7 Attempts). Ping-pong (max run 5), unacked posts and "Lead blocked on Manager" have no data: SKIP (3.5).
 - **Small local models: SKIP all seven jobs in this phase.** A deterministic rule exists for each (cause column, wake table, key dedup, text trim); the real bloat is `job-failed` text (74% of Lead-wake text, median 7,462 chars for `gate_failed`), fixed by pointing at the log; of the four metrics cpd computes one today (3.7).
 
+**Coverage of Section 7, by bullet name.**
+
+| Section 7 element | Where |
+|---|---|
+| **Typed messages** (kind, thread_id, status, refs, wake by rule) | 3.1 (a), 3.2 |
+| **Failure classes with routed escalation**, and its 7-row table | 3.1 (b), 3.3 (row by row) |
+| **Retry budgets and timeouts** | 3.6, 3.5 (R-B) |
+| **Storm grouping** | 3.1 (c), 3.4 |
+| **Digests, not raw dumps** | 3.6 |
+| **Reference, don't copy** (entry ids, `entry_reads`) | 3.6, 3.2 (interface only) |
+| **Structured completions** | 3.6 |
+| **Stuck detection** (ping-pong, unacknowledged, Lead blocked on Manager) | 3.1 (d), 3.5 |
+| Small-model jobs (failure summarizer and classifier, message triage, root-cause clustering, inbox digest, Worker first-line responder, plan coverage check, GitHub event summary), "Keep with the larger models", **Order of adoption**, **Metrics for this part** | 3.7 |
+
 ### 3.1 The four items
 
 | Item | Verdict | What cpd already has (Section 1) | What the data says (Section 2) | Cost and risk | Reversibility |
@@ -1173,7 +1187,7 @@ Every verdict is argued from Sections 1 and 2 and from the axioms: convention ov
 | (c) Storm grouping | **SKIP** the grouped message (**ADOPT** the per-Plan dedup, below) | One stuck-Job message per PR (`core/src/inbox/rules.rs:540-568`); engine `error` dedup per (step, scope, code) (`engine/src/watch/report.rs:231-262`); per Attempt and code for the driver (`ledger.rs:590-598`) | 24 candidate windows, 98 Events, max 9; none reaches 12; replay: 234 to 212 Lead wakes (-22); 12 of 16 gate groups share no failing test; dedup by `(code, plan, text)`: 26 of 52 `attempt run` errors and 36 of 51 `adapter` errors suppressed (`r.py 3`, `r.py 5`) | Grouping: an Event field, an adapter rule, PROTOCOL 18, a message that can hide a real bug in a flaky window. Dedup: one query in the two writers, no schema | Dedup: a constant window (`watch.error_repeat_seconds`, 600) set to 0 turns it off; a suppressed `error` Event is not written, so it cannot be recovered, as pro-d187 already accepts |
 | (d) Stuck, ping-pong, unacked escalation | **ADAPT**: two rules on E8; SKIP the others | E8 tells the Manager of Jobs failed 10 min and not worked on (`inbox/rules.rs:486-568`, `engine/src/watch/inbox.rs:12-40`); Escalations expire at `ask_minutes` 60 or when the asker dies (`ask/question.rs:47-69`, `watch/escalations.rs:1-75`); loop guard (`session/mod.rs:54`) | Answers: p99 5.4 / 18.0 min, max 5.6 / 18.0; 3 timeouts, all one Job (`convert-snaps`: 19 escalations, 17 with the same question, 7 Attempts); ping-pong max run 5 of 84 pairs; 0 stuck candidates (`r.py 4`, `r.py 7`) | Two pure predicates and one message through `tell_managers`; no schema. Risk: a false alarm wakes a Manager (0 on 183 answered in the replay) | Remove the step: no state is kept, the message is its own record |
 
-Reading across (c): the proposal's "12 jobs, one cause, one message" targets a symptom where cpd already has a key. The nearest real defect is that pro-d187's dedup (pro-d187, 2026-10-29) never reached the two writers that produce most of the repeats (3.4).
+Reading across (c): the proposal's "12 jobs, one cause, one message" targets a symptom where cpd already has a key. The nearest real defect is that pro-d187's dedup (2026-10-29) never reached the two writers that produce most of the repeats (3.4).
 
 ### 3.2 (a) Typed messages and rule-derived wake
 
@@ -1265,7 +1279,7 @@ flowchart TD
   A[Attempt ends failed] --> B{cause}
   B -->|provider_error| R1[Retry: same Tier, 3 times, 30 s hold]
   B -->|gate_failed, NEW| R2[Retry: same Tier, once, 30 s hold]
-  B -->|crashed, no_submit, merge_conflict| C1[Climb: one Tier up while automatic Attempts < 1 + retry_cap]
+  B -->|crashed, no_submit, merge_conflict| C1[Climb: one Tier up while automatic Attempts are fewer than 1 + retry_cap]
   B -->|setup_failed, timed_out, cas_lost, dirty_target, tampered, gate_error| L1[Lead: job-failed]
   R1 --> Q[attempt-retry: wakes no one]
   R2 --> Q
@@ -1302,7 +1316,7 @@ flowchart TD
 
 | Signal | Separates a test failure from a lint or compile error? | Evidence |
 |---|---|---|
-| Gate exit code | No: 113 of 113 are `exit 64` (the quick check ends `|| exit 64`) | `r.py 2` |
+| Gate exit code | No: 113 of 113 are `exit 64` (the quick check ends `\|\| exit 64`) | `r.py 2` |
 | `attempts.check_tail` | No: `rg check_tail core engine` finds readers (`attempt/row.rs:80`, `job/show.rs:119-135`) and migrations, no writer; the docs say it holds the quick check at submit, but the check moved to the merge (`attempt/submit.rs:3`, hs-d679) | `rg`, run in this worktree |
 | Gate tail (`detail`, up to 60 lines, `git::TAIL_LINES`) | Yes, by regex, per repo: of 16 tails I read, 14 test failures (`FAIL [`, `# fail`) and 2 compile errors | 2.8, rubric A.8 |
 | Failing-test names across a window | Separates a host flake from a real bug: 12 of 16 gate windows share no test | 2.3 |
@@ -1450,6 +1464,8 @@ Local models and their runner belong to the sibling `rfm-curation-models`; this 
 | Worker first-line responder | **SKIP** | the Lead's rule "Resolve first, ask second" (`pi/skills/cpd-lead/SKILL.md:45`, `:289`): prose, not enforced | 212 escalations, 86.3% answered, median 0.3 / 1.2 min: no latency to remove; of 10 sampled, 10 are a Spec/test contradiction or missing context (`guess:` reasoning, not a quotable passage, 2.4) | "Quote the plan" is retrieval: the memory Plan's. A wrong auto-answer costs a Worker Attempt | n/a |
 | GitHub event summary | **SKIP**: already rule-built | the poll writes `pr-feedback` Events with Rust text (`core/src/pr/poll.rs:432-447`) | 85 `pr-feedback` Events, median 160 characters, max 209 (`r.py 9`): short already | nothing to compress | n/a |
 | Plan coverage check (brief to PR) | out of scope | `rg -n coverage core/src/plan` finds nothing (1.6) | not measured here | planning-ladder sibling's | n/a |
+
+**Keep with the larger models** (interpreting requirements, deciding when to escalate to the Context Manager, changing a plan): unchanged. R-A and R-B only tell a Manager a fact; they decide no scope, no escalation target beyond the Manager's own message, and no plan.
 
 **Adoption order (classification, triage, grouping, each in shadow mode).** Not needed: the first label is free. A classifier's agreement with `cause` is 100% by construction for the 11 causes; the only unlabelled split is the gate tail, which has no handler. Shadow mode for triage needs a human label for each wake, which cpd does not store; grouping's truth is the host load, which `gate-load-stamp` records. If a model is ever wanted, run it as `off | shadow | on` like the curator (`docs/research/rfm-curation-models.md`, cited only).
 
