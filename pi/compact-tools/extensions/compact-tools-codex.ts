@@ -432,10 +432,10 @@ function wrapRanges(characters: readonly string[], first: number, rest: number):
 	return rows;
 }
 
+export const WRAP_CACHE_CHARS = 1_000_000;
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-/** Segments word-wrapped into rows, each piece keeping its color. */
-export function wrapSegments(segments: readonly Segment[], first: number, rest: number): Segment[][] {
+function wrapSegmentsUncached(segments: readonly Segment[], first: number, rest: number): Segment[][] {
 	const owners: number[] = [];
 	const characters: string[] = [];
 	segments.forEach((segment, index) => {
@@ -456,4 +456,40 @@ export function wrapSegments(segments: readonly Segment[], first: number, rest: 
 		}
 		return row;
 	});
+}
+
+type WrappedRows = readonly (readonly Readonly<Segment>[])[];
+
+/**
+ * Wrap cache: keyed by the CONTENT of the call (widths, colors, texts), not by the identity of
+ * the segments array, because callers build a fresh array every frame. Bounded by the total
+ * key length (WRAP_CACHE_CHARS, least recently used out first) and the rows are frozen because
+ * every hit returns the same shared object. See docs/contract.md section 6.9 (Render cache / Wrap cache).
+ */
+const wrapCache = new Map<string, WrappedRows>();
+let wrapCacheChars = 0;
+
+/** Segments word-wrapped into rows, each piece keeping its color. */
+export function wrapSegments(segments: readonly Segment[], first: number, rest: number): WrappedRows {
+	const key = `${first},${rest},${JSON.stringify(segments.map((segment) => [segment.color ?? null, segment.text]))}`;
+	const hit = wrapCache.get(key);
+	if (hit) {
+		wrapCache.delete(key);
+		wrapCache.set(key, hit);
+		return hit;
+	}
+	const rows = wrapSegmentsUncached(segments, first, rest);
+	for (const row of rows) {
+		for (const segment of row) Object.freeze(segment);
+		Object.freeze(row);
+	}
+	Object.freeze(rows);
+	wrapCache.set(key, rows);
+	wrapCacheChars += key.length;
+	while (wrapCacheChars > WRAP_CACHE_CHARS) {
+		const oldest = wrapCache.keys().next().value as string;
+		wrapCache.delete(oldest);
+		wrapCacheChars -= oldest.length;
+	}
+	return rows;
 }
