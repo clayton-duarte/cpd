@@ -489,6 +489,17 @@ What to read, top to bottom:
 |---|---|---|---|
 | Balloon cache, CachedComponent and CachedContainer hold the two latest widths (CT + EX on a copy of the Manager transcript; `keys`, 3 runs, two A/B rounds in one window) | 22.75 and 27.00 (runs 21.75 to 30.25) | 9.25 and 10.00 (runs 9.25 to 10.25) | kept |
 
+Pad candidates (job `padroot-docs`), on top of the row above. Recipe `keys`, unedited, 3 runs, median, CT + EX on a copy of the Manager transcript; each build in the same window, two rounds (A, B), `pi/lib/pad.ts` the only file edited, reverted after each run. Read from pi-tui's source (layout.js, h-stack.js, stack.js): `PaddedRoot` is a `VStack`, so pi-tui lays it out through its layout node; an entry with no numeric `basis` is measured first (`measureHeight` of the padded `HStack` calls `HStack.render(179)`, which renders the root and composites every row; `measureWidth` of the root renders it at 179), and then laid out at 177, where `paintBox` composites each visible row of a box that is not at x 0 and full width through `compositeTuiLine`, which always runs `Intl.Segmenter` (`sliceWithWidth`, `extractSegments`; read, not counted).
+
+| Change | Median ms per key (A, B) | Kept |
+|---|---|---|
+| C0: none (the cachefix head) | 8.75, 9.00 | the baseline |
+| C1: a numeric `basis: 0` on the `HStack` entry and on the root entry in `PaddedRoot`, so pi-tui does not measure either (no `HStack.render`, no render at 179); the transcript is laid out and rendered at one width, 177 | 5.50, 5.50 | **KEPT** (the Lead's decision): keeps the pad and the layout (rects, mouse, `ScrollView` unchanged) and cuts the second width, but paints every visible row of the root at x 1 through `compositeTuiLine`, so a frame still calls `Intl.Segmenter` for every visible row (read, not counted); the calls do not grow with the transcript, which is the contract |
+| C1 stand-in (job `padroot-fix`): C1 plus a private stand-in for the root in the `HStack`: `render()` returns nothing, `LAYOUT_NODE` and `handleMouse` delegate to the real root, so pi-tui's measure of the `HStack` child no longer renders the transcript and each message renders once | C0 9.25, 8.50; C1 5.50, 5.50; stand-in 4.75, 5.00, 4.50 (single runs 4.25 to 5.25; `ps` steps of 0.25 ms; CT + EX on a copy of the Manager transcript, `keys`, 3 runs per median, interleaved in one window) | **DROPPED BY THE LEAD**: 0.5 to 1.0 ms of 5.5 (about 12 percent, 2 to 4 noise steps) for a delegating class whose correctness rests on pi-tui internals (`box.component` identity, the `handleMouse` check); not worth it. C1 alone is **KEPT**. C1's gain over C0 (9.25 and 8.50 to 5.50 ms) is the removed second width, not a transcript-size effect: the count pins were already green after cachefix. The red test `chat pad: a padded frame renders every message at one width` pins the width only (old code: widths 80 and 78 seen; C1: 78 only); that a message is rendered once is not pinned, because pi-tui measures an `HStack` child (renders it) and then lays it out (renders again) |
+| C2: no `HStack`: `PaddedRoot` hands pi-tui a mapped copy of the root's layout tree (vertical pad rows kept), the root laid out at x 0 and full width, and each leaf (the `ScrollView`'s content and the dock rows) wrapped to render one cell narrower with a space in front; every row is then painted by the fast path of `paintBox` (x 0, full width), with no compositing | 2.50, 2.50 (runs 1.75 to 3.25) | **DROPPED BY THE LEAD**, left to the User as an option (about 3 ms per key, 5.5 vs 2.5): reaches the floor (about 2.0), but the `ScrollView` and the dock boxes then span the whole pane width, the pad columns included: the box rects, the scrollbar column and the mouse columns move, and `handleMouse` of the wrapped leaves would need forwarding (not done); it puts the `ScrollView`, its scrollbar column and the mouse columns into the pad cells, which changes what hs-d684 item 3 gave the User |
+| C3: inset by changing the rect | not tried | `layoutComponent` has no x inset for any node type (`vstack`, `hstack` with `gap` only moves later entries; `scroll` places its child at x); read from layout.js, not tried |
+| C4: a single pad row component | not tried | a leaf at x 1 is composited like C1's root; no cost difference expected (unverified) |
+
 ## After
 
 Recipe `keys` mode, unedited, one window (2026-10-30 afternoon EDT), CT + EX on a copy of the Manager transcript (a separate copy per build, in `mktemp -d`; the original untouched), BEFORE built in a throwaway worktree at 41fed448 (tip of PR `trace`, the merge-base with this branch), AFTER at this head (95f562d4), CONTROL `--no-session`.
@@ -502,3 +513,17 @@ Recipe `keys` mode, unedited, one window (2026-10-30 afternoon EDT), CT + EX on 
 Factor BEFORE/AFTER: 23.25 / 9.50 = 2.4x (AFTER is 41 % of BEFORE, below half).
 
 Validity: the BEFORE still reproduces (23.25 ms per key, above 15). The printed pid was the pane's child, whose CPU (0.92 to 0.95 s per 40 keys at BEFORE) matches pi's, not a transient; unverified beyond that. The remaining 9.5 ms is pi-tui compositing the padded `HStack` (see Cause confirmed); IDLE is not covered here.
+
+### padroot
+
+Recipe `keys` mode, unedited, one window (2026-10-30 afternoon EDT), CT + EX on a copy of the Manager transcript (a separate copy per build, in `mktemp -d`; the original untouched), 3 runs each. Base is e2a6e940 (tip of PR `cachefix`, built in a throwaway worktree, since removed); head is 418ec5fc (this PR); CONTROL is `--no-session`.
+
+| Build | Run 1 | Run 2 | Run 3 | Median ms per key | Ratio to CONTROL |
+| --- | --- | --- | --- | --- | --- |
+| base (e2a6e940, cachefix) | 9.25 | 10.00 | 9.00 | 9.25 | 12.3x |
+| head (418ec5fc, padroot) | 5.25 | 6.25 | 5.50 | 5.50 | 7.3x |
+| CONTROL | 1.00 | 0.75 | 0.50 | 0.75 | 1.0x |
+
+Factors: head against the original BEFORE (unmodified origin/main, CT + EX on the copy, 22.50 ms in the first Before table's per-key 2x2): 22.50 / 5.50 = 4.1x. Head against the cachefix AFTER (9.50 ms above): 9.50 / 5.50 = 1.7x; against the base measured in this window: 9.25 / 5.50 = 1.7x. The 2 ms floor is not reached: C2 was dropped by the Lead.
+
+Validity: head is clearly below base (every head run, 5.25 to 6.25, is below every base run, 9.00 to 10.00), and the base reproduces the cachefix AFTER (9.25 against 9.50). The printed pids were the pane's child (pgrep -P of the pane pid), CPU 0.36 to 0.40 s per 40 keys at base, which matches pi; unverified beyond that. IDLE is not covered here.

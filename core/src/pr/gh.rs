@@ -358,17 +358,21 @@ pub fn close_pr(cwd: &Path, repo: &str, number: i64) -> Result<(), CpdError> {
 }
 
 /// Retitles the pull request `repo`#`number` (`owner/name`): `gh api -X PATCH repos/<repo>/pulls/<n> -f title=<title>`.
-/// Not `gh pr edit`: it fails on repos with the deprecated classic Projects (commands.md §9.5, hs-d285).
+/// Not `gh pr edit`: it fails on repos with the deprecated classic Projects (commands.md §9.5, hs-d285). `describe_pr` shares that reason.
 pub fn retitle_pr(cwd: &Path, repo: &str, number: i64, title: &str) -> Result<(), CpdError> {
     let endpoint = format!("repos/{repo}/pulls/{number}");
     let field = format!("title={title}");
     run(cwd, &["api", "-X", "PATCH", &endpoint, "-f", &field]).map(drop)
 }
 
-/// `gh pr edit <number> --body-file -` with `body` on stdin: replaces the pull request's body.
-pub fn describe_pr(cwd: &Path, number: i64, body: &str) -> Result<(), CpdError> {
-    let n = number.to_string();
-    let args = ["pr", "edit", &n, "--body-file", "-"];
+/// Replaces the body of the pull request `repo`#`number` (`owner/name`): `gh api -X PATCH repos/<repo>/pulls/<n> --input -`
+/// with `{"body": <body>}` on stdin. Not `gh pr edit`: it fails on repos with the deprecated classic Projects
+/// (commands.md §9.5) and needs a repository cwd. A `repo` that is not `owner/name` is `gh_failed`, before any call.
+pub fn describe_pr(cwd: &Path, repo: &str, number: i64, body: &str) -> Result<(), CpdError> {
+    repo_parts(repo)
+        .ok_or_else(|| CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo.")).with("repo", repo))?;
+    let endpoint = format!("repos/{repo}/pulls/{number}");
+    let args = ["api", "-X", "PATCH", endpoint.as_str(), "--input", "-"];
     let call = Call {
         tool: "gh".to_owned(),
         program: "gh".to_owned(),
@@ -376,7 +380,7 @@ pub fn describe_pr(cwd: &Path, number: i64, body: &str) -> Result<(), CpdError> 
         envs: vec![("GH_PROMPT_DISABLED".to_owned(), Some("1".to_owned())), ("NO_COLOR".to_owned(), Some("1".to_owned()))],
         cwd: Some(cwd.to_path_buf()),
         deadline: TIMEOUT,
-        stdin: Some(body.as_bytes().to_vec()),
+        stdin: Some(serde_json::json!({"body": body}).to_string().into_bytes()),
         stderr_to: None,
     };
     let out = match Ports::current().runner.run(&call) {
@@ -414,6 +418,17 @@ pub fn view_for_merge(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) 
     parse(&args, &run_on(runner, cwd, &args)?)
 }
 
+/// `gh repo view <repo> --json deleteBranchOnMerge`: whether the repo deletes a merged branch itself.
+pub fn delete_branch_on_merge(runner: &dyn Runner, cwd: &Path, repo: &str) -> Result<bool, CpdError> {
+    #[derive(Deserialize)]
+    struct Setting {
+        #[serde(rename = "deleteBranchOnMerge")]
+        on: bool,
+    }
+    let args = ["repo", "view", repo, "--json", "deleteBranchOnMerge"];
+    parse::<Setting>(&args, &run_on(runner, cwd, &args)?).map(|s| s.on)
+}
+
 /// `headRefOid` of the pull request `number` of `repo`: its head commit, which GitHub keeps after a merge and the
 /// deletion of the branch (contract §7.2 "The recorded head").
 pub fn head_ref_oid(cwd: &Path, repo: &str, number: i64) -> Result<String, CpdError> {
@@ -427,11 +442,12 @@ pub fn head_ref_oid(cwd: &Path, repo: &str, number: i64) -> Result<String, CpdEr
     parse::<Head>(&args, &run(cwd, &args)?).map(|h| h.oid)
 }
 
-/// `gh pr merge <number> --repo <repo> --squash --delete-branch --match-head-commit <head>`: GitHub
-/// refuses when the branch is no longer at `head`.
+/// `gh pr merge <number> --repo <repo> --squash --match-head-commit <head>`: GitHub
+/// refuses when the branch is no longer at `head`. It does not pass `--delete-branch`: GitHub's own
+/// `delete_branch_on_merge` deletes the branch and repoints a stacked pull request (pro-d240).
 pub fn merge_pr(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64, head: &str) -> Result<(), CpdError> {
     let n = number.to_string();
-    let args = ["pr", "merge", &n, "--repo", repo, "--squash", "--delete-branch", "--match-head-commit", head];
+    let args = ["pr", "merge", &n, "--repo", repo, "--squash", "--match-head-commit", head];
     run_on(runner, cwd, &args).map(drop)
 }
 

@@ -32,9 +32,10 @@ class PaddedRoot extends VStack {
       {
         component: new HStack([
           padRow(),
-          { component: root, grow: 1, shrink: 1, minSize: 1 },
+          { component: root, basis: 0, grow: 1, shrink: 1, minSize: 1 },
           padRow(),
         ]),
+        basis: 0,
         grow: 1,
         shrink: 1,
         minSize: 1,

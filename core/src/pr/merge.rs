@@ -90,7 +90,14 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
         }
         _ => false,
     };
-    Ok(Output::success(json!({"repo": repo, "number": number, "method": "squash", "branch_deleted": true, "stored": stored})))
+    let warnings: Vec<serde_json::Value> = match gh::delete_branch_on_merge(runner, cwd, &repo) {
+        Ok(true) => vec![],
+        Ok(false) => vec![json!({"code": "auto_delete_off", "text": format!(
+            "{repo} has delete_branch_on_merge off: the merged branch stays on GitHub and a pull request stacked on it is not repointed to the base. Turn the setting on in the repo's settings."
+        )})],
+        Err(e) => vec![json!({"code": "auto_delete_unread", "text": e.message()})],
+    };
+    Ok(Output::success(json!({"repo": repo, "number": number, "method": "squash", "stored": stored, "warnings": warnings})))
 }
 
 const STORE_BUSY_MS: u64 = 5000;
