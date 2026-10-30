@@ -489,6 +489,16 @@ What to read, top to bottom:
 |---|---|---|---|
 | Balloon cache, CachedComponent and CachedContainer hold the two latest widths (CT + EX on a copy of the Manager transcript; `keys`, 3 runs, two A/B rounds in one window) | 22.75 and 27.00 (runs 21.75 to 30.25) | 9.25 and 10.00 (runs 9.25 to 10.25) | kept |
 
+Pad candidates (job `padroot-docs`), on top of the row above. Recipe `keys`, unedited, 3 runs, median, CT + EX on a copy of the Manager transcript; each build in the same window, two rounds (A, B), `pi/lib/pad.ts` the only file edited, reverted after each run. Read from pi-tui's source (layout.js, h-stack.js, stack.js): `PaddedRoot` is a `VStack`, so pi-tui lays it out through its layout node; an entry with no numeric `basis` is measured first (`measureHeight` of the padded `HStack` calls `HStack.render(179)`, which renders the root and composites every row; `measureWidth` of the root renders it at 179), and then laid out at 177, where `paintBox` composites each visible row of a box that is not at x 0 and full width through `compositeTuiLine`, which always runs `Intl.Segmenter` (`sliceWithWidth`, `extractSegments`; read, not counted).
+
+| Change | Median ms per key (A, B) | Kept |
+|---|---|---|
+| C0: none (the cachefix head) | 8.75, 9.00 | the baseline |
+| C1: a numeric `basis: 0` on the `HStack` entry and on the root entry in `PaddedRoot`, so pi-tui does not measure either (no `HStack.render`, no render at 179); the transcript is laid out and rendered at one width, 177 | 5.50, 5.50 | dropped as the answer, kept as the first step: keeps the pad and the layout (rects, mouse, `ScrollView` unchanged), cuts the second width, but paints every visible row of the root at x 1 through `compositeTuiLine`, so a frame still calls `Intl.Segmenter` for every visible row (read, not counted): it cannot make an unchanged frame zero |
+| C2: no `HStack`: `PaddedRoot` hands pi-tui a mapped copy of the root's layout tree (vertical pad rows kept), the root laid out at x 0 and full width, and each leaf (the `ScrollView`'s content and the dock rows) wrapped to render one cell narrower with a space in front; every row is then painted by the fast path of `paintBox` (x 0, full width), with no compositing | 2.50, 2.50 (runs 1.75 to 3.25) | NOT kept without the Lead: reaches the floor (about 2.0), but the `ScrollView` and the dock boxes then span the whole pane width, the pad columns included: the box rects, the scrollbar column and the mouse columns move, and `handleMouse` of the wrapped leaves would need forwarding (not done); it changes the layout the Job says to keep |
+| C3: inset by changing the rect | not tried | `layoutComponent` has no x inset for any node type (`vstack`, `hstack` with `gap` only moves later entries; `scroll` places its child at x); read from layout.js, not tried |
+| C4: a single pad row component | not tried | a leaf at x 1 is composited like C1's root; no cost difference expected (unverified) |
+
 ## After
 
 Recipe `keys` mode, unedited, one window (2026-10-30 afternoon EDT), CT + EX on a copy of the Manager transcript (a separate copy per build, in `mktemp -d`; the original untouched), BEFORE built in a throwaway worktree at 41fed448 (tip of PR `trace`, the merge-base with this branch), AFTER at this head (95f562d4), CONTROL `--no-session`.
