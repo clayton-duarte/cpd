@@ -4449,6 +4449,10 @@ A refusal's text starts `φ: ` and names the rule: `φ: <rule>: <what was refuse
 
 The explore Worker also may run the read-only `cpd context search` and `cpd context show` (§3.3, §3.4), as its Spec's Deliverable section says (R10); nothing enforces that.
 
+### 15.23 A Session is told its skill changed (Plan `skill-fresh`)
+
+Decision pro-d260 (User, 2026-10-30). Skeleton, filled in the next commit.
+
 ## 16. The Worker contract
 
 ### 16.1 The Worker Spec
