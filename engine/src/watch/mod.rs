@@ -64,6 +64,8 @@ mod janitor_tests;
 #[cfg(test)]
 mod inbox_tests;
 #[cfg(test)]
+mod stuck_explore_tests;
+#[cfg(test)]
 mod parked_tests;
 #[cfg(test)]
 mod stacked_ready_tests;
