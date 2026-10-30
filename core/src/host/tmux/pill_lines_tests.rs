@@ -140,11 +140,12 @@ fn status_line_pills_follow_the_rule() {
     let italic_pill = |colour: &str, text: &str| {
         format!("#[fg={colour}]\u{e0b6}#[reverse]#[italics]{text}#[noitalics]#[noreverse]\u{e0b4}#[default]")
     };
-    let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},18},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}}";
+    let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},18},#{?@cpd_runner,#{e|+:#{n:@cpd_runner},3},0}},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}}";
     let want = format!(
         "{JOIN}{}{JOIN}{}{JOIN}{}{JOIN}{}\
+         #{{?@cpd_runner,{JOIN}{},}}\
          #{{?#{{@cpd_preview}},#[fg=colour8]\u{2501}{},}}\
-         #[fg=colour8]#{{R:\u{2501},#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},16}},#{{?#{{@cpd_preview}},#{{e|+:#{{n:@cpd_preview}},12}},0}}}},#{{?@cpd_version,#{{e|+:#{{n:@cpd_version}},3}},0}}}},#{{?@cpd_incident,#{{e|+:#{{n:@cpd_incident}},18}},0}}}},\
+         #[fg=colour8]#{{R:\u{2501},#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},16}},#{{?@cpd_runner,#{{e|+:#{{n:@cpd_runner}},3}},0}}}},#{{?#{{@cpd_preview}},#{{e|+:#{{n:@cpd_preview}},12}},0}}}},#{{?@cpd_version,#{{e|+:#{{n:@cpd_version}},3}},0}}}},#{{?@cpd_incident,#{{e|+:#{{n:@cpd_incident}},18}},0}}}},\
          #{{e|+:#{{?{long},#{{e|+:#{{w:@cpd_workers}},2}},#{{e|+:#{{w:@cpd_workers_short}},2}}}},1}}}}}}\
          #[default]\
          #{{?@cpd_incident,{}{JOIN},}}\
@@ -155,6 +156,7 @@ fn status_line_pills_follow_the_rule() {
         button("legend", "colour15", super::LEGEND_GLYPH),
         button("logs", "colour15", super::LOGS_GLYPH),
         button("costs", "colour15", "\u{EEC1}"),
+        button("runner", "colour15", "#{@cpd_runner}"),
         pill("colour3", "preview: #{@cpd_preview}"),
         format!("#[range=user|incident]{}#[norange]", italic_pill("colour9", "Incident Mode: #{@cpd_incident}")),
         pill("colour8", &format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
@@ -267,7 +269,10 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
             super::LOGS_GLYPH,
             "\u{EEC1}"
         );
-    let prefix = prefix + "#{?#{@cpd_preview},#[fg=colour8]\u{2501}#[fg=colour3]\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}#[default],}\
+    // The fifth item (pro-d199): the runner pill, after a join, only while `@cpd_runner` is set.
+    let runner = "#[fg=colour8]\u{2501}#[default]#[range=user|runner]#[fg=colour15]\u{e0b6}#[reverse]#{@cpd_runner}#[noreverse]\u{e0b4}#[default]#[norange]";
+    let after_costs = |cond: &str| format!("{prefix}#{{?{cond},{runner},}}");
+    let rest = "#{?#{@cpd_preview},#[fg=colour8]\u{2501}#[fg=colour3]\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}#[default],}\
          #[fg=colour8]";
     let suffix = "#[default]\
          #{?@cpd_incident,#[range=user|incident]#[fg=colour9]\u{e0b6}#[reverse]#[italics]Incident Mode: #{@cpd_incident}#[noitalics]#[noreverse]\u{e0b4}#[default]#[norange]#[fg=colour8]\u{2501}#[default],}\
@@ -277,8 +282,167 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
          #{?#{@cpd_host_alert},#[fg=colour8]\u{2501}#[range=user|host]#[fg=colour9]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default]#[norange],#{?#{@cpd_version},#[fg=colour8]\u{2501}#[fg=colour8]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default],}}\
          #[fg=colour8]\u{2501}#[default]";
     let format = STATUS_FORMAT.as_str();
-    assert!(format.starts_with(&prefix), "{format}");
-    assert!(format.ends_with(suffix), "{format}");
+    // `#{?@cpd_runner,..}` as the version pill's width does, or `#{?#{@cpd_runner},..}` as the preview pill does.
+    let starts = ["@cpd_runner", "#{@cpd_runner}"].map(|cond| format!("{}{rest}", after_costs(cond)));
+    assert!(starts.iter().any(|p| format.starts_with(p.as_str())), "{format}");
+    // The widths of the long form count the runner pill, so the suffix is pinned from the incident pill to its end
+    // and the workers pill's text only by its shape.
+    let incident = suffix.find("#{?@cpd_incident").unwrap();
+    let workers_at = suffix.find("#[fg=colour8]\u{e0b6}#[reverse]#{?").unwrap();
+    let tail = &suffix[suffix.find("#[noreverse]\u{e0b4}#[default]#{?#{@cpd_host_alert}").unwrap()..];
+    assert!(incident < workers_at);
+    assert!(format.contains(&suffix[incident..workers_at]), "{format}");
+    assert!(format.ends_with(tail), "{format}");
+}
+
+/// pro-d199: the runner pill is the fifth item of the left group, after the costs button, in its own range, its text the
+/// option's value alone between the caps.
+#[test]
+fn the_runner_pill_follows_the_costs_button_in_its_own_range() {
+    use super::RUNNER_OPTION;
+    assert_eq!(RUNNER_OPTION, "@cpd_runner");
+    let format = STATUS_FORMAT.as_str();
+    assert_eq!(format.matches("range=user|runner").count(), 1, "one runner range: {format}");
+    let ranges: Vec<&str> = format
+        .match_indices("#[range=user|")
+        .map(|(i, _)| &format[i + "#[range=user|".len()..])
+        .map(|r| &r[..r.find(']').expect("a closed range")])
+        .collect();
+    assert_eq!(ranges[..5], ["reset", "legend", "logs", "costs", "runner"], "{ranges:?}");
+    let pill = "#[range=user|runner]#[fg=colour15]\u{e0b6}#[reverse]#{@cpd_runner}#[noreverse]\u{e0b4}#[default]#[norange]";
+    let at = format.find(pill).unwrap_or_else(|| panic!("no runner pill in {format}"));
+    let costs_end = format.find("range=user|costs").unwrap();
+    assert!(at > costs_end && at < format.find("@cpd_preview").unwrap(), "after costs, before the preview marker: {format}");
+    assert!(format[..at].ends_with("#[fg=colour8]\u{2501}#[default]") || format[..at].ends_with(&format!("#[fg=colour8]\u{2501}#[default]")), "{format}");
+    // Drawn only while the option is set.
+    let (before, after) = (&format[..at], &format[at + pill.len()..]);
+    assert!(before.contains("#{?@cpd_runner,") || before.contains("#{?#{@cpd_runner},"), "{format}");
+    assert!(after.starts_with(",}"), "{format}");
+}
+
+/// A tiny evaluator of the subset of tmux's format language the status format uses, on a zoomed window (the plain
+/// fill): `#[..]` styles cost no cell; `#{?c,a,b}`, `#{e|op:a,b}`, `#{n:x}`, `#{w:x}`, `#{R:s,n}`, `#{var}`.
+struct Row<'a> {
+    vars: &'a dyn Fn(&str) -> Option<String>,
+}
+
+impl Row<'_> {
+    fn split(s: &str) -> Vec<&str> {
+        let (mut out, mut depth, mut from) = (Vec::new(), 0, 0);
+        for (i, c) in s.char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                ',' if depth == 0 => {
+                    out.push(&s[from..i]);
+                    from = i + 1;
+                }
+                _ => {}
+            }
+        }
+        out.push(&s[from..]);
+        out
+    }
+
+    fn var(&self, name: &str) -> String {
+        (self.vars)(name).unwrap_or_default()
+    }
+
+    fn number(&self, s: &str) -> i64 {
+        let v = self.expand(s);
+        v.trim().parse().unwrap_or_else(|_| panic!("not a number: {v:?} from {s:?}"))
+    }
+
+    fn truthy(&self, cond: &str) -> bool {
+        let v = if cond.starts_with('@') || !cond.contains(['#', ':']) { self.var(cond) } else { self.expand(cond) };
+        !v.is_empty() && v != "0"
+    }
+
+    fn directive(&self, inner: &str) -> String {
+        if let Some(rest) = inner.strip_prefix('?') {
+            let parts = Self::split(rest);
+            let branch = if self.truthy(parts[0]) { parts[1] } else { parts.get(2).copied().unwrap_or("") };
+            return self.expand(branch);
+        }
+        if let Some(rest) = inner.strip_prefix("e|") {
+            let (op, args) = rest.split_once(':').unwrap();
+            let args = Self::split(args);
+            let (a, b) = (self.number(args[0]), self.number(args[1]));
+            return match op {
+                "+" => a + b,
+                "-" => a - b,
+                ">=" => i64::from(a >= b),
+                ">" => i64::from(a > b),
+                "<" => i64::from(a < b),
+                other => panic!("unread operator {other}"),
+            }
+            .to_string();
+        }
+        if let Some(name) = inner.strip_prefix("n:").or_else(|| inner.strip_prefix("w:")) {
+            return self.var(name.trim_start_matches('#')).chars().count().to_string();
+        }
+        if let Some(rest) = inner.strip_prefix("R:") {
+            let args = Self::split(rest);
+            return self.expand(args[0]).repeat(self.number(args[1]).max(0) as usize);
+        }
+        self.var(inner)
+    }
+
+    fn expand(&self, s: &str) -> String {
+        let (mut out, mut rest) = (String::new(), s);
+        while let Some(c) = rest.chars().next() {
+            if let Some(run) = rest.strip_prefix("#[") {
+                rest = &run[run.find(']').expect("a closed #[") + 1..];
+            } else if let Some(run) = rest.strip_prefix("#{") {
+                let (mut depth, mut end) = (1, 0);
+                for (i, c) in run.char_indices() {
+                    match c {
+                        '{' => depth += 1,
+                        '}' => depth -= 1,
+                        _ => {}
+                    }
+                    if depth == 0 {
+                        end = i;
+                        break;
+                    }
+                }
+                out.push_str(&self.directive(&run[..end]));
+                rest = &run[end + 1..];
+            } else {
+                out.push(c);
+                rest = &rest[c.len_utf8()..];
+            }
+        }
+        out
+    }
+}
+
+/// The row is exactly `#{client_width}` cells with the runner pill showing `pi`, `durable` or not at all, at every
+/// width the long and the short workers form cover, and the pill's text is on the row exactly when the option is set.
+#[test]
+fn the_status_row_keeps_its_width_with_pi_with_durable_and_with_no_runner_option() {
+    for runner in [Some("pi"), Some("durable"), None] {
+        for width in [60usize, 80, 120, 215] {
+            let vars = |name: &str| {
+                Some(match name {
+                    "client_width" => width.to_string(),
+                    "window_zoomed_flag" => "1".to_owned(),
+                    "@cpd_workers" => "2 running 1 waiting".to_owned(),
+                    "@cpd_workers_short" => "2 1".to_owned(),
+                    "@cpd_version" => "1.2.3".to_owned(),
+                    "@cpd_runner" => runner?.to_owned(),
+                    _ => return None,
+                })
+            };
+            let row = Row { vars: &vars }.expand(&STATUS_FORMAT);
+            assert_eq!(row.chars().count(), width, "runner {runner:?}, width {width}: {row:?}");
+            let pill = runner.map(|r| format!("\u{e0b6}{r}\u{e0b4}"));
+            for r in ["pi", "durable"] {
+                let marker = format!("\u{e0b6}{r}\u{e0b4}");
+                assert_eq!(row.contains(&marker), pill.as_deref() == Some(marker.as_str()), "runner {runner:?}: {row:?}");
+            }
+        }
+    }
 }
 
 /// The buttons' glyphs are the hs-d235 Material Design code points (width 1 is not asserted: no `unicode-width` dependency here).

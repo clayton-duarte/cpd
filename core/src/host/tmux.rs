@@ -77,6 +77,8 @@ pub const OPT_SESSION: &str = "@cpd_session";
 pub const OPT_TITLE: &str = "@cpd_title";
 /// The pane option naming the TUI view a pane runs (contract §6.2, amendment 2).
 pub const OPT_VIEW: &str = "@cpd_view";
+/// The global tmux option holding the Worker runner (`pi` or `durable`) the status line's runner pill shows.
+pub const RUNNER_OPTION: &str = "@cpd_runner";
 /// The pane option naming the Session a history pane shows (commands.md §10.12).
 pub const OPT_HISTORY: &str = "@cpd_history";
 
@@ -235,6 +237,8 @@ pub const COSTS_GLYPH: &str = costs_glyph!();
 /// The base colour of every status button (pro-d195): drawn bright, `spec().clickable(7)` = 15, so the four look alike.
 const BUTTON_BASE: u8 = 7;
 
+// The runner pill's width (0 while `@cpd_runner` is unset): a join, two caps and the runner.
+macro_rules! runner_width { () => { "#{?@cpd_runner,#{e|+:#{n:@cpd_runner},3},0}" }; }
 // The preview pill's width (0 without a preview): a join, two caps and `preview:` (12 cells) plus the value.
 macro_rules! preview_width { () => { "#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}" }; }
 // Whether the long workers form fits: the long workers pill's width (tmux's `#{w:@cpd_workers}` plus its two caps,
@@ -242,7 +246,7 @@ macro_rules! preview_width { () => { "#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview}
 // preview, the version pill and the incident pill.
 macro_rules! long_fits {
     () => {
-        concat!("#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},18},", preview_width!(), "},", version_width!(), "},", incident_width!(), "}}")
+        concat!("#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},18},", runner_width!(), "},", preview_width!(), "},", version_width!(), "},", incident_width!(), "}}")
     };
 }
 // The version pill's width (0 while `@cpd_version` is unset): a join, two caps and the version.
@@ -251,13 +255,13 @@ macro_rules! version_width { () => { "#{?@cpd_version,#{e|+:#{n:@cpd_version},3}
 // `Incident Mode: ` plus the value.
 macro_rules! incident_width { () => { "#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}" }; }
 // The fill's first column, F0: the left group's 16 cells and the preview pill.
-macro_rules! fill_start { () => { concat!("#{e|+:16,", preview_width!(), "}") }; }
+macro_rules! fill_start { () => { concat!("#{e|+:#{e|+:16,", runner_width!(), "},", preview_width!(), "}") }; }
 // The fill's cell count: `#{client_width}` minus the left group's 16, the preview pill, the version pill, the incident
 // pill and the right group's workers pill in the form drawn plus the closing `━`.
 macro_rules! fill_count {
     () => {
         concat!(
-            "#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},16},", preview_width!(), "},", version_width!(), "},", incident_width!(), "},",
+            "#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},16},", runner_width!(), "},", preview_width!(), "},", version_width!(), "},", incident_width!(), "},",
             "#{e|+:#{?", long_fits!(), ",#{e|+:#{w:@cpd_workers},2},#{e|+:#{w:@cpd_workers_short},2}},1}}"
         )
     };
@@ -340,12 +344,13 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
     // `Meaning::Failed` bright pair (index 9).
     let incident = pill::range("incident", &format!("{}#[default]", pill::italic_pill(&pill::fg(spec().clickable(m.failed)), "", "Incident Mode: #{@cpd_incident}")));
     format!(
-        "{join}{reset}{join}{legend}{join}{logs}{join}{costs}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2501}{preview},}}#[fg=colour8]{fill}#[default]#{{?@cpd_incident,{incident}{join},}}{workers}#{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2501}{alert},{plain}}}{join}",
+        "{join}{reset}{join}{legend}{join}{logs}{join}{costs}#{{?@cpd_runner,{join}{runner},}}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2501}{preview},}}#[fg=colour8]{fill}#[default]#{{?@cpd_incident,{incident}{join},}}{workers}#{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2501}{alert},{plain}}}{join}",
         join = join!(),
         reset = button("reset", reset_glyph!(), BUTTON_BASE),
         legend = button("legend", legend_glyph!(), BUTTON_BASE),
         logs = button("logs", logs_glyph!(), BUTTON_BASE),
         costs = button("costs", costs_glyph!(), BUTTON_BASE),
+        runner = button("runner", "#{@cpd_runner}", BUTTON_BASE),
         preview = status(m.review, "preview: #{@cpd_preview}"),
         fill = fill!(),
         workers = status(m.nothing, concat!("#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}")),
@@ -1299,6 +1304,7 @@ mod tests {
     /// A join: one grey `━`, outside the click ranges.
     const JOIN: &str = "#[fg=colour8]\u{2501}#[default]";
     /// The width a pill adds while its option is set, and 0 while it is unset.
+    const RUNNER_WIDTH: &str = "#{?@cpd_runner,#{e|+:#{n:@cpd_runner},3},0}";
     const PREVIEW_WIDTH: &str = "#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}";
     const VERSION_WIDTH: &str = "#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}";
     const INCIDENT_WIDTH: &str = "#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}";
@@ -1310,7 +1316,7 @@ mod tests {
     /// `long_fits!()` as text: the client is at least the workers pill's width plus 18 (the left group's 16, the closing `━` and a
     /// fill of at least 1), the preview pill, the version pill and the incident pill.
     fn long_fits() -> String {
-        format!("#{{e|>=:#{{client_width}},#{{e|+:#{{e|+:#{{e|+:#{{e|+:#{{e|+:#{{w:@cpd_workers}},2}},18}},{PREVIEW_WIDTH}}},{VERSION_WIDTH}}},{INCIDENT_WIDTH}}}}}")
+        format!("#{{e|>=:#{{client_width}},#{{e|+:#{{e|+:#{{e|+:#{{e|+:#{{e|+:#{{e|+:#{{w:@cpd_workers}},2}},18}},{RUNNER_WIDTH}}},{PREVIEW_WIDTH}}},{VERSION_WIDTH}}},{INCIDENT_WIDTH}}}}}")
     }
 
     /// A button of the left group: its click range, its glyph between the two caps (3 cells), a block of the bright pair of `base`.
@@ -1332,7 +1338,7 @@ mod tests {
     /// group's workers pill in the form drawn plus the closing `━`.
     fn fill_count() -> String {
         format!(
-            "#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},16}},{PREVIEW_WIDTH}}},{VERSION_WIDTH}}},{INCIDENT_WIDTH}}},#{{e|+:#{{?{},#{{e|+:#{{w:@cpd_workers}},2}},#{{e|+:#{{w:@cpd_workers_short}},2}}}},1}}}}",
+            "#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},16}},{RUNNER_WIDTH}}},{PREVIEW_WIDTH}}},{VERSION_WIDTH}}},{INCIDENT_WIDTH}}},#{{e|+:#{{?{},#{{e|+:#{{w:@cpd_workers}},2}},#{{e|+:#{{w:@cpd_workers_short}},2}}}},1}}}}",
             long_fits()
         )
     }
@@ -1346,7 +1352,9 @@ mod tests {
     fn after_the_buttons() -> String {
         let logs = button("costs", COSTS_GLYPH, BUTTON_BASE);
         let f: &str = &STATUS_FORMAT;
-        f[f.find(&logs).expect("the costs button") + logs.len()..].to_owned()
+        let after = &f[f.find(&logs).expect("the costs button") + logs.len()..];
+        // the runner pill (pro-d199) sits between the costs button and the preview marker
+        after[after.find("#{?#{@cpd_preview}").expect("the preview pill")..].to_owned()
     }
 
     // The right group is 37 cells wide in the long form (a text of 34 cells, 2 caps, the closing `━`):
@@ -1401,7 +1409,7 @@ mod tests {
         // a zoomed window's fill is one run of the whole free width, in either form (40 and 100 columns: the short form and the long one)
         assert!(f.contains(&format!("#{{?window_zoomed_flag,#{{R:\u{2501},{}}},", fill_count())), "{f}");
         // otherwise it starts after the left group's 16 cells and the preview pill
-        assert!(f.contains(&format!("#{{e|+:16,{PREVIEW_WIDTH}}}")), "{f}");
+        assert!(f.contains(&format!("#{{e|+:#{{e|+:16,{RUNNER_WIDTH}}},{PREVIEW_WIDTH}}}")), "{f}");
     }
 
     const PREVIEW: &str = "cpd.tui-visuals.box-order 6c43886";

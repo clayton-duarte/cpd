@@ -261,6 +261,13 @@ pub(super) fn run(engine: &mut Engine) {
         .zip(allocations)
         .filter_map(|((plan, key, urgent, seq, skipped), a)| a.map(|allocation| Entry { plan, key, urgent, allocation, seq, skipped }))
         .collect();
+    // pro-d199: the runner is re-read before Attempts start; a config that does not parse starts none (no stale value).
+    let runner = match cpd_core::config::Config::load(&engine.home) {
+        Ok(fresh) => fresh.worker_runner,
+        Err(e) => return engine.fail(Step::E3, About::Machine, &e),
+    };
+    let mut config = engine.config.clone();
+    config.worker_runner = runner;
     let (home, concurrency) = (engine.home.clone(), engine.config.concurrency);
     let mut remaining = ready;
     // The walk names the Jobs to start and the Jobs it skips. A start that fails (a tier outside the Worker range, a tampered Job,
@@ -290,7 +297,7 @@ pub(super) fn run(engine: &mut Engine) {
                     break;
                 }
             };
-            let ctx = StartCtx { home: &engine.home, config: &engine.config, catalog: &catalog, command: SOURCE };
+            let ctx = StartCtx { home: &engine.home, config: &config, catalog: &catalog, command: SOURCE };
             match driver::start_with_allocation(&engine.ports, &mut engine.store, &ctx, &plan, &key, Some(allocation)) {
                 Ok(started) => {
                     engine.log.line(&format!(

@@ -44,7 +44,7 @@ pub fn apply(text: &str) -> (String, Vec<&'static str>) {
 /// eq)`, where `body_end` is past the line's text (before its line ending), `line_end` past the
 /// whole line, and `eq` the offset of its `=`. `None` when there is no such line before the
 /// first table header, or the value spans lines (the line alone does not parse to the key).
-fn top_level_line(text: &str, key: &str) -> Option<(usize, usize, usize, usize)> {
+pub(super) fn top_level_line(text: &str, key: &str) -> Option<(usize, usize, usize, usize)> {
     let mut start = 0;
     for line in text.split_inclusive('\n') {
         let body = line.strip_suffix('\n').unwrap_or(line);
