@@ -218,8 +218,8 @@ mod tests {
         let git = |s: &str| PackageId::Git(s.into());
         let local = |s: &str| PackageId::Local(s.into());
 
-        assert_eq!(id("npm:@plannotator/pi-extension@0.28.17"), npm("@plannotator/pi-extension"));
-        assert_eq!(id("npm:@plannotator/pi-extension"), npm("@plannotator/pi-extension"));
+        assert_eq!(id("npm:@example/ext@0.28.17"), npm("@example/ext"));
+        assert_eq!(id("npm:@example/ext"), npm("@example/ext"));
         assert_eq!(id("npm:pi-tools@^1.2"), npm("pi-tools"));
         assert_eq!(id(" npm: pi-tools "), npm("pi-tools"));
 
@@ -275,7 +275,7 @@ mod tests {
     #[test]
     fn no_settings_pass_every_candidate() {
         let f = Fixture::new();
-        let candidates = strs(&["/opt/pi", "npm:@plannotator/pi-extension@0.28.17"]);
+        let candidates = strs(&["/opt/pi", "npm:@example/ext@0.28.17"]);
         assert_eq!(f.pass(&candidates), (candidates.clone(), String::new()));
     }
 
@@ -283,12 +283,12 @@ mod tests {
     fn skips_npm_specs_declared_globally_whatever_the_version() {
         let f = Fixture::new();
         let settings = f.global(
-            r#"{"packages": ["npm:@plannotator/pi-extension@0.30.0",
+            r#"{"packages": ["npm:@example/ext@0.30.0",
                 {"source": "npm:@example/other-tool", "skills": []}]}"#,
         );
         let candidates = strs(&[
             "/opt/pi",
-            "npm:@plannotator/pi-extension@0.28.17",
+            "npm:@example/ext@0.28.17",
             "npm:@example/other-tool@2.0.0",
             "npm:@other/pkg@1.0.0",
         ]);
@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(kept, strs(&["/opt/pi", "npm:@other/pkg@1.0.0"]));
         let lines: Vec<&str> = log.lines().collect();
         assert_eq!(lines.len(), 2, "{log}");
-        assert!(lines[0].contains("-e npm:@plannotator/pi-extension@0.28.17"), "{log}");
+        assert!(lines[0].contains("-e npm:@example/ext@0.28.17"), "{log}");
         assert!(lines[0].contains(&settings.display().to_string()), "{log}");
         assert!(lines[1].contains("-e npm:@example/other-tool@2.0.0"), "{log}");
     }
@@ -347,7 +347,7 @@ mod tests {
     // adapter carries its own copy).
     #[test]
     fn retired_package_is_not_passed_and_logged() {
-        const PLANNOTATOR: &str = "npm:@plannotator/pi-extension@0.28.17";
+        const SAMPLE: &str = "npm:@example/ext@0.28.17";
         const RETIRED: &str = "npm:@juicesharp/rpiv-ask-user-question@2.13.8";
         let root = tempfile::tempdir().unwrap();
         let dirs = PiDirs {
@@ -357,10 +357,10 @@ mod tests {
         };
         let cwd = root.path().join("cwd");
         fs::create_dir_all(&cwd).unwrap();
-        let candidates: Vec<String> = ["/opt/pi", PLANNOTATOR, RETIRED, "npm:@other/pkg@1.0.0"].map(str::to_owned).to_vec();
+        let candidates: Vec<String> = ["/opt/pi", SAMPLE, RETIRED, "npm:@other/pkg@1.0.0"].map(str::to_owned).to_vec();
         let mut log = Vec::new();
         let kept = extensions_to_pass(&candidates, &cwd, &dirs, &mut log);
-        assert_eq!(kept, ["/opt/pi", PLANNOTATOR, "npm:@other/pkg@1.0.0"]);
+        assert_eq!(kept, ["/opt/pi", SAMPLE, "npm:@other/pkg@1.0.0"]);
         assert_eq!(
             String::from_utf8(log).unwrap(),
             format!("cpd: not passing -e {RETIRED}: cpd's adapter carries its own copy of it\n")

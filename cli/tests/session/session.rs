@@ -1514,51 +1514,6 @@ fn run_refusals() {
     assert!(fx.fakes.spawn.launches().is_empty(), "pi was started");
 }
 
-// ---------- run: the plannotator environment ----------
-
-/// The value of `key` in the environment `launch` gives its process: set by it (`env_set`), else `None`.
-fn env_set(launch: &Launch, key: &str) -> Option<String> {
-    launch.env_set.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
-}
-
-/// `setup`, the cockpit and the session files of both Plans' Leads, so `session run` resumes them.
-fn port_fixture(fx: &Fx) {
-    setup(&fx.env);
-    fx.cockpit();
-    let sessions = fx.env.home().join(".pi/agent/sessions/g");
-    fs::create_dir_all(&sessions).unwrap();
-    for lead in [LEAD1, LEAD2] {
-        fs::write(sessions.join(format!("2026_{lead}.jsonl")), "{\"type\":\"session\"}\n").unwrap();
-    }
-}
-
-/// Section 5 of the research: the review host `primary_ipv4` detects reads the kernel's routing table, so its rule
-/// (`host::addr::choose`, with the detector a closure) has the unit tests of `core/src/host/addr.rs`; here the
-/// override and `PLANNOTATOR_REMOTE=1` are what pi's launch carries.
-#[test]
-fn run_gives_the_lead_remote_and_the_review_host() {
-    let fx = Fx::with_ports();
-    port_fixture(&fx);
-
-    // The environment's `PLANNOTATOR_URL_HOST` is the override; the `PLANNOTATOR_REMOTE` it holds is replaced.
-    let first = Pane::new(&fx, LEAD1, &installed_cpd(&fx));
-    fx.export("PLANNOTATOR_URL_HOST", "review.test");
-    fx.export("PLANNOTATOR_REMOTE", "0");
-    let mut w1 = first.run(&["session", "run", LEAD1]);
-    w1.until("the first Lead's pi", || first.spawn.pis().len() == 1);
-    let launch = &first.spawn.pis()[0];
-    assert_eq!((env_set(launch, "PLANNOTATOR_REMOTE"), env_set(launch, "PLANNOTATOR_URL_HOST")), (Some("1".to_owned()), Some("review.test".to_owned())));
-    assert!(!launch.env_remove.iter().any(|k| k.starts_with("PLANNOTATOR_")), "{:?}", launch.env_remove);
-
-    // The second Lead's pane has another override (a Plan's Lead too, whatever its caller holds).
-    let second = Pane::new(&fx, LEAD2, &installed_cpd(&fx));
-    fx.export("PLANNOTATOR_URL_HOST", "10.0.0.2");
-    let mut w2 = second.run(&["session", "run", LEAD2]);
-    w2.until("the second Lead's pi", || second.spawn.pis().len() == 1);
-    let launch = &second.spawn.pis()[0];
-    assert_eq!((env_set(launch, "PLANNOTATOR_REMOTE"), env_set(launch, "PLANNOTATOR_URL_HOST")), (Some("1".to_owned()), Some("10.0.0.2".to_owned())));
-}
-
 // ---------- run: the User's quit archives (commands.md §10.8) ----------
 
 /// pi's session file for `id`, so `session run` resumes it; `finished` ends it on a finished turn.

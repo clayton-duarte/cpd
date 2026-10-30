@@ -53,7 +53,7 @@ fn config_defaults_context_distill_tier_to_gx() {
             "context_curation_min_records": 25,
             "loop_guard_turns": 20,
             "open_tier": "H3",
-            "lead_pi_packages": ["npm:@plannotator/pi-extension@0.28.17"],
+            "lead_pi_packages": [],
             "pi_adapter": "",
             "worker_runner": "pi",
             "context_engine_enabled": true,
@@ -62,7 +62,6 @@ fn config_defaults_context_distill_tier_to_gx() {
             "context_engine_dir": "",
             "context_engine_timeout_ms": 30000,
             "context_engine_reindex_timeout_ms": 600000,
-            "plannotator_ports": "19432-19456",
             "timeouts": {
                 "attempt_minutes": 30,
                 "ask_minutes": 60,
@@ -160,14 +159,6 @@ fn config_takes_a_fractional_tick_and_pi_stop_seconds() {
 }
 
 #[test]
-fn config_shows_a_custom_plannotator_range() {
-    let fx = Fx::new();
-    let out = config_with(&fx, "version = 1\nmachine = \"hs\"\nplannotator_ports = \"20000-20000\"\n").ok();
-    assert_eq!(out["config"]["plannotator_ports"], "20000-20000");
-    assert_eq!(out["sources"]["plannotator_ports"], "file");
-}
-
-#[test]
 fn config_has_one_source_per_leaf_key() {
     let fx = Fx::new();
     let out = config_with(&fx, "version = 1\nmachine = \"hs\"\nconcurrency = 5\n[timeouts]\nask_minutes = 10\n").ok();
@@ -227,7 +218,6 @@ context_engine_python = "/b/venv/bin/python"
 context_engine_dir = "/b/engine"
 context_engine_timeout_ms = 4294967295
 context_engine_reindex_timeout_ms = 1
-plannotator_ports = "1-65535"
 worker_runner = "durable"
 [timeouts]
 attempt_minutes = 1
@@ -282,7 +272,6 @@ work_session = "w"
     assert_eq!(out["config"]["open_tier"], "S3");
     assert_eq!(out["config"]["lead_pi_packages"], json!([]));
     assert_eq!(out["config"]["pi_adapter"], adapter.to_str().unwrap());
-    assert_eq!(out["config"]["plannotator_ports"], "1-65535");
     assert!(out["sources"].as_object().unwrap().values().all(|s| s == "file"));
     // 0 turns the stall kill off (contract §8.2), unlike every other timeout.
     assert_eq!(out["config"]["timeouts"]["stall_seconds"], 0);
@@ -308,16 +297,6 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\nreview_mode = \"none\"\n", "review_mode"),
         ("version = 1\nmachine = \"hs\"\ndefault_review_tier = \"S3\"\n", "default_review_tier"),
         ("version = 1\nmachine = \"hs\"\ntickSeconds = 5\n", "tickSeconds"),
-        // plannotator_ports: "<a>-<b>", a <= b, both ports
-        ("version = 1\nmachine = \"hs\"\nplannotator_ports = 19432\n", "plannotator_ports"),
-        ("version = 1\nmachine = \"hs\"\nplannotator_ports = \"19432\"\n", "plannotator_ports"),
-        ("version = 1\nmachine = \"hs\"\nplannotator_ports = \"19441-19432\"\n", "plannotator_ports"),
-        ("version = 1\nmachine = \"hs\"\nplannotator_ports = \"0-5\"\n", "plannotator_ports"),
-        ("version = 1\nmachine = \"hs\"\nplannotator_ports = \"1-65536\"\n", "plannotator_ports"),
-        ("version = 1\nmachine = \"hs\"\nplannotator_ports = \"a-b\"\n", "plannotator_ports"),
-        ("version = 1\nmachine = \"hs\"\nplannotator_ports = \"1-2-3\"\n", "plannotator_ports"),
-        ("version = 1\nmachine = \"hs\"\nplannotator_ports = \"+1-5\"\n", "plannotator_ports"),
-        ("version = 1\nmachine = \"hs\"\nplannotator_ports = \"\"\n", "plannotator_ports"),
         // required keys
         ("machine = \"hs\"\n", "version"),
         ("version = 1\n", "machine"),

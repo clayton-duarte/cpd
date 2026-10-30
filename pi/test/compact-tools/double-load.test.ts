@@ -32,13 +32,13 @@ test("otherCopy finds a git source whose repository is pi-compact-tools, whoever
 test("otherCopy answers the first entry of the global list, then of the project list, with its scope", () => {
 	assert.deepEqual(otherCopy({ global: [], project: ["npm:pi-compact-tools@0.16.6"] }), { source: "npm:pi-compact-tools@0.16.6", scope: "project" });
 	assert.deepEqual(
-		otherCopy({ global: ["npm:@plannotator/pi-extension@0.28.17", "npm:pi-compact-tools@0.16.6"], project: ["npm:pi-compact-tools"] }),
+		otherCopy({ global: ["npm:some-other-pkg@1.0.0", "npm:pi-compact-tools@0.16.6"], project: ["npm:pi-compact-tools"] }),
 		{ source: "npm:pi-compact-tools@0.16.6", scope: "global" },
 	);
 });
 
 test("otherCopy does not find another package, a scoped one of the same name, a local path, or no packages", () => {
-	for (const source of ["npm:@plannotator/pi-extension@0.28.17", "npm:pi-compact-tools-extra", "npm:@scope/pi-compact-tools", "/home/me/pi-compact-tools", "./pi-compact-tools"]) {
+	for (const source of ["npm:some-other-pkg@1.0.0", "npm:pi-compact-tools-extra", "npm:@scope/pi-compact-tools", "/home/me/pi-compact-tools", "./pi-compact-tools"]) {
 		assert.equal(otherCopy({ global: [source], project: [] }), undefined, source);
 		assert.equal(otherCopy({ global: [], project: [{ source }] }), undefined, source);
 	}
@@ -162,7 +162,7 @@ test("another copy in the project's settings is named with the project's setting
 });
 
 test("with no other copy, or with other packages, the factory registers what it does today and says nothing", () => {
-	for (const packages of [undefined, [], ["npm:@plannotator/pi-extension@0.28.17", "npm:pi-compact-tools-extra"]]) {
+	for (const packages of [undefined, [], ["npm:some-other-pkg@1.0.0", "npm:pi-compact-tools-extra"]]) {
 		settings(packages, () => {
 			const { pi, calls, handlers } = fakePi();
 			compactTools(pi);

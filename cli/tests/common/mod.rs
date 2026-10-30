@@ -1009,7 +1009,7 @@ impl TestEnv {
     }
 
     /// A `Command` for `program` with this env's isolated environment:
-    /// `CPD_*`, `PI_*`, `GIT_*`, `XDG_*`, `PLANNOTATOR_*`, `GH_*`, `GITHUB_*`, `SSH_*`,
+    /// `CPD_*`, `PI_*`, `GIT_*`, `XDG_*`, `GH_*`, `GITHUB_*`, `SSH_*`,
     /// the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, either case),
     /// `TMUX`, `TMUX_PANE` and `ZDOTDIR` removed, then
     /// `CPD_HOME`, `HOME`, `PATH`, `TMUX_TMPDIR`, `TZ` (a POSIX rule: jiff reads `TZ` first, so no child reads
@@ -1039,7 +1039,7 @@ impl TestEnv {
         let mut remove: Vec<OsString> = ["TMUX", "TMUX_PANE", "ZDOTDIR"].map(OsString::from).to_vec();
         for (key, _) in std::env::vars_os() {
             let k = key.to_string_lossy();
-            let listed = ["CPD_", "PI_", "GIT_", "XDG_", "PLANNOTATOR_", "GH_", "GITHUB_", "SSH_"].iter().any(|p| k.starts_with(p))
+            let listed = ["CPD_", "PI_", "GIT_", "XDG_", "GH_", "GITHUB_", "SSH_"].iter().any(|p| k.starts_with(p))
                 || PROXY_VARS.iter().any(|v| k.eq_ignore_ascii_case(v));
             if listed && !remove.contains(&key) {
                 remove.push(key);

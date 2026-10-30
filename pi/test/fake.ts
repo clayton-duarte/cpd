@@ -339,13 +339,6 @@ export class Fixture {
     rmSync(join(this.dir, name), { force: true });
   }
 
-  planFile(plan: string, review: string, content: string): string {
-    const p = join(this.cpdHome, "run", plan, `plan-${review}.md`);
-    mkdirSync(join(this.cpdHome, "run", plan), { recursive: true });
-    writeFileSync(p, content);
-    return p;
-  }
-
   summaryFile(plan: string, review: string, content: string): string {
     const p = join(this.cpdHome, "run", plan, `summary-${review}.md`);
     mkdirSync(join(this.cpdHome, "run", plan), { recursive: true });
@@ -398,11 +391,6 @@ export class Fixture {
     await waitFor("the follower", () => this.follows().length > 0);
   }
 
-  /** Resolves when the tracker ran `cpd review list` (started after the follower, not awaited by it). */
-  async trackerListed(): Promise<void> {
-    await waitFor("the tracker's review list", () => this.argvs().some((a) => a[0] === "review" && a[1] === "list"));
-  }
-
   /** `--since` of every follower start. */
   sinces(): number[] {
     return this.follows().map((c) => Number(c.since));
@@ -428,7 +416,7 @@ export class Fixture {
     adapterFn(pi, {
       ...options,
       spawn: ((...args: Parameters<typeof spawn>) => pi.track(start(...args))) as typeof spawn,
-      timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200, callTimeoutMs: 10_000, ...options.timing },
+      timing: { restartInitialMs: 30, restartMaxMs: 120, shutdownWaitMs: 200, callTimeoutMs: 10_000, ...options.timing },
       reload,
     });
   }

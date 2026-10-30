@@ -15,10 +15,9 @@ import { installHint } from "./hint.ts";
 import { installChatPad, registerChatPad } from "./pad.ts";
 import { reasonText as secretReasonText, secretBypass } from "./secretguard.ts";
 import { hostApproveBypass, reasonText as hostApproveReasonText } from "./hostapprove.ts";
-import { pnVerdict } from "./pnguard.ts";
 import { RENDERED_TYPES } from "./render.ts";
 import { registerReloadCommand } from "./reload-command.ts";
-import { start, stop, trackers } from "./startup.ts";
+import { start, stop } from "./startup.ts";
 import { reasonText as testReasonText, unfilteredTestRun } from "./testguard.ts";
 import { registerReminderCheck } from "./turns.ts";
 
@@ -67,8 +66,6 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   // §15.11, §15.12, §15.16: one handler for the guards, registered once (pi has no unsubscribe); the role is read at each call.
   pi.on("tool_call", async (event, ctx) => {
     const role = host.run?.info.role;
-    const pn = pnVerdict({ env: host.env, live: host.run !== undefined, store: globalThis as Record<string, unknown> }, event);
-    if (pn) return pn;
     const explored = exploreGuard(role, host.env, { name: event.toolName, arguments: event.input as Record<string, unknown> }, ctx.cwd);
     if (explored !== undefined) return { block: true, reason: explored.block };
     if (host.run && (event.toolName === "edit" || event.toolName === "write")) {
@@ -102,14 +99,6 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     }
     const matched = unfilteredTestRun(command);
     return matched === undefined ? undefined : { block: true, reason: testReasonText(matched) };
-  });
-
-  // commands.md §15 "Every plannotator session is tracked": a plannotator result may have opened or closed a review.
-  pi.on("tool_result", async (event) => {
-    if (event.toolName !== "plannotator" && event.toolName !== "plannotator_submit_plan") return;
-    const r = host.run;
-    const tracker = r && trackers.get(r);
-    if (tracker) await tracker.poll().catch((e) => host.deliver("plannotator tracker", e));
   });
 
   registerAgentState(host);

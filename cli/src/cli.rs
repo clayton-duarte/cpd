@@ -14,7 +14,7 @@ use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, janitor, job, mcp, models, plan, policy, pr, prune, resource, review, secret, session, tag, testsel, version_sync};
+use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, janitor, job, mcp, models, plan, policy, pr, prune, resource, secret, session, tag, testsel, version_sync};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -58,9 +58,9 @@ pub enum Command {
     /// Pull requests (commands.md §9)
     #[command(subcommand)]
     Pr(pr::Command),
-    /// Plannotator sessions a Session has open (hs-d496)
+    /// The GitHub review (commands.md §31.1)
     #[command(subcommand)]
-    Review(ReviewCommand),
+    Review(pr::review::Command),
     /// Policies (commands.md §22)
     #[command(subcommand)]
     Policy(policy::Command),
@@ -169,15 +169,6 @@ fn run_scoped(ports: &Ports, argv: impl IntoIterator<Item = OsString>, terminal:
     }
 }
 
-/// `cpd review`: the plannotator sessions (hs-d496) and the GitHub review (commands.md §31.1), one word, two owners.
-#[derive(clap::Subcommand, Debug)]
-pub enum ReviewCommand {
-    #[command(flatten)]
-    Sessions(review::Command),
-    #[command(flatten)]
-    Submit(pr::review::Command),
-}
-
 fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
     match command {
         Command::Context(c) => context::run(c),
@@ -188,8 +179,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Answer(a) => ask::answer(a),
         Command::Board(c) => board::run(c),
         Command::Pr(c) => pr::run(ports, c),
-        Command::Review(ReviewCommand::Sessions(c)) => review::run(c),
-        Command::Review(ReviewCommand::Submit(c)) => pr::review::run(ports, c),
+        Command::Review(c) => pr::review::run(ports, c),
         Command::Policy(c) => policy::run(c),
         Command::Mcp(c) => mcp::run(c),
         Command::Session(c) => session::run(c),

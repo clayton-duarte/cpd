@@ -9,7 +9,6 @@ use std::path::Path;
 use super::Env;
 use crate::error::CpdError;
 use crate::events::{NewEvent, append};
-use crate::host::addr::{URL_HOST, review_host};
 use crate::host::{PaneId, Spawn, Tmux, WindowId};
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::session::PROGRAM;
@@ -26,18 +25,14 @@ pub(super) struct Lead<'a> {
     pub session: &'a SessionId,
     pub context: &'a ContextId,
     /// The Lead's Plan; `None` for a Context's Manager (contract §6.5:
-    /// no `CPD_PLAN` and no `PLANNOTATOR_*`).
+    /// no `CPD_PLAN`).
     pub plan: Option<&'a PlanId>,
     pub name: &'a str,
     pub cwd: &'a Path,
 }
 
 /// What tmux runs for `lead`: `cpd session run <id>` in its cwd, with
-/// `CPD_HOME`, `CPD_SESSION`, and for a Plan's Lead `CPD_PLAN` plus
-/// `PLANNOTATOR_PORT` from cpd's own environment when set, `PLANNOTATOR_REMOTE=1`
-/// and `PLANNOTATOR_URL_HOST` (the review host, contract §6.5; commands.md §15.5, amendment 8): passed with `-e`, so the pane
-/// has them whatever environment the tmux server was started with, and
-/// several Plan reviews can be open at once on a port range.
+/// `CPD_HOME`, `CPD_SESSION`, and for a Plan's Lead `CPD_PLAN`: passed with `-e`, so the pane has them whatever environment the tmux server was started with.
 fn spawn(env: &Env, lead: &Lead) -> Spawn {
     let mut vars = BTreeMap::from([
         ("CPD_HOME".to_owned(), env.home.root().display().to_string()),
@@ -45,11 +40,6 @@ fn spawn(env: &Env, lead: &Lead) -> Spawn {
     ]);
     if let Some(plan) = lead.plan {
         vars.insert("CPD_PLAN".to_owned(), plan.to_string());
-        if let Ok(port) = std::env::var("PLANNOTATOR_PORT") {
-            vars.insert("PLANNOTATOR_PORT".to_owned(), port);
-        }
-        vars.insert("PLANNOTATOR_REMOTE".to_owned(), "1".to_owned());
-        vars.insert(URL_HOST.to_owned(), review_host(&mut std::io::stderr()));
     }
     Spawn {
         cwd: Some(lead.cwd.to_path_buf()),

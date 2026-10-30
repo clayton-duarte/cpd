@@ -14,7 +14,7 @@ import { Fixture } from "./fake.ts";
 // hs-d355 (docs/implementing.md "Checking a pi version"): the answers the adapter parses at activation have one source, `pi/test/answers.ts`,
 // used by the tests' fake `cpd` and by pi-check's fake. A field the adapter starts requiring is added there once; until then these tests fail.
 
-const KEYS = ["--version", "context-pending", "policy-show", "review-list", "session-show"];
+const KEYS = ["--version", "context-pending", "policy-show", "session-show"];
 const answersFile = join(fileURLToPath(import.meta.url), "..", "answers.ts");
 const entry = (key: string): Record<string, unknown> => {
   const answer = (answers() as Record<string, unknown>)[key];

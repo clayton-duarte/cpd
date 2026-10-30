@@ -18,7 +18,7 @@ process.env.TZ = "Asia/Kolkata";
 const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
 
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
-const REFUSAL = "φ: ask_user_question is for a few short choices; put anything larger in plannotator; refused: 1789 characters (limit 1500)";
+const REFUSAL = "φ: ask_user_question is for a few short choices; write anything larger to a file outside the repo and point to it in chat; refused: 1789 characters (limit 1500)";
 const LONG = "TypeError: cannot read properties of undefined while compiling the project, see the diagnostic output above";
 const SEPARATOR = " \u00B7 ";
 let sequence = 0;

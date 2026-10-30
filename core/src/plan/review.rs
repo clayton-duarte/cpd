@@ -29,9 +29,9 @@ fn summary_md(home: &CpdHome, plan: &PlanId) -> PathBuf {
     home.plan_md(plan).with_file_name("summary.md")
 }
 
-/// `run/<plan>/summary-<review>.md`, beside `plan-<review>.md`.
+/// `run/<plan>/summary-<review>.md`, beside `summary.md`.
 fn summary_review_md(home: &CpdHome, plan: &PlanId, review: ReviewId) -> PathBuf {
-    home.plan_review_md(plan, review).with_file_name(format!("summary-{review}.md"))
+    home.plan_md(plan).with_file_name(format!("summary-{review}.md"))
 }
 
 /// A `plan_reviews` row.
@@ -124,8 +124,8 @@ fn base_prs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, String>
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// The summary of the snapshot (commands.md §4.5); `full_plan` is the file its last line names.
-fn summary_markdown(s: &Snapshot, kind: &summary::Kind, full_plan: &std::path::Path) -> String {
+/// The summary of the snapshot (commands.md §4.5).
+fn summary_markdown(s: &Snapshot, kind: &summary::Kind) -> String {
     summary::markdown(
         kind,
         &summary::Input {
@@ -134,7 +134,6 @@ fn summary_markdown(s: &Snapshot, kind: &summary::Kind, full_plan: &std::path::P
             jobs: &s.jobs,
             overlaps: &s.overlaps,
             base_prs: &s.base_prs,
-            full_plan,
         },
     )
 }
@@ -151,7 +150,7 @@ pub(super) fn render(args: RenderArgs) -> Result<Output, CpdError> {
     let path = env.home.plan_md(&id);
     write_file(&path, &plan_markdown(&s, &render::Heading::Plan { title: &s.plan.title }))?;
     let summary = summary_md(&env.home, &id);
-    write_file(&summary, &summary_markdown(&s, &summary::Kind::Plan, &path))?;
+    write_file(&summary, &summary_markdown(&s, &summary::Kind::Plan { full_plan: &path }))?;
     Ok(Output::success(json!({
         "path": path.display().to_string(),
         "summary": summary.display().to_string(),
@@ -186,7 +185,6 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     if let Some(r) = latest_review.as_ref().filter(|r| r.status == "pending" && r.fingerprint == fingerprint) {
         return Ok(Output::success(json!({
             "review": {"id": r.id, "fingerprint": r.fingerprint, "status": r.status, "requested_at": r.requested_at},
-            "path": env.home.plan_review_md(&id, r.id).display().to_string(),
             "summary": summary_review_md(&env.home, &id, r.id).display().to_string(),
             "next": REVIEW_NEXT,
             "already": true,
@@ -197,18 +195,10 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     let number = latest_review.as_ref().map_or(0, |r| r.id.number().get()) + 1;
     let review = ReviewId::new(std::num::NonZeroU32::new(number).expect("one more than a count"));
     write_file(&env.home.plan_md(&id), &plan_markdown(&s, &render::Heading::Plan { title: &s.plan.title }))?;
-    let path = env.home.plan_review_md(&id, review);
-    let heading = render::Heading::Review {
-        title: args.title.as_str(),
-        plan: id.as_str(),
-        plan_title: &s.plan.title,
-        review: &review.to_string(),
-    };
-    write_file(&path, &plan_markdown(&s, &heading))?;
     let plan_summary = summary_md(&env.home, &id);
-    write_file(&plan_summary, &summary_markdown(&s, &summary::Kind::Plan, &env.home.plan_md(&id)))?;
+    write_file(&plan_summary, &summary_markdown(&s, &summary::Kind::Plan { full_plan: &env.home.plan_md(&id) }))?;
     let summary = summary_review_md(&env.home, &id, review);
-    write_file(&summary, &summary_markdown(&s, &summary::Kind::Review { title: args.title.as_str(), review: &review.to_string() }, &path))?;
+    write_file(&summary, &summary_markdown(&s, &summary::Kind::Review { title: args.title.as_str(), review: &review.to_string() }))?;
 
     let requested_at = env.store.write("plan review", |tx| {
         // Compare-and-swap on what was read: the phase, the plan fingerprint and the latest review.
@@ -230,7 +220,6 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     })?;
     Ok(Output::success(json!({
         "review": {"id": review, "fingerprint": fingerprint, "status": "pending", "requested_at": requested_at},
-        "path": path.display().to_string(),
         "summary": summary.display().to_string(),
         "next": REVIEW_NEXT,
     })))

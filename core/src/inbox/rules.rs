@@ -7,7 +7,7 @@
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -17,7 +17,6 @@ use super::team::{self, GhPr, Lookup, Memo, Post, Status};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::host::addr::review_host;
 use crate::job::worked_on::failed_worked_on;
 use crate::ids::{ContextId, JobKey, PlanId, PrKey, SessionId};
 use crate::plan::Phase;
@@ -75,7 +74,6 @@ pub fn conditions_with(
     let mut all = store.read(dialogs)?;
     all.extend(store.read(|conn| loop_guards(conn, loop_guard_turns))?);
     all.extend(store.read(|conn| plan_reviews(conn))?);
-    all.extend(store.read(review_waiting)?);
     all.extend(store.read(unread)?);
     // No `question` kind (hs-d306 (1)): an open Context question opens nothing, and an item an older engine opened for
     // one closes at the next reconcile, its condition no longer holding. Questions to the User go through `ask_user_question`.
@@ -346,42 +344,6 @@ fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 
 // ---- Plans and Jobs: plan-review, and the stuck Jobs -------------------------------------------------------------
 
-/// The plannotator page on `port`, on the review host.
-fn review_url(port: u16) -> String {
-    format!("http://{}:{port}/", review_host(&mut std::io::stderr()))
-}
-
-/// `review-waiting` (hs-d496): an open tracked plannotator session (`plannotator_reviews`) of a Session that is neither
-/// archived nor `stopped`. Always magenta; it links its Session (and that Session's Plan, if it has one); its URL is the
-/// review host's page on the row's port. Label `<who> review\n<subject>`. It marks no Session `blocked`.
-fn review_waiting(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
-    let filter = "s.state <> 'stopped' AND EXISTS (SELECT 1 FROM plannotator_reviews r WHERE r.session = s.id AND r.closed_at IS NULL)";
-    let mut stmt = conn.prepare("SELECT pn_id, subject, port FROM plannotator_reviews WHERE session = ?1 AND closed_at IS NULL ORDER BY opened_at, pn_id")?;
-    let mut out = Vec::new();
-    for seat in seats(conn, "NULL", filter)? {
-        let rows = stmt
-            .query_map([seat.session.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, u16>(2)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        for (pn_id, subject, port) in rows {
-            out.push(Condition {
-                kind: Kind::ReviewWaiting,
-                urgency: Urgency::Magenta,
-                subject: format!("pn:{}/{pn_id}", seat.session),
-                label: format!("{} review\n{subject}", seat.who),
-                url: Some(review_url(port)),
-                context: Some(seat.context.clone()),
-                plan: seat.plan.clone(),
-                job: None,
-                session: Some(seat.session.clone()),
-                record: None,
-                event: None,
-                opened_at: None,
-            });
-        }
-    }
-    Ok(out)
-}
-
 /// `curate-retire` and `curate-docs` (hs-d549, hs-d551): one cyan item per Context and kind while the Context has
 /// pending retirements, or pending doc candidates; the label carries the count. Dismissing one decides nothing.
 fn curate(conn: &Connection, floor: u32) -> Result<Vec<Condition>, CpdError> {
@@ -432,9 +394,6 @@ fn plan_reviews(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
           WHERE v.status = 'pending' AND v.number = (SELECT max(w.number) FROM plan_reviews w WHERE w.plan = v.plan)
           ORDER BY v.requested_at, v.plan",
     )?;
-    let mut port_stmt = conn.prepare(
-        "SELECT port FROM plannotator_reviews WHERE session = ?1 AND kind = 'plan' AND closed_at IS NULL ORDER BY opened_at, pn_id LIMIT 1",
-    )?;
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
@@ -450,7 +409,7 @@ fn plan_reviews(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
                 Some(title) => format!("{plan} plan review\n{title}"),
                 None => format!("{plan} plan review"),
             },
-            url: port_stmt.query_row([lead.as_str()], |r| r.get::<_, u16>(0)).optional()?.map(review_url),
+            url: None,
             context: Some(id("Context id", &context, ContextId::parse)?),
             plan: Some(plan),
             job: None,
@@ -706,7 +665,6 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::host::addr::URL_HOST;
     use crate::inbox::model::reconcile;
     use crate::inbox::team::{GhState, Review};
 
@@ -1022,85 +980,10 @@ mod tests {
         assert_eq!(labels, ["ctx replied", "pay·fork replied\nPay"]);
     }
 
-    // ---- review-waiting (hs-d496) ----
-
-    impl Fixture {
-        /// A tracked plannotator session of `session`: `closed` is `None` while it is open.
-        fn tracked(&mut self, session: &str, pn_id: &str, subject: &str, port: u16, closed: Option<&str>) {
-            let (closed_at, ended) = closed.map_or(("NULL".to_owned(), "NULL".to_owned()), |e| (format!("'{T}'"), format!("'{e}'")));
-            self.sql(&format!(
-                "INSERT INTO plannotator_reviews (session, pn_id, kind, subject, port, opened_at, closed_at, ended)
-                 VALUES ('{session}', '{pn_id}', 'annotate', '{subject}', {port}, '{T}', {closed_at}, {ended});"
-            ));
-        }
-    }
-
-    #[test]
-    fn an_open_tracked_session_of_a_live_lead_is_one_magenta_review_waiting_with_the_review_hosts_page() {
-        let mut f = fixture("plan");
-        f.tracked("l-pay", "pn-0a1b2c", "docs/plan.md", 20001, None);
-        // the review host: `PLANNOTATOR_URL_HOST` from cpd's environment (nextest runs each test in its own process)
-        unsafe { std::env::set_var(URL_HOST, "review.example") };
-        let found = f.of(Kind::ReviewWaiting);
-        unsafe { std::env::remove_var(URL_HOST) };
-        let c = one(found);
-        assert_eq!(
-            (c.urgency, c.subject.as_str(), c.label.as_str(), c.url.as_deref()),
-            (Urgency::Magenta, "pn:l-pay/pn-0a1b2c", "pay review\ndocs/plan.md", Some("http://review.example:20001/"))
-        );
-        assert_eq!(c.session.as_ref().map(|s| s.as_str()), Some("l-pay"), "its Session");
-        assert_eq!((c.context.as_ref().map(|c| c.as_str()), c.plan.as_ref().map(|p| p.as_str())), (Some("ctx"), Some("pay")), "and its Plan");
-    }
-
-    #[test]
-    fn a_managers_tracked_session_is_a_review_waiting_with_its_context_and_no_plan() {
-        let mut f = fixture("plan");
-        f.tracked("mgr", "pn-0a1b2c", "notes.md", 20002, None);
-        let c = one(f.of(Kind::ReviewWaiting));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Magenta, "pn:mgr/pn-0a1b2c", "ctx review\nnotes.md"));
-        assert_eq!((c.session.as_ref().map(|s| s.as_str()), c.plan), (Some("mgr"), None));
-    }
-
-    #[test]
-    fn each_open_tracked_session_is_its_own_review_waiting() {
-        let mut f = fixture("plan");
-        f.tracked("l-pay", "pn-0a1b2c", "a.md", 20001, None);
-        f.tracked("l-pay", "pn-0d3e4f", "b.md", 20003, None);
-        let mut subjects: Vec<_> = f.of(Kind::ReviewWaiting).into_iter().map(|c| c.subject).collect();
-        subjects.sort();
-        assert_eq!(subjects, ["pn:l-pay/pn-0a1b2c", "pn:l-pay/pn-0d3e4f"]);
-    }
-
-    #[test]
-    fn a_closed_row_an_archived_session_and_a_stopped_session_give_no_review_waiting() {
-        let mut f = fixture("plan");
-        f.tracked("l-pay", "pn-0a1b2c", "a.md", 20001, Some("decided"));
-        f.tracked("l-pay", "pn-0d3e4f", "b.md", 20003, Some("lost"));
-        assert_eq!(f.of(Kind::ReviewWaiting), vec![], "closed");
-        f.tracked("l-pay", "pn-111111", "c.md", 20004, None);
-        assert_eq!(f.of(Kind::ReviewWaiting).len(), 1, "the open one");
-        f.sql("UPDATE sessions SET state = 'stopped' WHERE id = 'l-pay'");
-        assert_eq!(f.of(Kind::ReviewWaiting), vec![], "stopped");
-        f.sql("UPDATE sessions SET state = 'working', archived_at = 't' WHERE id = 'l-pay'");
-        assert_eq!(f.of(Kind::ReviewWaiting), vec![], "archived");
-    }
-
-    #[test]
-    fn a_review_waiting_leaves_the_plan_review_as_it_was_and_marks_no_session_blocked() {
-        let mut f = fixture("plan");
-        f.review("r1", "pending");
-        let before = f.of(Kind::PlanReview);
-        f.tracked("l-pay", "pn-0a1b2c", "a.md", 20001, None);
-        assert_eq!(f.of(Kind::PlanReview), before, "plan-review is unchanged");
-        assert_eq!(one(before).subject, "review:pay/r1");
-        assert_eq!(f.of(Kind::ReviewWaiting).len(), 1);
-        assert_eq!(f.of(Kind::Dialog), vec![], "a tracked session is no dialog (hs-d496 (4))");
-    }
-
     // ---- plan-review ----
 
     #[test]
-    fn a_pending_review_is_a_plan_review_with_its_plannotator_page() {
+    fn a_pending_review_is_a_plan_review() {
         let mut f = fixture("plan");
         f.review("r1", "pending");
         f.sql("UPDATE plan_reviews SET title = 'Add retries' WHERE id = 'r1'");
@@ -1109,51 +992,16 @@ mod tests {
             (c.urgency, c.subject.as_str(), c.label.as_str()),
             (Urgency::Magenta, "review:pay/r1", "pay plan review\nAdd retries")
         );
-        assert_eq!(c.url, None, "no open plan row (hs-d502)");
+        assert_eq!(c.url, None, "a plan-review has no url (hs-d739)");
         assert_eq!(c.session.as_ref().map(|s| s.as_str()), Some("l-pay"), "its Lead");
         assert_eq!((c.context.as_ref().map(|c| c.as_str()), c.plan.as_ref().map(|p| p.as_str())), (Some("ctx"), Some("pay")));
     }
 
-    impl Fixture {
-        /// A tracked plannotator session of `session` with `kind`; open unless `closed`.
-        fn tracked_kind(&mut self, session: &str, kind: &str, port: u16, closed: bool) {
-            let (closed_at, ended) = if closed { (format!("'{T}'"), "'decided'".to_owned()) } else { ("NULL".to_owned(), "NULL".to_owned()) };
-            self.sql(&format!(
-                "INSERT INTO plannotator_reviews (session, pn_id, kind, subject, port, opened_at, closed_at, ended)
-                 VALUES ('{session}', 'pn-0a1b2c', '{kind}', 'plan.md', {port}, '{T}', {closed_at}, {ended});"
-            ));
-        }
-    }
-
     #[test]
-    fn a_plan_review_has_no_url_without_an_open_plan_row_hs_d502() {
+    fn a_plan_review_has_no_url() {
         let mut f = fixture("plan");
         f.review("r1", "pending");
-        assert_eq!(one(f.of(Kind::PlanReview)).url, None, "no open plan row, no page");
-    }
-
-    #[test]
-    fn a_plan_review_carries_the_review_hosts_page_on_the_open_plan_rows_port_hs_d502() {
-        let mut f = fixture("plan");
-        f.review("r1", "pending");
-        f.tracked_kind("l-pay", "plan", 20007, false);
-        unsafe { std::env::set_var(URL_HOST, "review.example") };
-        let url = one(f.of(Kind::PlanReview)).url;
-        unsafe { std::env::remove_var(URL_HOST) };
-        assert_eq!(url.as_deref(), Some("http://review.example:20007/"));
-    }
-
-    #[test]
-    fn a_closed_plan_row_or_an_open_annotate_row_gives_a_plan_review_no_url_hs_d502() {
-        let mut f = fixture("plan");
-        f.review("r1", "pending");
-        f.tracked_kind("l-pay", "plan", 20007, true);
-        assert_eq!(one(f.of(Kind::PlanReview)).url, None, "closed plan row");
-        // plannotator_reviews is append-only: case 2 gets a fresh fixture
-        let mut f = fixture("plan");
-        f.review("r1", "pending");
-        f.tracked_kind("l-pay", "annotate", 20008, false);
-        assert_eq!(one(f.of(Kind::PlanReview)).url, None, "open annotate row");
+        assert_eq!(one(f.of(Kind::PlanReview)).url, None, "no page");
     }
 
     #[test]

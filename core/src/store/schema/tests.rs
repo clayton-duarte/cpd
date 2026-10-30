@@ -1792,7 +1792,7 @@ fn converts_keeping_every_row_and_id(n: usize) {
         assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
         assert_eq!(rows_after.remove("slack_reactions").map(|r| r.len()), Some(0)); // `slack-reactions`: a new empty table
         assert_eq!(rows_after.remove("jira_transitions"), Some(Vec::new())); // `jira-transitions`: a new empty table
-        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(25)); // 17, `plannotator_reviews`, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts` and `job_pools`
+        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(24)); // 17, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts` and `job_pools`
         let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
         assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
         assert_eq!(txns_after.len(), txns_before.len() + 1);
@@ -1817,8 +1817,6 @@ fn converts_keeping_every_row_and_id(n: usize) {
                 *row = Value::from(values).to_string();
             }
         }
-        // `plannotator-reviews` made a table, and it is empty.
-        assert_eq!(rows_after.remove("plannotator_reviews"), Some(Vec::new()));
         assert_eq!(rows_after.remove("board_posts"), Some(Vec::new()));
         assert_eq!(rows_after.remove("pr_posts"), Some(Vec::new()));
         // `job-tenancy` made `job_pools`, and it is empty.
@@ -2893,7 +2891,7 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
     assert_eq!(rows(&mut store, "SELECT name FROM event_kinds WHERE name = 'pr-base-changed'"), vec![serde_json::json!(["pr-base-changed"])]);
-    // this migration's one kind, the two of `plannotator-reviews`, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`, the one of `inbox-claim`, the one of `pr-description`: the later migrations that add Event kinds
+    // this migration's one kind, the two of an earlier migration, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`, the one of `inbox-claim`, the one of `pr-description`: the later migrations that add Event kinds
     assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2 + 3 + 1 + 2 + 1 + 1 + 1 + 1])]);
 }
 
@@ -3187,120 +3185,6 @@ fn the_history_of_jobs_and_prs_lists_the_new_columns() {
     );
 }
 
-// ---------- named migrations `plannotator-reviews` and `review-waiting` (§4.4, §4.5; hs-d496) ----------
-
-const SESSIONS_FOR_REVIEWS: &str = "
-  INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
-  INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-    VALUES ('mgr', 'manager', 'ctx', NULL, 'Manager', '/', 'O3', 'idle', 't', 't');";
-
-#[test]
-fn plannotator_reviews_is_additive_and_creates_its_table_with_its_checks_and_history() {
-    let migration = NAMED.iter().find(|n| n.name.ends_with("-plannotator-reviews")).expect("the migration plannotator-reviews exists");
-    assert_eq!(migration.compat, Compat::Additive);
-    assert_eq!(migration.sql.lines().next().unwrap(), "-- cpd-migration: additive");
-
-    let (_dir, home) = crate::store::tests::tmp_home();
-    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-plannotator-reviews")).collect();
-    drop(crate::store::tests::open_named(&home, &earlier).unwrap());
-    let mut store = Store::open(&home, 5000).unwrap();
-    assert_eq!(store.schema_mismatch(), None);
-    write(&mut store, SESSIONS_FOR_REVIEWS).unwrap();
-    let columns: Vec<String> = rows(&mut store, "SELECT name FROM pragma_table_info('plannotator_reviews') ORDER BY cid")
-        .iter()
-        .map(|r| r[0].as_str().unwrap().to_owned())
-        .collect();
-    assert_eq!(columns, ["session", "pn_id", "kind", "subject", "port", "opened_at", "closed_at", "ended"]);
-    assert_eq!(rows(&mut store, "SELECT name FROM history_tables WHERE name = 'plannotator_reviews'").len(), 1, "its history_tables row");
-
-    let insert = |pn: &str, kind: &str, subject: &str, port: i64, closed: &str, ended: &str| {
-        format!(
-            "INSERT INTO plannotator_reviews (session, pn_id, kind, subject, port, opened_at, closed_at, ended)
-             VALUES ('mgr', '{pn}', '{kind}', '{subject}', {port}, 't', {closed}, {ended})"
-        )
-    };
-    for kind in ["annotate", "review", "last", "plan"] {
-        write(&mut store, &insert("pn-0a1b2c", kind, "s", 20000, "NULL", "NULL").replace("pn-0a1b2c", &format!("pn-00000{}", ["annotate", "review", "last", "plan"].iter().position(|k| *k == kind).unwrap()))).unwrap_or_else(|e| panic!("{kind}: {e:?}"));
-    }
-    write(&mut store, &insert("pn-ffffff", "plan", &"x".repeat(200), 65535, "'t'", "'decided'")).unwrap();
-    write(&mut store, &insert("pn-eeeeee", "plan", "s", 1, "'t'", "'lost'")).unwrap();
-    for (what, bad) in [
-        ("a duplicate (session, pn_id)", insert("pn-ffffff", "plan", "s", 20000, "NULL", "NULL")),
-        ("an upper-case pn id", insert("pn-0A1B2C", "plan", "s", 20000, "NULL", "NULL")),
-        ("a short pn id", insert("pn-0a1b2", "plan", "s", 20000, "NULL", "NULL")),
-        ("an unknown kind", insert("pn-111111", "diff", "s", 20000, "NULL", "NULL")),
-        ("an empty subject", insert("pn-111111", "plan", "", 20000, "NULL", "NULL")),
-        ("a 201-character subject", insert("pn-111111", "plan", &"x".repeat(201), 20000, "NULL", "NULL")),
-        ("port 0", insert("pn-111111", "plan", "s", 0, "NULL", "NULL")),
-        ("port 65536", insert("pn-111111", "plan", "s", 65536, "NULL", "NULL")),
-        ("closed with no ended", insert("pn-111111", "plan", "s", 20000, "'t'", "NULL")),
-        ("ended with no closed_at", insert("pn-111111", "plan", "s", 20000, "NULL", "'lost'")),
-        ("an ended outside decided and lost", insert("pn-111111", "plan", "s", 20000, "'t'", "'gone'")),
-        ("an unknown Session", insert("pn-111111", "plan", "s", 20000, "NULL", "NULL").replace("'mgr'", "'nobody'")),
-    ] {
-        let error = refused(&mut store, &bad);
-        assert!(sqlite_message(&error).contains("constraint failed"), "{what}: {error:?}");
-    }
-    assert!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'plannotator_reviews'") >= 6, "the inserts wrote history rows");
-    assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
-}
-
-#[test]
-fn a_store_before_review_waiting_keeps_every_inbox_item_and_id_and_accepts_the_new_kind() {
-    let position = |suffix: &str| NAMED.iter().position(|n| n.name.ends_with(suffix)).unwrap_or_else(|| panic!("the migration {suffix} exists"));
-    let (reviews, waiting) = (position("-plannotator-reviews"), position("-review-waiting"));
-    assert!(reviews < waiting, "the table comes before the kind");
-    let migration = NAMED[waiting];
-    assert_eq!(migration.compat, Compat::Breaking);
-    assert!(migration.sql.lines().next().unwrap().starts_with("-- cpd-migration: breaking after "), "{}", migration.sql.lines().next().unwrap());
-
-    let (_dir, home) = crate::store::tests::tmp_home();
-    let mut before = crate::store::tests::open_named(&home, &NAMED[..waiting]).unwrap();
-    write(
-        &mut before,
-        &format!(
-            "{SESSIONS_FOR_REVIEWS}
-             INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES
-               ('dialog', 'red', 'session:a', 'l1', 't1'), ('pr-ready', 'yellow', 'pr:acme/api#1', 'l2', 't2');
-             INSERT INTO inbox_items (kind, urgency, subject, label, opened_at, closed_at) VALUES ('dialog', 'red', 'session:a', 'l3', 't3', 't4');"
-        ),
-    )
-    .unwrap();
-    let refusal = refused(&mut before, "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('review-waiting', 'magenta', 'pn:mgr/pn-0a1b2c', 'l', 't')");
-    assert!(sqlite_message(&refusal).contains("CHECK constraint failed"), "{refusal:?}");
-    let history = count(&mut before, "SELECT count(*) FROM history WHERE tbl = 'inbox_items'");
-    drop(before);
-
-    let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-    assert_eq!(
-        rows(&mut store, "SELECT id, kind, subject, label, closed_at FROM inbox_items ORDER BY id"),
-        vec![
-            serde_json::json!([1, "dialog", "session:a", "l1", null]),
-            serde_json::json!([2, "pr-ready", "pr:acme/api#1", "l2", null]),
-            serde_json::json!([3, "dialog", "session:a", "l3", "t4"]),
-        ]
-    );
-    assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'inbox_items'"), history, "the copy wrote no history row");
-    write(
-        &mut store,
-        "INSERT INTO plannotator_reviews (session, pn_id, kind, subject, port, opened_at) VALUES ('mgr', 'pn-0a1b2c', 'plan', 's', 20000, 't');
-         INSERT INTO inbox_items (kind, urgency, subject, session, label, opened_at) VALUES ('review-waiting', 'magenta', 'pn:mgr/pn-0a1b2c', 'mgr', 'ctx review: s', 't');",
-    )
-    .unwrap();
-    assert_eq!(count(&mut store, "SELECT id FROM inbox_items WHERE kind = 'review-waiting'"), 4, "the id sequence goes on");
-    // the index, the history triggers and `inbox_items_no_delete` are back
-    assert!(write(&mut store, "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('review-waiting', 'magenta', 'pn:mgr/pn-0a1b2c', 'l', 't')").is_err());
-    assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM inbox_items")), "append_only: inbox_items");
-    assert!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'inbox_items'") > history);
-    assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
-    let migrated = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
-    assert_eq!(migrated, fresh_canonical_hash(), "the schema of a fresh store with both migrations");
-    drop(store);
-    let err = crate::store::tests::open_named(&home, &NAMED[..waiting]).err().unwrap();
-    assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
-}
-
 // ---------- named migration `plan-outline` (§4.4, §4.5; hs-d502) ----------
 
 #[test]
@@ -3402,7 +3286,7 @@ fn delete_tombstone_keeps_every_row_and_lets_only_the_rows_of_a_deleted_plan_or_
     assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM plans WHERE id = 'pay'")), "append_only: plans");
     write(&mut store, "DELETE FROM events WHERE plan = 'pay'; DELETE FROM jobs WHERE plan = 'pay'; DELETE FROM prs WHERE plan = 'pay';").unwrap();
     assert_eq!(
-        rows(&mut store, "SELECT tbl, op, json_extract(before, '$.key') FROM history WHERE op = 'delete' ORDER BY id"),
+        rows(&mut store, "SELECT tbl, op, json_extract(before, '$.key') FROM history WHERE op = 'delete' AND tbl <> 'history_tables' ORDER BY id"),
         [serde_json::json!(["jobs", "delete", "api"]), serde_json::json!(["prs", "delete", "r"])]
     );
     assert_eq!(count(&mut store, "SELECT count(*) FROM events WHERE plan = 'live'"), 1);
