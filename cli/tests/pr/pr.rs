@@ -4005,3 +4005,15 @@ fn assert_reviews_superseded_before_done(env: &TestEnv, plan: &str) {
         1
     );
 }
+
+// ------------------------------------------------------------------ the update Job on a merged base (hs-d794, hs-n617)
+//
+// The regression test of the widened trigger: a stacked PR whose base PR merged and whose base GitHub repointed to the
+// default branch, with main ahead of the Lead Branch by the base fix and no conflict. The poll queues one `update` Job,
+// `reason` `base-merged`; its Worker merges `origin/main` into the Lead Branch even though there is no conflict, and the
+// red-test Job of the stacked PR then lists its test as found.
+
+#[test]
+fn a_stacked_red_test_job_lists_its_test_as_found_once_the_base_fix_merges_to_main() {
+    unimplemented!("the poll queues no update Job for a base-merge repoint that is ahead without a conflict");
+}
