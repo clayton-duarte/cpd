@@ -1,4 +1,4 @@
-import type { Extension } from "@earendil-works/pi-durable";
+import { GenerationTask, hook, type Extension } from "@earendil-works/pi-durable";
 import type { FollowerHooks } from "../lib/follower.ts";
 import { parseLine } from "../lib/event.ts";
 import { cursorFrom } from "./cursor.ts";
@@ -10,9 +10,11 @@ import { Reporter, stateArgs, type Wanted } from "../lib/state.ts";
 import { zoneLine } from "../lib/time.ts";
 import { storePath, type Config } from "./config.ts";
 import { hostExtension } from "./extension.ts";
+import { newTurnState, prepareTurn, reminderFor, type StoredEntry, type TurnPort, type Write } from "./turn.ts";
 
 export type Submission = { wait(): Promise<"done" | "unanswered"> };
-export type Conversation = { submit(input: Input): Promise<Submission>; install(extension: Extension): void; entries(): Promise<readonly unknown[]>; closed: Promise<unknown> };
+/** `write` appends an entry (`submit({ type: "write", ... })`); a conversation without it cannot store the first message or a context update, and `prepareTurn` reports that. */
+export type Conversation = { submit(input: Input): Promise<Submission>; write?(write: Write): Promise<unknown>; install(extension: Extension): void; entries(): Promise<readonly unknown[]>; closed: Promise<unknown> };
 
 type Model = { provider: string; modelId: string; thinkingLevel?: string };
 
@@ -56,7 +58,17 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
 
   const start = async (): Promise<void> => {
     const policy = policySection(await deps.cpd(["policy", "show"]));
-    const extension = hostExtension({ contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) }, { cwd: config.cwd, home: deps.homeDir() });
+    const base = hostExtension({ contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) }, { cwd: config.cwd, home: deps.homeDir() });
+    const turn = newTurnState();
+    let port!: TurnPort;
+    // pi-durable 1.3.0 (README "Hooks", GenerationHooks): `onYield(answer)` returning `{ continue }` appends a user message and continues the run; the answer is the final AssistantMessage.
+    const extension: Extension = {
+      ...base,
+      hooks: [...(base.hooks ?? []), hook(GenerationTask, { onYield: async (answer) => {
+        const text = await reminderFor([answer], port, turn);
+        return text === undefined ? undefined : { continue: text };
+      } })],
+    };
     const conversation = await deps.open({ file: storePath(config.home, config.session), cwd: config.cwd, model, extension });
     conversation.closed.then(
       (reason) => {
@@ -68,6 +80,18 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         end(1);
       },
     );
+    port = {
+      seat: { id: config.session, role: session.role as "lead" | "manager", context: session.context, plan: session.plan, registeredEvent: session.registeredEvent, byUser: session.byUser },
+      cpd: deps.cpd,
+      submit: async (w) => {
+        if (conversation.write === undefined) throw new Error("the conversation cannot write entries");
+        return conversation.write(w);
+      },
+      entries: async () => (await conversation.entries()) as readonly StoredEntry[],
+      log: deps.log,
+    };
+    let prepared: Promise<void> = Promise.resolve();
+    let preparing = 0;
     // §3.6 allows `stopped -> idle`, never `stopped -> working`.
     if ((shown.session as { state?: unknown }).state === "stopped") reporter.want({ state: "idle" });
 
@@ -87,9 +111,16 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       return name;
     };
     const submit = async (input: Input): Promise<void> => {
+      const starts = pending === 0;
       pending++;
       reporter.want({ state: "working" });
       try {
+        // Only an input that starts a turn gets the first message and the context update; they are prepared one input at a time.
+        if (starts) {
+          preparing++;
+          prepared = prepared.then(() => prepareTurn(port, turn)).finally(() => preparing--);
+        }
+        if (preparing > 0) await prepared;
         const submission = await conversation.submit(input);
         void submission.wait().then(
           () => {
