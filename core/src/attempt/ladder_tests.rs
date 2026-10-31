@@ -4,6 +4,7 @@
 
 use serde_json::Value;
 
+use crate::config::{Catalog, TierModel};
 use crate::ids::{AttemptId, PlanId};
 
 use super::incident_tests::{Fixture, catalog, fixture};
@@ -29,12 +30,17 @@ fn add(f: &mut Fixture, number: u32, tier: &str, ended: Option<&str>) {
 
 /// Ends `a-a<number>` with `cause` through the ledger and returns the Job's `(status, failed_cause)`.
 fn end(f: &mut Fixture, number: u32, cause: Cause, retry_cap: u32) -> (String, Option<String>) {
+    end_on(f, number, cause, retry_cap, &catalog())
+}
+
+/// [`end`] on a caller's Catalog: the explore test pins `next_tier` on the gappy catalog of
+/// contract §9 "Ladder" (hs-d791) without touching `incident_tests::catalog`.
+fn end_on(f: &mut Fixture, number: u32, cause: Cause, retry_cap: u32, cat: &Catalog) -> (String, Option<String>) {
     let attempt = f
         .store
         .read(|conn| ledger::load(conn, &PlanId::parse("pay").unwrap(), &AttemptId::parse(&format!("a-a{number}")).unwrap()))
         .unwrap();
-    let catalog = catalog();
-    let ladder = Ladder { catalog: &catalog, retry_cap };
+    let ladder = Ladder { catalog: cat, retry_cap };
     f.store
         .write("test", |tx| ledger::end(tx, &attempt, &End::Failed { cause, detail: "It failed.".into() }, None, &ladder, Stage::Driver))
         .unwrap();
@@ -105,6 +111,60 @@ fn retry_cap_still_bounds_automatic_attempts() {
         assert_eq!(failed_cause.as_deref(), Some(cause.as_str()));
         assert!(next_tiers(&mut f).is_empty(), "no attempt-retry at the cap");
     }
+}
+
+/// The gappy catalog of contract §9 "Ladder" (hs-d791): H efforts [1,3,5], S efforts [0,1,3,5],
+/// O and G as `incident_tests::catalog` has them. Built inline: `incident_tests::catalog` stays dense.
+fn gappy_catalog() -> Catalog {
+    Catalog {
+        pi_version: "1.0.0".into(),
+        o: TierModel { model: "o/m".into(), efforts: vec![1, 2, 3] },
+        s: TierModel { model: "s/m".into(), efforts: vec![0, 1, 3, 5] },
+        h: TierModel { model: "h/m".into(), efforts: vec![1, 3, 5] },
+        g: TierModel { model: "g/m".into(), efforts: vec![] },
+    }
+}
+
+/// Sets the Job's kind (the fixture defaults it to `work`): the explore kinds (`scout`, `research`).
+fn set_kind(f: &mut Fixture, kind: &str) {
+    f.store
+        .write("fixture", |tx| {
+            tx.execute("UPDATE jobs SET kind = ?1 WHERE plan = 'pay' AND key = 'a'", [kind])?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// hs-d791, pro-d210: an explore Job's ladder climbs to the next valid effort inside its letter
+/// (scout H, research S) and never leaves it; after the top rung a `no_submit` fails the Job.
+#[test]
+fn explore_kinds_stay_in_their_letter() {
+    let gappy = gappy_catalog();
+
+    // A `scout` at H1 with `no_submit` retries at H3: H2 is not a valid effort, and S1 is outside H.
+    let mut f = fixture();
+    set_kind(&mut f, "scout");
+    add(&mut f, 1, "H1", None);
+    let (status, _) = end_on(&mut f, 1, Cause::NoSubmit, 2, &gappy);
+    assert_eq!(status, "queued", "a scout's no_submit climbs within H");
+    assert_eq!(next_tiers(&mut f), ["H3"], "the scout's ladder skips the invalid H2 and stays in H");
+
+    // A `scout` at H3 has no rung above it in H (H5 is not a Worker's Tier): the Job fails.
+    let mut f = fixture();
+    set_kind(&mut f, "scout");
+    add(&mut f, 1, "H3", None);
+    let (status, failed_cause) = end_on(&mut f, 1, Cause::NoSubmit, 2, &gappy);
+    assert_eq!(status, "failed", "the scout's ladder never leaves H for S1");
+    assert_eq!(failed_cause.as_deref(), Some("no_submit"));
+    assert!(next_tiers(&mut f).is_empty(), "no attempt-retry when the scout's ladder runs out");
+
+    // A `research` at S1 with `no_submit` retries at S3: S2 is not a valid effort, and S is its last letter.
+    let mut f = fixture();
+    set_kind(&mut f, "research");
+    add(&mut f, 1, "S1", None);
+    let (status, _) = end_on(&mut f, 1, Cause::NoSubmit, 2, &gappy);
+    assert_eq!(status, "queued", "a research's no_submit climbs within S");
+    assert_eq!(next_tiers(&mut f), ["S3"], "the research's ladder skips the invalid S2 and stays in S");
 }
 
 #[test]

@@ -57,6 +57,41 @@ mod tests {
         assert_eq!(next("S4"), None);
     }
 
+    /// hs-d791: on a gappy catalog the ladder climbs to the next valid Worker-allowed effort within
+    /// the letter, not effort+1: H efforts [1,3,5], S efforts [0,1,3,5] (contract §9 "Ladder").
+    #[test]
+    fn gappy_catalog_next_climbs_to_the_next_valid_worker_effort() {
+        let gappy = Catalog {
+            pi_version: "1.4.0".into(),
+            o: model("opus", &[0, 1, 2, 3, 4, 5]),
+            s: model("sonnet", &[0, 1, 3, 5]),
+            h: model("haiku", &[1, 3, 5]),
+            g: model("gemini", &[]),
+        };
+        let nx = |from: &str| gappy.next(t(from)).unwrap().map(|t| t.to_string());
+        assert_eq!(nx("H1").as_deref(), Some("H3"), "H2 is not a valid effort: the ladder skips to H3, not S1");
+        assert_eq!(nx("H3").as_deref(), Some("S1"), "H5 is not a Worker's Tier: the ladder leaves H for S1");
+        assert_eq!(nx("S1").as_deref(), Some("S3"), "S2 is not a valid effort: the ladder skips to S3");
+        assert_eq!(nx("S0").as_deref(), Some("S1"));
+        assert_eq!(nx("S3"), None, "S5 is not a Worker's Tier and no letter is above S");
+        // A Tier outside the Worker range has no ladder (pro-d82), valid effort or not.
+        for name in ["S4", "S5", "O3"] {
+            assert_eq!(nx(name), None, "{name} is not a Worker's Tier: no ladder");
+        }
+    }
+
+    /// hs-d791 leaves the dense ladder alone: the two rules coincide there.
+    #[test]
+    fn dense_catalog_next_is_unchanged() {
+        assert_eq!(next("H0").as_deref(), Some("H1"));
+        assert_eq!(next("H1").as_deref(), Some("H2"));
+        assert_eq!(next("H2").as_deref(), Some("H3"));
+        assert_eq!(next("H3").as_deref(), Some("S1"));
+        assert_eq!(next("S1").as_deref(), Some("S2"));
+        assert_eq!(next("S2").as_deref(), Some("S3"));
+        assert_eq!(next("S3"), None);
+    }
+
     #[test]
     fn leaving_h_starts_s_at_its_lowest_valid_effort_from_s1() {
         let mut c = catalog();
