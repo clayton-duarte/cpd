@@ -304,6 +304,7 @@ error_codes! {
     PrNotClosed = "pr_not_closed" => Refused,
     PrNotOpen = "pr_not_open" => Refused,
     AlreadyPosted = "already_posted" => Refused,
+    DurableSession = "durable_session" => Refused,
     // Only an `error` Event's code (engine E18, pro-d117), never a command's failure.
     AutoMergeRefused = "auto_merge_refused" => Refused,
     PostDisabled = "post_disabled" => Refused,
@@ -548,6 +549,7 @@ mod tests {
             (ErrorCode::PrNotOpen, 3),
             (ErrorCode::NoFailedRun, 3),
             (ErrorCode::AlreadyPosted, 3),
+            (ErrorCode::DurableSession, 3),
             (ErrorCode::AutoMergeRefused, 3),
             (ErrorCode::PostDisabled, 3),
             (ErrorCode::NotAuthored, 3),
