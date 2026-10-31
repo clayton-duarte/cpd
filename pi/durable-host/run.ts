@@ -1,5 +1,6 @@
 import type { Extension } from "@earendil-works/pi-durable";
-import type { Conversation } from "../durable-worker/run.ts";
+import type { FollowerHooks } from "../lib/follower.ts";
+import type { Input } from "./deliver.ts";
 import { CpdError } from "../lib/cpd.ts";
 import { policySection } from "../lib/policy.ts";
 import { parseSession } from "../lib/run.ts";
@@ -8,6 +9,9 @@ import { zoneLine } from "../lib/time.ts";
 import { storePath, type Config } from "./config.ts";
 import { hostExtension } from "./extension.ts";
 
+export type Submission = { wait(): Promise<"done" | "unanswered"> };
+export type Conversation = { submit(input: Input): Promise<Submission>; install(extension: Extension): void; entries(): Promise<readonly unknown[]>; closed: Promise<unknown> };
+
 type Model = { provider: string; modelId: string; thinkingLevel?: string };
 
 export type Deps = {
@@ -15,6 +19,7 @@ export type Deps = {
   resolveModel(pattern: string): Model;
   contextFiles(cwd: string): readonly { path: string; content: string }[];
   open(o: { file: string; cwd: string; model: Model; extension: Extension }): Promise<Conversation>;
+  follow?(hooks: FollowerHooks): { start(): void; stop(): void };
   onTerminate(handler: () => void): void;
   homeDir(): string;
   now(): Date;
