@@ -5,7 +5,7 @@ import type { CpdEvent, EventOf } from "../lib/event.ts";
 export type Input = {
   content: string;
   requestId: string;
-  whenBusy: "followUp" | "steer";
+  whenBusy: "followUp" | "steer" | "reject";
   entry: { kind: string; data: Record<string, unknown> };
   /** True when the User wrote the message: the run that answers it reports `idle --reply`. */
   reply?: true;

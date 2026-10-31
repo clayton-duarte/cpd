@@ -29,6 +29,12 @@ try {
     contextFiles: (cwd) => loadProjectContextFiles({ cwd, agentDir: getAgentDir() }),
     open: (o) => openConversation(models as never, o),
     follow: (hooks) => new Follower(config.session, hooks, DEFAULT_TIMING),
+    listen: () => {
+      throw new Error("not implemented");
+    },
+    newEpoch: () => {
+      throw new Error("not implemented");
+    },
     onTerminate: (handler) => {
       process.once("SIGTERM", handler);
       process.once("SIGINT", handler);

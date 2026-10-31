@@ -10,11 +10,14 @@ import { Reporter, stateArgs, type Wanted } from "../lib/state.ts";
 import { zoneLine } from "../lib/time.ts";
 import { storePath, type Config } from "./config.ts";
 import { hostExtension } from "./extension.ts";
+import type { EventStream } from "../durable-worker/harness.ts";
+import type { Connection } from "./server.ts";
 import { newTurnState, prepareTurn, reminderFor, type StoredEntry, type TurnPort, type Write } from "./turn.ts";
 
-export type Submission = { wait(): Promise<"done" | "unanswered"> };
+export type { EventStream };
+export type Submission = { id: number; status(): Promise<string>; wait(): Promise<"done" | "unanswered"> };
 /** `write` appends an entry (`submit({ type: "write", ... })`): the first message and the context updates. */
-export type Conversation = { submit(input: Input): Promise<Submission>; write(write: Write): Promise<unknown>; install(extension: Extension): void; entries(): Promise<readonly unknown[]>; closed: Promise<unknown> };
+export type Conversation = { submit(input: Input): Promise<Submission>; write(write: Write): Promise<unknown>; install(extension: Extension): void; entries(): Promise<readonly unknown[]>; closed: Promise<unknown>; watch(): Promise<EventStream>; abort(opts: { background: boolean }): Promise<void>; abortSubmission(id: number): Promise<"aborted" | "already_placed" | "settled" | "not_found"> };
 
 type Model = { provider: string; modelId: string; thinkingLevel?: string };
 
@@ -24,6 +27,8 @@ export type Deps = {
   contextFiles(cwd: string): readonly { path: string; content: string }[];
   open(o: { file: string; cwd: string; model: Model; extension: Extension }): Promise<Conversation>;
   follow?(hooks: FollowerHooks): { start(): void; stop(): void };
+  listen(path: string, accept: (conn: Connection) => { receive(line: string): void; closed(): void }): Promise<{ close(): Promise<void> }>;
+  newEpoch(): string;
   onTerminate(handler: () => void): void;
   homeDir(): string;
   now(): Date;

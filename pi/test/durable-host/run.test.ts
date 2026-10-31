@@ -91,6 +91,11 @@ function rig(over: { role?: string; state?: string } = {}) {
           submitted.push(input);
           throw new Error("the host submits nothing");
         },
+        watch: async () => {
+          throw new Error("not used here");
+        },
+        abort: async () => {},
+        abortSubmission: async () => "not_found",
         write: async () => ({}),
         install: () => {},
         entries: async () => [],
@@ -98,6 +103,8 @@ function rig(over: { role?: string; state?: string } = {}) {
       };
       return Object.assign(conversation, { close: () => closeCalls.n++ });
     },
+    listen: async () => ({ close: async () => {} }),
+    newEpoch: () => "epoch-1",
     onTerminate: (handler) => {
       terminate.handler = handler;
       notify();
