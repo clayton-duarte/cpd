@@ -74,7 +74,7 @@ impl Fx {
         fs::create_dir_all(&adapter).unwrap();
         fs::write(adapter.join("package.json"), "{}").unwrap();
         let root = env.root().display().to_string();
-        env.fake("node", &format!("read -r status json < '{root}/registry-answer'\necho \"$json\"\nexit \"$status\"\n"));
+        env.fake("node", &format!("read -r status json < '{root}/registry-answer'\nn=0\nwhile IFS= read -r line; do n=$((n + 1)); [ \"$n\" -eq 1 ] || json=\"$json$line\"; done < '{root}/registry-answer'\necho \"$json\"\nexit \"$status\"\n"));
         fs::write(env.root().join("registry-answer"), format!("0 {REGISTRY}\n")).unwrap();
         Fx { env }
     }
