@@ -3851,6 +3851,196 @@ At start-up the host reads the cursor once and spawns the follower with `--since
 
 **6. Host errors (G04).** A host error is not an Event and carries no id, so the cursor never counts it. A Lead's goes to `cpd session report --what <what> --code <code> --message <text> [--details <json>] --session <id>` (§10.18), once per (`what`, `code`) until a different one has been reported (the `host.report` memory, §15.1 "Errors"); a Manager's goes to the chat as a **silent** write `{ kind: "cpd-error", data: { kind: "error", code, what }, model: [] }`, with the text `cpd adapter: <what>: <code>: <message>`, and the same once-per-(`what`, `code`) memory. It starts no turn. A failed `session report` is one log line and is never reported again (§15.1 L4). Verified: a write of only `kind` and `data` "is appended at once, even mid-run, as it changes nothing the model sees" (`Conversation.submit`).
 
+### 6.14 The host socket protocol (P1.5)
+
+The host socket protocol v1 is how a client (`cpd chat`, a CLI, an agent) talks to the durable session host of §6.13. The research is `docs/research/durable-leads.md` sections 4.1 to 4.5 and the `Decided:` lines of Q1 (any client may send any command), Q3 (socket `$CPD_HOME/run/host/<session>.sock`), Q4 (cpd-native envelope and message names, pi's field names for dialogs, pi-durable's `AgentEvent` and `SnapshotEvent` passed through unchanged), Q5 (the first snapshot is the whole history), Q6 (same-user trust) and Q16 (no resolved ids kept). The wire rules that the spike changed (section 4.9) are those of 4.2 to 4.5 as written: `attach` is answered by `attached`, not `result`; a client is caught up at `head_seq`; a short answer has no `message_update`.
+
+P1.5 is split in two PRs. **sock-proto** (this section) is the pure protocol, the ring and the server logic over ports: no socket, no `net`, no pi-durable import, no file. **sock-host** wires the real socket, the pi-durable event stream and `runHost`; it is not described here. Every statement about pi-durable below that was not verified in its types or README is marked **unverified**.
+
+**Modules** (all in `pi/durable-host/`; names and exports are fixed, the field shapes below are the contract):
+
+| File | Exports |
+|---|---|
+| `protocol.ts` | The wire: constants, types, `parseLine`, `encode`, `negotiate` (below) |
+| `ring.ts` | `Frame` and `class Ring`: sequence numbers, base snapshot, attach and rebase (below) |
+| `server.ts` | `Connection`, `Timers`, `ServerDeps`, `Server` and `createServer`: the per-connection state machine over ports (below) |
+
+#### `protocol.ts`
+
+```ts
+export const PROTOCOL_VERSIONS = [1] as const;
+export const LIMITS = {
+  clientLine: 1048576,     // bytes, client to host line
+  hostLine: 67108864,      // bytes, host to client line
+  slowClient: 8388608,     // bytes of unsent output
+  helloMs: 5000,           // ms from connect to hello
+  rebaseAtRunEnd: 256,     // frames in the ring at a run end
+  rebaseMax: 4096,         // frames in the ring at any time
+} as const;
+
+export type Cursor = { epoch: string; seq: number };
+
+export type ErrorCode =
+  | 'protocol_mismatch' | 'hello_timeout' | 'bad_frame' | 'frame_too_large'
+  | 'unknown_type' | 'bad_args' | 'not_attached' | 'busy' | 'unsupported'
+  | 'storage_failed' | 'shutting_down' | 'internal'
+  | 'hello_required';          // added in P1.5, connection kept
+
+export class ProtocolError extends Error {
+  code: ErrorCode;
+  details?: object;
+  constructor(code: ErrorCode, message: string, details?: object);
+}
+
+export type ToHost =
+  | { type: 'hello'; protocol: number; min_protocol: number; client: string; name?: string }
+  | { type: 'attach'; req: string; cursor?: Cursor; conversation?: string }
+  | { type: 'submit'; req: string; text: string;
+      when_busy: 'followUp' | 'steer' | 'reject';   // default 'followUp'
+      request_id?: string }
+  | { type: 'abort'; req: string; background: boolean }   // default false
+  | { type: 'abort_submission'; req: string; submission_id: number }
+  | { type: 'ping'; req?: string }
+  | { type: 'detach'; req: string };
+
+export type HostState = {
+  state: 'idle' | 'working' | 'waiting' | 'blocked';
+  name?: string;
+  agent?: unknown;
+};
+
+export type ToClient =
+  | { type: 'welcome'; protocol: number; host_version: string; pi_durable: string;
+      session: string; role: 'lead' | 'manager'; epoch: string; client_id: string;
+      cwd: string; limits: { client_line: number } }
+  | { type: 'attached'; req: string; mode: 'snapshot' | 'resume'; epoch: string;
+      from_seq: number; head_seq: number; client_id: string }
+  | { type: 'snapshot'; epoch: string; seq: number; snapshot: unknown }   // a pi-durable SnapshotEvent, unchanged
+  | { type: 'events'; epoch: string; seq: number; events: unknown[] }     // AgentEvent[], one commit, unchanged
+  | { type: 'result'; req: string; data: object }
+  | { type: 'error'; req?: string; code: ErrorCode; message: string; details?: object }
+  | { type: 'host_state'; state: HostState['state']; name?: string; clients: number;
+      held_ui: number; agent?: unknown }                                 // held_ui is 0 in P1.5
+  | { type: 'pong'; req?: string }
+  | { type: 'bye'; reason: 'shutdown' | 'restart' | 'storage_failed' | 'slow_client' | 'detached';
+      reconnect: boolean };
+
+export function parseLine(line: string):
+  | { ok: true; msg: ToHost }
+  | { ok: false; error: { code: 'bad_frame' | 'unknown_type' | 'bad_args'; message: string; req?: string } };
+export function encode(msg: ToClient): string;
+export function negotiate(hello: Extract<ToHost, { type: 'hello' }>): number | undefined;
+```
+
+Names are `snake_case` exactly as in research 4.5 (rows 1 to 5, 15, 16 and 17 to 22, 27 to 29); a field this section does not list is not sent. `ToHost` is what `parseLine` returns after the defaults are applied (`when_busy` `followUp`, `background` false), so the server never sees an absent default.
+
+- **`parseLine`**: a line that is not a JSON object, or whose `type` is not a string, is `bad_frame`. A `type` that is not one of the seven above is `unknown_type`, carrying `req` when the line has a string `req`. This includes the other rows of 4.5 (`compact`, `configure`, `list_models`, `reload`, `mcp`, `fork`, `history`, `rename`, `ui_response`): each later PR adds its type. A missing or mistyped field is `bad_args`, its message naming the field (`when_busy` must be one of the three values; `submission_id` and `cursor.seq` are numbers; `cursor.epoch` a string), carrying `req` when it has one. `req` is required (a string) on every message but `hello` and `ping`. Unknown fields are ignored. It never throws.
+- **`encode`**: `JSON.stringify(msg)` followed by `\n`. One line, never a raw newline inside.
+- **`negotiate`**: the highest member of `PROTOCOL_VERSIONS` with `hello.min_protocol <= v <= hello.protocol`, else `undefined`.
+- **`ProtocolError`**: what a port throws for a coded error (for example `busy` from `submit` with `when_busy: 'reject'` while busy). Any other throw is `internal`.
+
+#### `ring.ts`
+
+```ts
+export type Frame =
+  | { type: 'snapshot'; epoch: string; seq: number; snapshot: unknown }
+  | { type: 'events'; epoch: string; seq: number; events: unknown[] };
+
+export class Ring {
+  constructor(epoch: string, snapshot: unknown);   // the stream's first snapshot is frame seq 1
+  readonly head: number;                           // seq of the last frame, 1 for a new ring
+  append(events: unknown[]): Frame;                // an `events` frame at head + 1; head moves
+  attach(cursor?: Cursor): {
+    mode: 'snapshot' | 'resume';
+    fromSeq: number;                               // seq of the first frame sent
+    headSeq: number;                               // = head at the call
+    frames: Frame[];
+  };
+  shouldRebase(runEnd: boolean): boolean;
+  rebase(snapshot: unknown): Frame;                // a `snapshot` frame at head + 1; the ring is emptied
+}
+```
+
+Rules (research 4.3):
+
+1. `seq` counts stream frames only: the base `snapshot` frame and each `events` frame. It starts at 1 and grows by 1 per frame. The ring holds the frames after the base; `base.seq` is the `seq` of the base frame (1 until a rebase, then the rebase frame's `seq`).
+2. `attach(cursor?)` is in **snapshot mode** when there is no cursor, or `cursor.epoch` differs from the ring's epoch, or `cursor.seq < base.seq`, or `cursor.seq > head`. Its `frames` are the base `snapshot` frame, then every ring frame, in `seq` order; `fromSeq` is `base.seq`. It is in **resume mode** when `base.seq <= cursor.seq <= head`: `frames` are the ring frames with `seq > cursor.seq` (none when equal to `head`) and `fromSeq` is `cursor.seq + 1`. In both modes `headSeq` is `head`; a client is caught up when it has applied the frame with that `seq`. A snapshot-mode `attach` never mutates the ring.
+3. A batch holding an `AgentEvent` of `type: 'snapshot'` (pi-durable's overflow of more than 100 undelivered batches, `events.d.ts:66`, read, not run: **unverified** that it arrives so) is appended and forwarded unchanged like any batch; the ring does not inspect events.
+4. `shouldRebase(runEnd)` is true when the ring holds more than `LIMITS.rebaseAtRunEnd` frames and `runEnd` is true, or more than `LIMITS.rebaseMax` frames at any time. The ring counts its frames after the base. 256 and 4096 are design defaults, not measured.
+5. `rebase(snapshot)` makes `snapshot` the new base at `head + 1` (`seq` continues), empties the ring and returns that frame. The caller (sock-host) closes and reopens its pi-durable stream, then calls `rebase` with the fresh snapshot and `server.frame(...)` with the result; the server writes it to every attached client, who replace their whole view. That the new snapshot is atomic with the new registration is **unverified** (inferred from `events.d.ts:180-183`).
+
+#### `server.ts`
+
+```ts
+export type Connection = { write(line: string): void; buffered(): number; close(): void };
+export type Timers = { after(ms: number, fn: () => void): () => void };   // returns cancel
+
+export type ServerDeps = {
+  session: string;
+  role: 'lead' | 'manager';
+  cwd: string;
+  hostVersion: string;
+  piDurable: string;
+  epoch: string;
+  ring: Ring;
+  submit(input: { text: string; whenBusy: 'followUp' | 'steer' | 'reject'; requestId?: string }):
+    Promise<{ submissionId: number; status: string }>;
+  abort(opts: { background: boolean }): Promise<void>;
+  abortSubmission(id: number): Promise<'aborted' | 'already_placed' | 'settled' | 'not_found'>;
+  hostState(): HostState;
+  timers: Timers;
+  clientId(): string;
+};
+
+export type Server = {
+  connect(conn: Connection): { receive(line: string): void; closed(): void };
+  frame(f: Frame): void;
+  stateChanged(): void;
+  shutdown(reason: 'shutdown' | 'restart' | 'storage_failed'): void;
+  clients(): number;
+};
+export function createServer(deps: ServerDeps): Server;
+```
+
+**Ports.** `Connection` is one client's byte sink: `write` takes one encoded line, `buffered()` is the bytes written and not yet sent, `close()` closes it. `Timers.after` is the only clock; the server never reads the time, sleeps or starts a timer itself. `ServerDeps` is every effect: the Conversation calls (`submit`, `abort`, `abortSubmission`) are the sock-host's to wire to §6.12's `Conversation` (the pi adapter's behaviour is the rule: `submit` is `Conversation.submit({ type: 'input', content, whenBusy, requestId: 'chat:' + request_id })` when `request_id` is present, a mapping that is the wiring PR's, **unverified** here). `ring` is the one ring of the process. `clientId()` gives a fresh id per connection (`c1`, `c2`, ...). The server is single threaded and synchronous: it never awaits between appending to the ring (done by the caller) and `frame`, so frames reach a connection in `seq` order with none skipped.
+
+**Rules.**
+
+1. **Handshake.** The host sends nothing first. A connection starts un-greeted with a `helloMs` timer (`timers.after(LIMITS.helloMs, ...)`). On `hello`, the timer is cancelled and the server picks `negotiate(hello)`: on a version it writes `welcome` (`protocol` the pick, `host_version`, `pi_durable`, `session`, `role`, `epoch`, `client_id` from `clientId()`, `cwd`, `limits: { client_line: LIMITS.clientLine }`); on `undefined` it writes `error protocol_mismatch` with `details { host: [...PROTOCOL_VERSIONS], client: [min_protocol, ..., protocol] }` (the client's range as the list `[min_protocol .. protocol]`), then closes. The timer firing before `hello` writes `error hello_timeout` and closes.
+2. **`hello_required`.** Any message other than `hello` before `hello` is `error hello_required` (with its `req` when it has one), the connection kept and the timer running. A second `hello` after `welcome` is `error bad_args` ("already greeted"), connection kept (guess: the research is silent; the lowest-cost reading).
+3. **Replies.** Every command but `hello` and `ping` carries `req` and gets exactly one reply with that `req`: `result`, `error`, or `attached` for `attach`. Results: `submit` `{ submission_id, status }`; `abort` `{}`; `abort_submission` `{ outcome }`; `detach` `{}`, then `bye { reason: 'detached', reconnect: false }` and close. A reply to a command that awaits a port is written when the port settles; a connection closed meanwhile gets nothing.
+4. **`ping`** answers `pong` carrying `req` when the ping has one. It works before `hello` and before `attach`, and is not a `hello_required` case.
+5. **`attach`.** It needs `hello`. `conversation` absent or `root` is served; any other value is `error unsupported`. The server calls `ring.attach(cursor)` and writes, in this order: `attached` (`mode`, `epoch`, `from_seq` = `fromSeq`, `head_seq` = `headSeq`, `client_id`), then each frame of `frames` as its `snapshot` or `events` message in `seq` order with none skipped, then one `host_state`. The connection is attached from the start of that step, so a `frame()` call after it reaches the client after those frames. An `attach` on an attached connection is served again the same way (guess: a client that lost state reattaches).
+6. **Before attach.** `submit`, `abort` and `abort_submission` on a connection that has not attached are `error not_attached`. `ping` and `detach` are not.
+7. **Frames and state.** `frame(f)` writes the encoded frame to every attached client; `stateChanged()` writes `host_state` to every attached client. `host_state` is `{ state, name?, clients, held_ui: 0, agent? }` from `deps.hostState()`, `clients` the attached count. Connections that have not attached get neither. A client attaching or detaching changes `clients` but the server sends no `host_state` for that alone (the caller calls `stateChanged()`; the attach itself sends one to the attaching client). `ui_request`, `ui_resolved`, `notice` and `status` are not sent.
+8. **Limits.** A line over `LIMITS.clientLine` bytes (UTF-8) is `error frame_too_large`, then the connection is closed; it is checked before parsing. After every write to a connection, `conn.buffered() > LIMITS.slowClient` writes `bye { reason: 'slow_client', reconnect: true }` and closes it; the client reattaches with its cursor. A line that `encode`s to more than `LIMITS.hostLine` bytes is a host defect: unverified, not handled in P1.5.
+9. **Errors.** `parseLine` failures are `error` with that code, message and `req`, the connection kept and the line skipped. `unknown_type` is for every client type of another row of 4.5. A port that throws a `ProtocolError` gives `error` with its `code`, `message` and `details` and the connection kept; any other throw gives `error internal` with the connection kept and no detail from the exception beyond its message. `busy` is the `ProtocolError` of `submit` with `when_busy: 'reject'` while busy.
+10. **Shutdown.** `shutdown(reason)` cancels every timer, writes `bye { reason, reconnect: true }` to every connection (attached or not) and closes it. After it, `connect(conn)` writes `error shutting_down` to `conn` and closes it, and nothing else is served. `reason` `storage_failed` is `bye` only: the `error storage_failed` of 4.5.1 is not sent in P1.5 (guess: sock-host, which sees the failure, may send it).
+11. **Close.** `closed()` of a connection (the transport closed it) removes it from `clients()` and cancels its timer; the agent is not stopped (§6.13). `clients()` counts attached connections.
+
+**Error codes used in P1.5** (research 4.5.1 plus one):
+
+| Code | When | Connection |
+|---|---|---|
+| `protocol_mismatch` | no common version, `details { host, client }` | closed |
+| `hello_timeout` | no `hello` within `helloMs` | closed |
+| `hello_required` | any message but `hello` (and `ping`) before `hello` | kept |
+| `bad_frame` | not a JSON object, or no string `type` | kept, line skipped |
+| `frame_too_large` | line over `clientLine` | closed |
+| `unknown_type` | a client type this PR does not serve | kept |
+| `bad_args` | a field missing, mistyped or invalid; a second `hello` | kept |
+| `not_attached` | `submit`, `abort`, `abort_submission` before `attach` | kept |
+| `busy` | a port's `ProtocolError` for `when_busy: 'reject'` while busy | kept |
+| `unsupported` | `attach.conversation` other than absent or `root` | kept |
+| `shutting_down` | a connection made after `shutdown` | closed |
+| `internal` | a port threw something other than a `ProtocolError` | kept |
+
+`ui_unknown`, `refused` and `storage_failed` are in `ErrorCode` only as far as the type lists them and are not used in P1.5 (P1.6, P1.9; `storage_failed` as written in rule 10).
+
+**Not in P1.5.** Each later PR adds its client to host types and its host to client messages. UI requests and their messages (`ui_request`, `ui_resolved`, `ui_response`, `notice`, `status`, `held_ui` above 0): P1.6. The Lead guards: P1.7. `compact`, `configure`, `list_models`, `fork`, `history`, `rename`: P1.8. `reload`, `mcp` and skills: P1.9. The engine starting the host: P1.10. The real socket (`net`, the path, permissions), the pi-durable event stream (`watchEvents`, rebase by reopening it) and the wiring in `runHost`: the PR sock-host.
+
+**Tests.** They live in `pi/test/durable-host/`: `protocol.test.ts`, `ring.test.ts` and `server.test.ts`, written with `node:test` and added to the default file list of the `test` script. Nothing real runs: the server test uses a fake `Connection`, a fake `Timers` that fires on demand, a fake `ServerDeps` and a real `Ring`; no socket, no sleep, no pi-durable.
+
 ## 7. git and the Gate
 
 cpd runs git itself (R4); there is no worktrunk. Every git call is `git -C <dir> …` with argv, `GIT_TERMINAL_PROMPT=0`, and stdin from `/dev/null`. Every git call also gets, in its environment, `GIT_CONFIG_COUNT=2`, `GIT_CONFIG_KEY_0=core.filesRefLockTimeout`, `GIT_CONFIG_VALUE_0=10000`, `GIT_CONFIG_KEY_1=core.packedRefsTimeout`, `GIT_CONFIG_VALUE_1=10000` (git-config(1)): a ref or `packed-refs` lock held by another git process is waited for up to 10 s instead of git's 100 ms (`filesRefLockTimeout`) and 1 s (`packedRefsTimeout`), because cpd has concurrent writers of shared refs such as `refs/remotes/origin/<base>` (hs-d243, G2). Hooks are spawned by cpd, not by git, and do not get it (§7.3).
