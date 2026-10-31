@@ -3742,10 +3742,12 @@ type Submission = { wait(): Promise<"done" | "unanswered"> };
 | `now(): Date` | the current time |
 | `mcp: McpPort` | the MCP port of `mcp.ts` (`piMcpPort` of `pi-mcp.ts` in production) |
 | `log(line: string): void` | logs one line |
+| `listen(path: string, accept: (conn: Connection) => { receive(line: string): void; closed(): void }): Promise<{ close(): Promise<void> }>` (P1.5, required) | listens on the unix socket `path` and calls `accept` per client (`listenOn` of `net.ts` in production; §6.14 "The real socket"); throws a `usage` CpdError for a refused directory and a CpdError whose message is `host_running` when another host answers on the path |
+| `newEpoch(): string` (P1.5, required) | a fresh epoch for the ring (`crypto.randomUUID()` in production) |
 
 **`runWorker`, in order.**
 
-1. `resolveModel(config.model)` first: a `usage` error ends it before any effect.
+1. `resolveModel(config.model)` first: a `usage` error ends it before any effect. Then `socketPath(config.home, config.session)`: a path over 107 bytes is a `usage` CpdError naming `socket_path_too_long` (exit 2), also before any effect (§6.14 "The real socket").
 2. `cpd session show <session>`, read with `parseSession` of `pi/lib/run.ts` (its `registeredEvent` is the Event cursor). When the shown Session `state` is `stopped` (and only then), the runner sends `session state idle` before its first submission, as pi's adapter does at `session_start` (§3.6: `stopped -> idle`; `stopped -> working` is refused); after a crash restart the Session is not `stopped`, so it sends none, and the `working` that follows is the first submission's.
 3. `cpd policy show` -> `policySection` of `pi/lib/policy.ts`. The context files -> one text, each file as `## <path>` and its content, blocks separated by a blank line (`undefined` when there are none). `zone` = `zoneLine(now())` of `pi/lib/time.ts`.
 4. `open({ file: storePath(...), cwd, model, extension: cpdExtension(...) })`, where `cpdExtension` is given `{ cwd: config.cwd, home: deps.homeDir(), cpdHome: config.home, kind: config.jobKind, plan: config.plan }`.
@@ -3783,7 +3785,7 @@ The durable session host is `pi/durable-host/main.ts`, a headless Node process t
 
 | File | Exports |
 |---|---|
-| `config.ts` | `type Config = { home: string; session: string; cwd: string; model: string }` (`model` is the pattern); `parseConfig(argv: readonly string[], env: Record<string, string \| undefined>, cwd: string): Config` (flags `--session <id>` and `--model <pattern>`, environment `CPD_HOME` and `CPD_SESSION`; each missing one is a `usage` CpdError, and a `CPD_SESSION` that differs from `--session` is also a `usage` CpdError); `storePath(home: string, session: string): string` = `<home>/run/host/<session>.sqlite` |
+| `config.ts` | `type Config = { home: string; session: string; cwd: string; model: string }` (`model` is the pattern); `parseConfig(argv: readonly string[], env: Record<string, string \| undefined>, cwd: string): Config` (flags `--session <id>` and `--model <pattern>`, environment `CPD_HOME` and `CPD_SESSION`; each missing one is a `usage` CpdError, and a `CPD_SESSION` that differs from `--session` is also a `usage` CpdError); `storePath(home: string, session: string): string` = `<home>/run/host/<session>.sqlite`; `socketPath(home: string, session: string): string` = `<home>/run/host/<session>.sock` (P1.5, §6.14) |
 | `guards.ts` | `type Where = { cwd: string; home: string }` (`home` is the User's home directory, what `os.homedir()` returns); `hostVerdict(call: { name: string; arguments: Record<string, unknown> }, where: Where): Verdict` (`Verdict` as in §6.12). Rows, in the adapter's order and with its reasons: for `edit` and `write`, `primaryCheckoutWrite` (`mainguard.ts`); for `bash` with a string `command`, `primaryCheckoutMove` (`mainguard.ts`), `secretBypass` (`secretguard.ts`), then `hostApproveBypass` (`hostapprove.ts`); the `block` text is that module's `reasonText(matched)`. It has **no test guard** (`unfilteredTestRun`: a Lead may run tests) and **no explore profile** (it never applies to a Lead, `pi/lib/explore.ts:171`). The noblock, ask and loop guards and the role switch are P1.7 |
 | `extension.ts` | `hostExtension(prompt: { contextFiles: string \| undefined; policy: string \| undefined; zone: string }, where: Where): Extension` (pi-durable's `defineExtension`): prompt `sections` as `cpdExtension` of §6.12 gives them (`cpd-context-files`, `cpd-policy`, `cpd-time-zone`, same order, each omitted when `undefined`) and one `hook(ToolTask, { beforeTool })` that returns `{ block }` from `hostVerdict(call, where)` and `undefined` otherwise |
 | `run.ts` | `runHost(config: Config, deps: Deps): Promise<number>` and the `Deps` port below. The whole sequence; it returns the process exit code |
@@ -3804,6 +3806,8 @@ The conversation adapter is `openConversation` of `pi/durable-worker/harness.ts`
 | `now(): Date` | the current time |
 | `log(line: string): void` | logs one line |
 
+**`Conversation` in P1.5.** Besides `submit`, `write`, `install`, `entries` and `closed`, it has `watch(): Promise<EventStream>`, `abort(opts: { background: boolean }): Promise<void>` and `abortSubmission(id: number): Promise<'aborted' | 'already_placed' | 'settled' | 'not_found'>`, all required, and its `Submission` has `id: number` and `status(): Promise<string>` besides `wait()`; every shape and what is verified is in §6.14 "The event stream". `Input.whenBusy` gains `'reject'`.
+
 **`runHost`, in order.**
 
 1. `resolveModel(config.model)` first: a `usage` error ends it before any effect.
@@ -3811,12 +3815,13 @@ The conversation adapter is `openConversation` of `pi/durable-worker/harness.ts`
 3. The policy text is read the way the pi adapter reads it for that Session (`pi/lib/agent-state.ts:30-41`, `pi/lib/startup.ts`): `cpd policy show --session <session>` -> `policySection` of `pi/lib/policy.ts`. The context files -> one text, each file as `## <path>` and its content, blocks separated by a blank line (`undefined` when there are none). `zone` = `zoneLine(now())` of `pi/lib/time.ts`.
 4. `open({ file: storePath(...), cwd, model, extension: hostExtension(...) })`, where `hostExtension` is given `{ cwd: config.cwd, home: deps.homeDir() }`. pi-durable resumes an unfinished run of that store itself (its README, "Persist and Resume"); the host does nothing for it.
 5. When the shown Session `state` is `stopped` (and only then), report `idle` through `stateArgs` and `Reporter` of `pi/lib/state.ts` (§3.6: `stopped -> idle`; `stopped -> working` is refused).
+5a. (P1.5) After `open` and before the state report of step 5: `watch()`, the `Ring` (`epoch` from `deps.newEpoch()`), `createServer`, the stream's listener, then `deps.listen(...)`; a `host_running` failure of `listen` ends the host with exit 1 and a log line `host_running`, before any report (§6.14 "The event stream" 1 to 6). The socket is served from here on.
 6. Wait. The host submits nothing at start, writes no end report and sends no spec first message: a Lead's input arrives later (P1.4, P1.5).
-7. The run ends on the first of: `onTerminate` (report `stopped`, return 143); `conversation.closed` settling, which pi-durable does after a storage error, logged as `the conversation closed: <reason>` plus `: <error message>` when the reason is `failed` (the error's `message` when it is an Error, else its string), never '[object Object]' (report `stopped`, return 1); or an error thrown by steps 1 to 6 (report `stopped` best effort, return 1).
+7. The run ends on the first of: `onTerminate` (`server.shutdown('shutdown')` writes `bye shutdown` and the listener closes **before** `stopped` is reported, then return 143); `conversation.closed` settling or the stream's `closed` settling with a failure (`bye storage_failed` first, as §6.14 says), which pi-durable does after a storage error, logged as `the conversation closed: <reason>` plus `: <error message>` when the reason is `failed` (the error's `message` when it is an Error, else its string), never '[object Object]' (report `stopped`, return 1); or an error thrown by steps 1 to 6 (report `stopped` best effort, return 1).
 
-**Exit codes**, as the Worker runner's: 143 after SIGTERM or SIGINT, 1 when the harness closes or a step fails, 2 for a `usage` error (from `main.ts`). On every exit the host reports `stopped` through the same `Reporter`, and it never calls `Harness.close()`: a call with no end does not return from it (§6.12 "No `close()`" and its spike).
+**Exit codes**, as the Worker runner's: 143 after SIGTERM or SIGINT, 1 when the harness closes or a step fails (and `host_running`: another host holds the socket), 2 for a `usage` error (from `main.ts`), which includes `socket_path_too_long` and a `run/host/` directory owned by another user. On every exit the host reports `stopped` through the same `Reporter`, and it never calls `Harness.close()`: a call with no end does not return from it (§6.12 "No `close()`" and its spike).
 
-**Not in P1.3.** Events delivered as input, and the Event cursor: P1.4, designed in "Delivery (P1.4)" below. The socket: P1.5. UI requests and dialogs: P1.6. The noblock, ask and loop guards and the role switch: P1.7. Operations: P1.9. Starting the host, from the engine or by the config key: P1.10. Until P1.4 a host resumed after a crash while the Session row says `working` leaves it `working`: it tracks only its own submissions, and it has made none in this process.
+**Not in P1.3.** Events delivered as input, and the Event cursor: P1.4, designed in "Delivery (P1.4)" below. The socket: P1.5, §6.14. UI requests and dialogs: P1.6. The noblock, ask and loop guards and the role switch: P1.7. Operations: P1.9. Starting the host, from the engine or by the config key: P1.10. Until P1.4 a host resumed after a crash while the Session row says `working` leaves it `working`: it tracks only its own submissions, and it has made none in this process.
 
 **Tests.** They live in `pi/test/durable-host/`, one `*.test.ts` per module with rules of its own (`config`, `guards`, `extension`, `run`), added by the tests Job to the default list of the root `package.json` `test` script. Statements about pi-durable that neither its types nor its README were read for are **unverified**: here, that a store resumed by `open` continues an interrupted run with no host action (the README states it; no host spike has run it).
 
@@ -3855,7 +3860,7 @@ At start-up the host reads the cursor once and spawns the follower with `--since
 
 The host socket protocol v1 is how a client (`cpd chat`, a CLI, an agent) talks to the durable session host of §6.13. The research is `docs/research/durable-leads.md` sections 4.1 to 4.5 and the `Decided:` lines of Q1 (any client may send any command), Q3 (socket `$CPD_HOME/run/host/<session>.sock`), Q4 (cpd-native envelope and message names, pi's field names for dialogs, pi-durable's `AgentEvent` and `SnapshotEvent` passed through unchanged), Q5 (the first snapshot is the whole history), Q6 (same-user trust) and Q16 (no resolved ids kept). The wire rules that the spike changed (section 4.9) are those of 4.2 to 4.5 as written: `attach` is answered by `attached`, not `result`; a client is caught up at `head_seq`; a short answer has no `message_update`.
 
-P1.5 is split in two PRs. **sock-proto** (this section) is the pure protocol, the ring and the server logic over ports: no socket, no `net`, no pi-durable import, no file. **sock-host** wires the real socket, the pi-durable event stream and `runHost`; it is not described here. Every statement about pi-durable below that was not verified in its types or README is marked **unverified**.
+P1.5 is split in two PRs. **sock-proto** (this section) is the pure protocol, the ring and the server logic over ports: no socket, no `net`, no pi-durable import, no file. **sock-host** wires the real socket, the pi-durable event stream and `runHost`; it is described in the sections "The real socket", "The event stream" and "Client submits" at the end of this section. Every statement about pi-durable below that was not verified in its types or README is marked **unverified**.
 
 **Modules** (all in `pi/durable-host/`; names and exports are fixed, the field shapes below are the contract):
 
@@ -4040,6 +4045,93 @@ export function createServer(deps: ServerDeps): Server;
 **Not in P1.5.** Each later PR adds its client to host types and its host to client messages. UI requests and their messages (`ui_request`, `ui_resolved`, `ui_response`, `notice`, `status`, `held_ui` above 0): P1.6. The Lead guards: P1.7. `compact`, `configure`, `list_models`, `fork`, `history`, `rename`: P1.8. `reload`, `mcp` and skills: P1.9. The engine starting the host: P1.10. The real socket (`net`, the path, permissions), the pi-durable event stream (`watchEvents`, rebase by reopening it) and the wiring in `runHost`: the PR sock-host.
 
 **Tests.** They live in `pi/test/durable-host/`: `protocol.test.ts`, `ring.test.ts` and `server.test.ts`, written with `node:test` and added to the default file list of the `test` script. Nothing real runs: the server test uses a fake `Connection`, a fake `Timers` that fires on demand, a fake `ServerDeps` and a real `Ring`; no socket, no sleep, no pi-durable.
+
+#### The real socket (sock-host)
+
+Everything with a rule in it is a pure function of `sockets.ts` and is tested; `net.ts` is the thin binding that tests never run. Statements are **verified** (read in a source named) or **unverified**.
+
+```ts
+// config.ts, beside storePath
+export function socketPath(home: string, session: string): string;   // join(home, 'run', 'host', `${session}.sock`)
+
+// sockets.ts (pure: no node:net, no node:fs)
+export const SOCKET_PATH_MAX = 107;   // bytes
+export type LineOut = { lines: string[]; overLimit?: string };
+export class LineSplitter {
+  constructor(limit?: number);               // default LIMITS.clientLine (1048576)
+  push(chunk: Buffer | string): LineOut;     // complete lines (no '\n', a trailing '\r' kept), in order
+}
+export type DirStat = { exists: false } | { exists: true; isDir: boolean; uid: number; mode: number };
+export type DirVerdict = 'create' | 'chmod' | 'ok' | 'refuse';
+export function dirVerdict(stat: DirStat, uid: number): DirVerdict;
+export type Probe = 'absent' | 'refused' | 'connected' | { error: string };
+export type StaleVerdict = 'listen' | 'remove' | 'host_running' | 'fail';
+export function staleVerdict(probe: Probe): StaleVerdict;
+
+// net.ts (the real binding; not tested)
+export function listenOn(path: string, accept: (conn: Connection) => { receive(line: string): void; closed(): void }): Promise<{ close(): Promise<void> }>;
+```
+
+`listenOn` is `Deps.listen`: for each accepted socket it builds a `Connection` (`write`, `buffered` = `socket.writableLength`, `close` = end then destroy) and calls `accept`. `Connection` is the type of `server.ts`.
+
+1. **Path.** `socketPath(home, session)` = `<home>/run/host/<session>.sock`, the directory of `storePath` (Decided Q3). A path whose UTF-8 length is over `SOCKET_PATH_MAX` (107) bytes is a `usage` CpdError whose message names `socket_path_too_long` and the length, exit 2, raised in `runHost` before anything opens (before the store). 107 = `sun_path[108]` minus the terminating NUL: `man 7 unix` on this machine shows `char sun_path[108]` and the path "null-terminated" (verified by reading it; not run against `bind`).
+2. **Directory.** `dirVerdict(stat, uid)`: not existing, `create` (mkdir 0700, recursive); a directory owned by `uid` whose mode & 0o777 is not 0o700, `chmod` (to 0700); one owned by `uid` with mode 0o700, `ok`; a directory owned by another uid, or a path that is not a directory, `refuse`, a `usage` CpdError naming the path (exit 2) and nothing else done. The directory is the one that already holds the store.
+3. **Socket mode.** `listenOn` sets `umask(0o177)` around `listen`, restores it, then `chmod 0600` on the path (same-user trust, Q6). The restore happens whether or not `listen` threw.
+4. **Stale socket.** Before `listen`, `listenOn` probes the path with one `connect`: no file, `absent`; `ECONNREFUSED`, `refused`; a connect that succeeds, `connected` (closed at once); any other error, `{ error }`. `staleVerdict`: `absent` is `listen`; `refused` is `remove` (unlink the file, then `listen`); `connected` is `host_running`; `{ error }` is `fail` (the error is thrown as is: no guess). `host_running` ends the host with exit 1 and the stderr/log line `host_running`, before anything else opens. This is a cheap one-owner guard; the real one is the engine's `flock` of P1.10 (Decided Q14). A race between two hosts that probe at the same moment is not closed here (**unverified**, accepted).
+5. **Line splitting.** `LineSplitter.push` appends the chunk (UTF-8) to its buffer and returns every complete line (split at `\n`) in order. A line, complete or not, over `limit` bytes is returned as `overLimit` (its first `limit + 1` bytes are enough, the splitter keeps no more) and the splitter then discards input up to the next `\n` and goes on, so one over-limit line does not corrupt the next. The caller passes `overLimit` to the server's `receive`, which answers `frame_too_large` (rule 8 above) and closes: a line of `limit + 1` bytes is therefore over the server's `clientLine` check, which counts `line.length`. An empty line is returned as `''` and the server answers `bad_frame`.
+6. **Accept.** Each accepted socket is `server.connect(conn)`; its data goes through its own `LineSplitter` to `receive`; its `close` or `error` calls `closed()`. A write to a destroyed socket is dropped.
+7. **Close.** On terminate the host closes the listener after `server.shutdown`, and unlinks the socket file (**unverified**: `net.Server.close` unlinks a unix socket path on Node 22; the host unlinks it itself and ignores `ENOENT`).
+
+#### The event stream (sock-host)
+
+`Conversation` of `pi/durable-worker/harness.ts` (and of `run.ts`) gains four members, all **required** (no optional member: a mock must not hide a missing one). `conversationOf` builds them over the same `root`, `harness` and `ctx` it already holds:
+
+```ts
+export type EventStream = {
+  readonly snapshot: unknown;                       // a pi-durable SnapshotEvent
+  start(listener: (events: readonly unknown[]) => Promise<void>): void;
+  stop(): Promise<unknown>;
+  readonly closed: Promise<unknown>;                // a WatchEnd
+};
+export type Conversation = {
+  /* submit, write, install, entries, closed: as §6.13 */
+  watch(): Promise<EventStream>;
+  abort(opts: { background: boolean }): Promise<void>;
+  abortSubmission(id: number): Promise<'aborted' | 'already_placed' | 'settled' | 'not_found'>;
+};
+export type Submission = { id: number; status(): Promise<string>; wait(): Promise<'done' | 'unanswered'> };
+```
+
+- **`watch()`** is `watchEvents(harness, conversationId, ctx)` of `@earendil-works/pi-durable` (`dist/harness/events.d.ts`: `AgentEventStream { snapshot, start(listener), stop(), closed }`; the listener takes `(events, context)`, the adapter drops `context`). The docs say "the snapshot and the registration for later commits are captured atomically" (verified by reading `events.d.ts`; not run). `start` is called once by the host after it holds the snapshot; a listener that rejects ends the stream with `{ reason: 'listener_error', error }` (`WatchEnd`, `types.d.ts:772`, verified). `watchEvents` is declared **experimental** in its own comment (verified): a pi-durable bump re-reads it.
+- **`abort({ background })`** is `Conversation.abort(ctx, { background })` (`ConversationAbortOptions`, `types.d.ts:67`; verified). It resolves when the conversation is idle again (README "Abort", `types.d.ts:85`: verified by reading, not run).
+- **`abortSubmission(id)`** is `Harness.abortSubmission(id, ctx, conversationId?)` (`types.d.ts:660`; verified) with the root conversation id; the outcome is passed through unchanged. The server's `abort_submission` result is `{ outcome }`.
+- **The submission's `id` and `status`.** The adapter's `Submission` gains `id` (pi-durable's `SubmissionId`, `Submission.id`: verified to exist; **unverified** that it is a JS number: if it is not, `conversationOf` converts it and the contract changes) and `status()` = `Submission.status(ctx)` read as its record's `status`, one of `queued`, `placed`, `done`, `unanswered` (the first two for an input and `queued`/`done` for a write were read in `SubmissionRecord`; the other values are **unverified**). `submit` of the server answers `{ submission_id: id, status }`, `status` read once right after admission.
+- **`entries`** is as §6.13; nothing changes.
+
+**The wiring in `runHost`.** After step 4 of §6.13 (the store is open) `runHost`:
+
+1. `stream = await conversation.watch()`; `ring = new Ring(deps.newEpoch(), stream.snapshot)`. `epoch` is a fresh opaque string per host process (`newEpoch()` in `main.ts` is `crypto.randomUUID()`): a client's cursor from an older process is in another epoch and gets `mode: 'snapshot'` (rule 2 of the Ring). The first snapshot is the whole history (Q5).
+2. `server = createServer({ session, role, cwd, hostVersion, piDurable: '1.3.0', epoch, ring, submit, abort, abortSubmission, hostState, timers, clientId })`: `abort` and `abortSubmission` are `conversation.abort` and `conversation.abortSubmission`; `hostState()` is the reported `state` (`Reporter`) plus `name` (the Session name when known) and no `agent`; `clientId()` is `c1`, `c2`, ...; `hostVersion` is the `version` of the repo's `package.json` (**guess**; `Deps` may take a `hostVersion` string instead, in which case the test fixes it).
+3. `stream.start(async (events) => { const f = ring.append(events); server.frame(f); if (ring.shouldRebase(runEnd)) await rebase(); })`. `append` and `frame` are synchronous one after the other, as the server requires. `runEnd` is true when the batch holds the run's end (**unverified**: which `AgentEvent` type ends a run; the host uses the `idle` report of the reply rule's run-end as its stand-in and a test pins it with a mocked stream).
+4. **Rebase** (`rebase()`): `await stream.stop()`, `stream = await conversation.watch()`, `server.frame(ring.rebase(stream.snapshot))`, `stream.start(listener)` again. Atomic of the new snapshot with its registration is the same claim as above (verified by reading `events.d.ts:180-183`). A batch is never appended between the `stop` and the new `start` by the host; whether the stream delivers a batch after `stop` resolves is **unverified** (guess: no, as `stop()` is "idempotently stop future callbacks"; `types.d.ts:789`).
+5. `listen`: `await deps.listen(socketPath(home, session), (conn) => server.connect(conn))`, **after** `open` and the stream (a client that connects always finds a ring), and before the state report of step 5 of §6.13. The order is: open, watch, ring, server, listen, report `idle`.
+6. **State.** Whenever the reported state changes (the `Reporter`'s want), `server.stateChanged()`.
+7. **Failure.** When `conversation.closed` settles, or the stream's `closed` settles with `{ reason: 'listener_error' }` or `{ reason: 'session_closed' }` outside a rebase, the host calls `server.shutdown('storage_failed')` (writes `bye storage_failed`, `reconnect: true`), closes the listener, reports `stopped` and returns 1. A stream `closed` that settles as `stopped` or `cancelled` because the host itself stopped it (a rebase, or terminate) is not a failure. (`retired` is treated as a failure; **unverified** that it can occur.)
+8. **Terminate.** On `onTerminate`: `server.shutdown('shutdown')` (`bye shutdown`, `reconnect: true`) first, then the listener is closed, then `stopped` is reported, then the code is 143. The bye is always written **before** `stopped` is reported.
+
+**`Deps` additions** (both required): `listen(path: string, accept: (conn: Connection) => { receive(line: string): void; closed(): void }): Promise<{ close(): Promise<void> }>` (`net.ts`'s `listenOn` in production; it does the directory check, the stale rule and the modes above, and throws `CpdError('usage', ...)` for a refused directory and `CpdError('failed', 'host_running')` for a live owner) and `newEpoch(): string`. Tests give a fake `listen` that records the path and hands the test the `accept` function, so a fake `Connection` drives the server; no socket opens.
+
+#### Client submits (sock-host)
+
+`ServerDeps.submit` is wired to the **same submit path as an Event** of §6.13 "Delivery (P1.4)", so a client's message is not a second code path:
+
+- **Input.** `conversation.submit({ type: 'input', content: text, whenBusy, requestId: 'chat:' + request_id, entry: { kind: 'cpd-chat', data: { client_id, request_id } } })`. `request_id` is the client's when present; absent, the host generates one (`crypto.randomUUID()`) and uses it for both. `client_id` is the id of the connection that sent it (the server passes it to the port; `ServerDeps.submit`'s input gains `clientId: string`, which is a change to §6.14's `ServerDeps` that sock-host makes together with its tests). `entry.kind` does not start with `pi.` (verified rule of `InputEntry`, §6.13). The same `request_id` twice is one submission, by pi-durable's `requestId` dedup (README; verified in §6.13).
+- **`whenBusy`** is `followUp` (default), `steer` or `reject`. `reject` is added to the host's `Input` type (`deliver.ts`), which had two values: pi-durable's `whenBusy` has `"reject"` (README "Busy Conversations", verified). Events never use `reject`.
+- **Busy mapping.** pi-durable's `ConversationBusy` (`errors.d.ts:28`, verified: exported) thrown by `submit` becomes `ProtocolError('busy', message)`; every other error passes through as it is (`internal`). The server then sends `error busy` with the `req`.
+- **First message and context update.** A client's input that starts a turn gets the same two writes as an Event's: the first message of a by-user Session (§6.13 Delivery 3) and the context update (§6.13 Delivery 4), each ahead of the input, under the same conditions (a `steer` gets neither; a `reject` that is refused with `busy` gets neither, so the busy check comes first: **unverified** that the check can run before the writes without a race; if it cannot, a refused `reject` may leave its context write, harmless because the cursor counts it).
+- **The reply rule.** A client's input counts as a reply run like the User's `session-message` (§6.13 Delivery 1.5): `reply: true` is set on it, so the `idle` that follows is reported with `reply`. (Any client is the User's hand: Q1.)
+- **Result.** The server answers `result { submission_id, status }` when `submit` resolves (after admission, not after the answer). The answer arrives as `events` frames.
+- **Not served yet.** The other client types of research 4.5 get `error unknown_type` (rule 9); `host_state.held_ui` is 0; `ui_unknown` and `refused` are unused (P1.6, P1.9).
 
 ## 7. git and the Gate
 
