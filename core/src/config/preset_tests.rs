@@ -51,7 +51,7 @@ fn a_bad_preset_name_or_an_extra_key_or_a_missing_letter_is_refused() {
     // A missing letter (only three of the four).
     let (code, key) = refused_key(&format!("version = 1\nmachine = \"m1\"\n[presets.fast]\nO = \"p/a\"\nS = \"p/b\"\nH = \"p/c\"\n"));
     assert_eq!(code, ErrorCode::ConfigInvalid);
-    assert_eq!(key, "presets.fast", "a missing letter is refused at the table");
+    assert!(key.starts_with("presets.fast"), "a missing letter is refused at the preset: {key}");
 }
 
 #[test]

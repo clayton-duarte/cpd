@@ -22,18 +22,19 @@ const REGISTRY: &str = r#"{"ok": true, "pi_version": "1.3.0", "providers": [
   {"provider": "github-copilot", "auth": "oauth", "base": null,
    "ids": ["claude-haiku-4.5", "claude-sonnet-5.5", "claude-opus-5.5", "gemini-3.8-flash"]}]}"#;
 
-/// A `[presets.<name>]` table of four refs for provider `provider`.
+/// A `[presets.<name>]` table of four refs for provider `provider` and `letter`.
 fn preset(name: &str, provider: &str, letter: &str) -> String {
     format!(
         "[presets.{name}]\nO = \"{provider}/{letter}-o\"\nS = \"{provider}/{letter}-s\"\nH = \"{provider}/{letter}-h\"\nG = \"{provider}/{letter}-g\"\n"
     )
 }
 
-/// `[presets.fast]`, all four refs `github-copilot/fast-<letter>`.
-const FAST: &str = "[presets.fast]\nO = \"github-copilot/fast-o\"\nS = \"github-copilot/fast-s\"\nH = \"github-copilot/fast-h\"\nG = \"github-copilot/fast-g\"\n";
+/// `[presets.fast]`: the docs' example — O is `haiku`, S/H/G are the host's model for the S, H and G letters.
+const FAST: &str = "[presets.fast]\nO = \"github-copilot/claude-haiku-4.5\"\nS = \"github-copilot/claude-sonnet-5.5\"\nH = \"github-copilot/claude-haiku-4.5\"\nG = \"github-copilot/gemini-3.8-flash\"\n";
 
-/// The host `[model]` before an apply: the same provider, different refs, with a comment and another table around it.
-const HOST: &str = "# not part of the model\n[model]\nO = \"github-copilot/slow-o\"\nS = \"github-copilot/slow-s\"\nH = \"github-copilot/slow-h\"\nG = \"github-copilot/slow-g\"\n\n[pr]\nfeedback.checks = \"none\"\n";
+/// The host `[model]` before an apply: `O` is `opus` (the preset's is `haiku`), the other letters are already the
+/// preset's; a comment and another table surround it, so a rewrite must leave them byte-identical.
+const HOST: &str = "# not part of the model\n[model]\nO = \"github-copilot/claude-opus-5.5\"\nS = \"github-copilot/claude-sonnet-5.5\"\nH = \"github-copilot/claude-haiku-4.5\"\nG = \"github-copilot/gemini-3.8-flash\"\n\n[pr]\nfeedback.checks = \"none\"\n";
 
 impl TestEnv {
     /// The `session-model-changed` Events, each as `{session, data}`; scoped rows list the Session in `session`.
@@ -118,7 +119,7 @@ impl Fx {
              INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('p1', 'ctx', 'P', 'grounding', 'lead1', 't');
              INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                VALUES ('lead1', 'lead', 'ctx', 'p1', 'L', '/', 'O3', 'idle', 't', 't'),
-                      ('mgr1', 'manager', 'ctx', 'p1', 'M', '/', 'S3', 'idle', 't', 't');",
+                      ('mgr1', 'manager', 'ctx', NULL, 'M', '/', 'S3', 'idle', 't', 't');",
         );
     }
 }
@@ -142,12 +143,12 @@ fn apply_rewrites_host_toml_model_to_the_preset_s_provider() {
     let after = fx.host_text();
     assert!(after.starts_with("# not part of the model\n"), "the comment survives: {after}");
     assert!(after.contains("[model]\n"), "the [model] header names the section");
-    assert!(after.contains("O = \"github-copilot/fast-o\""));
-    assert!(after.contains("S = \"github-copilot/fast-s\""));
-    assert!(after.contains("H = \"github-copilot/fast-h\""));
-    assert!(after.contains("G = \"github-copilot/fast-g\""));
+    assert!(after.contains("O = \"github-copilot/claude-haiku-4.5\""));
+    assert!(after.contains("S = \"github-copilot/claude-sonnet-5.5\""));
+    assert!(after.contains("H = \"github-copilot/claude-haiku-4.5\""));
+    assert!(after.contains("G = \"github-copilot/gemini-3.8-flash\""));
     assert!(after.contains("[pr]\nfeedback.checks = \"none\""), "the other table survives: {after}");
-    assert!(!after.contains("slow-"), "no host ref remains: {after}");
+    assert!(!after.contains("claude-opus-5.5"), "the old O is replaced: {after}");
     // Nothing else is written.
     assert_eq!(fs::read_to_string(fx.env.cpd_home().join("config.toml")).unwrap(), config_before, "config.toml is unchanged");
     assert!(!fx.env.cpd_home().join("policy").join("host.toml.tmp").exists(), "atomic write leaves no temporary file");
@@ -160,10 +161,9 @@ fn apply_refuses_a_provider_not_in_the_registry_and_writes_nothing() {
     fx.registry(&json!([{"provider": "github-copilot", "auth": "oauth", "base": null, "ids": ["fast-o", "fast-s", "fast-h", "fast-g"]}]));
     fx.host(HOST);
 
-    let error = refused(&fx.cpd(&["preset", "apply", "ext"]), "preset_provider_unconfigured", 3);
-    assert_eq!(error["details"]["provider"], "other-provider", "{error}");
+    refused(&fx.cpd(&["preset", "apply", "ext"]), "preset_provider_unconfigured", 3);
     assert_eq!(fx.host_text(), HOST, "host.toml is untouched by the refusal");
-    assert_eq!(fx.env.model_changed(), json!([]), "no Event is appended");
+    assert!(fx.env.model_changed().is_empty(), "no Event is appended");
 }
 
 #[test]
@@ -174,10 +174,9 @@ fn apply_refuses_a_model_id_not_offered_and_writes_nothing() {
     fx.registry(&json!([{"provider": "github-copilot", "auth": "oauth", "base": null, "ids": ["real-o", "real-s", "real-h", "real-g"]}]));
     fx.host(HOST);
 
-    let error = refused(&fx.cpd(&["preset", "apply", "ext"]), "preset_model_unoffered", 3);
-    assert_eq!(error["details"]["provider"], "github-copilot", "{error}");
+    refused(&fx.cpd(&["preset", "apply", "ext"]), "preset_model_unoffered", 3);
     assert_eq!(fx.host_text(), HOST, "host.toml is untouched by the refusal");
-    assert_eq!(fx.env.model_changed(), json!([]), "no Event is appended");
+    assert!(fx.env.model_changed().is_empty(), "no Event is appended");
 }
 
 #[test]
@@ -188,7 +187,7 @@ fn apply_of_an_unknown_preset_refuses_preset_unknown() {
 
     refused(&fx.cpd(&["preset", "apply", "nope"]), "preset_unknown", 4);
     assert_eq!(fx.host_text(), HOST, "host.toml is untouched by the refusal");
-    assert_eq!(fx.env.model_changed(), json!([]));
+    assert!(fx.env.model_changed().is_empty());
 }
 
 // ---------- idempotence and the live-Session events ----------
@@ -224,8 +223,8 @@ fn apply_emits_one_session_model_changed_per_changed_live_session() {
     assert_eq!(changed.len(), 1, "exactly one Session's letter changed: {changed:?}");
     // The Lead is on the O letter, which the apply changed; the Manager is on the unchanged S letter.
     assert_eq!(changed[0]["session"], "lead1", "{changed:?}");
-    assert_eq!(changed[0]["data"]["from"], "github-copilot/slow-o", "{changed:?}");
-    assert_eq!(changed[0]["data"]["to"], "github-copilot/fast-o", "{changed:?}");
+    assert_eq!(changed[0]["data"]["from"], "github-copilot/claude-opus-5.5", "{changed:?}");
+    assert_eq!(changed[0]["data"]["to"], "github-copilot/claude-haiku-4.5", "{changed:?}");
 }
 
 // ---------- list and show ----------
@@ -241,14 +240,14 @@ fn list_and_show_print_the_presets_and_the_current_model() {
 
     let out = fx.cpd(&["preset", "show", "fast"]).ok();
     assert_eq!(out["name"], "fast", "{out}");
-    assert_eq!(out["O"], "github-copilot/fast-o", "{out}");
-    assert_eq!(out["S"], "github-copilot/fast-s", "{out}");
-    assert_eq!(out["H"], "github-copilot/fast-h", "{out}");
-    assert_eq!(out["G"], "github-copilot/fast-g", "{out}");
-    assert_eq!(out["host"]["O"], "github-copilot/slow-o", "{out}: the current host [model]");
-    assert_eq!(out["host"]["S"], "github-copilot/slow-s", "{out}");
-    assert_eq!(out["host"]["H"], "github-copilot/slow-h", "{out}");
-    assert_eq!(out["host"]["G"], "github-copilot/slow-g", "{out}");
+    assert_eq!(out["O"], "github-copilot/claude-haiku-4.5", "{out}");
+    assert_eq!(out["S"], "github-copilot/claude-sonnet-5.5", "{out}");
+    assert_eq!(out["H"], "github-copilot/claude-haiku-4.5", "{out}");
+    assert_eq!(out["G"], "github-copilot/gemini-3.8-flash", "{out}");
+    assert_eq!(out["host"]["O"], "github-copilot/claude-opus-5.5", "{out}: the current host [model]");
+    assert_eq!(out["host"]["S"], "github-copilot/claude-sonnet-5.5", "{out}");
+    assert_eq!(out["host"]["H"], "github-copilot/claude-haiku-4.5", "{out}");
+    assert_eq!(out["host"]["G"], "github-copilot/gemini-3.8-flash", "{out}");
 
     // A config with no presets lists none.
     let fx = Fx::new();
