@@ -3,7 +3,7 @@
 //! it; the stored copy is written at the insert (its fingerprint with it) and the Worker's Spec is rendered again at A3 from the live PR row;
 //! it has no Dependency rows (its Ready rule is derived, [`waiting_for`]).
 
-use rusqlite::params;
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
 use crate::config::Tier;
@@ -74,7 +74,7 @@ pub(crate) fn spec(pr: &PrRow) -> JobSpec {
 
 /// The fixed Spec of an `open` Job of an adopted PR: the pull request exists, and cpd updates it by pushing to its head branch.
 fn adopted_spec(pr: &PrRow, head_ref: &str) -> JobSpec {
-    let mut spec = update_spec(pr);
+    let mut spec = update_spec(pr, Cause::Conflict);
     spec.goal = format!(
         "Make the Lead Branch {lead} of PR {key} fit its base {base}, so that cpd can gate it and push it to {head_ref}, the head of the pull request that exists already: merge origin/{base} into it only if the two conflict, resolve the conflicts, and submit.",
         lead = pr.lead_branch,
@@ -92,40 +92,74 @@ fn adopted_spec(pr: &PrRow, head_ref: &str) -> JobSpec {
 }
 
 /// The fixed Spec of `pr`'s `open` Job, or its `update` Job when `update`: the one choice, for the insert and for the render at A3.
-pub(crate) fn fixed_spec(pr: &PrRow, update: bool) -> JobSpec {
-    if update { update_spec(pr) } else { spec(pr) }
+/// The `cause` is the `update` Job's (`None` for an `open` Job); a missing cause is the conflict, so a row inserted before the
+/// widened trigger keeps today's text.
+pub(crate) fn fixed_spec(pr: &PrRow, update: bool, cause: Option<Cause>) -> JobSpec {
+    if update { update_spec(pr, cause.unwrap_or(Cause::Conflict)) } else { spec(pr) }
 }
 
-/// The fixed Spec of an `update` Job of `pr` (§2.2 "Job kinds", §3.4 A3): the open Job's work for a pull request that exists.
-fn update_spec(pr: &PrRow) -> JobSpec {
+/// The fixed Spec of an `update` Job of `pr` (§2.2 "Job kinds", §3.4 A3): the open Job's work for a pull request that exists. The
+/// cause says what the Worker merges: a conflict merges the base only on a conflict, a base PR's merge merges the new base even
+/// without one (§3.7 E5, hs-d794).
+fn update_spec(pr: &PrRow, cause: Cause) -> JobSpec {
     let (base, lead) = (&pr.base, &pr.lead_branch);
     let remote = format!("origin/{base}");
+    let (goal, context, touches, out_of_scope) = match cause {
+        Cause::Conflict => (
+            format!(
+                "Bring the pull request of PR {key} up to date with its base {base}, so that cpd can gate the Lead Branch {lead} and push it: merge {remote} into it only if the two conflict, resolve the conflicts, and submit.",
+                key = pr.key
+            ),
+            format!(
+                "The pull request of PR {key} exists already: {lead}, in the repo {repo}, is its head, and you work in a worktree cut from it. Either GitHub reports a conflict between it and {base}, or fix Jobs of the PR have merged into {lead} and only have to reach the pull request (then there may be nothing to merge). \
+                 You push nothing, open nothing and run no Gate: when your submit passes, cpd runs the Gate in a test slot and pushes {lead}.\n\n\
+                 1. `git fetch origin {base}`.\n\
+                 2. Test for a conflict with `git merge-tree --write-tree --name-only {remote} HEAD`: exit 0 means none, and a base that merely moved ahead is no reason to merge it; exit 1 lists the conflicted files.\n\
+                 3. Only on a conflict: `git merge --no-edit {remote}`, resolve every conflict keeping both sides' intent, and commit the merge with what it needs to build and pass the Gate (recomputed hashes, tests adapted to the base's new rules, a renumbered migration).\n\
+                 4. Run the quick check and `cpd attempt submit` for your Attempt (the Worker Spec gives its id). With no conflict there is nothing to commit: submit as it is.\n\n\
+                 A refused submit says what to fix: `base_conflict` (merge the base, as above), `lead_branch_moved` (a Job merged into {lead} since you began: merge it, `git merge --no-edit {lead}`), `gate_failed` (fix what the Gate reports, commit, submit again), `gate_error` or `pr_closed` (ask the Lead).",
+                key = pr.key,
+                repo = pr.repo,
+            ),
+            json!([format!("The files {remote} conflicts with {lead} in, and what the merge needs in order to build and pass the Gate")]),
+            json!([
+                "Pushing, `gh`, running the Gate or editing the pull request yourself: cpd does them",
+                format!("Merging {remote} when it does not conflict"),
+                "Features, refactors or fixes that the conflict does not need",
+            ]),
+        ),
+        Cause::BaseMerged => (
+            format!(
+                "Bring the pull request of PR {key} up to date with its base {base}, so that cpd can gate the Lead Branch {lead} and push it: merge {remote} into it, resolve any conflicts, and submit.",
+                key = pr.key
+            ),
+            format!(
+                "The pull request of PR {key} exists already: {lead}, in the repo {repo}, is its head, and you work in a worktree cut from it. Its base PR merged and GitHub repointed the pull request to {base}, which holds commits {lead} lacks: merge them in, even though the two do not conflict. \
+                 You push nothing, open nothing and run no Gate: when your submit passes, cpd runs the Gate in a test slot and pushes {lead}.\n\n\
+                 1. `git fetch origin {base}`.\n\
+                 2. `git merge --no-edit {remote}`: resolve every conflict keeping both sides' intent, and commit the merge with what it needs to build and pass the Gate (recomputed hashes, tests adapted to the base's new rules, a renumbered migration).\n\
+                 3. Run the quick check and `cpd attempt submit` for your Attempt (the Worker Spec gives its id).\n\n\
+                 A refused submit says what to fix: `lead_branch_moved` (a Job merged into {lead} since you began: merge it, `git merge --no-edit {lead}`), `gate_failed` (fix what the Gate reports, commit, submit again), `gate_error` or `pr_closed` (ask the Lead).",
+                key = pr.key,
+                repo = pr.repo,
+            ),
+            json!([format!("The files {remote} merges into {lead} in, and what the merge needs in order to build and pass the Gate")]),
+            json!([
+                "Pushing, `gh`, running the Gate or editing the pull request yourself: cpd does them",
+                format!("Leaving {remote}'s commits out of {lead}"),
+                "Features, refactors or fixes that the merge does not need",
+            ]),
+        ),
+    };
     JobSpec {
-        goal: format!(
-            "Bring the pull request of PR {key} up to date with its base {base}, so that cpd can gate the Lead Branch {lead} and push it: merge {remote} into it only if the two conflict, resolve the conflicts, and submit.",
-            key = pr.key
-        ),
-        context: format!(
-            "The pull request of PR {key} exists already: {lead}, in the repo {repo}, is its head, and you work in a worktree cut from it. Either GitHub reports a conflict between it and {base}, or fix Jobs of the PR have merged into {lead} and only have to reach the pull request (then there may be nothing to merge). \
-             You push nothing, open nothing and run no Gate: when your submit passes, cpd runs the Gate in a test slot and pushes {lead}.\n\n\
-             1. `git fetch origin {base}`.\n\
-             2. Test for a conflict with `git merge-tree --write-tree --name-only {remote} HEAD`: exit 0 means none, and a base that merely moved ahead is no reason to merge it; exit 1 lists the conflicted files.\n\
-             3. Only on a conflict: `git merge --no-edit {remote}`, resolve every conflict keeping both sides' intent, and commit the merge with what it needs to build and pass the Gate (recomputed hashes, tests adapted to the base's new rules, a renumbered migration).\n\
-             4. Run the quick check and `cpd attempt submit` for your Attempt (the Worker Spec gives its id). With no conflict there is nothing to commit: submit as it is.\n\n\
-             A refused submit says what to fix: `base_conflict` (merge the base, as above), `lead_branch_moved` (a Job merged into {lead} since you began: merge it, `git merge --no-edit {lead}`), `gate_failed` (fix what the Gate reports, commit, submit again), `gate_error` or `pr_closed` (ask the Lead).",
-            key = pr.key,
-            repo = pr.repo,
-        ),
-        touches: json!([format!("The files {remote} conflicts with {lead} in, and what the merge needs in order to build and pass the Gate")]),
+        goal,
+        context,
+        touches,
         acceptance: json!([
             format!("`cpd attempt submit` succeeds: {lead} has no conflict with {remote} and the Gate, which cpd runs at submit, passes"),
             "Nothing was pushed by the Worker and no pull request was created or edited by it",
         ]),
-        out_of_scope: json!([
-            "Pushing, `gh`, running the Gate or editing the pull request yourself: cpd does them",
-            format!("Merging {remote} when it does not conflict"),
-            "Features, refactors or fixes that the conflict does not need",
-        ]),
+        out_of_scope,
     }
 }
 
@@ -140,14 +174,36 @@ pub fn add(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, draft: bool
 pub enum Cause {
     /// The poll saw the pull request conflict with its base.
     Conflict,
+    /// GitHub repointed the pull request from a base PR's Lead Branch to the default branch, which holds commits
+    /// the Lead Branch lacks without a conflict: the Worker merges that base even without one (§3.7 E5, hs-d794).
+    BaseMerged,
 }
 
 impl Cause {
     pub fn as_str(self) -> &'static str {
         match self {
             Cause::Conflict => "conflict",
+            Cause::BaseMerged => "base-merged",
         }
     }
+
+    /// The cause a `reason` spells (the inverse of [`Cause::as_str`]); `None` for a reason no cause spells.
+    pub fn parse(text: &str) -> Option<Cause> {
+        [Cause::Conflict, Cause::BaseMerged].into_iter().find(|cause| cause.as_str() == text)
+    }
+}
+
+/// The cause the poll queued Job `key` of `plan` for, from its `job-added` Event's `reason` (A3 re-renders the
+/// Worker's Spec from it): the conflict when the Event has none, as a Job inserted before the widened trigger has.
+pub fn cause_of(conn: &Connection, plan: &PlanId, key: &str) -> Result<Cause, CpdError> {
+    let reason: Option<String> = conn
+        .query_row(
+            "SELECT json_extract(data, '$.reason') FROM events WHERE plan = ?1 AND kind = 'job-added' AND job = ?2 ORDER BY id DESC LIMIT 1",
+            [plan.as_str(), key],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(reason.as_deref().and_then(Cause::parse).unwrap_or(Cause::Conflict))
 }
 
 /// Queues PR `pr`'s `update` Job in `tx` (§2.2 "Job kinds", §3.7 E5), unless the PR has one `queued` or `running`: one transaction writes the
@@ -166,11 +222,12 @@ pub fn queue_update(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, by
     if live {
         return Ok(None);
     }
-    insert(tx, plan, pr, tier, "update", by, Some(cause.as_str()), false).map(Some)
+    insert(tx, plan, pr, tier, "update", by, Some(cause), false).map(Some)
 }
 
-/// The insert of an `open` or `update` Job: the same row, Spec apart, with `job-added` in the same transaction.
-fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, by: &str, reason: Option<&str>, draft: bool) -> Result<JobKey, CpdError> {
+/// The insert of an `open` or `update` Job: the same row, Spec apart, with `job-added` in the same transaction. The
+/// `cause` is the `update` Job's (`None` for an `open` Job): it renders the Spec and spells the Event's `reason`.
+fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, by: &str, cause: Option<Cause>, draft: bool) -> Result<JobKey, CpdError> {
     let taken: Vec<String> = {
         let mut stmt = tx.prepare("SELECT key FROM jobs WHERE plan = ?1")?;
         stmt.query_map([plan.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
@@ -185,7 +242,7 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, 
         pr: Some(pr.key.as_str().to_owned()),
         title,
         tier: Some(tier.clone()),
-        spec: Some(fixed_spec(pr, update)),
+        spec: Some(fixed_spec(pr, update, cause)),
         status: if draft { "draft" } else { "queued" }.to_owned(),
         appended: true,
         kind: kind.to_owned(),
@@ -233,10 +290,11 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, 
             pr = pr.key
         )
     } else if update {
+        let merges = if cause == Some(Cause::BaseMerged) { "its base PR merged, so it merges the new base" } else { "it merges the base only on a conflict" };
         format!(
-            "Job {key} added to Plan {plan} by {by} ({why}): it merges the base only on a conflict, and cpd gates and pushes PR {pr}'s Lead Branch when it is done. \
+            "Job {key} added to Plan {plan} by {by} ({why}): {merges}, and cpd gates and pushes PR {pr}'s Lead Branch when it is done. \
              It waits for every other Job of the PR. Next: cpd job show {key} --plan {plan}",
-            why = reason.unwrap_or("update"),
+            why = cause.map_or("update", Cause::as_str),
             pr = pr.key
         )
     } else {
@@ -246,7 +304,7 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, 
             pr = pr.key
         )
     };
-    append(tx, NewEvent::job_added_by_cpd(text, pr.key.as_str(), kind, &job.status, &tier, by, reason).plan(plan.clone()).job(key.clone()))?;
+    append(tx, NewEvent::job_added_by_cpd(text, pr.key.as_str(), kind, &job.status, &tier, by, cause.map(Cause::as_str)).plan(plan.clone()).job(key.clone()))?;
     Ok(key)
 }
 
