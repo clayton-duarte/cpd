@@ -289,3 +289,424 @@ The largest gaps, by row ID:
 - G51 and G52: the host must hold open dialogs and cancel them, which pi's protocol does not (M and S).
 - G84: `!cmd` needs the host to run a command and write an entry (M, inferred).
 - G99: context-window usage has no field in pi-durable (absent, S).
+
+## 4. The durable session host and its socket protocol
+
+Sources: `g-proto.md`, `g-spike.md`, `c-conv.md`, `c-tools.md`. `PD` is `/home/clayton/.local/share/cpd/node_modules/@earendil-works/pi-durable` (1.3.0), `PI` is the sibling `pi-coding-agent` package. Every wire name below is our own design (labelled `inferred` in the Basis column); what is `read` is the pi-durable or cpd fact a message maps to. Where the spike built and ran a message the basis says `measured`. The protocol is **v1**.
+
+### 4.1 The host
+
+The durable session host (the host) is one Node process per Session. It is the one process that owns that Session's pi-durable store and its Event follower. A client (the Rust `cpd chat`, any number of them) is a view: closing it never stops the agent.
+
+| Fact | Basis |
+|---|---|
+| The host holds one `watchEvents(harness, conversationId, ctx)` stream for the root conversation (`PD/dist/harness/events.d.ts:184`). It gives an atomic `snapshot`, then one `AgentEvent[]` batch per commit (`events.d.ts:173-179`). | read (c-conv) |
+| pi-durable has **no resume cursor**: `watch` and `watchEvents` take no revision argument (`PD/dist/harness/types.d.ts:784-793`, `events.d.ts:173-184`). A late watcher gets the current view and nothing is replayed (`PD/README.md` "Watching a Conversation", l. 403). | read (c-conv: not found) |
+| pi-durable exports **no reducer** that applies an `AgentEvent` batch to a `SnapshotEvent` (`grep -n "apply\|reduce\|fold" PD/dist/harness/events.d.ts PD/dist/index.d.ts` finds nothing). The fold is new Rust code in the client (4.3). | measured (g-proto, grep) |
+| So the host keeps `base` (the newest `SnapshotEvent` and its `seq`) and `ring` (every batch delivered since `base`, each with its `seq`), and stamps every stream frame with its own `epoch` and `seq`. A client attaching gets `base`, then the ring, then live frames. | inferred (design) |
+| Everything except the store and the stream (ring, held UI requests, client list) is in memory and dies with the process. | inferred |
+| cpd Events enter only through the host's follower (`pi/lib/follower.ts`: a `cpd events follow` child with back-off) and `Conversation.submit({type:"input", content, requestId:"event:<id>", whenBusy})`, as the Worker runner does (`pi/durable-worker/deliver.ts:6-15`, contract 6.12 steps 5 and 6). An Event shows to clients only as an entry in the transcript. No client message carries an Event. | read (deliver.ts) / inferred |
+| `requestId` is the deduplication key scoped to the conversation (`PD/dist/harness/types.d.ts:24,333`); a second `submit` with `requestId:"r1"` returned the same submission id 8. Event submits use `event:<id>`, client submits `chat:<id>`. | measured (c-conv) |
+| One host per Session is the invariant that makes this safe, because pi-durable has no storage lock (4.7). | read / measured |
+
+Gap rows served: G20 (socket server), G16 (one owner), G21 (liveness), G01 to G09 (Event delivery in the host).
+
+### 4.2 Transport, framing and handshake
+
+Sources: g-proto, c-conv.
+
+| Item | Rule | Basis |
+|---|---|---|
+| Socket | `AF_UNIX`, `SOCK_STREAM`, path `$CPD_HOME/run/host/<session>.sock`. `<session>` is the cpd Session id, a lowercase UUID v4. With `CPD_HOME=/home/clayton/.cpd` the path is 69 bytes (`python3 -c "print(len('/home/clayton/.cpd/run/host/596d007f-6775-4134-b77a-b356cc523842.sock'))"`). The Linux `sun_path` limit of 107 bytes is from memory of `unix(7)`; the host refuses a longer path with exit 2 `socket_path_too_long`. | measured (69) / inferred (107) |
+| Framing | NDJSON: one JSON object per line, UTF-8, ended by `\n`. A serializer never emits a raw newline, so a reader splits on `0x0A`. | inferred |
+| Size | client to host line at most 1 MiB, host to client line at most 64 MiB (a `snapshot` carries every entry). Over the limit the reader closes with `error frame_too_large`. | inferred |
+| Message shape | Every message is an object with a string `type`, names in `snake_case`. Unknown fields are ignored by both sides. A client ignores (and logs) an unknown host to client `type`; the host answers an unknown client to host `type` with `error unknown_type` and keeps the connection. | inferred |
+| Correlation | Every client to host message except `hello` and `ping` carries `req`, a string unique on the connection. The host answers with **exactly one reply carrying the same `req`**: `result`, `error`, or for `attach` the `attached` message (changed by the spike, 4.9 row 2). Stream and state messages carry no `req`. | inferred; measured (spike: a client that waited for `result` on `attach` hung 10 s) |
+| Ordering | Per connection the host writes in the order of 4.3. A `result` is written after the stream frames the command caused that the host has already queued for that connection. | inferred; measured (spike CLI: `events` seq 2, then `result`) |
+| Numbers | JSON numbers. Ids pi-durable keeps as numbers (`EntryId`, `SubmissionId`, `TaskId`) stay numbers. Timestamps are Unix ms. | read (c-conv frames) |
+| Permissions | `$CPD_HOME/run/host/` mode 0700, socket mode 0600, both owned by the User; no TCP listener. The host creates the socket under `umask 0177`, then `chmod 0600`, and checks the directory owner and mode at start. The client checks the socket owner and mode before `connect`. The pattern exists: `core/src/secret/grants.rs:1` and `core/src/host_repair_approval.rs:2` ("directories 0700, files 0600"). The spike only set 0600; the checks were not built. | read (precedent) / inferred |
+| Keep-alive | Silence is allowed. The client may `ping`. The host closes a connection with no `hello` within 5 s (`error hello_timeout`); not built in the spike. | inferred |
+| Backpressure | A client whose unsent output exceeds 8 MiB gets `bye {reason:"slow_client"}` and is closed; it reattaches with its cursor. Not built in the spike. | inferred |
+
+**Handshake and version.**
+
+1. The client connects and sends `hello` at once; the host sends nothing first.
+2. The host answers `welcome` (the connection is open), or `error protocol_mismatch` and closes.
+3. The client sends `attach` to get state. A connection that never attaches still gets `pong`, `list_models` and `history`; stream, state and UI messages go only to attached clients.
+
+`protocol` is one integer, the **major** version of the wire. `hello.protocol` is the highest version the client speaks and `hello.min_protocol` the lowest. The host speaks a set (today `{1}`) and picks the highest in the intersection; `welcome.protocol` is the pick. Adding an optional field or a new message type is not a version change. Removing or retyping a field, or changing a message's meaning, bumps the integer. On an empty intersection the host writes `{"type":"error","code":"protocol_mismatch","message":"...","details":{"host":[1],"client":[2,3]}}`, flushes, closes and touches nothing in the store; the client prints "this host speaks protocol 1, the client speaks 2-3: restart the host with the installed cpd" and exits non-zero. A host that outlives a cpd upgrade is stopped (SIGTERM) and started again by the engine; a stop loses nothing durable (contract 6.12 "Crash resume"). The spike ran `protocol_mismatch` (measured). `welcome` carries `protocol`, `host_version`, `pi_durable` (read from `PD/package.json`), `session`, `role` (`lead` or `manager`), `epoch`, `client_id`, `cwd` and `limits`.
+
+**Rust shape.** `#[derive(Deserialize)] #[serde(tag = "type", rename_all = "snake_case")] enum ToClient { Welcome{..}, Attached{..}, Snapshot{..}, Events{..}, .. }` and the same for `ToHost`; `AgentEvent` is a second enum tagged on `type`; absent fields are `Option<T>` with `#[serde(default)]`; `#[serde(other)] Unknown` gives the "ignore unknown type" rule. No Rust was built (inferred).
+
+Gap rows served: G20. Open: where the peer uid of a connection is available in Node (not looked up); until then the directory mode is the only access control.
+
+### 4.3 Attach, snapshot and resume
+
+Sources: g-proto, g-spike, c-conv.
+
+**Sequence numbers and epoch.** `seq` counts stream frames only, the `snapshot` frame and each `events` frame. It starts at 1 when the host opens its stream and grows by 1 per frame, so a client detects a gap. `epoch` names the host process: a new process starts a new `epoch` and `seq` 1. A **cursor** is `{"epoch":"...","seq":N}`: "I applied every frame up to N of that epoch".
+
+**Attach.** `attach {req, cursor?}`. The host answers `attached` (the reply for that `req`), then writes in this order:
+
+| Case | `attached.mode` | Frames after `attached` |
+|---|---|---|
+| no cursor, or `cursor.epoch` differs from this epoch, or `cursor.seq` < `base.seq`, or `cursor.seq` > `head` | `snapshot` | the `snapshot` frame (`seq` = base seq, the stored `SnapshotEvent`), then every ring frame as `events` in `seq` order up to `head_seq` |
+| `base.seq` <= `cursor.seq` <= `head` | `resume` | every ring frame with `seq` > `cursor.seq` as `events` (none when equal to head) |
+
+Then `host_state`, one `status` per held status key, one `ui_request` per held request (each with `"replayed":true`), then live `events` frames. `attached.head_seq` is the `seq` at the moment of attach; the client is **caught up** when it has applied the frame with that `seq` (changed by the spike, 4.9 row 4). Frames reach a connection in `seq` order with none skipped: the host appends to the connection queue in the same synchronous step that appends to the ring (Node is single threaded: inferred).
+
+Why it is consistent (inferred from the read stream semantics): `base` is captured atomically with the stream's registration (`events.d.ts:180-183`) and the ring is exactly the batches that stream delivered afterwards, so `base` plus the ring applied in order equals the live state at `head`. No snapshot of an arbitrary moment is needed. Measured by the spike: a client attaching mid-stream got `mode:"snapshot"`, `head_seq:22`, 25 frames, no seq gap, and equal final state to the first client (5 of 5 runs); a cursor reattach got `mode:"resume"` and exactly the missed frames (5 of 5).
+
+**Rebase (the only broadcast snapshot).** When the ring holds more than 256 frames at a `run_end`, or more than 4096 frames at any time, the host closes its stream and opens a new `watchEvents`. Its fresh snapshot becomes `base` (`seq` continues at `head+1`), the ring is emptied, and the host sends that `snapshot` frame to **every attached client**; a client replaces its whole view on any `snapshot`. The new snapshot is atomic with the new registration, so nothing is lost (inferred). 256 and 4096 are design defaults, not measured; the spike has no rebase. A pi-durable overflow (more than 100 undelivered batches) arrives inside `events` as an `AgentEvent` of `type:"snapshot"` (`events.d.ts:66`; read in c-conv, not run); the host treats such a batch as a rebase point and forwards it unchanged.
+
+**The fold.** The client keeps a `SnapshotEvent` as its state (`entries`, `run`, `generation`, `tools`, `nestedTools`, `compactions`, `compactionFailure`, `inbox`, `agent`, `usage`: `events.d.ts:35-64`) and applies each `AgentEvent` of an `events` frame in order. Event types: `snapshot`, `run_start/end`, `turn_start/end`, `message_start/update/end`, `tool_execution_start/update/end`, `inbox_update`, `submission`, `auto_retry_start/end`, `deferred_poll`, `entry_appended`, `agent_changed`, `usage_changed`, `task_failed`, `compaction_start/end` (`events.d.ts:66-171`, read via c-conv). Text deltas are `MessageChange` (`text_delta`, `thinking_delta`, `toolcall_delta`: `events.d.ts:14-33`). **Changed by the spike:** a short answer has no `message_update` at all. The assistant message arrives whole in `message_start`, `message_end` follows in the same or the next commit, and `message_update` appears only when generation outlasts the commit interval (default 100 ms: `PD/README.md:406`). So the fold takes a complete message from `message_start` and replaces it at `message_end`, and a client never waits for a delta. The per-event fold is not specified here: it is the Rust client's Job, reading `events.d.ts:66-171`, and its size is unknown (Open: who folds, the client or the host).
+
+**Not in the seq space.** `ui_request`, `ui_resolved`, `notice`, `status` and `host_state` are state or one-shot and are never replayed from the ring. An attaching client receives the current held set (UI requests, statuses, `host_state`) after `attached`. A `notice` missed while detached is gone.
+
+**Ring size at attach (spike, 4.9 row 6).** The spike's ring holds every frame since the start snapshot: 25 frames and 17,303 bytes for a 30-entry conversation after 6 turns, received 0.9 ms after `attached` (measured, run 0). The 256-frame bound is what limits it; a burst at that size was not measured. Open: is the first snapshot the whole history, or a window with paging.
+
+Gap rows served: G20, G98 (usage in the snapshot), G87 (queued inputs in `inbox`).
+
+### 4.4 UI requests
+
+Sources: g-proto, g-spike, c-tools.
+
+pi-durable has no UI API (no `ctx.ui`, `hasUI` or `ui_request` in its README or `dist`: not found, a-dialogs). The host supplies the dialogs to the extensions it loads, as pi's RPC mode does (`PI/dist/modes/rpc/rpc-mode.js:40-80,231`, read via b-extui). A `ui_request` has a `method` of `select`, `confirm`, `input`, `editor` or `questionnaire`. The first four use pi's field names (`PI/dist/modes/rpc/rpc-types.d.ts:406-476`, read): `select{title,options[],timeout?}`, `confirm{title,message,timeout?}`, `input{title,placeholder?}`, `editor{title,prefill?}`. `questionnaire` is cpd's addition so a Rust client can show the tabbed questionnaire (pi's `ui.custom` has no RPC form: `rpc-mode.js:152-155`); its fields are the tool's input and answer shapes (`pi/ask-user-question/tool/types.ts:41-91,109-157`, read in a-dialogs). A client that cannot render `questionnaire` is not a v1 client (inferred). Added fields: `id` (host `crypto.randomUUID()`), `purpose` (`ask_user_question`, `plan_review`, `secret_approve`, `host_approve`, `mcp_login`, `other`), `created_at`, `expires_at?` (absolute ms, because pi's relative `timeout` would lie after a reattach), `tool_call_id?`, `replayed?`.
+
+Rules:
+
+1. **Held by the host.** An extension calls `select` and the like; the host creates the request, stores it in `held` (a map by id), broadcasts `ui_request` to every attached client and awaits a promise. The tool's `execute` is suspended: a waiting tool is an ordinary running tool, nothing in pi-durable depends on a watcher and nothing times it out (c-tools: no tool timeout field, `grep -in timeout tool.js define.js` found nothing; a measured `answer` run returned the answer after 2 s and the run continued).
+2. **First `ui_response` wins.** The host removes the request from `held`, resolves the promise (`cancelled` gives `undefined` or `false`, as pi), answers the sender with `result` and broadcasts `ui_resolved {id, outcome:"answered", by}` to **all** attached clients, the sender too. Measured by the spike: `result`, then `ui_resolved {outcome:"answered"}`, then the tool returned its value (5 of 5 runs).
+3. **A late answer** gets an `error`. **Changed by the spike:** the host keeps no resolved ids, so the late `ui_response` got `ui_unknown` (observed). v1 therefore drops `ui_resolved` as an error code and uses `ui_unknown` for an id not currently held, whether never seen or already resolved. The client learned of the resolution from the broadcast. Open: whether to remember a bounded set of resolved ids (the spike suggests 64, inferred) to tell the two cases apart.
+4. **The host resolves a request itself** when `timeout` or `expires_at` passes (`outcome:"timeout"`; pi honours `timeout` for select, confirm and input but not `editor`: `rpc-mode.js:51-70,174-192`), when the extension's `AbortSignal` fires, such as a newer plan review closing the older select (`pi/lib/review-chat.ts:26-31`) (`outcome:"superseded"`), and when a run is aborted (`outcome:"aborted"`, `by:"host"`). pi sends no cancel to the client in these cases, so `ui_resolved` is the host's addition. Measured by the spike: `abort` with a request held gave `ui_resolved {outcome:"aborted", by:"host"}` and `held_ui:0` (run 0, 1 of 1). Not tested: whether `root.abort()` fires `context.abortSignal` in a waiting tool, so the host resolves held requests itself before it calls `abort`.
+5. **Detach never touches `held`.** A client that attaches later receives one `ui_request` per held request with `replayed:true` and the same id. Measured: 5 of 5 runs (4.9 and 5.3). A client that Esc-closes a dialog without answering hides it and keeps it reopenable; no message. `cancelled:true` is an explicit decline. For plan review an Esc on the select leaves the review pending (`pi/lib/review-chat.ts:52-55`), so a client sends `cancelled` only when the User means decline (a UX rule, inferred).
+6. **Host restart.** `held` is memory and is lost with the process. On reopen the default `replay:"unsafe"` tells the model `Tool ... was interrupted and may have partially run` and does not re-run; `replay:"safe"` re-runs `execute()`, which asks again with a **new** id (both measured in c-tools after `kill -9`). A request is re-sent after a restart only if its tool is `replay:"safe"`. The plan-review dialog is not tool-bound: the adapter writes a pending `cpd-plan-review` entry and reopens the dialog at session start, so the host's start hook recreates it with a fresh id. A client that reattaches after a restart gets a new `epoch` and clears its held list. Open: ask again or tell the model it was interrupted (per tool: ask, secret approval, host approval).
+
+`notify` is not held: it is the `notice` message. `setStatus` is `status`. The other `ExtensionUIContext` members (`setWidget`, `setTitle`, `custom`, `onTerminalInput`, working indicators) have no message; the host gives extensions the same no-op stubs as `rpc-mode.js:97-221` (read via b-extui).
+
+Gap rows served: G39 to G41, G43 to G47 (dialogs), G48 and G49 (`ctx.ui` members), G50 (a tool that waits), G51 (persistence), G52 (cancel).
+
+### 4.5 Messages
+
+Sources: g-proto, g-spike, c-conv. Direction is C to H (client to host) or H to C. Examples are single JSON lines with sample ids and text. Gap IDs are those of section 3. Basis is `read` (the pi-durable or cpd fact at the cite), `measured` (the spike ran it) or `inferred` (our design; the wire name is ours in every row). 16 client to host messages (rows 1 to 16) and 13 host to client messages (rows 17 to 29), 29 in all.
+
+Every Example cell was parsed as JSON with `node -e` under `timeout 20`: the command reads this file, takes the second backticked cell after the Type column of each row of this table (the Example column) and calls `JSON.parse` on it. Result: 29 of 29 rows valid (check run before the commit).
+
+| # | Direction | Type | Fields | Example (one JSON line) | Serves gap row | Basis |
+|---|---|---|---|---|---|---|
+| 1 | C to H | `hello` | `protocol` (max int), `min_protocol` (int), `client` (string), `name?` | `{"type":"hello","protocol":1,"min_protocol":1,"client":"cpd-chat 0.1.0"}` | G20 | inferred; measured (spike) |
+| 2 | C to H | `attach` | `req`, `cursor?:{epoch,seq}`, `conversation?` (v1: absent or `"root"`) | `{"type":"attach","req":"r1","cursor":{"epoch":"e-7f3a","seq":412}}` | G20, G09 | `watchEvents` `events.d.ts:173-184` read, plus the host ring (inferred); measured (spike) |
+| 3 | C to H | `submit` | `req`, `text` (v1 text only), `when_busy` = `"followUp"` (default) \| `"steer"` \| `"reject"`, `request_id?` | `{"type":"submit","req":"r2","text":"run the checks","when_busy":"steer","request_id":"9c1e"}` | G95, G87 | `Conversation.submit({type:"input",content,whenBusy,requestId:"chat:"+request_id})` `PD/dist/harness/types.d.ts:600`, `SubmissionDraft` :23-36 read; `UserInput` :13 allows images, v1 sends text; measured (spike) |
+| 4 | C to H | `abort` | `req`, `background?` (bool, default false) | `{"type":"abort","req":"r3"}` | G96 | `Conversation.abort(ctx,{background})` `types.d.ts:627`, `ConversationAbortOptions` :68-76 read; withdraws queued inputs, aborts live tasks, resolves when idle; measured (spike: events ended `message_end, turn_end, run_end`, idle 51 ms later) |
+| 5 | C to H | `abort_submission` | `req`, `submission_id` (number) | `{"type":"abort_submission","req":"r4","submission_id":14}` | G95 | `Submission.abort(ctx)` :48, `Harness.abortSubmission` :660, outcomes `aborted`, `already_placed`, `settled`, `not_found`; read (c-conv) |
+| 6 | C to H | `compact` | `req`, `instructions?` | `{"type":"compact","req":"r5","instructions":"keep the plan decisions"}` | G71, G91 | `Conversation.compact(instructions\|undefined,ctx): Promise<TaskId<CompactionResult>>` `types.d.ts:610`; progress as `compaction_start/end` events; read (c-conv) |
+| 7 | C to H | `configure` | `req`, `model?:{provider,model_id}\|null`, `thinking_level?` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) `\|null` | `{"type":"configure","req":"r6","model":{"provider":"anthropic","model_id":"claude-opus-4-5"},"thinking_level":"high"}` | G72, G73, G97 | `Conversation.configure(AgentChange,ctx)` `types.d.ts:593`, `AgentChange` :378-396, levels `pi-ai/dist/providers/model-schema.js:2-3`; applies from the next request (read, c-conv); clamping to model support is unverified, so the host validates against `list_models` and refuses with `bad_args`; measured (spike, model only: persists across a restart, `chk-agent-persist.mjs`); `thinking_level` not built |
+| 8 | C to H | `list_models` | `req` | `{"type":"list_models","req":"r7"}` | G72, G73 | the host's model registry (`pi/durable-worker/harness.ts:20-28`), per-model levels `getSupportedThinkingLevels` `pi-ai/dist/models.d.ts:267-268` (read via c-conv); result shape inferred; not built in the spike |
+| 9 | C to H | `reload` | `req` | `{"type":"reload","req":"r8"}` | G76, G31 | the host re-reads the adapter package and replaces the extension in place with the Registry's `install` (README Reload l. 366-376, via a-ops); the idle and pending guard of `reload.ts:70-76` is host code; all inferred, pi-durable has no file watch or validation |
+| 10 | C to H | `mcp` | `req`, `action` = `"list"\|"login"\|"logout"\|"reconnect"`, `server?` | `{"type":"mcp","req":"r9","action":"login","server":"atlassian"}` | G33, G32 | pi's `/mcp` (`PI/dist/extensions/mcp/index.js:1121,1161-1177`, a-ops); a non-TUI login prints the URL (`notify`) and asks for the redirect URL (`input`, :955-957), so the host sends a `notice` and a `ui_request` `input` with `purpose:"mcp_login"`; beyond the pi form it is inferred |
+| 11 | C to H | `fork` | `req`, `at` (entry id), `ownership?` | `{"type":"fork","req":"r10","at":7}` | G74, G89 | `Conversation.fork(at,{ownership,agent?,init?},ctx): Promise<Conversation>` `types.d.ts:622`, `ConversationCreateOptions` :417-423; read (c-conv); v1 does not serve the new conversation (Open: a new Session with its own host, or a second conversation in the same store) |
+| 12 | C to H | `history` | `req`, `before?` (opaque cursor from a previous `result`), `limit` (default 50) | `{"type":"history","req":"r11","limit":50}` | G90, G89 | `Conversation.entries(query,limit,cursor,ctx): Promise<Page<EntryRecord,Cursor>>`, fork aware, newest first (`types.d.ts` near :619, line number from c-conv); `Cursor` is opaque; read |
+| 13 | C to H | `rename` | `req`, `name` | `{"type":"rename","req":"r12","name":"Plan lead: durable-leads"}` | G15 | the host calls `cpd session rename` (the adapter's pi to cpd direction, `pi/lib/agent-state.ts:84-91`); no pi-durable member; inferred |
+| 14 | C to H | `ui_response` | `req`, `id` (the request's), one of `value` (string) \| `confirmed` (bool) \| `answer` (object, for `questionnaire`) \| `cancelled:true` | `{"type":"ui_response","req":"r13","id":"b3b2e6f0-2a41-4c0e-9d52-6c1d8a0b7e11","value":"Allow once"}` | G39, G40, G41, G44, G46, G47 | pi's `extension_ui_response` shapes `rpc-types.d.ts:464-476` read (a-dialogs); `answer` is the questionnaire result (`tool/types.ts:109-157`); measured (spike) |
+| 15 | C to H | `ping` | `req?` | `{"type":"ping"}` | G20 | inferred; measured (spike) |
+| 16 | C to H | `detach` | `req` | `{"type":"detach","req":"r14"}` | G20 | inferred; closing the socket does the same, neither stops the agent; measured (spike) |
+| 17 | H to C | `welcome` | `protocol`, `host_version`, `pi_durable`, `session`, `role`, `epoch`, `client_id`, `cwd`, `limits:{client_line}` | `{"type":"welcome","protocol":1,"host_version":"2.7.0","pi_durable":"1.3.0","session":"596d007f-6775-4134-b77a-b356cc523842","role":"lead","epoch":"e-7f3a","client_id":"c1","cwd":"/home/clayton/projects/cpd","limits":{"client_line":1048576}}` | G20 | inferred; `pi_durable` read from `PD/package.json` (`"version": "1.3.0"`); measured (spike) |
+| 18 | H to C | `attached` | `req`, `mode` = `"snapshot"\|"resume"`, `epoch`, `from_seq`, `head_seq`, `client_id` | `{"type":"attached","req":"r1","mode":"resume","epoch":"e-7f3a","from_seq":413,"head_seq":420,"client_id":"c2"}` | G20 | the single reply to `attach` (changed by the spike); inferred; measured (spike) |
+| 19 | H to C | `snapshot` | `epoch`, `seq`, `snapshot` (a pi-durable `SnapshotEvent`, unchanged) | `{"type":"snapshot","epoch":"e-7f3a","seq":1,"snapshot":{"type":"snapshot","entries":[{"model":[{"role":"user","content":"hello","timestamp":1793415893061}],"kind":"pi.user","id":7,"conversationId":1}],"tools":[],"nestedTools":[],"compactions":[],"inbox":[],"agent":{"model":{"provider":"faux","modelId":"faux-1"}},"usage":{"models":{},"tools":{}}}}` | G20, G98 | `AgentEventStream.snapshot` `events.d.ts:173-179`, `SnapshotEvent` :35-64 read; the shape is the snapshot measured in c-conv; measured (spike) |
+| 20 | H to C | `events` | `epoch`, `seq`, `events` (array of `AgentEvent`, one commit, unchanged) | `{"type":"events","epoch":"e-7f3a","seq":2,"events":[{"type":"message_start","message":{"role":"user","content":"yo","timestamp":1793415925997}},{"type":"run_start","inputs":[8]},{"type":"turn_start"}]}` | G20, G98 | the `start(listener(events[],ctx))` batch `events.d.ts:173-179` read; the events are the batch measured in c-conv, shortened by hand; measured (spike) |
+| 21 | H to C | `result` | `req`, `data` (object, by command, below) | `{"type":"result","req":"r2","data":{"submission_id":14,"status":"queued"}}` | G20 | inferred; `submit` gives `{submission_id,status}` (`SubmissionRecord.status` queued, placed, done, unanswered: `types.d.ts:336-389`), `abort` `{}`, `abort_submission` `{outcome}`, `compact` `{task_id}`, `configure` `{agent}`, `list_models` `{models:[{provider,model_id,name,thinking_levels,context_window}]}` (inferred), `reload` `{reloaded,reason?}`, `mcp` `{servers?}`, `fork` `{conversation_id}`, `history` `{entries,next?}`, `rename`, `ui_response`, `detach` `{}`; measured (spike) |
+| 22 | H to C | `error` | `req?`, `code`, `message`, `details?` | `{"type":"error","req":"r2","code":"busy","message":"the conversation is busy and when_busy was reject"}` | G20 | inferred; codes in the error-code table below; `busy` is `ConversationBusy` (`errors.d.ts:28`, read in c-conv); measured (spike: `unknown_type`, `bad_frame`, `ui_unknown`, `protocol_mismatch`) |
+| 23 | H to C | `ui_request` | `id`, `method` (`select`, `confirm`, `input`, `editor`, `questionnaire`), pi's fields for the method, `purpose`, `created_at`, `expires_at?`, `tool_call_id?`, `replayed?` | `{"type":"ui_request","id":"b3b2e6f0-2a41-4c0e-9d52-6c1d8a0b7e11","method":"select","title":"lead-1 asks to get in vault cpd: item gh, field token. Reason: open a PR","options":["Allow once","Deny"],"purpose":"secret_approve","created_at":1793416000123,"tool_call_id":"call_7"}` | G39, G40, G41, G43, G44, G46, G47, G50 | pi's `extension_ui_request` shapes `rpc-types.d.ts:406-476` read; title and options as `pi/lib/secret.ts:48-49` (a-dialogs); `questionnaire` carries `questions:[{question,header,multiSelect,options:[{label,description,preview?}]}]` (inferred from `tool/types.ts:41-91`); measured (spike, `select`) |
+| 24 | H to C | `ui_resolved` | `id`, `outcome` = `"answered"\|"cancelled"\|"timeout"\|"superseded"\|"aborted"`, `by?` (client id, or `"host"`) | `{"type":"ui_resolved","id":"b3b2e6f0-2a41-4c0e-9d52-6c1d8a0b7e11","outcome":"answered","by":"c2"}` | G51, G52 | inferred; closes pi's gap that an abort or timeout sends nothing to the client (`rpc-mode.js:57-60`); measured (spike: `answered`, `aborted`) |
+| 25 | H to C | `notice` | `level` = `"info"\|"warning"\|"error"`, `message` | `{"type":"notice","level":"warning","message":"adapter update not loaded: no extension.ts"}` | G48, G76, G33 | pi `notify(message, type?)` `types.d.ts:80` and RPC `notify` (read, b-extui); not built in the spike |
+| 26 | H to C | `status` | `key`, `text` (string, or null to clear) | `{"type":"status","key":"cpd","text":"working"}` | G48 | pi `setStatus(key,text\|undefined)` (read, b-extui); only host-side extensions that call it produce it; not built in the spike |
+| 27 | H to C | `host_state` | `state` = `"idle"\|"working"\|"waiting"\|"blocked"`, `name?`, `clients` (int), `held_ui` (int), `agent?` (an `AgentState`) | `{"type":"host_state","state":"working","name":"Plan lead: durable-leads","clients":2,"held_ui":0,"agent":{"model":{"provider":"anthropic","modelId":"claude-opus-4-5"},"thinkingLevel":"high"}}` | G07, G15, G97 | the Session state the host reports with `cpd session state` (contract 6.12 step 7); `stopped` is never sent, the host is gone then; `agent` mirrors `agent_changed` (read, c-conv); measured (spike: `blocked` with `held_ui:1`, `idle` after abort); at attach `working` is derived from the snapshot (changed by the spike, inferred) |
+| 28 | H to C | `pong` | `req?` | `{"type":"pong"}` | G20 | inferred |
+| 29 | H to C | `bye` | `reason` = `"shutdown"\|"restart"\|"storage_failed"\|"slow_client"\|"detached"`, `reconnect` (bool) | `{"type":"bye","reason":"shutdown","reconnect":true}` | G10, G21 | inferred; `storage_failed` is pi-durable ending the Harness (`closed` settles `{reason:"failed"}`, README Errors l. 711, c-conv); sent at SIGTERM in the spike, not exercised |
+
+**4.5.1 Error codes**
+
+| Code | When | Connection |
+|---|---|---|
+| `protocol_mismatch` | no common version | closed |
+| `hello_timeout` | no `hello` in 5 s | closed |
+| `bad_frame` | a line that is not a JSON object, or has no `type` | kept, line skipped |
+| `frame_too_large` | line over the limit | closed |
+| `unknown_type` | client to host type the host does not know | kept |
+| `bad_args` | a field missing, mistyped or invalid (such as a `thinking_level` the model does not support) | kept |
+| `not_attached` | a command that needs `attach` first | kept |
+| `busy` | `submit` with `when_busy:"reject"` while busy | kept |
+| `ui_unknown` | `ui_response` for an id that is not held, never seen or already resolved (changed by the spike: replaces `ui_resolved`) | kept |
+| `unsupported` | `attach.conversation` other than root, or images in `submit` | kept |
+| `refused` | `reload` while busy (the guard of `reload.ts:70-76`), with `details.reason` | kept |
+| `storage_failed` | the Harness failed (`SessionFailed`); always followed by `bye` | closed |
+| `shutting_down` | a command arrived after SIGTERM | closed |
+| `internal` | an uncaught host error in a command | kept |
+
+Features with no message by design: cpd's `before_agent_start` hooks (G06, G11 to G13) run inside the host as pi-durable hooks and extension sections; they are gap rows, not wire.
+
+### 4.6 Sequences
+
+Sources: g-proto, g-spike. Each arrow is a message of the 4.5 table. `H` is the host. The store is not a participant. Diagram 4.6.1 and 4.6.5 were run by the spike in the shapes of rows 5 and 7 of 5.2 (measured); the others follow the same code paths.
+
+**4.6.1 Attach: a fresh client, then a second one resuming from a cursor**
+
+```mermaid
+sequenceDiagram
+    participant C1 as Client c1
+    participant H as Host
+    participant C2 as Client c2
+    C1->>H: hello {protocol:1, min_protocol:1}
+    H-->>C1: welcome {protocol:1, epoch:"e-7f3a", client_id:"c1"}
+    C1->>H: attach {req:"r1"}
+    H-->>C1: attached {req:"r1", mode:"snapshot", from_seq:1, head_seq:3}
+    H-->>C1: snapshot {seq:1}
+    H-->>C1: events {seq:2}
+    H-->>C1: events {seq:3}
+    H-->>C1: host_state {state:"idle", clients:1}
+    H-->>C1: events {seq:4}
+    Note over C2,H: c2 ran earlier, applied up to seq 3, then lost its socket
+    C2->>H: hello {protocol:1, min_protocol:1}
+    H-->>C2: welcome {client_id:"c2"}
+    C2->>H: attach {req:"r1", cursor:{epoch:"e-7f3a", seq:3}}
+    H-->>C2: attached {req:"r1", mode:"resume", from_seq:4, head_seq:4}
+    H-->>C2: events {seq:4}
+    H-->>C2: host_state {clients:2}
+    H-->>C1: host_state {clients:2}
+    C1->>H: detach {req:"r2"}
+    H-->>C1: result {req:"r2", data:{}}
+    Note over H: the agent is untouched by the detach
+```
+
+**4.6.2 A submit with streaming**
+
+```mermaid
+sequenceDiagram
+    participant C as Client c1
+    participant H as Host
+    C->>H: submit {req:"r2", text:"run the checks", when_busy:"followUp", request_id:"9c1e"}
+    H-->>C: result {req:"r2", data:{submission_id:14, status:"placed"}}
+    H-->>C: host_state {state:"working"}
+    H-->>C: events {seq:5, events: message_start, message_end, submission, run_start, turn_start}
+    H-->>C: events {seq:6, events: message_start with the whole short answer}
+    H-->>C: events {seq:7, events: message_end, tool_execution_start}
+    H-->>C: events {seq:8, events: tool_execution_end, turn_end, run_end}
+    H-->>C: host_state {state:"idle"}
+    C->>H: submit {req:"r3", text:"also lint", when_busy:"steer"}
+    H-->>C: result {req:"r3", data:{submission_id:15, status:"queued"}}
+```
+
+**4.6.3 A UI request answered by a second client after the first detached**
+
+```mermaid
+sequenceDiagram
+    participant C1 as Client c1
+    participant H as Host
+    participant C2 as Client c2
+    participant C3 as Client c3
+    Note over H: a tool calls ui.select and its execute awaits
+    H-->>C1: ui_request {id:"b3b2", method:"select", purpose:"secret_approve"}
+    H-->>C1: host_state {state:"blocked", held_ui:1}
+    C1->>H: detach {req:"r4"}
+    H-->>C1: result {req:"r4", data:{}}
+    Note over H: held_ui stays 1 and the tool still waits
+    C2->>H: hello {protocol:1, min_protocol:1}
+    H-->>C2: welcome {client_id:"c2"}
+    C2->>H: attach {req:"r1"}
+    H-->>C2: attached {req:"r1", mode:"snapshot"}
+    H-->>C2: snapshot {seq:1}
+    H-->>C2: ui_request {id:"b3b2", replayed:true}
+    C3->>H: hello {protocol:1, min_protocol:1}
+    H-->>C3: welcome {client_id:"c3"}
+    C3->>H: attach {req:"r1"}
+    H-->>C3: attached {req:"r1", mode:"snapshot"}
+    H-->>C3: ui_request {id:"b3b2", replayed:true}
+    C2->>H: ui_response {req:"r5", id:"b3b2", value:"Allow once"}
+    H-->>C2: result {req:"r5", data:{}}
+    H-->>C2: ui_resolved {id:"b3b2", outcome:"answered", by:"c2"}
+    H-->>C3: ui_resolved {id:"b3b2", outcome:"answered", by:"c2"}
+    C3->>H: ui_response {req:"r6", id:"b3b2", value:"Deny"}
+    H-->>C3: error {req:"r6", code:"ui_unknown"}
+    H-->>C2: events {seq:12, events: tool_execution_end}
+    H-->>C2: host_state {state:"working", held_ui:0}
+```
+
+**4.6.4 Abort during a tool**
+
+```mermaid
+sequenceDiagram
+    participant C as Client c1
+    participant H as Host
+    Note over H: a bash tool runs and one ui.select is also held
+    H-->>C: events {seq:20, events: tool_execution_start}
+    H-->>C: ui_request {id:"b3b2", method:"select"}
+    C->>H: abort {req:"r7"}
+    Note over H: the host resolves held requests first, then calls Conversation.abort
+    H-->>C: ui_resolved {id:"b3b2", outcome:"aborted", by:"host"}
+    H-->>C: events {seq:21, events: tool_execution_end}
+    H-->>C: events {seq:22, events: turn_end, run_end}
+    H-->>C: result {req:"r7", data:{}}
+    H-->>C: host_state {state:"idle", held_ui:0}
+    C->>H: abort {req:"r8"}
+    H-->>C: result {req:"r8", data:{}}
+```
+
+**4.6.5 Host restart with resume**
+
+```mermaid
+sequenceDiagram
+    participant C as Client c1
+    participant H as Host (old process)
+    participant N as Host (new process, same store)
+    H-->>C: events {seq:30, events: tool_execution_start}
+    H-->>C: ui_request {id:"b3b2", method:"select", purpose:"ask_user_question"}
+    Note over H: the engine stops it with SIGTERM or it is killed
+    H-->>C: bye {reason:"restart", reconnect:true}
+    Note over C: the socket closes, the client keeps its view and retries connect
+    Note over N: the engine starts the new host, it reopens the store, resumes and asks again where a tool is replay safe
+    C->>N: hello {protocol:1, min_protocol:1}
+    N-->>C: welcome {epoch:"e-91c2", client_id:"c1"}
+    C->>N: attach {req:"r1", cursor:{epoch:"e-7f3a", seq:30}}
+    N-->>C: attached {req:"r1", mode:"snapshot", epoch:"e-91c2", from_seq:1, head_seq:4}
+    N-->>C: snapshot {epoch:"e-91c2", seq:1}
+    N-->>C: events {epoch:"e-91c2", seq:2}
+    N-->>C: host_state {state:"working"}
+    N-->>C: ui_request {id:"d77e", method:"select", purpose:"ask_user_question"}
+    Note over C: new epoch, so the client drops its old held request b3b2 and shows d77e
+```
+
+In 4.6.5 after a `kill -9` there is no `bye`: the socket just closes, the stale socket file stays, and the new host unlinks it (measured, 5.3). The resumed answer can arrive after the first snapshot, so the client keeps reading frames after a restart snapshot (measured: the answer was not yet in the first snapshot in 2 of 5 runs of an earlier spike version, and was in it in 5 of 5 of the last).
+
+### 4.7 Host lifecycle
+
+Sources: g-proto, g-spike, c-conv, c-tools.
+
+| Question | Rule | Basis |
+|---|---|---|
+| Who starts it | The **engine**, as it starts an Attempt driver: a detached `setsid` process at idle priority, stdout and stderr appended to `$CPD_HOME/run/host/<session>.log` (the pattern of contract 3.4 "Start, `durable`", `docs/contract.md:1008`, and the Worker's log). The command is `<pi node> <pi_adapter>/durable-host/main.ts --session <id>` with the Session's environment (`CPD_HOME`, `CPD_SESSION`, `PATH`). `cpd session open` asks the engine and waits until the socket accepts. | read (pattern) / inferred (names); the liveness column that copies `attempts.worker_pid` is inferred (f-seam), the schema is the cut Job's |
+| Session-keyed store | `$CPD_HOME/run/host/<session>.sqlite`. A Worker's store is keyed by Attempt (`run/<plan>/durable/<attempt>.sqlite`, contract 6.12 `config.ts`); a Lead or Manager may have no Plan, so its path is keyed by Session. | read / inferred |
+| One host per Session | pi-durable has **no storage lock**: a second process opens the same SQLite file silently and the first process's next write fails `ID 11 already belongs to entry` (measured in c-conv: `two2.mjs`, `B exit 0`, `[A] ERROR Error ID 11 already belongs to entry`, `integrity_check` ok; README: "there is no cross-process locking"). So cpd enforces ownership: the engine takes an exclusive non-blocking `flock` on `$CPD_HOME/locks/host-<session>.lock` and starts the host with that open file inherited (fd 3), so the lock lives as long as the host process even if the engine dies. A second start fails `host_running` (exit 3) before it opens the store. That an inherited `flock` stays held by the child after the parent closes its copy is POSIX behaviour (the lock belongs to the open file description) but **unverified**: the spike did not test it (5.3). | measured (no lock) / inferred (flock design) |
+| Stale socket | With the lock held the starter knows no host is alive, so a socket file at the path is stale; the host unlinks it, then listens. It never connect-probes. | measured (spike: `kill -9` left the socket and the new host unlinked it and listened, 5 of 5) |
+| Start-up order | 1 the engine takes the lock. 2 `resolveModel`, `cpd session show`, `cpd policy show` (contract 6.12 steps 1 to 3). 3 open the store and `resume()` (`harness/types.d.ts:646`). 4 install the extension (prompt sections, guards, the ask and approval tools with `replay:"safe"` where chosen). 5 open `watchEvents` (the base snapshot). 6 start the follower and replay MCP attaches. 7 recreate a pending plan-review dialog from its entry. 8 report `idle`. 9 `listen`. A client that connects earlier gets `ECONNREFUSED` or `ENOENT` and retries. A host that loads pi's `ModelRuntime` (as `pi/durable-worker/main.ts:24`) starts in 0.67 s and uses 55 MB more than one that does not; loading it lazily on the first `list_models` or `configure` is **unverified** because resolving a real model at start may need it (4.9 row 9). | read (steps) / inferred (order) / measured (0.67 s) |
+| Clients | Any number, no limit in v1. A client closing never stops the agent. | inferred |
+| Shutdown (SIGTERM, SIGINT) | Stop accepting, write `bye {reason:"shutdown", reconnect:true}` to each client, stop the follower, report `stopped` (best effort, bounded wait of about 2 s like the adapter's), unlink the socket, exit **143**. It does **not** call `Harness.close()`: with a tool call that never ended `close()` had not returned after 3 s and SQLite commits survive a kill (contract 6.12 "No close()"). Held requests and the ring are dropped. | read (the runner's rule) / inferred |
+| Crash | SIGKILL: the kernel releases the lock, the socket file stays and is cleaned at the next start, interrupted tools are not re-run unless `replay:"safe"`. The conversation resumes with no resubmit: the crash turn's user entry appears once and exactly one assistant entry follows (measured by the spike, 5 of 5; `docs/contract.md:3754` "Crash resume"). | measured |
+| Storage failure | `closed` settles `{reason:"failed"}`: the host sends `bye {reason:"storage_failed", reconnect:true}` and exits **1**; the engine restarts it as the driver restarts a Worker runner (contract 6.12 step 8). | read (rule) / inferred |
+| Exit codes | 0 never (a host does not end by itself), 1 storage failure or a step error, 2 usage (`usage`, `socket_path_too_long`), 3 `host_running`, 143 terminate. | read (the Worker runner's 143, 1, 2) / inferred |
+| Restart policy | The engine's tick restarts a host that is gone while its Session is meant to be open, with a back-off. pi-durable 1.3.0 has no restart limit (contract 6.12 "Restart limit"); any bound is the engine's. Open: that bound. | read / inferred |
+| Events | The host alone owns the follower and the store; the follower is the only way an Event enters. The real `cpd events follow` polls: `Duration::from_millis(config.events.poll_ms)` (`core/src/events/mod.rs:160`), default 200 ms, range 20 to 10,000 (`core/src/config/file.rs:338`), so an Event reaches the Follower after 0 to 200 ms (mean 100 ms, inferred), plus the spike's 5.6 ms host path (5.2). | read / inferred / measured |
+| Client connect | Compute the path from the Session id, check mode and owner (4.2), connect; on `ENOENT` or `ECONNREFUSED` ask the engine to start the host and retry with back-off; on `bye {reconnect:true}` reconnect and `attach` with the cursor. | inferred |
+
+Gap rows served: G16, G21, G10, G08, G09, G17, G18.
+
+### 4.8 Security
+
+Sources: g-proto.
+
+What holds: the socket is 0600 in a 0700 directory under `$CPD_HOME/run/host/`, owned by the User; there is no TCP listener; both ends check owner and mode (4.2; the spike set only 0600). The host never writes a secret to a frame: the approval title carries vault, item, field and reason, not a value (read, a-dialogs `secret.ts:48-49`).
+
+What does not hold, in plain words: **every process of the same uid can connect to the socket, including the Lead's or Manager's own `bash` tool** (a child of the host: inferred from how a Worker's tools run). Such a process can `attach` and send `ui_response` to a `secret_approve` or `host_approve` request, so the agent could answer the approval that is meant to be the human's. Today the raw `cpd secret approve` in bash is refused by a guard (`pi/lib/secretguard.ts`, G23; `cpd host approve` by G29); the socket would be a second route around it. This was not tested. No option is free, because any file the User can read, the agent can read. Open: question Q6. The options are for section 8.
+
+### 4.9 What the spike changed
+
+Sources: g-spike. Nine changes; each row says whether it was applied above.
+
+| Message | Change | Why | Applied above |
+|---|---|---|---|
+| `events` (the fold) | A short answer has no `message_update`: the assistant message arrives whole in `message_start`, then `message_end`; `message_update` only when generation outlasts the 100 ms commit interval (`PD/README.md:406`). The fold takes a complete message from `message_start` and replaces it at `message_end`; clients never wait for a delta | measured: `node client.mjs SOCK --submit hi`: seq 4 is `message_start` (assistant, `ok: hi`) with no `message_update`; with the slow provider 8 `message_update` frames at gaps of 135, 148, 152, 116, 132, 151, 101 ms (ad hoc run) | yes, changed by the spike: 4.3 "The fold", diagram 4.6.2 |
+| `attach` and `attached` | `attached` is the single reply to `attach`, with the same `req`; the rule "exactly one `result` or `error`" is widened | measured: the first spike client waited for `result` and `attach` hung 10 s | yes, changed by the spike: 4.2 correlation, row 18 |
+| `ui_response` error | The host keeps no resolved ids, so a late answer got `ui_unknown`. Chosen: drop `ui_resolved` as an error code, `ui_unknown` for both | observed in the spike; the alternative (a bounded set of about 64 resolved ids, inferred size) stays an Open line in 4.4 | yes, changed by the spike: 4.4 rule 3, 4.5.1, diagram 4.6.3 |
+| `attach` and `attached` | Define "caught up" as having applied `head_seq`; a snapshot-only attach whose `head_seq` equals the base `seq` has no later frame that signals it. Low priority, a note | observed in `bench.mjs` (`c3.until(lastSeq >= att.head_seq)`) | yes, changed by the spike: 4.3 |
+| `host_state` | Derive `working` from the snapshot (`run` or `inbox` non-empty) at attach, not only from `run_start` and `run_end` the host has seen; after a restart do not report `idle` until `resume()` has had its first commit | inferred from the spike code: `running` flips only on stream `run_start`/`run_end`, so the first `host_state` after a restart says `idle` until `run_start` arrives; in 2 of 5 runs of an earlier version the resumed answer was still pending at the first snapshot; the `host_state` in that window was not logged | yes, changed by the spike: row 27 |
+| Ring | On a host that has just started, an attach burst is the base snapshot plus every frame since: 25 frames and 17,303 bytes for a 30-entry conversation after 6 turns. The 256-frame bound limits it; measure at the bound before fixing the numbers | measured: `c3_frames_in_attach_burst:25`, `c3_attach_burst_bytes:17303`, 0.9 ms; the largest burst was not built | yes, as a note in 4.3 (numbers 256 and 4096 stay unmeasured) |
+| Crash (4.6.5, 4.7) | Keep as written. Add that the resumed answer can arrive after the first snapshot | measured: row 7 of 5.2, `stale_socket_left_by_kill:true`, `new_epoch:true`, `mode:"snapshot"` | yes, changed by the spike: note under 4.6.5 |
+| `configure` | Works as specified and persists across a restart. Nothing to change; the spike built `model` only | measured: row 5, row 7, `chk-agent-persist.mjs` (`faux-slow` kept after reopen, with and without `root(C,{agent})`) | no change needed |
+| Start-up order | A host with `ModelRuntime` starts in about 0.67 s against 0.28 s and uses 55 MB more; load it lazily if `list_models` is the only reason | measured: rows 1d and 2c of 5.2. Whether lazy loading works is unverified: the worker resolves the model before opening the store (contract 6.12 step 1) | noted in 4.7 as unverified; no design change. Open: lazy `ModelRuntime` |
+
+No change contradicts the design. Confirmed as written, no change: `result` after the events the command caused; `host_state` `blocked` with `held_ui` while a request is held; `epoch` and cursor resume; `ui_resolved {outcome:"aborted", by:"host"}` on `abort`.
+
+## 5. The spike and its numbers
+
+Sources: `g-spike.md`. All numbers are copied from it; its raw output is `spike/last-run.json`.
+
+### 5.1 What was built
+
+A working host and client of the 4.5 protocol subset on pi-durable 1.3.0, in `/home/clayton/.cpd/run/durable-leads/explore/spike/`. The spike is **outside every repo and machine-local**; nothing of it was committed.
+
+| File | Bytes | What |
+|---|---|---|
+| `host.mjs` | 9,886 | Node host. Owns the SQLite store (`openNodeSqliteStorage`), one shared `watchEvents` stream, the `base` and `ring` with `seq` and `epoch`, held UI requests, the real `Follower`, `parseLine` and `inputOf` of cpd (imported read-only from `pi/lib/follower.ts`, `pi/lib/event.ts`, `pi/durable-worker/deliver.ts`), the faux provider, and a `replay:"safe"` tool `ask_user` that raises a `select` UI request |
+| `client.mjs` | 5,142 | Plain Node client and small CLI. Folds `snapshot` and `events` into an entry map and a partial-text string, counts seq gaps |
+| `stub-follow.mjs` | 1,193 | Stands in for `cpd events follow`: prints one `session-message` Event line per SIGUSR1 and never calls cpd; passed to `Follower` as its `spawn` argument |
+| `bench.mjs` | 16,106 | Spawns hosts, clients and the stub, measures, prints one JSON object |
+| `run.sh` | 517 | Wrapper: runs bench, a trap kills the process group and any `host.mjs` or `stub-follow.mjs` left |
+| `README.md` | 1,355 | |
+| `last-run.json` | 13,540 | Raw output of the rerun command |
+| `chk-agent-persist.mjs` | 1,534 | Checks that `configure` persists across a reopen |
+| `node_modules` | symlink | |
+
+The files' sizes were read with `ls -l` for this section. Subset: client to host `hello`, `attach` (with `cursor`), `submit`, `abort`, `detach`, `ui_response`, `configure` (model only), `ping`; host to client `welcome`, `attached`, `snapshot`, `events`, `result`, `error` (`unknown_type`, `bad_frame`, `ui_unknown`, `protocol_mismatch`), `ui_request`, `ui_resolved`, `host_state`, `bye` (sent at SIGTERM only, not exercised). **Not built**: `compact`, `reload`, `mcp`, `fork`, `history`, `rename`, `abort_submission`, `list_models`, `notice`, `status`, the ring rebase, `hello_timeout`, the backpressure close, the socket mode and owner checks, the flock. The spike only sets the socket to 0600. The host runs as `node host.mjs --sock S --store F [--follow stub] [--model-runtime]`; the `--model-runtime` variant loads pi's `ModelRuntime` only to measure memory, with `PI_CODING_AGENT_DIR` on an empty temp dir so no credential is read.
+
+Rerun, the one command of `run.sh`:
+
+    cd /home/clayton/.cpd/run/durable-leads/explore/spike && timeout 30 ./run.sh > last-run.json
+
+Measured: it took 19.1 s (earlier runs 17.0, 18.3, 18.4 s), and afterwards `ps` showed no `host.mjs`, `stub-follow` or `bench.mjs` and no `g-spike` temp dir was left.
+
+### 5.2 Numbers
+
+**The model is pi-ai's faux provider** (`fauxProvider()` from `pi-ai/providers/faux`, as `pi/durable-worker/harness.ts` does for tests): no model call and no credential. **Every number below is the host's overhead only. It excludes model latency, network, and the cost of real tool execution, and faux streaming is not a real provider's.** Command for every row: the rerun command of 5.1 (`timeout 30 ./run.sh`); the "How" column says what `bench.mjs` read. 5 runs each unless `n` says otherwise; each run starts a fresh host, store, stub and clients. One machine, node v22.23.2, load average about 1.2 on 16 cores; not a statistical study.
+
+| # | Measurement | n | min | median | max | How measured |
+|---|---|---|---|---|---|---|
+| 1a | Host RSS after start, 0 clients (MB) | 5 | 101.79 | 103.12 | 103.33 | `/proc/<pid>/status` VmRSS, 50 ms after a probe client closed |
+| 1b | RSS after one faux turn, 1 client (MB) | 5 | 102.66 | 103.98 | 104.21 | same, after the first turn went idle |
+| 1c | RSS with 2 clients (MB) | 5 | 102.66 | 103.99 | 104.21 | same, after the second client attached |
+| 1d | RSS with pi `ModelRuntime` loaded, 0 clients (MB) | 3 | 157.57 | 158.04 | 160.29 | `host.mjs --model-runtime`, `ModelRuntime.create({refreshOnCreate:false})` as `main.ts:24`, 300 ms after the first snapshot |
+| 2a | Start: spawn to socket accepting (ms) | 5 | 272.97 | 277.29 | 280.60 | `spawn()` to a successful `net.connect` (2 ms retry loop, up to 2 ms quantisation) |
+| 2b | Start: spawn to first `snapshot` frame (ms) | 5 | 278.05 | 281.11 | 285.95 | same, to the `snapshot` frame after `hello` and `attach` |
+| 2c | Start to first snapshot with `ModelRuntime` (ms) | 3 | 660.29 | 671.33 | 675.36 | same, with `--model-runtime` |
+| 3a | Event path: stub prints the line to first frame at the client (ms) | 15 | 1.14 | 2.60 | 32.56 | stub stamps `performance.timeOrigin+performance.now()` before `write`, the client stamps receipt; real `Follower`, `parseLine`, `inputOf`, `submit({requestId:"event:<id>",whenBusy:"followUp"})`; frame content checked to hold `event-ping <id>` |
+| 3b | same, to the first frame carrying the assistant message (ms) | 15 | 4.07 | 5.60 | 36.82 | first `events` frame with `message_update`, or a `message_start` whose role is assistant |
+| 4a | Plain client submit: send to `result` (ms) | 15 | 1.10 | 1.52 | 2.74 | client stamps send and `result` receipt |
+| 4b | send to first `events` frame (ms) | 15 | 0.92 | 1.32 | 2.66 | same |
+| 4c | send to first frame carrying the assistant message (ms) | 15 | 4.54 | 5.76 | 9.79 | same |
+| 4d | cold first turn of a host, as 4c (ms) | 5 | 14.44 | 14.57 | 16.25 | the first submit after start |
+| 5 | Attach mid-stream | 5 of 5 pass | | | | see 5.3 |
+| 6 | UI request survives detach | 5 of 5 pass | | | | see 5.3 |
+| 7 | `kill -9` mid-turn and resume | 5 of 5 pass | | | | see 5.3 |
+| 8 | Baseline pi processes, RSS (MB) | 5 | 159.07 | 232.40 | 279.66 | `ps -eo pid,rss,etimes,args \| grep -E ' pi( \|$)' \| grep -v grep \| head -5`, read only, run inside `bench.mjs` |
+
+Notes. Rows 3 and 4 have 3 samples per run (15). The 3a and 3b maxima (32.56 and 36.82 ms) are the **first Event of each host**, a cold code path: the first samples of the 5 runs were 34.7, 32.9, 35.4, 36.8 and 32.6 ms (3b); the other 10 samples were 4.2 to 6.0 ms (3b) and 1.1 to 2.9 ms (3a). Row 3 measures only what happens after the stub prints (the line is printed on SIGUSR1 from `bench.mjs`). Restart timing in row 7 (5 runs): spawn to accept 273, 277, 281 ms (min, median, max), restart to snapshot 278, 282, 323 ms, `kill` to resumed answer at a client 587, 594, 634 ms.
+
+Read, not measured: the latency of the real `cpd events follow` is 0 to 200 ms of poll (4.7: `core/src/events/mod.rs:160`, `core/src/config/file.rs:338`); the spike's 5.6 ms median (3b) is added to that. The Follower's restart timing (`DEFAULT_TIMING`, `pi/lib/follower.ts:14`: 1 s doubling to 30 s) was not exercised.
+
+Row 8 detail: five processes, all with args exactly `pi`: RSS 232.40, 279.66, 227.49, 159.07 and 261.58 MB, aged 20,474, 19,451, 12,144, 2,432 and 1,942 s. The start command is the bare `pi` binary; the session and role are in the environment, which was not read. That they are Lead or Manager Sessions is inferred (cpd starts them in tmux panes; the pane was not checked). A durable Worker for comparison (`node .../pi/durable-worker/main.ts`) read 150,932 and 189,676 kB over two reads, about 147 and 185 MB. The host with `ModelRuntime` (158 MB) is in the range of the lightest `pi`; a host without it (104 MB) is about 40% below the median `pi` RSS (inferred from rows 1a and 8). They are different workloads (a host has no TUI and no real context), so this is a baseline, not a comparison of equals.
+
+Limitations (from g-spike): faux provider only, so no real tool execution, no real extension set of a Lead (the cpd extension, MCP, about 20 tools) and no real context size, and a real Lead's snapshot is far larger than the 30-entry one here; the Follower's input is a stub; client and host share one machine; subset only, no security checks, no backpressure, no rebase; the `ModelRuntime` row used an empty agent dir, and a real one with auth and models would load more (not measured).
+
+### 5.3 What it showed and what is still unverified
+
+| Scenario | Result | Observed? |
+|---|---|---|
+| Attach and detach of two clients (row 5) | A second client `c3` attaching mid-stream got `mode:"snapshot"`, `head_seq:22`, 25 frames (17,303 bytes) in 0.9 ms, no seq gap, 88 characters of the in-flight answer folded at `head_seq`, and the same final text and entries as `c1` (269 characters). A cursor reattach got `mode:"resume"`, `from_seq:28`, `head_seq:30`, exactly 3 frames. `detach` is a `result`; the agent is untouched. 5 of 5 runs | observed |
+| A UI request survives a detach (row 6) | `ask_user` raised a `select`; `c1` detached; `c4` attached and got the same id with `replayed:true`; `host_state` was `blocked` with `held_ui:1`; the answer got `result` then `ui_resolved {answered, by:"c6"}`; the tool returned `blue` and the final text was `tool said: blue`. A second answer got `ui_unknown`. 5 of 5 runs | observed |
+| `abort` with a request held, and mid-stream (run 0) | `ui_resolved {aborted, by:"host"}` and `idle`, `held_ui:0`; a mid-stream `abort` gave `result`, `idle` 51 ms later, events ending `message_end, turn_end, run_end`, no `message_update` in the next 300 ms | observed, 1 of 1 |
+| `kill -9` mid-turn, restart on the same store and socket path (row 7) | The socket file stayed and the new host unlinked it; new `epoch`, `mode:"snapshot"`; 30 entries in the first snapshot, 29 before the kill; the crash turn's user entry once and exactly one assistant entry from the same provider, no resubmit. 5 of 5 runs. The resumed answer finished about 0.3 s after the host was up, less than the roughly 1 s the slow provider needs from scratch; why was not found (partial text committed before the kill may be reused: inferred, unverified), and whether the answer is the full 269 characters was not checked | observed |
+| `configure` persistence | after `configure({model})` and a reopen, `root(C)` and `root(C,{agent:<default>})` both keep the configured model (`node ./chk-agent-persist.mjs`, three output lines) | observed |
+| A crash during a held `ask_user` request | not tested with a host (c-tools measured the tool without a host) | not observed |
+| `bye` at SIGTERM | sent, not exercised | not observed |
+
+Of the g-proto items marked unverified, the spike resolved none of the three the plan named (flock inheritance, peer credentials, abort signal): it built no flock, did not look up peer credentials, and did not test whether `root.abort()` fires the tool's abort signal. What it did settle are the observed rows above (stale socket after `kill -9`, a held request across a detach, `abort` with a request held, `configure` persistence). Every g-proto item, and its status:
+
+| Item | Status after the spike |
+|---|---|
+| `flock` inherited through `spawn` and held after the parent closes its copy (4.7) | still unverified: the spike built no flock |
+| Whether Node gives the peer uid of a unix-socket connection (4.2) | still unverified: not looked up, the spike has no checks |
+| Whether `root.abort()` fires `context.abortSignal` in a waiting tool (4.4) | still unverified: the host resolved held requests itself, which works (observed, run 0) |
+| A second concurrent `watchEvents` on one conversation | still unverified: the design needs one |
+| The overflow `snapshot` `AgentEvent` (more than 100 undelivered batches) | still unverified: not run |
+| A run with a waiting tool and no watcher at all | still unverified: not timed separately (g-spike does not say it ran with no client attached) |
+| A real Lead's snapshot size | still unverified: the spike has 30 entries |
+| The 107-byte `sun_path` limit and the 256 and 4096 ring bounds | still unverified: the spike has no rebase and the limit was not measured |
+| `Harness.close()`-free shutdown leaves the WAL clean | still unverified: a `kill -9` and reopen worked (row 7), the WAL state was not inspected |
