@@ -13,7 +13,7 @@ export type Cursor = { epoch: string; seq: number };
 export type ErrorCode =
   | "protocol_mismatch" | "hello_timeout" | "bad_frame" | "frame_too_large"
   | "unknown_type" | "bad_args" | "not_attached" | "busy" | "unsupported"
-  | "storage_failed" | "shutting_down" | "internal"
+  | "storage_failed" | "shutting_down" | "internal" | "refused"
   | "hello_required" | "ui_unknown";
 
 export class ProtocolError extends Error {
@@ -96,7 +96,7 @@ const str = (o: Record<string, unknown>, k: string): string => (typeof o[k] === 
 const int = (o: Record<string, unknown>, k: string): number => (Number.isInteger(o[k]) ? (o[k] as number) : bad(k, "an integer"));
 const optStr = (o: Record<string, unknown>, k: string): string | undefined => (o[k] === undefined ? undefined : str(o, k));
 
-const KINDS = new Set(["hello", "attach", "submit", "abort", "abort_submission", "ping", "detach", "ui_response"]);
+const KINDS = new Set(["hello", "attach", "submit", "abort", "abort_submission", "ping", "detach", "reload", "ui_response"]);
 const WHEN_BUSY = ["followUp", "steer", "reject"] as const;
 
 function uiAnswer(o: Record<string, unknown>): { value?: string; confirmed?: boolean; answer?: object; cancelled?: boolean } {
@@ -150,6 +150,8 @@ function build(o: Record<string, unknown>, type: string): ToHost {
     }
     case "abort_submission":
       return { type, req, submission_id: int(o, "submission_id") };
+    case "reload":
+      return { type, req };
     case "ui_response":
       return { type, req, id: str(o, "id"), ...uiAnswer(o) };
     default:
