@@ -14,7 +14,7 @@ export type ErrorCode =
   | "protocol_mismatch" | "hello_timeout" | "bad_frame" | "frame_too_large"
   | "unknown_type" | "bad_args" | "not_attached" | "busy" | "unsupported"
   | "storage_failed" | "shutting_down" | "internal"
-  | "hello_required";
+  | "hello_required" | "ui_unknown";
 
 export class ProtocolError extends Error {
   code: ErrorCode;
@@ -33,12 +33,34 @@ export type ToHost =
   | { type: "abort"; req: string; background: boolean }
   | { type: "abort_submission"; req: string; submission_id: number }
   | { type: "ping"; req?: string }
-  | { type: "detach"; req: string };
+  | { type: "detach"; req: string }
+  | { type: "ui_response"; req: string; id: string; value?: string; confirmed?: boolean; answer?: object; cancelled?: boolean };
 
 export type HostState = {
   state: "idle" | "working" | "waiting" | "blocked";
   name?: string;
   agent?: unknown;
+  held_ui: number;
+};
+
+export type UiPurpose = "ask_user_question" | "plan_review" | "secret_approve" | "host_approve" | "mcp_login" | "other";
+export type UiMethod = "select" | "confirm" | "input" | "editor" | "questionnaire";
+
+export type UiQuestion = {
+  question: string;
+  header: string;
+  multiSelect?: boolean;
+  options: { label: string; description: string; preview?: string }[];
+};
+
+export type UiRequestBase = {
+  type: "ui_request";
+  id: string;
+  purpose: UiPurpose;
+  created_at: number;
+  expires_at?: number;
+  tool_call_id?: string;
+  replayed?: boolean;
 };
 
 export type ToClient =
@@ -49,6 +71,14 @@ export type ToClient =
   | { type: "result"; req: string; data: object }
   | { type: "error"; req?: string; code: ErrorCode; message: string; details?: object }
   | { type: "host_state"; state: HostState["state"]; name?: string; clients: number; held_ui: number; agent?: unknown }
+  | (UiRequestBase & { method: "select"; title: string; options: string[]; timeout?: number })
+  | (UiRequestBase & { method: "confirm"; title: string; message: string; timeout?: number })
+  | (UiRequestBase & { method: "input"; title: string; placeholder?: string; timeout?: number })
+  | (UiRequestBase & { method: "editor"; title: string; prefill?: string })
+  | (UiRequestBase & { method: "questionnaire"; questions: UiQuestion[] })
+  | { type: "ui_resolved"; id: string; outcome: "answered" | "cancelled" | "timeout" | "superseded" | "aborted"; by?: string }
+  | { type: "notice"; level: "info" | "warning" | "error"; message: string }
+  | { type: "status"; key: string; text: string | null }
   | { type: "pong"; req?: string }
   | { type: "bye"; reason: "shutdown" | "restart" | "storage_failed" | "slow_client" | "detached"; reconnect: boolean };
 
@@ -65,8 +95,27 @@ const str = (o: Record<string, unknown>, k: string): string => (typeof o[k] === 
 const int = (o: Record<string, unknown>, k: string): number => (Number.isInteger(o[k]) ? (o[k] as number) : bad(k, "an integer"));
 const optStr = (o: Record<string, unknown>, k: string): string | undefined => (o[k] === undefined ? undefined : str(o, k));
 
-const KINDS = new Set(["hello", "attach", "submit", "abort", "abort_submission", "ping", "detach"]);
+const KINDS = new Set(["hello", "attach", "submit", "abort", "abort_submission", "ping", "detach", "ui_response"]);
 const WHEN_BUSY = ["followUp", "steer", "reject"] as const;
+
+function uiAnswer(o: Record<string, unknown>): { value?: string; confirmed?: boolean; answer?: object; cancelled?: boolean } {
+  const fields = ["value", "confirmed", "answer", "cancelled"] as const;
+  const present = fields.filter((k) => o[k] !== undefined);
+  if (present.length !== 1) bad("ui_response", "exactly one of value, confirmed, answer or cancelled");
+  const k = present[0];
+  if (k === "value") return { value: str(o, "value") };
+  if (k === "confirmed") {
+    if (typeof o.confirmed !== "boolean") bad("confirmed", "a boolean");
+    return { confirmed: o.confirmed as boolean };
+  }
+  if (k === "answer") {
+    const a = o.answer;
+    if (typeof a !== "object" || a === null || Array.isArray(a)) bad("answer", "an object");
+    return { answer: a as object };
+  }
+  if (typeof o.cancelled !== "boolean") bad("cancelled", "a boolean");
+  return { cancelled: o.cancelled as boolean };
+}
 
 function build(o: Record<string, unknown>, type: string): ToHost {
   if (type === "hello") {
@@ -100,6 +149,8 @@ function build(o: Record<string, unknown>, type: string): ToHost {
     }
     case "abort_submission":
       return { type, req, submission_id: int(o, "submission_id") };
+    case "ui_response":
+      return { type, req, id: str(o, "id"), ...uiAnswer(o) };
     default:
       return { type: "detach", req };
   }

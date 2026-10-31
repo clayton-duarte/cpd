@@ -34,9 +34,9 @@ const flush = async () => {
 function setup(over: Partial<ServerDeps> = {}) {
   const timers: Timer[] = [];
   let n = 0;
-  const calls = { submit: [] as any[], abort: [] as any[], abortSubmission: [] as any[] };
+  const calls = { submit: [] as any[], abort: [] as any[], abortSubmission: [] as any[], answerUi: [] as any[] };
   const ring = new Ring("e1", snap);
-  const state = { current: { state: "idle" as const } as any };
+  const state = { current: { state: "idle" as const, held_ui: 0 } as any };
   const deps: ServerDeps = {
     session: "s1",
     role: "lead",
@@ -57,6 +57,11 @@ function setup(over: Partial<ServerDeps> = {}) {
       return "aborted";
     },
     hostState: () => state.current,
+    held: () => [],
+    answerUi: async (id, value) => {
+      calls.answerUi.push({ id, value });
+      return { outcome: "answered" };
+    },
     timers: {
       after(ms, fn) {
         const t: Timer = { ms, fn, cancelled: false };
@@ -380,7 +385,7 @@ test("stateChanged writes host_state with clients and held_ui 0 to attached clie
   const idle = open();
   const na = a.c.lines.length;
   const ni = idle.c.lines.length;
-  state.current = { state: "working", name: "n" };
+  state.current = { state: "working", name: "n", held_ui: 0 };
   server.stateChanged();
   const want = { type: "host_state", state: "working", name: "n", clients: 2, held_ui: 0 };
   assert.deepEqual(a.c.msgs().slice(na), [want]);
@@ -428,4 +433,174 @@ test("a connection made after shutdown gets shutting_down and is closed", () => 
   assert.equal(msgs[0].type, "error");
   assert.equal(msgs[0].code, "shutting_down");
   assert.equal(c.closes, 1);
+});
+
+test("ui_response before attach gets not_attached", () => {
+  const { open, calls } = setup();
+  const { c, h } = open();
+  h.receive(JSON.stringify({ type: "ui_response", req: "u0", id: "i1", value: "Allow once" }));
+  assert.deepEqual(c.msgs().slice(1), [{ type: "error", req: "u0", code: "not_attached", message: "attach first" }]);
+  assert.equal(c.closes, 0);
+  assert.deepEqual(calls.answerUi, []);
+});
+
+test("ui_response for a held id answers result then broadcasts ui_resolved answered to every attached client with the sender as by", async () => {
+  const { attached, calls } = setup({
+    held: () => [{ id: "u1", method: "select", purpose: "secret_approve", created_at: 100, fields: { title: "approve", options: ["Allow once", "Deny"] } }],
+  });
+  const a = attached();
+  const b = attached();
+  const na = a.c.lines.length;
+  const nb = b.c.lines.length;
+  a.h.receive(JSON.stringify({ type: "ui_response", req: "r1", id: "u1", value: "Allow once" }));
+  await flush();
+  assert.deepEqual(calls.answerUi, [{ id: "u1", value: { value: "Allow once", confirmed: undefined, answer: undefined, cancelled: undefined } }]);
+  assert.deepEqual(a.c.msgs().slice(na), [
+    { type: "result", req: "r1", data: {} },
+    { type: "ui_resolved", id: "u1", outcome: "answered", by: "c1" },
+  ]);
+  assert.deepEqual(b.c.msgs().slice(nb), [{ type: "ui_resolved", id: "u1", outcome: "answered", by: "c1" }]);
+});
+
+test("ui_response for a value the host answers cancelled broadcasts ui_resolved cancelled", async () => {
+  const { attached } = setup({
+    answerUi: async (id, value) => {
+      assert.equal(value.cancelled, true);
+      return { outcome: "cancelled" };
+    },
+  });
+  const a = attached();
+  const b = attached();
+  const na = a.c.lines.length;
+  const nb = b.c.lines.length;
+  a.h.receive(JSON.stringify({ type: "ui_response", req: "r1", id: "u1", cancelled: true }));
+  await flush();
+  assert.deepEqual(a.c.msgs().slice(na), [
+    { type: "result", req: "r1", data: {} },
+    { type: "ui_resolved", id: "u1", outcome: "cancelled", by: "c1" },
+  ]);
+  assert.deepEqual(b.c.msgs().slice(nb), [{ type: "ui_resolved", id: "u1", outcome: "cancelled", by: "c1" }]);
+});
+
+test("ui_response for an id not held gets ui_unknown and the connection is kept", async () => {
+  const { attached, calls } = setup({
+    answerUi: async (id, value) => {
+      calls.answerUi.push({ id, value });
+      throw new ProtocolError("ui_unknown", `no held request ${id}`);
+    },
+  });
+  const { c, h } = attached();
+  const n = c.lines.length;
+  h.receive(JSON.stringify({ type: "ui_response", req: "r1", id: "gone", value: "Allow once" }));
+  await flush();
+  assert.deepEqual(c.msgs().slice(n), [{ type: "error", req: "r1", code: "ui_unknown", message: "no held request gone" }]);
+  assert.equal(c.closes, 0);
+  assert.equal(calls.answerUi.length, 1);
+  h.receive(JSON.stringify({ type: "ping", req: "p" }));
+  assert.deepEqual(c.msgs().slice(-1), [{ type: "pong", req: "p" }]);
+});
+
+test("attach replays each held request with replayed true after the frames and before host_state", () => {
+  const held = [
+    { id: "u1", method: "select" as const, purpose: "secret_approve" as const, created_at: 100, fields: { title: "approve", options: ["Allow once", "Deny"] } },
+    { id: "u2", method: "input" as const, purpose: "ask_user_question" as const, created_at: 200, expires_at: 500, fields: { title: "name", placeholder: "your name" } },
+  ];
+  const { open } = setup({ held: () => held });
+  const { c, h } = open();
+  h.receive(JSON.stringify({ type: "attach", req: "a1" }));
+  assert.deepEqual(c.msgs().slice(1), [
+    { type: "attached", req: "a1", mode: "snapshot", epoch: "e1", from_seq: 1, head_seq: 1, client_id: "c1" },
+    { type: "snapshot", epoch: "e1", seq: 1, snapshot: snap },
+    { type: "ui_request", id: "u1", method: "select", title: "approve", options: ["Allow once", "Deny"], purpose: "secret_approve", created_at: 100, replayed: true },
+    { type: "ui_request", id: "u2", method: "input", title: "name", placeholder: "your name", purpose: "ask_user_question", created_at: 200, expires_at: 500, replayed: true },
+    hostState(1),
+  ]);
+});
+
+test("attach replays held requests in order of creation and does not change their ids", () => {
+  const held = [
+    { id: "u1", method: "select" as const, purpose: "other" as const, created_at: 100, fields: { title: "a", options: [] } },
+    { id: "u2", method: "select" as const, purpose: "other" as const, created_at: 200, fields: { title: "b", options: [] } },
+    { id: "u3", method: "confirm" as const, purpose: "plan_review" as const, created_at: 300, fields: { title: "c", message: "m" } },
+  ];
+  const { open } = setup({ held: () => held });
+  const { c, h } = open();
+  h.receive(JSON.stringify({ type: "attach", req: "a1" }));
+  const requests = c.msgs().filter((m) => m.type === "ui_request");
+  assert.deepEqual(requests.map((m) => m.id), ["u1", "u2", "u3"]);
+  assert.ok(requests.every((m) => m.replayed === true));
+  assert.deepEqual(requests.map((m) => m.title), ["a", "b", "c"]);
+});
+
+test("attach with no held request sends no ui_request", () => {
+  const { open } = setup();
+  const { c, h } = open();
+  h.receive(JSON.stringify({ type: "attach", req: "a1" }));
+  assert.deepEqual(
+    c.msgs().slice(1).map((m) => m.type),
+    ["attached", "snapshot", "host_state"],
+  );
+});
+
+test("host_state carries the held_ui of the deps and not a server constant", () => {
+  const { open, attached, server, state } = setup();
+  state.current = { state: "blocked", name: "n", held_ui: 2 };
+  const a = attached();
+  const idle = open();
+  const na = a.c.lines.length;
+  assert.deepEqual(a.c.msgs().slice(-1), [{ type: "host_state", state: "blocked", name: "n", clients: 1, held_ui: 2 }]);
+  state.current = { state: "blocked", name: "n", held_ui: 3 };
+  server.stateChanged();
+  assert.deepEqual(a.c.msgs().slice(na), [{ type: "host_state", state: "blocked", name: "n", clients: 1, held_ui: 3 }]);
+  assert.equal(idle.c.lines.length, 1);
+});
+
+test("broadcast sends a ui_request, notice and status to every attached client and to none that is not attached", () => {
+  const { open, attached, server } = setup();
+  const a = attached();
+  const b = attached();
+  const idle = open();
+  const na = a.c.lines.length;
+  const nb = b.c.lines.length;
+  const ni = idle.c.lines.length;
+  server.broadcast({ type: "ui_request", id: "u1", method: "select", title: "t", options: ["x"], purpose: "other", created_at: 1 });
+  server.broadcast({ type: "notice", level: "info", message: "hi" });
+  server.broadcast({ type: "status", key: "cpd", text: "working" });
+  server.broadcast({ type: "status", key: "cpd", text: null });
+  const want = [
+    { type: "ui_request", id: "u1", method: "select", title: "t", options: ["x"], purpose: "other", created_at: 1 },
+    { type: "notice", level: "info", message: "hi" },
+    { type: "status", key: "cpd", text: "working" },
+    { type: "status", key: "cpd", text: null },
+  ];
+  assert.deepEqual(a.c.msgs().slice(na), want);
+  assert.deepEqual(b.c.msgs().slice(nb), want);
+  assert.equal(idle.c.lines.length, ni);
+});
+
+test("a late ui_response after the resolver changed nothing answers ui_unknown once only", async () => {
+  const resolved = new Set<string>();
+  const { attached, calls } = setup({
+    answerUi: async (id, value) => {
+      calls.answerUi.push({ id, value });
+      if (resolved.has(id)) throw new ProtocolError("ui_unknown", `no held request ${id}`);
+      resolved.add(id);
+      return { outcome: "answered" };
+    },
+  });
+  const { c, h } = attached();
+  const n = c.lines.length;
+  h.receive(JSON.stringify({ type: "ui_response", req: "r1", id: "u1", value: "Allow once" }));
+  await flush();
+  assert.deepEqual(c.msgs().slice(n), [
+    { type: "result", req: "r1", data: {} },
+    { type: "ui_resolved", id: "u1", outcome: "answered", by: "c1" },
+  ]);
+  const m = c.lines.length;
+  h.receive(JSON.stringify({ type: "ui_response", req: "r2", id: "u1", value: "Deny" }));
+  await flush();
+  // The host keeps no resolved ids (Q16): the late answer is one ui_unknown, no result, no broadcast, the connection kept.
+  assert.deepEqual(c.msgs().slice(m), [{ type: "error", req: "r2", code: "ui_unknown", message: "no held request u1" }]);
+  assert.equal(c.closes, 0);
+  assert.deepEqual(calls.answerUi.map((a) => a.id), ["u1", "u1"]);
 });

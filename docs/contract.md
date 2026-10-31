@@ -4149,6 +4149,250 @@ export type Submission = { id: number; status(): Promise<string>; wait(): Promis
 - **Result.** The server answers `result { submission_id, status }` when `submit` resolves (after admission, not after the answer). The answer arrives as `events` frames.
 - **Not served yet.** The other client types of research 4.5 get `error unknown_type` (rule 9); `host_state.held_ui` is 0; `ui_unknown` and `refused` are unused (P1.6, P1.9).
 
+### 6.15 UI requests and the ask and approval tools (P1.6)
+
+The host holds UI requests: the dialogs a Lead's or Manager's tools ask for, and this section ports the ask and approval tools to the durable host, so every dialog a pi Lead has in a pane exists on the host for a client (CLI-first, hs-d753). The research is `docs/research/durable-leads.md` sections 3.4 (rows G39 to G52), 4.4 ("UI requests", rules 1 to 6), 4.5 (rows 14, 23 to 26 and 4.5.1's `ui_unknown`), 4.6.3 (a UI request answered by a second client), 4.6.4 (abort during a tool) and 4.6.5 (host restart), and the `Decided:` lines of Q8 (replay: safe for `ask_user_question` only, interrupted for the approvals), Q16 (no resolved ids kept; a late `ui_response` is `ui_unknown`) and Q20 (B: the host holds the request until a client attaches). P1.6 is split in two halves in one PR: first the wire (rows 14 and 23 to 26, `ui_unknown`, the server ports `held()` and `answerUi()`, the replay at attach) over the fakes, then the host flow (the held map, the dialogs, the four tools, the plan-review flow, the blocked state) with `runHost` wired. The pi-side reference is `pi/lib/secret.ts` (`cpd_secret_approve`), `pi/lib/hostapprove.ts` (`cpd_host_approve`), `pi/lib/review.ts` and `review-chat.ts` and `plan-review.ts` (the plan-review flow); the pure questions of `pi/lib/plan-review.ts` (`reviewsFromEntries`, `reviewNumber`, `highestReview`) are imported by the host as they are. The tool `ask_user_question` is the vendored extension at `pi/ask-user-question/` (base `@juicesharp/rpiv-ask-user-question` 2.13.8, §implementing "The ask_user_question extension"); its `tool/types.ts`, `tool/validate-questionnaire.ts` and `tool/response-envelope.ts` were read here. Every statement that a named source does not verify is marked **unverified**.
+
+**Modules** (all in `pi/durable-host/`; names and exports are fixed, the field shapes below are the contract):
+
+| File | Exports |
+|---|---|
+| `protocol.ts` | additions: `ToHost` gains `ui_response`; `ToClient` gains `ui_request` (row 23), `ui_resolved` (row 24), `notice` (row 25) and `status` (row 26); `ErrorCode` gains `ui_unknown` (below) |
+| `server.ts` | additions: `ServerDeps` gains `held()` and `answerUi()`; `Server` gains `broadcast()`; `host_state.held_ui` comes from `deps.hostState()`, never from the server (the 6.14 stub `held_ui: 0` is replaced) |
+| `held.ts` | `Held`, `heldCount`, `heldList`, `create`, `answer`, `resolveByHost`, `resolveAll` (below) |
+| `dialogs.ts` | `DialogPort`, `createDialogs` (below) |
+| `tools.ts` | `registerHostTools` (below) |
+| `plan-review.ts` | `PlanReviewPort`, `createPlanReview` (below) |
+
+#### `protocol.ts`
+
+`ToHost` gains one member (research 4.5 row 14):
+
+```ts
+| { type: "ui_response"; req: string; id: string;
+    value?: string; confirmed?: boolean; answer?: object; cancelled?: boolean }
+```
+
+`ToClient` gains four members (rows 23 to 26; pi's field names, 4.4; `questionnaire` is cpd's addition, its fields the tool's input shape, `pi/ask-user-question/tool/types.ts`, read):
+
+```ts
+| { type: "ui_request"; id: string; method: "select";
+    title: string; options: string[]; timeout?: number;              // timeout in ms
+    purpose: "ask_user_question" | "plan_review" | "secret_approve" | "host_approve" | "mcp_login" | "other";
+    created_at: number; expires_at?: number; tool_call_id?: string; replayed?: boolean }
+| { type: "ui_request"; id: string; method: "confirm";
+    title: string; message: string; timeout?: number;
+    purpose: "ask_user_question" | "plan_review" | "secret_approve" | "host_approve" | "mcp_login" | "other";
+    created_at: number; expires_at?: number; tool_call_id?: string; replayed?: boolean }
+| { type: "ui_request"; id: string; method: "input";
+    title: string; placeholder?: string; timeout?: number;
+    purpose: "ask_user_question" | "plan_review" | "secret_approve" | "host_approve" | "mcp_login" | "other";
+    created_at: number; expires_at?: number; tool_call_id?: string; replayed?: boolean }
+| { type: "ui_request"; id: string; method: "editor";
+    title: string; prefill?: string;                                 // no timeout, as pi
+    purpose: "ask_user_question" | "plan_review" | "secret_approve" | "host_approve" | "mcp_login" | "other";
+    created_at: number; expires_at?: number; tool_call_id?: string; replayed?: boolean }
+| { type: "ui_request"; id: string; method: "questionnaire";
+    questions: { question: string; header: string; multiSelect?: boolean;
+                 options: { label: string; description: string; preview?: string }[] }[];
+    purpose: "ask_user_question" | "plan_review" | "secret_approve" | "host_approve" | "mcp_login" | "other";
+    created_at: number; expires_at?: number; tool_call_id?: string; replayed?: boolean }
+| { type: "ui_resolved"; id: string;
+    outcome: "answered" | "cancelled" | "timeout" | "superseded" | "aborted"; by?: string }
+| { type: "notice"; level: "info" | "warning" | "error"; message: string }
+| { type: "status"; key: string; text: string | null }
+```
+
+Names are `snake_case` exactly as 4.5. `expires_at` is absolute ms, because pi's relative `timeout` would lie after a reattach (4.4). A `notice` is pi's `notify(message, type?)` (4.5 row 25); a `status` is pi's `setStatus(key, text)` (`text` null clears), which is produced only by a host-side extension that calls it (4.5 row 26, G48). `replayed` is set on the requests of the attach replay only; a live broadcast never sets it.
+
+- **`parseLine`** builds `ui_response` at the boundary: `req` and `id` are required strings. Exactly one of `value` (a string), `confirmed` (a boolean), `answer` (an object) and `cancelled` (a boolean) must be present: none of them, or two or more, is `bad_args` naming the field or fields, carrying `req`. Unknown fields are ignored. The other messages and `encode` and `negotiate` are §6.14.
+- **`ErrorCode`** gains `ui_unknown`, used from P1.6 on (`error ui_unknown`, connection kept, §server.ts rule 3). `refused` and `storage_failed` stay unused here (P1.9).
+
+#### `server.ts`
+
+```ts
+// ServerDeps gains (both required)
+held(): readonly { id: string;
+  method: "select" | "confirm" | "input" | "editor" | "questionnaire";
+  purpose: "ask_user_question" | "plan_review" | "secret_approve" | "host_approve" | "mcp_login" | "other";
+  created_at: number; expires_at?: number; fields: object }[];   // the replay list, oldest first
+answerUi(id: string, value: { value?: string; confirmed?: boolean; answer?: object; cancelled?: boolean }):
+  Promise<{ outcome: "answered" | "cancelled" }>;               // rejects with ProtocolError("ui_unknown", ...)
+
+// Server gains
+broadcast(msg: { type: "ui_request" | "ui_resolved" | "notice" | "status" } & ToClient): void;
+```
+
+`held()` is the process's held map (§held.ts), oldest first; `answerUi` is `held.answer` in production. `broadcast` writes the one message to every attached client through the same write path as every other message, so the slow-client rule of §6.14 rule 8 applies per connection; a connection that has not attached gets nothing. Rules:
+
+1. **`ui_response` needs `attach` first**, like `submit`: on a connection that has not attached it is `error not_attached` (the §6.14 rule 6 row now covers the served type).
+2. **The first answer wins.** The server awaits `deps.answerUi(id, value)`, answers the sender `result { data: {} }`, then broadcasts `ui_resolved { id, outcome, by: <the sender's client id> }` to every attached client, the sender too (4.6.3, 4.4 rule 2).
+3. **A rejection is the normal `error ui_unknown`**, the connection kept: `answerUi` rejects with `ProtocolError('ui_unknown', ...)` when the id is not held, never seen or already resolved (Q16: the host keeps no resolved ids; the client learned of the resolution from the broadcast).
+4. **Replay at attach.** An attaching client receives, after the frames of `Ring.attach` and before the `host_state` of the attach sequence, one `ui_request` per entry of `deps.held()` in order (oldest first) with `replayed: true` and the same `id`; nothing else in the attach sequence changes (4.4 rule 5). `detach` never touches the held list.
+5. **Live requests are broadcast, not replayed.** A request created while clients are attached is broadcast by the host through `Server.broadcast` (the host flow's `dialogs`), not replayed; the replay list is for a client that attaches later.
+6. **`host_state.held_ui`** is the count `deps.hostState()` reports, never computed by the server; the 6.14 stub `held_ui: 0` is gone. The `HostState` type of §6.14 gains `held_ui: number`, which the wired `hostState()` takes from the held map (`heldCount()`); `clients` stays the server's attached count.
+
+#### `held.ts`
+
+```ts
+export type Held = {
+  id: string;
+  method: "select" | "confirm" | "input" | "editor" | "questionnaire";
+  purpose: "ask_user_question" | "plan_review" | "secret_approve" | "host_approve" | "mcp_login" | "other";
+  created_at: number;
+  expires_at?: number;
+  fields: object;
+  signal?: AbortSignal;
+  resolve(value?: object): void;
+  reject(e: unknown): void;
+};
+export function heldCount(): number;
+export function heldList(): readonly Held[];   // oldest first, the §6.15 replay list
+export function create(
+  method: Held["method"], fields: object, purpose: Held["purpose"],
+  opts: { ms?: number; signal?: AbortSignal; toolCallId?: string;
+          onResolve(outcome: "answered" | "cancelled" | "timeout" | "superseded" | "aborted", by: string): void },
+): { id: string; promise: Promise<object | undefined> };
+export function answer(id: string, value: { value?: string; confirmed?: boolean; answer?: object; cancelled?: boolean }):
+  { outcome: "answered" | "cancelled" };
+export function resolveByHost(id: string, outcome: "timeout" | "superseded" | "aborted"): void;
+export function resolveAll(outcome: "timeout" | "superseded" | "aborted"): void;
+```
+
+Rules (4.4):
+
+1. The map is **memory only** (4.4 rule 6): it dies with the process. After a restart only a `replay: 'safe'` tool re-asks (§"Replay per tool"); the plan-review dialog is recreated from its entry (§plan-review.ts).
+2. `create` makes one request: the `id` is `crypto.randomUUID()`. `ms` sets `expires_at` (`created_at + ms`) for `select`, `confirm` and `input` only, **never for `editor`** (4.4 rule 4; pi honours `timeout` for the first three but not the editor). `fields` are the dialog's pi fields (`{ title, options, ... }`, §protocol.ts), `signal` is the caller's `AbortSignal`, `toolCallId` the executing tool call's id (on the wire as `tool_call_id`).
+3. The expiry and an aborted `signal` settle the promise with `undefined` and call `onResolve` with the outcome (`'timeout'` for the expiry, `'superseded'` for a signal, 4.4 rule 4) and `by: 'host'`. `onResolve` is also called for a client answer, with `by` the answering client's id.
+4. `answer(id, value)` answers a held request: an id not held throws `ProtocolError('ui_unknown', ...)` (Q16: never seen and already resolved are the same). An answered `value`, `confirmed` or `answer` settles the promise with the value and returns `{ outcome: 'answered' }`. A `cancelled` value returns `{ outcome: 'cancelled' }` and keeps the promise pending until the host settles the request as pi does (4.4 rule 2, 4.6.3): a cancelled request is settled by the **host**, not by the client — the dialogs map it to the method's cancelled shape — so the recorded outcome is always the host's `'cancelled'`.
+5. `resolveByHost(id, outcome)` settles one request by the host with `undefined`; `resolveAll(outcome)` settles every held request (the abort path calls `resolveAll('aborted')`, §"The blocked state").
+
+#### `dialogs.ts`
+
+```ts
+export type DialogPort = {
+  held: typeof held;              // the module above
+  broadcast(msg: { type: "ui_request" | "ui_resolved" | "notice" | "status" } & ToClient): void;
+  stateChanged(): void;           // a request appeared or resolved: the host re-reports state
+};
+export function createDialogs(port: DialogPort): {
+  select(title: string, options: readonly string[],
+         opts?: { purpose: Held["purpose"]; ms?: number; signal?: AbortSignal; toolCallId?: string }):
+    Promise<string | undefined>;
+  confirm(title: string, message: string,
+          opts?: { purpose: Held["purpose"]; ms?: number; signal?: AbortSignal; toolCallId?: string }):
+    Promise<boolean | undefined>;
+  input(title: string, placeholder?: string,
+        opts?: { purpose: Held["purpose"]; ms?: number; signal?: AbortSignal; toolCallId?: string }):
+    Promise<string | undefined>;
+  editor(title: string, prefill?: string,
+         opts?: { purpose: Held["purpose"]; ms?: number; signal?: AbortSignal; toolCallId?: string }):
+    Promise<string | undefined>;
+  questionnaire(questions: { question: string; header: string; multiSelect?: boolean;
+                             options: { label: string; description: string; preview?: string }[] }[],
+                opts?: { purpose: Held["purpose"]; ms?: number; signal?: AbortSignal; toolCallId?: string }):
+    Promise<{ answers: { questionIndex: number; question: string; kind: "option" | "custom" | "multi";
+                        answer: string | null; selected?: string[]; notes?: string; preview?: string }[];
+              cancelled: boolean; globalNote?: string; unanswered?: number[] }>;
+  notice(level: "info" | "warning" | "error", message: string): void;
+  status(key: string, text: string | null): void;
+};
+```
+
+- **One held request per dialog**: each call creates exactly one request through `held.create` with `purpose` the caller names (the tools: `secret_approve`, `host_approve`, `ask_user_question`; the plan-review flow: `plan_review`), broadcasts the `ui_request` through the port, and calls `stateChanged()` (a request appeared: the Session goes `blocked`, §"The blocked state"). The dialog awaits the request's promise and returns what it settles with.
+- **Cancelled shapes, as pi** (4.4 rule 2): a cancelled request gives `undefined` for `select`, `input` and `editor`, `false` for `confirm`, and `{ cancelled: true }` for `questionnaire` (with `answers` and `globalNote?` as the questionnaire's own result). The questionnaire's answer type is pi's `QuestionnaireResult` of `pi/ask-user-question/tool/types.ts` (read; the shape is written out above).
+- **The dialog's own settlement**: when a request it owns expires (`timeout`) or its `signal` fires (`superseded`, e.g. a newer plan review closing the older select, 4.4 rule 4), the dialog settles the promise and broadcasts one `ui_resolved { id, outcome, by: 'host' }` through the port (pi sends nothing in these cases, G52).
+- `notice` broadcasts `notice { level, message }`; `status` broadcasts `status { key, text }` (`text: null` clears). Neither is held and neither changes the state (4.4: "`notify` is not held; `setStatus` is `status`").
+- `confirm` is ported for the wire's completeness; no P1.6 feature calls it (G48: cpd uses `confirm` in no dialog today).
+
+#### `tools.ts`
+
+```ts
+export function registerHostTools(where: {
+  role: "lead" | "manager";
+  plan: string | undefined;      // the Session's Plan id; a Manager or a plan-less Lead has none
+  name: string;                  // the Session name, as `cpd session show` gives it
+  cpd(args: readonly string[]): Promise<Record<string, unknown>>;   // resolves the parsed {"ok":true,...}, throws a CpdError
+  held: typeof held;
+  dialogs: ReturnType<typeof createDialogs>;
+}): Extension;
+```
+
+Returns a `defineExtension` whose `tools` are the four `defineTool` registrations, input schemas in TypeBox exactly reflecting pi's:
+
+| Tool | `replay` | Schema |
+|---|---|---|
+| `ask_user_question` | `'safe'` | `questions` (1 to 4) of `{ question, header (maxLength 16), options (2 to 4, each `label` maxLength 60, `description`, optional `preview`), optional `multiSelect` }` — as `pi/ask-user-question/tool/types.ts` (`OptionSchema`, `QuestionSchema`, `QuestionsSchema`, read) |
+| `cpd_secret_approve` | `'unsafe'` | `action` enum `get \| list \| create \| edit \| delete`, `vault`, `item?`, `field?`, `reason` maxLength 200; required `action`, `vault`, `reason` |
+| `cpd_host_approve` | `'unsafe'` | `reason` maxLength 200; required `reason` |
+| `cpd_plan_review` | `'safe'` | `title`; required `title` |
+
+`exposure` is `model-only` and `additionalProperties` is false on each, as pi registers them. The G2 and G4 ask guards and noblock are **not** applied here (P1.7); the `ask_user_question` execute still validates its own input with the pi questionnaire rules. The executes, following the pi reference exactly (`secret.ts`, `hostapprove.ts`, `review.ts`, `pi/ask-user-question/`, each read):
+
+- **`ask_user_question`** validates with the pi rules (`tool/validate-questionnaire.ts`, read): `no_questions`, `too_many_questions`, `duplicate_question`, `empty_options`, `reserved_label` — an option authored `"Other"`, `"Type something."` or `"Next"` is refused — and `duplicate_option_label`; a validation failure is returned as the pi tool result (the error text, `details.error`). On a valid input it asks through the `questionnaire` dialog of §dialogs (`purpose: 'ask_user_question'`, no `ms`). The model-facing answer text and `details` follow the pi envelope (`tool/response-envelope.ts`, read): `User has answered your questions:` then per question the segment `"<question>"="<answer>"` with the optional `selected preview:` and `user notes:` suffixes, then `You can now continue with the user's answers in mind.`; a decline is `User declined to answer questions`; `details` is the `QuestionnaireResult` (the cancelled shape included).
+- **`cpd_secret_approve`** is for a Lead **or** a Manager — any other role is refused with pi's text: `not_a_lead`, "the tool cpd_secret_approve is for Lead and Manager Sessions only". `action` not one of the enum is `bad_args` "action must be one of get, list, create, edit, delete"; a missing `vault` is `bad_args` "vault is required". The open vaults `cpd` and `homeserver` are refused: `bad_vault`, "these vaults need no approval; use cpd secret get|list|create|edit|delete (commands.md §24)". The dialog is the `select` of §dialogs with `['Allow once', 'Deny']` and `purpose: 'secret_approve'`, titled `` `${name} asks to ${action} in vault ${vault}: item ${item}, field ${field}. Reason: ${reason}` ``. A denial returns "The User denied it. Do not try again."; on "Allow once" it runs `cpd secret approve --action <action> --vault <vault> [--item <item>] [--field <field>]` and returns "Approved for one command in the next 10 minutes: run it now." (secret.ts).
+- **`cpd_host_approve`** is Manager only — any other role is refused with pi's text: `not_a_manager`, "the tool cpd_host_approve is for Manager Sessions only". The dialog is the `select` of §dialogs with `['Allow once', 'Deny']` and `purpose: 'host_approve'`, titled `` `${name} asks to repair the cpd checkout. Reason: ${reason}. Allow once: approve the repair. It discards tracked changes of ~/projects/cpd and resets main to origin/main after saving the diff and the old HEAD.` ``. A denial returns "The User denied it. Do not try again."; on "Allow once" it runs `cpd host approve` and returns "Approved: run cpd host repair now." (hostapprove.ts).
+- **`cpd_plan_review`** is a Plan Lead only (refused `not_a_lead`, "cpd_plan_review is only available in a Plan Lead's session"). It executes `cpd plan review --plan <plan> --title <title>` through `cpd(args)` and returns pi's `next` text with `details { review, already }`, opening **no dialog** — the dialog comes from the flow of §plan-review.ts (review.ts's rule, read).
+
+#### `plan-review.ts`
+
+```ts
+export type PlanReviewPort = {
+  plan: string;
+  cpd(args: readonly string[]): Promise<Record<string, unknown>>;
+  readText(file: string): Promise<string>;   // the summary/feedback file's text; a failure is file_unreadable
+  write(entry: { kind: string; data: Record<string, unknown>; model: readonly unknown[] }): Promise<unknown>;
+  entries(): Promise<readonly unknown[]>;    // the conversation's entries, for reviewsFromEntries
+  dialogs: ReturnType<typeof createDialogs>;
+  held: typeof held;
+};
+export function createPlanReview(port: PlanReviewPort): {
+  open(review: string, via: "event" | "tool" | "start", summary?: string): Promise<void>;
+  decide(entry: ReviewEntry, approved: boolean, feedback?: string): Promise<void>;
+  decidedElsewhere(entry: ReviewEntry, ev: EventOf<"plan-review">): Promise<void>;
+  closeSuperseded(entry: ReviewEntry): void;
+};
+```
+
+`ReviewEntry` and the entry kinds (`cpd-plan-review`, `cpd-plan-decision`, `cpd-plan-summary`) are `pi/lib/plan-review.ts`'s, imported, not copied; the flow ports `pi/lib/review.ts` and `review-chat.ts` (both read).
+
+- **`open(review, via, summary?)`** (4.4 rule 6, review.ts's flow):
+  - the reviews of the Plan are folded from the entries with `reviewsFromEntries` (imported, pure), the latest review `r<k>` first (`highestReview`, imported).
+  - a `plan-review` Event with status `pending` opens the dialog. The summary is the `summary-<review>.md` file of `$CPD_HOME/run/<plan>/` read through `readText`; the `cpd_plan_review` tool call passes the summary directly (review.ts's `paths.summary`).
+  - the summary is written to the conversation as one entry of kind `cpd-plan-summary` with `data: { plan, review, display: true }` and the markdown as the model content.
+  - one `cpd-plan-review` entry `{ plan, review, surface: 'chat', status: 'pending' }` is written.
+  - then the dialog: `select('Approve the plan review', ['Approve', 'Change'])` with `purpose: 'plan_review'` and **no timeout** (per pi); a `Change` value opens `editor('What should change?', prefill?)` (pi passes no prefill).
+  - a newer review SUCCEEDS the older pending one: `open` of a review by a higher `reviewNumber` closes the older dialog (`AbortSignal`, `superseded`) and settles its entry as `superseded` (4.4 rule 4; pi's review-chat.ts `closeOlderDialogs`, read).
+  - a cancelled select leaves the entry pending and sends a `notice` (pi's review-chat `notify` with `stillWaiting`, read).
+- **`decide(entry, approved, feedback?)`** (review.ts's `decide`): runs `cpd plan decide <review> --approve | --reject` (with `--feedback-file feedback-<review>.md` and the feedback written to `$CPD_HOME/run/<plan>/feedback-<review>.md` when there is any); a `review_decided` failure is handled by re-reading the review (`cpd plan show`) and continuing with that decision — **nothing else is retried**. Then the settled entry `cpd-plan-review { status: 'approved' | 'rejected' }` is written and the Lead is told with one entry of kind `cpd-plan-decision` carrying `decisionText` of `pi/lib/plan-review.ts` (imported), its `details { plan, review, approved, current, feedback?, decided_elsewhere? }`.
+- **`decidedElsewhere(entry, ev)`** and **`closeSuperseded(entry)`** port review.ts's same flows: a `plan-review` Event of status `approved` or `rejected` for a pending entry settles it with that verdict and no `plan decide` (a failure leaves the entry pending); a `superseded` Event closes the reason and the dialog of a pending entry and records it. Nothing is sent for a supersede.
+- **The start hook**: at host start, `open` the highest pending review with `via: 'start'` — a fresh id (4.4 rule 6: the pending entry survives a restart and the dialog is recreated).
+- **The tool returns at once**: `cpd_plan_review` returns immediately and the dialog opens only from the `plan-review` Event or the start hook, so a second call of the tool while a dialog is pending re-uses it (review.ts: `openReview` is a no-op for a review it already holds, read).
+
+#### The blocked state
+
+A held request puts the Session in `blocked` with the label `dialog`, and `host_state.state` is `'blocked'` with `host_state.held_ui` the count (4.5 row 27; the spike measured `blocked` with `held_ui: 1`). Resolving to zero returns to `working` while a run is pending, else to `idle`, with the reply rule of §6.13 "Delivery (P1.4)" 1.5 untouched.
+
+**Abort (4.6.4).** An `abort` resolves every held request with `outcome: 'aborted', by: 'host'` **before** the conversation abort: the server's `abort` port is wired to `held.resolveAll('aborted')` and one `ui_resolved { id, outcome: 'aborted', by: 'host' }` per settled request broadcast to every attached client, then `conversation.abort`. Unverified (4.6.4): whether pi-durable also aborts a waiting tool; the host resolves the requests itself, so the client sees the resolution either way.
+
+#### Replay per tool (Q8)
+
+- `ask_user_question` is `replay: 'safe'`; `cpd_secret_approve` and `cpd_host_approve` are `replay: 'unsafe'` (Q8 C: an approval re-asked after a restart the User did not see could be answered by a client they did not mean to consent to). `cpd_plan_review` is `replay: 'safe'`.
+- A `replay: 'safe'` tool whose execute was interrupted asks again after a restart with a **new id** through a NEW `ui_request`, because the model re-runs the tool (4.4 rule 6; measured in c-tools after `kill -9`). This is the 4.6.5 case: the new host reports a new epoch, the client drops the old held request and shows the fresh one. Interrupted `replay: 'unsafe'` tools tell the model `Tool ... was interrupted and may have partially run` and do not re-run (4.4 rule 6).
+- The plan-review dialog is **not tool-bound**: the pending `cpd-plan-review` entry survives a restart and the start hook recreates the dialog with a fresh id (§plan-review.ts, 4.4 rule 6). A request is re-sent after a restart only if its tool is `replay: 'safe'`; the plan-review dialog is the exception — recreated from its entry, never re-sent as a request.
+- Unverified: the host-level re-ask with a request actually held at a real restart (the spike's "not observed", Q8 and 5.3); the pieces are pi-durable's `replay` (measured with a bare tool) and the host's start hook.
+
+#### Not in P1.6
+
+- The G2 and G4 ask guards and noblock: P1.7. `guards.ts`'s verdict gains no ask row here; the ask tool's execute still validates its input with the pi questionnaire rules.
+- `compact`, `configure`, `list_models`, `fork`, `history` and `rename` (4.5 rows 6 to 8, 11 to 13): P1.8 — still `error unknown_type`.
+- `reload`, `mcp` and skills: P1.9. `mcp_login` is a purpose this section defines on the wire only; its flow comes in P1.9.
+- The engine that starts the host (`lead_runner` / `manager_runner`, the flock, the restart bound): P1.10.
+- Every client-side row of research 3.4 — a client that renders the requests (G40, G41, G44, G46, G47 and the `select`/`input`/`editor`/`questionnaire` rendering): P2.
+- `confirm` is carried on the wire, in `held` and in `dialogs`; no P1.6 feature calls it (G48).
+
+**Tests.** They live in `pi/test/durable-host/` — `protocol.test.ts`, `server.test.ts`, `held.test.ts`, `dialogs.test.ts`, `tools.test.ts`, `plan-review.test.ts` and `socket.test.ts` — written with `node:test` and already in the default file list of the `test` script (`pi/test/durable-host/*.test.ts`). Nothing real runs: the wire tests parse and encode lines; the server tests drive a fake `Connection`, a fake `Timers` and a fake `ServerDeps` on a real `Ring`; the host-flow tests give fakes of the ports (`cpd`, `readText`, `write`, `entries`, a mocked pi-durable `Conversation`) and never open a socket, a store or a model. One test per rule above; the statements marked unverified are pinned by these tests, not by a real run.
+
 ## 7. git and the Gate
 
 cpd runs git itself (R4); there is no worktrunk. Every git call is `git -C <dir> …` with argv, `GIT_TERMINAL_PROMPT=0`, and stdin from `/dev/null`. Every git call also gets, in its environment, `GIT_CONFIG_COUNT=2`, `GIT_CONFIG_KEY_0=core.filesRefLockTimeout`, `GIT_CONFIG_VALUE_0=10000`, `GIT_CONFIG_KEY_1=core.packedRefsTimeout`, `GIT_CONFIG_VALUE_1=10000` (git-config(1)): a ref or `packed-refs` lock held by another git process is waited for up to 10 s instead of git's 100 ms (`filesRefLockTimeout`) and 1 s (`packedRefsTimeout`), because cpd has concurrent writers of shared refs such as `refs/remotes/origin/<base>` (hs-d243, G2). Hooks are spawned by cpd, not by git, and do not get it (§7.3).
