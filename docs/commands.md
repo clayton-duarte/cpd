@@ -2519,12 +2519,12 @@ Effects: none; one read transaction.
 
 ```json
 {"ok": true, "sessions": [
-  {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "waiting", "state_label": "φ: Worker question", "state_at": "…", "archived_at": null, "asleep_at": null,
+  {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "runner": "pi", "state": "waiting", "state_label": "φ: Worker question", "state_at": "…", "archived_at": null, "asleep_at": null,
    "place": "chat", "tmux_pane": "%12", "file": "/home/clayton/.pi/agent/sessions/…_596d007f-….jsonl", "forked_from": null, "plan_lead": true, "tier": "O3", "cwd": "/home/clayton/projects/cpd", "title": "Dynamic session titles contract", "titled_at": "…"}],
  "events_cursor": 48213}
 ```
 
-`role` is `lead`, `worker` or `manager` (B3-A1; a Manager has `plan` null, `attempt` null and `plan_lead` false; `--role manager` lists them). `plan_lead` is true for the Session that is its Plan's `lead_session`. `title` and `titled_at` are the dynamic title (contract §2.2, hs-d257) and when it was written, both null until the first `session retitle`. `archived_at` and `asleep_at` are null unless the Session is archived or asleep. Read-only.
+`runner` is `pi` or `durable` (contract §2.2): how the Session runs, `pi` for every Session that exists today; a `durable` Lead or Manager has a null `tmux_pane` and `place` `none` by design (contract §3.6). `role` is `lead`, `worker` or `manager` (B3-A1; a Manager has `plan` null, `attempt` null and `plan_lead` false; `--role manager` lists them). `plan_lead` is true for the Session that is its Plan's `lead_session`. `title` and `titled_at` are the dynamic title (contract §2.2, hs-d257) and when it was written, both null until the first `session retitle`. `archived_at` and `asleep_at` are null unless the Session is archived or asleep. Read-only.
 
 ### 10.2 `session show`
 
@@ -2532,14 +2532,14 @@ Effects: none; one read transaction.
 cpd session show [<id>]
 ```
 
-`<id>` defaults to the selected Session (`CPD_SESSION`); it accepts the short forms of §1.3. Output: the fields of `session list` plus `created_at`, `registered_event` (the id of its `session-registered` Event, the pi adapter's first cursor, §15.2), `model` and `thinking` (the row's `tier` as pi is told it, below: hs-d506), `loop_guard_turns` (the config value, for every Session), `switch` (null or a failed switch record, below) and, for a Plan's Lead, `open_escalations` (ids). Effects: none.
+`<id>` defaults to the selected Session (`CPD_SESSION`); it accepts the short forms of §1.3. Output: the fields of `session list` (`runner` included) plus `created_at`, `registered_event` (the id of its `session-registered` Event, the pi adapter's first cursor, §15.2), `model` and `thinking` (the row's `tier` as pi is told it, below: hs-d506), `loop_guard_turns` (the config value, for every Session), `switch` (null or a failed switch record, below) and, for a Plan's Lead, `open_escalations` (ids). Effects: none.
 
 `model` is from the policy's `[model]` table for the key of the row's `tier` (contract §8.3, §9) (`<provider>/<model-id>`) and `thinking` is the level of the tier's digit (`off`, `low`, `medium`, `high`, `xhigh`, `max`, contract §9): the two halves of the `--model <model>:<thinking>` argument `session run` passes (§10.8), computed by the one function both use. The models are read at each call, so a policy edit shows at once.
 
 `switch` (DEFECT 2) is null when the Session's last model switch succeeded or has not been attempted; otherwise it is `{tier, code, message, at, next}` where `tier` is the `tier` the switch tried, `code` and `message` are from the adapter error, `at` is the RFC 3339 UTC time and `next` is the exact `cpd session run <id>` command that relaunches this Session's pi so it starts on the current `tier` (taken from contract §6.5, §10.4, §10.8 as they stand at the time `switch` is read; the docs Job picks and cites it).
 
 ```json
-{"ok": true, "session": {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "idle", "state_label": null, "place": "chat", "tmux_pane": "%12", "file": "…", "forked_from": null, "plan_lead": true, "tier": "O3", "model": "github-copilot/claude-opus-5.5", "thinking": "high", "loop_guard_turns": 20, "switch": null, "cwd": "/home/clayton/projects/cpd", "title": null, "titled_at": null, "created_at": "…", "registered_event": 40117},
+{"ok": true, "session": {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "runner": "pi", "state": "idle", "state_label": null, "place": "chat", "tmux_pane": "%12", "file": "…", "forked_from": null, "plan_lead": true, "tier": "O3", "model": "github-copilot/claude-opus-5.5", "thinking": "high", "loop_guard_turns": 20, "switch": null, "cwd": "/home/clayton/projects/cpd", "title": null, "titled_at": null, "created_at": "…", "registered_event": 40117},
  "open_escalations": ["contract-commands-a1-q1"]}
 ```
 
@@ -2828,11 +2828,11 @@ Exactly one of `<text>` and `--file` (else `usage`).
 | only if the sender is an agent: the sender has not sent the exact same text (trimmed) to a different Session in the last 60 minutes (no broadcasts, hs-d507); `details: {session, at}` | `broadcast` | 3 |
 | only if the sender is an agent: the sender has not sent the exact same text (trimmed) to this Session in the last 60 minutes (no duplicates, hs-d507); `details: {at}` | `duplicate` | 3 |
 
-A `stopped` Lead or Manager is accepted: this call starts it (hs-d725) as a parked `cpd session run <id>` window (hs-d726, A1) and it gets the message when its adapter starts; the chat slot never moves. A live pane of the Session means it is starting and nothing is started.
+**A `durable` target** (`runner` `durable`, contract §3.6): the Event is appended as for any Session; the command starts no pane, wakes no pane and raises no error for the missing pane (so `no_cockpit` does not apply); the host's follower delivers it (contract §6.13, P1.4), `started` is false and `pane` null. A `stopped` Lead or Manager with `runner` `pi` is accepted: this call starts it (hs-d725) as a parked `cpd session run <id>` window (hs-d726, A1) and it gets the message when its adapter starts; the chat slot never moves. A live pane of the Session means it is starting and nothing is started.
 
 Effects:
 - **Rows**, one transaction: **Event** `session-message` with `session` = the target, `context` and `plan` = the target's, `data` = `{from, text, unblocks}`; `from` is `CPD_SESSION`, else `PI_SESSION_ID`, else null (the User).
-- **tmux:** when the target is `stopped` with no live pane, the mechanism of §10.4 (starting a parked window with a pane, §6.4) applies: first `kill-pane` on a dead pane of the Session, if one is still there; then `new-window -d -t =cpd: -n park-<label> | ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <id>`, the pane title and `@cpd_session` set, `tmux_pane` recorded and **Event** `session-moved` `{place: "parked"}` appended, the chat slot never moving. With a live pane, nothing is started. Otherwise no tmux.
+- **tmux:** when the target is `stopped` with no live pane, the mechanism of §10.4 (starting a parked window with a pane, §6.4) applies: first `kill-pane` on a dead pane of the Session, if one is still there; then `new-window -d -t =cpd: -n park-<label> | ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <id>`, the pane title and `@cpd_session` set, `tmux_pane` recorded and **Event** `session-moved` `{place: "parked"}` appended, the chat slot never moving. With a live pane, nothing is started. Otherwise no tmux, and none for a `durable` target.
 
 ```json
 {"ok": true, "event": 4812, "session": "a41b…", "from": "596d007f-…", "unblocks": "PR #210 opened", "started": true, "pane": "%47"}
@@ -4931,7 +4931,7 @@ cpd inbox claim <id>
 | the Context has a live Manager Session (C4) | `no_manager` | 3 |
 | the team review cache holds a primary post of the pull request (C4) | `post_not_found` | 3 |
 
-Effects, one transaction: **rows** `inbox_items.claimed_at` = now; **Event** `inbox-claimed` `{item}` (C4), whose text names the item by its one-line form `<row1>: <row2>` (the intro of this section); one `session-message` Event to the Context's Manager (C4), worded to ask the Manager to start a review of the pull request and to name the item by that one-line form, containing the URL and the Slack post's channel and `ts_raw`; **queue** one `slack_reactions` row with `emoji` = `eyes`, `channel` = the team review cache's channel, `ts` = the post's `ts_raw`, `queued_at` = now, `reacted_at` = NULL (the queue step drains it). Output: `{"ok": true, "item": {…, "claimed_at": "…"}, "manager": "<session id>"}` (C4).
+Effects, one transaction: **rows** `inbox_items.claimed_at` = now; **Event** `inbox-claimed` `{item}` (C4), whose text names the item by its one-line form `<row1>: <row2>` (the intro of this section); one `session-message` Event to the Context's Manager (C4), worded to ask the Manager to start a review of the pull request and to name the item by that one-line form, containing the URL and the Slack post's channel and `ts_raw`; **queue** one `slack_reactions` row with `emoji` = `eyes`, `channel` = the team review cache's channel, `ts` = the post's `ts_raw`, `queued_at` = now, `reacted_at` = NULL (the queue step drains it). Output: `{"ok": true, "item": {…, "claimed_at": "…"}, "manager": "<session id>"}` (C4). That Event is appended as `session send` appends it (§10.13): for a Manager whose `runner` is `durable` it starts no pane and its host delivers it (contract §6.13, P1.4; unverified in the code: the Event is written by `inbox claim` itself, not through `session send`).
 
 Idempotent: yes. An item already claimed returns `"already": true` and writes nothing, with no Event.
 
