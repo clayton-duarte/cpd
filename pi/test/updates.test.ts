@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { contextCursorFrom, contextUpdate, parsePending, parseRecords, type ContextRecord, type PendingJob, type PendingPlan, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
+import { contextCursorFrom, contextUpdate, parsePending, parseRecords, type ContextRecord, type PendingJob, type PendingPlan, type PendingPrJob, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
 import { Fixture, ID, OTHER, shown, waitFor } from "./fake.ts";
 import { adapterErrors } from "./lead-errors.ts";
 
@@ -283,15 +283,17 @@ test("a failed Plan Events read fails the whole message: nothing added, the curs
 
 // ---- the Manager's Pending work (§15.7, hs-d159 P2) ----
 
-const pjob = (n: number, status: string): PendingJob => ({ key: `job-${n}`, status, title: `Title ${n}` });
-const ppr = (jobs: PendingJob[], over: Record<string, unknown> = {}) => ({ key: "api", status: "dispatch", number: 212 as number | null, jobs, ...over });
-const pplan = (id: string, prs: ReturnType<typeof ppr>[], phase = "dispatch"): PendingPlan => ({ id, phase, prs });
+const pjob = (n: number, status: string, tier = "H2"): PendingJob => ({ key: `job-${n}`, kind: "scout", status, tier, title: `Title ${n}` });
+const prjob = (n: number, status: string): PendingPrJob => ({ key: `job-${n}`, status, title: `Title ${n}` });
+const ppr = (jobs: PendingPrJob[], over: Record<string, unknown> = {}) => ({ key: "api", status: "dispatch", number: 212 as number | null, jobs, ...over });
+const pplan = (id: string, prs: ReturnType<typeof ppr>[], phase = "dispatch", jobs: PendingJob[] = []): PendingPlan => ({ id, phase, prs, jobs });
 /** What `cpd context pending` prints for the same Plans (the fields the digest does not use are there too). */
 const pendingJson = (plans: PendingPlan[]) => ({
   ok: true,
   context: "ctx",
   plans: plans.map((p) => ({
     id: p.id, title: `T ${p.id}`, phase: p.phase, lead_session: null,
+    jobs: p.jobs.map((j) => ({ ...j, touches: ["a.rs"] })),
     prs: p.prs.map((r) => ({
       key: r.key, repo: "/r", base: "main", status: r.status, lead_branch: `cpd/${p.id}/${r.key}`,
       pull_request: r.number === null ? null : { number: r.number, url: "u", state: "OPEN" },
@@ -301,17 +303,17 @@ const pendingJson = (plans: PendingPlan[]) => ({
 });
 
 test("parsePending: Plans, PRs and Jobs; anything else is bad_output", () => {
-  const plans = [pplan("p", [ppr([pjob(1, "queued")]), ppr([], { key: "ui", number: null })])];
+  const plans = [pplan("p", [ppr([prjob(1, "queued")]), ppr([], { key: "ui", number: null })], "dispatch", [pjob(1, "queued")])];
   assert.deepEqual(parsePending(pendingJson(plans)), plans);
   assert.throws(() => parsePending({}), { code: "bad_output" });
   assert.throws(() => parsePending({ plans: [{ id: "p", phase: "dispatch" }] }), { code: "bad_output" });
-  assert.throws(() => parsePending({ plans: [{ id: "p", phase: "x", prs: [{ key: "a", status: "s", pull_request: null, jobs: [{ key: "j", status: "queued" }] }] }] }), { code: "bad_output" });
-  assert.throws(() => parsePending({ plans: [{ id: "p", phase: "x", prs: [{ key: "a", status: "s", jobs: [] }] }] }), { code: "bad_output" }, "pull_request is required");
+  assert.throws(() => parsePending({ plans: [{ id: "p", phase: "x", jobs: [], prs: [{ key: "a", status: "s", pull_request: null, jobs: [{ key: "j", status: "queued" }] }] }] }), { code: "bad_output" });
+  assert.throws(() => parsePending({ plans: [{ id: "p", phase: "x", jobs: [], prs: [{ key: "a", status: "s", jobs: [] }] }] }), { code: "bad_output" }, "pull_request is required");
 });
 
 const twoPlans = [
-  pplan("pay-4521", [ppr([pjob(1, "merged"), pjob(2, "queued"), pjob(3, "running")])]),
-  pplan("pay-4522", [ppr(range(12).map((n) => pjob(n, "draft")), { key: "web", status: "plan", number: null })], "plan"),
+  pplan("pay-4521", [ppr([prjob(1, "merged"), prjob(2, "queued"), prjob(3, "running")])]),
+  pplan("pay-4522", [ppr(range(12).map((n) => prjob(n, "draft")), { key: "web", status: "plan", number: null })], "plan"),
 ];
 
 test("a Manager with no active Plan gets no Pending work section", async (t) => {
@@ -481,7 +483,7 @@ test("the Manager's Pending work has one line per Plan and no Job lines", async 
   await manager(f);
   nothingNew(f);
   f.respond("events-list@plan-created", planEventsList([]));
-  const jobs = (...statuses: string[]) => statuses.map((s, i) => pjob(i + 1, s));
+  const jobs = (...statuses: string[]) => statuses.map((s, i) => prjob(i + 1, s));
   f.respond("context-pending", pendingJson([
     pplan("inbox", [ppr(jobs("running", "running", "queued"), { key: "mainfix" }), ppr([], { key: "prlink", status: "open", number: 207 })]),
     pplan("agent-comms", [ppr(jobs("running"), { key: "quiet-core" })], "plan"),
