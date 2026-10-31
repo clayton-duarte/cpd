@@ -16,6 +16,7 @@ test("inputOf maps a session-message for the Session to a follow-up input that n
     requestId: "event:7",
     whenBusy: "followUp",
     entry: entry(user),
+    reply: true,
   });
   const peer = event(8, "session-message", { data: { text: "hi", from: "s9", wake: false } });
   const input = inputOf(peer, "s1", LEAD);
@@ -77,6 +78,7 @@ test("inputOf gives a Manager and a Lead with no Plan only session-message", () 
       requestId: "event:21",
       whenBusy: "followUp",
       entry: entry(m),
+      reply: true,
     });
   }
 });
@@ -95,4 +97,38 @@ test("inputOf gives every input the requestId event:<id>", () => {
     const id = 100 + i * 7;
     assert.equal(inputOf(event(id, kind, { data }), "s1", LEAD)?.requestId, `event:${id}`, kind);
   });
+});
+
+test("inputOf marks a session-message from the User as a reply", () => {
+  const input = inputOf(event(30, "session-message", { data: { text: "hello", from: null } }), "s1", LEAD);
+  assert.equal(input?.reply, true);
+});
+
+test("inputOf does not mark a message from a Session, nor any other kind, as a reply", () => {
+  const peer = inputOf(event(31, "session-message", { data: { text: "hi", from: "s9", wake: false } }), "s1", LEAD);
+  assert.ok(peer);
+  assert.equal("reply" in peer, false);
+  assert.equal(inputOf(event(33, "session-message", { data: { text: "hello", from: null } }), "s1", LEAD)?.reply, true, "contrast: the User's message is a reply");
+  for (const kind of ["pr-feedback", "escalation", "job-failed", "plan-done", "error"]) {
+    const input = inputOf(event(32, kind), "s1", LEAD);
+    assert.ok(input, kind);
+    assert.equal("reply" in input, false, kind);
+  }
+});
+
+test("inputOf gives every input an entry of kind cpd-event", () => {
+  const kinds: [string, Record<string, unknown>][] = [
+    ["session-message", { text: "x", from: null }],
+    ["session-message", { text: "x", from: "s9" }],
+    ["job-merged", { turn: true }],
+    ["job-failed", {}],
+    ["pr-feedback", {}],
+    ["escalation", {}],
+  ];
+  kinds.forEach(([kind, data], i) => {
+    const e = event(40 + i, kind, { data });
+    assert.deepEqual(inputOf(e, "s1", LEAD)?.entry, entry(e), kind);
+  });
+  const user = event(60, "session-message", { data: { text: "x", from: null } });
+  assert.deepEqual(inputOf(user, "s1", LEAD), { ...inputOf(user, "s1", LEAD), entry: entry(user), reply: true }, "the entry is kept beside the reply flag");
 });

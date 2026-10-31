@@ -13,8 +13,8 @@ import { hostExtension } from "./extension.ts";
 import { newTurnState, prepareTurn, reminderFor, type StoredEntry, type TurnPort, type Write } from "./turn.ts";
 
 export type Submission = { wait(): Promise<"done" | "unanswered"> };
-/** `write` appends an entry (`submit({ type: "write", ... })`); a conversation without it cannot store the first message or a context update, and `prepareTurn` reports that. */
-export type Conversation = { submit(input: Input): Promise<Submission>; write?(write: Write): Promise<unknown>; install(extension: Extension): void; entries(): Promise<readonly unknown[]>; closed: Promise<unknown> };
+/** `write` appends an entry (`submit({ type: "write", ... })`): the first message and the context updates. */
+export type Conversation = { submit(input: Input): Promise<Submission>; write(write: Write): Promise<unknown>; install(extension: Extension): void; entries(): Promise<readonly unknown[]>; closed: Promise<unknown> };
 
 type Model = { provider: string; modelId: string; thinkingLevel?: string };
 
@@ -29,6 +29,14 @@ export type Deps = {
   now(): Date;
   log(line: string): void;
 };
+
+/** `conversation.closed` settles with a pi-durable `SessionEnd`: `{ reason: 'closed' } | { reason: 'failed', error }`. */
+function endText(end: unknown): string {
+  if (typeof end !== "object" || end === null) return String(end);
+  const { reason, error } = end as { reason?: unknown; error?: unknown };
+  if (reason !== "failed") return String(reason ?? "closed");
+  return `failed: ${error instanceof Error ? error.message : String(error)}`;
+}
 
 const contextText = (files: readonly { path: string; content: string }[]): string | undefined =>
   files.length === 0 ? undefined : files.map((f) => `## ${f.path}\n${f.content}`).join("\n\n");
@@ -72,7 +80,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     const conversation = await deps.open({ file: storePath(config.home, config.session), cwd: config.cwd, model, extension });
     conversation.closed.then(
       (reason) => {
-        failed("the conversation closed", reason);
+        failed("the conversation closed", endText(reason));
         end(1);
       },
       (e) => {
@@ -83,10 +91,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     port = {
       seat: { id: config.session, role: session.role as "lead" | "manager", context: session.context, plan: session.plan, registeredEvent: session.registeredEvent, byUser: session.byUser },
       cpd: deps.cpd,
-      submit: async (w) => {
-        if (conversation.write === undefined) throw new Error("the conversation cannot write entries");
-        return conversation.write(w);
-      },
+      submit: (w) => conversation.write(w),
       entries: async () => (await conversation.entries()) as readonly StoredEntry[],
       log: deps.log,
     };
@@ -97,6 +102,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
 
     let cursor = cursorFrom(session.registeredEvent, await conversation.entries(), config.session);
     let pending = 0;
+    let reply = false;
     const seen = new Set<string>();
     const names = new Map<string, Promise<string | null>>();
     const nameOf = (id: string): Promise<string | null> => {
@@ -112,6 +118,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     };
     const submit = async (input: Input): Promise<void> => {
       const starts = pending === 0;
+      if (input.reply) reply = true;
       pending++;
       reporter.want({ state: "working" });
       try {
@@ -124,7 +131,10 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         const submission = await conversation.submit(input);
         void submission.wait().then(
           () => {
-            if (--pending === 0) reporter.want({ state: "idle" });
+            if (--pending === 0) {
+              reporter.want(reply ? { state: "idle", reply: true } : { state: "idle" });
+              reply = false;
+            }
           },
           (e) => {
             failed("a submission", e);
