@@ -5896,7 +5896,7 @@ cpd test list <name>
 cpd test build
 ```
 
-`list` exits 0 only when that one test exists: a pi name when its title is in a `test(` or `it(` call of its file (nothing is started), a web name when the web package's vitest answers it from collection mode (`pnpm --filter cpd-web-client exec vitest list --reporter=json <file>`: an existing test lists as found whether it passes or fails, and only an absent title or a file that does not collect is refused), a Rust name when `nextest list --workspace --message-format oneline <name>` prints a test. `build` runs `nextest run --workspace --no-run`, then `pnpm run typecheck` and, when `web/package.json` exists, typechecks the web client (it skips the web client when the file does not exist), and stops at the first failure; its status is that of the step that failed. Both run from the repo root, whatever the cwd.
+`list` exits 0 only when that one test exists: a pi name when its title is in a `test(` or `it(` call of its file (nothing is started), a web name when the web package's vitest answers it from collection mode (`pnpm --filter cpd-web-client exec vitest list <file> --json`: an existing test lists as found whether it passes or fails, and only an absent title or a file that does not collect is refused), a Rust name when `nextest list --workspace --message-format oneline <name>` prints a test. `build` runs `nextest run --workspace --no-run`, then `pnpm run typecheck` and, when `web/package.json` exists, typechecks the web client (it skips the web client when the file does not exist), and stops at the first failure; its status is that of the step that failed. Both run from the repo root, whatever the cwd.
 
 ### 23.4 The `scripts/tests.sh` contract
 
