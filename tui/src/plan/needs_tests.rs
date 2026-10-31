@@ -84,7 +84,7 @@ fn tests_centre(jobs: usize) -> Centre {
     };
     let job = |n: usize| JobNode {
         key: JobKey::parse(&format!("job-{n}")).unwrap(),
-        pr: pr.clone(),
+        pr: Some(pr.clone()),
         seq: 0,
         title: String::new(),
         status: JobStatus::Queued,

@@ -32,6 +32,8 @@ use crate::read::{JobNode, NeedsUser, PrFacts, PrNode, PrStatus, Pull, pr_look};
 const GAP: u16 = 2;
 /// What the box of a PR with no Jobs says (the widget's padding is the space around it).
 const NO_JOBS: &str = "no Jobs";
+/// The title of the one Plan-level box holding the explore Jobs (D1-A): leading and trailing space, no state word.
+const EXPLORE_TITLE: &str = " explore Jobs ";
 
 /// The body of a PR box: the chart's buffer blitted at the body's corner, or [`NO_JOBS`] when the PR has none.
 struct ChartBody<'a> {
@@ -215,10 +217,14 @@ impl Drop for LayoutGuard {
 pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: usize) -> Boxes {
     #[cfg(test)]
     LAYOUTS.with(|n| n.set(n.get() + 1));
+    // The explore Jobs (no PR) draw in one Plan-level box above the PR boxes (D1-A); every other Job is its PR's.
+    let explore: Vec<&JobNode> = jobs.iter().filter(|j| j.pr.is_none()).collect();
     let charts: Vec<Chart> = prs
         .iter()
-        .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key), &needs_user.worked_on), frame))
+        .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr.as_ref() == Some(&p.key)), &needs_user.worked_on), frame))
         .collect();
+    let explore_chart = (!explore.is_empty())
+        .then(|| flow::layout(&flow::flow_jobs(explore.iter().copied(), &needs_user.worked_on), frame));
     let titles: Vec<Line> = prs.iter().map(|p| title_of(p, needs_user.lead_dialog, frame)).collect();
     let footers: Vec<Option<String>> = prs.iter().map(footer_text).collect();
     let footer_w: Vec<u16> = footers.iter().map(|f| f.as_ref().map_or(0, |t| Line::from(t.as_str()).width() as u16)).collect();
@@ -235,6 +241,11 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
             ((body_w + 2 + 2 * spacing::PAD_X).max(t.width() as u16 + 4).max(if fw > 0 { fw + 4 } else { 0 }), inner_h + 2)
         })
         .collect();
+    // The explore box: its chart's body, the walls and the padding, at least as wide as its title plus 4.
+    let explore_size: Option<(u16, u16)> = explore_chart.as_ref().map(|c| {
+        let inner_h = c.buf.area.height;
+        ((c.buf.area.width + 2 + 2 * spacing::PAD_X).max(EXPLORE_TITLE.chars().count() as u16 + 4), inner_h + 2)
+    });
 
     // y: each row of boxes as tall as its tallest box, `GAP` between; x: a row's boxes side by side by key, one apart
     let level = levels(prs);
@@ -247,7 +258,9 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         r.sort_by(|a, b| prs[*a].key.cmp(&prs[*b].key));
     }
     let row_h: Vec<u16> = rows.iter().map(|r| r.iter().map(|&i| size[i].1).max().unwrap_or(0)).collect();
-    let ys: Vec<u16> = row_h.iter().scan(0, |y, h| Some(std::mem::replace(y, *y + h + GAP))).collect();
+    // the explore box takes its own row at the top, `GAP` above the first row of PR boxes
+    let top0 = explore_size.map_or(0, |(_, h)| h + GAP);
+    let ys: Vec<u16> = row_h.iter().scan(top0, |y, h| Some(std::mem::replace(y, *y + h + GAP))).collect();
     let mut at = vec![(0u16, 0u16); prs.len()];
     for (l, r) in rows.iter().enumerate() {
         let mut x = 0;
@@ -289,8 +302,9 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         vs.push((land(c), run(lc - 1), ys[lc] - 1));
     }
     let boxes_w = (0..prs.len()).map(|i| at[i].0 + size[i].0).max().unwrap_or(0);
-    let width = vs.iter().map(|v| v.0 + 1).fold(boxes_w, u16::max);
-    let height = if nrows == 0 { 0 } else { ys[nrows - 1] + row_h[nrows - 1] };
+    let explore_w = explore_size.map_or(0, |(w, _)| w);
+    let width = vs.iter().map(|v| v.0 + 1).fold(boxes_w.max(explore_w), u16::max);
+    let height = if nrows == 0 { explore_size.map_or(0, |(_, h)| h) } else { ys[nrows - 1] + row_h[nrows - 1] };
     let mut mask = Mask::new(width, height);
     for &(y, x1, x2) in &hs {
         mask.h(y, x1, x2);
@@ -302,6 +316,13 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
     let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
     let lines = palette::muted_text();
     let mut links = Links::default();
+    // the one explore Jobs box, above every PR box, no footer and no need-line to a PR
+    if let (Some(chart), Some((w, h))) = (explore_chart.as_ref(), explore_size) {
+        let rect = Rect::new(0, 0, w, h);
+        BoxWidget::new(Walls::Full, lines, ChartBody { chart })
+            .title(Line::from(Span::styled(EXPLORE_TITLE, palette::read_only_text())))
+            .render(rect, &mut buf);
+    }
     for (i, chart) in charts.iter().enumerate() {
         let rect = Rect::new(at[i].0, at[i].1, size[i].0, size[i].1);
         BoxWidget::new(Walls::Full, lines, ChartBody { chart }).title(titles[i].clone()).render(rect, &mut buf);
@@ -340,8 +361,12 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
             (inner.x, inner.y)
         })
         .collect();
+    let explore_body = explore_size.map(|(w, h)| geometry(&Walls::Full, Rect::new(0, 0, w, h)).inner).map(|inner| (inner.x, inner.y));
     let mut base = Vec::with_capacity(prs.len());
     let mut pills: Vec<Pill> = Vec::new();
+    if let (Some(chart), Some((bx, by))) = (explore_chart.as_ref(), explore_body) {
+        pills.extend(chart.pills.iter().map(|p| Pill { key: p.key.clone(), rect: Rect { x: p.rect.x + bx, y: p.rect.y + by, ..p.rect } }));
+    }
     for (i, chart) in charts.iter().enumerate() {
         base.push(pills.len());
         pills.extend(chart.pills.iter().map(|p| Pill {
@@ -350,6 +375,9 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         }));
     }
     let mut columns: Vec<Vec<usize>> = Vec::new();
+    if let Some(chart) = explore_chart.as_ref() {
+        columns.extend(chart.columns.iter().cloned());
+    }
     for r in &rows {
         for &i in r {
             for column in &charts[i].columns {
@@ -402,7 +430,7 @@ mod tests {
     fn job(pr: &str, key: &str, needs: &[&str]) -> JobNode {
         JobNode {
             key: JobKey::parse(key).unwrap(),
-            pr: PrKey::parse(pr).unwrap(),
+            pr: Some(PrKey::parse(pr).unwrap()),
             seq: 0,
             title: String::new(),
             status: JobStatus::Queued,

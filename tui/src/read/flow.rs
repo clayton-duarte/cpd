@@ -52,7 +52,7 @@ pub struct PlanBoxes {
     pub context: ContextId,
     /// The PRs, in key order.
     pub prs: Vec<PrNode>,
-    /// Every Job of the Plan, in creation order; each names its PR.
+    /// Every Job of the Plan, in creation order; `pr` is `None` exactly for an explore Job (`jobs.pr` NULL).
     pub jobs: Vec<JobNode>,
     /// What of the Plan needs the User, from the same transaction.
     pub needs_user: NeedsUser,
@@ -187,8 +187,8 @@ fn conflicting(what: &str, mergeable: &str) -> Result<bool, CpdError> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobNode {
     pub key: JobKey,
-    /// The Job's PR (`jobs.pr`).
-    pub pr: PrKey,
+    /// The Job's PR (`jobs.pr`), `None` exactly for an explore Job of the Plan.
+    pub pr: Option<PrKey>,
     pub seq: i64,
     pub title: String,
     pub status: JobStatus,
@@ -348,13 +348,14 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
     }
     let blocked = active::blocked_spans(&events, now_ms);
     let mut spans: BTreeMap<&str, Vec<(i64, i64)>> = BTreeMap::new();
-    // `jobs` are JobNodes, so they hold only PR Jobs (job_nodes drops the Plan-level ones).
+    // An explore Job belongs to the Plan, not to a PR: its Attempts count in no Workflow's active time (pro-d237).
     for job in jobs {
+        let Some(pr) = job.pr.as_ref() else { continue };
         for a in &job.attempts {
             let what = format!("Attempt {}", a.id);
             let start = active::parse_ms(&what, &a.started_at)?;
             let end = a.ended_at.as_deref().map(|e| active::parse_ms(&what, e)).transpose()?.unwrap_or(now_ms);
-            spans.entry(job.pr.as_str()).or_default().push((start, end.max(start)));
+            spans.entry(pr.as_str()).or_default().push((start, end.max(start)));
         }
     }
     let mut costs: BTreeMap<String, Vec<Option<f64>>> = BTreeMap::new();
@@ -376,9 +377,9 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
     }
     let mut failed_prs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut stmt = conn.prepare(
-        "SELECT pr FROM jobs WHERE plan = ?1 AND status = 'failed'
+        "SELECT pr FROM jobs WHERE plan = ?1 AND status = 'failed' AND pr IS NOT NULL
          UNION SELECT j.pr FROM escalations e JOIN attempts a ON a.id = e.attempt JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-          WHERE e.status = 'open' AND j.plan = ?1",
+          WHERE e.status = 'open' AND j.plan = ?1 AND j.pr IS NOT NULL",
     )?;
     for row in stmt.query_map([plan.as_str()], |r| r.get::<_, String>(0))? {
         failed_prs.insert(row?);
@@ -476,12 +477,13 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
         .zip(waiting_on)
         .map(|(j, waiting_on)| {
             let what = format!("Job {plan}/{}", j.key);
-            // An explore Job belongs to the Plan, not to a PR: it has no node in a PR's flow.
-            let JobHome::Pr(pr) = JobHome::of("PR key", j.pr.as_deref())? else {
-                return Ok(None);
+            // An explore Job belongs to the Plan, not to a PR: its node carries no PR (`JobHome::Plan`).
+            let pr = match JobHome::of("PR key", j.pr.as_deref())? {
+                JobHome::Pr(pr) => Some(pr),
+                JobHome::Plan => None,
             };
             let key = id("Job key", &j.key, JobKey::parse)?;
-            Ok(Some(JobNode {
+            Ok(JobNode {
                 pr,
                 status: JobStatus::parse(&format!("{what} has status"), &j.status)?,
                 tier: j.tier.as_deref().map(|t| tier(&what, t)).transpose()?,
@@ -497,10 +499,9 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
                 cancel_reason: j.cancel_reason.clone(),
                 merged_sha: j.merged_sha.clone(),
                 key,
-            }))
+            })
         })
-        .filter_map(Result::transpose)
-        .collect()
+        .collect::<Result<Vec<_>, CpdError>>()
 }
 
 /// Every Attempt of the Plan by Job key, oldest first, with its Worker's state.
