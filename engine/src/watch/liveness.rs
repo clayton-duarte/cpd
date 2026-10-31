@@ -342,7 +342,7 @@ fn parse_time(text: &str) -> Result<OffsetDateTime, CpdError> {
 /// `WHERE` it can prove implies the index's, so the read costs the live Sessions, not every Session ever made
 /// (`sessions` only grows). A test pins the plan.
 const LIVE_SESSIONS: &str =
-    "SELECT id, role, state, tmux_pane, name FROM sessions WHERE state <> 'stopped' OR tmux_pane IS NOT NULL ORDER BY id";
+    "SELECT id, role, state, tmux_pane, name, runner FROM sessions WHERE state <> 'stopped' OR tmux_pane IS NOT NULL ORDER BY id";
 
 /// A Session not `stopped`, or with a pane, as read before the panes are listed.
 struct Live {
@@ -351,6 +351,7 @@ struct Live {
     state: String,
     pane: Option<String>,
     name: String,
+    runner: String,
 }
 
 /// Every Session whose pane is dead or missing becomes `stopped` with no pane,
@@ -371,11 +372,12 @@ fn sessions(engine: &mut Engine) {
                     r.get::<_, String>(2)?,
                     r.get::<_, Option<String>>(3)?,
                     r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
-            .map(|(id, role, state, pane, name)| Ok(Live { id: SessionId::parse(&id)?, role, state, pane, name }))
+            .map(|(id, role, state, pane, name, runner)| Ok(Live { id: SessionId::parse(&id)?, role, state, pane, name, runner }))
             .collect::<Result<Vec<_>, CpdError>>()
     });
     let panes = live.and_then(|live| Ok((live, engine.tmux.list_panes()?)));
@@ -387,6 +389,10 @@ fn sessions(engine: &mut Engine) {
         Err(e) => return engine.fail(Step::E2, About::Machine, &e),
     };
     for session in live {
+        // A durable Lead or Manager has no pane by design (contract §3.6): E2 leaves it alone.
+        if session.runner == "durable" && matches!(session.role.as_str(), "lead" | "manager") {
+            continue;
+        }
         let found = session.pane.as_deref().and_then(|p| panes.iter().find(|pane| pane.pane.as_str() == p));
         let why = match (&session.pane, found) {
             (_, Some(pane)) if !pane.dead => continue,

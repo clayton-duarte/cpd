@@ -24,6 +24,8 @@ mod moves;
 mod phi_label_tests;
 #[cfg(test)]
 mod ports_tests;
+#[cfg(test)]
+mod durable_send_tests;
 mod reload;
 mod resolve;
 mod resume;
