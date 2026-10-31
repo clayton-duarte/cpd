@@ -258,17 +258,28 @@ impl Catalog {
         Ok(format!("{}:{}", self.model(tier.letter).model, tier.level()))
     }
 
-    /// The ladder's next step (contract §9, pro-d82, pro-d83, hs-d554): the same model at effort
-    /// + 1 if valid and a Worker may have it (H0-H3, S0-S3); otherwise, leaving H, the
-    /// lowest valid allowed S effort ≥ 1; otherwise none. It never enters `O`; the ladder ends at S3. A Tier
-    /// a Worker may not have (effort 5, S4, `O`, `GX`) has no ladder.
+    /// The ladder's next step (contract §9, pro-d82, pro-d83, hs-d554, hs-d791): within the same
+    /// letter, the smallest valid effort a Worker may have (H0-H3, S0-S3) strictly greater than
+    /// `tier`'s — not effort + 1, which may not be a valid effort of the model; only when none
+    /// exists, leaving the letter, the lowest valid allowed S effort ≥ 1; otherwise none. It never
+    /// enters `O`; the ladder ends at S3. A Tier a Worker may not have (effort 5, S4, `O`, `GX`)
+    /// has no ladder.
     pub fn next(&self, tier: Tier) -> Result<Option<Tier>, CpdError> {
         self.check(tier)?;
         if !tier.is_worker_allowed() {
             return Ok(None);
         }
         let allowed = |t: &Tier| t.is_worker_allowed();
-        if let Some(up) = Tier::new(tier.letter, tier.effort + 1).filter(|t| allowed(t) && self.is_valid(*t)) {
+        // Within the letter: the smallest valid effort strictly above the Tier's (hs-d791).
+        if let Some(up) = self
+            .model(tier.letter)
+            .efforts
+            .iter()
+            .copied()
+            .find(|e| *e > tier.effort)
+            .and_then(|effort| Tier::new(tier.letter, effort))
+            .filter(|t| allowed(t) && self.is_valid(*t))
+        {
             return Ok(Some(up));
         }
         let at = Letter::LADDER.iter().position(|l| *l == tier.letter).expect("an allowed letter is on the ladder");
