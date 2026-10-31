@@ -6,6 +6,7 @@ mod common;
 
 mod ask;
 mod attempt;
+mod attempt_abort;
 mod worker_runner;
 mod working_pr;
 mod worker_runner_durable;
