@@ -32,6 +32,17 @@ fn run(store: &mut Store, sql: &str) {
 
 /// A store of Context `ctx`, Lead `lead1` and Plan `pay` (phase `dispatch`) with PR `api` (`/repo`, base `main`).
 fn db() -> (tempfile::TempDir, Store) {
+    let (dir, mut store) = db_without_pr();
+    run(
+        &mut store,
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+           VALUES ('pay', 'api', '/repo', 'main', 'dispatch', 'cpd/pay/api', '/wt/api', cpd_txn(), '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z');",
+    );
+    (dir, store)
+}
+
+/// [`db`] without the PR: an explore-only Plan's store (Context `ctx`, Lead `lead1`, Plan `pay`, phase `dispatch`).
+fn db_without_pr() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().to_path_buf().into()), None).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
@@ -42,9 +53,7 @@ fn db() -> (tempfile::TempDir, Store) {
            VALUES ('lead1', 'lead', 'ctx', NULL, 'lead1', '/repo', 'O3', 'idle', '2026-01-02T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z', NULL);
-         UPDATE sessions SET plan = 'pay' WHERE id = 'lead1';
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-           VALUES ('pay', 'api', '/repo', 'main', 'dispatch', 'cpd/pay/api', '/wt/api', cpd_txn(), '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z');",
+         UPDATE sessions SET plan = 'pay' WHERE id = 'lead1';",
     );
     (dir, store)
 }
@@ -61,11 +70,12 @@ fn pr_job(pr: &str, key: &str, status: &str) -> String {
 
 /// An explore Job `key` (kind `scout`, no PR) of Job status `status`, Tier S1, with no Attempt.
 fn explore_job(key: &str, status: &str) -> String {
+    let failed_cause = if status == "failed" { "'crashed'" } else { "NULL" };
     format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
-                           created_txn, created_at, kind)
+                           created_txn, created_at, kind, failed_cause)
          VALUES ('pay', NULL, '{key}', 'Job', 'S1', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, '{FP}', cpd_txn(),
-                 '2026-01-02T00:00:00.000Z', 'scout');"
+                 '2026-01-02T00:00:00.000Z', 'scout', {failed_cause});"
     )
 }
 
@@ -116,7 +126,7 @@ fn the_chart_draws_an_explore_jobs_box_above_the_pr_boxes() {
 
 #[test]
 fn an_explore_only_plans_chart_is_the_explore_box_alone() {
-    let (_dir, mut store) = db();
+    let (_dir, mut store) = db_without_pr();
     run(&mut store, &explore_job("look", "queued"));
     let chart = chart(&mut store, 0);
     let lines = rows(&chart.buf);

@@ -715,7 +715,7 @@ fn sample_pr(key: &str) -> read::PrNode {
 fn sample_job(pr: &str, key: &str) -> read::JobNode {
     read::JobNode {
         key: cpd_core::ids::JobKey::parse(key).unwrap(),
-        pr: cpd_core::ids::PrKey::parse(pr).unwrap(),
+        pr: Some(cpd_core::ids::PrKey::parse(pr).unwrap()),
         seq: 0,
         title: String::new(),
         status: read::JobStatus::Queued,
@@ -898,7 +898,7 @@ mod tests {
         };
         let job = |n: usize| JobNode {
             key: JobKey::parse(&format!("job-{n}")).unwrap(),
-            pr: pr.clone(),
+            pr: Some(pr.clone()),
             seq: 0,
             title: String::new(),
             status: JobStatus::Queued,
