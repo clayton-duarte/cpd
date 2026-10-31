@@ -86,6 +86,25 @@ fn job(env: &TestEnv, plan: &str, pr: &str, key: &str, status: &str) {
     );
 }
 
+/// An explore Job of `plan` (its `pr` NULL): `kind` `scout` or `research` at `tier`, stored `status`, touching `explore/<key>.md`,
+/// and `needs` of other explore Jobs. A `running` one gets a running Attempt.
+fn explore(env: &TestEnv, plan: &str, key: &str, kind: &str, tier: &str, status: &str, needs: &[&str]) {
+    let mut sql = format!(
+        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
+         VALUES ('{plan}', NULL, '{key}', 'Title {key}', '{tier}', 'Goal.', 'Context.', '[\"explore/{key}.md\"]', '[\"ok\"]', '[]', '{kind}', '{status}', 1, '{FP}', cpd_txn(), 't');"
+    );
+    for need in needs {
+        sql.push_str(&format!("INSERT INTO dependencies (plan, job, needs) VALUES ('{plan}', '{key}', '{need}');"));
+    }
+    if status == "running" {
+        sql.push_str(&format!(
+            "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, driver_pid, started_at)
+             VALUES ('{plan}', '{key}-a1', '{key}', 1, '{tier}', 'ladder', 'running', 'cpd/{plan}--{key}-a1', '/w', 4242, 't');"
+        ));
+    }
+    env.sql(&sql);
+}
+
 fn env() -> Fx {
     let fx = Fx::new();
     let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
@@ -206,6 +225,93 @@ fn markdown_prints_the_same_content() {
 }
 
 #[test]
+/// commands.md §3.12 (Plan `explore-view`): a Plan `live` with PR `api` and explore Jobs shows a plan-level `jobs`
+/// array beside `prs`, in `seq` order, while the PR's own `jobs` array is unchanged.
+#[test]
+fn context_pending_a_plans_plan_level_explore_jobs_in_json() {
+    let fx = env();
+    plan(&fx.env, "ctx", "live", "dispatch", false);
+    pr(&fx.env, "live", "api", "dispatch");
+    job(&fx.env, "live", "api", "w1", "queued");
+    explore(&fx.env, "live", "look", "scout", "H2", "queued", &[]);
+    explore(&fx.env, "live", "look2", "research", "S2", "running", &[]);
+    let out = fx.cpd(&["context", "pending", "--context", "ctx"]).ok();
+    let plans = out["plans"].as_array().unwrap();
+    assert_eq!(plans.len(), 1, "{out}");
+    let live = &plans[0];
+    assert_eq!(live["id"], "live");
+    assert!(live["jobs"].is_array(), "the Plan carries a plan-level jobs array: {out}");
+    assert_eq!(keys(&live["jobs"]), ["look", "look2"], "{out}");
+    assert_eq!(
+        live["jobs"][0],
+        json!({"key": "look", "kind": "scout", "status": "queued", "tier": "H2", "title": "Title look", "touches": ["explore/look.md"]})
+    );
+    assert_eq!(
+        live["jobs"][1],
+        json!({"key": "look2", "kind": "research", "status": "running", "tier": "S2", "title": "Title look2", "touches": ["explore/look2.md"]})
+    );
+    // The PR's own `jobs` array is unchanged.
+    assert_eq!(keys(&live["prs"]), ["api"]);
+    assert_eq!(keys(&live["prs"][0]["jobs"]), ["w1"]);
+    assert_eq!(live["prs"][0]["jobs"][0]["status"], "queued");
+}
+
+/// commands.md §3.12: an explore Job that needs another explore Job is displayed `waiting` with its `waiting_on`.
+#[test]
+fn context_pending_an_explore_job_waiting_on_another_explore_job() {
+    let fx = env();
+    plan(&fx.env, "ctx", "live", "dispatch", false);
+    explore(&fx.env, "live", "scan", "scout", "H2", "running", &[]);
+    explore(&fx.env, "live", "dig", "research", "S2", "queued", &["scan"]);
+    let out = fx.cpd(&["context", "pending", "--context", "ctx"]).ok();
+    let jobs = out["plans"][0]["jobs"].as_array().expect("the Plan's plan-level jobs");
+    assert_eq!(jobs[0]["key"], "scan");
+    assert_eq!(jobs[0]["status"], "running");
+    assert_eq!(
+        jobs[1],
+        json!({"key": "dig", "kind": "research", "status": "waiting", "tier": "S2", "title": "Title dig", "touches": ["explore/dig.md"], "waiting_on": ["scan"]})
+    );
+}
+
+/// commands.md §3.12: a Plan with only explore Jobs and no PR is listed, with a non-empty `jobs` and an empty `prs`.
+#[test]
+fn context_pending_a_plan_with_only_explore_jobs_is_not_empty() {
+    let fx = env();
+    plan(&fx.env, "ctx", "solo", "dispatch", false);
+    explore(&fx.env, "solo", "scan", "scout", "H2", "queued", &[]);
+    let out = fx.cpd(&["context", "pending", "--context", "ctx"]).ok();
+    let plans = out["plans"].as_array().unwrap();
+    assert_eq!(plans.len(), 1, "{out}");
+    assert_eq!(plans[0]["id"], "solo");
+    assert_eq!(plans[0]["prs"], json!([]));
+    assert_eq!(keys(&plans[0]["jobs"]), ["scan"], "{out}");
+}
+
+/// commands.md §3.12: `--markdown` renders the Plan-level `### Jobs` section after the Plan's PR sections, one line
+/// per explore Job `- <key> <kind> <status>: <title> (<touches>)`, a blocked one `waiting on <keys>`.
+#[test]
+fn context_pending_markdown_the_plan_level_jobs_section() {
+    let fx = env();
+    plan(&fx.env, "ctx", "live", "dispatch", false);
+    pr(&fx.env, "live", "api", "dispatch");
+    job(&fx.env, "live", "api", "w1", "queued");
+    explore(&fx.env, "live", "look", "scout", "H2", "queued", &[]);
+    explore(&fx.env, "live", "look2", "research", "S2", "running", &[]);
+    explore(&fx.env, "live", "dig", "research", "S2", "queued", &["look2"]);
+    let run = fx.env.cpd(&["context", "pending", "--context", "ctx", "--markdown"]);
+    assert_eq!(run.exit, 0, "{run:?}");
+    let expected = "# Pending work in ctx\n\
+\n## live (dispatch): Title of live\n\
+\n### PR api (/r/api, base main): dispatch\n\
+\nno pull request\n\
+\n- w1 queued: Title w1 (src/w1.rs, docs/w1.md)\n\
+\n### Jobs\n\
+\n- look scout queued: Title look (explore/look.md)\n\
+- look2 research running: Title look2 (explore/look2.md)\n\
+- dig research waiting on look2: Title dig (explore/dig.md)\n";
+    assert_eq!(run.stdout, expected);
+}
+
 fn it_writes_nothing() {
     let fx = fixture();
     let events = || fx.cpd(&["events", "list"]).ok()["events"].as_array().unwrap().len();
