@@ -3773,6 +3773,53 @@ A Worker does not exit when its first turn ends: it stays up and idle, because t
 
 **Packages.** `@earendil-works/pi-durable`, `@earendil-works/chord` and `@earendil-works/pi-ai` are pinned at exactly 1.3.0, the version of the installed pi. `engines.node` is `>=22.19.0`, what they declare. `@earendil-works/pi-coding-agent` is imported at run time by `main.ts`, so it is a production dependency, pinned 1.3.0 (`dependencies`, not `devDependencies`): `cpd install` runs `pnpm install --prod` (§3.7 step 4a), which leaves a devDependency out, and the installed runner would die with `ERR_MODULE_NOT_FOUND`. Only the `pnpm-lock.yaml` importer entry moves.
 
+### 6.13 The durable session host
+
+The durable session host is `pi/durable-host/main.ts`, a headless Node process that runs one Lead's or Manager's Session over `@earendil-works/pi-durable` 1.3.0 with no tmux pane. It generalises the durable Worker runner (§6.12), whose conversation adapter, `Deps` shape, exit codes and no-`close()` rule it keeps. It is a second host beside pi, behind a per-role config key that defaults to `pi`, so every step of the Plan `durable-leads` is reversible. The research is `docs/research/durable-leads.md` (section 4.7 "the host process", Decided Q3, Q13, Q14). This section is the P1.3 slice only; what it leaves to later PRs is listed under "Not in P1.3".
+
+**Invocation.** `node pi/durable-host/main.ts --session <id> --model <pattern>`, with `CPD_HOME` in the environment and the cwd the Session's working directory. `<pattern>` is the pi pattern `[<provider>/]<id>[:<thinking>]`. A missing `--session`, a missing `--model`, a missing `CPD_HOME` or an unusable pattern is a `usage` CpdError naming it; the process prints it on stderr and exits 2 before opening anything.
+
+**Modules** (all in `pi/durable-host/`, one concern each):
+
+| File | Exports |
+|---|---|
+| `config.ts` | `type Config = { home: string; session: string; cwd: string; model: string }` (`model` is the pattern); `parseConfig(argv: readonly string[], env: Record<string, string \| undefined>, cwd: string): Config` (flags `--session <id>` and `--model <pattern>`, environment `CPD_HOME`; each missing one is a `usage` CpdError); `storePath(home: string, session: string): string` = `<home>/run/host/<session>.sqlite` |
+| `guards.ts` | `type Where = { cwd: string; home: string }` (`home` is the User's home directory, what `os.homedir()` returns); `hostVerdict(call: { name: string; arguments: Record<string, unknown> }, where: Where): Verdict` (`Verdict` as in §6.12). Rows, in the adapter's order and with its reasons: for `edit` and `write`, `primaryCheckoutWrite` (`mainguard.ts`); for `bash` with a string `command`, `primaryCheckoutMove` (`mainguard.ts`), `secretBypass` (`secretguard.ts`), then `hostApproveBypass` (`hostapprove.ts`); the `block` text is that module's `reasonText(matched)`. It has **no test guard** (`unfilteredTestRun`: a Lead may run tests) and **no explore profile** (it never applies to a Lead, `pi/lib/explore.ts:171`). The noblock, ask and loop guards and the role switch are P1.7 |
+| `extension.ts` | `hostExtension(prompt: { contextFiles: string \| undefined; policy: string \| undefined; zone: string }, where: Where): Extension` (pi-durable's `defineExtension`): prompt `sections` as `cpdExtension` of §6.12 gives them (`cpd-context-files`, `cpd-policy`, `cpd-time-zone`, same order, each omitted when `undefined`) and one `hook(ToolTask, { beforeTool })` that returns `{ block }` from `hostVerdict(call, where)` and `undefined` otherwise |
+| `run.ts` | `runHost(config: Config, deps: Deps): Promise<number>` and the `Deps` port below. The whole sequence; it returns the process exit code |
+| `main.ts` | The entry and the only file that builds the real `Deps` (as §6.12's `main.ts`, without the follower, the report writer and MCP): `parseConfig`, `process.exit(await runHost(...))`, exit 2 for a `usage` error |
+
+The conversation adapter is `openConversation` of `pi/durable-worker/harness.ts`, reused unchanged: the host has no `harness.ts` of its own.
+
+**The `Deps` port** (`run.ts`). §6.12's, minus `follow`, `writeReport` and `mcp`; `Conversation` and `Submission` are §6.12's types, and the host uses only `closed` of them (it submits nothing at start):
+
+| Member | Does |
+|---|---|
+| `cpd(args: readonly string[]): Promise<Record<string, unknown>>` | runs `cpd <args>`; resolves to the parsed `{"ok":true,...}` object, or throws a CpdError |
+| `resolveModel(pattern: string): { provider: string; modelId: string; thinkingLevel?: string }` | throws a `usage` CpdError for an unusable pattern |
+| `contextFiles(cwd: string): readonly { path: string; content: string }[]` | the context files of `cwd` |
+| `open(o: { file: string; cwd: string; model: { provider: string; modelId: string; thinkingLevel?: string }; extension: Extension }): Promise<Conversation>` | opens the store at `file` (`openConversation` in production) |
+| `onTerminate(handler: () => void): void` | calls `handler` on SIGTERM and on SIGINT |
+| `homeDir(): string` | the User's home directory |
+| `now(): Date` | the current time |
+| `log(line: string): void` | logs one line |
+
+**`runHost`, in order.**
+
+1. `resolveModel(config.model)` first: a `usage` error ends it before any effect.
+2. `cpd session show <session>`, read with `parseSession` of `pi/lib/run.ts`. A Session whose `role` is not `lead` or `manager` is refused with a `usage` CpdError (exit 2): the host runs no Worker and no other role.
+3. The policy text is read the way the pi adapter reads it for that Session (`pi/lib/agent-state.ts:30-41`, `pi/lib/startup.ts`): `cpd policy show` -> `policySection` of `pi/lib/policy.ts`. The context files -> one text, each file as `## <path>` and its content, blocks separated by a blank line (`undefined` when there are none). `zone` = `zoneLine(now())` of `pi/lib/time.ts`.
+4. `open({ file: storePath(...), cwd, model, extension: hostExtension(...) })`, where `hostExtension` is given `{ cwd: config.cwd, home: deps.homeDir() }`. pi-durable resumes an unfinished run of that store itself (its README, "Persist and Resume"); the host does nothing for it.
+5. When the shown Session `state` is `stopped` (and only then), report `idle` through `stateArgs` and `Reporter` of `pi/lib/state.ts` (§3.6: `stopped -> idle`; `stopped -> working` is refused).
+6. Wait. The host submits nothing at start, writes no end report and sends no spec first message: a Lead's input arrives later (P1.4, P1.5).
+7. The run ends on the first of: `onTerminate` (report `stopped`, return 143); `conversation.closed` settling, which pi-durable does after a storage error (log it, report `stopped`, return 1); or an error thrown by steps 1 to 6 (report `stopped` best effort, return 1).
+
+**Exit codes**, as the Worker runner's: 143 after SIGTERM or SIGINT, 1 when the harness closes or a step fails, 2 for a `usage` error (from `main.ts`). On every exit the host reports `stopped` through the same `Reporter`, and it never calls `Harness.close()`: a call with no end does not return from it (§6.12 "No `close()`" and its spike).
+
+**Not in P1.3.** Events delivered as input, and the Event cursor: P1.4. The socket: P1.5. UI requests and dialogs: P1.6. The noblock, ask and loop guards and the role switch: P1.7. Operations: P1.9. Starting the host, from the engine or by the config key: P1.10. Until P1.4 a host resumed after a crash while the Session row says `working` leaves it `working`: it tracks only its own submissions, and it has made none in this process.
+
+**Tests.** They live in `pi/test/durable-host/`, one `*.test.ts` per module with rules of its own (`config`, `guards`, `extension`, `run`), added by the tests Job to the default list of the root `package.json` `test` script. Statements about pi-durable that neither its types nor its README were read for are **unverified**: here, that a store resumed by `open` continues an interrupted run with no host action (the README states it; no host spike has run it).
+
 ## 7. git and the Gate
 
 cpd runs git itself (R4); there is no worktrunk. Every git call is `git -C <dir> …` with argv, `GIT_TERMINAL_PROMPT=0`, and stdin from `/dev/null`. Every git call also gets, in its environment, `GIT_CONFIG_COUNT=2`, `GIT_CONFIG_KEY_0=core.filesRefLockTimeout`, `GIT_CONFIG_VALUE_0=10000`, `GIT_CONFIG_KEY_1=core.packedRefsTimeout`, `GIT_CONFIG_VALUE_1=10000` (git-config(1)): a ref or `packed-refs` lock held by another git process is waited for up to 10 s instead of git's 100 ms (`filesRefLockTimeout`) and 1 s (`packedRefsTimeout`), because cpd has concurrent writers of shared refs such as `refs/remotes/origin/<base>` (hs-d243, G2). Hooks are spawned by cpd, not by git, and do not get it (§7.3).
