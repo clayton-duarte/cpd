@@ -1048,7 +1048,7 @@ Explore Jobs (`scout`, `research`) are in no review (Plan `explore-roles`, R3): 
 |---|---|---|
 | the phase is `plan`, or any phase after it (not `grounding`) | `illegal_phase` | 3 |
 | at least one Job is `draft` (in a phase after `plan` too: the drafts are what is reviewed; a `draft` `open` Job does not count, it is not under review, hs-d573) | `no_draft_jobs` | 3 |
-| every `draft` Job has its Tier and its Spec (hs-d241, R1: no stub draft is approvable); `details.jobs` lists `[{key, missing}]`, `missing` being `["tier"]`, `["spec"]` or both | `draft_incomplete` | 3 |
+| every `draft` Job that does not wait (contract §2.2 "A parked draft", hs-n615) has its Tier and its Spec (hs-d241, R1: no stub draft is approvable); a waiting stub is skipped and the request is accepted (its covered set may then hold no non-waiting draft); `details.jobs` lists `[{key, missing}]`, `missing` being `["tier"]`, `["spec"]` or both | `draft_incomplete` | 3 |
 | every `impl` Job that is a `draft` needs at least one `test` Job of its PR (hs-d341; `details.jobs` lists the `impl` Jobs) | `test_job_required` | 3 |
 | every `verify` Job that is a `draft` needs at least one `impl` Job of its PR that is not `cancelled` (pro-d80; `details` `{plan, job, jobs}`; checked after `test_job_required` and before `shape_incomplete`) | `impl_job_required` | 3 |
 | every PR of shape `tdd` that has not opened has at least one `test` and one `impl` Job that is not `cancelled` (hs-d497, contract §2.2 "Job kinds"; `details` `{pr, missing}`) | `shape_incomplete` | 3 |
@@ -1066,7 +1066,7 @@ Effects:
  "next": "The User reviews the plan summary in your chat and decides there. Stop and wait for the decision message."}
 ```
 
-**Stubs** (hs-d241, R1). A draft without its Tier or its Spec (a stub, §5.1) cannot be approved, so the review is **not requested**: it is refused `draft_incomplete` (exit 3) with `details.jobs` = `[{"key": "api-1", "missing": ["spec"]}, …]`, in key order, `missing` holding `"tier"` and/or `"spec"`.  Nothing is rendered or written. The Lead completes each stub with `job edit --tier --spec` (§5.2) or cancels it, then asks again. The plan fingerprint covers a stub as it is (contract §2.3), so completing one changes it.
+**Stubs** (hs-d241, R1). A draft without its Tier or its Spec (a stub, §5.1) cannot be approved, so the review is **not requested**: it is refused `draft_incomplete` (exit 3) with `details.jobs` = `[{"key": "api-1", "missing": ["spec"]}, …]`, in key order, `missing` holding `"tier"` and/or `"spec"`. A stub that waits (contract §2.2 "A parked draft", hs-n615) is skipped and the request is accepted (its covered set may then hold no non-waiting draft). Nothing is rendered or written on refusal. The Lead completes each stub with `job edit --tier --spec` (§5.2) or cancels it, then asks again. The plan fingerprint covers a stub as it is (contract §2.3), so completing one changes it.
 
 Idempotent: yes. When the latest review is `pending` for the current fingerprint, it returns that review with `"already": true` (its `path` and `summary` too) and writes nothing; the two refusals above are still checked first, so a Plan with no outline is refused even when a review made before the outline existed is pending. When the Jobs or PRs changed since, it requests a new review and closes the older one `superseded`; the older one stays in the database, closed.
 
@@ -1084,8 +1084,8 @@ Records the User's decision. Called by the pi adapter with the result of the cha
 
 Effects: **rows**, one transaction: `plan_reviews.status`, `feedback` (the file's text, or null), `decided_at`. **Event** `plan-review` `{review, fingerprint, status, feedback}`.
 
-In a phase after `plan`, an **approval** also queues the drafts the review covered (§2.2, §3.2), in the same transaction:
-- **Rows:** every `draft` Job of the Plan becomes `queued` and gets its Locked-Job fingerprint (§2.3), as an appended Job has at `job add`; `appended` stays 1. A `draft` `open` Job is one of them: it is queued here with the others, so a PR's `open` Job is `queued` exactly when its other Jobs are (contract §3.7 E4, hs-d573) and the `jobs` of the Event lists it too. The engine schedules each as soon as it is Ready (§3.2). **A draft of an `open` PR** that becomes `queued` here is a `work` Job and reaches the pull request by its own merge (§5.1; contract §3.8 "Updating"); no `update` Job is queued.
+In a phase after `plan`, an **approval** also queues the drafts the review covered (§2.2, §3.2) — the ones that do not wait (contract §2.2 "A parked draft", hs-n615) — in the same transaction:
+- **Rows:** every `draft` Job of the Plan that does not wait (contract §2.2 "A parked draft", hs-n615) becomes `queued` and gets its Locked-Job fingerprint (§2.3), as an appended Job has at `job add`; a waiting draft stays `draft` and is resolved when it stops waiting (the E20 parked-draft wake tells the Lead) or by a later review round once it is complete; `appended` stays 1. A `draft` `open` Job is one of them: it is queued here with the others, so a PR's `open` Job is `queued` exactly when its other Jobs are (contract §3.7 E4, hs-d573) and the `jobs` of the Event lists it too. The engine schedules each as soon as it is Ready (§3.2). **A draft of an `open` PR** that becomes `queued` here is a `work` Job and reaches the pull request by its own merge (§5.1; contract §3.8 "Updating"); no `update` Job is queued.
 - **Event:** the same `plan-review` Event, whose `data` gains `jobs: [key]`, the Jobs it queued, in key order. No new Event kind. `plan-phase` is not appended: the phase does not change.
 - Only a **current** approval queues (*decided*: a stale one would queue drafts the User never saw): when the drafts changed since the review (`current` false), the decision is recorded and nothing is queued, `jobs` is absent and `next` asks for a new `cpd plan review`.
 - A **rejection** queues nothing: the drafts stay drafts, editable, as in phase `plan`; the Lead revises them (`job edit`, `job add --draft`, `job cancel`) and asks again.
@@ -1107,7 +1107,7 @@ cpd plan lock [--plan <id>]
 |---|---|---|
 | the phase is `plan` (`dispatch`: `already`) | `illegal_transition` | 3 |
 | at least one Job is `draft` | `no_draft_jobs` | 3 |
-| every `draft` Job has its Tier and its Spec, as `plan review` requires (§4.6; `details.jobs` as there) | `draft_incomplete` | 3 |
+| every `draft` Job that does not wait (contract §2.2 "A parked draft", hs-n615) has its Tier and its Spec, as `plan review` requires (§4.6; `details.jobs` as there) | `draft_incomplete` | 3 |
 | every `impl` Job needs at least one `test` Job of its PR, as `plan review` requires (§4.6; `details.jobs` as there) | `test_job_required` | 3 |
 | every `verify` Job needs at least one `impl` Job of its PR that is not `cancelled`, as `plan review` requires (§4.6; `details` as there; after `test_job_required`) | `impl_job_required` | 3 |
 | every PR of shape `tdd` has a `test` and an `impl` Job that is not `cancelled`, as `plan review` requires (§4.6; `details` as there) | `shape_incomplete` | 3 |
