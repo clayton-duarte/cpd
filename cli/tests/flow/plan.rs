@@ -1005,7 +1005,7 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
     // Locked, every Job queued: there is nothing to review.
     refused(&fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "no_draft_jobs", 3);
 
-    add_draft(&fx.env, "pay", "c", &["a"], true);
+    add_draft(&fx.env, "pay", "c", &[], true);
     add_draft(&fx.env, "pay", "d", &["c"], true);
     fx.outline_for_review("pay");
     let out = fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
@@ -1016,7 +1016,7 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
     };
     // The fingerprint covers exactly the drafts, and no PR, and the outline (contract §2.3) that `outline_for_review` set.
     let outline = "{\"assumptions\":[],\"decided\":[],\"decisions\":[],\"done_when\":{\"pay\":[\"Done\"]},\"goal\":\"Goal\",\"out_of_scope\":[],\"risks\":[]}";
-    let fingerprint = sha256(&format!("{{\"jobs\":[{},{}],\"outline\":{outline},\"prs\":[]}}", spec("c", "\"a\""), spec("d", "\"c\"")));
+    let fingerprint = sha256(&format!("{{\"jobs\":[{},{}],\"outline\":{outline},\"prs\":[]}}", spec("c", ""), spec("d", "\"c\"")));
     assert_eq!((&out["review"]["id"], &out["review"]["status"], &out["review"]["fingerprint"]), (&json!("r2"), &json!("pending"), &json!(fingerprint)));
     assert_eq!(inproc::events(&fx, "plan-review").last().unwrap()["data"], json!({"review": "r2", "fingerprint": fingerprint, "status": "pending"}));
 
@@ -1024,7 +1024,7 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
     assert!(out.get("path").is_none(), "{out}");
     let text = fs::read_to_string(home(&fx.env).plan_md(&pid("pay"))).unwrap();
     assert!(text.contains("| Key | Title | Kind | Tier | Status | Needs | Touches | Review |"), "{text}");
-    assert!(text.contains("| `c` | Job c | work | S2 | draft | `a` | `src/c.rs` | **under review** |"), "{text}");
+    assert!(text.contains("| `c` | Job c | work | S2 | draft | none | `src/c.rs` | **under review** |"), "{text}");
     assert!(text.contains("| `a` | Job a | work | S2 | queued | none | `src/a.rs` | Locked |"), "{text}");
     assert!(text.contains("\nStatus: `draft` · **under review** · Tier: `S2` · Needs: `c`\n"), "{text}");
     // `b` is queued but cannot start until `a` merges: shown as waiting (hs-d521)
@@ -1060,7 +1060,7 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
     let shown = inproc::show(&fx, "pay");
     assert_eq!(shown["plan"]["phase"], "dispatch");
     assert_eq!(inproc::events(&fx, "plan-phase").len(), phase_events, "the phase does not change");
-    for (key, needs) in [("c", &["a"]), ("d", &["c"])] {
+    for (key, needs) in [("c", &[] as &[&str]), ("d", &["c"])] {
         let job = shown["jobs"].as_array().unwrap().iter().find(|j| j["key"] == key).unwrap();
         assert_eq!((&job["status"], &job["appended"]), (&json!("queued"), &json!(true)), "{key}");
         assert_eq!(job["fingerprint"], locked_fingerprint_of(key, needs), "{key}");
@@ -1103,14 +1103,15 @@ fn add_draft_open(env: &TestEnv, plan: &str, key: &str) {
         .unwrap();
 }
 
-/// B1 (hs-d573 O3, O4): E4's draft `open` Job is no Job under review: the fingerprint ignores it, so a pending review stays current, and the
-/// approval queues it with the drafts, in the same transaction.
+/// B1 (hs-d573 O3, O4): E4's draft `open` Job is no Job under review: the fingerprint ignores it, so a pending review
+/// stays current, and an approval queues it in the same transaction, while a waiting draft stays `draft` (hs-n615).
 #[test]
 fn a_draft_open_job_does_not_void_a_pending_review_and_an_approval_queues_it_with_the_drafts() {
     let fx = Fx::with_ports();
     let repo = inproc::locking(&fx);
     inproc::approved(&fx, &repo);
     fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+    // A complete draft that waits on the queued Job `a`: the review covers it, but an approval does not queue it.
     add_draft(&fx.env, "pay", "c", &["a"], true);
     fx.outline_for_review("pay");
     let fingerprint = fx.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"].clone();
@@ -1123,18 +1124,13 @@ fn a_draft_open_job_does_not_void_a_pending_review_and_an_approval_queues_it_wit
     assert_eq!(inproc::show(&fx, "pay")["review"]["current"], true);
 
     let out = fx.cpd(&["plan", "decide", &review, "--approve", "--plan", "pay"]).ok();
-    assert_eq!((&out["review"]["status"], &out["current"]), (&json!("approved"), &json!(true)));
-    let mut queued: Vec<String> = out["jobs"].as_array().unwrap().iter().map(|j| j.as_str().unwrap().to_owned()).collect();
-    queued.sort();
-    assert_eq!(queued, ["c", "open-pay-2"]);
+    assert_eq!((&out["review"]["status"], &out["current"], &out["jobs"]), (&json!("approved"), &json!(true), &json!(["open-pay-2"])));
     let decided = inproc::events(&fx, "plan-review").last().unwrap().clone();
-    let mut listed: Vec<String> = decided["data"]["jobs"].as_array().unwrap().iter().map(|j| j.as_str().unwrap().to_owned()).collect();
-    listed.sort();
-    assert_eq!(listed, ["c", "open-pay-2"]);
-    for key in ["c", "open-pay-2"] {
-        assert_eq!(job_status(&fx.env, key), "queued", "{key}");
-        assert_eq!(fx.env.query::<bool>(&format!("SELECT fingerprint IS NOT NULL FROM jobs WHERE plan = 'pay' AND key = '{key}'")), true, "{key}");
-    }
+    assert_eq!(decided["data"]["jobs"], json!(["open-pay-2"]));
+    assert_eq!(job_status(&fx.env, "open-pay-2"), "queued");
+    assert_eq!(fx.env.query::<bool>("SELECT fingerprint IS NOT NULL FROM jobs WHERE plan = 'pay' AND key = 'open-pay-2'"), true);
+    assert_eq!(job_status(&fx.env, "c"), "draft", "a waiting draft is not queued by an approval");
+    assert_eq!(fx.env.query::<bool>("SELECT fingerprint IS NULL FROM jobs WHERE plan = 'pay' AND key = 'c'"), true, "a waiting draft keeps no fingerprint");
 }
 
 /// B1 (hs-d573 O4): `draft_jobs` and `no_draft_jobs` do not count a draft `open` Job, and the review document shows it as context.
@@ -1159,6 +1155,56 @@ fn a_draft_open_job_is_no_job_under_review() {
     let row = text.lines().find(|l| l.starts_with("| `open-pay-2` |")).unwrap_or_else(|| panic!("no row for the open Job: {text}"));
     assert!(!row.contains("**under review**"), "{row}");
     assert!(text.lines().any(|l| l.starts_with("| `c` |") && l.contains("**under review**")), "{text}");
+}
+
+/// hs-n615: a stub whose need is the queued Job `a` waits, so it is skipped by review completeness rather than
+/// refusing the request; the Plan still holds it as `draft`.
+#[test]
+fn a_parked_draft_passes_a_review_request() {
+    let fx = Fx::with_ports();
+    let repo = inproc::locking(&fx);
+    inproc::approved(&fx, &repo);
+    fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+
+    // A stub with no Tier and no Spec, waiting on the queued Job `a` (the door of hs-d731 accepts it).
+    let out = inproc::stub(&fx, "parked-stub", &["--needs", "a"]);
+    assert_eq!((&out["job"]["status"], &out["job"]["tier"]), (&json!("draft"), &Value::Null));
+
+    // The waiting stub is skipped: the review is requested, not refused `draft_incomplete`.
+    let out = fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+    assert_eq!(out["review"]["status"], "pending");
+    // The review row exists and the stub is still `draft`: neither the request nor the review queued it.
+    let shown = inproc::show(&fx, "pay");
+    assert_eq!(shown["review"]["status"], "pending");
+    let stub = shown["jobs"].as_array().unwrap().iter().find(|j| j["key"] == "parked-stub").unwrap();
+    assert_eq!((&stub["status"], &stub["tier"], &stub["goal"]), (&json!("draft"), &Value::Null, &Value::Null));
+}
+
+/// hs-n615: after the lock an approval queues exactly the drafts that do not wait; a waiting complete draft and a
+/// waiting stub stay `draft` and are not named in the decision Event.
+#[test]
+fn an_approval_queues_only_non_waiting_drafts() {
+    let fx = Fx::with_ports();
+    let repo = inproc::locking(&fx);
+    inproc::approved(&fx, &repo);
+    fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+
+    // A complete draft that waits on the queued Job `a`, a complete draft that waits for nothing, and a waiting stub.
+    add_draft(&fx.env, "pay", "waiting-full", &["a"], true);
+    add_draft(&fx.env, "pay", "fresh", &[], true);
+    inproc::stub(&fx, "parked-stub", &["--needs", "a"]);
+
+    fx.outline_for_review("pay");
+    let out = fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+    let review = out["review"]["id"].as_str().unwrap().to_owned();
+
+    let out = fx.cpd(&["plan", "decide", &review, "--approve", "--plan", "pay"]).ok();
+    assert_eq!(out["jobs"], json!(["fresh"]));
+    assert_eq!(job_status(&fx.env, "fresh"), "queued");
+    assert_eq!(job_status(&fx.env, "waiting-full"), "draft");
+    assert_eq!(job_status(&fx.env, "parked-stub"), "draft");
+    let decided = inproc::events(&fx, "plan-review").last().unwrap().clone();
+    assert_eq!(decided["data"]["jobs"], json!(["fresh"]));
 }
 
 // ---------- plan lock ----------
@@ -1800,19 +1846,20 @@ fn spec_file(env: &TestEnv, name: &str) -> String {
     path.to_str().unwrap().to_owned()
 }
 
+/// hs-n615: a stub added in dispatch waits for the queued Job `a` (the door of hs-d731), so it does not refuse the
+/// review; an approval queues only the drafts that do not wait, so the waiting ones stay `draft`.
 #[test]
 fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_approved_and_queued() {
     let fx = Fx::with_ports();
     let repo = inproc::locking(&fx);
-    seed_tiers(&fx.env);
     inproc::approved(&fx, &repo);
     fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
-    // A follow-up batch is registered at once: two stubs, one with its Tier, and a stub that is dropped again.
-    // After the lock a stub waits for a queued Job (the door, hs-d731): `a` is queued by the lock.
+    // A follow-up batch is registered at once: two stubs and a complete draft, all waiting on the queued Job `a`,
+    // and a stub that is dropped again.
     let out = inproc::stub(&fx, "next-1", &["--needs", "a"]);
     assert_eq!((&out["job"]["status"], &out["job"]["tier"], &out["job"]["appended"]), (&json!("draft"), &Value::Null, &json!(true)));
-    inproc::stub(&fx, "next-2", &["--tier", "S3", "--needs", "next-1"]);
+    inproc::stub(&fx, "next-2", &["--needs", "next-1"]);
     inproc::stub(&fx, "dropped", &["--needs", "a"]);
     fx.cpd(&["job", "cancel", "dropped", "--reason", "Not needed.", "--plan", "pay"]).ok();
     add_draft(&fx.env, "pay", "done-1", &["a"], true);
@@ -1826,40 +1873,26 @@ fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_app
     let pending_stub = jobs.as_array().unwrap().iter().find(|j| j["key"] == "next-1").unwrap();
     assert_eq!((&pending_stub["status"], &pending_stub["touches"]), (&json!("draft"), &json!([])));
 
-    // The review is refused, listing each stub and what it lacks (the cancelled one is not a draft); nothing is written.
-    let (reviews, evs) = (inproc::events(&fx, "plan-review").len(), fx.env.query::<i64>("SELECT count(*) FROM events"));
-    let error = refused(&fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "draft_incomplete", 3);
-    assert_eq!(error["details"]["jobs"], json!([{"key": "next-1", "missing": ["tier", "spec"]}, {"key": "next-2", "missing": ["spec"]}]));
-    assert_eq!(error["details"]["plan"], "pay");
-    assert!(error["message"].as_str().unwrap().contains("next-1, next-2"), "{error}");
-    assert_eq!((inproc::events(&fx, "plan-review").len(), fx.env.query::<i64>("SELECT count(*) FROM events")), (reviews, evs));
-    assert!(!home(&fx.env).plan_md(&pid("pay")).with_file_name("summary-r2.md").exists());
-    // `plan render` still shows them, and the fingerprint covers them as they are.
-    let before = fx.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"].clone();
-
-    // Completing one is not enough; completing both lets the review through, with a new fingerprint.
-    let spec_1 = spec_file(&fx.env, "next-1");
-    let out = fx.cpd(&["job", "edit", "next-1", "--tier", "S2", "--spec", &spec_1, "--plan", "pay"]).ok();
-    assert_eq!(out["fields"], json!(["tier", "spec"]));
-    let error = refused(&fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "draft_incomplete", 3);
-    assert_eq!(error["details"]["jobs"], json!([{"key": "next-2", "missing": ["spec"]}]));
-    let spec_2 = spec_file(&fx.env, "next-2");
-    fx.cpd(&["job", "edit", "next-2", "--spec", &spec_2, "--plan", "pay"]).ok();
+    // The waiting drafts do not refuse the review: the stubs are skipped, not listed `draft_incomplete`.
     fx.outline_for_review("pay");
     let out = fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     assert_eq!((&out["review"]["id"], &out["review"]["status"]), (&json!("r2"), &json!("pending")));
-    assert_ne!(out["review"]["fingerprint"], before, "completing a stub changes the plan fingerprint");
 
-    // Approved and current: exactly the complete drafts are queued, each with its Locked-Job fingerprint.
+    // Approved and current: no draft waits for nothing, so nothing is queued and every draft stays `draft`.
     let out = fx.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
-    assert_eq!((&out["current"], &out["jobs"]), (&json!(true), &json!(["done-1", "next-1", "next-2"])));
+    assert_eq!(out["current"], true);
+    let queued: Vec<String> = out["jobs"].as_array().map_or_else(Vec::new, |a| a.iter().map(|v| v.as_str().unwrap().to_owned()).collect());
+    assert!(queued.is_empty(), "a waiting draft is not queued: {queued:?}");
+    let decided = inproc::events(&fx, "plan-review").last().unwrap().clone();
+    let listed: Vec<String> = decided["data"]["jobs"].as_array().map_or_else(Vec::new, |a| a.iter().map(|v| v.as_str().unwrap().to_owned()).collect());
+    assert!(listed.is_empty(), "{decided}");
     let shown = inproc::show(&fx, "pay");
     for key in ["done-1", "next-1", "next-2"] {
-        assert_eq!(job_status(&fx.env, key), "queued", "{key}");
+        assert_eq!(job_status(&fx.env, key), "draft", "{key}");
     }
     assert_eq!(job_status(&fx.env, "dropped"), "cancelled");
     assert_eq!(shown["tamper"], json!([]));
-    assert_eq!(shown["counts"]["draft"], 0);
+    assert_eq!(shown["counts"]["draft"], 3);
 }
 
 #[test]
