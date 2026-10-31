@@ -1645,6 +1645,7 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 | Precondition | Code | Exit |
 |---|---|---|
 | the Attempt is `running` (already `merging` or later with `submitted_sha` = the worktree's HEAD: `already`) | `attempt_not_running` | 3 |
+| the Attempt was ended by `attempt abort` | `attempt_aborted` | 3 |
 | the caller's cwd is inside the Attempt worktree, on the Attempt branch; for a linear Attempt, the worktree is the Lead worktree and the branch is the Lead Branch | `wrong_worktree` | 3 |
 | clean tree, untracked files included | `dirty_tree` | 3 |
 | at least one commit ahead of `base_sha`; **for an `open` or `update` Job none is required** (the base may not have moved, so there may be nothing to commit, hs-d340) | `no_commits` | 3 |
@@ -1713,7 +1714,7 @@ cpd attempt show <attempt> [--plan <id>]
 cpd attempt list [--job <key>] [--active] [--plan <id>]
 ```
 
-`show` returns every field of the Attempt (§2.2), its Escalations and the paths it uses: `spec_path`, `check` (`run/<plan>/logs/<attempt>.pre-commit.log`, null when no quick check ran), `log` (`run/<plan>/logs/attempt-<attempt>.log`) and the Worker's session file. Its `attempt` carries `runner` (`pi` or `durable`) and `worker_pid` (null for `pi` and before a `durable` Worker starts) and so do the attempts of `job show` (contract §3.4 "The Worker runner and its seam", §4.4). The Gate fields `check_tail`, `gate_hook`, `gate_command` and `gate_exit` are set exactly when the Attempt ended `gate_failed` and are null otherwise, `gate_error` included (contract §2.2, §7.4 step 6). `list` returns `id`, `job`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `started_at`, `ended_at`; `--active` keeps those not `ended`.
+`show` returns every field of the Attempt (§2.2), its Escalations and the paths it uses: `spec_path`, `check` (`run/<plan>/logs/<attempt>.pre-commit.log`, null when no quick check ran), `log` (`run/<plan>/logs/attempt-<attempt>.log`) and the Worker's session file. Its `attempt` carries `runner` (`pi` or `durable`) and `worker_pid` (null for `pi` and before a `durable` Worker starts) and so do the attempts of `job show` (contract §3.4 "The Worker runner and its seam", §4.4). The Gate fields `check_tail`, `gate_hook`, `gate_command` and `gate_exit` are set exactly when the Attempt ended `gate_failed` and are null otherwise, `gate_error` included (contract §2.2, §7.4 step 6). An Attempt ended `aborted` (hs-a8, `attempt abort`, §6.5, contract §3.4) has `outcome` `failed` and `cause` `aborted` in both `show` and `list`. `list` returns `id`, `job`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `started_at`, `ended_at`; `--active` keeps those not `ended`.
 
 ```json
 {"ok": true, "attempts": [{"id": "api-schema-a1", "job": "api-schema", "number": 1, "tier": "S2", "origin": "ladder", "status": "ended", "outcome": "merged", "cause": "merged", "started_at": "…", "ended_at": "…"}]}
@@ -1744,6 +1745,30 @@ The Attempt driver, steps A1–A9 of §3.4, started detached by E3 or `job dispa
 Effects: everything of §3.4 A1–A9, §7.2, §7.3, §7.4: the worktree and `pre-start`; the rendered Worker Spec (§16.1); the Worker, started by the Attempt's `runner` (contract §3.4 "The Worker runner and its seam"): for `pi` its window `cpd-work:<plan>--<attempt>` (`new-window` with the Worker's argv of §6.5, `@cpd_session`) and the Session rows (`session-registered`, `session-moved` `{place: "work"}`); for `durable` a child process with no window and no `session-moved`, its `worker_pid` stored, restarted and stopped as that section says; the nudge (`attempt-nudge`); the stall kill (a Worker's session file idle for `timeouts.stall_seconds` inside one tool call: pi's descendant processes are killed, pi is not, the Attempt goes on; one driver-log line, no Event; contract §3.4 A4); the merge, with no lock (hs-d243: rule S and rule P, contract §7.4); the end (`metrics` from the end report, the Worker's stop by runner, worktree removal on `merged`). Each status change is one transaction with the Event of §3.4.
 
 Output, printed when it exits (stdout goes to its log): `{"ok": true, "attempt": "api-schema-a1", "outcome": "merged", "cause": "merged"}`. Unexpected failures append `error` `{source: "attempt run", code, message, details}` and end the Attempt `failed` / `crashed` when it is not already ended. Idempotent: no; a second driver cannot get fd 3.
+
+### 6.5 `attempt abort` (hs-a8, the User, 2026-10-31)
+
+```
+cpd attempt abort <attempt> [--plan <id>]
+```
+
+The Lead's abort of a running Attempt (hs-a8, the User, 2026-10-31; contract §3.4 "attempt abort"): the Lead ends a `running` Attempt `failed` / `aborted` in ONE write transaction (contract §3.4). It refuses a Worker that types it (`not_a_lead` exit 3), the same `CPD_ATTEMPT` check as `job approve-tests` (§5.9); the Attempt must be `running` (`attempt_not_running` exit 3). A Worker that needs a stopped Attempt talks to the Lead, or runs `cpd ask`.
+
+The command refuses a `starting` Attempt: its setup failure is `setup_failed` (contract §3.4), and the abort never touches it. A `merging` or `ended` Attempt is refused `attempt_not_running`: the natural ending stands, and the abort never rewrites its cause. The command re-reads the Attempt's status in its write transaction (ADR-0014): if the Attempt ended between the command's read and write, the transaction ends with the natural ending, refused `attempt_not_running`, nothing written.
+
+Effects (contract §3.4): in one transaction the Attempt goes `running` → `ended` / `failed` / `aborted` (a no-ladder cause: the engine requeues nothing and climbs nothing), the Job goes `running` → `failed`, `stop_request = aborted` is set when a merge step of the Attempt is running (the merge unwinds per its own rules, never torn down mid-write), and two Events are appended: `attempt-aborted` (§5.2) and `job-failed` (§5.2), whose text names the abort and the Tier-fix route `cpd job retry <key> --tier <T>`. The Worker is stopped by the existing teardown (contract §3.4 "attempt abort"): the `runner`'s stop seam (`core/src/driver/runner.rs::stop`, through the driver's A9, `core/src/driver/run.rs`) when the driver is live; when it is dead, the crash-recovery teardown (`core/src/merge/recover.rs::recover_attempt`, its `rest_of_a9`/`kill_worker`, the E2/R path). Exactly one command writes the two Events; no second command writes them again.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `CPD_ATTEMPT` is not set | `not_a_lead` | 3 |
+| the Attempt exists | `attempt_not_found` | 4 |
+| the Attempt is `running` | `attempt_not_running` | 3 |
+
+```json
+{"ok": true, "attempt": "api-schema-a1", "outcome": "failed", "cause": "aborted"}
+```
+
+Idempotent: no; a second call finds the Attempt not `running` and is refused `attempt_not_running`.
 
 ## 7. `review`
 
