@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { CpdError } from "../lib/cpd.ts";
+import { SOCKET_PATH_MAX } from "./sockets.ts";
 
 export type Config = { home: string; session: string; cwd: string; model: string };
 
@@ -26,6 +27,8 @@ export function storePath(home: string, session: string): string {
 }
 
 export function socketPath(home: string, session: string): string {
-  void home; void session;
-  throw new Error("not implemented");
+  const path = join(home, "run", "host", `${session}.sock`);
+  const bytes = Buffer.byteLength(path);
+  if (bytes > SOCKET_PATH_MAX) throw new CpdError("usage", `socket_path_too_long: ${path} is ${bytes} bytes, over ${SOCKET_PATH_MAX}`);
+  return path;
 }

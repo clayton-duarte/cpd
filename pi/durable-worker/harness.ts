@@ -11,7 +11,9 @@ import type { Input } from "../durable-host/deliver.ts";
 import type { Write } from "../durable-host/turn.ts";
 
 type Root = {
-  submit(input: unknown, ctx: typeof BACKGROUND_CONTEXT): Promise<{ wait(ctx: typeof BACKGROUND_CONTEXT): Promise<{ status: "done" | "unanswered" | "failed" }>; }>;
+  readonly id: unknown;
+  abort(ctx: typeof BACKGROUND_CONTEXT, opts: { background: boolean }): Promise<void>;
+  submit(input: unknown, ctx: typeof BACKGROUND_CONTEXT): Promise<{ readonly id: number; status(ctx: typeof BACKGROUND_CONTEXT): Promise<{ status: string }>; wait(ctx: typeof BACKGROUND_CONTEXT): Promise<{ status: "done" | "unanswered" | "failed" }>; }>;
   viewState(ctx: typeof BACKGROUND_CONTEXT): Promise<{ value: { entries: unknown } }>;
 };
 
@@ -38,19 +40,26 @@ export type Extras = {
 
 export function conversationOf(root: unknown, registry: { install(extension: Extension): void }, closed: Promise<unknown>, durable: Durable): Omit<HostConversation, "submit"> & Extras {
   const r = root as Root;
-  void durable;
   return {
-    watch: async () => { throw new Error("not implemented"); },
-    abort: async () => { throw new Error("not implemented"); },
-    abortSubmission: async () => { throw new Error("not implemented"); },
+    watch: async () => {
+      const stream = await durable.watchEvents(durable.harness, r.id, BACKGROUND_CONTEXT);
+      return {
+        snapshot: stream.snapshot,
+        start: (listener: (events: readonly unknown[]) => Promise<void>) => stream.start((events) => listener(events)),
+        stop: () => stream.stop(),
+        closed: stream.closed,
+      };
+    },
+    abort: (opts: { background: boolean }) => r.abort(BACKGROUND_CONTEXT, opts),
+    abortSubmission: (id: number) => durable.harness.abortSubmission(id, BACKGROUND_CONTEXT, r.id),
     submit: async (input: Input) => {
       const submission = await r.submit(
         { type: "input", content: input.content, requestId: input.requestId, whenBusy: input.whenBusy, ...(input.entry === undefined ? {} : { entry: input.entry }) },
         BACKGROUND_CONTEXT,
       );
       return {
-        get id(): number { throw new Error("not implemented"); },
-        status: async (): Promise<string> => { throw new Error("not implemented"); },
+        id: submission.id,
+        status: async (): Promise<string> => (await submission.status(BACKGROUND_CONTEXT)).status,
         wait: async () => (await submission.wait(BACKGROUND_CONTEXT)).status as "done" | "unanswered",
       };
     },
