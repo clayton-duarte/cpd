@@ -4391,6 +4391,10 @@ A held request puts the Session in `blocked` with the label `dialog`, and `host_
 
 **Tests.** They live in `pi/test/durable-host/` — `protocol.test.ts`, `server.test.ts`, `held.test.ts`, `dialogs.test.ts`, `tools.test.ts`, `plan-review.test.ts` and `socket.test.ts` — written with `node:test` and already in the default file list of the `test` script (`pi/test/durable-host/*.test.ts`). Nothing real runs: the wire tests parse and encode lines; the server tests drive a fake `Connection`, a fake `Timers` and a fake `ServerDeps` on a real `Ring`; the host-flow tests give fakes of the ports (`cpd`, `readText`, `write`, `entries`, a mocked pi-durable `Conversation`) and never open a socket, a store or a model. One test per rule above; the statements marked unverified are pinned by these tests, not by a real run.
 
+### 6.17 Commands: compact, configure, list_models, fork, history and images in submit (P1.8)
+
+Skeleton of P1.8: the five conversation commands of research 4.5 rows 6 to 8, 11 and 12, and images in `submit` (row 3, G82). Full section follows in this PR.
+
 ## 7. git and the Gate
 
 cpd runs git itself (R4); there is no worktrunk. Every git call is `git -C <dir> …` with argv, `GIT_TERMINAL_PROMPT=0`, and stdin from `/dev/null`. Every git call also gets, in its environment, `GIT_CONFIG_COUNT=2`, `GIT_CONFIG_KEY_0=core.filesRefLockTimeout`, `GIT_CONFIG_VALUE_0=10000`, `GIT_CONFIG_KEY_1=core.packedRefsTimeout`, `GIT_CONFIG_VALUE_1=10000` (git-config(1)): a ref or `packed-refs` lock held by another git process is waited for up to 10 s instead of git's 100 ms (`filesRefLockTimeout`) and 1 s (`packedRefsTimeout`), because cpd has concurrent writers of shared refs such as `refs/remotes/origin/<base>` (hs-d243, G2). Hooks are spawned by cpd, not by git, and do not get it (§7.3).
