@@ -74,6 +74,7 @@ function rig(over: { stored?: readonly unknown[] } = {}) {
             wait: () =>
               new Promise<"done" | "unanswered">((resolve) => {
                 finish.push(resolve);
+                notify();
               }),
           };
         },
@@ -180,7 +181,7 @@ test("runHost reports idle only when no submission is pending", { timeout: 20_00
   const hooks = await r.up();
   hooks.onLine(line(160, "job-failed"));
   hooks.onLine(line(161, "job-failed"));
-  await r.until(() => r.submitted.length >= 2);
+  await r.until(() => r.finish.length >= 2);
   r.finish[0]!("done");
   r.finish[1]!("done");
   await r.until(() => r.states().includes("idle"));
