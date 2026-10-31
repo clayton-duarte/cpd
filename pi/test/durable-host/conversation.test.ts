@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { conversationOf } from "../../durable-worker/harness.ts";
+import { conversationOf as build } from "../../durable-worker/harness.ts";
 
 type Status = { status: "done"; entry: string } | { status: "unanswered" } | { status: "failed" };
+
+type Listener = (events: readonly unknown[], context: unknown) => Promise<void>;
 
 /** A fake root: `submit` records its argument and returns a fake submission; no pi-durable store, no model, no timer. */
 function rig(status: Status = { status: "done", entry: "e1" }, entries: readonly unknown[] = []) {
@@ -14,14 +16,34 @@ function rig(status: Status = { status: "done", entry: "e1" }, entries: readonly
       return {
         wait: async () => ({ status: status.status === "done" ? "done" : status.status }),
         status: async () => status,
+        id: 7,
       };
     },
     viewState: async () => ({ value: { entries } }),
+    id: "conv1",
+    abort: async (ctx: unknown, opts: unknown) => void aborts.push({ ctx, opts }),
+  };
+  const aborts: { ctx: unknown; opts: unknown }[] = [];
+  const stopped: string[] = [];
+  const started: Listener[] = [];
+  const end = { reason: "stopped" };
+  const stream = {
+    snapshot: { type: "snapshot", n: 1 },
+    start: (l: Listener) => void started.push(l),
+    stop: async () => void stopped.push("stop"),
+    closed: Promise.resolve(end),
+  };
+  const watched: unknown[][] = [];
+  const abortedIds: unknown[][] = [];
+  const harness = { abortSubmission: async (...a: unknown[]) => (abortedIds.push(a), "settled" as const) };
+  const durable = {
+    harness,
+    watchEvents: async (...a: unknown[]) => (watched.push(a), stream),
   };
   const installed: unknown[] = [];
   const registry = { install: (extension: unknown) => void installed.push(extension) };
   const closed = new Promise<unknown>(() => {});
-  return { submitted, installed, closed, conversation: conversationOf(root, registry, closed) };
+  return { submitted, installed, closed, aborts, stopped, started, watched, abortedIds, harness, stream, end, conversation: build(root, registry, closed, durable as never) };
 }
 
 const ENTRY = { kind: "cpd-event", data: { id: 5, kind: "pr-feedback", delivered_to: "s1" } };
@@ -84,4 +106,49 @@ test("conversationOf install installs the extension in the registry", () => {
   r.conversation.install(extension as never);
   assert.deepEqual(r.installed, [extension]);
   assert.equal(r.conversation.closed, r.closed);
+});
+
+test("conversationOf submit resolves the id and the status of the submission", async () => {
+  const r = rig({ status: "done", entry: "e1" });
+  const submission = await r.conversation.submit({ content: "x", requestId: "r", whenBusy: "followUp", entry: ENTRY });
+  assert.equal(submission.id, 7);
+  assert.equal(await submission.status(), "done");
+});
+
+test("conversationOf watch returns the snapshot and delivers each batch to the listener", async () => {
+  const r = rig();
+  const stream = await r.conversation.watch();
+  assert.equal(stream.snapshot, r.stream.snapshot);
+  assert.deepEqual(r.watched, [[r.harness, "conv1", BACKGROUND_CONTEXT]]);
+  const got: unknown[][] = [];
+  stream.start(async (events) => void got.push([...events]));
+  assert.equal(r.started.length, 1);
+  await r.started[0]!([{ type: "a" }, { type: "b" }], { context: true });
+  assert.deepEqual(got, [[{ type: "a" }, { type: "b" }]]);
+});
+
+test("conversationOf watch stop stops the stream", async () => {
+  const r = rig();
+  const stream = await r.conversation.watch();
+  await stream.stop();
+  assert.deepEqual(r.stopped, ["stop"]);
+});
+
+test("conversationOf watch passes the end of the stream as closed", async () => {
+  const r = rig();
+  const stream = await r.conversation.watch();
+  assert.equal(await stream.closed, r.end);
+});
+
+test("conversationOf abort passes the background option to the root", async () => {
+  const r = rig();
+  await r.conversation.abort({ background: true });
+  await r.conversation.abort({ background: false });
+  assert.deepEqual(r.aborts, [{ ctx: BACKGROUND_CONTEXT, opts: { background: true } }, { ctx: BACKGROUND_CONTEXT, opts: { background: false } }]);
+});
+
+test("conversationOf abortSubmission returns the outcome of the harness", async () => {
+  const r = rig();
+  assert.equal(await r.conversation.abortSubmission(9), "settled");
+  assert.deepEqual(r.abortedIds, [[9, BACKGROUND_CONTEXT, "conv1"]]);
 });

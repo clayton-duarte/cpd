@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { join } from "node:path";
 import { test } from "node:test";
 import { CpdError } from "../../lib/cpd.ts";
-import { parseConfig, storePath } from "../../durable-host/config.ts";
+import { parseConfig, socketPath, storePath } from "../../durable-host/config.ts";
 
 const ENV = { CPD_HOME: "/h/.cpd", CPD_SESSION: "s1" };
 const ARGV = ["--session", "s1", "--model", "anthropic/sonnet:high"];
@@ -46,4 +47,21 @@ test("parseConfig refuses a CPD_SESSION that differs from --session with a usage
 
 test("storePath is run/host/<session>.sqlite under the home", () => {
   assert.equal(storePath("/h/.cpd", "s1"), "/h/.cpd/run/host/s1.sqlite");
+});
+
+test("socketPath is run/host/<session>.sock under the home", () => {
+  assert.equal(socketPath("/h/.cpd", "s1"), "/h/.cpd/run/host/s1.sock");
+});
+
+test("socketPath refuses a path over 107 bytes with a usage error naming socket_path_too_long", () => {
+  const home = "/" + "h".repeat(108 - 1 - "/run/host/s1.sock".length);
+  assert.equal(Buffer.byteLength(join(home, "run", "host", "s1.sock")), 108);
+  assert.match(usage(() => socketPath(home, "s1")).message, /socket_path_too_long/);
+});
+
+test("socketPath accepts a path of exactly 107 bytes", () => {
+  const home = "/" + "h".repeat(107 - 1 - "/run/host/s1.sock".length);
+  const path = socketPath(home, "s1");
+  assert.equal(Buffer.byteLength(path), 107);
+  assert.equal(path, `${home}/run/host/s1.sock`);
 });
