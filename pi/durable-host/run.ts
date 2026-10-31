@@ -292,6 +292,9 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         return conversation.abort(opts);
       },
       abortSubmission: (id) => conversation.abortSubmission(id),
+      reload: async () => {
+        throw new Error("not implemented");
+      },
       held: () => held.heldList(),
       answerUi: async (id, value) => held.answer(id, value),
       hostState: () => {

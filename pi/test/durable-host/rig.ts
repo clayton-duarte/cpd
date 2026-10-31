@@ -3,6 +3,7 @@ import type { FollowerHooks } from "../../lib/follower.ts";
 import type { Config } from "../../durable-host/config.ts";
 import type { Input } from "../../durable-host/deliver.ts";
 import type { Connection } from "../../durable-host/server.ts";
+import type { Extension } from "@earendil-works/pi-durable";
 import { runHost, type Conversation, type Deps, type EventStream } from "../../durable-host/run.ts";
 import { ev } from "../fake.ts";
 import { policyShow, shown } from "../answers.ts";
@@ -85,6 +86,8 @@ export function rig(over: RigOptions = {}) {
   const terminate = { handler: undefined as (() => void) | undefined };
   const ending = { code: undefined as number | undefined, error: undefined as unknown };
   const opened = { n: 0 };
+  /** The extension each `Deps.open` call received, in order (the code mode wiring test reads it). */
+  const extensions: Extension[] = [];
   const streams: FakeStream[] = [];
   const listens: { path: string; accept: Parameters<Deps["listen"]>[1] }[] = [];
   const listener = { closes: 0 };
@@ -163,8 +166,9 @@ export function rig(over: RigOptions = {}) {
     },
     resolveModel: () => MODEL,
     contextFiles: () => [],
-    open: async () => {
+    open: async (o) => {
       opened.n++;
+      extensions.push(o.extension);
       order.push("open");
       notify();
       const conversation: Conversation = {
@@ -321,7 +325,7 @@ export function rig(over: RigOptions = {}) {
   };
   return {
     guards, logs, submitted, written, stateCalls, finish, follower, ending, until, states, up, stop,
-    calls, order, streams, listens, listener, aborts, abortedSubmissions, clients, opened,
+    calls, order, streams, listens, listener, aborts, abortedSubmissions, clients, opened, extensions,
     closeConversation: (v: unknown) => closeConversation(v),
     drain, ready, shutdown, connect, attach,
   };
