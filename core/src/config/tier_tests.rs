@@ -74,8 +74,9 @@ mod tests {
         assert_eq!(nx("S1").as_deref(), Some("S3"), "S2 is not a valid effort: the ladder skips to S3");
         assert_eq!(nx("S0").as_deref(), Some("S1"));
         assert_eq!(nx("S3"), None, "S5 is not a Worker's Tier and no letter is above S");
-        // A Tier outside the Worker range has no ladder (pro-d82), valid effort or not.
-        for name in ["S4", "S5", "O3"] {
+        // A catalog-VALID Tier outside the Worker range has no ladder (pro-d82); a Tier the
+        // catalog refuses is tier_invalid, as an_invalid_tier_is_refused_not_stepped pins.
+        for name in ["S5", "O3"] {
             assert_eq!(nx(name), None, "{name} is not a Worker's Tier: no ladder");
         }
     }
