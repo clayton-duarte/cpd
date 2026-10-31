@@ -255,6 +255,8 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       const record = e as { kind?: unknown; data?: unknown };
       return { type: "custom", customType: record.kind, data: record.data };
     }));
+    // A restart that begins tripped reports `blocked` at once, so `cpd session resume` (which needs that state) can clear it (L7).
+    if (loop.tripped) report();
     let pending = 0;
     const seen = new Set<string>();
     const names = new Map<string, Promise<string | null>>();
