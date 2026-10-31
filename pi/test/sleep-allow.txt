@@ -16,6 +16,7 @@ pi/test/compact-tools/codemode-host.test.ts 2  # m-pi: sleep or wall-clock wait
 pi/test/compact-tools/compact-tools.test.ts 3  # m-pi: sleep or wall-clock wait
 pi/test/compact-tools/editor-box.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/delivery.test.ts 27  # m-pi: sleep or wall-clock wait
+pi/test/dialog-slot.test.ts 5  # m-pi: sleep or wall-clock wait
 pi/test/first-message.test.ts 5  # m-pi: sleep or wall-clock wait
 pi/test/follower.test.ts 21  # m-pi: sleep or wall-clock wait
 pi/test/handle.test.ts 10  # m-pi: sleep or wall-clock wait
