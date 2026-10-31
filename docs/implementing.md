@@ -728,6 +728,16 @@ Contract §6.12 fixes what the durable Worker runner is: its modules, the `Deps`
 
 **4. `durable-verify`: the one Job that proves the resume.** It runs `main.ts` over a real pi-durable store (SQLite, in a temporary directory that it removes on exit), with pi-ai's faux provider passed to `openConversation`. It kills the runner during a `bash` tool call, starts the runner again for the same Attempt, and checks the outcomes of contract §6.12's "Crash resume": the first message is not sent twice, no Event is delivered twice, the interrupted tool call is reported as interrupted, and the run settles `done`. No unit test opens a store or kills a process; `durable-verify` is the only place that does.
 
+## The durable session host
+
+Contract §6.13 fixes the durable session host: its modules, the `Deps` port, the seven steps of `runHost` and its exit codes. This section is how it is made and tested. The PR follows the TDD order: docs, red tests written from §6.13 by another Worker, then the implementation. It generalises the Worker runner above; that section is linked, not restated.
+
+**1. The files.** `pi/durable-host/` holds `config.ts`, `guards.ts`, `extension.ts`, `run.ts` and `main.ts`, each with the exports contract §6.13's table gives. `run.ts` performs no effect itself: every effect is a member of `Deps`, and `main.ts` is the only file that builds the real one. Only `extension.ts` imports `@earendil-works/pi-durable`.
+
+**2. Reused from the Worker runner, unchanged.** `openConversation` of `pi/durable-worker/harness.ts` (the host has no harness file), the `Conversation` and `Submission` types and the exit-code rules of `run.ts`, and from `pi/lib/`: `parseSession` (`run.ts`), `policySection` (`policy.ts`), `zoneLine` (`time.ts`), `stateArgs` and `Reporter` (`state.ts`), `primaryCheckoutWrite` and `primaryCheckoutMove` (`mainguard.ts`), `secretBypass` (`secretguard.ts`), `hostApproveBypass` (`hostapprove.ts`). Nothing is copied. The host leaves out `deliver.ts`, `report.ts`, `mcp.ts`, `pi-mcp.ts`, the test guard and the explore profile.
+
+**3. The tests.** They live in `pi/test/durable-host/`, one `*.test.ts` per module that has rules of its own, written with `node:test`. The change that adds them adds `pi/test/durable-host/*.test.ts` to the default file list of the `test` script in the root `package.json`. As for the Worker runner, nothing real runs in them: a test takes its effects from fakes of `Deps` and `Conversation`, reads the time only through `Deps.now()`, and never sleeps, starts a process or opens a socket.
+
 ## Measuring tool-result bloat (hs-d737)
 
 **Command.** `node pi/measure/session-bloat.ts [--root <dir>] [--since <ISO time>] [--until <ISO time>] [--top <n>] [--json]`; it reads every `*.jsonl` file one directory below `--root` (default: pi's agent sessions directory, `~/.pi/agent/sessions`), never writes or changes a file, and exits 0 with a report. A bad option, a bad time or an unreadable root exits 2 with one line on stderr (no silent default).
