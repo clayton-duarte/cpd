@@ -136,6 +136,10 @@ pub fn tell(tx: &WriteTxn<'_>, target: &SessionId, text: &str) -> Result<i64, Cp
 /// Whether `target`, a stopped Lead or Manager with no live pane, is to be started after its message commits (hs-d725);
 /// `no_cockpit` when it is and there is no cockpit to start it in.
 fn needs_pane(env: &Env, target: &Row) -> Result<bool, CpdError> {
+    // A durable Session has no pane by design: the message is only an Event.
+    if target.runner == row::Runner::Durable {
+        return Ok(false);
+    }
     let tmux = env.tmux();
     let wake = target.state.as_str() == "stopped"
         && !tmux.list_panes().unwrap_or_default().iter().any(|p| !p.dead && p.cpd_session.as_ref() == Some(&target.id));
