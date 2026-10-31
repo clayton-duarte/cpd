@@ -470,6 +470,29 @@ fn update_for_conflict(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, change: &C
     open::queue_update(tx, plan, pr, tier, COMMAND_BY, Cause::Conflict)
 }
 
+/// Why the poll queues a PR's `update` Job (§3.7 E5, hs-d794, hs-n617): the conflict transition
+/// ([`update_for_conflict`]), or a base PR's merge that left the default branch ahead of the Lead Branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Trigger {
+    /// The PR's `mergeable` became `conflicting`.
+    Conflict,
+    /// GitHub repointed the PR from a base PR's Lead Branch to the default branch, and the default
+    /// branch holds commits the Lead Branch lacks without a conflict.
+    BaseMerged,
+}
+
+/// Queues PR `key`'s `update` Job for `trigger` (§3.7 E5, hs-d794, hs-n617), unless the PR already has
+/// one `queued` or `running`. `ahead` is read only for [`Trigger::BaseMerged`]: true when the default
+/// branch holds commits the Lead Branch lacks without a conflict; false when the default branch is
+/// already contained, which queues nothing.
+///
+/// Stub for `update-trigger-impl`: it queues nothing, so this Job's tests stay red until the widened
+/// trigger is implemented (the conflict cause keeps [`update_for_conflict`]'s path).
+pub(super) fn queue_update_for(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, trigger: Trigger, ahead: bool, tier: Tier) -> Result<Option<JobKey>, CpdError> {
+    let _ = (tx, plan, key, trigger, ahead, tier);
+    Ok(None)
+}
+
 /// The PR `key` of the Plan is merged on GitHub (§7.6): `prs` `merged`,
 /// `pr-merged`, and, when it was the last PR, the Plan `done` with `plan-done`
 /// (§3.1). Whether the Plan became `done`.
