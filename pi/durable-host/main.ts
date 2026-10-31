@@ -5,7 +5,7 @@ import { getAgentDir, loadProjectContextFiles, ModelRuntime, resolveCliModel } f
 import { callCpd, CpdError } from "../lib/cpd.ts";
 import { openConversation } from "../durable-worker/harness.ts";
 import { DEFAULT_TIMING, Follower } from "../lib/follower.ts";
-import { listenOn } from "./net.ts";
+import { guardSocket, listenOn } from "./net.ts";
 import { parseConfig } from "./config.ts";
 import { runHost, type Deps } from "./run.ts";
 
@@ -31,6 +31,7 @@ try {
     contextFiles: (cwd) => loadProjectContextFiles({ cwd, agentDir: getAgentDir() }),
     open: (o) => openConversation(models as never, o),
     follow: (hooks) => new Follower(config.session, hooks, DEFAULT_TIMING),
+    guard: guardSocket,
     listen: listenOn,
     newEpoch: () => randomUUID(),
     onTerminate: (handler) => {

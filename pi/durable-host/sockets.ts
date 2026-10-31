@@ -56,3 +56,12 @@ export function staleVerdict(probe: Probe): StaleVerdict {
   if (probe === "connected") return "host_running";
   return "fail";
 }
+/** Another host already owns the socket: a connect to it succeeded. */
+export class HostRunning extends Error {
+  readonly path: string;
+  constructor(path: string) {
+    super(`host_running: ${path}`);
+    this.name = "HostRunning";
+    this.path = path;
+  }
+}
