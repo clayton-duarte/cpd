@@ -176,6 +176,16 @@ impl Helper {
         Ok(Helper { cmd, argv })
     }
 
+    /// [`Helper::new`] in `--all` mode (commands.md §14.6 step 5): alongside the normal entries, the answer also
+    /// lists every built-in provider pi has auth for and models to offer — the full registry `cpd preset apply`
+    /// validates a preset against. The cached `run/models-<provider>.json` files never feed it (contract §8.2,
+    /// commands.md §14.6): the registry is always listed at apply time.
+    pub fn all(mut self) -> Helper {
+        self.cmd.arg("--all");
+        self.argv.push("--all".to_owned());
+        self
+    }
+
     /// [`Helper::run_with`] the runner of the ports in scope ([`Ports::current`]).
     pub fn run(self) -> Result<Answer, CpdError> {
         let runner = Ports::current().runner;

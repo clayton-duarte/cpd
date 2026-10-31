@@ -366,6 +366,12 @@ impl NewEvent {
         make(Kind::SessionRetiered, text, json!({"from": from, "to": to}))
     }
 
+    /// `session-model-changed` (contract §5.2, commands.md §14.6): `cpd preset apply` rewrote the machine host
+    /// `[model]`; the Session's letter model moved from `from` to `to`. The adapter switches pi at its next idle.
+    pub fn session_model_changed(text: impl Into<String>, from: &str, to: &str) -> NewEvent {
+        make(Kind::SessionModelChanged, text, json!({"from": from, "to": to}))
+    }
+
     pub fn mcp_attached(text: impl Into<String>, name: &str, server: impl Serialize) -> NewEvent {
         make(Kind::McpAttached, text, json!({"name": name, "server": server}))
     }
@@ -577,6 +583,7 @@ mod tests {
             Kind::SessionRenamed => vec![NewEvent::session_renamed(T, s)],
             Kind::SessionTitled => vec![NewEvent::session_titled(T, s)],
             Kind::SessionRetiered => vec![NewEvent::session_retiered(T, s, s)],
+            Kind::SessionModelChanged => vec![NewEvent::session_model_changed(T, s, s)],
             Kind::McpAttached => vec![NewEvent::mcp_attached(T, s, json!({}))],
             Kind::SessionAsleep => vec![NewEvent::session_asleep(T)],
             Kind::SessionResumed => vec![NewEvent::session_resumed(T)],

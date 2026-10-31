@@ -24,7 +24,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 11. [`events`](#11-events)
 12. [`watch`](#12-watch)
 13. [`tui`](#13-tui)
-14. [`doctor`, `config`, `tiers`, `models`](#14-doctor-config-tiers-models)
+14. [`doctor`, `config`, `tiers`, `models`, `preset`](#14-doctor-config-tiers-models-preset)
 15. [The pi adapter's protocol](#15-the-pi-adapters-protocol)
 16. [The Worker contract](#16-the-worker-contract)
 17. [What the TUI reads](#17-what-the-tui-reads)
@@ -68,7 +68,7 @@ Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Fiv
 | `cpd tui action` (internal) | nothing, ever | the StatusBar's click binding and the `merge` popup's confirm (`cpd tui action merge <owner>/<repo>#<n> --client <client>`, hs-d473) run it with `run-shell -b`, which puts the active pane into view mode on a failure or any output (§13.2); it reports a failure with `display-message -c <client>` and a failed merge with the cockpit's one failure dialog, a `text` dialog (§13.2, §17 "No notes") |
 | `cpd` (no arguments), `cpd tui --attach` | nothing on success: it replaces itself with `tmux attach` | the approved outline says `tui` "builds and attaches the cockpit"; without `--attach`, `cpd tui` prints JSON like every command. Bare `cpd` is §13.3 (hs-d259) |
 
-`cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.13.45-070ddee", "protocol": 13, "store": {"opens": true, "refusal": null, "unknown": [], "pending": []}}`. The `version` field is `<semantic version>-<commit>` where the semantic version is `0.<protocol>.<migrations>`: the commit is the short hash the build was given in `CPD_COMMIT` (set by `scripts/install-cpd.sh` and the Gate, so an installed binary reports the commit it was built from) and `dev` when the build was given none, e.g. `0.13.45-dev` (docs/implementing.md "The version string"; docs/versioning.md). `store` is the **verdict** of contract §4.5 ("The window") on `$CPD_HOME`'s database opened read-only, computed by the one function every guard uses (`store::verdict`): `null` when the database file does not exist; otherwise `opens` (`true` when this binary can open the store, migrating or converting it if needed), `refusal` (`null`, or `{"code", "message"}` with `code` one of `store_too_new`, `store_failed`, `migration_changed`, `migration_order`, §1.3) when `opens` is `false`, `unknown` (the migration names the store has applied that this binary lacks, in name order: inside the window they are all additive) and `pending` (the names of this binary's migrations the store has not applied, in the order they would be applied; for an unconverted store the legacy names it lacks, then every named one). `unknown` and `pending` are `[]` for a store that is not named yet and filled whenever the store is a named store, whether or not it opens. `protocol` is an integer, **14** today (1 until Plan manager added `session-message`, 2 until Plan inbox added the four `inbox-*` kinds, 3 until `session state idle --reply`, hs-d278, 4 until `session-titled`, hs-d257, 5 until `pr-base-changed`, hs-d324, 6 until `session state waiting`, hs-d303, 7 until `review-opened`/`review-closed`, hs-d496, 8 until `session-retiered`, hs-d506, 9 until `plan-outlined`, hs-d502, 10 until `job-merged`'s `data.turn` and `session-message`'s `data.unblocks`, hs-d514, 11 until `session-resumed`, hs-d552, 12 until `session report`, hs-d573, 13 until `mcp-attached`, pro-d8), raised whenever an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"); the adapter checks it (§15.2). `--version` never creates, migrates or writes the database and runs neither the schema check nor the conversion. **The guards read `store`:** a driver or a Lead's wrapper reloads into a binary only when `store` is `null` or `store.opens` is `true` (contract §3.4, §6.7) and `scripts/install-cpd.sh` refuses a build whose `store.opens` is `false` and a Lead Branch build that carries a migration file that is not on `origin/main` (contract §3.7).
+`cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.18.45-070ddee", "protocol": 18, "store": {"opens": true, "refusal": null, "unknown": [], "pending": []}}`. The `version` field is `<semantic version>-<commit>` where the semantic version is `0.<protocol>.<migrations>`: the commit is the short hash the build was given in `CPD_COMMIT` (set by `scripts/install-cpd.sh` and the Gate, so an installed binary reports the commit it was built from) and `dev` when the build was given none, e.g. `0.18.45-dev` (docs/implementing.md "The version string"; docs/versioning.md). `store` is the **verdict** of contract §4.5 ("The window") on `$CPD_HOME`'s database opened read-only, computed by the one function every guard uses (`store::verdict`): `null` when the database file does not exist; otherwise `opens` (`true` when this binary can open the store, migrating or converting it if needed), `refusal` (`null`, or `{"code", "message"}` with `code` one of `store_too_new`, `store_failed`, `migration_changed`, `migration_order`, §1.3) when `opens` is `false`, `unknown` (the migration names the store has applied that this binary lacks, in name order: inside the window they are all additive) and `pending` (the names of this binary's migrations the store has not applied, in the order they would be applied; for an unconverted store the legacy names it lacks, then every named one). `unknown` and `pending` are `[]` for a store that is not named yet and filled whenever the store is a named store, whether or not it opens. `protocol` is an integer, **18** today (1 until Plan manager added `session-message`, 2 until Plan inbox added the four `inbox-*` kinds, 3 until `session state idle --reply`, hs-d278, 4 until `session-titled`, hs-d257, 5 until `pr-base-changed`, hs-d324, 6 until `session state waiting`, hs-d303, 7 until `review-opened`/`review-closed`, hs-d496, 8 until `session-retiered`, hs-d506, 9 until `plan-outlined`, hs-d502, 10 until `job-merged`'s `data.turn` and `session-message`'s `data.unblocks`, hs-d514, 11 until `session-resumed`, hs-d552, 12 until `session report`, hs-d573, 13 until `incident-started` and `incident-ended`, hs-d634, 14 until `mcp-attached`, pro-d8, 15 until the adapter runs `session switch-failed` and `session switched` and the `error` Event carries the reporting Session, 16 until `pr-described`, pro-d94, 17 until `session-model-changed`: the tier-preset switch, the adapter acts on it at the Session's next idle, §14.6), raised whenever an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"); the adapter checks it (§15.2). `--version` never creates, migrates or writes the database and runs neither the schema check nor the conversion. **The guards read `store`:** a driver or a Lead's wrapper reloads into a binary only when `store` is `null` or `store.opens` is `true` (contract §3.4, §6.7) and `scripts/install-cpd.sh` refuses a build whose `store.opens` is `false` and a Lead Branch build that carries a migration file that is not on `origin/main` (contract §3.7).
 
 Every `--help` prints `{"ok": true, "help": "<clap's text>"}`. The root help (`cpd --help`, `cpd -h`, `cpd help`) adds `tree`: the whole command tree, every command whatever its depth, in clap's order, clap's own `help` subcommand left out. `cpd <group> --help` and `cpd help <group>` print `help` only. Each node is `{"name", "about", ...}`: `name` the command's word, `about` its one-line description (clap's, which ends with its § here). A runnable node (no subcommand, or subcommands that are optional, as `tui`) also has `callers`, `cockpit` and `internal` (§2). A node with subcommands has `commands`, its children. Example (trimmed with `...`):
 
@@ -253,6 +253,9 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd secret approve` (§24.7, internal) | none | no | yes |
 | `cpd models refresh` (§14.5) | Manager, Lead | no | no |
 | `cpd models show` (§14.5) | Manager, Lead | no | no |
+| `cpd preset list` (§14.6) | Manager, Lead | no | no |
+| `cpd preset show` (§14.6) | Manager, Lead | no | no |
+| `cpd preset apply` (§14.6) | Manager | no | no |
 | `cpd context curation` (§3.15, internal) | none | yes | yes |
 | `cpd context retire` (§3.16, internal) | none | yes | yes |
 | `cpd context docs` (§3.17, internal) | none | yes | yes |
@@ -3659,7 +3662,7 @@ Rerunning is safe: a restart already pending keeps its time and a server that is
 - **A3** Each follow-up's failure is printed in one line on stderr and the attach still happens when the cockpit exists. When the cockpit does not exist and could not be built, bare `cpd` prints the failure value and exits with its code.
 - **A4** Nothing new in the store: no table, column or Event kind.
 
-## 14. `doctor`, `config`, `tiers`, `models`
+## 14. `doctor`, `config`, `tiers`, `models`, `preset`
 
 ### 14.1 `doctor`
 
@@ -3829,6 +3832,76 @@ Effects: `run/models-<provider>.json` written for each provider that has a good 
 
 `ids` is the file's sorted list, `count` its length, `auth` the file's `source.auth`, `changes` the file's last `changes` (`null` when it has none), `age_seconds` the time since `polled_at`, at the call. The providers are in name order. Idempotent: yes, read-only.
 
+### 14.6 `preset`
+
+```
+cpd preset list
+cpd preset show <name>
+cpd preset apply <name>
+```
+
+The tier-preset switch (D1–D5 of Plan `tier-presets`): a named set of four model refs — the `O`, `S`, `H` and `G` keys of a `[presets.<name>]` table of `$CPD_HOME/config.toml` (contract §8.1, §8.2) — applied to the machine by rewriting the `[model]` table of its host policy. `list` and `show` are read-only and their callers are `[Manager, Lead]`; `apply` writes and its caller is `[Manager]` (§2). None of the three writes `config.toml`: presets are the User's, managed by dotfiles. A provider is the text before the first `/` of a ref. `apply` writes a single-provider table (step 4), as contract §8.3 "One provider per table" holds of any written model table.
+
+**`preset list`** prints every preset with the provider of its `O` ref. No precondition, no effect (one read of `config.toml`, no store):
+
+```json
+{"ok": true, "presets": [
+  {"name": "fast", "provider": "github-copilot"}]}
+```
+
+`presets` is sorted by name, `[]` when the config has none. Idempotent: read-only.
+
+**`preset show <name>`** prints the preset's four refs and the current host `[model]`:
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `<name>` is a `[presets.<name>]` table of `config.toml` | `preset_unknown` | 4 |
+
+```json
+{"ok": true, "name": "fast",
+ "O": "github-copilot/claude-haiku-4.5", "S": "github-copilot/claude-sonnet-5.5",
+ "H": "github-copilot/claude-haiku-4.5", "G": "github-copilot/gemini-3.8-flash",
+ "host": {"O": "github-copilot/claude-opus-5.5", "S": "github-copilot/claude-sonnet-5.5",
+          "H": "github-copilot/claude-haiku-4.5", "G": "github-copilot/gemini-3.8-flash"}}
+```
+
+`host` is the machine scope's `[model]` refs read from `$CPD_HOME/policy/host.toml`, or the built-in default of contract §8.3 when the file has no `[model]` table. No registry is read and nothing is validated: `show` reports, it never checks. Idempotent: read-only.
+
+**`preset apply <name>`** validates the preset and, when it differs from the current host `[model]`, rewrites the `[model]` table of `$CPD_HOME/policy/host.toml`, then records the live Sessions whose model changed. Steps, in order; **every refusal happens before any write: nothing is written and no Event is appended**:
+
+1. **The name.** `<name>` must be a `[presets.<name>]` table of `config.toml`, else `preset_unknown` (exit 4).
+2. **The host file.** `$CPD_HOME/policy/host.toml` must exist and hold a `[model]` table, else `policy_invalid` (exit 1, `details.file`, `details.key` `model`): there is nothing to rewrite.
+3. **Equality.** When the preset's four refs equal the current host `[model]` refs of step 2, `apply` is a no-op: no write, no Event, `"already": true` (idempotent).
+4. **The one-provider invariant.** The preset's four refs must have one provider, the invariant contract §8.3 holds of a written model table; else `policy_invalid` (exit 1, `details.file`, `details.key` `model`), before anything external runs.
+5. **The registry** (D3). The command lists pi's **full** registry on this machine — every provider pi can use, the built-in providers included, each with its offered model ids — by running the model-discovery helper (`pi/lib/models-list.ts`, the helper §14.5's `models refresh` and the engine's E15 run with no argument) in its `--all` mode, through the host runner, under pi's Node, in its own process group, with the deadline of `models refresh`'s (120 s). **The cached `run/models-<provider>.json` files are never the source**: they exclude the built-in providers, so the registry is always listed at apply time. The registry listing's own failures are the helper's codes (`pi_not_found`, `spawn_failed`, `tool_timeout` exit 5, `models_helper_failed`, …), writing nothing. Then:
+   - a ref whose provider is not in the registry refuses `preset_provider_unconfigured` (exit 3);
+   - a ref that is not among its provider's offered ids refuses `preset_model_unoffered` (exit 3).
+6. **The write** (D4). The `[model]` table of `host.toml` is rewritten: the section header `[model]` and its `O`/`S`/`H`/`G` lines are replaced by the preset's four refs, in that order, and every other byte of the file is unchanged. The write is atomic: a temporary file in the same directory, then a rename over `host.toml` (`write_atomic`). `host.toml` stays the **only** place `[model]` is written (pro-d25): no owner or repo policy file and no dotfiles template.
+7. **The live Sessions** (D5). After the write, the command recomputes the model each live (not archived) Lead and Manager Session resolves at its tier's letter — the `model` of `cpd session show` (§10.2), i.e. the ref contract §8.3's resolution gives the letter of the Session's stored tier, so a letter whose effective ref an owner or repo file overrides is unchanged. For every Session whose model differs under the pre-write and the post-write host `[model]`, ONE `session-model-changed` Event is appended, scoped to it (`context` and `plan` when it has them; `data` `{from, to}` = the resolved refs under the pre-write and the post-write `host.toml`), all in one store transaction, in the same style as `session-retiered` (contract §5.2, §5.3). A Session whose letter's model is unchanged gets none. Nothing else is written for Sessions.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `<name>` is a `[presets.<name>]` table of `config.toml` (step 1) | `preset_unknown` | 4 |
+| `host.toml` exists and holds a `[model]` table; `details.file`, `details.key` `model` (step 2) | `policy_invalid` | 1 |
+| the preset's four refs are one provider — the invariant of contract §8.3 for the written table; `details.file`, `details.key` `model` (step 4) | `policy_invalid` | 1 |
+| the registry can be listed: pi is found as §9 says | `pi_not_found` | 1 |
+| the registry can be listed: the helper starts | `spawn_failed` | 1 |
+| the registry can be listed: the helper answers within 120 s | `tool_timeout` | 5 |
+| the registry can be listed: the answer is the JSON of contract §3.7 E15, in `--all` mode | `models_helper_failed` | 1 |
+| the preset's provider is in the registry (step 5a) | `preset_provider_unconfigured` | 3 |
+| every ref is among its provider's offered ids (step 5b) | `preset_model_unoffered` | 3 |
+
+`apply` opens the store (it appends the Events of step 7; the no-op of step 3 opens nothing and writes nothing), so the write path waits out a migration in progress as every store-opening command does (contract §4.2). The file write of step 6 is not a store write: only the Events of step 7 write rows, each with the usual `txns` and `history` rows of a transaction.
+
+```json
+{"ok": true, "preset": "fast", "host": "/home/clayton/.cpd/policy/host.toml",
+ "already": false,
+ "changed": [
+   {"session": "596d007f-…", "role": "lead", "from": "github-copilot/claude-opus-5.5", "to": "github-copilot/claude-sonnet-5.5", "event": 48220}]}
+```
+
+`host` is the path of the rewritten file; `changed` lists one entry per Session whose model changed, with the Session's id and role and its Event's `from`, `to` and `event` (the Event's id). When step 3 finds the host already on the preset, the output is `{"ok": true, "preset": "fast", "already": true, "changed": []}`. Idempotent: yes — a rerun whose preset already equals the host `[model]` is the no-op above.
+
 ## 15. The pi adapter's protocol
 
 The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays TypeScript"), loaded in every pi session cpd starts (§6.5). It is the only pi-specific code: it turns Events into messages (§5.3), reports agent states (§3.6) and runs the Plan review in the Lead's chat (§15.5). It calls only `cpd` commands; it never reads the database and never types into a pane (cpd 1 §15, kept).
@@ -3888,6 +3961,7 @@ Events arrive in id order; the follower already applied §11's `--session` rule 
 | `attempt-nudge` (`session` = itself) | | message with `data.prompt` as content, **turn** |
 | `session-message` (`session` = itself) | message, `followUp`, **a turn always, whatever `data.wake`** (hs-d514, hs-n406); for every Lead (Plan Lead, side fork) and the Manager (the `--session` rule delivers Events addressed to a Session to it). Content `Message from <sender> (HH:MM ZZZ): <text>`, `<sender>` = the sender Session's name and id (`<name> (<id>)`), or `the User` when `data.from` is null. The time is the local time when the message was sent (format §1.3): `HH:MM ZZZ`, 24-hour clock, zero-padded, no seconds, one space before ZZZ where ZZZ is the zone abbreviation (letters only) or numeric offset (§1.3); rendered from the stored `at` (UTC, ISO 8601) by the pi adapter from `pi/lib/time.ts`. Example for an instant 2026-10-25T22:29:00.000Z in America/Toronto: `Message from the User (18:29 EDT): ...`. An idle Lead starts a turn at once; a working, waiting or blocked one gets it after its running turn, never interrupted | |
 | `session-resumed` (`session` = itself) | for its own Session while tripped by the loop guard: the adapter clears the trip (L5), appends the pi session entry `{tripped: false}`, and delivers **one message** with a turn (the Event's text from `session resume`, `followUp`). While not tripped, does nothing (no message, no turn). For every Lead and a Manager. When the Session reloads, the trip survives (L7) | same | **the switch** (hs-d506, §10.15): no message, no turn. The adapter notes that its Session's Tier changed; at its next idle (right away when it already is idle, as `agent_settled` and `ctx.isIdle()` say it) it reads `cpd session show` for `model` and `thinking`, finds the model with `ctx.modelRegistry.find(provider, id)` and calls `pi.setModel(model)` and `pi.setThinkingLevel(thinking)`, once. Not while `working`, `waiting` or `blocked`. A model the registry lacks, or a `setModel` that answers false (no authentication for its provider), is one error message (§15.1, delivered as every adapter error is, with a turn: the Session tells the User; code `model_unavailable`, `details: {model, thinking}`) and sets nothing, not even the level; the next `session-retiered` tries again. The same for a failed `session show`. The adapter names no record id and reads no config: the mapping is `session show`'s. For every Lead and a Manager (a Worker never gets one). Adding the kind raises `protocol` | same |
+| `session-model-changed` (`session` = itself) | **the switch of the model** (the tier-preset switch, §14.6), the same path as `session-retiered`'s: no message, no turn. At the Session's next idle (right away when it already is idle, as `agent_settled` and `ctx.isIdle()` say it) the adapter reads `cpd session show` for `model` and `thinking`, finds the model with `ctx.modelRegistry.find(provider, id)` and calls `pi.setModel(model)` and `pi.setThinkingLevel(thinking)`, once, never while the Session works, waits or is blocked. A model the registry lacks, or a `setModel` that answers false (no authentication for its provider), is one error message (§15.1) and nothing is set; the next `session-model-changed` tries again. For every Lead and a Manager (a Worker never gets one). Adding the kind raises `protocol` to 18 | same |
 | `mcp-attached` (`session` = itself) | **the registration** (pro-d8, contract §5.3): no message, no turn. The adapter calls `pi.registerMcpServer(data.name, data.server)` (`attachServer`, contract §6.11). An Event for another Session registers nothing. The registration survives a reload and a restart through step 5a of §15.2 (pro-d226): an own Event that the replay read registers nothing when the follower delivers it again (the cursor counts delivered messages only, §15.2), and a new Event always registers, so `cpd mcp attach` again is still the recovery for a server that is missing. A registration pi refuses (it throws) is one error per refusal (pro-d226; §15.1 'Errors'; `what` `mcp attach <name>`, code `mcp_register_failed`). For **every role** the adapter runs `cpd session report --what 'mcp attach <name>' --code mcp_register_failed --message <pi's message> --details {"name","message"} --session <id>`, so the ledger holds one `error` Event for it. A Manager's or a Worker's adapter also delivers it in chat, `details: {kind: "error", code, name, message}` with pi's message. It is exempt from the once-per-(`what`, `code`) memory of both deliveries, so each refusal is delivered and reported, the same server twice in a row included, and it neither sets nor clears that memory (L2). A failed report is L4 of §15.1; every other adapter error keeps its delivery and memory (L5). With no such Event the adapter registers no server. For every role. Adding the kind raises `protocol` | same |
 | `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | ignored: no message, no turn | ignored |
 | `session-titled` | ignored: **no message, no turn** (hs-d257): the pane header is set by `session retitle` itself, through tmux (§10.14), so the adapter has nothing to do; it only **learns the kind** (the list of kinds in `pi/lib/event.ts`, with delivery `none`), because an unknown kind costs an error turn (hs-n122). Adding the kind raises `protocol` (contract §5.2, "The protocol number") | ignored |

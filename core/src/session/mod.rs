@@ -35,7 +35,7 @@ mod retier;
 mod report;
 mod switch;
 pub(crate) mod retitle;
-mod row;
+pub(crate) mod row;
 pub(crate) mod run;
 pub(crate) mod send;
 mod state;
