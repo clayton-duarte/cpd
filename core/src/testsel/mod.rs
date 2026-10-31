@@ -194,6 +194,25 @@ fn no_title(file: &str, title: &str) -> String {
     format!("cpd test: no test titled '{title}' in {file}\n")
 }
 
+/// How a `cpd test run|list` name classifies (§26).
+#[derive(Debug, PartialEq, Eq)]
+#[allow(dead_code)] // the classifier is a stub until the impl Job: only the tests use `kind_of` now
+enum Kind {
+    /// A Rust name, as nextest filters it.
+    Rust,
+    /// A pi name `pi/test/<file>.test.ts::<title>`.
+    Pi { file: String, title: String },
+    /// A web name `web/<file>.test.ts(x)::<title>`.
+    Web { file: String, title: String },
+}
+
+/// Classifies a test name. STUB: a web name is not yet accepted, so every name classifies as a Rust name; the impl
+/// Job will replace this with the real classifier (a web name, a pi name, else a Rust name).
+#[allow(dead_code)] // only the tests exercise `kind_of` until the impl Job routes the dispatch on it
+fn kind_of(_name: &str) -> Kind {
+    Kind::Rust
+}
+
 /// A pi name: `pi/test/<file>.test.ts::<title>` is its file and its title; `None` for a Rust name.
 fn pi_name(name: &str) -> Option<(&str, &str)> {
     let (file, title) = name.split_once("::")?;

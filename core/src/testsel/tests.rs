@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 use tempfile::TempDir;
 
-use super::{ChangedArgs, build, changed, list, run};
+use super::{ChangedArgs, Kind, build, changed, kind_of, list, pi_name, run};
 use crate::error::CpdError;
 use crate::host::runner::{Call, FakeRunner, Reply};
 use crate::ports::Fakes;
@@ -863,4 +863,80 @@ fn nothing_these_tests_ask_for_is_left_unscripted() {
     let out = s.run(&fakes, &["green_one", &pi("passes")]);
     assert_eq!(out.status, 0, "{}", out.what());
     assert!(out.unscripted.is_empty(), "{}", out.what());
+}
+
+// ---- web test names: the classifier and the web dispatch (testsel) ---------------------------------------------------
+
+/// A web name `web/<file>.test.ts(x)::<title>` classifies as a web name, not a pi name, and is not refused.
+#[test]
+fn classify_web_name() {
+    assert_eq!(
+        kind_of("web/sample.test.tsx::renders a button"),
+        Kind::Web { file: "web/sample.test.tsx".into(), title: "renders a button".into() },
+        "a tsx web name is a web name"
+    );
+    assert!(pi_name("web/sample.test.tsx::renders a button").is_none(), "a web name is not a pi name");
+}
+
+/// A web name runs through the web package's vitest, filtered by the exact title.
+#[test]
+fn dispatch_web_name_runs_vitest() {
+    let s = Sample::new();
+    let fakes = s.fakes(|r| {
+        r.on("pnpm", |c| c.args.iter().any(|a| a == "vitest"), Reply::ok("✓ renders a button (2ms)\n"))
+    });
+    let out = s.run(&fakes, &["web/sample.test.tsx::renders a button"]);
+    let vitest: Vec<Vec<&str>> = out
+        .calls_of("pnpm")
+        .into_iter()
+        .filter(|c| c.args.iter().any(|a| a == "vitest"))
+        .map(words)
+        .collect();
+    assert_eq!(
+        vitest,
+        [vec!["--filter", "cpd-web-client", "exec", "vitest", "run", "--testNamePattern", "renders a button", "web/sample.test.tsx"]],
+        "the web dispatch is the package's vitest, filtered by the title: {}",
+        out.what()
+    );
+    assert!(out.cargo("nextest").is_empty(), "a web name never reaches nextest: {}", out.what());
+    assert!(node_calls(&out).is_empty(), "a web name never reaches node: {}", out.what());
+}
+
+/// A web title the web package does not contain is refused (`list` exits non-zero and starts no Rust or node run).
+#[test]
+fn list_web_unknown_title() {
+    let s = Sample::new();
+    let fakes = s.fakes(|r| r);
+    let out = s.list(&fakes, "web/sample.test.tsx::no such test");
+    assert_ne!(out.status, 0, "a title the web package lacks is refused: {}", out.what());
+    assert!(out.cargo("nextest").is_empty(), "a web list never reaches nextest: {}", out.what());
+    assert!(out.calls_of("node").is_empty(), "a web list never reaches node: {}", out.what());
+}
+
+/// `test build` typechecks the web client only when `web/package.json` exists; without it the web client is skipped.
+#[test]
+fn build_skips_web_when_absent() {
+    let web = |c: &Call| c.args.iter().any(|a| a == "--filter");
+    // Without `web/` the web client is not typechecked.
+    let s = Sample::new();
+    let fakes = s.fakes(|r| r);
+    let out = s.build(&fakes);
+    assert_eq!(out.status, 0, "{}", out.what());
+    let absent: Vec<_> = out.calls_of("pnpm").into_iter().filter(|c| web(c)).collect();
+    assert!(absent.is_empty(), "no web client typecheck without web/: {}", out.what());
+
+    // With `web/package.json` the web client is typechecked.
+    let s = Sample::new();
+    write(&s.root, "web/package.json", "{\"name\":\"cpd-web-client\"}\n");
+    let fakes = s.fakes(|r| r.on("pnpm", web, Reply::ok("")));
+    let out = s.build(&fakes);
+    let present: Vec<Vec<&str>> = out.calls_of("pnpm").into_iter().filter(|c| web(c)).map(words).collect();
+    assert!(!present.is_empty(), "the web client is typechecked when web/ exists: {}", out.what());
+}
+
+/// Pi and Rust names keep their current classification once web names exist.
+#[test]
+fn pi_and_rust_names_unchanged() {
+    assert_eq!(kind_of("pi/test/sample.test.ts::passes"), Kind::Pi { file: PI.into(), title: "passes".into() }, "a pi name stays a pi name");
+    assert_eq!(kind_of("green_one"), Kind::Rust, "a Rust name stays a Rust name");
 }
