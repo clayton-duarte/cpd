@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { dirVerdict, LineSplitter, staleVerdict } from "../../durable-host/sockets.ts";
+import { dirVerdict, HostRunning, LineSplitter, staleVerdict } from "../../durable-host/sockets.ts";
 
 test("LineSplitter returns the complete lines of a chunk and keeps the rest", () => {
   const s = new LineSplitter();
@@ -52,4 +52,11 @@ test("staleVerdict removes the file when the connect is refused or the file is a
 
 test("staleVerdict refuses with host_running when the connect succeeds", () => {
   assert.equal(staleVerdict("connected"), "host_running");
+});
+
+test("HostRunning is an Error that carries the socket path", () => {
+  const e = new HostRunning("/cpd-home/run/host/s-lead.sock");
+  assert.ok(e instanceof Error);
+  assert.ok(e instanceof HostRunning);
+  assert.equal(e.path, "/cpd-home/run/host/s-lead.sock");
 });

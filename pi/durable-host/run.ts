@@ -26,6 +26,8 @@ export type Conversation = { submit(input: Input): Promise<Submission>; write(wr
 type Model = { provider: string; modelId: string; thinkingLevel?: string };
 
 export type Deps = {
+  /** The one-owner check: rejects with `HostRunning` when a host already owns the socket. */
+  guard(path: string): Promise<void>;
   cpd(args: readonly string[]): Promise<Record<string, unknown>>;
   resolveModel(pattern: string): Model;
   contextFiles(cwd: string): readonly { path: string; content: string }[];

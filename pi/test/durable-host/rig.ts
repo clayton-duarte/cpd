@@ -66,6 +66,8 @@ export type RigOptions = {
   sessionOver?: Record<string, unknown>;
   /** A `submit` with `whenBusy: "reject"` fails with pi-durable's ConversationBusy while true. */
   busy?: { value: boolean };
+  /** What `Deps.guard` does: resolves by default; rejects with the given error. */
+  guard?: Error;
   abortSubmission?: "aborted" | "already_placed" | "settled" | "not_found";
 };
 
@@ -133,7 +135,15 @@ export function rig(over: RigOptions = {}) {
     return stream;
   };
 
+  /** Each `Deps.guard` call: its path and how many cpd calls and ordered facts came before it. */
+  const guards: { path: string; calls: number; facts: number }[] = [];
   const deps: Deps = {
+    guard: async (path) => {
+      guards.push({ path, calls: calls.length, facts: order.length });
+      order.push("guard");
+      notify();
+      if (over.guard !== undefined) throw over.guard;
+    },
     cpd: async (args) => {
       calls.push([...args]);
       const text = args.join(" ");
@@ -310,7 +320,7 @@ export function rig(over: RigOptions = {}) {
     return client;
   };
   return {
-    logs, submitted, written, stateCalls, finish, follower, ending, until, states, up, stop,
+    guards, logs, submitted, written, stateCalls, finish, follower, ending, until, states, up, stop,
     calls, order, streams, listens, listener, aborts, abortedSubmissions, clients, opened,
     closeConversation: (v: unknown) => closeConversation(v),
     drain, ready, shutdown, connect, attach,

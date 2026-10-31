@@ -66,6 +66,7 @@ function rig(over: { role?: string; state?: string } = {}) {
   });
 
   const deps: Deps = {
+    guard: async () => {},
     cpd: async (args) => {
       calls.push([...args]);
       const line = args.join(" ");

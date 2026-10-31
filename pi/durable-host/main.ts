@@ -31,6 +31,9 @@ try {
     contextFiles: (cwd) => loadProjectContextFiles({ cwd, agentDir: getAgentDir() }),
     open: (o) => openConversation(models as never, o),
     follow: (hooks) => new Follower(config.session, hooks, DEFAULT_TIMING),
+    guard: () => {
+      throw new Error("not implemented");
+    },
     listen: listenOn,
     newEpoch: () => randomUUID(),
     onTerminate: (handler) => {
