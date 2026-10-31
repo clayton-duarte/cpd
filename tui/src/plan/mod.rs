@@ -825,6 +825,8 @@ mod footer_cost_tests;
 mod needs_tests;
 #[cfg(test)]
 mod chain_tests;
+#[cfg(test)]
+mod explore_view_tests;
 
 #[cfg(test)]
 mod tests {
