@@ -100,6 +100,8 @@ mod incident_option_tests;
 #[cfg(test)]
 mod runner_tests;
 #[cfg(test)]
+mod durable_e2_tests;
+#[cfg(test)]
 mod ports_tests;
 #[cfg(test)]
 mod provider_hold_tests;
