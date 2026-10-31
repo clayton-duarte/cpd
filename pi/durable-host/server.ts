@@ -27,6 +27,8 @@ export type ServerDeps = {
   submit(input: { text: string; whenBusy: "followUp" | "steer" | "reject"; requestId?: string }): Promise<{ submissionId: number; status: string }>;
   abort(opts: { background: boolean }): Promise<void>;
   abortSubmission(id: number): Promise<"aborted" | "already_placed" | "settled" | "not_found">;
+  /** Rebuilds and installs the adapter extension (contract §6.18); the answer is one `result { reloaded: true }`. */
+  reload(): Promise<{ reloaded: boolean }>;
   hostState(): HostState;
   /** The process's held map, oldest first: what an attaching client is replayed (§6.15 rule 4). */
   held(): readonly HeldUI[];

@@ -63,6 +63,21 @@ const behavior: MethodBehavior = (self, args, original) => {
 	return original.apply(self, args);
 };
 
+/** The model `reserveTokensOf` derives from: the `provider/modelId` key and its declared context window. */
+export interface ReserveModel {
+  provider: string;
+  modelId: string;
+  contextWindow?: number;
+}
+
+/**
+ * The pure derivation of the compaction reserve (contract §6.18): the same precedence the prototype hook applies,
+ * `Math.round(contextWindow * ratio)`, and the same throws. One source of truth the hook and the durable host share.
+ */
+export function reserveTokensOf(compaction: CompactionSettings, model: ReserveModel | undefined): number | undefined {
+  throw new Error("not implemented");
+}
+
 /** Wraps `getCompactionReserveTokens` once per process, as the adapter loads. */
 export function registerCompactionRatio(): void {
 	hookMethod(SettingsManager.prototype, "getCompactionReserveTokens", "cpd-compaction-ratio", behavior);

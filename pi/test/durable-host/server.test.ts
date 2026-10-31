@@ -56,6 +56,7 @@ function setup(over: Partial<ServerDeps> = {}) {
       calls.abortSubmission.push(id);
       return "aborted";
     },
+    reload: async () => ({ reloaded: true }),
     hostState: () => state.current,
     held: () => [],
     answerUi: async (id, value) => {
