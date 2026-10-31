@@ -931,3 +931,177 @@ The minimal changes that must land before the first durable Lead is created, so 
 | 8 | The config key and the doctor check, last, so no durable Session exists until steps 1 to 6 are in | 6.1; 6.4 pill template |
 
 Steps 2 to 4 are the ones that prevent a second pi runtime (6.2 E2-f, C-1, C-15); the rest are visible failures (a refusal or an error dialog) rather than a silent second runtime (inferred).
+
+## 7. The cut: P1 and P2
+
+Sources: `durable-leads-eval.md` (phases and risks), `f-seam.md` (the sizing template), `g-proto.md` (section 11, the open choices), `g-spike.md` (numbers and suggested changes), and sections 3 to 6 of this doc. Sizes are non-test lines and a guess unless a row cites a measured line count. A PR here is one Plan-sized deliverable; tests are extra and are not counted (f-seam: tests were about 1.4k lines in #596 and about 460 in #604, measured; the same ratio is a guess here).
+
+The cut is derived from the gap table (3.1 to 3.8), the order of safety (6, "Order of safety") and the protocol (4.5): the PRs follow what must exist before the next thing can be tried, not the file layout of today.
+
+### 7.1 Phases
+
+| Phase | What | Reversible? | PRs and size (guess) |
+|---|---|---|---|
+| P0 | This doc: the gap list, the protocol, the spike, the reversibility audit and the cut. No product code | yes: docs only | 1 PR (this one) |
+| P1 | The durable session host: the safety changes, the Lead and Manager host, the socket server and protocol v1, the guards, the operations, the engine start and supervision, an end-to-end verify with no chat UI (7.2) | yes: per new Session; `sessions.runner` is additive, the default stays `pi`, flip the config key back (6.5) | 11 PRs, about 4,700 to 8,950 non-test lines (7.2 sum) |
+| P2 | `cpd chat`: the ratatui client, shown in the existing tmux chat slot for a durable Session (7.3) | yes: a `pi` Session still shows pi; a durable Session can still be read through the socket | 10 PRs, about 7,300 to 13,000 non-test lines; 5,800 to 10,500 if the questionnaire P2.6 is not built (7.3 sum) |
+| P3 | A cockpit without tmux. Out of scope here: its own decision (hs-d752), cut after durable Leads have run long enough | one-way if tmux code is deleted; reversible while it is a second front-end (the evaluation) | not cut: the evaluation's guess is 6 to 10 PRs plus a large deletion |
+
+The evaluation guessed 4 to 6 PRs for P1 and 6 to 10 for P2. This cut has 11 and 10: the P1 count is higher because section 3 found 101 gap rows and section 6 found a safety step set that has to merge before any durable Lead exists (inferred; the evaluation was written before the gap list).
+
+Reuse of f-seam's template (the runner seam of PRs #596 and #604, about 300 to 700 non-test lines, a guess there):
+
+| f-seam row | Reused by | How |
+|---|---|---|
+| Migration (3 to 5 lines) and schema pin and tests | P1.1 | the same additive form for `sessions` (6.1) |
+| Config (30) | P1.10 | `lead_runner` and `manager_runner` copy `worker_runner` (`core/src/config/file.rs:274`) |
+| Session rows (40) | P1.1 and P1.10 | the INSERT sites of 6.1 |
+| Seam (300, a wild guess there) | P1.10 | the host start and stop copies `core/src/driver/runner.rs` (286 lines, measured, #596) |
+| Liveness (`engine/src/watch/liveness.rs`, 31 lines changed in #596, measured) | P1.1 | E2 branches on the runner |
+| Cockpit toggle (120) | none | Open: is a Lead runner pill wanted? (6.4) The cut leaves it out |
+| Doctor (20) | P1.10 | generalise `engine/src/doctor/worker_runner.rs` |
+| Contract and commands docs (60) | every PR | each PR edits the sections it changes |
+
+### 7.2 P1: the durable session host
+
+Sources: sections 3.1 to 3.4, 3.7, 3.8, 4 and 6.5; `d-worker.md`; `f-engine.md`; `f-seam.md`.
+
+PRs in merge order. Area is one of host (Node), engine, core, cli, tui, docs. Needs point only at earlier rows.
+
+| # | PR title (at most 72 characters) | Area | Size (lines, guess unless derived) | Needs | Closes gap rows | Proves / checkpoint |
+|---|---|---|---|---|---|---|
+| P1.1 | Add sessions.runner and make E2 and send skip durable Sessions | engine | 200 to 400 (guess; the migration is 3 to 5 lines, the E2 change is of the size of `liveness.rs` in #596, 31 lines, measured there) | none | G21 (the E2 half; closed in P1.10) | Step 1 to 3 of the order of safety (6, "Order of safety"): no existing Session changes; with the column set by hand to `durable`, E2 does not stop or restart it and `session send` does not start a pane. Checkpoint CP1 |
+| P1.2 | Make session open, park, close, history and fork work with no pane | core | 200 to 400 (guess) | P1.1 | none (6.3 rows `open`, `park`, `close`, `history`, `fork`, `archive`; 6.2 TMUX-restart and E13) | Step 5 and 7 of the order of safety: each command refuses clearly or acts without a pane for a durable Session; the tmux restart drain ignores durable Leads; E13 sleep stops the host. Tests with a fake tmux |
+| P1.3 | Generalise pi/durable-worker into a Session-keyed Lead and Manager host | host | 350 to 700 (guess; the five files to generalise are 280 lines, read: G18) | none | G10, G18; reuses G09, G12, G13, G17, G19 (drop), G22, G23, G30 | A host process opens `<session>.sqlite`, resumes, installs the policy and time sections and the Worker guards, and reports `idle` for a Lead or Manager. No Events yet |
+| P1.4 | Deliver every Event kind to a durable Lead and Manager, with context | host | 500 to 1,000 (guess; `updates.ts` alone is 330 lines, G06) | P1.3 | G01, G02, G03, G04, G05, G06, G08, G11 | The follower delivers `session-message`, `session-resumed`, `session-retiered`, `escalation`, `pr-feedback` and the others the adapter handles (`pi/lib/handle.ts:97-145`) with the per-kind steer or follow-up rule; the first message of a by-user Session; context updates at turn start; the turn-end reminder; the cursor survives a restart |
+| P1.5 | Add the host socket server and protocol v1 (attach, submit, abort) | host | 1,000 to 1,800 (guess; G20 is L) | P1.3 | G15, G20, G95, G98, G99 | Messages 1 to 5, 15 to 22, 27 to 29 of 4.5: hello, attach with snapshot and resume, the ring and its rebase, submit and abort, state, usage, `bye`; the spike's three scenarios pass again in a test with a mocked pi-durable. Checkpoint CP2 |
+| P1.6 | Hold UI requests in the host and port the ask and approval tools | host | 500 to 900 (guess; G39 is 526 lines measured, G43 262) | P1.5 | G07, G29, G39, G42, G43, G46, G47, G48, G50, G51, G52 | Messages 14, 23 and 24: `ui_request`, `ui_response`, `ui_resolved`, replay at attach, `blocked` state, cancel and supersede; `ask_user_question`, `cpd_plan_review`, `cpd_secret_approve` and `cpd_host_approve` as tools whose `execute` awaits. Open: `replay:"safe"` or `unsafe` per tool (4.4 rule 6) |
+| P1.7 | Add the Lead guards: noblock, ask G2 and G4, loop and a role switch | host | 350 to 650 (guess; G24 rule is 41 lines, G28 is M) | P1.3, P1.5 | G24, G25, G26, G27, G28 | The Lead verdict adds noblock, the ask guards and the loop guard to the shared Worker verdict and does not apply the test guard; the loop guard counts the host's own submits (Open: where it counts, since pi-durable has no turn-start hook with an origin, G28); a loop trip reports `blocked` with the label `φ: loop guard` that `cpd session resume` clears |
+| P1.8 | Serve compact, configure, models, fork, history and reset | host | 300 to 600 (guess; each of G89 to G97 is S) | P1.5 | G82, G89, G90, G91, G94, G97 | Messages 6 to 8, 11, 12: `compact`, `configure`, `list_models`, `fork`, `history` and images in `submit` (G82; v1 gave `unsupported`, 4.5.1); `reset` when `/new` is chosen as it (Open: G77). Open: a fork is a new Session with its own host or a second conversation (`g-proto` choice 7) |
+| P1.9 | Add the operations: reload, skills, retier and the compaction ratio | host | 600 to 1,100 (guess; the reload poll alone is 128 lines, G31) | P1.3, P1.5 | G14, G31, G34, G35, G37, G92 | Messages 9 and 10 for the host half (`reload`, the `mcp` relay if chosen); the skills prompt section and the skill-changed notice; retier at idle with `switched` and `switch-failed`; the reserve from the ratio. MCP attach is reused as is (G32) |
+| P1.10 | Start and supervise the host from the engine; branch plan new on runner | engine | 500 to 1,000 (guess; reuses the seam row and the config, doctor and session rows of f-seam) | P1.1, P1.2, P1.9 | G16, G21 | The engine starts the host with the inherited `flock` and a restart bound, `cpd session open` waits for the socket; `plan new` and `context manager` start the host instead of a pane for a durable Session; `lead_runner` and `manager_runner` (default `pi`) and the doctor check land last (steps 4 and 8 of the order of safety in 6). Open: lock file or socket bind (3.1); the restart bound (4.7); one config key or two (6.1) |
+| P1.11 | Verify a durable Lead end to end with session send and a read-only tail | cli | 200 to 400 (guess) | P1.10 | none | A flow test with a mocked pi-durable: `plan new` with the key at `durable`, `cpd session send`, a reply in the transcript, `kill -9` of the host and a resume, E2 leaving it alone, `session archive` stopping it. The read path is a small socket tail (Open: that tail, or `cpd session history` reading the store). Checkpoint CP3 |
+
+Sum of the sizes, a guess: the lower bounds are 200 + 200 + 350 + 500 + 1,000 + 500 + 350 + 300 + 600 + 500 + 200 = 4,700 non-test lines; the upper bounds are 400 + 400 + 700 + 1,000 + 1,800 + 900 + 650 + 600 + 1,100 + 1,000 + 400 = 8,950. With tests at the f-seam ratio (a guess) about twice that. The only row derived from a measured count is the E2 part of P1.1 and the seam copy in P1.10; the rest are the bands of section 3.
+
+### 7.3 P2: the chat client
+
+Sources: sections 3.4 to 3.7, 4.2 to 4.4, 6.4; `a-render.md`, `b-commands.md`, `g-proto.md` section 11.
+
+| # | PR title (at most 72 characters) | Area | Size (lines, guess unless derived) | Needs | Closes gap rows | Proves / checkpoint |
+|---|---|---|---|---|---|---|
+| P2.1 | Add the cpd chat crate, the socket client and the event fold | tui | 800 to 1,400 (guess; the fold of about 20 event types was not sized, 4.3) | P1.5 | none (the fold and the protocol types serve G20; the Rust shape is in 4.2) | `cpd chat <session>` connects, handshakes, attaches, folds `snapshot` and `events` (a whole message at `message_start`, a delta only when streamed), reconnects with its cursor after `bye` or a lost socket, and prints the transcript as plain lines. Detach and resume work. Open: the client folds (`g-proto` choice 9, recommended A) |
+| P2.2 | Add the editor: multi-line, history, paste, images, queue and keys | tui | 900 to 1,600 (guess; the TS editor is 231 lines, G62, and the pi-tui `Editor` is not exported, 3.5) | P2.1 | G62, G81, G83, G85, G86, G87, G88, G96 | The User submits a message, steers with Enter and queues with Alt+Enter, aborts with Esc, pastes text or an image, opens `$EDITOR`, completes `@file`. Open: a ratatui editor crate or our own (G88). Open: restore the withdrawn text on abort (G96). `cpd chat` is now usable for a conversation. Checkpoint CP4 |
+| P2.3 | Render the transcript: markdown, balloons, folds, palette and mentions | tui | 1,000 to 1,800 (guess; the TS counterparts total about 1,600 lines measured in 3.5 for balloons, thinking, folds, palette, padding and fold state; markdown has no counterpart, G59) | P2.1 | G38, G57, G58, G59, G60, G61, G64, G66, G68 | User and assistant balloons, markdown (headings, code, lists, tables), the thinking fold with the time, the cpd message and compaction folds, the Dango palette, padding, Ctrl+O and Ctrl+T, mention colours |
+| P2.4 | Render tool rows, grouping and nested summaries | tui | 1,000 to 1,800 (guess; the TS counterparts total about 3,000 lines measured in 3.5 for rows, summaries, grouping and nesting, much of it the claude and codex vocabularies that need no port) | P2.3 | G53, G54, G55, G56 | Head, rail, closing row, pill by state, a running row, `Run date + 16 more steps` grouping, the nested count, a calm label for a shell command |
+| P2.5 | Show dialogs: select, input, editor, plan review and approvals | tui | 400 to 700 (guess; G40 203 lines, G44 67, G45 36, measured as TS) | P2.1, P1.6 | G40, G44, G45 | `ui_request` of `select`, `input` and `editor` with a replay after attach, a cancel on `ui_resolved`, the Plan review dialog and `/plan-review`, the approval as a select with Allow once and Deny; walker parity for `ask_user_question` (G40). The agent can ask and the User can answer from the client |
+| P2.6 | Add the full ask_user_question questionnaire | tui | 1,500 to 2,500 (guess; the TS view, state and selectors are 4,362 lines, measured, G41) | P2.5 | G41 | The `questionnaire` request: tabs, options, preview, notes, submit. Open: whether the first cut ships G40 only and this PR waits |
+| P2.7 | Add slash commands: compact, model, thinking, reload, mcp, fork, skill | tui | 600 to 1,100 (guess; ten S rows and G33 M) | P2.2, P1.8, P1.9 | G33, G69, G70, G71, G72, G73, G74, G76, G79 | Dispatch and autocomplete; `/compact`, `/model` and `/thinking` with a list from `list_models`, `/reload`, `/fork`, `/skill:name`, `/quit`, `/copy`, `/hotkeys`; `/mcp login` as a relay (Open: relay to the host or the User keeps the shell `pi mcp login`, G33) |
+| P2.8 | Add the footer, the status pills and the working indicator | tui | 300 to 600 (guess; TS 146 + 43 + 55 lines for the pill, G63) | P2.1 | G63, G65 | Cwd, branch, name, tokens, cost, context fill, the host state pill (idle, working, waiting, blocked) and the working pill with its tick |
+| P2.9 | Add scrollback, mouse selection, copy and anchored scrolling | tui | 500 to 900 (guess; the TS anchoring is 234 lines, G67) | P2.3 | G67 | Scroll back through the whole transcript, keep the reader's place while rows resize, select with the mouse and copy; the terminal features tmux copy-mode gives today (7.5) |
+| P2.10 | Show cpd chat in the tmux chat slot for a durable Session | core | 300 to 600 (guess) | P2.1, P2.2, P2.5, P2.8, P2.9, P1.10 | none (6.4 rows `last_chat_lead`, `close_of`, `free_for`, Park and the Plan view centre) | `cpd session open` puts `cpd chat <id>` in the slot and writes `session-moved place=chat`; the cockpit tree, the Plan view centre and Close and Park route by runner; `chat_slot` recognises the pane; the chat pads itself by 1 cell. Checkpoint CP5 |
+
+Sum of the sizes, a guess: lower bounds 800 + 900 + 1,000 + 1,000 + 400 + 1,500 + 600 + 300 + 500 + 300 = 7,300 non-test lines; upper bounds 1,400 + 1,600 + 1,800 + 1,800 + 700 + 2,500 + 1,100 + 600 + 900 + 600 = 13,000. Without P2.6 the range is 5,800 to 10,500. The Rust sizes are judgements from the TypeScript line counts of 3.5; the Manager's evaluation called P2 the largest phase, which holds.
+
+Gap rows not built:
+
+| Row ID | Reason |
+|---|---|
+| G75 | `/tree` has no in-place branch switch in pi-durable (G90) and cpd does not name it. Open: is a branch a fork (G74) or not supported? |
+| G84 | `!cmd` is not named in cpd and the host has no run-a-shell path today. Open: wanted at all? |
+| G100 | Code mode is optional and the Lead's use of it is unverified. Open: do Leads get it? |
+| G101 | Tool search is optional and aimed at large MCP sets. Open: needed for a Lead's tool list? |
+
+Check of the closing rule: the command below extracts every ID of section 3 whose `cpd builds` is host, client or engine, and every ID in the `Closes gap rows` column of 7.2 and 7.3 plus the Not built table, and prints the difference.
+
+```sh
+timeout 30 sh -c "awk -F'|' '/^\| G[0-9]+ /{split(\$6,b,\" \"); gsub(/[:,]/,\"\",b[1]); gsub(/ /,\"\",\$2); if(b[1]==\"host\"||b[1]==\"client\"||b[1]==\"engine\") print \$2}' docs/research/durable-leads.md | sort -u > /tmp/built.txt; awk '/^## 7\./{s=1} /^## 8\./{s=0} s' docs/research/durable-leads.md | grep -E '^\| (P[12]\.[0-9]+|G[0-9]+) ' | awk -F'|' '{print (\$2 ~ /^ G/ ? \$2 : \$7)}' | grep -o 'G[0-9]\+' | sort -u > /tmp/closed.txt; comm -23 /tmp/built.txt /tmp/closed.txt"
+```
+
+It printed nothing (every one of the 86 rows is closed or in Not built; see the commit message for the count).
+
+### 7.4 Order and checkpoints
+
+```mermaid
+flowchart TD
+    P1_1["P1.1 runner column, E2, send"]
+    P1_2["P1.2 pane-free session commands"]
+    P1_3["P1.3 host runtime"]
+    P1_4["P1.4 Event delivery"]
+    P1_5["P1.5 socket and protocol v1"]
+    P1_6["P1.6 UI requests and tools"]
+    P1_7["P1.7 Lead guards"]
+    P1_8["P1.8 conversation commands"]
+    P1_9["P1.9 operations"]
+    P1_10["P1.10 engine start, config keys"]
+    P1_11["P1.11 end to end verify"]
+    P2_1["P2.1 chat crate and fold"]
+    P2_2["P2.2 editor"]
+    P2_3["P2.3 transcript"]
+    P2_4["P2.4 tool rows"]
+    P2_5["P2.5 dialogs"]
+    P2_6["P2.6 questionnaire"]
+    P2_7["P2.7 slash commands"]
+    P2_8["P2.8 footer and pills"]
+    P2_9["P2.9 scrollback and selection"]
+    P2_10["P2.10 chat in the tmux slot"]
+    P1_1 --> P1_2
+    P1_3 --> P1_4
+    P1_3 --> P1_5
+    P1_5 --> P1_6
+    P1_3 --> P1_7
+    P1_5 --> P1_7
+    P1_5 --> P1_8
+    P1_3 --> P1_9
+    P1_5 --> P1_9
+    P1_1 --> P1_10
+    P1_2 --> P1_10
+    P1_9 --> P1_10
+    P1_10 --> P1_11
+    P1_5 --> P2_1
+    P2_1 --> P2_2
+    P2_1 --> P2_3
+    P2_3 --> P2_4
+    P2_1 --> P2_5
+    P1_6 --> P2_5
+    P2_5 --> P2_6
+    P2_2 --> P2_7
+    P1_8 --> P2_7
+    P1_9 --> P2_7
+    P2_1 --> P2_8
+    P2_3 --> P2_9
+    P2_1 --> P2_10
+    P2_2 --> P2_10
+    P2_5 --> P2_10
+    P2_8 --> P2_10
+    P2_9 --> P2_10
+    P1_10 --> P2_10
+```
+
+P2.1 needs only P1.5, so the client can be built in parallel with P1.6 to P1.9 once the socket is merged; the merge order is the table order. The tmux chat slot (P2.10) needs the engine start of P1.10.
+
+| Checkpoint | After | What is true | Roll back (section 6) |
+|---|---|---|---|
+| CP1 | P1.1 and P1.2 | Nothing the User sees changes. A `sessions.runner` column exists with every row `pi`; E2, `session send` and the session commands treat a durable Session correctly, but no code can create one. | Nothing to flip. The column is additive (6.1) and stays. |
+| CP2 | P1.5 | A host with a mocked pi-durable serves protocol v1; a client library can attach, submit, abort and resume. Still no durable Lead in a real Plan. | Nothing is wired to the engine; delete nothing, do not start the host. |
+| CP3 | P1.11 | The User sets `lead_runner = "durable"` (or `manager_runner`), runs `cpd plan new`, and the Lead runs in a host with no pane; they drive it with `cpd session send` and read it through the read path of P1.11. There is no chat UI. | Set the key back to `pi`: new Sessions are pi again; live durable Sessions finish as they are; no data migration back (6.5 lines 1, 2, 4). |
+| CP4 | P2.2 | `cpd chat <session>` run in any terminal drives a durable Lead: send, steer, abort, paste. Transcript is plain until P2.3. | The same flip; the client is a separate binary of its own. |
+| CP5 | P2.10 | A durable Lead or Manager shows in the existing tmux chat slot as `cpd chat`, and a `pi` Session still shows pi; the cockpit tree, Plan view and Close and Park work for both. | The same flip (6.5 line 1); a durable Session already alive stays readable with `cpd chat` (6.5 line 3). A handoff summary moves a Lead to the other runner (6.5; the summary format is open). |
+
+P3 starts after CP5 and after durable Leads have run long enough; it is not cut here.
+
+### 7.5 Risks
+
+| Risk | Evidence | Mitigation | How it shows early |
+|---|---|---|---|
+| pi-durable is experimental and its API changes without notice | README "Experimental. The API changes without notice" and `watchEvents` "Experimental" (`events.d.ts:181-183`); the Worker runner pins 1.3.0 (read, section 2) | Pin the one version in the host, as the Worker does, and upgrade by one PR that reruns the spike scenarios of 5.3 against a mocked pi-durable; the protocol's `pi_durable` field in `welcome` (4.5 row 17) names what a host runs. Open: the upgrade procedure and who owns it | A type error or a changed event shape in the fold test after a version bump; a `welcome.pi_durable` that the client does not know |
+| Parity gaps | 101 gap rows (3.9): 20 absent, 35 partial. Largest: G20 (L, host), G41 (L, client), G88, G59, G53 (M, client), G90, G51, G84, G06, G28, G31 (M) | The cut closes G20 in P1.5, G41 in P2.6 (with G40 as the cheap substitute in P2.5), and defers G75, G84, G100, G101 (7.3). A feature a Lead uses and the client lacks keeps a `pi` Session as the way back | The Lead's tool list of a durable Session against a `pi` one in the P1.11 flow test; a User report of a missing command |
+| The terminal features tmux gives today (scrollback, mouse selection and copy, detach and reattach, the ssh case of BACKLOG) | The Manager's evaluation (risks); 6.4: the cockpit never reads a Session's pane | Detach and reattach are covered by the host and client split: closing a client never stops the agent (4.1) and a client reattaches with its cursor (4.3). Not covered: a reachable socket from another machine (the socket is a unix path, 4.2: there is no TCP listener, so ssh needs a forward of the socket or a remote `cpd chat`; not tested, Open: the ssh case). P2.9 must build scrollback, mouse selection, copy and anchored scrolling; P2.2 builds paste and the external editor | P2.9 is the PR that proves it; a User who loses selection or the scroll position in the slot |
+| The approval bypass: the agent's own bash tool, a child of the host, can connect to the socket and answer a `secret_approve` or `host_approve` request (4.8) | `g-proto` choice 6; not tested | Options (section 8, Q6): A accept same-user trust and add a bash guard that refuses a command naming `run/host/`, B a per-host secret, C answer approvals only out of band. The cut builds none: Open: Q6. The guard of A would be added only on seen misbehaviour (the axiom) | A `ui_response` from a client id that is not a `cpd chat` (the host logs `by`); the host's `clients` count rising with no User attached |
+| A long Lead's snapshot size | Not measured: the spike had 30 entries and 17,303 bytes in the attach burst (5.3); `g-proto` choice 5 | The wire has `history` so a windowed first snapshot can be added without a version bump (4.3). Measure a real Lead's snapshot in P1.5 before the ring bounds 256 and 4096 are fixed. Open: whole history or a window | The attach time and the burst size of a Lead with weeks of history; `slow_client` closes (4.2) |
+| The restart loop of E2 for a paneless Lead | E2 treats a paneless non-Worker Session as dead and restarts it as pi until `session_restart_loop` (6.2: `liveness.rs:391-395`, `:448-450`, `:455`) | P1.1 lands the E2 skip before any durable Lead exists; P1.10 adds the host's own restart bound. Open: that bound (4.7) | `session_restart_loop` errors in the engine log; a Lead's `state` flipping to `stopped` while its host runs |
+| The missing hook for the loop guard | G28 absent: no pi-durable hook is a turn start with its origin; `beforeRequest` over-counts retries (`harness/types.d.ts:690`) | The host counts the submits it makes (the host is the only submitter) in P1.7. Open: where the host counts. The tripped state and its release are tested against the adapter's rule (`pi/lib/loop-guard.ts:14-59`) | A Lead that loops with no trip; or a trip with no `blocked` label in the cockpit |
+| The spike's limits | Faux provider only: no model latency, no real tool execution, no real extension set or context size, a stub Follower, one machine, no flock, no peer credentials, no rebase (5.2, 5.3) | P1.5 reruns the scenarios with a mocked pi-durable (no real model in a test); a real-model soak is not in the cut. The unverified items of 5.3 (flock inheritance, peer uid, abort signal, the overflow snapshot) are each tested in the PR that depends on them (P1.10, P1.5, P1.6, P1.5) | A scenario of 5.3 that passes on the spike and fails in the PR's test |
+| Parallel Rust and Node work on one wire | The protocol is ours (4.5) and v1 is not yet exercised by a second implementation | One protocol document, section 4.5, with the example lines parsed as JSON; the client and the host tests both read those examples. A version bump is the integer of 4.2 | A host test and a client test that disagree on a field |
+
+Open questions raised here, for section 8 (each also stands in the row or PR above): who folds events (P2.1); a ratatui editor crate or our own (P2.2); restore withdrawn text on abort (P2.2); `replay:"safe"` per tool (P1.6); where the loop guard counts (P1.7); a fork as a new Session or a second conversation (P1.8); `/new` as `reset` (P1.8); relay `/mcp login` (P2.7); whether the first cut ships the questionnaire (P2.6); lock file or socket bind, the restart bound and one config key or two (P1.10); how P1.11 reads the transcript; whole history or a windowed snapshot (7.5); the ssh case; the approval bypass (Q6); the pi-durable upgrade procedure; whether a Lead runner pill is wanted (7.1).
