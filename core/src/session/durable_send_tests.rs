@@ -54,6 +54,8 @@ fn world() -> World {
     let clock = ManualClock::new();
     let runner = FakeRunner::with_tmux();
     let ports = Ports { clock: Arc::new(clock), runner: Arc::new(runner.clone()), spawn: Arc::new(FakeSpawn::new()) };
+    // The fake tmux keys its server by `$TMUX_TMPDIR` and the socket: the same directory for every `Tmux` of this process.
+    unsafe { std::env::set_var("TMUX_TMPDIR", dir.path()) };
     Tmux::new("t")
         .with_runner(Arc::new(runner.clone()))
         .run(&["new-session", "-d", "-s", "cpd", "sleep", "600"].map(str::to_owned))
@@ -89,7 +91,7 @@ fn new_windows(world: &World) -> usize {
 #[test]
 fn send_to_a_stopped_durable_lead_appends_the_event_and_starts_no_pane() {
     let mut w = world();
-    let out = cpd(&w, &["session", "send", "dlead", "wake up", "--unblocks", "u"]);
+    let out = cpd(&w, &["send", "dlead", "wake up", "--unblocks", "u"]);
     assert_eq!(messages(&mut w, "dlead"), 1, "the Event is appended");
     assert_eq!(new_windows(&w), 0, "no window");
     assert_eq!((&out["started"], &out["pane"]), (&Value::Bool(false), &Value::Null), "{out}");
@@ -101,7 +103,7 @@ fn send_to_a_stopped_durable_lead_appends_the_event_and_starts_no_pane() {
 #[test]
 fn send_to_a_stopped_pi_lead_still_starts_its_pane() {
     let mut w = world();
-    let out = cpd(&w, &["session", "send", "plead", "wake up", "--unblocks", "u"]);
+    let out = cpd(&w, &["send", "plead", "wake up", "--unblocks", "u"]);
     assert_eq!(messages(&mut w, "plead"), 1, "the Event is appended");
     assert_eq!(new_windows(&w), 1, "one parked window");
     assert_eq!(out["started"], Value::Bool(true), "{out}");
@@ -111,13 +113,13 @@ fn send_to_a_stopped_pi_lead_still_starts_its_pane() {
 #[test]
 fn session_show_and_list_carry_the_runner() {
     let w = world();
-    let list = cpd(&w, &["session", "list"]);
+    let list = cpd(&w, &["list"]);
     let runner_of = |id: &str| {
         list["sessions"].as_array().unwrap().iter().find(|s| s["id"] == id).unwrap_or_else(|| panic!("{id} in {list}"))["runner"].clone()
     };
     assert_eq!((runner_of("dlead"), runner_of("plead")), (Value::from("durable"), Value::from("pi")));
     for (id, runner) in [("dlead", "durable"), ("plead", "pi")] {
-        let shown = cpd(&w, &["session", "show", id]);
+        let shown = cpd(&w, &["show", id]);
         assert_eq!(shown["session"]["runner"], Value::from(runner), "{shown}");
     }
 }

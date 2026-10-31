@@ -18,6 +18,10 @@ use cpd_core::host::runner::FakeRunner;
 fn fx(lead_runner: &str, manager_runner: &str, state: &str) -> (Fx, Arc<ManualClock>, FakeRunner) {
     let mut fx = Fx::with_plan("");
     let runner = fx.on_fake_tmux();
+    // E2's restart builds its own `Tmux` (the config socket, `$TMUX_TMPDIR`): the engine's `Tmux` is the same one, so both reach
+    // one fake server (nextest runs one test per process).
+    unsafe { std::env::set_var("TMUX_TMPDIR", fx.engine.home.root()) };
+    fx.engine.tmux = cpd_core::host::Tmux::new(fx.engine.config.tmux.socket.clone()).with_runner(Arc::new(runner.clone()));
     fx.tmux_server();
     fx.engine.tmux.run(&["new-session", "-d", "-s", "cpd", "sleep", "600"].map(str::to_owned)).unwrap();
     let clock = Arc::new(ManualClock::new());
@@ -44,6 +48,8 @@ fn new_windows(runner: &FakeRunner) -> usize {
 #[test]
 fn e2_leaves_a_paneless_durable_lead_alone() {
     let (mut fx, _clock, runner) = fx("durable", "pi", "idle");
+    // The pi Manager beside it is stopped with no pane, so E2 does not read it: its restart would be a window of its own.
+    fx.fixture("UPDATE sessions SET state = 'stopped' WHERE id = 'mgr1';");
     liveness::run(&mut fx.engine);
     assert_eq!(state_and_pane(&mut fx, "lead1"), ("idle".to_owned(), None), "not stopped, no pane written");
     assert_eq!(new_windows(&runner), 0, "not restarted");
@@ -77,6 +83,8 @@ fn e2_never_stops_or_restarts_a_working_durable_session_with_no_pane() {
 #[test]
 fn e2_still_stops_and_restarts_a_paneless_pi_lead() {
     let (mut fx, _clock, runner) = fx("pi", "pi", "idle");
+    // The pi Manager beside it is stopped with no pane, so E2 does not read it: its restart would be a second window.
+    fx.fixture("UPDATE sessions SET state = 'stopped' WHERE id = 'mgr1';");
     liveness::run(&mut fx.engine);
     assert_eq!(new_windows(&runner), 1, "the pi Lead is restarted in a parked window");
     let (state, pane) = state_and_pane(&mut fx, "lead1");

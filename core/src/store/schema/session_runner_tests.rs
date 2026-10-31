@@ -41,7 +41,7 @@ fn session_runner_defaults_to_pi_for_a_row_inserted_without_it() {
 fn session_runner_refuses_a_value_other_than_pi_or_durable() {
     let (_dir, home) = crate::store::tests::tmp_home();
     let mut store = Store::open(&home, 5000).unwrap();
-    write(&mut store, BASE).unwrap();
+    write(&mut store, &format!("{BASE}{}", session("lead", "", ""))).unwrap();
     write(&mut store, &session("ok", ", runner", ", 'pi'")).expect("`pi` is a runner");
     write(&mut store, &session("ok2", ", runner", ", 'durable'")).expect("`durable` is a runner");
     for (n, bad) in [(1, "tmux"), (2, "PI"), (3, "")] {
