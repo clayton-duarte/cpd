@@ -26,7 +26,8 @@ export function inputOf(event: CpdEvent, session: string, info: { role: string; 
   if (event.kind === "session-message") {
     const e = event as EventOf<"session-message">;
     const from = e.data.from;
-    return input(sessionMessage(e, session, from === null ? null : { id: from, name: sender ?? null }).content, "followUp");
+    const message = input(sessionMessage(e, session, from === null ? null : { id: from, name: sender ?? null }).content, "followUp");
+    return from === null ? { ...message, reply: true } : message;
   }
   if (!info.planLead) return undefined;
   const rule = leadRule(event);

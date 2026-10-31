@@ -15,6 +15,9 @@ export function parseConfig(argv: readonly string[], env: Record<string, string 
   const model = flag(argv, "--model");
   const home = env.CPD_HOME;
   if (home === undefined || home === "") throw new CpdError("usage", "CPD_HOME is not set");
+  const bound = env.CPD_SESSION;
+  if (bound === undefined || bound === "") throw new CpdError("usage", "CPD_SESSION is not set");
+  if (bound !== session) throw new CpdError("usage", `CPD_SESSION ${bound} differs from --session ${session}`);
   return { home, session, cwd, model };
 }
 
