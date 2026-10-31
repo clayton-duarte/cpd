@@ -123,7 +123,7 @@ function rig(over: { role?: string; state?: string } = {}) {
       if (ending.error) throw ending.error;
       return fn();
     });
-  const states = () => calls.filter((a) => a[0] === "session" && a[1] === "state").map((a) => a.slice(2).join(" "));
+  const states = () => calls.filter((a) => a[0] === "session" && a[1] === "state").map((a) => a[2]);
   const up = async () => {
     await until("the store opened", () => opens.length >= 1);
     await until("the terminate handler", () => terminate.handler);
