@@ -202,9 +202,14 @@ pub fn list(ports: &Ports, cwd: &Path, name: &str, err: &mut dyn Write) -> Resul
                 write(err, &no_title(&file, &title))?;
                 return Ok(1);
             }
-            let args = ["--filter", "cpd-web-client", "exec", "vitest", "run", "--testNamePattern", title.as_str(), file.as_str()];
+            // vitest list --reporter=json <file> imports the file and prints the collected tests without running
+            // them, so an existing-but-red test still lists as found and only an absent title or a file that does
+            // not collect is refused; `run` would exit non-zero on a red test and read as 'not found' (the list
+            // command of vitest's CLI has existed since 2.x). The report is the JSON reporter's object, one
+            // `testResults[]` per file, each with an `assertionResults[]` of `{ fullName, title, … }` per test.
+            let args = ["--filter", "cpd-web-client", "exec", "vitest", "list", "--reporter=json", file.as_str()];
             let answered = process(ports, "pnpm", "pnpm", &args, &root)?;
-            if answered.status.success() {
+            if answered.status.success() && web_has(&answered.stdout, &title) {
                 return Ok(0);
             }
             write(err, &text(&answered.stderr))?;
@@ -268,6 +273,15 @@ fn pi_name(name: &str) -> Option<(&str, &str)> {
     let (file, title) = name.split_once("::")?;
     let is_pi = file.starts_with("pi/test/") && file.ends_with(".test.ts") && !title.is_empty();
     is_pi.then_some((file, title))
+}
+
+/// Whether the vitest `list --reporter=json` report of the collected tests names `title` exactly: the `fullName` or
+/// `title` of an `assertionResult` of a `testResult`.
+fn web_has(report: &[u8], title: &str) -> bool {
+    let Ok(json) = serde_json::from_slice::<Value>(report) else { return false };
+    json["testResults"].as_array().into_iter().flatten().filter_map(|file| file["assertionResults"].as_array()).flatten().any(|test| {
+        test["fullName"].as_str().is_some_and(|name| name == title) || test["title"].as_str().is_some_and(|at| at == title)
+    })
 }
 
 /// Whether `title` is in a `test(` or `it(` call of the file, quoted `'`, `"` or `` ` ``.
