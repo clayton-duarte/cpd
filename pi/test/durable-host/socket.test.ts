@@ -32,7 +32,7 @@ test("runHost listens on the socket path of the Session after it opens the store
   await withHost({}, async (r) => {
     await r.ready();
     assert.deepEqual(r.listens.map((l) => l.path), [SOCK]);
-    assert.deepEqual(r.order.slice(0, 3), ["open", "watch", "listen"]);
+    assert.deepEqual(r.order.slice(0, 3), ["guard", "open", "watch"]);
   });
 });
 
