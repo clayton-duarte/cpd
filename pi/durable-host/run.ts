@@ -233,7 +233,12 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       },
       abort: (opts) => conversation.abort(opts),
       abortSubmission: (id) => conversation.abortSubmission(id),
-      hostState: () => ({ state: hostState, ...(session.name === null ? {} : { name: session.name }) }),
+      // P1.6 first half: the wire only — the host flow (held map, dialogs, tools) lands in the second half of the PR.
+      held: () => [],
+      answerUi: () => {
+        throw new Error("not implemented");
+      },
+      hostState: () => ({ state: hostState, held_ui: 0, ...(session.name === null ? {} : { name: session.name }) }),
       timers,
       clientId: () => (from = `c${++nextClient}`),
     });

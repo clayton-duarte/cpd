@@ -104,10 +104,90 @@ test("parseLine answers an unknown type with unknown_type and keeps its req", ()
 });
 
 test("parseLine answers a type of a later PR with unknown_type", () => {
-  for (const type of ["compact", "configure", "list_models", "reload", "mcp", "fork", "history", "rename", "ui_response"]) {
+  for (const type of ["compact", "configure", "list_models", "reload", "mcp", "fork", "history", "rename"]) {
     const e = fail(`{"type":"${type}","req":"r"}`);
     assert.equal(e.code, "unknown_type", type);
     assert.equal(e.req, "r", type);
+  }
+});
+
+test("parseLine accepts ui_response with value and rejects none, two or unknown shapes with bad_args", () => {
+  assert.deepEqual(parseLine('{"type":"ui_response","req":"r13","id":"b3b2e6f0","value":"Allow once"}'), {
+    ok: true,
+    msg: { type: "ui_response", req: "r13", id: "b3b2e6f0", value: "Allow once" },
+  });
+  // none of the four answer fields: bad_args naming the fields, req carried.
+  const none = fail('{"type":"ui_response","req":"r","id":"i"}');
+  assert.equal(none.code, "bad_args");
+  assert.equal(none.req, "r");
+  assert.match(none.message, /value|confirmed|answer|cancelled/);
+  const other = fail('{"type":"ui_response","req":"r","id":"i","declined":true}');
+  assert.equal(other.code, "bad_args");
+  // two or more of the four: bad_args naming the fields it saw.
+  for (const body of ['"value":"x","confirmed":true', '"answer":{},"cancelled":true', '"value":"x","confirmed":true,"answer":{},"cancelled":true']) {
+    const two = fail(`{"type":"ui_response","req":"r","id":"i",${body}}`);
+    assert.equal(two.code, "bad_args", body);
+    assert.equal(two.req, "r", body);
+    assert.match(two.message, /value|confirmed|answer|cancelled/, body);
+  }
+  // a mistyped answer field: bad_args naming that field.
+  for (const [field, value] of [
+    ["value", 5],
+    ["value", true],
+    ["confirmed", "yes"],
+    ["answer", "not an object"],
+    ["answer", [1]],
+    ["cancelled", 1],
+  ] as const) {
+    const e = fail(`{"type":"ui_response","req":"r","id":"i","${field}":${JSON.stringify(value)}}`);
+    assert.equal(e.code, "bad_args", `${field}=${JSON.stringify(value)}`);
+    assert.match(e.message, new RegExp(field), `${field}=${JSON.stringify(value)}`);
+    assert.equal(e.req, "r", `${field}=${JSON.stringify(value)}`);
+  }
+});
+
+test("parseLine accepts ui_response with confirmed, answer and cancelled", () => {
+  assert.deepEqual(parseLine('{"type":"ui_response","req":"r","id":"i","confirmed":true}'), {
+    ok: true,
+    msg: { type: "ui_response", req: "r", id: "i", confirmed: true },
+  });
+  const q = { questionIndex: 0, question: "color", kind: "option", answer: "blue" };
+  assert.deepEqual(parseLine(`{"type":"ui_response","req":"r","id":"i","answer":${JSON.stringify(q)}}`), {
+    ok: true,
+    msg: { type: "ui_response", req: "r", id: "i", answer: q },
+  });
+  assert.deepEqual(parseLine('{"type":"ui_response","req":"r","id":"i","cancelled":true}'), {
+    ok: true,
+    msg: { type: "ui_response", req: "r", id: "i", cancelled: true },
+  });
+});
+
+test("parseLine requires req and id on ui_response and answers an unknown type ui_response variant with unknown_type", () => {
+  const noReq = fail('{"type":"ui_response","id":"i","value":"x"}');
+  assert.equal(noReq.code, "bad_args");
+  assert.match(noReq.message, /req/);
+  assert.equal(noReq.req, undefined);
+  const noId = fail('{"type":"ui_response","req":"r","value":"x"}');
+  assert.equal(noId.code, "bad_args");
+  assert.match(noId.message, /id/);
+  assert.equal(noId.req, "r");
+  const badId = fail('{"type":"ui_response","req":"r","id":5,"value":"x"}');
+  assert.equal(badId.code, "bad_args");
+  assert.match(badId.message, /id/);
+  assert.equal(badId.req, "r");
+  const badReq = fail('{"type":"ui_response","req":5,"id":"i","value":"x"}');
+  assert.equal(badReq.code, "bad_args");
+  assert.match(badReq.message, /req/);
+  // The wire's host-to-client UI messages are not client-to-host kinds: unknown_type.
+  for (const line of [
+    '{"type":"ui_request","id":"i","method":"select","title":"t","options":[],"purpose":"other","created_at":1}',
+    '{"type":"ui_resolved","id":"i","outcome":"answered"}',
+    '{"type":"notice","level":"info","message":"hi"}',
+    '{"type":"status","key":"k","text":"v"}',
+  ]) {
+    const e = fail(line);
+    assert.equal(e.code, "unknown_type", line);
+    assert.equal(e.req, undefined, line);
   }
 });
 
