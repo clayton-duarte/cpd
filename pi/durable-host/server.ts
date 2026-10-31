@@ -139,8 +139,27 @@ export function createServer(deps: ServerDeps): Server {
         }
         if (msg.type === "submit") {
           run(st, msg.req, async () => {
-            const r = await deps.submit({ text: msg.text, whenBusy: msg.when_busy, ...(msg.request_id === undefined ? {} : { requestId: msg.request_id }) });
+            const imgs = msg.images === undefined ? {} : { images: msg.images.map((i) => ({ mimeType: i.mime_type, data: i.data })) };
+            const r = await deps.submit({ text: msg.text, whenBusy: msg.when_busy, ...(msg.request_id === undefined ? {} : { requestId: msg.request_id }), ...imgs });
             return { submission_id: r.submissionId, status: r.status };
+          });
+        } else if (msg.type === "compact") {
+          run(st, msg.req, async () => ({ task_id: (await deps.compact(msg.instructions)).task_id }));
+        } else if (msg.type === "configure") {
+          run(st, msg.req, async () => {
+            const change: { model?: string; thinkingLevel?: string | null } = {};
+            if (msg.model !== undefined) change.model = msg.model;
+            if (msg.thinking_level !== undefined) change.thinkingLevel = msg.thinking_level;
+            return { agent: (await deps.configure(change)).agent };
+          });
+        } else if (msg.type === "list_models") {
+          run(st, msg.req, async () => ({ models: await deps.models() }));
+        } else if (msg.type === "fork") {
+          run(st, msg.req, async () => ({ conversation_id: (await deps.fork(msg.at, msg.ownership)).conversation_id }));
+        } else if (msg.type === "history") {
+          run(st, msg.req, async () => {
+            const r = await deps.history(msg.before, msg.limit);
+            return { entries: r.entries, ...(r.next === undefined ? {} : { next: r.next }) };
           });
         } else if (msg.type === "abort") {
           run(st, msg.req, async () => {

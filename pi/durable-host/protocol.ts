@@ -110,8 +110,33 @@ const str = (o: Record<string, unknown>, k: string): string => (typeof o[k] === 
 const int = (o: Record<string, unknown>, k: string): number => (Number.isInteger(o[k]) ? (o[k] as number) : bad(k, "an integer"));
 const optStr = (o: Record<string, unknown>, k: string): string | undefined => (o[k] === undefined ? undefined : str(o, k));
 
-const KINDS = new Set(["hello", "attach", "submit", "abort", "abort_submission", "ping", "detach", "ui_response"]);
+const KINDS = new Set(["hello", "attach", "submit", "compact", "configure", "list_models", "fork", "history", "abort", "abort_submission", "ping", "detach", "ui_response"]);
 const WHEN_BUSY = ["followUp", "steer", "reject"] as const;
+const OWNERSHIP = ["lead", "manager"] as const;
+const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+/** The `submit.images` of contract §6.17: an empty array is the absent one; `undefined` when absent. */
+function images(o: Record<string, unknown>): readonly { mime_type: string; data: string }[] | undefined {
+  const raw = o.images;
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) bad("images", "an array");
+  if (raw.length === 0) return undefined;
+  if (raw.length > IMAGE_MAX_COUNT) bad("images", `at most ${IMAGE_MAX_COUNT} images`);
+  const out: { mime_type: string; data: string }[] = [];
+  let total = 0;
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) bad("images", "an array of objects");
+    const im = item as Record<string, unknown>;
+    const mime = im.mime_type;
+    if (typeof mime !== "string" || !(IMAGE_MIME as readonly string[]).includes(mime)) bad("mime_type", `one of ${IMAGE_MIME.join(", ")}`);
+    const data = im.data;
+    if (typeof data !== "string" || !BASE64.test(data)) bad("data", "an RFC 4648 base64 string with its padding");
+    total += data.length;
+    out.push({ mime_type: mime, data });
+  }
+  if (total > IMAGE_MAX_TOTAL) bad("images", `at most ${IMAGE_MAX_TOTAL} bytes of base64 data together`);
+  return out;
+}
 
 function uiAnswer(o: Record<string, unknown>): { value?: string; confirmed?: boolean; answer?: object; cancelled?: boolean } {
   const fields = ["value", "confirmed", "answer", "cancelled"] as const;
@@ -156,7 +181,34 @@ function build(o: Record<string, unknown>, type: string): ToHost {
       const text = str(o, "text");
       const wb = o.when_busy === undefined ? "followUp" : (WHEN_BUSY as readonly unknown[]).includes(o.when_busy) ? (o.when_busy as (typeof WHEN_BUSY)[number]) : bad("when_busy", "followUp, steer or reject");
       const request_id = optStr(o, "request_id");
-      return { type, req, text, when_busy: wb, ...(request_id === undefined ? {} : { request_id }) };
+      const imgs = images(o);
+      return { type, req, text, when_busy: wb, ...(request_id === undefined ? {} : { request_id }), ...(imgs === undefined ? {} : { images: imgs }) };
+    }
+    case "compact": {
+      const instructions = optStr(o, "instructions");
+      return { type, req, ...(instructions === undefined ? {} : { instructions }) };
+    }
+    case "configure": {
+      const hasModel = o.model !== undefined;
+      const hasLevel = o.thinking_level !== undefined;
+      if (hasModel === hasLevel) bad("model|thinking_level", "exactly one of model and thinking_level");
+      if (hasModel) return { type, req, model: str(o, "model") };
+      if (o.thinking_level !== null && typeof o.thinking_level !== "string") bad("thinking_level", "a string or null");
+      return { type, req, thinking_level: o.thinking_level as string | null };
+    }
+    case "list_models":
+      return { type, req };
+    case "fork": {
+      const ownership = o.ownership;
+      if (ownership !== undefined && !(OWNERSHIP as readonly unknown[]).includes(ownership)) bad("ownership", "lead or manager");
+      return { type, req, at: int(o, "at"), ...(ownership === undefined ? {} : { ownership: ownership as (typeof OWNERSHIP)[number] }) };
+    }
+    case "history": {
+      const before = optStr(o, "before");
+      const limit = o.limit;
+      if (limit !== undefined && (!Number.isInteger(limit) || (limit as number) < 1)) bad("limit", "a positive integer");
+      if (limit !== undefined && (limit as number) > HISTORY_MAX) bad("limit", `a positive integer no greater than ${HISTORY_MAX}`);
+      return { type, req, ...(before === undefined ? {} : { before }), ...(limit === undefined ? {} : { limit: limit as number }) };
     }
     case "abort": {
       if (o.background !== undefined && typeof o.background !== "boolean") bad("background", "a boolean");
