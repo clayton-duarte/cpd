@@ -5863,7 +5863,7 @@ The logic behind `scripts/test-changed` and `scripts/tests.sh`, which become thi
 cpd test changed [--dry-run] [<base>]
 ```
 
-Runs the Rust tests the changed files can reach: exactly the selection of docs/implementing.md "The scoped loop" (changed files from the merge base of `<base>`, default `origin/main`, to the working tree and untracked files; crate and reverse dependencies as `-p`; `cli/tests/<area>/<module>.rs` as `--test <area> -E 'test(/^<module>::/)'`; root-level inputs as `--workspace`; docs, `pi/` and other scripts select nothing). `--dry-run` prints the one command on stdout and runs nothing, exit 0. Nothing selected: `test-changed: nothing to run` on stderr, exit 0. Otherwise the exit status is nextest's. `scripts/test-changed [--dry-run] [<base>]` stays as `exec cpd test changed "$@"`.
+Runs the Rust tests the changed files can reach: exactly the selection of docs/implementing.md "The scoped loop" (changed files from the merge base of `<base>`, default `origin/main`, to the working tree and untracked files; crate and reverse dependencies as `-p`; `cli/tests/<area>/<module>.rs` as `--test <area> -E 'test(/^<module>::/)'`; root-level inputs as `--workspace`; docs, `pi/`, `web/` and other scripts select nothing). `--dry-run` prints the one command on stdout and runs nothing, exit 0. Nothing selected: `test-changed: nothing to run` on stderr, exit 0. Otherwise the exit status is nextest's. `scripts/test-changed [--dry-run] [<base>]` stays as `exec cpd test changed "$@"`.
 
 ### 23.2 `test run`
 
@@ -5871,7 +5871,7 @@ Runs the Rust tests the changed files can reach: exactly the selection of docs/i
 cpd test run <name>...
 ```
 
-Runs the named tests and exits non-zero when any failed or did not run. A name is a pi name, `pi/test/<file>.test.ts::<title>` (the file's path, `::`, the exact `node:test` title; run with `node --test --test-name-pattern=<title> <file>` and refused when the title is in no `test(` or `it(` call of the file), or a Rust name as nextest filters it (run with `nextest run --workspace --no-fail-fast`). Both run filtered, so neither takes a test slot. Runs from the repo root, whatever the cwd. No name is a `usage` error.
+Runs the named tests and exits non-zero when any failed or did not run. A name is a pi name, `pi/test/<file>.test.ts::<title>` (the file's path, `::`, the exact `node:test` title; run with `node --test --test-name-pattern=<title> <file>` and refused when the title is in no `test(` or `it(` call of the file), a web name, `web/<file>.test.ts(x)::<title>` (the file's path, `::`, the exact vitest title; run through the web package's vitest, `pnpm --filter cpd-web-client exec vitest run --testNamePattern <title> <file>`), or a Rust name as nextest filters it (run with `nextest run --workspace --no-fail-fast`). All run filtered, so none takes a test slot. Runs from the repo root, whatever the cwd. No name is a `usage` error.
 
 ### 23.3 `test list` and `test build`
 
@@ -5880,7 +5880,7 @@ cpd test list <name>
 cpd test build
 ```
 
-`list` exits 0 only when that one test exists: a pi name when its title is in a `test(` or `it(` call of its file (nothing is started), a Rust name when `nextest list --workspace --message-format oneline <name>` prints a test. `build` runs `nextest run --workspace --no-run`, then `pnpm run typecheck` and stops at the first failure; its status is that of the step that failed. Both run from the repo root, whatever the cwd.
+`list` exits 0 only when that one test exists: a pi name when its title is in a `test(` or `it(` call of its file (nothing is started), a web name when the web package's vitest answers it (the same runner as `run`, `pnpm --filter cpd-web-client exec vitest run --testNamePattern <title> <file>`), a Rust name when `nextest list --workspace --message-format oneline <name>` prints a test. `build` runs `nextest run --workspace --no-run`, then `pnpm run typecheck` and, when `web/package.json` exists, typechecks the web client (it skips the web client when the file does not exist), and stops at the first failure; its status is that of the step that failed. Both run from the repo root, whatever the cwd.
 
 ### 23.4 The `scripts/tests.sh` contract
 
