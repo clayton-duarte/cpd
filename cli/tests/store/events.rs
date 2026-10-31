@@ -249,6 +249,7 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("session-renamed", "cs", "p", &["name"], &[]),
     ("session-titled", "cs", "p", &["title"], &[]),
     ("session-retiered", "cs", "p", &["from", "to"], &[]),
+    ("session-model-changed", "cs", "p", &["from", "to"], &[]),
     ("mcp-attached", "cs", "p", &["name", "server"], &[]),
     ("session-asleep", "cs", "p", &[], &[]),
     ("session-resumed", "cs", "p", &[], &[]),
