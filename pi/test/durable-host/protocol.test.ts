@@ -103,8 +103,19 @@ test("parseLine answers an unknown type with unknown_type and keeps its req", ()
   assert.equal(fail('{"type":"frobnicate","req":5}').req, undefined);
 });
 
+test("parseLine accepts reload with req and rejects a foreign body with bad_args", () => {
+  assert.deepEqual(parseLine('{"type":"reload","req":"r1"}'), { ok: true, msg: { type: "reload", req: "r1" } });
+  // unknown fields are ignored
+  assert.deepEqual(parseLine('{"type":"reload","req":"r2","extra":1}'), { ok: true, msg: { type: "reload", req: "r2" } });
+  for (const line of ['{"type":"reload"}', '{"type":"reload","req":5}', '{"type":"reload","req":null}']) {
+    const e = fail(line);
+    assert.equal(e.code, "bad_args", line);
+    assert.match(e.message, /req/, line);
+  }
+});
+
 test("parseLine answers a type of a later PR with unknown_type", () => {
-  for (const type of ["reload", "mcp", "rename"]) {
+  for (const type of ["mcp", "rename"]) {
     const e = fail(`{"type":"${type}","req":"r"}`);
     assert.equal(e.code, "unknown_type", type);
     assert.equal(e.req, "r", type);

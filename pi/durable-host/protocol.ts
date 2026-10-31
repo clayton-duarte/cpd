@@ -49,6 +49,7 @@ export type ToHost =
   | { type: "abort_submission"; req: string; submission_id: number }
   | { type: "ping"; req?: string }
   | { type: "detach"; req: string }
+  | { type: "reload"; req: string }
   | { type: "ui_response"; req: string; id: string; value?: string; confirmed?: boolean; answer?: object; cancelled?: boolean };
 
 export type HostState = {
@@ -110,7 +111,7 @@ const str = (o: Record<string, unknown>, k: string): string => (typeof o[k] === 
 const int = (o: Record<string, unknown>, k: string): number => (Number.isInteger(o[k]) ? (o[k] as number) : bad(k, "an integer"));
 const optStr = (o: Record<string, unknown>, k: string): string | undefined => (o[k] === undefined ? undefined : str(o, k));
 
-const KINDS = new Set(["hello", "attach", "submit", "compact", "configure", "list_models", "fork", "history", "abort", "abort_submission", "ping", "detach", "ui_response"]);
+const KINDS = new Set(["hello", "attach", "submit", "compact", "configure", "list_models", "fork", "history", "abort", "abort_submission", "ping", "detach", "reload", "ui_response"]);
 const WHEN_BUSY = ["followUp", "steer", "reject"] as const;
 const OWNERSHIP = ["lead", "manager"] as const;
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
@@ -217,6 +218,8 @@ function build(o: Record<string, unknown>, type: string): ToHost {
     }
     case "abort_submission":
       return { type, req, submission_id: int(o, "submission_id") };
+    case "reload":
+      return { type, req };
     case "ui_response":
       return { type, req, id: str(o, "id"), ...uiAnswer(o) };
     default:

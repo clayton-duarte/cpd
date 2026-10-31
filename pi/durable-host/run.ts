@@ -1,12 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ConversationBusy, GenerationTask, hook, type Extension } from "@earendil-works/pi-durable";
+import { ConversationBusy, GenerationTask, hook, section, type Extension } from "@earendil-works/pi-durable";
+import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
+import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 import type { FollowerHooks } from "../lib/follower.ts";
 import { parseLine, type EventOf } from "../lib/event.ts";
 import { cursorFrom } from "./cursor.ts";
 import { inputOf, type Input } from "./deliver.ts";
 import { CpdError, toCpdError } from "../lib/cpd.ts";
+import { adapterPath } from "../lib/reload.ts";
+import { skillOf } from "../lib/skills.ts";
+import { codemodeNamespaces } from "./codemode.ts";
+import { createReload, type ReloadPort } from "./reload.ts";
+import { createRetier } from "./retier.ts";
+import { skillsCheck, skillsSection, type SkillsPort } from "./skills.ts";
 import { highestReview, reviewsFromEntries } from "../lib/plan-review.ts";
 import type { Host } from "../lib/host.ts";
 import { clearTrip, ENTRY_TYPE, holdTrip, LABEL, trippedIn, WINDOW_MS } from "../lib/loop-guard.ts";
@@ -31,12 +39,14 @@ import { newTurnState, prepareTurn, reminderFor, type StoredEntry, type TurnPort
 export type { EventStream };
 export type Submission = { id: number; status(): Promise<string>; wait(): Promise<"done" | "unanswered"> };
 /** `write` appends an entry (`submit({ type: "write", ... })`): the first message and the context updates. */
+/** The change a retier applies (contract §6.18): pi-durable's `AgentChange`, narrowed to the two fields the host sets. */
+export type AgentChange = { model?: { provider: string; modelId: string } | null; thinkingLevel?: string | null };
 export type Conversation = { submit(input: Input): Promise<Submission>; write(write: Write): Promise<unknown>; install(extension: Extension): void; entries(): Promise<readonly unknown[]>; closed: Promise<unknown>; watch(): Promise<EventStream>; abort(opts: { background: boolean }): Promise<void>; abortSubmission(id: number): Promise<"aborted" | "already_placed" | "settled" | "not_found"> } & ConversationCommands;
 
 /** The four conversation commands of contract 6.17 a `Conversation` must carry (built by `conversationOf`). */
 export type ConversationCommands = {
   compact(instructions?: string): Promise<number>;
-  configure(change: { model?: { provider: string; modelId: string }; thinkingLevel?: string | null }): Promise<void>;
+  configure(change: AgentChange): Promise<void>;
   agent(): Promise<{ model?: { provider: string; modelId: string }; thinkingLevel: string }>;
   pageEntries(limit: number, cursor?: object): Promise<{ entries: readonly unknown[]; next?: object }>;
 };
@@ -76,6 +86,8 @@ export type Deps = {
   resolveModel(pattern: string): Model;
   contextFiles(cwd: string): readonly { path: string; content: string }[];
   open(o: { file: string; cwd: string; model: Model; extension: Extension }): Promise<Conversation>;
+  /** pi/lib/reload.ts's `validatePackage` over the adapter package directory: the refusal reason, or `undefined`. */
+  validatePackage(dir: string): Promise<string | undefined>;
   follow?(hooks: FollowerHooks): { start(): void; stop(): void };
   /** The one source of truth of `list_models` and of the `configure` validation (contract §6.17). */
   models(): Promise<readonly ModelInfo[]>;
@@ -155,12 +167,6 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
   );
 
   const start = async (): Promise<void> => {
-    const policy = policySection(await deps.cpd(["policy", "show"]));
-    const base = hostExtension(
-      { contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) },
-      { cwd: config.cwd, home: deps.homeDir(), visible: [] },
-      session.role as "lead" | "manager",
-    );
     const turn = newTurnState();
     const plan = session.plan ?? "";
     // §6.16 the loop guard: the runtime the lib's `holdTrip`/`clearTrip`/`trippedIn` read. `facts` satisfies the lib (the
@@ -214,15 +220,30 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       held,
       dialogs,
     });
-    // pi-durable 1.3.0 (README "Hooks", GenerationHooks): `onYield(answer)` returning `{ continue }` appends a user message and continues the run; the answer is the final AssistantMessage.
-    const extension: Extension = {
-      ...base,
-      hooks: [...(base.hooks ?? []), hook(GenerationTask, { onYield: async (answer) => {
-        const text = await reminderFor([answer], port, turn);
-        return text === undefined ? undefined : { continue: text };
-      } })],
-      ...(hostTools.tools === undefined ? {} : { tools: hostTools.tools }),
+    // §6.18 code mode: the QuickJS sandbox and one namespace per attached MCP server. No MCP attach is wired in P1.9 (out of scope), so the list is empty today.
+    const sandbox = new CodemodeSandbox();
+    const skill = skillOf(session.role);
+    const skillDir = skill === undefined ? undefined : join(adapterPath(), "skills", skill);
+    const codemodeServers: readonly { server: string; tools: readonly string[] }[] = [];
+    // The build the start and a reload share: re-reads the prompt sources and the role skill, and rebuilds the extension modules.
+    const build = async (): Promise<Extension> => {
+      const policy = policySection(await deps.cpd(["policy", "show"]));
+      const base = hostExtension({ contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) }, { cwd: config.cwd, home: deps.homeDir(), visible: [] }, session.role as "lead" | "manager");
+      const sections = [...(base.sections ?? [])];
+      if (skill !== undefined && skillDir !== undefined) sections.push(section("cpd-skills", () => skillsSection(skill, skillDir)));
+      const codemode = createCodemodeExtension({ sandbox, namespaces: codemodeNamespaces(codemodeServers) });
+      // pi-durable 1.3.0 (README "Hooks", GenerationHooks): `onYield(answer)` returning `{ continue }` appends a user message and continues the run; the answer is the final AssistantMessage.
+      return {
+        ...base,
+        sections: [...sections, ...(codemode.sections ?? [])],
+        hooks: [...(base.hooks ?? []), hook(GenerationTask, { onYield: async (answer) => {
+          const text = await reminderFor([answer], port, turn);
+          return text === undefined ? undefined : { continue: text };
+        } })],
+        tools: [...(hostTools.tools ?? []), ...(codemode.tools ?? [])],
+      };
     };
+    const extension = await build();
     const conversation = await deps.open({ file: storePath(config.home, config.session), cwd: config.cwd, model, extension });
     current = await conversation.watch();
     conversation.closed.then(
@@ -277,6 +298,47 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     // A restart that begins tripped reports `blocked` at once, so `cpd session resume` (which needs that state) can clear it (L7).
     if (loop.tripped) report();
     let pending = 0;
+    // §6.18 skills: the check at start and after every reload, over the conversation's entries.
+    const skillsPort: SkillsPort = {
+      entries: async () => (await conversation.entries()) as readonly { kind: string; data?: Record<string, unknown> }[],
+      write: (entry) => conversation.write({ type: "write", entry }),
+      broadcast: (msg) => server?.broadcast(msg),
+      deliver: (error) => failed(error.what, new CpdError(error.code, error.message, error.details)),
+      log: deps.log,
+    };
+    const runSkillsCheck = async (): Promise<void> => {
+      if (skill === undefined || skillDir === undefined) return;
+      try {
+        await skillsCheck(skillsPort, skill, skillDir);
+      } catch (e) {
+        failed("skills check", e);
+      }
+    };
+    // §6.18 reload: the guard from the host's own state, the shared build, and `deps.validatePackage` over the adapter path.
+    const reloadPort: ReloadPort = {
+      rebuild: () => build(),
+      guard: () => {
+        const state = wanted().state;
+        return { busy: pending > 0, pending: false, state: state === "stopped" ? "idle" : state };
+      },
+      validate: async () => {
+        const reason = await deps.validatePackage(adapterPath());
+        return reason === undefined ? { ok: true } : { ok: false, reason };
+      },
+      install: async (installed) => {
+        conversation.install(installed as Extension);
+        await runSkillsCheck();
+      },
+    };
+    const reload = createReload(reloadPort);
+    // §6.18 retier: apply the `session-retiered` agent change at idle, in one commit, and report back to the engine.
+    const retier = createRetier({
+      idle: () => pending === 0 && hostState === "idle" && held.heldCount() === 0,
+      configure: (change) => conversation.configure(change as AgentChange),
+      report: async (kind, detail) => {
+        await deps.cpd(kind === "switched" ? ["session", "switched", "--session", config.session] : ["session", "switch-failed", "--code", "model_unavailable", "--message", detail ?? "not idle", "--session", config.session]);
+      },
+    });
     // The cached `AgentState` of contract §6.17: read back after each `configure`; absent until the first one (a `host_state` carrying no agent).
     let agentState: AgentState | undefined;
     const seen = new Set<string>();
@@ -451,6 +513,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         return conversation.abort(opts);
       },
       abortSubmission: (id) => conversation.abortSubmission(id),
+      reload: () => reload.reload(),
       held: () => held.heldList(),
       answerUi: async (id, value) => held.answer(id, value),
       hostState: () => {
@@ -506,6 +569,8 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     } catch (e) {
       failed("the plan review at start", e);
     }
+    // §6.18: the skills check runs at start, after the host has its conversation.
+    await runSkillsCheck();
     follower = deps.follow?.({
       before: async () => {},
       onRunStart: () => {},
@@ -523,6 +588,21 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
           failed("an event", e);
           end(1);
         };
+        // A `session-retiered` Event (§6.18): resolve the agent change from `cpd session show` and apply it at idle.
+        if (event.kind === "session-retiered") {
+          void (async () => {
+            try {
+              const answer = await deps.cpd(["session", "show", config.session]);
+              const s = answer.session as { model?: unknown; thinking?: unknown } | undefined;
+              if (typeof s?.model !== "string" || typeof s?.thinking !== "string") throw new CpdError("bad_output", "cpd session show: the session object lacks model or thinking");
+              const slash = s.model.indexOf("/");
+              await retier.apply({ model: slash > 0 ? { provider: s.model.slice(0, slash), modelId: s.model.slice(slash + 1) } : null, thinkingLevel: s.thinking });
+            } catch (e) {
+              failed("a retier event", e);
+            }
+          })();
+          return true;
+        }
         // A `plan-review` Event feeds the flow of §plan-review.ts instead of a submission: pending opens the dialog,
         // approved or rejected settles the pending entry, superseded closes it (pi/lib/handle.ts `handleEvent`).
         if (event.kind === "plan-review") {
