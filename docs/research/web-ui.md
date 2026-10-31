@@ -293,3 +293,34 @@ Two media are mixed in the cockpit: the ratatui views (tree, Plan, widgets, dial
 | **Archived Session history** | none | refused (`archived`) | none | TUI: `cpd session history <id>` is a pane view (`history/render.rs:18`); a browser reads `file` from `session show` and parses; **durable archived**: refused | durable Leads in `history` |
 
 A browser that wants cockpit parity therefore must, today, act over the `cpd` CLI (every read/action of sections 2.1–2.2), follow `cpd events` for live data, read pi transcripts from the session file, and leave each pi Lead's pane dialogs and editor to the pane — until the durable host socket's `ui_request`/`ui_response` (P1.6) or a shared core fold (Q35) wires them to data.
+## 3. Live data
+
+### 3.1 How a cockpit view learns of a change today
+
+### 3.2 The ways a browser can get updates
+
+### 3.3 What the host socket protocol v1 carries for a web client
+
+### 3.4 The three bridge options A, B and C
+
+### 3.5 The protocol changes C1 to C5
+
+## 4. The shared read model
+
+### 4.1 The crate graph
+
+### 4.2 Every file of tui/src/read/
+
+### 4.3 The three parallel paths against the cockpit's reads
+
+### 4.4 Parity is not pinned
+
+### 4.5 Options for one model
+
+## 5. Stack options and the recommendation
+
+### 5.1 The decisions of a stack
+
+### 5.2 Cost by stack class
+
+### 5.3 The recommendation
