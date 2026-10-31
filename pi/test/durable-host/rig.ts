@@ -205,7 +205,6 @@ export function rig(over: RigOptions = {}) {
         },
         entries: async () => over.stored ?? [],
         compact: async () => 1,
-        configure: async () => {},
         agent: async () => ({ thinkingLevel: "high" }),
         pageEntries: async () => ({ entries: over.stored ?? [] }),
         closed: conversationClosed,

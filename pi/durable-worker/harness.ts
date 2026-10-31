@@ -57,7 +57,6 @@ export function conversationOf(root: unknown, registry: { install(extension: Ext
     },
     abort: (opts: { background: boolean }) => r.abort(BACKGROUND_CONTEXT, opts),
     abortSubmission: (id: number) => durable.harness.abortSubmission(id, BACKGROUND_CONTEXT, r.id),
-    configure: (change) => r.configure(change, BACKGROUND_CONTEXT),
     submit: async (input: Input) => {
       const submission = await r.submit(
         { type: "input", content: input.content, requestId: input.requestId, whenBusy: input.whenBusy, ...(input.entry === undefined ? {} : { entry: input.entry }) },

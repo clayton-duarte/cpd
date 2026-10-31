@@ -104,7 +104,6 @@ function rig(over: { role?: string; state?: string } = {}) {
         configure: async () => {},
         entries: async () => [],
         compact: async () => 1,
-        configure: async () => {},
         agent: async () => ({ thinkingLevel: "high" }),
         pageEntries: async () => ({ entries: [] }),
         closed,
