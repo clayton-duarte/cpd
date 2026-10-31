@@ -217,6 +217,12 @@ impl NewEvent {
         )
     }
 
+    /// `attempt abort` (contract §5.2, commands.md §6.5): the Lead ended a running Attempt `failed` / `aborted`.
+    /// `by` is the calling Session's id.
+    pub fn attempt_aborted(text: impl Into<String>, tier: &str, by: &str) -> NewEvent {
+        make(Kind::AttemptAborted, text, json!({"tier": tier, "by": by}))
+    }
+
     pub fn attempt_nudge(text: impl Into<String>, prompt: &str, turns: u64) -> NewEvent {
         make(Kind::AttemptNudge, text, json!({"prompt": prompt, "turns": turns}))
     }
@@ -559,6 +565,7 @@ mod tests {
                 NewEvent::attempt_check_end(T, s, true),
             ],
             Kind::AttemptRetry => vec![NewEvent::attempt_retry(T, s, s, s, s)],
+            Kind::AttemptAborted => vec![NewEvent::attempt_aborted(T, s, s)],
             Kind::AttemptNudge => vec![NewEvent::attempt_nudge(T, s, 1)],
             Kind::AllMerged => vec![NewEvent::all_merged(T, s, [s], [s])],
             Kind::PrFeedback => vec![NewEvent::pr_feedback(T, s, n, s, s, s, s, s, s, b, &[s])],
