@@ -145,6 +145,8 @@ export function createServer(deps: ServerDeps): Server {
           });
         } else if (msg.type === "abort_submission") {
           run(st, msg.req, async () => ({ outcome: await deps.abortSubmission(msg.submission_id) }));
+        } else if (msg.type === "reload") {
+          run(st, msg.req, () => deps.reload());
         } else if (msg.type === "ui_response") {
           const done = (): void => send(st, { type: "result", req: msg.req, data: {} });
           deps
