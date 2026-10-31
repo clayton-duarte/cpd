@@ -4393,6 +4393,73 @@ A held request puts the Session in `blocked` with the label `dialog`, and `host_
 
 **Tests.** They live in `pi/test/durable-host/` — `protocol.test.ts`, `server.test.ts`, `held.test.ts`, `dialogs.test.ts`, `tools.test.ts`, `plan-review.test.ts` and `socket.test.ts` — written with `node:test` and already in the default file list of the `test` script (`pi/test/durable-host/*.test.ts`). Nothing real runs: the wire tests parse and encode lines; the server tests drive a fake `Connection`, a fake `Timers` and a fake `ServerDeps` on a real `Ring`; the host-flow tests give fakes of the ports (`cpd`, `readText`, `write`, `entries`, a mocked pi-durable `Conversation`) and never open a socket, a store or a model. One test per rule above; the statements marked unverified are pinned by these tests, not by a real run.
 
+### 6.16 The Lead guards and the role switch (P1.7)
+
+P1.7 adds the guards a Lead or Manager runs with, to the durable host: **noblock**, the **ask guards** G2 and G4, the **loop guard**, and the **role switch** that keeps the worker-only test guard out. The research is `docs/research/durable-leads.md` sections 3.2 (rows G24 to G28) and 7.2 (row P1.7), and the `Decided:` line of Q32 (A: "In the host, on the submits it makes (it is the only submitter)"); the plan's assumptions A4 (the ask guards and noblock land here, not in P1.6) and A5 (the Lead verdict adds noblock, the ask guards and the loop guard, without the test guard; a loop trip blocks with the label `φ: loop guard`, cleared by resume). The pi-side reference is the adapter's `tool_call` handler (`pi/lib/adapter.ts:67-102`, read) and its pure libs `pi/lib/noblock.ts`, `pi/lib/askguard.ts`, `pi/lib/loop-guard.ts` (all read, imported by the host as they are, never copied), the shared guards of `pi/durable-worker/guards.ts` (`primaryCheckoutWrite`/`primaryCheckoutMove`, `secretBypass`, `hostApproveBypass`, the same imports the host already has) and `pi/lib/testguard.ts` (`unfilteredTestRun`, the worker's only). The host's `beforeTool` hook returns `{ block }` or replacement `{ arguments }` (verified: `@earendil-works/pi-durable` `dist/harness/types.d.ts` `ToolHooks.beforeTool`, read), so the noblock default-timeout rewrite fits. Every statement a named source does not verify is marked **unverified**.
+
+**Modules** (all in `pi/durable-host/`; names and exports are fixed, the field shapes below are the contract):
+
+| File | Exports |
+|---|---|
+| `guards.ts` | `Where` gains `visible`; `Verdict` gains the rewrite arm; `hostVerdict(call, where, role)` (below) |
+| `run.ts` | `LoopRuntime`, `loopGate(r, now)` (below); the single submit gate counts a self-started turn and holds while tripped |
+
+#### `guards.ts`
+
+```ts
+export type Where = {
+  cwd: string;
+  home: string;
+  visible: readonly unknown[];   // the session's visible chat, in the shape `unseen` reads (askguard.ts:91-98)
+};
+export type Verdict = { block: string } | { arguments: Record<string, unknown> } | undefined;
+export function hostVerdict(
+  call: { id: string; name: string; arguments: Record<string, unknown> },
+  where: Where,
+  role: "lead" | "manager",
+): Verdict;
+```
+
+The `role` joins the verdict; `where.visible` is the visible chat the G4 guard reads. `call.id` is the tool call's id (pi's `ToolCall.id`, verified: `@earendil-works/pi-ai` `dist/types.d.ts` `ToolCall { type; id; name; arguments }`, read). The **four shared guards stay first and unchanged**, in their order: an `edit` or `write` into a primary checkout (`primaryCheckoutWrite`), a `bash` that moves into a primary checkout (`primaryCheckoutMove`), a raw `cpd secret approve` (`secretBypass`), a raw `cpd host approve` (`hostApproveBypass`); each is `{ block: reason }` by its lib's `reasonText`. Then, by the call's tool:
+
+- **noblock (G24).** For a `bash` call (`typeof call.arguments.command === "string"`). `blockingReason(command, timeout)` (`pi/lib/noblock.ts`, imported) with `command` the string and `timeout` the number `call.arguments.timeout` when it is a number. A match (a `sleep`/`timeout` over `BOUND_SECONDS = 30`, `watch`, `tail -f`, `cpd events follow`, `gh run watch`, `gh pr checks --watch`, or an enclosing `while`/`until` whose body sleeps) gives `{ block: reasonText(matched, role) }`, the lib's one line whose tail differs by role: for a Manager `… runs in the background or is the owning Lead's or Worker's job; refused: <matched>`, for a Lead `… runs in the background or is left to the engine's Events; refused: <matched>` (both prefixed `φ: a Manager never blocks:` / `φ: a Lead never blocks:`, exactly `pi/lib/noblock.ts:9-12`, read). When nothing matched **and** `call.arguments.timeout === undefined`, the verdict is the rewrite `{ arguments: { ...call.arguments, timeout: BOUND_SECONDS } }` (30), so no foreground `bash` of a Lead or Manager can hang past 30 s (pro-d202, docs/commands.md §15.11). An explicit timeout of 30 or less is kept unchanged; one above 30 was already refused as `bash timeout <n>`; a call that is refused is not rewritten. The pi-durable `bash` tool has a `timeout` input (**verified**: `@earendil-works/pi-coding-agent` `dist/core/tools/bash.d.ts`, `bashSchema = { command: string; timeout?: number }`, read).
+- **The ask guards (G25, G26).** For an `ask_user_question` call only, Lead and Manager only (every host Session is one). `tooLong(call.arguments)` (`pi/lib/askguard.ts`, imported) sums the call's question text (every `question`, `header`, and every option's `label`, `description`, `preview`) over `LIMIT = 1500` characters; a reason gives `{ block: reason }` with the lib's `longReason` text (`φ: ask_user_question is for a few short choices; write anything larger to a file outside the repo and point to it in chat; refused: <n> characters (limit 1500)`). Then `unseen(call.arguments, call.id, where.visible)` gives `{ block: reason }` with the lib's `unseenReason` text (`φ: state what you ask about in the question itself (its text, or an option's description or preview); refused: <labels> stated nowhere`) when a label cited in the call (A1, B2-B4, …) is stated neither in the call's own text nor in the visible chat. The labels `unseen` reads are exactly `askguard.ts:91-98` (read): a `custom_message` entry with `display === true` contributes its text content; an entry whose `message.role` is `user` or `toolResult` contributes its text blocks; an `assistant` entry contributes its text blocks before the tool call with `call.id` (a nested call passes its parent's id; P1.7 has none). The host keeps the visible chat and passes it as `where.visible`. **Unverified**: the durable host's entry (`EntryRecord`: `{ id, kind, model?, data? }`) is not pi's session entry `unseen` reads (`{ type, message?, display? }`), so the host maps one to the other and `guard.test.ts` pins the mapping with a literal visible list; the pi-durable `Context` the `beforeTool` hook receives was not confirmed to expose entries in that shape (research G26, unverified).
+- **The role switch (G27).** The verdict has **no test-guard arm**: `unfilteredTestRun` is the worker's (`pi/durable-worker/guards.ts:34-35`) and a Lead's or Manager's unfiltered `cargo test` / `npm test` passes the host guard to the pi-durable layer (docs/commands.md §15.12, read: "for a Lead, a Manager, or before `session_start` has read the role, this guard returns nothing"). It is the only guard the two verdicts do not share besides the explore profile; the noblock reason tail is the only role-dependent piece of the Lead verdict.
+
+Order among tools is immaterial (a call is one tool). Anything else passes: an `ask_user_question` with no ask reason, and the other three P1.6 tools (`cpd_secret_approve`, `cpd_host_approve`, `cpd_plan_review`), which carry no ask guard. `extension.ts` (its `hostExtension` gains the session's role and the visible chat) returns this verdict unchanged, so the hook's block or its rewritten arguments reach pi-durable. No member is optional; the shared four and the new arms are the whole verdict.
+
+#### `run.ts` — the loop gate
+
+The host is the only submitter (Q32 A), so every input that reaches the conversation — a client `submit` or a follower Event — goes through the one `submit(input)` gate, and the loop count is there. The rules are `pi/lib/loop-guard.ts`'s (`WINDOW_MS = 600_000`, `ENTRY_TYPE = 'cpd-loop-guard'`, `KEY = 'loop-guard'`, `LABEL = 'φ: loop guard'`, `trippedIn`, `holdTrip`, `clearTrip`), imported, not copied; the host supplies a runtime object with the field names the lib reads.
+
+```ts
+export type LoopRuntime = {
+  role: "lead" | "manager";
+  info: { loopGuardTurns: number };   // the Session's bound, `cpd session show`'s loop_guard_turns (default 20)
+  turnStarts: number[];
+  tripped: boolean;
+};
+/** The lib's window rule (`registerLoopGuard`, loop-guard.ts:56-58), pure: folds the self-started turn at `now` into `r.turnStarts` and returns whether the window holds more than `r.info.loopGuardTurns`. */
+export function loopGate(r: LoopRuntime, now: number): boolean;
+```
+
+- **The turn start.** At the gate, a submission the host makes is a **self-started turn** unless it is the User's own `session-message` (the input `inputOf` marks `reply: true`, §6.13 `deliver.ts`). Every other input, a client's `submit` and every follower Event alike, counts. `now` is `deps.now().getTime()`. The User's own message does not count and empties the window, exactly as `messageType === "user"` clears the adapter's trip (`pi/lib/loop-guard.ts:52-54`, read).
+- **The window and the trip.** `loopGate` drops every start at or before `now - WINDOW_MS`, appends `now`, and returns `r.turnStarts.length > r.info.loopGuardTurns`; the host trips when it returns true and `r.tripped` is false. A trip is the lib's: `holdTrip(r)` sets `r.tripped` and opens the reason (`KEY`, `LABEL`, `"human"`), and the host appends the entry `cpd-loop-guard { tripped: true, at: now, turns: r.turnStarts.length }` (the lib's private `trip` does the append; the host, which cannot call it, writes the same entry). The entry survives a restart (L7).
+- **The blocked state.** While `r.tripped`, `wanted()` reports `{ state: "blocked", label: "φ: loop guard" }` through the same `stateChanged`/`reporter.want` path as §6.15 — **by label, not by a held request**; `host_state.held_ui` stays the dialog count. `cpd session resume` refuses (`not_loop_guarded`) unless the Session is `blocked` with the label `φ: loop guard` (`core/src/session/resume.rs`, read).
+- **Held deliveries.** While tripped the gate does not start a turn: an input that would start one is held in the session's queue and is not submitted (a `reject` is still refused by §6.13/6.14). The state is `blocked` until the trip clears.
+- **The clear.** A `session-resumed` Event for this Session (`cpd session resume`, §10.17) while tripped calls the lib's `clearTrip(host, r)`: `r.turnStarts` empties, the reason closes, the entry `cpd-loop-guard { tripped: false }` is appended and the state returns to `working` (a run pending) or `idle`; then the held deliveries are submitted — one turn that sees what queued, exactly the `session-resumed` rule of `pi/lib/handle.ts` (read). A `session-resumed` when not tripped changes nothing.
+- **At start.** The host reads `trippedIn` over the conversation's entries so a restart begins tripped when the last `cpd-loop-guard` entry says so. **Unverified**: the durable entry (`{ kind, data }`) is not the pi session entry `trippedIn` reads (`{ type: 'custom', customType, data }`), so the host maps one to the other; `loop.test.ts` pins the mapping and the trip with fake entries, a fake clock and a fake runtime.
+
+#### Not in P1.7
+
+- The test guard (G27): worker-only (§6.12, `pi/durable-worker/guards.ts`); the host verdict never applies it.
+- The ask guards stay off the other three tools: `cpd_secret_approve`, `cpd_host_approve` and `cpd_plan_review` take no G2/G4 row (`askguard.ts` is applied to `ask_user_question` only, as in the adapter).
+- `ask_user_question` still ships without images; the questionnaire P1.6 tool is unchanged.
+- Nothing of P1.8 (`compact`, `configure`, `list_models`, `fork`, `history`, images in `submit`) or P1.9 (`reload`, skills, retier, code mode); no new wire message; `reload`'s `restart` path and the engine (`lead_runner`/`manager_runner`, P1.10) are untouched.
+- No P2 client row: no client renders the guard refusals or the loop reason; the wire and the server are unchanged.
+
+**Tests.** They live in `pi/test/durable-host/` and are already in the default file list of the `test` script (`pi/test/durable-host/*.test.ts`): `guard.test.ts` (the role and the new verdicts over literal calls and a fake `Where` — the shared four, noblock's refusal and its `timeout` rewrite, the ask guards' exact lib texts, the test guard's absence, and the visible-chat mapping), `loop.test.ts` (the pure `loopGate` with a fake `now` and a fake runtime `{ role, info: { loopGuardTurns }, turnStarts }`, and the trip/clear with fake persisted entries and the lib's own `trippedIn`/`holdTrip`/`clearTrip`), and `run.test.ts` (the submit gate: a self-started turn counts, a User's message clears, a trip holds the next delivery and reports `blocked` with the label, and a `session-resumed` clears it and submits the held one). Nothing real runs: no socket, no pi-durable, no model, no timer, no sleep; the statements marked unverified are pinned by these tests, not by a real run.
+
 ### 6.17 Commands: compact, configure, list_models, fork, history and images in submit (P1.8)
 
 The host serves the five conversation commands of research 4.5 rows 6 to 8, 11 and 12, and accepts images in `submit` (row 3, G82). The research is `docs/research/durable-leads.md` sections 3.6 (G82, G89, G90, G91, G94, G97), 4.5 and the `Decided:` lines of Q2 (the client renders; the host sends the raw text), Q7 (a fork is a new cpd Session with its own host and store) and Q22 (no `reset`: a new context is a new cpd Session). Source of the pi-durable and pi-ai shapes: the installed 1.3.0 types — `dist/harness/types.d.ts` for `Conversation.compact`, `configure`, `agent` and `entries`, `dist/types.d.ts` for `Id`, `EntryRecord`, `Page` and `Cursor`, `@earendil-works/pi-ai` `dist/types.d.ts` for `ImageContent` and `UserMessage`, `dist/providers/model-schema.d.ts` for the thinking levels and `dist/models.d.ts` for `getSupportedThinkingLevels`. Every statement a named source does not verify is marked **unverified**.
@@ -4489,6 +4556,7 @@ pageEntries(limit: number, cursor?: object): Promise<{ entries: readonly unknown
 - The client rows: the `/compact`, `/model`, `/thinking` and `/fork` commands and the image paste are P2.7 and P2.2 (G71, G72, G73, G74, G83); this PR serves the wire only.
 
 **Tests.** They live in `pi/test/durable-host/protocol.test.ts` and `server.test.ts`, written with `node:test` and already in the default file list of the `test` script (`pi/test/durable-host/*.test.ts`), so the change adds no line there. Nothing real runs: a fake `Connection`, a fake `Timers` and a fake `ServerDeps` drive the server (the `Ring` is real); the wiring tests fake `deps.cpd` and `models` and a mocked pi-durable `Conversation`; no socket, no pi-durable, no model, no `cpd session fork` run. One test per rule above: each `parseLine` outcome of the five types and of `submit.images` (the configure one-of, `fork`'s `at` and `ownership`, the `history` cap, the image count, total and mime set, the base64 shape); each result shape; `not_attached` for each of the five; the `refused` of `configure` while a run is pending and the `bad_args` of its validation; the `history` paging (the default limit, the cursor round-trip, the shrink under `hostLine`); the fork mapping (`ownership` refused, `at` validated, the `conversation_id` from the fake `cpd`, a CLI refusal mapped to `refused`); the image mapping onto `ImageContent` and the content array. The statements this section marks unverified are pinned by those mocks, not by a real run.
+
 
 ## 7. git and the Gate
 

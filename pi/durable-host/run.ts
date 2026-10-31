@@ -8,8 +8,10 @@ import { cursorFrom } from "./cursor.ts";
 import { inputOf, type Input } from "./deliver.ts";
 import { CpdError, toCpdError } from "../lib/cpd.ts";
 import { highestReview, reviewsFromEntries } from "../lib/plan-review.ts";
+import type { Host } from "../lib/host.ts";
+import { clearTrip, ENTRY_TYPE, holdTrip, LABEL, trippedIn, WINDOW_MS } from "../lib/loop-guard.ts";
 import { policySection } from "../lib/policy.ts";
-import { parseSession } from "../lib/run.ts";
+import { parseSession, type Run } from "../lib/run.ts";
 import { Reporter, stateArgs, type Wanted } from "../lib/state.ts";
 import { zoneLine } from "../lib/time.ts";
 import { socketPath, storePath, type Config } from "./config.ts";
@@ -40,6 +42,23 @@ export type ConversationCommands = {
 };
 
 type Model = { provider: string; modelId: string; thinkingLevel?: string };
+
+/** The loop guard's runtime (contract §6.16): the bound `cpd session show` gives, the window of self-started turns the host keeps, and the trip. */
+export type LoopRuntime = {
+  role: "lead" | "manager";
+  info: { loopGuardTurns: number };
+  turnStarts: number[];
+  tripped: boolean;
+};
+
+/**
+ * The lib's window rule (`registerLoopGuard`, loop-guard.ts), pure: folds the self-started turn at `now` into `r.turnStarts`
+ * and returns whether the window holds more than `r.info.loopGuardTurns`.
+ */
+export function loopGate(r: LoopRuntime, now: number): boolean {
+  r.turnStarts = [...r.turnStarts.filter((t) => t > now - WINDOW_MS), now];
+  return r.turnStarts.length > r.info.loopGuardTurns;
+}
 
 /** One model of `list_models` and of the `configure` validation (contract §6.17). */
 export type ModelInfo = { provider: string; model_id: string; name: string; thinking_levels: readonly string[]; context_window: number };
@@ -137,19 +156,40 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
 
   const start = async (): Promise<void> => {
     const policy = policySection(await deps.cpd(["policy", "show"]));
-    const base = hostExtension({ contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) }, { cwd: config.cwd, home: deps.homeDir() });
+    const base = hostExtension(
+      { contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) },
+      { cwd: config.cwd, home: deps.homeDir(), visible: [] },
+      session.role as "lead" | "manager",
+    );
     const turn = newTurnState();
     const plan = session.plan ?? "";
+    // §6.16 the loop guard: the runtime the lib's `holdTrip`/`clearTrip`/`trippedIn` read. `facts` satisfies the lib (the
+    // blocked state is reported from `wanted()` by `loop.tripped`), and `loopHost` carries the effects the lib calls back into.
+    const loop: LoopRuntime & { facts: { open(key: string, label: string, kind: string): void; close(key: string): void } } = {
+      role: session.role as "lead" | "manager",
+      info: { loopGuardTurns: session.loopGuardTurns },
+      turnStarts: [],
+      tripped: false,
+      facts: { open: () => {}, close: () => {} },
+    };
+    // §6.16 held deliveries: while the breaker is tripped an input that would start a turn is queued here, not submitted.
+    const heldLoop: Input[] = [];
     // §6.15 "The blocked state": a held request reports `blocked` with the label `dialog`; resolving to zero returns to
-    // `working` while a run is pending, else to `idle`, with the reply rule of §6.13 untouched.
+    // `working` while a run is pending, else to `idle`, with the reply rule of §6.13 untouched. A loop-guard trip reports
+    // `blocked` with the label `φ: loop guard` by label, not by a held request (§6.16).
     let hostState: "idle" | "working" = "idle";
     let reply = false;
     const wanted = (): Wanted =>
-      held.heldCount() > 0 ? { state: "blocked", label: "dialog" } : hostState === "working" ? { state: "working" } : reply ? { state: "idle", reply: true } : { state: "idle" };
+      loop.tripped ? { state: "blocked", label: LABEL } : held.heldCount() > 0 ? { state: "blocked", label: "dialog" } : hostState === "working" ? { state: "working" } : reply ? { state: "idle", reply: true } : { state: "idle" };
     const report = (): void => {
       server?.stateChanged();
       reporter.want(wanted());
     };
+    // The adapter the lib calls: the pi entry (a silent conversation write) and the refresh.
+    const loopHost = {
+      pi: { appendEntry: (type: string, data: unknown) => void conversation.write({ type: "write", entry: { kind: type, data: data as Record<string, unknown>, model: [] } }).catch((e) => failed("writing a loop-guard entry", e)) },
+      refresh: () => report(),
+    } as unknown as Host;
     const changed = (next: "idle" | "working"): void => {
       if (hostState === next) return;
       hostState = next;
@@ -226,7 +266,16 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       held,
     });
 
-    let cursor = cursorFrom(session.registeredEvent, await conversation.entries(), config.session);
+    const storedEntries = await conversation.entries();
+    let cursor = cursorFrom(session.registeredEvent, storedEntries, config.session);
+    // L7: the last persisted `cpd-loop-guard` entry says whether the breaker is tripped; the durable entry is mapped to the
+    // pi session shape `trippedIn` reads (§6.16 unverified: `{ kind, data }` is not `{ type, customType, data }`).
+    loop.tripped = trippedIn(storedEntries.map((e) => {
+      const record = e as { kind?: unknown; data?: unknown };
+      return { type: "custom", customType: record.kind, data: record.data };
+    }));
+    // A restart that begins tripped reports `blocked` at once, so `cpd session resume` (which needs that state) can clear it (L7).
+    if (loop.tripped) report();
     let pending = 0;
     // The cached `AgentState` of contract §6.17: read back after each `configure`; absent until the first one (a `host_state` carrying no agent).
     let agentState: AgentState | undefined;
@@ -244,8 +293,29 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       return name;
     };
     const submit = async (input: Input): Promise<Submission> => {
+      // §6.16 the loop gate: every input that reaches the conversation — a client `submit` or a follower Event — is a
+      // submission the host makes, so it counts here, at the one gate. The User's own `session-message` (`inputOf` sets
+      // `reply: true` for it) does not count: it empties the window and clears a trip, as the adapter's `messageType === "user"` does.
+      const selfUser = input.reply === true && input.entry.kind === "cpd-event" && input.entry.data.kind === "session-message";
+      if (selfUser) {
+        if (clearTrip(loopHost, loop as unknown as Run)) report();
+      } else if (!loop.tripped) {
+        const at = deps.now().getTime();
+        if (loopGate(loop, at)) {
+          holdTrip(loop as unknown as Run);
+          conversation
+            .write({ type: "write", entry: { kind: ENTRY_TYPE, data: { tripped: true, at, turns: loop.turnStarts.length }, model: [] } })
+            .catch((e) => failed("writing the loop-guard entry", e));
+          report();
+        }
+      }
       // A reject never waits to prepare: it stores nothing when the conversation is busy (the context update then comes with the next turn).
       const starts = pending === 0 && input.whenBusy !== "reject";
+      // §6.16 held deliveries: while tripped an input that would start a turn is queued, not submitted (a `reject` is still refused).
+      if (loop.tripped && starts) {
+        heldLoop.push(input);
+        return { id: -1, status: async () => "held", wait: async () => "unanswered" };
+      }
       if (input.reply) reply = true;
       pending++;
       changed("working");
@@ -473,6 +543,21 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
               failed("a plan-review event", e);
             }
           })();
+          return true;
+        }
+        // §6.16 the clear: a `session-resumed` Event for this Session while tripped calls the lib's `clearTrip`; then the held
+        // deliveries are submitted (one turn that sees what queued). A `session-resumed` when not tripped changes nothing.
+        if (event.kind === "session-resumed") {
+          if (event.session === config.session) {
+            void (async () => {
+              try {
+                if (!clearTrip(loopHost, loop as unknown as Run)) return;
+                for (const queued of heldLoop.splice(0)) await submit(queued);
+              } catch (e) {
+                failed("a session-resumed event", e);
+              }
+            })();
+          }
           return true;
         }
         // Submitted synchronously unless a sender's name must be read first: a lookup is the only thing that waits.
