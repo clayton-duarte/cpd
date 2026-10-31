@@ -4147,6 +4147,10 @@ export type Submission = { id: number; status(): Promise<string>; wait(): Promis
 - **Result.** The server answers `result { submission_id, status }` when `submit` resolves (after admission, not after the answer). The answer arrives as `events` frames.
 - **Not served yet.** The other client types of research 4.5 get `error unknown_type` (rule 9); `host_state.held_ui` is 0; `ui_unknown` and `refused` are unused (P1.6, P1.9).
 
+### 6.15 UI requests and the ask and approval tools (P1.6)
+
+Skeleton. TODO: the six modules, their exports, the ports, the rules, the blocked state, the replay rule per tool and the not-in-P1.6 list.
+
 ## 7. git and the Gate
 
 cpd runs git itself (R4); there is no worktrunk. Every git call is `git -C <dir> …` with argv, `GIT_TERMINAL_PROMPT=0`, and stdin from `/dev/null`. Every git call also gets, in its environment, `GIT_CONFIG_COUNT=2`, `GIT_CONFIG_KEY_0=core.filesRefLockTimeout`, `GIT_CONFIG_VALUE_0=10000`, `GIT_CONFIG_KEY_1=core.packedRefsTimeout`, `GIT_CONFIG_VALUE_1=10000` (git-config(1)): a ref or `packed-refs` lock held by another git process is waited for up to 10 s instead of git's 100 ms (`filesRefLockTimeout`) and 1 s (`packedRefsTimeout`), because cpd has concurrent writers of shared refs such as `refs/remotes/origin/<base>` (hs-d243, G2). Hooks are spawned by cpd, not by git, and do not get it (§7.3).

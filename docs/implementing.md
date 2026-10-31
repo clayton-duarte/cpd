@@ -762,6 +762,10 @@ Contract §6.14 fixes the host socket protocol v1: the wire types, the ring and 
 
 **3. The tests.** They live in `pi/test/durable-host/`: `protocol.test.ts`, `ring.test.ts` and `server.test.ts`, with `node:test`. The change that adds them adds the three files to the default list of the `test` script in the root `package.json`. Nothing real runs: a fake `Connection` records lines, a fake `Timers` fires on demand (no sleep), `ServerDeps` is a fake, the `Ring` is real. One test per rule of §6.14: each `parseLine` outcome; `negotiate`; each `Ring.attach` row of research 4.3 and `rebase`; the handshake, `hello_timeout` (timer cancelled by `hello`), `hello_required`, the single reply per `req`, the `attached` then frames then `host_state` order, `not_attached`, `unsupported`, `frame_too_large`, `slow_client`, `ProtocolError` versus `internal`, `shutdown` and `shutting_down`. Statements about pi-durable that the contract marks unverified are not tested here: sock-host pins them with a mocked pi-durable.
 
+## UI requests and the ask and approval tools (P1.6)
+
+Skeleton. TODO: the files, the ports and the tests' home.
+
 ## Measuring tool-result bloat (hs-d737)
 
 **Command.** `node pi/measure/session-bloat.ts [--root <dir>] [--since <ISO time>] [--until <ISO time>] [--top <n>] [--json]`; it reads every `*.jsonl` file one directory below `--root` (default: pi's agent sessions directory, `~/.pi/agent/sessions`), never writes or changes a file, and exits 0 with a report. A bad option, a bad time or an unreadable root exits 2 with one line on stderr (no silent default).
