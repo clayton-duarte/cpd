@@ -6,7 +6,7 @@ Status: this is a contract document for the web-client Plan (plan `web-client`, 
 
 ## 0. The client in one paragraph
 
-The web client is a browser UI for cpd with cockpit parity (hs-d757, web-ui.md §2), built in `web/` as npm package `cpd-web-client`, a pnpm workspace member (A1, hs-n603), on Vite + React + shadcn/ui stock components only (hs-d770, hs-d783). It is developed against a **typed mock of the decided API** first, wired to the core and server when those land (hs-d780, superseding hs-d778's W1-to-W7 build order). Client scope (A7): **Tree, Plan, Inbox, Logs and Chat render read-only**; actions are **typed POSTs** with mock handlers; the **TS chat fold** (hs-d772) and approval answering via `ui_response` (hs-d775) are fully typed and reachable; the **Escalation count shows** with no answer UI (hs-d776). Live views travel over a **WebSocket** with an in-process commit-watcher + Event-cursor model (hs-d773, hs-n799 [sic: n599]).
+The web client is a browser UI for cpd with cockpit parity (hs-d757, web-ui.md §2), built in `web/` as npm package `cpd-web-client`, a pnpm workspace member (A1, hs-n603), on Vite + React + shadcn/ui stock components only (hs-d770, hs-d783). It is developed against a **typed mock of the decided API** first, wired to the core and server when those land (hs-d780, superseding hs-d778's W1-to-W7 build order). Client scope (A7): **Tree, Plan, Inbox, Logs and Chat render read-only**; actions are **typed POSTs** with mock handlers; the **TS chat fold** (hs-d772) and approval answering via `ui_response` (hs-d775) are fully typed and reachable; the **Escalation count shows** with no answer UI (hs-d776). Live views travel over a **WebSocket** with an in-process commit-watcher + Event-cursor model (hs-d773, hs-n599).
 
 ## 1. The typed wire surface
 
@@ -20,7 +20,7 @@ The client types the decided wire shapes of durable-leads.md §4.5; the v1 host 
 | H→C | `attached` | `req`, `mode` (`snapshot`\|`resume`), `epoch`, `from_seq`, `head_seq`, `client_id` | protocol.ts:43; row 18 |
 | H→C | `snapshot` | `epoch`, `seq`, `snapshot` (a pi-durable `SnapshotEvent`, unchanged) | protocol.ts:44; row 19 |
 | H→C | `events` | `epoch`, `seq`, `events` (an array of `AgentEvent`, one commit, unchanged) | protocol.ts:45; row 20 |
-| H→C | `result` | `req`, `data` (object, by command — 1.3) | protocol.ts:46; row 21 |
+| H→C | `result` | `req`, `data` (object, by command — below) | protocol.ts:46; row 21 |
 | H→C | `error` | `req?`, `code`, `message`, `details?` | protocol.ts:47; row 22; codes in 1.4 |
 | H→C | `host_state` | `state` (`idle`\|`working`\|`waiting`\|`blocked`), `name?`, `clients` (int), `held_ui` (int), `agent?` (an `AgentState`) | protocol.ts:48; row 27 — `clients` and `held_ui` included |
 | H→C | `pong` | `req?` | protocol.ts:49; row 28 |
@@ -33,13 +33,25 @@ The client types the decided wire shapes of durable-leads.md §4.5; the v1 host 
 | C→H | `ping` | `req?` | protocol.ts:32; row 15 |
 | C→H | `detach` | `req` | protocol.ts:33; row 16 |
 
-`result.data` by command (row 21): `submit` `{submission_id,status}` (`queued`\|`placed`\|`done`\|`unanswered`), `abort` `{}`, `abort_submission` `{outcome}` (`aborted`\|`already_placed`\|`settled`\|`not_found`), `ui_response` `{}`, `detach` `{}`.
+The five remaining §4.5 rows are outside the v1 protocol.ts set and outside P1.6/P1.8 — they land with P1.9 host operations (durable-leads 7.2 "P1.9") and are **not in the client's first mock surface**; the client types them only if a view needs one, never inventing a shape. Their fields, as the rows state them:
+
+| Direction | Type | §4.5 fields | Row |
+|---|---|---|---|
+| C→H | `reload` | `req` | 9 |
+| C→H | `mcp` | `req`, `action` (`list`\|`login`\|`logout`\|`reconnect`), `server?` | 10 |
+| C→H | `rename` | `req`, `name` | 13 |
+| H→C | `notice` | `level` (`info`\|`warning`\|`error`), `message` | 25 |
+| H→C | `status` | `key`, `text` (string, or null to clear) | 26 |
+
+`result.data` by command (row 21): `submit` `{submission_id,status}` (`queued`\|`placed`\|`done`\|`unanswered`; measured), `abort` `{}`, `abort_submission` `{outcome}` (`aborted`\|`already_placed`\|`settled`\|`not_found`), `compact` `{task_id}` (read), `ui_response` `{}`, `detach` `{}`; and the P1.6/P1.8 results of §1.2: `configure` `{agent}`, `list_models` `{models:[...]}`, `fork` `{conversation_id}`, `history` `{entries,next?}` — each with its `@open(P1.6/P1.8)` marker (§2); `reload` `{reloaded,reason?}` and `mcp` `{servers?}` (P1.9; not in the client's first surface).
 
 Error codes (row 22 and protocol.ts:13-17): `protocol_mismatch` (closed), `hello_timeout` (closed), `hello_required` (protocol.ts:17), `bad_frame` (kept), `frame_too_large` (closed), `unknown_type` (kept), `bad_args` (kept), `not_attached` (kept), `busy` (kept), `ui_unknown` (kept; changed by the spike — replaces `ui_resolved` as an error code, row 22 / 4.4 rule 3), `unsupported` (kept), `storage_failed` (closed, then `bye`), `shutting_down` (closed), `internal` (kept), `refused` (kept, `reload` busy-guard, row 9).
 
 Framing, handshake, correlation, ordering, limits: durable-leads 4.2 (NDJSON, one object per line; `hello` first, `welcome` or `protocol_mismatch`; every C→H message except `hello`/`ping` carries `req` and gets exactly one reply with the same `req` — `attached` for `attach`; `LIMITS` protocol.ts:2-9; a `snapshot` or `events` replaces/extends the client's view per the fold, section 5).
 
 ### 1.2 The eight P1.6/P1.8 messages
+
+The eight messages a browser client needs beyond the v1 set: `ui_request`, `ui_response`, `ui_resolved` (P1.6) and `compact`, `configure`, `list_models`, `fork`, `history` (P1.8).
 
 The web client needs the P1.6 and P1.8 messages; host protocol v1 plus P1.6/P1.8 carries a browser client with **no protocol change or version bump** (hs-n595; web-ui.md 3.3, 3.5). P1.6 is messages 14, 23, 24 (`ui_request`, `ui_response`, `ui_resolved`); P1.8 is messages 6, 7, 8, 11, 12 (`compact`, `configure`, `list_models`, `fork`, `history`) (durable-leads 7.2 "P1.6", "P1.8"; web-ui.md 3.3). Their recorded shapes:
 
@@ -51,13 +63,11 @@ The web client needs the P1.6 and P1.8 messages; host protocol v1 plus P1.6/P1.8
 
 **P1.8.**
 
-- `history` (row 12): `req`, `before?` (opaque cursor from a previous `result`), `limit` (default 50). Result `history {entries,next?}`, newest first, fork-aware; `Cursor` is opaque (read: `Conversation.entries`, `types.d.ts` near :619). The exact `entries`/`next` result shape is **`@open(P1.6/P1.8)`** (row 21 "inferred" for `history`; C4; hs-n596(1)).
+- `history` (row 12): `req`, `before?` (opaque cursor from a previous `result`), `limit` (default 50). Result `history {entries,next?}`, newest first, fork-aware; `Cursor` is opaque (read: `Conversation.entries`, `types.d.ts` near :619; `EntryRecord` is read). The exact `entries`/`next` result shape is **`@open(P1.6/P1.8)`** (row 21 "inferred" for `history`; C4; hs-n596(1)).
 - `list_models` (row 8): `req`. Result `{models:[{provider,model_id,name,thinking_levels,context_window}]}` is **`@open(P1.6/P1.8)`** (row 21 marks it inferred; the registry and `getSupportedThinkingLevels` are read: `pi/durable-worker/harness.ts:20-28`, `pi-ai/dist/models.d.ts:267-268`; not built in the spike).
 - `configure` (row 7): `req`, `model?:{provider,model_id}|null`, `thinking_level?` (`off`\|`minimal`\|`low`\|`medium`\|`high`\|`xhigh`\|`max`)\|null. Applies from the next request; the host validates against `list_models` and refuses with `bad_args`; `model` persists across a restart; `thinking_level` not built (row 7, measured for `model`). The `{agent}` result shape is **`@open(P1.6/P1.8)`** (row 21; C4).
 - `fork` (row 11): `req`, `at` (entry id), `ownership?`. v1 does not serve the new conversation (a new Session with its own host, or a second conversation in the same store: Q7). The `{conversation_id}` result and what the client opens next are **`@open(P1.6/P1.8)`** (C4 "a new Session id the host does not serve, Q7"; hs-n596(1)).
 - `compact` (row 6): `req`, `instructions?`. Result `{task_id}` (`TaskId<CompactionResult>`, read: `Conversation.compact`, `types.d.ts:610`); progress as `compaction_start/end` events (row 6, read).
-
-The rows of §4.5 outside the v1 set and outside P1.6/P1.8 — `reload` (row 9), `mcp` (row 10), `rename` (row 13), `notice` (row 25), `status` (row 26) — are part of the v1 table's design with the fields their rows state, and are not in the client's first mock surface (they land with P1.9 host operations, durable-leads 7.2 "P1.9"); the client types them only if a view needs them, without inventing shapes.
 
 ## 2. `@open(P1.6/P1.8)`: every shape durable-leads marks inferred or that P1.6/P1.8 must pin
 
@@ -78,9 +88,9 @@ Not part of this surface, sent to durable-leads as asks and never decided — th
 The mock's read-model types mirror the CLI's documented JSON (hs-d771, A6), **flagged as the W1 core `Serialize` output to supersede** (hs-d771: move the shared read model to core with `Serialize`; the CLI commands print it; the gaps close as CLI commands first). The mirror covers, per `docs/commands.md`:
 
 - `plan list` (§4.2): `{ok, plans:[{id, context, title, phase, lead_session, archived_at, counts:{draft,queued,running,merged,failed,cancelled}, prs:[{key, repo, status, pr, pull_request}]}], events_cursor}`;
-- `plan show` (§4.3): `{ok, plan:{id, context, title, jira, phase, lead_session, created_at, locked_at, done_at, archived_at, outline}, prs:[{key, repo, base, base_pr, jira, needs, status, lead_branch, lead_worktree, pr, pull_request, all_merged_at, start_failed_at, created_at, started_at, merged_at, jobs}], jobs:[{key, pr, title, status, tier, appended, needs, fingerprint, retry_tier, goal, context, touches, acceptance, out_of_scope, attempts:[...]}], escalations, review, counts, tamper, events_cursor}`;
+- `plan show` (§4.3): `{ok, plan:{id, context, title, jira, phase, lead_session, created_at, locked_at, done_at, archived_at, outline}, prs:[{key, repo, base, base_pr, jira, needs, status, lead_branch, lead_worktree, pr, pull_request, closed_unmerged, feedback_open, all_merged_at, start_failed_at, created_at, started_at, merged_at, jobs}], jobs:[{key, pr, title, status, tier, appended, needs, fingerprint, retry_tier, goal, context, touches, acceptance, out_of_scope, attempts:[...]}], escalations, review, counts, tamper, events_cursor}`;
 - `session list` (§10.1): `{ok, sessions:[{id, role, context, plan, attempt, name, runner, state, state_label, state_at, archived_at, asleep_at, place, tmux_pane, file, forked_from, plan_lead, tier, cwd, title, titled_at}], events_cursor}`;
-- `inbox list` (§21.1): `{ok, engine:{running}, items:[{id, kind, urgency, label, subject, context, plan, job, session, record, event, url, opened_at, closed_at, snoozed_until, dismissed_at, claimed_at, age_seconds}], hidden:{snoozed,dismissed,claimed}, events_cursor}` (item shape per `core/src/inbox/cmd.rs:121-142`; the synthetic `engine-down` item has `id:null`).
+- `inbox list` (§21.1): `{ok, engine:{running}, items:[{id, kind, urgency, label, subject, context, plan, job, session, record, event, url, opened_at, closed_at, snoozed_until, dismissed_at, claimed_at, age_seconds}], hidden:{snoozed,dismissed,claimed}, events_cursor}` (item shape per `core/src/inbox/cmd.rs:121-149`; the synthetic `engine-down` item has `id:null`, cmd.rs:150-168).
 
 The mirror lives in `web/src/parity` (TS types over these JSON shapes). The **parity skeleton** (A6, hs-d779) is a test in `web/src/parity` that consumes the mirror types and, when W1 lands (hs-d771), imports the core `Serialize` read-model types and asserts the CLI's real output equals the mirror — the parity test pinning the one shared read model plus the rule that a new cockpit read or action lands in core with a CLI command first (hs-d779).
 
@@ -96,7 +106,7 @@ The mock is a dev-time stand-in for the decided API that the client is built aga
 
 ## 5. Fold semantics (the TS fold)
 
-The chat bridge relays host-socket frames to the browser, which folds them — a TS fold (hs-d772, web-ui.md §8 Q4 A). The fold's semantics are decided in durable-leads 4.3 and the spike:
+The chat bridge relays host-socket frames to the browser over the WebSocket live channel (hs-d773, hs-n599), and the browser folds them — a TS fold (hs-d772, web-ui.md §8 Q4 A). The fold's semantics are decided in durable-leads 4.3 and the spike:
 
 1. **Apply each `AgentEvent` of an `events` frame in order** onto the client's `SnapshotEvent` state (durable-leads.md:385, "The fold"; hs-d772).
 2. **A whole message arrives at `message_start` and is replaced at `message_end`**; a short answer has no `message_update` at all, and `message_update` appears only when generation outlasts the 100 ms commit interval — a client never waits for a delta (durable-leads.md:385, "Changed by the spike"; 4.9 row 1).
