@@ -80,11 +80,13 @@ function build(o: Record<string, unknown>, type: string): ToHost {
   const req = str(o, "req");
   switch (type) {
     case "attach": {
+      const conversation = optStr(o, "conversation");
+      const extra = conversation === undefined ? {} : { conversation };
       const c = o.cursor;
-      if (c === undefined) return { type, req };
+      if (c === undefined) return { type, req, ...extra };
       if (typeof c !== "object" || c === null || Array.isArray(c)) return bad("cursor", "an object");
       const cur = c as Record<string, unknown>;
-      return { type, req, cursor: { epoch: str(cur, "epoch"), seq: int(cur, "seq") } };
+      return { type, req, cursor: { epoch: str(cur, "epoch"), seq: int(cur, "seq") }, ...extra };
     }
     case "submit": {
       const text = str(o, "text");
