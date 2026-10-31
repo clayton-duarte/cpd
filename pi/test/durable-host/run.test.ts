@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Extension } from "@earendil-works/pi-durable";
 import { CpdError } from "../../lib/cpd.ts";
+import { ENTRY_TYPE } from "../../lib/loop-guard.ts";
 import { POLICY_SECTION, policySection } from "../../lib/policy.ts";
 import { TIME_ZONE_SECTION, zoneLine } from "../../lib/time.ts";
 import type { Conversation } from "../../durable-host/run.ts";
@@ -242,7 +243,7 @@ test("the host registers every client submit and follower submission at the subm
     await r.until(() => r.submitted.length >= 2);
     await r.drain();
     assert.ok(
-      r.written.some((w) => (w as { entry?: { kind?: unknown } }).entry?.kind === "cdp-loop-guard"),
+      r.written.some((w) => (w as { entry?: { kind?: unknown } }).entry?.kind === ENTRY_TYPE),
       `the gate must count both submissions and trip; writes were ${JSON.stringify(r.written)}`,
     );
   });

@@ -27,18 +27,27 @@ export function hostVerdict(
     const written = primaryCheckoutWrite(call.name, call.arguments, where.cwd, where.home);
     return written === undefined ? undefined : { block: mainReason(written) };
   }
-  const command = call.arguments.command;
-  if (call.name !== "bash" || typeof command !== "string") {
-    // The ask guards (G25, G26) are for an `ask_user_question` call only; every other tool passes.
-    if (call.name === "ask_user_question") throw new Error("not implemented");
-    return undefined;
+  if (call.name === "bash") {
+    const command = call.arguments.command;
+    if (typeof command !== "string") return undefined;
+    const moved = primaryCheckoutMove(command, where.cwd, where.home);
+    if (moved !== undefined) return { block: mainReason(moved) };
+    const secret = secretBypass(command);
+    if (secret !== undefined) return { block: secretReason(secret) };
+    const host = hostApproveBypass(command);
+    if (host !== undefined) return { block: hostReason(host) };
+    const timeout = call.arguments.timeout;
+    const matched = blockingReason(command, typeof timeout === "number" ? timeout : undefined);
+    if (matched !== undefined) return { block: noblockReason(matched, role) };
+    // noblock (G24): no match and no explicit timeout: bound the foreground call. An explicit one is kept unchanged.
+    return timeout === undefined ? { arguments: { ...call.arguments, timeout: BOUND_SECONDS } } : undefined;
   }
-  const moved = primaryCheckoutMove(command, where.cwd, where.home);
-  if (moved !== undefined) return { block: mainReason(moved) };
-  const secret = secretBypass(command);
-  if (secret !== undefined) return { block: secretReason(secret) };
-  const host = hostApproveBypass(command);
-  if (host !== undefined) return { block: hostReason(host) };
-  // noblock (G24): the new branch is not implemented by this Worker.
-  throw new Error("not implemented");
+  if (call.name === "ask_user_question") {
+    // The ask guards (G25, G26) are for an `ask_user_question` call only; every host Session is a Lead or Manager.
+    const long = tooLong(call.arguments);
+    if (long !== undefined) return { block: long };
+    const missing = unseen(call.arguments, call.id, where.visible);
+    return missing === undefined ? undefined : { block: missing };
+  }
+  return undefined;
 }
