@@ -710,3 +710,224 @@ Of the g-proto items marked unverified, the spike resolved none of the three the
 | A real Lead's snapshot size | still unverified: the spike has 30 entries |
 | The 107-byte `sun_path` limit and the 256 and 4096 ring bounds | still unverified: the spike has no rebase and the limit was not measured |
 | `Harness.close()`-free shutdown leaves the WAL clean | still unverified: a `kill -9` and reopen worked (row 7), the WAL state was not inspected |
+
+## 6. Reversibility
+
+Sources: `f-engine.md`, `f-session.md`, `f-cockpit.md`, `f-seam.md`, `d-worker.md`. Every `file:line` is of cpd `943a11337`. Nothing here was run against a live store: every verdict is read from code, and what a durable Lead would do is inferred. In the tables of 6.2 to 6.4 the verdict (works, breaks or degrades) is the first word of the column "A Session with no pane"; "no pane" means a Lead or Manager whose `sessions.tmux_pane` is NULL and which has no `@cpd_session` pane.
+
+### 6.1 The runner per Session
+
+The User's decision (hs-d752): a Session's runner is fixed at creation, a config key picks the runner of NEW Sessions, the default stays `pi`, there is no live switch and no converter. pi's JSONL and durable's SQLite are different transcripts (inferred), so a Lead moves by a handoff summary into a new Session (6.5).
+
+| Item | Where | Basis |
+|---|---|---|
+| Today `sessions` has no `runner` column; its last rebuild lists id, role, context, plan, attempt, name, file, forked_from, cwd, tier, `tmux_pane`, state, state_label, state_at, created_at, archived_at, title, titled_at, asleep_at | `core/src/store/migrations/20261022T0028-session-title-length.sql:12-35` | read |
+| `attempts.runner` is the template: `ALTER TABLE attempts ADD COLUMN runner TEXT NOT NULL DEFAULT 'pi' CHECK (runner IN ('pi', 'durable'));` under the first line `-- cpd-migration: additive` | `core/src/store/migrations/20261102T1700-worker-runner.sql:1-2` | read |
+| New column: `sessions.runner`, same form: first line `-- cpd-migration: additive`, `DEFAULT 'pi'`, the same CHECK. An ADD COLUMN with CHECK and DEFAULT is additive (the attempts migration is the proof). Whether `sessions` triggers block the additive form is not checked (the `working_pr` migration `20261102T2100-session-working-pr.sql` is `breaking after 82` and adds triggers: read in f-seam) | `docs/contract.md` §4.5 (rules, from f-seam) | read; additive for `sessions`: inferred, unverified |
+| The file name must sort after every existing migration (#596 had to rename its file for that); `SCHEMA_HASH` is repinned | `core/src/store/schema.rs:113` | read |
+| Config key: a closed enum plus `r.get("worker_runner", WorkerRunner::Pi, ...)` is the template for `lead_runner` and `manager_runner` (the Manager's evaluation names them so). The key names are an open choice. Open: one key for both roles, or two? (section 8) | `core/src/config/runner.rs:13` (enum), `core/src/config/file.rs:59` (field), `:274` (parse) | read |
+| The Worker stores the runner at creation and never reads today's flag afterwards: Attempt creation reads `ctx.config.worker_runner` and `insert` writes `attempts.runner`; the driver reads the stored value | `core/src/driver/start.rs:197,440`; `core/src/driver/runner.rs:43-50` | read |
+| Doctor check: the Worker's check takes `Config` and a `Runner` port and is registered in the doctor list; a Lead check copies it | `engine/src/doctor/worker_runner.rs:17-23`; `engine/src/doctor/mod.rs:81` | read; what the Lead check would test: inferred |
+
+Where a Session is created today, and so where the column is written; each is a pane starter that must read the runner (rows in 6.2 and 6.3):
+
+| Pane starter | file:line | What it does | Row |
+|---|---|---|---|
+| `plan new` | `core/src/plan/new.rs:96` (INSERT), `:169-186`, `:180-185` (`None if state == "stopped"` starts the Lead), `core/src/plan/lead.rs:57-80` | registers the Lead `stopped`, starts a parked window, writes `tmux_pane` and `session-moved parked` | 6.2 C-15 |
+| `context manager` | `core/src/context/manager.rs:158` (INSERT), `:41-54,106-118` | the same for the Manager in `ctx-<context>` | 6.2 C-15 |
+| E2 restart | `engine/src/watch/liveness.rs:448-450,500-532`; `core/src/session/mod.rs:388-392`; `core/src/session/moves.rs:417-450` (`start_parked`) | a Lead or Manager E2 stopped is started again in a parked window | 6.2 E2-f |
+| `cpd session send` (`needs_pane`) | `core/src/session/send.rs:138-146,172,201` | a message to a `stopped` Lead or Manager starts a pane after the commit | 6.2 C-1 |
+| `session fork` | `core/src/session/moves.rs:101-164` (INSERT `:139`) | registers a Lead and opens a window | 6.3 `fork` |
+| `session open` | `core/src/session/moves.rs:218-233` | starts a window for a stopped Session | 6.3 `open` |
+| tmux restart `reopen` | `core/src/session/moves.rs:386-390` | puts each placed Lead back in a parked window | 6.2 TMUX-restart |
+| `inbox claim` | `core/src/inbox/cmd.rs:476` into `send.rs:151-175` | `send_as_user` to a Manager, then as `send` | 6.3 `inbox claim` |
+
+Other INSERT sites, not through one helper: `core/src/driver/run.rs:543` (Worker Session), `core/src/inbox/rules.rs:763` (read in f-seam). With a DEFAULT they need no edit (inferred).
+
+Equivalent change (the mirror of #596 plus #604, from f-seam section 4; every size is a guess, as f-seam labels them, not derived from a line count of this change):
+
+| Area | Files | Guess, non-test lines |
+|---|---|---|
+| Migration | new `core/src/store/migrations/<ts>-session-runner.sql` | 3-5 |
+| Schema pin and tests | `core/src/store/schema.rs`, `core/src/store/schema/tests.rs` (default clause, `:1849` pattern), a new `schema/<x>_tests.rs` | 90 |
+| Config | `core/src/config/runner.rs`, `file.rs`, `config/mod.rs` | 30 |
+| Session rows | the INSERT sites above; `core/src/session/row.rs` (show, list) | 40 |
+| Launch seam for Leads and Managers (the analogue of `core/src/driver/runner.rs`, 286 lines measured for the Worker seam) | not investigated in f-seam | 300 (wild guess) |
+| Cockpit toggle, status-line option, engine feed | `core/src/config/runner.rs`, `tui/src/cockpit.rs`, `core/src/host/tmux.rs`, `engine/src/watch/workers.rs` | 120 |
+| Doctor | `engine/src/doctor/worker_runner.rs` generalised | 20 |
+| Contract and commands docs | `docs/contract.md`, `docs/commands.md` | 60 |
+| Total non-test | | about 300 to 700 (guess); tests 500 to 1,000 (guess) |
+
+For scale, measured with `git show --stat`: #596 was 50 files, +2123 −152; #604 was 16 files, +600 −34. The Worker's durable runner (`pi/durable-worker/*`) does not carry over as a Lead host unchanged: `d-worker.md` marks its `config.ts`, `deliver.ts`, `extension.ts`, `main.ts` and `run.ts` "generalise", and `report.ts` and `guards.ts` Worker-only; that is section 4's and 7's matter.
+
+The Rust start, restart and stop of a durable Worker, which a Lead host would copy or replace (read, `d-worker.md`): launch `core/src/driver/runner.rs:60-88`; restart up to `MAX_RESTARTS = 3` per driver run (`runner.rs:34`, `core/src/driver/run.rs:723-746`); stop by SIGTERM, naps of 1 s, then SIGKILL (`runner.rs:156-191`); the signal guard proves the process by its command line holding the runner file and the Attempt's spec path (`runner.rs:136-140`). A Lead has no Attempt and no spec, so that proof and the restart owner are new (inferred). Open: who restarts a crashed durable Lead host, and what bounds it? (section 8)
+
+### 6.2 What assumes a pane
+
+Engine and core, from `f-engine.md`. Headline: E2 liveness treats a paneless non-Worker Session as dead (`engine/src/watch/liveness.rs:391-395`, `(None, _) => "it has no pane"`), stops it (`:437-452`) and restarts it as a pi in a parked tmux window (`:448-450`, `:500-532`) until the 10-minute guard (`RESTART_GUARD`, `:455`) raises `session_restart_loop` (`:518-525`). The only exemption, R9, is for `role == "worker"` joined to `attempts.runner = 'durable'` (`:418,424,430`). So a durable Lead needs E2 to branch on the runner BEFORE any durable Lead is created (read; the effect on a live durable Lead is inferred, nothing was run).
+
+The branch needs a `sessions.runner` column: none exists (`f-engine.md` section 0), and a Lead has no Attempt to join (CHECK `(role='worker') = (attempt IS NOT NULL)`, migration `20261022T0028-session-title-length.sql:33`).
+
+| File:line | Function | Assumes | A Session with no pane | Branch keyed on sessions.runner |
+|---|---|---|---|---|
+| `engine/src/watch/liveness.rs:344-345` | E2-a `LIVE_SESSIONS` | selects every Session with `state <> 'stopped' OR tmux_pane IS NOT NULL` | works for a `stopped` paneless Session (not selected); any other state is selected and reaches E2-b | none |
+| `engine/src/watch/liveness.rs:381,389-396` | E2-b `sessions` | alive only if its `tmux_pane` is in `tmux list-panes -a` and not dead; `(None, _)` is dead (`:395`) | breaks: an idle, working, waiting or blocked paneless Lead is declared dead on the first tick; a tmux list failure (`:387`) fails E2's Session half for every Session | `if session.runner == "durable" && role != "worker" { continue }` before `:397` (inferred) |
+| `engine/src/watch/liveness.rs:398-406,415-431` | E2-c `live_durable_worker` | the exemption is `role == "worker"`, `attempts.runner = 'durable'`, `status <> 'ended'` (`:418,424,430`) | breaks: the exemption does not apply to a Lead or Manager (`:418`) | widen on the new column; the Worker form joins `attempts`, a Lead has none |
+| `engine/src/watch/liveness.rs:437-452`, `:548-556`; `core/src/session/state.rs:129-152` | E2-d `stop_and_clean` / `stop` / `pane_gone` | compare-and-set on `state` and `tmux_pane IS ?3`; with `pane=None` writes `stopped` and a `session-state` Event (`state.rs:143-146`), no `session-moved` (`:147`) | breaks: the host's `idle` or `working` is overwritten with `stopped`; later host writes flip it back and E2 stops it again (inferred) | covered by E2-b |
+| `engine/src/watch/liveness.rs:407-408,438-446,536-545` | E2-e `dead_lead` / `in_slot` | cleanup only when the found pane is dead: `kill_window` or `replace_with_placeholder` | works: a paneless Session finds no pane, so nothing is killed | none |
+| `engine/src/watch/liveness.rs:448-450,500-532`; `core/src/session/mod.rs:388-392`; `core/src/session/moves.rs:417-450` | E2-f `restart` / `start_parked_as` / `start_parked` | after the stop, a lead or manager that was not `stopped` is started as pi `cpd session run <id>` in a new parked window, `tmux_pane` written (`moves.rs:429`); skipped if archived, Plan done, or restarted within 10 minutes (`:455,507`) | breaks, worst case: a durable Lead gets a second runtime, a pi on the same Session id (the same file: inferred from `moves.rs:32`); after 10 minutes one `error` per loop; with no cockpit `new_window` (`moves.rs:424`) errors | skip `restart` (`:448`) when the runner is durable |
+| `engine/src/watch/liveness.rs:461,466` | E2-g `run/session-restarts.json` | map of Session to the last restart time | works (a file); never written for a durable Lead if E2-f is skipped | none |
+| `engine/src/watch/titles.rs:81-85,126-131,151-155` | E10 titles | selects idle Leads and Managers; no pane of the Session, but no retitle starts unless the cockpit's chat slot pane exists (`:129`) | degrades: a paneless Lead is titled only while some cockpit pane holds the slot (the width is the slot's); with none, no title is ever made | none for the Session; the slot gate is a client matter (inferred) |
+| `engine/src/watch/sleep.rs:94-104` | E13 sleep | `list_panes` (`:96`, `?`), skip the chat-slot Session (`:97`), `close_lead` (`:100`), then writes `asleep_at` | works for the row (`close_lead` returns `already`, `moves.rs:481-483`); degrades: asleep means "pane closed" (`sleep.rs:2-3`) and nothing stops the durable runtime; a `list_panes` error fails the Session's step | after `:100`, stop the host for durable (inferred) |
+| `engine/src/watch/archive_leads.rs:30-71` | E14 `archive_plan` | calls `plan::archive::archive` (`:66`), which reads panes (C-5, C-6) | works | none |
+| `engine/src/watch/parked.rs:32,57-72`; `core/src/session/send.rs:132-134` | E20 parked drafts | idle Lead of the Plan; wakes by `tell`, which only writes a `session-message` Event | works, if the host writes `state='idle'`: a Lead E2 stopped is not `idle` and is not woken | none |
+| `engine/src/watch/closed.rs:14`, `report.rs:30,192`, `asks.rs:8`; `core/src/session/send.rs:111-128` | closed, report, asks, inbox: `tell`, `tell_managers`, `tell_manager_of` | Events only (`write` plus `session-message`) | works: no pane is read | none |
+| `engine/src/watch/restart.rs:164-167,237-262`; `core/src/session/moves.rs:316-400` | TMUX-restart drain; `placed`, `gone`, `reopen` | the safety check reads `working` or `blocked` Leads and Managers with no pane filter (`restart.rs:164-167`); `placed` is Sessions with a live or recorded pane (`moves.rs:316-320`) | degrades: a paneless Lead is never reopened (works), but while it is `working` or `blocked` it holds the tmux restart (inferred: indefinitely) | exclude durable from the `:164` query |
+| `engine/src/watch/ensure.rs:19-21,198-261`; `engine/src/watch/engine.rs:55`; `host_alert.rs:48`; `workers.rs:97` | the engine's own window and tmux handle | about the engine's pane; the engine needs a tmux server to set status options each tick | works (not about a Lead) | none |
+| `core/src/session/send.rs:138-146,159-173,187-201` | C-1 `needs_pane` | `wake = state == "stopped"` and no live `@cpd_session` pane (`:140-141`); with no cockpit `no_cockpit` refuses before any write (`:142-143`); then `start_parked` | breaks: a message to a stopped durable Lead (E2-d makes it so) starts a pi window or refuses with `no_cockpit`; a message to a non-stopped paneless Lead only writes the Event (`:105`) | `wake = false` if durable |
+| `core/src/session/moves.rs:417-450` | C-2 `start_parked` | creates the window, writes `tmux_pane` and `session-moved parked` | breaks if called for a durable Lead; its callers are E2-f, C-1 and `reopen` | the callers branch |
+| `core/src/session/moves.rs:463-505` | C-3 `close_lead` | no `tmux_pane` returns `Closed{pane:None, already:true}` (`:481-483`); in the chat slot or `place == "chat"` refuses (`:473`); calls `list_panes` (`:471`) | works; a durable Lead must never write `place: chat` (inferred); tmux failing errors | none |
+| `core/src/session/retitle.rs:161-171`; `core/src/session/row.rs:300-308` | C-4 `set_header` | finds a live pane with `cpd_session == id` and sets `@cpd_title` | degrades: none found returns `Ok(None)`, the title is still written (`retitle.rs:145-146`), only the header is not shown | none |
+| `core/src/plan/archive.rs:151-180,185-215` | C-5 `refuse_chat_slot` | `place == "chat"` or `chat_slot(...) == id` refuses; `list_panes` (`:167`, `?`) | works; fails if tmux is unreachable | none |
+| `core/src/session/archive.rs:136-182,216-240` | C-6 `archive_lead` and the quit path | `close_lead` (`:159`); `:234-238` parks on pi quit | works for `archive_lead`; the quit path is unreachable without a `session run` pane | none |
+| `core/src/session/history.rs:30-48` | C-7 `session history` | parks the Lead in the slot, respawns the placeholder | breaks if a durable Lead occupies the slot: no pane to park | branch on `place` (inferred) |
+| `core/src/session/state.rs:129-152` | C-8 `pane_gone` | writes `stopped` and a NULL pane | degrades: the one writer that nulls the pane; see E2-d | see E2 |
+| `core/src/session/row.rs:83,108,129,157,204,239` | C-9 `Row.tmux_pane` | read and returned by `show` and `list` | works (`None`) | none |
+| `core/src/session/reload.rs:122-143` | C-10 `reload_due_with` | reload exists only inside `session run` (`:1-3`) | works: no wrapper, no reload | none |
+| `core/src/host/layout.rs:84-101` | C-11 `chat_slot`, `view_pane`, `session_pane` | find a pane by `@cpd_session` or `@cpd_view` in `<cockpit>:main` | works: absent returns `None` | none |
+| `core/src/host/tmux.rs` | C-12 the typed tmux wrapper | the only way the rows above reach tmux | works: infrastructure; a durable host needs none of it, every row above calls it | none |
+| `core/src/host/pi/launch.rs:23,81,138`; `core/src/host/spawn.rs:44` | C-13 the pi launch | `new-window ... -- pi ...`; the Lead's pi owns the pane's terminal | works: not used by a durable Lead | none |
+| `core/src/store/migrations/20261022T0028-session-title-length.sql:12-35` | C-14 schema | `tmux_pane` nullable; `sessions_live` index keeps `stopped` and paneless rows out | works: no CHECK forbids a paneless live Lead (only the `state_label` check) | none |
+| `core/src/plan/lead.rs:57-80`; `core/src/plan/new.rs:169-186`; `core/src/context/manager.rs:41-54,110` | C-15 Lead and Manager start | `plan new` and `context manager` start a parked window, `set_pane_session`, write `tmux_pane` and `session-moved parked` | breaks: creating a Lead always starts a pi pane when the new row is `stopped` with no pane (`new.rs:180-185`) | start the host instead, at `new.rs:180` and `lead.rs:57` |
+| `core/src/inbox/rules.rs:654` (the rule text is `docs/contract.md:654`) | C-16 `unread` | idle and not in the chat slot, by `session-moved place` | works: no pane and not chat counts as unread when idle (inferred) | none |
+
+Not read (wrappers that only host pi in a pane, `f-engine.md` section 4): `core/src/session/run.rs` (`check_pane` `:321-346`), `fork_wait.rs`, `reload.rs`, `moves.rs` `fork`, `open`, `park`, `park_lead` (`:101-298`). None is reached for a durable Lead except where listed above.
+
+Net (inferred from the table): E2 is the one engine step that breaks, and its restart branch (E2-f) makes a second pi runtime. The other breaks are core: `needs_pane` (C-1) and the Lead and Manager start (C-15). The tmux restart drain and E13 degrade; E10, E14, E20, `tell*` and the schema work.
+
+### 6.3 The `cpd session *` commands
+
+From `f-session.md`; the 20 variants of `Command` are at `core/src/session/mod.rs:70-118`, dispatched at `:361-382`. Delivery fact (read): no command uses `send-keys` (`git grep send-keys` in `core/src` and `cli/src` finds only the mouse binding `core/src/host/tmux.rs:170,204` and the tmux fake). Every message to a Lead is an Event row (`core/src/session/send.rs:85-106`; `resume.rs:31`; `retier.rs:75`; `core/src/ask/reply.rs:50-56`), and the pi adapter delivers it by spawning `cpd events follow --session <id> --since <cursor>` (`docs/commands.md:3853`, `pi/lib/follower.ts:50`). A durable host delivers the same Events: the durable Worker already does, through `inputOf` (`pi/durable-worker/deliver.ts:6-15`) and the follower started at `pi/durable-worker/run.ts:112-136` (read). What it must widen is `inputOf`, which maps only `attempt-nudge` and `session-message`, where the adapter's `handleEvent` also delivers `session-resumed`, `session-retiered`, `escalation`, `pr-feedback` and more (`pi/lib/handle.ts:97-145`; inferred, a gap for section 3). With no pane the Events queue safely and replay from the cursor (inferred); the only pane-coupled part is the wake (`needs_pane` and E2-f), which a host replaces with "load the Session when an Event for it is pending" (inferred).
+
+| File:line | Function | Assumes | A Session with no pane | Branch keyed on sessions.runner |
+|---|---|---|---|---|
+| `core/src/session/row.rs:314` | `list` | store read (includes `place`, `tmux_pane`) | works: `place` is `none`, `tmux_pane` null | none; the columns are meaningless for durable |
+| `core/src/session/row.rs:343-377` | `show` | store read; the adapter calls it at start (`docs/commands.md:3846`) | works | none |
+| `core/src/session/moves.rs:101-164` (`:127-129`, `:153`, `:159`) | `fork` | needs the cockpit (`has_session`, else `no_cockpit`) and a window running `cpd session run`; `session run` then waits for the source to be idle (`fork_wait.rs:31-67`) | breaks | a host-side "new Session from a fork of the source's transcript" (inferred) |
+| `core/src/session/moves.rs:180-256` (`:174-177,195,218-233`) | `open` | brings the Session into the chat slot: starts a window if none, `swap-pane`, writes `session-moved chat`, clears `asleep_at` (`:242`) | breaks: no cockpit or slot gives `no_cockpit`; for a stopped Session with a cockpit it starts a pane (`:218-233`) | `open` becomes "a client attaches"; it must still write `session-moved chat` for the cockpit (6.4) |
+| `core/src/session/moves.rs:259-298` (`:266-274`) | `park` | moves the slot Session to a `park-*` window | breaks without a cockpit; a Session not in the slot returns `already` | no slot to park |
+| `core/src/session/moves.rs:520-531`; `:463-505` | `close` | kills `sessions.tmux_pane`, writes `pane_gone`; refuses the chat-slot Session (`:473-480`) and the Worker role (`:468-470`) | degrades: NULL pane returns `{pane: null, already: true}` (`:481-483`); the durable runtime is not stopped | stop the host's Session |
+| `core/src/session/history.rs:19-49` (`:24-28,33,45`) | `history` | reads the file, then parks the slot's Lead and respawns the placeholder | breaks without a cockpit; needs `session.file` | a client reads the store |
+| `core/src/session/archive.rs:125-182` (`:136-160`) | `archive` | `close_lead` unless `keep`, then writes `archived_at` | degrades: the pane close is a no-op, the row write happens; whether `list_panes` errors with no tmux server is not checked | stop the host's Session |
+| `core/src/session/archive.rs:254-289` | `unarchive` | store only | works | none |
+| `core/src/session/send.rs:138-146,177-206` (`:142-144,201`); `moves.rs:417-450` | `send` | appends `session-message`; a `stopped` target with no live pane gets a parked pane started after the commit | breaks (as C-1): starts a pi window or `no_cockpit` | `wake = false` if durable |
+| `core/src/session/resume.rs:17-35` | `resume` | writes `session-resumed` if `blocked` with the label `φ: loop guard` | works as a write; effective only with a consumer; a stopped Session gives `not_loop_guarded` | the host needs the adapter's loop guard (`pi/lib/loop-guard.ts`), not read here |
+| `core/src/session/retier.rs:49-89` (`:75`) | `retier` | sets `sessions.tier` and writes `session-retiered`; a Session with no pi gets the Tier at `run` start (`run.rs:168-175`) | works (row only) | the host reads `tier` when it opens; the switch at next idle needs a host handler (inferred) |
+| `core/src/session/state.rs:206-224`; `core/src/session/row.rs:303-311` | `rename` | writes `name`, then `row::retitle` calls `tmux.list_panes()?` unguarded (`row.rs:307`) | works for the row; a missing tmux server may make the command error after the write (not checked) | none |
+| `core/src/session/state.rs:174-203` (`:121-152`) | `state` (hidden) | transition with a `session-state` Event; called by the adapter (`pi/lib/agent-state.ts`) | works; `pane_gone` is the one writer that nulls the pane | the host writes the same transitions |
+| `core/src/session/run.rs:47-162` (`:55,321-330`) | `run` (hidden) | is the pane: `wrong_pane` unless `$TMUX` and `@cpd_session` match | breaks outside a pane | replaced by the host; its reload, watchdog (`reload.rs:75-102`) and archive-on-quit (`archive.rs:222-251`) have no durable counterpart read here |
+| `core/src/session/first_message.rs:16-57` | `first-message` (hidden) | renders the first message, writes `run/<plan>/lead-message.md` | works | the host seeds its first input from it |
+| `core/src/session/retitle.rs:123-147` (`:163-173`) | `retitle` (hidden) | writes the title; tmux only in `set_header` | degrades: no live pane, `pane: null`; a tmux error is printed, the write stays | none |
+| `core/src/session/report.rs:69-85` | `report` (hidden) | one `error` Event, no Plan | works | the host reports its errors the same way |
+| `core/src/session/switch.rs:16-37` | `switch-failed` | writes `switch_failed` on the row | works | the host calls it when a model switch fails |
+| `core/src/session/switch.rs:39-41` | `switched` | clears `switch_failed` | works | same |
+
+Commands outside `cpd session` that act on a Lead (read in `f-session.md`):
+
+| File:line | Function | Assumes | A Session with no pane | Branch keyed on sessions.runner |
+|---|---|---|---|---|
+| `core/src/plan/new.rs:169-186,271-275`; `core/src/plan/lead.rs:51-88` | `plan new` | creates the cockpit tmux session if missing, starts the Lead's pane; a rerun on a stopped Lead restarts it (`new.rs:181-184`) | breaks: creates a pane | spawn or load a durable Session; `lead-message.md` is its first input |
+| `core/src/context/manager.rs:20,106-118` | `context manager` | `lead_spawn` plus `tmux.new_window` | breaks: creates a pane | same |
+| `core/src/ask/reply.rs:14-67` | `answer` | store only; the Lead runs it | works | none |
+| `core/src/ask/question.rs` | `ask` | a Worker writes an Escalation; the Lead's follower delivers it as a steered message | works as a write; unread until a follower runs; the host follower must deliver `escalation` with steer | none |
+| `core/src/inbox/cmd.rs:476` | `inbox claim` | `send_as_user` to a Manager, then as `send` | breaks (as `send`) | as `send` |
+| `core/src/plan/archive.rs:218`; `core/src/plan/cancel.rs:70,77`; `engine/src/watch/sleep.rs:100` | `plan archive`, `plan cancel`, E13 | `close_lead` on each Lead | degrades: a NULL pane is a no-op | stop the host |
+| `core/src/board.rs:78` | `board` move | `session::plan_inactive` guard only | works | none |
+
+### 6.4 The cockpit
+
+From `f-cockpit.md`. Headline (read): the cockpit never reads a Session's pane. Every "in the slot, parked, gone" fact comes from the `place` of the latest `session-moved` Event (`tui/src/read/shared.rs:116-119,262-269,284`; `read/widgets.rs:175-188`; `read/flow.rs:622-633`; `read/pulse.rs:45-55`; `tui/src/cockpit.rs:500-510`). `sessions.tmux_pane` is selected and stored (`shared.rs:223,263,296`) but no non-test tui code branches on it. The dot comes from `sessions.state` (`shared.rs:287`; `read/tree.rs:292`), so it works without a pane. No `sessions.runner` is read anywhere in `tui/src`.
+
+What a paneless Session shows (inferred from the rows below, all DB and Event based):
+
+| Place | What it shows |
+|---|---|
+| Tree | the row exists, the dot from `sessions.state`, not blue (`place` is `none` or `parked`, `shared.rs:284`), muted if `asleep_at` (`tui/src/tree/rows.rs:10-11,354,394,406`) |
+| Click or Enter | runs `session open <id>` (`tui/src/tree/view.rs:500`, `tui/src/tree/actions.rs:147`), then `select-pane` on the slot; everything depends on `session open` |
+| Plan view centre | ` no Lead session in the centre` (`tui/src/plan/mod.rs:218`) until a `session-moved place=chat` Event names it (`plan/mod.rs:164-170`, `read/flow.rs:608-644`) |
+| Inbox | `unread` and dialog items still come from Events; a click runs `session open` (`tui/src/widgets/inbox.rs:233-270`) |
+| `x` (Close) | allowed unless `place == Chat` (`tui/src/tree/view.rs:68-76`); the outcome depends on `session close`, whose behaviour on a paneless Session is unverified in f-cockpit; 6.3 reads it as a no-op |
+| Dots | work (`state`); an engine E2 stop would turn it into `stopped` (6.2 E2-d) |
+
+Open: a `cpd chat` in the chat slot must make `session open` write `session-moved{place:"chat"}`, else every row shows "not in slot" (inferred in f-cockpit).
+
+| File:line | Function | Assumes | A Session with no pane | Branch keyed on sessions.runner |
+|---|---|---|---|---|
+| `tui/src/cockpit.rs:55,167-186` | `LAYOUT`, `build` | a 4-pane `main` window with the `Chat` placeholder pane | works: the layout is cockpit-owned | none |
+| `tui/src/cockpit.rs:190-226` | `add_missing_panes` | the slot counts as present when it holds a Lead (`chat_slot`); re-adds the placeholder if missing | works; a `cpd chat` pane that `chat_slot` does not recognise would get a second Chat pane (`chat_slot` is core, not read here) | confirm `chat_slot` accepts the `cpd chat` pane |
+| `tui/src/cockpit.rs:139-143,497-516` | `ensure` and `last_chat_lead` | re-opens the newest `place=chat` Lead with `session open` (`s.role='lead'`, plan not null) | degrades: Managers are never restored; a durable Lead restores only if `session open` handles it | none |
+| `tui/src/cockpit.rs:453-483` | `respawn_live_views` | restarts panes with `@cpd_view`; a Lead's pane is not touched | works | none |
+| `tui/src/cockpit.rs:251-263,454-460,486-495` | `remove_old_panes`, `respawn_dead` | layout panes only | works | none |
+| `tui/src/tree/actions.rs:147,326-328,333-341` | `Action::Open`, `run_all`, `Runner::focus_chat` | after `session open <id>`, `select-pane` on the slot | works if `session open` succeeds; breaks if it refuses (the flow stops with an error dialog); no-op with no slot | none in tui; `session open` must support the runner |
+| `tui/src/tree/view.rs:478-505` | `View::click` | a Context row runs `OpenManager` (`actions.rs:148`), a Plan or fork row `Open`, an archived row `Resume{unarchive, Open}` (`rows.rs:225-244`) | works as a command; the effect is the CLI's | none |
+| `tui/src/tree/view.rs:68-76` | `close_of` | refuses with `IN_CHAT_SLOT` if `place == Chat`, else `session close` | degrades: `session close` on a paneless Session is unverified here (6.3: a no-op) | hide Close for durable unless in the slot (inferred) |
+| `tui/src/tree/view.rs:433-461` | `free_for` | archiving the slot's Lead first runs `session open <next>`, else `session park` (`actions.rs:203-209`) | degrades: reads place only; `session park` for a durable Lead in the slot is unverified (6.3: breaks) | route by runner |
+| `tui/src/tree/actions.rs:77-94,149` | `Action::Park`, `Free::Park` | a Lead in the slot goes back to a parked window | breaks: no window to park to (inferred) | route by runner |
+| `tui/src/tree/actions.rs:223,321-325` | `Action::NewPlan` | the log text names `park-{id}`; then `session open` and `focus_chat` | degrades: log text only | none |
+| `tui/src/read/tree.rs:54-55,288-295,326-327` | `manager_place`, `manager_asleep` | a Manager's place from sessions and Events; default dot `Stopped` | works | none |
+| `tui/src/read/shared.rs:248-250,257,236` | `is_active`, `is_asleep` | `place == Chat`; `asleep_at` | works | none |
+| `tui/src/widgets/inbox.rs:233-270,404-407` | `open_or_history`, `jump`, `open_lead` | `session open` or `history` if archived; `LoopGuard` runs `session resume` | works as commands | none |
+| `tui/src/widgets/mod.rs:217-225,529-538` | `jump`, `open_lead` | `session open`, then `select-pane` on the slot | works (as `focus_chat`) | none |
+| `tui/src/plan/actions.rs:39-43`; `tui/src/plan/mod.rs:651-659,684-690` | Plan view Pulse row click | `open_lead`; failure shows an "Open Lead" error dialog | works; breaks only if `session open` fails | none |
+| `tui/src/plan/mod.rs:164-170,206-211`; `tui/src/read/flow.rs:608-644`; `tui/src/read/pulse.rs:36-65` | `chat_slot` read, `Watching::concerns`, `manager_slot` | the centre is the Plan of the newest `place=chat` Lead, else Pulse for a Manager | degrades: `no Lead session in the centre` (`plan/mod.rs:218`) without the Event | the host's `open` writes the Event |
+| `tui/src/host_click.rs:38-47`; `tui/src/incident_click.rs:18-22` | the `host` and `incident` pills | `open_lead` (`session open` plus `select-pane`); `tmux display-message` if none | works (as Open) | none |
+| `tui/src/chat.rs:1-18,31-32`; `tui/src/history/mod.rs:61-62` | the chat placeholder and history view | the slot's occupant pads itself by 1 cell (`docs/contract.md:2862,3085`); `session open` kills the placeholder (`chat.rs:4`) | works; a ratatui `cpd chat` must pad itself | none |
+| `tui/src/tree/mod.rs:272` | engine-down notice, `live_managers` | tells live Managers; the body was not located in f-cockpit | degrades: unverified | read it before acting |
+| `tui/src/tree/ask.rs:331-346`; `tui/src/merge/mod.rs:62-69`; `tui/src/lib.rs:264-265` | popups, merge, the `pane-died` hook | the cockpit's own tmux (popups on `list-clients`, layout views) | works: not about a Session | none |
+
+The `worker_runner` pill toggle is the template for a `lead_runner` toggle (read, `f-cockpit.md` section 3):
+
+| Step | file:line |
+|---|---|
+| Config field, default `Pi` | `core/src/config/file.rs:59,274` |
+| Closed enum, `parse`, `as_str`, `flipped` | `core/src/config/runner.rs:11-42` |
+| `toggle(home)`: reads `config.toml`, flips, `set_in_text` (replaces the line, else inserts after the last top-level key), re-parses, `write_atomic` | `core/src/config/runner.rs:44-88` |
+| Click entry: `cpd tui action runner --client <c>`, `Action::Runner` | `tui/src/cockpit.rs:334-358`, dispatched before config load `:396-399` |
+| Handler: `toggle_runner` flips, then `tmux set -g @cpd_runner` and `refresh-client -S` | `tui/src/cockpit.rs:421-426` |
+| Option name `@cpd_runner` | `core/src/host/tmux.rs:81` |
+| Display: the status format shows the pill, range `runner`, with a width macro | `core/src/host/tmux.rs:240-241,352,358,1312,1324,1346` |
+| Engine feed each tick: `Config::load`, sets `@cpd_runner` | `engine/src/watch/workers.rs:83-107` |
+| Test and doctor | `cli/tests/tui/tui_runner_toggle.rs:1-88`; `engine/src/doctor/worker_runner.rs:17-23` |
+
+A `lead_runner` toggle copies (inferred): a closed enum with `flipped`; a `Config` field and parse line; an `Action` arm; a second tmux option and pill; the engine feed. `set_in_text` is hard-wired to `"worker_runner"` (`runner.rs:51-52`), so it is generalised or duplicated. As the Worker's pill, an open Lead keeps its runner until it is recreated. Open: is a Lead pill wanted, or is the config key enough? (section 8)
+
+### 6.5 Rollback and what stays one-way
+
+Rollback, in 5 lines:
+
+1. Flip the config key back to `pi` (or delete it: the default is `pi`); new Sessions are pi again, as for `worker_runner` (read: the stored runner decides, never today's flag, `core/src/driver/runner.rs:43-50`).
+2. Live durable Sessions keep running on durable: the Session's runner is fixed at creation, so there is no live switch.
+3. `cpd chat` shows the live durable Sessions (inferred: the client is section 4 and 7's).
+4. There is no data migration back: pi's JSONL and durable's SQLite are different transcripts (the decision of hs-d752); `sessions.runner` stays, its default is `pi`.
+5. The engine branch of 6.2 stays in place for the durable Sessions that are still alive (inferred).
+
+The Session handoff: to move a Lead from durable to pi, or the reverse, the old Lead writes a handoff summary and a new Session is created on the other runner that starts from it (the User's decision, hs-d752; the summary format is not designed here). Open: where does the handoff summary live, and who writes it? (section 8)
+
+What stays one-way: P3, deleting the tmux code, is out of scope and is its own decision. Until then every tmux row in 6.2 to 6.4 stays and the `pi` runner works as today (inferred). Adding `sessions.runner` itself is additive and is not undone by the flag (read for the form, `20261102T1700-worker-runner.sql:1-2`).
+
+### Order of safety
+
+The minimal changes that must land before the first durable Lead is created, so that the engine, `cpd session send`, `plan new` and the cockpit do not start a pi in a pane for it. Each cites its row above.
+
+| Step | Change | Row |
+|---|---|---|
+| 1 | `sessions.runner` migration (additive, default `pi`) and the column in the session row; no code reads it yet, and every existing Session is `pi` | 6.1; 6.2 E2-c (needs the column); 6.2 C-14 |
+| 2 | E2 skips a durable non-Worker Session in the liveness decision and does not restart it | 6.2 E2-b, E2-c, E2-d, E2-f |
+| 3 | `session send` does not wake a stopped durable Lead (`wake = false`), and `inbox claim` with it | 6.2 C-1; 6.3 `send`, `inbox claim` |
+| 4 | `plan new` and `context manager` create a durable Lead or Manager without `start_parked` | 6.2 C-15, C-2; 6.3 `plan new`, `context manager` |
+| 5 | `session open`, `park`, `close`, `history` and `fork` handle a Session with no pane (a client attach, or a clear refusal) | 6.3 `open`, `park`, `close`, `history`, `fork` |
+| 6 | The cockpit: `session open` writes `session-moved place=chat` for a Session in `cpd chat`; Close and Park route by runner | 6.4 `last_chat_lead`, `close_of`, `free_for`, `Action::Park`, Plan view centre |
+| 7 | The tmux restart drain ignores durable Leads; E13 sleep stops the host | 6.2 TMUX-restart, E13 |
+| 8 | The config key and the doctor check, last, so no durable Session exists until steps 1 to 6 are in | 6.1; 6.4 pill template |
+
+Steps 2 to 4 are the ones that prevent a second pi runtime (6.2 E2-f, C-1, C-15); the rest are visible failures (a refusal or an error dialog) rather than a silent second runtime (inferred).
