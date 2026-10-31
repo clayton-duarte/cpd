@@ -92,6 +92,9 @@ pub enum Command {
     /// The model lists pi can offer (commands.md §14.5)
     #[command(subcommand)]
     Models(models::Command),
+    /// The tier presets and their machine switch (commands.md §14.6)
+    #[command(subcommand)]
+    Preset(config::preset::Command),
     /// Install the cpd built from a checkout (commands.md §14.4)
     Install(install::Args),
     /// Secrets in 1Password through op (commands.md §24)
@@ -192,6 +195,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),
         Command::Models(c) => models::run(c),
+        Command::Preset(c) => config::preset::run(c),
         Command::Install(a) => install::run(ports, a),
         Command::Secret(c) => secret::run(c),
         Command::Host(c) => host::run(c),
