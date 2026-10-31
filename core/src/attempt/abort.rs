@@ -64,7 +64,7 @@ pub(super) fn abort(args: AbortArgs) -> Result<Output, CpdError> {
         )?;
         Ok(())
     })?;
-    Ok(Output::success(json!({"ok": true, "attempt": id, "outcome": "failed", "cause": "aborted"})))
+    Ok(Output::success(json!({"attempt": id, "outcome": "failed", "cause": "aborted"})))
 }
 
 /// The calling Lead Session's id (contract §5.2): `CPD_SESSION`, else the Plan's Lead Session.
