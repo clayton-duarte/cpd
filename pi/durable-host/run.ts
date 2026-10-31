@@ -11,6 +11,7 @@ import { Reporter, stateArgs, type Wanted } from "../lib/state.ts";
 import { zoneLine } from "../lib/time.ts";
 import { socketPath, storePath, type Config } from "./config.ts";
 import { ProtocolError } from "./protocol.ts";
+import { HostRunning } from "./sockets.ts";
 import { Ring } from "./ring.ts";
 import { createServer, type Server } from "./server.ts";
 import { hostExtension } from "./extension.ts";
@@ -66,8 +67,19 @@ const contextText = (files: readonly { path: string; content: string }[]): strin
 
 /** Runs one Lead's or Manager's Session (contract §6.13). Resolves only on terminate (143), a closed conversation (1) or a failure (1); a `usage` error is thrown before any effect. */
 export async function runHost(config: Config, deps: Deps): Promise<number> {
-  // A path over the limit is a usage error before any effect.
+  // The one-owner check is the first thing the host does, before it reads the Session, resolves the model, opens the store or reports any state (contract §6.13).
+  // A host that finds another host running logs `host_running` and returns 1 with no effect on the Session.
   const sock = socketPath(config.home, config.session);
+  try {
+    await deps.guard(sock);
+  } catch (e) {
+    if (e instanceof HostRunning) {
+      deps.log(e.message);
+      return 1;
+    }
+    // Any other guard failure is thrown unchanged, before any effect (fail loud).
+    throw e;
+  }
   const model = deps.resolveModel(config.model);
   const failed = (what: string, e: unknown) => deps.log(`${what}: ${e instanceof Error ? e.message : String(e)}`);
 
