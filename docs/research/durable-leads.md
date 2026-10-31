@@ -1,5 +1,27 @@
 # Leads and Managers on pi-durable with a cpd chat client: P0 findings
 
+## Summary
+
+**Verdict.** Yes: Leads and Managers can run on pi-durable 1.3.0 behind a ratatui `cpd chat`, reversibly, by a Node durable session host plus 21 PRs (11 for the host, 10 for the client) and the 34 decisions of section 8 (inferred from sections 3 to 7).
+**Gaps (3.9).** 101 rows: offered 29, partial 35, absent 20, none-needed 17; built by host 47, client 38, engine 1, none 15; size S 83, M 16, L 2 (G20 the socket server, G41 the questionnaire).
+**Host and protocol (4).** One Node process per Session owns its SQLite store and one `watchEvents` stream, and holds a `flock`.
+It serves any number of clients on a unix socket `$CPD_HOME/run/host/<session>.sock` in newline JSON: pi-durable's events pass through with a `seq` ring and an `epoch`, and the client folds them.
+Attach is a snapshot or a resume from a cursor; UI requests are held in the host, so a question outlives a detach.
+**Spike (5.2, faux provider: host overhead only, no model latency).** Host RSS median 103.12 MB, start to socket 277.29 ms, to first snapshot 281.11 ms.
+Event to first frame at the client median 2.60 ms, to the assistant message 5.60 ms; plain submit to `result` 1.52 ms.
+Attach mid-stream, a UI request across a detach and `kill -9` mid-turn with resume passed 5 of 5 each; `kill` to resumed answer median 594 ms.
+**Reversibility (6).** A Session's runner is fixed at creation and the config key defaults to `pi`; flipping it back makes new Sessions pi again and no data migrates.
+The one engine step that must change first is E2 liveness, which restarts a paneless non-Worker Session as pi (P1.1, 6.2).
+**The cut (7.1 to 7.3, sizes are a guess)**
+
+| Phase | PRs | Non-test lines |
+|---|---|---|
+| P1 durable session host | 11 | 4,700 to 8,950 |
+| P2 `cpd chat` | 10 | 7,300 to 13,000 (5,800 to 10,500 without P2.6) |
+
+**Risks that matter most (7.5).** pi-durable is experimental and changes without notice; the agent's own bash can answer an approval over the socket (Q6); E2 restarts a paneless Lead as pi until P1.1 lands; the spike used a faux provider on 30 entries, so a real Lead's snapshot and tools are unmeasured.
+**Open questions.** 34, in section 8; the User answers them, this Plan decides none.
+
 ## 1. Scope, sources and labels
 
 Goal (the User's requirement of 2026-10-30 22:52 EDT, records hs-n586 and hs-d752):
@@ -1105,3 +1127,359 @@ P3 starts after CP5 and after durable Leads have run long enough; it is not cut 
 | Parallel Rust and Node work on one wire | The protocol is ours (4.5) and v1 is not yet exercised by a second implementation | One protocol document, section 4.5, with the example lines parsed as JSON; the client and the host tests both read those examples. A version bump is the integer of 4.2 | A host test and a client test that disagree on a field |
 
 Open questions raised here, for section 8 (each also stands in the row or PR above): who folds events (P2.1); a ratatui editor crate or our own (P2.2); restore withdrawn text on abort (P2.2); `replay:"safe"` per tool (P1.6); where the loop guard counts (P1.7); a fork as a new Session or a second conversation (P1.8); `/new` as `reset` (P1.8); relay `/mcp login` (P2.7); whether the first cut ships the questionnaire (P2.6); lock file or socket bind, the restart bound and one config key or two (P1.10); how P1.11 reads the transcript; whole history or a windowed snapshot (7.5); the ssh case; the approval bypass (Q6); the pi-durable upgrade procedure; whether a Lead runner pill is wanted (7.1).
+
+## 8. Open design choices
+
+Sources: `g-proto.md` section 11 (Q1 to Q9), `g-spike.md` (what changed an option), sections 3 to 7 of this doc (Q10 onward, one for each place a section said "see Qn"). Each question is for the User; "Recommended" is this doc's judgement (inferred), never a decision. Where the spike changes an option, the question says so.
+
+### Q1. Who may command: one controller at a time, or any attached client?
+
+- A. Any client may send any command (v1 as written in 4.5).
+- B. One controller at a time; others are viewers until they take control (`attach {role}` and a `take_control` message).
+- C. Any client may command, but only the longest-attached client may answer approvals (`secret_approve`, `host_approve`).
+
+Recommended: A. First answer wins already settles the one real conflict (observed in the spike: the second answer got `ui_unknown`, 5.3), and A adds no message or state. B costs two messages and a controller state for two humans on one machine, which cpd's single-User model does not have; revisit with a `viewer` role if a log tailer must attach and not submit.
+
+Evidence: `g-proto.md` choice 1; 4.4 rule 3; 5.3 row "A UI request survives a detach" (read, observed).
+
+### Q2. Who renders markdown: the host or the client?
+
+- A. The client; the host sends the raw text of entries and deltas.
+- B. The host sends pre-rendered text (ANSI or styled spans).
+- C. Both: raw text and a rendered copy.
+
+Recommended: A. The wire is pi-durable's data unchanged; width, theme and cells are the client's, and B breaks with several clients of different widths; C doubles every frame.
+
+Evidence: `g-proto.md` choice 2; plan summaries are `.md` files (`a-dialogs.md` 2.2); G59 (3.5).
+
+### Q3. What is the socket path scheme?
+
+- A. `$CPD_HOME/run/host/<session>.sock`, flat (69 bytes measured with the example UUID and `~/.cpd`).
+- B. `$CPD_HOME/run/host/<session>/host.sock`, a directory per Session.
+- C. `$XDG_RUNTIME_DIR/cpd/<hash>.sock` (short, tmpfs).
+
+Recommended: A, with C only as the fallback when A is over 107 bytes. A derives from the Session id with no registry and sits in the tree cpd already owns and cleans (`$CPD_HOME/run`). C is outside cpd's tree and `$XDG_RUNTIME_DIR` can be unset (not verified). The spike did not change this; the 107-byte `sun_path` limit is still unverified (5.3).
+
+Evidence: `g-proto.md` choice 3; 4.2.
+
+### Q4. Reuse pi's RPC shapes or a cpd-native vocabulary?
+
+- A. Hybrid: cpd-native envelope and message names, pi's field names for the dialogs, pi-durable's `AgentEvent` and `SnapshotEvent` passed through unchanged.
+- B. pi's RPC verbatim (`extension_ui_request`, `{"type":"prompt"}`).
+- C. A cpd-native view model: the host reshapes events into its own types.
+
+Recommended: A. pi's RPC is built for pi's `AgentSession` and has no cursor, snapshot or multi-client; its dialog shapes fit the three dialogs plus `editor` and `notify` exactly, so those are taken as they are. C is the largest build and renames upstream. The spike ran the hybrid subset end to end (5 of 5 runs, 5.3) and found no reason to change it (4.9).
+
+Evidence: `g-proto.md` choice 4; `b-extui.md` ("Reuse question"); 4.5, 4.9.
+
+### Q5. Is the first snapshot the whole history, or a window with paging?
+
+- A. The whole history (`SnapshotEvent.entries`).
+- B. The host trims to the last N entries; the client pages older ones with `history`.
+- C. The whole history, gzipped over a size.
+
+Recommended: A for v1, B if a real Lead's snapshot is slow. The spike measured an attach burst of 25 frames and 17,303 bytes in 0.9 ms for 30 entries (5.3), which does not decide it: a Lead with weeks of history was not measured. `history` is in the wire, so B needs no version bump.
+
+Evidence: `g-proto.md` choice 5; 4.3; 5.3; risk "A long Lead's snapshot size" (7.5). Measure a real Lead's snapshot in P1.5.
+
+### Q6. The agent can reach the socket (same uid): how are approvals protected?
+
+- A. Accept same-user trust; add a bash guard that refuses a command naming `run/host/`.
+- B. A per-host secret from the engine at open, presented in `attach`.
+- C. Approvals (`secret_approve`, `host_approve`) are answered only out of band, by a cockpit command that needs a TTY, never through the socket.
+
+Recommended: A now, added only when the bypass is seen (the repo's rule: a guard on raw tools is for proven misbehaviour). B still fails if the agent can read `/proc/<pid>/environ` of the client (inferred); C is the only complete fix and changes the approval UX the User has today. Not tested: whether an agent's `bash` can answer an approval over the socket (4.8). Whether Node gives the peer uid of a connection was not looked up (4.2), so until it is, the directory mode is the only access control.
+
+Evidence: `g-proto.md` choice 6; 4.8; risk "The approval bypass" (7.5); guards G23 and G29 (3.2).
+
+### Q7. Fork: a new Session with its own host, or a second conversation in the same store?
+
+- A. A new cpd Session with its own host and store (pi's `/fork` makes a new file; cpd has `cpd session fork`).
+- B. A second pi-durable conversation served by the same host (`attach.conversation`).
+
+Recommended: A. One host is one conversation is one store, and the cockpit's rows and state are per Session (6.4). B is what `Conversation.fork` does natively (`types.d.ts:622`) but leaves two live conversations under one Session row that nothing models. With A the `fork` message returns an id the host does not serve, or is replaced by a `session fork` call.
+
+Evidence: `g-proto.md` choice 7; 4.5 row 11; G74 and G90; P1.8 (7.2).
+
+### Q8. A held UI request when the host restarts: ask again, or tell the model it was interrupted?
+
+- A. Ask again: `replay:"safe"` on `ask_user_question`, `cpd_secret_approve` and `cpd_host_approve`.
+- B. Interrupted: the model reads `Tool ... was interrupted and may have partially run` (the default, `replay:"unsafe"`).
+- C. Safe for `ask_user_question` only; interrupted for the approvals.
+
+Recommended: C. Both behaviours are measured with a bare tool (`c-tools.md`): `safe` re-asks with a new id, `unsafe` marks it interrupted. A question has no side effect, so asking again is harmless; an approval re-asked after a restart the User did not see could be answered by a client they did not mean to consent to. This is a judgement. The spike used a `safe` tool but did not crash a host with a request held (5.3, "not observed"), so the host-level behaviour is still unverified.
+
+Evidence: `g-proto.md` choice 8; 4.4 rule 6; G50; P1.6.
+
+### Q9. Who folds the events into a view: the Rust client or the host?
+
+- A. The Rust client folds each `AgentEvent` batch onto the `SnapshotEvent`.
+- B. The host folds and sends a ready transcript plus small patches.
+- C. Use `watch` (Chord ops) instead of `watchEvents` and apply the ops in Rust.
+
+Recommended: A. `watchEvents` is shaped for this and the host forwards it untouched, so the host stays small; B needs a fold in Node and a second wire shape; C needs a Chord applier in Rust and commits output at most every 100 ms. The spike changed the fold, not the choice: a short answer has no `message_update` at all, the message arrives whole in `message_start` (4.3, 4.9), and its Node client folds the subset in 5,142 bytes (5.1). The size of the full Rust fold of about 20 event types is unknown. `watchEvents` is marked experimental (risk 1 in 7.5).
+
+Evidence: `g-proto.md` choice 9; 4.3; 4.9; `events.d.ts:66-171`.
+
+### Q10. One config key for the runner of new Leads and Managers, or one per role?
+
+- A. Two keys, `lead_runner` and `manager_runner`, each a closed enum defaulting to `pi`.
+- B. One key for both roles.
+
+Recommended: A. The Manager's evaluation names the two keys, the Worker's `worker_runner` is one key for one role, and a key per role is the unit of rollback (6.5 line 1). The template is `core/src/config/runner.rs:13`, `core/src/config/file.rs:59,274` (read).
+
+Evidence: 6.1 row "Config key"; P1.10.
+
+### Q11. May a Manager run durable before any Lead does?
+
+- A. Yes: the two keys are independent.
+- B. No: `manager_runner = "durable"` is refused unless `lead_runner` is `durable`.
+
+Recommended: A. Each role is flipped and rolled back alone, and a refusal is code nothing needs (YAGNI). Whether a Manager and a pi Lead exchange anything that assumes a pane was not checked beyond `session send` (6.3, inferred), so the first durable Manager runs the P1.11 flow test too.
+
+Evidence: 6.1; 6.3 `send` and `inbox claim`; Q10.
+
+### Q12. Which Session is the first durable Lead, and when?
+
+- A. A Lead of a scratch Plan, made by hand at CP3 (7.4), driven by `cpd session send`; a real Plan's Lead only after CP5.
+- B. The next real Plan's Lead right after CP3.
+- C. A Manager first (Q11).
+
+Recommended: A. CP3 has no chat UI (7.4), so a real Lead would be unreadable except through the read path of Q33; CP4 is the first point where `cpd chat` can drive one. The spike's limits (faux provider only, 5.2) mean the first real-model run is this one.
+
+Evidence: 7.4 checkpoints; 6.5 "Order of safety"; risk "The spike's limits" (7.5).
+
+### Q13. What is the pin and upgrade policy for pi-durable?
+
+- A. Pin one exact version (1.3.0 today) in the host as the Worker does; upgrade by one PR that reruns the spike scenarios of 5.3 against a mocked pi-durable.
+- B. A caret range, upgraded by the package manager.
+
+Recommended: A. The API "changes without notice" and `watchEvents` is "Experimental" (`events.d.ts:181-183`), so a range can break the fold silently; `welcome.pi_durable` (4.5 row 17) lets a client see what the host runs. Who owns the upgrade PR is for the User to name.
+
+Evidence: risk 1 in 7.5; section 2 (the Worker pin).
+
+### Q14. How does the host hold its one-owner lock: a lock file or the socket bind?
+
+- A. A lock file `run/host/<session>.lock` held by `flock`, taken by the engine and inherited by the host.
+- B. The socket bind: a second host fails to bind.
+
+Recommended: A. After `kill -9` the socket file stayed (measured, 5 of 5, 5.3), so a bind alone cannot tell a stale socket from a live host without a connect-probe; with the lock held, the new host knows the socket is stale and unlinks it (4.7). That `flock` survives `spawn` is still unverified (5.3), and P1.10 must test it first.
+
+Evidence: 3.1 (G16); 4.7; 5.3.
+
+### Q15. Who restarts a crashed host, and what bounds it?
+
+- A. The engine's tick restarts it with a back-off and a bound of N restarts in a window, then marks the Session `stopped` with a label.
+- B. The engine restarts with no bound, like E2 does for a pi Session until `session_restart_loop`.
+- C. The Worker's rule: `MAX_RESTARTS = 3` per run (`core/src/driver/runner.rs:34`).
+
+Recommended: A, with N and the window for the User to set (no number here is measured). C counts per driver run and a Lead lives for weeks, so a fixed 3 would strand it (inferred); B can loop. pi-durable has no restart limit (contract 6.12), so the bound is the engine's.
+
+Evidence: 4.7 "Restart policy"; 6.1 (the start, restart and stop of a Worker); risk "The restart loop of E2" (7.5).
+
+### Q16. Does the host remember resolved UI request ids?
+
+- A. No: `ui_unknown` for an id not currently held, never seen or already resolved (the spike's choice).
+- B. A bounded set (the spike suggests 64, inferred) so a late answer can be told from a bad id.
+
+Recommended: A. The client learns of a resolution from the `ui_resolved` broadcast (observed, 5.3), so nothing needs the distinction.
+
+Evidence: 4.4 rule 3; 4.9 row 3.
+
+### Q17. Is `ModelRuntime` loaded at host start or lazily?
+
+- A. At start: 0.67 s and 158 MB against 0.28 s and 104 MB without it (medians, rows 1a, 1d, 2b and 2c of 5.2).
+- B. Lazily, on the first `list_models`.
+
+Recommended: A for v1. The lighter host is 104 MB against 159 to 280 MB for the pi processes read (row 8), so the cost is small; whether lazy loading works is unverified because the worker resolves the model before opening the store (contract 6.12 step 1).
+
+Evidence: 4.7; 4.9 row 8; 5.2.
+
+### Q18. `/mcp login`: relayed to the host, or left to the shell?
+
+- A. The User keeps the shell `pi mcp login`; the client says so.
+- B. The client relays `/mcp login` to a host that runs the flow (G33, M guess).
+
+Recommended: A. The Worker already tells the model to "run pi mcp login" (`pi/durable-worker/pi-mcp.ts:32-38`) and the sign-in is picked up on the next turn, so no code is needed.
+
+Evidence: G33 (3.3); P2.7.
+
+### Q19. Does the first cut ship the questionnaire (G41), or G40 only?
+
+- A. G40 only (walker parity); the full questionnaire (P2.6) waits.
+- B. Both.
+
+Recommended: A. P2.6 is 1,500 to 2,500 lines of the 7,300 to 13,000 of P2 (guess); 5,800 to 10,500 without it (7.3). The agent can ask and the User can answer with G40.
+
+Evidence: G40 and G41 (3.4); 7.3 P2.5 and P2.6.
+
+### Q20. With no client attached, does `ask_user_question` fail or wait?
+
+- A. Fail with `no_ui`, as a pi with no UI does today.
+- B. Wait: the host holds the request until a client attaches.
+
+Recommended: B. Today a Lead in a pane always has a UI, so a question waits for the User; the spike observed a held request survive a detach and replay at attach (5 of 5, 5.3), and the host reports `blocked`. A would change what a Lead does when the User is away (inferred).
+
+Evidence: G42 and G50 (3.4); 4.4.
+
+### Q21. The editor: a ratatui crate or our own?
+
+- A. Take an existing crate.
+- B. Write one (the TS editor is 231 lines, G62; the pi-tui `Editor` is not exported).
+
+Recommended: A, chosen in P2.2 by checking the crate for multi-line, history, paste and `@file` completion. No crate was looked up in P0 (unverified); the rule is to take a dependency that fits before building.
+
+Evidence: G88 (3.6); P2.2.
+
+### Q22. Is `/new` pi-durable's `reset`?
+
+- A. Yes: `/new` calls `reset(handoff, ctx)`; older entries stay in storage but the model no longer sees them.
+- B. No: a new context is a new cpd Session (Q30).
+
+Recommended: B. A cpd Session is cpd's object, G77 is `none-needed`, and `reset` was read but not run (G94, unverified).
+
+Evidence: G77 and G94 (3.6, 3.7).
+
+### Q23. Do `/login`, `/logout`, `/settings`, `/scoped-models` and `/trust` stay in the shell `pi`?
+
+- A. Yes; the client names them as unavailable.
+- B. The host relays them.
+
+Recommended: A. Settings and provider auth are pi's files; pi-durable takes a plain `settings` object (`c-env.md`), and a Worker needs none of this either.
+
+Evidence: G78 (3.6).
+
+### Q24. A branch of the session tree: a fork, or not supported?
+
+- A. Not supported; a branch is a fork (Q7).
+- B. Switch the leaf inside one conversation (no API found in pi-durable).
+
+Recommended: A. pi-durable has `ConversationRecord.parent` and fork-aware `entries`, and no way to switch a leaf (G90, inferred); G75 stays unbuilt.
+
+Evidence: G75 (3.6) and G90 (3.7); 7.3 "Gap rows not built".
+
+### Q25. On abort, is the withdrawn text restored to the editor?
+
+- A. Yes, as pi does on Esc.
+- B. No.
+
+Recommended: A. The User would lose a queued message otherwise, and it is small (S, guess). `abort` withdraws queued inputs (`HT:627`); whether it fires a running tool's abort signal was not tested.
+
+Evidence: G96 (3.7); P2.2.
+
+### Q26. Do Leads get code mode?
+
+- A. No.
+- B. Yes: `createCodemodeExtension` with a QuickJS sandbox, namespaces for `mcp__<server>__` tools.
+
+Recommended: A. It is optional and the Lead's use of it is unverified (G100).
+
+Evidence: G100 (3.8); 7.3 "Gap rows not built".
+
+### Q27. Do Leads get tool search?
+
+- A. No: MCP tools stay installed direct and all offered.
+- B. Mark MCP tools `deferred` and install `createToolSearchExtension()`.
+
+Recommended: A until a Lead's tool list is measured as large; pi's own MCP exposure modes are not mapped (unverified).
+
+Evidence: G101 (3.8); 7.3 "Gap rows not built".
+
+### Q28. Is `!cmd` (run a shell command from the editor) wanted?
+
+- A. No.
+- B. Yes: the host runs it and writes an entry (M, inferred).
+
+Recommended: A. cpd does not name it and the host has no run-a-shell path today (G84).
+
+Evidence: G84 (3.6); 7.3.
+
+### Q29. Is a Lead runner pill in the cockpit wanted?
+
+- A. No: the config key is enough; the cut leaves it out.
+- B. Yes: copy the Worker's pill (a second tmux option and pill; 120 lines in the f-seam sizing, read).
+
+Recommended: A. An open Lead keeps its runner until recreated, so a pill shows what the key already says.
+
+Evidence: 6.4; 7.1 reuse table; `f-seam.md`.
+
+### Q30. Where does the handoff summary live, and who writes it?
+
+- A. The old Lead writes it as the first message of the new Session, sent with `cpd session send`.
+- B. A file in `$CPD_HOME/run/` keyed by the old Session.
+- C. An entry in the old Session's store, read by the new one.
+
+Recommended: A. It needs no new storage and no format beyond text (inferred). The User decided the handoff exists (hs-d752); its format is not designed here.
+
+Evidence: 6.5.
+
+### Q31. Who writes `session-moved{place:"chat"}` for a `cpd chat` in the slot?
+
+- A. `session open`, after it puts `cpd chat <id>` in the slot.
+- B. `cpd chat`, when it starts.
+
+Recommended: A. Step 6 of the order of safety (6.5) and P2.10 give it to `session open`, which already owns the move; one writer.
+
+Evidence: 6.4; P2.10 (7.3); `f-cockpit.md`.
+
+### Q32. Where does the loop guard count?
+
+- A. In the host, on the submits it makes (it is the only submitter).
+- B. In `beforeRequest`, which over-counts retries (`harness/types.d.ts:690`).
+
+Recommended: A. No pi-durable hook is a turn start with its origin (G28).
+
+Evidence: G28 (3.2); P1.7; risk "The missing hook for the loop guard" (7.5).
+
+### Q33. How does P1.11 read a durable Lead's transcript before `cpd chat` exists?
+
+- A. A small socket tail.
+- B. `cpd session history` reads the store.
+
+Recommended: A. The host is the one owner of the store; pi-durable has no storage lock and a second process corrupts it (measured, `c-conv.md`, 4.7), and a read-only open was not tested.
+
+Evidence: 4.7; P1.11.
+
+### Q34. The ssh case: how is a Lead reached from another machine?
+
+- A. Forward the unix socket, or run `cpd chat` on the remote; no TCP listener.
+- B. A TCP listener in the host.
+
+Recommended: A. A TCP listener needs authentication the socket gets from directory modes (4.2, 4.8). Not tested.
+
+Evidence: 7.5 risk "The terminal features tmux gives today"; 4.2.
+
+The User answers these after reading the doc; this Plan decides none.
+
+
+## Appendix A. Evidence index
+
+The finding files are written by earlier explore Jobs and are machine-local sources, as in `docs/research/chat-render-cost.md`: nothing here is committed to a repository. Each is cited to `file:line` of cpd origin/main at commit `943a11337` and to the pi packages. Paths are under `/home/clayton/.cpd/run/durable-leads/explore/`; sizes are lines, measured with `wc -l`.
+
+| Path | Question it answers | Lines |
+|---|---|---|
+| `a-dialogs.md` | Which dialogs and custom UI a Lead or Manager opens (ask, plan review, approvals) | 135 |
+| `a-guards.md` | Which adapter guards exist and which the durable Worker already has | 43 |
+| `a-hooks.md` | Which pi runtime hooks the adapter uses for a Lead or Manager (Event delivery, context) | 85 |
+| `a-ops.md` | Which operations a Lead or Manager Session has beyond a Worker (reload, skills, retier) | 95 |
+| `a-render.md` | What a Lead's chat draws and what a ratatui client must reproduce | 74 |
+| `b-commands.md` | pi 1.3.0 slash commands, keys and input forms | 114 |
+| `b-extui.md` | pi's `ctx.ui`, its RPC extension-UI sub-protocol and what a pi-durable host carries | 59 |
+| `c-conv.md` | What pi-durable 1.3.0 offers a host that owns a conversation (watch, snapshot, submit, one owner) | 88 |
+| `c-env.md` | What pi-durable 1.3.0 offers a Lead host and what the host supplies (settings, environment) | 29 |
+| `c-tools.md` | pi-durable tools that wait, restart semantics (`replay`), hooks | 97 |
+| `d-worker.md` | What of the durable Worker runner a Lead or Manager host can reuse | 90 |
+| `f-cockpit.md` | Cockpit code that assumes a Lead or Manager pane or chat slot | 71 |
+| `f-engine.md` | Where the engine and core assume a Lead or Manager has a tmux pane | 83 |
+| `f-seam.md` | `attempts.runner`, `worker_runner`, the pill and what `sessions.runner` would touch (sizing template) | 92 |
+| `f-session.md` | Which `cpd session *` commands assume a tmux pane | 76 |
+| `g-proto.md` | The durable session host's socket protocol v1 and its open design choices | 427 |
+| `g-spike.md` | The spike: the smallest host and client of that protocol, its numbers and the protocol changes it suggests | 171 |
+
+The spike directory is `/home/clayton/.cpd/run/durable-leads/explore/spike/` (`host.mjs`, `client.mjs`, `stub-follow.mjs`, `bench.mjs`, `run.sh`, `chk-agent-persist.mjs`, `last-run.json`; 5.1). The one command that reruns it, about 18 s, prints one JSON object and leaves no process or temp dir (5.1):
+
+```sh
+cd /home/clayton/.cpd/run/durable-leads/explore/spike && timeout 30 ./run.sh > last-run.json
+```
+
+It needs node 22.18 or later and is machine-local, as is the whole directory.
