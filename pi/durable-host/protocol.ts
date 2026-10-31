@@ -52,18 +52,82 @@ export type ToClient =
   | { type: "pong"; req?: string }
   | { type: "bye"; reason: "shutdown" | "restart" | "storage_failed" | "slow_client" | "detached"; reconnect: boolean };
 
-export function parseLine(
-  _line: string,
-):
+type Parsed =
   | { ok: true; msg: ToHost }
-  | { ok: false; error: { code: "bad_frame" | "unknown_type" | "bad_args"; message: string; req?: string } } {
-  throw new Error("not implemented");
+  | { ok: false; error: { code: "bad_frame" | "unknown_type" | "bad_args"; message: string; req?: string } };
+
+class ArgError extends Error {}
+
+const bad = (field: string, want: string): never => {
+  throw new ArgError(`${field} must be ${want}`);
+};
+const str = (o: Record<string, unknown>, k: string): string => (typeof o[k] === "string" ? (o[k] as string) : bad(k, "a string"));
+const int = (o: Record<string, unknown>, k: string): number => (Number.isInteger(o[k]) ? (o[k] as number) : bad(k, "an integer"));
+const optStr = (o: Record<string, unknown>, k: string): string | undefined => (o[k] === undefined ? undefined : str(o, k));
+
+const KINDS = new Set(["hello", "attach", "submit", "abort", "abort_submission", "ping", "detach"]);
+const WHEN_BUSY = ["followUp", "steer", "reject"] as const;
+
+function build(o: Record<string, unknown>, type: string): ToHost {
+  if (type === "hello") {
+    const name = optStr(o, "name");
+    return { type, protocol: int(o, "protocol"), min_protocol: int(o, "min_protocol"), client: str(o, "client"), ...(name === undefined ? {} : { name }) };
+  }
+  if (type === "ping") {
+    const req = optStr(o, "req");
+    return req === undefined ? { type } : { type, req };
+  }
+  const req = str(o, "req");
+  switch (type) {
+    case "attach": {
+      const c = o.cursor;
+      if (c === undefined) return { type, req };
+      if (typeof c !== "object" || c === null || Array.isArray(c)) return bad("cursor", "an object");
+      const cur = c as Record<string, unknown>;
+      return { type, req, cursor: { epoch: str(cur, "epoch"), seq: int(cur, "seq") } };
+    }
+    case "submit": {
+      const text = str(o, "text");
+      const wb = o.when_busy === undefined ? "followUp" : (WHEN_BUSY as readonly unknown[]).includes(o.when_busy) ? (o.when_busy as (typeof WHEN_BUSY)[number]) : bad("when_busy", "followUp, steer or reject");
+      const request_id = optStr(o, "request_id");
+      return { type, req, text, when_busy: wb, ...(request_id === undefined ? {} : { request_id }) };
+    }
+    case "abort": {
+      if (o.background !== undefined && typeof o.background !== "boolean") bad("background", "a boolean");
+      return { type, req, background: o.background === true };
+    }
+    case "abort_submission":
+      return { type, req, submission_id: int(o, "submission_id") };
+    default:
+      return { type: "detach", req };
+  }
 }
 
-export function encode(_msg: ToClient): string {
-  throw new Error("not implemented");
+export function parseLine(line: string): Parsed {
+  let v: unknown;
+  try {
+    v = JSON.parse(line);
+  } catch {
+    return { ok: false, error: { code: "bad_frame", message: "line is not JSON" } };
+  }
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return { ok: false, error: { code: "bad_frame", message: "line is not a JSON object" } };
+  const o = v as Record<string, unknown>;
+  if (typeof o.type !== "string") return { ok: false, error: { code: "bad_frame", message: "type must be a string" } };
+  const req = typeof o.req === "string" ? o.req : undefined;
+  const keep = req === undefined ? {} : { req };
+  if (!KINDS.has(o.type)) return { ok: false, error: { code: "unknown_type", message: `unknown type ${o.type}`, ...keep } };
+  try {
+    return { ok: true, msg: build(o, o.type) };
+  } catch (e) {
+    if (!(e instanceof ArgError)) throw e;
+    return { ok: false, error: { code: "bad_args", message: e.message, ...(o.type === "hello" ? {} : keep) } };
+  }
 }
 
-export function negotiate(_hello: Extract<ToHost, { type: "hello" }>): number | undefined {
-  throw new Error("not implemented");
+export function encode(msg: ToClient): string {
+  return `${JSON.stringify(msg)}\n`;
+}
+
+export function negotiate(hello: Extract<ToHost, { type: "hello" }>): number | undefined {
+  return [...PROTOCOL_VERSIONS].reverse().find((v) => v >= hello.min_protocol && v <= hello.protocol);
 }
