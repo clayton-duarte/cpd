@@ -4,12 +4,17 @@
 
 use std::sync::Arc;
 
+use rusqlite::OptionalExtension;
+
 use super::PollArgs;
-use super::poll::poll;
+use super::poll::{Trigger, poll, queue_update_for};
 use crate::args::PlanArg;
+use crate::config::Tier;
 use crate::host::runner::{Call, Handler, Reply};
+use crate::ids::{PlanId, PrKey};
 use crate::janitor_tests::Rig;
 use crate::ports::Ports;
+use crate::store::Store;
 
 /// The in-process `gh` of the poll: no open pull request in the search, `merged` pull requests in the lookup.
 struct Gh {
@@ -146,4 +151,132 @@ fn poll_with_an_empty_required_list_stores_the_rollup_as_it_does_today() {
 fn poll_stores_passed_when_the_required_check_passed() {
     let gate = serde_json::json!({"__typename": "CheckRun", "name": "gate", "status": "COMPLETED", "conclusion": "SUCCESS"});
     assert_eq!(stored_checks(Some("SUCCESS"), vec![guardian(), gate], REQUIRED), "passed");
+}
+
+// --- the widened update-Job trigger (contract §3.7 E5, §3.8; commands.md §9.2; hs-d794, hs-n617) ---
+//
+// The poll queues a PR's `update` Job for two causes: the conflict (unchanged, `update_for_conflict`)
+// and a base PR's merge that repoints the pull request to the default branch with the default branch
+// ahead of the Lead Branch without a conflict, `reason` `base-merged`. The ahead decision is computed
+// from git in the poll's read phase; these tests pass it as the boolean directly.
+
+/// A Plan `pay` in `deploy` with the PRs `keys` `open` (the janitor `Rig`).
+fn open_rig(keys: &[&'static str]) -> Rig {
+    let mut rig = Rig::new();
+    for key in keys {
+        rig.pr(key, "open");
+    }
+    rig
+}
+
+fn tier() -> Tier {
+    Tier::parse("S2").unwrap()
+}
+
+/// The keys of every `update` Job of Plan `pay`, sorted.
+fn update_jobs(store: &mut Store) -> Vec<String> {
+    store
+        .read(|c| {
+            let mut stmt = c.prepare("SELECT key FROM jobs WHERE plan = 'pay' AND kind = 'update' ORDER BY key")?;
+            Ok(stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .unwrap()
+}
+
+/// The `reason` of the latest `job-added` Event of Plan `pay`, if any.
+fn last_reason(store: &mut Store) -> Option<String> {
+    store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT json_extract(data, '$.reason') FROM events WHERE kind = 'job-added' AND plan = 'pay' ORDER BY id DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?)
+        })
+        .unwrap()
+}
+
+#[test]
+fn a_base_merge_with_main_ahead_queues_an_update_job() {
+    let rig = open_rig(&["api"]);
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    let (pay, api) = (PlanId::parse("pay").unwrap(), PrKey::parse("api").unwrap());
+
+    // The repoint happened (GitHub moved the PR to the default branch) and main is ahead without a conflict.
+    let queued = store
+        .write("pr poll", |tx| queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier()))
+        .unwrap()
+        .expect("a base merge with main ahead queues one update Job");
+
+    assert_eq!(update_jobs(&mut store), vec![queued.as_str().to_owned()], "exactly one update Job");
+    assert_eq!(last_reason(&mut store).as_deref(), Some("base-merged"), "the Job's cause is base-merged");
+}
+
+#[test]
+fn a_base_merge_with_main_contained_queues_nothing() {
+    let rig = open_rig(&["api", "web"]);
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    let (pay, api, web) = (PlanId::parse("pay").unwrap(), PrKey::parse("api").unwrap(), PrKey::parse("web").unwrap());
+
+    let (ahead, contained) = store
+        .write("pr poll", |tx| {
+            // Control: the very same repoint with the default branch ahead does queue.
+            let ahead = queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier())?;
+            // The default branch is already contained in the Lead Branch: nothing.
+            let contained = queue_update_for(tx, &pay, &web, Trigger::BaseMerged, false, tier())?;
+            Ok((ahead, contained))
+        })
+        .unwrap();
+
+    let ahead = ahead.expect("the control: an ahead default branch queues its update Job");
+    assert_eq!(contained, None, "a default branch already contained queues nothing");
+    assert_eq!(update_jobs(&mut store), vec![ahead.as_str().to_owned()], "only the ahead PR's update Job exists");
+}
+
+#[test]
+fn a_conflict_still_queues_an_update_job() {
+    let rig = open_rig(&["api"]);
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    let (pay, api) = (PlanId::parse("pay").unwrap(), PrKey::parse("api").unwrap());
+
+    let queued = store
+        .write("pr poll", |tx| queue_update_for(tx, &pay, &api, Trigger::Conflict, false, tier()))
+        .unwrap()
+        .expect("the conflict still queues its update Job");
+
+    assert_eq!(update_jobs(&mut store), vec![queued.as_str().to_owned()], "exactly one update Job");
+    assert_eq!(last_reason(&mut store).as_deref(), Some("conflict"), "the conflict cause is unchanged");
+}
+
+#[test]
+fn an_update_job_already_live_is_not_duplicated() {
+    let rig = open_rig(&["api"]);
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    let (pay, api) = (PlanId::parse("pay").unwrap(), PrKey::parse("api").unwrap());
+
+    let first = store
+        .write("pr poll", |tx| queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier()))
+        .unwrap()
+        .expect("the first repoint queues its update Job");
+
+    // A queued update Job is not duplicated by the next repoint.
+    let queued_again = store
+        .write("pr poll", |tx| queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier()))
+        .unwrap();
+    assert_eq!(queued_again, None, "a queued update Job is not duplicated");
+    assert_eq!(update_jobs(&mut store).len(), 1, "still one update Job");
+
+    // A running update Job is not duplicated either (the Job's own push is no new transition).
+    store
+        .write("fixture", |tx| {
+            tx.execute("UPDATE jobs SET status = 'running' WHERE key = ?1", [first.as_str()])?;
+            Ok(())
+        })
+        .unwrap();
+    let running_again = store
+        .write("pr poll", |tx| queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier()))
+        .unwrap();
+    assert_eq!(running_again, None, "a running update Job is not duplicated");
+    assert_eq!(update_jobs(&mut store), vec![first.as_str().to_owned()], "still exactly the one update Job");
 }

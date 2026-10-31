@@ -62,6 +62,22 @@ struct Follow {
     to: String,
     number: i64,
     url: String,
+    /// The base PR of `from` (`plan/key`), when `from` is some PR's Lead Branch.
+    from_pr: Option<String>,
+    /// The PR whose Lead Branch is `to`, when some PR's is.
+    to_pr: Option<String>,
+    /// The pull request's repo default branch, from the listing: `to` is the default branch exactly when the base
+    /// PR merged (`None` = GitHub did not say, and a base no default branch is no merge repoint).
+    default_branch: Option<String>,
+}
+
+/// What the read phase learned of a [`Follow`] that is a base PR's merge to the default branch (§3.7 E5, hs-d794):
+/// whether that default branch holds commits the Lead Branch lacks without a conflict.
+struct Ahead {
+    plan: PlanId,
+    pr: PrKey,
+    /// True when the default branch holds commits the Lead Branch lacks and the two merge cleanly.
+    ahead: bool,
 }
 
 /// What the transaction did.
@@ -70,8 +86,8 @@ struct Outcome {
     changed: Vec<Value>,
     base_changed: Vec<Value>,
     feedback: Vec<(PlanId, PrKey)>,
-    /// The `update` Jobs the poll queued, for a conflict (§3.7 E5).
-    update_jobs: Vec<(PlanId, PrKey, JobKey)>,
+    /// The `update` Jobs the poll queued and their cause (§3.7 E5).
+    update_jobs: Vec<(PlanId, PrKey, JobKey, Cause)>,
     merged: Vec<(PlanId, PrKey)>,
     done: Vec<PlanId>,
 }
@@ -183,6 +199,9 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
 
     // The owned PRs whose pull request a search lists with a base other than the PR's `base`.
     let follows = env.store.read(|conn| follows(conn, &owned, &search.prs))?;
+    // The base PR's merge repoints whose default branch is ahead of the Lead Branch (§3.7 E5, hs-d794): the git
+    // check of the read phase (§7.6), before the write transaction of D5.
+    let ahead = env.store.read(|conn| ahead_of(conn, &follows))?;
 
     let dirty = !follows.is_empty() || env.store.read(|conn| {
         for listed in &seen {
@@ -195,7 +214,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     })?;
     let open_tier = env.config.open_tier;
     // A poll that finds nothing new opens no write transaction (D5).
-    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &reads, &owned, &checks, &follows, open_tier))? } else { Outcome::default() };
+    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &reads, &owned, &checks, &follows, &ahead, open_tier))? } else { Outcome::default() };
 
     report_unresolved(&mut env, &unresolved)?;
     // After the poll's own rows are written (§7.6 step 8): a failure of the deploy read loses none of them.
@@ -215,7 +234,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
         "changed": outcome.changed,
         "base_changed": outcome.base_changed,
         "feedback": outcome.feedback.iter().map(pair).collect::<Vec<_>>(),
-        "update_jobs": outcome.update_jobs.iter().map(|(plan, pr, job)| json!({"plan": plan, "pr": pr, "job": job, "reason": Cause::Conflict.as_str()})).collect::<Vec<_>>(),
+        "update_jobs": outcome.update_jobs.iter().map(|(plan, pr, job, cause)| json!({"plan": plan, "pr": pr, "job": job, "reason": cause.as_str()})).collect::<Vec<_>>(),
         "merged": outcome.merged.iter().map(pair).collect::<Vec<_>>(),
         "done": outcome.done,
         "rate_limit": {"cost": search.rate.cost, "remaining": search.rate.remaining, "reset_at": search.rate.reset_at},
@@ -262,6 +281,7 @@ fn apply(
     owned: &[Owned],
     checks: &[Resolved],
     follows: &[Follow],
+    ahead: &[Ahead],
     open_tier: Tier,
 ) -> Result<Outcome, CpdError> {
     let mut out = Outcome::default();
@@ -298,13 +318,18 @@ fn apply(
                     out.feedback.push((plan.clone(), key.clone()));
                 }
                 if let Some(job) = update_for_conflict(tx, plan, key, &change, open_tier)? {
-                    out.update_jobs.push((plan.clone(), key.clone(), job));
+                    out.update_jobs.push((plan.clone(), key.clone(), job, Cause::Conflict));
                 }
             }
         }
     }
     for follow in follows {
-        out.base_changed.push(follow_base(tx, follow)?);
+        let is_ahead = ahead.iter().any(|a| a.plan == follow.plan && a.pr == follow.pr && a.ahead);
+        let (base_changed, job) = follow_base(tx, follow, is_ahead, open_tier)?;
+        out.base_changed.push(base_changed);
+        if let Some(job) = job {
+            out.update_jobs.push((follow.plan.clone(), follow.pr.clone(), job, Cause::BaseMerged));
+        }
     }
     Ok(out)
 }
@@ -316,14 +341,32 @@ fn read_of<'a>(reads: &'a [Read], listed: &Listed) -> Option<&'a Read> {
 
 /// Each `open` PR of `owned` whose pull request a search lists (as `OPEN`) with a `baseRefName` that is not the PR's
 /// `base` (§7.6 step 6): a repoint by GitHub, or a base retargeted by hand. A PR whose listing has no base is not followed.
+/// The base PR of the old base, the PR of the new one and the repo's default branch are read here, so the write
+/// transaction queues the update Job a base PR's merge needs in the same transaction as the repoint.
 fn follows(conn: &rusqlite::Connection, owned: &[Owned], listed: &[Listed]) -> Result<Vec<Follow>, CpdError> {
-    let mut stored = conn.prepare("SELECT base FROM prs WHERE plan = ?1 AND key = ?2 AND status = 'open'")?;
+    let mut stored = conn.prepare("SELECT base, repo FROM prs WHERE plan = ?1 AND key = ?2 AND status = 'open'")?;
+    let base_pr = |repo: &str, branch: &str| -> Result<Option<String>, CpdError> {
+        Ok(conn
+            .query_row("SELECT plan || '/' || key FROM prs WHERE repo = ?1 AND lead_branch = ?2", [repo, branch], |r| r.get(0))
+            .optional()?)
+    };
     let mut found = Vec::new();
     for (plan, key, row) in owned {
-        let Some(to) = listed.iter().find(|l| (&l.pr.repo, l.pr.number) == (&row.repo, row.number)).and_then(|l| l.pr.base_ref.as_ref()) else { continue };
-        let from: Option<String> = stored.query_row([plan.as_str(), key.as_str()], |r| r.get(0)).optional()?;
-        if let Some(from) = from.filter(|from| from != to) {
-            found.push(Follow { plan: plan.clone(), pr: key.clone(), from, to: to.clone(), number: row.number, url: row.url.clone() });
+        let Some(listing) = listed.iter().find(|l| (&l.pr.repo, l.pr.number) == (&row.repo, row.number)) else { continue };
+        let Some(to) = listing.pr.base_ref.as_ref() else { continue };
+        let stored: Option<(String, String)> = stored.query_row([plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        if let Some((from, repo)) = stored.filter(|(from, _)| from != to) {
+            found.push(Follow {
+                plan: plan.clone(),
+                pr: key.clone(),
+                from_pr: base_pr(&repo, &from)?,
+                to_pr: base_pr(&repo, to)?,
+                from,
+                to: to.clone(),
+                number: row.number,
+                url: row.url.clone(),
+                default_branch: listing.pr.default_branch.clone(),
+            });
         }
     }
     Ok(found)
@@ -331,15 +374,11 @@ fn follows(conn: &rusqlite::Connection, owned: &[Owned], listed: &[Listed]) -> R
 
 /// Sets the PR's `base` to the one GitHub reports and appends `pr-base-changed` for its Plan (§5.2). Nothing else
 /// changes: no Gate, no status, no `pr-feedback`, no `gh` call (hs-d326: the tree is unchanged, a ready PR stays ready).
-fn follow_base(tx: &WriteTxn<'_>, follow: &Follow) -> Result<Value, CpdError> {
-    let Follow { plan, pr, from, to, number, url } = follow;
-    let repo: String = tx.query_row("SELECT repo FROM prs WHERE plan = ?1 AND key = ?2", [plan.as_str(), pr.as_str()], |r| r.get(0))?;
-    let base_pr = |branch: &str| -> Result<Option<String>, CpdError> {
-        Ok(tx
-            .query_row("SELECT plan || '/' || key FROM prs WHERE repo = ?1 AND lead_branch = ?2", [repo.as_str(), branch], |r| r.get(0))
-            .optional()?)
-    };
-    let (from_pr, to_pr) = (base_pr(from)?, base_pr(to)?);
+/// When the new base is the default branch of a base PR's merge and `ahead` says the Lead Branch lacks commits of it
+/// without a conflict, the PR's `update` Job is queued in the same transaction (§3.7 E5, hs-d794). Returns the Event's
+/// data and the Job's key when one was queued.
+fn follow_base(tx: &WriteTxn<'_>, follow: &Follow, ahead: bool, tier: Tier) -> Result<(Value, Option<JobKey>), CpdError> {
+    let Follow { plan, pr, from, to, number, url, from_pr, to_pr, default_branch } = follow;
     let moved = tx.execute(
         "UPDATE prs SET base = ?3 WHERE plan = ?1 AND key = ?2 AND status = 'open' AND base = ?4",
         [plan.as_str(), pr.as_str(), to.as_str(), from.as_str()],
@@ -347,7 +386,7 @@ fn follow_base(tx: &WriteTxn<'_>, follow: &Follow) -> Result<Value, CpdError> {
     if moved == 0 {
         return Err(cas_lost(plan, pr));
     }
-    let reason = match (&from_pr, &to_pr) {
+    let reason = match (from_pr, to_pr) {
         (Some(base), None) => format!("its base PR {base} merged and GitHub repointed the pull request"),
         _ => "the base changed on GitHub".to_owned(),
     };
@@ -357,7 +396,46 @@ fn follow_base(tx: &WriteTxn<'_>, follow: &Follow) -> Result<Value, CpdError> {
     );
     let event = NewEvent::pr_base_changed(text, pr, (from, to), (from_pr.as_deref(), to_pr.as_deref()), COMMAND_BY, BasePull::Of(*number, url));
     append(tx, event.plan(plan.clone()))?;
-    Ok(json!({"plan": plan, "pr": pr, "from": from, "to": to}))
+    // A base PR's merge repoints the pull request to the default branch; with that branch ahead and no conflict, the
+    // PR's update Job is the cause (§3.7 E5, hs-d794). A hand retarget to another branch queues nothing.
+    let base_merged = default_branch.as_deref() == Some(to.as_str()) && from_pr.is_some() && to_pr.is_none();
+    let job = if base_merged { queue_update_for(tx, plan, pr, Trigger::BaseMerged, ahead, tier)? } else { None };
+    Ok((json!({"plan": plan, "pr": pr, "from": from, "to": to}), job))
+}
+
+/// The default-branch-ahead decision of each base PR's merge repoint (§3.7 E5, hs-d794), from git in the read phase
+/// (§7.6): `git fetch origin <base>`, `git merge-tree --write-tree --name-only origin/<base> <lead>` and
+/// `git merge-base --is-ancestor`, in the PR's repo (`prs.repo`). A failed fetch or check is no ahead: the poll queues
+/// nothing for that PR and goes on (A4), with no panic and no unwrap.
+fn ahead_of(conn: &rusqlite::Connection, follows: &[Follow]) -> Result<Vec<Ahead>, CpdError> {
+    let mut out = Vec::new();
+    for follow in follows {
+        if !(follow.default_branch.as_deref() == Some(follow.to.as_str()) && follow.from_pr.is_some() && follow.to_pr.is_none()) {
+            continue;
+        }
+        let row: Option<(String, String)> = conn
+            .query_row("SELECT repo, lead_branch FROM prs WHERE plan = ?1 AND key = ?2", [follow.plan.as_str(), follow.pr.as_str()], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?;
+        let Some((repo, lead)) = row else { continue };
+        out.push(Ahead { plan: follow.plan.clone(), pr: follow.pr.clone(), ahead: base_ahead(Path::new(&repo), &follow.to, &lead) });
+    }
+    Ok(out)
+}
+
+/// Whether `origin/<base>` holds commits `lead` lacks without a conflict, in `dir`: `fetch`, a clean `merge-tree`
+/// (`None`), then `merge-base --is-ancestor` exit 1 (not an ancestor). Any failure answers `false` (A4).
+fn base_ahead(dir: &Path, base: &str, lead: &str) -> bool {
+    let remote = format!("origin/{base}");
+    if crate::git::run::fetch(dir, &["origin", base]).is_err() {
+        return false;
+    }
+    match crate::git::worktree::merge_conflicts(dir, &remote, lead) {
+        Ok(None) => {}
+        Ok(Some(_)) | Err(_) => return false,
+    }
+    matches!(crate::git::run::run(dir, &["merge-base", "--is-ancestor", &remote, lead]), Ok(out) if out.code == 1)
 }
 
 /// The PR's resolved `pr.feedback.checks`; `None` when its policy did not resolve: it is told nothing.
@@ -468,6 +546,36 @@ fn update_for_conflict(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, change: &C
     let prs = load_prs(tx, plan)?;
     let Some(pr) = prs.iter().find(|p| p.key == *key) else { return Ok(None) };
     open::queue_update(tx, plan, pr, tier, COMMAND_BY, Cause::Conflict)
+}
+
+/// Why the poll queues a PR's `update` Job (§3.7 E5, hs-d794, hs-n617): the conflict transition
+/// ([`update_for_conflict`]), or a base PR's merge that left the default branch ahead of the Lead Branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Trigger {
+    /// The PR's `mergeable` became `conflicting`.
+    Conflict,
+    /// GitHub repointed the PR from a base PR's Lead Branch to the default branch, and the default
+    /// branch holds commits the Lead Branch lacks without a conflict.
+    BaseMerged,
+}
+
+/// Queues PR `key`'s `update` Job for `trigger` (§3.7 E5, hs-d794, hs-n617), unless the PR already has one `queued`
+/// or `running`. `ahead` is read only for [`Trigger::BaseMerged`]: true when the default branch holds commits the
+/// Lead Branch lacks without a conflict; false when it is already contained, which queues nothing. A Plan that is
+/// archived or a PR that is not `open` queues nothing. The Job's key when one was inserted.
+pub(super) fn queue_update_for(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, trigger: Trigger, ahead: bool, tier: Tier) -> Result<Option<JobKey>, CpdError> {
+    let cause = match trigger {
+        Trigger::Conflict => Cause::Conflict,
+        Trigger::BaseMerged if ahead => Cause::BaseMerged,
+        Trigger::BaseMerged => return Ok(None),
+    };
+    let archived: bool = tx.query_row("SELECT archived_at IS NOT NULL FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?;
+    if archived {
+        return Ok(None);
+    }
+    let prs = load_prs(tx, plan)?;
+    let Some(pr) = prs.iter().find(|p| p.key == *key).filter(|p| p.status == "open") else { return Ok(None) };
+    open::queue_update(tx, plan, pr, tier, COMMAND_BY, cause)
 }
 
 /// The PR `key` of the Plan is merged on GitHub (§7.6): `prs` `merged`,
