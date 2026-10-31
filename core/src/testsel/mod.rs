@@ -195,7 +195,13 @@ pub fn build(ports: &Ports, cwd: &Path, out: &mut dyn Write, err: &mut dyn Write
 pub fn list(ports: &Ports, cwd: &Path, name: &str, err: &mut dyn Write) -> Result<u8, CpdError> {
     let root = repo_root(ports, cwd)?;
     match kind_of(name) {
+        // A web title in a repo without the web client (no `web/package.json`) is refused like a pi title that
+        // exists nowhere: nothing runs, `pnpm --filter` on a missing package would exit 0 silently.
         Kind::Web { file, title } => {
+            if !root.join("web/package.json").exists() {
+                write(err, &no_title(&file, &title))?;
+                return Ok(1);
+            }
             let args = ["--filter", "cpd-web-client", "exec", "vitest", "run", "--testNamePattern", title.as_str(), file.as_str()];
             let answered = process(ports, "pnpm", "pnpm", &args, &root)?;
             if answered.status.success() {
