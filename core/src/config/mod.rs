@@ -22,6 +22,9 @@ mod runner_tests;
 mod tier_tests;
 
 #[cfg(test)]
+mod preset_tests;
+
+#[cfg(test)]
 mod config_write_tests;
 
 #[cfg(test)]
