@@ -3805,12 +3805,15 @@ The conversation adapter is `openConversation` of `pi/durable-worker/harness.ts`
 | `homeDir(): string` | the User's home directory |
 | `now(): Date` | the current time |
 | `log(line: string): void` | logs one line |
+| `guard(path: string): Promise<void>` | required; throws `HostRunning` when another host owns the socket at `path`, or any other error (fail loud) |
+| `listen(path: string, accept: (conn: Connection) => { receive(line: string): void; closed(): void }): Promise<{ close(): Promise<void> }>` | required; binds and listens on the socket (P1.5, sock-host wiring) |
 
 **`Conversation` in P1.5.** Besides `submit`, `write`, `install`, `entries` and `closed`, it has `watch(): Promise<EventStream>`, `abort(opts: { background: boolean }): Promise<void>` and `abortSubmission(id: number): Promise<'aborted' | 'already_placed' | 'settled' | 'not_found'>`, all required, and its `Submission` has `id: number` and `status(): Promise<string>` besides `wait()`; every shape and what is verified is in §6.14 "The event stream". `Input.whenBusy` gains `'reject'`.
 
-**`runHost`, in order.**
+**`runHost`, in order.** The **guard-first rule** (sock-guard, P1.5): the one-owner check is the first thing the host does, before it reads the Session, resolves the model, opens the store or reports any state; a host that finds another host running logs `host_running`, returns exit code 1 and has no effect on the Session.
 
-1. `resolveModel(config.model)` first: a `usage` error ends it before any effect.
+1. `await deps.guard(socketPath(home, session))` (§6.14 "The guard"). The socket path is checked at this step before any other work. If the guard throws `HostRunning`, the host logs `host_running`, exits 1 and returns before step 2. Any other error is thrown unchanged (fail loud, before any effect).
+2. `resolveModel(config.model)` first: a `usage` error ends it before any effect.
 2. `cpd session show <session>`, read with `parseSession` of `pi/lib/run.ts`. A Session whose `role` is not `lead` or `manager` is refused with a `usage` CpdError (exit 2): the host runs no Worker and no other role.
 3. The policy text is read the way the pi adapter reads it for that Session (`pi/lib/agent-state.ts:30-41`, `pi/lib/startup.ts`): `cpd policy show --session <session>` -> `policySection` of `pi/lib/policy.ts`. The context files -> one text, each file as `## <path>` and its content, blocks separated by a blank line (`undefined` when there are none). `zone` = `zoneLine(now())` of `pi/lib/time.ts`.
 4. `open({ file: storePath(...), cwd, model, extension: hostExtension(...) })`, where `hostExtension` is given `{ cwd: config.cwd, home: deps.homeDir() }`. pi-durable resumes an unfinished run of that store itself (its README, "Persist and Resume"); the host does nothing for it.
