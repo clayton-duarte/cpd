@@ -1,4 +1,4 @@
-import { encode, LIMITS, negotiate, PROTOCOL_VERSIONS, parseLine, ProtocolError, type ToClient, type ToHost, type HostState } from "./protocol.ts";
+import { encode, LIMITS, negotiate, PROTOCOL_VERSIONS, parseLine, ProtocolError, type AgentState, type ToClient, type ToHost, type HostState } from "./protocol.ts";
 import { type Frame, type Ring } from "./ring.ts";
 
 export type Connection = { write(line: string): void; buffered(): number; close(): void };
@@ -24,7 +24,13 @@ export type ServerDeps = {
   piDurable: string;
   epoch: string;
   ring: Ring;
-  submit(input: { text: string; whenBusy: "followUp" | "steer" | "reject"; requestId?: string }): Promise<{ submissionId: number; status: string }>;
+  submit(input: { text: string; whenBusy: "followUp" | "steer" | "reject"; requestId?: string; images?: readonly { mimeType: string; data: string }[] }): Promise<{ submissionId: number; status: string }>;
+  /** Contract §6.17: the five conversation commands; each port settles one reply or throws a `ProtocolError`. */
+  compact(instructions?: string): Promise<{ task_id: number }>;
+  configure(change: { model?: string; thinkingLevel?: string | null }): Promise<{ agent: AgentState }>;
+  models(): Promise<readonly { provider: string; model_id: string; name: string; thinking_levels: readonly string[]; context_window: number }[]>;
+  fork(at: number, ownership?: "lead" | "manager"): Promise<{ conversation_id: string }>;
+  history(before?: string, limit?: number): Promise<{ entries: readonly unknown[]; next?: string }>;
   abort(opts: { background: boolean }): Promise<void>;
   abortSubmission(id: number): Promise<"aborted" | "already_placed" | "settled" | "not_found">;
   hostState(): HostState;

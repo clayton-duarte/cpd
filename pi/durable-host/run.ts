@@ -282,6 +282,12 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
           throw e;
         }
       },
+      // Contract §6.17 stubs: the five conversation commands are wired by a later Worker; here they only keep the branch typechecking.
+      compact: async () => { throw new Error("not implemented"); },
+      configure: async () => { throw new Error("not implemented"); },
+      models: async () => { throw new Error("not implemented"); },
+      fork: async () => { throw new Error("not implemented"); },
+      history: async () => { throw new Error("not implemented"); },
       abort: (opts) => {
         // §6.15 "Abort (4.6.4)": every held request is resolved `aborted` by the host before the conversation abort, one `ui_resolved` each.
         const ids = held.heldList().map((h) => h.id);

@@ -10,10 +10,20 @@ export const LIMITS = {
 
 export type Cursor = { epoch: string; seq: number };
 
+/** The agent state a `configure` answers and `host_state.agent` carries (contract §6.17). */
+export type AgentState = { model?: { provider: string; model_id: string }; thinking_level: string };
+
+/** The `history` page sizes and the images of a `submit` (contract §6.17). */
+export const HISTORY_LIMIT = 50;
+export const HISTORY_MAX = 500;
+export const IMAGE_MAX_COUNT = 4;
+export const IMAGE_MAX_TOTAL = 786432;
+export const IMAGE_MIME = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
+
 export type ErrorCode =
   | "protocol_mismatch" | "hello_timeout" | "bad_frame" | "frame_too_large"
   | "unknown_type" | "bad_args" | "not_attached" | "busy" | "unsupported"
-  | "storage_failed" | "shutting_down" | "internal"
+  | "storage_failed" | "shutting_down" | "internal" | "refused"
   | "hello_required" | "ui_unknown";
 
 export class ProtocolError extends Error {
@@ -29,7 +39,12 @@ export class ProtocolError extends Error {
 export type ToHost =
   | { type: "hello"; protocol: number; min_protocol: number; client: string; name?: string }
   | { type: "attach"; req: string; cursor?: Cursor; conversation?: string }
-  | { type: "submit"; req: string; text: string; when_busy: "followUp" | "steer" | "reject"; request_id?: string }
+  | { type: "submit"; req: string; text: string; when_busy: "followUp" | "steer" | "reject"; request_id?: string; images?: readonly { mime_type: string; data: string }[] }
+  | { type: "compact"; req: string; instructions?: string }
+  | { type: "configure"; req: string; model?: string; thinking_level?: string | null }
+  | { type: "list_models"; req: string }
+  | { type: "fork"; req: string; at: number; ownership?: "lead" | "manager" }
+  | { type: "history"; req: string; before?: string; limit?: number }
   | { type: "abort"; req: string; background: boolean }
   | { type: "abort_submission"; req: string; submission_id: number }
   | { type: "ping"; req?: string }
