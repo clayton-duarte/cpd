@@ -15,6 +15,10 @@ type Root = {
   abort(ctx: typeof BACKGROUND_CONTEXT, opts: { background: boolean }): Promise<void>;
   submit(input: unknown, ctx: typeof BACKGROUND_CONTEXT): Promise<{ readonly id: number; status(ctx: typeof BACKGROUND_CONTEXT): Promise<{ status: string }>; wait(ctx: typeof BACKGROUND_CONTEXT): Promise<{ status: "done" | "unanswered" | "failed" }>; }>;
   viewState(ctx: typeof BACKGROUND_CONTEXT): Promise<{ value: { entries: unknown } }>;
+  compact(instructions: string | undefined, ctx: typeof BACKGROUND_CONTEXT): Promise<number>;
+  configure(change: unknown, ctx: typeof BACKGROUND_CONTEXT): Promise<void>;
+  agent(ctx: typeof BACKGROUND_CONTEXT): Promise<{ model?: { provider: string; modelId: string }; thinkingLevel: string }>;
+  entries(query: object, limit: number, cursor: unknown, ctx: typeof BACKGROUND_CONTEXT): Promise<{ items: readonly unknown[]; next?: object }>;
 };
 
 /** The Conversation of a root and its registry (contract §6.13): the pure part of `openConversation`, testable with no pi-durable. */
@@ -70,6 +74,13 @@ export function conversationOf(root: unknown, registry: { install(extension: Ext
     },
     install: (extension) => registry.install(extension),
     entries: async () => (await r.viewState(BACKGROUND_CONTEXT)).value.entries as never,
+    compact: (instructions) => r.compact(instructions, BACKGROUND_CONTEXT),
+    configure: (change) => r.configure(change, BACKGROUND_CONTEXT),
+    agent: () => r.agent(BACKGROUND_CONTEXT),
+    pageEntries: async (limit, cursor) => {
+      const page = await r.entries({ order: "descending" }, limit, cursor, BACKGROUND_CONTEXT);
+      return { entries: page.items, ...(page.next === undefined ? {} : { next: page.next }) };
+    },
     closed,
   };
 }

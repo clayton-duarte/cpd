@@ -117,22 +117,23 @@ const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$
 
 /** The `submit.images` of contract §6.17: an empty array is the absent one; `undefined` when absent. */
 function images(o: Record<string, unknown>): readonly { mime_type: string; data: string }[] | undefined {
-  const raw = o.images;
+  const raw: unknown = o.images;
   if (raw === undefined) return undefined;
   if (!Array.isArray(raw)) bad("images", "an array");
-  if (raw.length === 0) return undefined;
-  if (raw.length > IMAGE_MAX_COUNT) bad("images", `at most ${IMAGE_MAX_COUNT} images`);
+  const list = raw as unknown[];
+  if (list.length === 0) return undefined;
+  if (list.length > IMAGE_MAX_COUNT) bad("images", `at most ${IMAGE_MAX_COUNT} images`);
   const out: { mime_type: string; data: string }[] = [];
   let total = 0;
-  for (const item of raw) {
+  for (const item of list) {
     if (typeof item !== "object" || item === null || Array.isArray(item)) bad("images", "an array of objects");
     const im = item as Record<string, unknown>;
-    const mime = im.mime_type;
+    const mime: unknown = im.mime_type;
+    const data: unknown = im.data;
     if (typeof mime !== "string" || !(IMAGE_MIME as readonly string[]).includes(mime)) bad("mime_type", `one of ${IMAGE_MIME.join(", ")}`);
-    const data = im.data;
     if (typeof data !== "string" || !BASE64.test(data)) bad("data", "an RFC 4648 base64 string with its padding");
-    total += data.length;
-    out.push({ mime_type: mime, data });
+    total += (data as string).length;
+    out.push({ mime_type: mime as string, data: data as string });
   }
   if (total > IMAGE_MAX_TOTAL) bad("images", `at most ${IMAGE_MAX_TOTAL} bytes of base64 data together`);
   return out;

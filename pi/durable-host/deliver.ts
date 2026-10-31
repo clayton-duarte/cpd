@@ -1,9 +1,12 @@
 import { leadRule, sessionMessage } from "../lib/delivery.ts";
 import type { CpdEvent, EventOf } from "../lib/event.ts";
 
+/** The model content of a submission: a string, or text plus images (contract §6.17, pi-ai's `UserMessage` content). */
+export type InputContent = string | readonly ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
+
 /** One submission of the host (contract §6.13 "Delivery (P1.4)"). `entry.data.delivered_to` is what the cursor counts. */
 export type Input = {
-  content: string;
+  content: InputContent;
   requestId: string;
   whenBusy: "followUp" | "steer" | "reject";
   entry: { kind: string; data: Record<string, unknown> };
