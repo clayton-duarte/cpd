@@ -38,7 +38,6 @@ const BY_HAND: &[(&str, &str)] = &[
     ("tui/src/merge/action_d550.rs", "test module declared with #[cfg(test)] #[path]"),
     ("tui/src/merge/marker_d550.rs", "test module declared with #[cfg(test)] #[path]"),
 ];
-
 fn walk(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
@@ -91,4 +90,26 @@ fn no_source_file_writes_config_toml_with_fs_write() {
         .collect();
     offenders.sort();
     assert!(offenders.is_empty(), "these files write config.toml with fs::write; use cpd_core::atomic::write_atomic: {offenders:?}");
+}
+
+/// `cpd preset apply` rewrites host.toml's `[model]` table whole and atomically (commands.md §14.6 step 6): no source
+/// file writes the machine policy with `fs::write` or `File::create`.
+#[test]
+fn no_source_file_writes_host_toml_with_fs_write() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let mut files = Vec::new();
+    for krate in ["core", "engine", "cli", "tui"] {
+        walk(&root.join(krate).join("src"), root, &mut files);
+    }
+    let mut offenders: Vec<String> = files
+        .iter()
+        .filter(|p| {
+            let text = std::fs::read_to_string(p).unwrap();
+            let text = non_test_text(&text);
+            text.contains("host.toml") && (text.contains("fs::write(") || text.contains("File::create("))
+        })
+        .map(|p| p.strip_prefix(root).unwrap().to_string_lossy().into_owned())
+        .collect();
+    offenders.sort();
+    assert!(offenders.is_empty(), "these files write host.toml with fs::write; use cpd_core::atomic::write_atomic: {offenders:?}");
 }

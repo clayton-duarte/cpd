@@ -2,7 +2,9 @@ import { CpdError, isObject } from "./cpd.ts";
 import type { Host } from "./host.ts";
 import type { Run } from "./run.ts";
 
-/** commands.md §15.3 `session-retiered`: the Session's Tier changed (`cpd session retier`). The switch waits for the Session's next idle and reads the row then, so several Events before one idle make one switch. */
+/** commands.md §15.3 `session-retiered` and `session-model-changed` (the tier-preset switch, §14.6): the Session's model
+ * changed (`cpd session retier`, or `cpd preset apply` rewrote the host `[model]`). The switch waits for the Session's
+ * next idle and reads the row then, so several Events before one idle make one switch. */
 export async function noteRetier(host: Host, r: Run): Promise<void> {
   r.retierDue = true;
   await switchModel(host, r);
