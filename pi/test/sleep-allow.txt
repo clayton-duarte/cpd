@@ -33,6 +33,7 @@ pi/test/reminder.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/reply.test.ts 9  # m-pi: sleep or wall-clock wait
 pi/test/retier.test.ts 11  # m-pi: sleep or wall-clock wait
 pi/test/review-chat.test.ts 39  # m-pi: sleep or wall-clock wait
+pi/test/session_model_changed.test.ts 2  # m-pi: sleep or wall-clock wait
 pi/test/slack-channel.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/start.test.ts 20  # m-pi: sleep or wall-clock wait
 pi/test/state.test.ts 31  # m-pi: sleep or wall-clock wait

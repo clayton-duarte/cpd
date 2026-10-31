@@ -21,3 +21,16 @@ fn context_show_and_search_list_worker_among_their_callers() {
     }
     assert_eq!(callers("context distill"), [Caller::Lead], "context distill is unchanged");
 }
+
+#[test]
+fn preset_commands_list_their_callers() {
+    // The tier-preset switch (Plan tier-presets; commands.md §14.6): the read-only rows are
+    // Manager and Lead, `apply` writes and is the Manager's (like `session retier`).
+    for path in ["preset list", "preset show"] {
+        assert_eq!(callers(path), [Caller::Manager, Caller::Lead], "{path} is read-only");
+    }
+    assert_eq!(callers("preset apply"), [Caller::Manager], "preset apply writes");
+    // The neighbouring rows keep their callers.
+    assert_eq!(callers("models refresh"), [Caller::Manager, Caller::Lead], "models refresh is unchanged");
+    assert_eq!(callers("models show"), [Caller::Manager, Caller::Lead], "models show is unchanged");
+}

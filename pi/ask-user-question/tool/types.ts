@@ -131,7 +131,12 @@ export type QuestionnaireError =
 	| "too_many_questions"
 	| "duplicate_question"
 	| "duplicate_option_label"
-	| "reserved_label";
+	| "reserved_label"
+	// The never-hang resolutions (docs/commands.md §15.13): the inline slot was
+	// taken by another dialog, or the mount outlived the two-hour bound. Both mean
+	// the user never saw the questions — the tool resolves loud with these codes.
+	| "dialog_displaced"
+	| "dialog_stuck";
 
 export interface QuestionnaireResult {
 	answers: QuestionAnswer[];

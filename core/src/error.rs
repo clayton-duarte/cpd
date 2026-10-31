@@ -257,6 +257,9 @@ error_codes! {
     HostApprovalRequired = "host_approval_required" => Refused,
     NotAManager = "not_a_manager" => Refused,
     EngineDisabled = "engine_disabled" => Refused,
+    // The tier-preset switch (commands.md §14.6): the registry refused the preset, before any write.
+    PresetProviderUnconfigured = "preset_provider_unconfigured" => Refused,
+    PresetModelUnoffered = "preset_model_unoffered" => Refused,
 
     // Exit 4: not found.
     ContextNotFound = "context_not_found" => NotFound,
@@ -272,6 +275,7 @@ error_codes! {
     BaseNotFound = "base_not_found" => NotFound,
     ItemNotFound = "item_not_found" => NotFound,
     EngineMissing = "engine_missing" => NotFound,
+    PresetUnknown = "preset_unknown" => NotFound,
 
     // Exit 5: timeout.
     StoreBusy = "store_busy" => Timeout,
