@@ -2,7 +2,14 @@
 
 ## Summary
 
-**Verdict.** TODO
+**Verdict.** Yes: a browser UI with full cockpit parity — the tree, Plans, PR boxes, the Inbox, costs, the status line's pills, chat with Leads and the Manager, and every action the cockpit takes — can be built (inferred from sections 2 to 7) on the recommended stack: a `cpd web` subcommand in the one binary over a sync tiny_http-class server, htmx with one SSE stream per tab, and the read model moved to core. Cut into **11 PRs** (sizes guess, section 6): three no-web prerequisites (the shared read model, then the CLI read and action gaps), the server skeleton with its access controls, the read-only views, the actions, chat (approvals wait for durable-leads P1.6 and P1.8), and install plus the Tailscale/ssh recipe; total non-test lines guess 8,000–11,000.
+**Inventory (2).** 59 read rows across the six tables of 2.1 (tree 9, StatusBar 7, Inbox 6 plus its 18 kinds, logs and history 5, Plan view 10, Dispatch 7), **34 actions** in 2.2, **41 gaps (G01–G41)** in five groups: missing command 9, command returns less 19, view-private 4, composed flow 4, Lead/pi-only 5. One hard terminal-only part: the chat slot of a pi Lead in tmux; everything else has a web equivalent (2.4).
+**Live data and the protocol (3).** No protocol change is needed: host v1 plus the planned P1.6 and P1.8 carry everything a browser needs; the five asks **C1–C5** (snapshot windowing, a viewer role, `ui_request` shapes, P1.8 result types, the 64 MiB line) were sent — not agreed — to the Manager as a board FYI (A4). Live updates reproduce the TUI: commit watcher + Event cursor + pulls mark + engine-lock probe + timers; PR state, engine down, snooze ends, Pulse ages and host samples have **no Event** (3.1.1), and the SSE+POST live path carries them.
+**Stack (5.3).** `cpd web` in the one binary (a new `cpd-web` crate the cli calls); the sync tiny_http class at 4–6 packages (guess), adding no async runtime to a workspace with none; **SSE + POST only** (no WebSocket); server-rendered fragments with htmx, the two htmx files as pinned npm dependencies embedded by one classified copy step — never vendored; markdown rendered and sanitised server-side in Rust; and the read model moved to core with `Serialize` (**O1**) so `plan show`/`session list`/`inbox list` print it.
+**The cut (6).** 11 PRs in six phases: W1 the shared read model (delivers alone: 14 read gaps closed for the CLI); W2 the CLI read gaps; W3 the CLI action gaps; W4 the server skeleton with access controls; W5/W6 the read-only views; W7 the actions; W8–W10 chat (W9/W10 after durable-leads P1.6 and P1.8); W11 install and the Tailscale/ssh recipe. Serial spine W1→W2→W3→W4→(W5,W6)→W7→W8→(W9,W10) — single-writer `core/src/lib.rs`/`cli/src/cli.rs`, `implementing.md:7` — in parallel: W5∥W6, W7∥W8, W9∥W10, W11∥W5–W10.
+**Risks that matter most (7).** Parity drift: nothing pins the three read paths today (4.4); a shared model, a parity test and the CLI-first rule stop it. A local listener is reachable by other local users and by any page in the User's browser (CSRF, DNS rebinding, cross-site WebSocket): a 0600 token, a Host allow-list and Origin checks; a same-uid agent reads the token and forges headers whatever the controls — accepted (hs-d754 Q6). The pi-Lead chat slot and editor stay terminal-only. tiny_http is stale (2022). W9/W10 depend on P1.6/P1.8 and on an unmeasured real snapshot (64 MiB line). No-Event state (3.1.1) and the cost of two renderers.
+**Open choices (8).** 12 questions, named by topic: where the server lives, the HTTP crate, the front end, the chat bridge, the live-update path, the shared read model, access control, approvals in a browser, Escalations, Sessions with no socket, the build order, and parity over time. The User answers after the PR opens (A3) and the Lead records each answer as a Context decision; this document recommends but decides nothing.
+**CLI-first (hs-d753).** The CLI is the first-class interface and the web UI one client of the core; a capability that lives only in the TUI is a CLI-first defect — the 41 gaps of 2.3 are that list, each with its one-line fix (inferred), and the cut closes them before (W1–W3) or with (W7) the web.
 
 ## 1. Scope, sources and labels
 
@@ -28,7 +35,7 @@ Gap-table legend (the header used once, in section 2.3; ids G01, G02, … run on
 - `CLI-first fix` is the one-line (inferred) change a web client needs to render or run it — usually: add a field to an existing `cpd` command, or a `cpd` command that does not exist.
 - `Size`: S under 300 non-test lines, M 300 to 1,000, L over 1,000; the value is a `guess`.
 
-Evidence: the twelve finding files are at `/home/clayton/.cpd/run/web-ui/explore/`, one per finding; this document synthesises the five that cover sections 1 and 2 (`inv-reads-left.md`, `inv-reads-plan.md`, `inv-acts-tree.md`, `inv-acts-work.md`, `tui-only.md`). They are a machine-local source, as `docs/research/chat-render-cost.md` says of its own.
+The twelve finding files are at `/home/clayton/.cpd/run/web-ui/explore/`, one per finding; this document synthesises the five that cover sections 1 and 2 (`inv-reads-left.md`, `inv-reads-plan.md`, `inv-acts-tree.md`, `inv-acts-work.md`, `tui-only.md`). They are a machine-local source, as `docs/research/chat-render-cost.md` says of its own.
 
 ## 2. Inventory: what the cockpit reads and does
 
@@ -583,16 +590,226 @@ What evidence would change it: `tiny_http`'s abandonment on a future toolchain (
 
 ## 6. The cut into PRs
 
-<!-- skeleton -->
+The build of the recommended stack of 5.3, cut for a later Plan (this document only cuts it; the Plan orders the Jobs). Ordered after durable-leads: **P1.5 is merged** (#686 the protocol, #687 the host socket server); **P1.6** (UI requests: Plan review, approvals, ask) and **P1.8** (history, fork, configure, models) are **not**, and chat approvals in the browser wait for them. The cut assumes the `Recommended:` options of section 8; each question that changes the cut is named in the row's `Needs`. Sizes follow the legend of section 1 (S < 300 non-test lines, M 300–1,000, L > 1,000) and are a `guess` unless a line count is cited; every row's `Closes` cites the gap ids of section 2.3 or says `none`. `implementing.md:7` is why the prerequisites are serial: `core/src/lib.rs` and `cli/src/cli.rs` are single-writer files, and the read-model move is one deliberate decision, not a Job's side effect (4.6, `implementing.md:383,405`).
+
+| PR | Repo | What it holds | Needs | Shape | Size | Closes |
+|---|---|---|---|---|---|---|
+| **W1** shared read model | core (move), tui (thin), cli | Move `tui/src/read`'s pure data to core with `Serialize` (O1); `plan show`/`session list`/`inbox list` print the moved model; a parity test pinning CLI JSON == the read draws; the cost cache becomes server state; `docs/interface.md` regenerated | the one recorded decision to touch `core/src/lib.rs` and root `Cargo.toml` (`implementing.md:7,383`) | tdd + docs | L (guess; 2,755 movable product + 1,643 movable test lines move, section 4.5; the Serialize and parity-test work is the guess) | G01, G04, G10, G11, G12, G13, G14, G17, G18, G22, G23, G29, G30, G32; part of G03, G19–G21, G25, G26 (4.6) |
+| **W2** CLI read gaps | core, cli | The missing/partial read commands the web renders and the CLI should return first: workers W count (G02), host machine stats (G05), `policy owners` (G06), incident Lead id in `incident status` (G09), host-alert/incident-elapsed reads (G15), a transcript read (G16), an authored-PR list (G24), the `pr post` pull form (G27), the entry list moved to core with the `cockpit` flag fixed (G28) | W1 (the read model's JSON is the base) | tdd + docs | M (guess; nine S/M gaps of 2.3: G02, G05, G06, G09, G15, G16, G24, G27, G28) | G02, G05, G06, G09, G15, G16, G24, G27, G28 |
+| **W3** CLI action gaps | core, cli | The commands the action forms call: `config set worker_runner` (G07), the host-pill command (G08), `--free-slot` on the archive commands (G33), user-trigger surfaces for Park/History(tree)/Send/Retier (G35), a Manager-accepted unarchive (G41) | W2 | tdd | M (guess; five S gaps of 2.3) | G07, G08, G33, G35, G41 |
+| **W4** server skeleton + access controls | new `cpd-web` member (fifth), cli, root `Cargo.toml`, scripts | The HTTP server (the Q2 crate) bound to 127.0.0.1 with the Q7 controls (token file 0600, Host allow-list, Origin check); one multiplexed SSE endpoint with `Last-Event-ID` resume; the POST command endpoint; `cpd web` subcommand; htmx + the SSE extension as pinned npm deps embedded by the classified copy step (D5) | W1 (read types), the Q2 dependency decision, the Q7 access decision | tdd + config | M (guess; a sync server skeleton + a `Ports` seam + the copy step; no precedent to size from) | none (it is the container; the access controls are Q7's) |
+| **W5** read-only tree + Inbox page | cpd-web | The first useful cut: Context/Plan/Session rows with dots, costs (G01 from W1), the Inbox with its 18 kinds, per-second age, `engine-down`, merge spinners, page chrome with the StatusBar-equivalent pills (data from W2) | W4, W1, W2 | tdd | M (guess; two views of fragments over the W1 model; the read logic already exists in core) | none new; renders what W1/W2 closed |
+| **W6** read-only Plan view, Pulse, logs, history | cpd-web | The Plan page (PR boxes, Job pills with derived status from G12, the chat slot from G23), Pulse (G22), the logs view (G17), archived history (G16), the Dispatch host stats (G05) | W4, W1, W2 | tdd | L (guess; the Plan view + PR boxes + Pulse + logs + history; `flow.rs` 644 + `pulse.rs` 302 lines are the read side, section 4.2) | none new; renders what W1/W2 closed |
+| **W7** actions and dialogs | cpd-web, cli (composed flows) | Every action of 2.2 as a form or POST: Context/Plan/Session create-rename-archive-delete-open, park, close, Inbox snooze/dismiss/claim/approve/merge/post-for-review, curation checklists, runner toggle, incident/host pills; composed flows G34 kept client-side and documented; an Escalation surface only if Q9 answers A (per the recommendation: none — the count only) | W5, W6 (surfaces), W3 (commands) | tdd + docs | L (guess; 34 actions of 2.2, each a form + handler + test) | none new; consumes W3 |
+| **W8** durable chat: stream + submit | cpd-web | The D6 bridge: hold `$CPD_HOME/run/host/<session>.sock`, `hello`/`attach`/reconnect by cursor, fold via the shared Rust fold in core (Q35; Q4's choice), one SSE stream per chat slot, POST `submit`/`abort` (3.2, 3.3); markdown server-side (D4) | W4 (SSE/POST), durable-leads P1.5 (merged #686/#687), the Q4 decision | tdd + docs | L (guess; the host client + fold integration + transcript views; the fold itself is core's (Q35)) | none (the socket is not a Ledger gap; renders the durable chat 2.4 calls intended) |
+| **W9** chat approvals and UI requests | cpd-web, pi/durable-host, docs/contract.md | Render and answer `ui_request` in the browser: Plan review (G39), secret approval (G38), host-repair approval (G38), `ask_user_question` questionnaire (G40); needs the C3 contract shapes (P1.6) and the Q8 decision | W8, durable-leads P1.6 | tdd + docs | M (guess; four dialog renderers; G38–G40 are M/M/L in 2.3) | G38, G39, G40 |
+| **W10** chat completeness | cpd-web, pi/durable-host, docs/contract.md | `history` paging (C1's windowing, conditional on the P1.5 snapshot measurement), `fork` (a second socket), `configure`/`list_models` (model and tier), `compact`; the C4 result shapes (P1.8) | W8, durable-leads P1.8 | tdd + docs | M (guess) | none (P1.8 protocol features, not Ledger gaps) |
+| **W11** install, restart, recipe | cli, cpd-web, docs | A `cpd install` follow-up that starts/stops `cpd web` (nothing exists for a long-lived server, `repo-cost.md` 3), a restart rule, and the Tailscale/ssh recipe with the Host allow-list names (Q7) | W4; the Q7 decision | config + docs | S (guess) | none |
+
+**Serial vs parallel (inferred).** The strictly serial spine is **W1 → W2 → W3 → W4 → (W5, W6) → W7 → W8 → (W9, W10)** — W1 first (everything reads it), W2/W3 after W1 and before W4's data-holding pages (they and W4 share `cli/src/cli.rs`, a single-writer file, `implementing.md:7`), W4 before any page, W7 after W5/W6's surfaces, W8 before W9/W10. In parallel where files do not overlap: **W5 ∥ W6** (two page areas over the W4 skeleton), **W7 ∥ W8** (forms vs the chat bridge), **W9 ∥ W10** (both after W8, on P1.6 and P1.8), **W11 ∥ W5–W10** once W4 exists (install/config/docs do not touch the page code). Total: 11 PRs, non-test lines **guess 8,000–11,000** (sum of the per-PR guesses above).
+
+**What the first PR delivers by itself.** W1 delivers the shared read model with no web code: the three CLI commands print the cockpit's read model, so agents, scripts and the later web all read one source of truth; the read-located gaps G01, G04, G10–G14, G17, G18, G22, G23, G29, G30 and G32 close for the CLI alone (4.6) — the hs-d753 fix on the read side, and the foundation every later PR builds on.
 
 ## 7. Risks
 
-<!-- skeleton -->
+One table per area. Columns: risk | evidence | likelihood and impact (inferred) | mitigation | where it is handled (a PR of section 6 or a question of section 8).
+
+**Parity drift between the TUI and the web**
+
+| Risk | Evidence (cite) | Likelihood and impact (inferred) | Mitigation | Handled in |
+|---|---|---|---|---|
+| No test pins that the cockpit's reads and the CLI's JSON agree; a web path would be a third reader | 4.3-4.4: `plan show` `core/src/plan/show.rs:76-100` vs `read::flow` `tui/src/read/flow.rs:275`; `inbox list` `core/src/inbox/cmd.rs:182` vs `read::tree.rs:151`; no read type derives `Serialize`; `read_source_tests.rs:6-22` is a source scan only; the equality is words in docs (`commands.md:4555`) (read) | High: a change to one path compiles green while the others disagree; impact is a web that silently shows different data than the TUI | W1 moves the model to core and prints nothing else; a parity test pins the three CLI commands against the read model (4.6 O1) | W1, Q12 |
+| A rule written twice is already drifting | `engine_down` implemented twice, `tui/src/read/tree.rs:103` vs `core/src/inbox/cmd.rs:150`; ordering restated (4.3) (read) | Certain today; impact: the web would inherit whichever copy it reads | O1 makes the moved model the one writer of the JSON | W1 |
+| Code and docs disagree on a dot (`pr-closed` fills the Lead dot in docs, not in code) | `read/dot.rs:139,147-152`; `core/src/inbox/pr.rs:195`; the 2.1 note, G29 (read) | Known today; a web drawn from the docs would draw a dot the cockpit never draws | Parity follows the code (A5); W1's moved `Dot` field makes the code the source; the drift stays listed (G29) | W1, 2.1 |
+| The web re-implements view logic (dot rule, ordering, age) and drifts | G29, G30 view-private (2.3); host-wire.md 2 option A is a second TS fold, which Q35's evidence flags (read) | High: a second implementation is a second bug surface | Render every fragment from the one moved model (W1); Q4 B folds with the shared Rust fold, never in JS | W1, W5/W6, Q4, Q12 |
+
+**Security of a local listener**
+
+| Risk | Evidence (cite) | Likelihood and impact (inferred) | Mitigation | Handled in |
+|---|---|---|---|---|
+| Loopback TCP is reachable by other local users (TCP checks no uid) | local-sec.md (1); `docs/research/durable-leads.md:1514` "a TCP listener needs authentication the socket gets from directory modes" (read) | Medium on a single-user laptop, high on shared machines; a second uid reads/writes the User's cpd | Bind 127.0.0.1 only; a token file mode 0600 only the User's uid can read (Q7 A) | W4, Q7 |
+| Any page in the User's browser can drive the server (CSRF; a WebSocket handshake is not same-origin-bound, CSWSH) | local-sec.md (1) [CSRF]/[WS] 2026-10-31; RFC 6455 §10.2 from memory, unverified (3.3) | Low-to-medium (the User's browsing habits); a page can run every cockpit action | Origin check on every state-changing request and on the upgrade; a custom header/token not sent automatically; `Sec-Fetch-Site` as a second line | W4, Q7 |
+| DNS rebinding makes an attacker domain same-origin with the server | local-sec.md (1) [WIKI]; "bind address alone does not stop it" (read) | Low (rarely exploited) but cheap to stop | Host allow-list (localhost, 127.0.0.1, the tailnet name) | W4, Q7 |
+| Tailscale identity headers forged by a direct local connection | local-sec.md (2) [TS]: Serve strips client-sent headers; trust only when the sole route is the proxy (read) | Medium if the headers are ever trusted | Trust them only under Q7 B/D's condition, or never (Q7 A) | Q7 |
+| Same-uid agent (the Lead's bash) can read the token, forge any header, and answer approvals | local-sec.md (3); `durable-leads.md:631`: any file the User can read, the agent can read; hs-d754 Q6 A (read) | Certain — it is the decided stance; impact: approvals meant for the human can be answered by the agent | None by controls; accepted under same-user trust; a bash guard only when the bypass is seen (`durable-leads.md:631`) | Q8, 7 (accepted) |
+| A wrong bind exposes the server (0.0.0.0, ssh `-R`/GatewayPorts) | local-sec.md (1) [SSH]: ssh forwards bind loopback unless GatewayPorts says otherwise (read) | Low (configuration error) but the worst blast radius | The W11 recipe states loopback-only binds and forwards; a smoke test asserts the listener is not on 0.0.0.0 | W4, W11 |
+
+**Terminal-only features**
+
+| Risk | Evidence (cite) | Likelihood and impact (inferred) | Mitigation | Handled in |
+|---|---|---|---|---|
+| The chat slot of a pi Lead in tmux has no web equivalent: the live pi TUI, its dialogs and editor are in the pane | 2.4 (features table: chat slot `none`; pi dialogs `none` for pi); tui-only.md 1 (read) | Certain today; cockpit parity cannot include the pi pane's live conversation | Read-only/send-only web chat from the transcript read (G16) + `cpd session send`, with a pane-banner (Q10 A); durable Leads use the host socket (W8) | W2 (G16), W8, Q10 |
+| pi chords and editor features (`@file`, `!cmd`, Ctrl+C/T …) are unreliable in a browser | 2.4 (pi editor box `none today`; pi chords `none reliably`); tui-only.md 1 (read) | Certain; the browser cannot take some chords | Web textarea covers editor/paste; `@file`/`!cmd` are client work; every action also has a click path (2.4) | W7, 2.4 |
+| The dialog file handoff (`--out`) is terminal-only | 2.4 (popups row: "the file handoff is terminal-only") (read) | Low; only the popup plumbing is affected, not the actions | Native web forms over POST (W7) | W7 |
+
+**The dependency and maintenance risk of the chosen crates**
+
+| Risk | Evidence (cite) | Likelihood and impact (inferred) | Mitigation | Handled in |
+|---|---|---|---|---|
+| tiny_http is stale (no release since 2022) on a security-sensitive boundary | rust-http.md 2: 0.12.0 2026-10-31 crates.io 2022-10-06; active alternative axum 2026-04 (read) | Medium (a future toolchain break or an unfixed CVE); impact: a build break or a listener compromise | The handler seam (W4) makes the crate a library-only swap (5.3's "what evidence would change it"); Q2 records the decision | W4, Q2 |
+| An async stack would bring the first runtime to a sync workspace | rust-http.md 1 (no tokio/async anywhere); `implementing.md:253` (read) | Medium if chosen; impact: `spawn_blocking` seams and a second concurrency model | The recommendation is the sync tiny_http class (5.3); Q2 asks | Q2 |
+| The two npm files (htmx + SSE ext) are a supply chain: a stale pin or a build-script block | 5.1 D5; 5.2 A; pnpm refuses unlisted build scripts (`pnpm-workspace.yaml:1-5`, repo-cost.md 2) (read) | Low; the files are small, pinned and frozen-lockfile; impact: a Gate or install failure | Pinned versions in root `package.json`; one classified copy step; files embedded in the one binary | W4, W11, Q3 |
+
+**Dependence on P1.6 and P1.8, and on an unmeasured real snapshot**
+
+| Risk | Evidence (cite) | Likelihood and impact (inferred) | Mitigation | Handled in |
+|---|---|---|---|---|
+| Chat approvals wait for durable-leads P1.6 (ui_request) and P1.8 (history/fork/configure/models); the web cannot deliver them earlier | host-wire.md 1 (P1.6 rows; `held_ui: 0` today, C:4045); 3.3 (read) | Certain: the protocol is not built; impact: W9/W10 slide if durable-leads slips | The cut keeps W9/W10 after P1.6/P1.8 and after W8; W8 itself needs only v1 (merged #687) | W8, W9, W10, Q11 |
+| A real Lead's snapshot is unmeasured; a line over 64 MiB is "a host defect, not handled"; a cold attach over Tailscale pays the whole history | host-wire.md 1 (the Q5 residual, R:1532; `protocol.ts:4` 64 MiB; C:4021); 3.3: 580 B/entry derived, MB plausible (guess) | Plausible (a real Lead with tool output); impact: slow cold attaches or a bridge hitting its message cap | C1 (windowing) sent to the Manager conditional on the P1.5 measurement; the bridge sets its message size from `LIMITS.hostLine` (C5); measure in P1.5 | W8, 3.5 C1/C5, Q11 |
+
+**No-Event state**
+
+| Risk | Evidence (cite) | Likelihood and impact (inferred) | Mitigation | Handled in |
+|---|---|---|---|---|
+| PR checks/review/mergeable, engine up/down, snooze ends, Pulse ages and host samples change with no Event; an Events-only stream misses them | 3.1.1: `pulls_mark` `read/follow.rs:22-24`; engine flock `model.rs:267-287`; snooze clock `read/tree.rs:196-214`; `PULSE_REFRESH` `plan/mod.rs:64`; host samples `widgets/mod.rs:89` (read) | Certain — it is how the TUI works today; impact: a web that shows a stale PR state or a false engine-down | W4's live path carries the TUI's full set: commit watcher + Event cursor + pulls mark + engine-lock probe + timers (3.1); Q5 offers watcher vs events-follow | W4, Q5 |
+
+**The cost of two renderers**
+
+| Risk | Evidence (cite) | Likelihood and impact (inferred) | Mitigation | Handled in |
+|---|---|---|---|---|
+| A second rendering path (HTML fragments) beside the TUI's ratatui doubles the surface where parity can leak, and adds template/escaping work the repo has no precedent for | front-end.md (5.1 D3-A): "a second rendering path next to the TUI's"; repo-cost.md 5 B: "HTML-escaping and XSS are product risk, not repo-rule risk (unverified: no escaping policy read)" (read) | High unless pinned; impact: duplicated row code and escaped-HTML bugs | Render from the one moved model (W1) only; fragment tests pin HTML output (D3-A's render-fn-over-a-fake-store); markdown sanitised server-side and tested in-process (D4); a strict CSP | W1, W5/W6, Q12 |
 
 ## 8. Open design choices
 
-<!-- skeleton -->
+Sources: sections 2 to 7 of this document and the findings behind them (`inv-reads-left.md`, `inv-reads-plan.md`, `inv-acts-tree.md`, `inv-acts-work.md`, `tui-only.md`, `live-today.md`, `host-wire.md`, `core-model.md`, `repo-cost.md`, `rust-http.md`, `front-end.md`, `local-sec.md`). The User answers each question after the PR opens (A3) and the Lead records each answer as a Context decision, so there are no `Decided:` lines here. **`Recommended` is this document's judgement, inferred** — a recommendation to answer against, not a decision. Where the evidence settles an option the question says so.
+
+### Q1. Where does the web server live and how is it started?
+
+- A. A `cpd web` subcommand in the one cpd binary the User runs, implemented in a new `cpd-web` crate as a library the cli calls.
+- B. Hosted by the engine (engine restart = web server restart).
+- C. A separate Node process (a second long-lived artefact with its own copy, `pnpm install --prod` at `cpd install`, and its own restart rule).
+
+Recommended: A. `Install` copies one binary (`cli/src/install.rs:36-41`), `install-cpd.sh` builds `-p cpd` only, and `docs/research/binaries.md` priced separate binaries; the engine lifecycle is the wrong home for interactive browsing (5.1 D1).
+
+Evidence: 5.1 D1; 5.3; repo-cost.md (3); `binaries.md:6,113-114`.
+
+### Q2. Which HTTP crate, given that adding a dependency needs a recorded decision?
+
+- A. tiny_http class: sync, thread-per-connection, 4–6 new packages (guess); stale — last release 2022-10.
+- B. axum + tokio: active, org-maintained, 45–70 new packages (guess); brings the workspace's first async runtime.
+- C. hyper + tokio + hyper-util: active, 25–40 new packages (guess); routing, SSE framing and assets hand-written.
+
+Recommended: A. It is the only stack that adds no runtime to a workspace with none (`implementing.md:253`), matches the codebase's `std::thread` concurrency, and is the fewest dependencies for the same localhost parity (5.1 D2, 5.3). Not settled: the dependency decision itself is the User's (`implementing.md:383,405`).
+
+Evidence: 5.1 D2; 5.2 A; rust-http.md 2 and 4.
+
+### Q3. Which front-end approach, and how does third-party JavaScript ship without vendoring?
+
+- A. Server-rendered fragments with htmx + SSE; the two htmx files ship as pinned npm dependencies embedded by one classified copy step — never vendored, no bundler, markdown server-side.
+- B. Vanilla ES modules + Web Components; marked/DOMPurify (if markdown is client-side) as pinned npm deps; own code only.
+- C. A small SPA + bundler: a new build step in the Gate and a second tsconfig with the DOM lib.
+
+Recommended: A. One multiplexed EventSource per tab fits the 6-connection cap, the only third-party JS is htmx + the SSE extension (17,899 B gz), and the Gate gains no toolchain (5.1 D3/D5, 5.3).
+
+Evidence: 5.1 D3, D5; 3.2 (MDN EventSource, 2026-10-31); front-end.md.
+
+### Q4. How is the chat bridge built: relay and fold in the browser, fold in Rust, or hybrid?
+
+- A. Relay: the web server passes host frames to the browser, which folds — a second, TS fold beside the Rust one.
+- B. Fold in Rust: the web server folds `AgentEvent`s onto the `SnapshotEvent` with the shared core fold (Q35 A) and serves the view over SSE.
+- C. Hybrid: the server folds transcript state only; control-plane frames relayed raw.
+
+Recommended: B. Q35 decided one shared Rust fold in core, and its own evidence warns that another-language clients "would have to fold again until B is added" (`durable-leads.md` R:1528); the server of Q1/Q2 is Rust, so the shared fold is already in its language (3.4, 5.3 D6).
+
+Evidence: 3.4; 5.3 D6; host-wire.md 2; durable-leads Q9 R:1238 and Q35 R:1528.
+
+### Q5. How do views learn of a change: the TUI's commit watcher with an Event cursor, or a fan-out of `cpd events follow` — and over SSE or a WebSocket?
+
+- A. In-process commit watcher (`notify`, already a workspace dependency) + Event cursor + pulls mark + engine-lock probe + timers, delivered over one multiplexed SSE stream per tab with `Last-Event-ID`; commands are POST.
+- B. A fan-out of `cpd events follow` children; the server resumes a dropped browser with `--since`.
+- C. The A live path, but WebSocket instead of SSE (+10–15 packages for tungstenite, guess).
+
+Recommended: A. It is exactly what the TUI sees, at TUI latency (inotify wake + 50 ms, 3.1); a follower adds a 200 ms floor and misses the no-Event states — so between A and B the parity requirement of A5 and 3.1.1 settles it (B is the fallback for a server that cannot watch the store). The SSE+POST half is near-settled too: EventSource reconnects itself and `Last-Event-ID` is the `--since` cursor (3.2, inferred).
+
+Evidence: 3.1, 3.1.1, 3.2; live-today.md 4; front-end.md (MDN, 2026-10-31).
+
+### Q6. Where does the shared read model live, and are the CLI-first gaps closed before the web UI is built?
+
+- A. Move `tui/src/read` to core with `Serialize` (O1), and close section 2.3's gaps as CLI commands first; the web is built on those commands.
+- B. Move it to core with `Serialize`, but the web server reads the core model directly and the CLI commands follow.
+- C. Leave the model in tui; the web crate depends on `cpd-tui` (O2).
+
+Recommended: A. hs-d753 makes the CLI the first-class interface and the web one client of it; O1 closes the read-located gaps for both at once (4.6) and building the web on the CLI commands pins that the CLI is complete first — no capability exists only in the web, or only in the TUI.
+
+Evidence: 4.6 O1; 4.3-4.4; 2.3; hs-d753.
+
+### Q7. How is the server's access controlled, and may it trust the Tailscale identity headers?
+
+- A. TCP on 127.0.0.1 with a token file mode 0600 and Host + Origin checks; never trust the identity headers.
+- B. A unix socket in a 0700 directory behind `tailscale serve`; trust Serve's identity headers only while the socket is reachable solely through the proxy.
+- C. Nothing beyond same-user trust: bind 127.0.0.1 and check Host and Origin, no token.
+- D. A, and additionally trust the Tailscale identity headers where the sole route is `tailscale serve`.
+
+Recommended: A. Under same-user trust (hs-d754 Q6) the token excludes only other local users, which is all any control can do — a same-uid agent reads the token and forges headers anyway (`durable-leads.md:631`); Host and Origin checks are needed in every option (local-sec.md (1)); trusting the identity headers adds nothing against that agent and is optional hardening only under D's condition.
+
+Evidence: local-sec.md (1)–(3); 3.3; durable-leads Q6 R:1203 and Q34 R:1516.
+
+### Q8. May a browser answer approvals — Plan review, secret approval, host-repair approval, ask_user_question — once P1.6 delivers them?
+
+- A. Yes: any attached client may answer, as durable-leads Q1 decided; the browser's `ui_response` is the path.
+- B. A web client is a viewer until it takes control (host-wire change C2's `hello.role: 'viewer'`, or the web server refuses to forward `ui_response` for approvals without re-authentication).
+- C. Some approvals stay terminal-only (e.g. secret/host-repair never arrive in the browser).
+
+Recommended: A. Q1 A already decided any client may command and Q6 A accepts that same-uid processes — the agent's bash included — can answer; the browser only widens the reach, which Q7's token + Host + Origin controls bound, and C2 was sent to the Manager only "if the web server cannot enforce the alternative itself" (host-wire 3.5) — it can.
+
+Evidence: 3.4 ("approvals and Origin are the server's job in all three"); host-wire.md 3 C2; durable-leads Q1 R:1143; Q6 R:1203.
+
+### Q9. Does the web UI add an Escalation-answer surface, or keep parity with the cockpit as it is?
+
+- A. Add it: a list of open Escalations and a User answer path — but a CLI command comes first, so both UIs have it (hs-d753; G37).
+- B. Keep parity: the cockpit shows only a count (G37) and the Lead agent runs `cpd answer`; the web shows the count too, no answer surface.
+
+Recommended: B. hs-d757 is parity with the cockpit as drawn (A5), and answering an Escalation is not a cockpit action today — its UI is the CLI `cpd answer`, run by the Lead — so the web gains nothing under parity. If the User wants the browser to answer, A is the CLI-first path and costs G37 in both UIs.
+
+Evidence: 2.2 ("Answer an Escalation — no cockpit UI"); 2.3 G37; tui-only.md 2 (Worker row).
+
+### Q10. What does a browser show for Sessions with no socket — a pi Lead in tmux and a durable Session whose host is stopped?
+
+- A. A read-only/send-only web chat for both: pi from the session-file transcript (G16) plus `cpd session send`; a stopped durable host shows its last transcript with a "host not running" banner.
+- B. A banner only: the rows are drawn, the chat pane says why there is no live conversation.
+- C. Web chat requires a durable runner; pi Leads never get a chat pane in the browser (send stays a CLI action).
+
+Recommended: A. The cockpit shows the pi pane, so parity wants the conversation visible; reading the file (G16, W2) and sending via `cpd session send` are the only data paths today (2.4), and the banner states the pane's terminal-only reality instead of pretending a live stream.
+
+Evidence: 2.4 (Sessions a browser can reach); tui-only.md 2; host-wire.md 1 (host not running; P1.10).
+
+### Q11. In what order is the build cut, and what is the first useful cut?
+
+- A. Read-only tree + Inbox first (the first useful cut), then actions, then chat — chat approvals after P1.6.
+- B. All read-only views first (tree, Inbox, Plan, Pulse, logs, history), then actions, then chat after P1.6/P1.8.
+- C. Chat before the full views (the Session conversation is the heart of parity).
+
+Recommended: A. Section 6's cut: W1 (the read model) delivers by itself, W5 then W6 give the read-only views on the shared model, actions (W7) after the surfaces exist, chat (W8) once the v1 bridge exists with approvals after P1.6 (Q8). C reverses the dependency: chat needs the W4 bridge and P1.6 anyway (3.3).
+
+Evidence: section 6; hs-n591 (P1.5 onward); 3.3 (P1.6/P1.8 rows).
+
+### Q12. How is parity between the TUI and the web kept over time?
+
+- A. A parity test pinning one shared model: the three CLI commands print the moved read model and a test asserts the TUI draws the same values; plus the rule that a new cockpit read or action lands in core with a CLI command first.
+- B. The rule only, documented: new reads and actions are core functions and CLI commands first (hs-d753).
+- C. A guard: a CI or compile check that no TUI view runs its own SQL when a core read exists.
+
+Recommended: A. 4.4 shows the words in docs are the only link today; the move (Q6 A) makes the CLI print the model, so the test becomes cheap and the rule becomes the move's own enforcement; a guard (C) is possible later, on evidence of misbehaviour (the axioms' guard rule).
+
+Evidence: 4.3-4.4; 4.6 O1; hs-d753.
 
 ## Appendix A. Evidence index
 
-<!-- skeleton -->
+The twelve findings, one per row (file | the one question it answers | the sections that use it):
+
+| Finding file | The one question it answers | Sections that use it |
+|---|---|---|
+| `inv-reads-left.md` | What does the cockpit's left column read (tree, dots, StatusBar pills, Inbox, logs, history), and which of those reads has no CLI command? | 1, 2.1, 2.3, 3.1 |
+| `inv-reads-plan.md` | What do the Plan view, the PR boxes, the Dispatch column, the Job pills and Pulse read? | 1, 2.1, 2.3, 3.1 |
+| `inv-acts-tree.md` | Which actions does the cockpit offer on Contexts, Plans and Sessions? | 1, 2.2, 2.3 |
+| `inv-acts-work.md` | Which actions does the cockpit offer on PRs, the Inbox, Plan review, approvals and ask? | 1, 2.2, 2.3 |
+| `tui-only.md` | What is terminal-only, and which Sessions can a browser reach? | 1, 2.4, 7, 8 (Q10) |
+| `live-today.md` | How does a cockpit view learn of a change, and which state has no Event? | 3.1, 3.2, 7 |
+| `host-wire.md` | What does a browser need from the host socket protocol v1, which bridge fits, and which protocol changes? | 3.2–3.5, 6, 7, 8 (Q4, Q8, Q11) |
+| `core-model.md` | How much of `tui/src/read` is pure data, and is CLI == cockpit pinned? | 4, 6, 7, 8 (Q6, Q12) |
+| `repo-cost.md` | What do the dependency rule, the Gate, install and the test rules require of a web component? | 5, 6, 7, 8 (Q2, Q3) |
+| `rust-http.md` | Which Rust HTTP server crates fit this workspace? | 3.2, 5, 6, 7, 8 (Q2, Q5) |
+| `front-end.md` | Which front-end approach fits the repo, and what is the EventSource connection limit? | 3.2, 5, 7, 8 (Q3, Q5) |
+| `local-sec.md` | What threatens a localhost listener reached over Tailscale or ssh, and what are the minimum controls? | 7, 8 (Q7, Q8) |
+
+Pinned versions and commits: the twelve findings were read on a checkout of `fdd9745d9` (where this research began; section 1 says main later moved to `d55c00251` when PR #687 merged), except `host-wire.md`, which read `d55c00251` (the host socket server is on main there). Sections 6–8 add **18 spot-checks** — 15 against `git show fdd9745d9:<path>` (`docs/implementing.md:7,383,405,417`, `Cargo.toml:10-12`, `cli/src/install.rs:36-41`, `scripts/install-cpd.sh:10`, `package.json:20-21`, `docs/research/durable-leads.md:631,1514`, `tui/src/read_source_tests.rs:6-22`, `core/src/plan/show.rs:76-100`, `tui/src/read/flow.rs:275`, `tui/src/read/tree.rs:103`, `core/src/inbox/cmd.rs:150`) and 3 against `git show origin/main:<path>` (`pi/durable-host/protocol.ts:4`, `docs/contract.md:4021,4049`) — all matched, none needed correction. Every other `file:line` is as the findings and sections 1–5 give them.
