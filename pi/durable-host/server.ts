@@ -83,14 +83,13 @@ export function createServer(deps: ServerDeps): Server {
     else fail(st, "internal", e instanceof Error ? e.message : String(e), req);
   };
   const hostState = (): ToClient => {
-    // Stub (P1.6 first half): `held_ui` stays the 6.14 constant 0; rule 6.15.6 (held_ui from `deps.hostState()`)
-    // is pinned by the red test "host_state carries the held_ui of the deps and not a server constant".
-    const { state, name, agent } = deps.hostState();
-    return { type: "host_state", state, ...(name === undefined ? {} : { name }), clients: count(), held_ui: 0, ...(agent === undefined ? {} : { agent }) };
+    const { state, name, agent, held_ui } = deps.hostState();
+    return { type: "host_state", state, ...(name === undefined ? {} : { name }), clients: count(), held_ui, ...(agent === undefined ? {} : { agent }) };
   };
   const count = (): number => [...states].filter((s) => s.attached).length;
-  // Stub: writes nothing; the red broadcast test pins the real behaviour (one message to every attached client through `send`).
-  const broadcast: Server["broadcast"] = () => {};
+  const broadcast: Server["broadcast"] = (msg) => {
+    for (const st of [...states]) if (st.attached) send(st, msg);
+  };
 
   const run = (st: State, req: string, work: () => Promise<object>): void => {
     work().then(
@@ -116,8 +115,9 @@ export function createServer(deps: ServerDeps): Server {
         st.attached = true;
         send(st, { type: "attached", req: msg.req, mode: a.mode, epoch: deps.epoch, from_seq: a.fromSeq, head_seq: a.headSeq, client_id: st.id });
         for (const f of a.frames) send(st, f);
-        // Stub (P1.6 first half): the replay at attach (one `ui_request` per `deps.held()`, replayed: true,
-        // after the frames and before `host_state`) is pinned by the red replay tests.
+        for (const h of deps.held()) {
+          send(st, { ...h.fields, type: "ui_request", id: h.id, method: h.method, purpose: h.purpose, created_at: h.created_at, ...(h.expires_at === undefined ? {} : { expires_at: h.expires_at }), replayed: true } as ToClient);
+        }
         send(st, hostState());
         return;
       }
@@ -143,10 +143,17 @@ export function createServer(deps: ServerDeps): Server {
           });
         } else if (msg.type === "abort_submission") {
           run(st, msg.req, async () => ({ outcome: await deps.abortSubmission(msg.submission_id) }));
-        } else {
-          // ui_response never reaches here while parseLine answers it with unknown_type
-          // (the §6.15 parse path is stubbed in this first half of P1.6).
-          fail(st, "internal", "ui_response is not handled", msg.req);
+        } else if (msg.type === "ui_response") {
+          const done = (): void => send(st, { type: "result", req: msg.req, data: {} });
+          deps
+            .answerUi(msg.id, { value: msg.value, confirmed: msg.confirmed, answer: msg.answer, cancelled: msg.cancelled })
+            .then(
+              (r) => {
+                done();
+                broadcast({ type: "ui_resolved", id: msg.id, outcome: r.outcome, by: st.id });
+              },
+              (e) => failWith(st, e, msg.req),
+            );
         }
     }
   };

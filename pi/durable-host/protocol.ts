@@ -95,8 +95,27 @@ const str = (o: Record<string, unknown>, k: string): string => (typeof o[k] === 
 const int = (o: Record<string, unknown>, k: string): number => (Number.isInteger(o[k]) ? (o[k] as number) : bad(k, "an integer"));
 const optStr = (o: Record<string, unknown>, k: string): string | undefined => (o[k] === undefined ? undefined : str(o, k));
 
-const KINDS = new Set(["hello", "attach", "submit", "abort", "abort_submission", "ping", "detach"]);
+const KINDS = new Set(["hello", "attach", "submit", "abort", "abort_submission", "ping", "detach", "ui_response"]);
 const WHEN_BUSY = ["followUp", "steer", "reject"] as const;
+
+function uiAnswer(o: Record<string, unknown>): { value?: string; confirmed?: boolean; answer?: object; cancelled?: boolean } {
+  const fields = ["value", "confirmed", "answer", "cancelled"] as const;
+  const present = fields.filter((k) => o[k] !== undefined);
+  if (present.length !== 1) bad("ui_response", "exactly one of value, confirmed, answer or cancelled");
+  const k = present[0];
+  if (k === "value") return { value: str(o, "value") };
+  if (k === "confirmed") {
+    if (typeof o.confirmed !== "boolean") bad("confirmed", "a boolean");
+    return { confirmed: o.confirmed as boolean };
+  }
+  if (k === "answer") {
+    const a = o.answer;
+    if (typeof a !== "object" || a === null || Array.isArray(a)) bad("answer", "an object");
+    return { answer: a as object };
+  }
+  if (typeof o.cancelled !== "boolean") bad("cancelled", "a boolean");
+  return { cancelled: o.cancelled as boolean };
+}
 
 function build(o: Record<string, unknown>, type: string): ToHost {
   if (type === "hello") {
@@ -130,6 +149,8 @@ function build(o: Record<string, unknown>, type: string): ToHost {
     }
     case "abort_submission":
       return { type, req, submission_id: int(o, "submission_id") };
+    case "ui_response":
+      return { type, req, id: str(o, "id"), ...uiAnswer(o) };
     default:
       return { type: "detach", req };
   }
