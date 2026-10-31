@@ -75,6 +75,21 @@ pub(super) fn require_lead(row: &Row) -> Result<(), CpdError> {
     }
 }
 
+/// A `durable` Session has no pane (contract §3.6): `open`, `park`, `history` and `fork` refuse it, before any write or tmux call.
+pub(super) fn require_pane(row: &Row) -> Result<(), CpdError> {
+    if row.runner == row::Runner::Durable {
+        return Err(CpdError::new(
+            ErrorCode::DurableSession,
+            format!(
+                "Session {} runs on durable: it has no pane. Send it a message with cpd session send; cpd chat will open it.",
+                row.id
+            ),
+        )
+        .with("session", row.id.as_str()));
+    }
+    Ok(())
+}
+
 /// `session open` and `park` take a Lead or a Context's Manager (commands.md §10.4, §10.5).
 fn require_chat_session(row: &Row) -> Result<(), CpdError> {
     match row.role {
@@ -103,6 +118,7 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
     let source_id = env.resolve(&args.source)?;
     let source = env.store.read(|conn| row::load(conn, &source_id))?;
     require_lead(&source)?;
+    require_pane(&source)?;
     let plan = args.plan.clone().or_else(|| source.plan.clone()).ok_or_else(|| {
         CpdError::new(
             ErrorCode::PlanRequired,
@@ -182,6 +198,7 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
     let id = env.resolve(&args.id)?;
     let lead = env.store.read(|conn| row::load(conn, &id))?;
     require_chat_session(&lead)?;
+    require_pane(&lead)?;
     if lead.archived_at.is_some() {
         return Err(archived(&lead));
     }
@@ -258,11 +275,14 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
 /// `session park` (commands.md §10.5, contract §6.4 with amendment 3).
 pub(super) fn park(args: ParkArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
+    let named = args.id.as_ref().map(|reference| env.resolve(reference)).transpose()?;
+    if let Some(id) = &named {
+        require_pane(&env.store.read(|conn| row::load(conn, id))?)?;
+    }
     let tmux = env.tmux();
     let cockpit = env.config.tmux.cockpit_session.clone();
     let panes = tmux.list_panes()?;
     let slot = slot(&panes, &cockpit)?;
-    let named = args.id.as_ref().map(|reference| env.resolve(reference)).transpose()?;
     let Some(id) = named.or_else(|| slot.cpd_session.clone()) else {
         // The placeholder holds the slot: there is no Lead to park.
         return Ok(Output::success(json!({"session": null, "already": true})));
@@ -467,6 +487,10 @@ pub fn close_lead(store: &mut Store, tmux: &Tmux, cockpit: &str, id: &SessionId,
     // A Context's Manager is closed by the archive cascade as a Lead is (contract §2.2 "Archived").
     if lead.role == Role::Worker {
         return Err(not_a_lead(&lead.id, lead.role));
+    }
+    // A durable Session has no pane to close (contract §3.6): nothing is killed, nothing written.
+    if lead.runner == row::Runner::Durable {
+        return Ok(Closed { pane: None, already: true });
     }
     let panes = tmux.list_panes()?;
     let in_slot = chat_slot(&panes, cockpit).is_some_and(|p| p.cpd_session.as_ref() == Some(&lead.id));

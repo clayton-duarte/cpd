@@ -162,7 +162,7 @@ pub fn busy(store: &mut Store) -> Result<Vec<String>, CpdError> {
             busy.push(format!("Attempt {id} of Plan {plan} is {status}"));
         }
         let mut sessions = conn.prepare(
-            "SELECT role, name, state FROM sessions WHERE role IN ('lead', 'manager') AND state IN ('working', 'blocked') AND archived_at IS NULL ORDER BY id",
+            "SELECT role, name, state FROM sessions WHERE role IN ('lead', 'manager') AND state IN ('working', 'blocked') AND archived_at IS NULL AND runner = 'pi' ORDER BY id",
         )?;
         for row in sessions.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
             let (role, name, state) = row?;

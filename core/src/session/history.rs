@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde_json::json;
 
-use super::moves::{park_lead, require_lead, slot};
+use super::moves::{park_lead, require_lead, require_pane, slot};
 use super::row;
 use super::{Env, HistoryArgs, PROGRAM};
 use crate::error::{CpdError, ErrorCode};
@@ -21,6 +21,7 @@ pub(super) fn history(args: HistoryArgs) -> Result<Output, CpdError> {
     let id = env.resolve(&args.id)?;
     let session = env.store.read(|conn| row::load(conn, &id))?;
     require_lead(&session)?;
+    require_pane(&session)?;
     let file = session.file.clone().ok_or_else(|| {
         CpdError::new(ErrorCode::FileUnreadable, format!("Session {} has no session file.", session.id))
             .with("session", session.id.as_str())

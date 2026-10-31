@@ -93,14 +93,18 @@ fn ready(engine: &mut Engine) -> Result<Vec<Ready>, CpdError> {
 /// Puts one Session to sleep. False when the User is looking at it (the chat slot) or it changed meanwhile.
 fn sleep(engine: &mut Engine, r: &Ready) -> Result<bool, CpdError> {
     let cockpit = engine.config.tmux.cockpit_session.clone();
-    let panes = engine.tmux.list_panes()?;
-    if chat_slot(&panes, &cockpit).is_some_and(|p| p.cpd_session.as_ref() == Some(&r.session)) {
-        return Ok(false);
-    }
-    match close_lead(&mut engine.store, &engine.tmux, &cockpit, &r.session, SOURCE) {
-        Ok(_) => {}
-        Err(e) if e.code() == ErrorCode::InChatSlot => return Ok(false),
-        Err(e) => return Err(e),
+    // A durable Session has no pane (contract §3.6): no tmux call, only the two writes.
+    let durable = engine.store.read(|conn| Ok(conn.query_row("SELECT runner = 'durable' FROM sessions WHERE id = ?1", [r.session.as_str()], |row| row.get::<_, bool>(0))?))?;
+    if !durable {
+        let panes = engine.tmux.list_panes()?;
+        if chat_slot(&panes, &cockpit).is_some_and(|p| p.cpd_session.as_ref() == Some(&r.session)) {
+            return Ok(false);
+        }
+        match close_lead(&mut engine.store, &engine.tmux, &cockpit, &r.session, SOURCE) {
+            Ok(_) => {}
+            Err(e) if e.code() == ErrorCode::InChatSlot => return Ok(false),
+            Err(e) => return Err(e),
+        }
     }
     engine.store.write(SOURCE, |tx| {
         let changed = tx.execute(
