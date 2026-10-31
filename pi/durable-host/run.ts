@@ -1,20 +1,27 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { ConversationBusy, GenerationTask, hook, type Extension } from "@earendil-works/pi-durable";
 import type { FollowerHooks } from "../lib/follower.ts";
-import { parseLine } from "../lib/event.ts";
+import { parseLine, type EventOf } from "../lib/event.ts";
 import { cursorFrom } from "./cursor.ts";
 import { inputOf, type Input } from "./deliver.ts";
 import { CpdError } from "../lib/cpd.ts";
+import { highestReview, reviewsFromEntries } from "../lib/plan-review.ts";
 import { policySection } from "../lib/policy.ts";
 import { parseSession } from "../lib/run.ts";
 import { Reporter, stateArgs, type Wanted } from "../lib/state.ts";
 import { zoneLine } from "../lib/time.ts";
 import { socketPath, storePath, type Config } from "./config.ts";
+import * as held from "./held.ts";
+import { createDialogs } from "./dialogs.ts";
+import { createPlanReview } from "./plan-review.ts";
 import { ProtocolError } from "./protocol.ts";
 import { HostRunning } from "./sockets.ts";
 import { Ring } from "./ring.ts";
 import { createServer, type Server } from "./server.ts";
 import { hostExtension } from "./extension.ts";
+import { registerHostTools } from "./tools.ts";
 import type { EventStream } from "../durable-worker/harness.ts";
 import type { Connection } from "./server.ts";
 import { newTurnState, prepareTurn, reminderFor, type StoredEntry, type TurnPort, type Write } from "./turn.ts";
@@ -113,7 +120,41 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     const policy = policySection(await deps.cpd(["policy", "show"]));
     const base = hostExtension({ contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) }, { cwd: config.cwd, home: deps.homeDir() });
     const turn = newTurnState();
+    const plan = session.plan ?? "";
+    // §6.15 "The blocked state": a held request reports `blocked` with the label `dialog`; resolving to zero returns to
+    // `working` while a run is pending, else to `idle`, with the reply rule of §6.13 untouched.
+    let hostState: "idle" | "working" = "idle";
+    let reply = false;
+    const wanted = (): Wanted =>
+      held.heldCount() > 0 ? { state: "blocked", label: "dialog" } : hostState === "working" ? { state: "working" } : reply ? { state: "idle", reply: true } : { state: "idle" };
+    const report = (): void => {
+      server?.stateChanged();
+      reporter.want(wanted());
+    };
+    const changed = (next: "idle" | "working"): void => {
+      if (hostState === next) return;
+      hostState = next;
+      report();
+    };
+    // The dialogs broadcast through the server and re-report the state on every request that appears or resolves.
+    const dialogs = createDialogs({
+      held,
+      broadcast: (msg) => server?.broadcast(msg),
+      stateChanged: () => {
+        server?.stateChanged();
+        reporter.want(wanted());
+      },
+    });
     let port!: TurnPort;
+    // The four tools of §6.15 ride on the extension `deps.open` installs (the extension's `tools` carry them).
+    const hostTools = registerHostTools({
+      role: session.role as "lead" | "manager",
+      plan: session.plan ?? undefined,
+      name: session.name ?? "",
+      cpd: deps.cpd,
+      held,
+      dialogs,
+    });
     // pi-durable 1.3.0 (README "Hooks", GenerationHooks): `onYield(answer)` returning `{ continue }` appends a user message and continues the run; the answer is the final AssistantMessage.
     const extension: Extension = {
       ...base,
@@ -121,6 +162,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         const text = await reminderFor([answer], port, turn);
         return text === undefined ? undefined : { continue: text };
       } })],
+      ...(hostTools.tools === undefined ? {} : { tools: hostTools.tools }),
     };
     const conversation = await deps.open({ file: storePath(config.home, config.session), cwd: config.cwd, model, extension });
     current = await conversation.watch();
@@ -146,15 +188,27 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     // §3.6 allows `stopped -> idle`, never `stopped -> working`.
     if ((shown.session as { state?: unknown }).state === "stopped") reporter.want({ state: "idle" });
 
+    // The plan-review flow (§6.15): its summary and feedback files live in `$CPD_HOME/run/<plan>/` (review.rs `summary_review_md`).
+    const readPlanFile = async (file: string): Promise<string> => {
+      const path = join(config.home, "run", plan, file);
+      try {
+        return await readFile(path, "utf8");
+      } catch (e) {
+        throw new CpdError("file_unreadable", `cannot read ${path}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    };
+    const planReview = createPlanReview({
+      plan,
+      cpd: deps.cpd,
+      readText: readPlanFile,
+      write: (entry) => conversation.write({ type: "write", entry }),
+      entries: () => conversation.entries(),
+      dialogs,
+      held,
+    });
+
     let cursor = cursorFrom(session.registeredEvent, await conversation.entries(), config.session);
     let pending = 0;
-    let reply = false;
-    let hostState: "idle" | "working" = "idle";
-    const changed = (next: "idle" | "working"): void => {
-      if (hostState === next) return;
-      hostState = next;
-      server?.stateChanged();
-    };
     const seen = new Set<string>();
     const names = new Map<string, Promise<string | null>>();
     const nameOf = (id: string): Promise<string | null> => {
@@ -173,7 +227,6 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       const starts = pending === 0 && input.whenBusy !== "reject";
       if (input.reply) reply = true;
       pending++;
-      reporter.want({ state: "working" });
       changed("working");
       try {
         // Only an input that starts a turn gets the first message and the context update; they are prepared one input at a time.
@@ -186,9 +239,8 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         void submission.wait().then(
           () => {
             if (--pending === 0) {
-              reporter.want(reply ? { state: "idle", reply: true } : { state: "idle" });
-              reply = false;
               changed("idle");
+              reply = false;
             }
           },
           (e) => {
@@ -199,7 +251,6 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         return submission;
       } catch (e) {
         if (--pending === 0) {
-          reporter.want({ state: "idle" });
           reply = false;
           changed("idle");
         }
@@ -231,14 +282,22 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
           throw e;
         }
       },
-      abort: (opts) => conversation.abort(opts),
-      abortSubmission: (id) => conversation.abortSubmission(id),
-      // P1.6 first half: the wire only — the host flow (held map, dialogs, tools) lands in the second half of the PR.
-      held: () => [],
-      answerUi: () => {
-        throw new Error("not implemented");
+      abort: (opts) => {
+        // §6.15 "Abort (4.6.4)": every held request is resolved `aborted` by the host before the conversation abort, one `ui_resolved` each.
+        const ids = held.heldList().map((h) => h.id);
+        for (const id of ids) {
+          held.resolveByHost(id, "aborted");
+          server?.broadcast({ type: "ui_resolved", id, outcome: "aborted", by: "host" });
+        }
+        return conversation.abort(opts);
       },
-      hostState: () => ({ state: hostState, held_ui: 0, ...(session.name === null ? {} : { name: session.name }) }),
+      abortSubmission: (id) => conversation.abortSubmission(id),
+      held: () => held.heldList(),
+      answerUi: async (id, value) => held.answer(id, value),
+      hostState: () => {
+        const heldUi = held.heldCount();
+        return { state: heldUi > 0 ? "blocked" : hostState, held_ui: heldUi, ...(session.name === null ? {} : { name: session.name }) };
+      },
       timers,
       clientId: () => (from = `c${++nextClient}`),
     });
@@ -279,6 +338,15 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       };
     });
     if (over) await listener.close();
+    // §6.15 "The start hook": at host start, reopen the dialog of the highest pending review with a fresh id (4.4 rule 6).
+    try {
+      const { reviews } = reviewsFromEntries(await conversation.entries(), plan);
+      const pending = [...reviews.values()].filter((e) => e.status === "pending").map((e) => e.review);
+      const highest = highestReview(pending);
+      if (highest !== undefined) await planReview.open(highest, "start");
+    } catch (e) {
+      failed("the plan review at start", e);
+    }
     follower = deps.follow?.({
       before: async () => {},
       onRunStart: () => {},
@@ -296,6 +364,28 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
           failed("an event", e);
           end(1);
         };
+        // A `plan-review` Event feeds the flow of §plan-review.ts instead of a submission: pending opens the dialog,
+        // approved or rejected settles the pending entry, superseded closes it (pi/lib/handle.ts `handleEvent`).
+        if (event.kind === "plan-review") {
+          const ev = event as EventOf<"plan-review">;
+          void (async () => {
+            try {
+              const review = ev.data.review;
+              if (ev.data.status === "pending") {
+                await planReview.open(review, "event");
+                return;
+              }
+              const { reviews } = reviewsFromEntries(await conversation.entries(), plan);
+              const entry = reviews.get(review);
+              if (entry?.status !== "pending") return;
+              if (ev.data.status === "approved" || ev.data.status === "rejected") await planReview.decidedElsewhere(entry, ev);
+              else if (ev.data.status === "superseded") planReview.closeSuperseded(entry);
+            } catch (e) {
+              failed("a plan-review event", e);
+            }
+          })();
+          return true;
+        }
         // Submitted synchronously unless a sender's name must be read first: a lookup is the only thing that waits.
         const from = event.kind === "session-message" && event.session === config.session ? event.data.from : null;
         if (typeof from === "string") {

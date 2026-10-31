@@ -1,5 +1,9 @@
 // Contract §6.15 `held.ts`: the host's memory-only map of held UI requests (4.4 rule 6), and its pure questions.
-// The types are real so the tests and the rest of the host type against them; the bodies are P1.6's tail, not this Job.
+// One request per entry, oldest first (`heldList`), created through `create`, answered through `answer` (the server's
+// `answerUi`), settled by the host through `resolveByHost`/`resolveAll`. The expiry is this module's seam (the impl
+// Job's): `create` with an `ms` schedules an unref-ed timer that settles the request as `timeout` at `expires_at`.
+import { randomUUID } from "node:crypto";
+import { ProtocolError } from "./protocol.ts";
 
 export type Held = {
   id: string;
@@ -32,26 +36,94 @@ export type HeldApi = {
   resolveAll(outcome: Extract<Outcome, "timeout" | "superseded" | "aborted">): void;
 };
 
+type Entry = Held & {
+  onResolve(outcome: Outcome, by: string): void;
+  timer?: ReturnType<typeof setTimeout>;
+};
+
+/** The map, insertion order (oldest first): the §6.15 replay list. Memory only (4.4 rule 6): it dies with the process. */
+const map = new Map<string, Entry>();
+
 export function heldCount(): number {
-  throw new Error("not implemented");
+  return map.size;
 }
 
 export function heldList(): readonly Held[] {
-  throw new Error("not implemented");
+  return [...map.values()];
+}
+
+function drop(id: string, entry: Entry): void {
+  if (map.get(id) !== entry) return;
+  map.delete(id);
+  if (entry.timer !== undefined) clearTimeout(entry.timer);
+}
+
+/** Settles one entry by the host: removes it, records the outcome and resolves the promise with `undefined`. */
+function settleByHost(id: string, entry: Entry, outcome: Extract<Outcome, "timeout" | "superseded" | "aborted">, by: string): void {
+  drop(id, entry);
+  entry.onResolve(outcome, by);
+  entry.resolve(undefined);
 }
 
 export function create(method: Held["method"], fields: object, purpose: Held["purpose"], opts: CreateOptions): { id: string; promise: Promise<object | undefined> } {
-  throw new Error("not implemented");
+  const id = randomUUID();
+  const created_at = Date.now();
+  const expires_at = opts.ms === undefined ? undefined : created_at + opts.ms;
+  let resolve!: (value?: object) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<object | undefined>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  const onSignal = (): void => settleByHost(id, entry, "superseded", "host");
+  const entry: Entry = {
+    id,
+    method,
+    purpose,
+    created_at,
+    ...(expires_at === undefined ? {} : { expires_at }),
+    fields,
+    ...(opts.signal === undefined ? {} : { signal: opts.signal }),
+    resolve,
+    reject,
+    onResolve: opts.onResolve,
+  };
+  map.set(id, entry);
+  // The expiry is a clock of the process (contract: "where held takes it is the impl Job's seam"): an unref-ed timer,
+  // cleared with the entry, so a pending expiry never holds the process and a settled request is never touched twice.
+  if (opts.ms !== undefined && opts.ms > 0) {
+    entry.timer = setTimeout(() => settleByHost(id, entry, "timeout", "host"), opts.ms);
+    entry.timer.unref?.();
+  }
+  if (opts.signal !== undefined) {
+    if (opts.signal.aborted) queueMicrotask(onSignal);
+    else opts.signal.addEventListener("abort", onSignal, { once: true });
+  }
+  return { id, promise };
 }
 
 export function answer(id: string, value: AnswerValue): { outcome: "answered" | "cancelled" } {
-  throw new Error("not implemented");
+  const entry = map.get(id);
+  if (entry === undefined) throw new ProtocolError("ui_unknown", `no held request ${id}`);
+  const given = value.value ?? value.confirmed ?? value.answer;
+  if (given !== undefined) {
+    // The first answer wins: the request is removed and the promise settles with the value (4.4 rule 2).
+    drop(id, entry);
+    entry.onResolve("answered", "client");
+    entry.resolve(given as object);
+    return { outcome: "answered" };
+  }
+  // A cancelled value is an explicit decline, settled by the host, not by the client (4.4 rule 2, 4.6.3): the request
+  // stays held (the client learned of the resolution from the ui_resolved broadcast) until the host settles it.
+  return { outcome: "cancelled" };
 }
 
 export function resolveByHost(id: string, outcome: Extract<Outcome, "timeout" | "superseded" | "aborted">): void {
-  throw new Error("not implemented");
+  const entry = map.get(id);
+  if (entry === undefined) return;
+  settleByHost(id, entry, outcome, "host");
 }
 
 export function resolveAll(outcome: Extract<Outcome, "timeout" | "superseded" | "aborted">): void {
-  throw new Error("not implemented");
+  for (const [id, entry] of [...map]) settleByHost(id, entry, outcome, "host");
 }
