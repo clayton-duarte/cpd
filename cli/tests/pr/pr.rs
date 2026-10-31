@@ -4013,7 +4013,145 @@ fn assert_reviews_superseded_before_done(env: &TestEnv, plan: &str) {
 // `reason` `base-merged`; its Worker merges `origin/main` into the Lead Branch even though there is no conflict, and the
 // red-test Job of the stacked PR then lists its test as found.
 
+/// A `node` with GitHub's `baseRefName` and the repo's default branch, as the poll's search prints them (`pr_stacked_ready`'s
+/// own, private there): the poll needs both to follow a repoint and to know the new base is the default branch.
+fn repointed(node: String, base: &str, default: &str) -> String {
+    let node = based(node, base);
+    let node = node.replacen(r#""},"number":"#, &format!(r#"","defaultBranchRef":{{"name":"{default}"}}}},"number":"#), 1);
+    assert!(node.contains("defaultBranchRef"), "{node}");
+    node
+}
+
+/// 814, the stacked PR's pull request, with its base and the repo's default branch GitHub reports.
+fn web_repointed(base: &str, default: &str) -> String {
+    repointed(up("OPEN"), base, default)
+}
+
+/// The repo `acme/pay`'s `[test-commands]` of the regression: `list` finds `t::one` only when the base fix (`harness.txt`)
+/// is in the worktree, and `run` fails, so the `test` Job is red.
+const REGRESS_TESTS: &str = "[test-commands]\n\
+    build = \"build\"\n\
+    list = \"list {{ test }}\"\n\
+    run = \"run {{ tests }}\"\n";
+
+/// The answer of `sh -c <command>` for [`REGRESS_TESTS`]: `build` always passes, `list t::one` passes only once
+/// `harness.txt` (the base fix) exists in the worktree, `list` of another name fails, and `run` fails (a red test).
+fn red_tests_answer(call: &Call) -> Reply {
+    let command = call.args[1].clone();
+    let cwd = call.cwd.clone().expect("a [test-commands] command runs in a directory");
+    match command.as_str() {
+        "build" => Reply::ok("building\n"),
+        "list t::one" => Reply::exit(i32::from(!cwd.join("harness.txt").exists()), "", ""),
+        "run t::one" => Reply::exit(1, "running\n", ""),
+        other => panic!("a [test-commands] command nothing scripted: {other}"),
+    }
+}
+
+impl Poll {
+    /// The Lead worktree path of PR `key` of Plan `pay`.
+    fn lead_worktree_of(&self, key: &str) -> PathBuf {
+        let path: String = self.store().read(|c| Ok(c.query_row("SELECT lead_worktree FROM prs WHERE plan = 'pay' AND key = ?1", [key], |r| r.get(0))?)).unwrap();
+        PathBuf::from(path)
+    }
+
+    /// Cuts Attempt `<job>-a1` for a running `test` Job of PR `key` - its red test named `t::one` in `tests/t.rs` - from
+    /// the PR's Lead worktree and commits the red test. Returns the Attempt worktree; [`Poll::submit_red`] submits it.
+    fn red_test_attempt(&self, key: &str, job: &str) -> PathBuf {
+        let lead = self.lead_worktree_of(key);
+        let attempt = AttemptId::parse(&format!("{job}-a1")).unwrap();
+        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("red.log") };
+        let made = self.scoped(|| create_attempt_worktree(&self.repo, &lead, &plan(), &attempt, &setup)).unwrap();
+        self.store()
+            .write("fixture", |tx| {
+                tx.execute(
+                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                       status, appended, fingerprint, created_txn, created_at, kind, tests, test_files)
+                     VALUES ('pay', ?4, ?1, 'Red', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', 'test', ?5, ?6)",
+                    params![job, "f".repeat(64), tx.id(), key, r#"["t::one"]"#, r#"["tests/t.rs"]"#],
+                )?;
+                tx.execute(
+                    "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
+                     VALUES ('pay', ?1, ?2, 1, 'S2', 'ladder', 'running', ?3, ?4, ?5, 't')",
+                    params![attempt.to_string(), job, made.branch, made.path.to_str().unwrap(), made.base_sha],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        self.commit_file(&made.path, "tests/t.rs", "// the red test t::one\n", "the red test");
+        made.path
+    }
+
+    /// `cpd attempt submit red-a1 --plan pay` in the red-test Attempt's worktree.
+    fn submit_red(&self, worktree: &Path) -> Run {
+        self.cpd_in(worktree, &["attempt", "submit", "red-a1", "--plan", "pay"])
+    }
+}
+
+/// A stacked PR's red-test Job lists its test as found once the base fix merges to main (hs-d794, hs-n617): the base PR
+/// `repo` merged and GitHub repointed the stacked pull request `web` to the default branch `main`, which holds the base
+/// fix and no conflict with `web`'s Lead Branch. The poll queues one `update` Job, `reason` `base-merged`; running it
+/// merges `origin/main` into the Lead Branch even though there is no conflict; and the `test` Job of `web` then lists its
+/// test `t::one` as found, with no hand-merge by the Lead.
 #[test]
 fn a_stacked_red_test_job_lists_its_test_as_found_once_the_base_fix_merges_to_main() {
-    unimplemented!("the poll queues no update Job for a base-merge repoint that is ahead without a conflict");
+    let fx = poll_fx_stacked("deploy");
+    poll_stacked_pr(&fx);
+    fx.mark_opened("web", 814);
+    // The repo runs the repo's own `[test-commands]`: no real build, no real cargo, no real git.
+    fx.env.repo_policy("acme", "pay", REGRESS_TESTS);
+    fx.sh(red_tests_answer);
+
+    // The base fix reaches `main`; `web`'s Lead Branch was cut from the base PR's Lead Branch before it: it lacks the fix.
+    let fix = fx.advance_base("harness.txt", "the base fix\n");
+    let web = fx.lead_worktree_of("web");
+    assert_eq!(fx.git(&fx.repo, &["rev-parse", "origin/main"]), fix, "the base fix is on main on the remote");
+    assert!(!fx.git_output(&web, &["cat-file", "-e", "HEAD:harness.txt"]).status.success(), "the Lead Branch lacks the base fix before the update Job");
+
+    // The red-test Job of `web` is blocked on the base fix: its `list` finds no `t::one`, and cpd refuses the submit
+    // `tests_not_found`. The Lead's hand-merge of `origin/main` is the defect's deadlock and must not be needed.
+    let red = fx.red_test_attempt("web", "red");
+    let error = common::refused(&fx.submit_red(&red), "tests_not_found", 3);
+    assert_eq!(error["details"]["tests"], json!(["t::one"]));
+    assert_eq!(fx.status_of_attempt("red-a1"), "running", "the blocked Job stays running");
+
+    // The base PR merged: 812 left the open search and GitHub repointed 814 to `main`.
+    fx.search(&[web_repointed("main", "main")]);
+    fx.lookup(&[Some(pay("MERGED", None, None))]);
+
+    let out = fx.poll();
+
+    // The base follow learns the repoint, and the poll queues exactly one update Job, `reason` `base-merged`.
+    assert_eq!(out["base_changed"], json!([{"plan": "pay", "pr": "web", "from": fx.branch, "to": "main"}]));
+    assert_eq!(fx.update_jobs(), [("up-web".to_owned(), "queued".to_owned())]);
+    let added: Vec<_> = fx.events("job-added").into_iter().filter(|(_, data)| data["pr"] == json!("web")).collect();
+    assert_eq!(added.len(), 1, "{added:?}");
+    assert_eq!(
+        (&added[0].1["kind"], &added[0].1["by"], &added[0].1["reason"]),
+        (&json!("update"), &json!("poll"), &json!("base-merged"))
+    );
+    assert_eq!(fx.pr_status("web"), "open", "the repoint changes no status");
+
+    // Running that Job: its Worker merges `origin/main` into the Lead Branch even though the two do not conflict.
+    fx.git(&web, &["fetch", "-q", "origin", "main"]);
+    fx.git(&web, &["merge", "-q", "--no-edit", "origin/main"]);
+    fx.git(&web, &["push", "-q", "origin", "cpd/pay/web"]);
+    assert!(fx.git_output(&web, &["cat-file", "-e", "HEAD:harness.txt"]).status.success(), "the Lead Branch holds the base fix after the update Job");
+
+    // The red-test Job takes the Lead Branch's new tip into its Attempt and submits again; its `list` now finds `t::one`,
+    // and the Job passes (its `run` is red).
+    fx.git(&red, &["merge", "-q", "--no-edit", "cpd/pay/web"]);
+    let submitted = fx.submit_red(&red).ok();
+    assert_eq!(submitted["submitted"], json!(true), "{submitted}");
+    let lists: Vec<String> = fx.calls("sh").into_iter().map(|call| call.args[1].clone()).filter(|command| command.starts_with("list")).collect();
+    assert_eq!(lists, ["list t::one", "list t::one"], "the Job's list ran before and after the base fix");
+    assert!(red.join("harness.txt").exists(), "the Attempt worktree holds the base fix");
+    assert_eq!(fx.status_of_attempt("red-a1"), "merging", "the red-test Job submitted once its test was found");
 }
+
+impl Poll {
+    /// The status of Attempt `id` of Plan `pay`.
+    fn status_of_attempt(&self, id: &str) -> String {
+        self.store().read(|c| Ok(c.query_row("SELECT status FROM attempts WHERE plan = 'pay' AND id = ?1", [id], |r| r.get(0))?)).unwrap()
+    }
+}
+
