@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { encode, LIMITS, negotiate, parseLine } from "../../durable-host/protocol.ts";
+import { encode, HISTORY_MAX, IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL, IMAGE_MIME, LIMITS, negotiate, parseLine } from "../../durable-host/protocol.ts";
 
 const fail = (line: string) => {
   const r = parseLine(line);
@@ -104,7 +104,7 @@ test("parseLine answers an unknown type with unknown_type and keeps its req", ()
 });
 
 test("parseLine answers a type of a later PR with unknown_type", () => {
-  for (const type of ["compact", "configure", "list_models", "reload", "mcp", "fork", "history", "rename"]) {
+  for (const type of ["reload", "mcp", "rename"]) {
     const e = fail(`{"type":"${type}","req":"r"}`);
     assert.equal(e.code, "unknown_type", type);
     assert.equal(e.req, "r", type);
@@ -238,4 +238,127 @@ test("LIMITS holds the numbers of contract 6.14", () => {
   );
   // the stub must not make this pass alone: the limits are used by shouldRebase and the wire
   assert.equal(encode({ type: "pong" }), '{"type":"pong"}\n');
+});
+
+test("parseLine accepts compact with optional instructions", () => {
+  assert.deepEqual(parseLine('{"type":"compact","req":"r","instructions":"summarize"}'), {
+    ok: true,
+    msg: { type: "compact", req: "r", instructions: "summarize" },
+  });
+  assert.deepEqual(parseLine('{"type":"compact","req":"r"}'), { ok: true, msg: { type: "compact", req: "r" } });
+  const e = fail('{"type":"compact","req":"r","instructions":5}');
+  assert.equal(e.code, "bad_args");
+  assert.equal(e.req, "r");
+  assert.match(e.message, /instructions/);
+});
+
+test("parseLine accepts configure with a model or a thinking_level and rejects both or none with bad_args", () => {
+  assert.deepEqual(parseLine('{"type":"configure","req":"r","model":"anthropic/sonnet"}'), {
+    ok: true,
+    msg: { type: "configure", req: "r", model: "anthropic/sonnet" },
+  });
+  assert.deepEqual(parseLine('{"type":"configure","req":"r","thinking_level":"high"}'), {
+    ok: true,
+    msg: { type: "configure", req: "r", thinking_level: "high" },
+  });
+  assert.deepEqual(parseLine('{"type":"configure","req":"r","thinking_level":null}'), {
+    ok: true,
+    msg: { type: "configure", req: "r", thinking_level: null },
+  });
+  const none = fail('{"type":"configure","req":"r"}');
+  assert.equal(none.code, "bad_args");
+  assert.equal(none.req, "r");
+  assert.match(none.message, /model|thinking_level/);
+  const both = fail('{"type":"configure","req":"r","model":"anthropic/sonnet","thinking_level":"high"}');
+  assert.equal(both.code, "bad_args");
+  assert.equal(both.req, "r");
+  assert.match(both.message, /model|thinking_level/);
+  const badModel = fail('{"type":"configure","req":"r","model":5}');
+  assert.equal(badModel.code, "bad_args");
+  assert.match(badModel.message, /model/);
+  const badLevel = fail('{"type":"configure","req":"r","thinking_level":5}');
+  assert.equal(badLevel.code, "bad_args");
+  assert.match(badLevel.message, /thinking_level/);
+});
+
+test("parseLine accepts list_models and fork with ownership and rejects an unknown ownership with bad_args", () => {
+  assert.deepEqual(parseLine('{"type":"list_models","req":"r"}'), { ok: true, msg: { type: "list_models", req: "r" } });
+  assert.deepEqual(parseLine('{"type":"fork","req":"r","at":7}'), { ok: true, msg: { type: "fork", req: "r", at: 7 } });
+  for (const ownership of ["lead", "manager"] as const) {
+    assert.deepEqual(parseLine(`{"type":"fork","req":"r","at":7,"ownership":"${ownership}"}`), {
+      ok: true,
+      msg: { type: "fork", req: "r", at: 7, ownership },
+    });
+  }
+  const bad = fail('{"type":"fork","req":"r","at":7,"ownership":"worker"}');
+  assert.equal(bad.code, "bad_args");
+  assert.equal(bad.req, "r");
+  assert.match(bad.message, /ownership/);
+  const noAt = fail('{"type":"fork","req":"r"}');
+  assert.equal(noAt.code, "bad_args");
+  assert.match(noAt.message, /at/);
+  const badAt = fail('{"type":"fork","req":"r","at":"7"}');
+  assert.equal(badAt.code, "bad_args");
+  assert.match(badAt.message, /at/);
+});
+
+test("parseLine accepts history with before and limit and rejects an over-cap limit with bad_args", () => {
+  assert.deepEqual(parseLine('{"type":"history","req":"r"}'), { ok: true, msg: { type: "history", req: "r" } });
+  assert.deepEqual(parseLine('{"type":"history","req":"r","before":"Y3Vyc29y","limit":10}'), {
+    ok: true,
+    msg: { type: "history", req: "r", before: "Y3Vyc29y", limit: 10 },
+  });
+  const over = fail(`{"type":"history","req":"r","limit":${HISTORY_MAX + 1}}`);
+  assert.equal(over.code, "bad_args");
+  assert.equal(over.req, "r");
+  assert.match(over.message, /limit/);
+  assert.match(over.message, new RegExp(String(HISTORY_MAX)));
+  for (const limit of [0, -1, 1.5, "10"]) {
+    const e = fail(`{"type":"history","req":"r","limit":${JSON.stringify(limit)}}`);
+    assert.equal(e.code, "bad_args", String(limit));
+    assert.match(e.message, /limit/, String(limit));
+  }
+  const badBefore = fail('{"type":"history","req":"r","before":5}');
+  assert.equal(badBefore.code, "bad_args");
+  assert.match(badBefore.message, /before/);
+});
+
+test("parseLine accepts submit with images and rejects an over-limit or a bad mime or a non-base64 data with bad_args", () => {
+  const image = { mime_type: "image/png", data: "aGk=" };
+  assert.deepEqual(parseLine(JSON.stringify({ type: "submit", req: "r", text: "hi", images: [image] })), {
+    ok: true,
+    msg: { type: "submit", req: "r", text: "hi", when_busy: "followUp", images: [image] },
+  });
+  for (const mime_type of IMAGE_MIME) {
+    assert.deepEqual(parseLine(JSON.stringify({ type: "submit", req: "r", text: "hi", images: [{ mime_type, data: "aGk=" }] })), {
+      ok: true,
+      msg: { type: "submit", req: "r", text: "hi", when_busy: "followUp", images: [{ mime_type, data: "aGk=" }] },
+    });
+  }
+  // an empty array is the absent one
+  assert.deepEqual(parseLine('{"type":"submit","req":"r","text":"hi","images":[]}'), {
+    ok: true,
+    msg: { type: "submit", req: "r", text: "hi", when_busy: "followUp" },
+  });
+  // more than IMAGE_MAX_COUNT images
+  const tooMany = Array.from({ length: IMAGE_MAX_COUNT + 1 }, () => ({ mime_type: "image/png", data: "aGk=" }));
+  const count = fail(JSON.stringify({ type: "submit", req: "r", text: "hi", images: tooMany }));
+  assert.equal(count.code, "bad_args");
+  assert.equal(count.req, "r");
+  assert.match(count.message, /images/);
+  // more than IMAGE_MAX_TOTAL bytes of base64 data together
+  const big = Array.from({ length: 2 }, () => ({ mime_type: "image/png", data: "A".repeat(Math.ceil(IMAGE_MAX_TOTAL / 2) + 4) }));
+  const total = fail(JSON.stringify({ type: "submit", req: "r", text: "hi", images: big }));
+  assert.equal(total.code, "bad_args");
+  assert.match(total.message, /images/);
+  // a mime outside IMAGE_MIME
+  const mime = fail(JSON.stringify({ type: "submit", req: "r", text: "hi", images: [{ mime_type: "image/tiff", data: "aGk=" }] }));
+  assert.equal(mime.code, "bad_args");
+  assert.match(mime.message, /mime_type/);
+  // data that is not RFC 4648 base64 with its padding
+  for (const data of ["not base64!!", "aGk", "====", "aGk=extra"]) {
+    const e = fail(JSON.stringify({ type: "submit", req: "r", text: "hi", images: [{ mime_type: "image/png", data }] }));
+    assert.equal(e.code, "bad_args", data);
+    assert.match(e.message, /data/, data);
+  }
 });

@@ -83,6 +83,7 @@ function rig(over: { role?: string; state?: string } = {}) {
       throw new Error(`unexpected cpd call: ${line}`);
     },
     resolveModel: () => MODEL,
+    models: async () => [],
     contextFiles: () => FILES,
     open: async (o) => {
       opens.push(o);
@@ -98,6 +99,10 @@ function rig(over: { role?: string; state?: string } = {}) {
         write: async () => ({}),
         install: () => {},
         entries: async () => [],
+        compact: async () => 1,
+        configure: async () => {},
+        agent: async () => ({ thinkingLevel: "high" }),
+        pageEntries: async () => ({ entries: [] }),
         closed,
       };
       return Object.assign(conversation, { close: () => closeCalls.n++ });

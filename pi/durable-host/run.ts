@@ -6,7 +6,7 @@ import type { FollowerHooks } from "../lib/follower.ts";
 import { parseLine, type EventOf } from "../lib/event.ts";
 import { cursorFrom } from "./cursor.ts";
 import { inputOf, type Input } from "./deliver.ts";
-import { CpdError } from "../lib/cpd.ts";
+import { CpdError, toCpdError } from "../lib/cpd.ts";
 import { highestReview, reviewsFromEntries } from "../lib/plan-review.ts";
 import { policySection } from "../lib/policy.ts";
 import { parseSession } from "../lib/run.ts";
@@ -16,7 +16,7 @@ import { socketPath, storePath, type Config } from "./config.ts";
 import * as held from "./held.ts";
 import { createDialogs } from "./dialogs.ts";
 import { createPlanReview } from "./plan-review.ts";
-import { ProtocolError } from "./protocol.ts";
+import { HISTORY_LIMIT, LIMITS, ProtocolError, type AgentState } from "./protocol.ts";
 import { HostRunning } from "./sockets.ts";
 import { Ring } from "./ring.ts";
 import { createServer, type Server } from "./server.ts";
@@ -29,9 +29,26 @@ import { newTurnState, prepareTurn, reminderFor, type StoredEntry, type TurnPort
 export type { EventStream };
 export type Submission = { id: number; status(): Promise<string>; wait(): Promise<"done" | "unanswered"> };
 /** `write` appends an entry (`submit({ type: "write", ... })`): the first message and the context updates. */
-export type Conversation = { submit(input: Input): Promise<Submission>; write(write: Write): Promise<unknown>; install(extension: Extension): void; entries(): Promise<readonly unknown[]>; closed: Promise<unknown>; watch(): Promise<EventStream>; abort(opts: { background: boolean }): Promise<void>; abortSubmission(id: number): Promise<"aborted" | "already_placed" | "settled" | "not_found"> };
+export type Conversation = { submit(input: Input): Promise<Submission>; write(write: Write): Promise<unknown>; install(extension: Extension): void; entries(): Promise<readonly unknown[]>; closed: Promise<unknown>; watch(): Promise<EventStream>; abort(opts: { background: boolean }): Promise<void>; abortSubmission(id: number): Promise<"aborted" | "already_placed" | "settled" | "not_found"> } & ConversationCommands;
+
+/** The four conversation commands of contract 6.17 a `Conversation` must carry (built by `conversationOf`). */
+export type ConversationCommands = {
+  compact(instructions?: string): Promise<number>;
+  configure(change: { model?: { provider: string; modelId: string }; thinkingLevel?: string | null }): Promise<void>;
+  agent(): Promise<{ model?: { provider: string; modelId: string }; thinkingLevel: string }>;
+  pageEntries(limit: number, cursor?: object): Promise<{ entries: readonly unknown[]; next?: object }>;
+};
 
 type Model = { provider: string; modelId: string; thinkingLevel?: string };
+
+/** One model of `list_models` and of the `configure` validation (contract §6.17). */
+export type ModelInfo = { provider: string; model_id: string; name: string; thinking_levels: readonly string[]; context_window: number };
+
+/** pi-durable's `Agent` narrowed to the two fields the wire's `AgentState` carries. */
+const agentOf = (a: { model?: { provider: string; modelId: string }; thinkingLevel: string }): AgentState => ({
+  ...(a.model === undefined ? {} : { model: { provider: a.model.provider, model_id: a.model.modelId } }),
+  thinking_level: a.thinkingLevel,
+});
 
 export type Deps = {
   /** The one-owner check: rejects with `HostRunning` when a host already owns the socket. */
@@ -41,6 +58,8 @@ export type Deps = {
   contextFiles(cwd: string): readonly { path: string; content: string }[];
   open(o: { file: string; cwd: string; model: Model; extension: Extension }): Promise<Conversation>;
   follow?(hooks: FollowerHooks): { start(): void; stop(): void };
+  /** The one source of truth of `list_models` and of the `configure` validation (contract §6.17). */
+  models(): Promise<readonly ModelInfo[]>;
   listen(path: string, accept: (conn: Connection) => { receive(line: string): void; closed(): void }): Promise<{ close(): Promise<void> }>;
   newEpoch(): string;
   onTerminate(handler: () => void): void;
@@ -209,6 +228,8 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
 
     let cursor = cursorFrom(session.registeredEvent, await conversation.entries(), config.session);
     let pending = 0;
+    // The cached `AgentState` of contract §6.17: read back after each `configure`; absent until the first one (a `host_state` carrying no agent).
+    let agentState: AgentState | undefined;
     const seen = new Set<string>();
     const names = new Map<string, Promise<string | null>>();
     const nameOf = (id: string): Promise<string | null> => {
@@ -272,15 +293,83 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       piDurable: PI_DURABLE,
       epoch,
       ring,
-      submit: async ({ text, whenBusy, requestId }) => {
+      submit: async ({ text, whenBusy, requestId, images }) => {
         const id = requestId ?? randomUUID();
+        const content =
+          images === undefined || images.length === 0
+            ? text
+            : [{ type: "text" as const, text }, ...images.map((i) => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }))];
         try {
-          const s = await submit({ content: text, requestId: `chat:${id}`, whenBusy, entry: { kind: "cpd-chat", data: { client_id: from, request_id: id } }, reply: true });
+          const s = await submit({ content, requestId: `chat:${id}`, whenBusy, entry: { kind: "cpd-chat", data: { client_id: from, request_id: id } }, reply: true });
           return { submissionId: s.id, status: await s.status() };
         } catch (e) {
           if (e instanceof ConversationBusy) throw new ProtocolError("busy", e.message);
           throw e;
         }
+      },
+      // Contract §6.17: the five conversation commands.
+      compact: async (instructions) => ({ task_id: await conversation.compact(instructions) }),
+      configure: async (change) => {
+        if (pending > 0) throw new ProtocolError("refused", "a run is pending");
+        // The current agent is read back before the first configure, so a change that names only a thinking level validates against it.
+        if (agentState === undefined) agentState = agentOf(await conversation.agent());
+        const list = await deps.models();
+        let ref: { provider: string; modelId: string } | undefined;
+        if (change.model !== undefined) {
+          const i = change.model.indexOf("/");
+          const provider = i < 0 ? "" : change.model.slice(0, i);
+          const modelId = i < 0 ? change.model : change.model.slice(i + 1);
+          const found = list.find((m) => m.provider === provider && m.model_id === modelId);
+          if (found === undefined) throw new ProtocolError("bad_args", `model must name an offered model: ${change.model}`);
+          ref = { provider: found.provider, modelId: found.model_id };
+        }
+        if (typeof change.thinkingLevel === "string") {
+          const current = agentState?.model;
+          const target = ref ?? (current === undefined ? undefined : { provider: current.provider, modelId: current.model_id });
+          const found = target === undefined ? undefined : list.find((m) => m.provider === target.provider && m.model_id === target.modelId);
+          if (found === undefined || !found.thinking_levels.includes(change.thinkingLevel)) throw new ProtocolError("bad_args", `thinking_level must be one of the levels of the model: ${change.thinkingLevel}`);
+        }
+        await conversation.configure({ ...(ref === undefined ? {} : { model: ref }), ...(change.thinkingLevel === undefined ? {} : { thinkingLevel: change.thinkingLevel }) } as never);
+        agentState = agentOf(await conversation.agent());
+        return { agent: agentState };
+      },
+      models: async () => deps.models(),
+      fork: async (at, ownership) => {
+        if (ownership !== undefined) throw new ProtocolError("bad_args", "ownership must be lead or manager");
+        const entries = await conversation.entries();
+        if (!entries.some((e) => (e as { id?: unknown }).id === at)) throw new ProtocolError("bad_args", "at must name an entry of this conversation");
+        let answered: Record<string, unknown>;
+        try {
+          answered = await deps.cpd(["session", "fork", config.session]);
+        } catch (e) {
+          const c = toCpdError(e);
+          throw new ProtocolError("refused", c.message, { code: c.code });
+        }
+        const s = answered.session;
+        if (typeof s !== "object" || s === null || typeof (s as { id?: unknown }).id !== "string") throw new ProtocolError("internal", "cpd session fork answered without a session id");
+        return { conversation_id: (s as { id: string }).id };
+      },
+      history: async (before, limit) => {
+        let cursor: object | undefined;
+        if (before !== undefined) {
+          let decoded: unknown;
+          try {
+            decoded = JSON.parse(Buffer.from(before, "base64").toString("utf8"));
+          } catch {
+            throw new ProtocolError("bad_args", "before must be the base64 of a page cursor");
+          }
+          if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) throw new ProtocolError("bad_args", "before must be the base64 of a page cursor");
+          cursor = decoded as object;
+        }
+        const nextOf = (c: object): string => Buffer.from(JSON.stringify(c), "utf8").toString("base64");
+        const encoded = (p: { entries: readonly unknown[]; next?: object }): string => JSON.stringify({ entries: p.entries, ...(p.next === undefined ? {} : { next: nextOf(p.next) }) });
+        let n = limit ?? HISTORY_LIMIT;
+        let page = await conversation.pageEntries(n, cursor);
+        while (n > 1 && Buffer.byteLength(encoded(page), "utf8") > LIMITS.hostLine) {
+          n = Math.max(1, Math.floor(n / 2));
+          page = await conversation.pageEntries(n, cursor);
+        }
+        return { entries: page.entries, ...(page.next === undefined ? {} : { next: nextOf(page.next) }) };
       },
       abort: (opts) => {
         // §6.15 "Abort (4.6.4)": every held request is resolved `aborted` by the host before the conversation abort, one `ui_resolved` each.
@@ -296,7 +385,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       answerUi: async (id, value) => held.answer(id, value),
       hostState: () => {
         const heldUi = held.heldCount();
-        return { state: heldUi > 0 ? "blocked" : hostState, held_ui: heldUi, ...(session.name === null ? {} : { name: session.name }) };
+        return { state: heldUi > 0 ? "blocked" : hostState, held_ui: heldUi, ...(session.name === null ? {} : { name: session.name }), ...(agentState === undefined ? {} : { agent: agentState }) };
       },
       timers,
       clientId: () => (from = `c${++nextClient}`),

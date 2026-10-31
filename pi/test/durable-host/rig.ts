@@ -162,6 +162,7 @@ export function rig(over: RigOptions = {}) {
       throw new Error(`unexpected cpd call: ${text}`);
     },
     resolveModel: () => MODEL,
+    models: async () => [],
     contextFiles: () => [],
     open: async () => {
       opened.n++;
@@ -194,6 +195,10 @@ export function rig(over: RigOptions = {}) {
         },
         install: () => {},
         entries: async () => over.stored ?? [],
+        compact: async () => 1,
+        configure: async () => {},
+        agent: async () => ({ thinkingLevel: "high" }),
+        pageEntries: async () => ({ entries: over.stored ?? [] }),
         closed: conversationClosed,
         watch,
         abort: async (opts) => {
