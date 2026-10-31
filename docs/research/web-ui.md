@@ -419,15 +419,79 @@ Not needed (checked): a `hello` capability for the web (the `client` string is e
 
 ## 4. The shared read model
 
-### 4.1 The crate graph
+Source: `core-model.md`; every `file:line` is of `fdd9745d9`. 14 of the new cites below were spot-checked against `git show fdd9745d9:<path>`.
 
-### 4.2 Every file of tui/src/read/
+**Answer first.** The whole read model except `pr_look.rs` and `watch.rs` is pure data with no ratatui, but it lives in the tui crate and no CLI command calls it. The CLI commands `plan show`, `session list` and `inbox list` run a *parallel* path in core. No test pins that the two agree. Moving the model to core with `Serialize` would give the TUI, the CLI JSON and a web server one source of truth — and would close, at once, most of the "command returns less" and "view-private" gaps of 2.3 (4.6).
+
+### 4.1 The crate graph, one line each
+
+| Crate | Depends on | Notes |
+|---|---|---|
+| `cpd-core` (`core/Cargo.toml:2`) | no workspace crate | ratatui only as a dev-dep, to unify features (`core/Cargo.toml:37-42`); `core/src/lib.rs:9-56` has `plan`, `inbox`, `session`, `metrics`, `events` — no `read`/`view` module |
+| `cpd-engine` (`engine/Cargo.toml:2`) | `cpd-core` (`engine/Cargo.toml:13`) | — |
+| `cpd-tui` (`tui/Cargo.toml:2`) | `cpd-core` (`tui/Cargo.toml:13`), ratatui (`tui/Cargo.toml:17`) | does not depend on engine or cli |
+| `cpd` / cli (`cli/Cargo.toml:2`) | `cpd-core`, `cpd-engine`, `cpd-tui` (`cli/Cargo.toml:21-23`) | calls only `cpd_tui::{bare,run_with,...}` (`cli/src/cli.rs:142,156,190`); never `cpd_tui::read` |
+| workspace | members core, engine, cli, tui (`Cargo.toml:3`) | `cpd_tui::read` is used outside tui only by a cli test (`cli/tests/pr/pr.rs:24,2666`) |
+
+### 4.2 Every file of `tui/src/read/`
+
+"Pure" = no ratatui/crossterm import in the file (verified by `rg ratatui` over non-test files: no hit; only `pr_look.rs:4` imports `crate::palette` and `watch.rs:6-9` imports `crate::pump`). No type derives `Serialize` (derives are Clone/Debug/PartialEq only, e.g. `widgets.rs:23`, `pulse.rs:37`); "serde-able" here means no UI types in the fields. Not run through a compiler: the classification is a read, not a build.
+
+| File | Lines | Class | Shared with CLI/core? | What moving to core touches |
+|---|---|---|---|---|
+| `active.rs` | 72 | pure (interval union math, `time`) | TUI-private | leaf; needs `bad_row` from `shared.rs:22` |
+| `age.rs` | 11 | pure (`age_text`) | TUI-private; CLI emits `age_seconds` (commands.md §13.2 has the same unit rule) | leaf |
+| `cost.rs` | 79 | pure (process-global `LazyLock<Mutex>` cache, `cost.rs:5,14`) | calls `cpd_core::metrics::parse_file` (`cost.rs:9,58`): parsing shared, the (mtime, len) cache and the sums TUI-private | the cache is process state: a server keeps it, a CLI call does not need it |
+| `dot.rs` | 378 | pure enums `Work`, `Dot`, `urgency` (`dot.rs:12,37,144`); docs name `palette::*` but the code has no ratatui | TUI-private (the Lead dot rule, commands.md:4645) | palette maps `Dot` → colour/glyph (view-bound, stays); `Dot`, `Work` move |
+| `flow.rs` | 644 | pure structs `Flow`, `PlanBoxes`, `PrNode`, `JobNode`, `Pull`… (`flow.rs:35-258`), `flow`, `plan_boxes(_at)`, `chat_slot` | **partly**: reuses core `plan::jobs::load` (`flow.rs:471`), `load_prs` (`:387`), `plan_fingerprint` (`:278`), `shown_needs` (`:488`), `failed_worked_on` (`:317`); own SQL for attempts, escalations, review, pulls (`flow.rs:507-611`) which `core/src/plan/show.rs:~20-70` also writes as `serde_json::Value` | largest piece; `PrNode.lead_dot: Dot` pulls `dot.rs` along; needs `Serialize` |
+| `follow.rs` | 80 | pure (`Follow`, `Changes`; uses `events` + rusqlite) | wraps `cpd_core::events` (`follow.rs:6`) | leaf; in-process cursor |
+| `logs.rs` | 40 | pure (`logs`, `logs_after`) | wraps `cpd_core::events::Selection` (`logs.rs:6`); `events list` is the CLI twin (`mod.rs:15`) | leaf |
+| `mod.rs` | 84 | glue: module list and re-exports (`mod.rs:27-84`) | n/a | re-exports follow the moves |
+| `pr_look.rs` | 41 | **UI-bound**: returns `palette` meanings/colours (`pr_look.rs:4,29-38`); `PrFacts`/`PrState` are plain data | TUI-private | the words (`open`, `conflict`, `updating`) could move; the `palette::Meaning` mapping cannot (unverified whether `Meaning` alone is ratatui-free: palette.rs is 884 lines, not read) |
+| `pulse.rs` | 302 | pure (`Pulse`, `PulseRow`, `Bucket`, `Kind`, `manager_slot`) | TUI-private; no CLI command | uses `shared.rs` `plan_heads`/`sessions`, `dot.rs` |
+| `shared.rs` | 503 | pure row types and loaders: `SessionNode`, `PlanHead`, `Pr`, `JobCounts`, `plan_heads`, `sessions` (`shared.rs:272,356`) | **parallel** to `session list`: own SQL `sessions()` (`shared.rs:272`) vs core's `query` (`core/src/session/row.rs:279`) | foundation of tree/flow/pulse/widgets; needs clap `ValueEnum` of core types (`shared.rs:7,36`), already core's |
+| `tree.rs` | 343 | pure (`Tree`, `ContextNode`, `PlanNode`, `inbox_at`, `inbox_mark`, `snooze_end`, `tree_at`) | **partly**: inbox rows come from core `inbox::model::list` (`tree.rs:128`, same as `core/src/inbox/cmd.rs:194-195`); own copy of `engine_down` as `Item` (`tree.rs:103`) beside the CLI's JSON one (`core/src/inbox/cmd.rs:150`) | pulls `shared.rs`, `dot.rs`, `cost.rs` |
+| `watch.rs` | 46 | **UI/process-bound**: `notify` watcher plus `crate::pump::Waker` (`watch.rs:6-9`) | TUI-private | does not move; a server needs its own wake |
+| `widgets.rs` | 303 | pure (`Widgets`, `Slots`, `Engine`, `PlanCard`, `PrRow`, `MachineEscalation`, `widgets`, `slots`, `open_pulls`) | TUI-private SQL; the CLI twin is `plan list` (`mod.rs:13`) | pulls `flow.rs` `open_escalation`, `tree.rs` helpers |
+| `*_tests.rs` (13 files) | 2162 | tests | n/a | `look_tests` 197, `lead_dot_box_tests` 103, `working_pr_dot_tests` 219 use ratatui `Cell`/`Color` and `crate::plan::boxes` (519 lines UI-bound); the other 1643 test pure reads on fakes |
 
 ### 4.3 The three parallel paths against the cockpit's reads
 
+| Command | CLI code | Cockpit code | Shared | Parity test |
+|---|---|---|---|---|
+| `plan show` | `core/src/plan/show.rs:76-100` (raw SQL → `serde_json::Value`) | `read::flow`/`plan_boxes` (`tui/src/read/flow.rs:275,292`) | only the core helpers listed in the `flow.rs` row; the escalation, attempt, review and PR queries are written twice | none found |
+| `inbox list` | `core/src/inbox/cmd.rs:182-250` (`model::list` ×3 and an own `engine_down` JSON) | `read::inbox_at`/`tree_at` (`tui/src/read/tree.rs:151,231`) | `inbox::model::list` and `engine_running` (`core/src/inbox/model.rs:273`); ordering and the engine-down rule are restated | none found |
+| `session list` | `core/src/session/row.rs:340-366` (`query` + `Row::list_json`) | `shared::sessions` (`tui/src/read/shared.rs:272`) | nothing | none found |
+
+What the two disagree on (read, from `core-model.md` 3): the ordering and the `engine-down` rule are restated in two places (`tree.rs:103` vs `cmd.rs:150`); the escalation/attempt/review/PR queries exist twice with no test that the JSONs equal; everything the views *derive* — the shown status (`SHOWN_STATUS`), the dot rule, Pulse buckets, the chat slot — is in the read model only, so the CLI cannot even disagree, it simply lacks them (gaps G12, G29, G22, G23).
+
 ### 4.4 Parity is not pinned
 
-### 4.5 Options for one model
+The docs claim the equality — "the same queries as the snapshot commands" and "in the order of `cpd inbox list`" (`docs/commands.md:4555`; `tui/src/read/tree.rs:28,126`) — and those words are the only link. Facts: no read type derives `Serialize`, so no CLI command can print a read row as-is (`widgets.rs:23`, `pulse.rs:37`); `tui/src/read_source_tests.rs:6-22` is a *source scan* only — no process spawn, no write statement in non-test read files — and checks nothing about the CLI; `rg 'plan show|session list|inbox list'` over `tui/src/read/*_tests.rs` hits nothing; the only CLI test touching `cpd_tui::read` is `cli/tests/pr/pr.rs:2666`, which asserts on `read::widgets` and does not compare with CLI JSON. Not exhaustively verified over `cli/tests` (searched `cpd_tui` and `read::` only).
+
+### 4.5 Totals (product files in `tui/src/read/`, 2926 lines; guess: classified by import/derive, not compiled)
+
+| Bucket | Lines | Which |
+|---|---|---|
+| Already shared | **0 whole files**; only call-level reuse of core primitives (guess: ~15 of the 2926 lines are such calls) | `flow.rs`, `tree.rs`, `cost.rs`, `follow.rs`, `logs.rs` call core |
+| Movable (pure data) | **2755** | active 72, age 11, cost 79, dot 378, flow 644, follow 80, logs 40, pulse 302, shared 503, tree 343, widgets 303 |
+| Glue | 84 | `mod.rs` |
+| View/process-bound | **87** | pr_look 41 (palette), watch 46 (pump, notify) |
+| Test lines | 2162 | 1643 movable, 519 UI-bound |
+
+Gaps a web server would hit today (read): read types have no `Serialize`; the process-global cost cache in `cost.rs:5,14` (process state, not a pure function); `engine_down` and the ordering duplicated between tui and core (4.3).
+
+### 4.6 Options for one model that the TUI, the CLI JSON and the web server all read
+
+Each option's effect on parity drift is **inferred**. Gap ids are the ones of section 2.3 whose "Capability lives today" is a `tui/src/read/` path (read-located) plus the ones whose data the moved queries compute.
+
+**O1. Move `tui/src/read` to core, derive `Serialize`, and make the three CLI commands print the moved model.** One path, one source of truth (DRY); the CLI JSON becomes the read model, which is exactly the CLI-first rule of hs-d753 (the CLI is the first-class interface; a web UI is one client of it). The web server links the same types, so its views cannot drift from the TUI's; the derived facts (shown status, dot, Pulse, chat slot) become data, so the CLI stops "disagreeing" — it simply returns them. Contracts to serialize: a deliberate change to the JSON of `plan show`/`session list`/`inbox list` (ordering, derived statuses, dot field), regenerated `docs/interface.md`; the cost cache becomes server state (a server keeps it, a CLI call does not); moving touches `core/src/lib.rs` and `Cargo.toml`-adjacent files, which `docs/implementing.md:7` forbids Jobs to edit — the move is one deliberate decision, not a Job's side effect. Closes for the web **and** the CLI every read-located gap of 2.3: **G01** (cost), **G04** (engine state), **G10** (dot inputs), **G11** (working dot), **G12** (derived status), **G13** (`created_at` order), **G14** (Manager facts), **G17** (logs), **G18** (`engine-down`), **G22** (Pulse), **G23** (chat slot), **G29** (the dot rule), **G30** (the ordering rank), **G32** (merging read) — and, if the printed JSON keeps the field (a `guess`), part of the `plan show` gaps **G03, G19–G21, G25, G26** that `flow.rs` already computes.
+
+**O2. Leave the model in tui; let the web crate depend on `cpd-tui`.** The web UI and the TUI share one model and cannot drift from each other, with zero moves and zero `Serialize` work at first; the CLI stays a third, parallel path, so its gaps remain open for agents and the CLI (the gaps of 2.3 stay open for the CLI). Costs: the web crate pulls ratatui transitively (`tui/Cargo.toml:17`) and is coupled to the TUI crate's internals; a `cpd-web` binary then links a UI crate, which is the layering the crate graph (4.1) exists to avoid — and hs-d753's CLI-first test fails on every gap the CLI does not close. Closes for the web the read-located list of O1; for the CLI, none.
+
+**O3. A second read model written in the web crate.** Worst parity drift: three paths (core CLI, tui, web) with no test pinning any two (4.4), so a change drifts silently; it is a fourth copy of the same SQL (the 2,755 movable lines again) and leaves every gap of 2.3 open for the web too, because the web's copy has the same omissions as the CLI's. Cheapest to start, most expensive forever; only defensible as a throwaway spike.
+
+Recommended (inferred): **O1** — it is the only one that satisfies hs-d753 (the CLI gains the read model) and converges the three consumers on one source of truth, with no new dependency (serde is already a workspace dependency) and no new toolchain. O2 is the reversible first step: a web crate that starts by linking `cpd_tui::read` (proving the views) and is then cut over to core's copy once `plan show`/`session list`/`inbox list` print it. The User decides in section 8 (A3).
 
 ## 5. Stack options and the recommendation
 
