@@ -4393,7 +4393,100 @@ A held request puts the Session in `blocked` with the label `dialog`, and `host_
 
 ### 6.17 Commands: compact, configure, list_models, fork, history and images in submit (P1.8)
 
-Skeleton of P1.8: the five conversation commands of research 4.5 rows 6 to 8, 11 and 12, and images in `submit` (row 3, G82). Full section follows in this PR.
+The host serves the five conversation commands of research 4.5 rows 6 to 8, 11 and 12, and accepts images in `submit` (row 3, G82). The research is `docs/research/durable-leads.md` sections 3.6 (G82, G89, G90, G91, G94, G97), 4.5 and the `Decided:` lines of Q2 (the client renders; the host sends the raw text), Q7 (a fork is a new cpd Session with its own host and store) and Q22 (no `reset`: a new context is a new cpd Session). Source of the pi-durable and pi-ai shapes: the installed 1.3.0 types — `dist/harness/types.d.ts` for `Conversation.compact`, `configure`, `agent` and `entries`, `dist/types.d.ts` for `Id`, `EntryRecord`, `Page` and `Cursor`, `@earendil-works/pi-ai` `dist/types.d.ts` for `ImageContent` and `UserMessage`, `dist/providers/model-schema.d.ts` for the thinking levels and `dist/models.d.ts` for `getSupportedThinkingLevels`. Every statement a named source does not verify is marked **unverified**.
+
+This section is written to follow 6.16 (P1.7, the Lead guards), whose PR merges before this one; on the branch this PR branched from, 6.15 is the last section of 6. It changes no rule of 6.12 to 6.16: the additions below extend the tables those sections fix.
+
+**Modules** (all in `pi/durable-host/`; names and exports are fixed, the field shapes below are the contract):
+
+| File | Exports |
+|---|---|
+| `protocol.ts` | additions: `ToHost` gains `compact` (row 6), `configure` (row 7), `list_models` (row 8), `fork` (row 11) and `history` (row 12); `submit` gains `images`; the constants `HISTORY_LIMIT`, `HISTORY_MAX`, `IMAGE_MAX_COUNT`, `IMAGE_MAX_TOTAL`, `IMAGE_MIME` and the type `AgentState` (below) |
+| `server.ts` | additions: `ServerDeps` gains `compact()`, `configure()`, `models()`, `fork()` and `history()`; `submit`'s input gains `images`; the five dispatches (below) |
+| `run.ts`, `main.ts` | the wiring (below) |
+
+#### `protocol.ts`
+
+```ts
+/** The agent state a `configure` answers and `host_state.agent` carries (the fields written out). */
+export type AgentState = { model?: { provider: string; model_id: string }; thinking_level: string };
+
+export const HISTORY_LIMIT = 50;       // the default `history` page (research 4.5 row 12)
+export const HISTORY_MAX = 500;        // the cap a `history.limit` may name
+export const IMAGE_MAX_COUNT = 4;      // images in one submit
+export const IMAGE_MAX_TOTAL = 786432; // bytes of base64 `data` across one submit's images
+export const IMAGE_MIME = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
+
+// ToHost gains (rows 6 to 8, 11 and 12):
+| { type: "compact"; req: string; instructions?: string }
+| { type: "configure"; req: string; model?: string; thinking_level?: string | null }
+| { type: "list_models"; req: string }
+| { type: "fork"; req: string; at: number; ownership?: "lead" | "manager" }
+| { type: "history"; req: string; before?: string; limit?: number }
+
+// `submit` gains:
+images?: readonly { mime_type: string; data: string }[];   // `data` base64; the pi-durable `ImageContent[]`
+```
+
+`configure.model` is the string form `"provider/model_id"` (the form `session show` prints and the Worker takes as `--model`), not research row 7's object form: the shape is this section's (the research's example is the same model, spelled differently). `fork.at` is a **number**: a pi-durable entry id is a nominal number (`Id`, `dist/types.d.ts:14-19`, verified; research row 11's example is `"at": 7`), and the ids `history` and the `snapshot` carry are numbers. "Fully qualified" because the store's ids are session-global, so the number names the entry wherever in the fork tree it lives (**inferred** from the `ID 11 already belongs to entry` error of `c-conv.md`; not read in pi-durable's storage). `IMAGE_MAX_TOTAL` is counted on the base64 `data` strings as the wire carries them and keeps the images alone well under `LIMITS.clientLine` (1 MiB); a submit whose text plus images still exceeds `clientLine` is `frame_too_large`, as any line is (6.14 rule 8). `IMAGE_MIME` is the set pi's providers accept inline: `pi-ai dist/api/bedrock-converse-stream.js:1090-1100` maps exactly `image/jpeg`, `image/png`, `image/gif` and `image/webp`, and pi's own image sniffer knows the same four (`pi-coding-agent dist/bundle/chunks/execute-HXNYK3DM.js:350-354`, both read). The two image caps are this section's numbers, not measured.
+
+- **`parseLine`** builds the five at the boundary. `compact`: `instructions` an optional string. `configure`: exactly one of `model` (a string) and `thinking_level` (a string or `null`) is present; none, both, or a wrong type is `bad_args` naming the field. `list_models` carries `req` only. `fork`: `at` is required and an integer; `ownership`, when present, is `"lead"` or `"manager"`, else `bad_args` naming `ownership`. `history`: `before` an optional string; `limit` an optional positive integer, one over `HISTORY_MAX` is `bad_args` naming `limit` with the cap. `submit.images`, when present, is an array (an empty one is the absent one) of objects each with `mime_type` (a member of `IMAGE_MIME`, else `bad_args` naming `mime_type`) and `data` (a base64 string, the RFC 4648 alphabet with its padding, else `bad_args` naming `data`); more than `IMAGE_MAX_COUNT` images, or more than `IMAGE_MAX_TOTAL` bytes of `data` together, is `bad_args` naming `images`. Unknown fields are ignored; it never throws. `encode` and `negotiate` are §6.14.
+- **The results.** `compact` answers `result { data: { task_id: number } }` (the `TaskId`, a number like every pi-durable id, verified). `configure` answers `result { data: { agent: AgentState } }`. `list_models` answers `result { data: { models: readonly { provider: string; model_id: string; name: string; thinking_levels: readonly string[]; context_window: number }[] } }` (`context_window` a number: pi-ai's `Model.contextWindow` is required, `dist/types.d.ts` `BaseModel`, verified). `fork` answers `result { data: { conversation_id: string } }`, the value the **new Session's** id — an id this host does not serve (Q7 A: the new Session has its own host and store; a client that wants it connects to that Session's socket). `history` answers `result { data: { entries: readonly unknown[]; next?: string } }`; each entry is the pi-durable `EntryRecord` unchanged (`id`, `conversationId`, `kind`, `model?`, `data?`, `head?`, `edits?`, `byTaskId?` — the same objects a `snapshot` frame's `entries` array holds, Q4 A), raw text the client renders (Q2).
+
+#### `server.ts`
+
+```ts
+// ServerDeps gains (all required: a port a real adapter implements has no optional member):
+compact(instructions?: string): Promise<{ task_id: number }>;
+configure(change: { model?: string; thinkingLevel?: string | null }): Promise<{ agent: AgentState }>;
+models(): Promise<readonly { provider: string; model_id: string; name: string;
+                             thinking_levels: readonly string[]; context_window: number }[]>;
+fork(at: number, ownership?: "lead" | "manager"): Promise<{ conversation_id: string }>;
+history(before?: string, limit?: number): Promise<{ entries: readonly unknown[]; next?: string }>;
+
+// submit's input gains:
+images?: readonly { mimeType: string; data: string }[];
+```
+
+Rules:
+
+1. **The five need `attach` first**, like `submit`: on a connection that has not attached, each is `error not_attached` (the §6.14 rule 6 row now covers them).
+2. **Replies.** Each of the five gets exactly one reply with its `req` (§6.14 rule 3), written when its port settles: `compact` `{ task_id }`, `configure` `{ agent }`, `list_models` `{ models }`, `fork` `{ conversation_id }`, `history` `{ entries, next? }`. A port that throws a `ProtocolError` gives `error` with its code and the connection kept (§6.14 rule 9): the `bad_args` of the wiring's validation (naming the field), the `refused` of `configure` while a run is pending; any other throw is `internal`.
+3. **`submit` passes `images` through** to the same destination as the text: the server hands `images` to its `submit` port beside `text`, `when_busy` and `request_id`; nothing else of the submit path changes.
+4. **The result fits `hostLine`.** The host pages `history` so its `result` line never exceeds `LIMITS.hostLine` (6.14 rule 8's 64 MiB): the wiring asks pi-durable for pages and, while the encoded result is over `hostLine`, asks again with a smaller page (halved, down to one entry) before answering. A line that still exceeds `hostLine` with a one-entry page is a host defect: unverified, not handled — the sentence 6.14 rule 8 closes with. The other four results carry no array of entries (`list_models`' list is bounded by the model catalog) and are answered as they are.
+
+#### The host flow (`run.ts` and `main.ts`)
+
+The `Conversation` of `run.ts` gains four members (all required; `conversationOf` builds them over the same `ctx` it already holds):
+
+```ts
+compact(instructions?: string): Promise<number>;   // pi-durable `Conversation.compact(instructions, ctx)` (`HT:610`): the TaskId
+configure(change: AgentChange): Promise<void>;     // pi-durable `Conversation.configure(change, ctx)` (`HT:593`), one commit
+agent(): Promise<{ model?: { provider: string; modelId: string }; thinkingLevel: string }>;
+                                                   // pi-durable `agent(ctx)` narrowed to the two fields the wire carries
+pageEntries(limit: number, cursor?: object): Promise<{ entries: readonly unknown[]; next?: object }>;
+                                                   // pi-durable `entries({ conversationId: root, order: "descending" }, limit, cursor, ctx)` (`HT:621-622`)
+```
+
+- **`compact`.** The wiring calls `conversation.compact(msg.instructions)` and answers `{ task_id }`. pi-durable summarizes while the conversation keeps working and places the summary through a write submission: at once when idle, otherwise at the next boundary (`HT:606-610`, verified by reading); the `compaction_start` / `compaction_end` events ride `watchEvents` like any batch, so clients see the progress in the frames they already receive. A compact that finishes while a run is pending completes at that boundary; P1.8 adds no restart and no cancel of it. No refusal: `compact` is served while busy (unverified that the task queues behind a run — the types say only that the summary is placed at the next boundary).
+- **`configure`.** The wiring validates before it applies, against the same list `models()` serves (one source of truth): `model` splits at its first `/` into `provider` and `model_id` and must name an entry of the list (else `bad_args` naming `model`); `thinking_level`, when a string, must be a member of the `thinking_levels` of the model the change names — the given `model`, else the current agent's (`agent()`) — else `bad_args` naming `thinking_level`; `null` clears the stored level and validates nothing. When a run is pending (the host's `pending` counter is above 0), the port rejects with `ProtocolError("refused", ...)` before anything is applied, which the server answers `error refused`, the connection kept. Then `conversation.configure({ model: { provider, modelId }, thinkingLevel })` — the `AgentChange` of `HT:378-396` in one commit, applied from the next request (verified by reading) — and the result is the state read back through `agent()` after the configure resolves. Whether pi-durable clamps a level the model does not support is unverified (G97); the host validates first, so the clamp is never exercised by this message.
+- **`list_models`.** `models()` reads pi's `ModelRuntime`, built once at start as the Worker builds it (`pi/durable-worker/main.ts:24`, `ModelRuntime.create({ refreshOnCreate: false })`, verified there; Q17: at start). `main.ts` builds the runtime and `Deps` gains `models()`: the chat models pi lists as available (`getAvailable()` of `pi-coding-agent dist/core/model-runtime.d.ts`, verified to exist; the choice of the available list over the whole catalog is this section's — a model whose key is missing is not offered), each mapped to `{ provider: model.provider, model_id: model.id, name: model.name, thinking_levels: getSupportedThinkingLevels(model), context_window: model.contextWindow }` (`pi-ai dist/models.d.ts:267`, verified; the levels are the seven of `ModelThinkingLevelSchema`, `dist/providers/model-schema.d.ts:8`, minus the ones the model does not support). The list is served as it is, no paging.
+- **`fork`.** The wiring refuses a given `ownership` with `bad_args` naming `ownership`: `cpd session fork --help` (read 2026-10-31) accepts `--plan`, `--name` and `--message-file` and no ownership, and §10.3 registers the fork with its source's role. It validates `at` against the conversation's entries (the read `history` serves): an id that names no entry of this conversation is `bad_args` naming `at`. Then it runs `cpd session fork <this session>` through `deps.cpd` and answers `{ conversation_id }` from the command's `session.id` (§10.3's JSON). The fork is of the source's **whole** conversation: `cpd session fork` accepts no entry cut (the help and §10.3, verified), so `at` is validated and selects nothing in P1.8 — **labelled**: pi's `/fork` cuts at an earlier message (G74), and a later PR that teaches `session fork` an entry maps `at` without a version bump. A failing call is mapped to `ProtocolError("refused", <the CLI's message>, { code: <the CLI's code> })` — the preconditions of §10.3 (`not_a_lead`, `durable_session`, `plan_required`, `archived`, `no_cockpit`) included — so a client reads a refusal, not `internal`. **Labelled**: §10.3 refuses a `durable` source with `durable_session` today (commands.md §10.3, read; the refusal of P1.2), so a wire `fork` of a durable Session is refused until `session fork` learns the runner; this section writes the host flow as decided and the refusal is what the CLI answers.
+- **`history`.** The wiring maps `before` and `limit` onto `pageEntries`: `limit` the given one or `HISTORY_LIMIT`, `before` decoded to the pi-durable page cursor. The pi-durable `Cursor` is a JSON record a caller only round-trips to the same scan (`dist/types.d.ts:563-571`, verified), so the wire carries it opaquely: `next` in a result is the base64 of the UTF-8 JSON of the page's `next` cursor, and a `before` is such a string decoded back and passed as `entries`' `cursor`. The first request of a client has no `before` and the host passes no cursor (the whole history, newest first — `order: "descending"` is `EntryQuery`'s default, verified). A `before` that does not decode to a JSON object is `bad_args` naming `before` (unverified what pi-durable does with a malformed cursor; the decode check is the host's). The entries serve the whole-history read a client needs for scrollback and for the session tree (G90's host half; the tree selector is a client row, P2).
+- **Images in `submit`.** The wiring maps each image to pi-ai's `ImageContent { type: "image", data, mimeType }` (`pi-ai dist/types.d.ts:260-264`, verified) and submits `content` as `[{ type: "text", text }, ...images]` — `UserInput` is `UserMessage["content"]`, a string or a `(TextContent | ImageContent)[]` (`pi-ai dist/types.d.ts:343,359`; pi-durable `dist/harness/types.d.ts:13`, verified). The `entry`, `when_busy`, `request_id`, the reply rule, the first message and the context update are §6.14 "Client submits", unchanged. Resizing an image the User submits is not found in pi (G82) and is not built.
+- **`host_state.agent`.** The wired `hostState()` now carries `agent` (the 6.14 wiring left it unset): the host reads the `AgentState` once at start through `agent()`, replaces it with what a `configure` reads back, and `host_state.agent` is that cached state — `configure`'s result and `host_state`'s `agent` are the same object shape, and a client learns of a configure the same way it learns of every other change, from the frames.
+- **`Deps`.** `run.ts`'s `Deps` gains `models()` (above); `main.ts` builds it over the runtime it creates. The other `Deps` members are unchanged.
+
+**Not in P1.8.**
+
+- `reset` (G94): Q22 B — a new context is a new cpd Session (Q30). pi-durable's `reset(handoff, ctx)` is not served; a client's "new context" is a new Session (`cpd session fork`), not a message to this host.
+- `rename` (row 13): P2. A client names the Session through cpd; the host's `welcome` and `host_state` already carry the name (G15's host half).
+- The `mcp` message (row 10): Q18 A — the User keeps the shell `pi mcp login`; the client says so. No relay is built, not in P1.9 either.
+- A cancel of a running compaction (pi's Esc): client-side, P2; the host serves no cancel of a compaction task.
+- Images in the ask tool: `ask_user_question` still ships without images; its tool result may carry them, unchanged from pi.
+- The client rows: the `/compact`, `/model`, `/thinking` and `/fork` commands and the image paste are P2.7 and P2.2 (G71, G72, G73, G74, G83); this PR serves the wire only.
+
+**Tests.** They live in `pi/test/durable-host/protocol.test.ts` and `server.test.ts`, written with `node:test` and already in the default file list of the `test` script (`pi/test/durable-host/*.test.ts`), so the change adds no line there. Nothing real runs: a fake `Connection`, a fake `Timers` and a fake `ServerDeps` drive the server (the `Ring` is real); the wiring tests fake `deps.cpd` and `models` and a mocked pi-durable `Conversation`; no socket, no pi-durable, no model, no `cpd session fork` run. One test per rule above: each `parseLine` outcome of the five types and of `submit.images` (the configure one-of, `fork`'s `at` and `ownership`, the `history` cap, the image count, total and mime set, the base64 shape); each result shape; `not_attached` for each of the five; the `refused` of `configure` while a run is pending and the `bad_args` of its validation; the `history` paging (the default limit, the cursor round-trip, the shrink under `hostLine`); the fork mapping (`ownership` refused, `at` validated, the `conversation_id` from the fake `cpd`, a CLI refusal mapped to `refused`); the image mapping onto `ImageContent` and the content array. The statements this section marks unverified are pinned by those mocks, not by a real run.
 
 ## 7. git and the Gate
 
