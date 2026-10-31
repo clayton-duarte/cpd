@@ -293,10 +293,29 @@ pub(super) fn live(conn: &Connection) -> Result<Vec<Row>, CpdError> {
     query(conn, "s.role IN ('lead', 'manager') AND s.archived_at IS NULL", Vec::new())
 }
 
+/// The fields a live model switch needs (commands.md §14.6 step 7): the same live selection `session retier` uses.
+#[derive(Clone, Debug)]
+pub(crate) struct ModelSwitchRow {
+    pub id: SessionId,
+    pub role: Role,
+    pub context: ContextId,
+    pub plan: Option<PlanId>,
+    pub tier: String,
+}
+
+/// Every live Lead and Manager that is not archived, oldest first, as the model-switch step of `cpd preset apply`
+/// reads them (commands.md §14.6 step 7).
+pub(crate) fn live_model_switch(conn: &Connection) -> Result<Vec<ModelSwitchRow>, CpdError> {
+    Ok(query(conn, "s.role IN ('lead', 'manager') AND s.archived_at IS NULL", Vec::new())?
+        .into_iter()
+        .map(|r| ModelSwitchRow { id: r.id, role: r.role, context: r.context, plan: r.plan, tier: r.tier })
+        .collect())
+}
+
 /// The model and thinking level pi is told for `tier` (commands.md §10.2, §10.8): the `<letter>` ref of the Session's `Models` (its Context's key) and
 /// the level of the Tier's digit. The one function `session show` and `session run` share, so a Session retiered and a
 /// Session started later are on the same model.
-pub(super) fn model_and_level(models: &Models, id: &SessionId, tier: &str) -> Result<(String, &'static str), CpdError> {
+pub(crate) fn model_and_level(models: &Models, id: &SessionId, tier: &str) -> Result<(String, &'static str), CpdError> {
     let tier = Tier::parse(tier).map_err(|_| CpdError::bad_row(format!("{id} has tier {tier:?}")))?;
     let model = match tier.letter() {
         Letter::O => &models.o,

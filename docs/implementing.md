@@ -127,7 +127,7 @@ Target contract (ADR 0013): tests are in-process, with fakes behind traits for t
   |---|---|
   | `engine` | `watch*`, `doctor`, `write_executable` |
   | `pr` | `pr*`, `merge*`, `git*`, `repo_hooks` |
-  | `flow` | `plan*`, `worker_runner*`, `job*`, `attempt`, `feedback*`, `driver*`, `review*`, `retire_review`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `resource*`, `config`, `repo_config`, `repo_cmds`, `secret*`, `models*`, `host_repair`, `gate`, `working_pr` |
+  | `flow` | `plan*`, `worker_runner*`, `job*`, `attempt`, `feedback*`, `driver*`, `review*`, `retire_review`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `resource*`, `config`, `repo_config`, `repo_cmds`, `secret*`, `models*`, `host_repair`, `gate`, `working_pr`, `preset` |
   | `session` | `session*`, `host`, `board`, `host_pill`, `mcp_attach` |
   | `store` | `store*`, `events`, `home`, `scripted` |
   | `tui` | `tui*`, `inbox*`, `bare` |

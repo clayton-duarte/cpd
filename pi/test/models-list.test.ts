@@ -48,7 +48,8 @@ async function closedPort(): Promise<number> {
 type Fake = {
   /** Built-in providers have a `refreshModels`; custom ones (models.json) have none. */
   custom?: Record<string, { baseUrl?: string; key?: string | "throws" | "none" }>;
-  builtin?: Record<string, { baseUrl?: string }>;
+  /** A built-in provider's `--all` listing: `auth` `"none"` (or absent) leaves it out, an empty `available` too. */
+  builtin?: Record<string, { baseUrl?: string; auth?: "oauth" | "api_key" | "none"; available?: string[]; known?: string[] }>;
   copilot?: { available: string[]; known: string[]; auth: "oauth" | "api_key" | "none"; errors?: string[] };
 };
 
@@ -71,9 +72,23 @@ function runtime(fake: Fake): { rt: ListRuntime; refreshes: unknown[]; authAsked
       if (key === "none") return undefined;
       return { auth: { apiKey: key ?? KEY } };
     },
-    getAllModels: (_p?: string) => (fake.copilot?.known ?? []).map((id) => ({ id })),
-    getAvailable: async (_p?: string) => (fake.copilot && fake.copilot.auth !== "none" ? fake.copilot.available : []).map((id) => ({ id })),
-    checkAuth: async (_p: string) => (fake.copilot && fake.copilot.auth !== "none" ? { type: fake.copilot.auth } : undefined),
+    getAllModels: (p?: string) => {
+      const id = typeof p === "string" ? p : p;
+      if (id === "github-copilot") return (fake.copilot?.known ?? []).map((id) => ({ id }));
+      return (fake.builtin?.[id ?? ""]?.known ?? []).map((id) => ({ id }));
+    },
+    getAvailable: async (p?: string) => {
+      const id = typeof p === "string" ? p : p;
+      if (id === "github-copilot") return (fake.copilot && fake.copilot.auth !== "none" ? fake.copilot.available : []).map((id) => ({ id }));
+      const b = fake.builtin?.[id ?? ""];
+      return (b && b.auth !== "none" ? b.available ?? [] : []).map((id) => ({ id }));
+    },
+    checkAuth: async (p?: string) => {
+      const id = typeof p === "string" ? p : p;
+      if (id === "github-copilot") return fake.copilot && fake.copilot.auth !== "none" ? { type: fake.copilot.auth } : undefined;
+      const b = fake.builtin?.[id ?? ""];
+      return b && b.auth && b.auth !== "none" ? { type: b.auth } : undefined;
+    },
     refresh: async (options: unknown) => {
       refreshes.push(options);
       return { aborted: false, errors: new Map((fake.copilot?.errors ?? []).map((m, i) => [`github-copilot${i}`, new Error(m)])) };
@@ -324,4 +339,38 @@ test("the providers are github-copilot (when logged in) and the custom providers
   } finally {
     await Promise.all([bifrost.close(), broken.close(), builtin.close()]);
   }
+});
+
+test("--all lists the built-in providers pi has auth for and models to offer, beside github-copilot; the others are left out, and plain mode never lists one", async () => {
+  const { rt } = runtime({
+    builtin: {
+      anthropic: { auth: "oauth", available: ["claude-sonnet-5.5"], known: ["claude-sonnet-5.5", "claude-opus-5.5"] },
+      openai: { auth: "none", available: ["gpt-5.6-sol"] }, // no login: left out
+      gemini: { auth: "api_key", available: [] }, // a login, but no offered model: left out
+    },
+    copilot: { available: ["gpt-5.6-sol"], known: ["gpt-5.6-sol"], auth: "oauth" },
+  });
+
+  const all = await listModels({ rt, piVersion: PI_VERSION, all: true });
+  assert.ok(all.ok);
+  assert.deepEqual(all.providers.map((e) => e.provider).sort(), ["anthropic", "github-copilot"], JSON.stringify(all));
+  const anthropic = listed(entry(all, "anthropic"));
+  assert.equal(anthropic.auth, "oauth");
+  assert.equal(anthropic.base, null);
+  assert.deepEqual(anthropic.ids, ["claude-sonnet-5.5"]);
+  assert.deepEqual(anthropic.known, ["claude-sonnet-5.5", "claude-opus-5.5"]);
+
+  // Without `--all` the built-ins are never listed, whatever pi has for them.
+  const plain = await listModels({ rt, piVersion: PI_VERSION });
+  assert.ok(plain.ok);
+  assert.deepEqual(plain.providers.map((e) => e.provider), ["github-copilot"]);
+});
+
+test("--all: a built-in whose auth check throws is one failed entry, never hiding the others", async () => {
+  const rt = runtime({ builtin: { anthropic: { auth: "oauth", available: ["m1"] } } }).rt;
+  rt.checkAuth = async () => {
+    throw new Error("pi's runtime exploded");
+  };
+  const answer = await listModels({ rt, piVersion: PI_VERSION, all: true });
+  assert.equal(failure(answer, "anthropic").code, "models_refresh_failed");
 });

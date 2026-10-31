@@ -111,6 +111,11 @@ async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
     if (own && (r.info.role === "lead" || r.info.role === "manager")) await noteRetier(host, r);
     return;
   }
+  if (ev.kind === "session-model-changed") {
+    // §15.3 `session-model-changed` (the tier-preset switch, §14.6): the same silent switch path as `session-retiered`.
+    if (own && (r.info.role === "lead" || r.info.role === "manager")) await noteRetier(host, r);
+    return;
+  }
   if (ev.kind === "mcp-attached") {
     if (own && !r.replayed.has(ev.id)) {
       try {
