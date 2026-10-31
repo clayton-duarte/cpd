@@ -87,6 +87,8 @@ test("a resume clears the trip and the held delivery goes through", () => {
   assert.equal(trippedIn([entry(true)]), true);
   assert.equal(trippedIn([entry(true), entry(false)]), false);
   assert.equal(trippedIn([]), false);
+  // the resumed window is empty: the next submission is at the bound, not over it
+  assert.equal(loopGate(f.r, 5_000), false);
 });
 
 test("the loop guard counts only the submissions the host makes", () => {
