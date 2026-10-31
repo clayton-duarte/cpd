@@ -206,6 +206,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `gh_rate_limited` | 1 | an `error` Event code of engine E5 (contract §3.7, §5.2; `details`: `remaining`, `reset_at`), reported while it skips polls because GitHub's rate limit is nearly used; never a command's refusal |
 | `install_state_invalid` | 1 | engine E6 (contract §3.7) or a command read the install state file `$CPD_HOME/run/cpd-install.json` (§1.4) and found it invalid (not JSON, unknown fields, missing or type-mismatched fields); `details: {path, reason}` |
 | `adapter_missing` | 1 | an `error` Event code of the Lead wrapper `session run` (contract §6.7 "Adapter watchdog", §10.8; `details`: `session`, `state_since`, `seconds`), appended when it restarts a pi whose adapter never came back; never a command's refusal |
+| `durable_session` | 3 | `session open` (§10.4), `session park` (§10.5), `session history` (§10.12) or `session fork` (§10.3) named a Session whose `runner` is `durable` (contract §3.6): it has no pane, so there is nothing to open, park, show or fork. A state error, as `archived` and `in_chat_slot` are; refused before any write or tmux call. Message: `Session <id> runs on durable: it has no pane. Send it a message with cpd session send; cpd chat will open it.`; `details: {session}` |
 | `session_restart_loop` | 1 | an `error` Event code of engine E2 (contract §3.6, §3.7; `details`: `session`, `name`, `seconds`), appended when E2 detects a Session's pane gone but E2 itself restarted it less than 10 minutes ago (hs-d725, hs-d727), to guard against restart loops; never a command's refusal |
 
 ### 1.4 Files written by commands
@@ -2563,6 +2564,7 @@ cpd session fork <source> [--plan <id>] [--name <name>] [--message-file <file>]
 | Precondition | Code | Exit |
 |---|---|---|
 | the source is a `lead` Session | `not_a_lead` | 3 |
+| the source's `runner` is `pi`; a `durable` source has no pane (contract §3.6), refused before any write or tmux call (§1.3) | `durable_session` | 3 |
 | a Plan is known: `--plan`, else the source's Plan (a Manager has none) | `plan_required` | 2 |
 | the source is not archived; `details.next` = `cpd session unarchive <source>` | `archived` | 3 |
 | the cockpit's tmux session (`tmux.cockpit_session`) exists, checked before anything is written; `details.next` = `cpd tui` | `no_cockpit` | 3 |
@@ -2589,6 +2591,7 @@ Brings a Lead, or a Context's Manager, into the chat slot (§6.4). `<id>` accept
 | Precondition | Code | Exit |
 |---|---|---|
 | the Session is a `lead` or a `manager` (B3-A2) | `not_a_lead` | 3 |
+| its `runner` is `pi`; a `durable` Session has no pane (contract §3.6), refused before any write or tmux call (§1.3). Send it a message with `session send` (§10.13) instead | `durable_session` | 3 |
 | it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
 | the cockpit's `main` window and its chat slot exist; `details.next` = `cpd tui` | `no_cockpit` | 3 |
 
@@ -2616,6 +2619,7 @@ Moves the Lead in the chat slot back into a parked window (§6.4). `<id>` defaul
 |---|---|---|
 | the cockpit exists | `no_cockpit` | 3 |
 | the Session is a `lead` | `not_a_lead` | 3 |
+| its `runner` is `pi`; a `durable` Session has no pane (contract §3.6) and is never in the chat slot, refused before any write or tmux call (§1.3) | `durable_session` | 3 |
 
 Effects:
 - Not in the chat slot: nothing; `"already": true`. A history pane in the slot (§10.12) has no Lead to park: nothing; `"already": true`.
@@ -2716,7 +2720,7 @@ Ends a Lead's pane (`<id>` accepts the short forms of §1.3): pi stops and the S
 | its place is not `chat`: the Lead in the chat slot is never closed; `details.next` = `cpd session park` | `in_chat_slot` | 3 |
 
 Effects:
-- No live pane (`tmux_pane` null, or the pane is gone): nothing; `"already": true`.
+- No live pane (`tmux_pane` null, or the pane is gone): nothing; `"already": true`. A `durable` Session (`runner` `durable`, contract §3.6) has no pane to kill and takes this branch: it succeeds with `"already": true` and writes nothing, as a `pi` Session with no pane does. Stopping its host on close is P1.10, not described here.
 - **tmux:** `kill-pane -t <pane>`. A parked window that held only that pane closes with it.
 - **Rows**, one transaction, compare-and-swap on `tmux_pane` (when engine E2 recorded the pane as gone first, nothing is left to write: `"already": true`): `state = stopped` with **Event** `session-state` `{from, to: "stopped", label: null}` unless it already was `stopped`; `tmux_pane = NULL`; **Event** `session-moved` `{pane: null, window: null, place: "none"}`, the rows E2 writes for a pane that is gone (contract §3.6).
 
@@ -2744,7 +2748,7 @@ Archives one Session (contract §2.2 "Archived"); `<id>` accepts the short forms
 
 Effects, in this order:
 1. **Check** the rule above; nothing is written if it blocks.
-2. **tmux:** a live pane is closed as `session close` does (§10.9).
+2. **tmux:** a live pane is closed as `session close` does (§10.9). A `durable` Session (contract §3.6) has no pane: nothing is closed and `closed` is empty; step 3 writes `archived_at` as for any Session.
 3. **Rows**, one transaction that re-checks the rule: `sessions.archived_at` = now, `sessions.asleep_at` = null (hs-d515); **Event** `session-archived` `{archived: true}`.
 
 ```json
@@ -2787,6 +2791,7 @@ Shows an archived Session's history, read-only, in the chat slot (hs-d91, hs-d12
 |---|---|---|
 | the Session exists | `session_not_found` | 4 |
 | it is a `lead` | `not_a_lead` | 3 |
+| its `runner` is `pi`; a `durable` Session has no pane (contract §3.6), refused before any write or tmux call, so no Lead is parked and no history pane is made (§1.3) | `durable_session` | 3 |
 | it has a session file (`sessions.file` set and readable) | `file_unreadable` | 2 |
 | the cockpit's `main` window and its chat slot exist; `details.next` = `cpd tui` | `no_cockpit` | 3 |
 
