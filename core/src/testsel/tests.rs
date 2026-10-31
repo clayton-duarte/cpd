@@ -913,6 +913,42 @@ fn list_web_unknown_title() {
     assert!(out.calls_of("node").is_empty(), "a web list never reaches node: {}", out.what());
 }
 
+/// A web title the package contains but that is red is still found: `list` exits 0 by asking vitest in collection mode
+/// (`list --reporter=json`), never by `run`ning the title (which only a green test would survive).
+#[test]
+fn list_web_finds_existing_red_test() {
+    let s = Sample::new();
+    write(&s.root, "web/package.json", "{\"name\":\"cpd-web-client\"}\n");
+    let title = "renders a button";
+    let collected = json!({ "testResults": [{ "assertionResults": [{ "fullName": title }] }] }).to_string();
+    let fakes = s.fakes(|r| {
+        r.on(
+            "pnpm",
+            |c| c.args.iter().any(|a| a == "list") && c.args.iter().any(|a| a == "--reporter=json"),
+            Reply::ok(&collected),
+        )
+    });
+    let out = s.list(&fakes, &format!("web/sample.test.tsx::{title}"));
+    assert_eq!(out.status, 0, "an existing, even red, title is found: {}", out.what());
+    let vitest: Vec<Vec<&str>> = out
+        .calls_of("pnpm")
+        .into_iter()
+        .filter(|c| c.args.iter().any(|a| a == "vitest"))
+        .map(words)
+        .collect();
+    assert!(!vitest.is_empty(), "the web list reaches vitest: {}", out.what());
+    assert!(
+        vitest.iter().all(|c| c.iter().any(|a| a == &"list")),
+        "vitest is asked to list, not run: {}",
+        out.what()
+    );
+    assert!(
+        vitest.iter().all(|c| !c.iter().any(|a| a == &"run")),
+        "vitest never `run`s the title: {}",
+        out.what()
+    );
+}
+
 /// `test build` typechecks the web client only when `web/package.json` exists; without it the web client is skipped.
 #[test]
 fn build_skips_web_when_absent() {
