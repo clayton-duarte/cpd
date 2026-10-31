@@ -1,6 +1,17 @@
-import type { Extension } from "@earendil-works/pi-durable";
-import type { Where } from "./guards.ts";
+import { defineExtension, hook, section, ToolTask, type Extension } from "@earendil-works/pi-durable";
+import { POLICY_SECTION } from "../lib/policy.ts";
+import { TIME_ZONE_SECTION } from "../lib/time.ts";
+import { hostVerdict, type Where } from "./guards.ts";
 
-export function hostExtension(_prompt: { contextFiles: string | undefined; policy: string | undefined; zone: string }, _where: Where): Extension {
-  throw new Error("not implemented");
+export function hostExtension(prompt: { contextFiles: string | undefined; policy: string | undefined; zone: string }, where: Where): Extension {
+  const texts: [string, string | undefined][] = [
+    ["cpd-context-files", prompt.contextFiles],
+    [POLICY_SECTION, prompt.policy],
+    [TIME_ZONE_SECTION, prompt.zone],
+  ];
+  return defineExtension({
+    name: "cpd-host",
+    sections: texts.flatMap(([key, text]) => (text === undefined ? [] : [section(key, () => text)])),
+    hooks: [hook(ToolTask, { beforeTool: (call) => hostVerdict(call, where) })],
+  });
 }
