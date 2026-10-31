@@ -1,5 +1,9 @@
 # A web UI for cpd with cockpit parity: findings and open choices
 
+## Summary
+
+**Verdict.** TODO
+
 ## 1. Scope, sources and labels
 
 **Goal** (the User's requirement, record hs-d757, 2026-10-31). A browser UI for cpd with full cockpit parity: the tree, Plans, PR boxes, the Inbox, costs, the status line's pills, chat with Leads and the Manager through the durable host protocol, and every action the cockpit takes. It is bound to localhost; other devices reach it over Tailscale or an ssh forward, never a LAN or public listener. The research picks the stack. The build waits for durable-leads P1.5's host socket protocol.
@@ -576,3 +580,19 @@ Why the axioms pick it: **YAGNI** — nothing in hs-d757 needs a framework or a 
 The cost it accepts: three new crates (HTTP + markdown renderer + sanitiser) and two npm packages, each needing a recorded User decision (`implementing.md:383,405`); `tiny_http` is **stale** (last release 2022-10, crates.io); thread-per-connection is fine at localhost scale (guess); the CLI JSON of the three commands changes (O1's contract); SSE+POST chat latency is unmeasured; C1's real-snapshot size is still open.
 
 What evidence would change it: `tiny_http`'s abandonment on a future toolchain (swap to hyper or axum behind the same handler seam — a library change, no protocol change); a measured SSE+POST chat latency over the spike's 2.6 ms unix-socket figure (measured, `durable-leads.md` Summary: event to first frame at the client median 2.60 ms; then a WebSocket bridge, +10–15 packages, guess); a real Lead's snapshot measured multi-MB (C1 windowing — still no new dependency); pnpm `allowBuilds` friction with the two JS files (then move markdown client-side or serve from a CDN — direction changes, not stack changes). Each is a measurement or a fact, not a belief; none is known today (all open items are labelled in 3.3, 3.5 and `host-wire.md` 4).
+
+## 6. The cut into PRs
+
+<!-- skeleton -->
+
+## 7. Risks
+
+<!-- skeleton -->
+
+## 8. Open design choices
+
+<!-- skeleton -->
+
+## Appendix A. Evidence index
+
+<!-- skeleton -->
