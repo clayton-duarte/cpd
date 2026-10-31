@@ -295,15 +295,127 @@ Two media are mixed in the cockpit: the ratatui views (tree, Plan, widgets, dial
 A browser that wants cockpit parity therefore must, today, act over the `cpd` CLI (every read/action of sections 2.1–2.2), follow `cpd events` for live data, read pi transcripts from the session file, and leave each pi Lead's pane dialogs and editor to the pane — until the durable host socket's `ui_request`/`ui_response` (P1.6) or a shared core fold (Q35) wires them to data.
 ## 3. Live data
 
+Sources: `live-today.md`, `host-wire.md`, `front-end.md` (the last three figures in 3.2 are from URLs read 2026-10-31). Cites of `pi/durable-host/*` and `docs/contract.md` in 3.3–3.5 are of `d55c00251` (main after #687); every other `file:line` here is of `fdd9745d9`. 23 of the new cites were spot-checked against `git show fdd9745d9:<path>` or `git show origin/main:<path>` (the host-wire ones); the rest are as the findings give them.
+
 ### 3.1 How a cockpit view learns of a change today
+
+**Answer first.** Two mechanisms drive every TUI view: (a) a *commit watcher* (`notify` inotify on `cpd.db`/`cpd.db-wal`) that only wakes the loop, and (b) a read in the view's own process that asks the store "which Events are after my cursor" (`Follow`). `cpd events follow` is a third, separate poller (`PRAGMA data_version`) used by the pi adapter, not the TUI. The Event stream alone is **not** enough to drive a full cockpit view: PR state, the engine-running flag, snooze ends, Pulse ages and the host samples change with no Event (3.1.1). Event stream + store re-read covers the rest.
+
+| State | Change signal | Latency / cadence | Cite |
+|---|---|---|---|
+| Any store write (wake only) | inotify `Modify(Data/Any)`/`Create`/`Remove` of `cpd.db`/`cpd.db-wal`, non-recursive on the store dir → `Signal::Commit` | event-driven (kernel); a lost/`Err` event is ignored, the safety read covers it | `tui/src/read/watch.rs:11-21,29-45`; `tui/src/pump.rs:38-40` |
+| Read pacing after a commit | `Schedule::take`: a wanted read waits until `FRAME` (50 ms) since the last read; one read in flight; `force` for own actions | ≤ 1 read / 50 ms; 50 ms coalescing | `tui/src/pump.rs:167-220`; `tui/src/palette.rs:481` |
+| Safety poll (watcher present) | `Schedule` every `SAFETY` | 2 s | `tui/src/pump.rs:19`; `tui/src/tree/mod.rs:188`; `tui/src/plan/mod.rs:538` |
+| Fallback when the watcher fails to start (or driven/test loop) | poll at `events.poll_ms` (default 200 ms, range 20–10,000); widgets shows "no commit watcher" | 200 ms | `core/src/config/file.rs:338`; `tui/src/widgets/mod.rs:320-324` |
+| What changed (Events) | `Follow::poll_changes`: `highest_id`, then `events` with `id > cursor`, in one read txn; cursor moves only on `Ok`; `cursor_ahead` if the DB was replaced | per read (above) | `tui/src/read/follow.rs:61-79` |
+| Plan view | snapshot retaken only if an Event `concerns` it: kind `session-moved`, or same plan, or same context, or (Pulse) context; or `pulls` changed; or `force`/retry | commit + ≤ 50 ms, else 2 s | `tui/src/plan/mod.rs:197-203,585-600` |
+| Pulse (dots, 5-min buckets, ages, quiet) | same Event filter + timer `PULSE_REFRESH` (window slides, ages tick, a running Attempt is no Event) | 60 s timer | `tui/src/plan/mod.rs:64,125-131`; `tui/src/read/pulse.rs:30-32` |
+| Tree (Contexts/Plans/Sessions, Inbox, dots) | any `Changes::any()` (Events or pulls), or engine lock flip, or snooze end, or retry | commit + ≤ 50 ms; 2 s safety | `tui/src/tree/mod.rs:250-270` |
+| Widgets/Inbox strip | Events/pulls/Inbox mark; ages each 1 s; CPU/GPU/mem sample | 50 ms frame, 1 s, 2 s | `tui/src/widgets/mod.rs:89,313-330,473,525-527` |
+| Logs view | own `Follow` poll at `events.poll_ms`, appends | 200 ms | `tui/src/logs/mod.rs:94-95` |
+| Spinner/animation frames | clock `FRAME_MS` = 50, `(unix ms / 50) % 28` | 50 ms | `tui/src/palette.rs:481-486` |
+| Background action results | `Waker::read_done` → `Signal::Read` | on completion | `tui/src/background.rs:115-119`; `tui/src/pace.rs:72-76` |
+| Engine writes (source of nearly all of the above) | engine tick; PR poll | `watch.tick_seconds` default 5 s; `watch.pr_poll_seconds` default 5 s after the last poll ended | `core/src/config/file.rs:302-303`; `engine/src/watch/pr.rs:40-48` |
+| `cpd events follow` (pi adapter, any external consumer) | poll `PRAGMA data_version` (+ `schema_version`) every `events.poll_ms`; query only when it changed; one batch of 500 repeats at once | ≤ 200 ms + query | `core/src/events/mod.rs:160-215`; `docs/contract.md:2765` ("polling, no notification channel") |
+
+#### 3.1.1 State with NO Event or store commit
+
+| State | Why no signal | How the TUI learns | Cite |
+|---|---|---|---|
+| PR checks, review decision, `mergeable`, state | `pr poll` writes `pull_requests` with no Event (contract §7.6, hs-d96) | `pulls_mark` = `count(*)`, `max(changed_at)` of `pull_requests` compared per poll (it is a commit, so the watcher wakes it; the Event list alone would miss it) | `tui/src/read/follow.rs:22-24,34-38,77` |
+| Engine running / down (`engine-down` item, never stored) | flock on `locks/watch.lock`; no row | non-blocking shared flock probed per read (`engine_running`); a flip triggers a snapshot | `core/src/inbox/model.rs:267-287`; `tui/src/tree/mod.rs:250-262` |
+| Inbox snooze ending | clock only | `min(snoozed_until)` → deadline / safety read | `tui/src/read/tree.rs:196-214` |
+| Running Attempt age, Pulse ages, window slide | time-derived | `PULSE_REFRESH` 60 s | `tui/src/plan/mod.rs:64`; `docs/commands.md:3558` |
+| Inbox item age text | time-derived | redraw each second from `opened_at` | `tui/src/widgets/mod.rs:343-345,525-527` |
+| Spinner frame | clock | 50 ms | `tui/src/palette.rs:483-486` |
+| Host CPU/GPU/memory % | sampled from the OS | every 2 s | `tui/src/widgets/mod.rs:89,473` |
+| Marker files (`run/tmux-restart.pending`, `run/watch.log`, tmux option `@cpd_workers`) | files / tmux options, no Event | not read by the listed TUI views; the tmux status bar reads the option | `docs/commands.md:3232,3305` |
+| Worker/session pid liveness | the engine detects dead panes and writes `attempt-status died`/`session-state stopped` (an Event, up to one tick late); the TUI never probes a pid | via Events | `docs/contract.md:2690` context; `engine/src/watch/liveness.rs:358` (unverified in detail: only header comments read) |
+
+#### 3.1.2 Event kinds and their coverage (`core/src/events/kind.rs:76-143`)
+
+| Group | Kinds | State covered |
+|---|---|---|
+| Context | context-created/-record/-grounded/-deleted, records-retired, docs-decided, context-curated/-renamed/-owner/-archived | tree rows, records, archive |
+| Plan | plan-created/-phase/-review/-outlined/-done/-deleted/-renamed/-archived | Plan row, phase, review, outline |
+| Job | job-added/-edited/-merged/-failed/-retried/-cancel-requested/-cancelled | Job status in the chart |
+| Attempt | attempt-started/-status (from/to, `died`), attempt-retry, attempt-nudge | Attempt/Worker status |
+| PR (cpd `prs`) | all-merged, pr-feedback, pr-added/-edited/-described/-cancelled/-started/-base-changed/-opened/-merged | PR boxes, cpd-side merge state |
+| Escalation | escalation, escalation-answered, escalation-expired | asks |
+| Session | session-registered/-state/-moved/-renamed/-titled/-retiered, mcp-attached, session-asleep/-resumed/-archived, session-message | Lead/Manager dots, the chat slot (`session-moved` `place=chat`, `tui/src/read/pulse.rs:49-52`), titles |
+| Inbox | inbox-opened/-closed/-snoozed/-dismissed/-claimed | Inbox items |
+| Engine/other | watch-started/-stopped, error, review-opened/-closed, incident-started/-plans/-ended | engine marks, errors, reviews, incident mode |
+
+Coverage verdict (inferred from the two tables): every ledger row a view draws has an Event kind except the `pull_requests` table and the engine lock; those two are the set a web server must carry separately, exactly as the TUI does (`pulls_mark` + `engine_running` probe).
 
 ### 3.2 The ways a browser can get updates
 
+| Way | What it needs | Covers | Misses |
+|---|---|---|---|
+| **In-process server** over the store's commit watcher plus an Event cursor, SSE with `Last-Event-ID` resume | `notify` (already a workspace dep, `Cargo.toml:19`), a `Follow`-style cursor (`events` after id, one read txn), `pulls_mark`, the engine-lock probe, the 60 s/2 s timers; an SSE endpoint that takes `Last-Event-ID` and resumes `--since` | exactly what the TUI sees, at TUI latency (inotify wake + 50 ms coalescing); the DB is the buffer, ids monotone, so a dropped browser reconnects with its last id with no gap or dup | nothing on the ledger side; chat needs the host socket (3.3); the snapshot for a first load needs a store read (no confirmed command gives snapshot+cursor atomically, `live-today.md` 4, unverified) |
+| **Fan-out of `cpd events follow`** | one follower child per server (or the server reads the store like `Follow`); each line is already JSON with a monotone `id`; a browser that drops reconnects with its last id and the server resumes with `--since` or `events list --since` | all Events, back-pressured (500/line batch, nothing dropped; ends on EPIPE); `--since 0` replays all; same `--since` replays the same lines (idempotent) | nothing outside the stream: PR checks/review/mergeable, engine up/down, snoozes, ages, host samples (3.1.1); no heartbeat line, so an idle stream is silent; latency floor is `events.poll_ms` (200 ms) + query vs inotify wake + 50 ms; a replaced store makes `--since` fail `cursor_ahead` (clients must resnapshot) |
+| **Timers** | a polling endpoint (any `cpd` read of section 2.1, or a store read) at a fixed cadence | everything a read returns | push semantics; latency = the timer; N clients = N polls |
+| **Chat (host socket)** | a bridge to `$CPD_HOME/run/host/<session>.sock` holding `hello`/`attach` and reconnect; frames to the browser | the Session's conversation, live (3.3, 3.4) | the cockpit views (those are cpd CLI/core, not the host) |
+
+**The connection limit.** EventSource over HTTP/1.1 — what a plain localhost or ssh-forward server speaks — is capped at 6 connections per origin in Chrome and Firefox ("Won't fix"; HTTP/2 negotiates up to 100 streams but needs TLS, a guess for Tailscale `serve`), MDN `EventSource`, read 2026-10-31 (from `front-end.md`). **One multiplexed stream per tab** (one EventSource carrying typed events: tree, plan, pr, inbox, chat) uses 1 of 6, leaves 5 for ordinary fetches/POSTs, and survives several tabs and devices per browser; htmx's per-panel `sse-connect` (one stream per element) would hit the cap across tabs. EventSource also reconnects itself (`error` event, `readyState` CONNECTING/OPEN/CLOSED, same MDN page).
+
+**SSE + POST against WebSocket (inferred).** The evidence favours SSE for server→browser: it reconnects itself, `Last-Event-ID` is the resume cursor the TUI already uses (`--since`), and the direction is write-mostly-one-way; WebSocket has no auto-reconnect (MDN WebSocket, unverified read, `front-end.md`). It favours POST for browser→server: every action of section 2.2 already is a `cpd` command, stateless and retryable. A WebSocket earns its keep only inside the chat bridge (host frames arrive unsolicited and chat submits are frequent); even there, an SSE stream per chat slot plus POST `submit` reproduces the bridge, and the crate table of 5.2 prices the difference (dropping WS keeps the server deps at 4–6, `rust-http.md` 4).
+
 ### 3.3 What the host socket protocol v1 carries for a web client
+
+All cites are of `d55c00251`; `C:n` = `docs/contract.md:n` (the real socket at C:4049), `pi/durable-host/<f>:n` as named. "Not in v1" rows are either planned (P1.6–P1.9) or a gap.
+
+| Need | Carried by v1 (message, contract section) | Planned P1.6 to P1.9 | Gap |
+|---|---|---|---|
+| Attach and snapshot of the whole history | `attach` → `attached{mode,epoch,from_seq,head_seq,client_id}`, then a `snapshot` frame, then ring `events` frames, then `host_state` (`pi/durable-host/server.ts:88-99`; C:4018); the first snapshot is the whole history (Q5, `durable-leads.md` R:1191) | — | size unmeasured (Q5 residual, open): ~580 B per entry for a 30-entry faux snapshot, MB plausible for a real Lead (`host-wire.md` 1, derived, guess); one line ≤ 64 MiB (`protocol.ts:4`), a bigger snapshot is "a host defect" (C:4021) |
+| Resume after a drop | `attach.cursor {epoch,seq}`; resume if `base.seq ≤ seq ≤ head` and the same epoch, else snapshot mode (`pi/durable-host/ring.ts:27-34`; C:3947) | — | a host restart is a new epoch = always a full snapshot (`bye{reconnect}` tells when to retry); the browser must keep `{epoch,seq}` of the last applied frame |
+| Slow or dropped browser | host-side only: `bye{slow_client, reconnect:true}` past 8 MiB unsent (`pi/durable-host/server.ts:53-60`; `protocol.ts:4`) | — | the browser-side backlog is the bridge's to bound (no protocol help); a dropped unix link resumes by cursor if still in the ring |
+| Several clients on one host | Q1: any client may command (`durable-leads.md` R:1143); `clients` count in `host_state`, `client_id` per connection (`server.ts:67-71,88-99`) | — | one tab = one connection works; shared tabs need the bridge to fan out and keep per-tab cursors itself |
+| Send a message | `submit{req,text,when_busy followUp\|steer\|reject,request_id?}` → `result{submission_id,status}` or `error busy` (`pi/durable-host/protocol.ts:91-96`; C:4124) | — | text only; images are unsupported until P1.8 (G82, `durable-leads.md` R:7.2); every client submit is `reply:true` — any client is the User's hand (Q1, C:4124); idempotent resend by `request_id` |
+| Abort | `abort{req,background}`, `abort_submission{req,submission_id}` → `result` (`pi/durable-host/server.ts:112-121`) | — | both are plain RPC |
+| Answer UI requests (approvals, `ask_user_question`, Plan review) | — | P1.6: `ui_request`, `ui_resolved`, `ui_response`; `held_ui` > 0, replay at attach; today `held_ui: 0` and none are sent (C:4045); Q8 re-asks `ask_user_question` only; Q20 ask waits for a client | the `select/confirm/input/editor/questionnaire` shapes are not yet in the contract (C3); "not a v1 client" without `questionnaire` (`durable-leads.md` R:4.4) |
+| Model and tier: show | via the fold: `SnapshotEvent.agent` and `agent_changed` (R:4.3); `host_state.agent` exists (`protocol.ts:51`) but `run.ts:222` never sends it | — | cpd tier is not a wire concept: a retier is a cpd Event delivered as an entry (`session-retiered`, P1.9, C:3859) |
+| Model and tier: change | — | P1.8: `configure{model?,thinking_level?}`, `list_models` | `unknown_type` today; `list_models` result shape "inferred" (R:4.5 row 21) |
+| Compact | — | P1.8: `compact{req,instructions?}` → `result{task_id}`; progress as `compaction_start/end` events | — |
+| Fork | — | P1.8: `fork{req,at}`; Q7: a fork is a new Session with its own host | the web client must open a second socket/Session after a fork; session list and fork are cpd CLI/core, not the host |
+| History paging | — | P1.8: `history{req,before?,limit=50}` → `result{entries,next?}`, newest first | only matters if the snapshot is windowed (C1); shape not yet in the contract (C4) |
+| Markdown | client's (Q2): the host sends raw text of entries and deltas | — | the browser renders; no protocol part |
+| Origin and auth on the socket | **gap, by decision**: unix socket 0600 in a 0700 dir, owner-checked (`net.ts:21-24,41,47`); no TCP in the host (Q34); same-user trust (Q6); a socket has no Origin | — | the web server must authenticate and check `Origin` on its own upgrades; without it any web page in the User's browser can drive a localhost server (RFC 6455 §10.2, from memory, unverified); a reachable bridge widens Q1 to every device on the tailnet/forward |
+| Host not running (no socket) | **gap, outside the protocol**: the socket exists only while the host runs; Q33 rejected reading the store directly | `cpd session open` starting the host is P1.10 | a web view of a stopped/parked durable Session needs the engine to start the host first, or shows nothing |
+| Ping / liveness | `ping` → `pong`, works before `hello` (C:4012 rule 4); `bye` on shutdown | — | the bridge maps to WS ping or its own timer |
+| State pill | coarse: `host_state{state idle\|working\|waiting\|blocked,name?,clients,held_ui}`; main only ever reports `idle`/`working` (`run.ts:138`) | `blocked`/`waiting` need P1.6/P1.7 | — |
+
+Outside the host protocol: the cockpit parity of hs-d757 (tree, Plans, PRs, Inbox, merges, reviews) is cpd CLI/core, not the host — the host serves one Session's conversation.
 
 ### 3.4 The three bridge options A, B and C
 
+All three dial `$CPD_HOME/run/host/<session>.sock`, send `hello` (≤ 5 s or `hello_timeout`), `attach`, and own reconnect with `bye.reconnect`; the wire is NDJSON, so one line = one message in any option. Basics from `host-wire.md` 2 and the durable-leads decisions (read): **Q9** decided "A. The Rust client folds each `AgentEvent` batch onto the `SnapshotEvent`" and **Q35** decided "A. A shared Rust fold in `core`: one library used by the CLI tail and by `cpd chat`; the wire is unchanged" (`durable-leads.md` R:1238, R:1528).
+
+| | A. Relay, browser folds (JS) | B. Server folds in Rust, serves views | C. Hybrid |
+|---|---|---|---|
+| Who folds | the browser, a second fold of ~20 event types in TS beside the Rust one (R:4.3); a Node spike client with a subset fold is 5,142 B (R:662), full size unknown (R:1236) | the server, the one Rust fold in `core` (Q35 A) | the server folds transcript state only; control-plane frames (`ui_*`, `host_state`, `error`, `bye`, `result`) relayed raw |
+| Duplicated logic | highest: a TS reimplementation of the Rust fold; pi-durable exports no reducer (R:4.1) | none beyond the shared fold; the cost moves to a view schema that does not exist (each option's own) | smaller than B's schema (transcript only); no TS fold |
+| Browser implements | the fold (incl. "whole message at `message_start`, replace at `message_end`"), cursor storage, snapshot-mode replace on any `snapshot` frame, dialogs from raw `ui_request`, markdown | render the view, apply patches, send commands, dialogs, markdown | render the transcript view, dialogs from raw `ui_request`, markdown |
+| Server implements | least: auth + Origin check, session ↔ socket map, line ↔ message, backpressure, reconnect; needs a max message size ≥ the 64 MiB host line | most: fold, per-session state, patch/diff or full-view resend, resume across restarts, fan-out to N browsers | medium |
+| Wire coupling | the browser is tied to pi-durable `AgentEvent` shapes, which pass through unchanged (Q4) and are "experimental" (R:1236); a pi-durable bump touches the Rust **and** TS folds | only the Rust fold tracks pi-durable; the browser is tied to the server's view schema | as B for the transcript |
+| Fit with Q9/Q35 | Q9 A and Q35 A say a Rust client folds; A adds a second, non-Rust fold, which Q35's own evidence flags: "a web UI in another language would have to fold again until B is added" (R:1528) | Q35 A directly, if the web server is Rust (stack not yet chosen: unverified); hs-d753 CLI-first | compatible with Q35 A |
+| Latency / size over the link | the whole snapshot and every raw batch cross the link; batches are small, the snapshot is the unmeasured big one | the server can send a trimmed/rendered view; the snapshot still crosses the unix hop | as B for the transcript |
+
+Common to all three (not a bridge question): markdown is the client's (Q2) and approvals + Origin are the (web) server's job.
+
 ### 3.5 The protocol changes C1 to C5
+
+From `host-wire.md` 3. **None needs a version bump**: adding an optional field or a new message type is not a version change (R:352). The durable-leads Lead is done and takes no message, so at 2026-10-31 14:14 EDT these were **sent** — not agreed — to the Manager as a board FYI (A4).
+
+| # | Change a web client needs | Why | Version bump? | Status |
+|---|---|---|---|---|
+| C1 (conditional) | optional `attach` field `entries_limit` (number): in snapshot mode the host sends a `snapshot` whose `entries` holds only the last N, `attached` says `truncated:true`; older entries come from `history` (P1.8) | a cold attach over Tailscale/ssh pays the whole history (Q5 A; no cap; the 64 MiB line limit is unhandled, C:4021); windowing "needs no version bump" already noted (R:1191) | No for the field and `truncated` — but an old host **silently ignores an unknown `attach` field** (`parseLine` ignores unknown fields, C:3873), so the client would silently get the full snapshot: list a feature in `welcome` or require P1.8 | sent, conditional on the P1.5 snapshot measurement; whether folded events name entry ids not in a trimmed snapshot is unverified and must be checked first |
+| C2 (conditional) | optional `hello.role: 'viewer'` that cannot `submit`, `abort` or `ui_response` (`error refused`) | Q1 (any client commands) plus a network-reachable bridge means every connected browser can answer `secret_approve`/`host_approve` (R:4.8); Q1's own text says "revisit with a `viewer` role" (R:1135-1141) | No (same silent-ignore as C1); alternative with no protocol change: the web server refuses to forward `ui_response` for those purposes unless the User re-authenticates | sent, only if the web server cannot enforce the alternative itself |
+| C3 (request, P1.6) | write `ui_request` for every `purpose` including the `questionnaire` field schema as exact TS types in §6.14 (today only "inferred", R:4.5 row 23), and say `ui_request` frames replay after `host_state` with `replayed:true` | a JS client must render and answer them from the contract alone; the questionnaire has no pi shape (R:4.4) | No (new types) | sent |
+| C4 (request, P1.8) | specify `history`, `list_models` and `configure` results as exact types (today "inferred", R:4.5 row 21), and say what `fork` returns (a new Session id the host does not serve, Q7) | the web client calls them; the fork result must tell it which socket to open next | No | sent |
+| C5 (request, sock-host follow-up) | define what the host does for a line over `LIMITS.hostLine` (64 MiB): today "a host defect, not handled" (C:4021) | a bridge sets its message-size limit from this; a silent drop or crash on a big snapshot is undebuggable remotely | No | sent |
+
+Not needed (checked): a `hello` capability for the web (the `client` string is enough, `protocol.ts:30`); a second transport or TCP in the host (Q34 decided against; the bridge is another process); `Origin` on the socket (a unix socket has none; the bridge checks it); server-side folding in the host (Q35 B, only if the web server is not Rust and B is chosen — then it is a new message family, still no bump).
 
 ## 4. The shared read model
 
