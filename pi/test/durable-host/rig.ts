@@ -166,6 +166,7 @@ export function rig(over: RigOptions = {}) {
     },
     resolveModel: () => MODEL,
     contextFiles: () => [],
+    validatePackage: async () => undefined,
     open: async (o) => {
       opened.n++;
       extensions.push(o.extension);
@@ -197,6 +198,10 @@ export function rig(over: RigOptions = {}) {
           return {};
         },
         install: () => {},
+        configure: async () => {
+          order.push("configure");
+          notify();
+        },
         entries: async () => over.stored ?? [],
         closed: conversationClosed,
         watch,

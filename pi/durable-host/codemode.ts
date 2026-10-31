@@ -9,3 +9,8 @@ export function namespacesFor(servers: readonly CodemodeServer[]): Record<string
   for (const { server, tools } of servers) out[`mcp__${server}__`] = tools;
   return out;
 }
+
+/** `namespacesFor` as `createCodemodeExtension` reads them: one `{ name, prefix }` per server (contract §6.18). */
+export function codemodeNamespaces(servers: readonly CodemodeServer[]): { name: string; prefix: string }[] {
+  return Object.keys(namespacesFor(servers)).map((prefix) => ({ name: prefix.slice("mcp__".length, -"__".length), prefix }));
+}

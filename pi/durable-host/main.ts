@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { getAgentDir, loadProjectContextFiles, ModelRuntime, resolveCliModel } from "@earendil-works/pi-coding-agent";
 import { callCpd, CpdError } from "../lib/cpd.ts";
+import { validatePackage } from "../lib/reload.ts";
 import { openConversation } from "../durable-worker/harness.ts";
 import { DEFAULT_TIMING, Follower } from "../lib/follower.ts";
 import { guardSocket, listenOn } from "./net.ts";
@@ -29,6 +30,7 @@ try {
       return { provider: r.model.provider, modelId: r.model.id, ...(r.thinkingLevel === undefined ? {} : { thinkingLevel: r.thinkingLevel }) };
     },
     contextFiles: (cwd) => loadProjectContextFiles({ cwd, agentDir: getAgentDir() }),
+    validatePackage: (dir) => validatePackage(dir),
     open: (o) => openConversation(models as never, o),
     follow: (hooks) => new Follower(config.session, hooks, DEFAULT_TIMING),
     guard: guardSocket,

@@ -5,13 +5,16 @@ import { ProtocolError } from "./protocol.ts";
 /** The host's own state at the trigger (contract §6.18). `editorText` is always `""`: the host is headless. */
 export type ReloadGuard = { busy: boolean; pending: boolean; state: "idle" | "working" | "waiting" | "blocked" };
 
+/** A validation answer, or a promise of one (the real `deps.validatePackage` is async). */
+type Validation = { ok: true } | { ok: false; reason: string };
+
 export type ReloadPort = {
   /** The rebuild: re-read the prompt sources and re-import the extension modules; the new extension, or a throw for `internal`. */
-  rebuild(): unknown;
+  rebuild(): unknown | Promise<unknown>;
   /** The host's state: the pending counter, the queued messages and the wanted state of the lib's `Guard`. */
   guard(): ReloadGuard;
   /** pi's own load of the package: `{ ok: true }`, or the refusal reason of `validatePackage`. */
-  validate(extension: unknown): { ok: true } | { ok: false; reason: string };
+  validate(extension: unknown): Validation | Promise<Validation>;
   /** pi-durable's in-place install replaces the extension with its name. */
   install(extension: unknown): Promise<void>;
 };
@@ -27,8 +30,8 @@ export function createReload(port: ReloadPort): { reload(): Promise<{ reloaded: 
       if (g.busy) throw refused("busy");
       if (g.pending) throw refused("pending");
       if (g.state !== "idle") throw refused("state");
-      const extension = port.rebuild();
-      const validation = port.validate(extension);
+      const extension = await port.rebuild();
+      const validation = await port.validate(extension);
       if (!validation.ok) throw refused(validation.reason);
       await port.install(extension);
       return { reloaded: true };

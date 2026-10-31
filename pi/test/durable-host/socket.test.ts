@@ -162,7 +162,8 @@ test("runHost answers a client submit with when_busy reject while the conversati
     assert.equal(errors[0]!.code, "busy");
     assert.equal(typeof errors[0]!.message, "string");
     assert.equal(c.closed, 0, "the connection is kept");
-    assert.deepEqual(r.written, [], "a refused reject stores nothing");
+    // P1.9 writes the skills baseline at host start; the rejected submit itself stores nothing.
+    assert.deepEqual(r.written.filter((w) => (w as { entry?: { kind?: string } }).entry?.kind !== "cpd-skills"), [], "a refused reject stores nothing");
 
     busy.value = false;
     c.send(submit("r2", { when_busy: "reject" }));

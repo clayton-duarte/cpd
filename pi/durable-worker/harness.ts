@@ -13,6 +13,7 @@ import type { Write } from "../durable-host/turn.ts";
 type Root = {
   readonly id: unknown;
   abort(ctx: typeof BACKGROUND_CONTEXT, opts: { background: boolean }): Promise<void>;
+  configure(change: unknown, ctx: typeof BACKGROUND_CONTEXT): Promise<void>;
   submit(input: unknown, ctx: typeof BACKGROUND_CONTEXT): Promise<{ readonly id: number; status(ctx: typeof BACKGROUND_CONTEXT): Promise<{ status: string }>; wait(ctx: typeof BACKGROUND_CONTEXT): Promise<{ status: "done" | "unanswered" | "failed" }>; }>;
   viewState(ctx: typeof BACKGROUND_CONTEXT): Promise<{ value: { entries: unknown } }>;
 };
@@ -52,6 +53,7 @@ export function conversationOf(root: unknown, registry: { install(extension: Ext
     },
     abort: (opts: { background: boolean }) => r.abort(BACKGROUND_CONTEXT, opts),
     abortSubmission: (id: number) => durable.harness.abortSubmission(id, BACKGROUND_CONTEXT, r.id),
+    configure: (change) => r.configure(change, BACKGROUND_CONTEXT),
     submit: async (input: Input) => {
       const submission = await r.submit(
         { type: "input", content: input.content, requestId: input.requestId, whenBusy: input.whenBusy, ...(input.entry === undefined ? {} : { entry: input.entry }) },

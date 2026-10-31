@@ -1,6 +1,6 @@
 import { formatSkillsForPrompt, loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import { isObject } from "../lib/cpd.ts";
-import { digestSkill, noticeContent, skillChanges, SKILLS_TYPE, type Change, type Digest, type SkillsNotice } from "../lib/skills.ts";
+import { digestSkill, noticeContent, skillChanges, SKILLS_TYPE, type Digest, type SkillsNotice } from "../lib/skills.ts";
 
 // Contract §6.18 "Skills": the role skill section and the digest check against the conversation's
 // entries.
@@ -13,9 +13,6 @@ export type SkillsPort = {
   deliver(error: { what: string; code: string; message: string; details?: Record<string, unknown> }): void;
   log(line: string): void;
 };
-
-/** The held notice a changed digest must deliver at the next turn (pi/lib/skills.ts `SkillsNotice`). */
-export type SkillsNotice = { skill: string; dir: string; changes: Change[]; files: Digest };
 
 /** A `data.files` that is an object of 64-hex strings, as pi/lib/skills.ts's `isDigest` reads. */
 const isDigest = (v: unknown): v is Digest => isObject(v) && Object.values(v).every((h) => typeof h === "string" && /^[0-9a-f]{64}$/.test(h));
