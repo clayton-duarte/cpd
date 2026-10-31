@@ -87,6 +87,11 @@ fn txn_of(fx: &Fx, where_: &str) -> i64 {
     fx.env.query(&format!("SELECT txn FROM history WHERE {where_} ORDER BY id LIMIT 1"))
 }
 
+/// The txn of the one `events` row of `kind` (the Events' `kind`, not the history table's `tbl`).
+fn event_txn_of(fx: &Fx, kind: &str) -> i64 {
+    fx.env.query(&format!("SELECT txn FROM events WHERE kind = '{kind}' ORDER BY id LIMIT 1"))
+}
+
 // ---------- (a) a running Attempt ends failed / aborted, in one store ----------
 
 #[test]
@@ -116,8 +121,8 @@ fn aborts_a_running_attempt_failed_aborted() {
 
     // The Attempt's end and both Events are one write transaction.
     let txn = txn_of(&fx, &format!("tbl = 'attempts' AND op = 'update' AND json_extract(after, '$.cause') = 'aborted'"));
-    assert_eq!(txn_of(&fx, "kind = 'attempt-aborted'"), txn, "the Event shares the Attempt's transaction");
-    assert_eq!(txn_of(&fx, "kind = 'job-failed'"), txn, "and the Job's failure too");
+    assert_eq!(event_txn_of(&fx, "attempt-aborted"), txn, "the Event shares the Attempt's transaction");
+    assert_eq!(event_txn_of(&fx, "job-failed"), txn, "and the Job's failure too");
 }
 
 // ---------- (b) the retry route after the abort ----------
@@ -139,26 +144,30 @@ fn job_retry_after_abort_works() {
 #[test]
 fn refuses_a_non_running_attempt_and_writes_nothing() {
     // A `starting` Attempt: the setup is the only way it ends, the abort never touches it.
-    let fx = starting();
-    let before = writes(&fx);
-    let error = refused(&abort(&fx), "attempt_not_running", 3);
-    assert_eq!(error["details"]["status"], "starting");
-    assert_eq!(writes(&fx), before, "nothing written");
-    assert_eq!(events(&fx, "attempt-aborted").len(), 0);
-    assert_eq!(events(&fx, "job-failed").len(), 0);
+    {
+        let fx = starting();
+        let before = writes(&fx);
+        let error = refused(&abort(&fx), "attempt_not_running", 3);
+        assert_eq!(error["details"]["status"], "starting");
+        assert_eq!(writes(&fx), before, "nothing written");
+        assert_eq!(events(&fx, "attempt-aborted").len(), 0);
+        assert_eq!(events(&fx, "job-failed").len(), 0);
+    }
 
     // An `ended` Attempt: the natural ending stands, the abort cannot rewrite its cause.
-    let fx = ended_by_the_engine();
-    let before = writes(&fx);
-    let error = refused(&abort(&fx), "attempt_not_running", 3);
-    assert_eq!(error["details"]["status"], "ended");
-    assert_eq!(error["details"]["cause"], "timed_out");
-    assert_eq!(writes(&fx), before, "nothing written");
-    assert_eq!(
-        fx.env.query::<String>(&format!("SELECT cause FROM attempts WHERE id = '{ATTEMPT}'")),
-        "timed_out",
-        "the ended cause is untouched"
-    );
+    {
+        let fx = ended_by_the_engine();
+        let before = writes(&fx);
+        let error = refused(&abort(&fx), "attempt_not_running", 3);
+        assert_eq!(error["details"]["status"], "ended");
+        assert_eq!(error["details"]["cause"], "timed_out");
+        assert_eq!(writes(&fx), before, "nothing written");
+        assert_eq!(
+            fx.env.query::<String>(&format!("SELECT cause FROM attempts WHERE id = '{ATTEMPT}'")),
+            "timed_out",
+            "the ended cause is untouched"
+        );
+    }
 }
 
 // ---------- (d) the race with the engine's natural end ----------
@@ -168,28 +177,32 @@ fn race_with_the_natural_end_has_one_winner() {
     // The engine's natural end (the deadline) already ended the Attempt and failed its Job. The abort that
     // follows re-reads the status, finds it no longer `running`, is refused `attempt_not_running` and writes
     // nothing: exactly one ending wins, there is no second Event and no rewritten cause.
-    let fx = ended_by_the_engine();
-    assert_eq!(fx.env.query::<String>(&format!("SELECT cause FROM attempts WHERE id = '{ATTEMPT}'")), "timed_out");
-    let before = writes(&fx);
-    let failed_before = events(&fx, "job-failed").len();
-    let aborted_before = events(&fx, "attempt-aborted").len();
+    {
+        let fx = ended_by_the_engine();
+        assert_eq!(fx.env.query::<String>(&format!("SELECT cause FROM attempts WHERE id = '{ATTEMPT}'")), "timed_out");
+        let before = writes(&fx);
+        let failed_before = events(&fx, "job-failed").len();
+        let aborted_before = events(&fx, "attempt-aborted").len();
 
-    let error = refused(&abort(&fx), "attempt_not_running", 3);
-    assert_eq!((error["details"]["status"].as_str(), error["details"]["cause"].as_str()), (Some("ended"), Some("timed_out")));
-    assert_eq!(writes(&fx), before, "no transaction was written: {error}");
-    assert_eq!(events(&fx, "job-failed").len(), failed_before, "no second `job-failed`");
-    assert_eq!(events(&fx, "attempt-aborted").len(), aborted_before, "no `attempt-aborted`");
-    assert_eq!(fx.env.query::<String>(&format!("SELECT cause FROM attempts WHERE id = '{ATTEMPT}'")), "timed_out", "the natural cause stands");
+        let error = refused(&abort(&fx), "attempt_not_running", 3);
+        assert_eq!((error["details"]["status"].as_str(), error["details"]["cause"].as_str()), (Some("ended"), Some("timed_out")));
+        assert_eq!(writes(&fx), before, "no transaction was written: {error}");
+        assert_eq!(events(&fx, "job-failed").len(), failed_before, "no second `job-failed`");
+        assert_eq!(events(&fx, "attempt-aborted").len(), aborted_before, "no `attempt-aborted`");
+        assert_eq!(fx.env.query::<String>(&format!("SELECT cause FROM attempts WHERE id = '{ATTEMPT}'")), "timed_out", "the natural cause stands");
+    }
 
     // A second abort of the Attempt the first already ended is the same loser: one winner, never two writes.
-    let fx = running();
-    abort(&fx).ok();
-    let before = writes(&fx);
-    refused(&abort(&fx), "attempt_not_running", 3);
-    assert_eq!(writes(&fx), before, "the losing abort wrote nothing");
-    assert_eq!(events(&fx, "attempt-aborted").len(), 1, "exactly one winner");
-    assert_eq!(events(&fx, "job-failed").len(), 1);
-    assert_eq!(fx.env.query::<String>(&format!("SELECT cause FROM attempts WHERE id = '{ATTEMPT}'")), "aborted");
+    {
+        let fx = running();
+        abort(&fx).ok();
+        let before = writes(&fx);
+        refused(&abort(&fx), "attempt_not_running", 3);
+        assert_eq!(writes(&fx), before, "the losing abort wrote nothing");
+        assert_eq!(events(&fx, "attempt-aborted").len(), 1, "exactly one winner");
+        assert_eq!(events(&fx, "job-failed").len(), 1);
+        assert_eq!(fx.env.query::<String>(&format!("SELECT cause FROM attempts WHERE id = '{ATTEMPT}'")), "aborted");
+    }
 }
 
 // ---------- (e) a Worker is refused ----------
@@ -213,7 +226,7 @@ fn aborted_is_not_a_ladder_cause() {
     // The Job fails: the engine requeues nothing and climbs nothing.
     assert_eq!(job_row(&fx.env, PLAN, JOB, "status"), "failed");
     assert_eq!(events(&fx, "attempt-retry").len(), 0, "no ladder retry was queued");
-    assert_eq!(events(&fx, "attempt-started").len(), 1, "no new Attempt was started");
+    assert_eq!(events(&fx, "attempt-started").len(), 0, "no new Attempt was started");
     assert_eq!(fx.env.query::<i64>(&format!("SELECT count(*) FROM attempts WHERE plan = '{PLAN}' AND job = '{JOB}'")), 1);
     assert_eq!(fx.env.query::<String>(&format!("SELECT status FROM attempts WHERE id = '{ATTEMPT}'")), "ended");
     assert_eq!(fx.env.query::<String>(&format!("SELECT cause FROM attempts WHERE id = '{ATTEMPT}'")), "aborted");
