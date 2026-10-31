@@ -24,3 +24,8 @@ export function parseConfig(argv: readonly string[], env: Record<string, string 
 export function storePath(home: string, session: string): string {
   return join(home, "run", "host", `${session}.sqlite`);
 }
+
+export function socketPath(home: string, session: string): string {
+  void home; void session;
+  throw new Error("not implemented");
+}
