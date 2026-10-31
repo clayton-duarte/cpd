@@ -166,33 +166,33 @@ Smallest set of UI request kinds over the socket (inferred from the rows above; 
 | `command` (client to host) | `name`, `args` | none | G45 |
 | `message` (host to client) | `customType`, `content`, `display`, `details` | none | G43 |
 
-Reading: `confirm` and `custom` are carried by no feature. Of 14 rows, 0 are offered, 1 is none-needed (G49).
+Reading: `confirm` and `custom` are carried by no feature. Of 14 rows, 1 is offered (G50), 5 partial, 7 absent and 1 none-needed (G49).
 
 ### 3.5 Rendering
 
-Sources: `a-render.md`. `EXT` = `pi/compact-tools/extensions/compact-tools-`. Line counts are measured (`git show origin/main:<file> | wc -l`, non-test) and are the TypeScript counterpart; the Rust size is a judgement, so every Size here says guess and cites the counterpart. All rows are built in the client. pi-durable offers data only: the `pi.tool-result` entry (`dist/entries.js:20`), the `pi.live` and `pi.usage` docs (README l.378-402), and no render. Mention highlight is G38 (3.3) and is not repeated.
+Sources: `a-render.md`. `EXT-<name>.ts` = `pi/compact-tools/extensions/compact-tools-<name>.ts`. Line counts are measured (`git show origin/main:<file> | wc -l`, non-test) and are the TypeScript counterpart; the Rust size is a judgement, so every Size here says guess and cites the counterpart. All rows are built in the client. pi-durable offers data only: the `pi.tool-result` entry (`dist/entries.js:20`), the `pi.live` and `pi.usage` docs (README l.378-402), and no render. Mention highlight is G38 (3.3) and is not repeated.
 
 | ID | Feature | Used today (file:line) | pi-durable 1.3.0 offers | cpd builds | Size | Basis |
 |---|---|---|---|---|---|---|
-| G53 | Tool rows: head `╭─[pill] title`, body rails, closing `╰` row, pill colour by state, running loader row, `ask_user_question` in magenta | `` `EXT`.ts:187,285,296,361,567 ``, `compact-tools.ts:255,272,276`, `compact-tools-custom.ts:51` | partial: data only (entry plus `pi.live`) | client: draw from entry and live doc | M (guess; TS 996 + 295 + 574 + 85 lines) | measured |
-| G54 | Per-tool argument summaries and the shell "calm label" parse | `EXT`-invocation.ts:81,329,395, `EXT`-shell.ts:29,245 | partial: data only (tool args) | client: show the command; classify nothing | S (guess; TS 531 + 277 lines) | measured |
-| G55 | Tool grouping: `Run date + 16 more steps` head, count, running hint, failures | `EXT`-grouping.ts:44,133,150,157,199,270 | partial: data only | client: the compact group head and count | S (guess; TS 487 lines) | measured |
-| G56 | Nested call summary under a parent tool | `EXT`-nested.ts:17,87 | partial: child conversation found through the call's `details` (README l.560) | client: a count line | S (guess; TS 168 lines) | measured |
-| G57 | Thinking fold: one pill `Thinking…`, folded, body on rails, time `HH:MM`, Ctrl+T | `EXT`-thinking.ts:52-56,62,124,184,253,348 | partial: data only (thinking blocks of the assistant entry) | client: two states, fold and time | S (guess; TS 385 lines) | measured |
-| G58 | User and assistant balloons: rounded box, tail, time, text wrapped to width minus 8 or 7 | `EXT`-balloon.ts:10,14,29, `EXT`-silent.ts:72,114,302 | partial: data only (`pi.user` entry `dist/entries.js:11`) | client: balloon widget | S (guess; TS 49 + 501 lines) | measured |
-| G59 | Markdown in balloons: headings, code, lists, tables, syntax colours | pi-tui `Markdown` (`EXT`-silent.ts:12), `pi/themes/dango.json` | none-needed: input text is data; the renderer is not | client: a markdown to ratatui renderer, new work | M (guess; no TS counterpart of ours) | inferred |
+| G53 | Tool rows: head `╭─[pill] title`, body rails, closing `╰` row, pill colour by state, running loader row, `ask_user_question` in magenta | `pi/compact-tools/extensions/compact-tools.ts:187,255,272,276,285,296,361,567`, `compact-tools-custom.ts:51` | partial: data only (entry plus `pi.live`) | client: draw from entry and live doc | M (guess; TS 996 + 295 + 574 + 85 lines) | measured |
+| G54 | Per-tool argument summaries and the shell "calm label" parse | `EXT-invocation.ts:81,329,395,` `EXT-shell.ts:29,245` | partial: data only (tool args) | client: show the command; classify nothing | S (guess; TS 531 + 277 lines) | measured |
+| G55 | Tool grouping: `Run date + 16 more steps` head, count, running hint, failures | `EXT-grouping.ts:44,133,150,157,199,270` | partial: data only | client: the compact group head and count | S (guess; TS 487 lines) | measured |
+| G56 | Nested call summary under a parent tool | `EXT-nested.ts:17,87` | partial: child conversation found through the call's `details` (README l.560) | client: a count line | S (guess; TS 168 lines) | measured |
+| G57 | Thinking fold: one pill `Thinking…`, folded, body on rails, time `HH:MM`, Ctrl+T | `EXT-thinking.ts:52-56,62,124,184,253,348` | partial: data only (thinking blocks of the assistant entry) | client: two states, fold and time | S (guess; TS 385 lines) | measured |
+| G58 | User and assistant balloons: rounded box, tail, time, text wrapped to width minus 8 or 7 | `EXT-balloon.ts:10,14,29,` `EXT-silent.ts:72,114,302` | partial: data only (`pi.user` entry `dist/entries.js:11`) | client: balloon widget | S (guess; TS 49 + 501 lines) | measured |
+| G59 | Markdown in balloons: headings, code, lists, tables, syntax colours | pi-tui `Markdown` (`EXT-silent.ts:12`), `pi/themes/dango.json` | none-needed: input text is data; the renderer is not | client: a markdown to ratatui renderer, new work | M (guess; no TS counterpart of ours) | inferred |
 | G60 | cpd message fold (`cpd`, context, decision, summary, skills): pill, first-sentence summary, `Message from <name> (<id>) (<HH:MM>)` | `pi/lib/render.ts:23,37-99,143` | partial: an app entry carries `content` and `details` (README l.416); the mapping from pi's `customType` is inferred | client: fold widget | S (guess; TS 238 lines) | measured |
-| G61 | Compaction fold: `[compaction]` pill, `Compacted from N tokens` | `EXT`-compaction.ts:31,71,84 | partial: `pi.compaction` entry (`dist/entries.js:30`); whether it carries `tokensBefore` was not found | client: fold widget | S (guess; TS 91 lines) | measured |
-| G62 | Editor box: rounded, border colour by working, focused, unfocused, `↑ n more` labels | `EXT`-editor.ts:88,137,145-151,163 | none-needed: no UI | client: box and colours over its own editor (G88) | S (guess; TS 231 lines) | measured |
-| G63 | Header working pill in the editor's top border: moon frames, words from run events; animation clock | `EXT`-editor.ts:68, `EXT`-progress.ts:38,132, `EXT`-loader.ts:8, `EXT`-clock.ts:7 | partial: run state from `pi.live` and events `run_start`, `tool_execution_start` (`events.d.ts`) | client: pill and a tick | S (guess; TS 146 + 43 + 55 lines) | measured |
+| G61 | Compaction fold: `[compaction]` pill, `Compacted from N tokens` | `EXT-compaction.ts:31,71,84` | partial: `pi.compaction` entry (`dist/entries.js:30`); whether it carries `tokensBefore` was not found | client: fold widget | S (guess; TS 91 lines) | measured |
+| G62 | Editor box: rounded, border colour by working, focused, unfocused, `↑ n more` labels | `EXT-editor.ts:88,137,145-151,163` | none-needed: no UI | client: box and colours over its own editor (G88) | S (guess; TS 231 lines) | measured |
+| G63 | Header working pill in the editor's top border: moon frames, words from run events; animation clock | `EXT-editor.ts:68,` `EXT-progress.ts:38,132,` `EXT-loader.ts:8,` `EXT-clock.ts:7` | partial: run state from `pi.live` and events `run_start`, `tool_execution_start` (`events.d.ts`) | client: pill and a tick | S (guess; TS 146 + 43 + 55 lines) | measured |
 | G64 | Pills and the Dango palette: 16 indexed colours, pill spec JSON | `pi/lib/pill.ts:41`, `pi/themes/dango.json`, `pill-spec.json` | none-needed: static JSON | client: map to indexed colours; reuse the JSON as is | S (guess; TS 53 lines) | measured |
 | G65 | Footer: cwd, branch, session name, tokens, cost, context, statuses (pi's own) | pi-coding-agent `dist/modes/interactive/components/footer.js:130-168,253` | partial: `pi.usage` (`dist/harness/usage.js:4`); branch and cwd are client facts | client: footer line | S (guess) | inferred |
 | G66 | Chat padding: one blank cell around the root | `pi/lib/pad.ts:62-80` | none-needed | client: a margin | S (guess; TS 83 lines) | measured |
-| G67 | Anchored scrolling: keep the reader's place when rows resize | `EXT`-viewport.ts:79,130,200,212-216 | none-needed: no UI | client: anchor by entry id and offset, not by line content (inferred) | S (guess; TS 234 lines) | measured |
-| G68 | Fold state and toggles: Ctrl+O, Ctrl+T, click on a row | `EXT`-config.ts:35, `pi/lib/render.ts:95`, `EXT`-compaction.ts:17,60 | none-needed: client state | client: expanded flag per row | S (guess; TS 195 lines) | measured |
+| G67 | Anchored scrolling: keep the reader's place when rows resize | `EXT-viewport.ts:79,130,200,212-216` | none-needed: no UI | client: anchor by entry id and offset, not by line content (inferred) | S (guess; TS 234 lines) | measured |
+| G68 | Fold state and toggles: Ctrl+O, Ctrl+T, click on a row | `EXT-config.ts:35,` `pi/lib/render.ts:95`, `EXT-compaction.ts:17,60` | none-needed: client state | client: expanded flag per row | S (guess; TS 195 lines) | measured |
 
 May simplify (inferred in `a-render.md`): per-tool argument summaries and the shell parse (G54); the failure line; the thinking hint and the 3-step Ctrl+T cycle (two states); the input cursor (ratatui's own; blink optional); nested summaries (G56); viewport anchoring by entry id (G67); silent mode.
-Can drop (inferred): the claude and codex grouping vocabularies (1,187 code lines, not the default: cpd sets `style: compact`); the eased dot ramp of `compact-tools-activity.ts:100` (contract 6.9 already lists it as removed, yet it is still in the tree); the hint patch `pi/lib/hint.ts`; render caching (`EXT`-layout.ts:24,59,111); config, `/compact-tools`, double-load and the hook utility (they exist because the renderer patches pi); status pills (cockpit, not chat).
+Can drop (inferred): the claude and codex grouping vocabularies (1,187 code lines, not the default: cpd sets `style: compact`); the eased dot ramp of `compact-tools-activity.ts:100` (contract 6.9 already lists it as removed, yet it is still in the tree); the hint patch `pi/lib/hint.ts`; render caching (`EXT-layout.ts:24,59,111`); config, `/compact-tools`, double-load and the hook utility (they exist because the renderer patches pi); status pills (cockpit, not chat).
 What depends on pi-tui and cannot be exported as data (read, `a-render.md` section 3; pi-tui's source is not under `node_modules`, so this is from cpd's imports): the `Editor` text buffer and key handling, the alt-screen driver and layout (`TuiAltScreen`, `ScrollView`), `Markdown`, `MouseRegion`, ANSI width and wrap helpers, the key map, and the pi component classes that cpd patches (`AssistantMessageComponent`, `ToolExecutionComponent` and others). With no pi in the client those hooks have no target; only the drawing rules carry over. Everything else (row text, times, counts, status, token numbers, mention ids, palette, pill spec, glyphs) is data from entries, `pi.live` and `pi.usage`.
 Open: whether the client reuses a ratatui editor crate or writes one (G88).
 
@@ -231,7 +231,7 @@ The 23 built-in commands (read, `SC` order not kept; grouped as in `b-commands.m
 | G85 | `@file`: fuzzy file search and path completion | `IM:543`; pi-tui `autocomplete.js:90-115` | absent | client: file completion over the Lead's cwd | S (guess) | read |
 | G86 | External editor: Ctrl+G opens `$VISUAL` or `$EDITOR` | `IM:3771-3786`; not named in cpd | none-needed | client: spawn and read back | S (guess) | read |
 | G87 | Queued input: Enter steers, Alt+Enter queues a follow-up, Alt+Up and Esc bring queued messages back, input queued during compaction | `IM:2704-2723,3655-3693,3893`; not named in cpd | partial: `whenBusy` (see G95); `Submission.abort` withdraws a queued one (`HT:44-49`); no "restore to editor" | client: the keys and the editor restore; host: list and withdraw queued submissions | S (guess) | read |
-| G88 | Editor behaviour: multi-line, history, cursor, wrap, autocomplete | pi-tui `Editor` (`EXT`-editor.ts:145-151) | none-needed: no UI | client: write one or take a ratatui crate (Open) | M (guess) | inferred |
+| G88 | Editor behaviour: multi-line, history, cursor, wrap, autocomplete | pi-tui `Editor` (`EXT-editor.ts:145-151`) | none-needed: no UI | client: write one or take a ratatui crate (Open) | M (guess) | inferred |
 
 ### 3.7 Conversation operations
 
@@ -257,7 +257,7 @@ Sources: `c-env.md`. Today the Worker runner installs neither (grep of `codemode
 
 | ID | Feature | Used today (file:line) | pi-durable 1.3.0 offers | cpd builds | Size | Basis |
 |---|---|---|---|---|---|---|
-| G100 | Code mode: a `codemode` tool that runs a script calling `tools.<name>()` in a sandbox; unverified for the Lead | none in `pi/durable-worker/`; the Lead's use is unverified | offered, optional: `createCodemodeExtension({sandbox, namespaces?})` from `@earendil-works/pi-durable/codemode`, QuickJS sandbox, survives a restart through a journal (README Code Mode l.259-272; `dist/codemode/codemode.d.ts:47-48,154-171`) | host: install it with a `CodemodeSandbox`, namespaces for `mcp__<server>__` tools. Open: whether Leads get it | S (guess) | read |
+| G100 | Code mode: a `codemode` tool that runs a script calling `tools.<name>()` in a sandbox; unverified for the Lead | none in `pi/durable-worker/`; the Lead's use is unverified | offered (optional): `createCodemodeExtension({sandbox, namespaces?})` from `@earendil-works/pi-durable/codemode`, QuickJS sandbox, survives a restart through a journal (README Code Mode l.259-272; `dist/codemode/codemode.d.ts:47-48,154-171`) | host: install it with a `CodemodeSandbox`, namespaces for `mcp__<server>__` tools. Open: whether Leads get it | S (guess) | read |
 | G101 | Tool search: `deferred: true` tools stay out of the prompt until `tool_search` loads them; aimed at large MCP sets | none: MCP tools are installed direct and all offered (`pi/durable-worker/mcp.ts:31-39`; `docs/contract.md:3762`) | offered: `createToolSearchExtension()` adds `tool_search` (limit 8); loaded tools go to `modelTools` and survive compaction (README Tools l.253; `dist/tool-search/tool-search.d.ts:8-19`; `HT:264,362`) | host: mark MCP tools `deferred` and install it if the Lead's tool list is large. Open: pi's own MCP exposure modes are not mapped (unverified) | S (guess) | read |
 
 ### 3.9 Parity summary
@@ -268,4 +268,24 @@ Counted over every gap row of section 3 (3.1 to 3.8) with:
 timeout 30 awk -F'|' '/^\| G[0-9]+ /{n++; split($5,a," "); split($6,b," "); split($7,c," "); gsub(/:/,"",a[1]); gsub(/:/,"",b[1]); s[a[1]]++; w[b[1]]++; z[c[1]]++} END{print n; for(k in s) print "offers",k,s[k]; for(k in w) print "builds",k,w[k]; for(k in z) print "size",k,z[k]}' docs/research/durable-leads.md
 ```
 
-COUNTS_PLACEHOLDER
+The command printed 101 rows, G01 to G101 with no gap in the IDs (checked with a second awk over the ID column).
+
+| By pi-durable 1.3.0 status | Rows | | By build site | Rows | | By size | Rows |
+|---|---|---|---|---|---|---|---|
+| offered | 29 | | host | 47 | | S | 83 |
+| partial | 35 | | client | 38 | | M | 16 |
+| absent | 20 | | engine | 1 | | L | 2 |
+| none-needed | 17 | | none | 15 | | | |
+| **total** | **101** | | **total** | **101** | | **total** | **101** |
+
+Size range, a guess (the sum of the band bounds, S under 300, M 300 to 1,000, L over 1,000): the lower bound is 83 x 0 + 16 x 300 + 2 x 1,000 = 6,800 lines; the upper bound of the S and M rows is 83 x 300 + 16 x 1,000 = 40,900 lines, and the 2 L rows (G20, G41) have no upper bound in the band. Most S rows are `(guess)` in their own cell, so this is a spread, not an estimate.
+
+The largest gaps, by row ID:
+
+- G41: the full questionnaire (L, client); G40 is the cheap walker-parity substitute, so the first cut can ship that.
+- G20: the socket server for a client (3.1, host, L), the largest host row.
+- G88, G59 and G53: the editor, the markdown renderer and the tool rows are the biggest client builds (M each); the pi-tui parts cannot be exported as data.
+- G90: the session tree has no in-place branch switch in pi-durable (M, inferred); a branch would be a fork.
+- G51 and G52: the host must hold open dialogs and cancel them, which pi's protocol does not (M and S).
+- G84: `!cmd` needs the host to run a command and write an entry (M, inferred).
+- G99: context-window usage has no field in pi-durable (absent, S).
