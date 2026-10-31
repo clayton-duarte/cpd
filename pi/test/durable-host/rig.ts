@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { FollowerHooks } from "../../lib/follower.ts";
 import type { Config } from "../../durable-host/config.ts";
 import type { Input } from "../../durable-host/deliver.ts";
@@ -118,8 +119,8 @@ export function rig(over: RigOptions = {}) {
         return { reason: "stopped" };
       },
       push: async (events) => {
-        if (stream.listener === undefined) throw new Error(`stream ${n} has no listener: it was not started`);
-        await stream.listener(events);
+        assert.ok(stream.listener !== undefined, `stream ${n} was not started: the host never registered its listener`);
+        await stream.listener!(events);
       },
       settle: (end) => {
         settle(end);
@@ -276,7 +277,7 @@ export function rig(over: RigOptions = {}) {
   /** A fake client: the test calls the `accept` function `Deps.listen` was given. */
   const connect = (): FakeClient => {
     const accept = listens[0]?.accept;
-    if (accept === undefined) throw new Error("the host did not listen");
+    assert.ok(accept !== undefined, "the host did not listen");
     const lines: string[] = [];
     const client: FakeClient = {
       closed: 0,
