@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { getAgentDir, loadProjectContextFiles, ModelRuntime, resolveCliModel } from "@earendil-works/pi-coding-agent";
 import { callCpd, CpdError } from "../lib/cpd.ts";
 import { openConversation } from "../durable-worker/harness.ts";
+import { DEFAULT_TIMING, Follower } from "../lib/follower.ts";
 import { parseConfig } from "./config.ts";
 import { runHost, type Deps } from "./run.ts";
 
@@ -27,6 +28,7 @@ try {
     },
     contextFiles: (cwd) => loadProjectContextFiles({ cwd, agentDir: getAgentDir() }),
     open: (o) => openConversation(models as never, o),
+    follow: (hooks) => new Follower(config.session, hooks, DEFAULT_TIMING),
     onTerminate: (handler) => {
       process.once("SIGTERM", handler);
       process.once("SIGINT", handler);
