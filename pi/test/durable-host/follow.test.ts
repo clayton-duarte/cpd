@@ -44,6 +44,7 @@ function rig(over: { stored?: readonly unknown[] } = {}) {
   const calls: string[][] = [];
   const logs: string[] = [];
   const submitted: Input[] = [];
+  const written: unknown[] = [];
   const finish: ((v: "done" | "unanswered") => void)[] = [];
   const follower = { hooks: undefined as FollowerHooks | undefined, started: 0, stopped: 0 };
   const terminate = { handler: undefined as (() => void) | undefined };
@@ -55,7 +56,7 @@ function rig(over: { stored?: readonly unknown[] } = {}) {
       const text = args.join(" ");
       if (text === `session show ${CONFIG.session}`) return shown({ role: "lead", state: session.state, registered_event: 100 });
       if (text === "policy show") return POLICY;
-      const m = /^session state (working|idle|stopped) --session s-lead$/.exec(text);
+      const m = /^session state (working|idle|stopped)(?: --reply)? --session s-lead$/.exec(text);
       if (m) {
         session.state = m[1]!;
         notify();
@@ -77,6 +78,10 @@ function rig(over: { stored?: readonly unknown[] } = {}) {
                 notify();
               }),
           };
+        },
+        write: async (w) => {
+          written.push(w);
+          return {};
         },
         install: () => {},
         entries: async () => over.stored ?? [],
@@ -124,6 +129,7 @@ function rig(over: { stored?: readonly unknown[] } = {}) {
       return fn();
     });
   const states = () => calls.filter((a) => a[0] === "session" && a[1] === "state").map((a) => a[2]);
+  const stateCalls = () => calls.filter((a) => a[0] === "session" && a[1] === "state");
   const up = async (): Promise<FollowerHooks> => {
     await until(() => follower.started >= 1 && terminate.handler);
     return follower.hooks!;
@@ -132,7 +138,7 @@ function rig(over: { stored?: readonly unknown[] } = {}) {
     terminate.handler!();
     return await until(() => ending.code);
   };
-  return { logs, submitted, finish, follower, ending, until, states, up, stop };
+  return { logs, submitted, written, stateCalls, finish, follower, ending, until, states, up, stop };
 }
 
 test("runHost starts the follower at the cursor read from the stored entries", { timeout: 20_000 }, async () => {
@@ -198,4 +204,81 @@ test("runHost logs a follower failure and keeps running", { timeout: 20_000 }, a
   hooks.onLine(line(170, "job-failed"));
   await r.until(() => r.submitted.length >= 1);
   assert.equal(await r.stop(), 143);
+});
+
+const IDLE = ["session", "state", "idle", "--session", CONFIG.session];
+const IDLE_REPLY = ["session", "state", "idle", "--reply", "--session", CONFIG.session];
+
+test("runHost reports idle with reply after a run started by a message from the User", { timeout: 20_000 }, async () => {
+  const r = rig();
+  const hooks = await r.up();
+  hooks.onLine(line(200, "session-message", { data: { text: "hello", from: null } }));
+  await r.until(() => r.finish.length >= 1);
+  r.finish[0]!("done");
+  await r.until(() => r.states().includes("idle"));
+  assert.deepEqual(r.stateCalls().at(-1), IDLE_REPLY);
+  await r.stop();
+});
+
+test("runHost reports idle without reply after a run of Events and messages from Sessions", { timeout: 20_000 }, async () => {
+  const r = rig();
+  const hooks = await r.up();
+  hooks.onLine(line(210, "pr-feedback"));
+  hooks.onLine(line(211, "job-failed"));
+  await r.until(() => r.finish.length >= 2);
+  r.finish[0]!("done");
+  r.finish[1]!("done");
+  await r.until(() => r.states().includes("idle"));
+  assert.deepEqual(r.stateCalls().at(-1), IDLE);
+  await r.stop();
+
+  const peer = rig();
+  const peerHooks = await peer.up();
+  peerHooks.onLine(line(212, "session-message", { data: { text: "hi", from: "s9", wake: false } }));
+  await peer.until(() => peer.finish.length >= 1);
+  peer.finish[0]!("done");
+  await peer.until(() => peer.states().includes("idle"));
+  assert.deepEqual(peer.stateCalls().at(-1), IDLE);
+  await peer.stop();
+
+  const user = rig();
+  const userHooks = await user.up();
+  userHooks.onLine(line(213, "session-message", { data: { text: "hello", from: null } }));
+  await user.until(() => user.finish.length >= 1);
+  user.finish[0]!("done");
+  await user.until(() => user.states().includes("idle"));
+  assert.deepEqual(user.stateCalls().at(-1), IDLE_REPLY, "contrast: the User's message makes a reply run");
+  await user.stop();
+});
+
+test("runHost makes a run a reply run when a message from the User joins it", { timeout: 20_000 }, async () => {
+  const r = rig();
+  const hooks = await r.up();
+  hooks.onLine(line(220, "pr-feedback"));
+  await r.until(() => r.finish.length >= 1);
+  hooks.onLine(line(221, "session-message", { data: { text: "typed during the run", from: null } }));
+  await r.until(() => r.finish.length >= 2);
+  r.finish[0]!("done");
+  r.finish[1]!("done");
+  await r.until(() => r.states().includes("idle"));
+  assert.deepEqual(r.stateCalls().at(-1), IDLE_REPLY);
+  await r.stop();
+});
+
+test("runHost reports reply once and the next run without it", { timeout: 20_000 }, async () => {
+  const r = rig();
+  const hooks = await r.up();
+  hooks.onLine(line(230, "session-message", { data: { text: "hello", from: null } }));
+  await r.until(() => r.finish.length >= 1);
+  r.finish[0]!("done");
+  await r.until(() => r.states().filter((s) => s === "idle").length >= 1);
+  hooks.onLine(line(231, "pr-feedback"));
+  await r.until(() => r.finish.length >= 2);
+  r.finish[1]!("done");
+  await r.until(() => r.states().filter((s) => s === "idle").length >= 2);
+  assert.deepEqual(
+    r.stateCalls().filter((a) => a[2] === "idle"),
+    [IDLE_REPLY, IDLE],
+  );
+  await r.stop();
 });

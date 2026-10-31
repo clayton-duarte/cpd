@@ -14,7 +14,7 @@ import { newTurnState, prepareTurn, reminderFor, type StoredEntry, type TurnPort
 
 export type Submission = { wait(): Promise<"done" | "unanswered"> };
 /** `write` appends an entry (`submit({ type: "write", ... })`); a conversation without it cannot store the first message or a context update, and `prepareTurn` reports that. */
-export type Conversation = { submit(input: Input): Promise<Submission>; write?(write: Write): Promise<unknown>; install(extension: Extension): void; entries(): Promise<readonly unknown[]>; closed: Promise<unknown> };
+export type Conversation = { submit(input: Input): Promise<Submission>; write(write: Write): Promise<unknown>; install(extension: Extension): void; entries(): Promise<readonly unknown[]>; closed: Promise<unknown> };
 
 type Model = { provider: string; modelId: string; thinkingLevel?: string };
 
@@ -84,7 +84,6 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       seat: { id: config.session, role: session.role as "lead" | "manager", context: session.context, plan: session.plan, registeredEvent: session.registeredEvent, byUser: session.byUser },
       cpd: deps.cpd,
       submit: async (w) => {
-        if (conversation.write === undefined) throw new Error("the conversation cannot write entries");
         return conversation.write(w);
       },
       entries: async () => (await conversation.entries()) as readonly StoredEntry[],

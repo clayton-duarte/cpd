@@ -6,7 +6,9 @@ export type Input = {
   content: string;
   requestId: string;
   whenBusy: "followUp" | "steer";
-  entry?: { kind: string; data: Record<string, unknown> };
+  entry: { kind: string; data: Record<string, unknown> };
+  /** True when the User wrote the message: the run that answers it reports `idle --reply`. */
+  reply?: true;
 };
 
 /**

@@ -4,7 +4,7 @@ import type { Extension } from "@earendil-works/pi-durable";
 import { CpdError } from "../../lib/cpd.ts";
 import { POLICY_SECTION, policySection } from "../../lib/policy.ts";
 import { TIME_ZONE_SECTION, zoneLine } from "../../lib/time.ts";
-import type { Conversation } from "../../durable-worker/run.ts";
+import type { Conversation } from "../../durable-host/run.ts";
 import type { Config } from "../../durable-host/config.ts";
 import { runHost, type Deps } from "../../durable-host/run.ts";
 import { policyShow, shown } from "../answers.ts";
@@ -91,6 +91,7 @@ function rig(over: { role?: string; state?: string } = {}) {
           submitted.push(input);
           throw new Error("the host submits nothing");
         },
+        write: async () => ({}),
         install: () => {},
         entries: async () => [],
         closed,
@@ -211,4 +212,13 @@ test("runHost reports stopped and returns 1 when the conversation closes", { tim
   assert.deepEqual(r.calls.at(-1), STOPPED);
   assert.ok(r.logs.length >= 1, "the close is logged");
   assert.equal(r.closeCalls.n, 0);
+});
+
+test("runHost logs the reason and the error message of a closed conversation", { timeout: 20_000 }, async () => {
+  const r = rig({ state: "working" });
+  await r.up();
+  r.closeIt({ reason: "failed", error: new Error("disk I/O error") });
+  assert.equal(await r.until("the host to end", () => r.ending.code), 1);
+  assert.ok(r.logs.some((l) => l.includes("failed") && l.includes("disk I/O error")), r.logs.join("\n"));
+  assert.ok(!r.logs.some((l) => l.includes("[object Object]")), r.logs.join("\n"));
 });
