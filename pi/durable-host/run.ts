@@ -33,6 +33,22 @@ export type Conversation = { submit(input: Input): Promise<Submission>; write(wr
 
 type Model = { provider: string; modelId: string; thinkingLevel?: string };
 
+/** The loop guard's runtime (contract §6.16): the bound `cpd session show` gives, the window of self-started turns the host keeps, and the trip. */
+export type LoopRuntime = {
+  role: "lead" | "manager";
+  info: { loopGuardTurns: number };
+  turnStarts: number[];
+  tripped: boolean;
+};
+
+/**
+ * The lib's window rule (`registerLoopGuard`, loop-guard.ts), pure: folds the self-started turn at `now` into `r.turnStarts`
+ * and returns whether the window holds more than `r.info.loopGuardTurns`. Not implemented by this Worker.
+ */
+export function loopGate(r: LoopRuntime, now: number): boolean {
+  throw new Error("not implemented");
+}
+
 export type Deps = {
   /** The one-owner check: rejects with `HostRunning` when a host already owns the socket. */
   guard(path: string): Promise<void>;
@@ -118,7 +134,11 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
 
   const start = async (): Promise<void> => {
     const policy = policySection(await deps.cpd(["policy", "show"]));
-    const base = hostExtension({ contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) }, { cwd: config.cwd, home: deps.homeDir() });
+    const base = hostExtension(
+      { contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) },
+      { cwd: config.cwd, home: deps.homeDir(), visible: [] },
+      session.role as "lead" | "manager",
+    );
     const turn = newTurnState();
     const plan = session.plan ?? "";
     // §6.15 "The blocked state": a held request reports `blocked` with the label `dialog`; resolving to zero returns to

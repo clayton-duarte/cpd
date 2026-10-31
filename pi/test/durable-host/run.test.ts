@@ -8,6 +8,7 @@ import type { Conversation } from "../../durable-host/run.ts";
 import type { Config } from "../../durable-host/config.ts";
 import { runHost, type Deps } from "../../durable-host/run.ts";
 import { policyShow, shown } from "../answers.ts";
+import { line, withHost } from "./rig.ts";
 
 /** Every fake calls notify() when it sets a fact; a waiter re-checks its fact on each call. No timer, no polling. */
 const waiters = new Set<() => void>();
@@ -227,4 +228,22 @@ test("runHost logs the reason and the error message of a closed conversation", {
   assert.equal(await r.until("the host to end", () => r.ending.code), 1);
   assert.ok(r.logs.some((l) => l.includes("failed") && l.includes("disk I/O error")), r.logs.join("\n"));
   assert.ok(!r.logs.some((l) => l.includes("[object Object]")), r.logs.join("\n"));
+});
+
+// The loop gate at contract §6.16's single submit: a client `submit` and a follower Event alike are submissions the host makes.
+test("the host registers every client submit and follower submission at the submit gate", { timeout: 20_000 }, async () => {
+  // The bound is 1, so the second registered submission trips the loop guard and the host appends its entry.
+  await withHost({ sessionOver: { loop_guard_turns: 1 } }, async (r) => {
+    const hooks = await r.up();
+    const client = await r.attach();
+    client.send({ type: "submit", req: "r1", text: "hello", when_busy: "followUp" });
+    await r.until(() => r.submitted.length >= 1);
+    hooks.onLine(line(300, "job-failed"));
+    await r.until(() => r.submitted.length >= 2);
+    await r.drain();
+    assert.ok(
+      r.written.some((w) => (w as { entry?: { kind?: unknown } }).entry?.kind === "cdp-loop-guard"),
+      `the gate must count both submissions and trip; writes were ${JSON.stringify(r.written)}`,
+    );
+  });
 });
