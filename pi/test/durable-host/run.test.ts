@@ -91,9 +91,7 @@ function rig(over: { role?: string; state?: string } = {}) {
           submitted.push(input);
           throw new Error("the host submits nothing");
         },
-        watch: async () => {
-          throw new Error("not used here");
-        },
+        watch: async () => ({ snapshot: {}, start: () => {}, stop: async () => ({ reason: "stopped" }), closed: new Promise<unknown>(() => {}) }),
         abort: async () => {},
         abortSubmission: async () => "not_found",
         write: async () => ({}),

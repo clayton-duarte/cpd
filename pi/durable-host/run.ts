@@ -1,4 +1,5 @@
-import { GenerationTask, hook, type Extension } from "@earendil-works/pi-durable";
+import { randomUUID } from "node:crypto";
+import { ConversationBusy, GenerationTask, hook, type Extension } from "@earendil-works/pi-durable";
 import type { FollowerHooks } from "../lib/follower.ts";
 import { parseLine } from "../lib/event.ts";
 import { cursorFrom } from "./cursor.ts";
@@ -8,7 +9,10 @@ import { policySection } from "../lib/policy.ts";
 import { parseSession } from "../lib/run.ts";
 import { Reporter, stateArgs, type Wanted } from "../lib/state.ts";
 import { zoneLine } from "../lib/time.ts";
-import { storePath, type Config } from "./config.ts";
+import { socketPath, storePath, type Config } from "./config.ts";
+import { ProtocolError } from "./protocol.ts";
+import { Ring } from "./ring.ts";
+import { createServer, type Server } from "./server.ts";
 import { hostExtension } from "./extension.ts";
 import type { EventStream } from "../durable-worker/harness.ts";
 import type { Connection } from "./server.ts";
@@ -43,11 +47,25 @@ function endText(end: unknown): string {
   return `failed: ${error instanceof Error ? error.message : String(error)}`;
 }
 
+/** The host's own version (the wire's `host_version`) and the pi-durable it is built on (package.json pins 1.3.0). */
+const HOST_VERSION = "1";
+const PI_DURABLE = "1.3.0";
+/** Timers of the server: the global ones, unref-ed so a pending hello timeout never holds the process. */
+const timers = {
+  after(ms: number, fn: () => void): () => void {
+    const t = setTimeout(fn, ms);
+    t.unref();
+    return () => clearTimeout(t);
+  },
+};
+
 const contextText = (files: readonly { path: string; content: string }[]): string | undefined =>
   files.length === 0 ? undefined : files.map((f) => `## ${f.path}\n${f.content}`).join("\n\n");
 
 /** Runs one Lead's or Manager's Session (contract §6.13). Resolves only on terminate (143), a closed conversation (1) or a failure (1); a `usage` error is thrown before any effect. */
 export async function runHost(config: Config, deps: Deps): Promise<number> {
+  // A path over the limit is a usage error before any effect.
+  const sock = socketPath(config.home, config.session);
   const model = deps.resolveModel(config.model);
   const failed = (what: string, e: unknown) => deps.log(`${what}: ${e instanceof Error ? e.message : String(e)}`);
 
@@ -56,9 +74,17 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
   if (session.role !== "lead" && session.role !== "manager") throw new CpdError("usage", `session ${config.session} has role ${session.role}: the host runs a lead or a manager only`);
 
   let follower: { start(): void; stop(): void } | undefined;
-  let end!: (code: number) => void;
+  let server: Server | undefined;
+  let listener: { close(): Promise<void> } | undefined;
+  let current: EventStream | undefined;
+  let over = false;
+  let byeReason: "shutdown" | "storage_failed" = "shutdown";
+  let end!: (code: number, reason?: "shutdown" | "storage_failed") => void;
   const ended = new Promise<number>((resolve) => {
-    end = resolve;
+    end = (code, reason = "shutdown") => {
+      if (!over) byeReason = reason;
+      resolve(code);
+    };
   });
   deps.onTerminate(() => end(143));
 
@@ -83,14 +109,15 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       } })],
     };
     const conversation = await deps.open({ file: storePath(config.home, config.session), cwd: config.cwd, model, extension });
+    current = await conversation.watch();
     conversation.closed.then(
       (reason) => {
         failed("the conversation closed", endText(reason));
-        end(1);
+        end(1, "storage_failed");
       },
       (e) => {
         failed("the conversation closed", e);
-        end(1);
+        end(1, "storage_failed");
       },
     );
     port = {
@@ -108,6 +135,12 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     let cursor = cursorFrom(session.registeredEvent, await conversation.entries(), config.session);
     let pending = 0;
     let reply = false;
+    let hostState: "idle" | "working" = "idle";
+    const changed = (next: "idle" | "working"): void => {
+      if (hostState === next) return;
+      hostState = next;
+      server?.stateChanged();
+    };
     const seen = new Set<string>();
     const names = new Map<string, Promise<string | null>>();
     const nameOf = (id: string): Promise<string | null> => {
@@ -121,11 +154,13 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       }
       return name;
     };
-    const submit = async (input: Input): Promise<void> => {
-      const starts = pending === 0;
+    const submit = async (input: Input): Promise<Submission> => {
+      // A reject never waits to prepare: it stores nothing when the conversation is busy (the context update then comes with the next turn).
+      const starts = pending === 0 && input.whenBusy !== "reject";
       if (input.reply) reply = true;
       pending++;
       reporter.want({ state: "working" });
+      changed("working");
       try {
         // Only an input that starts a turn gets the first message and the context update; they are prepared one input at a time.
         if (starts) {
@@ -139,6 +174,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
             if (--pending === 0) {
               reporter.want(reply ? { state: "idle", reply: true } : { state: "idle" });
               reply = false;
+              changed("idle");
             }
           },
           (e) => {
@@ -146,11 +182,84 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
             end(1);
           },
         );
+        return submission;
       } catch (e) {
-        pending--;
+        if (--pending === 0) {
+          reporter.want({ state: "idle" });
+          reply = false;
+          changed("idle");
+        }
         throw e;
       }
     };
+
+    // The event stream: the ring of what clients are caught up on (contract §6.14).
+    const first = current!;
+    const epoch = deps.newEpoch();
+    const ring = new Ring(epoch, first.snapshot);
+    let from = "";
+    let nextClient = 0;
+    const srv = createServer({
+      session: config.session,
+      role: session.role as "lead" | "manager",
+      cwd: config.cwd,
+      hostVersion: HOST_VERSION,
+      piDurable: PI_DURABLE,
+      epoch,
+      ring,
+      submit: async ({ text, whenBusy, requestId }) => {
+        const id = requestId ?? randomUUID();
+        try {
+          const s = await submit({ content: text, requestId: `chat:${id}`, whenBusy, entry: { kind: "cpd-chat", data: { client_id: from, request_id: id } }, reply: true });
+          return { submissionId: s.id, status: await s.status() };
+        } catch (e) {
+          if (e instanceof ConversationBusy) throw new ProtocolError("busy", e.message);
+          throw e;
+        }
+      },
+      abort: (opts) => conversation.abort(opts),
+      abortSubmission: (id) => conversation.abortSubmission(id),
+      hostState: () => ({ state: hostState, ...(session.name === null ? {} : { name: session.name }) }),
+      timers,
+      clientId: () => (from = `c${++nextClient}`),
+    });
+    server = srv;
+    const attachStream = (s: EventStream): void => {
+      s.start(async (events) => {
+        if (s !== current) return;
+        srv.frame(ring.append([...events]));
+        if (!ring.shouldRebase(events.some((e) => (e as { type?: unknown }).type === "run_end"))) return;
+        // Retire this stream first (events it delivers after this point are in the next snapshot); its stop is not awaited, since it may wait for this very listener (unverified in pi-durable 1.3.0).
+        current = undefined;
+        s.stop().catch((e) => failed("stopping the stream", e));
+        const next = await conversation.watch();
+        current = next;
+        srv.frame(ring.rebase(next.snapshot));
+        attachStream(next);
+      });
+      s.closed.then((reason) => {
+        if (s !== current) return;
+        const why = (reason as { reason?: unknown } | null)?.reason;
+        if (why === "stopped") return;
+        failed("the event stream ended", endText(reason));
+        end(1, "storage_failed");
+      });
+    };
+    attachStream(first);
+    listener = await deps.listen(sock, (conn) => {
+      const h = srv.connect(conn);
+      let client = "";
+      return {
+        receive: (line) => {
+          // `ServerDeps.submit` carries no client id: the id the server gave this connection is read here, synchronously, while it calls us.
+          from = client;
+          h.receive(line);
+          client = from;
+        },
+        closed: () => h.closed(),
+      };
+    });
+    if (over) await listener.close();
     follower = deps.follow?.({
       before: async () => {},
       onRunStart: () => {},
@@ -194,7 +303,11 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
   });
 
   const code = await ended;
+  over = true;
   follower?.stop();
+  server?.shutdown(byeReason);
+  await listener?.close().catch((e) => failed("closing the listener", e));
+  await current?.stop().catch((e) => failed("stopping the stream", e));
   await reporter.close({ state: "stopped" });
   return code;
 }
