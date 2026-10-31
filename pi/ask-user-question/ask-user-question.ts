@@ -245,7 +245,7 @@ function makeSessionFactory(config: {
 		// The render guard applies to the inline mount only: overlays stack over other
 		// overlays and cannot be displaced, so they are left unwrapped.
 		if (presentation.overlay) return component;
-		const guard = new RenderGuard(component, () => done(DISPLACED_RESULT));
+		const guard = new RenderGuard(tui, component, () => done(DISPLACED_RESULT));
 		guardRef.current = guard;
 		guard.start(RENDER_GUARD_TICK_MS);
 		return guard.component;

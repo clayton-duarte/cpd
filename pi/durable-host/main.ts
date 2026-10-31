@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { getAgentDir, loadProjectContextFiles, ModelRuntime, resolveCliModel } from "@earendil-works/pi-coding-agent";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { callCpd, CpdError } from "../lib/cpd.ts";
 import { validatePackage } from "../lib/reload.ts";
 import { openConversation } from "../durable-worker/harness.ts";
@@ -29,6 +30,14 @@ try {
       if (r.error !== undefined || r.model === undefined) throw new CpdError("usage", `unusable model ${pattern}: ${r.error ?? "not found"}`);
       return { provider: r.model.provider, modelId: r.model.id, ...(r.thinkingLevel === undefined ? {} : { thinkingLevel: r.thinkingLevel }) };
     },
+    models: async () =>
+      (await models.getAvailable()).map((m) => ({
+        provider: m.provider,
+        model_id: m.id,
+        name: m.name,
+        thinking_levels: getSupportedThinkingLevels(m),
+        context_window: m.contextWindow,
+      })),
     contextFiles: (cwd) => loadProjectContextFiles({ cwd, agentDir: getAgentDir() }),
     validatePackage: (dir) => validatePackage(dir),
     open: (o) => openConversation(models as never, o),
