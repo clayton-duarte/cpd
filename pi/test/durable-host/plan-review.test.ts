@@ -50,12 +50,16 @@ const makePort = (entries: readonly unknown[] = []) => {
 };
 
 test("open writes the summary and the pending entry then asks the select dialog", async () => {
-  const { written, broadcasted, port } = makePort([entryOf("r3", "pending")]);
+  const { written, read, broadcasted, port } = makePort([entryOf("r3", "pending")]);
   const pr = createPlanReview(port);
-  await pr.open("r3", "event", "# newest summary");
-  assert.equal(written.length, 2);
-  assert.deepEqual(written[0], { kind: "cpd-plan-summary", data: { plan: "p1", review: "r3", display: true }, model: [] });
-  assert.deepEqual(written[1], { kind: "cpd-plan-review", data: { plan: "p1", review: "r3", surface: "chat", status: "pending" }, model: [] });
+  await pr.open("r3", "event");
+  assert.equal(read.length, 1);
+  const summary = written.find((e) => e.kind === "cpd-plan-summary");
+  assert.ok(summary, "the summary entry is written");
+  assert.deepEqual(summary!.data, { plan: "p1", review: "r3", display: true });
+  const entry = written.find((e) => e.kind === "cpd-plan-review");
+  assert.ok(entry, "the pending entry is written");
+  assert.deepEqual(entry!.data, { plan: "p1", review: "r3", surface: "chat", status: "pending" });
   const req = broadcasted.find((m) => m.type === "ui_request");
   assert.equal(req?.method, "select");
   assert.equal((req as { title: string }).title, "Approve the plan review");
