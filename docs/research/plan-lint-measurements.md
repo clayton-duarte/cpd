@@ -56,4 +56,10 @@ Decision pro-d284 (as stated in this Job's spec): ship the equal-file rule as a 
 
 ## Replay of the Rust rule
 
-Written by the verify Job of PR lint-engine.
+- Engine commit: `5cbf40bedb3ee0c85c1b93894188266892b90e50` (`lint::run`, core/src/plan/lint.rs).
+- Rows: replay-rows.json, sha256 `00ecad1ea4e2a5d97d9237f08c9c4a1994109deeebde360005dd7df7f4460cb4` (verified with `shasum -a 256`); 1,973 Jobs, 431 PRs.
+- Rows to Jobs: grouped by (plan, pr); every non-cancelled row a `draft` Job, every cancelled row a `cancelled` Job; tier `S1`, spec touches = the row's; one `waiting` PR of shape `free` per group; phase `Dispatch` (so `pr_empty` is off), no outline, empty waiting set. Only `parallel_write_overlap` findings kept.
+- Scratch run output (a crate outside the repo, run through `scripts/cargo.sh`): `found 213 unique 213 oracle 213 identical sets: yes`
+- Count found: 213. Oracle count: 213. identical sets: yes (compared as (plan/pr, job, other, paths), job/other ordered by key).
+- Bound: at most 218 (9.9% of 2,204 parallel pairs); 213 is within it.
+- Result: pass
