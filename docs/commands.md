@@ -1354,7 +1354,44 @@ Idempotent: yes; a Plan already deleted returns `"already": true` and writes not
 
 ### 4.15 `plan lint`
 
-Skeleton: the section is written in the next commit.
+```
+cpd plan lint [--plan <id>]
+```
+
+Checks the Plan's drafts and its shape, and returns every error and warning in one list. The rules, their severities and the refusal each error carries are in contract §2.7; this section does not repeat them. The lint reads the Plan's Jobs, PRs and outline and writes nothing: no row, no Event, no file. It runs fresh on every call.
+
+| Flag | Meaning |
+|---|---|
+| `--plan <id>` | the Plan (§1.3) |
+
+Callers: Lead; no cockpit. The about line (the clap doc comment, shown in `docs/interface.md`): `Check the Plan's drafts: every error and warning in one list (§4.15)`.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the phase is not `grounding` (`details` as `plan review`'s, §4.6) | `illegal_phase` | 3 |
+| the Plan exists | `plan_not_found` | 4 |
+| at least one finding is an error; the message names the rules of the errors, in the order of the list below | `lint_failed` | 3 |
+
+The refusal `lint_failed` has the message `Plan <id> has <n> lint errors: <rules joined by ", ">. Fix them, then ask again.` and `details` `{plan, errors, warnings, findings}`, where `findings` is every finding, errors first, in the order of contract §2.7.
+
+**Output** on success, that is with no error finding:
+
+```json
+{"ok": true, "plan": "pay-4521", "errors": 0, "warnings": 1, "findings": [
+  {"rule": "parallel_write_overlap", "severity": "warn",
+   "message": "api-2 and api-3 have no dependency path and both name api/src/lib.rs. A hint, not a conflict prediction: on the ledger of 2026-10-30, 5 of 209 such pairs (2.4%) hit a merge conflict. Settle it with cpd job edit api-2 --needs api-3, or narrow touches.",
+   "pr": "api", "job": "api-2", "other": "api-3", "paths": ["api/src/lib.rs"], "details": {}}]}
+```
+
+Every finding has every key, so the output is byte-stable: `{"rule": "<id>", "severity": "error"|"warn", "message": "<text>", "pr": <key|null>, "job": <key|null>, "other": <key|null>, "paths": [<sorted paths>], "details": {<the refusal's details for an error rule; {} for a warning>}}`.
+- An error finding has `job` and `other` null and `paths` `[]`: its subjects are in `details`, as in the refusal it carries. Its `pr` is null, except for `shape_incomplete`, whose `pr` is the PR it names.
+- A `parallel_write_overlap` finding has `pr`, `job`, `other` and `paths` set, and `details` `{}`.
+
+The `parallel_write_overlap` message is exactly: `<job> and <other> have no dependency path and both name <paths joined by ", ">. A hint, not a conflict prediction: on the ledger of 2026-10-30, 5 of 209 such pairs (2.4%) hit a merge conflict. Settle it with cpd job edit <job> --needs <other>, or narrow touches.` The pair is defined in contract §2.7: `job` is the draft under review (the smaller key when both are drafts under review), `other` the other Job. The rule is a warning and never a refusal; it covers equal files only, exempts the lockfiles, and its limits are in contract §2.7.
+
+`plan review` and `plan render` also return the warnings, and `plan review` refuses with the first error finding's own code, never with `lint_failed` (added by PR lint-review).
+
+Idempotent: yes. The same Plan twice gives byte-equal stdout, and nothing is written.
 
 ## 5. `job`
 
