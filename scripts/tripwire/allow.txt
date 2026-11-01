@@ -32,8 +32,8 @@ cpd::tooling fake_tmux::  # m-tooling: tooling test that may reach a real tmux
 cpd::tooling harness::  # m-tooling: tooling test that may reach a real tmux
 cpd::tooling install_script::  # m-tooling: tooling test that may reach a real tmux
 cpd::tooling tripwire_script::  # m-tooling: tooling test that may reach a real tmux
-cpd::pr git_guard::  # m-pr-b: pr commands that may reach a real tmux
-cpd::pr git::  # m-pr-b: pr commands that may reach a real tmux
+cpd::workflow git_guard::  # m-pr-b: pr commands that may reach a real tmux
+cpd::workflow git::  # m-pr-b: pr commands that may reach a real tmux
 cpd::tui bare::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui inbox_rules::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui tui::  # m-tui-t: cockpit view driven on a real tmux server

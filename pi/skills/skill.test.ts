@@ -805,10 +805,10 @@ test("cpd-manager: job approve-tests joins the commands that belong to a Lead an
 
 test("the Worker Spec's text and the adapter's refusal say the full suite is the Gate's, run by the Workflow's open Job (hs-d340)", () => {
   const worker = readFileSync(new URL("../../core/src/spec/worker.md", here), "utf8");
-  // The object is a Workflow (pro-d136): the Spec speaks the new word, the adapter's code keeps its words until the text Jobs rename it.
+  // The object is a Workflow (pro-d136, pro-d138): the Spec and the adapter's code both speak the new word; the rename is a cutover, no transitional period.
   assert.match(worker, /the Gate runs it, in the Workflow's open Job/);
   const guard = readFileSync(new URL("../lib/testguard.ts", here), "utf8");
-  assert.match(guard, /the full suite is the Gate's, run by the PR's open Job/);
+  assert.match(guard, /the full suite is the Gate's, run by the Workflow's open Job/);
   for (const text of [worker, guard]) assert.doesNotMatch(text, /at pr open/);
   const deliveries = readFileSync(new URL("../lib/delivery.ts", here), "utf8");
   assert.doesNotMatch(deliveries, /"all-merged":/, "commands.md §15.3: all-merged is ignored");
