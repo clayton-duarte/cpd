@@ -27,7 +27,8 @@ fn count(store: &mut Store, sql: &str) -> i64 {
 fn dump(store: &mut Store, table: &str) -> Vec<String> {
     store
         .read(|c| {
-            let mut s = c.prepare(&format!("SELECT json_array(t.*) FROM {table} t ORDER BY rowid"))?;
+            let columns: Vec<String> = table_columns(c, table)?.into_iter().map(|(name, _)| format!("\"{name}\"")).collect();
+            let mut s = c.prepare(&format!("SELECT json_array({}) FROM \"{table}\" ORDER BY rowid", columns.join(", ")))?;
             let rows = s.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })
