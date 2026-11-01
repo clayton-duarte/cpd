@@ -48,6 +48,8 @@ impl GateAlias {
 #[serde(deny_unknown_fields)]
 pub struct Gates {
     pub merge: Gate,
+    /// `gate.pr` (R11): the pull request's Gate, its TOML key unchanged by the rename.
+    #[serde(rename = "pr")]
     pub workflow: Gate,
     pub text: String,
 }

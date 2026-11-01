@@ -26,6 +26,7 @@ fn domain_and_exposure() {
     // The retired `pr.jira_required` is no longer a key of the `pr` domain.
     assert!(out["policy"]["pr"]["keys"].get("pr.jira_required").is_none(), "{out}");
 
+    drop(fx);
     // An owner file sets `workflow.jira_required`; a repo file overrides it.
     let fx = world("[workflow]\njira_required = true\n");
     let out = show(&fx, false).ok();
@@ -36,6 +37,7 @@ fn domain_and_exposure() {
     let repo = format!("repo:{}", real(&fx, "acme/r.toml"));
     assert_eq!(keys(&out)["workflow.jira_required"], json!({"value": false, "source": repo}), "{out}");
 
+    drop(fx);
     // The retired `pr.jira_required` is `policy_invalid`.
     let fx = world("[pr]\njira_required = true\n");
     let error = refused(&show(&fx, false), "policy_invalid", 1);
@@ -43,6 +45,7 @@ fn domain_and_exposure() {
 
     // The exposure table keeps the moved key's exposure: `workflow` is set in a machine, an owner
     // and a repo file.
+    drop(fx);
     for rel in ["host.toml", "acme/owner.toml", "acme/r.toml"] {
         let fx = world("");
         write(&fx, rel, "[workflow]\njira_required = true\n");
