@@ -18,7 +18,6 @@ fn is_shared_names_the_four_lockfiles_at_any_depth() {
 #[test]
 fn is_shared_is_false_for_other_names() {
     for path in [
-    for path in [
         "Cargo.toml",
         "Cargo.lock.bak",
         "my-Cargo.lock",
@@ -28,7 +27,6 @@ fn is_shared_is_false_for_other_names() {
         "cargo.lock",
         "package.json",
         "",
-    ] {
     ] {
         assert!(!is_shared(path), "{path:?}");
     }
