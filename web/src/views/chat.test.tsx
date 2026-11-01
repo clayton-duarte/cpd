@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
-// Red tests for the single-screen AI Elements chat (web/README.md "The chat surface (shadcn AI
-// Elements)"). The whole screen is `LiveChat` and nothing else — no app header, no nav, no
-// Tree/Plan/Inbox/Logs panes — so every test renders `App` exactly as `main.tsx` does and pins
-// what the screen shows and what the injected LiveApi receives. The impl Job owns the view and
-// the shell; these fail on the current tree and pass once it lands.
+// Tests for the single-screen AI Elements chat reachable from the Context tree in the left rail
+// (web/README.md "The Context tree in the left rail selects the Chat"): the Chat is the centre
+// column, with the Context rail to its left and the Inbox placeholder to its right. The whole
+// screen is the three-column shell (`App`): the left rail is the Chat's only navigation and
+// nothing is selected on first render, so every test renders `App` exactly as `main.tsx` does,
+// clicks a Session's row in the rail, and pins what the screen then shows and what the injected
+// LiveApi receives. The shell's own three columns and its 20rem default are pinned by
+// web/src/app/App.test.tsx, not here.
 //
 // Only authored code is tested. The LiveApi is an injected fake: no EventSource opens, no fetch
 // runs, no socket, server or cpd spawns. The frame the view folds is the same `SnapshotFrame`
@@ -23,6 +26,21 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  // shadcn's `use-mobile` hook reads `window.matchMedia`; jsdom has none, and the desktop rail
+  // (not the mobile sheet) is what the Context column renders.
+  window.matchMedia = (() => ({
+    matches: false,
+    media: "",
+    onchange: null,
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
+    dispatchEvent() {
+      return false;
+    },
+  })) as unknown as typeof window.matchMedia;
+
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -70,7 +88,12 @@ function fakeLiveApi(sessions: readonly LiveSession[]): FakeLiveApi {
   return { api, subscribed, closed, sent, emit: (id, frame) => callbacks.get(id)?.(frame) };
 }
 
-/** Renders the single screen the way `main.tsx` mounts it. */
+/** A lead Session whose tree row is labelled from its `name`; `context` groups it in the rail. */
+function lead(id: string, label: string, context: string): LiveSession {
+  return { id, role: "lead", runner: "pi", title: label, context, name: label };
+}
+
+/** Renders the shell the way `main.tsx` mounts it. */
 async function renderScreen(live?: LiveApi): Promise<void> {
   await act(async () => {
     root.render(
@@ -82,15 +105,30 @@ async function renderScreen(live?: LiveApi): Promise<void> {
   });
 }
 
+/** The rail row button for a Session: the tree's only navigation. */
+function sessionButton(id: string): HTMLButtonElement | null {
+  return container.querySelector<HTMLButtonElement>(`button[data-session-id="${id}"]`);
+}
+
+/** Clicks a Session's row in the rail, selecting it for the Chat. */
+async function selectSession(id: string): Promise<void> {
+  const button = sessionButton(id);
+  expect(button).not.toBeNull();
+  await act(async () => {
+    button!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+  });
+}
+
 /** Sets a form control's value the way React observes it, then fires `input` and `change`. */
-function setValue(element: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement, value: string): void {
+function setValue(element: HTMLInputElement | HTMLTextAreaElement, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value")?.set;
   setter?.call(element, value);
   element.dispatchEvent(new Event("input", { bubbles: true }));
   element.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-/** A snapshot frame carrying an assistant message through the existing fold (rule 3). */
+/** A snapshot frame carrying a message through the existing fold (rule 3). */
 function snapshot(text: string, role: "user" | "assistant" = "assistant"): SnapshotFrame {
   return {
     type: "snapshot",
@@ -101,24 +139,32 @@ function snapshot(text: string, role: "user" | "assistant" = "assistant"): Snaps
 }
 
 test("the chat is the only element on the screen, with no nav and no other panes", async () => {
-  const { api } = fakeLiveApi([{ id: "s1", role: "lead", runner: "pi", title: "Lead one" }]);
+  const { api } = fakeLiveApi([lead("s1", "Lead one", "alpha")]);
 
   await renderScreen(api);
 
-  // The app shell's navigation and the cockpit panes leave the screen.
+  // The legacy single-screen cockpit chrome stays gone: no nav, no Tree/Plan/Inbox/Logs panes.
   expect(container.querySelector("nav")).toBeNull();
   for (const pane of ["tree", "plan", "inbox", "logs"]) {
     expect(container.querySelector(`[data-view="${pane}"]`)).toBeNull();
   }
 
-  // The chat surface itself is the screen: the prompt input is there.
-  expect(container.querySelector("textarea")).not.toBeNull();
+  // The Chat is the centre column of the shell: the Context rail is to its left and the Inbox
+  // placeholder to its right. The shell's three columns and 20rem default are App.test.tsx's.
+  const chat = container.querySelector("textarea")?.closest<HTMLElement>("[data-panel]");
+  expect(chat).not.toBeNull();
+  const context = chat!.previousElementSibling?.previousElementSibling as HTMLElement | null;
+  expect(context?.querySelector('[data-slot="sidebar"]')).not.toBeNull();
+  const inbox = chat!.nextElementSibling?.nextElementSibling as HTMLElement | null;
+  expect(inbox?.textContent).toContain("The Inbox lands here.");
 });
 
 test("the transcript renders inside a scroll container and the composer stays visible", async () => {
-  const fake = fakeLiveApi([{ id: "s1", role: "lead", runner: "pi", title: "Lead one" }]);
+  const fake = fakeLiveApi([lead("s1", "Lead one", "alpha")]);
 
   await renderScreen(fake.api);
+  // Nothing is selected on first render: clicking the rail row selects the Session.
+  await selectSession("s1");
   await act(async () => {
     fake.emit("s1", snapshot("in the transcript"));
     await flush();
@@ -139,9 +185,10 @@ test("the transcript renders inside a scroll container and the composer stays vi
 });
 
 test("an assistant message renders its markdown, never raw text", async () => {
-  const fake = fakeLiveApi([{ id: "s1", role: "lead", runner: "pi", title: "Lead one" }]);
+  const fake = fakeLiveApi([lead("s1", "Lead one", "alpha")]);
 
   await renderScreen(fake.api);
+  await selectSession("s1");
   await act(async () => {
     fake.emit("s1", snapshot("# Heading\n\na **bold** word"));
     await flush();
@@ -156,33 +203,34 @@ test("an assistant message renders its markdown, never raw text", async () => {
 
 test("the session picker lists the live sessions and switching re-subscribes", async () => {
   const fake = fakeLiveApi([
-    { id: "s1", role: "lead", runner: "pi", title: "Lead one" },
-    { id: "s2", role: "manager", runner: "durable", title: "Manager two" },
+    lead("s1", "Lead one", "alpha"),
+    { id: "s2", role: "manager", runner: "durable", title: "Manager two", context: "alpha", name: "Manager two" },
   ]);
 
   await renderScreen(fake.api);
 
-  // Both Sessions are offered; the first is selected and subscribed.
-  const options = [...container.querySelectorAll("option")].map((option) => option.textContent);
-  expect(options).toContain("Lead one");
-  expect(options).toContain("Manager two");
+  // The rail lists both live Sessions; nothing is selected or subscribed on first render.
+  expect(sessionButton("s1")).not.toBeNull();
+  expect(sessionButton("s2")).not.toBeNull();
+  expect(sessionButton("s1")!.textContent).toContain("Lead one");
+  expect(sessionButton("s2")!.textContent).toContain("Manager two");
+  expect(fake.subscribed).toEqual([]);
+
+  // Selecting a Session subscribes the Chat to it.
+  await selectSession("s1");
   expect(fake.subscribed).toEqual(["s1"]);
 
-  // Switching the picker closes the old session and subscribes to the new one.
-  const select = container.querySelector("select");
-  expect(select).not.toBeNull();
-  await act(async () => {
-    setValue(select!, "s2");
-    await flush();
-  });
+  // Selecting another closes the old subscription and subscribes to the new Session.
+  await selectSession("s2");
   expect(fake.subscribed).toEqual(["s1", "s2"]);
   expect(fake.closed).toEqual(["s1"]);
 });
 
 test("the composer sends through the live API and clears", async () => {
-  const fake = fakeLiveApi([{ id: "s1", role: "lead", runner: "pi", title: "Lead one" }]);
+  const fake = fakeLiveApi([lead("s1", "Lead one", "alpha")]);
 
   await renderScreen(fake.api);
+  await selectSession("s1");
 
   const textarea = container.querySelector("textarea");
   expect(textarea).not.toBeNull();

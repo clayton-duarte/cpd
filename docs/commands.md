@@ -1384,17 +1384,6 @@ Callers: Lead; no cockpit. The about line (the clap doc comment, shown in `docs/
 | the phase is not `grounding` (`details` as `plan review`'s, §4.6) | `illegal_phase` | 3 |
 | the Plan exists | `plan_not_found` | 4 |
 | the Tier advice needs the catalog (§3.4b; no catalog read when no qualifying cell exists): the catalog is found and readable | `pi_not_found`, `catalog_failed`, `tier_model_unknown` | 1 |
-| at least one finding is an error; the message names the rules of the errors, in the order of the list below | `lint_failed` | 3 |
-
-The refusal `lint_failed` has the message `Plan <id> has <n> lint errors: <rules joined by ", ">. Fix them, then ask again.` and `details` `{plan, errors, warnings, findings}`, where `findings` is every finding, errors first, in the order of contract §2.7.
-
-**Output** on success, that is with no error finding:
-
-```json
-{"ok": true, "plan": "pay-4521", "errors": 0, "warnings": 2, "findings": [
-  {"rule": "tier_advice", "severity": "warn",
-   "message": "api-spec is S1 but history favours H3 for docs Jobs: of 47 first Attempts at H3, 45 merged (95.7%, lower bound 90.3%), at an expected cost of $0.15. That is what happened to Jobs that ran at H3, not what the Tier causes: the Lead picks harder Jobs for higher Tiers. Keep S1 if this Job is harder than the usual one, or change it with cpd job edit api-spec --tier H3.",
-   "pr": null, "job": "api-spec", "other": null, "paths": [], "details": {}},
   {"rule": "parallel_write_overlap", "severity": "warn",
    "message": "api-2 and api-3 have no dependency path and both name api/src/lib.rs. A hint, not a conflict prediction: on the ledger of 2026-10-30, 5 of 209 such pairs (2.4%) hit a merge conflict. Settle it with cpd job edit api-2 --needs api-3, or narrow touches.",
    "pr": "api", "job": "api-2", "other": "api-3", "paths": ["api/src/lib.rs"], "details": {}}]}

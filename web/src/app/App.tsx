@@ -1,16 +1,32 @@
-// The app root: the single-screen chat and nothing else (web/README.md "The chat surface
-// (shadcn AI Elements)"). The shell header, the nav and the Tree/Plan/Inbox/Logs routes have
-// left the render path; `ApprovalDialog` stays exported for the approval harness.
-import type { ReactElement } from "react";
+// The app root: the resizable three-column shell Context | Chat | Inbox (web/README.md "The
+// resizable three-column shell"). The Context column is the vendored shadcn `sidebar-03` block,
+// the centre column is the existing Live Chat unchanged, and the Inbox is a placeholder (the
+// real Inbox and the Tree/Plan panes belong to the ui-parity Plan). Sizing is
+// `react-resizable-panels` 4.15.3 through the vendored `resizable` wrapper; the Context column
+// defaults to 20rem and its handle restores that on double-click. `ApprovalDialog` stays
+// exported for the approval harness.
+import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
+import { usePanelRef } from "react-resizable-panels";
 import { uiResponsePost } from "../api/actions";
 import type { LiveApi } from "../api/live";
+import type { LiveSession } from "../api/live-server";
 import type { CpdApi } from "../api/mock";
 import type { UiRequest } from "../api/types";
+import { AppSidebar } from "../components/app-sidebar";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "../components/ui/resizable";
+import { SidebarProvider } from "../components/ui/sidebar";
 import { LiveChat } from "../views/live-chat";
 
-/** The app root's props; the live adapter drives the one screen. */
+/** The Context column's default width (web/README.md "Sizing"); the handle restores it. */
+const CONTEXT_DEFAULT = "20rem";
+
+/** The app root's props; the live adapter drives the Chat column. */
 export interface AppProps {
   /** A held `ui_request` for the approval dialog (kept for the approval harness). */
   uiRequest?: UiRequest;
@@ -24,7 +40,6 @@ export interface AppProps {
    */
   live?: LiveApi;
 }
-
 
 /** One approval `ui_request` as a dialog listing its options (hs-d775). */
 export function ApprovalDialog({
@@ -77,10 +92,86 @@ export function ApprovalDialog({
 }
 
 /**
- * Renders the single-screen chat and nothing else (web/README.md "The chat surface (shadcn AI
- * Elements)"): no shell header, no nav and no Tree/Plan/Inbox/Logs panes. The chat is the only
- * element on the screen; the live adapter is handed in when the probe answered `ok`.
+ * The Context (left) column: the vendored `sidebar-03` block, now the Context tree. Its desktop
+ * rail is `position: fixed`, so it needs a `transform`ed containing block and
+ * `--sidebar-width: 100%` so the rail and its gap spacer match the panel without adding a panel
+ * scrollbar (web/README.md "Containing the fixed rail").
+ */
+function ContextColumn({
+  sessions,
+  selectedId,
+  onSelectSession,
+}: {
+  sessions: readonly LiveSession[];
+  selectedId?: string;
+  onSelectSession: (id: string) => void;
+}): ReactElement {
+  return (
+    <div className="h-full overflow-hidden [transform:translateZ(0)]">
+      <SidebarProvider style={{ "--sidebar-width": "100%" } as CSSProperties}>
+        <AppSidebar sessions={sessions} selectedId={selectedId} onSelectSession={onSelectSession} />
+      </SidebarProvider>
+    </div>
+  );
+}
+
+/** The Inbox (right) column: a placeholder; the real Inbox belongs to the ui-parity Plan. */
+function InboxColumn(): ReactElement {
+  return (
+    <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
+      The Inbox lands here.
+    </div>
+  );
+}
+
+/**
+ * Renders the resizable three-column shell (web/README.md "The resizable three-column shell"):
+ * Context | Chat | Inbox, with a handle between each. The Context column defaults to 20rem; the
+ * three panels' default sizes over-constrain the group, so the mount effect re-applies 20rem
+ * through the panel ref to land it exactly, and the Context handle's double-click restores it.
  */
 export function App({ token, live }: AppProps): ReactElement {
-  return <LiveChat api={live} token={token} />;
+  const contextPanel = usePanelRef();
+  const [sessions, setSessions] = useState<readonly LiveSession[]>([]);
+  const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
+
+  // Fetch the lead/manager Sessions once; the cancelled flag keeps the resolution from setting
+  // state after unmount (web/README.md "The Context tree").
+  useEffect(() => {
+    if (live === undefined) return;
+    let cancelled = false;
+    void live.sessions().then((list) => {
+      if (cancelled) return;
+      setSessions(list);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [live]);
+
+  useEffect(() => {
+    contextPanel.current?.resize(CONTEXT_DEFAULT);
+  }, [contextPanel]);
+
+  // Nothing is selected on first render; the rail's `onSelectSession` fills it.
+  const selected = sessions.find((session) => session.id === selectedId);
+
+  return (
+    <ResizablePanelGroup orientation="horizontal" className="h-svh">
+      <ResizablePanel defaultSize={CONTEXT_DEFAULT} panelRef={contextPanel}>
+        <ContextColumn sessions={sessions} selectedId={selectedId} onSelectSession={setSelectedId} />
+      </ResizablePanel>
+      <ResizableHandle
+        disableDoubleClick
+        onDoubleClick={() => contextPanel.current?.resize(CONTEXT_DEFAULT)}
+      />
+      <ResizablePanel defaultSize="60%">
+        <LiveChat api={live} token={token} session={selected} />
+      </ResizablePanel>
+      <ResizableHandle disableDoubleClick />
+      <ResizablePanel defaultSize="20%">
+        <InboxColumn />
+      </ResizablePanel>
+    </ResizablePanelGroup>
+  );
 }

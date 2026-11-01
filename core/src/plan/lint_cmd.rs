@@ -29,11 +29,13 @@ pub(super) fn find(
 ) -> Result<Vec<Finding>, CpdError> {
     let advice = advice(env, plan.context.as_str())?;
     Ok(run(&Input::new(
+>>>>>>> origin/main
         &plan.id,
         plan.phase,
         prs,
         jobs,
         plan.outline.as_ref(),
+<<<<<<< HEAD
     )
     .with_advice(&advice)))
 }
@@ -71,6 +73,7 @@ pub(super) fn lint(args: LintArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
     let (plan, prs, jobs) = env.store.read(|conn| {
+>>>>>>> origin/main
         let plan = row::load(conn, &id)?;
         if plan.phase == Phase::Grounding {
             return Err(CpdError::new(
@@ -87,6 +90,7 @@ pub(super) fn lint(args: LintArgs) -> Result<Output, CpdError> {
         Ok((plan, prs, jobs))
     })?;
     let findings = find(&mut env, &plan, &prs, &jobs)?;
+>>>>>>> origin/main
     let errors: Vec<&Finding> = findings
         .iter()
         .filter(|f| f.severity() == Severity::Error)
