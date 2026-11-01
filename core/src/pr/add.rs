@@ -1134,8 +1134,9 @@ fn insert_stubs(
                 wanted.key
             ))
         })?;
-    // After the lock a stub that waits for nothing would be a parked draft (hs-d731): without `--jobs` only a PR that waits
-    // for another PR may lay the stubs out; the error rolls the transaction back, nothing stays written.
+    // After the lock a PR that starts at once lays its template out as decided work, never as unscoped stubs (§2.2 "The
+    // template"): without `--jobs` only a PR that waits for another PR may lay the stubs out; the error rolls the
+    // transaction back, nothing stays written.
     if appended
         && wanted.jobs.is_none()
         && crate::pr::start::not_ready(tx, plan, &wanted.key)?.is_empty()
@@ -1148,8 +1149,8 @@ fn insert_stubs(
         return Err(CpdError::new(
             ErrorCode::DraftParked,
             format!(
-                "PR {} starts at once, so its template stubs ({}) would be parked drafts that no one can review. Say --jobs <file.json> to add them as decided work \
-                 (a Tier and Spec for each: {}), or make the PR wait for another PR (--needs, --base).",
+                "PR {} starts at once, so without --jobs its template Jobs ({}) would stay unscoped stubs that no review has queued, and the PR would start with nothing to run. \
+                 Say --jobs <file.json> to add them as decided work (a Tier and Spec for each: {}), or make the PR wait for another PR (--needs, --base).",
                 wanted.key,
                 jobs.join(", "),
                 stubs.iter().filter(|s| s.kind != "open").map(|s| s.suffix).collect::<Vec<_>>().join(", ")
