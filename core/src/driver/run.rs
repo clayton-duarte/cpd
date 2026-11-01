@@ -271,7 +271,7 @@ pub(super) fn log(line: &str) {
 
 /// Appends an `error` Event about `target` (§5.2): an unexpected failure of
 /// the driver (commands.md §6.4).
-fn append_error(tx: &crate::store::WriteTxn<'_>, target: &Target, error: &CpdError) -> Result<(), CpdError> {
+fn append_error(tx: &crate::store::WriteTxn<'_>, target: &Target, error: &CpdError, window: Duration) -> Result<(), CpdError> {
     let text = format!(
         "The driver of Attempt {} failed: {} See: cpd attempt show {} --plan {}",
         target.id,
@@ -279,7 +279,7 @@ fn append_error(tx: &crate::store::WriteTxn<'_>, target: &Target, error: &CpdErr
         target.id,
         target.plan
     );
-    ledger::append_error(tx, target, SOURCE, error, text)
+    ledger::append_error(tx, target, SOURCE, error, text, window)
 }
 
 impl Driver {
@@ -916,7 +916,7 @@ impl Driver {
         let target = self.load()?;
         if let Err(e) = self.stop_worker() {
             log(&format!("stopping the Worker failed: {}", e.message()));
-            let _ = self.store.write(SOURCE, |tx| append_error(tx, &target, &e));
+            let _ = self.store.write(SOURCE, |tx| append_error(tx, &target, &e, self.config.watch.error_repeat()));
         }
         // The safe point before A8's rebase.
         self.reload_if_installed()?;
@@ -970,7 +970,7 @@ impl Driver {
         result = result.and(removed);
         if let Err(e) = result {
             log(&format!("A9 failed: {}", e.message()));
-            let _ = self.store.write(SOURCE, |tx| append_error(tx, target, &e));
+            let _ = self.store.write(SOURCE, |tx| append_error(tx, target, &e, self.config.watch.error_repeat()));
         }
     }
 
@@ -995,7 +995,7 @@ impl Driver {
     fn fail(&mut self, error: &CpdError) {
         log(&format!("failed: {}: {}", error.code().as_str(), error.message()));
         let Ok(target) = self.load() else { return };
-        if let Err(e) = self.store.write(SOURCE, |tx| append_error(tx, &target, error)) {
+        if let Err(e) = self.store.write(SOURCE, |tx| append_error(tx, &target, error, self.config.watch.error_repeat())) {
             log(&format!("cannot append the error Event: {}", e.message()));
         }
         // An install or a store migration, not the Worker (hs-n278): the marker is left; E2 ends the Attempt
