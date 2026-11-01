@@ -1382,6 +1382,8 @@ cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--pr <key
 
 `--tier` and `--spec` are required, except with `--draft`: a **stub draft** (hs-d241, R1) needs only `--title`; either or both of `--tier` and `--spec` may be given too. A Job that is not a draft still needs both (`usage`, exit 2). The Lead registers planned work with a stub the moment it is planned (hs-d239) and completes it later with `cpd job edit <key> --tier <T> --spec <file>` (§5.2). A follow-up PR is added the same way: `pr add <key> --repo … --needs …` (§9.4) plus stub drafts in it.
 
+`--tier <T>` is any allowed Tier of the machine's catalog (`cpd tiers`) and it is the Tier the Job **starts** at: no ladder surprise, the first Attempt runs at it (hs-d796). A Tier that is not valid at all is refused `tier_invalid`, a Tier outside the Worker range `tier_not_allowed` (both rows below). **The `-r` replacement recipe** (hs-d796): to replace a Job that is on the wrong Tier, cancel it with `cpd job cancel <key> --reason <why>` and add its replacement with `cpd job add <key>-r1 --tier <T> --spec <spec>.json` — same `--pr`, a Spec describing the same work. The `-r1` suffix is the Lead's choice; no naming rule is enforced beyond the Job-key syntax (§2.1). The cancel-then-add pattern is the one hs-n614/hs-n615 describe, and it is how the `update` Job of an open PR is replaced too (contract §3.8 "Updating").
+
 | Flag | Meaning |
 |---|---|
 | `<key>` | Job key (§2.1). Change: positional, like every other `job` command (cpd 1 had `--key`) |
