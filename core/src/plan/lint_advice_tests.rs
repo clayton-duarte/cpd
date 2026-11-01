@@ -18,7 +18,14 @@ fn t(s: &str) -> Tier {
     Tier::parse(s).unwrap()
 }
 
-fn job(key: &str, workflow: &str, kind: &str, status: &str, touches: &[&str], needs: &[&str]) -> Job {
+fn job(
+    key: &str,
+    workflow: &str,
+    kind: &str,
+    status: &str,
+    touches: &[&str],
+    needs: &[&str],
+) -> Job {
     Job {
         seq: 1,
         key: key.into(),
