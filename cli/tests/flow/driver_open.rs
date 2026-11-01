@@ -667,12 +667,12 @@ fn an_open_job_with_no_conflict_merges_nothing_runs_both_gates_at_its_merge_push
         .collect();
     assert_eq!(ours.len(), 1, "{merged:?}");
     assert_eq!(
-        (&ours[0].1["pr"], &ours[0].1["number"], &ours[0].1["url"]),
+        (&ours[0].1["workflow"], &ours[0].1["number"], &ours[0].1["url"]),
         (&json!("repo"), &json!(812), &json!(PR_URL))
     );
     assert_eq!(
         opened.iter().map(|e| e.1.clone()).collect::<Vec<_>>(),
-        [json!({"pr": "repo", "number": 812, "url": PR_URL})]
+        [json!({"workflow": "repo", "number": 812, "url": PR_URL})]
     );
     assert_eq!(
         (phase.len(), &phase[0].1["from"], &phase[0].1["to"]),

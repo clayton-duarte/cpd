@@ -557,7 +557,17 @@ fn dispatch_refuses_a_job_of_a_pr_that_has_not_started() {
 #[test]
 fn a_merge_conflict_ends_failed_and_the_next_attempt_retries_the_same_tier_with_the_files() {
     let live = live("");
-    // The Worker edits README.md while another Job's merge edits it on the Lead Branch.
+    // The Worker edits README.md while another Job's merge edits it on the Lead Branch. The Job's touches name it,
+    // and its Locked-Job fingerprint follows (§7.5).
+    live.fixture("UPDATE jobs SET touches = '[\"README.md\"]' WHERE plan = 'pay' AND key = 'api'");
+    let all = store(&live.fx.env)
+        .read(|conn| jobs::load(conn, &PlanId::parse(PLAN).unwrap()))
+        .unwrap();
+    let job = all.iter().find(|j| j.key == JOB).unwrap();
+    live.fixture(&format!(
+        "UPDATE jobs SET fingerprint = '{}' WHERE plan = 'pay' AND key = '{JOB}'",
+        locked_fingerprint(job)
+    ));
     let (_, ran) = drive_parallel_with_out(&live, JOB, |live, id, nap| {
         if nap == 1 {
             live.commit(&live.lead, "README.md", "theirs\n", "other");
