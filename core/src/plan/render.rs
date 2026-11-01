@@ -342,6 +342,42 @@ fn spec_section(out: &mut Vec<String>, spec: &JobSpec) {
     ]);
 }
 
+/// The `## Explore` section (commands.md §4.5): the explore Jobs' table (a Job with no PR) and the summary of each merged one; nothing without them.
+fn explore_section(out: &mut Vec<String>, plan: &str, jobs: &[Job], display: &Display) {
+    let mut explore: Vec<&Job> = jobs.iter().filter(|j| j.pr.is_none()).collect();
+    if explore.is_empty() {
+        return;
+    }
+    explore.sort_by(|a, b| a.key.cmp(&b.key));
+    let anchors = Anchors::new(jobs);
+    out.extend([
+        "## Explore".to_owned(),
+        String::new(),
+        "| Job | Kind | Tier | Status | Needs | Question | Artefact |".to_owned(),
+        "|---|---|---|---|---|---|---|".to_owned(),
+    ]);
+    for j in &explore {
+        let needs = if j.needs.is_empty() { MISSING_TIER.to_owned() } else { j.needs.iter().map(|n| tcode(n)).collect::<Vec<_>>().join(", ") };
+        let goal = j.spec.as_ref().map_or("", |s| s.goal.lines().next().unwrap_or(""));
+        let question: String = goal.chars().take(100).collect();
+        out.push(format!(
+            "| {} | {} | {} | {} | {needs} | {} | {} |",
+            tcode(&j.key),
+            tcode(&j.kind),
+            display.job_tier(j).unwrap_or_else(|| MISSING_TIER.to_owned()),
+            job_status(j, &[], &anchors),
+            cell(&question),
+            tcode(&crate::job::spec::explore_artefact(plan, &j.key))
+        ));
+    }
+    out.push(String::new());
+    for j in explore.iter().filter(|j| j.status == "merged") {
+        if let Some(summary) = &j.summary {
+            out.extend([format!("### {}", j.key), block(summary), String::new()]);
+        }
+    }
+}
+
 /// The most paths a row of `## Overlaps` shows before it only counts the rest.
 const PATHS_SHOWN: usize = 5;
 
@@ -385,6 +421,7 @@ pub enum Heading<'a> {
 pub fn markdown(heading: &Heading, context: &str, phase: &str, prs: &[PrRow], jobs: &[Job], overlaps: &[Overlap], open_tier: &str, display: &Display) -> String {
     let shown = Shown { all_jobs: jobs, display, anchors: Anchors::new(jobs) };
     let (cancelled, prs): (Vec<&PrRow>, Vec<&PrRow>) = prs.iter().partition(|p| p.status == "cancelled");
+    let Heading::Plan { plan, .. } = heading;
     let mut out = match heading {
         Heading::Plan { title, .. } => vec![format!("# Plan: {}", inline(title)), String::new()],
     };
@@ -398,6 +435,7 @@ pub fn markdown(heading: &Heading, context: &str, phase: &str, prs: &[PrRow], jo
     }
     if prs.is_empty() && cancelled.is_empty() {
         out.extend(["No PRs yet.".to_owned(), String::new()]);
+        explore_section(&mut out, plan, jobs, display);
         return out.join("\n");
     }
     let order = ordered(&prs, display);
@@ -426,6 +464,7 @@ pub fn markdown(heading: &Heading, context: &str, phase: &str, prs: &[PrRow], jo
         out.extend([graph("LR", "p", &nodes), String::new()]);
     }
     overlaps_section(&mut out, overlaps);
+    explore_section(&mut out, plan, jobs, display);
     let mut cancelled = cancelled;
     cancelled.sort_by(|a, b| a.key.cmp(&b.key));
     for pr in order.into_iter().chain(cancelled) {
