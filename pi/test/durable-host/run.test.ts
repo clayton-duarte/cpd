@@ -53,7 +53,7 @@ const MOVES: Record<string, readonly string[]> = {
   blocked: ["working", "idle", "waiting", "stopped"],
 };
 
-function rig(over: { role?: string; state?: string } = {}) {
+function rig(over: { role?: string; state?: string; firstMessage?: boolean } = {}) {
   const session = { state: over.state ?? "stopped" };
   const calls: string[][] = [];
   const opens: Parameters<Deps["open"]>[0][] = [];
@@ -82,6 +82,8 @@ function rig(over: { role?: string; state?: string } = {}) {
         notify();
         return { ok: true };
       }
+      // Answers the startup first-message read of a fresh durable Plan Lead (contract §6.13 step 7): the text and its Event id.
+      if (over.firstMessage === true && line === `session first-message --session ${CONFIG.session}`) return { ok: true, text: "Build the thing.", event: 120 };
       throw new Error(`unexpected cpd call: ${line}`);
     },
     resolveModel: () => MODEL,
@@ -94,6 +96,8 @@ function rig(over: { role?: string; state?: string } = {}) {
       const conversation: Conversation = {
         submit: async (input) => {
           submitted.push(input);
+          // The first-turn test needs the submission to return so the host can finish starting; the other tests keep the refusal of an unexpected submit.
+          if (over.firstMessage === true) return { id: 1, status: async () => "queued", wait: async () => "done" };
           throw new Error("the host submits nothing");
         },
         watch: async () => ({ snapshot: {}, start: () => {}, stop: async () => ({ reason: "stopped" }), closed: new Promise<unknown>(() => {}) }),
@@ -138,6 +142,8 @@ function rig(over: { role?: string; state?: string } = {}) {
       if (ending.error) throw ending.error;
       return fn();
     });
+  // Lets every pending promise chain of the fakes run: no fake uses a timer or I/O, so one turn of the event loop settles them all.
+  const drain = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
   const states = () => calls.filter((a) => a[0] === "session" && a[1] === "state").map((a) => a[2]);
   const up = async () => {
     await until("the store opened", () => opens.length >= 1);
@@ -147,7 +153,7 @@ function rig(over: { role?: string; state?: string } = {}) {
     terminate.handler!();
     return await until("the host to end", () => ending.code);
   };
-  return { calls, opens, logs, submitted, closeCalls, ending, closeIt: (v: unknown) => closeIt(v), until, states, up, stop };
+  return { calls, opens, logs, submitted, closeCalls, ending, closeIt: (v: unknown) => closeIt(v), until, states, up, stop, drain };
 }
 
 test("runHost opens the store at run/host/<session>.sqlite", { timeout: 20_000 }, async () => {
@@ -198,6 +204,26 @@ test("runHost submits nothing and writes no report at start", { timeout: 20_000 
     "no cpd call besides session show, policy show and the state reports",
   );
   assert.ok(r.opens.length === 1);
+});
+
+// The startup first turn (contract §6.13 step 7, hs-n658/hs-d812): a fresh non-by-user Plan Lead has no input of its
+// own and no pi argv first message, so the host reads `cpd session first-message` and submits its text as the first turn.
+test("a fresh durable Plan Lead runs its first turn at birth", { timeout: 20_000 }, async () => {
+  const r = rig({ firstMessage: true });
+  await r.up();
+  await r.until("idle reported", () => r.states().includes("idle"));
+  await r.drain();
+  assert.ok(
+    r.calls.some((a) => a.join(" ") === `session first-message --session ${CONFIG.session}`),
+    `the host reads the first message at startup: ${JSON.stringify(r.calls)}`,
+  );
+  assert.equal(r.submitted.length, 1, `one turn-starting input: ${JSON.stringify(r.submitted)}`);
+  const input = r.submitted[0] as { content: unknown; entry: { kind: string; data: Record<string, unknown> } };
+  assert.equal(input.content, "Build the thing.", "the input's content is the first message");
+  assert.equal(input.entry.kind, "cpd-first-message", "the input is tagged as the first message");
+  assert.equal(input.entry.data.event, 120, "the first message's Event id counts it");
+  assert.equal(input.entry.data.delivered_to, CONFIG.session, "the first message is delivered to this Session");
+  await r.stop();
 });
 
 test("runHost refuses a Session whose role is worker with a usage error before opening the store", { timeout: 20_000 }, async () => {

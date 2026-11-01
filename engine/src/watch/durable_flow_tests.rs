@@ -79,6 +79,13 @@ fn flow_plan_new_to_archive_with_a_mocked_host() {
     assert_eq!((state.as_str(), runner.as_str(), pane), ("stopped", "durable", None), "a durable Lead starts with no pane");
     assert!(spawn.launches().is_empty(), "plan new starts no host; the engine's hosts step does");
 
+    // 1a. `plan new` writes the Lead's first message (commands.md §1.4): the source the durable host now
+    //     consumes at startup (hs-d812), since the launch passes no `@<lead-message.md>` argv.
+    let message = fx.engine.home.lead_message(&cpd_core::ids::PlanId::parse("flow").unwrap());
+    assert!(message.exists(), "plan new writes the Lead's first message: {message:?}");
+    let first_message = std::fs::read_to_string(&message).expect("the Lead's first message is readable");
+    assert!(!first_message.trim().is_empty(), "the Lead's first message is non-empty: {first_message:?}");
+
     // 2. The hosts step (§6.19) launches the mocked host, and the mock reports idle as the real host does.
     hosts::run(&mut fx.engine);
     let launches = spawn.launches();
@@ -92,7 +99,8 @@ fn flow_plan_new_to_archive_with_a_mocked_host() {
     assert!(launch.env_set.iter().any(|(k, _)| k == "PATH"), "{:?}", launch.env_set);
     Ports::scope(&ports, || cpd_core::session::run(session(&["state", "idle", "--session", &lead]))).unwrap();
 
-    // 3. `session send` writes the message Event; the mocked reply is tailed through the client under test.
+    // 3. Mid-life delivery parity (requirement 3): the fresh durable Lead's first turn is its message file read by
+    //    the host at startup (asserted above); `session send` later writes a message Event the mocked reply is tailed through.
     Ports::scope(&ports, || cpd_core::session::run(session(&["send", &lead, "run the checks", "--unblocks", "flow"]))).unwrap();
     assert_eq!(fx.count("session-message"), 1, "{:?}", fx.events("session-message"));
     host_conn.serve(vec![
