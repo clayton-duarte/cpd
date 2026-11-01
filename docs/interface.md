@@ -47,6 +47,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd job retry` | Queue a failed Job again at a Tier (§5.4) | Lead | |
 | `cpd job urgent` | Mark a Job urgent, only when the User asks (§5.8) | Lead, Manager | |
 | `cpd job approve-tests` | The Lead approves an impl Job to change red tests (§5.9) | Lead | |
+| `cpd job addendum` | Add information to a Job without changing its Spec (§5.10) | Lead | |
 | `cpd job dispatch` | Start one Ready Job now (§5.5) | | |
 | `cpd job list` | List the Jobs (§5.6) | Lead | |
 | `cpd job show` | Show a Job and its Attempts (§5.7) | Lead | |

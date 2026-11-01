@@ -187,6 +187,10 @@ impl NewEvent {
         make(Kind::JobCancelled, text, json!({"reason": reason}))
     }
 
+    pub fn job_addendum(text: impl Into<String>, addendum: &str) -> NewEvent {
+        make(Kind::JobAddendum, text, json!({"text": addendum}))
+    }
+
     /// `job-blocked` (§5.2, hs-d798): E3 skipped a Ready Job for want of a pool slot, one Event per
     /// waiting episode; `waiting` is the number of Ready Jobs skipped that tick.
     pub fn job_blocked(text: impl Into<String>, waiting: u64) -> NewEvent {
@@ -588,6 +592,7 @@ mod tests {
             Kind::JobRetried => vec![NewEvent::job_retried(T, s)],
             Kind::JobCancelRequested => vec![NewEvent::job_cancel_requested(T, s)],
             Kind::JobCancelled => vec![NewEvent::job_cancelled(T, s)],
+            Kind::JobAddendum => vec![NewEvent::job_addendum(T, s)],
             Kind::JobBlocked => vec![NewEvent::job_blocked(T, 1)],
             Kind::AttemptStarted => vec![NewEvent::attempt_started(T, n, s, s)],
             Kind::AttemptStatus => vec![

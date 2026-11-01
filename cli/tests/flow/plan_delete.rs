@@ -343,3 +343,24 @@ fn deleting_a_plan_deletes_its_jira_transitions() {
     assert_eq!(count(&fx, "SELECT count(*) FROM jira_transitions WHERE plan = 'pay'"), 0);
     assert_eq!(count(&fx, "SELECT count(*) FROM jira_transitions WHERE plan = 'other'"), 1, "another Plan's row stays");
 }
+
+#[test]
+fn deleting_a_plan_deletes_its_job_addenda() {
+    let fx = Fx::with_ports();
+    base(&fx);
+    world(&fx, "pay");
+    world(&fx, "other");
+    // `world` gives each Plan the Job `m` and its Attempt `m-a1`; `pay`'s row is unaddressed, `other`'s is addressed to an Attempt and a Session
+    let columns = "(plan, job, number, attempt, session, text, created_at)";
+    let unaddressed = format!("INSERT INTO job_addenda {columns} VALUES ('pay', 'm', 1, NULL, NULL, 'a note', 't')");
+    let addressed = format!("INSERT INTO job_addenda {columns} VALUES ('other', 'm', 1, 'm-a1', (SELECT lead_session FROM plans WHERE id = 'other'), 'a note', 't')");
+    fixture(&fx, &format!("{unaddressed}; {addressed};"));
+    assert_eq!(count(&fx, "SELECT count(*) FROM job_addenda"), 2);
+    archive(&fx, "pay");
+
+    fx.cpd(&["plan", "delete", "pay", "--yes"]).ok();
+
+    assert_eq!(count(&fx, "SELECT count(*) FROM job_addenda WHERE plan = 'pay'"), 0);
+    assert_eq!(count(&fx, "SELECT count(*) FROM job_addenda WHERE plan = 'other'"), 1, "another Plan's row stays");
+    assert_eq!(plan_rows(&fx, "pay"), 0, "the Plan's other rows go as before");
+}

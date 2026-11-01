@@ -1792,7 +1792,7 @@ fn converts_keeping_every_row_and_id(n: usize) {
         assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
         assert_eq!(rows_after.remove("slack_reactions").map(|r| r.len()), Some(0)); // `slack-reactions`: a new empty table
         assert_eq!(rows_after.remove("jira_transitions"), Some(Vec::new())); // `jira-transitions`: a new empty table
-        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(24)); // 17, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts` and `job_pools`
+        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(25)); // 17, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts`, `job_pools` and `job_addenda`
         let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
         assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
         assert_eq!(txns_after.len(), txns_before.len() + 1);
@@ -1821,6 +1821,8 @@ fn converts_keeping_every_row_and_id(n: usize) {
         assert_eq!(rows_after.remove("pr_posts"), Some(Vec::new()));
         // `job-tenancy` made `job_pools`, and it is empty.
         assert_eq!(rows_after.remove("job_pools"), Some(Vec::new()));
+        // `20261103T0400-job-addenda` made `job_addenda`, and it is empty.
+        assert_eq!(rows_after.remove("job_addenda"), Some(Vec::new()));
         // `curation` made two tables, and they are empty.
         assert_eq!(rows_after.remove("record_retirements"), Some(Vec::new()));
         assert_eq!(rows_after.remove("record_curations"), Some(Vec::new()));
@@ -2895,8 +2897,8 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
     assert_eq!(rows(&mut store, "SELECT name FROM event_kinds WHERE name = 'pr-base-changed'"), vec![serde_json::json!(["pr-base-changed"])]);
-    // this migration's one kind, the two of an earlier migration, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`, the one of `inbox-claim`, the one of `pr-description`, the one of `event-session-model-changed`, the one of `attempt-aborted`, the one of `attempt-ended` and the one of `job-blocked`: the later migrations that add Event kinds
-    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2 + 3 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1])]);
+    // this migration's one kind, the two of an earlier migration, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`, the one of `inbox-claim`, the one of `pr-description`, the one of `event-session-model-changed`, the one of `attempt-aborted`, the one of `attempt-ended`, the one of `job-blocked` and the one of `20261103T0400-job-addenda`: the later migrations that add Event kinds
+    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2 + 3 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1])]);
 }
 
 // ---------- named migration session-titles ----------

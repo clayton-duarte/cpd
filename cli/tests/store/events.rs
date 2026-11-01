@@ -226,6 +226,7 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("job-retried", "cpj", "", &["tier"], &[]),
     ("job-cancel-requested", "cpja", "", &["reason"], &[]),
     ("job-cancelled", "cpj", "a", &["reason"], &[]),
+    ("job-addendum", "cpj", "as", &["text"], &[]),
     ("job-blocked", "cpj", "", &["waiting"], &[]),
     ("attempt-started", "cpja", "", &["number", "tier", "origin"], &[]),
     ("attempt-status", "cpja", "", &["from", "to"], &[]),
@@ -932,6 +933,7 @@ fn kind_data(kind: Kind) -> Value {
         JobRetried => json!({"tier": "S1"}),
         JobMerged => json!({"sha": "c0ffee1", "tier": "S1", "kind": "work"}),
         JobCancelled => json!({"reason": "r"}),
+        JobAddendum => json!({"text": "t"}),
         AttemptStarted => json!({"number": 2, "tier": "S1", "origin": "ladder"}),
         AttemptNudge => json!({"prompt": "p"}),
         Escalation => json!({"escalation": "e1", "question": "q"}),
@@ -977,12 +979,12 @@ impl Stale {
             e = e.job(JobKey::parse(job).unwrap());
             if matches!(
                 kind,
-                Kind::JobMerged | Kind::AttemptStarted | Kind::AttemptNudge | Kind::Escalation | Kind::EscalationAnswered | Kind::EscalationExpired
+                Kind::JobMerged | Kind::AttemptStarted | Kind::AttemptNudge | Kind::JobAddendum | Kind::Escalation | Kind::EscalationAnswered | Kind::EscalationExpired
             ) {
                 e = e.attempt(AttemptId::parse(&format!("{job}-a1")).unwrap());
             }
         }
-        if kind == Kind::AttemptNudge {
+        if matches!(kind, Kind::AttemptNudge | Kind::JobAddendum) {
             e = e.session(session("worker1"));
         }
         append_one(&mut self.store, e).unwrap()
@@ -1143,6 +1145,24 @@ fn follow_session_drops_an_attempt_nudge_that_a_later_attempt_merge_failure_or_c
     let n7 = s.ev(Kind::AttemptNudge, "pay", Some("j7"), json!({})); // 11 nudge, job-retried: not a listed Event, streams
     let r7 = s.ev(Kind::JobRetried, "pay", Some("j7"), json!({}));
     assert_eq!(s.lead(), vec![st1, m2, f3, c4, n5, st6, n7, r7]);
+}
+
+#[test]
+fn follow_session_drops_a_job_addendum_that_a_later_attempt_merge_failure_or_cancel_follows() {
+    let mut s = Stale::new();
+    let _a1 = s.ev(Kind::JobAddendum, "pay", Some("j1"), json!({})); // 1 addendum, attempt-started 2
+    let st1 = s.ev(Kind::AttemptStarted, "pay", Some("j1"), json!({}));
+    let _a2 = s.ev(Kind::JobAddendum, "pay", Some("j2"), json!({})); // 3 addendum, job-merged 4
+    let m2 = s.ev(Kind::JobMerged, "pay", Some("j2"), json!({}));
+    let _a3 = s.ev(Kind::JobAddendum, "pay", Some("j3"), json!({})); // 5 addendum, job-failed 6
+    let f3 = s.ev(Kind::JobFailed, "pay", Some("j3"), json!({}));
+    let _a4 = s.ev(Kind::JobAddendum, "pay", Some("j4"), json!({})); // 7 addendum, job-cancelled 8
+    let c4 = s.ev(Kind::JobCancelled, "pay", Some("j4"), json!({}));
+    let a5 = s.ev(Kind::JobAddendum, "pay", Some("j5"), json!({})); // 9 addendum, attempt-started of j6: streams
+    let st6 = s.ev(Kind::AttemptStarted, "pay", Some("j6"), json!({}));
+    let a7 = s.ev(Kind::JobAddendum, "pay", Some("j7"), json!({})); // 11 addendum, job-retried: not a listed Event, streams
+    let r7 = s.ev(Kind::JobRetried, "pay", Some("j7"), json!({}));
+    assert_eq!(s.lead(), vec![st1, m2, f3, c4, a5, st6, a7, r7]);
 }
 
 #[test]

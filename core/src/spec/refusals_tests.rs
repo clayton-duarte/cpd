@@ -27,6 +27,7 @@ fn text(kind: JobKind) -> String {
         protected: &[],
         previous: &[],
         answers: &[],
+        addenda: &[],
     })
     .unwrap()
 }

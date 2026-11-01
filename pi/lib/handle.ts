@@ -1,5 +1,5 @@
 import { CpdError, installedIdentity, isObject } from "./cpd.ts";
-import { eventMessage, FOLLOW_UP, gated, leadRule, sessionMessage } from "./delivery.ts";
+import { eventMessage, FOLLOW_UP, gated, STEER, leadRule, sessionMessage } from "./delivery.ts";
 import { type CpdEvent, type EventOf, parseLine } from "./event.ts";
 import { type FollowerHooks, PERMANENT_CODES } from "./follower.ts";
 import type { Host } from "./host.ts";
@@ -136,6 +136,7 @@ async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
   }
   if (!r.info.planLead) {
     if (ev.kind === "attempt-nudge" && own) deliverOnce(host, r, ev, eventMessage(ev, r.id, ev.data.prompt), FOLLOW_UP(true));
+    if (ev.kind === "job-addendum" && own) deliverOnce(host, r, ev, eventMessage(ev, r.id), STEER(true));
     return;
   }
   const rule = leadRule(ev);

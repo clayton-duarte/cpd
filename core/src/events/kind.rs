@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 21;
+pub const PROTOCOL: u32 = 22;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -89,6 +89,7 @@ kinds! {
     JobRetried = "job-retried",
     JobCancelRequested = "job-cancel-requested",
     JobCancelled = "job-cancelled",
+    JobAddendum = "job-addendum",
     JobBlocked = "job-blocked",
     AttemptStarted = "attempt-started",
     AttemptStatus = "attempt-status",
@@ -170,6 +171,7 @@ impl Kind {
             JobRetried => spec([Y, Y, Y, N, N], &["tier"], &[]),
             JobCancelRequested => spec([Y, Y, Y, Y, N], &["reason"], &[]),
             JobCancelled => spec([Y, Y, Y, M, N], &["reason"], &[]),
+            JobAddendum => spec([Y, Y, Y, M, M], &["text"], &[]),
             JobBlocked => spec([Y, Y, Y, N, N], &["waiting"], &[]),
             AttemptStarted => spec([Y, Y, Y, Y, N], &["number", "tier", "origin"], &[]),
             AttemptStatus => spec([Y, Y, Y, Y, N], &["from", "to"], &["check", "what", "died"]),
@@ -264,10 +266,12 @@ mod tests {
     /// The protocol history: 8 (`session-retiered`), 10 (`plan-outlined`), 12 (`session-resumed`), 13 (`session report`),
     /// 14 (the incident kinds), 15 (`mcp-attached`), 16 (`session switch-failed`/`switched`), 17 (`pr-described`),
     /// 18 (`session-model-changed`, the tier-preset switch, commands.md §14.6), 19 (`context pending`'s plan-level `jobs`,
-    /// commands.md §3.12, Plan explore-view), 20 (`attempt-ended` and `job-blocked`, hs-d798) and 21 (`attempt-aborted`, hs-a8).
+    /// commands.md §3.12, Plan explore-view), 20 (`attempt-ended` and `job-blocked`, hs-d798), 21 (`attempt-aborted`,
+    /// hs-a8) and 22 (`job-addendum`, pro-d294).
+    // The 18 in the name is the Job's fixed test name, not the protocol number.
     #[test]
-    fn the_protocol_is_21_with_the_attempt_aborted_attempt_ended_and_job_blocked_kinds_and_the_pending_plan_jobs_field() {
-        assert_eq!(PROTOCOL, 21);
+    fn the_protocol_is_18_with_the_job_addendum_kind() {
+        assert_eq!(PROTOCOL, 22);
     }
 
     #[test]

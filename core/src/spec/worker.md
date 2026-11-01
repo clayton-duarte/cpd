@@ -170,6 +170,18 @@ Nothing is listed. Still do only what the Goal and Acceptance require.
 This Attempt holds these exclusive resources: {% for item in resources %}`{{ item }}`{% if not loop.last %}, {% endif %}{% endfor %}. No other Job and no `cpd resource run` can take them until this Attempt ends.
 
 {% endif %}
+{% if addenda %}
+## Addenda from the Lead
+
+The Lead added these to your Job after its Spec was locked. Each one adds information; none replaces your Goal, Files you may touch, Acceptance or Out of scope, which stand as written.
+
+{% for a in addenda %}
+### Addendum {{ a.number }}
+
+{{ a.text }}
+
+{% endfor %}
+{% endif %}
 {% if previous %}
 ## Previous Attempts
 

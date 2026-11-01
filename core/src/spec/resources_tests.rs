@@ -26,6 +26,7 @@ fn text(resources: &[String]) -> String {
         protected: &[],
         previous: &[],
         answers: &[],
+        addenda: &[],
     })
     .unwrap()
 }

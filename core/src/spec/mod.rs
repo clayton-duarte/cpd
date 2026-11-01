@@ -114,6 +114,13 @@ pub struct Previous {
     pub evidence: Evidence,
 }
 
+/// An addendum of the Lead to the Job (§5.10).
+#[derive(Clone, Debug)]
+pub struct Addendum {
+    pub number: u32,
+    pub text: String,
+}
+
 /// An `answered` Escalation of an earlier Attempt.
 #[derive(Clone, Debug)]
 pub struct Answer {
@@ -185,6 +192,8 @@ pub struct Input<'a> {
     pub previous: &'a [Previous],
     /// Answered Escalations of earlier Attempts, oldest first.
     pub answers: &'a [Answer],
+    /// The Job's addenda, oldest first.
+    pub addenda: &'a [Addendum],
 }
 
 /// The commands of `pipeline` (the policy's `hooks.pre-commit`), verbatim and in file order; empty when it is not
@@ -249,6 +258,12 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
         })
         .collect();
 
+    let addenda: Vec<Value> = input
+        .addenda
+        .iter()
+        .map(|a| Value::from_pairs([("number", Value::from(a.number)), ("text", Value::from(a.text.as_str()))]))
+        .collect();
+
     let (tests, test_files, test_jobs, approved): (&[String], &[String], String, &[String]) = match input.kind {
         JobKind::Test { tests, test_files } => (tests, test_files, String::new(), &[]),
         JobKind::Impl { test_jobs, tests, guarded, approved } => (tests, guarded, code_list(test_jobs), approved),
@@ -283,6 +298,7 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
         ("protected", Value::from(protected.iter().map(|p| p.to_string()).collect::<Vec<_>>())),
         ("previous", Value::from(previous)),
         ("answers", Value::from(answers)),
+        ("addenda", Value::from(addenda)),
     ]);
     env.render_named_str("worker.md", TEMPLATE, vars).map_err(|e| {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot render the Worker Spec: {e}."))

@@ -15,6 +15,7 @@
 mod incident_tests;
 
 pub(crate) mod add;
+mod addendum;
 mod approve;
 mod chain;
 pub(crate) mod cancel;
@@ -66,6 +67,8 @@ pub enum Command {
     Urgent(UrgentArgs),
     /// The Lead approves an impl Job to change red tests (§5.9)
     ApproveTests(ApproveArgs),
+    /// Add information to a Job without changing its Spec (§5.10)
+    Addendum(AddendumArgs),
     /// Start one Ready Job now (§5.5)
     Dispatch(driver::DispatchArgs),
     /// List the Jobs (§5.6)
@@ -188,6 +191,22 @@ pub struct ApproveArgs {
 }
 
 #[derive(clap::Args, Debug)]
+#[command(group(clap::ArgGroup::new("message").required(true).multiple(false).args(["text", "file"])))]
+pub struct AddendumArgs {
+    /// The Job
+    #[arg(value_name = "job")]
+    key: JobKey,
+    /// The addendum
+    #[arg(value_name = "text")]
+    text: Option<Text>,
+    /// Read the addendum from a file
+    #[arg(long, value_name = "path")]
+    file: Option<PathBuf>,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct ListArgs {
     /// Only Jobs in this status (repeatable)
     #[arg(long = "status", value_name = "status", value_parser = PossibleValuesParser::new(STATUSES))]
@@ -213,6 +232,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Retry(args) => retry::retry(args),
         Command::Urgent(args) => urgent::urgent(args),
         Command::ApproveTests(args) => approve::approve(args),
+        Command::Addendum(args) => addendum::addendum(args),
         Command::Dispatch(args) => driver::dispatch(args),
         Command::List(args) => show::list(args),
         Command::Show(args) => show::show(args),
