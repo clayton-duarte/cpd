@@ -328,8 +328,7 @@ fn every_line_of_a_sweep_of_small_plans_touches_what_it_joins() {
 /// The pane's body window of the drawn view at `offset`, as the canvas's own cells (the drawn cells put back at the offset
 /// the view clamped to), with that window; `pane` is the pane's size.
 fn drawn(centre: &super::Centre, pane: (u16, u16), offset: (u16, u16)) -> (Buffer, Rect, Buffer) {
-    let mut ui = Ui::default();
-    ui.scroll = offset;
+    let mut ui = Ui { scroll: offset, ..Ui::default() };
     let mut terminal = Terminal::new(TestBackend::new(pane.0, pane.1)).unwrap();
     terminal.draw(|f| ui.draw(f, Some(centre))).unwrap();
     let pane_buf = terminal.backend().buffer().clone();

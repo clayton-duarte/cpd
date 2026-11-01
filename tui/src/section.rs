@@ -141,7 +141,8 @@ mod tests {
 
     #[test]
     fn every_title_form_has_its_left_cap_at_column_3_and_the_non_collapsible_has_no_corner() {
-        for (line, lead) in [(title("Logs", None, 22), " ──")] {
+        {
+            let (line, lead) = (title("Logs", None, 22), " ──");
             let got = text(line.clone());
             assert!(got.starts_with(lead), "{got:?}");
             assert_eq!(got.chars().nth(3), Some('\u{E0B6}'), "the left cap sits three columns from the edge: {got:?}");
@@ -194,7 +195,8 @@ mod tests {
 
     #[test]
     fn a_count_is_a_grey_pill_at_the_rows_end_inside_the_right_padding() {
-        for (line, name) in [(title("Inbox", Some(35), 22), "title")] {
+        {
+            let (line, name) = (title("Inbox", Some(35), 22), "title");
             let buf = buffer_of(line, 22);
             check::grey_pill(&buf, 17, 0, "35"); // caps at columns 17 and 20, the padding at 21
             assert_eq!(buf[(21, 0)].symbol(), " ", "the right padding, {name}");

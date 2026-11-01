@@ -145,7 +145,6 @@ fn the_down_arrow_row_is_muted_and_only_it_toggles() {
 }
 
 #[test]
-#[test]
 fn an_archived_context_is_all_archived_rows_folded_it_shows_its_title_and_the_down_arrow() {
     let mut view = View::new(archived(), true);
     let got = rows(&draw(&mut view, 44, 24));

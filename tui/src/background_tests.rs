@@ -11,7 +11,7 @@ use crate::pump::{Pump, Signal};
 
 fn fake() -> (mpsc::Sender<Event>, Pump) {
     let (tx, rx) = mpsc::channel::<Event>();
-    let pump = Pump::new(move || rx.recv().map_err(|e| io::Error::new(io::ErrorKind::Other, e)));
+    let pump = Pump::new(move || rx.recv().map_err(io::Error::other));
     (tx, pump)
 }
 

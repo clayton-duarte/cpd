@@ -98,6 +98,9 @@ fn moved(at: &str, plan: &str, place: &str) -> String {
     )
 }
 
+/// One Plan's fixture row: lead label, name, phase, its PR (number and checks), its time and its pane place.
+type PlanFixture = (&'static str, &'static str, &'static str, Option<(i64, (&'static str, &'static str, &'static str))>, &'static str, Option<&'static str>);
+
 /// One Context and these Plans, each named by its Lead Session (the label), oldest first:
 /// - `old` ("cpd-ui"): done, its merged PR 3, every check passed, no review; the Lead in the chat slot;
 /// - `rel` ("cpd visual lead"): PR 7, open, failing checks, changes requested; the Lead parked;
@@ -108,7 +111,7 @@ fn moved(at: &str, plan: &str, place: &str) -> String {
 /// - `never` ("never lead"): no PR; the Lead was never moved.
 fn populate(store: &mut Store) {
     let mut s = context("alpha");
-    let plans: [(&str, &str, &str, Option<(i64, (&str, &str, &str))>, &str, Option<&str>); 7] = [
+    let plans: [PlanFixture; 7] = [
         ("old", "cpd-ui", "done", Some((3, ("cpd-ui: cockpit rows", "none", "passed"))), "2026-01-01T12:00:00.000Z", Some("chat")),
         (
             "rel",

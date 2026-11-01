@@ -222,7 +222,6 @@ impl Opener<'_> {
         match inbox::click(&tree, item) {
             None => {}
             Some(Jump::Run(action)) => self.said(self.runner.run(&action)),
-            Some(Jump::Steps(steps)) => self.said(self.runner.run_all(&steps)),
             Some(Jump::Models(provider, at)) => {
                 let shown = inbox::models_body(self.home, &provider, &at).map_err(|e| format!("{}: {}", e.code(), e.message()));
                 match shown {
@@ -302,6 +301,7 @@ impl Opener<'_> {
 /// Draws and follows, for as long as the process runs: no key ends it. A failed read keeps what is on screen and shows its error in the last row, until a read
 /// succeeds ([`kept`]). The wheel over the Inbox section scrolls it. A left click on a link opens its url, on an Inbox item its jump; a failure is the error dialog and a line of the log (commands.md §17 "No notes"). A right click on an
 /// Inbox item opens its menu, which takes every key and click until it closes.
+#[allow(clippy::too_many_arguments)] // takes every input of the show loop; a signature change is out of scope
 fn show<B: Backend>(
     ctx: &mut Ctx<B>,
     feed: Feed,
@@ -385,11 +385,10 @@ fn show<B: Backend>(
                         match entry {
                             InboxEntry::Choice(choice) => opener.choose(choice, item.id),
                             InboxEntry::Merge => {
-                                if let Some(pull) = inbox::Pull::from_subject(&item.subject) {
-                                    if let Err(e) = crate::merge::start(opener.tmux, &pull.to_string()) {
+                                if let Some(pull) = inbox::Pull::from_subject(&item.subject)
+                                    && let Err(e) = crate::merge::start(opener.tmux, &pull.to_string()) {
                                         dialog::report(opener.tmux, opener.log, "Merge Pull Request", &e);
                                     }
-                                }
                             }
                             InboxEntry::Post => opener.post(&item),
                             InboxEntry::GoToLead => opener.jump(&item, &clock::timestamp(ports.clock.utc())),
@@ -425,11 +424,10 @@ fn show<B: Backend>(
                     }
                     Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
                         let at = Position::new(m.column, m.row);
-                        if let Some(url) = drawn.links.at(at) {
-                            if let Err(e) = crate::link::open_url(&*ports.runner, url) {
+                        if let Some(url) = drawn.links.at(at)
+                            && let Err(e) = crate::link::open_url(&*ports.runner, url) {
                                 dialog::report(opener.tmux, opener.log, "Open Link", &e);
                             }
-                        }
                         schedule.force();
                     }
                     Event::Mouse(m) if drawn.inbox.contains(Position::new(m.column, m.row)) => match m.kind {

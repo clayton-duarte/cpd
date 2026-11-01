@@ -27,6 +27,7 @@ use super::rows::{self, Hits, Id, Row};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::SessionId;
 use cpd_core::ports::Ports;
+#[cfg(test)]
 use cpd_core::session::State;
 use serde_json::Value;
 use crate::palette;
@@ -816,7 +817,6 @@ mod tests {
     const COLLAPSE: &str = " ╰\u{F0B2C} collapse";
     /// The tree root's archive row, folded and expanded (hs-d698, hs-d707); drawn with the pane's leading margin.
     const ARCHIVE_DOWN: &str = "\u{F0B26} archive";
-    const ARCHIVE_UP: &str = "\u{F0B2C} archive";
 
     #[test]
     fn a_click_folds_a_context_and_opens_a_session_and_hides_the_cursor() {
@@ -1225,8 +1225,8 @@ mod tests {
         drawn(&mut view, 44, 16);
         right_click(&mut view, 8, 5);
         let rows = drawn(&mut view, 44, 16);
-        assert!(rows[5].ends_with(&format!("shi╭─────────╮")), "{rows:?}");
-        assert!(rows[6].contains(&format!("shi│ Open    │")), "{rows:?}");
+        assert!(rows[5].ends_with(&"shi╭─────────╮".to_string()), "{rows:?}");
+        assert!(rows[6].contains(&"shi│ Open    │".to_string()), "{rows:?}");
         assert!(rows[7].contains("│ Rename… │"), "drawn over the tree: {rows:?}");
         assert_eq!(rows[12], " ╰\u{f0b2a} new ╰─────────╯", "over the tree's last row");
         let reversed = |view: &mut View, x, y| {

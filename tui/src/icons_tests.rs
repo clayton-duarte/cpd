@@ -69,7 +69,8 @@ fn the_fold_arrows_and_the_terminator_are_the_chevrons() {
         assert_eq!(line.spans[0].style, palette::muted_text(), "the corner is muted");
         assert_eq!(line.spans[1].style, palette::toggle_text(), "the glyph and the word");
     }
-    for line in [&plain] {
+    {
+        let line = &plain;
         assert_eq!(line.spans.len(), 1);
         assert_eq!(line.spans[0].style, palette::muted_text(), "the terminator rows are muted");
     }

@@ -220,7 +220,7 @@ fn screen(ctx: &Ctx<TestBackend>) -> String {
 
 /// A temporary home with its config and its store's schema, which lives as long as the value.
 struct Home {
-    dir: tempfile::TempDir,
+    _dir: tempfile::TempDir,
     home: CpdHome,
 }
 
@@ -228,7 +228,7 @@ fn home() -> Home {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
     std::fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
-    Home { dir, home }
+    Home { _dir: dir, home }
 }
 
 impl Home {

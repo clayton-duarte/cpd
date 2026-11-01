@@ -191,11 +191,10 @@ fn title_of(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
             (status, _) => Span::styled(status.as_str(), palette::muted_text()),
         }),
     }
-    if pr.pull.is_none() {
-        if let Some(dot) = pr.lead_dot {
+    if pr.pull.is_none()
+        && let Some(dot) = pr.lead_dot {
             spans.extend([" ".into(), palette::dot_span(dot, frame, false)]);
         }
-    }
     spans.push(" ".into());
     if pr.status == PrStatus::Cancelled {
         // the whole title is muted: the PR is shown, counted nowhere
@@ -409,7 +408,7 @@ impl Boxes {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::buffer::CellWidth;
+    
     use ratatui::style::Modifier;
 
     use super::*;
@@ -552,7 +551,8 @@ mod tests {
 
     #[test]
     fn the_arrow_glyphs_are_one_cell_wide() {
-        for glyph in [TO] {
+        {
+            let glyph = TO;
             assert_eq!(Span::raw(glyph).width(), 1, "{glyph:?}");
         }
     }

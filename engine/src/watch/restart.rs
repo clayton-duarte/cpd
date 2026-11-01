@@ -272,7 +272,7 @@ fn perform(home: &CpdHome, config: &Config, store: &mut Store, log: &mut dyn FnM
 
 /// The cockpit on the installed tmux, and the engine again (`cpd tui` runs `watch --ensure`).
 fn rebuild_cockpit(home: &CpdHome) -> Result<(), CpdError> {
-    rebuild_cockpit_with(&*Ports::current().runner, &exe::started_as()?, home)
+    rebuild_cockpit_with(&*Ports::current().runner, exe::started_as()?, home)
 }
 
 /// [`rebuild_cockpit`] on `runner`, with `exe` the recorded path of cpd's own executable.

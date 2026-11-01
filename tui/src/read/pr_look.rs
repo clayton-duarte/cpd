@@ -31,7 +31,7 @@ pub fn pr_look(facts: &PrFacts) -> PrLook {
         PrState::Closed => ("closed", palette::pr_state(PrState::Closed)),
         PrState::Merged => ("merged", palette::pr_state(PrState::Merged)),
     };
-    let conflict = (facts.state == PrState::Open && facts.conflicting).then(|| match facts.update {
+    let conflict = (facts.state == PrState::Open && facts.conflicting).then_some(match facts.update {
         Some(UpdateState::Running) => palette::PR_UPDATING_RUNNING,
         Some(UpdateState::Queued) => palette::PR_UPDATING_QUEUED,
         None if facts.owned => palette::PR_CONFLICT_OWNED,

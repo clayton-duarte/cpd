@@ -120,6 +120,7 @@ pub struct Drawn {
 /// (commands.md §13.2), growing upward. The Inbox draws `inbox` from the item `inbox_scroll`, capped at the rows below the machine; its ages are taken at `now`, the spinner in the glyph cell of a `pr-ready` item whose pull
 /// request is in `merging` at `frame` (`palette::frame`). It draws no note (commands.md §17 "No notes"); the snapshot's error is
 /// [`draw_error`]'s.
+#[allow(clippy::too_many_arguments)] // draws every input of one frame; a signature change is out of scope
 pub fn draw(
     f: &mut Frame,
     area: Rect,

@@ -336,7 +336,7 @@ fn plan_cost(p: &PlanNode, width: usize) -> Option<Span<'static>> {
         return None;
     }
     let reserve = 1 + cost.width() + if c > 0 { c + 1 } else { 0 };
-    (width >= PLAN_ROW_FIXED + reserve + 1).then_some(cost)
+    (width > PLAN_ROW_FIXED + reserve).then_some(cost)
 }
 
 /// The cells of a Plan row that the name never takes: the branch, the dot and its space, and the one level of indent
@@ -524,7 +524,7 @@ pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -
 pub fn items_with_costs(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize, costs: bool) -> Vec<FlatRow> {
     let (archived, mut live): (Vec<&ContextNode>, Vec<&ContextNode>) = tree.contexts.iter().partition(|c| c.is_archived());
     // The live Contexts by tier then creation, newest first (hs-d686, pro-d48); the archived ones keep their read-model order after them.
-    live.sort_by(|a, b| a.dot.order_key(&a.created_at).cmp(&b.dot.order_key(&b.created_at)));
+    live.sort_by_key(|a| a.dot.order_key(&a.created_at));
     let mut rows: Vec<FlatRow> = Vec::new();
     let last_live = live.len().saturating_sub(1);
     for (i, c) in live.iter().enumerate() {
@@ -827,12 +827,9 @@ mod tests {
     const EXPAND: &str = "╰\u{F0B26} expand";
     /// The closing toggle `╰󰬬 collapse`.
     const COLLAPSE: &str = "╰\u{F0B2C} collapse";
-    /// The closing row of a Context with nothing to fold.
-    const TERMINATOR: &str = "╰󰬪";
     /// The closing row of a LIVE Context with nothing to fold (hs-d688).
     const NEW_PLAN: &str = "╰󰬪 new";
     /// The tree root's archive row, folded and expanded (hs-d698, hs-d707).
-    const ARCHIVE_DOWN: &str = "\u{F0B26} archive";
     const ARCHIVE_UP: &str = "\u{F0B2C} archive";
 
     /// A Plan with an idle Lead named `name` and no forks.
@@ -1059,8 +1056,8 @@ mod tests {
                 assert_eq!(cell(&buf, 1, 0), drawn_dot(dot), "its Context row too: {dot:?} in {phase:?}");
             }
         }
-        assert_eq!(drawn_dot(Dot::Red).0, format!("{NEEDS_YOU}"));
-        assert_eq!(drawn_dot(Dot::Idle), (format!("{IDLE}").to_owned(), palette::clickable_text().fg.unwrap()), "clickable text, 15");
+        assert_eq!(drawn_dot(Dot::Red).0, NEEDS_YOU.to_string());
+        assert_eq!(drawn_dot(Dot::Idle), (IDLE.to_string().to_owned(), palette::clickable_text().fg.unwrap()), "clickable text, 15");
     }
 
     #[test]
@@ -1099,13 +1096,13 @@ mod tests {
         let mut state = state_for(&t, &[], &[]);
         state.open(vec![ARCHIVE.to_owned()]);
         unfold(&mut state, &t, "zz");
-        for frame in 0..SPINNER.len() {
+        for (frame, spinner) in SPINNER.iter().enumerate() {
             let buf = render_at(&t, &mut state, 24, 12, false, frame);
             let grey = (String::from("\u{E3D5}"), color(Meaning::Nothing));
             assert_eq!(cell(&buf, 2, 1), grey, "frame {frame}: an archived Plan row, always the hollow ring {:?}", lines(&buf));
             assert_eq!(cell(&buf, 1, 5), grey, "frame {frame}: an archived Context row {:?}", lines(&buf));
             assert_eq!(cell(&buf, 2, 6), grey, "frame {frame}: its Plan row");
-            assert_eq!(buf[(1, 0)].symbol(), SPINNER[frame], "while the live Context row turns");
+            assert_eq!(buf[(1, 0)].symbol(), *spinner, "while the live Context row turns");
         }
     }
 
@@ -1116,7 +1113,7 @@ mod tests {
         let t = tree(vec![context("cc", vec![p])]);
         let mut state = state_for(&t, &[], &[]);
         let buf = render(&t, &mut state, 24, 4, false);
-        assert_eq!(cell(&buf, 2, 1), (format!("{NEEDS_YOU}").to_owned(), color(Meaning::Nothing)), "{:?}", lines(&buf));
+        assert_eq!(cell(&buf, 2, 1), (NEEDS_YOU.to_string().to_owned(), color(Meaning::Nothing)), "{:?}", lines(&buf));
     }
 
     #[test]

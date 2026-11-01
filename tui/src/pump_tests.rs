@@ -14,7 +14,7 @@ fn ms(n: u64) -> Duration {
 
 fn fake() -> (mpsc::Sender<Event>, Pump) {
     let (tx, rx) = mpsc::channel::<Event>();
-    let pump = Pump::new(move || rx.recv().map_err(|e| io::Error::new(io::ErrorKind::Other, e)));
+    let pump = Pump::new(move || rx.recv().map_err(io::Error::other));
     (tx, pump)
 }
 
@@ -169,7 +169,7 @@ fn a_waker_does_nothing_after_the_pump_is_dropped() {
 
 #[test]
 fn a_failing_input_source_posts_input_failed_and_ends_the_thread() {
-    let pump = Pump::new(|| Err(io::Error::new(io::ErrorKind::Other, "gone")));
+    let pump = Pump::new(|| Err(io::Error::other("gone")));
     assert!(matches!(pump.wait(None), Signal::InputFailed(_)));
 }
 

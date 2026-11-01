@@ -45,7 +45,7 @@ pub(super) fn run(engine: &mut Engine) {
 }
 
 fn archived_plans(engine: &mut Engine) -> Result<Vec<PlanId>, CpdError> {
-    engine.store.read(|conn| archived_with_drafts(conn))
+    engine.store.read(archived_with_drafts)
 }
 
 /// W2: one transaction per Plan, which writes nothing when the Plan has no draft left.

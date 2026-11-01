@@ -1,7 +1,6 @@
 //! The legend's `cost` row (pro-d179, commands.md legend paragraph, F6): the last row of the section
 //! `Jobs: Plan Pills And Context Counters`, after the `counters row` row.
 
-use ratatui::style::Style;
 use ratatui::text::Line;
 
 use super::legend::sections;
@@ -24,7 +23,7 @@ fn cost_row() -> Vec<Line<'static>> {
 }
 
 fn colour_of(line: &Line) -> Vec<Option<ratatui::style::Color>> {
-    line.spans.iter().map(|s| Style::from(s.style).fg.or(line.style.fg)).collect()
+    line.spans.iter().map(|s| s.style.fg.or(line.style.fg)).collect()
 }
 
 #[test]

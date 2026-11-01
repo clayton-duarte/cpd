@@ -32,7 +32,7 @@ fn draw(items: &[Item], shape: &Shape, width: u16, height: u16) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal
         .draw(|f| {
-            inbox::draw(f, Rect::new(0, 0, width, height), items, &shape, now(), &|_| None);
+            inbox::draw(f, Rect::new(0, 0, width, height), items, shape, now(), &|_| None);
         })
         .unwrap();
     terminal.backend().buffer().clone()

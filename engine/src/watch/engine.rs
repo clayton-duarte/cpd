@@ -164,12 +164,9 @@ impl Engine {
         if self.verdict_seen == Some(version) {
             return false;
         }
-        match self.store.read(|conn| Ok(cpd_core::store::verdict(conn)?.refusal().cloned())) {
-            Ok(refusal) => {
-                self.verdict_seen = Some(version);
-                self.outgrown = refusal;
-            }
-            Err(_) => {}
+        if let Ok(refusal) = self.store.read(|conn| Ok(cpd_core::store::verdict(conn)?.refusal().cloned())) {
+            self.verdict_seen = Some(version);
+            self.outgrown = refusal;
         }
         self.outgrown.is_some()
     }

@@ -305,8 +305,8 @@ pub fn stop(engine: &mut Engine, session: &SessionId) {
         Some(host) => Some(host.pid),
         None => read_pid(&engine.home, session),
     };
-    if let Some(pid) = pid {
-        if engine.ports.spawn.alive(pid) {
+    if let Some(pid) = pid
+        && engine.ports.spawn.alive(pid) {
             let _ = engine.ports.spawn.signal(pid, Signal::Term);
             let grace = Duration::from_secs(u64::from(engine.config.timeouts.pi_stop_seconds));
             let mut waited = Duration::ZERO;
@@ -318,7 +318,6 @@ pub fn stop(engine: &mut Engine, session: &SessionId) {
                 let _ = engine.ports.spawn.signal(pid, Signal::Kill);
             }
         }
-    }
     let _ = std::fs::remove_file(pid_path(&engine.home, session));
     // `held` drops here, releasing the lock (the host's own fd is already gone).
     drop(held);
