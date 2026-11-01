@@ -13,12 +13,12 @@ use serde_json::{Value, json};
 
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
-fn home(fx: &Fx) -> CpdHome {
+pub(super) fn home(fx: &Fx) -> CpdHome {
     CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap()
 }
 
 /// A Plan in `phase`, its Lead Session beside it; `archived` as a flag.
-fn plan(fx: &Fx, id: &str, phase: &str, archived: bool) {
+pub(super) fn plan(fx: &Fx, id: &str, phase: &str, archived: bool) {
     let locked = if matches!(phase, "grounding" | "plan") {
         "NULL"
     } else {
@@ -45,7 +45,7 @@ fn plan(fx: &Fx, id: &str, phase: &str, archived: bool) {
 }
 
 /// A PR of `plan` in `repo`: `waiting` for a Plan still being planned, else `dispatch`, `merged` or `cancelled`.
-fn pr(fx: &Fx, plan: &str, key: &str, repo: &str, status: &str) {
+pub(super) fn pr(fx: &Fx, plan: &str, key: &str, repo: &str, status: &str) {
     let none = "NULL, NULL, NULL, NULL";
     let (worktree, started, pull, merged) = match status {
         "waiting" | "cancelled" => ("NULL", "NULL", none.to_owned(), "NULL"),
@@ -70,7 +70,7 @@ fn pr(fx: &Fx, plan: &str, key: &str, repo: &str, status: &str) {
 }
 
 /// A Job of PR `pr` in `status` touching `touches`.
-fn job(fx: &Fx, plan: &str, pr: &str, key: &str, status: &str, touches: &[&str]) {
+pub(super) fn job(fx: &Fx, plan: &str, pr: &str, key: &str, status: &str, touches: &[&str]) {
     fx.env.sql(
         &format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,

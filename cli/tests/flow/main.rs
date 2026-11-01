@@ -56,6 +56,7 @@ mod plan_delete;
 mod plan_new_by_user;
 mod plan_new_tier;
 mod plan_outline;
+mod plan_lint;
 mod plan_overlap;
 mod plan_render_cancelled;
 mod plan_render_waiting;
