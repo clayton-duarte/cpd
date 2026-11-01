@@ -13,8 +13,6 @@ The levels, the cpd objects and their roles. The levels are Jira's words, used a
 | (none) | Workflow | Lead |
 | Task | Job | Worker |
 
-Transitional note: until the rename lands, the CLI (`cpd pr add`, `--pr`), the tables (`prs`, `pr_needs`), the Events and the docs still call a Workflow "PR", and the cockpit's third column is still titled Deploy; this glossary's words are the target. The rename deletes this note.
-
 The one rule: **PR means only the pull request** on GitHub. Plan > Workflows > Jobs. History keeps the old words: ADRs, the archive, research, old Context records and applied migrations are never rewritten.
 
 An entry is a bold term, a parenthesis with its kind and the Context record that decided it, a colon, the definition, and an `_Avoid_:` line when words are to be avoided. The kinds are entity, phase, stage, step, state, role, mechanism, policy, other and retired. A definition says what a thing is, never how a command works: the contract and [commands.md](docs/commands.md) own that, and an entry points to them. An Avoid word that is also a command is meant as a noun. A word with several senses has one entry per sense, each with a qualified name.
