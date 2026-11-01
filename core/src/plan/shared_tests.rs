@@ -2,7 +2,12 @@ use super::shared::is_shared;
 
 #[test]
 fn is_shared_names_the_four_lockfiles_at_any_depth() {
-    for name in ["Cargo.lock", "pnpm-lock.yaml", "package-lock.json", "yarn.lock"] {
+    for name in [
+        "Cargo.lock",
+        "pnpm-lock.yaml",
+        "package-lock.json",
+        "yarn.lock",
+    ] {
         for dir in ["", "core/", "a/b/c/", ".cpd/x/"] {
             let path = format!("{dir}{name}");
             assert!(is_shared(&path), "{path}");
@@ -13,8 +18,17 @@ fn is_shared_names_the_four_lockfiles_at_any_depth() {
 #[test]
 fn is_shared_is_false_for_other_names() {
     for path in [
-        "Cargo.toml", "Cargo.lock.bak", "my-Cargo.lock", "lock", "bun.lockb", "go.sum",
-        "cargo.lock", "package.json", "",
+    for path in [
+        "Cargo.toml",
+        "Cargo.lock.bak",
+        "my-Cargo.lock",
+        "lock",
+        "bun.lockb",
+        "go.sum",
+        "cargo.lock",
+        "package.json",
+        "",
+    ] {
     ] {
         assert!(!is_shared(path), "{path:?}");
     }

@@ -1050,3 +1050,59 @@ fn worker_runner_durable_fails_when_node_is_older_than_22_19_0() {
         );
     }
 }
+
+// ------------------------------------------------------------ host_runner
+
+/// A live durable Session (`runner = 'durable'`, `archived_at` null) of `role` (`lead` or `manager`), with a Context
+/// for it: the row `host_runner` must see under an otherwise-`pi` config (contract §6.19).
+fn live_durable_session(env: &TestEnv, role: &str) {
+    open_store(env)
+        .write("fixture", |tx| {
+            tx.execute_batch(&format!(
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Context', 't', 'hs');
+                 INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, runner)
+                   VALUES ('durable-{role}', '{role}', 'ctx', NULL, '{role}', '/repo', 'O3', 'idle', 't', 't', 'durable');"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// The durable host file the check looks for under the adapter `write_config` made.
+fn host_file(fx: &Fx) -> std::path::PathBuf {
+    fx.env.root().join("adapter/durable-host/main.ts")
+}
+
+#[test]
+fn host_runner_durable_fails_for_a_live_durable_lead_under_pi_config() {
+    let fx = healthy();
+    live_durable_session(&fx.env, "lead");
+    assert!(!host_file(&fx).exists());
+    let run = doctor(&fx);
+    assert_doctor_failed(&run);
+    let c = assert_fails(&run, "host_runner", "error", "main.ts");
+    assert!(
+        c["message"]
+            .as_str()
+            .unwrap()
+            .contains(host_file(&fx).to_str().unwrap()),
+        "names the file it looked for: {c}"
+    );
+}
+
+#[test]
+fn host_runner_durable_fails_for_a_live_durable_manager_under_pi_config() {
+    let fx = healthy();
+    live_durable_session(&fx.env, "manager");
+    assert!(!host_file(&fx).exists());
+    let run = doctor(&fx);
+    assert_doctor_failed(&run);
+    let c = assert_fails(&run, "host_runner", "error", "main.ts");
+    assert!(
+        c["message"]
+            .as_str()
+            .unwrap()
+            .contains(host_file(&fx).to_str().unwrap()),
+        "names the file it looked for: {c}"
+    );
+}

@@ -46,3 +46,10 @@ tui/src/tree/folds.rs 1  # m-units: sleep or wall-clock wait
 tui/src/tree/view.rs 8  # m-units: sleep or wall-clock wait
 pi/test/secret-approve.test.ts 3  # m-pi: new debt of PR #311 (cpd secret) landed before the ratchet; lower it when the file waits on the fact
 pi/test/secretguard.test.ts 1  # m-pi: new debt of PR #311 (cpd secret) landed before the ratchet; lower it when the file waits on the fact
+engine/src/watch/poll_run_tests.rs 2  # m-engine: Instant::now() brackets a blocked poll's end time against the real clock; it waits on nothing
+engine/src/watch/wake_tests.rs 7  # m-engine: Instant::now() is the origin of the wake-time arithmetic (next_tick), a frame clock, no wait
+tui/src/background_tests.rs 1  # m-tui-t: Instant::now() is the due time handed to the pump; it waits on nothing
+tui/src/pace_tests.rs 2  # m-tui-t: a real-clock deadline of 10 s that bounds a spin on yield_now until two reads arrive
+tui/src/plan/needs_tests.rs 5  # m-tui-t: Instant::now() is the frame clock passed to needs(); it waits on nothing
+tui/src/pump_tests.rs 15  # m-tui-t: Instant::now() is the origin of the schedule's frame clock; it waits on nothing
+tui/src/widgets/needs_tests.rs 5  # m-tui-t: Instant::now() is the frame clock passed to the needs widget; it waits on nothing

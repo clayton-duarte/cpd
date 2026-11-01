@@ -515,12 +515,13 @@ Effects: **rows**, one transaction: `archived_at = NULL` on the Context and ever
 ### 3.11 `context manager`
 
 ```
-cpd context manager [--context <c>] [--by-user]
+cpd context manager [--context <c>] [--by-user] [--runner <pi|durable>]
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--by-user` | (hs-d542 A2) when registering a new Manager, stores the flag on the Session and writes no first message (§1.4); `plan new` and `context manager` use it (§4.1); omit it and the Manager starts with its first message, as today |
+| `--runner <pi|durable>` | the new Manager's runner; default the config key `manager_runner`, default `pi` (contract §6.19). Only on registration: a resume keeps the stored `sessions.runner` and a `--runner` that differs from it is refused (`usage`, exit 2) |
 
 Gets the Context's **Manager** (B3-A1, B3-A2; CONTEXT.md "Manager"): registers and starts it when the Context has none, starts it again when it is stopped. The Context is `--context`, else the selected Plan's (§1.3).
 
@@ -529,10 +530,11 @@ Gets the Context's **Manager** (B3-A1, B3-A2; CONTEXT.md "Manager"): registers a
 | the Context exists | `context_not_found` | 4 |
 | the Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
 | the cockpit's tmux session exists when a pane must be started; `details.next` = `cpd tui` | `no_cockpit` | 3 |
+| `--runner` is neither `pi` nor `durable`, or a `--runner` on an existing Manager differs from the stored `sessions.runner` (the message names the stored runner) | `usage` | 2 |
 
 Effects, by the state of the Context's live (not archived) Manager Session:
-- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>-manager`; `cwd` = the realpath of the caller's cwd; `tier` = config `manager_tier`, default `O5`; `runner` = config `manager_runner`, default `pi`, contract §6.19; `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then the Context as `plan new` gives it (§4.1 step 3; contract §4.6 "Consumers", the same function): the digest and at most 20 uncurated records raw. **For a durable Manager** (`runner` `durable`, contract §6.19) the tmux step and its `session-moved` are skipped: the new Session is left live and `stopped` and the engine's hosts step starts its host at the next tick, with a null `pane`/`window` in the output.
-- **`stopped` with no pane:** the tmux step alone, in the stored `cwd`: `session run` resumes pi on its session file (`pi --session <file>`, §6.5), with no first message. A durable Manager is started by the engine's hosts step instead, not here.
+- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>-manager`; `cwd` = the realpath of the caller's cwd; `tier` = config `manager_tier`, default `O5`; `runner` = the `--runner` flag, else config `manager_runner`, default `pi` (contract §6.19); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then the Context as `plan new` gives it (§4.1 step 3; contract §4.6 "Consumers", the same function): the digest and at most 20 uncurated records raw. **For a durable Manager** (`runner` `durable`, contract §6.19) the tmux step and its `session-moved` are skipped: the new Session is left live and `stopped` and the engine's hosts step starts its host at the next tick, with a null `pane`/`window` in the output.
+- **`stopped` with no pane:** the tmux step alone, in the stored `cwd`: `session run` resumes pi on its session file (`pi --session <file>`, §6.5), with no first message. A durable Manager is started by the engine's hosts step instead, not here; a resume keeps the stored `sessions.runner` (it never changes after creation, contract §6.19).
 - **Otherwise** (it has a pane): nothing.
 
 The command never moves the chat slot (hs-d103); `session open <manager>` does (§10.4).
@@ -816,7 +818,7 @@ A Plan (§2.2) and its phases (§3.1). Replaces cpd 1's `workflow` group (D3) an
 ### 4.1 `plan new`
 
 ```
-cpd plan new <id> --context <c> --title <text> [--jira <key>] [--name <name>] [--brief-file <file>] [--by-user] [--tier <T>]
+cpd plan new <id> --context <c> --title <text> [--jira <key>] [--name <name>] [--brief-file <file>] [--by-user] [--tier <T>] [--runner <pi|durable>]
 ```
 
 A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4) and its Lead starts in the caller's cwd, the directory `plan new` runs from (usually `~`; §6.4). `--repo` and `--base` are gone: either is `usage` (exit 2).
@@ -831,6 +833,7 @@ A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4) and
 | `--brief-file <file>` | the brief for the Lead (B3-A4): written as a Context record of kind `brief` and put into the Lead's first message in full |
 | `--by-user` | (hs-d542 A2) when registering a new Lead, stores the flag on the Session and writes no first message (§1.4); `plan new` and `context manager` use it (§3.10); omit it and the Lead starts with its first message, as today |
 | `--tier <T>` | the Lead's Tier (contract §2.2, §9): a Tier in the Tier flag syntax (§5: `O`, `S` or `H` with an effort, or `GX`), checked by the Lead rule (below). Omitted, the Tier is `review_lead_tier` when `--context` is the non-empty `inbox.review_context` (contract §8.2), else `lead_tier` (Effects, step 1) |
+| `--runner <pi|durable>` | the new Lead's runner; default the config key `lead_runner`, default `pi` (contract §6.19) |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -840,9 +843,10 @@ A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4) and
 | `--tier` is letter G (`GX`) or effort 5, the Lead rule (contract §9); `details` `{tier, allowed: "O0-O4, S0-S4, H0-H4", rule: "hs-d506, hs-d562"}`, message `Tier <T> is not allowed for a Lead: Leads use only the Tiers O0-O4, S0-S4, H0-H4, never effort 5 and never G (hs-d506, hs-d562).` | `tier_not_allowed` | 2 |
 | no Plan with this id, unless every flag matches it (then the result is `already`) | `plan_exists` | 3 |
 | the Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
+| `--runner` is neither `pi` nor `durable` | `usage` | 2 |
 
 Effects, in this order:
-1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier` = the Lead's Tier (the `--tier` flag; else `review_lead_tier` when the Context is the non-empty `inbox.review_context`; else `lead_tier`; contract §2.2); `runner` = config `lead_runner`, default `pi` (contract §6.19); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `prs` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
+1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier` = the Lead's Tier (the `--tier` flag; else `review_lead_tier` when the Context is the non-empty `inbox.review_context`; else `lead_tier`; contract §2.2); `runner` = the `--runner` flag, else config `lead_runner`, default `pi` (contract §6.19); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `prs` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
 2. **Context records:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}` (`jira` omitted when null); **Event** `context-record`. With `--brief-file`, a second record of kind `brief` (letter `b`), `text` = the file's text, `plan` = `{id, machine}`; **Event** `context-record`.
 3. **First message**, when `by_user` is 0, written to `run/<id>/lead-message.md` (contract §4.6 "Consumers", hs-d655): a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then the pointer line:
    ```
@@ -860,7 +864,7 @@ When the cockpit session is missing, plan new creates it with the new Lead's par
  "record": "hs-p4"}
 ```
 
-Idempotent: yes. With the same flags it returns `"already": true` and redoes any step that did not happen: the `plan` record when the Context has none for this Plan, the `brief` record when `--brief-file` is given and the Context has none for this Plan and step 4 when the Lead is `stopped` with no pane (in the stored `cwd`). The caller's cwd is not a flag: a rerun from another directory is still `already` and keeps the stored `cwd`. `--tier` is one of 'the same flags' only when it equals the stored `sessions.tier` of the Plan's Lead session: then the result is `already`, as above; a different Tier is `plan_exists` (exit 3, as for the other flags). The `--tier` checks of the table run first, so a refused Tier is refused whatever the Plan's state. A rerun without `--tier` compares no Tier, whatever the Lead's stored Tier is. Different flags: `plan_exists`. The `--by-user` flag is part of 'the same flags': a rerun with or without it when the Plan exists is `plan_exists` (hs-d542 A1).
+Idempotent: yes. With the same flags it returns `"already": true` and redoes any step that did not happen: the `plan` record when the Context has none for this Plan, the `brief` record when `--brief-file` is given and the Context has none for this Plan and step 4 when the Lead is `stopped` with no pane (in the stored `cwd`). The caller's cwd is not a flag: a rerun from another directory is still `already` and keeps the stored `cwd`. `--tier` is one of 'the same flags' only when it equals the stored `sessions.tier` of the Plan's Lead session: then the result is `already`, as above; a different Tier is `plan_exists` (exit 3, as for the other flags). The `--runner` flag is also one of 'the same flags': a rerun of an existing Plan with a different `--runner` is `plan_exists` (exit 3), as for a different `--title`. The `--tier` checks of the table run first, so a refused Tier is refused whatever the Plan's state. A rerun without `--tier` compares no Tier, whatever the Lead's stored Tier is. Different flags: `plan_exists`. The `--by-user` flag is part of 'the same flags': a rerun with or without it when the Plan exists is `plan_exists` (hs-d542 A1).
 
 ### 4.2 `plan list`
 
@@ -3896,7 +3900,7 @@ Checks, in order:
 | `holographic` | error | when `context_engine_enabled = true`, resolve the bridge script and the Python interpreter from the config (or their defaults, §8.2), run `{"cmd":"ping"}` under `context_engine_timeout_ms` and report the engine version; when `context_engine_enabled = false`, passes with `"disabled": true` (hs-d677); no index read or build |
 | `pi_adapter` | error | the `pi_adapter` directory has a `package.json` |
 | `worker_runner` | error | for `pi`, passes without looking at anything; for `durable`, passes when `<pi_adapter>/durable-worker/main.ts` exists and pi's Node is at least 22.19.0 (the `engines.node` of the runner's package, contract §6.12): `found` is the Node version, `expected` is `>= 22.19.0` (contract §3.4 "The Worker runner and its seam") |
-| `host_runner` | error | when `lead_runner` and `manager_runner` are both `pi`, passes without looking at anything; when either is `durable`, passes when `<pi_adapter>/durable-host/main.ts` exists and pi's Node is at least 22.19.0 (contract §6.19): `found` is the Node version, `expected` is `>= 22.19.0` |
+| `host_runner` | error | when `lead_runner` and `manager_runner` are both `pi` and the store has no live durable Session (a `lead` or `manager` row with `runner = 'durable'` and `archived_at` null), passes without looking at anything; when either key is `durable` or such a live durable Session exists, passes when `<pi_adapter>/durable-host/main.ts` exists and pi's Node is at least 22.19.0 (contract §6.19): `found` is the Node version, `expected` is `>= 22.19.0` |
 | `lead_packages` | warn | reports, for each `lead_pi_packages` entry and the adapter, whether a Lead gets it by `-e` or from which settings file (§6.5); warns when an entry is neither declared nor resolvable |
 | `watch` | warn | the engine runs when any Plan is in `dispatch` or `deploy` |
 | `tmux_restart` | warn | present only while `run/tmux-restart.pending` exists: it passes (`message` "tmux restart pending", `found` the times and versions) while the restart waits, a planned hold of E3 (contract §3.7) and not a failure; it fails, with the reason, when the restart failed (§13.3) |

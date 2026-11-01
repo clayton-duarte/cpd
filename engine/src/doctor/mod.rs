@@ -24,6 +24,7 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host::limit::limit;
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 
 /// Each probe's deadline (commands.md §14.1): `doctor` is run when something is wrong,
@@ -79,6 +80,22 @@ pub fn run(_args: Args, zone: &cpd_core::clock::TimeZone) -> Result<Output, CpdE
         ),
     };
     checks.push(store_check);
+    // Whether the store holds a live durable Session (contract §6.19): the `host_runner` check must look even when
+    // both config keys are `pi`. False when the store is unavailable, like the other 'not checked' paths.
+    let durable_session = store
+        .as_mut()
+        .and_then(|store| {
+            store
+                .read(|conn| {
+                    Ok(conn.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM sessions WHERE role IN ('lead', 'manager') AND runner = 'durable' AND archived_at IS NULL)",
+                        [],
+                        |r| r.get::<_, bool>(0),
+                    )?)
+                })
+                .ok()
+        })
+        .unwrap_or(false);
     checks.push(state::tamper(store.as_mut()));
     checks.extend(tools::tools());
     checks.push(tools::gh_auth());
@@ -94,11 +111,9 @@ pub fn run(_args: Args, zone: &cpd_core::clock::TimeZone) -> Result<Output, CpdE
         Severity::Error,
         &worker_runner::worker_runner,
     ));
-    checks.push(with_config(
-        "host_runner",
-        Severity::Error,
-        &host_runner::check,
-    ));
+    checks.push(with_config("host_runner", Severity::Error, &|config| {
+        host_runner::check_with(config, durable_session, &*Ports::current().runner)
+    }));
     checks.push(with_config(
         "lead_packages",
         Severity::Warn,

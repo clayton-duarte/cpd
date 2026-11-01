@@ -135,7 +135,13 @@ fn rig(changed: &[(&str, &str)], base_ahead: &[(&str, &str)], brings_base: bool)
         let mut ahead = BASE.to_vec();
         ahead.extend(base_ahead.iter().copied());
         let mut u = universe.lock().unwrap();
-        let tip = commit(&mut u, repo.id(), &[base.clone()], &ahead, "the base moved");
+        let tip = commit(
+            &mut u,
+            repo.id(),
+            std::slice::from_ref(&base),
+            &ahead,
+            "the base moved",
+        );
         u.set_ref(repo.id(), "refs/heads/main", &tip, "the base moved");
     }
     // The Attempt is linear: its branch is the Lead Branch, and its commit is the Lead tip.

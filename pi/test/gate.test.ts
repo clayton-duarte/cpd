@@ -11,7 +11,7 @@ test("the verify script runs the portability check and pi-check, in the document
   // The tests run in a scratch TMPDIR removed after them (hygiene.md), so the steps are not split on every `&&`.
   assert.equal(
     pkg.scripts["verify:steps"],
-    ["migrations", "portable", "typecheck", "pi", "build", "web", "node", "rust"].map((s) => (s === "typecheck" ? "pnpm run typecheck" : `pnpm run verify:${s}`)).join(" && "),
+    ["migrations", "portable", "typecheck", "pi", "fmt", "build", "clippy", "web", "node", "rust"].map((s) => (s === "typecheck" ? "pnpm run typecheck" : `pnpm run verify:${s}`)).join(" && "),
   );
   assert.equal(
     pkg.scripts["verify:web"],
@@ -26,6 +26,8 @@ test("the verify script runs the portability check and pi-check, in the document
   // The tests run in a scratch TMPDIR removed after them (hygiene.md).
   assert.equal(pkg.scripts["verify:node"], '(t=$(mktemp -d) && TMPDIR=$t pnpm test; s=$?; rm -rf "$t"; exit $s)');
   assert.equal(pkg.scripts["verify:pi"], "scripts/pi-check.sh node_modules/.bin/pi");
+  assert.equal(pkg.scripts["verify:fmt"], "scripts/cargo.sh fmt --all --check");
+  assert.equal(pkg.scripts["verify:clippy"], "scripts/cargo.sh clippy --workspace --all-targets -- -D warnings");
   assert.equal(pkg.scripts["verify:build"], "export CPD_COMMIT=$(git rev-parse --short HEAD) && scripts/cargo.sh nextest run --workspace --no-run");
   assert.equal(
     pkg.scripts["verify:rust"],
@@ -43,7 +45,7 @@ test("the CI workflow runs the stages of verify:steps, in order, as named steps"
   assert.deepEqual(workflow, gate);
   assert.match(ci, /- name: Dependencies\n\s+run: scripts\/pnpm-fresh\.sh\s*\n/);
   const names = [...ci.matchAll(/^\s*- name: (.+?)\s*$/gm)].map((m) => m[1]);
-  const wanted = ["Dependencies", "Migrations frozen", "Portability", "Typecheck", "pi check", "Rust build", "Web", "Node tests", "Rust tests"];
+  const wanted = ["Dependencies", "Migrations frozen", "Portability", "Typecheck", "pi check", "Format", "Rust build", "Clippy", "Web", "Node tests", "Rust tests"];
   assert.deepEqual(names.filter((n) => wanted.includes(n)), wanted);
 });
 

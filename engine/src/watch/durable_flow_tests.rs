@@ -277,3 +277,92 @@ fn flow_plan_new_to_archive_with_a_mocked_host() {
         "an archived Session starts no host"
     );
 }
+
+/// `flow_fx` with empty config: both `lead_runner` and `manager_runner` are unset and default to `pi`. The fake
+/// ports are the same (`ManualClock`, `FakeRunner`, `FakeSpawn`, `FakeHostConn`): no socket, no pi-durable, no
+/// process.
+fn pi_config_fx() -> (Fx, Arc<FakeSpawn>) {
+    let mut fx = Fx::new("");
+    let clock = Arc::new(ManualClock::new());
+    let spawn = Arc::new(FakeSpawn::new());
+    fx.engine.ports = Ports {
+        clock: clock.clone(),
+        runner: Arc::new(FakeRunner::new((*clock).clone())),
+        spawn: spawn.clone(),
+        host_conn: Arc::new(FakeHostConn::new()),
+        ..Ports::real()
+    };
+    // SAFETY: nextest runs one test per process; this is the only test in it.
+    unsafe {
+        std::env::set_var("CPD_HOME", fx.engine.home.root());
+        std::env::remove_var("CPD_SESSION");
+    }
+    (fx, spawn)
+}
+
+/// The runner is authoritative to the engine (contract §6.19, A3): with both config keys defaulting to `pi`, a
+/// `--runner durable` Lead is left `stopped` with no pane and no host by `plan new`, and the engine's `hosts` step
+/// starts the host because `sessions.runner` says `durable`, not because the config does.
+#[test]
+fn a_plan_new_runner_flag_starts_the_host_under_pi_config() {
+    let (mut fx, spawn) = pi_config_fx();
+    let ports = fx.engine.ports.clone();
+
+    Ports::scope(&ports, || {
+        cpd_core::plan::run(plan(&[
+            "new",
+            "flag",
+            "--context",
+            "ctx",
+            "--title",
+            "Flag",
+            "--runner",
+            "durable",
+        ]))
+    })
+    .unwrap();
+    let lead: String = fx.query("SELECT lead_session FROM plans WHERE id = 'flag'");
+    let (state, runner, pane): (String, String, Option<String>) = fx
+        .engine
+        .store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT state, runner, tmux_pane FROM sessions WHERE id = ?1",
+                [&lead],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(
+        (state.as_str(), runner.as_str(), pane),
+        ("stopped", "durable", None),
+        "a durable Lead starts with no pane under pi config"
+    );
+    assert!(
+        spawn.launches().is_empty(),
+        "plan new starts no host; the engine's hosts step does"
+    );
+
+    hosts::run(&mut fx.engine);
+    let launches = spawn.launches();
+    assert_eq!(launches.len(), 1, "one host: {launches:?}");
+    let launch = &launches[0];
+    assert!(
+        launch
+            .args
+            .first()
+            .is_some_and(|a| a.ends_with("durable-host/main.ts")),
+        "{:?}",
+        launch.args
+    );
+    assert!(
+        launch.args.iter().any(|a| a == "--session"),
+        "the host launch carries --session: {:?}",
+        launch.args
+    );
+    assert!(
+        launch.args.iter().any(|a| a == &lead),
+        "the launch names the Session: {:?}",
+        launch.args
+    );
+}
