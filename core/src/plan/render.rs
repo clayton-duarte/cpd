@@ -374,7 +374,7 @@ fn overlaps_section(out: &mut Vec<String>, overlaps: &[Overlap]) {
 /// What the document opens with (commands.md §4.5, §4.6; hs-d291): `plan.md`
 /// is headed by the Plan.
 pub enum Heading<'a> {
-    Plan { title: &'a str },
+    Plan { title: &'a str, plan: &'a str },
 }
 
 /// The plan markdown for `prs` and `jobs` (every one of the Plan); `cancelled`
@@ -386,7 +386,7 @@ pub fn markdown(heading: &Heading, context: &str, phase: &str, prs: &[PrRow], jo
     let shown = Shown { all_jobs: jobs, display, anchors: Anchors::new(jobs) };
     let (cancelled, prs): (Vec<&PrRow>, Vec<&PrRow>) = prs.iter().partition(|p| p.status == "cancelled");
     let mut out = match heading {
-        Heading::Plan { title } => vec![format!("# Plan: {}", inline(title)), String::new()],
+        Heading::Plan { title, .. } => vec![format!("# Plan: {}", inline(title)), String::new()],
     };
     out.extend([format!("Context: `{context}` · Phase: `{phase}`"), String::new()]);
     let later = !matches!(phase, "grounding" | "plan");
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn a_plan_without_prs_says_so() {
-        assert_eq!(markdown(&Heading::Plan { title: "T" }, "ctx", "plan", &[], &[], &[], "S2", &Display::default()), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n");
+        assert_eq!(markdown(&Heading::Plan { title: "T", plan: "p1" }, "ctx", "plan", &[], &[], &[], "S2", &Display::default()), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n");
     }
 
     fn pr(key: &str, needs: &[&str]) -> PrRow {
@@ -508,6 +508,7 @@ mod tests {
             cancel_requested_at: None,
             failed_cause: None,
             merged_sha: None,
+            summary: None,
             created_at: "t".into(),
             needs: Vec::new(),
         }
@@ -515,7 +516,7 @@ mod tests {
 
     /// The Plan `T` as `markdown` renders it for `prs` and `jobs` alone: no needs of other Plans, nothing superseded.
     fn plain(phase: &str, prs: &[PrRow], jobs: &[Job], open_tier: &str) -> String {
-        markdown(&Heading::Plan { title: "T" }, "ctx", phase, prs, jobs, &[], open_tier, &Display::of(prs))
+        markdown(&Heading::Plan { title: "T", plan: "p1" }, "ctx", phase, prs, jobs, &[], open_tier, &Display::of(prs))
     }
 
     fn titled_pr(key: &str, status: &str) -> PrRow {

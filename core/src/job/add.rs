@@ -201,6 +201,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
         cancel_requested_at: None,
         failed_cause: None,
         merged_sha: None,
+        summary: None,
         created_at: String::new(),
         needs,
     };
@@ -284,6 +285,7 @@ fn decide_explore(conn: &Connection, plan: &PlanId, wanted: &Wanted, phase: &str
         cancel_requested_at: None,
         failed_cause: None,
         merged_sha: None,
+        summary: None,
         created_at: String::new(),
         needs: wanted.needs.clone(),
     };

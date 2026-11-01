@@ -64,6 +64,8 @@ pub struct Job {
     pub cancel_requested_at: Option<String>,
     pub failed_cause: Option<String>,
     pub merged_sha: Option<String>,
+    /// An explore Job's bounded summary (`jobs.summary`): set exactly when an explore Job is `merged`.
+    pub summary: Option<String>,
     pub created_at: String,
     /// Keys of the Jobs it needs, sorted.
     pub needs: Vec<String>,
@@ -226,6 +228,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 cancel_requested_at,
                 failed_cause,
                 merged_sha,
+                summary: None, // STUB: the implementation Job reads it
                 created_at,
             })
         })
@@ -337,6 +340,7 @@ mod tests {
             cancel_requested_at: None,
             failed_cause: None,
             merged_sha: None,
+            summary: None,
             created_at: "t".into(),
             needs: needs.iter().map(|n| (*n).to_owned()).collect(),
         }
