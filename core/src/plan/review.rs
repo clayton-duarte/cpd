@@ -4,15 +4,13 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::display::Display;
 use super::fingerprint::{load_prs, plan_fingerprint};
 use super::jobs::{self, Job};
-use super::outline::Outline;
 use super::overlap::{self, Overlap};
-use super::parked;
 use super::prs::PrRow;
 use super::row::{self, Phase, PlanRow};
 use super::{DecideArgs, Env, RenderArgs, ReviewArgs, read_text_file, render, summary, write_file};
@@ -370,33 +368,21 @@ pub fn close_reviews(
 /// `outline_incomplete` (`details.prs`, in key order). Before anything is written.
 fn check_outline(id: &PlanId, s: &Snapshot) -> Result<(), CpdError> {
     let Some(outline) = &s.plan.outline else {
-        return Err(outline_missing(id));
+        return Err(CpdError::new(
+            ErrorCode::OutlineMissing,
+            format!(
+                "Plan {id} has no outline: write what was settled with the User, then ask again."
+            ),
+        )
+        .with("plan", id.as_str())
+        .with("next", "cpd plan outline --file <outline.json>"));
     };
-    outline_incomplete(id, outline, &s.prs, &s.jobs).map_or(Ok(()), Err)
-}
-
-/// `outline_missing`: the Plan has no outline.
-pub(super) fn outline_missing(id: &PlanId) -> CpdError {
-    CpdError::new(
-        ErrorCode::OutlineMissing,
-        format!("Plan {id} has no outline: write what was settled with the User, then ask again."),
-    )
-    .with("plan", id.as_str())
-    .with("next", "cpd plan outline --file <outline.json>")
-}
-
-/// `outline_incomplete`: a live PR with a draft Job has no `done_when` (`details.prs`, in key order).
-pub(super) fn outline_incomplete(
-    id: &PlanId,
-    outline: &Outline,
-    prs: &[PrRow],
-    jobs: &[Job],
-) -> Option<CpdError> {
-    let mut without: Vec<&str> = prs
+    let mut without: Vec<&str> = s
+        .prs
         .iter()
         .filter(|p| {
             p.status != "cancelled"
-                && jobs
+                && s.jobs
                     .iter()
                     .any(|j| j.is_draft() && j.pr_str() == p.key.as_str())
         })
@@ -404,17 +390,15 @@ pub(super) fn outline_incomplete(
         .filter(|key| !outline.done_when.contains_key(*key))
         .collect();
     if without.is_empty() {
-        return None;
+        return Ok(());
     }
     without.sort();
-    Some(
-        CpdError::new(
-            ErrorCode::OutlineIncomplete,
-            format!("The outline of Plan {id} has no done_when for the PRs {}: add them with cpd plan outline, then ask again.", without.join(", ")),
-        )
-        .with("plan", id.as_str())
-        .with("prs", without),
+    Err(CpdError::new(
+        ErrorCode::OutlineIncomplete,
+        format!("The outline of Plan {id} has no done_when for the PRs {}: add them with cpd plan outline, then ask again.", without.join(", ")),
     )
+    .with("plan", id.as_str())
+    .with("prs", without))
 }
 
 pub(super) fn no_draft_jobs(id: &PlanId) -> CpdError {
@@ -429,26 +413,16 @@ pub(super) fn no_draft_jobs(id: &PlanId) -> CpdError {
 /// `draft_incomplete`, `details.jobs` = `[{key, missing}]` in key order. A stub
 /// cannot be approved, so neither `plan review` nor `plan lock` goes on.
 pub(super) fn check_drafts_complete(
-    conn: &Connection,
+    _conn: &Connection,
     id: &PlanId,
     jobs: &[Job],
 ) -> Result<(), CpdError> {
-    let waiting = parked::waiting_set(conn, id, jobs)?;
-    drafts_incomplete(id, jobs, &waiting).map_or(Ok(()), Err)
-}
-
-/// The pure part of [`check_drafts_complete`]: `waiting` Jobs are exempt.
-pub(super) fn drafts_incomplete(
-    id: &PlanId,
-    jobs: &[Job],
-    waiting: &BTreeSet<String>,
-) -> Option<CpdError> {
     let mut stubs: Vec<&Job> = jobs
         .iter()
-        .filter(|j| j.is_draft() && !waiting.contains(j.key.as_str()) && !j.missing().is_empty())
+        .filter(|j| j.is_draft() && !j.missing().is_empty())
         .collect();
     if stubs.is_empty() {
-        return None;
+        return Ok(());
     }
     stubs.sort_by(|a, b| a.key.cmp(&b.key));
     let keys: Vec<&str> = stubs.iter().map(|j| j.key.as_str()).collect();
@@ -456,17 +430,15 @@ pub(super) fn drafts_incomplete(
         .iter()
         .map(|j| json!({"key": j.key, "missing": j.missing()}))
         .collect();
-    Some(
-        CpdError::new(
-            ErrorCode::DraftIncomplete,
-            format!(
-                "Plan {id} has draft Jobs without their Tier or Spec: {}. Complete each with cpd job edit <key> --tier <T> --spec <file>, or cancel it, then ask again.",
-                keys.join(", ")
-            ),
-        )
-        .with("plan", id.as_str())
-        .with("jobs", listed),
+    Err(CpdError::new(
+        ErrorCode::DraftIncomplete,
+        format!(
+            "Plan {id} has draft Jobs without their Tier or Spec: {}. Complete each with cpd job edit <key> --tier <T> --spec <file>, or cancel it, then ask again.",
+            keys.join(", ")
+        ),
     )
+    .with("plan", id.as_str())
+    .with("jobs", listed))
 }
 
 /// `plan decide` (§4.7). In a phase after `plan`, a current approval also
@@ -505,7 +477,6 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
         // The phase and the drafts as they are now: an approval queues what it covered only.
         let phase = row::load(tx, &id)?.phase;
         let all = jobs::load(tx, &id)?;
-        let waiting = parked::waiting_set(tx, &id, &all)?;
         let current = review.fingerprint == plan_fingerprint(tx, &id)?;
         let changed = tx.execute(
             "UPDATE plan_reviews SET status = ?1, feedback = ?2, decided_at = (SELECT at FROM txns WHERE id = cpd_txn())
@@ -519,7 +490,7 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
         let queues = status == "approved" && current && phase != Phase::Plan;
         let mut queued: Vec<String> = Vec::new();
         if queues {
-            for job in all.iter().filter(|j| j.is_draft() && !waiting.contains(j.key.as_str())) {
+            for job in all.iter().filter(|j| j.is_draft()) {
                 tx.execute(
                     "UPDATE jobs SET status = 'queued', fingerprint = ?1 WHERE plan = ?2 AND key = ?3 AND status = 'draft'",
                     [jobs::locked_fingerprint(job).as_str(), id.as_str(), job.key.as_str()],
