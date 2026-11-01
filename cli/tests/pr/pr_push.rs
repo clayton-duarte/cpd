@@ -63,11 +63,16 @@ fn fx(status: &str) -> Fx {
     let home = CpdHome::resolve(Some(kit.env.cpd_home().into()), None).unwrap();
     // What `pr open` writes for a PR that has a pull request: its row, number and url.
     let (phase, state, columns, values, done) = match status {
+        // `waiting` and `cancelled` have no Lead worktree and no `started_at` (the `prs` CHECK).
+        "waiting" | "cancelled" => ("dispatch", "", "", String::new(), "NULL"),
         "dispatch" => ("dispatch", "", "", String::new(), "NULL"),
         "open" => ("deploy", "open", ", pr_number, pr_url, pr_opened_at, pull_request", format!(", 812, '{URL}', 't', (SELECT id FROM pull_requests)"), "NULL"),
         "merged" => ("done", "merged", ", pr_number, pr_url, pr_opened_at, pull_request, merged_at", format!(", 812, '{URL}', 't', (SELECT id FROM pull_requests), 't'"), "'t'"),
         other => panic!("no status {other}"),
     };
+    let unstarted = matches!(status, "waiting" | "cancelled");
+    let worktree = if unstarted { "NULL".to_owned() } else { format!("'{}'", lead.display()) };
+    let started_at = if unstarted { "NULL" } else { "'t'" };
     let merged_at = if state == "merged" { "'t'" } else { "NULL" };
     let pull_request = if state.is_empty() {
         String::new()
@@ -85,9 +90,8 @@ fn fx(status: &str) -> Fx {
            VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', 't', {done});
          {pull_request}
          INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
-           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', '{status}', 'cpd/pay', '{lead}', cpd_txn(), 't', 't'{values});",
+           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', '{status}', 'cpd/pay', {worktree}, cpd_txn(), 't', {started_at}{values});",
         repo = repo.display(),
-        lead = lead.display(),
     );
     let fx = Fx { kit, home, repo, origin, lead };
     fx.store().write("fixture", |tx| Ok(tx.execute_batch(&sql)?)).unwrap();
@@ -166,6 +170,29 @@ impl Fx {
                                            submitted_sha, submitted_at, started_at)
                      VALUES ('pay', 'm-a1', 'm', 1, 'S2', 'ladder', 'merging', ?1, ?2, ?3, ?4, 't', 't')",
                     params![made.branch, made.path.to_str().unwrap(), made.base_sha, sha],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        attempt
+    }
+
+    /// Job `m` of the PR with a `running` Attempt `m-a1`, which the PR's branch push must refuse
+    /// (`attempt_running`); nothing runs it, so its worktree is a placeholder.
+    fn running(&self) -> AttemptId {
+        let attempt = AttemptId::parse("m-a1").unwrap();
+        self.store()
+            .write("fixture", |tx| {
+                tx.execute(
+                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                       status, appended, fingerprint, created_txn, created_at)
+                     VALUES ('pay', 'repo', 'm', 'M', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, 't')",
+                    params!["f".repeat(64), tx.id()],
+                )?;
+                tx.execute(
+                    "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+                     VALUES ('pay', 'm-a1', 'm', 1, 'S2', 'ladder', 'running', 'cpd/pay--m-a1', '/w', 't')",
+                    [],
                 )?;
                 Ok(())
             })
@@ -422,14 +449,68 @@ fn push_checks_nothing_about_the_base_whether_it_moved_ahead_or_conflicts() {
 
 #[test]
 fn push_refuses_a_pr_that_is_not_open() {
-    for status in ["dispatch", "merged"] {
+    for status in ["waiting", "merged", "cancelled"] {
         let fx = fx(status);
         let before = fx.remote_sha();
-        let run = fx.push();
+        // `--pr` names the PR: a `cancelled` one is not selected on its own (§1.3).
+        let run = fx.cpd(&["pr", "push", "--pr", "repo", "--plan", "pay"]);
         assert_eq!(code(&run), ("illegal_transition".into(), 3), "{status}");
-        assert_eq!(run.error()["details"]["from"], status);
+        let error = run.error();
+        assert_eq!(error["details"]["from"], status);
+        // The refusal names what `pr push` accepts, which is no longer `open` alone (hs-d801).
+        let needs = error["details"]["needs"].as_str().unwrap();
+        assert!(needs.contains("open") && needs.contains("dispatch"), "{needs}");
         assert_eq!(fx.remote_sha(), before);
     }
+}
+
+#[test]
+fn push_of_a_dispatch_pr_gates_and_pushes_the_lead_branch() {
+    let fx = fx("dispatch");
+    fx.hooks("pre-merge = \"git rev-parse HEAD\"\n");
+    fx.sh(|ran| Reply::ok(&format!("{}\n", ran.head)));
+    let tip = fx.commit("more.txt");
+    assert_ne!(fx.remote_sha(), tip);
+
+    let out = fx.push().ok();
+
+    assert_eq!(out, json!({"ok": true, "plan": "pay", "pr": "repo", "pushed": true, "sha": tip, "remote": tip}));
+    assert_eq!(fx.remote_sha(), tip);
+    assert_eq!(fx.gate_log().trim(), tip, "the Gate ran on the tip in the Lead worktree");
+    assert_eq!(fx.lead_sha(), tip, "no rebase");
+}
+
+#[test]
+fn push_refuses_while_an_attempt_of_the_pr_is_running() {
+    let fx = fx("dispatch");
+    let before = fx.remote_sha();
+    fx.running();
+
+    let run = fx.push();
+
+    assert_eq!(code(&run), ("attempt_running".into(), 3));
+    assert_eq!(run.error()["details"], json!({"pr": "repo", "jobs": ["m"], "attempts": ["m-a1"]}));
+    assert_eq!(fx.remote_sha(), before, "nothing was pushed");
+}
+
+#[test]
+fn a_push_and_an_attempt_start_race_and_exactly_one_wins() {
+    // `open`, not `dispatch`: the Gate must be reached for the race to be observable (a `dispatch`
+    // push refuses today before the Gate, which would leave this test's Gate thread waiting).
+    let fx = fx("open");
+    let before = fx.remote_sha();
+    let (_, gate) = fx.paused_gate();
+    let tip = fx.lead_sha();
+    assert_ne!(before, tip);
+
+    // The Attempt start commits while the push is paused inside its Gate, past its early read: the
+    // push's post-Gate write transaction must see it and refuse, so no push lands under the Attempt.
+    let (out, _) = fx.push_paused(&gate, || fx.running());
+
+    assert_eq!(out["error"]["code"], json!("attempt_running"), "{out}");
+    assert_eq!(out["error"]["details"], json!({"pr": "repo", "jobs": ["m"], "attempts": ["m-a1"]}), "{out}");
+    assert_eq!(fx.remote_sha(), before, "nothing was pushed");
+    assert_eq!(fx.gate_log().trim(), tip, "the Gate ran on G");
 }
 
 #[test]
