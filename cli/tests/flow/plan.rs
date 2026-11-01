@@ -1347,7 +1347,10 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
         repo.canonicalize().unwrap().display().to_string()
     );
     assert_eq!(
-        (&pay["workflows"][0]["key"], &pay["workflows"][0]["base_workflow"]),
+        (
+            &pay["workflows"][0]["key"],
+            &pay["workflows"][0]["base_workflow"]
+        ),
         (&json!("pay"), &Value::Null)
     );
     let ids = |args: &[&str]| -> Vec<String> {
@@ -1649,7 +1652,10 @@ fn render_shows_the_planned_opener_and_no_placeholder() {
         "{old}"
     );
     assert!(old.contains("Status: — · Kind: `open`"), "{old}");
-    assert!(old.contains("Added by cpd when the Workflow starts"), "{old}");
+    assert!(
+        old.contains("Added by cpd when the Workflow starts"),
+        "{old}"
+    );
 }
 
 // ---------- plan review, plan decide ----------
@@ -2622,7 +2628,10 @@ fn lock_reuses_a_remote_lead_branch_that_lacks_a_base_that_merely_moved_ahead() 
     let out = fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
     assert_eq!(
-        (&out["workflows"][0]["reused"], &out["workflows"][0]["pushed"]),
+        (
+            &out["workflows"][0]["reused"],
+            &out["workflows"][0]["pushed"]
+        ),
         (&json!(true), &json!(false))
     );
     assert_eq!(

@@ -612,7 +612,10 @@ fn pr_open_refuses_jobs_not_done_and_a_missing_title() {
     let run = fx.pr("open");
 
     assert_eq!(code(&run), ("workflow_title_required".into(), 3));
-    assert_eq!(run.error()["details"], json!({"plan": "pay", "workflow": "repo"}));
+    assert_eq!(
+        run.error()["details"],
+        json!({"plan": "pay", "workflow": "repo"})
+    );
     assert_eq!(
         (fx.plan_row().0, fx.txns(), open_jobs(&fx)),
         ("dispatch".to_owned(), txns, Vec::<(String, String)>::new())

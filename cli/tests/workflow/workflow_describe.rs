@@ -273,7 +273,10 @@ fn pr_open_refuses_description_required_without_a_body() {
         let run = fx.pr("open");
 
         assert_eq!(code(&run), ("description_required".into(), 3));
-        assert_eq!(run.error()["details"], json!({"plan": "pay", "workflow": "repo"}));
+        assert_eq!(
+            run.error()["details"],
+            json!({"plan": "pay", "workflow": "repo"})
+        );
         assert_eq!(
             (fx.plan_row().0, fx.txns(), open_jobs(&fx)),
             ("dispatch".to_owned(), txns, Vec::<(String, String)>::new())

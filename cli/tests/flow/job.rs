@@ -1604,7 +1604,10 @@ fn add_refuses_a_missing_unknown_or_ended_pr_and_writes_nothing() {
         "workflow_required",
         2,
     );
-    assert!(e["message"].as_str().unwrap().contains("cpd workflow add"), "{e}");
+    assert!(
+        e["message"].as_str().unwrap().contains("cpd workflow add"),
+        "{e}"
+    );
 }
 
 #[test]

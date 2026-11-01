@@ -1568,7 +1568,11 @@ fn a_stacked_workflow_starts_from_origin_when_the_base_workflows_local_branch_is
             &error["details"]["step"],
             &error["details"]["base"]
         ),
-        (&json!("b1"), &json!("base_workflow_branch"), &json!("pay/a1"))
+        (
+            &json!("b1"),
+            &json!("base_workflow_branch"),
+            &json!("pay/a1")
+        )
     );
     assert_eq!(fx.workflow_status("b1"), "waiting");
     assert!(!fx.lead_path(&repo.path, "b1").exists());
@@ -1636,7 +1640,10 @@ fn workflow_start_refuses_a_workflow_whose_need_of_another_plan_is_not_merged() 
     let error = refused(&fx.start("c1"), "workflow_not_ready", 3);
 
     assert_eq!(
-        (&error["details"]["needs"], &error["details"]["base_workflow"]),
+        (
+            &error["details"]["needs"],
+            &error["details"]["base_workflow"]
+        ),
         (&json!(["a1"]), &Value::Null)
     );
     assert!(error["message"].as_str().unwrap().contains("a1"), "{error}");

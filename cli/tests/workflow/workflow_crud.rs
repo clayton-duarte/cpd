@@ -1642,7 +1642,10 @@ fn a_workflow_restacked_after_the_lock_waits_for_its_base_workflow_to_open() {
         fx.writes(),
     );
     assert_eq!(
-        (&error["details"]["base_workflow"], &error["details"]["needs"]),
+        (
+            &error["details"]["base_workflow"],
+            &error["details"]["needs"]
+        ),
         (&json!("pay-1/a"), &json!([]))
     );
     assert_eq!(

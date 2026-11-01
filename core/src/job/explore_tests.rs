@@ -119,7 +119,11 @@ fn fixture_with(
     // SAFETY: nextest gives each test a process of its own; the fixture restores the variable on drop.
     let saved_attempt = std::env::var_os("CPD_ATTEMPT");
     unsafe { std::env::remove_var("CPD_ATTEMPT") };
-    let mut f = Fixture { dir, env, saved_attempt };
+    let mut f = Fixture {
+        dir,
+        env,
+        saved_attempt,
+    };
     f.sql(&sql);
     f
 }
