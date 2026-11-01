@@ -2420,7 +2420,7 @@ Idempotent: no (each call re-runs what has failed). A second call right after th
 cpd pr push [--pr <key>] [--plan <id>]
 ```
 
-Publishes an `open` PR's Lead Branch with a plain push, after the Gate when the PR's `gate.merge` is `local` (for `pr open` and `pr push`) or `gate.pr` is `local` (for `pr rebase`) (hs-d139, hs-d292; contract §7.6, §8.3; with `ci` there is no Gate and the two Gate rows below do not apply). It does not rebase: use it (the repair, as `pr rebase`; a fix Job's own merge pushes for itself, contract §3.8 "Updating"; after a `push_failed` it is the command to run) when the branch carries a merge of the base, which `pr rebase` would drop (§9.3), when the remote has not moved and the Jobs Merged since only need to reach the pull request, or for a stacked PR that took its base PR's new commits. It checks nothing about the base (hs-d490): a Lead Branch that lacks a base that moved ahead is pushed as it is.
+Publishes an `open` or `dispatch` PR's Lead Branch with a plain push, after the Gate when the PR's `gate.merge` is `local` (for `pr open` and `pr push`) or `gate.pr` is `local` (for `pr rebase`) (hs-d139, hs-d292; contract §7.6, §8.3; with `ci` there is no Gate and the two Gate rows below do not apply). It does not rebase: use it (the repair, as `pr rebase`; a fix Job's own merge pushes for itself, contract §3.8 "Updating"; after a `push_failed` it is the command to run) when the branch carries a merge of the base, which `pr rebase` would drop (§9.3), when the remote has not moved and the Jobs Merged since only need to reach the pull request, or for a stacked PR that took its base PR's new commits. It checks nothing about the base (hs-d490): a Lead Branch that lacks a base that moved ahead is pushed as it is.
 
 | Flag | Meaning |
 |---|---|
@@ -2428,7 +2428,8 @@ Publishes an `open` PR's Lead Branch with a plain push, after the Gate when the 
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the PR is `open`, before the Gate and again after it (merged during the Gate: nothing pushed) | `illegal_transition` | 3 |
+| the PR is `open` or `dispatch`, before the Gate and again after it (merged during the Gate: nothing pushed) | `illegal_transition` | 3 |
+| no Attempt of the PR of any kind (work, open, update) is running (pro-d103, pro-d105; widened to `pr push` by hs-d801); `details` is `{pr, jobs: [keys], attempts: [ids]}`; checked before the Gate, nothing is pushed | `attempt_running` | 3 |
 | the `pre-start` passes before the Gate runs; `details.tail` is its last 60 lines, `details.log` the full log `run/<plan>/logs/pr-<key>.pre-start.log` | `gate_error` | 1 |
 | the PR's policy resolves (contract §8.3 "Validation", `details` as there): its Context has an owner | `owner_unset` | 3 |
 | its owner has a policy file | `owner_unconfirmed` | 1 |
