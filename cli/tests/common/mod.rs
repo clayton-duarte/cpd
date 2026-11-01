@@ -931,7 +931,8 @@ impl TestEnv {
 
     /// Stops the reaper, then runs the teardown ([`TEARDOWN_SH`]): stops the env's process
     /// group, its tmux server and the detached children cpd records, then removes the
-    /// directory. Idempotent.
+    /// directory. Idempotent. Every env that a test builds is dropped (or torn down) before the
+    /// test process ends, so the Gate's leak check finds no `cpd-test-*` behind.
     pub fn teardown(&self) {
         if let Some(mut reaper) = self.reaper.lock().unwrap_or_else(PoisonError::into_inner).take() {
             // By its pid alone, and reaped: a zombie in the group would hold the teardown for its grace.
