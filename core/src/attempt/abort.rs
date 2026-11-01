@@ -64,6 +64,13 @@ pub(super) fn abort(args: AbortArgs) -> Result<Output, CpdError> {
         )?;
         Ok(())
     })?;
+    // A dead driver cannot consume the stop request: tear the Worker down here, through the existing A9/crash-recovery
+    // seam. A live driver owns its Worker and consumes the request itself (run.rs A5), so it is left alone. The end is
+    // already committed: the teardown only kills the process/window and cleans the worktree.
+    if let Some(dead) = crate::driver::lock::probe(&env.home, &plan, &id)? {
+        crate::driver::teardown_aborted(&env.ports, &env.config, &env.home, &mut env.store, &attempt)?;
+        drop(dead);
+    }
     Ok(Output::success(json!({"attempt": id, "outcome": "failed", "cause": "aborted"})))
 }
 
