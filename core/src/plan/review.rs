@@ -4,13 +4,13 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::display::Display;
-use super::outline::Outline;
 use super::fingerprint::{load_prs, plan_fingerprint};
 use super::jobs::{self, Job};
+use super::outline::Outline;
 use super::overlap::{self, Overlap};
 use super::prs::PrRow;
 use super::row::{self, Phase, PlanRow};
@@ -455,14 +455,10 @@ pub(super) fn outline_incomplete(
 }
 
 /// The pure part of draft checking: returns `Option<CpdError>` for incomplete drafts.
-pub(super) fn drafts_incomplete(
-    id: &PlanId,
-    jobs: &[Job],
-    waiting: &BTreeSet<String>,
-) -> Option<CpdError> {
+pub(super) fn drafts_incomplete(id: &PlanId, jobs: &[Job]) -> Option<CpdError> {
     let mut stubs: Vec<&Job> = jobs
         .iter()
-        .filter(|j| j.is_draft() && !j.missing().is_empty() && !waiting.contains(&j.key))
+        .filter(|j| j.is_draft() && !j.missing().is_empty())
         .collect();
     if stubs.is_empty() {
         return None;
@@ -486,35 +482,19 @@ pub(super) fn drafts_incomplete(
     )
 }
 
-
-
+/// Every `draft` Job has its Tier and its Spec (§4.6, §4.8, hs-d241): else
+/// `draft_incomplete`, `details.jobs` = `[{key, missing}]` in key order. A stub
+/// cannot be approved, whether it waits or not (hs-d731), so neither
+/// `plan review` nor `plan lock` goes on.
 pub(super) fn check_drafts_complete(
     _conn: &Connection,
     id: &PlanId,
     jobs: &[Job],
 ) -> Result<(), CpdError> {
-    let mut stubs: Vec<&Job> = jobs
-        .iter()
-        .filter(|j| j.is_draft() && !j.missing().is_empty())
-        .collect();
-    if stubs.is_empty() {
-        return Ok(());
+    match drafts_incomplete(id, jobs) {
+        Some(e) => Err(e),
+        None => Ok(()),
     }
-    stubs.sort_by(|a, b| a.key.cmp(&b.key));
-    let keys: Vec<&str> = stubs.iter().map(|j| j.key.as_str()).collect();
-    let listed: Vec<Value> = stubs
-        .iter()
-        .map(|j| json!({"key": j.key, "missing": j.missing()}))
-        .collect();
-    Err(CpdError::new(
-        ErrorCode::DraftIncomplete,
-        format!(
-            "Plan {id} has draft Jobs without their Tier or Spec: {}. Complete each with cpd job edit <key> --tier <T> --spec <file>, or cancel it, then ask again.",
-            keys.join(", ")
-        ),
-    )
-    .with("plan", id.as_str())
-    .with("jobs", listed))
 }
 
 /// `plan decide` (§4.7). In a phase after `plan`, a current approval also
