@@ -7,6 +7,7 @@
 //! - [`lead`]: Lead windows in the cockpit (`plan new`, `plan phase plan`);
 //! - [`archive`]: `plan archive` and `unarchive`, and the cascade `context archive` shares;
 //! - [`cancel`]: `plan cancel`, which abandons a Plan;
+//! - [`lint`]: the Plan lint rules and the pure run (contract §2.7);
 //! - [`shared`]: `is_shared`, the predicate for lockfile paths (contract §2.6);
 //! - `new`, `list`, `show`, `phase`, `review`, `lock`: the commands.
 
@@ -23,6 +24,9 @@ mod explore_tests;
 pub mod fingerprint;
 pub mod jobs;
 mod lead;
+pub mod lint;
+#[cfg(test)]
+mod lint_tests;
 mod list;
 pub(crate) mod lock;
 mod new;
