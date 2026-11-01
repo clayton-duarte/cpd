@@ -91,7 +91,7 @@ export function toSnapshotFrame(messages: readonly TranscriptMessage[], epoch?: 
 
 The pi JSONL parse rules — the real field names of a pi session file (verified against a real file under `~/.pi/agent/sessions`):
 
-1. Parse every line as JSON. A line whose `type` is not `"message"` is skipped (`session`, `session_info`, `model_change`, `thinking_level_change`, `custom`, …).
+1. Parse every line as JSON. A line whose `type` is not `"message"` is skipped (`session`, `session_info`, `model_change`, `thinking_level_change`, `custom`, …) — except a `custom_message` line, the cpd record that “A message delivered into a Session is the person's turn” (below) rules.
 2. Of a `message` line, keep `message.role` `"user"`, `"assistant"` and `"system"` — a `"system"` line is a notice, and the Chat renders it as a `Marker` (“The Chat column renders a whole turn”, below).
 3. `message.content` is either a plain string — one `text` part — or an array of blocks, kept in order as the turn's `parts`: a `text` block is a `text` part (`text` stays the join of the `text` parts, an empty join when there is none), a `thinking` block is a `thinking` part (its text under `thinking`), a `toolCall` block is a `tool` part (`id`, `name`, `arguments`), and an `image` block (`data`, `mimeType`) is an `image` part. No block is skipped.
 4. A following line with `message.role` `"toolResult"` is no turn of its own: paired by `toolCallId` with the `toolCall` block it answers, its `text` blocks become the `tool` part's `result`, its `image` blocks become `image` parts of the same turn, and its `durationMs` and `isError` land on the part (`error: true`).
@@ -502,6 +502,14 @@ The Chat column renders **every part of a turn** — decided by the User on 2026
 The `tool` row's title is the command or path the call names — the `arguments`' `command` of a `bash` call, its `path` of a `read`, `edit` or `write` call, else the tool's `name` — with the call's `durationMs` beside the title and the row in its error state when the result failed (`error`). Opened, the row shows the call's `arguments` and its `result` as `Code Block`s. A large result is never truncated: the Code Block carries it whole; only the live frame is bounded (next section).
 
 The pairing behind a `tool` part is measured against a real pi session file under `~/.pi/agent/sessions`: an assistant message's content blocks are `thinking` (its text under `thinking`), `text` and `toolCall` (`id`, `name`, `arguments`), and the tool's result is the **following** line's `message.role` `"toolResult"` (`toolCallId`, `toolName`, `content` of `text` and `image` blocks, `isError`, `durationMs`). `parsePiSession` pairs a `toolCall` with its `toolResult` by `toolCallId`: the part carries the call's `arguments`, and the result's text, `durationMs`, `isError` and `image` blocks land on the same turn — the `toolResult` line yields no turn of its own.
+
+### A message delivered into a Session is the person's turn
+
+A cpd record arrives in a pi session file as a `custom_message` line, and the parser (`parsePiSession`, `web/src/transcript.ts`) filed every one of them as an engine notice — measured against 1 500+ records across 13 real Sessions of Context building-cpd, the Chat showed the person's own words back as a cpd notice. The rule, measured: the record whose `customType` is `"cpd"` and whose `details.kind` is `"session-message"` (595 of those records) is a message **delivered into the Session** — the person's own turn. Every other record is an engine notice: the `customType`s `cpd-context`, `cpd-plan-summary`, `cpd-plan-decision` and `cpd-skills`, and the `"cpd"` kinds `escalation`, `error`, `pr-feedback`, `job-merged`, `job-failed` and `plan-done`. A record with `display: false` is skipped, whichever kind it carries.
+
+The delivered turn's text is `details.data.text` — the person's words, unwrapped — not cpd's wrapper: the record's `content` is cpd's wrapper `Message from <sender> (<time>): <body>`, and only its `<body>` is the fallback when `details.data.text` is absent. The wrapper's sender may itself carry parentheses (`Message from web-chat-live (14bd6551-…) (13:02 EST): …`), so the `<time>` is the last parenthesised group before the colon.
+
+The delivered turn renders as a `Bubble` aligned to the end (`web/src/views/live-chat.tsx`), with a muted line above it carrying the time cpd stamped and the recorded reason (`details.data.unblocks`, e.g. `sent from the cpd web chat`); the full `Message from <sender> (<time>)` header is the line's `title`.
 
 ### The live frame is the newest turns; history is paged
 
