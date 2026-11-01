@@ -32,8 +32,18 @@ use crate::read::{JobNode, NeedsUser, PrFacts, PrNode, PrStatus, Pull, pr_look};
 const GAP: u16 = 2;
 /// What the box of a PR with no Jobs says (the widget's padding is the space around it).
 const NO_JOBS: &str = "no Jobs";
-/// The title of the one Plan-level box holding the explore Jobs (D1-A): leading and trailing space, no state word.
-const EXPLORE_TITLE: &str = " explore Jobs ";
+/// The title of the one Plan-level box holding the explore Jobs (D1-A): ` explore Jobs · <n> <kind> · <n> <kind> `, the kinds in byte order, one read-only span.
+fn explore_title(explore: &[&JobNode]) -> Line<'static> {
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for j in explore {
+        *counts.entry(j.kind.as_str()).or_default() += 1;
+    }
+    let mut text = String::from(" explore Jobs ");
+    for (kind, n) in counts {
+        text.push_str(&format!("· {n} {kind} "));
+    }
+    Line::from(Span::styled(text, palette::read_only_text()))
+}
 
 /// The body of a PR box: the chart's buffer blitted at the body's corner, or [`NO_JOBS`] when the PR has none.
 struct ChartBody<'a> {
@@ -223,6 +233,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         .iter()
         .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr.as_ref() == Some(&p.key)), &needs_user.worked_on), frame))
         .collect();
+    let explore_title = explore_title(&explore);
     let explore_chart = (!explore.is_empty())
         .then(|| flow::layout(&flow::flow_jobs(explore.iter().copied(), &needs_user.worked_on), frame));
     let titles: Vec<Line> = prs.iter().map(|p| title_of(p, needs_user.lead_dialog, frame)).collect();
@@ -244,7 +255,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
     // The explore box: its chart's body, the walls and the padding, at least as wide as its title plus 4.
     let explore_size: Option<(u16, u16)> = explore_chart.as_ref().map(|c| {
         let inner_h = c.buf.area.height;
-        ((c.buf.area.width + 2 + 2 * spacing::PAD_X).max(EXPLORE_TITLE.chars().count() as u16 + 4), inner_h + 2)
+        ((c.buf.area.width + 2 + 2 * spacing::PAD_X).max(explore_title.width() as u16 + 4), inner_h + 2)
     });
 
     // y: each row of boxes as tall as its tallest box, `GAP` between; x: a row's boxes side by side by key, one apart
@@ -320,7 +331,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
     if let (Some(chart), Some((w, h))) = (explore_chart.as_ref(), explore_size) {
         let rect = Rect::new(0, 0, w, h);
         BoxWidget::new(Walls::Full, lines, ChartBody { chart })
-            .title(Line::from(Span::styled(EXPLORE_TITLE, palette::read_only_text())))
+            .title(explore_title.clone())
             .render(rect, &mut buf);
     }
     for (i, chart) in charts.iter().enumerate() {
