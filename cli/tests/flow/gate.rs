@@ -577,3 +577,40 @@ fn attempt_show_and_job_show_print_the_gate_facts() {
         assert!(row["check_tail"].as_str().is_some_and(|t| t.contains("the merge gate is red")), "{what}: {row}");
     }
 }
+
+#[test]
+fn the_worker_spec_lists_every_addendum_of_the_job_in_order_and_none_when_there_is_none() {
+    let fx = fx();
+    fx.env.sql(&format!(
+        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+           VALUES ('pay', 'repo', 'ad', 'Title of ad', 'S2', 'Do it.', 'Because.', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, 'work', '{fp}', cpd_txn(), 't');
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, started_at, ended_at)
+           VALUES ('pay', 'ad-a1', 'ad', 1, 'S2', 'ladder', 'ended', 'failed', 'timed_out', 'cpd/pay--ad-a1', '{wt}-a1', '{zero}', 't', 't');
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
+           VALUES ('pay', 'ad-a2', 'ad', 2, 'S2', 'retry', 'running', 'cpd/pay--ad-a2', '{wt}-a2', '{zero}', 't');
+         INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at)
+           VALUES ('w-ad', 'worker', (SELECT context FROM plans WHERE id = 'pay'), 'pay', 'ad-a1', 'ad-a1', '/w', 'S2', 'stopped', 't', 't');",
+        fp = "f".repeat(64),
+        zero = "0".repeat(40),
+        wt = fx.env.root().join("ad").display()
+    ));
+    let none = fx.spec_text("ad-a2", "ad");
+    assert!(!none.contains("Addenda from the Lead"), "a Job with no addendum has no such section:\n{none}");
+
+    fx.env.sql(
+        "INSERT INTO job_addenda (plan, job, number, attempt, session, text, created_at) VALUES ('pay', 'ad', 1, 'ad-a1', 'w-ad', 'Use the v2 endpoint.\nSecond line.', 't');
+         INSERT INTO job_addenda (plan, job, number, attempt, session, text, created_at) VALUES ('pay', 'ad', 2, NULL, NULL, 'Mind the `cache`.', 't');",
+    );
+    let spec = fx.spec_text("ad-a2", "ad");
+
+    let heading = spec.find("\n## Addenda from the Lead\n").unwrap_or_else(|| panic!("no Addenda section:\n{spec}"));
+    let out_of_scope = spec.find("### Out of scope").unwrap_or_else(|| panic!("{spec}"));
+    let previous = spec.find("\n## Previous Attempts").unwrap_or_else(|| panic!("{spec}"));
+    assert!(out_of_scope < heading && heading < previous, "{spec}");
+    let section = &spec[heading + 1..previous];
+    assert_eq!(section.matches("\n## ").count(), 0, "another `## ` heading inside the section:\n{section}");
+    let sentence = "The Lead added these to your Job after its Spec was locked. Each one adds information; none replaces your Goal, Files you may touch, Acceptance or Out of scope, which stand as written.";
+    let at = |needle: &str| section.find(needle).unwrap_or_else(|| panic!("`{needle}` is not in:\n{section}"));
+    let order = [sentence, "### Addendum 1", "Use the v2 endpoint.\nSecond line.", "### Addendum 2", "Mind the `cache`."].map(at);
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "{section}");
+}

@@ -37,6 +37,7 @@ mod driver;
 mod context_inbox_cyan;
 mod host_repair;
 mod job;
+mod job_addendum;
 mod job_open_description;
 mod job_open_jira;
 mod job_resources;
