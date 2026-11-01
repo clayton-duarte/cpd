@@ -5,9 +5,9 @@
 use rusqlite::Connection;
 
 use crate::error::CpdError;
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{PlanId, WorkflowKey};
 
-pub fn name(tx: &Connection, plan: &PlanId, pr: &PrKey) -> Result<(), CpdError> {
+pub fn name(tx: &Connection, plan: &PlanId, pr: &WorkflowKey) -> Result<(), CpdError> {
     let id = match std::env::var("CPD_SESSION") {
         Ok(id) if !id.is_empty() => id,
         _ => return Ok(()),

@@ -23,7 +23,7 @@ use super::SOURCE;
 use super::log::Log;
 use cpd_core::error::CpdError;
 use cpd_core::events::{self, NewEvent};
-use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, PrKey, SessionId};
+use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, WorkflowKey, SessionId};
 use cpd_core::pr::jira_sync::Target;
 use cpd_core::inbox::rules::{StuckGroup, StuckJob, stuck_groups};
 use cpd_core::job::home::JobHome;
@@ -98,7 +98,7 @@ pub(super) enum About {
     /// `error` Event sets no Session, so no Lead gets a turn for it (contract §3.7 E10).
     TitleRun(SessionId),
     /// One E19 queue row (Plan, PR, target): scoped to the Plan, deduped per row (contract §3.7 E19).
-    Move(PlanId, PrKey, Target),
+    Move(PlanId, WorkflowKey, Target),
 }
 
 impl About {
@@ -325,7 +325,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use cpd_core::home::CpdHome;
-    use cpd_core::ids::{ContextId, PrKey};
+    use cpd_core::ids::{ContextId, WorkflowKey};
 
     fn failure(code: &str) -> Failure {
         Failure { code: code.to_owned(), message: "It failed.".to_owned(), details: json!({}) }
@@ -377,10 +377,10 @@ mod tests {
     #[test]
     fn a_move_failure_is_per_row_and_plan_scoped() {
         let plan = PlanId::parse("plan-a").unwrap();
-        let about = About::Move(plan.clone(), PrKey::parse("pr1").unwrap(), Target::InReview);
+        let about = About::Move(plan.clone(), WorkflowKey::parse("pr1").unwrap(), Target::InReview);
         assert_eq!(about.see(), "cpd plan show --plan plan-a");
         assert!(about.lead(Step::E19).contains(&format!("the {} move of PR pr1 of Plan plan-a", Target::InReview.as_str())));
-        assert_ne!(about, About::Move(plan, PrKey::parse("pr2").unwrap(), Target::InReview));
+        assert_ne!(about, About::Move(plan, WorkflowKey::parse("pr2").unwrap(), Target::InReview));
         let event = about.event("x".to_owned(), &failure("jira_failed"));
         assert_eq!(format!("{event:?}").matches("plan: Some").count(), 1, "{event:?}");
     }
@@ -510,7 +510,7 @@ mod tests {
     fn stuck(context: &str, plan: &str, pr: &str, job: &str, event: i64, minutes: i64) -> StuckJob {
         StuckJob {
             plan: PlanId::parse(plan).unwrap(),
-            home: JobHome::Pr(PrKey::parse(pr).unwrap()),
+            home: JobHome::Pr(WorkflowKey::parse(pr).unwrap()),
             job: JobKey::parse(job).unwrap(),
             context: ContextId::parse(context).unwrap(),
             event,

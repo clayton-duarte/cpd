@@ -22,7 +22,7 @@ use super::{Env, PollArgs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{BasePull, NewEvent, append};
 use crate::inbox::model as inbox;
-use crate::ids::{JobKey, OwnerLogin, PlanId, PrKey, RepoName};
+use crate::ids::{JobKey, OwnerLogin, PlanId, WorkflowKey, RepoName};
 use crate::config::Tier;
 use crate::job::open::{self, Cause};
 use crate::plan::fingerprint::load_prs;
@@ -44,12 +44,12 @@ const LOCK_WAIT: Duration = Duration::from_secs(60);
 const RETRY: Duration = Duration::from_millis(100);
 
 /// A pull request an `open` PR of a Plan points to.
-type Owned = (PlanId, PrKey, pulls::PullRequest);
+type Owned = (PlanId, WorkflowKey, pulls::PullRequest);
 
 /// An owned PR whose policy did not resolve (`owner_unset`, `owner_unconfirmed`, `policy_invalid`).
 struct Unresolved {
     plan: PlanId,
-    pr: PrKey,
+    pr: WorkflowKey,
     number: i64,
     error: CpdError,
 }
@@ -57,7 +57,7 @@ struct Unresolved {
 /// A PR whose pull request GitHub repointed: the PR's `base` follows it (§7.6 step 6, hs-d325).
 struct Follow {
     plan: PlanId,
-    pr: PrKey,
+    pr: WorkflowKey,
     from: String,
     to: String,
     number: i64,
@@ -75,7 +75,7 @@ struct Follow {
 /// whether that default branch holds commits the Lead Branch lacks without a conflict.
 struct Ahead {
     plan: PlanId,
-    pr: PrKey,
+    pr: WorkflowKey,
     /// True when the default branch holds commits the Lead Branch lacks and the two merge cleanly.
     ahead: bool,
 }
@@ -85,10 +85,10 @@ struct Ahead {
 struct Outcome {
     changed: Vec<Value>,
     base_changed: Vec<Value>,
-    feedback: Vec<(PlanId, PrKey)>,
+    feedback: Vec<(PlanId, WorkflowKey)>,
     /// The `update` Jobs the poll queued and their cause (§3.7 E5).
-    update_jobs: Vec<(PlanId, PrKey, JobKey, Cause)>,
-    merged: Vec<(PlanId, PrKey)>,
+    update_jobs: Vec<(PlanId, WorkflowKey, JobKey, Cause)>,
+    merged: Vec<(PlanId, WorkflowKey)>,
     done: Vec<PlanId>,
 }
 
@@ -228,7 +228,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
         None => None,
     };
 
-    let pair = |(plan, pr): &(PlanId, PrKey)| json!({"plan": plan, "pr": pr});
+    let pair = |(plan, pr): &(PlanId, WorkflowKey)| json!({"plan": plan, "pr": pr});
     let mut out = json!({
         "polled": search.prs.len(),
         "changed": outcome.changed,
@@ -439,7 +439,7 @@ fn base_ahead(dir: &Path, base: &str, lead: &str) -> bool {
 }
 
 /// The PR's resolved `pr.feedback.checks`; `None` when its policy did not resolve: it is told nothing.
-fn checks_of<'a>(checks: &'a [Resolved], plan: &PlanId, key: &PrKey) -> Option<&'a Resolved> {
+fn checks_of<'a>(checks: &'a [Resolved], plan: &PlanId, key: &WorkflowKey) -> Option<&'a Resolved> {
     checks.iter().find(|r| &r.plan == plan && &r.key == key)
 }
 
@@ -460,7 +460,7 @@ pub(super) fn repo_required(home: &crate::home::CpdHome, repo: &str) -> Result<V
 /// What the poll resolved of an owned PR's policy: `pr.feedback.checks` and `pr.post.enabled`.
 struct Resolved {
     plan: PlanId,
-    key: PrKey,
+    key: WorkflowKey,
     checks: Checks,
     post_enabled: bool,
     human_gated: Vec<String>,
@@ -517,7 +517,7 @@ fn report_unresolved(env: &mut Env, unresolved: &[Unresolved]) -> Result<(), Cpd
 }
 
 /// D7: `pr-feedback` to the Plan, when the change needs its attention.
-fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, resolved: &Resolved, change: &Change) -> Result<bool, CpdError> {
+fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey, resolved: &Resolved, change: &Change) -> Result<bool, CpdError> {
     let open = change.after.feedback.as_deref().unwrap_or_default();
     let new = comments::new_items(change.before.as_ref().and_then(|b| b.feedback.as_deref()), open);
     let post = PostFacts { enabled: resolved.post_enabled, posted: posts::find(tx, plan.as_str(), key.as_str())?.is_some() };
@@ -534,7 +534,7 @@ fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, resolved: &Resolved, chan
 /// transition: `unknown` is no conflict and a base that merely moved, `merge_state` `behind`, is no cause), the row's `state` is `open`
 /// and the Plan is not archived, the PR's `update` Job is queued unless one is `queued` or `running`. The caller has resolved the
 /// PR's policy. The Job's key when one was inserted.
-fn update_for_conflict(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, change: &Change, tier: Tier) -> Result<Option<JobKey>, CpdError> {
+fn update_for_conflict(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey, change: &Change, tier: Tier) -> Result<Option<JobKey>, CpdError> {
     let became = change.after.mergeable == "conflicting" && change.before.as_ref().is_none_or(|b| b.mergeable != "conflicting");
     if !became || change.after.state != "open" {
         return Ok(None);
@@ -563,7 +563,7 @@ pub(super) enum Trigger {
 /// or `running`. `ahead` is read only for [`Trigger::BaseMerged`]: true when the default branch holds commits the
 /// Lead Branch lacks without a conflict; false when it is already contained, which queues nothing. A Plan that is
 /// archived or a PR that is not `open` queues nothing. The Job's key when one was inserted.
-pub(super) fn queue_update_for(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, trigger: Trigger, ahead: bool, tier: Tier) -> Result<Option<JobKey>, CpdError> {
+pub(super) fn queue_update_for(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey, trigger: Trigger, ahead: bool, tier: Tier) -> Result<Option<JobKey>, CpdError> {
     let cause = match trigger {
         Trigger::Conflict => Cause::Conflict,
         Trigger::BaseMerged if ahead => Cause::BaseMerged,
@@ -581,7 +581,7 @@ pub(super) fn queue_update_for(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, tr
 /// The PR `key` of the Plan is merged on GitHub (§7.6): `prs` `merged`,
 /// `pr-merged`, and, when it was the last PR, the Plan `done` with `plan-done`
 /// (§3.1). Whether the Plan became `done`.
-pub(super) fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest) -> Result<bool, CpdError> {
+pub(super) fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &WorkflowKey, pull: &pulls::PullRequest) -> Result<bool, CpdError> {
     let moved = tx.execute(
         "UPDATE workflows SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn())
           WHERE plan = ?1 AND key = ?2 AND status = 'open'",
@@ -619,7 +619,7 @@ pub(super) fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::P
 /// The unstack of the PRs with no pull request yet that were stacked on the PR `key` of `plan`, which this transaction
 /// merged (§7.6 step 6, hs-d301): every `waiting` or `dispatch` PR of any Plan whose `base` is its Lead Branch, told to
 /// its own Plan, so that engine E7 of the same tick already sees the new base.
-pub(super) fn unstack_stacked_on(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+pub(super) fn unstack_stacked_on(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey) -> Result<(), CpdError> {
     let mut stmt = tx.prepare(
         "SELECT r.plan, r.key FROM workflows r, workflows m
           WHERE m.plan = ?1 AND m.key = ?2 AND r.repo = m.repo AND r.base = m.lead_branch AND r.status IN ('waiting', 'dispatch')
@@ -629,7 +629,7 @@ pub(super) fn unstack_stacked_on(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) 
         .query_map([plan.as_str(), key.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (plan, key) in stacked {
-        unstack(tx, &PlanId::parse(&plan)?, &PrKey::parse(&key)?, COMMAND_BY)?;
+        unstack(tx, &PlanId::parse(&plan)?, &WorkflowKey::parse(&key)?, COMMAND_BY)?;
     }
     Ok(())
 }
@@ -649,7 +649,7 @@ fn plan_prs(env: &mut Env, plan: &PlanPrs) -> Result<Vec<Value>, CpdError> {
 /// `[{key, number, url, merged_at}]` of every PR that is not `cancelled`, in key
 /// order: `merged_at` is the moment the PR was seen merged, and for `just`, the
 /// one this poll merged, the time `gh` reports when it does.
-fn merged_prs(tx: &WriteTxn<'_>, id: &PlanId, just: &PrKey, reported: Option<&str>) -> Result<Vec<serde_json::Value>, CpdError> {
+fn merged_prs(tx: &WriteTxn<'_>, id: &PlanId, just: &WorkflowKey, reported: Option<&str>) -> Result<Vec<serde_json::Value>, CpdError> {
     let mut stmt = tx.prepare("SELECT key, pr_number, pr_url, merged_at FROM workflows WHERE plan = ?1 AND status = 'merged' ORDER BY key")?;
     let rows = stmt
         .query_map([id.as_str()], |r| {
@@ -662,7 +662,7 @@ fn merged_prs(tx: &WriteTxn<'_>, id: &PlanId, just: &PrKey, reported: Option<&st
     Ok(rows)
 }
 
-fn cas_lost(id: &PlanId, key: &PrKey) -> CpdError {
+fn cas_lost(id: &PlanId, key: &WorkflowKey) -> CpdError {
     CpdError::new(ErrorCode::CasLost, format!("PR {key} of Plan {id} changed while it was being polled: rerun the command."))
         .with("plan", id.as_str())
         .with("pr", key.as_str())
@@ -670,7 +670,7 @@ fn cas_lost(id: &PlanId, key: &PrKey) -> CpdError {
 
 /// The pull requests whose comments are read (§7.6 step 3a): an owned pull request listed `open` in `seen` whose `updatedAt` moved, or
 /// whose stored feedback holds an open item (resolving a thread does not move `updatedAt`, pro-d231). No duplicates.
-fn due_reads(owned: &[(PlanId, PrKey, pulls::PullRequest)], seen: &[Listed]) -> Vec<(String, i64)> {
+fn due_reads(owned: &[(PlanId, WorkflowKey, pulls::PullRequest)], seen: &[Listed]) -> Vec<(String, i64)> {
     let mut due: Vec<(String, i64)> = Vec::new();
     for (_, _, row) in owned {
         let open_feedback = row.feedback.as_ref().is_some_and(|items| !items.is_empty());
@@ -707,7 +707,7 @@ mod due_reads_tests {
         }
     }
 
-    fn row(updated: &str, feedback: Option<Vec<Item>>) -> (PlanId, PrKey, pulls::PullRequest) {
+    fn row(updated: &str, feedback: Option<Vec<Item>>) -> (PlanId, WorkflowKey, pulls::PullRequest) {
         let pr = pulls::PullRequest {
             id: 1,
             repo: "o/r".into(),
@@ -732,7 +732,7 @@ mod due_reads_tests {
         };
         (
             PlanId::parse("plan").unwrap(),
-            PrKey::parse("web").unwrap(),
+            WorkflowKey::parse("web").unwrap(),
             pr,
         )
     }

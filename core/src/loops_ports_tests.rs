@@ -36,7 +36,7 @@ use crate::home::CpdHome;
 use crate::host::pi::Launch as PiLaunch;
 use crate::host::runner::{FakeRunner, Reply};
 use crate::host::spawn::FakeSpawn;
-use crate::ids::{AttemptId, PlanId, PrKey};
+use crate::ids::{AttemptId, PlanId, WorkflowKey};
 use crate::inbox::cmd::{Until, snooze_until_on};
 use crate::inbox::model::Kind;
 use crate::inbox::rules::conditions_on;
@@ -446,7 +446,7 @@ fn guarded(status: &str) -> (Home, Store, impl Sized) {
 
 fn settle(rig: &Rig, h: &Home) -> Result<(), CpdError> {
     let mut env = env(rig, h);
-    settle_in(&mut env, &mut None, &plan(), &PrKey::parse("repo").unwrap(), &attempt())
+    settle_in(&mut env, &mut None, &plan(), &WorkflowKey::parse("repo").unwrap(), &attempt())
 }
 
 #[test]

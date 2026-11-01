@@ -36,7 +36,7 @@ pub(super) fn urgent(args: UrgentArgs) -> Result<Output, CpdError> {
                 let text = format!("Job {key} of Plan {plan} is urgent. Next: cpd job show {key} --plan {plan}");
                 append(tx, NewEvent::job_edited(text, ["urgent"]).plan(plan.clone()).job(key.clone()))?;
                 if let Some(pr) = &job.pr {
-                    crate::session::working_pr::name(tx, &plan, &crate::ids::PrKey::parse(pr)?)?;
+                    crate::session::working_pr::name(tx, &plan, &crate::ids::WorkflowKey::parse(pr)?)?;
                 }
                 Ok((job, false))
             }

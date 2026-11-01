@@ -2,7 +2,7 @@
 
 use super::closed::{ClosedUnmerged, closed_unmerged};
 use crate::home::CpdHome;
-use crate::ids::{ContextId, PlanId, PrKey, SessionId};
+use crate::ids::{ContextId, PlanId, WorkflowKey, SessionId};
 use crate::store::Store;
 
 const T: &str = "2026-01-01T00:00:00.000Z";
@@ -68,7 +68,7 @@ impl Fixture {
 fn row(plan: &str, key: &str, lead: &str, n: i64) -> ClosedUnmerged {
     ClosedUnmerged {
         plan: PlanId::parse(plan).unwrap(),
-        pr: PrKey::parse(key).unwrap(),
+        pr: WorkflowKey::parse(key).unwrap(),
         context: ContextId::parse("ctx").unwrap(),
         lead_session: Some(SessionId::parse(lead).unwrap()),
         repo: "acme/api".to_owned(),

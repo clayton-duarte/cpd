@@ -9,7 +9,7 @@ use super::flow::{self, Chart, Live, Pill};
 use crate::read::{JobNode, JobStatus};
 use crate::test_text::rows;
 use cpd_core::config::Tier;
-use cpd_core::ids::{JobKey, PrKey};
+use cpd_core::ids::{JobKey, WorkflowKey};
 
 const U: u8 = 1;
 const D: u8 = 2;
@@ -147,7 +147,7 @@ pub(super) fn reaches(buf: &Buffer, pills: &[Pill], from: &str, to: &str) -> boo
 fn node(key: &str, status: JobStatus, tier: Option<&str>, needs: &[&str]) -> JobNode {
     JobNode {
         key: JobKey::parse(key).unwrap(),
-        pr: Some(PrKey::parse("p").unwrap()),
+        pr: Some(WorkflowKey::parse("p").unwrap()),
         seq: 0,
         title: String::new(),
         status,

@@ -19,7 +19,7 @@ use super::engine::{Engine, incident_holds};
 use super::report::{About, Failure, Step};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::host::deadline::Failed;
-use cpd_core::ids::{PlanId, PrKey};
+use cpd_core::ids::{PlanId, WorkflowKey};
 use cpd_core::jira::{Done, Names, Request};
 use cpd_core::policy::Policy;
 use cpd_core::ports::Ports;
@@ -64,12 +64,12 @@ fn about(plan: &str) -> About {
 fn policy_of(engine: &mut Engine, plan: &str, pr: &str) -> Result<Policy, CpdError> {
     let home = engine.home.clone();
     let plan = PlanId::parse(plan)?;
-    let key = PrKey::parse(pr)?;
+    let key = WorkflowKey::parse(pr)?;
     engine.store.read(|conn| cpd_core::pr::policy_of_pr(conn, &home, &plan, &key))
 }
 
 fn move_about(due: &Due) -> About {
-    About::Move(PlanId::parse(&due.plan).expect("a stored Plan id"), PrKey::parse(&due.pr).expect("a stored PR key"), due.target)
+    About::Move(PlanId::parse(&due.plan).expect("a stored Plan id"), WorkflowKey::parse(&due.pr).expect("a stored PR key"), due.target)
 }
 
 /// Reports a failure of the row `due`: machine-wide for a missing sign-in or server, else one Event of the row's Plan.

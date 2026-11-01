@@ -15,7 +15,7 @@ use crate::plan::boxes::{self, LAYOUTS};
 use crate::plan::{CHART_MARGIN, Centre};
 use crate::read::{Dot, JobNode, JobStatus, NeedsUser, PlanBoxes, PrNode, PrState, PrStatus, Pull, ChatSlot};
 use cpd_core::config::Tier;
-use cpd_core::ids::{ContextId, JobKey, PlanId, PrKey, SessionId};
+use cpd_core::ids::{ContextId, JobKey, PlanId, WorkflowKey, SessionId};
 
 #[test]
 fn one_read_runs_at_a_time_and_the_newest_waiting_request_wins() {
@@ -70,7 +70,7 @@ fn one_read_runs_at_a_time_and_the_newest_waiting_request_wins() {
 
 fn pr_node(pull: Option<Pull>, lead_dot: Option<Dot>) -> PrNode {
     PrNode {
-        key: PrKey::parse("web").unwrap(),
+        key: WorkflowKey::parse("web").unwrap(),
         repo_name: "repo".into(),
         base: "main".into(),
         status: PrStatus::Dispatch,
@@ -91,7 +91,7 @@ fn pull() -> Pull {
 fn job_node(key: &str, status: JobStatus) -> JobNode {
     JobNode {
         key: JobKey::parse(key).unwrap(),
-        pr: Some(PrKey::parse("web").unwrap()),
+        pr: Some(WorkflowKey::parse("web").unwrap()),
         seq: 0,
         title: String::new(),
         status,

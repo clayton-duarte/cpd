@@ -8,7 +8,7 @@ use super::flow::Pill;
 use super::{boxes, sample_pr};
 use crate::read::{NeedsUser, PrNode};
 use crate::test_text::rows;
-use cpd_core::ids::PrKey;
+use cpd_core::ids::WorkflowKey;
 use ratatui::layout::Rect;
 
 fn chars(s: &str) -> Vec<String> {
@@ -112,7 +112,7 @@ fn a_box_is_widened_to_hold_its_counter_plus_four() {
 
 /// The `┬` columns of the first box's bottom border, its width and the canvas.
 fn exit(secs: Option<u64>) -> (Buffer, usize, usize, Vec<usize>) {
-    let web = PrNode { needs: vec![PrKey::parse("api").unwrap()], ..sample_pr("web") };
+    let web = PrNode { needs: vec![WorkflowKey::parse("api").unwrap()], ..sample_pr("web") };
     let buf = canvas(&[with("api", secs), web]);
     let r = rows(&buf);
     let y = r.iter().position(|l| l.starts_with('╰')).unwrap();

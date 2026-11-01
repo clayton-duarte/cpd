@@ -13,7 +13,7 @@ use super::open::{merged_prs, opened_prs};
 use super::{CancelArgs, Env, find_pr, plan_phase, pulls};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::fingerprint::load_prs;
@@ -105,14 +105,14 @@ pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
 
 /// The PR's Jobs go with it (contract §3.8): in the transaction that cancels a PR, every Job of it that is `draft`, `queued` or `failed`, of every kind,
 /// is `cancelled` (`reason` `pr cancelled`, one `job-cancelled` each, by `seq`). One already `cancelled` is untouched.
-fn cancel_jobs(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+fn cancel_jobs(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey) -> Result<(), CpdError> {
     cancel_jobs_with(tx, plan, key, &["draft", "queued", "failed"], "pr cancelled", "was cancelled")
 }
 
 /// The Jobs of PR `key` whose status is one of `statuses`, `cancelled` in the caller's transaction with `reason`, one `job-cancelled` Event each,
 /// by `seq`. `what` is what happened to the PR, for the Event's text. `pr cancel` cancels `draft`, `queued` and `failed` ones; the merge of a PR its `draft` ones
 /// (hs-d735, `pr merged`).
-pub(super) fn cancel_jobs_with(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, statuses: &[&str], reason: &str, what: &str) -> Result<(), CpdError> {
+pub(super) fn cancel_jobs_with(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey, statuses: &[&str], reason: &str, what: &str) -> Result<(), CpdError> {
     let list = statuses.iter().map(|s| format!("'{s}'")).collect::<Vec<_>>().join(", ");
     let own: Vec<String> = {
         let mut stmt = tx.prepare(&format!("SELECT key FROM jobs WHERE plan = ?1 AND workflow = ?2 AND status IN ({list}) ORDER BY seq"))?;
@@ -154,7 +154,7 @@ pub fn cancel_archived_drafts(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<(), Cp
         stmt.query_map([plan.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
     for pr in prs {
-        cancel_jobs_with(tx, plan, &PrKey::parse(&pr)?, &["draft"], ARCHIVED_REASON, "belongs to an archived Plan")?;
+        cancel_jobs_with(tx, plan, &WorkflowKey::parse(&pr)?, &["draft"], ARCHIVED_REASON, "belongs to an archived Plan")?;
     }
     Ok(())
 }
@@ -162,7 +162,7 @@ pub fn cancel_archived_drafts(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<(), Cp
 /// After the lock, the cancelled PR may have been the last one `waiting` or `dispatch`: the Plan then moves on as
 /// `pr open` and `pr poll` move it (§3.1): `dispatch → deploy`, and `deploy → done` when every PR left is `merged`.
 /// Never when no PR is left that is not `cancelled`. The Plan's new phase, if it moved.
-fn advance(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<Option<Phase>, CpdError> {
+fn advance(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey) -> Result<Option<Phase>, CpdError> {
     if plan_phase(tx, plan)? != Phase::Dispatch {
         return Ok(None);
     }
@@ -187,7 +187,7 @@ fn advance(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<Option<Phase
 
 /// In phase `deploy`, when every PR that is not `cancelled` is `merged` and one is: `deploy → done` with `plan-done`
 /// (§3.1). The Plan's new phase, if it moved. Never in another phase: in `dispatch` PRs remain to start or open.
-fn finish(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<Option<Phase>, CpdError> {
+fn finish(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey) -> Result<Option<Phase>, CpdError> {
     if plan_phase(tx, plan)? != Phase::Deploy {
         return Ok(None);
     }
@@ -212,7 +212,7 @@ fn finish(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<Option<Phase>
     Ok(Some(Phase::Done))
 }
 
-fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, superseded: Option<&str>) -> Result<Decision, CpdError> {
+fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, superseded: Option<&str>) -> Result<Decision, CpdError> {
     let prs = load_prs(conn, plan)?;
     let pr = find_pr(&prs, plan, key)?;
     let phase = plan_phase(conn, plan)?;
@@ -279,7 +279,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, superseded: Option<&str
 /// Context (`pr_not_found`), not `key` itself (`usage`), not `cancelled` (`illegal_transition`). Any other status will
 /// do: cpd cannot know where the work went (contract §3.8). It is where the work went, not a dependency: it may be
 /// another Plan's.
-fn check_superseding(conn: &Connection, plan: &PlanId, key: &PrKey, by: &str) -> Result<(), CpdError> {
+fn check_superseding(conn: &Connection, plan: &PlanId, key: &WorkflowKey, by: &str) -> Result<(), CpdError> {
     let (by_plan, by_key) = by.split_once('/').unwrap_or((plan.as_str(), by));
     if by_plan == plan.as_str() && by_key == key.as_str() {
         return Err(CpdError::new(ErrorCode::Usage, format!("--superseded-by names PR {key} itself.")).with("pr", key.as_str()));
@@ -320,7 +320,7 @@ fn stacked_on(conn: &Connection, plan: &PlanId, pr: &PrRow) -> Result<Vec<String
 
 /// An `open` PR: its pull request must be stored `closed` (`pr_not_closed`, no `gh` call: the row is what the last poll
 /// wrote) and no PR that is not `cancelled` may need it (`pr_in_use`). Its Jobs are not checked: its `draft`, `queued` and `failed` ones go with it.
-fn decide_open(conn: &Connection, plan: &PlanId, key: &PrKey, pr: &PrRow, needing: &[String]) -> Result<Decision, CpdError> {
+fn decide_open(conn: &Connection, plan: &PlanId, key: &WorkflowKey, pr: &PrRow, needing: &[String]) -> Result<Decision, CpdError> {
     let (Some(id), Some(pull), Some(worktree)) = (pr.pull_request, &pr.pull, &pr.lead_worktree) else {
         return Err(CpdError::bad_row(format!("PR {key} of Plan {plan} is open without a pull request or a Lead worktree")));
     };
@@ -390,7 +390,7 @@ mod tests {
     #[test]
     fn a_draft_queued_and_failed_job_go_with_its_pr_and_a_running_one_holds_it() {
         let (_dir, mut store) = fixture();
-        let (plan, key) = (PlanId::parse("pay").unwrap(), PrKey::parse("api").unwrap());
+        let (plan, key) = (PlanId::parse("pay").unwrap(), WorkflowKey::parse("api").unwrap());
         assert!(matches!(store.read(|conn| decide(conn, &plan, &key, None)).unwrap(), Decision::Cancel { from: "dispatch", .. }));
 
         store

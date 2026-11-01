@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::error::ErrorCode;
 use crate::home::CpdHome;
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{PlanId, WorkflowKey};
 use crate::store::Store;
 
 use super::open::hold_refused;
@@ -51,7 +51,7 @@ fn fixture() -> Fixture {
 }
 
 /// The incident hold refusal for `plan`/`pr` from an agent, as its `CpdError`.
-fn refused(f: &mut Fixture, plan: &PlanId, pr: &PrKey) -> crate::error::CpdError {
+fn refused(f: &mut Fixture, plan: &PlanId, pr: &WorkflowKey) -> crate::error::CpdError {
     f.store
         .read(|c| hold_refused(c, plan, pr, true))
         .expect_err("a held Plan is refused for an agent")
@@ -61,7 +61,7 @@ fn refused(f: &mut Fixture, plan: &PlanId, pr: &PrKey) -> crate::error::CpdError
 fn pr_open_refuses_a_held_plan_for_an_agent() {
     let mut f = fixture();
     let ops = PlanId::parse("ops").unwrap();
-    let web = PrKey::parse("web").unwrap();
+    let web = WorkflowKey::parse("web").unwrap();
 
     let err = refused(&mut f, &ops, &web);
     assert_eq!(err.code(), ErrorCode::IncidentHold, "the code is incident_hold");
@@ -75,7 +75,7 @@ fn pr_open_refuses_a_held_plan_for_an_agent() {
 fn pr_push_refuses_a_held_plan_for_an_agent() {
     let mut f = fixture();
     let ops = PlanId::parse("ops").unwrap();
-    let web = PrKey::parse("web").unwrap();
+    let web = WorkflowKey::parse("web").unwrap();
 
     // The agent is refused; a caller that is not an agent is not (the User's own push).
     let err = refused(&mut f, &ops, &web);
@@ -90,7 +90,7 @@ fn pr_push_refuses_a_held_plan_for_an_agent() {
 fn pr_rebase_refuses_a_held_plan_for_an_agent() {
     let mut f = fixture();
     let ops = PlanId::parse("ops").unwrap();
-    let web = PrKey::parse("web").unwrap();
+    let web = WorkflowKey::parse("web").unwrap();
 
     let err = refused(&mut f, &ops, &web);
     assert_eq!(err.code(), ErrorCode::IncidentHold, "the code is incident_hold");
@@ -101,7 +101,7 @@ fn pr_rebase_refuses_a_held_plan_for_an_agent() {
 fn pr_open_allows_an_incident_plan() {
     let mut f = fixture();
     let pay = PlanId::parse("pay").unwrap();
-    let api = PrKey::parse("api").unwrap();
+    let api = WorkflowKey::parse("api").unwrap();
 
     // A Plan in the incident is not held, even for an agent.
     f.store
@@ -117,7 +117,7 @@ fn pr_open_allows_an_incident_plan() {
         })
         .unwrap();
     let ops = PlanId::parse("ops").unwrap();
-    let web = PrKey::parse("web").unwrap();
+    let web = WorkflowKey::parse("web").unwrap();
     f.store
         .read(|c| hold_refused(c, &ops, &web, true))
         .expect("with the incident off no Plan is held");

@@ -17,7 +17,7 @@ use super::{
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
-use crate::ids::{JobKey, PlanId, PrKey};
+use crate::ids::{JobKey, PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::args::PrArg;
 use crate::plan::fingerprint::load_prs;
@@ -129,7 +129,7 @@ pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
                     .job(wanted.key.clone()),
                 )?;
                 if let Some(pr) = &job.pr {
-                    crate::session::working_pr::name(tx, &plan, &crate::ids::PrKey::parse(pr)?)?;
+                    crate::session::working_pr::name(tx, &plan, &crate::ids::WorkflowKey::parse(pr)?)?;
                 }
                 Ok((job, false))
             }
@@ -322,7 +322,7 @@ pub(super) fn check_needs_explore_only(all: &[Job], plan: &PlanId, key: &str, ex
 /// the first one that is not fails, with the names the repo declares and the file that declares them.
 pub(crate) fn check_resources_declared(conn: &Connection, home: &CpdHome, plan: &PlanId, pr: &str, job: &str, resources: Option<&[String]>) -> Result<(), CpdError> {
     let Some(resources) = resources else { return Ok(()) };
-    let key = PrKey::parse(pr)?;
+    let key = WorkflowKey::parse(pr)?;
     let declared = crate::pr::policy_of_pr(conn, home, plan, &key)?.resources.names;
     let Some(missing) = resources.iter().find(|r| !declared.contains(r)) else { return Ok(()) };
     let (owner, name): (String, Option<String>) = conn.query_row(

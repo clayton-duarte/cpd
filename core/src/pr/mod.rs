@@ -72,7 +72,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::git::hooks::{Detached, Log as HookLog};
 use crate::git::{self, HookOutcome, Operation, Setup};
 use crate::home::{CpdHome, Hook};
-use crate::ids::{ContextId, OwnerLogin, PlanId, PrKey, RepoName};
+use crate::ids::{ContextId, OwnerLogin, PlanId, WorkflowKey, RepoName};
 use crate::policy::{Gate, Policy, PolicyKey, owner_unset, resolve};
 use crate::output::Output;
 use crate::plan::Phase;
@@ -146,7 +146,7 @@ pub struct PollArgs {
 pub struct AddArgs {
     /// The PR key, chosen by the Lead
     #[arg(value_name = "key")]
-    key: PrKey,
+    key: WorkflowKey,
     /// The PR's repo: a path inside it
     #[arg(long, value_name = "path")]
     repo: PathBuf,
@@ -185,7 +185,7 @@ pub struct AddArgs {
 pub struct EditArgs {
     /// The PR key
     #[arg(value_name = "key")]
-    key: PrKey,
+    key: WorkflowKey,
     /// The new repo: a path inside it
     #[arg(long, value_name = "path")]
     repo: Option<PathBuf>,
@@ -212,7 +212,7 @@ pub struct EditArgs {
 pub struct DescribeArgs {
     /// The PR key
     #[arg(long = "pr", value_name = "key")]
-    key: PrKey,
+    key: WorkflowKey,
     /// The description: a path to a UTF-8 file, or - for stdin
     #[arg(long, value_name = "path")]
     file: PathBuf,
@@ -224,7 +224,7 @@ pub struct DescribeArgs {
 pub struct CancelArgs {
     /// The PR key
     #[arg(value_name = "key")]
-    key: PrKey,
+    key: WorkflowKey,
     /// Cancel a dispatch PR whose merged work another PR carried: that PR, as <plan>/<key> (a bare <key> is of the Plan)
     #[arg(long = "superseded-by", value_name = "ref")]
     superseded_by: Option<add::PrRef>,
@@ -236,7 +236,7 @@ pub struct CancelArgs {
 pub struct StartArgs {
     /// The PR key
     #[arg(value_name = "key")]
-    key: PrKey,
+    key: WorkflowKey,
     #[command(flatten)]
     plan: PlanArg,
 }
@@ -269,14 +269,14 @@ impl Env {
 
 /// The resolved policy of PR `key` of `plan` (contract §8.3 "Keys and resolution"): `Repo(<owner>, <name>)`,
 /// `Owner` when the PR has no name. An unset owner is `owner_unset`; a resolve error is returned as it is.
-fn pr_policy(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Policy, CpdError> {
+fn pr_policy(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<Policy, CpdError> {
     pr_policy_resolved(env, plan, key, resolve)?
 }
 
 /// [`pr_policy`] with the two kinds of failure apart: the outer error is the store's (it cannot be read, or holds
 /// a value that does not parse), the inner one the resolve's (`owner_unset`, `owner_unconfirmed`, `policy_invalid`),
 /// which a consumer of many rows (the poll) reports for its row and goes on.
-fn pr_policy_resolved(env: &mut Env, plan: &PlanId, key: &PrKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
+fn pr_policy_resolved(env: &mut Env, plan: &PlanId, key: &WorkflowKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
     let home = env.home.clone();
     env.store.read(|conn| pr_policy_in(conn, &home, plan, key, resolve))
 }
@@ -284,7 +284,7 @@ fn pr_policy_resolved(env: &mut Env, plan: &PlanId, key: &PrKey, resolve: Resolv
 type ResolveFn = fn(&CpdHome, &PolicyKey) -> Result<crate::policy::Resolved, CpdError>;
 
 /// [`pr_policy_resolved`] on a connection, for a consumer that has no [`Env`] (an Attempt's, the engine's).
-fn pr_policy_in(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &PrKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
+fn pr_policy_in(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &WorkflowKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
     let (context, owner, name): (String, Option<String>, Option<String>) = conn.query_row(
         "SELECT c.id, c.owner, r.name FROM workflows r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context
           WHERE r.plan = ?1 AND r.key = ?2",
@@ -304,14 +304,14 @@ fn pr_policy_in(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key:
 
 /// The policy of PR `key` of `plan`, from a connection: what an Attempt-level consumer (the quick check, the
 /// Worker Spec) reads, through its Job's PR.
-pub fn policy_of_pr(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &PrKey) -> Result<Policy, CpdError> {
+pub fn policy_of_pr(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &WorkflowKey) -> Result<Policy, CpdError> {
     pr_policy_in(conn, home, plan, key, resolve)?
 }
 
 /// [`policy_of_pr`] of the PR that holds Job `job` of `plan`.
 pub fn policy_of_job(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, job: &str) -> Result<Policy, CpdError> {
     let pr: String = conn.query_row("SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job], |r| r.get(0))?;
-    let key = PrKey::parse(&pr).map_err(|_| CpdError::bad_row(format!("Job {job} has the PR key {pr:?}")))?;
+    let key = WorkflowKey::parse(&pr).map_err(|_| CpdError::bad_row(format!("Job {job} has the PR key {pr:?}")))?;
     policy_of_pr(conn, home, plan, &key)
 }
 
@@ -323,7 +323,7 @@ fn illegal_phase(plan: &PlanPrs, command: &str, needs: &str) -> CpdError {
 /// A per-PR Gate log, `run/<plan>/logs/pr-<key>.<hook>.log` (§7.6): `pre-start`
 /// and `pre-merge` of a repair's Gate. The contract's layout (§1.4) names these
 /// files; `CpdHome` has no method for them.
-fn pr_log(home: &CpdHome, plan: &PlanId, key: &PrKey, hook: Hook) -> PathBuf {
+fn pr_log(home: &CpdHome, plan: &PlanId, key: &WorkflowKey, hook: Hook) -> PathBuf {
     home.plan_dir(plan).join("logs").join(format!("pr-{key}.{}.log", hook.as_str()))
 }
 
@@ -356,7 +356,7 @@ fn plan_phase(conn: &rusqlite::Connection, plan: &PlanId) -> Result<Phase, CpdEr
 }
 
 /// The PR `key` among `prs`, else `pr_not_found` (exit 4).
-fn find_pr<'a>(prs: &'a [PrRow], plan: &PlanId, key: &PrKey) -> Result<&'a PrRow, CpdError> {
+fn find_pr<'a>(prs: &'a [PrRow], plan: &PlanId, key: &WorkflowKey) -> Result<&'a PrRow, CpdError> {
     prs.iter().find(|p| p.key == *key).ok_or_else(|| {
         CpdError::new(ErrorCode::PrNotFound, format!("No PR {key} in Plan {plan}."))
             .with("plan", plan.as_str())

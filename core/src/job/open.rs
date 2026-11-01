@@ -349,7 +349,7 @@ pub fn nothing_merged(all: &[Job], job: &Job) -> bool {
 mod tests {
     use super::*;
     use crate::plan::jobs::Job;
-    use crate::ids::PrKey;
+    use crate::ids::WorkflowKey;
 
     fn job(key: &str, pr: &str, kind: &str, status: &str) -> Job {
         Job {
@@ -389,7 +389,7 @@ mod tests {
         assert_eq!(key(&["open-api"]).as_str(), "open-api-2");
         assert_eq!(key(&["open-api", "open-api-2", "open-web"]).as_str(), "open-api-3");
         // A PR key of 24 characters leaves room for a suffix of up to two digits (32 characters).
-        let long = PrKey::parse(&"a".repeat(24)).unwrap().to_string();
+        let long = WorkflowKey::parse(&"a".repeat(24)).unwrap().to_string();
         let taken: Vec<String> = std::iter::once(format!("open-{long}")).chain((2..10).map(|n| format!("open-{long}-{n}"))).collect();
         assert_eq!(free_key(&taken, "open", &pr(&long)).unwrap().as_str().len(), 32);
     }

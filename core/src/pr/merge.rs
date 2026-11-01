@@ -15,7 +15,7 @@ use super::status::{Required, required_states};
 use crate::host::runner::Runner;
 use crate::home::CpdHome;
 use crate::store::Store;
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{PlanId, WorkflowKey};
 use crate::inbox::model::close_pr_ready;
 use crate::store::WriteTxn;
 use crate::error::{CpdError, ErrorCode};
@@ -165,7 +165,7 @@ fn store_merge_in(tx: &WriteTxn<'_>, repo: &str, number: i64, merged_at: Option<
         stmt.query_map([row.id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
     };
     for (plan, key) in owners {
-        let (plan, key): (PlanId, PrKey) = (plan.parse()?, key.parse()?);
+        let (plan, key): (PlanId, WorkflowKey) = (plan.parse()?, key.parse()?);
         poll::merge(tx, &plan, &key, &after)?;
         poll::unstack_stacked_on(tx, &plan, &key)?;
     }

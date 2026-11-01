@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::comments::{Item, Read};
 use super::gh::{Listed, Membership, PolledPr};
 use crate::error::CpdError;
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{PlanId, WorkflowKey};
 use crate::policy::Checks;
 use crate::store::WriteTxn;
 
@@ -186,7 +186,7 @@ pub(super) fn find(conn: &Connection, repo: &str, number: i64) -> Result<Option<
 }
 
 /// Every row a PR in status `open` points to, with that PR's Plan and key, in Plan and key order.
-pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, PrKey, PullRequest)>, CpdError> {
+pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, WorkflowKey, PullRequest)>, CpdError> {
     let columns: Vec<String> = COLUMNS.split(", ").map(|c| format!("pr.{c}")).collect();
     let mut stmt = conn.prepare(&format!(
         "SELECT r.plan, r.key, {} FROM workflows r JOIN pull_requests pr ON pr.id = r.pull_request
@@ -226,7 +226,7 @@ pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, PrKey, PullRe
             let bad = |what: &str, value: &str| {
                 CpdError::bad_row(format!("a PR has {what} {value:?}"))
             };
-            Ok((PlanId::parse(&plan).map_err(|_| bad("Plan id", &plan))?, PrKey::parse(&key).map_err(|_| bad("PR key", &key))?, pull))
+            Ok((PlanId::parse(&plan).map_err(|_| bad("Plan id", &plan))?, WorkflowKey::parse(&key).map_err(|_| bad("PR key", &key))?, pull))
         })
         .collect()
 }

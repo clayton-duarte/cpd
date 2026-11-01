@@ -8,7 +8,7 @@ use super::lines_tests::violations;
 use super::{boxes, sample_pr};
 use crate::read::{NeedsUser, PrNode};
 use crate::test_text::rows;
-use cpd_core::ids::PrKey;
+use cpd_core::ids::WorkflowKey;
 
 fn chars(s: &str) -> Vec<String> {
     s.chars().map(String::from).collect()
@@ -108,7 +108,7 @@ fn a_box_is_widened_to_hold_the_time_and_the_cost_plus_four() {
 
 /// The `┬` columns of box `a`'s bottom border, that another PR `b` needs; and the canvas, the row, the box's width.
 fn exit(secs: Option<u64>, cost: Option<f64>) -> (Buffer, usize, usize, Vec<usize>) {
-    let web = PrNode { needs: vec![PrKey::parse("a").unwrap()], ..sample_pr("b") };
+    let web = PrNode { needs: vec![WorkflowKey::parse("a").unwrap()], ..sample_pr("b") };
     let buf = canvas(&[small(secs, cost), web]);
     let r = rows(&buf);
     let y = r.iter().position(|l| l.starts_with('╰')).unwrap();

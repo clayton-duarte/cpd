@@ -16,7 +16,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{BasePull, NewEvent, append};
 use crate::git::{self, Setup, Step};
 use crate::home::{CpdHome, Hook};
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::plan::{Phase, PrRow};
 
@@ -94,7 +94,7 @@ impl NotReady {
     }
 }
 
-pub(crate) fn not_ready(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<NotReady, CpdError> {
+pub(crate) fn not_ready(conn: &rusqlite::Connection, plan: &PlanId, key: &WorkflowKey) -> Result<NotReady, CpdError> {
     let mut stmt = conn.prepare(concat!(
         "SELECT n.needs FROM workflows r, workflow_needs n, workflows q WHERE r.plan = ?1 AND r.key = ?2 AND ",
         needs_unmerged!(),
@@ -131,7 +131,7 @@ struct MergedBase {
     to: String,
 }
 
-fn merged_base(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<Option<MergedBase>, CpdError> {
+fn merged_base(conn: &rusqlite::Connection, plan: &PlanId, key: &WorkflowKey) -> Result<Option<MergedBase>, CpdError> {
     use rusqlite::OptionalExtension;
     Ok(conn
         .query_row(
@@ -149,7 +149,7 @@ fn merged_base(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Resul
 /// `base` and `pr-base-changed` is appended for its Plan, once per step down a chain of merged base PRs. GitHub deleted
 /// the merged branch, so it is never looked up. `by` is who unstacks (`poll`, `engine`, `pr start`, `pr open`); the
 /// poll's Event has `number` and `url` null. Whether anything changed.
-pub(super) fn unstack(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, by: &str) -> Result<bool, CpdError> {
+pub(super) fn unstack(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey, by: &str) -> Result<bool, CpdError> {
     use rusqlite::OptionalExtension;
     let mut seen = Vec::new();
     while let Some(MergedBase { repo, from, from_pr, to }) = merged_base(tx, plan, key)? {
@@ -182,7 +182,7 @@ pub(super) fn unstack(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, by: &str) -
 
 /// [`unstack`] in a transaction of its own when the PR needs it (a PR already unstacked writes nothing), then the PR as
 /// it is stored.
-pub(super) fn unstack_stored(store: &mut Store, source: &str, plan: &PlanId, key: &PrKey, by: &str) -> Result<PrRow, CpdError> {
+pub(super) fn unstack_stored(store: &mut Store, source: &str, plan: &PlanId, key: &WorkflowKey, by: &str) -> Result<PrRow, CpdError> {
     if store.read(|conn| Ok(merged_base(conn, plan, key)?.is_some()))? {
         store.write(source, |tx| unstack(tx, plan, key, by))?;
     }
@@ -193,7 +193,7 @@ pub(super) fn unstack_stored(store: &mut Store, source: &str, plan: &PlanId, key
 
 /// A2 of an `open` Job (contract §3.4, hs-d340): a PR stacked on a base PR that has merged is unstacked first (`pr-base-changed`, `by` `open job`),
 /// so the Worker is told a base that exists: GitHub deleted the merged base PR's branch.
-pub fn unstack_for_open_job(store: &mut Store, source: &str, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+pub fn unstack_for_open_job(store: &mut Store, source: &str, plan: &PlanId, key: &WorkflowKey) -> Result<(), CpdError> {
     unstack_stored(store, source, plan, key, "open job").map(|_| ())
 }
 
@@ -301,7 +301,7 @@ impl Failed {
 }
 
 /// Where `pre-start`'s whole output goes: `run/<plan>/logs/lead-<key>.pre-start.log` (§7.2).
-fn pre_start_log(home: &CpdHome, plan: &PlanId, key: &PrKey) -> PathBuf {
+fn pre_start_log(home: &CpdHome, plan: &PlanId, key: &WorkflowKey) -> PathBuf {
     home.plan_dir(plan).join("logs").join(format!("lead-{key}.{}.log", Hook::PreStart.as_str()))
 }
 
@@ -394,7 +394,7 @@ pub fn start(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, 
 /// transaction `start_failed_at` is set and one `error` Event `pr_start_failed`
 /// is appended for the Plan's Lead, `source` being the engine's. False when the
 /// PR is no longer `waiting` or was already marked: nothing is written.
-pub fn record_failure(store: &mut Store, source: &str, plan: &PlanId, key: &PrKey, step: Step, error: &CpdError) -> Result<bool, CpdError> {
+pub fn record_failure(store: &mut Store, source: &str, plan: &PlanId, key: &WorkflowKey, step: Step, error: &CpdError) -> Result<bool, CpdError> {
     store.write(source, |tx| {
         let marked = tx.execute(
             "UPDATE workflows SET start_failed_at = (SELECT at FROM txns WHERE id = cpd_txn())

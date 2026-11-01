@@ -151,7 +151,7 @@ fn the_lead_working_dot_stays_between_the_state_and_the_cue_inside_the_link() {
 #[test]
 fn after_the_chart_scrolled_a_click_opens_the_url_of_the_title_now_under_the_pointer() {
     let mut web = pr_with("web", Some(pull(2)));
-    web.needs = vec![cpd_core::ids::PrKey::parse("api").unwrap()];
+    web.needs = vec![cpd_core::ids::WorkflowKey::parse("api").unwrap()];
     let centre = sample_centre(vec![pr_with("api", Some(pull(1))), web], Vec::new());
     let mut ui = Ui::default();
     let first = draw(&mut ui, &centre, 8);
@@ -175,7 +175,7 @@ fn after_the_chart_scrolled_a_click_opens_the_url_of_the_title_now_under_the_poi
 #[test]
 fn a_pr_box_with_no_pull_request_has_no_link() {
     let mut web = pr_with("web", Some(pull(2)));
-    web.needs = vec![cpd_core::ids::PrKey::parse("api").unwrap()];
+    web.needs = vec![cpd_core::ids::WorkflowKey::parse("api").unwrap()];
     let centre = sample_centre(vec![pr_with("api", None), web], Vec::new());
     let mut ui = Ui::default();
     let buf = draw(&mut ui, &centre, 20);

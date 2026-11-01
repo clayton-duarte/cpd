@@ -375,7 +375,7 @@ impl Driver {
     fn start(&mut self, target: &Target, job: &jobs::Job, dirs: &PiDirs) -> Result<Ended, CpdError> {
         // A2: an `open` Job's PR stacked on a merged base PR is unstacked first, so the Worker is told a base that exists (§3.4).
         if job.kind == "open" {
-            let pr = crate::ids::PrKey::parse(job.pr_str()).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", job.key, job.pr_str())))?;
+            let pr = crate::ids::WorkflowKey::parse(job.pr_str()).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", job.key, job.pr_str())))?;
             crate::pr::start::unstack_for_open_job(&mut self.store, SOURCE, &self.plan, &pr)?;
         }
         if crate::plan::jobs::is_explore(&job.kind) {

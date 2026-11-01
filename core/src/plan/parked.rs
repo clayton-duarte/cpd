@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension};
 use super::fingerprint::{load_prs, plan_fingerprint};
 use super::jobs::{self, Job};
 use crate::error::{CpdError, ErrorCode};
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{PlanId, WorkflowKey};
 use crate::pr::start::not_ready;
 
 /// What decides whether a draft waits: the Plan's Jobs and the PRs that wait for another PR (only after the lock).
@@ -45,7 +45,7 @@ fn waiting_prs(conn: &Connection, plan: &PlanId, phase: &str) -> Result<BTreeSet
     let mut waits = BTreeSet::new();
     if locked(phase) {
         for pr in load_prs(conn, plan)? {
-            let key = PrKey::parse(pr.key.as_str())?;
+            let key = WorkflowKey::parse(pr.key.as_str())?;
             if !not_ready(conn, plan, &key)?.is_empty() {
                 waits.insert(pr.key.to_string());
             }

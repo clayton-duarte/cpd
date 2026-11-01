@@ -6,7 +6,7 @@
 //! The inc-v2-engine Job implements the two stubs these tests call
 //! ([`schedule::incident_starts`] and [`engine::incident_holds_plan`]) and wires them into the steps.
 
-use cpd_core::ids::{PlanId, PrKey};
+use cpd_core::ids::{PlanId, WorkflowKey};
 
 use super::engine::{self, Engine};
 use super::report::Step;
@@ -164,7 +164,7 @@ fn incident_mode_holds_e4_and_e7_for_plans_outside_the_set() {
     let startable = engine::startable_prs(engine).unwrap();
     assert_eq!(
         startable,
-        vec![(PlanId::parse("pay").unwrap(), PrKey::parse("ship").unwrap())],
+        vec![(PlanId::parse("pay").unwrap(), WorkflowKey::parse("ship").unwrap())],
         "E7 starts only the incident Plan's PR"
     );
 

@@ -86,7 +86,7 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
     };
     let metrics = (ctx.metrics)(&target);
     let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
-    let pr = crate::ids::PrKey::parse(target.pr_str()).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", target.job, target.pr_str())))?;
+    let pr = crate::ids::WorkflowKey::parse(target.pr_str()).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", target.job, target.pr_str())))?;
     // Step 10, and every other end. An `open` Job's merge writes the PR's rows in the same transaction (§7.7).
     store.write(ctx.source, |tx| {
         let pull = pulled.as_ref().map(|p| ledger::Pull { number: p.number(), url: p.url() });

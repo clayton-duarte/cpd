@@ -23,7 +23,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git::{self, Push, RebaseWorktree, TAIL_LINES, tail};
 use crate::host::runner::Runner;
-use crate::ids::{AttemptId, PlanId, PrKey};
+use crate::ids::{AttemptId, PlanId, WorkflowKey};
 use crate::merge::{self, CAS_RETRIES};
 use crate::output::Output;
 use crate::plan::Phase;
@@ -153,7 +153,7 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
 }
 
 /// A running Attempt of any Job of the PR refuses `attempt_running`: that Worker does the rebase, steered by the Lead.
-fn refuse_running(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+fn refuse_running(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<(), CpdError> {
     let running: Vec<(String, String)> = env.store.read(|conn| {
         let mut stmt = conn.prepare(
             "SELECT j.key, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
@@ -450,13 +450,13 @@ pub(crate) fn unresolved_with(runner: &dyn Runner, lead: &Path) -> Result<Vec<St
 }
 
 /// `cpd pr rebase --pr <key> [--plan <id>] <flag>`: `--plan` unless `CPD_PLAN` already names the Plan.
-fn command(plan: &PlanId, key: &PrKey, flag: &str) -> String {
+fn command(plan: &PlanId, key: &WorkflowKey, flag: &str) -> String {
     let selected = std::env::var("CPD_PLAN").is_ok_and(|p| p == plan.as_str());
     if selected { format!("cpd pr rebase --pr {key} {flag}") } else { format!("cpd pr rebase --pr {key} --plan {plan} {flag}") }
 }
 
 /// The rebase stopped at a conflict in the Lead worktree (the stop's `rebase_conflict`).
-fn stopped(plan: &PlanId, key: &PrKey, lead: &Path, branch: &str, files: Vec<String>) -> CpdError {
+fn stopped(plan: &PlanId, key: &WorkflowKey, lead: &Path, branch: &str, files: Vec<String>) -> CpdError {
     let message = format!(
         "{branch} conflicts in {} files: the rebase is stopped in {}. Resolve them and `git add` them (no commit, no push), then run `{}`; or give it up with `{}`.",
         files.len(),
@@ -467,7 +467,7 @@ fn stopped(plan: &PlanId, key: &PrKey, lead: &Path, branch: &str, files: Vec<Str
     conflict(plan, key, lead, message, files)
 }
 
-fn conflict(plan: &PlanId, key: &PrKey, lead: &Path, message: String, files: Vec<String>) -> CpdError {
+fn conflict(plan: &PlanId, key: &WorkflowKey, lead: &Path, message: String, files: Vec<String>) -> CpdError {
     CpdError::new(ErrorCode::RebaseConflict, message)
         .with("plan", plan.as_str())
         .with("pr", key.as_str())
@@ -477,7 +477,7 @@ fn conflict(plan: &PlanId, key: &PrKey, lead: &Path, message: String, files: Vec
         .with("abort", command(plan, key, "--abort"))
 }
 
-fn in_progress_error(plan: &PlanId, key: &PrKey) -> CpdError {
+fn in_progress_error(plan: &PlanId, key: &WorkflowKey) -> CpdError {
     CpdError::new(
         ErrorCode::RebaseInProgress,
         format!("A rebase of PR {key} is already in progress in its Lead worktree: run `{}` or `{}`.", command(plan, key, "--continue"), command(plan, key, "--abort")),
@@ -488,14 +488,14 @@ fn in_progress_error(plan: &PlanId, key: &PrKey) -> CpdError {
     .with("abort", command(plan, key, "--abort"))
 }
 
-fn no_rebase_error(plan: &PlanId, key: &PrKey) -> CpdError {
+fn no_rebase_error(plan: &PlanId, key: &WorkflowKey) -> CpdError {
     CpdError::new(ErrorCode::NoRebaseInProgress, format!("No rebase of PR {key} is in progress in its Lead worktree."))
         .with("plan", plan.as_str())
         .with("pr", key.as_str())
 }
 
 /// The Lead Branch is not where the stopped rebase started: a merge landed during the stop.
-fn moved(plan: &PlanId, key: &PrKey, tip: &str) -> CpdError {
+fn moved(plan: &PlanId, key: &WorkflowKey, tip: &str) -> CpdError {
     CpdError::new(
         ErrorCode::CasLost,
         format!("The Lead Branch of PR {key} moved during the stop (a merge landed): run `{}`, then `cpd pr rebase --pr {key}`.", command(plan, key, "--abort")),
@@ -552,7 +552,7 @@ fn removing(worktree: RebaseWorktree, error: CpdError) -> CpdError {
 /// compare-and-swap happened, its step 10 has not committed) is ended before
 /// the rebase rewrites it: by R when its driver is dead, else by its driver,
 /// waited for at most 60 s, else `cas_lost` with `details.attempt`.
-fn guard_u(env: &mut Env, plan: &PlanId, key: &PrKey, repo: &Path, snapshot: &str) -> Result<(), CpdError> {
+fn guard_u(env: &mut Env, plan: &PlanId, key: &WorkflowKey, repo: &Path, snapshot: &str) -> Result<(), CpdError> {
     let merging: Vec<String> = env.store.read(|conn| {
         let mut stmt = conn.prepare(
             "SELECT a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
@@ -585,7 +585,7 @@ fn guard_u(env: &mut Env, plan: &PlanId, key: &PrKey, repo: &Path, snapshot: &st
 /// ends it. pi's catalog, which R needs for the ledger's Tier checks (a crashed
 /// Attempt is retried at its own Tier), is loaded the first time R runs.
 /// Reads the time and takes the naps on `env.ports.clock`.
-pub(crate) fn settle_in(env: &mut Env, catalog: &mut Option<Catalog>, plan: &PlanId, key: &PrKey, attempt: &AttemptId) -> Result<(), CpdError> {
+pub(crate) fn settle_in(env: &mut Env, catalog: &mut Option<Catalog>, plan: &PlanId, key: &WorkflowKey, attempt: &AttemptId) -> Result<(), CpdError> {
     let clock = env.ports.clock.clone();
     let deadline = clock.now() + GUARD_WAIT;
     loop {
@@ -621,7 +621,7 @@ pub(crate) fn settle_in(env: &mut Env, catalog: &mut Option<Catalog>, plan: &Pla
 
 /// Rule S stopped after the Lead Branch moved (§7.6 step 7, and `--abort`; `what` is
 /// "rebased" or "aborted"): one `error` Event `lead_worktree_stale` for the Plan; the command goes on.
-fn report_stale(env: &mut Env, plan: &PlanId, key: &PrKey, lead: &Path, what: &str, stale: &CpdError) -> Result<(), CpdError> {
+fn report_stale(env: &mut Env, plan: &PlanId, key: &WorkflowKey, lead: &Path, what: &str, stale: &CpdError) -> Result<(), CpdError> {
     let fix = stale.details().get("fix").and_then(|v| v.as_str()).unwrap_or_default().to_owned();
     let text = format!(
         "PR {key} of Plan {plan} was {what}, but its Lead worktree {} still holds the previous tree. {fix}. Then: cpd plan show --plan {plan}",

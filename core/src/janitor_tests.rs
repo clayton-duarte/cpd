@@ -14,7 +14,7 @@ use crate::fakes::git::{GitRoute, Head, Repo, Universe};
 use crate::git::{attempt_worktree_path, pr_lead_worktree_path};
 use crate::home::CpdHome;
 use crate::host::runner::Reply;
-use crate::ids::{AttemptId, PlanId, PrKey};
+use crate::ids::{AttemptId, PlanId, WorkflowKey};
 use crate::janitor;
 use crate::output::Output;
 use crate::ports::{Fakes, Ports};
@@ -114,7 +114,7 @@ impl Rig {
     pub(crate) fn pr_with(&mut self, key: &'static str, status: &'static str, job: &str, outcome: &str) -> &Pr {
         let plan = PlanId::parse("pay").unwrap();
         let lead_branch = format!("cpd/pay/{key}");
-        let lead = pr_lead_worktree_path(self.repo.dir(), &plan, &PrKey::parse(key).unwrap(), &lead_branch).unwrap();
+        let lead = pr_lead_worktree_path(self.repo.dir(), &plan, &WorkflowKey::parse(key).unwrap(), &lead_branch).unwrap();
         let attempt_id = format!("{key}-a1");
         let attempt_branch = format!("cpd/pay--{attempt_id}");
         let attempt = attempt_worktree_path(self.repo.dir(), &plan, &AttemptId::parse(&attempt_id).unwrap()).unwrap();

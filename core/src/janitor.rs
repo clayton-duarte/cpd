@@ -14,7 +14,7 @@ use crate::git;
 use crate::home::CpdHome;
 use crate::host::layout::attempt_window;
 use crate::host::tmux::Tmux;
-use crate::ids::{AttemptId, PlanId, PrKey};
+use crate::ids::{AttemptId, PlanId, WorkflowKey};
 use crate::lock;
 use crate::output::Output;
 
@@ -85,7 +85,7 @@ fn log(env: &Env, status: &str) {
 /// What a pass did to one path.
 struct Entry {
     plan: PlanId,
-    pr: PrKey,
+    pr: WorkflowKey,
     status: String,
     path: String,
     outcome: &'static str,
@@ -154,7 +154,7 @@ fn event(e: &Entry) -> (PlanId, NewEvent) {
 /// Attempts of merged Jobs, never its Lead worktree (contract §7.2 "Ended Attempts of merged Jobs on a live PR").
 pub(crate) struct Merged {
     pub(crate) plan: PlanId,
-    pub(crate) pr: PrKey,
+    pub(crate) pr: WorkflowKey,
     /// The PR's status in the store: `merged`, `cancelled`, or (for the swept Attempts only) `dispatch` or `open`.
     pub(crate) status: String,
     pub(crate) repo: String,
@@ -244,7 +244,7 @@ pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Mer
             .map(|(id, branch, worktree, ended, _)| Ok(Attempt { id: AttemptId::parse(&id)?, branch, worktree, ended }))
             .collect::<Result<Vec<_>, CpdError>>()?;
         let plan = PlanId::parse(&plan)?;
-        let pr = PrKey::parse(&pr)?;
+        let pr = WorkflowKey::parse(&pr)?;
         let lead_worktree = if status == "cancelled" {
             git::pr_lead_worktree_path(Path::new(&repo), &plan, &pr, &lead_branch)
                 .ok()

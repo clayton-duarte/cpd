@@ -8,7 +8,7 @@
 use cpd_core::config::Tier;
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
-use cpd_core::ids::{JobKey, PlanId, PrKey};
+use cpd_core::ids::{JobKey, PlanId, WorkflowKey};
 use cpd_core::plan::Phase;
 use cpd_core::store::Store;
 use ratatui::style::Color;
@@ -64,7 +64,7 @@ fn dots_plan_box_title_dot_follows_work() {
 /// A PR of a Plan whose Lead works (or not), with one pull request.
 fn pr_node(lead_dot: Option<Dot>) -> PrNode {
     PrNode {
-        key: PrKey::parse("api").unwrap(),
+        key: WorkflowKey::parse("api").unwrap(),
         repo_name: "api-repo".into(),
         base: "main".into(),
         status: PrStatus::Dispatch,
@@ -90,7 +90,7 @@ fn pr_node(lead_dot: Option<Dot>) -> PrNode {
 fn failed_job() -> JobNode {
     JobNode {
         key: JobKey::parse("j1").unwrap(),
-        pr: Some(PrKey::parse("api").unwrap()),
+        pr: Some(WorkflowKey::parse("api").unwrap()),
         seq: 0,
         title: String::new(),
         status: JobStatus::Failed,

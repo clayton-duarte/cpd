@@ -696,7 +696,7 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
 #[cfg(test)]
 fn sample_pr(key: &str) -> read::PrNode {
     read::PrNode {
-        key: cpd_core::ids::PrKey::parse(key).unwrap(),
+        key: cpd_core::ids::WorkflowKey::parse(key).unwrap(),
         repo_name: format!("{key}-repo"),
         base: "main".into(),
         status: read::PrStatus::Dispatch,
@@ -715,7 +715,7 @@ fn sample_pr(key: &str) -> read::PrNode {
 fn sample_job(pr: &str, key: &str) -> read::JobNode {
     read::JobNode {
         key: cpd_core::ids::JobKey::parse(key).unwrap(),
-        pr: Some(cpd_core::ids::PrKey::parse(pr).unwrap()),
+        pr: Some(cpd_core::ids::WorkflowKey::parse(pr).unwrap()),
         seq: 0,
         title: String::new(),
         status: read::JobStatus::Queued,
@@ -838,7 +838,7 @@ mod tests {
     use crate::dialog::scroll::WHEEL_ROWS;
     use crate::read::{JobNode, JobStatus, PrNode, PrStatus};
     use cpd_core::config::Tier;
-    use cpd_core::ids::{ContextId, JobKey, PrKey, SessionId};
+    use cpd_core::ids::{ContextId, JobKey, WorkflowKey, SessionId};
 
 
     #[test]
@@ -882,7 +882,7 @@ mod tests {
 
     /// A Plan of one PR with `jobs` independent Jobs: a chart `jobs` rows tall (and some more for the box).
     fn scroll_centre(plan_id: &str, jobs: usize) -> Centre {
-        let pr = PrKey::parse("web").unwrap();
+        let pr = WorkflowKey::parse("web").unwrap();
         let node = PrNode {
             key: pr.clone(),
             repo_name: "repo".into(),

@@ -18,7 +18,7 @@ use crate::config::{Catalog, Tier, TierModel};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::ids::{JobKey, PlanId, PrKey};
+use crate::ids::{JobKey, PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::plan::jobs;
 use crate::plan::locked_fingerprint;
@@ -158,7 +158,7 @@ impl Fixture {
             draft,
             urgent: false,
             kind: Some(kind.to_owned()),
-            pr: PrArg { pr: pr.map(|p| PrKey::parse(p).unwrap()) },
+            pr: PrArg { pr: pr.map(|p| WorkflowKey::parse(p).unwrap()) },
             plan: PlanArg { plan: Some(PlanId::parse("pay").unwrap()) },
         };
         add_in(&mut self.env, args)

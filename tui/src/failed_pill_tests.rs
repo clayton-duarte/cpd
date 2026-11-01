@@ -3,7 +3,7 @@
 //! stays still. Glyphs are codepoints and colours come from the palette's calls, never raw values.
 
 use cpd_core::config::Tier;
-use cpd_core::ids::{JobKey, PrKey};
+use cpd_core::ids::{JobKey, WorkflowKey};
 use ratatui::style::Style;
 
 use crate::palette;
@@ -21,7 +21,7 @@ const CLOSE_CIRCLE: &str = "\u{F0159}";
 
 fn pr() -> PrNode {
     PrNode {
-        key: PrKey::parse("api").unwrap(),
+        key: WorkflowKey::parse("api").unwrap(),
         repo_name: "api-repo".into(),
         base: "main".into(),
         status: PrStatus::Dispatch,
@@ -38,7 +38,7 @@ fn pr() -> PrNode {
 fn job(key: &str, status: JobStatus) -> JobNode {
     JobNode {
         key: JobKey::parse(key).unwrap(),
-        pr: Some(PrKey::parse("api").unwrap()),
+        pr: Some(WorkflowKey::parse("api").unwrap()),
         seq: 0,
         title: String::new(),
         status,

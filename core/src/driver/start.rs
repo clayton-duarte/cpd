@@ -128,7 +128,7 @@ pub fn start_with_allocation(
         let mut pools = Vec::new();
         if let Some(w) = &wanted {
             crate::job::add::check_resources_declared(conn, ctx.home, plan, &w.pr, key.as_str(), Some(&w.names))?;
-            let policy = crate::pr::policy_of_pr(conn, ctx.home, plan, &crate::ids::PrKey::parse(&w.pr)?)?;
+            let policy = crate::pr::policy_of_pr(conn, ctx.home, plan, &crate::ids::WorkflowKey::parse(&w.pr)?)?;
             pools = resource::pools_of(&policy.resources, &w.owner, &w.repo).into_iter().filter(|p| w.names.iter().any(|n| n == p.name())).collect();
         }
         Ok((wanted, pools))
@@ -259,7 +259,7 @@ fn decide(conn: &Connection, home: &CpdHome, catalog: &Catalog, plan: &PlanId, k
         pr
     };
     if job.kind == "open" {
-        let pr = crate::ids::PrKey::parse(job.pr_str()).map_err(|e| CpdError::bad_row(format!("Job {key} has the PR key {:?}: {e}", job.pr_str())))?;
+        let pr = crate::ids::WorkflowKey::parse(job.pr_str()).map_err(|e| CpdError::bad_row(format!("Job {key} has the PR key {:?}: {e}", job.pr_str())))?;
         crate::pr::stored_description_of(conn, plan, &pr)?;
         crate::pr::jira_required_of(conn, home, plan, &pr)?;
     }

@@ -13,7 +13,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::home::Hook;
 use crate::host::runner::Runner;
 use crate::ports::Ports;
-use crate::ids::{AttemptId, PlanId, PrKey};
+use crate::ids::{AttemptId, PlanId, WorkflowKey};
 
 /// The LEGACY Lead Branch of a Plan: `cpd/<plan>` (a PR made before R34 keeps it; a new PR's is `<plan>/<key>`).
 pub fn legacy_lead_branch(plan: &PlanId) -> String {
@@ -54,7 +54,7 @@ pub fn lead_worktree_path(repo: &Path, plan: &PlanId) -> Result<PathBuf, CpdErro
 /// The Lead worktree of a PR (contract §7.1): `<repo-parent>/<repo-name>.<plan>.<key>`.
 /// A PR made by migration 4 keeps the Lead Branch `cpd/<plan>` and with it the
 /// worktree `<repo-parent>/<repo-name>.<plan>` it had.
-pub fn pr_lead_worktree_path(repo: &Path, plan: &PlanId, key: &PrKey, lead_branch_name: &str) -> Result<PathBuf, CpdError> {
+pub fn pr_lead_worktree_path(repo: &Path, plan: &PlanId, key: &WorkflowKey, lead_branch_name: &str) -> Result<PathBuf, CpdError> {
     if lead_branch_name == legacy_lead_branch(plan) {
         lead_worktree_path(repo, plan)
     } else {
@@ -68,7 +68,7 @@ pub fn attempt_worktree_path(repo: &Path, plan: &PlanId, attempt: &AttemptId) ->
 }
 
 /// The Gate worktree for a PR's process: `<repo-parent>/<repo-name>.<plan>--<key>-gate-<pid>`.
-pub fn gate_worktree_path(repo: &Path, plan: &PlanId, key: &PrKey, pid: u32) -> Result<PathBuf, CpdError> {
+pub fn gate_worktree_path(repo: &Path, plan: &PlanId, key: &WorkflowKey, pid: u32) -> Result<PathBuf, CpdError> {
     sibling(repo, &format!("{plan}--{key}-gate-{pid}"))
 }
 
@@ -476,7 +476,7 @@ pub struct RebaseWorktree {
 impl RebaseWorktree {
     /// `git -C <repo> worktree add --detach --lock --reason "cpd rebase <pid>" W <sha>`, `W` the
     /// rebase worktree of this process's pid.
-    pub fn add(repo: &Path, plan: &PlanId, key: &PrKey, sha: &str) -> Result<RebaseWorktree, CpdError> {
+    pub fn add(repo: &Path, plan: &PlanId, key: &WorkflowKey, sha: &str) -> Result<RebaseWorktree, CpdError> {
         let pid = std::process::id();
         let path = sibling(repo, &format!("{plan}.{key}.rebase-{pid}"))?;
         let reason = format!("cpd rebase {pid}");

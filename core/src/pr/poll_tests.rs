@@ -11,7 +11,7 @@ use super::poll::{Trigger, poll, queue_update_for};
 use crate::args::PlanArg;
 use crate::config::Tier;
 use crate::host::runner::{Call, Handler, Reply};
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{PlanId, WorkflowKey};
 use crate::janitor_tests::Rig;
 use crate::ports::Ports;
 use crate::store::Store;
@@ -201,7 +201,7 @@ fn last_reason(store: &mut Store) -> Option<String> {
 fn a_base_merge_with_main_ahead_queues_an_update_job() {
     let rig = open_rig(&["api"]);
     let mut store = Store::open(&rig.home, 5000).unwrap();
-    let (pay, api) = (PlanId::parse("pay").unwrap(), PrKey::parse("api").unwrap());
+    let (pay, api) = (PlanId::parse("pay").unwrap(), WorkflowKey::parse("api").unwrap());
 
     // The repoint happened (GitHub moved the PR to the default branch) and main is ahead without a conflict.
     let queued = store
@@ -217,7 +217,7 @@ fn a_base_merge_with_main_ahead_queues_an_update_job() {
 fn a_base_merge_with_main_contained_queues_nothing() {
     let rig = open_rig(&["api", "web"]);
     let mut store = Store::open(&rig.home, 5000).unwrap();
-    let (pay, api, web) = (PlanId::parse("pay").unwrap(), PrKey::parse("api").unwrap(), PrKey::parse("web").unwrap());
+    let (pay, api, web) = (PlanId::parse("pay").unwrap(), WorkflowKey::parse("api").unwrap(), WorkflowKey::parse("web").unwrap());
 
     let (ahead, contained) = store
         .write("pr poll", |tx| {
@@ -238,7 +238,7 @@ fn a_base_merge_with_main_contained_queues_nothing() {
 fn a_conflict_still_queues_an_update_job() {
     let rig = open_rig(&["api"]);
     let mut store = Store::open(&rig.home, 5000).unwrap();
-    let (pay, api) = (PlanId::parse("pay").unwrap(), PrKey::parse("api").unwrap());
+    let (pay, api) = (PlanId::parse("pay").unwrap(), WorkflowKey::parse("api").unwrap());
 
     let queued = store
         .write("pr poll", |tx| queue_update_for(tx, &pay, &api, Trigger::Conflict, false, tier()))
@@ -253,7 +253,7 @@ fn a_conflict_still_queues_an_update_job() {
 fn an_update_job_already_live_is_not_duplicated() {
     let rig = open_rig(&["api"]);
     let mut store = Store::open(&rig.home, 5000).unwrap();
-    let (pay, api) = (PlanId::parse("pay").unwrap(), PrKey::parse("api").unwrap());
+    let (pay, api) = (PlanId::parse("pay").unwrap(), WorkflowKey::parse("api").unwrap());
 
     let first = store
         .write("pr poll", |tx| queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier()))

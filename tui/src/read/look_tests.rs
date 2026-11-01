@@ -2,7 +2,7 @@
 
 use ratatui::buffer::CellWidth;
 use cpd_core::config::Tier;
-use cpd_core::ids::{JobKey, PrKey};
+use cpd_core::ids::{JobKey, WorkflowKey};
 use cpd_core::session::State;
 
 use super::{Dot, JobNode, JobStatus, NeedsUser, PrFacts, PrNode, PrState, PrStatus, Pull, UpdateState, pr_look};
@@ -86,7 +86,7 @@ fn pull(state: PrState) -> Pull {
 
 fn pr_node(pull: Pull) -> PrNode {
     PrNode {
-        key: PrKey::parse("api").unwrap(),
+        key: WorkflowKey::parse("api").unwrap(),
         repo_name: "api-repo".into(),
         base: "main".into(),
         status: PrStatus::Open,
@@ -103,7 +103,7 @@ fn pr_node(pull: Pull) -> PrNode {
 fn failed_job() -> JobNode {
     JobNode {
         key: JobKey::parse("api-1").unwrap(),
-        pr: Some(PrKey::parse("api").unwrap()),
+        pr: Some(WorkflowKey::parse("api").unwrap()),
         seq: 0,
         title: String::new(),
         status: JobStatus::Failed,

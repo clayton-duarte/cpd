@@ -15,7 +15,7 @@ use cpd_core::inbox::model::{Item, Kind};
 use cpd_core::job::open::shown_needs;
 use cpd_core::job::worked_on::failed_worked_on;
 use cpd_core::job::home::JobHome;
-use cpd_core::ids::{AttemptId, ContextId, EscalationId, JobKey, PlanId, PrKey, SessionId};
+use cpd_core::ids::{AttemptId, ContextId, EscalationId, JobKey, PlanId, WorkflowKey, SessionId};
 use cpd_core::plan::display::Display;
 use cpd_core::plan::fingerprint::load_prs;
 use cpd_core::plan::{jobs, plan_fingerprint, Phase};
@@ -119,13 +119,13 @@ impl PrStatus {
 /// One PR of a Plan, for its box's title and its place among the boxes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrNode {
-    pub key: PrKey,
+    pub key: WorkflowKey,
     /// The repo's directory name: the last component of `prs.repo`.
     pub repo_name: String,
     pub base: String,
     pub status: PrStatus,
     /// The PRs it needs, sorted (none is `cancelled`: `pr cancel` refuses a PR another one needs).
-    pub needs: Vec<PrKey>,
+    pub needs: Vec<WorkflowKey>,
     /// Its pull request, once it has one.
     pub pull: Option<Pull>,
     /// What a PR that has not started waits for, sorted (PR references): empty when it can start (hs-d521).
@@ -188,7 +188,7 @@ fn conflicting(what: &str, mergeable: &str) -> Result<bool, CpdError> {
 pub struct JobNode {
     pub key: JobKey,
     /// The Job's PR (`jobs.pr`), `None` exactly for an explore Job of the Plan.
-    pub pr: Option<PrKey>,
+    pub pr: Option<WorkflowKey>,
     pub seq: i64,
     pub title: String,
     pub status: JobStatus,
@@ -386,11 +386,11 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
     }
     let display = Display::load(conn, plan)?;
     let pr_rows = load_prs(conn, plan)?;
-    let mut needs: BTreeMap<String, Vec<PrKey>> = BTreeMap::new();
+    let mut needs: BTreeMap<String, Vec<WorkflowKey>> = BTreeMap::new();
     let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1 ORDER BY pr, needs")?;
     for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
         let (pr, need) = row?;
-        needs.entry(pr).or_default().push(id("PR key", &need, PrKey::parse)?);
+        needs.entry(pr).or_default().push(id("PR key", &need, WorkflowKey::parse)?);
     }
     let ready = cpd_core::pr::pulls::ready_to_merge_sql("q");
     let mut stmt = conn.prepare(&format!(
@@ -450,12 +450,12 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
                 let mut n = needs.remove(&key).unwrap_or_default();
                 // the implied need: the base PR of the Plan (a base PR of another Plan has no node here)
                 if let Some(base) = row.and_then(|p| display.pr_needs(p).into_iter().find(|b| !p.needs.contains(b))).filter(|b| !b.contains('/')) {
-                    n.push(id("PR key", &base, PrKey::parse)?);
+                    n.push(id("PR key", &base, WorkflowKey::parse)?);
                     n.sort();
                 }
                 n
             },
-            key: id("PR key", &key, PrKey::parse)?,
+            key: id("PR key", &key, WorkflowKey::parse)?,
             repo_name,
             base,
             status,

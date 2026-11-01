@@ -17,7 +17,7 @@ use super::add::{
 use super::{EditArgs, Env, find_pr, plan_phase, pr_locked};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
-use crate::ids::{PlanId, PrKey, RepoName};
+use crate::ids::{PlanId, WorkflowKey, RepoName};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::PrRow;
@@ -121,7 +121,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
 }
 
 /// When the PR has an open pull request, retitles it on GitHub, before the title is stored: a failure stores nothing (§9.5).
-fn retitle_open_pull_request(env: &mut Env, plan: &PlanId, key: &PrKey, title: &str) -> Result<(), CpdError> {
+fn retitle_open_pull_request(env: &mut Env, plan: &PlanId, key: &WorkflowKey, title: &str) -> Result<(), CpdError> {
     let open: Option<(String, i64)> = env.store.read(|conn| {
         let mut stmt = conn.prepare(
             "SELECT p.repo, p.number FROM workflows r JOIN pull_requests p ON p.id = r.pull_request
@@ -140,7 +140,7 @@ fn retitle_open_pull_request(env: &mut Env, plan: &PlanId, key: &PrKey, title: &
 /// `--title`), the Plan is in `grounding` or `plan` and the PR `waiting` (`illegal_transition`); `--title` alone
 /// meets neither rule. After the lock only a restack (`restack`: the flags have its shape) of a `waiting` PR passes;
 /// anything else is `pr_locked`, and `decide` checks the rest of the restack.
-fn editable_pr(conn: &Connection, plan: &PlanId, key: &PrKey, title: bool, others: bool, restack: bool) -> Result<(PrRow, Option<String>), CpdError> {
+fn editable_pr(conn: &Connection, plan: &PlanId, key: &WorkflowKey, title: bool, others: bool, restack: bool) -> Result<(PrRow, Option<String>), CpdError> {
     let prs = load_prs(conn, plan)?;
     let pr = find_pr(&prs, plan, key)?;
     if title && matches!(pr.status.as_str(), "merged" | "cancelled") {
@@ -166,7 +166,7 @@ fn editable_pr(conn: &Connection, plan: &PlanId, key: &PrKey, title: bool, other
     Ok((pr.clone(), stored))
 }
 
-fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Result<Decision, CpdError> {
+fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, edits: &Edits) -> Result<Decision, CpdError> {
     let (before, stored_title) = editable_pr(conn, plan, key, edits.title.is_some() || edits.jira.is_some(), edits.others(), edits.restack_shape())?;
     let mut after = before.clone();
     if let Some(repo) = &edits.repo {

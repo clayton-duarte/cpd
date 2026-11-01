@@ -138,7 +138,7 @@ simple_id!(
 
 simple_id!(
     /// PR key (R34): `^[a-z][a-z0-9-]{0,23}$`, unique in its Plan.
-    PrKey, InvalidPrId, "PR key", "^[a-z][a-z0-9-]{0,23}$",
+    WorkflowKey, InvalidWorkflowId, "PR key", "^[a-z][a-z0-9-]{0,23}$",
     |s| matches(s, lower, lower_digit_dash, 0, 23)
 );
 
@@ -488,18 +488,18 @@ mod tests {
     #[test]
     fn pr_keys() {
         for ok in ["a", "schema", "web-2", "a-", &format!("a{}", "b".repeat(23))] {
-            assert_eq!(PrKey::parse(ok).unwrap().to_string(), ok);
-            assert_eq!(ok.parse::<PrKey>().unwrap().as_str(), ok);
+            assert_eq!(WorkflowKey::parse(ok).unwrap().to_string(), ok);
+            assert_eq!(ok.parse::<WorkflowKey>().unwrap().as_str(), ok);
         }
         for bad in ["", "1a", "-a", "A", "a_b", "a/b", "a.b", &format!("a{}", "b".repeat(24))] {
-            assert_eq!(code(PrKey::parse(bad)), ErrorCode::InvalidPrId, "{bad:?}");
+            assert_eq!(code(WorkflowKey::parse(bad)), ErrorCode::InvalidWorkflowId, "{bad:?}");
         }
-        let err = PrKey::parse("Web").unwrap_err();
+        let err = WorkflowKey::parse("Web").unwrap_err();
         assert_eq!(err.exit().code(), 2);
         assert_eq!(err.details()["expected"], "^[a-z][a-z0-9-]{0,23}$");
-        let key: PrKey = serde_json::from_str("\"web\"").unwrap();
+        let key: WorkflowKey = serde_json::from_str("\"web\"").unwrap();
         assert_eq!(serde_json::to_string(&key).unwrap(), "\"web\"");
-        let err = serde_json::from_str::<PrKey>("\"Web\"").unwrap_err();
+        let err = serde_json::from_str::<WorkflowKey>("\"Web\"").unwrap_err();
         assert!(err.to_string().contains("invalid_pr_id"), "{err}");
     }
 

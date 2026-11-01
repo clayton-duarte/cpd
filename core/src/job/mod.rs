@@ -47,7 +47,7 @@ use crate::config::{self, Tier};
 use crate::driver;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::ids::{JobKey, PlanId, PrKey};
+use crate::ids::{JobKey, PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::plan::PrRow;
 use crate::plan::jobs::{Job, KINDS, STATUSES};
@@ -131,7 +131,7 @@ pub struct EditArgs {
     no_needs: bool,
     /// Move the Job to this PR (it keeps no old Dependency)
     #[arg(long = "pr", value_name = "key")]
-    pr: Option<PrKey>,
+    pr: Option<WorkflowKey>,
     /// The new kind (§2.2 "Job kinds"): work, docs, test or impl. open and update are cpd's
     #[arg(long, value_name = "kind", value_parser = PossibleValuesParser::new(KINDS))]
     kind: Option<String>,
@@ -226,7 +226,7 @@ impl Env {
     ///
     /// The models are those of the Job's PR repo key (contract §8.3 "Models" (5)): `pr` is the PR the Job is
     /// (or is about to be) on, `None` for the PR the existing Job `job` is on.
-    fn check_tier(&mut self, plan: &PlanId, job: &JobKey, pr: Option<&PrKey>, tier: Tier) -> Result<(), CpdError> {
+    fn check_tier(&mut self, plan: &PlanId, job: &JobKey, pr: Option<&WorkflowKey>, tier: Tier) -> Result<(), CpdError> {
         let home = self.home.clone();
         let models = self.store.read(|conn| {
             plan_phase(conn, plan)?;

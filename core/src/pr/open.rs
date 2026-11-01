@@ -17,7 +17,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git;
 use crate::ports::Ports;
-use crate::ids::{AttemptId, PlanId, PrKey};
+use crate::ids::{AttemptId, PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::job;
 use crate::plan::fingerprint::load_prs;
@@ -34,7 +34,7 @@ pub(super) fn agent() -> bool {
 /// `incident_hold` (exit 3, contract §7.6, commands.md §9.1/§9.3/§9.9, hs-d643): `plan` is held
 /// by incident mode and the caller is an agent. `pr` names the PR the caller resolved, for
 /// `details.pr`; `details.incident` is the incident as `cpd incident status` prints it.
-pub fn hold_refused(conn: &rusqlite::Connection, plan: &PlanId, pr: &PrKey, agent: bool) -> Result<(), CpdError> {
+pub fn hold_refused(conn: &rusqlite::Connection, plan: &PlanId, pr: &WorkflowKey, agent: bool) -> Result<(), CpdError> {
     if !agent || !crate::incident::is_held(conn, plan) {
         return Ok(());
     }
@@ -224,7 +224,7 @@ pub fn is_merged_on_github(lead: &Path, pr: &PrRow) -> Result<bool, CpdError> {
 }
 
 /// `pr_closed` (exit 3): the newest pull request of the Lead Branch is closed without a merge (§7.6 `pr open` step 0): it is found at the merge of an `open` Job (§7.4 step 8b), not at submit.
-pub fn closed(key: &PrKey, branch: &str, head: &gh::HeadPr) -> CpdError {
+pub fn closed(key: &WorkflowKey, branch: &str, head: &gh::HeadPr) -> CpdError {
     CpdError::new(
         ErrorCode::PrClosed,
         format!(
@@ -296,7 +296,7 @@ fn merged_row(lead: &Path, head: &gh::HeadPr, bots: &[String]) -> Result<PolledP
 /// `dispatch → deploy` when this was the last PR not yet open; for a merged pull request `pr-merged`, and `plan-done` when it completes
 /// the Plan. `None`, with nothing written, when the PR is no longer `dispatch` (another opener, or the poll, got there first): `pr open`
 /// refuses `cas_lost`, an `open` Job's merge ends `merged` all the same (§7.7). Else the Plan's phase after.
-pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pulled: &Pulled) -> Result<Option<Phase>, CpdError> {
+pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &WorkflowKey, pulled: &Pulled) -> Result<Option<Phase>, CpdError> {
     let status: Option<String> = {
         use rusqlite::OptionalExtension;
         tx.query_row("SELECT status FROM workflows WHERE plan = ?1 AND key = ?2", [id.as_str(), key.as_str()], |r| r.get(0)).optional()?
@@ -397,7 +397,7 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pulled: &Pulled) -> R
 /// (`lead_branch_moved`: a Job merged into it since this Attempt began, and A8 never rebases these kinds). The base check and the Gates run
 /// at the merge (§7.4 step 6, hs-d679). `root` is the Attempt worktree, `sha` its HEAD.
 pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jobs::Job, root: &Path, sha: &str) -> Result<(), CpdError> {
-    let key = PrKey::parse(job.pr_str()).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", job.key, job.pr_str())))?;
+    let key = WorkflowKey::parse(job.pr_str()).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", job.key, job.pr_str())))?;
     let prs = env.plan(plan)?;
     let pr = pr_of(&prs, &key);
     let lead = pr.lead(plan)?.clone();
@@ -466,7 +466,7 @@ pub(super) fn merged_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_jso
     Ok(rows)
 }
 
-fn cas_lost(id: &PlanId, key: &PrKey) -> CpdError {
+fn cas_lost(id: &PlanId, key: &WorkflowKey) -> CpdError {
     CpdError::new(ErrorCode::CasLost, format!("PR {key} of Plan {id} left status dispatch meanwhile: rerun the command."))
         .with("plan", id.as_str())
         .with("pr", key.as_str())
@@ -482,13 +482,13 @@ pub(super) fn opened_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_jso
 }
 
 /// The PR `key`, which the Plan has.
-fn pr_of<'a>(plan: &'a PlanPrs, key: &PrKey) -> &'a PrRow {
+fn pr_of<'a>(plan: &'a PlanPrs, key: &WorkflowKey) -> &'a PrRow {
     plan.prs.iter().find(|p| p.key == *key).expect("the selected PR is still in the Plan")
 }
 
 enum Step {
     /// The PR is `dispatch`: go on, with its key.
-    Go(PrKey),
+    Go(WorkflowKey),
     /// The PR is `open` or `merged`: the success to print.
     Already(Output),
 }
@@ -511,7 +511,7 @@ fn require_dispatch(plan: &PlanPrs, args: &Args) -> Result<Step, CpdError> {
 }
 
 /// The PR's `open` Job that is `draft`, `queued` or `running`, by key, if any (hs-d573): it is about to open the pull request.
-fn live_open_job(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<Option<String>, CpdError> {
+fn live_open_job(conn: &rusqlite::Connection, plan: &PlanId, key: &WorkflowKey) -> Result<Option<String>, CpdError> {
     use rusqlite::OptionalExtension;
     Ok(conn
         .query_row(
@@ -524,7 +524,7 @@ fn live_open_job(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Res
 
 /// `pr open` is the repair (contract §7.6, hs-d340): while the PR's `open` Job is `draft`, `queued` or `running` that Job is about to open the
 /// pull request, and two openers would race, so it is refused `open_job_live` (exit 3, `details.job`) with nothing run or written.
-fn require_no_open_job_live(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+fn require_no_open_job_live(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<(), CpdError> {
     match env.store.read(|conn| live_open_job(conn, plan, key))? {
         None => Ok(()),
         Some(job) => Err(open_job_live(plan, key, &job)),
@@ -532,7 +532,7 @@ fn require_no_open_job_live(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result
 }
 
 /// `open_job_live` (exit 3, `details.job`): the PR already has a live opener.
-fn open_job_live(plan: &PlanId, key: &PrKey, job: &str) -> CpdError {
+fn open_job_live(plan: &PlanId, key: &WorkflowKey, job: &str) -> CpdError {
     CpdError::new(
         ErrorCode::OpenJobLive,
         format!("PR {key} of Plan {plan} has its open Job {job} draft, queued or running: it opens the pull request. Wait for it, or cancel it (cpd job cancel {job}) to open the PR by hand."),
@@ -545,7 +545,7 @@ fn open_job_live(plan: &PlanId, key: &PrKey, job: &str) -> CpdError {
 /// Every Job of the PR `merged` or `cancelled`, and at least one `merged`; else `jobs_not_done`. The PR's `open` and `update` Jobs count
 /// for nothing (contract §7.6): an `open` Job that is `failed` is why the Lead is here, and one that is `merged` on a PR still
 /// `dispatch` is a merge that died before it opened the pull request.
-pub(super) fn require_jobs_done(env: &mut Env, plan: &PlanPrs, key: &PrKey) -> Result<Vec<jobs::Job>, CpdError> {
+pub(super) fn require_jobs_done(env: &mut Env, plan: &PlanPrs, key: &WorkflowKey) -> Result<Vec<jobs::Job>, CpdError> {
     let all: Vec<jobs::Job> = env
         .store
         .read(|conn| jobs::load(conn, &plan.plan.id))?
@@ -577,7 +577,7 @@ pub(super) fn require_jobs_done(env: &mut Env, plan: &PlanPrs, key: &PrKey) -> R
 
 /// The PR's stored title (hs-d285), which it must have: a PR that existed before migration `pr-title` has none, and
 /// there is no fallback to the Plan's title (`pr_title_required`).
-fn stored_title(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<String, CpdError> {
+fn stored_title(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<String, CpdError> {
     let stored: Option<String> =
         env.store.read(|conn| Ok(conn.query_row("SELECT title FROM workflows WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?))?;
     stored.ok_or_else(|| {
@@ -592,12 +592,12 @@ fn stored_title(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<String, Cpd
 
 /// The PR's stored description (§9.5a), which a cpd PR must have (`description_required`): the body of its pull request. An
 /// adopted PR (`head_ref` set) keeps the body of its own pull request and needs none.
-fn stored_description(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Option<String>, CpdError> {
+fn stored_description(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<Option<String>, CpdError> {
     env.store.read(|conn| stored_description_of(conn, plan, key))
 }
 
 /// [`stored_description`] on a connection: the one rule (`description IS NULL AND head_ref IS NULL` is `description_required`).
-pub fn stored_description_of(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<Option<String>, CpdError> {
+pub fn stored_description_of(conn: &rusqlite::Connection, plan: &PlanId, key: &WorkflowKey) -> Result<Option<String>, CpdError> {
     let (stored, adopted): (Option<String>, bool) = conn.query_row(
         "SELECT description, head_ref IS NOT NULL FROM workflows WHERE plan = ?1 AND key = ?2",
         [plan.as_str(), key.as_str()],
@@ -610,7 +610,7 @@ pub fn stored_description_of(conn: &rusqlite::Connection, plan: &PlanId, key: &P
 }
 
 /// `description_required` (exit 3): the PR has no stored description.
-pub fn description_required(plan: &PlanId, key: &PrKey) -> CpdError {
+pub fn description_required(plan: &PlanId, key: &WorkflowKey) -> CpdError {
     CpdError::new(
         ErrorCode::DescriptionRequired,
         format!("PR {key} of Plan {plan} has no description: write it (the repo's pull request template, else ## What and why / ## How / ## Acceptance criteria / ## Out of scope and follow-ups / ## Links), run cpd pr describe --pr {key} --file <body.md>, then open it again."),
@@ -621,7 +621,7 @@ pub fn description_required(plan: &PlanId, key: &PrKey) -> CpdError {
 
 /// The one ticket rule: a PR with no `jira` that is not adopted (`head_ref` null) is `jira_required` when its resolved policy sets
 /// `pr.jira_required`. A PR with a ticket, an adopted PR, or a policy that leaves it false never resolves a policy.
-pub fn jira_required_of(conn: &rusqlite::Connection, home: &crate::home::CpdHome, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+pub fn jira_required_of(conn: &rusqlite::Connection, home: &crate::home::CpdHome, plan: &PlanId, key: &WorkflowKey) -> Result<(), CpdError> {
     let missing: bool = conn.query_row(
         "SELECT jira IS NULL AND head_ref IS NULL FROM workflows WHERE plan = ?1 AND key = ?2",
         [plan.as_str(), key.as_str()],
@@ -634,7 +634,7 @@ pub fn jira_required_of(conn: &rusqlite::Connection, home: &crate::home::CpdHome
 }
 
 /// `jira_required` (exit 3): the PR has no Jira ticket and its owner's policy requires one.
-pub fn jira_required(plan: &PlanId, key: &PrKey) -> CpdError {
+pub fn jira_required(plan: &PlanId, key: &WorkflowKey) -> CpdError {
     CpdError::new(
         ErrorCode::JiraRequired,
         format!("PR {key} of Plan {plan} has no Jira ticket: its owner's policy sets pr.jira_required; run cpd pr edit {key} --jira <KEY>, then open it again."),
@@ -718,7 +718,7 @@ mod tests {
     #[test]
     fn recording_an_opened_pull_request_moves_the_pr_and_the_plan_and_is_refused_by_a_pr_that_left_dispatch() {
         let (_dir, mut store) = fixture(false);
-        let (plan, key) = (PlanId::parse("pay").unwrap(), PrKey::parse("api").unwrap());
+        let (plan, key) = (PlanId::parse("pay").unwrap(), WorkflowKey::parse("api").unwrap());
         let pulled = Pulled { row: pull(PrState::Open, None), merged: false };
 
         let phase = store.write("test", |tx| record(tx, &plan, &key, &pulled)).unwrap();
@@ -746,7 +746,7 @@ mod tests {
     #[test]
     fn recording_a_merged_pull_request_merges_the_pr_and_ends_the_plan_only_when_it_is_the_last() {
         let (_dir, mut store) = fixture(false);
-        let (plan, key) = (PlanId::parse("pay").unwrap(), PrKey::parse("api").unwrap());
+        let (plan, key) = (PlanId::parse("pay").unwrap(), WorkflowKey::parse("api").unwrap());
         let pulled = Pulled { row: pull(PrState::Merged, Some("2026-10-20T11:00:00Z")), merged: true };
 
         let phase = store.write("test", |tx| record(tx, &plan, &key, &pulled)).unwrap();

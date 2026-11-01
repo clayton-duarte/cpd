@@ -70,10 +70,10 @@ fn text(c: &flow::Chart) -> String {
 
 #[test]
 fn a_need_connector_reaches_the_top_border_with_no_arrowhead() {
-    use cpd_core::ids::{JobKey, PrKey};
+    use cpd_core::ids::{JobKey, WorkflowKey};
 
     let mut web = sample_pr("web");
-    web.needs = vec![PrKey::parse("api").unwrap()];
+    web.needs = vec![WorkflowKey::parse("api").unwrap()];
     let prs = [sample_pr("api"), web];
     let mut b = sample_job("api", "b");
     b.needs = vec![JobKey::parse("a").unwrap()];

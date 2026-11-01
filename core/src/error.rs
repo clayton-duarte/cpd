@@ -287,7 +287,7 @@ error_codes! {
     // R34, Plans across repos (contract §1.2, §3.8). `branch_exists` is above.
     PrStartFailed = "pr_start_failed" => Failure,
     PrRequired = "pr_required" => Usage,
-    InvalidPrId = "invalid_pr_id" => Usage,
+    InvalidWorkflowId = "invalid_pr_id" => Usage,
     PrExists = "pr_exists" => Refused,
     PrInUse = "pr_in_use" => Refused,
     PrEmpty = "pr_empty" => Refused,
@@ -527,7 +527,7 @@ mod tests {
             (ErrorCode::CancelTimeout, 5),
             (ErrorCode::PrStartFailed, 1),
             (ErrorCode::PrRequired, 2),
-            (ErrorCode::InvalidPrId, 2),
+            (ErrorCode::InvalidWorkflowId, 2),
             (ErrorCode::PrExists, 3),
             (ErrorCode::PrInUse, 3),
             (ErrorCode::BasePrUnknown, 3),

@@ -15,7 +15,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::error::{CpdError, ErrorCode};
-use crate::ids::{PlanId, PrKey, SessionId};
+use crate::ids::{PlanId, WorkflowKey, SessionId};
 use crate::plan::PrRow;
 
 /// `--plan <id>`, else `CPD_PLAN`, else `plan_required` (exit 2).
@@ -39,7 +39,7 @@ impl PlanArg {
 pub struct PrArg {
     /// The PR [default: the Plan's one PR that is not cancelled]
     #[arg(long = "pr", value_name = "key")]
-    pub pr: Option<PrKey>,
+    pub pr: Option<WorkflowKey>,
 }
 
 impl PrArg {
@@ -313,7 +313,7 @@ mod tests {
     fn pr_selection() {
         let plan = PlanId::parse("cpd2").unwrap();
         let pr = |key: &str, status: &str| PrRow::fixture(key, "/r", "main", &[], status);
-        let arg = |key: Option<&str>| PrArg { pr: key.map(|k| PrKey::parse(k).unwrap()) };
+        let arg = |key: Option<&str>| PrArg { pr: key.map(|k| WorkflowKey::parse(k).unwrap()) };
         let prs = [pr("a", "cancelled"), pr("b", "waiting")];
         assert_eq!(arg(None).select(&plan, &prs).unwrap().key.as_str(), "b");
         assert_eq!(arg(Some("a")).select(&plan, &prs).unwrap().key.as_str(), "a");

@@ -11,7 +11,7 @@ use super::SOURCE;
 use super::engine::{Engine, incident_holds_plan};
 use super::report::{About, Step};
 use cpd_core::error::CpdError;
-use cpd_core::ids::{PlanId, PrKey};
+use cpd_core::ids::{PlanId, WorkflowKey};
 use cpd_core::job::open;
 use cpd_core::plan::fingerprint::load_prs;
 use cpd_core::store::WriteTxn;
@@ -32,7 +32,7 @@ pub(super) fn run(engine: &mut Engine) {
         let mut missing = Vec::new();
         for (plan, key) in rows {
             let plan = PlanId::parse(&plan)?;
-            let key = PrKey::parse(&key)?;
+            let key = WorkflowKey::parse(&key)?;
             // Incident mode on: a held Plan's PR gets no open Job (contract §3.7 E4).
             if !incident_holds_plan(conn, &plan) {
                 missing.push((plan, key));
@@ -103,7 +103,7 @@ fn promote_all(tx: &WriteTxn<'_>) -> Result<Vec<(String, String)>, CpdError> {
 }
 
 /// Decides again inside the transaction (a hand `pr open` or `job cancel` may have changed a PR), then adds each missing Job.
-fn add_all(tx: &WriteTxn<'_>, missing: &[(PlanId, PrKey)], tier: cpd_core::config::Tier) -> Result<Vec<(PlanId, PrKey, cpd_core::ids::JobKey)>, CpdError> {
+fn add_all(tx: &WriteTxn<'_>, missing: &[(PlanId, WorkflowKey)], tier: cpd_core::config::Tier) -> Result<Vec<(PlanId, WorkflowKey, cpd_core::ids::JobKey)>, CpdError> {
     let mut added = Vec::new();
     for (plan, key) in missing {
         let still: bool = tx.query_row(&format!("SELECT EXISTS ({MISSING})"), [Some(plan.as_str()), Some(key.as_str())], |r| r.get(0))?;

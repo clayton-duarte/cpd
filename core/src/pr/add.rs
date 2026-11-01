@@ -18,7 +18,7 @@ use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
 use crate::git::run::{branch_exists, has_origin, run};
 use crate::git::worktree::list as worktrees;
-use crate::ids::{JobKey, OwnerLogin, PlanId, PrKey, RepoName};
+use crate::ids::{JobKey, OwnerLogin, PlanId, WorkflowKey, RepoName};
 use crate::job::open;
 use crate::job::spec::{Spec, parse as parse_spec};
 use crate::policy::{Policy, PolicyKey, owner_mismatch, owner_unset, repo_key, resolve};
@@ -49,7 +49,7 @@ struct Stub {
 /// The stub drafts a PR of `shape` starts with (commands.md §9.4): `tdd` docs, red tests (needs docs) and
 /// implementation (needs the tests); `docs` its docs; `config` one `work` Job. Every shape ends with the PR's opener stub
 /// (`open-<pr>`, kind `open`, no needs): its Ready rule is derived (contract §2.2 "Job kinds", §3.2, hs-d573).
-fn template(shape: &str, pr: &PrKey, title: &str) -> Vec<Stub> {
+fn template(shape: &str, pr: &WorkflowKey, title: &str) -> Vec<Stub> {
     let stub = |suffix: &'static str, kind: &'static str, prefix: &str, needs: Option<&str>| Stub {
         key: format!("{pr}-{suffix}"),
         suffix,
@@ -72,7 +72,7 @@ fn template(shape: &str, pr: &PrKey, title: &str) -> Vec<Stub> {
 
 /// The flags given, resolved.
 struct Wanted {
-    key: PrKey,
+    key: WorkflowKey,
     repo: String,
     /// The repo's GitHub name, from its `origin` (§8.3).
     name: RepoName,
@@ -92,7 +92,7 @@ struct Wanted {
 
 /// `--jobs <file.json>` (§9.4): one object keyed by the suffixes of `shape`'s template (every one, no other), each
 /// `{"tier", "spec"}`. A fault is the code `job add` uses for the same one (`spec_invalid`, `tier_invalid`, ...), never `usage`.
-fn read_jobs(path: &Path, shape: &str, pr: &PrKey, title: &str) -> Result<BTreeMap<&'static str, (Tier, Spec)>, CpdError> {
+fn read_jobs(path: &Path, shape: &str, pr: &WorkflowKey, title: &str) -> Result<BTreeMap<&'static str, (Tier, Spec)>, CpdError> {
     let invalid = |at: &str, why: String| {
         CpdError::new(ErrorCode::SpecInvalid, format!("The --jobs file is invalid at {at}: {why}.")).with("path", at).with("file", path.display().to_string())
     };
@@ -148,15 +148,15 @@ enum Decision {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrRef {
     plan: Option<PlanId>,
-    key: PrKey,
+    key: WorkflowKey,
 }
 
 impl FromStr for PrRef {
     type Err = CpdError;
     fn from_str(s: &str) -> Result<Self, CpdError> {
         match s.split_once('/') {
-            Some((plan, key)) => Ok(PrRef { plan: Some(PlanId::parse(plan)?), key: PrKey::parse(key)? }),
-            None => Ok(PrRef { plan: None, key: PrKey::parse(s)? }),
+            Some((plan, key)) => Ok(PrRef { plan: Some(PlanId::parse(plan)?), key: WorkflowKey::parse(key)? }),
+            None => Ok(PrRef { plan: None, key: WorkflowKey::parse(s)? }),
         }
     }
 }
@@ -181,7 +181,7 @@ pub(super) fn needs_refs(own: &PlanId, needs: &[PrRef]) -> Result<Vec<String>, C
 /// What `--base` names: a branch (`None`: the default branch), or a base PR.
 pub(super) enum BaseArg {
     Branch(Option<String>),
-    Pr(PlanId, PrKey),
+    Pr(PlanId, WorkflowKey),
 }
 
 /// What the PR targets, once the git checks passed.
@@ -189,7 +189,7 @@ pub(super) enum BaseWanted {
     /// A branch, checked to exist (`resolve_base`).
     Branch(String),
     /// A base PR named as `<key>` or `<plan>/<key>`: its Lead Branch becomes the base.
-    Pr(PlanId, PrKey),
+    Pr(PlanId, WorkflowKey),
 }
 
 /// Reads `--base` (§2.2 "A PR reference"): a base PR when it is a bare `<key>` of a PR of `plan` in `repo`
@@ -197,7 +197,7 @@ pub(super) enum BaseWanted {
 pub(super) fn classify_base(conn: &Connection, plan: &PlanId, repo: &Path, base: Option<&str>) -> Result<BaseArg, CpdError> {
     let Some(value) = base else { return Ok(BaseArg::Branch(None)) };
     if !value.contains('/')
-        && let Ok(key) = PrKey::parse(value)
+        && let Ok(key) = WorkflowKey::parse(value)
     {
         let repo = repo.display().to_string();
         if known_prs(conn, plan)?.iter().any(|q| q.key == key.as_str() && q.repo == repo) {
@@ -205,7 +205,7 @@ pub(super) fn classify_base(conn: &Connection, plan: &PlanId, repo: &Path, base:
         }
     }
     if let Some((plan, key)) = value.split_once('/')
-        && let (Ok(plan), Ok(key)) = (PlanId::parse(plan), PrKey::parse(key))
+        && let (Ok(plan), Ok(key)) = (PlanId::parse(plan), WorkflowKey::parse(key))
     {
         let exists: bool = conn.query_row("SELECT EXISTS (SELECT 1 FROM plans WHERE id = ?1)", [plan.as_str()], |r| r.get(0))?;
         if exists {
@@ -258,7 +258,7 @@ pub(super) fn stacked_on(known: &[Known], repo: &str, lead_branch: &str) -> Vec<
 /// The PR being added or edited.
 pub(super) struct Subject<'a> {
     pub plan: &'a PlanId,
-    pub key: &'a PrKey,
+    pub key: &'a WorkflowKey,
     /// Its repo as it will be stored.
     pub repo: &'a str,
 }
@@ -923,7 +923,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
 }
 
 /// One `pr_needs` row per need.
-pub(super) fn insert_needs(tx: &Connection, plan: &PlanId, pr: &PrKey, needs: &[String]) -> Result<(), CpdError> {
+pub(super) fn insert_needs(tx: &Connection, plan: &PlanId, pr: &WorkflowKey, needs: &[String]) -> Result<(), CpdError> {
     for need in needs {
         tx.execute("INSERT INTO workflow_needs (plan, workflow, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), pr.as_str(), need.as_str()])?;
     }
@@ -932,7 +932,7 @@ pub(super) fn insert_needs(tx: &Connection, plan: &PlanId, pr: &PrKey, needs: &[
 
 /// In `deploy` or `done` the Plan goes back to `dispatch` (D1): the phase is compared and set, then
 /// `plan-phase` is appended (before `pr-added`).
-fn reopen(tx: &WriteTxn<'_>, plan: &PlanId, from: Phase, key: &PrKey) -> Result<(), CpdError> {
+fn reopen(tx: &WriteTxn<'_>, plan: &PlanId, from: Phase, key: &WorkflowKey) -> Result<(), CpdError> {
     let moved = tx.execute("UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = ?1 AND phase = ?2", [plan.as_str(), from.as_str()])?;
     if moved == 0 {
         return Err(CpdError::new(ErrorCode::CasLost, format!("Plan {plan} left phase {} meanwhile: rerun the command.", from.as_str()))
@@ -944,7 +944,7 @@ fn reopen(tx: &WriteTxn<'_>, plan: &PlanId, from: Phase, key: &PrKey) -> Result<
 }
 
 /// The Lead Branch of a PR made now (contract §2.1): `<plan>/<key>`, without the `cpd/` prefix.
-fn pr_branch(plan: &PlanId, key: &PrKey) -> String {
+fn pr_branch(plan: &PlanId, key: &WorkflowKey) -> String {
     format!("{plan}/{key}")
 }
 

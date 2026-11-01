@@ -59,7 +59,7 @@ pub(super) fn answer(args: AnswerArgs) -> Result<Output, CpdError> {
             .optional()?
             .flatten();
         if let Some(pr) = pr {
-            crate::session::working_pr::name(tx, &plan, &crate::ids::PrKey::parse(&pr)?)?;
+            crate::session::working_pr::name(tx, &plan, &crate::ids::WorkflowKey::parse(&pr)?)?;
         }
         Ok(at)
     })?;

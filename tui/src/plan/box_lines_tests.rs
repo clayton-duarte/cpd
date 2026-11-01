@@ -13,7 +13,7 @@ use super::{Ui, boxes, sample_centre, sample_job, sample_pr};
 use crate::read::{JobNode, JobStatus, NeedsUser, PrNode, PrState, PrStatus, Pull};
 use crate::test_text::rows;
 use cpd_core::config::Tier;
-use cpd_core::ids::{JobKey, PrKey};
+use cpd_core::ids::{JobKey, WorkflowKey};
 
 const CAP_L: &str = "\u{e0b6}";
 const CAP_R: &str = "\u{e0b4}";
@@ -30,7 +30,7 @@ fn sp(n: usize) -> String {
 
 /// A PR `key` of repo `repo`, base `main`, `dispatch`, needing `needs`.
 fn pr(key: &str, repo: &str, needs: &[&str]) -> PrNode {
-    PrNode { repo_name: repo.into(), needs: needs.iter().map(|n| PrKey::parse(n).unwrap()).collect(), ..sample_pr(key) }
+    PrNode { repo_name: repo.into(), needs: needs.iter().map(|n| WorkflowKey::parse(n).unwrap()).collect(), ..sample_pr(key) }
 }
 
 fn job(pr: &str, key: &str, status: JobStatus, tier: Option<&str>, needs: &[&str]) -> JobNode {

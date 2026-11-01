@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use rusqlite::Connection;
 
 use crate::error::CpdError;
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{PlanId, WorkflowKey};
 
 /// The pull request of a PR that is `open` or `merged` (contract §2.2 PR `pr`).
 #[derive(Clone, Debug, PartialEq)]
@@ -20,7 +20,7 @@ pub struct Pull {
 /// One PR of a Plan.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrRow {
-    pub key: PrKey,
+    pub key: WorkflowKey,
     /// As stored: the fingerprint and `pr add` compare it as text.
     pub repo: String,
     pub base: String,
@@ -72,7 +72,7 @@ impl PrRow {
     /// A PR of the fields the fingerprint, `plan render` and `--pr` selection read.
     pub fn fixture(key: &str, repo: &str, base: &str, needs: &[&str], status: &str) -> PrRow {
         PrRow {
-            key: PrKey::parse(key).unwrap(),
+            key: WorkflowKey::parse(key).unwrap(),
             repo: repo.to_owned(),
             base: base.to_owned(),
             lead_branch: format!("cpd/fixture/{key}"),
@@ -120,7 +120,7 @@ pub fn load_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<PrRow>, CpdError
     raw.into_iter()
         .map(|(key, repo, base, lead_branch, lead_worktree, status, pull, pull_request, (name, title, shape, head_ref, started_at, jira))| {
             let needs = needs.remove(&key).unwrap_or_default();
-            let key = PrKey::parse(&key).map_err(|_| CpdError::bad_row(format!("Plan {plan} has a PR key {key:?}")))?;
+            let key = WorkflowKey::parse(&key).map_err(|_| CpdError::bad_row(format!("Plan {plan} has a PR key {key:?}")))?;
             let pull = match pull {
                 (Some(number), Some(url), Some(opened_at)) => Some(Pull { number, url, opened_at }),
                 _ => None,

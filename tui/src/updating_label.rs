@@ -4,7 +4,7 @@
 
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
-use cpd_core::ids::{ContextId, PlanId, PrKey};
+use cpd_core::ids::{ContextId, PlanId, WorkflowKey};
 use cpd_core::store::Store;
 use ratatui::text::{Line, Span};
 
@@ -17,7 +17,7 @@ const RUNNING: Meaning = Meaning::InProgress;
 
 fn node(update: Option<UpdateState>) -> PrNode {
     PrNode {
-        key: PrKey::parse("api").unwrap(),
+        key: WorkflowKey::parse("api").unwrap(),
         repo_name: "api-repo".into(),
         base: "main".into(),
         status: PrStatus::Open,

@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{append, NewEvent};
 use crate::home::CpdHome;
-use crate::ids::{OwnerLogin, PlanId, PrKey, RepoName};
+use crate::ids::{OwnerLogin, PlanId, WorkflowKey, RepoName};
 use crate::policy::{policy_dir, repo_path};
 use crate::store::WriteTxn;
 
@@ -165,7 +165,7 @@ pub fn refuse(tx: &WriteTxn<'_>, source: &str, id: i64, reason: &str, file: Opti
 /// A policy that does not resolve is its error, unchanged.
 pub fn policy_emoji(conn: &Connection, home: &CpdHome, plan: &str, pr: &str) -> Result<PolicyEmoji, CpdError> {
     let plan_id = PlanId::parse(plan)?;
-    let key = PrKey::parse(pr)?;
+    let key = WorkflowKey::parse(pr)?;
     let emoji = super::policy_of_pr(conn, home, &plan_id, &key)?.pr.post.merged_reaction;
     let (owner, name): (String, Option<String>) = conn.query_row(
         "SELECT c.owner, r.name FROM workflows r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context WHERE r.plan = ?1 AND r.key = ?2",

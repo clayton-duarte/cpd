@@ -15,7 +15,7 @@ use super::row::{self, PlanRow};
 use super::{Env, ShowArgs};
 use crate::error::CpdError;
 use crate::events::highest_id;
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::pr::closed::closed_unmerged;
 use crate::pr::pulls;
@@ -125,7 +125,7 @@ fn current_fingerprint(plan: &PlanRow, jobs: &[Job], prs: &[Value]) -> String {
     let rows: Vec<PrRow> = if reviews_prs(Some(plan.phase.as_str())) {
         prs.iter()
             .map(|p| PrRow {
-                key: PrKey::parse(&text(p, "key")).expect("a PR key"),
+                key: WorkflowKey::parse(&text(p, "key")).expect("a PR key"),
                 repo: text(p, "repo"),
                 base: text(p, "base"),
                 lead_branch: text(p, "lead_branch"),

@@ -27,7 +27,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::host::Tmux;
 use cpd_core::host::pi::{self, PiDirs};
 use cpd_core::host::spawn::Pid;
-use cpd_core::ids::{AttemptId, ContextId, PlanId, PrKey, SessionId};
+use cpd_core::ids::{AttemptId, ContextId, PlanId, WorkflowKey, SessionId};
 use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::pr::start::{self as start_pr, By, Failed};
@@ -282,14 +282,14 @@ fn startable() -> String {
 
 /// The ready `waiting` PRs E7 starts, the Plan-scoped incident hold applied (contract §3.7): a PR of
 /// a held Plan is left alone. Oldest Plan first, then by key (the query's order).
-pub(super) fn startable_prs(engine: &mut Engine) -> Result<Vec<(PlanId, PrKey)>, CpdError> {
+pub(super) fn startable_prs(engine: &mut Engine) -> Result<Vec<(PlanId, WorkflowKey)>, CpdError> {
     engine.store.read(|conn| {
         let mut stmt = conn.prepare(&startable())?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         let mut waiting = Vec::new();
         for (plan, key) in rows {
             let plan = PlanId::parse(&plan)?;
-            let key = PrKey::parse(&key)?;
+            let key = WorkflowKey::parse(&key)?;
             // Incident mode on: a held Plan's PR is not started (§3.7 E7).
             if !incident_holds_plan(conn, &plan) {
                 waiting.push((plan, key));

@@ -14,7 +14,7 @@ use super::domain::{
 use super::{audience, check_file_names, load_machine, resolve, Domain, DomainSource, Machine, PolicyKey};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::ids::{ContextId, OwnerLogin, PlanId, PrKey, RepoName, SessionId};
+use crate::ids::{ContextId, OwnerLogin, PlanId, WorkflowKey, RepoName, SessionId};
 use crate::output::Output;
 use crate::store::Store;
 
@@ -23,7 +23,7 @@ use crate::store::Store;
 pub struct KeyArgs {
     /// The PR of the selected Plan whose repo policy to show
     #[arg(long, value_name = "key", conflicts_with_all = ["context", "owner"])]
-    pr: Option<PrKey>,
+    pr: Option<WorkflowKey>,
     /// The Plan of `--pr` [default: $CPD_PLAN]
     #[arg(long, value_name = "id", env = "CPD_PLAN", hide_env = true)]
     plan: Option<PlanId>,

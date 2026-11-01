@@ -10,7 +10,7 @@ use serde_json::json;
 use super::{DescribeArgs, Env, find_pr, gh};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::plan::fingerprint::load_prs;
 
@@ -78,7 +78,7 @@ fn read_text(file: &Path) -> Result<String, CpdError> {
 }
 
 /// The PR's status when it may be described, and with `text` whether that changes it; the open pull request's repo and number, if any.
-fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, text: Option<&str>) -> Result<Decision, CpdError> {
+fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, text: Option<&str>) -> Result<Decision, CpdError> {
     let prs = load_prs(conn, plan)?;
     let pr = find_pr(&prs, plan, key)?;
     if pr.head_ref.is_some() {

@@ -17,7 +17,7 @@ use cpd_core::driver::{self, Allocation, StartCtx};
 use cpd_core::resource;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::host::limit::limit;
-use cpd_core::ids::{JobKey, PlanId, PrKey};
+use cpd_core::ids::{JobKey, PlanId, WorkflowKey};
 
 /// The longest back-off after Attempts whose driver never started (§3.7 E3).
 const BACKOFF_CAP_SECONDS: u64 = 300;
@@ -157,7 +157,7 @@ fn pick(conn: &Connection, home: &cpd_core::home::CpdHome, concurrency: u32, rea
         let mut needs = vec![0];
         if let Some(wanted) = resource::wanted(conn, &e.plan, e.key.as_str())? {
             // A name the policy does not resolve fails in the starter, which reports it.
-            if let Ok(policy) = PrKey::parse(&wanted.pr).and_then(|pr| cpd_core::pr::policy_of_pr(conn, home, &e.plan, &pr)) {
+            if let Ok(policy) = WorkflowKey::parse(&wanted.pr).and_then(|pr| cpd_core::pr::policy_of_pr(conn, home, &e.plan, &pr)) {
                 for pool in resource::pools_of(&policy.resources, &wanted.owner, &wanted.repo) {
                     if !wanted.names.iter().any(|n| n == pool.name()) {
                         continue;

@@ -19,7 +19,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::job::home::JobHome;
 use crate::job::worked_on::failed_worked_on;
-use crate::ids::{ContextId, JobKey, PlanId, PrKey, SessionId};
+use crate::ids::{ContextId, JobKey, PlanId, WorkflowKey, SessionId};
 use crate::plan::Phase;
 use crate::plan::parked_wake::wake_state;
 use crate::ports::Ports;
@@ -1044,7 +1044,7 @@ mod tests {
             stuck,
             [StuckJob {
                 plan: PlanId::parse("pay").unwrap(),
-                home: JobHome::Pr(PrKey::parse("p1").unwrap()),
+                home: JobHome::Pr(WorkflowKey::parse("p1").unwrap()),
                 job: JobKey::parse("a").unwrap(),
                 context: ContextId::parse("ctx").unwrap(),
                 event: latest,
@@ -1071,7 +1071,7 @@ mod tests {
         let groups = stuck_groups(f.stuck());
         assert_eq!(groups.len(), 1, "one PR, one group");
         let group = &groups[0];
-        assert_eq!((&group.plan, &group.home, group.event), (&PlanId::parse("pay").unwrap(), &JobHome::Pr(PrKey::parse("p1").unwrap()), b));
+        assert_eq!((&group.plan, &group.home, group.event), (&PlanId::parse("pay").unwrap(), &JobHome::Pr(WorkflowKey::parse("p1").unwrap()), b));
         assert_eq!(group.jobs.iter().map(|j| j.job.as_str()).collect::<Vec<_>>(), ["a", "b"], "oldest Event first");
         assert_eq!(group.jobs[0].event, a);
     }
@@ -1093,7 +1093,7 @@ mod tests {
         f.event("job-failed", None, Some("b"), "2026-01-01T22:00:00.000Z", r#"{}"#);
         f.event("job-failed", None, Some("a"), "2026-01-01T23:50:00.000Z", r#"{}"#);
         let groups = stuck_groups(f.stuck());
-        assert_eq!(groups.iter().map(|g| g.home.clone()).collect::<Vec<_>>(), [JobHome::Pr(PrKey::parse("p2").unwrap()), JobHome::Pr(PrKey::parse("p1").unwrap())], "the group of the oldest first Event leads");
+        assert_eq!(groups.iter().map(|g| g.home.clone()).collect::<Vec<_>>(), [JobHome::Pr(WorkflowKey::parse("p2").unwrap()), JobHome::Pr(WorkflowKey::parse("p1").unwrap())], "the group of the oldest first Event leads");
     }
 
     #[test]

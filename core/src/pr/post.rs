@@ -15,7 +15,7 @@ use crate::args::{PlanArg, PrArg};
 use crate::clock::timestamp;
 use crate::error::{CpdError, ErrorCode};
 use crate::host::deadline::Failed;
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::ports::Ports;
 use crate::slack;
@@ -173,7 +173,7 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
 }
 
 /// The GitHub attempt, after the post is stored, on the read made before the send: `{state, reason}` (commands.md §9.8b).
-fn request_auto_merge(env: &mut Env, id: &PlanId, key: &PrKey, read: &super::gh::AutoMergeRead) -> Result<Value, CpdError> {
+fn request_auto_merge(env: &mut Env, id: &PlanId, key: &WorkflowKey, read: &super::gh::AutoMergeRead) -> Result<Value, CpdError> {
     let stacked = env.store.read(|conn| auto_merge::stacked(conn, id.as_str(), key.as_str()))?;
     let outcome = if !read.allowed {
         Outcome::NotAllowed
@@ -216,7 +216,7 @@ fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn already_posted(key: &crate::ids::PrKey, done: &PostRecord) -> CpdError {
+fn already_posted(key: &crate::ids::WorkflowKey, done: &PostRecord) -> CpdError {
     CpdError::new(ErrorCode::AlreadyPosted, format!("PR {key} was already posted: {}.", done.link))
         .with("pr", key.as_str())
         .with("channel", done.channel.as_str())

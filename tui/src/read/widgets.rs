@@ -11,7 +11,7 @@ use cpd_core::error::CpdError;
 use cpd_core::events::{Event, highest_id};
 use cpd_core::host::spawn::Pid;
 use cpd_core::inbox::model::{self, Item};
-use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, PrKey};
+use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, WorkflowKey};
 use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 
@@ -90,7 +90,7 @@ pub struct PlanCard {
 /// A PR's pull request: number, state, and what `pr poll` last stored in its row (contract §4.4, §7.6).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrRow {
-    pub key: PrKey,
+    pub key: WorkflowKey,
     pub number: i64,
     pub state: PrState,
     /// Always set: a PR with a pull request has its row (`prs` CHECK). Job `dispatch-prs2` drops the `Option`.
@@ -210,7 +210,7 @@ fn pulls(conn: &Connection) -> Result<BTreeMap<String, Vec<PrRow>>, CpdError> {
             _ => return Err(bad_row(format!("{what} has review_decision {decision:?}"))),
         };
         let polled = PolledPr { title, decision, checks: Checks::parse(&what, &checks)? };
-        let key = id("PR key", &key, PrKey::parse)?;
+        let key = id("PR key", &key, WorkflowKey::parse)?;
         out.entry(plan).or_default().push(PrRow { key, number, state, polled: Some(polled) });
     }
     Ok(out)

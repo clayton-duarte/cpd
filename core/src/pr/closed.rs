@@ -3,13 +3,13 @@
 use rusqlite::Connection;
 
 use crate::error::CpdError;
-use crate::ids::{ContextId, PlanId, PrKey, SessionId};
+use crate::ids::{ContextId, PlanId, WorkflowKey, SessionId};
 
 /// One closed-unmerged PR.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClosedUnmerged {
     pub plan: PlanId,
-    pub pr: PrKey,
+    pub pr: WorkflowKey,
     pub context: ContextId,
     /// The Plan's Lead session; `None` when it has none.
     pub lead_session: Option<SessionId>,
@@ -39,7 +39,7 @@ pub fn closed_unmerged(conn: &Connection, plan: Option<&str>) -> Result<Vec<Clos
         .map(|(plan, pr, context, lead, repo, number, url, title)| {
             Ok(ClosedUnmerged {
                 plan: PlanId::parse(&plan)?,
-                pr: PrKey::parse(&pr)?,
+                pr: WorkflowKey::parse(&pr)?,
                 context: ContextId::parse(&context)?,
                 lead_session: lead.as_deref().map(SessionId::parse).transpose()?,
                 repo,

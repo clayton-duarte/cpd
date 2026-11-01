@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::context::legacy;
 use crate::error::CpdError;
 use crate::home::CpdHome;
-use crate::ids::PrKey;
+use crate::ids::WorkflowKey;
 
 /// A legacy migration: applied once, in order, inside the migrating transaction.
 pub(super) type Migration = fn(&Connection) -> Result<()>;
@@ -390,7 +390,7 @@ fn fill_prs(conn: &Connection) -> Result<()> {
 /// its repo, lower-cased, each character outside `[a-z0-9-]` replaced by `-`,
 /// prefixed `pr-` when it does not then start with a letter, cut to 24
 /// characters.
-fn migrated_pr_key(repo: &str) -> PrKey {
+fn migrated_pr_key(repo: &str) -> WorkflowKey {
     let name = Path::new(repo).file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
     let mut key: String =
         name.chars().map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' { c } else { '-' }).collect();
@@ -398,7 +398,7 @@ fn migrated_pr_key(repo: &str) -> PrKey {
         key.insert_str(0, "pr-");
     }
     key.truncate(24);
-    PrKey::parse(&key).expect("the rule above always makes a valid PR key")
+    WorkflowKey::parse(&key).expect("the rule above always makes a valid PR key")
 }
 
 /// What a generated `_hist_upd` trigger writes in `before` and `after`.

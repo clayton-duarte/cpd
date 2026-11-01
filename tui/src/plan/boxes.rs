@@ -405,15 +405,15 @@ mod tests {
     use crate::test_text::rows;
     use crate::read::{JobStatus, PrState};
     use cpd_core::config::Tier;
-    use cpd_core::ids::{JobKey, PrKey};
+    use cpd_core::ids::{JobKey, WorkflowKey};
 
     fn pr(key: &str, needs: &[&str]) -> PrNode {
         PrNode {
-            key: PrKey::parse(key).unwrap(),
+            key: WorkflowKey::parse(key).unwrap(),
             repo_name: format!("{key}-repo"),
             base: "main".into(),
             status: PrStatus::Dispatch,
-            needs: needs.iter().map(|n| PrKey::parse(n).unwrap()).collect(),
+            needs: needs.iter().map(|n| WorkflowKey::parse(n).unwrap()).collect(),
             pull: None,
             waiting_on: Vec::new(),
             superseded_by: None,
@@ -430,7 +430,7 @@ mod tests {
     fn job(pr: &str, key: &str, needs: &[&str]) -> JobNode {
         JobNode {
             key: JobKey::parse(key).unwrap(),
-            pr: Some(PrKey::parse(pr).unwrap()),
+            pr: Some(WorkflowKey::parse(pr).unwrap()),
             seq: 0,
             title: String::new(),
             status: JobStatus::Queued,

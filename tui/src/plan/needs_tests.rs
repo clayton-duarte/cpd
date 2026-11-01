@@ -66,9 +66,9 @@ fn no_chat_slot_needs_no_clock() {
 /// A Plan of one PR with `jobs` queued Jobs (the pattern of the tests in `mod.rs`).
 fn tests_centre(jobs: usize) -> Centre {
     use cpd_core::config::Tier;
-    use cpd_core::ids::{ContextId, JobKey, PrKey};
+    use cpd_core::ids::{ContextId, JobKey, WorkflowKey};
     use crate::read::{JobNode, PrNode, PrStatus};
-    let pr = PrKey::parse("web").unwrap();
+    let pr = WorkflowKey::parse("web").unwrap();
     let node = PrNode {
         key: pr.clone(),
         repo_name: "repo".into(),
