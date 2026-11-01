@@ -260,11 +260,10 @@ fn check_box(placed: &Placed, buf: &Buffer, fail: &dyn Fn(u16, u16, &str)) {
         if !left.contains(&sym(buf, r.x, y)) {
             fail(r.x, y, &format!("(2) box {name}: the first column is not {what}"));
         }
-        if let Some(end) = end.filter(|_| !rail) {
-            if sym(buf, right, y) != end {
+        if let Some(end) = end.filter(|_| !rail)
+            && sym(buf, right, y) != end {
                 fail(right, y, &format!("(2) box {name}: the last column is not {end}"));
             }
-        }
         // a rail's title runs to the area's last cell (the Inbox's pill ends there); the body and closing rows leave it blank
         if rail && y != top && !blank(&buf[(right, y)]) && !exempted(placed, y, Rule::RightEdge) {
             fail(right, y, &format!("(2) box {name}: a rail writes its last column"));
@@ -314,11 +313,10 @@ fn check_box(placed: &Placed, buf: &Buffer, fail: &dyn Fn(u16, u16, &str)) {
     }
     // (8) the title: `╭─` then the pill's left cap
     let pill = (r.x..r.right()).find(|&x| sym(buf, x, top) == PILL_LEFT);
-    if let Some(x) = pill.filter(|_| placed.kind != Kind::FullText) {
-        if x != r.x + 2 || sym(buf, r.x, top) != "╭" || sym(buf, r.x + 1, top) != "─" {
+    if let Some(x) = pill.filter(|_| placed.kind != Kind::FullText)
+        && (x != r.x + 2 || sym(buf, r.x, top) != "╭" || sym(buf, r.x + 1, top) != "─") {
             fail(x, top, &format!("(8) box {name}: the title does not start `╭─` then the pill's left cap"));
         }
-    }
 }
 
 /// A section title's three rows: blank above and below the title row, which starts one column in with `──` and then, when a
@@ -342,9 +340,8 @@ fn check_rule(placed: &Placed, buf: &Buffer, fail: &dyn Fn(u16, u16, &str)) {
     if !blank(&buf[(r.x, y)]) || !blank(&buf[(r.right() - 1, y)]) {
         fail(r.x, y, &format!("(10) section title {name}: the title row's first or last column is not blank"));
     }
-    if let Some(x) = (r.x..r.right()).find(|&x| sym(buf, x, y) == PILL_LEFT) {
-        if x != r.x + 3 {
+    if let Some(x) = (r.x..r.right()).find(|&x| sym(buf, x, y) == PILL_LEFT)
+        && x != r.x + 3 {
             fail(x, y, &format!("(10) section title {name}: the pill's left cap is not right after `──`"));
         }
-    }
 }

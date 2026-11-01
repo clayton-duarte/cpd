@@ -88,7 +88,7 @@ fn each_meaning_has_its_decided_base_colour_and_bright_pair() {
 }
 
 #[test]
-fn selection_is_a_blue_block__inverted() {
+fn selection_is_a_blue_block_inverted() {
     let expected = block(C4);
     assert_eq!(selected(), expected, "a cursor and a selection: background 4, inverted");
     assert_eq!(pill_focus(), expected, "the focused pill is the same blue block");

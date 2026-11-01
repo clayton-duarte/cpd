@@ -5,7 +5,6 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::style::Modifier;
 
 use super::fixture::{context, plan, session, tree};
 use super::view::{Effect, View};

@@ -52,7 +52,7 @@ impl Log {
         self.follow
     }
 
-    fn to_bottom(&mut self) {
+    fn scroll_to_bottom(&mut self) {
         self.scroll.by(isize::try_from(self.scroll.max_offset()).unwrap_or(isize::MAX));
     }
 
@@ -61,7 +61,7 @@ impl Log {
         self.events.extend(events);
         self.scroll.resize(self.events.len(), self.scroll.page());
         if self.follow {
-            self.to_bottom();
+            self.scroll_to_bottom();
         }
     }
 
@@ -69,8 +69,8 @@ impl Log {
     pub fn fit(&mut self, height: u16) {
         let page = usize::from(height.saturating_sub(HEADER_ROWS + u16::from(self.error.is_some())));
         self.scroll.resize(self.events.len(), page);
-        if let (true, Some(id)) = (std::mem::take(&mut self.reveal), self.selected) {
-            if let Some(i) = self.events.iter().position(|e| e.id == id) {
+        if let (true, Some(id)) = (std::mem::take(&mut self.reveal), self.selected)
+            && let Some(i) = self.events.iter().position(|e| e.id == id) {
                 // the line goes to the middle of the view, which is full when it can be: `end` is one past the last
                 // line shown
                 let end = (i + 1 + page.saturating_sub(1) / 2).max(page);
@@ -78,9 +78,8 @@ impl Log {
                 self.scroll.by(top - isize::try_from(self.scroll.offset()).unwrap_or(isize::MAX));
                 self.follow = false;
             }
-        }
         if self.follow {
-            self.to_bottom();
+            self.scroll_to_bottom();
         }
         self.settle();
     }

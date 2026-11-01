@@ -612,11 +612,10 @@ impl Dialog {
         }
         if matches!(self.mode, Mode::Select { .. }) && body.contains(at) {
             let n = (self.scroll.offset() + usize::from(at.y - body.y)).checked_sub(self.prompt_rows(usize::from(body.width)).len());
-            if let (Some(n), Mode::Select { options, cursor }) = (n, &mut self.mode) {
-                if n < options.len() {
+            if let (Some(n), Mode::Select { options, cursor }) = (n, &mut self.mode)
+                && n < options.len() {
                     *cursor = n;
                 }
-            }
             return None;
         }
         match self.buttons(self.area).iter().position(|b| b.contains(at))? {

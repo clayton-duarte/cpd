@@ -33,7 +33,7 @@ fn the_plan_view_reads_its_leads_plan_phase() {
     for (phase, plan, _) in PHASES {
         let boxes = read::plan_boxes(&mut store, &PlanId::parse(plan).unwrap()).unwrap();
         assert!(boxes.needs_user.lead_working, "Plan {plan}: its Lead is working");
-        assert_eq!(boxes.needs_user.lead_work.is_some(), true, "Plan {plan} {phase:?}");
+        assert!(boxes.needs_user.lead_work.is_some(), "Plan {plan} {phase:?}");
     }
 }
 

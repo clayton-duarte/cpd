@@ -30,11 +30,10 @@ impl CostCache {
             self.entries.remove(path);
             return None;
         };
-        if let Some((cached, cost)) = self.entries.get(path) {
-            if *cached == stamp {
+        if let Some((cached, cost)) = self.entries.get(path)
+            && *cached == stamp {
                 return Some(*cost);
             }
-        }
         match parse(path) {
             Ok(cost) => {
                 self.entries.insert(path.to_owned(), (stamp, cost));

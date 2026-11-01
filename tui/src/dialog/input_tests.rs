@@ -168,7 +168,7 @@ fn the_refusal_rows_follow_the_box_inside_the_padding() {
     }
     assert_eq!(rows[7], blank(42));
     assert_eq!(rows[8], buttons(42));
-    assert!(REFUSAL_ROWS >= 1);
+    const _: () = assert!(REFUSAL_ROWS >= 1);
 }
 
 #[test]

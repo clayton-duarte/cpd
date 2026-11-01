@@ -223,7 +223,7 @@ const R: u8 = 8;
 
 pub(super) fn glyph(m: u8) -> &'static str {
     match m {
-        3 | 1 | 2 => "│",
+        1..=3 => "│",
         12 | 4 | 8 => "─",
         10 => "╭",
         6 => "╮",
@@ -307,7 +307,7 @@ fn starts(start: u16, lengths: impl IntoIterator<Item = u16>, gap: u16) -> Vec<u
 
 pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     let jobs = all;
-    let cards = cards_of(&reduced_needs(&jobs));
+    let cards = cards_of(&reduced_needs(jobs));
     let col_of: Vec<usize> = {
         let mut memo = vec![None; cards.len()];
         (0..cards.len()).map(|c| column_of(c, &cards, &mut memo, &mut HashSet::new())).collect()
@@ -342,19 +342,19 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     let height_of = |c: usize| cards[c].jobs.len() as u16;
     let hmax = cols.iter().map(|cs| cs.iter().map(|&c| height_of(c)).sum::<u16>() + cs.len().saturating_sub(1) as u16).max().unwrap_or(0);
     let (mut top, mut mid) = (vec![0u16; cards.len()], vec![0u16; cards.len()]);
-    for l in 0..ncols {
+    for col in cols.iter_mut() {
         let barycentre = |c: &usize| match &cards[*c].needs[..] {
             [] => 0.0,
             ns => ns.iter().map(|&p| mid[p] as f64).sum::<f64>() / ns.len() as f64,
         };
-        let mut ordered = cols[l].clone();
+        let mut ordered = col.clone();
         ordered.sort_by(|a, b| barycentre(a).total_cmp(&barycentre(b)));
-        cols[l] = ordered;
-        let stack = cols[l].iter().map(|&c| height_of(c)).sum::<u16>() + cols[l].len() as u16 - 1;
+        *col = ordered;
+        let stack = col.iter().map(|&c| height_of(c)).sum::<u16>() + col.len() as u16 - 1;
         // centred; the spare row of an odd difference goes below (ratatui's own centring would put it above, and the
         // accepted render has it below)
-        let ys = starts((hmax - stack) / 2, cols[l].iter().map(|&c| height_of(c)), 1);
-        for (&c, y) in cols[l].iter().zip(ys) {
+        let ys = starts((hmax - stack) / 2, col.iter().map(|&c| height_of(c)), 1);
+        for (&c, y) in col.iter().zip(ys) {
             (top[c], mid[c]) = (y, y + (height_of(c) - 1) / 2);
         }
     }

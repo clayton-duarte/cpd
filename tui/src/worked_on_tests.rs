@@ -8,7 +8,6 @@ use cpd_core::home::CpdHome;
 use cpd_core::ids::PlanId;
 use cpd_core::session::State;
 use cpd_core::inbox::model::Urgency;
-use cpd_core::plan::Phase;
 use cpd_core::store::Store;
 
 use crate::plan::boxes;

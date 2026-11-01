@@ -198,12 +198,11 @@ pub fn backed_off_with(
     err: &mut dyn Write,
     result: Result<Output, CpdError>,
 ) -> Result<Output, CpdError> {
-    if let Err(e) = &result {
-        if on_terminal {
+    if let Err(e) = &result
+        && on_terminal {
             drop(writeln!(err, "{}\nStarting again in {} s.", e.message(), BACKOFF.as_secs()));
             ports.clock.sleep(BACKOFF);
         }
-    }
     result
 }
 

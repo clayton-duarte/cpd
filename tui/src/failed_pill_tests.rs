@@ -112,9 +112,9 @@ fn a_failed_pill_turns_through_the_28_moon_alt_phases_while_its_lead_works() {
 #[test]
 fn every_failed_pill_turns_together_and_a_cancelled_pill_stays_still() {
     let jobs = [job("a", JobStatus::Failed), job("b", JobStatus::Failed), job("c", JobStatus::Cancelled)];
-    for frame in 0..28 {
+    for (frame, moon) in MOONS.iter().enumerate().take(28) {
         let got = pills(&jobs, &working(), frame);
-        assert_eq!(got[0], (MOONS[frame].to_owned(), red_pill()), "a, frame {frame}");
+        assert_eq!(got[0], (moon.to_string(), red_pill()), "a, frame {frame}");
         assert_eq!(got[1], got[0], "b turns with a, frame {frame}");
         assert_eq!(got[2], (CLOSE_CIRCLE.to_owned(), cancelled_pill()), "cancelled: colour 8, static, frame {frame}");
     }

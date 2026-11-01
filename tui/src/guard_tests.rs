@@ -11,14 +11,13 @@ pub(crate) fn product_text(text: &str) -> String {
     let mut out = String::new();
     let mut lines = text.lines();
     while let Some(line) = lines.next() {
-        if line.trim() == "#[cfg(test)]" {
-            if let Some(next) = lines.clone().next() {
+        if line.trim() == "#[cfg(test)]"
+            && let Some(next) = lines.clone().next() {
                 let next = next.trim();
                 if next.starts_with("mod ") && next.ends_with('{') {
                     break;
                 }
             }
-        }
         out.push_str(line);
         out.push('\n');
     }

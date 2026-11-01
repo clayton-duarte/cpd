@@ -395,7 +395,7 @@ fn the_scroll_position_is_muted_on_the_buttons_row_between_the_pills() {
     let narrow = &rows(&render(&mut d, 28, 10))[8];
     assert!(!narrow.contains("1-5/20"), "{narrow:?}");
     let fits = &rows(&render(&mut d, 29, 10))[8];
-    assert_eq!(*fits, line(&format!("{}{}1-5/20 {}", pill("Archive"), " ".repeat(1), pill("Cancel")), 29));
+    assert_eq!(*fits, line(&format!("{}{}1-5/20 {}", pill("Archive"), " ", pill("Cancel")), 29));
 }
 
 #[test]

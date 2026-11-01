@@ -142,8 +142,6 @@ fn age_of(opened_at: &str, now: OffsetDateTime) -> String {
 pub enum Jump {
     /// Run this command and focus the chat slot (a click on a Session row).
     Run(Action),
-    /// These actions in order, each stopping the flow when it is refused: `plan-review` opens its Lead, then copies its page.
-    Steps(Vec<Action>),
     /// The checklist dialog of a `curate-retire` or `curate-docs` item of this Context (hs-d549, hs-d551).
     Curate(Kind, cpd_core::ids::ContextId),
     /// The read-only `text` dialog of the announced ids of a `models-changed` item: its provider and `changes.at`.
@@ -281,10 +279,6 @@ pub fn click(tree: &Tree, item: &Item) -> Option<Jump> {
     };
     match jump(tree, item)? {
         Jump::Run(action) if in_focus(&action) => None,
-        Jump::Steps(steps) => {
-            let steps: Vec<Action> = steps.into_iter().filter(|a| !in_focus(a)).collect();
-            (!steps.is_empty()).then_some(Jump::Steps(steps))
-        }
         jump => Some(jump),
     }
 }
@@ -577,7 +571,6 @@ mod tests {
             url(item);
         };
         let copy = Some(Jump::Run(Action::CopyUrl("https://example.com".into())));
-        let steps = |action| Some(Jump::Steps(vec![Action::Open(sid("l-ship")), action]));
         assert_eq!(
             jump(&tree, &with(Kind::PlanReview, &owned)),
             Some(Jump::Run(Action::Open(sid("l-ship")))),

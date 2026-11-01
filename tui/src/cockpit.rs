@@ -66,13 +66,12 @@ pub(super) fn run(attach: bool, respawn: bool, version: &str, run_command: RunCo
 
     let (built, respawned) = ensure(&tmux, &home, &mut store, cockpit, config.machine.as_str(), respawn, version, run_command)?;
     let watch = command(&run_command, &["watch", "--ensure"])?;
-    if respawn {
-        if let Some(preview) = tmux.preview()? {
+    if respawn
+        && let Some(preview) = tmux.preview()? {
             eprintln!(
                 "a preview is on ({preview}); its views keep the preview build until 'preview-tui.sh off'"
             );
         }
-    }
     // An older server is restarted by the engine once nothing is in the way (contract §6.1).
     let after = match mark_if_older(&home, &tmux, restart) {
         Ok(Some(why)) => {
@@ -108,6 +107,7 @@ pub(super) fn run(attach: bool, respawn: bool, version: &str, run_command: RunCo
 /// status line and `@cpd_machine` again; brings the last chat
 /// Lead into a new chat slot. Returns whether it built `main` and the panes
 /// restarted by `respawn`.
+#[allow(clippy::too_many_arguments)] // takes every input of the ensure step; a signature change is out of scope
 fn ensure(
     tmux: &Tmux,
     home: &CpdHome,
@@ -136,11 +136,10 @@ fn ensure(
     // The window title's machine name (contract §6.1, hs-d300): SERVER_OPTIONS is static.
     tmux.run(&["set".to_owned(), "-g".to_owned(), "@cpd_machine".to_owned(), machine.to_owned()])?;
     tmux.apply_status_line(cockpit, version)?;
-    if chat_added {
-        if let Some(lead) = store.read(last_chat_lead)? {
+    if chat_added
+        && let Some(lead) = store.read(last_chat_lead)? {
             open_lead(run_command, &lead)?;
         }
-    }
     Ok((built, respawned))
 }
 

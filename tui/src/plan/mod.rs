@@ -559,9 +559,8 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
                 ctx.snapshot_read();
                 let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
                 let before_pulse = snap.pulse.as_ref().map(|p| p.context.clone());
-                let next = kept(result.map(|s| {
+                let next = kept(result.inspect(|s| {
                     trace.add_layout(s.layout);
-                    s
                 }), &mut snapshot_error);
                 if let Some(next) = next {
                     redraw = true;
@@ -971,8 +970,7 @@ mod tests {
     #[test]
     fn two_leads_of_one_plan_share_its_offset() {
         let a = plan("plan-a");
-        let mut ui = Ui::default();
-        ui.scroll = (4, 9);
+        let mut ui = Ui { scroll: (4, 9), ..Ui::default() };
         ui.switch(Some(&a), Some(&a));
         assert_eq!(ui.scroll, (4, 9));
     }
@@ -980,8 +978,7 @@ mod tests {
     #[test]
     fn no_lead_and_back_is_the_same_plan() {
         let a = plan("plan-a");
-        let mut ui = Ui::default();
-        ui.scroll = (0, 5);
+        let mut ui = Ui { scroll: (0, 5), ..Ui::default() };
         ui.switch(Some(&a), None);
         assert_eq!(ui.scroll, (0, 0));
         ui.switch(None, Some(&a));
@@ -991,8 +988,7 @@ mod tests {
     #[test]
     fn a_chart_that_shrank_clamps_the_restored_offset_when_drawn() {
         let (a, b) = (plan("plan-a"), plan("plan-b"));
-        let mut ui = Ui::default();
-        ui.scroll = (0, 20);
+        let mut ui = Ui { scroll: (0, 20), ..Ui::default() };
         ui.switch(Some(&a), Some(&b));
         ui.switch(Some(&b), Some(&a));
         assert_eq!(ui.scroll, (0, 20), "restored as it was left");
