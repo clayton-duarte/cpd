@@ -207,7 +207,7 @@ impl Fx {
                VALUES ('lead1', 'lead', 'ctx', '{PLAN}', 'Lead', '/', 'O3', 'stopped', 't', 't');
              INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                VALUES ('{PLAN}', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at)
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at)
                VALUES ('{PLAN}', 'repo', '{}', 'main', 'dispatch', '{lead_branch}', '{}', 'Charge the card at checkout', 'A description', 'config', cpd_txn(), 't', 't');",
             repo.display(),
             lead.display()
@@ -228,7 +228,7 @@ impl Fx {
     /// [`Fx::add_job_in`] with the Job's Tier `tier`.
     pub fn add_job_on(&self, tier: &str, pr: &str, key: &str, needs: &[&str], then: &str) {
         let mut sql = format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
              VALUES ('{PLAN}', '{pr}', '{key}', 'Title of {key}', '{tier}', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         );
         for need in needs {
@@ -311,7 +311,7 @@ impl Fx {
         let repo = self.env.root().join("pay");
         let lead = self.env.root().join("pay.pay");
         self.env.sql(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at)
                VALUES ('{PLAN}', '{key}', '{}', 'main', 'dispatch', 'cpd/{PLAN}/{key}', '{}', '{title}', 'A description', 'config', cpd_txn(), 't', 't');",
             repo.display(),
             lead.display()
@@ -321,7 +321,7 @@ impl Fx {
     /// Job `key` of PR `pr` a `draft`: the PR's open Job waits for it, and E3 never starts it.
     pub fn add_draft_in(&self, pr: &str, key: &str) {
         self.env.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
              VALUES ('{PLAN}', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, cpd_txn(), 't');"
         ));
     }
@@ -335,7 +335,7 @@ impl Fx {
     /// fingerprint, then moved by `then` (SQL).
     pub fn add_cpd_job_in(&self, pr: &str, key: &str, kind: &str, then: &str) {
         self.env.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
              VALUES ('{PLAN}', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');"
         ));
         let plan = PlanId::parse(PLAN).unwrap();

@@ -32,7 +32,7 @@ fn engine_with(policy: &str, concurrency: u32) -> Fx {
     fx.engine_routes();
     fx.env.sql("INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');");
     fx.engine_plan();
-    fx.env.sql("UPDATE prs SET name = 'pay' WHERE plan = 'pay';");
+    fx.env.sql("UPDATE workflows SET name = 'pay' WHERE plan = 'pay';");
     fx.env.repo_policy("acme", "pay", policy);
     let exe = fx.env.root().join("cpd-installed");
     fs::write(&exe, "").unwrap();
@@ -47,7 +47,7 @@ fn engine_with(policy: &str, concurrency: u32) -> Fx {
 fn add(fx: &Fx, key: &str, resources: &[&str], then: &str) {
     let list = if resources.is_empty() { "NULL".to_owned() } else { format!("'{}'", json!(resources)) };
     fx.env.sql(&format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at, resources)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at, resources)
          VALUES ('{PLAN}', 'repo', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't', {list});"
     ));
     let plan = PlanId::parse(PLAN).unwrap();

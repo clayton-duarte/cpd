@@ -71,9 +71,9 @@ fn fixture(store: &mut Store) -> i64 {
                        VALUES ('lead1', 'lead', 'ctx', 'Lead', '/', 'O3', 'idle', 't', 't');
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at)
                        VALUES ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't');
-                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                     INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                        VALUES ('pay', 'pay', '/r', 'main', 'waiting', 'cpd/pay/pay', {id}, 't');
-                     INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                     INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at)
                        VALUES ('pay', 'pay', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{FP}', {id}, 't'),
                               ('pay', 'pay', 'ui', 'Ui', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, NULL, {id}, 't');
@@ -266,13 +266,13 @@ fn every_table_index_and_trigger_of_4_4_exists() {
             expected.insert(format!("{table}_hist_del"));
         }
         // `pull_requests` has no `_no_delete`: an unowned row may be deleted (`pull_requests_owned` is in the DDL).
-        // `dependencies` and `pr_needs` write their own (in the DDL).
-        if no_delete || ["dependencies", "pr_needs"].contains(&table.as_str()) {
+        // `dependencies` and `workflow_needs` write their own (in the DDL).
+        if no_delete || ["dependencies", "workflow_needs"].contains(&table.as_str()) {
             expected.insert(format!("{table}_no_delete"));
         }
     }
     // Described in §4.4's prose, written like `dependencies_hist_del`.
-    expected.insert("pr_needs_hist_del".to_owned());
+    expected.insert("workflow_needs_hist_del".to_owned());
     expected.insert("pull_requests_hist_del".to_owned());
     let found = names(
         &raw(&env),
@@ -355,7 +355,7 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
                 }
             }
         }
-        if ["dependencies", "pr_needs", "pull_requests"].contains(&table) {
+        if ["dependencies", "workflow_needs", "pull_requests"].contains(&table) {
             let del = sql_of(&format!("{table}_hist_del"));
             // `pull_requests_hist_del` is hand-written and owned by its migrations (§4.5 K4): `pr-comments` and `pr-base` (pro-d118) are additive, so they
             // cannot rewrite it (two additive migrations that did would not commute) and its columns are not in it.
@@ -412,7 +412,7 @@ fn a_job_status_change_writes_only_the_key_and_the_changed_columns_to_history() 
             exec(
                 tx,
                 &format!(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                    "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at)
                        VALUES ('pay', 'pay', 'big', 'Big', 'S2', '{long}', '{long}', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, '{FP}', cpd_txn(), 't')"
                 ),
@@ -464,10 +464,10 @@ fn check_constraints_reject_a_bad_value_in_every_constrained_table() {
         ("contexts", "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('x', 'T', 't', 'm')".to_owned()),
         ("context_records", "INSERT INTO context_records (context, id, kind, at, machine, text) VALUES ('ctx', 'n1', 'bogus', 't', 'm', 'x')".to_owned()),
         ("plans", "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('ops', 'ctx', 'O', 'bogus', 'lead1', 't')".to_owned()),
-        ("prs", format!("INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES ('pay', 'web', '/r', 'main', 'waiting', 'cpd/other', {txn}, 't')")),
-        ("pr_needs", "INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'pay', 'pay')".to_owned()),
+        ("prs", format!("INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES ('pay', 'web', '/r', 'main', 'waiting', 'cpd/other', {txn}, 't')")),
+        ("workflow_needs", "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', 'pay', 'pay')".to_owned()),
         ("plan_reviews", format!("INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at) VALUES ('pay', 'r2', 1, '{FP}', 'pending', 't')")),
-        ("jobs", format!("INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at) VALUES ('pay', 'pay', 'web', 'W', 'X9', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, NULL, {txn}, 't')")),
+        ("jobs", format!("INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at) VALUES ('pay', 'pay', 'web', 'W', 'X9', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, NULL, {txn}, 't')")),
         ("dependencies", "INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'ui', 'ui')".to_owned()),
         ("attempts", "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at) VALUES ('pay', 'ui-a1', 'ui', 1, 'S2', 'ladder', 'reviewing', 'cpd/pay--ui-a1', '/w', 't')".to_owned()),
         ("escalations", "INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at) VALUES ('pay', 'api-a1-q2', 'api-a1', 2, 'Q', 'pending', 1, 't')".to_owned()),
@@ -492,7 +492,7 @@ fn check_constraints_reject_a_bad_value_in_every_constrained_table() {
         .unwrap();
 }
 
-/// Contract §4.4 `pr_needs` (migration `local-needs`): a need names a PR of the Plan by key; one naming no PR is refused.
+/// Contract §4.4 `workflow_needs` (migration `local-needs`): a need names a PR of the Plan by key; one naming no PR is refused.
 #[test]
 fn a_need_names_a_pr_of_its_plan_and_one_naming_no_pr_is_refused() {
     let env = Home::new();
@@ -503,17 +503,17 @@ fn a_need_names_a_pr_of_its_plan_and_one_naming_no_pr_is_refused() {
             exec(
                 tx,
                 &format!(
-                    "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                    "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                        VALUES ('pay', 'deploy', '/r', 'main', 'waiting', 'cpd/pay/deploy', {txn}, 't');
-                     INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'deploy', 'pay');"
+                     INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', 'deploy', 'pay');"
                 ),
             )
         })
         .unwrap();
     let stored: (String, String) =
-        store.read(|c| Ok(c.query_row("SELECT pr, needs FROM pr_needs WHERE plan = 'pay'", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).unwrap();
+        store.read(|c| Ok(c.query_row("SELECT workflow, needs FROM workflow_needs WHERE plan = 'pay'", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).unwrap();
     assert_eq!(stored, ("deploy".to_owned(), "pay".to_owned()));
-    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'pay', 'nowhere')");
+    let err = refused(&mut store, "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', 'pay', 'nowhere')");
     assert!(sqlite_message(&err).contains("FOREIGN KEY constraint failed"), "{err:?}");
 }
 
@@ -551,7 +551,7 @@ fn a_locked_job_and_its_dependencies_are_job_locked() {
     fixture(&mut store);
     for sql in [
         "UPDATE jobs SET title = 'New' WHERE key = 'api'",
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
            VALUES ('pay', 'pay', 'web', 'W', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, 1, 't');
          INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'api', 'web')",
     ] {
@@ -587,7 +587,7 @@ fn a_stub_draft_has_a_title_only_and_a_job_that_is_not_a_draft_has_its_tier_and_
     fixture(&mut store);
     let insert = |key: &str, status: &str, fingerprint: &str| {
         format!(
-            "INSERT INTO jobs (plan, pr, key, title, status, appended, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, status, appended, fingerprint, created_txn, created_at)
              VALUES ('pay', 'pay', '{key}', 'T', '{status}', 1, {fingerprint}, cpd_txn(), 't')"
         )
     };
@@ -626,7 +626,7 @@ fn appending_a_job_inserts_its_dependencies_in_its_own_transaction() {
             exec(
                 tx,
                 &format!(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+                    "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
                        VALUES ('pay', 'pay', 'web', 'W', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, '{FP}', {}, 't');
                      INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'web', 'api');",
                     tx.id()

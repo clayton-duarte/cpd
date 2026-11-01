@@ -73,10 +73,10 @@ fn fixture(store: &mut Store) {
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
                        ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't'),
                        ('other', 'ctx', 'Other', 'grounding', 'lead2', 't');
-                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES
+                     INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES
                        ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', {id}, 't'),
                        ('other', 'r', '/r', 'main', 'waiting', 'cpd/other', {id}, 't');
-                     INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                     INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at)
                        VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{fp}', {id}, 't');
                      INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
@@ -1019,7 +1019,7 @@ impl Stale {
                     &format!(
                         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, feedback)
                            VALUES ('o/r', {n}, 'u{n}', 't', 0, '{state}', '{review}', '{checks}', 't', 't', {feedback});
-                         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+                         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                                           pull_request, created_txn, created_at, started_at)
                            VALUES ('{plan}', '{key}', '/r', 'main', 'open', 'cpd/{plan}/{key}', '/w/{key}', {n}, 'u{n}', 't',
                                    (SELECT id FROM pull_requests WHERE number = {n}), {id}, 't', 't');",
@@ -1037,7 +1037,7 @@ impl Stale {
                 exec(
                     tx,
                     &format!(
-                        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                          VALUES ('{plan}', '{key}', '/r', 'main', 'waiting', 'cpd/{plan}/{key}', {}, 't');",
                         tx.id()
                     ),
@@ -1058,7 +1058,7 @@ impl Stale {
                 exec(
                     tx,
                     &format!(
-                        "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at)
+                        "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction, reacted_at)
                          VALUES ('{plan}', '{pr}', 'C02JU6C2Z1D', '1793040197.490209', 'https://example.slack.com/p1', 'opened', NULL, NULL)"
                     ),
                 )

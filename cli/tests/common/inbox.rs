@@ -108,7 +108,7 @@ pub fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str)
     format!(
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
          VALUES ('{id}', '{context}', 'Plan {id}', '{phase}', '{lead}', '{created}', {locked}, NULL);
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                           pull_request, created_txn, created_at, started_at, merged_at)
          VALUES ('{id}', 'repo', '/repo/{id}', 'main', '{status}', 'cpd/{id}', {worktree}, NULL, NULL, NULL,
                  NULL, cpd_txn(), '{created}', {locked}, NULL);"

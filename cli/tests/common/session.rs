@@ -140,10 +140,10 @@ pub fn setup(env: &TestEnv) {
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
                    ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't'),
                    ('other', 'ctx', 'Other', 'grounding', 'lead2', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES
                    ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', {id}, 't'),
                    ('other', 'r', '/r', 'main', 'waiting', 'cpd/other', {id}, 't');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, created_txn, created_at)
                    VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fp}', {id}, 't');
                  INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
@@ -192,10 +192,10 @@ pub fn setup_with_fork(env: &TestEnv) {
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
                    ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't'),
                    ('other', 'ctx', 'Other', 'grounding', 'lead2', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES
                    ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', {txn}, 't'),
                    ('other', 'r', '/r', 'main', 'waiting', 'cpd/other', {txn}, 't');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, created_txn, created_at)
                    VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fp}', {txn}, 't');
                  INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)

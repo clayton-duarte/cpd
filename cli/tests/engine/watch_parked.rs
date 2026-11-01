@@ -169,9 +169,9 @@ fn an_approved_plan_review_in_phase_plan_sends_no_wake() {
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, tmux_pane)
            VALUES ('lead2', 'lead', 'ctx', 'pln', 'Lead2', '/', 'O3', 'idle', 't', 't', '{pane}');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at) VALUES ('pln', 'ctx', 'Pln', 'plan', 'lead2', 't', NULL);
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('pln', 'r', '/r', 'main', 'dispatch', 'cpd/pln', '/w', cpd_txn(), 't', 't');
-         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+         INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
            VALUES ('pln', 'r', 'd1', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 1, cpd_txn(), 't');"
     ));
     let plan = cpd_core::ids::PlanId::parse("pln").unwrap();

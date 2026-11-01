@@ -205,7 +205,7 @@ fn pull_request(fx: &Fx, number: u32, merge_state: &str) {
         ),
     );
     if number == 4 {
-        sql(&mut store, "UPDATE prs SET status = 'open', pr_number = 4, pr_url = 'https://github.com/acme/shop/pull/4', pr_opened_at = '2026-01-03T00:00:00.000Z',
+        sql(&mut store, "UPDATE workflows SET status = 'open', pr_number = 4, pr_url = 'https://github.com/acme/shop/pull/4', pr_opened_at = '2026-01-03T00:00:00.000Z',
                         pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/shop' AND number = 4) WHERE plan = 'ship';");
     }
 }

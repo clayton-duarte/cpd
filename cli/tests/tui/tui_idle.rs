@@ -66,7 +66,7 @@ fn plan(id: &str, fat: bool) -> String {
     let mut s = format!(
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
          VALUES ('{id}', 'ctx', 'Plan {id}', 'dispatch', 'lead-{id}', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
          VALUES ('{id}', 'repo', '/repo', 'main', 'dispatch', 'cpd/{id}', '/wt', cpd_txn(), '2026-01-02T00:00:00.000Z',
                  '2026-01-02T00:00:00.000Z');
          INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
@@ -76,7 +76,7 @@ fn plan(id: &str, fat: bool) -> String {
     if fat {
         s += &format!(
             "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < {FAT_JOBS})
-             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+             INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                fingerprint, created_txn, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at)
              SELECT '{id}', 'repo', 'k' || i, 'Job ' || i, 'S3', hex(randomblob(2000)), 'Why.', '[\"x\"]', '[\"y\"]', '[]',
                     'queued', 0, '{FP}', cpd_txn(), NULL, NULL, NULL, NULL, '2026-01-02T00:00:00.000Z' FROM n;"
@@ -88,7 +88,7 @@ fn plan(id: &str, fat: bool) -> String {
 /// A Job `key` of `plan` that runs, with its Attempt `key`-a1 (a Worker with no Session yet).
 fn running_job(plan: &str, key: &str) -> String {
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                            fingerprint, created_txn, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at)
          VALUES ('{plan}', 'repo', '{key}', 'Job {key}', 'S3', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', 'running', 0, '{FP}',
                  cpd_txn(), NULL, NULL, NULL, NULL, '2026-01-02T00:00:00.000Z');

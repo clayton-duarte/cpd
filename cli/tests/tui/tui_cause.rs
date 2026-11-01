@@ -32,9 +32,9 @@ fn the_cockpit_reads_every_cause_the_attempts_table_admits() {
                    VALUES ('lead-{pl}', 'lead', 'ctx', '{pl}', 'Lead', '/', 'O3', 'idle', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                    VALUES ('{pl}', 'ctx', 'Pay', 'dispatch', 'lead-{pl}', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
-                 INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                 INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                    VALUES ('{pl}', 'repo', '/repos/pay', 'pay', 'main', 'dispatch', 'cpd/{pl}', '/worktrees/lead', cpd_txn(), 't', 't');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
                    VALUES ('{pl}', 'repo', 'api', 'Job api', 'S2', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', 'running', 0, '{fp}', cpd_txn(), '2026-01-02T00:00:00.000Z');
                  INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, merged_sha, started_at, ended_at)
                    VALUES ('{pl}', 'api-a1', 'api', 1, 'S2', 'ladder', 'ended', '{outcome}', '{cause}', 'cpd/{pl}--api-a1', '/w/api-a1', {merged},

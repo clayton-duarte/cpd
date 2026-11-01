@@ -94,7 +94,7 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
          VALUES ('{id}', '{context}', 'Plan {id}', '{phase}', '{lead}', '{created}', {locked}, {done});
          {row}
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                           created_txn, created_at, started_at, merged_at)
          VALUES ('{id}', 'repo', '/repo', 'main', '{status}', 'cpd/{id}', {worktree}, {number}, {url}, {opened}, {pull_request},
                  cpd_txn(), '{created}', {locked}, {done});"
@@ -120,7 +120,7 @@ fn job_row(plan: &str, key: &str, status: &str, tier: &str, needs: &[&str]) -> S
     let (reason, requested) =
         if status == "cancelled" { ("'not needed'", "'2026-01-04T00:00:00.000Z'") } else { ("NULL", "NULL") };
     let mut out = format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at)
          VALUES ('{plan}', 'repo', '{key}', 'Job {key}', '{tier}', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fingerprint},
                  cpd_txn(), {reason}, {requested}, {failed}, {merged}, '2026-01-02T00:00:00.000Z');"
@@ -940,7 +940,7 @@ fn a_stub_draft_without_tier_or_spec_is_a_job_without_a_tier_and_does_not_fail_t
     let (_fx, mut store) = fixture();
     sql(
         &mut store,
-        "INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, status, appended, created_txn, created_at)
          VALUES ('ship', 'repo', 'stub', 'Planned', 'draft', 1, cpd_txn(), '2026-01-05T00:00:00.000Z');",
     );
     let flow = read::flow(&mut store, &plan("ship")).unwrap();
@@ -1401,13 +1401,13 @@ fn the_flow_gives_a_stacked_pr_its_base_pr_as_a_need_and_as_its_blocker_until_it
                  '2026-01-05T00:00:00.000Z', '2026-01-06T00:00:00.000Z', '2026-01-06T00:00:00.000Z'),
                 ('acme/zeta', 92, 'https://github.com/acme/zeta/pull/92', 'Zeta', 0, 'open', 'none', 'none',
                  '2026-01-05T00:00:00.000Z', NULL, '2026-01-06T00:00:00.000Z');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, pr_number, pull_request, pr_url, pr_opened_at, merged_at, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, pr_number, pull_request, pr_url, pr_opened_at, merged_at, created_txn, created_at)
          VALUES ('ship', 'mid', '/r/mid', 'main', 'merged', 'cpd/ship/mid', '/wt/mid', '2026-01-02T00:00:00.000Z', 91, (SELECT id FROM pull_requests WHERE number = 91), 'https://github.com/acme/mid/pull/91', '2026-01-02T00:00:00.000Z', '2026-01-03T00:00:00.000Z', cpd_txn(), '2026-01-02T00:00:00.000Z');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
          VALUES ('ship', 'zeta', '/r/zeta', 'main', 'dispatch', 'cpd/ship/zeta', '/wt/zeta', '2026-01-02T00:00:00.000Z', cpd_txn(), '2026-01-02T00:00:00.000Z');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          VALUES ('ship', 'stk', '/r/stk', 'cpd/ship/zeta', 'waiting', 'cpd/ship/stk', cpd_txn(), '2026-01-02T00:00:00.000Z');
-         INSERT INTO pr_needs (plan, pr, needs) VALUES ('ship', 'stk', 'mid');",
+         INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('ship', 'stk', 'mid');",
     );
     let stk = |store: &mut Store| {
         let node = read::plan_boxes(store, &plan("ship")).unwrap().workflows.into_iter().find(|p| p.key.as_str() == "stk").unwrap();
@@ -1419,14 +1419,14 @@ fn the_flow_gives_a_stacked_pr_its_base_pr_as_a_need_and_as_its_blocker_until_it
     // a base PR that is waiting blocks: `stk2` is stacked on `wb`, which has not started
     sql(
         &mut store,
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          VALUES ('ship', 'wb', '/r/wb', 'main', 'waiting', 'cpd/ship/wb', cpd_txn(), '2026-01-02T00:00:00.000Z');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          VALUES ('ship', 'stk2', '/r/wb', 'cpd/ship/wb', 'waiting', 'cpd/ship/stk2', cpd_txn(), '2026-01-02T00:00:00.000Z');",
     );
     let node = read::plan_boxes(&mut store, &plan("ship")).unwrap().workflows.into_iter().find(|p| p.key.as_str() == "stk2").unwrap();
     assert_eq!(node.waiting_on, ["wb"], "a base PR that is waiting blocks");
-    sql(&mut store, "UPDATE prs SET status = 'open', pr_number = 92, pull_request = (SELECT id FROM pull_requests WHERE number = 92), pr_url = 'https://github.com/acme/zeta/pull/92', pr_opened_at = '2026-01-02T00:00:00.000Z', started_at = '2026-01-02T00:00:00.000Z', lead_worktree = '/wt/zeta' WHERE plan = 'ship' AND key = 'zeta'");
+    sql(&mut store, "UPDATE workflows SET status = 'open', pr_number = 92, pull_request = (SELECT id FROM pull_requests WHERE number = 92), pr_url = 'https://github.com/acme/zeta/pull/92', pr_opened_at = '2026-01-02T00:00:00.000Z', started_at = '2026-01-02T00:00:00.000Z', lead_worktree = '/wt/zeta' WHERE plan = 'ship' AND key = 'zeta'");
     let (needs, waiting_on) = stk(&mut store);
     assert_eq!(needs, ["mid", "zeta"], "an open base PR is still listed");
     assert!(waiting_on.is_empty(), "an open base PR blocks nothing: {waiting_on:?}");

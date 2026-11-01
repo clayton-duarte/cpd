@@ -298,7 +298,7 @@ impl Jira {
         let jira = ticket.map_or("NULL".to_owned(), |t| format!("'{t}'"));
         let sql = if status == "cancelled" {
             format!(
-                "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at, name, jira)
+                "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at, name, jira)
                    VALUES ('pay', '{key}', '/nowhere', 'main', 'cancelled', 'cpd/pay/{key}', cpd_txn(), 't', 'pay', {jira});"
             )
         } else {
@@ -306,7 +306,7 @@ impl Jira {
             format!(
                 "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, authored)
                    VALUES ('acme/pay', {number}, '{url}', 'PR {key}', 0, 'open', 'none', 'none', 't', NULL, 't', 0);
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, name, jira)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, name, jira)
                    VALUES ('pay', '{key}', '/nowhere', 'main', 'open', 'cpd/pay/{key}', '/nowhere/lead', {number}, '{url}', 't',
                            (SELECT id FROM pull_requests WHERE repo = 'acme/pay' AND number = {number}), cpd_txn(), 't', 't', 'pay', {jira});"
             )
@@ -440,7 +440,7 @@ fn a_target_with_no_status_name_settles_skipped_without_calling_the_helper() {
 #[test]
 fn a_row_of_a_pr_with_no_ticket_waits_and_runs_once_the_ticket_is_set() {
     let t = jira(LONG, true);
-    t.fx.env.sql("UPDATE prs SET jira = NULL WHERE plan = 'pay' AND key = 'web';");
+    t.fx.env.sql("UPDATE workflows SET jira = NULL WHERE plan = 'pay' AND key = 'web';");
     t.queue("web", "in_progress");
     t.queue("api", "in_progress");
     t.run(then_ticks(5, |p| p.settled("api", "in_progress")));
@@ -450,7 +450,7 @@ fn a_row_of_a_pr_with_no_ticket_waits_and_runs_once_the_ticket_is_set() {
     assert!(p.pending("web", "in_progress"), "the row of the PR with no ticket waits, with nothing else written");
     assert_eq!(p.error_events(), vec![]);
 
-    p.write("UPDATE prs SET jira = 'ABC-9' WHERE plan = 'pay' AND key = 'web';");
+    p.write("UPDATE workflows SET jira = 'ABC-9' WHERE plan = 'pay' AND key = 'web';");
     t.run(then_ticks(3, |p| p.settled("web", "in_progress")));
     assert_eq!(p.tickets(), [API, "ABC-9"], "the ticket is set: the row runs with it");
     assert_eq!(p.row("web", "in_progress").1.as_deref(), Some("moved"));
@@ -560,9 +560,9 @@ fn a_parked_row_is_reopened_and_run_when_the_ticket_or_the_status_name_changes()
     // settled too. (change, does it reopen the row, the ticket and the name of the second run)
     type Change = Box<dyn Fn(&Probe)>;
     let cases: Vec<(&str, Change, Option<(&str, &str)>)> = vec![
-        ("another ticket", Box::new(|p| p.write("UPDATE prs SET jira = 'ABC-124' WHERE plan = 'pay' AND key = 'api';")), Some(("ABC-124", "In Review"))),
+        ("another ticket", Box::new(|p| p.write("UPDATE workflows SET jira = 'ABC-124' WHERE plan = 'pay' AND key = 'api';")), Some(("ABC-124", "In Review"))),
         ("another status name", Box::new(|p| p.owner_policy(&owner_toml("In Progress", "Under Review", "Done"))), Some((API, "Under Review"))),
-        ("another title", Box::new(|p| p.write("UPDATE prs SET title = 'Another title' WHERE plan = 'pay' AND key = 'api';")), None),
+        ("another title", Box::new(|p| p.write("UPDATE workflows SET title = 'Another title' WHERE plan = 'pay' AND key = 'api';")), None),
         ("the same name, rewritten", Box::new(|p| p.owner_policy(&format!("# edited\n{}", names()))), None),
         ("an empty name", Box::new(|p| p.owner_policy(&owner_toml("In Progress", "", "Done"))), None),
     ];

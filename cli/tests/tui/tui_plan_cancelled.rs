@@ -99,7 +99,7 @@ pub(crate) fn plan(fx: &Fx, prs: &[(&str, &str)], jobs: &[FixtureJob]) {
     );
     for (key, dir) in prs {
         s += &format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
              VALUES ('ship', '{key}', '/{dir}', 'main', 'dispatch', 'cpd/ship/{key}', '/wt/{key}', cpd_txn(), '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');"
         );
     }
@@ -107,7 +107,7 @@ pub(crate) fn plan(fx: &Fx, prs: &[(&str, &str)], jobs: &[FixtureJob]) {
         let merged = if *status == "merged" { "'abc123'" } else { "NULL" };
         let status = if *status == "cancelled" { "queued" } else { status };
         s += &format!(
-            "INSERT INTO jobs (plan, pr, key, kind, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+            "INSERT INTO jobs (plan, workflow, key, kind, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                                created_txn, merged_sha, created_at)
              VALUES ('ship', '{pr}', '{key}', '{kind}', 'Job {key}', 'S3', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, '{FP}',
                      cpd_txn(), {merged}, '2026-01-02T00:00:00.000Z');"

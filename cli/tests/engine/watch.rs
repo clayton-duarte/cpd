@@ -123,7 +123,7 @@ fn fx(config_extra: &str) -> Fx {
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'stopped', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at)
            VALUES ('pay', 'repo', '{repo}', 'main', 'dispatch', 'cpd/pay', '{lead}', '{PR_TITLE}', 'A description', 'config', cpd_txn(), 't', 't');",
         repo = fx.repo.display(),
         lead = fx.lead.display()
@@ -207,7 +207,7 @@ impl Fx {
     /// `add_job_in` with the Job's Tier `tier`.
     fn add_job_on(&self, tier: &str, pr: &str, key: &str, needs: &[&str], then: &str) {
         let mut sql = format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
              VALUES ('pay', '{pr}', '{key}', 'Title of {key}', '{tier}', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         );
         for need in needs {
@@ -1936,7 +1936,7 @@ fn pr_cancel_cancels_the_prs_own_open_job_with_it_and_e4_adds_none() {
 
     let web: Vec<_> = fx.jobs_of_kind("open").into_iter().filter(|(key, _)| key.starts_with("open-web")).collect();
     assert_eq!(web, [("open-web".to_owned(), "cancelled".to_owned())]);
-    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE plan = 'pay' AND key = 'web'"), "cancelled");
+    assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE plan = 'pay' AND key = 'web'"), "cancelled");
 }
 
 /// `watch_ticks` is `n` ticks of each run, whatever ran before it on the clock.
@@ -1982,7 +1982,7 @@ fn open_pr() -> (Ip, Says) {
         "UPDATE plans SET title = 'Pay the bills', phase = 'deploy' WHERE id = 'pay';
          INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, mergeable, merge_state, created_at, merged_at, changed_at, updated_at, feedback)
            VALUES ('acme/pay', 812, 'https://github.com/acme/pay/pull/812', 'Pay the bills', 0, 'open', 'none', 'none', 'mergeable', 'clean', 'opened', NULL, 'opened', 'U1', '[]');
-         UPDATE prs SET status = 'open', pr_number = 812, pr_url = 'https://github.com/acme/pay/pull/812', pr_opened_at = 'opened',
+         UPDATE workflows SET status = 'open', pr_number = 812, pr_url = 'https://github.com/acme/pay/pull/812', pr_opened_at = 'opened',
             pull_request = (SELECT id FROM pull_requests WHERE number = 812) WHERE plan = 'pay' AND key = 'repo';",
     );
     fx.add_merged_api();
@@ -2040,7 +2040,7 @@ fn e5_queues_one_update_job_when_the_pull_request_conflicts_and_none_for_a_base_
     let data = &added[0].3;
     assert_eq!((&data["kind"], &data["by"], &data["reason"], &data["pr"]), (&json!("update"), &json!("poll"), &json!("conflict"), &json!("repo")));
     assert_eq!(fx.events("pr-feedback").len(), 0, "a conflict is no pr-feedback reason any more");
-    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE plan = 'pay'"), "open", "the PR's status does not change");
+    assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE plan = 'pay'"), "open", "the PR's status does not change");
 }
 
 /// The update Job that ended is a cause that ended: a conflict that comes after it is a new transition, and a new Job, `up-repo-2`.
@@ -2092,7 +2092,7 @@ fn in_pr(fx: &Ip) {
         "UPDATE plans SET phase = 'deploy' WHERE id = 'pay';
          INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
            VALUES ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Pay', 0, 'open', 'none', 'none', 't', 't');
-         UPDATE prs SET status = 'open', pr_number = 7, pr_url = 'https://github.com/acme/pay/pull/7', pr_opened_at = 't',
+         UPDATE workflows SET status = 'open', pr_number = 7, pr_url = 'https://github.com/acme/pay/pull/7', pr_opened_at = 't',
             pull_request = (SELECT id FROM pull_requests WHERE number = 7) WHERE plan = 'pay';",
     );
 }
@@ -2621,11 +2621,11 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     fx.env.sql(&format!(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
            VALUES ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Pay', 0, 'open', 'none', 'none', 't', 't');
-         UPDATE prs SET status = 'open', pr_number = 7, pr_url = 'https://github.com/acme/pay/pull/7', pr_opened_at = 't',
+         UPDATE workflows SET status = 'open', pr_number = 7, pr_url = 'https://github.com/acme/pay/pull/7', pr_opened_at = 't',
                 pull_request = (SELECT id FROM pull_requests WHERE number = 7) WHERE plan = 'pay' AND key = 'repo';
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('pay', 'web', '{repo}', 'main', 'waiting', 'cpd/pay/web', cpd_txn(), 't');
-         INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'repo');",
+         INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', 'web', 'repo');",
         repo = web.display()
     ));
     // The real `pr poll`, against a `gh` that finds PR 7 merged: the search lists nothing, the lookup answers MERGED.
@@ -2652,8 +2652,8 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     )
     .unwrap();
 
-    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'repo'"), "merged");
-    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "dispatch");
+    assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE key = 'repo'"), "merged");
+    assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE key = 'web'"), "dispatch");
     assert_eq!(fx.count("pr-started"), 1);
     assert!(fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'") < fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-started'"));
     assert!(lead.exists(), "the poll that saw the merge leaves the Lead worktree to the janitor");

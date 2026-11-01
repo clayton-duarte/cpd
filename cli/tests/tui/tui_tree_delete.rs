@@ -24,7 +24,7 @@ fn plan_row(id: &str, phase: &str, lead: &str, created: &str) -> String {
                          '2026-01-09T00:00:00.000Z', '2026-01-06T00:00:00.000Z');"
             ),
             format!(
-                "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+                "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                                   created_txn, created_at, started_at, merged_at)
                  VALUES ('{id}', 'repo', '/repo/{id}', 'main', 'merged', 'cpd/{id}', '/wt', 7, 'https://github.com/acme/{id}/pull/7',
                          '2026-01-05T00:00:00.000Z', (SELECT id FROM pull_requests WHERE repo = 'acme/{id}'), cpd_txn(), '{created}',

@@ -471,12 +471,12 @@ fn locked_jobs(env: &TestEnv) {
                    VALUES ('lead-pl', 'lead', 'ctx', 'pl', 'pl', '/repo', 'O3', 'stopped', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at)
                    VALUES ('pl', 'ctx', 'Plan', 'plan', 'lead-pl', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                    VALUES ('pl', 'repo', '/repo', 'main', 'waiting', 'cpd/pl', cpd_txn(), 't');",
             )?;
             for key in ["a", "b", "c"] {
                 tx.execute(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                    "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                        created_txn, created_at)
                      VALUES ('pl', 'repo', ?1, 'T', 'S2', 'Do it.', 'Because.', '[\"x\"]', '[\"y\"]', '[]', 'draft', 0, cpd_txn(), 't')",
                     [key],
@@ -648,7 +648,7 @@ fn plan_in_phase(env: &TestEnv, phase: &str) {
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                    VALUES ('pay', 'ctx', 'Pay', '{phase}', 'lead1', 't', {locked});
                  {pull}
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at{pr})
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at{pr})
                    VALUES ('pay', 'r', '/r', 'main', '{status}', 'cpd/pay', {worktree}, {locked}, cpd_txn(), 't'{pr_values});"
             ))?;
             Ok(())
