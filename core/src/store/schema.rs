@@ -485,9 +485,20 @@ fn fill_prs(conn: &Connection) -> Result<()> {
 /// prefixed `pr-` when it does not then start with a letter, cut to 24
 /// characters.
 fn migrated_workflow_key(repo: &str) -> WorkflowKey {
-    let name = Path::new(repo).file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
-    let mut key: String =
-        name.chars().map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' { c } else { '-' }).collect();
+    let name = Path::new(repo)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let mut key: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
     if !key.starts_with(|c: char| c.is_ascii_lowercase()) {
         key.insert_str(0, "pr-");
     }
@@ -554,8 +565,11 @@ fn delete_owner(table: &str) -> Option<String> {
         )
     };
     Some(match table {
-        "workflows" | "pr_posts" | "job_pools" | "workflow_needs" | "plan_reviews" | "jobs" | "dependencies" | "attempts" | "escalations" => plan_deleted("OLD.plan"),
-        "context_records" | "record_retirements" | "record_curations" => context_deleted("OLD.context"),
+        "workflows" | "pr_posts" | "job_pools" | "workflow_needs" | "plan_reviews" | "jobs"
+        | "dependencies" | "attempts" | "escalations" => plan_deleted("OLD.plan"),
+        "context_records" | "record_retirements" | "record_curations" => {
+            context_deleted("OLD.context")
+        }
         "events" | "inbox_items" | "sessions" => plan_row(),
         "board_posts" => session_row("to_session"),
         _ => return None,
@@ -1077,6 +1091,6 @@ mod tier_catalog_tests;
 #[cfg(test)]
 mod worker_runner_tests;
 #[cfg(test)]
-mod working_pr_tests;
-#[cfg(test)]
 mod workflow_rename_tests;
+#[cfg(test)]
+mod working_pr_tests;

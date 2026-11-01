@@ -68,7 +68,9 @@ pub(super) fn run(engine: &mut Engine) {
     }) {
         Ok((added, promoted)) => {
             for (plan, workflow, key) in added {
-                engine.log.line(&format!("E4: added the open Job {key} to Workflow {workflow} of Plan {plan}"));
+                engine.log.line(&format!(
+                    "E4: added the open Job {key} to Workflow {workflow} of Plan {plan}"
+                ));
             }
             for (plan, key) in promoted {
                 engine.log.line(&format!("E4: queued the draft open Job {key} of Plan {plan}: no draft of its Workflow remains"));
@@ -117,7 +119,11 @@ fn promote_all(tx: &WriteTxn<'_>) -> Result<Vec<(String, String)>, CpdError> {
 }
 
 /// Decides again inside the transaction (a hand `pr open` or `job cancel` may have changed a Workflow), then adds each missing Job.
-fn add_all(tx: &WriteTxn<'_>, missing: &[(PlanId, WorkflowKey)], tier: cpd_core::config::Tier) -> Result<Vec<(PlanId, WorkflowKey, cpd_core::ids::JobKey)>, CpdError> {
+fn add_all(
+    tx: &WriteTxn<'_>,
+    missing: &[(PlanId, WorkflowKey)],
+    tier: cpd_core::config::Tier,
+) -> Result<Vec<(PlanId, WorkflowKey, cpd_core::ids::JobKey)>, CpdError> {
     let mut added = Vec::new();
     for (plan, key) in missing {
         let still: bool = tx.query_row(
@@ -129,7 +135,9 @@ fn add_all(tx: &WriteTxn<'_>, missing: &[(PlanId, WorkflowKey)], tier: cpd_core:
             continue;
         }
         let workflows = load_workflows(tx, plan)?;
-        let Some(workflow) = workflows.iter().find(|p| p.key == *key) else { continue };
+        let Some(workflow) = workflows.iter().find(|p| p.key == *key) else {
+            continue;
+        };
         let draft: bool = tx.query_row(
             "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND pr = ?2 AND status = 'draft' AND kind NOT IN ('open', 'update'))",
             [plan.as_str(), key.as_str()],

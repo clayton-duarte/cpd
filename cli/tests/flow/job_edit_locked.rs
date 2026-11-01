@@ -116,7 +116,14 @@ fn only_the_spec_of_a_queued_job_can_be_edited() {
     let fx = locked();
     let spec = new_spec(&fx, "new.json");
     let before = writes(&fx);
-    for flag in [&["--title", "Else"][..], &["--tier", "S3"], &["--workflow", "repo"], &["--kind", "docs"], &["--needs", "a"], &["--no-needs"]] {
+    for flag in [
+        &["--title", "Else"][..],
+        &["--tier", "S3"],
+        &["--workflow", "repo"],
+        &["--kind", "docs"],
+        &["--needs", "a"],
+        &["--no-needs"],
+    ] {
         let mut args = vec!["edit", "b", "--spec", spec.as_str()];
         args.extend(flag);
         let e = refused(&job(&fx, &args, "pl"), "job_locked", 3);

@@ -539,11 +539,24 @@ mod error_colour {
     #[test]
     fn an_error_addressed_to_a_lead_is_waiting() {
         let waiting = Some(palette::color(Meaning::Waiting));
-        assert_eq!(colour(&error(Some("pay"), "attempt run", "git_failed")), waiting, "a driver's error");
-        assert_eq!(colour(&error(Some("pay"), "pr poll", "cleanup_failed")), waiting);
-        assert_eq!(colour(&error(Some("pay"), "plan lock", "push_failed")), waiting);
+        assert_eq!(
+            colour(&error(Some("pay"), "attempt run", "git_failed")),
+            waiting,
+            "a driver's error"
+        );
+        assert_eq!(
+            colour(&error(Some("pay"), "pr poll", "cleanup_failed")),
+            waiting
+        );
+        assert_eq!(
+            colour(&error(Some("pay"), "plan lock", "push_failed")),
+            waiting
+        );
         // the engine's own start of a Workflow (source `watch`) is for the Lead too
-        assert_eq!(colour(&error(Some("pay"), "watch", "workflow_start_failed")), waiting);
+        assert_eq!(
+            colour(&error(Some("pay"), "watch", "workflow_start_failed")),
+            waiting
+        );
         assert_eq!(colour(&error(Some("pay"), "watch", "push_failed")), waiting);
     }
 

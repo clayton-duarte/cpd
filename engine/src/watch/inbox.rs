@@ -26,7 +26,9 @@ pub(super) fn run(engine: &mut Engine) {
                 ));
             }
             if told > 0 {
-                engine.log.line(&format!("E8: told the Manager of {told} stuck Job Workflow(s)"));
+                engine.log.line(&format!(
+                    "E8: told the Manager of {told} stuck Job Workflow(s)"
+                ));
             }
             if asked > 0 {
                 engine

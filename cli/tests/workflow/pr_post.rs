@@ -79,11 +79,11 @@ fn post_with_node(setup: Setup, node: Reply) -> Pay {
         .unwrap_or_default();
     env.repo_policy("acme", "owner", &owner);
     env.repo_policy("acme", "pay", "");
-    let sql = format!(
-        "UPDATE contexts SET owner = 'acme' WHERE id = 'ctx';
+    let sql = "UPDATE contexts SET owner = 'acme' WHERE id = 'ctx';
          UPDATE workflows SET name = 'pay' WHERE plan = 'pay' AND key = 'repo';
          UPDATE pull_requests SET mergeable = 'mergeable', review_decision = 'none', checks = 'passed', authored = 1, feedback = '[]'
-           WHERE number = 812;".to_string();
+           WHERE number = 812;"
+        .to_string();
     pay.store()
         .write("fixture", |tx| tx.execute_batch(&sql).map_err(Into::into))
         .unwrap();
@@ -100,7 +100,8 @@ impl Pay {
     }
 
     pub(super) fn post_cmd(&self) -> crate::common::Run {
-        self.fx.cpd(&["pr", "post", "--workflow", "repo", "--plan", "pay"])
+        self.fx
+            .cpd(&["pr", "post", "--workflow", "repo", "--plan", "pay"])
     }
 
     fn posts(&self) -> Vec<Value> {
@@ -159,7 +160,15 @@ fn posts_the_rendered_message_and_records_it() {
     assert_eq!(posts.len(), 1, "{posts:?}");
     let row = &posts[0];
     assert_eq!(
-        (&row["plan"], &row["workflow"], &row["channel"], &row["ts"], &row["link"], &row["reaction"], &row["reacted_at"]),
+        (
+            &row["plan"],
+            &row["workflow"],
+            &row["channel"],
+            &row["ts"],
+            &row["link"],
+            &row["reaction"],
+            &row["reacted_at"]
+        ),
         (
             &json!("pay"),
             &json!("repo"),

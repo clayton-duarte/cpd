@@ -452,7 +452,10 @@ impl Set for GatesSet {
     type Value = Gates;
 
     fn fill(&self, base: &Gates) -> (Gates, Vec<&'static str>) {
-        let left_out = left_out([(MERGE, self.merge.is_none()), (GATE_PR, self.workflow.is_none())]);
+        let left_out = left_out([
+            (MERGE, self.merge.is_none()),
+            (GATE_PR, self.workflow.is_none()),
+        ]);
         let value = Gates {
             merge: self.merge.unwrap_or(base.merge),
             workflow: self.workflow.unwrap_or(base.workflow),
@@ -462,7 +465,11 @@ impl Set for GatesSet {
     }
 
     fn complete(&self) -> Option<Gates> {
-        Some(Gates { merge: self.merge?, workflow: self.workflow?, text: self.text.clone()? })
+        Some(Gates {
+            merge: self.merge?,
+            workflow: self.workflow?,
+            text: self.text.clone()?,
+        })
     }
 }
 
@@ -478,9 +485,18 @@ impl Set for PrSet {
         let left_out = left_out([
             (FEEDBACK_CHECKS, checks.is_none()),
             (POST_ENABLED, post.and_then(|p| p.enabled).is_none()),
-            (POST_CHANNEL, post.and_then(|p| p.channel.as_ref()).is_none()),
-            (POST_TEMPLATE, post.and_then(|p| p.template.as_ref()).is_none()),
-            (POST_MERGED_REACTION, post.and_then(|p| p.merged_reaction.as_ref()).is_none()),
+            (
+                POST_CHANNEL,
+                post.and_then(|p| p.channel.as_ref()).is_none(),
+            ),
+            (
+                POST_TEMPLATE,
+                post.and_then(|p| p.template.as_ref()).is_none(),
+            ),
+            (
+                POST_MERGED_REACTION,
+                post.and_then(|p| p.merged_reaction.as_ref()).is_none(),
+            ),
             (HUMAN_GATED_CONTEXTS, self.human_gated_contexts.is_none()),
             (EXCUSED_LABELS, self.excused_labels.is_none()),
             (REQUIRED_CHECKS, self.required_checks.is_none()),
@@ -523,9 +539,18 @@ impl Set for PrSet {
                     .and_then(|j| j.estimate_fields.clone())
                     .unwrap_or_else(|| base.jira.estimate_fields.clone()),
             },
-            human_gated_contexts: self.human_gated_contexts.clone().unwrap_or_else(|| base.human_gated_contexts.clone()),
-            excused_labels: self.excused_labels.clone().unwrap_or_else(|| base.excused_labels.clone()),
-            required_checks: self.required_checks.clone().unwrap_or_else(|| base.required_checks.clone()),
+            human_gated_contexts: self
+                .human_gated_contexts
+                .clone()
+                .unwrap_or_else(|| base.human_gated_contexts.clone()),
+            excused_labels: self
+                .excused_labels
+                .clone()
+                .unwrap_or_else(|| base.excused_labels.clone()),
+            required_checks: self
+                .required_checks
+                .clone()
+                .unwrap_or_else(|| base.required_checks.clone()),
             text: self.text.clone().unwrap_or_else(|| base.text.clone()),
         };
         (value, left_out)
@@ -575,7 +600,10 @@ impl Set for WorkflowSet {
     }
 
     fn complete(&self) -> Option<Workflow> {
-        Some(Workflow { jira_required: self.jira_required?, text: self.text.clone()? })
+        Some(Workflow {
+            jira_required: self.jira_required?,
+            text: self.text.clone()?,
+        })
     }
 }
 

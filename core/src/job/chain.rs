@@ -10,16 +10,33 @@ use crate::plan::jobs::Job;
 /// The chain is the non-cancelled Jobs after the open Job (the open Job and every Job that transitively needs it),
 /// minus `key` and whoever needs `key` (a rerun of the same add); drafts and `update` Jobs are never members. A leaf is a member
 /// no other member needs; a `failed` leaf refuses `needs_unavailable`.
-pub(super) fn leaves(all: &[Job], plan: &PlanId, workflow: &str, workflow_status: &str, key: &str) -> Result<Option<Vec<String>>, CpdError> {
+pub(super) fn leaves(
+    all: &[Job],
+    plan: &PlanId,
+    workflow: &str,
+    workflow_status: &str,
+    key: &str,
+) -> Result<Option<Vec<String>>, CpdError> {
     if workflow_status != "open" {
         return Ok(None);
     }
-    let Some(open) = all.iter().find(|j| j.workflow_str() == workflow && j.kind == "open" && j.status == "merged") else { return Ok(None) };
+    let Some(open) = all
+        .iter()
+        .find(|j| j.workflow_str() == workflow && j.kind == "open" && j.status == "merged")
+    else {
+        return Ok(None);
+    };
     let descendants = |root: &str| {
         let mut seen: BTreeSet<String> = BTreeSet::from([root.to_owned()]);
         loop {
             let before = seen.len();
-            let next: Vec<String> = all.iter().filter(|j| j.workflow_str() == workflow && j.needs.iter().any(|n| seen.contains(n))).map(|j| j.key.clone()).collect();
+            let next: Vec<String> = all
+                .iter()
+                .filter(|j| {
+                    j.workflow_str() == workflow && j.needs.iter().any(|n| seen.contains(n))
+                })
+                .map(|j| j.key.clone())
+                .collect();
             seen.extend(next);
             if seen.len() == before {
                 return seen;

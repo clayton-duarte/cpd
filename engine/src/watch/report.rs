@@ -24,10 +24,10 @@ use super::log::Log;
 use cpd_core::error::CpdError;
 use cpd_core::events::repeat::{self, Recent, Same};
 use cpd_core::events::{self, NewEvent};
-use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, WorkflowKey, SessionId};
-use cpd_core::pr::jira_sync::Target;
+use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId, WorkflowKey};
 use cpd_core::inbox::rules::{StuckGroup, StuckJob, stuck_groups};
 use cpd_core::job::home::JobHome;
+use cpd_core::pr::jira_sync::Target;
 use cpd_core::session::tell_managers;
 use cpd_core::store::Store;
 
@@ -110,7 +110,9 @@ impl About {
             About::Job(p, j) => format!("Job {j} of Plan {p}"),
             About::Attempt(p, a) => format!("Attempt {a} of Plan {p}"),
             About::Session(s) | About::TitleRun(s) => format!("Session {s}"),
-            About::Move(p, workflow, t) => format!("the {} move of Workflow {workflow} of Plan {p}", t.as_str()),
+            About::Move(p, workflow, t) => {
+                format!("the {} move of Workflow {workflow} of Plan {p}", t.as_str())
+            }
         }
     }
 
@@ -172,7 +174,9 @@ impl From<&CpdError> for Failure {
 /// What every message about a group's stuck Jobs begins with: the record that it was sent ([`tell_stuck_jobs`]).
 fn stuck_prefix(group: &StuckGroup) -> String {
     match &group.home {
-        JobHome::Workflow(workflow) => format!("Jobs of Workflow {}/{workflow} failed ", group.plan),
+        JobHome::Workflow(workflow) => {
+            format!("Jobs of Workflow {}/{workflow} failed ", group.plan)
+        }
         JobHome::Plan => format!("Explore Jobs of Plan {} failed ", group.plan),
     }
 }
@@ -181,7 +185,9 @@ fn stuck_prefix(group: &StuckGroup) -> String {
 /// hazard): the dedupe must match it too, or the Manager is told again of Workflows whose failures predate the rename.
 fn stuck_prefix_legacy(group: &StuckGroup) -> Option<String> {
     match &group.home {
-        JobHome::Workflow(workflow) => Some(format!("Jobs of PR {}/{workflow} failed ", group.plan)),
+        JobHome::Workflow(workflow) => {
+            Some(format!("Jobs of PR {}/{workflow} failed ", group.plan))
+        }
         JobHome::Plan => None,
     }
 }
@@ -213,7 +219,9 @@ fn stuck_text(group: &StuckGroup) -> String {
 /// `job-failed` Event whose text begins [`stuck_prefix`]. A later failure of a Job of the Workflow is a newer Event, so the group
 /// is told again.
 fn untold(conn: &Connection, group: &StuckGroup) -> Result<bool, CpdError> {
-    let Some(manager) = live_manager(conn, &group.context)? else { return Ok(false) };
+    let Some(manager) = live_manager(conn, &group.context)? else {
+        return Ok(false);
+    };
     if message_exists(conn, &manager, Some(group.event), &stuck_prefix(group))? {
         return Ok(false);
     }
@@ -485,10 +493,20 @@ mod tests {
     #[test]
     fn a_move_failure_is_per_row_and_plan_scoped() {
         let plan = PlanId::parse("plan-a").unwrap();
-        let about = About::Move(plan.clone(), WorkflowKey::parse("pr1").unwrap(), Target::InReview);
+        let about = About::Move(
+            plan.clone(),
+            WorkflowKey::parse("pr1").unwrap(),
+            Target::InReview,
+        );
         assert_eq!(about.see(), "cpd plan show --plan plan-a");
-        assert!(about.lead(Step::E19).contains(&format!("the {} move of Workflow pr1 of Plan plan-a", Target::InReview.as_str())));
-        assert_ne!(about, About::Move(plan, WorkflowKey::parse("pr2").unwrap(), Target::InReview));
+        assert!(about.lead(Step::E19).contains(&format!(
+            "the {} move of Workflow pr1 of Plan plan-a",
+            Target::InReview.as_str()
+        )));
+        assert_ne!(
+            about,
+            About::Move(plan, WorkflowKey::parse("pr2").unwrap(), Target::InReview)
+        );
         let event = about.event("x".to_owned(), &failure("jira_failed"));
         assert_eq!(
             format!("{event:?}").matches("plan: Some").count(),
@@ -655,7 +673,14 @@ mod tests {
     }
 
     /// The Job as the stuck query reads it: failed `minutes` ago, whose `job-failed` Event is `event`, for `crashed`.
-    fn stuck(context: &str, plan: &str, workflow: &str, job: &str, event: i64, minutes: i64) -> StuckJob {
+    fn stuck(
+        context: &str,
+        plan: &str,
+        workflow: &str,
+        job: &str,
+        event: i64,
+        minutes: i64,
+    ) -> StuckJob {
         StuckJob {
             plan: PlanId::parse(plan).unwrap(),
             home: JobHome::Workflow(WorkflowKey::parse(workflow).unwrap()),
@@ -731,8 +756,15 @@ mod tests {
         let old = job_failed(&mut store, "ctx-a", "plan-a", "old");
         let fresh = job_failed(&mut store, "ctx-a", "plan-a", "fresh");
 
-        let jobs = [stuck("ctx-a", "plan-a", "repo", "old", old, 30), stuck("ctx-a", "plan-a", "repo", "fresh", fresh, 12)];
-        assert_eq!(tell_stuck_jobs(&mut store, &jobs).unwrap(), 1, "one Workflow, one message");
+        let jobs = [
+            stuck("ctx-a", "plan-a", "repo", "old", old, 30),
+            stuck("ctx-a", "plan-a", "repo", "fresh", fresh, 12),
+        ];
+        assert_eq!(
+            tell_stuck_jobs(&mut store, &jobs).unwrap(),
+            1,
+            "one Workflow, one message"
+        );
         assert_eq!(
             messages(&mut store),
             [(

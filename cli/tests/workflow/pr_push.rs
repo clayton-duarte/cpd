@@ -780,7 +780,9 @@ fn push_of_a_pr_merged_during_its_gate_pushes_nothing() {
     let (out, ()) = fx.push_paused(&gate, || {
         fx.store()
             .write("pr poll", |tx| {
-                tx.execute_batch("UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'pay'")?;
+                tx.execute_batch(
+                    "UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'pay'",
+                )?;
                 Ok(())
             })
             .unwrap();

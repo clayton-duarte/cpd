@@ -81,7 +81,21 @@ fn pr_add_of_a_repo_without_a_file_succeeds() {
            VALUES ('pl', 'ctx', 'Plan', 'grounding', 'lead1', 't');",
     );
     let repo = fx.keyed_repo("shop");
-    let out = fx.cpd(&["workflow", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pl"]).ok();
+    let out = fx
+        .cpd(&[
+            "workflow",
+            "add",
+            "pay",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--title",
+            "Change the PR",
+            "--shape",
+            "config",
+            "--plan",
+            "pl",
+        ])
+        .ok();
     assert_eq!(out["pr"]["name"], "shop", "{out}");
 }
 

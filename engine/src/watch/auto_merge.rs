@@ -110,15 +110,23 @@ fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
         }
     };
     let written = engine.store.write("engine E18", |tx| {
-        posts::set_auto_merge(tx, &post.plan, &post.workflow, match (&refused, &not_allowed) {
-            (Some(_), _) => "refused",
-            (None, true) => "none",
-            (None, false) => "enabled",
-        })?;
+        posts::set_auto_merge(
+            tx,
+            &post.plan,
+            &post.workflow,
+            match (&refused, &not_allowed) {
+                (Some(_), _) => "refused",
+                (None, true) => "none",
+                (None, false) => "enabled",
+            },
+        )?;
         if let Some(why) = &refused {
             let failure = Failure::from(&CpdError::new(
                 ErrorCode::AutoMergeRefused,
-                format!("Auto-merge for Workflow {}/{} (#{} of {}) was refused: {why}.", post.plan, post.workflow, post.number, post.repo),
+                format!(
+                    "Auto-merge for Workflow {}/{} (#{} of {}) was refused: {why}.",
+                    post.plan, post.workflow, post.number, post.repo
+                ),
             ));
             let text = format!(
                 "{} See: cpd plan show --plan {}",
@@ -144,9 +152,15 @@ fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
             engine.auto_merge.last_end = None;
             engine.clear(Step::E18, &about);
             if not_allowed {
-                engine.log.line(&format!("E18: the repo of Workflow {}/{} does not allow auto-merge: row set to none", post.plan, post.workflow));
+                engine.log.line(&format!(
+                    "E18: the repo of Workflow {}/{} does not allow auto-merge: row set to none",
+                    post.plan, post.workflow
+                ));
             } else if refused.is_none() {
-                engine.log.line(&format!("E18: enabled auto-merge for Workflow {}/{}", post.plan, post.workflow));
+                engine.log.line(&format!(
+                    "E18: enabled auto-merge for Workflow {}/{}",
+                    post.plan, post.workflow
+                ));
             }
         }
         Err(e) => {

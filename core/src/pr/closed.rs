@@ -3,7 +3,7 @@
 use rusqlite::Connection;
 
 use crate::error::CpdError;
-use crate::ids::{ContextId, PlanId, WorkflowKey, SessionId};
+use crate::ids::{ContextId, PlanId, SessionId, WorkflowKey};
 
 /// One closed-unmerged Workflow.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,7 +20,10 @@ pub struct ClosedUnmerged {
 }
 
 /// Every closed-unmerged Workflow of `plan` (every Plan when `None`), ordered by plan id then Workflow key.
-pub fn closed_unmerged(conn: &Connection, plan: Option<&str>) -> Result<Vec<ClosedUnmerged>, CpdError> {
+pub fn closed_unmerged(
+    conn: &Connection,
+    plan: Option<&str>,
+) -> Result<Vec<ClosedUnmerged>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT p.plan, p.key, l.context, l.lead_session, g.repo, g.number, g.url, g.title
            FROM workflows p
@@ -44,17 +47,19 @@ pub fn closed_unmerged(conn: &Connection, plan: Option<&str>) -> Result<Vec<Clos
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|(plan, workflow, context, lead, repo, number, url, title)| {
-            Ok(ClosedUnmerged {
-                plan: PlanId::parse(&plan)?,
-                workflow: WorkflowKey::parse(&workflow)?,
-                context: ContextId::parse(&context)?,
-                lead_session: lead.as_deref().map(SessionId::parse).transpose()?,
-                repo,
-                number,
-                url,
-                title,
-            })
-        })
+        .map(
+            |(plan, workflow, context, lead, repo, number, url, title)| {
+                Ok(ClosedUnmerged {
+                    plan: PlanId::parse(&plan)?,
+                    workflow: WorkflowKey::parse(&workflow)?,
+                    context: ContextId::parse(&context)?,
+                    lead_session: lead.as_deref().map(SessionId::parse).transpose()?,
+                    repo,
+                    number,
+                    url,
+                    title,
+                })
+            },
+        )
         .collect()
 }

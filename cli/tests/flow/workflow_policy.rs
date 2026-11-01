@@ -4,7 +4,7 @@
 
 use super::policy_post::{real, show, world, write};
 use crate::common::refused;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// The `policy show` output's `workflow` domain keys.
 fn keys(out: &Value) -> &Value {
@@ -17,25 +17,50 @@ fn domain_and_exposure() {
     // name, and `workflow.jira_required` takes cpd's default of false.
     let fx = world("");
     let out = show(&fx, false).ok();
-    let mut domains: Vec<&str> = out["policy"].as_object().unwrap().keys().map(String::as_str).collect();
+    let mut domains: Vec<&str> = out["policy"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     domains.sort_unstable();
-    assert!(domains.contains(&"workflow"), "the workflow domain is in the exposure table: {out}");
+    assert!(
+        domains.contains(&"workflow"),
+        "the workflow domain is in the exposure table: {out}"
+    );
     assert!(domains.contains(&"pr"), "the pr domain stays: {out}");
-    assert_eq!(keys(&out)["workflow.jira_required"], json!({"value": false, "source": "default"}), "{out}");
+    assert_eq!(
+        keys(&out)["workflow.jira_required"],
+        json!({"value": false, "source": "default"}),
+        "{out}"
+    );
 
     // The retired `pr.jira_required` is no longer a key of the `pr` domain.
-    assert!(out["policy"]["pr"]["keys"].get("pr.jira_required").is_none(), "{out}");
+    assert!(
+        out["policy"]["pr"]["keys"]
+            .get("pr.jira_required")
+            .is_none(),
+        "{out}"
+    );
 
     drop(fx);
     // An owner file sets `workflow.jira_required`; a repo file overrides it.
     let fx = world("[workflow]\njira_required = true\n");
     let out = show(&fx, false).ok();
     let owner = format!("owner:{}", real(&fx, "acme/owner.toml"));
-    assert_eq!(keys(&out)["workflow.jira_required"], json!({"value": true, "source": owner}), "{out}");
+    assert_eq!(
+        keys(&out)["workflow.jira_required"],
+        json!({"value": true, "source": owner}),
+        "{out}"
+    );
     write(&fx, "acme/r.toml", "[workflow]\njira_required = false\n");
     let out = show(&fx, true).ok();
     let repo = format!("repo:{}", real(&fx, "acme/r.toml"));
-    assert_eq!(keys(&out)["workflow.jira_required"], json!({"value": false, "source": repo}), "{out}");
+    assert_eq!(
+        keys(&out)["workflow.jira_required"],
+        json!({"value": false, "source": repo}),
+        "{out}"
+    );
 
     drop(fx);
     // The retired `pr.jira_required` is `policy_invalid`.

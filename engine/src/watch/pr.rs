@@ -315,7 +315,10 @@ pub(super) fn rate_guard(
     let until = clock.now() + Duration::try_from(wait).unwrap_or_default();
     let failure = Failure {
         code: ErrorCode::GhRateLimited.as_str().to_owned(),
-        message: format!("GitHub's rate limit has {remaining} requests left: pull request polling pauses until {}.", cpd_core::clock::prose(reset, zone)),
+        message: format!(
+            "GitHub's rate limit has {remaining} requests left: pull request polling pauses until {}.",
+            cpd_core::clock::prose(reset, zone)
+        ),
         details: json!({"remaining": remaining, "reset_at": reset_at}),
     };
     Ok(Some((until, failure)))

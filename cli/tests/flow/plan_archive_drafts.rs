@@ -25,7 +25,20 @@ fn world(fx: &Fx) {
     ])
     .ok();
     let repo = fx.keyed_repo("api");
-    fx.cpd(&["workflow", "add", "api", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
+    fx.cpd(&[
+        "workflow",
+        "add",
+        "api",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        "Change the PR",
+        "--shape",
+        "config",
+        "--plan",
+        "pay",
+    ])
+    .ok();
     for key in ["api-config", "open-api"] {
         fx.cpd(&[
             "job",

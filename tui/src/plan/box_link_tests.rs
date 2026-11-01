@@ -28,7 +28,10 @@ fn pull(number: i64) -> Pull {
 }
 
 fn workflow_with(key: &str, pull: Option<Pull>) -> read::WorkflowNode {
-    read::WorkflowNode { pull, ..sample_workflow(key) }
+    read::WorkflowNode {
+        pull,
+        ..sample_workflow(key)
+    }
 }
 
 fn draw(ui: &mut Ui, centre: &Centre, height: u16) -> Buffer {
@@ -155,7 +158,10 @@ fn a_left_click_on_a_pr_box_titles_text_or_cue_opens_its_pull_request_url() {
 
 #[test]
 fn a_click_on_the_title_does_nothing_else_than_open_the_page() {
-    let centre = sample_centre(vec![workflow_with("api", Some(pull(12)))], vec![sample_job("api", "a")]);
+    let centre = sample_centre(
+        vec![workflow_with("api", Some(pull(12)))],
+        vec![sample_job("api", "a")],
+    );
     let mut ui = Ui::default();
     let buf = draw(&mut ui, &centre, 12);
     let (x, y) = title_x(&buf, 12).expect("the title shows #12");

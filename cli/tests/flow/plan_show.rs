@@ -137,11 +137,20 @@ fn at(text: &str, needle: &str) -> usize {
 fn a_plan_without_a_pr_shows_lists_and_renders() {
     let fx = fx("grounding");
     let show = fx.show();
-    assert_eq!((&show["plan"]["id"], &show["workflows"], &show["jobs"]), (&json!("pay-1"), &json!([]), &json!([])));
+    assert_eq!(
+        (&show["plan"]["id"], &show["workflows"], &show["jobs"]),
+        (&json!("pay-1"), &json!([]), &json!([]))
+    );
     assert_eq!(fx.list()["plans"][0]["workflows"], json!([]));
     let (out, text) = fx.render();
-    assert_eq!((&out["workflows"], &out["draft_jobs"]), (&json!(0), &json!(0)));
-    assert_eq!(text, "# Plan: Pay the bills\n\nContext: `ctx` · Phase: `grounding`\n\nNo Workflows yet.\n");
+    assert_eq!(
+        (&out["workflows"], &out["draft_jobs"]),
+        (&json!(0), &json!(0))
+    );
+    assert_eq!(
+        text,
+        "# Plan: Pay the bills\n\nContext: `ctx` · Phase: `grounding`\n\nNo Workflows yet.\n"
+    );
 }
 
 // ---------- one PR ----------
@@ -245,13 +254,34 @@ fn list_with_one_pr_has_the_dispatch_columns() {
 fn render_with_one_pr_keeps_the_jobs_table_and_graph() {
     let fx = one_pr();
     let (out, text) = fx.render();
-    assert_eq!((&out["draft_jobs"], &out["workflows"]), (&json!(2), &json!(1)));
-    assert!(text.starts_with("# Plan: Pay the bills\n\nContext: `ctx` · Phase: `dispatch`\n"), "{text}");
-    assert!(text.contains("| `pay` | `/r/pay` | `main` | none |"), "{text}");
-    assert!(!text.contains("graph LR"), "one PR has no graph of PRs: {text}");
-    assert!(text.contains("\n## Workflow pay\n\nRepo: `/r/pay` · Base: `main` · Needs: none\n"), "{text}");
-    assert!(text.contains("| `b` | Job b | work | S2 | draft | `a` | `src/b.rs` |"), "{text}");
-    assert!(text.contains("```mermaid\ngraph TD\n  j1[\"a\"]\n  j2[\"b\"]\n  j1 --> j2\n```"), "{text}");
+    assert_eq!(
+        (&out["draft_jobs"], &out["workflows"]),
+        (&json!(2), &json!(1))
+    );
+    assert!(
+        text.starts_with("# Plan: Pay the bills\n\nContext: `ctx` · Phase: `dispatch`\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("| `pay` | `/r/pay` | `main` | none |"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("graph LR"),
+        "one PR has no graph of PRs: {text}"
+    );
+    assert!(
+        text.contains("\n## Workflow pay\n\nRepo: `/r/pay` · Base: `main` · Needs: none\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("| `b` | Job b | work | S2 | draft | `a` | `src/b.rs` |"),
+        "{text}"
+    );
+    assert!(
+        text.contains("```mermaid\ngraph TD\n  j1[\"a\"]\n  j2[\"b\"]\n  j1 --> j2\n```"),
+        "{text}"
+    );
     assert!(text.contains("\n### `a`: Job a\n"), "{text}");
     assert!(text.contains("\n#### Goal\n\nGoal of b.\n"), "{text}");
     // a cancelled Job is shown with its status, and drawn in no graph (hs-d518)
@@ -283,8 +313,18 @@ fn show_with_two_prs_lists_every_pr_in_key_order_with_its_jobs() {
     let fx = two_prs();
     let show = fx.show();
     let prs = &show["workflows"];
-    assert_eq!(keys(prs), ["a-web", "old", "z-api"], "cancelled PRs included, key order");
-    let by_key = |key: &str| prs.as_array().unwrap().iter().find(|p| p["key"] == key).unwrap();
+    assert_eq!(
+        keys(prs),
+        ["a-web", "old", "z-api"],
+        "cancelled PRs included, key order"
+    );
+    let by_key = |key: &str| {
+        prs.as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["key"] == key)
+            .unwrap()
+    };
     let (web, api, old) = (by_key("a-web"), by_key("z-api"), by_key("old"));
     assert_eq!(
         (
@@ -365,9 +405,19 @@ fn list_with_two_prs_has_each_prs_columns_in_key_order() {
 fn render_with_two_prs_has_a_section_per_pr_in_needs_order() {
     let fx = two_prs();
     let (out, text) = fx.render();
-    assert_eq!((&out["draft_jobs"], &out["workflows"]), (&json!(3), &json!(2)), "the cancelled PR is not counted");
-    assert!(text.contains("| `a-web` | `/r/a-web` | `main` | `z-api` |"), "{text}");
-    assert!(text.contains("| `z-api` | `/r/z-api` | `main` | none |"), "{text}");
+    assert_eq!(
+        (&out["draft_jobs"], &out["workflows"]),
+        (&json!(3), &json!(2)),
+        "the cancelled PR is not counted"
+    );
+    assert!(
+        text.contains("| `a-web` | `/r/a-web` | `main` | `z-api` |"),
+        "{text}"
+    );
+    assert!(
+        text.contains("| `z-api` | `/r/z-api` | `main` | none |"),
+        "{text}"
+    );
     // the cancelled PR and its Job are shown, after the live PRs, and in no graph (hs-d518)
     assert!(
         text.contains("| `old` | `/r/old` | `main` | none | cancelled |")
@@ -384,9 +434,15 @@ fn render_with_two_prs_has_a_section_per_pr_in_needs_order() {
         "{text}"
     );
 
-    let (api, web) = (at(&text, "\n## Workflow z-api\n"), at(&text, "\n## Workflow a-web\n"));
+    let (api, web) = (
+        at(&text, "\n## Workflow z-api\n"),
+        at(&text, "\n## Workflow a-web\n"),
+    );
     assert!(api < web, "the needed PR comes first: {text}");
-    assert!(text.contains("\n## Workflow a-web\n\nRepo: `/r/a-web` · Base: `main` · Needs: `z-api`\n"), "{text}");
+    assert!(
+        text.contains("\n## Workflow a-web\n\nRepo: `/r/a-web` · Base: `main` · Needs: `z-api`\n"),
+        "{text}"
+    );
     // Each Job is under its PR only, with that PR's graph.
     for job in ["api-1", "api-2"] {
         let section = at(&text, &format!("\n### `{job}`: Job {job}\n"));
@@ -413,7 +469,10 @@ fn render_ties_prs_by_key() {
         fx.job(&format!("{key}-1"), key, "draft", &[]);
     }
     let (_, text) = fx.render();
-    let order: Vec<usize> = ["api", "db", "web"].iter().map(|k| at(&text, &format!("\n## Workflow {k}\n"))).collect();
+    let order: Vec<usize> = ["api", "db", "web"]
+        .iter()
+        .map(|k| at(&text, &format!("\n## Workflow {k}\n")))
+        .collect();
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{text}");
 }
 
@@ -424,9 +483,15 @@ fn a_pr_without_jobs_says_so_and_the_fingerprint_covers_the_prs() {
     fx.job("api-1", "api", "draft", &[]);
     fx.pr("web", "dispatch", &["api"]);
     let (out, text) = fx.render();
-    assert!(text.contains("\n## Workflow web\n\nRepo: `/r/web` · Base: `main` · Needs: `api`\n\nNo Jobs yet.\n"), "{text}");
+    assert!(
+        text.contains(
+            "\n## Workflow web\n\nRepo: `/r/web` · Base: `main` · Needs: `api`\n\nNo Jobs yet.\n"
+        ),
+        "{text}"
+    );
     let before = out["fingerprint"].clone();
-    fx.env.sql("UPDATE workflows SET base = 'develop' WHERE key = 'web'");
+    fx.env
+        .sql("UPDATE workflows SET base = 'develop' WHERE key = 'web'");
     assert_ne!(fx.render().0["fingerprint"], before);
 }
 
@@ -439,7 +504,10 @@ fn a_waiting_pr_with_no_jobs_shows_the_open_job_placeholder_in_no_fingerprint() 
     assert!(!text.contains("No Jobs yet."), "{text}");
     assert!(text.contains("\n## Workflow web\n\nRepo: `/r/web` · Base: `main` · Needs: none\n\n### Jobs\n\n| Key | Title | Kind | Tier | Status | Needs | Touches |\n"), "{text}");
     assert!(text.contains("| `open-web` | Open the pull request: web | open | H3 | — | every other Job of the Workflow | — |"), "{text}");
-    assert!(text.contains("\n### `open-web`: Open the pull request: web\n"), "{text}");
+    assert!(
+        text.contains("\n### `open-web`: Open the pull request: web\n"),
+        "{text}"
+    );
     // `open_tier` is the config key; the placeholder is no row, so the fingerprint is that of a PR with no Job.
     fx.env
         .write_config("version = 1\nmachine = \"t\"\nopen_tier = \"S3\"\n");
@@ -458,7 +526,12 @@ fn a_closed_unmerged_pr_is_flagged_in_plan_show() {
     fx.env
         .sql("UPDATE pull_requests SET state = 'closed' WHERE number = 7");
     let show = fx.show();
-    let flags: Vec<(&str, &Value)> = show["workflows"].as_array().unwrap().iter().map(|p| (p["key"].as_str().unwrap(), &p["closed_unmerged"])).collect();
+    let flags: Vec<(&str, &Value)> = show["workflows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| (p["key"].as_str().unwrap(), &p["closed_unmerged"]))
+        .collect();
     assert_eq!(flags, [("api", &json!(true)), ("web", &json!(false))]);
 }
 

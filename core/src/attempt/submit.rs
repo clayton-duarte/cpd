@@ -269,7 +269,10 @@ fn run_checks(
     // A stacked Workflow's check reads the root base too (§7.5), so one more ref than an unstacked Workflow's.
     let (lead, base_refs) = env.store.read(|conn| {
         let (lead, repo, workflow_base) = lead_branch(conn, plan, key)?;
-        Ok((lead, crate::pr::start::tamper_bases(conn, root, &repo, &workflow_base)?))
+        Ok((
+            lead,
+            crate::pr::start::tamper_bases(conn, root, &repo, &workflow_base)?,
+        ))
     })?;
     // A linear Attempt runs on the Lead Branch, so the Lead Branch diff `lead...sha` is empty: its tamper and
     // red-test diffs compare against the Attempt's `base_sha` instead (hs-d716), as the merge does (hs-d680).
@@ -331,7 +334,11 @@ fn run_checks(
 }
 
 /// The Lead Branch and the base of the Workflow that holds Job `job` of `plan`.
-fn lead_branch(conn: &rusqlite::Connection, plan: &PlanId, job: &str) -> Result<(String, String, String), CpdError> {
+fn lead_branch(
+    conn: &rusqlite::Connection,
+    plan: &PlanId,
+    job: &str,
+) -> Result<(String, String, String), CpdError> {
     Ok(conn.query_row(
         "SELECT r.lead_branch, r.repo, r.base FROM jobs j JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow WHERE j.plan = ?1 AND j.key = ?2",
         [plan.as_str(), job],

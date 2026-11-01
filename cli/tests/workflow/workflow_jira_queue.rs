@@ -24,7 +24,8 @@ fn row(plan: &str, pr: &str, target: &str) -> Value {
 #[test]
 fn a_merge_queues_the_done_transition_of_the_pr() {
     let fx = fixture(None);
-    fx.env.sql("UPDATE workflows SET jira = 'ABC-123' WHERE key = 'api';");
+    fx.env
+        .sql("UPDATE workflows SET jira = 'ABC-123' WHERE key = 'api';");
     merge(&fx);
     assert_eq!(queue(&fx.env), json!([row("pay-1", "api", "done")]));
 }
@@ -32,7 +33,11 @@ fn a_merge_queues_the_done_transition_of_the_pr() {
 #[test]
 fn a_merge_of_a_pr_with_no_ticket_queues_the_same_row() {
     let fx = fixture(None);
-    assert_eq!(fx.env.query::<Option<String>>("SELECT jira FROM workflows WHERE key = 'api'"), None);
+    assert_eq!(
+        fx.env
+            .query::<Option<String>>("SELECT jira FROM workflows WHERE key = 'api'"),
+        None
+    );
     merge(&fx);
     assert_eq!(
         queue(&fx.env),

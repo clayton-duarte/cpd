@@ -32,7 +32,12 @@ fn event(kind: &str, job: &str) -> String {
 }
 
 /// A store holding the Plan `p` with its Workflow `r` (`dispatch`) and the Job `a` (`status`, `tier`, `retry_tier`), then `extra` SQL.
-fn store_with(status: &str, tier: Option<&str>, retry_tier: Option<&str>, extra: &str) -> (tempfile::TempDir, Store) {
+fn store_with(
+    status: &str,
+    tier: Option<&str>,
+    retry_tier: Option<&str>,
+    extra: &str,
+) -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();

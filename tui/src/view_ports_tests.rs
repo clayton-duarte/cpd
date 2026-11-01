@@ -1016,7 +1016,9 @@ fn the_plan_views_snapshot_reads_the_elapsed_time_at_its_ports_clock() {
         ),
     );
     let elapsed = |fakes: &Fakes, store: &mut Store| {
-        let centre = crate::plan::snapshot_with(&fakes.ports, store, 40).unwrap().expect("the Lead is in the slot");
+        let centre = crate::plan::snapshot_with(&fakes.ports, store, 40)
+            .unwrap()
+            .expect("the Lead is in the slot");
         centre.plan.workflows[0].elapsed_seconds
     };
     assert_eq!(elapsed(&fakes, &mut store), Some(100)); // the fake clock is 100 s after the start

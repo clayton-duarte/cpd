@@ -251,15 +251,53 @@ const SPEC: &[SpecRow] = &[
         &[],
     ),
     ("context-grounded", "cs", "", &["seq", "forked_from"], &[]),
-    ("plan-created", "cp", "", &["title", "jira", "lead_session", "forked_from", "cwd"], &[]),
-    ("plan-phase", "cp", "", &["from", "to"], &["jobs", "workflows"]),
-    ("plan-review", "cp", "", &["review", "fingerprint", "status"], &["feedback"]),
+    (
+        "plan-created",
+        "cp",
+        "",
+        &["title", "jira", "lead_session", "forked_from", "cwd"],
+        &[],
+    ),
+    (
+        "plan-phase",
+        "cp",
+        "",
+        &["from", "to"],
+        &["jobs", "workflows"],
+    ),
+    (
+        "plan-review",
+        "cp",
+        "",
+        &["review", "fingerprint", "status"],
+        &["feedback"],
+    ),
     ("plan-outlined", "cp", "", &["replaced"], &[]),
     ("plan-done", "cp", "", &["workflows"], &[]),
-    ("job-added", "cpj", "", &["workflow", "kind", "status", "appended", "tier", "needs", "urgent"], &["by", "reason"]),
+    (
+        "job-added",
+        "cpj",
+        "",
+        &[
+            "workflow", "kind", "status", "appended", "tier", "needs", "urgent",
+        ],
+        &["by", "reason"],
+    ),
     ("job-edited", "cpj", "", &["fields"], &[]),
-    ("job-merged", "cpja", "", &["sha", "tier", "kind"], &["cancel_too_late", "workflow", "number", "url"]),
-    ("job-failed", "cpj", "a", &["cause", "detail", "tier", "attempts"], &[]),
+    (
+        "job-merged",
+        "cpja",
+        "",
+        &["sha", "tier", "kind"],
+        &["cancel_too_late", "workflow", "number", "url"],
+    ),
+    (
+        "job-failed",
+        "cpj",
+        "a",
+        &["cause", "detail", "tier", "attempts"],
+        &[],
+    ),
     ("job-retried", "cpj", "", &["tier"], &[]),
     ("job-cancel-requested", "cpja", "", &["reason"], &[]),
     ("job-cancelled", "cpj", "a", &["reason"], &[]),
@@ -282,16 +320,86 @@ const SPEC: &[SpecRow] = &[
     ),
     ("attempt-aborted", "cpja", "", &["tier", "by"], &[]),
     ("attempt-nudge", "cpjas", "", &["prompt"], &[]),
-    ("all-merged", "cp", "", &["workflow", "merged", "cancelled"], &[]),
-    ("pr-feedback", "cp", "", &["workflow", "number", "url", "state", "checks", "review_decision", "mergeable", "merge_state", "conflict", "reasons"], &[]),
-    ("workflow-added", "cp", "", &["workflow", "repo", "base", "needs", "appended"], &[]),
+    (
+        "all-merged",
+        "cp",
+        "",
+        &["workflow", "merged", "cancelled"],
+        &[],
+    ),
+    (
+        "pr-feedback",
+        "cp",
+        "",
+        &[
+            "workflow",
+            "number",
+            "url",
+            "state",
+            "checks",
+            "review_decision",
+            "mergeable",
+            "merge_state",
+            "conflict",
+            "reasons",
+        ],
+        &[],
+    ),
+    (
+        "workflow-added",
+        "cp",
+        "",
+        &["workflow", "repo", "base", "needs", "appended"],
+        &[],
+    ),
     ("workflow-edited", "cp", "", &["workflow", "fields"], &[]),
     ("workflow-described", "cp", "", &["workflow"], &[]),
-    ("workflow-cancelled", "cp", "", &["workflow"], &["superseded_by"]),
-    ("workflow-started", "cp", "", &["workflow", "repo", "base", "lead_branch", "lead_worktree", "base_sha", "reused", "pushed", "by"], &[]),
-    ("workflow-base-changed", "cp", "", &["workflow", "from", "to", "from_workflow", "to_workflow", "by"], &["number", "url"]),
+    (
+        "workflow-cancelled",
+        "cp",
+        "",
+        &["workflow"],
+        &["superseded_by"],
+    ),
+    (
+        "workflow-started",
+        "cp",
+        "",
+        &[
+            "workflow",
+            "repo",
+            "base",
+            "lead_branch",
+            "lead_worktree",
+            "base_sha",
+            "reused",
+            "pushed",
+            "by",
+        ],
+        &[],
+    ),
+    (
+        "workflow-base-changed",
+        "cp",
+        "",
+        &[
+            "workflow",
+            "from",
+            "to",
+            "from_workflow",
+            "to_workflow",
+            "by",
+        ],
+        &["number", "url"],
+    ),
     ("pr-opened", "cp", "", &["workflow", "number", "url"], &[]),
-    ("pr-merged", "cp", "", &["workflow", "number", "url", "merged_at"], &[]),
+    (
+        "pr-merged",
+        "cp",
+        "",
+        &["workflow", "number", "url", "merged_at"],
+        &[],
+    ),
     ("escalation", "cpja", "", &["escalation", "question"], &[]),
     ("escalation-answered", "cpja", "", &["escalation"], &[]),
     (
@@ -406,8 +514,20 @@ const SPEC: &[SpecRow] = &[
         &[],
     ),
     ("review-closed", "cs", "p", &["pn_id", "ended"], &[]),
-    ("incident-started", "", "", &["by", "reason", "started_at", "plans"], &["until_workflow"]),
-    ("incident-plans", "", "", &["by", "plans"], &["until_workflow"]),
+    (
+        "incident-started",
+        "",
+        "",
+        &["by", "reason", "started_at", "plans"],
+        &["until_workflow"],
+    ),
+    (
+        "incident-plans",
+        "",
+        "",
+        &["by", "plans"],
+        &["until_workflow"],
+    ),
     ("incident-ended", "", "", &["by", "ended_at", "cause"], &[]),
 ];
 
@@ -457,7 +577,14 @@ fn the_kinds_are_exactly_those_of_5_2_and_of_event_kinds() {
     let mut expected = names.clone();
     // The retired `pr-*` object kinds stay in `event_kinds` as history (rename map R7a): past Events hold those
     // kinds, so the store keeps the rows and reads the new ones only.
-    expected.extend(["pr-added", "pr-base-changed", "pr-cancelled", "pr-described", "pr-edited", "pr-started"]);
+    expected.extend([
+        "pr-added",
+        "pr-base-changed",
+        "pr-cancelled",
+        "pr-described",
+        "pr-edited",
+        "pr-started",
+    ]);
     expected.sort();
     assert_eq!(in_table, expected);
 }
@@ -1440,7 +1567,12 @@ impl Stale {
 
     /// A `pr-feedback` of PR `pr` of `plan` for `reasons`.
     fn feedback(&mut self, plan: &str, pr: &str, reasons: Value) -> i64 {
-        self.ev(Kind::PrFeedback, plan, None, json!({"workflow": pr, "reasons": reasons}))
+        self.ev(
+            Kind::PrFeedback,
+            plan,
+            None,
+            json!({"workflow": pr, "reasons": reasons}),
+        )
     }
 
     /// A `pr_posts` row for PR `pr` of `plan`: it was posted for review.
@@ -1637,7 +1769,12 @@ fn follow_session_drops_a_pr_error_that_a_later_pr_start_merge_or_cancel_clears(
     let _e2 = s.ev(Kind::Error, "pay", None, err("b")); // 3 error of PR b, pr-merged b 4
     let pm2 = s.ev(Kind::PrMerged, "pay", None, json!({"workflow": "b"}));
     let _e3 = s.ev(Kind::Error, "pay", None, err("c")); // 5 error of PR c, pr-cancelled c 6
-    let pc3 = s.ev(Kind::WorkflowCancelled, "pay", None, json!({"workflow": "c"}));
+    let pc3 = s.ev(
+        Kind::WorkflowCancelled,
+        "pay",
+        None,
+        json!({"workflow": "c"}),
+    );
     let e4 = s.ev(Kind::Error, "pay", None, err("d")); // 7 error of PR d, pr-started e: streams
     let pse = s.ev(Kind::WorkflowStarted, "pay", None, json!({"workflow": "e"}));
     let e5 = s.ev(Kind::Error, "pay", None, err("f")); // 9 error of PR f, pr-merged f in another Plan: streams
@@ -1679,7 +1816,12 @@ fn follow_session_drops_a_pr_feedback_that_a_later_pr_merge_or_cancel_ends() {
     let _f1 = s.feedback("pay", "a", json!(["checks_failed"])); // 1 feedback of a, pr-merged a 2
     let pm1 = s.ev(Kind::PrMerged, "pay", None, json!({"workflow": "a"}));
     let _f2 = s.feedback("pay", "b", json!(["checks_failed"])); // 3 feedback of b, pr-cancelled b 4
-    let pc2 = s.ev(Kind::WorkflowCancelled, "pay", None, json!({"workflow": "b"}));
+    let pc2 = s.ev(
+        Kind::WorkflowCancelled,
+        "pay",
+        None,
+        json!({"workflow": "b"}),
+    );
     let f3 = s.feedback("pay", "c", json!(["checks_failed"])); // 5 feedback of c, nothing after: streams
     let f4 = s.feedback("pay", "d", json!(["checks_failed"])); // 6 feedback of d, pr-merged e: streams
     let pme = s.ev(Kind::PrMerged, "pay", None, json!({"workflow": "e"}));
@@ -1786,7 +1928,12 @@ fn follow_session_fails_open_when_the_object_or_a_data_field_is_missing() {
     live.push(s.feedback("pay", "nopr", json!(["checks_failed"]))); // no workflows row
     live.push(s.feedback("pay", "w1", json!(["checks_failed"]))); // workflows.pull_request NULL
     live.push(s.feedback("pay", "p6", json!(["comments"]))); // feedback NULL
-    live.push(s.raw(Kind::PrFeedback, Some("pay"), None, json!({"workflow": "p1", "reasons": null}))); // reasons missing
+    live.push(s.raw(
+        Kind::PrFeedback,
+        Some("pay"),
+        None,
+        json!({"workflow": "p1", "reasons": null}),
+    )); // reasons missing
     live.push(s.feedback("pay", "p2", json!([]))); // reasons empty
     live.push(s.feedback("pay", "p3", json!("checks_failed"))); // reasons not an array
     live.push(s.feedback("pay", "p4", json!([5]))); // reasons not strings

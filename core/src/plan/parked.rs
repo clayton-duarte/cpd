@@ -44,7 +44,11 @@ fn locked(phase: &str) -> bool {
 }
 
 /// The Workflows of `plan` that wait for another Workflow, when the Plan is locked: the condition engine E7 starts a Workflow by.
-fn waiting_prs(conn: &Connection, plan: &PlanId, phase: &str) -> Result<BTreeSet<String>, CpdError> {
+fn waiting_prs(
+    conn: &Connection,
+    plan: &PlanId,
+    phase: &str,
+) -> Result<BTreeSet<String>, CpdError> {
     let mut waits = BTreeSet::new();
     if locked(phase) {
         for workflow in load_workflows(conn, plan)? {
@@ -113,8 +117,15 @@ pub fn door(
     if !locked(phase) || !job.is_draft() || job.kind == "open" || !job.missing().is_empty() {
         return Ok(());
     }
-    let all: Vec<Job> = others.iter().filter(|j| j.key != job.key).cloned().collect();
-    let waits = Waits { all: &all, workflow_waits: waiting_prs(conn, plan, phase)? };
+    let all: Vec<Job> = others
+        .iter()
+        .filter(|j| j.key != job.key)
+        .cloned()
+        .collect();
+    let waits = Waits {
+        all: &all,
+        workflow_waits: waiting_prs(conn, plan, phase)?,
+    };
     if !waits.waiting(job, &mut BTreeSet::from([job.key.clone()])) {
         return Ok(());
     }

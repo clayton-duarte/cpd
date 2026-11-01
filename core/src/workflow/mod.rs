@@ -52,7 +52,12 @@ pub struct AddArgs {
     #[arg(long, value_name = "branch")]
     base: Option<String>,
     /// Workflows that must be merged before this one starts, comma-separated: a key of the Plan, or <plan>/<key> of another Plan of the Context
-    #[arg(long, value_name = "r1,r2", value_delimiter = ',', conflicts_with = "no_needs")]
+    #[arg(
+        long,
+        value_name = "r1,r2",
+        value_delimiter = ',',
+        conflicts_with = "no_needs"
+    )]
     needs: Vec<add::WorkflowRef>,
     /// No needs, even on a reopened Plan (default there: every merged Workflow of the Plan)
     #[arg(long = "no-needs")]
@@ -85,7 +90,12 @@ pub struct EditArgs {
     #[arg(long, value_name = "branch")]
     base: Option<String>,
     /// The new needs, replacing the list, comma-separated: keys of the Plan or <plan>/<key>
-    #[arg(long, value_name = "r1,r2", value_delimiter = ',', conflicts_with = "no_needs")]
+    #[arg(
+        long,
+        value_name = "r1,r2",
+        value_delimiter = ',',
+        conflicts_with = "no_needs"
+    )]
     needs: Option<Vec<add::WorkflowRef>>,
     /// Remove every need
     #[arg(long = "no-needs")]

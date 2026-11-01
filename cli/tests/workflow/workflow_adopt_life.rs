@@ -110,8 +110,32 @@ fn fx(conflicting: bool) -> Fx {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at)
            VALUES ('pay', 'ctx', 'Pay the bills', 'plan', 'lead1', 't');",
     );
-    env.cpd(&["workflow", "add", "web", "--repo", repo.to_str().unwrap(), "--title", "Polish", "--shape", "config", "--adopt", "7", "--plan", "pay"]).ok();
-    env.cpd(&["job", "cancel", "web-config", "--reason", "a stub of the template", "--plan", "pay"]).ok();
+    env.cpd(&[
+        "workflow",
+        "add",
+        "web",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        "Polish",
+        "--shape",
+        "config",
+        "--adopt",
+        "7",
+        "--plan",
+        "pay",
+    ])
+    .ok();
+    env.cpd(&[
+        "job",
+        "cancel",
+        "web-config",
+        "--reason",
+        "a stub of the template",
+        "--plan",
+        "pay",
+    ])
+    .ok();
     env.sql("UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';");
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     Fx {
@@ -284,7 +308,14 @@ fn merge_in_child(fx: &Fx, attempt: &AttemptId) -> String {
     let out = fx
         .env
         .command(exe)
-        .args(["workflow_adopt_life::child_merges_the_attempt", "--exact", "--ignored", "--nocapture", "--test-threads", "1"])
+        .args([
+            "workflow_adopt_life::child_merges_the_attempt",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads",
+            "1",
+        ])
         .env(CHILD_ATTEMPT, attempt.to_string())
         .output()
         .unwrap();

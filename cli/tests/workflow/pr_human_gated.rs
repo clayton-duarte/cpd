@@ -8,12 +8,12 @@ use std::fs;
 use cpd_core::host::runner::Reply;
 use serde_json::{Value, json};
 
-use super::workflow::{Poll, Rows, node, pay, poll_fx};
 use super::pr_checks::{
     add_second_owned_pr, answer, checks_of_row, contexts, feedback_data, green, one_page, policy,
     read_says, reads, run, status_context,
 };
 use super::pr_view;
+use super::workflow::{Poll, Rows, node, pay, poll_fx};
 
 const OK: &str = r#"{"ok":true,"channel":"C0POLICY1","ts":"1793040197.490209","link":"https://acme.slack.com/archives/C0POLICY1/p1793040197490209"}"#;
 
@@ -245,8 +245,14 @@ fn view(body: &str) -> Value {
     fx.fx.env.owner_policy("acme", body);
     let mut checks = green(2);
     checks.push(status_context("UI Review", "PENDING"));
-    let _ = (*fx.fx.fakes.runner).clone().on("gh", |c| c.args.starts_with(&["pr".into(), "view".into()]), Reply::ok(&super::pr_checks::view_with(checks)));
-    fx.fx.cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"]).ok()
+    let _ = (*fx.fx.fakes.runner).clone().on(
+        "gh",
+        |c| c.args.starts_with(&["pr".into(), "view".into()]),
+        Reply::ok(&super::pr_checks::view_with(checks)),
+    );
+    fx.fx
+        .cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"])
+        .ok()
 }
 
 #[test]

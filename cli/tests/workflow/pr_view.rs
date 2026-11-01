@@ -216,7 +216,10 @@ impl Pay {
 fn view_prints_the_checks_reviews_comments_and_inline_comments() {
     let fx = fx("open");
 
-    let out = fx.fx.cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"]).ok();
+    let out = fx
+        .fx
+        .cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"])
+        .ok();
 
     assert_eq!(
         out,
@@ -252,7 +255,10 @@ fn view_reads_every_page_of_inline_comments() {
     let fx = fx("open");
     fx.gh_inline2(r#"[{"id": 1894, "user": {"login": "other"}, "path": "src/lib.rs", "body": "Second page."}]"#);
 
-    let out = fx.fx.cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"]).ok();
+    let out = fx
+        .fx
+        .cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"])
+        .ok();
 
     assert_eq!(
         out["inline_comments"],
@@ -333,7 +339,10 @@ fn view_prints_the_post_of_a_posted_pr() {
         })
         .unwrap();
 
-    let out = fx.fx.cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"]).ok();
+    let out = fx
+        .fx
+        .cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"])
+        .ok();
 
     assert_eq!(
         out["post"],
@@ -346,8 +355,15 @@ fn summary_of(body: &str, checks: Vec<serde_json::Value>) -> serde_json::Value {
     let fx = fx("open");
     fx.fx.env.owner_policy("acme", body);
     let view = json!({"state": "OPEN", "mergedAt": null, "title": "Pay the bills", "url": URL, "reviewDecision": null, "statusCheckRollup": checks, "reviews": [], "comments": []});
-    let _ = (*fx.fx.fakes.runner).clone().on("gh", |c| c.args.starts_with(&["pr".into(), "view".into()]), Reply::ok(&format!("{view}\n")));
-    fx.fx.cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"]).ok()["pr"]["checks"].clone()
+    let _ = (*fx.fx.fakes.runner).clone().on(
+        "gh",
+        |c| c.args.starts_with(&["pr".into(), "view".into()]),
+        Reply::ok(&format!("{view}\n")),
+    );
+    fx.fx
+        .cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"])
+        .ok()["pr"]["checks"]
+        .clone()
 }
 
 fn guardian() -> serde_json::Value {

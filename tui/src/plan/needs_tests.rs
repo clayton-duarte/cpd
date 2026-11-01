@@ -82,9 +82,9 @@ fn no_chat_slot_needs_no_clock() {
 /// A Plan of one Workflow with `jobs` queued Jobs (the pattern of the tests in `mod.rs`).
 fn tests_centre(jobs: usize) -> Centre {
     use crate::read::{JobNode, PrNode, PrStatus};
+    use crate::read::{JobNode, WorkflowNode, WorkflowStatus};
     use cpd_core::config::Tier;
     use cpd_core::ids::{ContextId, JobKey, WorkflowKey};
-    use crate::read::{JobNode, WorkflowNode, WorkflowStatus};
     let workflow = WorkflowKey::parse("web").unwrap();
     let node = WorkflowNode {
         key: workflow.clone(),
@@ -125,7 +125,8 @@ fn tests_centre(jobs: usize) -> Centre {
         needs_user: read::NeedsUser::default(),
         events_cursor: 0,
     };
-    let boxes = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, 0).with_margin(CHART_MARGIN);
+    let boxes =
+        boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, 0).with_margin(CHART_MARGIN);
     let slot = ChatSlot {
         session: SessionId::parse("00000000-0000-4000-8000-000000000000").unwrap(),
         name: "lead".into(),

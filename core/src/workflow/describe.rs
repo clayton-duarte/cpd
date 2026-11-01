@@ -9,12 +9,12 @@ use serde_json::json;
 
 use super::DescribeArgs;
 use crate::env::Env;
-use crate::pr::{describe_pr, find_workflow};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::plan::fingerprint::load_workflows;
+use crate::pr::{describe_pr, find_workflow};
 
 const COMMAND: &str = "workflow describe";
 
@@ -24,7 +24,10 @@ const MAX_CHARS: usize = 65536;
 enum Decision {
     Already(String),
     /// `open` is the `(repo, number)` of the Workflow's open pull request, if any.
-    Update { status: String, open: Option<(String, i64)> },
+    Update {
+        status: String,
+        open: Option<(String, i64)>,
+    },
 }
 
 pub(crate) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
@@ -32,7 +35,8 @@ pub(crate) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
     let key = args.key;
     let mut env = Env::open()?;
     // The Workflow first (`workflow_adopted`, `workflow_ended`), then the text.
-    env.store.read(|conn| decide(conn, &plan, &key, None).map(drop))?;
+    env.store
+        .read(|conn| decide(conn, &plan, &key, None).map(drop))?;
     let text = read_text(&args.file)?;
     if text.trim().is_empty() || text.chars().count() > MAX_CHARS {
         return Err(CpdError::new(
@@ -85,7 +89,12 @@ fn read_text(file: &Path) -> Result<String, CpdError> {
 }
 
 /// The Workflow's status when it may be described, and with `text` whether that changes it; the open pull request's repo and number, if any.
-fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, text: Option<&str>) -> Result<Decision, CpdError> {
+fn decide(
+    conn: &Connection,
+    plan: &PlanId,
+    key: &WorkflowKey,
+    text: Option<&str>,
+) -> Result<Decision, CpdError> {
     let workflows = load_workflows(conn, plan)?;
     let workflow = find_workflow(&workflows, plan, key)?;
     if workflow.head_ref.is_some() {
@@ -94,13 +103,25 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, text: Option<&str
             .with("workflow", key.as_str()));
     }
     if matches!(workflow.status.as_str(), "merged" | "cancelled") {
-        return Err(CpdError::new(ErrorCode::WorkflowEnded, format!("Workflow {key} of Plan {plan} is {}: its description is history.", workflow.status))
-            .with("plan", plan.as_str())
-            .with("workflow", key.as_str())
-            .with("status", workflow.status.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::WorkflowEnded,
+            format!(
+                "Workflow {key} of Plan {plan} is {}: its description is history.",
+                workflow.status
+            ),
+        )
+        .with("plan", plan.as_str())
+        .with("workflow", key.as_str())
+        .with("status", workflow.status.as_str()));
     }
-    let Some(text) = text else { return Ok(Decision::Already(workflow.status.clone())) };
-    let stored: Option<String> = conn.query_row("SELECT description FROM workflows WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
+    let Some(text) = text else {
+        return Ok(Decision::Already(workflow.status.clone()));
+    };
+    let stored: Option<String> = conn.query_row(
+        "SELECT description FROM workflows WHERE plan = ?1 AND key = ?2",
+        [plan.as_str(), key.as_str()],
+        |r| r.get(0),
+    )?;
     if stored.as_deref() == Some(text) {
         return Ok(Decision::Already(workflow.status.clone()));
     }
@@ -113,5 +134,8 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, text: Option<&str
             Ok((r.get(0)?, r.get(1)?))
         })
         .optional()?;
-    Ok(Decision::Update { status: workflow.status.clone(), open })
+    Ok(Decision::Update {
+        status: workflow.status.clone(),
+        open,
+    })
 }

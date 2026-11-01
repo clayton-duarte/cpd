@@ -67,10 +67,19 @@ fn a_cyan_or_white_pr_ready_item_leaves_a_lower_item_the_dot() {
     let workflow = |u| item(Kind::PrReady, u, None, Some("pp"));
     let unread = item(Kind::Unread, Urgency::White, Some("s-lead"), None);
     let cyan_dialog = item(Kind::Dialog, Urgency::Cyan, Some("s-lead"), None);
-    assert_eq!(urgency(&[workflow(Urgency::Cyan), unread.clone()], &s, Some(&pp)), Some(Urgency::White));
-    assert_eq!(urgency(&[workflow(Urgency::White), cyan_dialog], &s, Some(&pp)), Some(Urgency::Cyan));
+    assert_eq!(
+        urgency(&[workflow(Urgency::Cyan), unread.clone()], &s, Some(&pp)),
+        Some(Urgency::White)
+    );
+    assert_eq!(
+        urgency(&[workflow(Urgency::White), cyan_dialog], &s, Some(&pp)),
+        Some(Urgency::Cyan)
+    );
     assert_eq!(urgency(&[workflow(Urgency::Cyan)], &s, Some(&pp)), None);
-    assert_eq!(urgency(&[workflow(Urgency::Yellow), unread], &s, Some(&pp)), Some(Urgency::Yellow));
+    assert_eq!(
+        urgency(&[workflow(Urgency::Yellow), unread], &s, Some(&pp)),
+        Some(Urgency::Yellow)
+    );
 }
 
 #[test]

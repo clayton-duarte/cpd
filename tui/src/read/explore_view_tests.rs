@@ -85,7 +85,11 @@ fn the_read_model_lists_a_plans_explore_job_beside_its_pr_jobs() {
     );
 
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
-    assert!(job_node(&boxes.jobs, "work").is_some(), "the Workflow Job is a node: {:?}", keys(&boxes.jobs));
+    assert!(
+        job_node(&boxes.jobs, "work").is_some(),
+        "the Workflow Job is a node: {:?}",
+        keys(&boxes.jobs)
+    );
     let look = job_node(&boxes.jobs, "look").expect("the explore Job is a node");
     assert_eq!(
         look.attempts.len(),
@@ -94,8 +98,15 @@ fn the_read_model_lists_a_plans_explore_job_beside_its_pr_jobs() {
     );
 
     let flow = read::flow(&mut store, &pay()).unwrap();
-    assert!(job_node(&flow.jobs, "work").is_some(), "the Workflow Job is in the flow: {:?}", keys(&flow.jobs));
-    assert!(job_node(&flow.jobs, "look").is_some(), "the explore Job is in the flow");
+    assert!(
+        job_node(&flow.jobs, "work").is_some(),
+        "the Workflow Job is in the flow: {:?}",
+        keys(&flow.jobs)
+    );
+    assert!(
+        job_node(&flow.jobs, "look").is_some(),
+        "the explore Job is in the flow"
+    );
 }
 
 fn keys(jobs: &[read::JobNode]) -> Vec<String> {
@@ -109,7 +120,10 @@ fn a_plan_with_only_explore_jobs_is_not_empty() {
 
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
     assert!(boxes.workflows.is_empty(), "no Workflow box");
-    assert!(job_node(&boxes.jobs, "look").is_some(), "the explore Job is the Plan's content");
+    assert!(
+        job_node(&boxes.jobs, "look").is_some(),
+        "the explore Job is the Plan's content"
+    );
     assert_every_cockpit_read_is_ok(&mut store);
 }
 
@@ -139,7 +153,10 @@ fn assert_every_cockpit_read_is_ok(store: &mut Store) {
 fn an_explore_attempts_cost_is_in_no_pr_box_and_in_the_plan_total() {
     let (_dir, mut store) = mixed();
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
-    assert!(job_node(&boxes.jobs, "look").is_some(), "the explore Job is a node");
+    assert!(
+        job_node(&boxes.jobs, "look").is_some(),
+        "the explore Job is a node"
+    );
     assert_eq!(boxes.workflows.len(), 1);
     near(boxes.workflows[0].cost_usd, 0.25); // the explore Attempt is in no Workflow box
 
@@ -168,7 +185,14 @@ fn an_explore_attempts_active_time_is_in_no_pr_box() {
                        '2026-01-02T11:00:00.000Z', '2026-01-02T11:10:00.000Z', '{\"cost_usd\":0.40}');"),
     );
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
-    assert!(job_node(&boxes.jobs, "look").is_some(), "the explore Job is a node");
+    assert!(
+        job_node(&boxes.jobs, "look").is_some(),
+        "the explore Job is a node"
+    );
     assert_eq!(boxes.workflows.len(), 1);
-    assert_eq!(boxes.workflows[0].elapsed_seconds, Some(60), "only the Workflow Job's Attempt counts");
+    assert_eq!(
+        boxes.workflows[0].elapsed_seconds,
+        Some(60),
+        "only the Workflow Job's Attempt counts"
+    );
 }

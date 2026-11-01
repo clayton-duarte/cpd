@@ -1243,7 +1243,10 @@ impl Fx {
         let mut done_when = serde_json::Map::new();
         for job in shown["jobs"].as_array().expect("plan show lists the jobs") {
             if job["status"] == "draft" {
-                done_when.insert(job["pr"].as_str().expect("a Job's Workflow").to_owned(), serde_json::json!(["Done"]));
+                done_when.insert(
+                    job["pr"].as_str().expect("a Job's Workflow").to_owned(),
+                    serde_json::json!(["Done"]),
+                );
             }
         }
         let outline = serde_json::json!({"goal": "Goal", "done_when": done_when});

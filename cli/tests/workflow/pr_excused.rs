@@ -5,8 +5,11 @@
 use cpd_core::host::runner::Reply;
 use serde_json::{Value, json};
 
+use super::pr_checks::{
+    answer, checks_of_row, contexts, feedback_data, green, is_checks_read, read_says, reads, run,
+    with_labels,
+};
 use super::workflow::{Poll, Rows, pay, poll_fx};
-use super::pr_checks::{answer, checks_of_row, contexts, feedback_data, green, is_checks_read, read_says, reads, run, with_labels};
 
 const POLICY: &str =
     "[pr]\nfeedback.checks = \"any\"\nexcused_labels = [\"No Merges on Friday\", \"Dont Merge\"]\n";

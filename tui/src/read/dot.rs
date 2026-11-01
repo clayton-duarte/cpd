@@ -543,6 +543,14 @@ mod tests {
             assert!(!Dot::Working(Some(work)).needs_you());
         }
         // the dot of a Plan of drafts and an open Workflow is planning, whatever the phase: through the one rule
-        assert_eq!(Dot::of(State::Working, None, false, Some(Work::of(Phase::Dispatch, true, true))), Dot::Working(Some(Work::Planning)));
+        assert_eq!(
+            Dot::of(
+                State::Working,
+                None,
+                false,
+                Some(Work::of(Phase::Dispatch, true, true))
+            ),
+            Dot::Working(Some(Work::Planning))
+        );
     }
 }

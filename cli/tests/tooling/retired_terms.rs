@@ -8,36 +8,63 @@ use std::path::{Path, PathBuf};
 
 /// The repo root: `cli/..`.
 fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 /// The live surfaces of the map: the docs (not history), the skills, the adapter and the non-test Rust. `CONTEXT.md`
 /// and `README.md` are added by `sources_of_interest`.
-const DIRS: [&str; 7] = ["docs", "pi/skills", "pi/lib", "cli/src", "core/src", "engine/src", "tui/src"];
+const DIRS: [&str; 7] = [
+    "docs",
+    "pi/skills",
+    "pi/lib",
+    "cli/src",
+    "core/src",
+    "engine/src",
+    "tui/src",
+];
 
 /// Directories that hold history or tests, never scanned: `docs/adr|archive|research` (the map allowed them), the
 /// test areas, `node_modules` and the applied migrations (whose SQL keeps the old names by design).
-const SKIP_DIRS: [&str; 7] = ["adr", "archive", "research", "node_modules", "tests", "test", "migrations"];
+const SKIP_DIRS: [&str; 7] = [
+    "adr",
+    "archive",
+    "research",
+    "node_modules",
+    "tests",
+    "test",
+    "migrations",
+];
 
 fn is_source(path: &Path) -> bool {
-    path.extension().is_some_and(|e| e == "rs" || e == "ts" || e == "md")
+    path.extension()
+        .is_some_and(|e| e == "rs" || e == "ts" || e == "md")
 }
 
 /// A test file: a name with `test`, in a `tests`/`test` directory. Test fixtures that build an old store are an
 /// allowed place, so no test file is scanned.
 fn is_test_file(path: &Path) -> bool {
     path.file_name().unwrap().to_string_lossy().contains("test")
-        || path.components().any(|c| c.as_os_str() == "tests" || c.as_os_str() == "test")
+        || path
+            .components()
+            .any(|c| c.as_os_str() == "tests" || c.as_os_str() == "test")
 }
 
 /// Appends every non-test source file under `dir`, sorted.
 fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(read) = std::fs::read_dir(dir) else { return };
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut entries: Vec<_> = read.map(|e| e.unwrap().path()).collect();
     entries.sort();
     for path in entries {
         if path.is_dir() {
-            if path.file_name().is_some_and(|n| SKIP_DIRS.contains(&n.to_string_lossy().as_ref())) {
+            if path
+                .file_name()
+                .is_some_and(|n| SKIP_DIRS.contains(&n.to_string_lossy().as_ref()))
+            {
                 continue;
             }
             sources(&path, out);
@@ -144,11 +171,18 @@ fn bare_workflow(line: &str) -> bool {
     // A line that is about GitHub Actions or the deploy policy names the GitHub object, not the cpd one. A line that
     // names the renamed command or flag speaks the target vocabulary, so the bare-word rule skips it.
     let lower = line.to_lowercase();
-    if lower.contains("github actions") || lower.contains("[deploys]") || lower.contains("workflow_runs") {
+    if lower.contains("github actions")
+        || lower.contains("[deploys]")
+        || lower.contains("workflow_runs")
+    {
         return false;
     }
-    if lower.contains("cpd workflow") || lower.contains("--workflow") || lower.contains("workflow add")
-        || lower.contains("workflow edit") || lower.contains("workflow describe") || lower.contains("workflow cancel")
+    if lower.contains("cpd workflow")
+        || lower.contains("--workflow")
+        || lower.contains("workflow add")
+        || lower.contains("workflow edit")
+        || lower.contains("workflow describe")
+        || lower.contains("workflow cancel")
         || lower.contains("workflow start")
     {
         return false;
@@ -174,10 +208,18 @@ fn bare_workflow(line: &str) -> bool {
 fn offenders(forbidden: &[&str], allowed: &[&str]) -> Vec<String> {
     let root = root();
     let files = sources_of_interest();
-    assert!(files.len() > 100, "the guard saw {} files: it scans the wrong directory", files.len());
+    assert!(
+        files.len() > 100,
+        "the guard saw {} files: it scans the wrong directory",
+        files.len()
+    );
     let mut found = Vec::new();
     for path in files {
-        let rel = path.strip_prefix(&root).unwrap().to_string_lossy().to_string();
+        let rel = path
+            .strip_prefix(&root)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         if allowed.contains(&rel.as_str()) {
             continue;
         }

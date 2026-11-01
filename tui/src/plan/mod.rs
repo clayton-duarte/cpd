@@ -201,9 +201,22 @@ fn snapshot_timed(
     let plan = read::plan_boxes_at(store, &slot.plan, now_ms)?;
     let frame = frame_now(ports);
     let began = timed.then(|| ports.clock.now());
-    let boxes = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, frame).with_margin(CHART_MARGIN);
-    let layout = began.map_or(Duration::ZERO, |b| ports.clock.now().saturating_duration_since(b));
-    Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, boxes, frame }), pulse: None, layout })
+    let boxes = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, frame)
+        .with_margin(CHART_MARGIN);
+    let layout = began.map_or(Duration::ZERO, |b| {
+        ports.clock.now().saturating_duration_since(b)
+    });
+    Ok(Snapshot {
+        cursor,
+        centre: Some(Centre {
+            slot,
+            plan,
+            boxes,
+            frame,
+        }),
+        pulse: None,
+        layout,
+    })
 }
 
 /// What the reader thread brings back from one read: the poll's outcome and, when the poll found a change that concerns the
@@ -254,9 +267,17 @@ fn message(error: Option<&str>, centre: Option<&Centre>) -> Option<Line<'static>
         .map(|e| Span::styled(e.to_owned(), palette::error()))
         .collect();
     match centre {
-        None => parts.push(Span::styled(" no Lead session in the centre", palette::muted_text())),
-        Some(c) if c.plan.workflows.is_empty() => parts.push(Span::styled("no Workflow yet: cpd workflow add", palette::muted_text())),
-        Some(c) if c.plan.jobs.is_empty() => parts.push(Span::styled("no Plan yet", palette::muted_text())),
+        None => parts.push(Span::styled(
+            " no Lead session in the centre",
+            palette::muted_text(),
+        )),
+        Some(c) if c.plan.workflows.is_empty() => parts.push(Span::styled(
+            "no Workflow yet: cpd workflow add",
+            palette::muted_text(),
+        )),
+        Some(c) if c.plan.jobs.is_empty() => {
+            parts.push(Span::styled("no Plan yet", palette::muted_text()))
+        }
         Some(_) => {}
     }
     (!parts.is_empty()).then(|| Line::from(spaced(parts)))
@@ -946,7 +967,11 @@ pub(crate) fn layout_sample(
         PlanCase::Three(scroll) => (
             scroll,
             vec![sample_workflow("api"), sample_workflow("web")],
-            vec![sample_job("api", "api-1"), sample_job("api", "api-2"), sample_job("web", "web-1")],
+            vec![
+                sample_job("api", "api-1"),
+                sample_job("api", "api-2"),
+                sample_job("web", "web-1"),
+            ],
         ),
     };
     let expected = workflows.len();
@@ -997,8 +1022,17 @@ pub(crate) fn layout_sample(
             });
         }
     }
-    assert_eq!(boxes.len(), expected, "one box per Workflow on the canvas\n{}", crate::layout_tests::dump(canvas));
-    Sample { buf: terminal.backend().buffer().clone(), container: Rect::new(0, 0, width, height), boxes }
+    assert_eq!(
+        boxes.len(),
+        expected,
+        "one box per Workflow on the canvas\n{}",
+        crate::layout_tests::dump(canvas)
+    );
+    Sample {
+        buf: terminal.backend().buffer().clone(),
+        container: Rect::new(0, 0, width, height),
+        boxes,
+    }
 }
 
 #[cfg(test)]
@@ -1037,7 +1071,7 @@ mod tests {
     use crate::dialog::scroll::WHEEL_ROWS;
     use crate::read::{JobNode, JobStatus, WorkflowNode, WorkflowStatus};
     use cpd_core::config::Tier;
-    use cpd_core::ids::{ContextId, JobKey, WorkflowKey, SessionId};
+    use cpd_core::ids::{ContextId, JobKey, SessionId, WorkflowKey};
 
     #[test]
     fn a_read_is_taken_for_a_commit_at_most_once_per_frame_and_for_no_change_only_on_the_safety_time()
@@ -1128,7 +1162,8 @@ mod tests {
             needs_user: read::NeedsUser::default(),
             events_cursor: 0,
         };
-        let boxes = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, 0).with_margin(CHART_MARGIN);
+        let boxes = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, 0)
+            .with_margin(CHART_MARGIN);
         let slot = ChatSlot {
             session: SessionId::parse("00000000-0000-4000-8000-000000000000").unwrap(),
             name: "lead".into(),

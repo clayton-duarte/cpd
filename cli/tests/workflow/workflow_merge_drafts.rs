@@ -64,7 +64,11 @@ fn status(fx: &Fx, key: &str) -> String {
 
 /// The PR is merged, its draft is cancelled with the reason `pr merged` and one `job-cancelled` Event, and `pr-merged` is written.
 fn assert_draft_cancelled_with_the_merge(fx: &Fx) {
-    assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE key = 'api'"), "merged");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT status FROM workflows WHERE key = 'api'"),
+        "merged"
+    );
     assert_eq!(events(fx, "pr-merged").len(), 1);
     assert_eq!(status(fx, "late"), "cancelled");
     assert_eq!(
@@ -147,7 +151,11 @@ fn poll_merge_without_drafts_cancels_nothing() {
     world(&fx, false);
     fx.fake_gh(search_merged());
     fx.cpd(&["pr", "poll"]).ok();
-    assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE key = 'api'"), "merged");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT status FROM workflows WHERE key = 'api'"),
+        "merged"
+    );
     assert_eq!(events(&fx, "pr-merged").len(), 1);
     assert!(events(&fx, "job-cancelled").is_empty());
 }

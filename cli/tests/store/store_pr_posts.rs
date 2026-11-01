@@ -60,7 +60,10 @@ fn a_second_row_for_one_pr_is_refused() {
     let err = refused(&mut store, GOOD);
 
     assert_eq!(err.code(), ErrorCode::StoreFailed, "{err:?}");
-    assert!(sqlite_message(&err).contains("UNIQUE constraint failed: pr_posts.plan, pr_posts.workflow"), "{err:?}");
+    assert!(
+        sqlite_message(&err).contains("UNIQUE constraint failed: pr_posts.plan, pr_posts.workflow"),
+        "{err:?}"
+    );
 }
 
 #[test]

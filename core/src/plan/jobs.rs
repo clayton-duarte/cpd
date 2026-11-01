@@ -242,53 +242,76 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|((seq, key, workflow, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, urgent), (kind, tests, test_files, test_approved, resources, summary, touches_approved))| {
-            let array = |name: &str, text: &str| -> Result<Value, CpdError> {
-                serde_json::from_str::<Value>(text)
-                    .ok()
-                    .filter(Value::is_array)
-                    .ok_or_else(|| CpdError::bad_row(format!("Job {plan}/{key} has {name} {text:?}")))
-            };
-            // The Spec is all or nothing (§4.4 CHECK).
-            let spec = match (goal, context, touches, acceptance, out_of_scope) {
-                (Some(goal), Some(context), Some(touches), Some(acceptance), Some(out_of_scope)) => Some(JobSpec {
-                    goal,
-                    context,
-                    touches: array("touches", &touches)?,
-                    acceptance: array("acceptance", &acceptance)?,
-                    out_of_scope: array("out_of_scope", &out_of_scope)?,
-                }),
-                (None, None, None, None, None) => None,
-                _ => return Err(CpdError::bad_row(format!("Job {plan}/{key} has some of its Spec fields and not all"))),
-            };
-            let optional = |name: &str, text: Option<String>| text.map(|t| array(name, &t)).transpose();
-            Ok(Job {
-                tests: optional("tests", tests)?,
-                test_files: optional("test_files", test_files)?,
-                test_approved: optional("test_approved", test_approved)?,
-                resources: optional("resources", resources)?,
-                touches_approved: optional("touches_approved", touches_approved)?,
-                kind,
-                spec,
-                needs: needs.remove(&key).unwrap_or_default(),
-                seq,
-                key,
-                workflow,
-                title,
-                tier,
-                status,
-                appended,
-                urgent,
-                fingerprint,
-                retry_tier,
-                cancel_reason,
-                cancel_requested_at,
-                failed_cause,
-                merged_sha,
-                created_at,
-                summary,
-            })
-        })
+        .map(
+            |(
+                (seq, key, workflow, title, tier),
+                (goal, context),
+                (touches, acceptance, out_of_scope),
+                (status, appended, fingerprint, retry_tier),
+                (cancel_reason, cancel_requested_at, failed_cause),
+                (merged_sha, created_at, urgent),
+                (kind, tests, test_files, test_approved, resources, summary, touches_approved),
+            )| {
+                let array = |name: &str, text: &str| -> Result<Value, CpdError> {
+                    serde_json::from_str::<Value>(text)
+                        .ok()
+                        .filter(Value::is_array)
+                        .ok_or_else(|| {
+                            CpdError::bad_row(format!("Job {plan}/{key} has {name} {text:?}"))
+                        })
+                };
+                // The Spec is all or nothing (§4.4 CHECK).
+                let spec = match (goal, context, touches, acceptance, out_of_scope) {
+                    (
+                        Some(goal),
+                        Some(context),
+                        Some(touches),
+                        Some(acceptance),
+                        Some(out_of_scope),
+                    ) => Some(JobSpec {
+                        goal,
+                        context,
+                        touches: array("touches", &touches)?,
+                        acceptance: array("acceptance", &acceptance)?,
+                        out_of_scope: array("out_of_scope", &out_of_scope)?,
+                    }),
+                    (None, None, None, None, None) => None,
+                    _ => {
+                        return Err(CpdError::bad_row(format!(
+                            "Job {plan}/{key} has some of its Spec fields and not all"
+                        )));
+                    }
+                };
+                let optional =
+                    |name: &str, text: Option<String>| text.map(|t| array(name, &t)).transpose();
+                Ok(Job {
+                    tests: optional("tests", tests)?,
+                    test_files: optional("test_files", test_files)?,
+                    test_approved: optional("test_approved", test_approved)?,
+                    resources: optional("resources", resources)?,
+                    touches_approved: optional("touches_approved", touches_approved)?,
+                    kind,
+                    spec,
+                    needs: needs.remove(&key).unwrap_or_default(),
+                    seq,
+                    key,
+                    workflow,
+                    title,
+                    tier,
+                    status,
+                    appended,
+                    urgent,
+                    fingerprint,
+                    retry_tier,
+                    cancel_reason,
+                    cancel_requested_at,
+                    failed_cause,
+                    merged_sha,
+                    created_at,
+                    summary,
+                })
+            },
+        )
         .collect()
 }
 

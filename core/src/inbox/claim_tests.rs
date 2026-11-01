@@ -36,15 +36,30 @@ fn write_cache(home: &CpdHome, now: OffsetDateTime, posts: &[(u64, &str, f64)]) 
 }
 
 /// The `review-requested` conditions of the cache, every posted pull request open on GitHub with no review.
-fn reviews(store: &mut Store, home: &CpdHome, now: OffsetDateTime, numbers: &[u64]) -> Vec<Condition> {
+fn reviews(
+    store: &mut Store,
+    home: &CpdHome,
+    now: OffsetDateTime,
+    numbers: &[u64],
+) -> Vec<Condition> {
     let workflows = numbers
         .iter()
         .map(|n| {
-            let workflow = GhPr { title: "Add retries".to_owned(), draft: false, state: GhState::Open, author: "ryan".to_owned(), decision: None, reviews: Vec::new() };
+            let workflow = GhPr {
+                title: "Add retries".to_owned(),
+                draft: false,
+                state: GhState::Open,
+                author: "ryan".to_owned(),
+                decision: None,
+                reviews: Vec::new(),
+            };
             (("acme/pay".to_owned(), *n), Some(workflow))
         })
         .collect();
-    let lookup = Lookup { me: "clayton-duarte".to_owned(), workflows };
+    let lookup = Lookup {
+        me: "clayton-duarte".to_owned(),
+        workflows,
+    };
     let bots = ["github-actions".to_owned()];
     let mut github = |_: &[(String, u64)]| -> Result<Lookup, CpdError> { Ok(lookup.clone()) };
     let team = Team {

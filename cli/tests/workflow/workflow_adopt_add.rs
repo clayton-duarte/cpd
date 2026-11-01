@@ -130,7 +130,11 @@ fn adopts_a_pull_request_of_the_user_without_asking() {
     assert_eq!(out["workflow"]["base"], "release");
     assert_eq!(out["workflow"]["status"], "waiting");
     assert_eq!(out["workflow"]["lead_branch"], "pay-1/web");
-    assert_eq!(fx.env.query::<String>("SELECT head_ref FROM workflows WHERE key = 'web'"), "feat/x");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT head_ref FROM workflows WHERE key = 'web'"),
+        "feat/x"
+    );
 }
 
 #[test]
@@ -156,7 +160,11 @@ fn adopts_a_pull_request_of_another_author_once_confirmed() {
     );
     let out = fx.adopt("web", &["--confirm-author", "Alice"]).ok();
     assert_eq!(out["workflow"]["head_ref"], "feat/x");
-    assert_eq!(fx.env.query::<String>("SELECT head_ref FROM workflows WHERE key = 'web'"), "feat/x");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT head_ref FROM workflows WHERE key = 'web'"),
+        "feat/x"
+    );
 }
 
 #[test]
@@ -247,18 +255,41 @@ fn pr_edit_refuses_repo_and_base_of_an_adopted_pr() {
     fx.adopt("web", &[]).ok();
     let error = fx.refuse(&fx.pr(&["edit", "web", "--base", "x"]), "workflow_adopted");
     assert_eq!(error["details"], json!({"pr": "web", "flag": "--base"}));
-    let error = fx.refuse(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]), "workflow_adopted");
+    let error = fx.refuse(
+        &fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]),
+        "workflow_adopted",
+    );
     assert_eq!(error["details"], json!({"pr": "web", "flag": "--repo"}));
     fx.pr(&["edit", "web", "--title", "Renamed"]).ok();
-    assert_eq!(fx.env.query::<String>("SELECT title FROM workflows WHERE key = 'web'"), "Renamed");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT title FROM workflows WHERE key = 'web'"),
+        "Renamed"
+    );
 }
 
 #[test]
 fn the_event_and_plan_show_name_the_head_branch() {
     let fx = fx();
     fx.adopt("web", &[]).ok();
-    fx.pr(&["add", "plain", "--repo", fx.pay.to_str().unwrap(), "--title", "P", "--shape", "config"]).ok();
-    let added = fx.env.cpd(&["events", "list", "--kind", "workflow-added"]).ok()["events"].as_array().unwrap().clone();
+    fx.pr(&[
+        "add",
+        "plain",
+        "--repo",
+        fx.pay.to_str().unwrap(),
+        "--title",
+        "P",
+        "--shape",
+        "config",
+    ])
+    .ok();
+    let added = fx
+        .env
+        .cpd(&["events", "list", "--kind", "workflow-added"])
+        .ok()["events"]
+        .as_array()
+        .unwrap()
+        .clone();
     assert_eq!(added.len(), 2);
     assert_eq!(added[0]["data"]["head_ref"], "feat/x");
     assert_eq!(added[0]["data"]["author"], "bob");
@@ -274,7 +305,14 @@ fn the_event_and_plan_show_name_the_head_branch() {
     );
     let shown = fx.env.cpd(&["plan", "show", "--plan", "pay-1"]).ok();
     let workflows = shown["workflows"].as_array().unwrap();
-    let head = |key: &str| workflows.iter().find(|p| p["key"] == key).unwrap().get("head_ref").cloned();
+    let head = |key: &str| {
+        workflows
+            .iter()
+            .find(|p| p["key"] == key)
+            .unwrap()
+            .get("head_ref")
+            .cloned()
+    };
     assert_eq!(head("web"), Some(json!("feat/x")));
     assert_eq!(head("plain"), Some(Value::Null));
 }
@@ -292,7 +330,8 @@ fn the_head_branch_of_a_pr_cannot_change_and_is_unique_among_live_prs() {
     };
     let write = |sql: &str| fx.store().write("fixture", |tx| Ok(tx.execute_batch(sql)?));
     write(&insert("pay-1", "a", "waiting")).expect("insert a PR with a head_ref");
-    let err = write("UPDATE workflows SET head_ref = 'feat/z' WHERE key = 'a'").expect_err("head_ref is fixed");
+    let err = write("UPDATE workflows SET head_ref = 'feat/z' WHERE key = 'a'")
+        .expect_err("head_ref is fixed");
     assert!(format!("{err:?}").contains("workflow_locked"), "{err:?}");
     let err = write(&insert("pay-2", "b", "waiting")).expect_err("a second live PR with the head");
     assert!(

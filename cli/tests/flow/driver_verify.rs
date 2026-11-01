@@ -41,7 +41,25 @@ BEGIN SELECT RAISE(ABORT, 'workflow_locked'); END;"
     fs::write(&spec, r#"{"goal": "Check it end to end.", "context": "The PR is built.", "touches": ["e2e.txt"], "acceptance": ["e2e passes"], "out_of_scope": []}"#).unwrap();
     let added = live
         .fx
-        .cpd(&["job", "add", "e2e", "--title", "E2E", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--kind", "verify", "--needs", "build", "--workflow", "repo", "--plan", PLAN])
+        .cpd(&[
+            "job",
+            "add",
+            "e2e",
+            "--title",
+            "E2E",
+            "--tier",
+            "S2",
+            "--spec",
+            spec.to_str().unwrap(),
+            "--kind",
+            "verify",
+            "--needs",
+            "build",
+            "--workflow",
+            "repo",
+            "--plan",
+            PLAN,
+        ])
         .ok();
     assert_eq!(
         (&added["job"]["kind"], &added["job"]["status"]),

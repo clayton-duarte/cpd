@@ -123,8 +123,18 @@ fn chart(store: &mut Store, frame: usize) -> super::flow::Chart {
 fn centre(store: &mut Store, frame: usize) -> Centre {
     let plan = read::plan_boxes_at(store, &pay(), NOW_MS).unwrap();
     let boxes = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, frame);
-    let slot = read::ChatSlot { session: SessionId::parse("lead1").unwrap(), name: "lead1".into(), plan: plan.plan.clone(), moved_event: 1 };
-    Centre { slot, plan, boxes, frame }
+    let slot = read::ChatSlot {
+        session: SessionId::parse("lead1").unwrap(),
+        name: "lead1".into(),
+        plan: plan.plan.clone(),
+        moved_event: 1,
+    };
+    Centre {
+        slot,
+        plan,
+        boxes,
+        frame,
+    }
 }
 
 /// The pill of `key` in `chart`, as (its icon cell's glyph, its colours).
@@ -149,15 +159,35 @@ fn pill(chart: &super::flow::Chart, key: &str) -> (String, ratatui::style::Style
 #[test]
 fn the_chart_draws_an_explore_jobs_box_above_the_pr_boxes() {
     let (_dir, mut store) = db();
-    run(&mut store, &(workflow_job("api", "api-1", "queued") + &explore_job("look", "queued")));
+    run(
+        &mut store,
+        &(workflow_job("api", "api-1", "queued") + &explore_job("look", "queued")),
+    );
     let chart = chart(&mut store, 0);
     let lines = rows(&chart.buf);
 
-    let explore = lines.iter().position(|l| l.contains(" explore Jobs ")).expect("the explore Jobs box");
-    let api = lines.iter().position(|l| l.contains(" api · ")).expect("the api Workflow box");
-    assert!(explore < api, "the explore box is above the Workflow box: {lines:?}");
-    assert!(lines[explore + 1].contains("look"), "the look pill is inside the explore box: {:?}", lines[explore + 1]);
-    assert!(lines[api + 1].contains("api-1"), "the api pill stays inside its Workflow box: {:?}", lines[api + 1]);
+    let explore = lines
+        .iter()
+        .position(|l| l.contains(" explore Jobs "))
+        .expect("the explore Jobs box");
+    let api = lines
+        .iter()
+        .position(|l| l.contains(" api · "))
+        .expect("the api Workflow box");
+    assert!(
+        explore < api,
+        "the explore box is above the Workflow box: {lines:?}"
+    );
+    assert!(
+        lines[explore + 1].contains("look"),
+        "the look pill is inside the explore box: {:?}",
+        lines[explore + 1]
+    );
+    assert!(
+        lines[api + 1].contains("api-1"),
+        "the api pill stays inside its Workflow box: {:?}",
+        lines[api + 1]
+    );
 }
 
 #[test]
@@ -167,10 +197,23 @@ fn an_explore_only_plans_chart_is_the_explore_box_alone() {
     let chart = chart(&mut store, 0);
     let lines = rows(&chart.buf);
 
-    assert_eq!(lines.iter().filter(|l| l.contains('╭')).count(), 1, "one box only: {lines:?}");
-    assert!(lines.iter().any(|l| l.contains(" explore Jobs ")), "the explore box: {lines:?}");
-    assert!(lines.iter().any(|l| l.contains("look")), "its pill: {lines:?}");
-    assert!(!lines.iter().any(|l| l.contains("no Jobs")), "no Workflow box and no `no Jobs` box: {lines:?}");
+    assert_eq!(
+        lines.iter().filter(|l| l.contains('╭')).count(),
+        1,
+        "one box only: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains(" explore Jobs ")),
+        "the explore box: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("look")),
+        "its pill: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("no Jobs")),
+        "no Workflow box and no `no Jobs` box: {lines:?}"
+    );
 }
 
 #[test]
@@ -210,7 +253,10 @@ fn a_running_explore_job_spins_and_a_failed_one_turns() {
 #[test]
 fn exact_rendered_rows_for_one_pr_box_and_one_explore_box() {
     let (_dir, mut store) = db();
-    run(&mut store, &(workflow_job("api", "api-1", "queued") + &explore_job("look", "queued")));
+    run(
+        &mut store,
+        &(workflow_job("api", "api-1", "queued") + &explore_job("look", "queued")),
+    );
     let chart = chart(&mut store, 0);
     let got = rows(&chart.buf).join("\n");
     // the title is ` explore Jobs · 1 scout ` (24 cells); the box is as wide as the title plus 4 (28), the pill row as before

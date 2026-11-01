@@ -89,9 +89,20 @@ fn stacked_ready_poll_rewrites_the_row_when_the_base_is_retargeted() {
 
     fx.search(&[with_base(pay("OPEN", None, None), "main", Some("main"))]);
     let out = fx.poll();
-    assert_eq!(stored(&fx, 812), some("main", "main"), "the retargeted row is rewritten");
-    assert_eq!(out["base_changed"], json!([{"plan": "pay", "pr": "repo", "from": "feature-branch", "to": "main"}]));
-    assert_eq!(fx.events("workflow-base-changed").len(), told + 1, "the base follow still happens");
+    assert_eq!(
+        stored(&fx, 812),
+        some("main", "main"),
+        "the retargeted row is rewritten"
+    );
+    assert_eq!(
+        out["base_changed"],
+        json!([{"plan": "pay", "pr": "repo", "from": "feature-branch", "to": "main"}])
+    );
+    assert_eq!(
+        fx.events("workflow-base-changed").len(),
+        told + 1,
+        "the base follow still happens"
+    );
 }
 
 #[test]

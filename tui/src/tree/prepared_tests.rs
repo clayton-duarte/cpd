@@ -137,11 +137,26 @@ fn context(id: &str) -> String {
 }
 
 /// `pr`: the Plan has a Workflow (the schema ties phases `deploy` and `done` to one).
-fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, workflow: bool) -> String {
+fn plan_row(
+    id: &str,
+    context: &str,
+    phase: &str,
+    lead: &str,
+    created: &str,
+    workflow: bool,
+) -> String {
     let late = !matches!(phase, "grounding" | "plan");
     let worktree = if late { "'/wt'" } else { "NULL" };
-    let locked = if late { "'2026-01-02T00:00:00.000Z'" } else { "NULL" };
-    let done = if phase == "done" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" };
+    let locked = if late {
+        "'2026-01-02T00:00:00.000Z'"
+    } else {
+        "NULL"
+    };
+    let done = if phase == "done" {
+        "'2026-01-09T00:00:00.000Z'"
+    } else {
+        "NULL"
+    };
     let (row, number, url, opened, pull_request) = if workflow {
         let state = if phase == "done" { "merged" } else { "open" };
         let merged = if phase == "done" {
@@ -307,18 +322,108 @@ pub(super) fn populate(env: &mut Env) {
     s += &context("alpha");
     s += &context("beta");
     s += &context("gamma");
-    s += &plan_row("ship", "alpha", "dispatch", "l-ship", "2026-01-02T00:00:10.000Z", false);
-    s += &plan_row("sketch", "alpha", "plan", "l-sketch", "2026-01-02T00:00:09.000Z", false);
-    s += &plan_row("rel", "beta", "deploy", "l-rel", "2026-01-02T00:00:02.000Z", true);
-    s += &plan_row("old", "beta", "done", "l-old", "2026-01-02T00:00:03.000Z", true);
-    s += &session_row("g-alpha", "grounded", "alpha", "", "idle", None, "2026-01-02T00:00:00.000Z");
-    s += &session_row("l-ship", "ship lead", "alpha", "ship", "working", None, "2026-01-02T00:00:00.000Z");
-    s += &session_row("f-idle", "ship fork", "alpha", "ship", "idle", None, "2026-01-02T00:00:02.000Z");
-    s += &session_row("f-blocked", "ship review", "alpha", "ship", "blocked", Some("φ: Worker question"), "2026-01-02T00:00:09.000Z");
-    s += &session_row("l-sketch", "sketch", "alpha", "sketch", "idle", None, "2026-01-02T00:00:01.000Z");
-    s += &session_row("l-rel", "rel lead", "beta", "rel", "blocked", Some("cpd: Workflow feedback"), "2026-01-02T00:00:02.000Z");
-    s += &session_row("l-old", "old lead", "beta", "old", "stopped", None, "2026-01-02T00:00:03.000Z");
-    for (key, status) in [("a", "merged"), ("b", "merged"), ("c", "running"), ("d", "queued"), ("e", "failed")] {
+    s += &plan_row(
+        "ship",
+        "alpha",
+        "dispatch",
+        "l-ship",
+        "2026-01-02T00:00:10.000Z",
+        false,
+    );
+    s += &plan_row(
+        "sketch",
+        "alpha",
+        "plan",
+        "l-sketch",
+        "2026-01-02T00:00:09.000Z",
+        false,
+    );
+    s += &plan_row(
+        "rel",
+        "beta",
+        "deploy",
+        "l-rel",
+        "2026-01-02T00:00:02.000Z",
+        true,
+    );
+    s += &plan_row(
+        "old",
+        "beta",
+        "done",
+        "l-old",
+        "2026-01-02T00:00:03.000Z",
+        true,
+    );
+    s += &session_row(
+        "g-alpha",
+        "grounded",
+        "alpha",
+        "",
+        "idle",
+        None,
+        "2026-01-02T00:00:00.000Z",
+    );
+    s += &session_row(
+        "l-ship",
+        "ship lead",
+        "alpha",
+        "ship",
+        "working",
+        None,
+        "2026-01-02T00:00:00.000Z",
+    );
+    s += &session_row(
+        "f-idle",
+        "ship fork",
+        "alpha",
+        "ship",
+        "idle",
+        None,
+        "2026-01-02T00:00:02.000Z",
+    );
+    s += &session_row(
+        "f-blocked",
+        "ship review",
+        "alpha",
+        "ship",
+        "blocked",
+        Some("φ: Worker question"),
+        "2026-01-02T00:00:09.000Z",
+    );
+    s += &session_row(
+        "l-sketch",
+        "sketch",
+        "alpha",
+        "sketch",
+        "idle",
+        None,
+        "2026-01-02T00:00:01.000Z",
+    );
+    s += &session_row(
+        "l-rel",
+        "rel lead",
+        "beta",
+        "rel",
+        "blocked",
+        Some("cpd: Workflow feedback"),
+        "2026-01-02T00:00:02.000Z",
+    );
+    s += &session_row(
+        "l-old",
+        "old lead",
+        "beta",
+        "old",
+        "stopped",
+        None,
+        "2026-01-02T00:00:03.000Z",
+    );
+    for (key, status) in [
+        ("a", "merged"),
+        ("b", "merged"),
+        ("c", "running"),
+        ("d", "queued"),
+        ("e", "failed"),
+    ] {
         s += &job_row("ship", key, status);
     }
     for key in ["s1", "s2"] {

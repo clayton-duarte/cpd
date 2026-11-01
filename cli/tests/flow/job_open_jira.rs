@@ -81,7 +81,8 @@ fn job_dispatch_starts_the_open_job_of_a_pr_with_no_jira_when_the_policy_does_no
 #[test]
 fn job_dispatch_starts_the_open_job_of_an_adopted_pr_with_no_jira_when_required() {
     let live = live_requiring(true);
-    let trigger: String = live.value("SELECT sql FROM sqlite_master WHERE name = 'workflows_head_ref_fixed'");
+    let trigger: String =
+        live.value("SELECT sql FROM sqlite_master WHERE name = 'workflows_head_ref_fixed'");
     live.fixture(&format!("DROP TRIGGER workflows_head_ref_fixed; UPDATE workflows SET head_ref = 'feature' WHERE key = 'repo'; {trigger};"));
     let out = live.dispatch("open-repo").ok();
     assert_eq!(out["attempt"], "open-repo-a1", "{out}");

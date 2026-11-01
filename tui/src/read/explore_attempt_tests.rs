@@ -88,7 +88,10 @@ fn plan_boxes_reads_a_plan_with_only_explore_attempts() {
     assert!(result.is_ok(), "plan_boxes_at failed: {result:?}");
     let boxes = result.unwrap();
     assert!(boxes.workflows.is_empty());
-    assert!(boxes.jobs.iter().any(|j| j.key.as_str() == "look"), "the explore Job is a JobNode of the Plan");
+    assert!(
+        boxes.jobs.iter().any(|j| j.key.as_str() == "look"),
+        "the explore Job is a JobNode of the Plan"
+    );
 }
 
 #[test]
@@ -148,7 +151,15 @@ fn an_explore_job_is_a_node_beside_the_pr_job_in_the_flow() {
     let flow = read::flow(&mut store, &pay()).unwrap();
     let keys: Vec<&str> = flow.jobs.iter().map(|j| j.key.as_str()).collect();
     assert!(keys.contains(&"work") && keys.contains(&"look"), "{keys:?}");
-    assert!(flow.jobs.iter().find(|j| j.key.as_str() == "look").unwrap().workflow.is_none(), "the explore Job has no Workflow");
+    assert!(
+        flow.jobs
+            .iter()
+            .find(|j| j.key.as_str() == "look")
+            .unwrap()
+            .workflow
+            .is_none(),
+        "the explore Job has no Workflow"
+    );
 }
 
 #[test]

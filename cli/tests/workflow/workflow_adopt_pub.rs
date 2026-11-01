@@ -262,7 +262,8 @@ impl Fx {
     }
 
     fn pr(&self, command: &str) -> Run {
-        self.env.cpd(&["pr", command, "--workflow", "web", "--plan", "pay"])
+        self.env
+            .cpd(&["pr", command, "--workflow", "web", "--plan", "pay"])
     }
 
     /// `(status, pr_number, pr_url)` of PR `web`.
@@ -397,7 +398,14 @@ fn merge_in_child(fx: &Fx, attempt: &AttemptId) -> String {
     let out = fx
         .env
         .command(exe)
-        .args(["workflow_adopt_pub::child_merges_the_attempt", "--exact", "--ignored", "--nocapture", "--test-threads", "1"])
+        .args([
+            "workflow_adopt_pub::child_merges_the_attempt",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads",
+            "1",
+        ])
         .env(CHILD_ATTEMPT, attempt.to_string())
         .output()
         .unwrap();

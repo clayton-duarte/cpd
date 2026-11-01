@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
-use crate::ids::{OwnerLogin, PlanId, WorkflowKey, RepoName};
+use crate::ids::{OwnerLogin, PlanId, RepoName, WorkflowKey};
 use crate::policy::{policy_dir, repo_path};
 use crate::store::WriteTxn;
 
@@ -39,7 +39,10 @@ pub struct PolicyEmoji {
 }
 
 fn due(r: &rusqlite::Row<'_>) -> rusqlite::Result<Due> {
-    let merge = match (r.get::<_, Option<String>>(4)?, r.get::<_, Option<String>>(5)?) {
+    let merge = match (
+        r.get::<_, Option<String>>(4)?,
+        r.get::<_, Option<String>>(5)?,
+    ) {
         (Some(plan), Some(workflow)) => Some(MergeOf { plan, workflow }),
         _ => None,
     };
@@ -143,7 +146,11 @@ pub fn refuse(
     if rows != 1 {
         return Ok(false);
     }
-    let row = tx.query_row("SELECT id, channel, ts, emoji, plan, workflow FROM slack_reactions WHERE id = ?1", [id], due)?;
+    let row = tx.query_row(
+        "SELECT id, channel, ts, emoji, plan, workflow FROM slack_reactions WHERE id = ?1",
+        [id],
+        due,
+    )?;
     let emoji = &row.emoji;
     let mut details =
         json!({"id": id, "emoji": emoji, "reason": reason, "channel": row.channel, "ts": row.ts});
@@ -159,7 +166,11 @@ pub fn refuse(
             details["file"] = json!(file.display().to_string());
             format!(
                 "The merge reaction of Workflow {} of Plan {} on Slack message {} of {} was not placed. {what}. Set pr.post.merged_reaction in {} to an emoji of the workspace; the engine tries again when the policy names another emoji.",
-                merge.workflow, merge.plan, row.ts, row.channel, file.display()
+                merge.workflow,
+                merge.plan,
+                row.ts,
+                row.channel,
+                file.display()
             )
         }
         _ => format!(
@@ -184,10 +195,18 @@ pub fn refuse(
 /// The emoji Workflow `pr` of `plan` names for its merge (`pr.post.merged_reaction`, `""` when none), resolved with the Workflow's repo and
 /// owner policy, and the file to edit: the repo's file when it sets the key, else the owner's `owner.toml`.
 /// A policy that does not resolve is its error, unchanged.
-pub fn policy_emoji(conn: &Connection, home: &CpdHome, plan: &str, workflow: &str) -> Result<PolicyEmoji, CpdError> {
+pub fn policy_emoji(
+    conn: &Connection,
+    home: &CpdHome,
+    plan: &str,
+    workflow: &str,
+) -> Result<PolicyEmoji, CpdError> {
     let plan_id = PlanId::parse(plan)?;
     let key = WorkflowKey::parse(workflow)?;
-    let emoji = super::policy_of_workflow(conn, home, &plan_id, &key)?.pr.post.merged_reaction;
+    let emoji = super::policy_of_workflow(conn, home, &plan_id, &key)?
+        .pr
+        .post
+        .merged_reaction;
     let (owner, name): (String, Option<String>) = conn.query_row(
         "SELECT c.owner, r.name FROM workflows r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context WHERE r.plan = ?1 AND r.key = ?2",
         [plan, workflow],
@@ -292,8 +311,17 @@ mod tests {
         );
         let parked_rows = store.read(parked).unwrap();
         assert_eq!(parked_rows.len(), 1);
-        assert_eq!(parked_rows[0].merge, Some(MergeOf { plan: "pay".into(), workflow: "api".into() }));
-        assert!(!store.write("t", |tx| set_emoji(tx, 1, "x")).unwrap(), "a refused row keeps its emoji");
+        assert_eq!(
+            parked_rows[0].merge,
+            Some(MergeOf {
+                plan: "pay".into(),
+                workflow: "api".into()
+            })
+        );
+        assert!(
+            !store.write("t", |tx| set_emoji(tx, 1, "x")).unwrap(),
+            "a refused row keeps its emoji"
+        );
         assert!(store.write("t", |tx| reopen(tx, 1, "git-merged")).unwrap());
         assert_eq!(
             store

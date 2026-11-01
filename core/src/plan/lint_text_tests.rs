@@ -16,7 +16,14 @@ use crate::ids::{ContextId, PlanId, SessionId};
 
 const HINT: &str = "(a hint, not a conflict prediction)";
 
-fn job(key: &str, workflow: &str, kind: &str, status: &str, touches: &[&str], needs: &[&str]) -> Job {
+fn job(
+    key: &str,
+    workflow: &str,
+    kind: &str,
+    status: &str,
+    touches: &[&str],
+    needs: &[&str],
+) -> Job {
     Job {
         seq: 1,
         key: key.into(),

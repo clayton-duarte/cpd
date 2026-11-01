@@ -489,7 +489,17 @@ fn picking_post_runs_cpd_pr_post_with_the_pr_key_and_plan_and_opens_no_popup() {
     cockpit(&fx);
     let screen = first_rows(&fx);
     run(&fx, pick(&screen, "shop#4 ready for user review", 0));
-    assert_eq!(cpd_calls(&fx), [words(&["pr", "post", "--workflow", PR_KEY, "--plan", "ship"])]);
+    assert_eq!(
+        cpd_calls(&fx),
+        [words(&[
+            "pr",
+            "post",
+            "--workflow",
+            PR_KEY,
+            "--plan",
+            "ship"
+        ])]
+    );
     assert!(popups(&fx).is_empty(), "{:?}", popups(&fx));
 }
 
@@ -532,9 +542,19 @@ fn a_refused_post_opens_the_error_dialog_and_a_post_with_no_matching_pr_row_says
         "no `pr post` without a matching PR row"
     );
     let opened = commands(&fx);
-    let [dialog] = &opened[..] else { panic!("{opened:?}") };
-    assert!(dialog.starts_with("cpd tui view dialog text --title="), "a failure dialog: {dialog}");
-    assert!(dialog.to_lowercase().contains("no workflow of plan ship has the pull request acme/shop#4"), "{dialog}");
+    let [dialog] = &opened[..] else {
+        panic!("{opened:?}")
+    };
+    assert!(
+        dialog.starts_with("cpd tui view dialog text --title="),
+        "a failure dialog: {dialog}"
+    );
+    assert!(
+        dialog
+            .to_lowercase()
+            .contains("no workflow of plan ship has the pull request acme/shop#4"),
+        "{dialog}"
+    );
 }
 
 #[test]

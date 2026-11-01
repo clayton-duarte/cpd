@@ -7,7 +7,7 @@ use super::model::{Condition, Item, Kind, Urgency};
 use super::rules::id;
 use crate::error::CpdError;
 use crate::home::CpdHome;
-use crate::ids::{ContextId, PlanId, WorkflowKey, SessionId};
+use crate::ids::{ContextId, PlanId, SessionId, WorkflowKey};
 use crate::pr::postable::unready;
 use crate::pr::pulls::{self, PullRequest};
 
@@ -172,8 +172,14 @@ pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, C
         let get = |i: usize| row.get::<_, Option<String>>(width + i);
         let (plan, key, context, lead) = (get(1)?, get(2)?, get(3)?, get(4)?);
         let (handled, posted): (bool, bool) = (row.get(width + 5)?, row.get(width + 6)?);
-        let plan = plan.as_deref().map(|p| id("Plan id", p, PlanId::parse)).transpose()?;
-        let key = key.as_deref().map(|k| id("Workflow key", k, WorkflowKey::parse)).transpose()?;
+        let plan = plan
+            .as_deref()
+            .map(|p| id("Plan id", p, PlanId::parse))
+            .transpose()?;
+        let key = key
+            .as_deref()
+            .map(|k| id("Workflow key", k, WorkflowKey::parse))
+            .transpose()?;
         let owner = plan.as_ref().zip(key.as_ref());
         let facts = Facts {
             row: &pull,
@@ -183,7 +189,10 @@ pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, C
             clean,
         };
         let status = classify(&facts, || {
-            owner.is_some_and(|(plan, key)| crate::pr::policy_of_workflow(conn, home, plan, key).is_ok_and(|p| p.pr.post.enabled))
+            owner.is_some_and(|(plan, key)| {
+                crate::pr::policy_of_workflow(conn, home, plan, key)
+                    .is_ok_and(|p| p.pr.post.enabled)
+            })
         });
         let name = pull
             .repo

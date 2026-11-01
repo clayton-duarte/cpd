@@ -13,12 +13,28 @@ impl Poll {
     fn describe(&self, text: &str) -> crate::common::Run {
         let file = self.env.root().join("body.md");
         fs::write(&file, text).unwrap();
-        self.cpd(&["workflow", "describe", "repo", "--file", file.to_str().unwrap(), "--plan", "pay"])
+        self.cpd(&[
+            "workflow",
+            "describe",
+            "repo",
+            "--file",
+            file.to_str().unwrap(),
+            "--plan",
+            "pay",
+        ])
     }
 
     /// The stored `description` of PR `repo`.
     fn description(&self) -> Option<String> {
-        self.store().read(|c| Ok(c.query_row("SELECT description FROM workflows WHERE plan = 'pay' AND key = 'repo'", [], |r| r.get(0))?)).unwrap()
+        self.store()
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT description FROM workflows WHERE plan = 'pay' AND key = 'repo'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap()
     }
 
     /// Runs `sql` on the Plan's rows.
@@ -26,7 +42,10 @@ impl Poll {
         // `workflows_head_ref_fixed` refuses any later `head_ref` change (contract §4.4): this test database drops it to adopt a PR, then
         // puts it back as the migration has it, so the schema check of the next `cpd` still passes.
         let (drop, restore) = if sql.contains("head_ref") {
-            ("DROP TRIGGER workflows_head_ref_fixed;", "CREATE TRIGGER workflows_head_ref_fixed BEFORE UPDATE OF head_ref ON workflows\nBEGIN SELECT RAISE(ABORT, 'workflow_locked'); END;")
+            (
+                "DROP TRIGGER workflows_head_ref_fixed;",
+                "CREATE TRIGGER workflows_head_ref_fixed BEFORE UPDATE OF head_ref ON workflows\nBEGIN SELECT RAISE(ABORT, 'workflow_locked'); END;",
+            )
         } else {
             ("", "")
         };
@@ -45,9 +64,18 @@ fn pr_describe_stores_the_body_and_a_second_describe_replaces_it() {
 
     let out = fx.describe(first).ok();
 
-    assert_eq!(out, json!({"ok": true, "workflow": {"key": "repo", "status": "dispatch"}}));
+    assert_eq!(
+        out,
+        json!({"ok": true, "workflow": {"key": "repo", "status": "dispatch"}})
+    );
     assert_eq!(fx.description().as_deref(), Some(first), "stored verbatim");
-    assert_eq!(fx.events("workflow-described").iter().map(|e| e.1.clone()).collect::<Vec<_>>(), [json!({"workflow": "repo"})]);
+    assert_eq!(
+        fx.events("workflow-described")
+            .iter()
+            .map(|e| e.1.clone())
+            .collect::<Vec<_>>(),
+        [json!({"workflow": "repo"})]
+    );
 
     // Another text replaces it.
     let second = "## What and why\n\nCharge it twice.\n";
@@ -119,7 +147,10 @@ fn pr_describe_refuses_an_adopted_or_closed_pr() {
         let run = fx.describe("New body\n");
 
         assert_eq!(code(&run), ("workflow_ended".into(), 3));
-        assert_eq!((fx.description().as_deref(), fx.txns()), (Some(DESCRIPTION), txns));
+        assert_eq!(
+            (fx.description().as_deref(), fx.txns()),
+            (Some(DESCRIPTION), txns)
+        );
         assert!(fx.gh_calls().is_empty(), "no gh call");
     }
     let fx = poll_fx("plan");
@@ -129,7 +160,10 @@ fn pr_describe_refuses_an_adopted_or_closed_pr() {
     let run = fx.describe("New body\n");
 
     assert_eq!(code(&run), ("workflow_ended".into(), 3));
-    assert_eq!((fx.description().as_deref(), fx.txns()), (Some(DESCRIPTION), txns));
+    assert_eq!(
+        (fx.description().as_deref(), fx.txns()),
+        (Some(DESCRIPTION), txns)
+    );
 }
 
 #[test]

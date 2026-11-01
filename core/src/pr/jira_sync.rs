@@ -92,12 +92,23 @@ fn due(r: &rusqlite::Row<'_>) -> rusqlite::Result<(Due, Option<String>)> {
     let target =
         Target::parse(&target).ok_or_else(|| corrupt(format!("unknown jira target {target}")))?;
     let ticket: Option<String> = r.get(4)?;
-    let row = Due { id: r.get(0)?, plan: r.get(1)?, workflow: r.get(2)?, target, ticket: ticket.unwrap_or_default() };
+    let row = Due {
+        id: r.get(0)?,
+        plan: r.get(1)?,
+        workflow: r.get(2)?,
+        target,
+        ticket: ticket.unwrap_or_default(),
+    };
     Ok((row, r.get(5)?))
 }
 
 /// Queues `target` for Workflow `pr` of `plan`; `true` when newly queued, `false` when the row exists.
-pub fn queue(tx: &WriteTxn<'_>, plan: &str, workflow: &str, target: Target) -> Result<bool, CpdError> {
+pub fn queue(
+    tx: &WriteTxn<'_>,
+    plan: &str,
+    workflow: &str,
+    target: Target,
+) -> Result<bool, CpdError> {
     let rows = tx.execute(
         "INSERT INTO jira_transitions (plan, pr, target, queued_at) VALUES (?1, ?2, ?3, (SELECT at FROM txns WHERE id = cpd_txn()))
          ON CONFLICT (plan, pr, target) DO NOTHING",
@@ -145,8 +156,11 @@ pub fn refuse(
     if rows != 1 {
         return Ok(false);
     }
-    let (plan, workflow, target): (String, String, String) =
-        tx.query_row("SELECT plan, pr, target FROM jira_transitions WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    let (plan, workflow, target): (String, String, String) = tx.query_row(
+        "SELECT plan, pr, target FROM jira_transitions WHERE id = ?1",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
     let details = json!({
         "id": id, "plan": plan, "pr": workflow, "ticket": refusal.ticket, "target": target, "status": refusal.status, "reason": refusal.reason,
     });
@@ -202,7 +216,11 @@ mod tests {
         let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
         let mut store = Store::open(&home, 5000).unwrap();
         let workflow = |key: &str, jira: &str, status: &str| {
-            let (started, worktree) = if status == "cancelled" { ("NULL", "NULL".to_owned()) } else { ("'t'", format!("'/nowhere/{key}'")) };
+            let (started, worktree) = if status == "cancelled" {
+                ("NULL", "NULL".to_owned())
+            } else {
+                ("'t'", format!("'/nowhere/{key}'"))
+            };
             format!(
                 "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, jira)
                    VALUES ('pay', '{key}', '/nowhere', 'main', '{status}', 'cpd/pay/{key}', {worktree}, cpd_txn(), 't', {started}, {jira});"
@@ -229,7 +247,9 @@ mod tests {
     }
 
     fn q(store: &mut Store, workflow: &str, target: Target) -> bool {
-        store.write("t", |tx| queue(tx, "pay", workflow, target)).unwrap()
+        store
+            .write("t", |tx| queue(tx, "pay", workflow, target))
+            .unwrap()
     }
 
     fn refusal(status: &str) -> Refusal {
@@ -271,9 +291,18 @@ mod tests {
         q(&mut store, "api", Target::InProgress);
         q(&mut store, "api", Target::InReview);
         let first = store.read(|c| next_due(c, &[])).unwrap().unwrap();
-        assert_eq!((first.id, first.target, first.ticket.as_str()), (1, Target::InProgress, "ABC-1"));
-        assert_eq!((first.plan.as_str(), first.workflow.as_str()), ("pay", "api"));
-        assert_eq!(store.read(|c| next_due(c, &[1])).unwrap().map(|d| d.id), Some(2));
+        assert_eq!(
+            (first.id, first.target, first.ticket.as_str()),
+            (1, Target::InProgress, "ABC-1")
+        );
+        assert_eq!(
+            (first.plan.as_str(), first.workflow.as_str()),
+            ("pay", "api")
+        );
+        assert_eq!(
+            store.read(|c| next_due(c, &[1])).unwrap().map(|d| d.id),
+            Some(2)
+        );
         assert_eq!(store.read(|c| next_due(c, &[1, 2])).unwrap(), None);
     }
 

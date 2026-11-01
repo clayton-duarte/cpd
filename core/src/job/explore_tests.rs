@@ -13,7 +13,7 @@ use super::check_kind_tier;
 use super::edit::edit_in;
 use super::retry::retry_in;
 use super::{AddArgs, CancelArgs, EditArgs, RetryArgs};
-use crate::args::{PlanArg, WorkflowArg, Text};
+use crate::args::{PlanArg, Text, WorkflowArg};
 use crate::config::{Catalog, Tier, TierModel};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -38,7 +38,12 @@ fn fixture_at(phase: &str, workflows: &[&str], repo: Option<&std::path::Path>) -
 
 /// [`fixture_at`], or, with `repo_is_temp_dir`, with the Workflows' repo the temp dir that holds `$CPD_HOME` (known once the dir exists,
 /// and fixed at insert: the `prs_locked` trigger refuses a later change of `repo`).
-fn fixture_with(phase: &str, workflows: &[&str], repo: Option<&std::path::Path>, repo_is_temp_dir: bool) -> Fixture {
+fn fixture_with(
+    phase: &str,
+    workflows: &[&str],
+    repo: Option<&std::path::Path>,
+    repo_is_temp_dir: bool,
+) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let dir_path = dir.path().to_owned();
     let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
@@ -131,7 +136,11 @@ impl Fixture {
     /// An existing queued Job of `kind` (explore: no Workflow, derived touches) with a true fingerprint, in its own transaction.
     fn job(&mut self, key: &str, kind: &str, status: &str, tier: &str, needs: &[&str]) {
         let explore = matches!(kind, "scout" | "research");
-        let (workflow, touches) = if explore { ("NULL".to_owned(), format!("[\"run/pay/explore/{key}.md\"]")) } else { ("'api'".to_owned(), "[\"a\"]".to_owned()) };
+        let (workflow, touches) = if explore {
+            ("NULL".to_owned(), format!("[\"run/pay/explore/{key}.md\"]"))
+        } else {
+            ("'api'".to_owned(), "[\"a\"]".to_owned())
+        };
         // The true fingerprint of the Job, computed from a twin row that the rolled-back transaction takes away again.
         let mut fingerprint = String::new();
         let _ = self.env.store.write("fingerprint", |tx| {
@@ -184,7 +193,16 @@ impl Fixture {
         ));
     }
 
-    fn add(&mut self, key: &str, kind: &str, tier: &str, spec: &PathBuf, workflow: Option<&str>, draft: bool, needs: &[&str]) -> Result<Output, CpdError> {
+    fn add(
+        &mut self,
+        key: &str,
+        kind: &str,
+        tier: &str,
+        spec: &PathBuf,
+        workflow: Option<&str>,
+        draft: bool,
+        needs: &[&str],
+    ) -> Result<Output, CpdError> {
         let args = AddArgs {
             key: JobKey::parse(key).unwrap(),
             title: Text::from_str("T").unwrap(),
@@ -194,8 +212,12 @@ impl Fixture {
             draft,
             urgent: false,
             kind: Some(kind.to_owned()),
-            workflow: WorkflowArg { workflow: workflow.map(|p| WorkflowKey::parse(p).unwrap()) },
-            plan: PlanArg { plan: Some(PlanId::parse("pay").unwrap()) },
+            workflow: WorkflowArg {
+                workflow: workflow.map(|p| WorkflowKey::parse(p).unwrap()),
+            },
+            plan: PlanArg {
+                plan: Some(PlanId::parse("pay").unwrap()),
+            },
         };
         add_in(&mut self.env, args)
     }
@@ -272,7 +294,11 @@ fn explore_add_scout_in_grounding_is_queued_with_derived_touches() {
     assert_eq!(out["job"]["pr"], Value::Null);
     assert_eq!(f.column("s1", "status").as_deref(), Some("queued"));
     assert_eq!(f.column("s1", "workflow"), None);
-    assert!(f.column("s1", "fingerprint").is_some_and(|fp| fp.len() == 64), "a Locked-Job fingerprint");
+    assert!(
+        f.column("s1", "fingerprint")
+            .is_some_and(|fp| fp.len() == 64),
+        "a Locked-Job fingerprint"
+    );
     let touches: Value = serde_json::from_str(&f.column("s1", "touches").unwrap()).unwrap();
     assert_eq!(touches, json!(["run/pay/explore/s1.md"]));
     assert_eq!(f.events("job-added"), 1);
@@ -316,7 +342,11 @@ fn explore_add_needs_no_pr_flag_when_the_plan_has_two_prs() {
         let spec = f.explore_spec("s.json");
         let out = f.add("s1", "scout", "H2", &spec, None, false, &[]);
         if let Err(e) = &out {
-            assert_ne!(e.code(), ErrorCode::WorkflowRequired, "an explore Job belongs to the Plan, not to a Workflow");
+            assert_ne!(
+                e.code(),
+                ErrorCode::WorkflowRequired,
+                "an explore Job belongs to the Plan, not to a Workflow"
+            );
         }
         assert_eq!(fields(out)["job"]["pr"], Value::Null, "phase {phase}");
         assert_eq!(f.column("s1", "workflow"), None);
@@ -329,7 +359,10 @@ fn explore_add_refuses_the_pr_flag() {
         let mut f = fixture_at("dispatch", &["api", "web"], None);
         let spec = f.explore_spec("s.json");
         let tier = if kind == "scout" { "H2" } else { "S2" };
-        let e = refused(f.add("s1", kind, tier, &spec, Some("api"), false, &[]), ErrorCode::ExploreWorkflowForbidden);
+        let e = refused(
+            f.add("s1", kind, tier, &spec, Some("api"), false, &[]),
+            ErrorCode::ExploreWorkflowForbidden,
+        );
         assert_eq!(e.exit().code(), 3);
         assert_eq!(f.jobs(), 0, "nothing written");
         assert_eq!(f.events("job-added"), 0);

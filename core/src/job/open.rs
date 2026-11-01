@@ -38,7 +38,12 @@ fn free_key(taken: &[String], prefix: &str, workflow: &WorkflowRow) -> Result<Jo
             }
         })
         .find(|key| !taken.contains(key))
-        .ok_or_else(|| CpdError::bad_row(format!("Workflow {} has no free {prefix} Job key", workflow.key)))
+        .ok_or_else(|| {
+            CpdError::bad_row(format!(
+                "Workflow {} has no free {prefix} Job key",
+                workflow.key
+            ))
+        })
         .and_then(|key| JobKey::parse(&key))
 }
 
@@ -105,7 +110,11 @@ fn adopted_spec(workflow: &WorkflowRow, head_ref: &str) -> JobSpec {
 /// The `cause` is the `update` Job's (`None` for an `open` Job); a missing cause is the conflict, so a row inserted before the
 /// widened trigger keeps today's text.
 pub(crate) fn fixed_spec(workflow: &WorkflowRow, update: bool, cause: Option<Cause>) -> JobSpec {
-    if update { update_spec(workflow, cause.unwrap_or(Cause::Conflict)) } else { spec(workflow) }
+    if update {
+        update_spec(workflow, cause.unwrap_or(Cause::Conflict))
+    } else {
+        spec(workflow)
+    }
 }
 
 /// The fixed Spec of an `update` Job of `pr` (§2.2 "Job kinds", §3.4 A3): the open Job's work for a pull request that exists. The
@@ -181,7 +190,14 @@ fn update_spec(workflow: &WorkflowRow, cause: Cause) -> JobSpec {
 
 /// Inserts Workflow `pr`'s `open` Job in `tx` (§3.7 E4): `queued` at `tier`, `appended`, `urgent` 0, fixed Spec, no Dependency rows, its
 /// fingerprint stored at once, with `job-added` (`kind` `open`, `by` the caller's) in the same transaction. Returns its key.
-pub fn add(tx: &WriteTxn<'_>, plan: &PlanId, workflow: &WorkflowRow, tier: Tier, draft: bool, by: &str) -> Result<JobKey, CpdError> {
+pub fn add(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    workflow: &WorkflowRow,
+    tier: Tier,
+    draft: bool,
+    by: &str,
+) -> Result<JobKey, CpdError> {
     insert(tx, plan, workflow, tier, "open", by, None, draft)
 }
 
@@ -230,7 +246,14 @@ pub fn cause_of(conn: &Connection, plan: &PlanId, key: &str) -> Result<Cause, Cp
 /// Queues Workflow `pr`'s `update` Job in `tx` (§2.2 "Job kinds", §3.7 E5), unless the Workflow has one `queued` or `running`: one transaction writes the
 /// cause and the Job, so a cause is told once. `by` is `job-added`'s `by` (`poll`, `job add`, `plan review`). Returns the key of the Job it
 /// inserted, none when one was live.
-pub fn queue_update(tx: &WriteTxn<'_>, plan: &PlanId, workflow: &WorkflowRow, tier: Tier, by: &str, cause: Cause) -> Result<Option<JobKey>, CpdError> {
+pub fn queue_update(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    workflow: &WorkflowRow,
+    tier: Tier,
+    by: &str,
+    cause: Cause,
+) -> Result<Option<JobKey>, CpdError> {
     // A conflict-driven update is the poll's own work: a held Plan queues none (hs-d643, contract §3.7 E5).
     if cause == Cause::Conflict && crate::incident::is_held(tx, plan) {
         return Ok(None);
@@ -248,7 +271,16 @@ pub fn queue_update(tx: &WriteTxn<'_>, plan: &PlanId, workflow: &WorkflowRow, ti
 
 /// The insert of an `open` or `update` Job: the same row, Spec apart, with `job-added` in the same transaction. The
 /// `cause` is the `update` Job's (`None` for an `open` Job): it renders the Spec and spells the Event's `reason`.
-fn insert(tx: &WriteTxn<'_>, plan: &PlanId, workflow: &WorkflowRow, tier: Tier, kind: &str, by: &str, cause: Option<Cause>, draft: bool) -> Result<JobKey, CpdError> {
+fn insert(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    workflow: &WorkflowRow,
+    tier: Tier,
+    kind: &str,
+    by: &str,
+    cause: Option<Cause>,
+    draft: bool,
+) -> Result<JobKey, CpdError> {
     let taken: Vec<String> = {
         let mut stmt = tx.prepare("SELECT key FROM jobs WHERE plan = ?1")?;
         stmt.query_map([plan.as_str()], |r| r.get(0))?
@@ -257,7 +289,11 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, workflow: &WorkflowRow, tier: Tier, 
     let update = kind == "update";
     let key = free_key(&taken, if update { "up" } else { "open" }, workflow)?;
     let tier = tier.to_string();
-    let title = if update { format!("Bring the pull request up to date: {}", pr_title(workflow)) } else { format!("Open the pull request: {}", pr_title(workflow)) };
+    let title = if update {
+        format!("Bring the pull request up to date: {}", pr_title(workflow))
+    } else {
+        format!("Open the pull request: {}", pr_title(workflow))
+    };
     let mut job = Job {
         seq: 0,
         key: key.as_str().to_owned(),
@@ -314,7 +350,11 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, workflow: &WorkflowRow, tier: Tier, 
             workflow = workflow.key
         )
     } else if update {
-        let merges = if cause == Some(Cause::BaseMerged) { "its base Workflow merged, so it merges the new base" } else { "it merges the base only on a conflict" };
+        let merges = if cause == Some(Cause::BaseMerged) {
+            "its base Workflow merged, so it merges the new base"
+        } else {
+            "it merges the base only on a conflict"
+        };
         format!(
             "Job {key} added to Plan {plan} by {by} ({why}): {merges}, and cpd gates and pushes Workflow {workflow}'s Lead Branch when it is done. \
              It waits for every other Job of the Workflow. Next: cpd job show {key} --plan {plan}",
@@ -328,13 +368,30 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, workflow: &WorkflowRow, tier: Tier, 
             workflow = workflow.key
         )
     };
-    append(tx, NewEvent::job_added_by_cpd(text, workflow.key.as_str(), kind, &job.status, &tier, by, cause.map(Cause::as_str)).plan(plan.clone()).job(key.clone()))?;
+    append(
+        tx,
+        NewEvent::job_added_by_cpd(
+            text,
+            workflow.key.as_str(),
+            kind,
+            &job.status,
+            &tier,
+            by,
+            cause.map(Cause::as_str),
+        )
+        .plan(plan.clone())
+        .job(key.clone()),
+    )?;
     Ok(key)
 }
 
 /// The other Jobs of `job`'s Workflow that its Ready rule counts (§3.2): every Job but the `open` and `update` ones, which do not count each other.
 fn others<'a>(all: &'a [Job], job: &'a Job) -> impl Iterator<Item = &'a Job> {
-    all.iter().filter(move |j| j.workflow == job.workflow && j.key != job.key && !matches!(j.kind.as_str(), "open" | "update"))
+    all.iter().filter(move |j| {
+        j.workflow == job.workflow
+            && j.key != job.key
+            && !matches!(j.kind.as_str(), "open" | "update")
+    })
 }
 
 /// What an `open` or `update` Job waits for (§3.2: they have no Dependency rows, so this is their needs, derived each time it is read):
@@ -388,8 +445,8 @@ pub fn nothing_merged(all: &[Job], job: &Job) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plan::jobs::Job;
     use crate::ids::WorkflowKey;
+    use crate::plan::jobs::Job;
 
     fn job(key: &str, workflow: &str, kind: &str, status: &str) -> Job {
         Job {
@@ -426,14 +483,32 @@ mod tests {
 
     #[test]
     fn the_key_is_the_first_free_of_open_pr_and_its_numbered_successors() {
-        let key = |taken: &[&str]| free_key(&taken.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>(), "open", &workflow("api")).unwrap();
+        let key = |taken: &[&str]| {
+            free_key(
+                &taken.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>(),
+                "open",
+                &workflow("api"),
+            )
+            .unwrap()
+        };
         assert_eq!(key(&[]).as_str(), "open-api");
         assert_eq!(key(&["open-api"]).as_str(), "open-api-2");
-        assert_eq!(key(&["open-api", "open-api-2", "open-web"]).as_str(), "open-api-3");
+        assert_eq!(
+            key(&["open-api", "open-api-2", "open-web"]).as_str(),
+            "open-api-3"
+        );
         // A Workflow key of 24 characters leaves room for a suffix of up to two digits (32 characters).
         let long = WorkflowKey::parse(&"a".repeat(24)).unwrap().to_string();
-        let taken: Vec<String> = std::iter::once(format!("open-{long}")).chain((2..10).map(|n| format!("open-{long}-{n}"))).collect();
-        assert_eq!(free_key(&taken, "open", &workflow(&long)).unwrap().as_str().len(), 32);
+        let taken: Vec<String> = std::iter::once(format!("open-{long}"))
+            .chain((2..10).map(|n| format!("open-{long}-{n}")))
+            .collect();
+        assert_eq!(
+            free_key(&taken, "open", &workflow(&long))
+                .unwrap()
+                .as_str()
+                .len(),
+            32
+        );
     }
 
     #[test]
@@ -475,8 +550,16 @@ mod tests {
         ];
         let mut waiting = unfinished(&all, &open).unwrap();
         waiting.sort();
-        assert_eq!(waiting, ["broken", "busy", "later", "queued"], "the open and update Jobs of a Workflow do not count each other");
-        assert_eq!(unfinished(&all, &all[0]), None, "a Job of another kind has Dependency rows");
+        assert_eq!(
+            waiting,
+            ["broken", "busy", "later", "queued"],
+            "the open and update Jobs of a Workflow do not count each other"
+        );
+        assert_eq!(
+            unfinished(&all, &all[0]),
+            None,
+            "a Job of another kind has Dependency rows"
+        );
         assert!(!nothing_merged(&all, &open));
         assert!(nothing_merged(
             &[

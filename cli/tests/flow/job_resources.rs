@@ -22,7 +22,10 @@ fn world() -> Fx {
     )
     .unwrap();
     plan(&fx.env, "pl", "plan");
-    fixture(&fx.env, "UPDATE workflows SET name = 'cpd' WHERE plan = 'pl';");
+    fixture(
+        &fx.env,
+        "UPDATE workflows SET name = 'cpd' WHERE plan = 'pl';",
+    );
     fx
 }
 

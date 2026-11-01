@@ -62,7 +62,10 @@ fn add_cpd_job_in(fx: &mut Fx, workflow: &str, key: &str, kind: &str, then: &str
 
 /// Workflow `web` of Plan `pay`, `dispatch`, beside Workflow `repo`.
 fn add_web_workflow(fx: &mut Fx) {
-    let (repo, lead) = (fx.engine.home.root().join("repo"), fx.engine.home.root().join("lead"));
+    let (repo, lead) = (
+        fx.engine.home.root().join("repo"),
+        fx.engine.home.root().join("lead"),
+    );
     fx.fixture(&format!(
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
            VALUES ('pay', 'web', '{}', 'main', 'dispatch', 'cpd/pay/web', '{}', 'Show the receipt', 'config', cpd_txn(), 't', 't');",
@@ -242,7 +245,12 @@ fn e4_queues_the_open_job_at_once_when_its_pr_has_no_draft_and_adds_no_second_to
     add_draft(&mut fx, "later");
     add_web_workflow(&mut fx);
     // A running Job keeps E3 from starting the open Job of Workflow web, and is no draft.
-    fx.add_job_in("web", "ui", &[], "UPDATE jobs SET status = 'running' WHERE key = 'ui';");
+    fx.add_job_in(
+        "web",
+        "ui",
+        &[],
+        "UPDATE jobs SET status = 'running' WHERE key = 'ui';",
+    );
 
     ticks(&mut fx, 5);
 
@@ -336,7 +344,11 @@ fn e4_adds_no_open_job_to_a_pr_whose_open_job_is_queued_or_failed() {
             .map(|(key, _)| key)
             .collect();
         assert_eq!(open, ["open-repo", "open-web"], "{then:?}");
-        assert_eq!(fx.count("job-added"), 1, "{then:?}: only Workflow web's was added");
+        assert_eq!(
+            fx.count("job-added"),
+            1,
+            "{then:?}: only Workflow web's was added"
+        );
     }
 }
 
@@ -381,9 +393,15 @@ fn e4_adds_no_open_job_to_a_dispatch_pr_whose_open_job_the_lead_cancelled() {
         }
     }
 
-    assert_eq!(jobs_of_kind(&mut fx, "open"), [pair("open-repo", "cancelled"), pair("open-web", "draft")]);
+    assert_eq!(
+        jobs_of_kind(&mut fx, "open"),
+        [pair("open-repo", "cancelled"), pair("open-web", "draft")]
+    );
     assert_eq!(fx.count("job-added"), 1, "only Workflow web's was added");
-    assert_eq!(fx.query::<String>("SELECT status FROM prs WHERE plan = 'pay' AND key = 'repo'"), "dispatch");
+    assert_eq!(
+        fx.query::<String>("SELECT status FROM prs WHERE plan = 'pay' AND key = 'repo'"),
+        "dispatch"
+    );
 }
 
 /// A draft added after the lock (`job add --draft`, contract §3.2): E3 never starts it, and the Workflow's open Job waits while one remains (§3.2

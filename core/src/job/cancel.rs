@@ -259,9 +259,19 @@ fn decide(
 
 /// The last `test` or the last `impl` Job of a `tdd` Workflow that has not opened is not cancelled: add the replacement first
 /// (`shape_incomplete`, §5.3, hs-d497).
-fn keeps_the_shape(conn: &Connection, plan: &PlanId, all: &[Job], job: &Job) -> Result<(), CpdError> {
+fn keeps_the_shape(
+    conn: &Connection,
+    plan: &PlanId,
+    all: &[Job],
+    job: &Job,
+) -> Result<(), CpdError> {
     let workflows = crate::plan::fingerprint::load_workflows(conn, plan)?;
-    let Some(workflow) = workflows.iter().find(|p| p.key.as_str() == job.workflow_str()) else { return Ok(()) };
+    let Some(workflow) = workflows
+        .iter()
+        .find(|p| p.key.as_str() == job.workflow_str())
+    else {
+        return Ok(());
+    };
     let lacks = crate::plan::shape::missing(workflow, all, Some(job.key.as_str()));
     // Only what this cancel would take away: a Workflow that already lacked a kind is not this Job's doing.
     let kept = crate::plan::shape::missing(workflow, all, None);
@@ -269,5 +279,10 @@ fn keeps_the_shape(conn: &Connection, plan: &PlanId, all: &[Job], job: &Job) -> 
     if taken.is_empty() {
         return Ok(());
     }
-    Err(crate::plan::shape::incomplete(plan, workflow, &taken, &format!("cancelling {} would leave it with none", job.key)))
+    Err(crate::plan::shape::incomplete(
+        plan,
+        workflow,
+        &taken,
+        &format!("cancelling {} would leave it with none", job.key),
+    ))
 }

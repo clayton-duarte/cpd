@@ -126,7 +126,11 @@ fn a_directory_containing_the_path_is_listed_in_the_file_and_the_json() {
     assert!(text.contains(&table), "{text}");
     assert!(!text.contains(NONE), "{text}");
     // After the PRs table, before the PR sections.
-    let (prs, overlaps, section) = (text.find("## Workflows").unwrap(), text.find("## Overlaps").unwrap(), text.find("## Workflow api").unwrap());
+    let (prs, overlaps, section) = (
+        text.find("## Workflows").unwrap(),
+        text.find("## Overlaps").unwrap(),
+        text.find("## Workflow api").unwrap(),
+    );
     assert!(prs < overlaps && overlaps < section, "{text}");
 }
 

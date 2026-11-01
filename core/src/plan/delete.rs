@@ -137,7 +137,13 @@ impl Targets {
                FROM history WHERE tbl = 'workflows' AND op = 'delete' AND json_extract(pk, '$[0]') = ?1",
         )?;
         let workflows = stmt
-            .query_map([p], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?)))?
+            .query_map([p], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for (repo, worktree, branch) in workflows {
             targets.push_worktree(Some(repo.clone()), worktree);
@@ -398,9 +404,16 @@ pub(crate) fn blockers(
             });
         }
         let mut stmt = conn.prepare("SELECT key, status FROM workflows WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled') ORDER BY key")?;
-        for workflow in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+        for workflow in stmt.query_map([plan.as_str()], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })? {
             let (key, status) = workflow?;
-            found.push(Blocker { kind: "pr", id: key.clone(), plan: Some(plan.to_string()), reason: format!("Workflow {key} of Plan {plan} is {status}.") });
+            found.push(Blocker {
+                kind: "pr",
+                id: key.clone(),
+                plan: Some(plan.to_string()),
+                reason: format!("Workflow {key} of Plan {plan} is {status}."),
+            });
         }
     }
     Ok(found)

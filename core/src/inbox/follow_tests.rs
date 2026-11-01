@@ -86,10 +86,20 @@ fn visible(store: &mut Store) -> Vec<Item> {
 #[test]
 fn a_pr_ready_item_whose_label_changes_inside_its_colour_is_updated_in_place() {
     let (_d, mut store) = store();
-    let first = reconcile(&mut store, &[workflow(Urgency::Cyan, "shop#4 checks running")], T1).unwrap();
+    let first = reconcile(
+        &mut store,
+        &[workflow(Urgency::Cyan, "shop#4 checks running")],
+        T1,
+    )
+    .unwrap();
     let id = first.opened[0];
     let before = all_events(&mut store);
-    let second = reconcile(&mut store, &[workflow(Urgency::Cyan, "shop#4 in review")], T2).unwrap();
+    let second = reconcile(
+        &mut store,
+        &[workflow(Urgency::Cyan, "shop#4 in review")],
+        T2,
+    )
+    .unwrap();
     assert!(second.opened.is_empty() && second.closed.is_empty());
     let open = items(&mut store, State::Open);
     assert_eq!(open.len(), 1);
@@ -106,7 +116,13 @@ fn a_pr_ready_item_whose_label_changes_inside_its_colour_is_updated_in_place() {
 fn an_in_place_update_keeps_a_snooze_and_a_dismissal() {
     for column in ["snoozed_until", "dismissed_at"] {
         let (_d, mut store) = store();
-        let id = reconcile(&mut store, &[workflow(Urgency::Cyan, "shop#4 checks running")], T1).unwrap().opened[0];
+        let id = reconcile(
+            &mut store,
+            &[workflow(Urgency::Cyan, "shop#4 checks running")],
+            T1,
+        )
+        .unwrap()
+        .opened[0];
         let later = "2026-02-01T00:00:00.000Z";
         store
             .write("hide", |tx| {
@@ -117,7 +133,12 @@ fn an_in_place_update_keeps_a_snooze_and_a_dismissal() {
                 Ok(())
             })
             .unwrap();
-        reconcile(&mut store, &[workflow(Urgency::Cyan, "shop#4 in review")], T2).unwrap();
+        reconcile(
+            &mut store,
+            &[workflow(Urgency::Cyan, "shop#4 in review")],
+            T2,
+        )
+        .unwrap();
         let open = items(&mut store, State::Open);
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].label, "shop#4 in review");
@@ -130,7 +151,13 @@ fn an_in_place_update_keeps_a_snooze_and_a_dismissal() {
 #[test]
 fn a_pr_ready_item_follows_its_links_in_place() {
     let (_d, mut store) = store();
-    let id = reconcile(&mut store, &[workflow(Urgency::Cyan, "shop#4 in review")], T1).unwrap().opened[0];
+    let id = reconcile(
+        &mut store,
+        &[workflow(Urgency::Cyan, "shop#4 in review")],
+        T1,
+    )
+    .unwrap()
+    .opened[0];
     let before = all_events(&mut store);
     let linked = Condition {
         url: Some("https://github.com/acme/shop/pull/4".into()),
@@ -170,7 +197,9 @@ fn an_unchanged_pr_ready_condition_writes_nothing() {
 fn a_colour_change_closes_the_pr_ready_item_and_opens_a_new_one_a_dismissal_stays_with_the_colour()
 {
     let (_d, mut store) = store();
-    let first = reconcile(&mut store, &[workflow(Urgency::Red, "shop#4 failing")], T1).unwrap().opened[0];
+    let first = reconcile(&mut store, &[workflow(Urgency::Red, "shop#4 failing")], T1)
+        .unwrap()
+        .opened[0];
     store
         .write("dismiss", |tx| {
             tx.execute(
@@ -180,7 +209,12 @@ fn a_colour_change_closes_the_pr_ready_item_and_opens_a_new_one_a_dismissal_stay
             Ok(())
         })
         .unwrap();
-    let changes = reconcile(&mut store, &[workflow(Urgency::Cyan, "shop#4 in review")], T2).unwrap();
+    let changes = reconcile(
+        &mut store,
+        &[workflow(Urgency::Cyan, "shop#4 in review")],
+        T2,
+    )
+    .unwrap();
     assert_eq!(changes.closed, vec![first]);
     assert_eq!(changes.opened.len(), 1);
     assert_ne!(changes.opened[0], first);
@@ -193,7 +227,10 @@ fn a_colour_change_closes_the_pr_ready_item_and_opens_a_new_one_a_dismissal_stay
 
 #[test]
 fn a_dialog_item_whose_label_changes_is_updated_in_place() {
-    let dialog = |urgency: Urgency, label: &str| Condition { kind: Kind::Dialog, ..workflow(urgency, label) };
+    let dialog = |urgency: Urgency, label: &str| Condition {
+        kind: Kind::Dialog,
+        ..workflow(urgency, label)
+    };
     let (_d, mut store) = store();
     let id = reconcile(&mut store, &[dialog(Urgency::Red, "pay asks you")], T1)
         .unwrap()

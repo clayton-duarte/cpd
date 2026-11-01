@@ -189,13 +189,20 @@ fn incident_mode_holds_e4_and_e7_for_plans_outside_the_set() {
 
     // E4 acts on the incident Plan's `dispatch` Workflow only: the held Plan's Workflow gets no `open` Job.
     open::run(engine);
-    assert_eq!(open_jobs(engine), vec![("pay".to_owned(), "api".to_owned())], "E4 adds the open Job only for the incident Plan's Workflow");
+    assert_eq!(
+        open_jobs(engine),
+        vec![("pay".to_owned(), "api".to_owned())],
+        "E4 adds the open Job only for the incident Plan's Workflow"
+    );
 
     // E7 selects only the incident Plan's `waiting` Workflow; the held Plan's Workflow is left alone.
     let startable = engine::startable_workflows(engine).unwrap();
     assert_eq!(
         startable,
-        vec![(PlanId::parse("pay").unwrap(), WorkflowKey::parse("ship").unwrap())],
+        vec![(
+            PlanId::parse("pay").unwrap(),
+            WorkflowKey::parse("ship").unwrap()
+        )],
         "E7 starts only the incident Plan's Workflow"
     );
 

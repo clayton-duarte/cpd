@@ -12,9 +12,12 @@ use std::time::{Duration, Instant};
 use crate::pace::Reads;
 use crate::plan::boxes::{self, LAYOUTS};
 use crate::plan::{CHART_MARGIN, Centre};
-use crate::read::{Dot, JobNode, JobStatus, NeedsUser, PlanBoxes, WorkflowNode, PrState, WorkflowStatus, Pull, ChatSlot};
+use crate::read::{
+    ChatSlot, Dot, JobNode, JobStatus, NeedsUser, PlanBoxes, PrState, Pull, WorkflowNode,
+    WorkflowStatus,
+};
 use cpd_core::config::Tier;
-use cpd_core::ids::{ContextId, JobKey, PlanId, WorkflowKey, SessionId};
+use cpd_core::ids::{ContextId, JobKey, PlanId, SessionId, WorkflowKey};
 
 #[test]
 fn one_read_runs_at_a_time_and_the_newest_waiting_request_wins() {
@@ -129,7 +132,8 @@ fn centre(lead_dot: Option<Dot>, jobs: Vec<JobNode>) -> Centre {
         needs_user: NeedsUser::default(),
         events_cursor: 0,
     };
-    let boxes = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, 0).with_margin(CHART_MARGIN);
+    let boxes =
+        boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, 0).with_margin(CHART_MARGIN);
     let slot = ChatSlot {
         session: SessionId::parse("00000000-0000-4000-8000-000000000000").unwrap(),
         name: "lead".into(),
@@ -189,7 +193,8 @@ fn the_plan_view_lays_out_once_per_snapshot_and_a_frame_change_draws_the_same_ce
     );
 
     for (frame, buf) in cells.iter().take(8) {
-        let full = boxes::layout(&c.plan.workflows, &c.plan.jobs, &c.plan.needs_user, *frame).with_margin(CHART_MARGIN);
+        let full = boxes::layout(&c.plan.workflows, &c.plan.jobs, &c.plan.needs_user, *frame)
+            .with_margin(CHART_MARGIN);
         assert_eq!(&full.chart.buf, buf, "frame {frame}");
     }
 }

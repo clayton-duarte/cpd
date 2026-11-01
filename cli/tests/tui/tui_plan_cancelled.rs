@@ -226,8 +226,16 @@ fn a_cancelled_job_pill_is_colour_8_and_nothing_follows_it() {
 fn cancelled_pr_box_is_drawn_muted_after_live_ones() {
     let fx = env();
     // `aaa` sorts first by key: it is drawn after `web` only because it is cancelled
-    plan(&fx, &[("aaa", "aaa-repo"), ("web", "web-repo")], &[("aaa", "o1", "cancelled", "work", &[]), ("web", "w", "queued", "work", &[])]);
-    fx.cpd(&["workflow", "cancel", "aaa", "--plan", "ship"]).ok();
+    plan(
+        &fx,
+        &[("aaa", "aaa-repo"), ("web", "web-repo")],
+        &[
+            ("aaa", "o1", "cancelled", "work", &[]),
+            ("web", "w", "queued", "work", &[]),
+        ],
+    );
+    fx.cpd(&["workflow", "cancel", "aaa", "--plan", "ship"])
+        .ok();
     let buf = draw(&fx);
     let screen = rows(&buf);
     let text = screen.join("\n");

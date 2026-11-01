@@ -574,7 +574,8 @@ fn a_target_with_no_status_name_settles_skipped_without_calling_the_helper() {
 #[test]
 fn a_row_of_a_pr_with_no_ticket_waits_and_runs_once_the_ticket_is_set() {
     let t = jira(LONG, true);
-    t.fx.env.sql("UPDATE workflows SET jira = NULL WHERE plan = 'pay' AND key = 'web';");
+    t.fx.env
+        .sql("UPDATE workflows SET jira = NULL WHERE plan = 'pay' AND key = 'web';");
     t.queue("web", "in_progress");
     t.queue("api", "in_progress");
     t.run(then_ticks(5, |p| p.settled("api", "in_progress")));
@@ -751,11 +752,35 @@ fn a_parked_row_is_reopened_and_run_when_the_ticket_or_the_status_name_changes()
     // settled too. (change, does it reopen the row, the ticket and the name of the second run)
     type Change = Box<dyn Fn(&Probe)>;
     let cases: Vec<(&str, Change, Option<(&str, &str)>)> = vec![
-        ("another ticket", Box::new(|p| p.write("UPDATE workflows SET jira = 'ABC-124' WHERE plan = 'pay' AND key = 'api';")), Some(("ABC-124", "In Review"))),
-        ("another status name", Box::new(|p| p.owner_policy(&owner_toml("In Progress", "Under Review", "Done"))), Some((API, "Under Review"))),
-        ("another title", Box::new(|p| p.write("UPDATE workflows SET title = 'Another title' WHERE plan = 'pay' AND key = 'api';")), None),
-        ("the same name, rewritten", Box::new(|p| p.owner_policy(&format!("# edited\n{}", names()))), None),
-        ("an empty name", Box::new(|p| p.owner_policy(&owner_toml("In Progress", "", "Done"))), None),
+        (
+            "another ticket",
+            Box::new(|p| {
+                p.write("UPDATE workflows SET jira = 'ABC-124' WHERE plan = 'pay' AND key = 'api';")
+            }),
+            Some(("ABC-124", "In Review")),
+        ),
+        (
+            "another status name",
+            Box::new(|p| p.owner_policy(&owner_toml("In Progress", "Under Review", "Done"))),
+            Some((API, "Under Review")),
+        ),
+        (
+            "another title",
+            Box::new(|p| {
+                p.write("UPDATE workflows SET title = 'Another title' WHERE plan = 'pay' AND key = 'api';")
+            }),
+            None,
+        ),
+        (
+            "the same name, rewritten",
+            Box::new(|p| p.owner_policy(&format!("# edited\n{}", names()))),
+            None,
+        ),
+        (
+            "an empty name",
+            Box::new(|p| p.owner_policy(&owner_toml("In Progress", "", "Done"))),
+            None,
+        ),
     ];
     for (what, change, reopened) in cases {
         let t = jira(LONG, true);

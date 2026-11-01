@@ -1146,13 +1146,19 @@ impl Rows {
     fn plan_events(&self, kind: &str) -> Vec<(i64, Value)> {
         store(&self.fx.env)
             .read(|c| {
-                let mut stmt = c.prepare("SELECT txn, data FROM events WHERE plan = 'pay' AND kind = ?1 ORDER BY id")?;
+                let mut stmt = c.prepare(
+                    "SELECT txn, data FROM events WHERE plan = 'pay' AND kind = ?1 ORDER BY id",
+                )?;
                 let rows = stmt
-                    .query_map([kind], |r| Ok((r.get::<_, i64>(0)?, serde_json::from_str(&r.get::<_, String>(1)?).unwrap())))?
+                    .query_map([kind], |r| {
+                        Ok((
+                            r.get::<_, i64>(0)?,
+                            serde_json::from_str(&r.get::<_, String>(1)?).unwrap(),
+                        ))
+                    })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 Ok(rows)
             })
             .unwrap()
     }
 }
-

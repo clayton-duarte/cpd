@@ -18,7 +18,7 @@ use super::{
 };
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::ids::{ContextId, OwnerLogin, PlanId, WorkflowKey, RepoName, SessionId};
+use crate::ids::{ContextId, OwnerLogin, PlanId, RepoName, SessionId, WorkflowKey};
 use crate::output::Output;
 use crate::store::Store;
 
@@ -64,7 +64,9 @@ impl KeyArgs {
                     "No Plan selected: pass --plan <id> or set CPD_PLAN.",
                 )
             })?;
-            Ok(Some(store.read(|conn| key_of_workflow(conn, plan.as_str(), workflow.as_str()))?))
+            Ok(Some(store.read(|conn| {
+                key_of_workflow(conn, plan.as_str(), workflow.as_str())
+            })?))
         } else if let Some(context) = &self.context {
             Ok(Some(store.read(|conn| {
                 context_owner(conn, context.as_str()).map(PolicyKey::Owner)
@@ -112,20 +114,36 @@ fn workflow_key(owner: OwnerLogin, name: Option<String>) -> Result<PolicyKey, Cp
 
 /// The key of Workflow `pr` of Plan `plan`, and of the Context of the Plan.
 fn key_of_workflow(conn: &Connection, plan: &str, workflow: &str) -> Result<PolicyKey, CpdError> {
-    let context: Option<String> =
-        conn.query_row("SELECT context FROM plans WHERE id = ?1", [plan], |r| r.get(0)).optional()?;
-    let context = context.ok_or_else(|| not_found(ErrorCode::PlanNotFound, "Plan", "plan", plan))?;
+    let context: Option<String> = conn
+        .query_row("SELECT context FROM plans WHERE id = ?1", [plan], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    let context =
+        context.ok_or_else(|| not_found(ErrorCode::PlanNotFound, "Plan", "plan", plan))?;
     let name: Option<Option<String>> = conn
-        .query_row("SELECT name FROM workflows WHERE plan = ?1 AND key = ?2", [plan, workflow], |r| r.get(0))
+        .query_row(
+            "SELECT name FROM workflows WHERE plan = ?1 AND key = ?2",
+            [plan, workflow],
+            |r| r.get(0),
+        )
         .optional()?;
     let name = name.ok_or_else(|| {
-        CpdError::new(ErrorCode::WorkflowNotFound, format!("No Workflow {workflow} in Plan {plan}.")).with("plan", plan).with("pr", workflow)
+        CpdError::new(
+            ErrorCode::WorkflowNotFound,
+            format!("No Workflow {workflow} in Plan {plan}."),
+        )
+        .with("plan", plan)
+        .with("pr", workflow)
     })?;
     workflow_key(context_owner(conn, &context)?, name)
 }
 
 /// The Session's role and key (no flag): a Manager or a Lead its Context's owner, a Worker its Job's Workflow (an explore Job has none: its Context's owner, as a Lead's).
-pub(crate) fn key_of_session(conn: &Connection, session: &SessionId) -> Result<(&'static str, PolicyKey), CpdError> {
+pub(crate) fn key_of_session(
+    conn: &Connection,
+    session: &SessionId,
+) -> Result<(&'static str, PolicyKey), CpdError> {
     let row: Option<(String, String, Option<String>, Option<String>)> = conn
         .query_row(
             "SELECT role, context, plan, attempt FROM sessions WHERE id = ?1",

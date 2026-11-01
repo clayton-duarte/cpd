@@ -69,11 +69,17 @@ fn policy_of(engine: &mut Engine, plan: &str, workflow: &str) -> Result<Policy, 
     let home = engine.home.clone();
     let plan = PlanId::parse(plan)?;
     let key = WorkflowKey::parse(workflow)?;
-    engine.store.read(|conn| cpd_core::pr::policy_of_workflow(conn, &home, &plan, &key))
+    engine
+        .store
+        .read(|conn| cpd_core::pr::policy_of_workflow(conn, &home, &plan, &key))
 }
 
 fn move_about(due: &Due) -> About {
-    About::Move(PlanId::parse(&due.plan).expect("a stored Plan id"), WorkflowKey::parse(&due.workflow).expect("a stored Workflow key"), due.target)
+    About::Move(
+        PlanId::parse(&due.plan).expect("a stored Plan id"),
+        WorkflowKey::parse(&due.workflow).expect("a stored Workflow key"),
+        due.target,
+    )
 }
 
 /// Reports a failure of the row `due`: machine-wide for a missing sign-in or server, else one Event of the row's Plan.
@@ -200,7 +206,14 @@ fn collect(engine: &mut Engine) {
             }) {
                 Ok(_) => {
                     engine.jira.failed_at.remove(&due.id);
-                    engine.log.line(&format!("E19: {} {} {} ({}): {}", outcome.as_str(), due.ticket, due.target.as_str(), due.workflow, status));
+                    engine.log.line(&format!(
+                        "E19: {} {} {} ({}): {}",
+                        outcome.as_str(),
+                        due.ticket,
+                        due.target.as_str(),
+                        due.workflow,
+                        status
+                    ));
                     engine.clear(Step::E19, &About::Machine);
                     engine.clear(Step::E19, &move_about(&due));
                 }
@@ -226,7 +239,13 @@ fn collect(engine: &mut Engine) {
             }) {
                 Ok(_) => {
                     engine.jira.failed_at.remove(&due.id);
-                    engine.log.line(&format!("E19: parked {} {} on {} of {}: {reason}", due.ticket, due.target.as_str(), due.workflow, due.plan));
+                    engine.log.line(&format!(
+                        "E19: parked {} {} on {} of {}: {reason}",
+                        due.ticket,
+                        due.target.as_str(),
+                        due.workflow,
+                        due.plan
+                    ));
                     engine.clear(Step::E19, &About::Machine);
                     engine.clear(Step::E19, &move_about(&due));
                 }
@@ -260,8 +279,17 @@ fn reopen_parked(engine: &mut Engine) {
                 engine.clear(Step::E19, &about(&due.plan));
                 let name = name_of(&names_of(&policy), due.target).to_owned();
                 if !name.is_empty() && format!("{}|{name}", due.ticket) != row.tried {
-                    match engine.store.write("engine E19", |tx| jira_sync::reopen(tx, due.id)) {
-                        Ok(_) => engine.log.line(&format!("E19: reopened {} {} on {} of {}", due.ticket, due.target.as_str(), due.workflow, due.plan)),
+                    match engine
+                        .store
+                        .write("engine E19", |tx| jira_sync::reopen(tx, due.id))
+                    {
+                        Ok(_) => engine.log.line(&format!(
+                            "E19: reopened {} {} on {} of {}",
+                            due.ticket,
+                            due.target.as_str(),
+                            due.workflow,
+                            due.plan
+                        )),
                         Err(e) => engine.fail(Step::E19, about(&due.plan), Failure::from(&e)),
                     }
                 }

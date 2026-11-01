@@ -119,7 +119,10 @@ pub(super) const READY: &str = "SELECT j.plan, j.key, j.urgent, j.seq, j.skipped
 /// live linear Attempt starts nothing (`None`: its Jobs are held); a Workflow with live parallel Attempts starts all
 /// `Parallel`; a Workflow with no live Attempt starts one Job `Linear`, two or more all `Parallel`. One entry per Job of
 /// `ready`, in its order.
-fn allocations(conn: &Connection, ready: &[(PlanId, JobKey)]) -> Result<Vec<Option<Allocation>>, CpdError> {
+fn allocations(
+    conn: &Connection,
+    ready: &[(PlanId, JobKey)],
+) -> Result<Vec<Option<Allocation>>, CpdError> {
     let mut workflows = Vec::with_capacity(ready.len());
     for (plan, key) in ready {
         let workflow: Option<String> = conn.query_row(
@@ -146,8 +149,15 @@ fn allocations(conn: &Connection, ready: &[(PlanId, JobKey)]) -> Result<Vec<Opti
             params![plan.as_str(), workflow.as_str()],
             |r| r.get(0),
         )?;
-        let siblings = workflows.iter().filter(|p| *p == &(plan.clone(), Some(workflow.clone()))).count();
-        out.push(Some(if live == 0 && siblings == 1 { Allocation::Linear } else { Allocation::Parallel }));
+        let siblings = workflows
+            .iter()
+            .filter(|p| *p == &(plan.clone(), Some(workflow.clone())))
+            .count();
+        out.push(Some(if live == 0 && siblings == 1 {
+            Allocation::Linear
+        } else {
+            Allocation::Parallel
+        }));
     }
     Ok(out)
 }
@@ -182,7 +192,9 @@ fn pick(
         let mut needs = vec![0];
         if let Some(wanted) = resource::wanted(conn, &e.plan, e.key.as_str())? {
             // A name the policy does not resolve fails in the starter, which reports it.
-            if let Ok(policy) = WorkflowKey::parse(&wanted.workflow).and_then(|workflow| cpd_core::pr::policy_of_workflow(conn, home, &e.plan, &workflow)) {
+            if let Ok(policy) = WorkflowKey::parse(&wanted.workflow).and_then(|workflow| {
+                cpd_core::pr::policy_of_workflow(conn, home, &e.plan, &workflow)
+            }) {
                 for pool in resource::pools_of(&policy.resources, &wanted.owner, &wanted.repo) {
                     if !wanted.names.iter().any(|n| n == pool.name()) {
                         continue;

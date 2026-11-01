@@ -218,7 +218,9 @@ pub(super) fn find(
 }
 
 /// Every row a Workflow in status `open` points to, with that Workflow's Plan and key, in Plan and key order.
-pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, WorkflowKey, PullRequest)>, CpdError> {
+pub(super) fn owned_open(
+    conn: &Connection,
+) -> Result<Vec<(PlanId, WorkflowKey, PullRequest)>, CpdError> {
     let columns: Vec<String> = COLUMNS.split(", ").map(|c| format!("pr.{c}")).collect();
     let mut stmt = conn.prepare(&format!(
         "SELECT r.plan, r.key, {} FROM workflows r JOIN pull_requests pr ON pr.id = r.pull_request
@@ -258,7 +260,11 @@ pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, WorkflowKey, 
             let bad = |what: &str, value: &str| {
                 CpdError::bad_row(format!("a pull request has {what} {value:?}"))
             };
-            Ok((PlanId::parse(&plan).map_err(|_| bad("Plan id", &plan))?, WorkflowKey::parse(&key).map_err(|_| bad("Workflow key", &key))?, pull))
+            Ok((
+                PlanId::parse(&plan).map_err(|_| bad("Plan id", &plan))?,
+                WorkflowKey::parse(&key).map_err(|_| bad("Workflow key", &key))?,
+                pull,
+            ))
         })
         .collect()
 }
@@ -440,7 +446,14 @@ impl Reason {
 /// else), the state became `closed` from `open`, or the feedback has `new` open items (`comments::new_items`). `before` none is a row first
 /// seen: it counts as no checks, no review and `open`. A conflict is no reason any more (hs-d340): it queues an `update` Job
 /// (`poll::update_for_conflict`). Checks are a reason only when the Workflow's `pr.feedback.checks` is `any` (§8.3, hs-d292).
-pub(super) fn attention(before: Option<&PullRequest>, after: &PullRequest, checks_policy: Checks, new: &[&Item], post: PostFacts, excused: Excused) -> Vec<Reason> {
+pub(super) fn attention(
+    before: Option<&PullRequest>,
+    after: &PullRequest,
+    checks_policy: Checks,
+    new: &[&Item],
+    post: PostFacts,
+    excused: Excused,
+) -> Vec<Reason> {
     let (checks, review, state) = match before {
         Some(b) => (
             b.checks.as_str(),
@@ -759,7 +772,11 @@ mod tests {
         );
         let mut closed = ready();
         closed.state = "closed".into();
-        assert_eq!(post_reasons(None, &closed, ON), [Reason::Closed], "a closed Workflow is not ready");
+        assert_eq!(
+            post_reasons(None, &closed, ON),
+            [Reason::Closed],
+            "a closed Workflow is not ready"
+        );
     }
 
     #[test]
@@ -785,7 +802,11 @@ mod tests {
         assert!(post_reasons(None, &approved, OFF).is_empty(), "disabled");
         let mut closed = approved.clone();
         closed.state = "closed".into();
-        assert_eq!(post_reasons(None, &closed, POSTED), [Reason::Closed], "closed Workflow");
+        assert_eq!(
+            post_reasons(None, &closed, POSTED),
+            [Reason::Closed],
+            "closed Workflow"
+        );
     }
 
     fn conflicting(mut row: PullRequest) -> PullRequest {

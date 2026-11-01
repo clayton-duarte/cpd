@@ -15,7 +15,9 @@ use ratatui::style::Color;
 
 use crate::palette;
 use crate::plan::boxes;
-use crate::read::{self, Dot, Work, JobNode, JobStatus, NeedsUser, WorkflowNode, PrState, WorkflowStatus, Pull};
+use crate::read::{
+    self, Dot, JobNode, JobStatus, NeedsUser, PrState, Pull, Work, WorkflowNode, WorkflowStatus,
+};
 
 /// Each Plan of the fixture: its phase, its id and its Lead Session.
 const PHASES: [(Phase, &str, &str); 5] = [
@@ -46,9 +48,15 @@ fn the_plan_view_reads_its_leads_plan_phase() {
 /// pro-d200: the Workflow box title's Lead dot follows what the Lead works on, and is red for a failed Job or an open Escalation.
 #[test]
 fn dots_plan_box_title_dot_follows_work() {
-    let needs = |work: Option<Work>| NeedsUser { lead_working: true, lead_work: work, ..NeedsUser::default() };
+    let needs = |work: Option<Work>| NeedsUser {
+        lead_working: true,
+        lead_work: work,
+        ..NeedsUser::default()
+    };
     // the read model hands the box its dot: `WorkflowNode::lead_dot`, red when a Job of the box failed or an Escalation is open
-    let workflow = |failed_here: bool, work: Option<Work>| workflow_node(Some(Dot::working(failed_here, work)));
+    let workflow = |failed_here: bool, work: Option<Work>| {
+        workflow_node(Some(Dot::working(failed_here, work)))
+    };
     for (work, colour) in [
         (Some(Work::Planning), palette::numbered::C13),
         (Some(Work::Dispatch), palette::numbered::C14),
@@ -56,15 +64,35 @@ fn dots_plan_box_title_dot_follows_work() {
         (None, palette::numbered::C15),
     ] {
         for frame in [0, 5, 27] {
-            assert_eq!(title_dot(&workflow(false, work), &[], &needs(work), frame), Some(colour), "{work:?} frame {frame}");
+            assert_eq!(
+                title_dot(&workflow(false, work), &[], &needs(work), frame),
+                Some(colour),
+                "{work:?} frame {frame}"
+            );
         }
     }
     for work in [Some(Work::Planning), Some(Work::Review), None] {
-        assert_eq!(title_dot(&workflow(true, work), &[failed_job()], &needs(work), 3), Some(palette::numbered::C9), "a failed Job beats {work:?}");
-        assert_eq!(title_dot(&workflow(true, work), &[], &needs(work), 3), Some(palette::numbered::C9), "an Escalation beats {work:?}");
+        assert_eq!(
+            title_dot(&workflow(true, work), &[failed_job()], &needs(work), 3),
+            Some(palette::numbered::C9),
+            "a failed Job beats {work:?}"
+        );
+        assert_eq!(
+            title_dot(&workflow(true, work), &[], &needs(work), 3),
+            Some(palette::numbered::C9),
+            "an Escalation beats {work:?}"
+        );
     }
-    let idle = NeedsUser { lead_working: false, lead_work: Some(Work::Dispatch), ..NeedsUser::default() };
-    assert_eq!(title_dot(&workflow_node(None), &[], &idle, 0), None, "a Lead not working: no spinner");
+    let idle = NeedsUser {
+        lead_working: false,
+        lead_work: Some(Work::Dispatch),
+        ..NeedsUser::default()
+    };
+    assert_eq!(
+        title_dot(&workflow_node(None), &[], &idle, 0),
+        None,
+        "a Lead not working: no spinner"
+    );
 }
 
 /// A Workflow of a Plan whose Lead works (or not), with one pull request.
@@ -116,7 +144,12 @@ fn failed_job() -> JobNode {
 
 /// The foreground of the Lead's dot in the box title row, found by its spinner glyph: the whole title is a link, so
 /// the glyph rides in a cell's OSC 8 symbol while the cell keeps the dot's style.
-fn title_dot(workflow: &WorkflowNode, jobs: &[JobNode], needs: &NeedsUser, frame: usize) -> Option<Color> {
+fn title_dot(
+    workflow: &WorkflowNode,
+    jobs: &[JobNode],
+    needs: &NeedsUser,
+    frame: usize,
+) -> Option<Color> {
     let chart = boxes::layout(std::slice::from_ref(workflow), jobs, needs, frame).chart;
     (0..chart.buf.area.width)
         .map(|x| &chart.buf[(x, 0)])

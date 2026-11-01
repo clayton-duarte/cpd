@@ -528,10 +528,21 @@ impl Driver {
     }
 
     /// A2 to A5, for a `starting` Attempt.
-    fn start(&mut self, target: &Target, job: &jobs::Job, dirs: &PiDirs) -> Result<Ended, CpdError> {
+    fn start(
+        &mut self,
+        target: &Target,
+        job: &jobs::Job,
+        dirs: &PiDirs,
+    ) -> Result<Ended, CpdError> {
         // A2: an `open` Job's Workflow stacked on a merged base Workflow is unstacked first, so the Worker is told a base that exists (§3.4).
         if job.kind == "open" {
-            let workflow = crate::ids::WorkflowKey::parse(job.workflow_str()).map_err(|_| CpdError::bad_row(format!("Job {} has the Workflow key {:?}", job.key, job.workflow_str())))?;
+            let workflow = crate::ids::WorkflowKey::parse(job.workflow_str()).map_err(|_| {
+                CpdError::bad_row(format!(
+                    "Job {} has the Workflow key {:?}",
+                    job.key,
+                    job.workflow_str()
+                ))
+            })?;
             crate::pr::start::unstack_for_open_job(&mut self.store, SOURCE, &self.plan, &workflow)?;
         }
         if crate::plan::jobs::is_explore(&job.kind) {
@@ -551,7 +562,11 @@ impl Driver {
             // A2 (hs-d680): a linear Attempt reuses the Workflow's Lead worktree as it is; a parallel sibling creates
             // its own worktree from the Lead Branch HEAD and runs pre-start. A linear Attempt never runs pre-start.
             let linear = git::worktree::is_linear(&target.branch, &target.lead_branch);
-            log(if linear { "A2: reusing the Lead worktree on the Lead Branch" } else { "A2: creating the worktree and running pre-start" });
+            log(if linear {
+                "A2: reusing the Lead worktree on the Lead Branch"
+            } else {
+                "A2: creating the worktree and running pre-start"
+            });
             let setup = Setup {
                 timeout: Duration::from_secs(u64::from(self.config.timeouts.setup_minutes) * 60),
                 log: self.home.hook_log(&self.plan, &self.id, Hook::PreStart),
@@ -562,8 +577,16 @@ impl Driver {
             {
                 Ok(policy) => policy,
                 Err(e) => {
-                    let detail = format!("Reading the policy of the Workflow failed: {}", e.message());
-                    return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
+                    let detail =
+                        format!("Reading the policy of the Workflow failed: {}", e.message());
+                    return self.end(
+                        target,
+                        End::Failed {
+                            cause: Cause::SetupFailed,
+                            detail,
+                        },
+                        dirs,
+                    );
                 }
             };
             let base_sha = if linear {
@@ -571,7 +594,14 @@ impl Driver {
                     Ok(sha) => sha,
                     Err(e) => {
                         let detail = format!("The Lead worktree is not usable: {}", e.message());
-                        return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
+                        return self.end(
+                            target,
+                            End::Failed {
+                                cause: Cause::SetupFailed,
+                                detail,
+                            },
+                            dirs,
+                        );
                     }
                 }
             } else {
@@ -1487,21 +1517,40 @@ impl Driver {
 fn verify_linear_worktree(target: &Target) -> Result<String, CpdError> {
     let worktree = &target.worktree;
     if !worktree.exists() {
-        return Err(CpdError::new(ErrorCode::SetupFailed, format!("the Lead worktree {} does not exist", worktree.display())));
+        return Err(CpdError::new(
+            ErrorCode::SetupFailed,
+            format!("the Lead worktree {} does not exist", worktree.display()),
+        ));
     }
     match git::run::current_branch(worktree)? {
         Some(branch) if branch == target.lead_branch => {}
         Some(branch) => {
             return Err(CpdError::new(
                 ErrorCode::SetupFailed,
-                format!("the Lead worktree {} is on {branch}, not the Lead Branch {}", worktree.display(), target.lead_branch),
-            ))
+                format!(
+                    "the Lead worktree {} is on {branch}, not the Lead Branch {}",
+                    worktree.display(),
+                    target.lead_branch
+                ),
+            ));
         }
-        None => return Err(CpdError::new(ErrorCode::SetupFailed, format!("the Lead worktree {} has a detached HEAD", worktree.display()))),
+        None => {
+            return Err(CpdError::new(
+                ErrorCode::SetupFailed,
+                format!(
+                    "the Lead worktree {} has a detached HEAD",
+                    worktree.display()
+                ),
+            ));
+        }
     }
     let status = git::run::ok(worktree, &["--no-optional-locks", "status", "--porcelain"])?;
     if !status.trim().is_empty() {
-        return Err(CpdError::new(ErrorCode::SetupFailed, format!("the Lead worktree {} is not clean", worktree.display())).with("status", status.trim()));
+        return Err(CpdError::new(
+            ErrorCode::SetupFailed,
+            format!("the Lead worktree {} is not clean", worktree.display()),
+        )
+        .with("status", status.trim()));
     }
     git::run::rev_parse(worktree, &format!("refs/heads/{}", target.lead_branch))
 }
@@ -1519,8 +1568,11 @@ pub(super) fn reset_linear_lead_branch(
         other => {
             return Err(CpdError::new(
                 ErrorCode::SetupFailed,
-                format!("Cannot reset the Lead Branch: the Lead worktree {} is on {other:?}, not {lead_branch}.", lead_worktree.display()),
-            ))
+                format!(
+                    "Cannot reset the Lead Branch: the Lead worktree {} is on {other:?}, not {lead_branch}.",
+                    lead_worktree.display()
+                ),
+            ));
         }
     }
     // One call moves the Lead Branch and discards the Attempt's working-tree changes.

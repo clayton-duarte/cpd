@@ -42,7 +42,11 @@ fn section_title_is_three_rows_a_blank_one_the_rule_and_a_blank_one() {
     draw("Workflows", Some(3), Rect::new(0, 1, 20, 3), &mut buf);
     assert_eq!(row(&buf, 0).trim(), "", "above the area");
     assert_eq!(row(&buf, 1).trim(), "", "row 0 is blank");
-    assert!(row(&buf, 2).contains("Workflows"), "row 1 is the title: {:?}", row(&buf, 2));
+    assert!(
+        row(&buf, 2).contains("Workflows"),
+        "row 1 is the title: {:?}",
+        row(&buf, 2)
+    );
     assert_eq!(row(&buf, 3).trim(), "", "row 2 is blank");
     assert_eq!(row(&buf, 4).trim(), "", "under the area");
 }

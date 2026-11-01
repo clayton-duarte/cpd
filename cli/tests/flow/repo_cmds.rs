@@ -68,7 +68,19 @@ fn pr_fx() -> (Fx, PathBuf) {
 }
 
 fn add_tdd(fx: &Fx, repo: &Path) -> Run {
-    fx.cpd(&["workflow", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change", "--shape", "tdd", "--plan", "pl"])
+    fx.cpd(&[
+        "workflow",
+        "add",
+        "pay",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        "Change",
+        "--shape",
+        "tdd",
+        "--plan",
+        "pl",
+    ])
 }
 
 #[test]

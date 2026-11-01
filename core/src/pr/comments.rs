@@ -206,7 +206,11 @@ fn failed(repo: &str, number: i64, why: &str) -> CpdError {
 
 /// The reads in `answer`, alias `p<i>` for the i-th pair of `prs`. An `errors` array, a missing alias, field or pull
 /// request, and more than 100 threads, comments or reviews (or comments of a thread) are `gh_failed`.
-pub fn parse(workflows: &[(&str, i64)], answer: &str, bots: &[String]) -> Result<Vec<Read>, CpdError> {
+pub fn parse(
+    workflows: &[(&str, i64)],
+    answer: &str,
+    bots: &[String],
+) -> Result<Vec<Read>, CpdError> {
     let gh = |message: String| CpdError::new(ErrorCode::GhFailed, message);
     let answer: Answer = serde_json::from_str(answer)
         .map_err(|e| gh(format!("The comments read printed unexpected JSON: {e}.")))?;

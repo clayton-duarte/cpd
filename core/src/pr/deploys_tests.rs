@@ -398,7 +398,8 @@ fn a_failed_workflow_call_keeps_its_previous_runs_and_updates_the_others() {
         ],
         &[(3, json!([can("staging", true)]))],
     ));
-    let err: CpdError = read(&runner, &home, POLLED_AT).expect_err("a failed call fails the read like a failed Workflow lookup");
+    let err: CpdError = read(&runner, &home, POLLED_AT)
+        .expect_err("a failed call fails the read like a failed Workflow lookup");
     assert_eq!(err.code(), ErrorCode::GhFailed);
 
     assert_eq!(

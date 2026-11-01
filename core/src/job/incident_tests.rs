@@ -84,7 +84,19 @@ fn pr_poll_does_not_queue_a_conflict_update_for_a_held_plan() {
     let ops_workflow = WorkflowRow::fixture("web", "/r", "main", &[], "open");
 
     // `ops` is held: the poll's conflict cause queues nothing.
-    let queued = f.store.write("pr poll", |tx| queue_update(tx, &ops, &ops_workflow, Tier::parse("S2").unwrap(), "poll", Cause::Conflict)).unwrap();
+    let queued = f
+        .store
+        .write("pr poll", |tx| {
+            queue_update(
+                tx,
+                &ops,
+                &ops_workflow,
+                Tier::parse("S2").unwrap(),
+                "poll",
+                Cause::Conflict,
+            )
+        })
+        .unwrap();
     assert_eq!(queued, None, "a held Plan queues no conflict update Job");
     assert!(
         update_jobs(&mut f, "ops").is_empty(),
@@ -92,7 +104,19 @@ fn pr_poll_does_not_queue_a_conflict_update_for_a_held_plan() {
     );
 
     // `pay` is in the incident: the same call queues as it always has.
-    let queued = f.store.write("pr poll", |tx| queue_update(tx, &pay, &pay_workflow, Tier::parse("S2").unwrap(), "poll", Cause::Conflict)).unwrap();
+    let queued = f
+        .store
+        .write("pr poll", |tx| {
+            queue_update(
+                tx,
+                &pay,
+                &pay_workflow,
+                Tier::parse("S2").unwrap(),
+                "poll",
+                Cause::Conflict,
+            )
+        })
+        .unwrap();
     let key = queued.expect("an incident Plan still queues its conflict update Job");
     assert_eq!(
         update_jobs(&mut f, "pay"),

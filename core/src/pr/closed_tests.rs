@@ -2,7 +2,7 @@
 
 use super::closed::{ClosedUnmerged, closed_unmerged};
 use crate::home::CpdHome;
-use crate::ids::{ContextId, PlanId, WorkflowKey, SessionId};
+use crate::ids::{ContextId, PlanId, SessionId, WorkflowKey};
 use crate::store::Store;
 
 const T: &str = "2026-01-01T00:00:00.000Z";
@@ -55,7 +55,11 @@ impl Fixture {
 
     /// Workflow `key` of `plan` in `status` (`open` or `merged`) on pull request `n`.
     fn workflow_on(&mut self, plan: &str, key: &str, status: &str, n: i64) {
-        let merged = if status == "merged" { format!("'{T}'") } else { "NULL".to_owned() };
+        let merged = if status == "merged" {
+            format!("'{T}'")
+        } else {
+            "NULL".to_owned()
+        };
         self.sql(&format!(
             "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                               created_txn, created_at, started_at, merged_at)
@@ -133,7 +137,14 @@ fn the_plan_filter_returns_only_that_plans_prs() {
     f.pull(8, "closed");
     f.workflow_on("shop", "web", "open", 8);
     f.workflow_on("pay", "api", "open", 7);
-    assert_eq!(f.found(None), [row("pay", "api", "l-pay", 7), row("shop", "web", "l-shop", 8)], "every Plan, by plan id then key");
+    assert_eq!(
+        f.found(None),
+        [
+            row("pay", "api", "l-pay", 7),
+            row("shop", "web", "l-shop", 8)
+        ],
+        "every Plan, by plan id then key"
+    );
     assert_eq!(f.found(Some("shop")), [row("shop", "web", "l-shop", 8)]);
     assert_eq!(f.found(Some("pay")), [row("pay", "api", "l-pay", 7)]);
 }

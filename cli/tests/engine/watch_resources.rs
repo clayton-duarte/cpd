@@ -31,7 +31,8 @@ fn engine_with(policy: &str, concurrency: u32) -> Fx {
     fx.engine_routes();
     fx.env.sql("INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');");
     fx.engine_plan();
-    fx.env.sql("UPDATE workflows SET name = 'pay' WHERE plan = 'pay';");
+    fx.env
+        .sql("UPDATE workflows SET name = 'pay' WHERE plan = 'pay';");
     fx.env.repo_policy("acme", "pay", policy);
     let exe = fx.env.root().join("cpd-installed");
     fs::write(&exe, "").unwrap();

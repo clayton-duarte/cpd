@@ -105,9 +105,16 @@ pub(crate) fn row(conn: &Connection) -> Result<Option<Value>, CpdError> {
             },
         )
         .optional()?;
-    let Some((started_at, by, reason, until_workflow)) = stored else { return Ok(None) };
-    let plans: Vec<String> = plans(conn)?.into_iter().map(|p| p.as_str().to_owned()).collect();
-    Ok(Some(json!({"started_at": started_at, "by": by, "reason": reason, "plans": plans, "until_pr": until_workflow})))
+    let Some((started_at, by, reason, until_workflow)) = stored else {
+        return Ok(None);
+    };
+    let plans: Vec<String> = plans(conn)?
+        .into_iter()
+        .map(|p| p.as_str().to_owned())
+        .collect();
+    Ok(Some(
+        json!({"started_at": started_at, "by": by, "reason": reason, "plans": plans, "until_pr": until_workflow}),
+    ))
 }
 
 /// Whether incident mode is on (contract §2.2): one row in `incident`.
@@ -173,8 +180,11 @@ pub fn lead(conn: &Connection) -> Result<Option<SessionId>, CpdError> {
 /// The `<plan>/<key>` auto-end value split into its Plan and key. `usage` for anything else.
 fn parse_until_workflow(value: &str) -> Result<(PlanId, String), CpdError> {
     let usage = || {
-        CpdError::new(ErrorCode::Usage, "An --until-workflow is `<plan>/<key>` with a non-empty Plan and key.")
-            .with("until_pr", value)
+        CpdError::new(
+            ErrorCode::Usage,
+            "An --until-workflow is `<plan>/<key>` with a non-empty Plan and key.",
+        )
+        .with("until_pr", value)
     };
     let (plan, key) = value.split_once('/').ok_or_else(usage)?;
     if plan.is_empty() || key.is_empty() || key.contains('/') {
@@ -349,8 +359,12 @@ pub fn end_if_until_workflow_merged(tx: &WriteTxn<'_>) -> Result<bool, CpdError>
             },
         )
         .optional()?;
-    let Some((Some(until_plan), Some(until_workflow))) = stored else { return Ok(false) };
-    let key = until_workflow.split_once('/').map_or(until_workflow.as_str(), |(_, key)| key);
+    let Some((Some(until_plan), Some(until_workflow))) = stored else {
+        return Ok(false);
+    };
+    let key = until_workflow
+        .split_once('/')
+        .map_or(until_workflow.as_str(), |(_, key)| key);
     let merged: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM workflows WHERE plan = ?1 AND key = ?2 AND status = 'merged')",
         params![until_plan, key],
@@ -362,7 +376,10 @@ pub fn end_if_until_workflow_merged(tx: &WriteTxn<'_>) -> Result<bool, CpdError>
     tx.execute("DELETE FROM incident_plans", [])?;
     tx.execute("DELETE FROM incident WHERE id = 1", [])?;
     let ended_at = clock::now();
-    append(tx, NewEvent::incident_ended("Incident mode off.", "engine", &ended_at, "until-workflow"))?;
+    append(
+        tx,
+        NewEvent::incident_ended("Incident mode off.", "engine", &ended_at, "until-workflow"),
+    )?;
     Ok(true)
 }
 

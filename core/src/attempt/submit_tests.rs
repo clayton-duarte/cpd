@@ -152,7 +152,10 @@ fn a_linear_attempt_submits_from_the_workflow_worktree() {
     .unwrap();
     let id = AttemptId::parse("a-a1").unwrap();
     let attempt = rig.store.read(|conn| row::load(conn, &plan, &id)).unwrap();
-    assert_eq!(attempt.branch, "cpd/pay/api", "the linear Attempt's branch is the Lead Branch");
+    assert_eq!(
+        attempt.branch, "cpd/pay/api",
+        "the linear Attempt's branch is the Lead Branch"
+    );
     // The caller's cwd is the Lead worktree; submit checks the Attempt's own worktree and branch.
     let previous = std::env::current_dir().unwrap();
     std::env::set_current_dir(&rig.lead_worktree).unwrap();
@@ -167,5 +170,8 @@ fn a_linear_attempt_submits_from_the_workflow_worktree() {
         super::submit::require_inside(&attempt, &worktree)
     });
     std::env::set_current_dir(previous).unwrap();
-    assert!(result.is_ok(), "submit accepts a cwd in the Lead worktree on the Lead Branch: {result:?}");
+    assert!(
+        result.is_ok(),
+        "submit accepts a cwd in the Lead worktree on the Lead Branch: {result:?}"
+    );
 }

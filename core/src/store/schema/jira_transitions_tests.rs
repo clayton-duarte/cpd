@@ -36,7 +36,11 @@ fn workflow(key: &str, jira: &str) -> String {
 }
 
 fn two_prs() -> String {
-    format!("{PLAN}{}{}", workflow("a", "'ABC-1'"), workflow("b", "NULL"))
+    format!(
+        "{PLAN}{}{}",
+        workflow("a", "'ABC-1'"),
+        workflow("b", "NULL")
+    )
 }
 
 /// The same two objects before `workflow-rename`: the table is `prs`.
@@ -48,7 +52,11 @@ fn workflow_before(key: &str, jira: &str) -> String {
 }
 
 fn two_prs_before() -> String {
-    format!("{PLAN}{}{}", workflow_before("a", "'ABC-1'"), workflow_before("b", "NULL"))
+    format!(
+        "{PLAN}{}{}",
+        workflow_before("a", "'ABC-1'"),
+        workflow_before("b", "NULL")
+    )
 }
 
 fn count(store: &mut Store, sql: &str) -> i64 {
@@ -84,14 +92,58 @@ fn insert(columns: &str, values: &str) -> String {
 fn a_database_before_jira_transitions_migrates_to_an_empty_queue() {
     let (_dir, home) = before_jira_transitions();
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-    assert_eq!(count(&mut store, "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'jira_transitions'"), 1);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM jira_transitions"), 0);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM workflows WHERE plan = 'pay'"), 2);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM workflows WHERE key = 'a' AND jira = 'ABC-1'"), 1);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM workflows WHERE key = 'b' AND jira IS NULL"), 1);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'jira_transitions'"), 0, "not a history table");
-    assert_eq!(count(&mut store, "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name LIKE '%jira_transitions%'"), 0);
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'jira_transitions'"
+        ),
+        1
+    );
+    assert_eq!(
+        count(&mut store, "SELECT count(*) FROM jira_transitions"),
+        0
+    );
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM workflows WHERE plan = 'pay'"
+        ),
+        2
+    );
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM workflows WHERE key = 'a' AND jira = 'ABC-1'"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM workflows WHERE key = 'b' AND jira IS NULL"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'jira_transitions'"
+        ),
+        0,
+        "not a history table"
+    );
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name LIKE '%jira_transitions%'"
+        ),
+        0
+    );
 }
 
 #[test]
@@ -196,7 +248,11 @@ fn jira_transitions_keeps_one_row_per_pr_and_target() {
         store.schema_mismatch()
     );
     write(&mut store, &two_prs()).unwrap();
-    let row = |workflow: &str, target: &str| format!("INSERT INTO jira_transitions (plan, pr, target, queued_at) VALUES ('pay', '{workflow}', '{target}', 'q');");
+    let row = |workflow: &str, target: &str| {
+        format!(
+            "INSERT INTO jira_transitions (plan, pr, target, queued_at) VALUES ('pay', '{workflow}', '{target}', 'q');"
+        )
+    };
     write(&mut store, &row("a", "done")).expect("first row");
     let text = message(
         write(&mut store, &row("a", "done")),
@@ -207,9 +263,22 @@ fn jira_transitions_keeps_one_row_per_pr_and_target() {
         .replace("'q'", "'later'")
         .replace(';', " ON CONFLICT DO NOTHING;");
     write(&mut store, &again).expect("ON CONFLICT DO NOTHING");
-    assert_eq!(count(&mut store, "SELECT count(*) FROM jira_transitions"), 1);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM jira_transitions WHERE queued_at = 'q'"), 1, "the first row is untouched");
+    assert_eq!(
+        count(&mut store, "SELECT count(*) FROM jira_transitions"),
+        1
+    );
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM jira_transitions WHERE queued_at = 'q'"
+        ),
+        1,
+        "the first row is untouched"
+    );
     write(&mut store, &row("b", "done")).expect("same target, another Workflow");
     write(&mut store, &row("a", "in_review")).expect("another target, same Workflow");
-    assert_eq!(count(&mut store, "SELECT count(*) FROM jira_transitions"), 3);
+    assert_eq!(
+        count(&mut store, "SELECT count(*) FROM jira_transitions"),
+        3
+    );
 }

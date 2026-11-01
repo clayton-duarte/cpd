@@ -8,21 +8,21 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
-use crate::pr::retitle_pr;
-use super::add::{
-    BaseArg, BaseWanted, Subject, classify_base, insert_needs, key_repo, known_workflows, main_worktree, needs_refs, no_branch_clash,
-    resolve_refs, stacked_on, wanted_base,
-};
 use super::EditArgs;
+use super::add::{
+    BaseArg, BaseWanted, Subject, classify_base, insert_needs, key_repo, known_workflows,
+    main_worktree, needs_refs, no_branch_clash, resolve_refs, stacked_on, wanted_base,
+};
 use crate::env::Env;
-use crate::pr::{find_workflow, plan_phase, workflow_locked};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
-use crate::ids::{PlanId, WorkflowKey, RepoName};
+use crate::ids::{PlanId, RepoName, WorkflowKey};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::WorkflowRow;
 use crate::plan::fingerprint::load_workflows;
+use crate::pr::retitle_pr;
+use crate::pr::{find_workflow, plan_phase, workflow_locked};
 
 const COMMAND: &str = "workflow edit";
 
@@ -55,7 +55,11 @@ impl Edits {
 enum Decision {
     /// No value changes.
     Already(WorkflowRow),
-    Update { before: WorkflowRow, after: WorkflowRow, fields: Vec<&'static str> },
+    Update {
+        before: WorkflowRow,
+        after: WorkflowRow,
+        fields: Vec<&'static str>,
+    },
 }
 
 pub(crate) fn edit(args: EditArgs) -> Result<Output, CpdError> {
@@ -84,7 +88,12 @@ pub(crate) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let wants_others = args.repo.is_some() || args.base.is_some() || needs.is_some();
     let wants_title = args.title.is_some() || args.jira.is_some();
     let restack_shape = args.repo.is_none() && args.base.is_some() && needs.is_some();
-    let stored = env.store.read(|conn| editable_workflow(conn, &plan, &key, wants_title, wants_others, restack_shape))?.0;
+    let stored = env
+        .store
+        .read(|conn| {
+            editable_workflow(conn, &plan, &key, wants_title, wants_others, restack_shape)
+        })?
+        .0;
     if stored.head_ref.is_some()
         && let Some(flag) = [
             (args.repo.is_some(), "--repo"),
@@ -128,7 +137,11 @@ pub(crate) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let decision = env.store.read(|conn| decide(conn, &plan, &key, &edits))?;
     let (workflow, fields, already) = match decision {
         Decision::Already(workflow) => (workflow, Vec::new(), true),
-        Decision::Update { before, after, fields } => {
+        Decision::Update {
+            before,
+            after,
+            fields,
+        } => {
             if after.repo != before.repo {
                 no_branch_clash(
                     repo.as_deref().expect("the repo changed, so it was given"),
@@ -151,7 +164,8 @@ pub(crate) fn edit(args: EditArgs) -> Result<Output, CpdError> {
             })?
         }
     };
-    let mut out = json!({"workflow": {"key": workflow.key, "status": workflow.status}, "fields": fields});
+    let mut out =
+        json!({"workflow": {"key": workflow.key, "status": workflow.status}, "fields": fields});
     if already {
         out["already"] = json!(true);
     }
@@ -159,7 +173,12 @@ pub(crate) fn edit(args: EditArgs) -> Result<Output, CpdError> {
 }
 
 /// When the Workflow has an open pull request, retitles it on GitHub, before the title is stored: a failure stores nothing (§9.5).
-fn retitle_open_pull_request(env: &mut Env, plan: &PlanId, key: &WorkflowKey, title: &str) -> Result<(), CpdError> {
+fn retitle_open_pull_request(
+    env: &mut Env,
+    plan: &PlanId,
+    key: &WorkflowKey,
+    title: &str,
+) -> Result<(), CpdError> {
     let open: Option<(String, i64)> = env.store.read(|conn| {
         let mut stmt = conn.prepare(
             "SELECT p.repo, p.number FROM workflows r JOIN pull_requests p ON p.id = r.pull_request
@@ -182,34 +201,71 @@ fn retitle_open_pull_request(env: &mut Env, plan: &PlanId, key: &WorkflowKey, ti
 /// `--title`), the Plan is in `grounding` or `plan` and the Workflow `waiting` (`illegal_transition`); `--title` alone
 /// meets neither rule. After the lock only a restack (`restack`: the flags have its shape) of a `waiting` Workflow passes;
 /// anything else is `workflow_locked`, and `decide` checks the rest of the restack.
-fn editable_workflow(conn: &Connection, plan: &PlanId, key: &WorkflowKey, title: bool, others: bool, restack: bool) -> Result<(WorkflowRow, Option<String>), CpdError> {
+fn editable_workflow(
+    conn: &Connection,
+    plan: &PlanId,
+    key: &WorkflowKey,
+    title: bool,
+    others: bool,
+    restack: bool,
+) -> Result<(WorkflowRow, Option<String>), CpdError> {
     let workflows = load_workflows(conn, plan)?;
     let workflow = find_workflow(&workflows, plan, key)?;
     if title && matches!(workflow.status.as_str(), "merged" | "cancelled") {
-        return Err(CpdError::new(ErrorCode::WorkflowEnded, format!("Workflow {key} of Plan {plan} is {}: its title and ticket are history.", workflow.status))
-            .with("plan", plan.as_str())
-            .with("workflow", key.as_str())
-            .with("status", workflow.status.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::WorkflowEnded,
+            format!(
+                "Workflow {key} of Plan {plan} is {}: its title and ticket are history.",
+                workflow.status
+            ),
+        )
+        .with("plan", plan.as_str())
+        .with("workflow", key.as_str())
+        .with("status", workflow.status.as_str()));
     }
     if others {
         let phase = plan_phase(conn, plan)?;
-        if !matches!(phase, Phase::Grounding | Phase::Plan) && !(restack && workflow.status == "waiting") {
+        if !matches!(phase, Phase::Grounding | Phase::Plan)
+            && !(restack && workflow.status == "waiting")
+        {
             return Err(workflow_locked(plan, phase, COMMAND));
         }
         if workflow.status != "waiting" {
-            return Err(CpdError::new(ErrorCode::IllegalTransition, format!("Workflow {key} is {}: only a waiting Workflow is edited.", workflow.status))
-                .with("plan", plan.as_str())
-                .with("workflow", key.as_str())
-                .with("from", workflow.status.as_str())
-                .with("to", "waiting"));
+            return Err(CpdError::new(
+                ErrorCode::IllegalTransition,
+                format!(
+                    "Workflow {key} is {}: only a waiting Workflow is edited.",
+                    workflow.status
+                ),
+            )
+            .with("plan", plan.as_str())
+            .with("workflow", key.as_str())
+            .with("from", workflow.status.as_str())
+            .with("to", "waiting"));
         }
     }
-    let stored = conn.query_row("SELECT title FROM workflows WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
+    let stored = conn.query_row(
+        "SELECT title FROM workflows WHERE plan = ?1 AND key = ?2",
+        [plan.as_str(), key.as_str()],
+        |r| r.get(0),
+    )?;
     Ok((workflow.clone(), stored))
 }
 
-fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, edits: &Edits) -> Result<Decision, CpdError> {
-    let (before, stored_title) = editable_workflow(conn, plan, key, edits.title.is_some() || edits.jira.is_some(), edits.others(), edits.restack_shape())?;
+fn decide(
+    conn: &Connection,
+    plan: &PlanId,
+    key: &WorkflowKey,
+    edits: &Edits,
+) -> Result<Decision, CpdError> {
+    let (before, stored_title) = editable_workflow(
+        conn,
+        plan,
+        key,
+        edits.title.is_some() || edits.jira.is_some(),
+        edits.others(),
+        edits.restack_shape(),
+    )?;
     let mut after = before.clone();
     if let Some(repo) = &edits.repo {
         after.repo = repo.clone();
@@ -238,15 +294,30 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, edits: &Edits) ->
         after.base = resolved.base;
         let phase = plan_phase(conn, plan)?;
         if !matches!(phase, Phase::Grounding | Phase::Plan) {
-            check_restack(conn, plan, &before, &after, resolved.base_workflow.as_deref()).map_err(|()| workflow_locked(plan, phase, COMMAND))?;
+            check_restack(
+                conn,
+                plan,
+                &before,
+                &after,
+                resolved.base_workflow.as_deref(),
+            )
+            .map_err(|()| workflow_locked(plan, phase, COMMAND))?;
         }
     }
     if after.repo != before.repo {
-        let in_use = stacked_on(&known_workflows(conn, plan)?, &before.repo, &before.lead_branch);
+        let in_use = stacked_on(
+            &known_workflows(conn, plan)?,
+            &before.repo,
+            &before.lead_branch,
+        );
         if !in_use.is_empty() {
             return Err(CpdError::new(
                 ErrorCode::WorkflowInUse,
-                format!("Workflow {key} keeps its repo: {} {} stacked on it.", in_use.join(", "), if in_use.len() == 1 { "is" } else { "are" }),
+                format!(
+                    "Workflow {key} keeps its repo: {} {} stacked on it.",
+                    in_use.join(", "),
+                    if in_use.len() == 1 { "is" } else { "are" }
+                ),
             )
             .with("plan", plan.as_str())
             .with("workflow", key.as_str())
@@ -283,10 +354,21 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, edits: &Edits) ->
 
 /// After the lock, a restack is allowed only onto `A`, the base Workflow the edit resolves to, when `A` is a current need or
 /// already the base Workflow, and the needs after the edit are the current needs without `A` (§3.8 step 10).
-fn check_restack(conn: &Connection, plan: &PlanId, before: &WorkflowRow, after: &WorkflowRow, base_workflow: Option<&str>) -> Result<(), ()> {
-    let a = base_workflow.and_then(|p| p.split_once('/')).map(|(_, k)| k).ok_or(())?;
+fn check_restack(
+    conn: &Connection,
+    plan: &PlanId,
+    before: &WorkflowRow,
+    after: &WorkflowRow,
+    base_workflow: Option<&str>,
+) -> Result<(), ()> {
+    let a = base_workflow
+        .and_then(|p| p.split_once('/'))
+        .map(|(_, k)| k)
+        .ok_or(())?;
     let workflows = load_workflows(conn, plan).map_err(|_| ())?;
-    let already = workflows.iter().any(|q| q.key.as_str() == a && q.repo == before.repo && q.lead_branch == before.base);
+    let already = workflows
+        .iter()
+        .any(|q| q.key.as_str() == a && q.repo == before.repo && q.lead_branch == before.base);
     if !already && !before.needs.iter().any(|n| n == a) {
         return Err(());
     }
@@ -300,7 +382,15 @@ fn check_restack(conn: &Connection, plan: &PlanId, before: &WorkflowRow, after: 
 /// Writes the changed `workflows` columns, and deletes and inserts `workflow_needs` rows
 /// to match (§4.4 allows deletion in `grounding` and `plan`). `title` is the new
 /// title when it was given (a Workflow that has it already is not touched).
-fn update(tx: &Connection, plan: &PlanId, before: &WorkflowRow, after: &WorkflowRow, name: Option<&RepoName>, title: Option<&str>, jira: Option<&str>) -> Result<(), CpdError> {
+fn update(
+    tx: &Connection,
+    plan: &PlanId,
+    before: &WorkflowRow,
+    after: &WorkflowRow,
+    name: Option<&RepoName>,
+    title: Option<&str>,
+    jira: Option<&str>,
+) -> Result<(), CpdError> {
     if let Some(title) = title {
         tx.execute(
             "UPDATE workflows SET title = ?1 WHERE plan = ?2 AND key = ?3 AND title IS NOT ?1 AND status NOT IN ('merged', 'cancelled')",
@@ -320,7 +410,10 @@ fn update(tx: &Connection, plan: &PlanId, before: &WorkflowRow, after: &Workflow
         )?;
     }
     for need in before.needs.iter().filter(|n| !after.needs.contains(n)) {
-        tx.execute("DELETE FROM workflow_needs WHERE plan = ?1 AND workflow = ?2 AND needs = ?3", [plan.as_str(), after.key.as_str(), need.as_str()])?;
+        tx.execute(
+            "DELETE FROM workflow_needs WHERE plan = ?1 AND workflow = ?2 AND needs = ?3",
+            [plan.as_str(), after.key.as_str(), need.as_str()],
+        )?;
     }
     let added: Vec<String> = after
         .needs

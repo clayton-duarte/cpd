@@ -15,18 +15,34 @@ fn is_open_for_work(workflow: &WorkflowRow) -> bool {
 
 /// The kinds (`test`, `impl`) a Workflow of shape `tdd` that has not opened lacks, ignoring the Job `without` and every `cancelled` one.
 /// Empty for a Workflow of another shape or one that has opened.
-pub(crate) fn missing(workflow: &WorkflowRow, jobs: &[Job], without: Option<&str>) -> Vec<&'static str> {
+pub(crate) fn missing(
+    workflow: &WorkflowRow,
+    jobs: &[Job],
+    without: Option<&str>,
+) -> Vec<&'static str> {
     if !is_open_for_work(workflow) {
         return Vec::new();
     }
     ["test", "impl"]
         .into_iter()
-        .filter(|kind| !jobs.iter().any(|j| j.workflow_str() == workflow.key.as_str() && j.kind == *kind && j.status != "cancelled" && Some(j.key.as_str()) != without))
+        .filter(|kind| {
+            !jobs.iter().any(|j| {
+                j.workflow_str() == workflow.key.as_str()
+                    && j.kind == *kind
+                    && j.status != "cancelled"
+                    && Some(j.key.as_str()) != without
+            })
+        })
         .collect()
 }
 
 /// `shape_incomplete`, `details` `{pr, missing}`.
-pub(crate) fn incomplete(plan: &PlanId, workflow: &WorkflowRow, missing: &[&str], what: &str) -> CpdError {
+pub(crate) fn incomplete(
+    plan: &PlanId,
+    workflow: &WorkflowRow,
+    missing: &[&str],
+    what: &str,
+) -> CpdError {
     CpdError::new(
         ErrorCode::ShapeIncomplete,
         format!(
@@ -44,7 +60,11 @@ pub(crate) fn incomplete(plan: &PlanId, workflow: &WorkflowRow, missing: &[&str]
 /// `plan review` and `plan lock` (§4.6, §4.8): every `impl` Job that is a `draft` needs a `test` Job of its Workflow
 /// (`test_job_required`), then every `verify` one an `impl` Job, then every `tdd` Workflow that has not opened has a `test`
 /// and an `impl` Job (`shape_incomplete`). The first refusal.
-pub(super) fn check(plan: &PlanId, workflows: &[WorkflowRow], jobs: &[Job]) -> Result<(), CpdError> {
+pub(super) fn check(
+    plan: &PlanId,
+    workflows: &[WorkflowRow],
+    jobs: &[Job],
+) -> Result<(), CpdError> {
     if let Some(e) = test_job_required(plan, jobs) {
         return Err(e);
     }
@@ -64,7 +84,14 @@ pub(crate) fn test_job_required(plan: &PlanId, jobs: &[Job]) -> Option<CpdError>
         .filter(|j| {
             j.is_draft()
                 && j.kind == "impl"
-                && !j.needs.iter().any(|n| jobs.iter().any(|t| t.key == *n && t.workflow == j.workflow && t.kind == "test" && t.status != "cancelled"))
+                && !j.needs.iter().any(|n| {
+                    jobs.iter().any(|t| {
+                        t.key == *n
+                            && t.workflow == j.workflow
+                            && t.kind == "test"
+                            && t.status != "cancelled"
+                    })
+                })
         })
         .collect();
     if lacking.is_empty() {
@@ -89,7 +116,14 @@ pub(crate) fn impl_job_required(plan: &PlanId, jobs: &[Job]) -> Option<CpdError>
         .filter(|j| {
             j.is_draft()
                 && j.kind == "verify"
-                && !j.needs.iter().any(|n| jobs.iter().any(|t| t.key == *n && t.workflow == j.workflow && t.kind == "impl" && t.status != "cancelled"))
+                && !j.needs.iter().any(|n| {
+                    jobs.iter().any(|t| {
+                        t.key == *n
+                            && t.workflow == j.workflow
+                            && t.kind == "impl"
+                            && t.status != "cancelled"
+                    })
+                })
         })
         .collect();
     if unneeding.is_empty() {
@@ -116,7 +150,11 @@ pub(crate) fn impl_job_required(plan: &PlanId, jobs: &[Job]) -> Option<CpdError>
 }
 
 /// `shape_incomplete`: one refusal per `tdd` Workflow that has not opened and lacks a `test` or `impl` Job, in Workflow key order.
-pub(crate) fn shape_incomplete(plan: &PlanId, workflows: &[WorkflowRow], jobs: &[Job]) -> Vec<CpdError> {
+pub(crate) fn shape_incomplete(
+    plan: &PlanId,
+    workflows: &[WorkflowRow],
+    jobs: &[Job],
+) -> Vec<CpdError> {
     let mut ordered: Vec<&WorkflowRow> = workflows.iter().collect();
     ordered.sort_by(|a, b| a.key.cmp(&b.key));
     ordered

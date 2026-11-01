@@ -11,8 +11,23 @@ fn error(run: &crate::common::Run) -> Value {
 }
 
 fn assert_refused(f: &Added, key: &str, shape: &str) {
-    let other = f.fx.keyed_repo(&format!("other-{shape}")).canonicalize().unwrap();
-    let run = f.fx.cpd(&["workflow", "add", key, "--repo", other.to_str().unwrap(), "--title", "Change the PR", "--shape", shape, "--plan", "pay"]);
+    let other =
+        f.fx.keyed_repo(&format!("other-{shape}"))
+            .canonicalize()
+            .unwrap();
+    let run = f.fx.cpd(&[
+        "workflow",
+        "add",
+        key,
+        "--repo",
+        other.to_str().unwrap(),
+        "--title",
+        "Change the PR",
+        "--shape",
+        shape,
+        "--plan",
+        "pay",
+    ]);
     let e = error(&run);
     assert_eq!(e["code"], "needs_required", "{shape}: {e}");
     assert_eq!(run.exit, 3, "{shape}");
@@ -27,8 +42,12 @@ fn assert_refused(f: &Added, key: &str, shape: &str) {
         "{msg}"
     );
     // Nothing written.
-    let workflows: i64 = f.fx.env.query(&format!("SELECT count(*) FROM workflows WHERE plan = 'pay' AND key = '{key}'"));
-    let jobs: i64 = f.fx.env.query(&format!("SELECT count(*) FROM jobs WHERE plan = 'pay' AND workflow = '{key}'"));
+    let workflows: i64 = f.fx.env.query(&format!(
+        "SELECT count(*) FROM workflows WHERE plan = 'pay' AND key = '{key}'"
+    ));
+    let jobs: i64 = f.fx.env.query(&format!(
+        "SELECT count(*) FROM jobs WHERE plan = 'pay' AND workflow = '{key}'"
+    ));
     assert_eq!((workflows, jobs), (0, 0), "{shape}");
     assert!(f.pr_added().is_empty(), "{shape}");
 }
@@ -54,7 +73,9 @@ fn workflow_add_in_dispatch_refusal_covers_every_shape() {
 fn workflow_add_in_dispatch_with_no_needs_adds_a_workflow_without_needs() {
     let f = added("dispatch");
     // Stacked on PR `repo`, which has not merged: a PR that starts at once is refused its stub drafts after the lock (`draft_parked`).
-    let out = f.add("fix", &f.repo, &["--no-needs", "--base", "pay/repo"]).ok();
+    let out = f
+        .add("fix", &f.repo, &["--no-needs", "--base", "pay/repo"])
+        .ok();
     assert_eq!(out["workflow"]["needs"], json!([]));
     assert!(f.needs_of("fix").is_empty());
 }
@@ -80,7 +101,19 @@ fn workflow_add_in_plan_phase_needs_no_flag() {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at)
            VALUES ('pay', 'ctx', 'Pay the bills', 'plan', 'lead1', 't');",
     );
-    let run = fx.cpd(&["workflow", "add", "fix", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]);
+    let run = fx.cpd(&[
+        "workflow",
+        "add",
+        "fix",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        "Change the PR",
+        "--shape",
+        "config",
+        "--plan",
+        "pay",
+    ]);
     assert_eq!(run.json()["workflow"]["needs"], json!([]));
 }
 
@@ -117,7 +150,8 @@ fn workflow_add_in_dispatch_needs_neither_flag_for_a_stacked_workflow_named_by_i
 }
 
 #[test]
-fn workflow_add_in_dispatch_needs_neither_flag_for_a_workflow_based_on_another_workflows_lead_branch() {
+fn workflow_add_in_dispatch_needs_neither_flag_for_a_workflow_based_on_another_workflows_lead_branch()
+ {
     // The Lead Branch of PR `repo` in the fixture is `cpd/pay`.
     assert_stacked_add_needs_no_flag("cpd/pay");
 }

@@ -82,7 +82,20 @@ fn world(fx: &Fx) -> (String, String) {
         .to_owned();
     for key in ["api", "web", "ui"] {
         let repo = fx.keyed_repo(key);
-        fx.cpd(&["workflow", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
+        fx.cpd(&[
+            "workflow",
+            "add",
+            key,
+            "--repo",
+            repo.to_str().unwrap(),
+            "--title",
+            "Change the PR",
+            "--shape",
+            "config",
+            "--plan",
+            "pay",
+        ])
+        .ok();
         // The stub the shape lays out is cancelled, as a Lead cancels a stub it does not need: these Jobs are the table's.
         fx.cpd(&[
             "job",
@@ -119,7 +132,9 @@ fn world(fx: &Fx) -> (String, String) {
         )
     };
     let start_pr = |key: &str| {
-        format!("UPDATE workflows SET status = 'dispatch', lead_worktree = '/wt/{key}', started_at = 't' WHERE plan = 'pay' AND key = '{key}';")
+        format!(
+            "UPDATE workflows SET status = 'dispatch', lead_worktree = '/wt/{key}', started_at = 't' WHERE plan = 'pay' AND key = '{key}';"
+        )
     };
     let open_pr = |key: &str, number: i64, status: &str| {
         let merged = if status == "merged" {
@@ -215,7 +230,8 @@ fn job_status(fx: &Fx, key: &str) -> String {
 }
 
 fn pr_status(fx: &Fx, key: &str) -> String {
-    fx.env.query(&format!("SELECT status FROM workflows WHERE key = '{key}'"))
+    fx.env
+        .query(&format!("SELECT status FROM workflows WHERE key = '{key}'"))
 }
 
 fn gh_closes(fx: &Fx) -> Vec<Vec<String>> {

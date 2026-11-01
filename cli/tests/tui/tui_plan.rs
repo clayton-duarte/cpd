@@ -574,11 +574,27 @@ fn a_plan_with_no_pr_yet_says_so() {
     fx.env.sql(&bare_plan("grounding"));
     let buf = draw(&fx);
     let screen = rows(&buf);
-    assert!(screen.iter().any(|l| l.trim() == "no Workflow yet: cpd workflow add"), "{}", screen.join("\n"));
-    assert!(!screen.iter().any(|l| l.contains('╭') || l.contains("No Plan")), "{}", screen.join("\n"));
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.trim() == "no Workflow yet: cpd workflow add"),
+        "{}",
+        screen.join("\n")
+    );
+    assert!(
+        !screen
+            .iter()
+            .any(|l| l.contains('╭') || l.contains("No Plan")),
+        "{}",
+        screen.join("\n")
+    );
     // muted, colour 8
     let text = cells_of(&buf, "no Workflow yet: cpd workflow add").expect("the message");
-    assert!(text.iter().all(|at| buf[*at].fg == palette::muted_text().fg.unwrap()), "{text:?}");
+    assert!(
+        text.iter()
+            .all(|at| buf[*at].fg == palette::muted_text().fg.unwrap()),
+        "{text:?}"
+    );
 }
 
 #[test]

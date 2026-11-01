@@ -308,7 +308,10 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
 /// starts the engine; `pr-ready` has none (the label is a link; Merge is in its menu); `plan-review` opens the Lead of its Plan; the `url` is copied for `review-requested` (a click on the label of a link kind opens its page instead, see [`Link`]). `None` only for an item without what its jump needs.
 pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     match item.kind {
-        Kind::Dialog | Kind::Unread => item.session.as_ref().map(|s| Jump::Run(open_or_history(tree, s))),
+        Kind::Dialog | Kind::Unread => item
+            .session
+            .as_ref()
+            .map(|s| Jump::Run(open_or_history(tree, s))),
         // no click: the engine's errors, the stuck Jobs and Workflow check/review state reach no Inbox (hs-d314, hs-d318, hs-d470); only a row an older engine opened remains
         Kind::EngineError | Kind::JobStuck | Kind::PrFailing | Kind::PrChanges => None,
         Kind::EngineDown => Some(Jump::Run(Action::EnsureWatch)),

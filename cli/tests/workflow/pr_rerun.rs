@@ -171,8 +171,15 @@ fn a_pr_that_is_not_open_is_refused_pr_not_open_and_calls_gh_not_at_all() {
 
         let r = rerun(&pay);
 
-        assert_eq!((r.error()["code"].as_str().unwrap(), r.exit), ("workflow_not_open", 3), "{status}");
-        assert_eq!(r.error()["details"], json!({"pr": "repo", "status": status}));
+        assert_eq!(
+            (r.error()["code"].as_str().unwrap(), r.exit),
+            ("workflow_not_open", 3),
+            "{status}"
+        );
+        assert_eq!(
+            r.error()["details"],
+            json!({"pr": "repo", "status": status})
+        );
         assert!(pay.fx.calls("gh").is_empty(), "{status}");
     }
 }

@@ -129,7 +129,10 @@ pub(super) fn check(
         // An `impl` Job's tests are its `test` Jobs': with none, `run` would be told no test and might run them all (hs-d338).
         return Err(CpdError::new(
             ErrorCode::TestJobRequired,
-            format!("The impl Job {} needs no test Job of its Workflow, so it names no test to run.", job.key),
+            format!(
+                "The impl Job {} needs no test Job of its Workflow, so it names no test to run.",
+                job.key
+            ),
         )
         .with("job", job.key.as_str())
         .with("jobs", json!(Vec::<String>::new())));

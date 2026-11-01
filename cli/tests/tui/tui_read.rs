@@ -2000,10 +2000,25 @@ fn a_plan_carries_its_pr_and_what_the_poll_saw() {
 #[test]
 fn a_pull_request_is_conflicting_only_when_the_poll_saw_a_conflict() {
     let (_fx, mut store) = fixture();
-    let pull = |store: &mut Store, p: &str| read::plan_boxes(store, &plan(p)).unwrap().workflows[0].pull.clone().unwrap();
-    assert!(!pull(&mut store, "rel").conflicting, "a fresh row reads `unknown`");
-    for (mergeable, want) in [("conflicting", true), ("mergeable", false), ("unknown", false)] {
-        sql(&mut store, &format!("UPDATE pull_requests SET mergeable = '{mergeable}' WHERE number = 7"));
+    let pull = |store: &mut Store, p: &str| {
+        read::plan_boxes(store, &plan(p)).unwrap().workflows[0]
+            .pull
+            .clone()
+            .unwrap()
+    };
+    assert!(
+        !pull(&mut store, "rel").conflicting,
+        "a fresh row reads `unknown`"
+    );
+    for (mergeable, want) in [
+        ("conflicting", true),
+        ("mergeable", false),
+        ("unknown", false),
+    ] {
+        sql(
+            &mut store,
+            &format!("UPDATE pull_requests SET mergeable = '{mergeable}' WHERE number = 7"),
+        );
         assert_eq!(pull(&mut store, "rel").conflicting, want, "{mergeable}");
     }
 }
@@ -2011,7 +2026,13 @@ fn a_pull_request_is_conflicting_only_when_the_poll_saw_a_conflict() {
 #[test]
 fn an_open_pull_request_is_clean_only_when_its_merge_state_is_clean() {
     let (_fx, mut store) = fixture();
-    let clean = |store: &mut Store| read::plan_boxes(store, &plan("rel")).unwrap().workflows[0].pull.as_ref().unwrap().clean;
+    let clean = |store: &mut Store| {
+        read::plan_boxes(store, &plan("rel")).unwrap().workflows[0]
+            .pull
+            .as_ref()
+            .unwrap()
+            .clean
+    };
     assert!(!clean(&mut store), "a fresh row reads `unknown`");
     sql(
         &mut store,
@@ -2232,7 +2253,11 @@ fn a_pull_request_is_worked_only_while_its_owners_lead_is_working() {
          VALUES ('acme/work', 70, 'https://github.com/acme/work/pull/70', 'Mine', 0, 'open', 'none', 'none',
                  '2026-01-07T00:00:00.000Z', NULL, '2026-01-07T00:00:00.000Z');",
     );
-    let worked = |store: &mut Store| read::plan_boxes(store, &plan("rel")).unwrap().workflows[0].lead_dot.is_some();
+    let worked = |store: &mut Store| {
+        read::plan_boxes(store, &plan("rel")).unwrap().workflows[0]
+            .lead_dot
+            .is_some()
+    };
     for state in ["blocked", "idle", "waiting", "stopped"] {
         sql(
             &mut store,
@@ -2247,8 +2272,15 @@ fn a_pull_request_is_worked_only_while_its_owners_lead_is_working() {
         "UPDATE sessions SET state = 'working', state_label = NULL WHERE id = 'l-rel'",
     );
     assert!(!worked(&mut store), "working, naming no Workflow: no dot");
-    let pr_key: String = read::plan_boxes(&mut store, &plan("rel")).unwrap().workflows[0].key.to_string();
-    sql(&mut store, &format!("UPDATE sessions SET working_pr = '{pr_key}' WHERE id = 'l-rel'"));
+    let pr_key: String = read::plan_boxes(&mut store, &plan("rel"))
+        .unwrap()
+        .workflows[0]
+        .key
+        .to_string();
+    sql(
+        &mut store,
+        &format!("UPDATE sessions SET working_pr = '{pr_key}' WHERE id = 'l-rel'"),
+    );
     assert!(worked(&mut store), "the Lead of acme/repo#7 works on it");
 }
 
@@ -2755,8 +2787,19 @@ fn the_flow_gives_a_stacked_pr_its_base_pr_as_a_need_and_as_its_blocker_until_it
          INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('ship', 'stk', 'mid');",
     );
     let stk = |store: &mut Store| {
-        let node = read::plan_boxes(store, &plan("ship")).unwrap().workflows.into_iter().find(|p| p.key.as_str() == "stk").unwrap();
-        (node.needs.iter().map(|n| n.as_str().to_string()).collect::<Vec<_>>(), node.waiting_on)
+        let node = read::plan_boxes(store, &plan("ship"))
+            .unwrap()
+            .workflows
+            .into_iter()
+            .find(|p| p.key.as_str() == "stk")
+            .unwrap();
+        (
+            node.needs
+                .iter()
+                .map(|n| n.as_str().to_string())
+                .collect::<Vec<_>>(),
+            node.waiting_on,
+        )
     };
     let (needs, waiting_on) = stk(&mut store);
     assert_eq!(
@@ -2777,9 +2820,17 @@ fn the_flow_gives_a_stacked_pr_its_base_pr_as_a_need_and_as_its_blocker_until_it
          INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          VALUES ('ship', 'stk2', '/r/wb', 'cpd/ship/wb', 'waiting', 'cpd/ship/stk2', cpd_txn(), '2026-01-02T00:00:00.000Z');",
     );
-    let node = read::plan_boxes(&mut store, &plan("ship")).unwrap().workflows.into_iter().find(|p| p.key.as_str() == "stk2").unwrap();
+    let node = read::plan_boxes(&mut store, &plan("ship"))
+        .unwrap()
+        .workflows
+        .into_iter()
+        .find(|p| p.key.as_str() == "stk2")
+        .unwrap();
     assert_eq!(node.waiting_on, ["wb"], "a base PR that is waiting blocks");
-    sql(&mut store, "UPDATE workflows SET status = 'open', pr_number = 92, pull_request = (SELECT id FROM pull_requests WHERE number = 92), pr_url = 'https://github.com/acme/zeta/pull/92', pr_opened_at = '2026-01-02T00:00:00.000Z', started_at = '2026-01-02T00:00:00.000Z', lead_worktree = '/wt/zeta' WHERE plan = 'ship' AND key = 'zeta'");
+    sql(
+        &mut store,
+        "UPDATE workflows SET status = 'open', pr_number = 92, pull_request = (SELECT id FROM pull_requests WHERE number = 92), pr_url = 'https://github.com/acme/zeta/pull/92', pr_opened_at = '2026-01-02T00:00:00.000Z', started_at = '2026-01-02T00:00:00.000Z', lead_worktree = '/wt/zeta' WHERE plan = 'ship' AND key = 'zeta'",
+    );
     let (needs, waiting_on) = stk(&mut store);
     assert_eq!(needs, ["mid", "zeta"], "an open base PR is still listed");
     assert!(

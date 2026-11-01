@@ -15,8 +15,8 @@ use crate::clock::Clock;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::Hook;
 use crate::host::runner::Runner;
-use crate::ports::Ports;
 use crate::ids::{AttemptId, PlanId, WorkflowKey};
+use crate::ports::Ports;
 
 /// The LEGACY Lead Branch of a Plan: `cpd/<plan>` (a Workflow made before R34 keeps it; a new Workflow's is `<plan>/<key>`).
 pub fn legacy_lead_branch(plan: &PlanId) -> String {
@@ -57,7 +57,12 @@ pub fn lead_worktree_path(repo: &Path, plan: &PlanId) -> Result<PathBuf, CpdErro
 /// The Lead worktree of a Workflow (contract §7.1): `<repo-parent>/<repo-name>.<plan>.<key>`.
 /// A Workflow made by migration 4 keeps the Lead Branch `cpd/<plan>` and with it the
 /// worktree `<repo-parent>/<repo-name>.<plan>` it had.
-pub fn workflow_lead_worktree_path(repo: &Path, plan: &PlanId, key: &WorkflowKey, lead_branch_name: &str) -> Result<PathBuf, CpdError> {
+pub fn workflow_lead_worktree_path(
+    repo: &Path,
+    plan: &PlanId,
+    key: &WorkflowKey,
+    lead_branch_name: &str,
+) -> Result<PathBuf, CpdError> {
     if lead_branch_name == legacy_lead_branch(plan) {
         lead_worktree_path(repo, plan)
     } else {
@@ -75,7 +80,12 @@ pub fn attempt_worktree_path(
 }
 
 /// The Gate worktree for a Workflow's process: `<repo-parent>/<repo-name>.<plan>--<key>-gate-<pid>`.
-pub fn gate_worktree_path(repo: &Path, plan: &PlanId, key: &WorkflowKey, pid: u32) -> Result<PathBuf, CpdError> {
+pub fn gate_worktree_path(
+    repo: &Path,
+    plan: &PlanId,
+    key: &WorkflowKey,
+    pid: u32,
+) -> Result<PathBuf, CpdError> {
     sibling(repo, &format!("{plan}--{key}-gate-{pid}"))
 }
 
@@ -587,7 +597,12 @@ pub struct RebaseWorktree {
 impl RebaseWorktree {
     /// `git -C <repo> worktree add --detach --lock --reason "cpd rebase <pid>" W <sha>`, `W` the
     /// rebase worktree of this process's pid.
-    pub fn add(repo: &Path, plan: &PlanId, key: &WorkflowKey, sha: &str) -> Result<RebaseWorktree, CpdError> {
+    pub fn add(
+        repo: &Path,
+        plan: &PlanId,
+        key: &WorkflowKey,
+        sha: &str,
+    ) -> Result<RebaseWorktree, CpdError> {
         let pid = std::process::id();
         let path = sibling(repo, &format!("{plan}.{key}.rebase-{pid}"))?;
         let reason = format!("cpd rebase {pid}");
@@ -672,7 +687,16 @@ pub fn prepare_lead_worktree(
     base: &str,
     setup: &Setup,
 ) -> Result<Prepared, StartFailure> {
-    prepare_workflow_lead_worktree(repo, plan, path, branch, base, Cut::Base, setup, &Pipeline::default())
+    prepare_workflow_lead_worktree(
+        repo,
+        plan,
+        path,
+        branch,
+        base,
+        Cut::Base,
+        setup,
+        &Pipeline::default(),
+    )
 }
 
 /// [`prepare_lead_worktree`] of a **stacked** Workflow: `base` is its base Workflow's Lead Branch, and the branch is cut from
@@ -686,7 +710,16 @@ pub fn prepare_stacked_lead_worktree(
     base: &str,
     setup: &Setup,
 ) -> Result<Prepared, StartFailure> {
-    prepare_workflow_lead_worktree(repo, plan, path, branch, base, Cut::Stacked, setup, &Pipeline::default())
+    prepare_workflow_lead_worktree(
+        repo,
+        plan,
+        path,
+        branch,
+        base,
+        Cut::Stacked,
+        setup,
+        &Pipeline::default(),
+    )
 }
 
 /// Where a Lead Branch is cut from: `origin/<base>` (or the branch already on the remote), a stacked Workflow's base Workflow's
@@ -817,7 +850,17 @@ pub fn create_lead_worktree_with(
     pre_start: &Pipeline,
 ) -> Result<Created, CpdError> {
     let path = lead_worktree_path(repo, plan)?;
-    let prepared = prepare_workflow_lead_worktree(repo, plan, &path, &legacy_lead_branch(plan), base, Cut::Base, setup, pre_start).map_err(|f| f.error)?;
+    let prepared = prepare_workflow_lead_worktree(
+        repo,
+        plan,
+        &path,
+        &legacy_lead_branch(plan),
+        base,
+        Cut::Base,
+        setup,
+        pre_start,
+    )
+    .map_err(|f| f.error)?;
     // The remote is touched only after `pre-start` has passed.
     let push_failed = prepared.push().err();
     Ok(Created {
@@ -1005,7 +1048,10 @@ pub fn remove_merged_lead(
 /// pull request's recorded head `oid` (contract §7.2 "The recorded head"; no `oid`, or an object this repo does not
 /// have, excludes nothing). A merge commit is not work: a lone local merge of the base (rule S) is no reason to keep a
 /// merged Workflow's worktree (hygiene.md 8a).
-fn has_unpushed_work(worktree: &Path, recorded_head: impl FnOnce() -> Option<String>) -> Result<bool, CpdError> {
+fn has_unpushed_work(
+    worktree: &Path,
+    recorded_head: impl FnOnce() -> Option<String>,
+) -> Result<bool, CpdError> {
     let list = |extra: Option<&str>| -> Result<bool, CpdError> {
         let mut args = vec![
             "rev-list",

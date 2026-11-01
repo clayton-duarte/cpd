@@ -9,8 +9,13 @@ use super::workflow::{Poll, Rows, code, open_jobs, poll_fx};
 /// A PR `repo` in `dispatch`, described, whose owner's policy holds `policy` in its `[pr]` table.
 fn fx_with(policy: &str) -> Poll {
     let fx = poll_fx("dispatch");
-    fx.env.owner_policy("acme", &format!("[pr]\ngate = \"local\"\n{policy}"));
-    fx.store().write("fixture", |tx| Ok(tx.execute_batch("UPDATE workflows SET description = 'A description'")?)).unwrap();
+    fx.env
+        .owner_policy("acme", &format!("[pr]\ngate = \"local\"\n{policy}"));
+    fx.store()
+        .write("fixture", |tx| {
+            Ok(tx.execute_batch("UPDATE workflows SET description = 'A description'")?)
+        })
+        .unwrap();
     fx
 }
 
@@ -27,7 +32,13 @@ fn pr_open_refuses_jira_required_without_a_ticket() {
 
     assert_eq!(code(&run), ("jira_required".into(), 3));
     let error = run.error();
-    assert!(error["message"].as_str().unwrap().contains("cpd workflow edit repo --jira"), "{error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("cpd workflow edit repo --jira"),
+        "{error}"
+    );
     assert_eq!(error["details"], json!({"plan": "pay", "pr": "repo"}));
     assert_eq!(
         (fx.plan_row().0, fx.txns(), open_jobs(&fx)),
@@ -43,7 +54,11 @@ fn pr_open_refuses_jira_required_without_a_ticket() {
 #[test]
 fn pr_open_opens_the_pull_request_of_a_pr_with_a_jira_key_when_it_is_required() {
     let fx = fx_with("jira_required = true\n");
-    fx.store().write("fixture", |tx| Ok(tx.execute_batch("UPDATE workflows SET jira = 'ABC-1'")?)).unwrap();
+    fx.store()
+        .write("fixture", |tx| {
+            Ok(tx.execute_batch("UPDATE workflows SET jira = 'ABC-1'")?)
+        })
+        .unwrap();
 
     open(&fx).ok();
 

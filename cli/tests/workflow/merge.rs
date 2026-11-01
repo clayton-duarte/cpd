@@ -24,7 +24,10 @@ use cpd_core::config::{Catalog, Config, TierModel};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::fakes::git::{Oid, parse};
 use cpd_core::git::worktree::prepare_stacked_lead_worktree;
-use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree, workflow_lead_worktree_path, prepare_lead_worktree};
+use cpd_core::git::{
+    Setup, create_attempt_worktree, create_lead_worktree, prepare_lead_worktree,
+    workflow_lead_worktree_path,
+};
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, Reply};
 use cpd_core::ids::{AttemptId, PlanId, WorkflowKey};
@@ -289,7 +292,13 @@ impl Fx {
 
     /// The PR `repo` that [`fx`] makes: Lead Branch `cpd/pay` in `self.repo`.
     fn first_pr(&self) -> Workflow {
-        Workflow { key: "repo".into(), repo: self.repo.clone(), branch: "cpd/pay".into(), lead: self.lead.clone(), origin: None }
+        Workflow {
+            key: "repo".into(),
+            repo: self.repo.clone(),
+            branch: "cpd/pay".into(),
+            lead: self.lead.clone(),
+            origin: None,
+        }
     }
 
     /// Job `key` (`running`, Tier S2) of the first PR with Attempt `<key>-a1` in `merging`:
@@ -300,19 +309,38 @@ impl Fx {
     }
 
     /// [`Fx::submitted`] for a Job of `pr`.
-    fn submitted_on(&self, pr: &Workflow, key: &str, path: &str, content: &str) -> (AttemptId, PathBuf) {
+    fn submitted_on(
+        &self,
+        pr: &Workflow,
+        key: &str,
+        path: &str,
+        content: &str,
+    ) -> (AttemptId, PathBuf) {
         self.submitted_as(pr, key, "work", Some((path, content)))
     }
 
     /// [`Fx::submitted_on`] for a Job of `kind`, whose Attempt commits `change` (a path and its content) or, when there is none,
     /// nothing: an `open` or `update` Worker whose base did not move submits the Lead tip as it is (contract §7.7).
-    fn submitted_as(&self, pr: &Workflow, key: &str, kind: &str, change: Option<(&str, &str)>) -> (AttemptId, PathBuf) {
+    fn submitted_as(
+        &self,
+        pr: &Workflow,
+        key: &str,
+        kind: &str,
+        change: Option<(&str, &str)>,
+    ) -> (AttemptId, PathBuf) {
         self.submitted_needing(pr, key, kind, change, None)
     }
 
     /// [`Fx::submitted_as`] for a Job that needs the merged `test` Job `t`, whose `test_files` are `guarded` (a JSON array): `t` and the
     /// Dependency are written in the Job's own transaction (a Dependency of a Locked Job is refused later, `dependencies_locked`).
-    fn submitted_needing(&self, pr: &Workflow, key: &str, kind: &str, change: Option<(&str, &str)>, guarded: Option<&str>) -> (AttemptId, PathBuf) {
+    fn submitted_needing(
+        &self,
+        pr: &Workflow,
+        key: &str,
+        kind: &str,
+        change: Option<(&str, &str)>,
+        guarded: Option<&str>,
+    ) -> (AttemptId, PathBuf) {
         let attempt = AttemptId::parse(&format!("{key}-a1")).unwrap();
         let setup = Setup {
             timeout: Duration::from_secs(30),
@@ -366,9 +394,24 @@ impl Fx {
     /// `cpd/pay/<key>` and its Lead worktree, pushed when the repo has an `origin`.
     fn add_pr(&self, key: &str, repo: &Path, origin: Option<PathBuf>) -> Workflow {
         let branch = format!("cpd/pay/{key}");
-        let path = self.scoped(|| workflow_lead_worktree_path(repo, &plan(), &WorkflowKey::parse(key).unwrap(), &branch)).unwrap();
-        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("lead.log") };
-        let prepared = self.scoped(|| prepare_lead_worktree(repo, &plan(), &path, &branch, "main", &setup)).map_err(|f| f.error).unwrap();
+        let path = self
+            .scoped(|| {
+                workflow_lead_worktree_path(
+                    repo,
+                    &plan(),
+                    &WorkflowKey::parse(key).unwrap(),
+                    &branch,
+                )
+            })
+            .unwrap();
+        let setup = Setup {
+            timeout: Duration::from_secs(30),
+            log: self.env.root().join("lead.log"),
+        };
+        let prepared = self
+            .scoped(|| prepare_lead_worktree(repo, &plan(), &path, &branch, "main", &setup))
+            .map_err(|f| f.error)
+            .unwrap();
         self.scoped(|| prepared.push()).unwrap();
         // The PR's policy is its repo's policy file, named as the PR.
         self.env.repo_policy("acme", key, "");
@@ -382,7 +425,13 @@ impl Fx {
                 Ok(())
             })
             .unwrap();
-        Workflow { key: key.into(), repo: repo.to_owned(), branch, lead: path, origin }
+        Workflow {
+            key: key.into(),
+            repo: repo.to_owned(),
+            branch,
+            lead: path,
+            origin,
+        }
     }
 
     /// Adds PR `key` of Plan `pay`, **stacked** on `base_pr` and started as `pr start` does: its Lead Branch
@@ -390,9 +439,33 @@ impl Fx {
     fn add_stacked_pr(&self, key: &str, base_pr: &Workflow) -> Workflow {
         let repo = &base_pr.repo;
         let branch = format!("cpd/pay/{key}");
-        let path = self.scoped(|| workflow_lead_worktree_path(repo, &plan(), &WorkflowKey::parse(key).unwrap(), &branch)).unwrap();
-        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("lead.log") };
-        let prepared = self.scoped(|| prepare_stacked_lead_worktree(repo, &plan(), &path, &branch, &base_pr.branch, &setup)).map_err(|f| f.error).unwrap();
+        let path = self
+            .scoped(|| {
+                workflow_lead_worktree_path(
+                    repo,
+                    &plan(),
+                    &WorkflowKey::parse(key).unwrap(),
+                    &branch,
+                )
+            })
+            .unwrap();
+        let setup = Setup {
+            timeout: Duration::from_secs(30),
+            log: self.env.root().join("lead.log"),
+        };
+        let prepared = self
+            .scoped(|| {
+                prepare_stacked_lead_worktree(
+                    repo,
+                    &plan(),
+                    &path,
+                    &branch,
+                    &base_pr.branch,
+                    &setup,
+                )
+            })
+            .map_err(|f| f.error)
+            .unwrap();
         self.scoped(|| prepared.push()).unwrap();
         // The PR's policy is its repo's policy file, named as the PR.
         self.env.repo_policy("acme", key, "");
@@ -406,12 +479,21 @@ impl Fx {
                 Ok(())
             })
             .unwrap();
-        Workflow { key: key.into(), repo: repo.clone(), branch, lead: path, origin: base_pr.origin.clone() }
+        Workflow {
+            key: key.into(),
+            repo: repo.clone(),
+            branch,
+            lead: path,
+            origin: base_pr.origin.clone(),
+        }
     }
 
     /// The tip of `pr`'s Lead Branch, read in its repo.
     fn tip(&self, pr: &Workflow) -> String {
-        self.git(&pr.repo, &["rev-parse", &format!("refs/heads/{}", pr.branch)])
+        self.git(
+            &pr.repo,
+            &["rev-parse", &format!("refs/heads/{}", pr.branch)],
+        )
     }
 
     /// Another Job's merge into `pr`: a commit through its Lead worktree.
@@ -421,7 +503,10 @@ impl Fx {
 
     /// The tip of `branch` on `pr`'s `origin`.
     fn remote_tip(&self, pr: &Workflow) -> String {
-        self.git(pr.origin.as_ref().expect("the PR's repo has an origin"), &["rev-parse", &format!("refs/heads/{}", pr.branch)])
+        self.git(
+            pr.origin.as_ref().expect("the PR's repo has an origin"),
+            &["rev-parse", &format!("refs/heads/{}", pr.branch)],
+        )
     }
 
     /// R as E2 runs it, for each Attempt in `merging` of a PR on `repo`, with no repo lock.

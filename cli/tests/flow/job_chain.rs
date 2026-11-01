@@ -63,7 +63,21 @@ fn seed(fx: &Fx, key: &str, kind: &str, status: &str, needs: &[&str]) {
 
 fn add(fx: &Fx, key: &str, extra: &[&str]) -> crate::common::Run {
     let spec = spec_file(&fx.env);
-    let mut args = vec!["job", "add", key, "--title", "Fix", "--tier", "S2", "--spec", &spec, "--workflow", "fix", "--plan", "pl"];
+    let mut args = vec![
+        "job",
+        "add",
+        key,
+        "--title",
+        "Fix",
+        "--tier",
+        "S2",
+        "--spec",
+        &spec,
+        "--workflow",
+        "fix",
+        "--plan",
+        "pl",
+    ];
     args.extend(extra);
     fx.cpd(&args)
 }

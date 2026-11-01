@@ -545,8 +545,13 @@ fn a_merge_of_an_owned_pull_request_records_the_prs_merge_hs_d526() {
     );
     fx.cpd(&["pr", "merge", REF]).ok();
     assert_ne!(fx.cpd(&["pr", "poll"]).exit, 0, "the poll fails");
-    assert_eq!(env.query::<String>("SELECT status FROM workflows WHERE key = 'api'"), "merged");
-    let events = fx.cpd(&["events", "list", "--kind", "pr-merged", "--plan", "pay-1"]).ok();
+    assert_eq!(
+        env.query::<String>("SELECT status FROM workflows WHERE key = 'api'"),
+        "merged"
+    );
+    let events = fx
+        .cpd(&["events", "list", "--kind", "pr-merged", "--plan", "pay-1"])
+        .ok();
     assert_eq!(events["events"].as_array().unwrap().len(), 1, "{events}");
 }
 

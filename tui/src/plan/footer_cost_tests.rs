@@ -15,7 +15,9 @@ fn chars(s: &str) -> Vec<String> {
 }
 
 fn canvas(workflows: &[WorkflowNode]) -> Buffer {
-    boxes::layout(workflows, &[], &NeedsUser::default(), 0).chart.buf
+    boxes::layout(workflows, &[], &NeedsUser::default(), 0)
+        .chart
+        .buf
 }
 
 /// The first row of `buf` that starts with `╰`, as cells (trailing blanks trimmed).
@@ -29,7 +31,11 @@ fn bottom(buf: &Buffer) -> (usize, Vec<String>) {
 }
 
 fn with(key: &str, secs: Option<u64>, cost: Option<f64>) -> WorkflowNode {
-    WorkflowNode { elapsed_seconds: secs, cost_usd: cost, ..sample_workflow(key) }
+    WorkflowNode {
+        elapsed_seconds: secs,
+        cost_usd: cost,
+        ..sample_workflow(key)
+    }
 }
 
 /// Box `a` of repo `r` and base `m`: 26 cells wide with no Jobs.
@@ -144,7 +150,10 @@ fn a_box_is_widened_to_hold_the_time_and_the_cost_plus_four() {
 
 /// The `┬` columns of box `a`'s bottom border, that another Workflow `b` needs; and the canvas, the row, the box's width.
 fn exit(secs: Option<u64>, cost: Option<f64>) -> (Buffer, usize, usize, Vec<usize>) {
-    let web = WorkflowNode { needs: vec![WorkflowKey::parse("a").unwrap()], ..sample_workflow("b") };
+    let web = WorkflowNode {
+        needs: vec![WorkflowKey::parse("a").unwrap()],
+        ..sample_workflow("b")
+    };
     let buf = canvas(&[small(secs, cost), web]);
     let r = rows(&buf);
     let y = r.iter().position(|l| l.starts_with('╰')).unwrap();

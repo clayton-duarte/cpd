@@ -41,10 +41,28 @@ fn store(phase: &str, extra: &str) -> (tempfile::TempDir, Store) {
 
 /// SQL for the Job `key` of Workflow `pr`: a stub draft, a full draft (`full`) or any other status, with its needs.
 fn job(key: &str, workflow: &str, kind: &str, status: &str, full: bool, needs: &[&str]) -> String {
-    let (tier, spec) = if full || status != "draft" { ("'S2'", "'g', 'c', '[\"a\"]', '[\"b\"]', '[]'") } else { ("NULL", "NULL, NULL, NULL, NULL, NULL") };
-    let fingerprint = if status == "draft" { "NULL".to_owned() } else { format!("'{}'", "f".repeat(64)) };
-    let column = |wanted: &str, value: &str| if status == wanted { value.to_owned() } else { "NULL".to_owned() };
-    let (failed, merged, cancelled) = (column("failed", "'timed_out'"), column("merged", "'abc'"), column("cancelled", "'x'"));
+    let (tier, spec) = if full || status != "draft" {
+        ("'S2'", "'g', 'c', '[\"a\"]', '[\"b\"]', '[]'")
+    } else {
+        ("NULL", "NULL, NULL, NULL, NULL, NULL")
+    };
+    let fingerprint = if status == "draft" {
+        "NULL".to_owned()
+    } else {
+        format!("'{}'", "f".repeat(64))
+    };
+    let column = |wanted: &str, value: &str| {
+        if status == wanted {
+            value.to_owned()
+        } else {
+            "NULL".to_owned()
+        }
+    };
+    let (failed, merged, cancelled) = (
+        column("failed", "'timed_out'"),
+        column("merged", "'abc'"),
+        column("cancelled", "'x'"),
+    );
     let mut sql = format!(
         "INSERT INTO jobs (plan, workflow, key, title, kind, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, failed_cause, merged_sha, cancel_reason, cancel_requested_at, created_txn, created_at)
          VALUES ('pl', '{workflow}', '{key}', 'T', '{kind}', {tier}, {spec}, '{status}', 1, {fingerprint}, {failed}, {merged}, {cancelled}, {cancelled}, cpd_txn(), 't');"

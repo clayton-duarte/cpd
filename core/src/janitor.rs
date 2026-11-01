@@ -158,17 +158,32 @@ fn event(e: &Entry) -> (PlanId, NewEvent) {
     let reason = e.reason.clone().unwrap_or_default();
     let (status, workflow, plan, path) = (&e.status, &e.workflow, &e.plan, &e.path);
     let (message, text) = if e.outcome == "kept" {
-        let m = format!("The clean-up of the {status} Workflow {workflow} of Plan {plan} kept {path} untouched: {reason}");
+        let m = format!(
+            "The clean-up of the {status} Workflow {workflow} of Plan {plan} kept {path} untouched: {reason}"
+        );
         (m.clone(), m)
     } else if e.renamed {
-        let m = format!("The clean-up of the {status} Workflow {workflow} of Plan {plan} removed {path}, but not everything: {reason}");
+        let m = format!(
+            "The clean-up of the {status} Workflow {workflow} of Plan {plan} removed {path}, but not everything: {reason}"
+        );
         (m.clone(), format!("{m}. The next janitor pass retries."))
     } else {
-        let m = format!("The clean-up of the {status} Workflow {workflow} of Plan {plan} did not remove {path}: {reason}");
+        let m = format!(
+            "The clean-up of the {status} Workflow {workflow} of Plan {plan} did not remove {path}: {reason}"
+        );
         (m.clone(), format!("{m}. The next janitor pass retries."))
     };
     let details = json!({"plan": plan, "pr": workflow, "status": status, "outcome": e.outcome, "path": path, "reason": reason});
-    (plan.clone(), NewEvent::error(text, SOURCE, ErrorCode::CleanupFailed.as_str(), &message, details))
+    (
+        plan.clone(),
+        NewEvent::error(
+            text,
+            SOURCE,
+            ErrorCode::CleanupFailed.as_str(),
+            &message,
+            details,
+        ),
+    )
 }
 
 /// A merged or cancelled Workflow with what its clean-up removes; also a live (`dispatch` or `open`) Workflow with only its ended
@@ -275,7 +290,15 @@ pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Mer
     for (plan, workflow, repo, lead_branch, lead_worktree, pull_request, status) in rows {
         let live = status == "dispatch" || status == "open";
         let list = attempts
-            .query_map([&plan, &workflow], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, bool>(3)?, r.get::<_, bool>(4)?)))?
+            .query_map([&plan, &workflow], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, bool>(3)?,
+                    r.get::<_, bool>(4)?,
+                ))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?
             .into_iter()
             .filter(|(_, _, _, ended, sweepable)| !live || *ended && *sweepable)
@@ -310,7 +333,17 @@ pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Mer
             lead_worktree
         };
         let seen: i64 = reported.query_row([plan.as_str(), workflow.as_str()], |r| r.get(0))?;
-        found.push(Merged { plan, workflow, status, repo, lead_branch, lead_worktree, pull_request, attempts: list, fresh: seen == 0 });
+        found.push(Merged {
+            plan,
+            workflow,
+            status,
+            repo,
+            lead_branch,
+            lead_worktree,
+            pull_request,
+            attempts: list,
+            fresh: seen == 0,
+        });
     }
     Ok(found)
 }

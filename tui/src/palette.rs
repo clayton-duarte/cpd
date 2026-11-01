@@ -584,7 +584,11 @@ pub fn pr_open(clean: bool) -> Meaning {
 pub const PR_CLOSED_ASKED: (&str, Meaning) = ("closed", Meaning::Failed);
 
 /// The Workflow states the legend lists, with the name shown.
-pub const PR_LEGEND: [(&str, PrState); 3] = [("open", PrState::Open), ("merged", PrState::Merged), ("closed", PrState::Closed)];
+pub const PR_LEGEND: [(&str, PrState); 3] = [
+    ("open", PrState::Open),
+    ("merged", PrState::Merged),
+    ("closed", PrState::Closed),
+];
 
 /// What an open pull request with a merge conflict reads instead of `open` (its `mergeable` is `conflicting`), and its
 /// meaning: the plan view's Workflow box title and the legend's Workflow states.

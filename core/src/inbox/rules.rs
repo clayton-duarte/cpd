@@ -19,9 +19,9 @@ use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 #[cfg(test)]
 use crate::ids::PrKey;
+use crate::ids::{ContextId, JobKey, PlanId, SessionId};
 use crate::job::home::JobHome;
 use crate::job::worked_on::failed_worked_on;
-use crate::ids::{ContextId, JobKey, PlanId, SessionId};
 use crate::plan::Phase;
 use crate::plan::parked_wake::wake_state;
 use crate::ports::Ports;
@@ -687,7 +687,12 @@ fn review_requested(
         Ok(lookup) => lookup,
         Err(e) => return kept_review_items(store, Some(&e)),
     };
-    let read = |p: &Post| -> Option<&GhPr> { lookup.workflows.get(&(p.repo.clone(), p.number)).and_then(Option::as_ref) };
+    let read = |p: &Post| -> Option<&GhPr> {
+        lookup
+            .workflows
+            .get(&(p.repo.clone(), p.number))
+            .and_then(Option::as_ref)
+    };
     if posts.iter().all(|p| read(p).is_none()) {
         let none = CpdError::new(
             ErrorCode::GhFailed,
@@ -701,16 +706,26 @@ fn review_requested(
         .filter(|post| !settled.contains(&format!("pr:{}#{}", post.repo, post.number)))
         .filter_map(|post| {
             let workflow = read(post)?;
-            matches!(team::status(post, workflow, &lookup.me, team.bot_reviewers), Status::NeedsReview(_)).then_some((post, workflow))
+            matches!(
+                team::status(post, workflow, &lookup.me, team.bot_reviewers),
+                Status::NeedsReview(_)
+            )
+            .then_some((post, workflow))
         })
         .map(|(post, workflow)| {
-            let name = post.repo.split_once('/').map_or(post.repo.as_str(), |(_, name)| name);
+            let name = post
+                .repo
+                .split_once('/')
+                .map_or(post.repo.as_str(), |(_, name)| name);
             Condition {
                 kind: Kind::ReviewRequested,
                 urgency: Urgency::Blue,
                 subject: format!("pr:{}#{}", post.repo, post.number),
                 label: format!("review {name}#{}\n{}", post.number, workflow.title),
-                url: Some(format!("https://github.com/{}/pull/{}", post.repo, post.number)),
+                url: Some(format!(
+                    "https://github.com/{}/pull/{}",
+                    post.repo, post.number
+                )),
                 context: None,
                 plan: None,
                 job: None,
@@ -1386,8 +1401,23 @@ mod tests {
         let groups = stuck_groups(f.stuck());
         assert_eq!(groups.len(), 1, "one Workflow, one group");
         let group = &groups[0];
-        assert_eq!((&group.plan, &group.home, group.event), (&PlanId::parse("pay").unwrap(), &JobHome::Workflow(WorkflowKey::parse("p1").unwrap()), b));
-        assert_eq!(group.jobs.iter().map(|j| j.job.as_str()).collect::<Vec<_>>(), ["a", "b"], "oldest Event first");
+        assert_eq!(
+            (&group.plan, &group.home, group.event),
+            (
+                &PlanId::parse("pay").unwrap(),
+                &JobHome::Workflow(WorkflowKey::parse("p1").unwrap()),
+                b
+            )
+        );
+        assert_eq!(
+            group
+                .jobs
+                .iter()
+                .map(|j| j.job.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"],
+            "oldest Event first"
+        );
         assert_eq!(group.jobs[0].event, a);
     }
 
@@ -1420,7 +1450,14 @@ mod tests {
             r#"{}"#,
         );
         let groups = stuck_groups(f.stuck());
-        assert_eq!(groups.iter().map(|g| g.home.clone()).collect::<Vec<_>>(), [JobHome::Workflow(WorkflowKey::parse("p2").unwrap()), JobHome::Workflow(WorkflowKey::parse("p1").unwrap())], "the group of the oldest first Event leads");
+        assert_eq!(
+            groups.iter().map(|g| g.home.clone()).collect::<Vec<_>>(),
+            [
+                JobHome::Workflow(WorkflowKey::parse("p2").unwrap()),
+                JobHome::Workflow(WorkflowKey::parse("p1").unwrap())
+            ],
+            "the group of the oldest first Event leads"
+        );
     }
 
     #[test]
@@ -1799,8 +1836,16 @@ mod tests {
                 "{kind:?}"
             );
         }
-        let c = one(f.of(Kind::PrReady).into_iter().filter(|c| c.subject == "pr:acme/shop#7").collect());
-        assert_eq!((c.plan, c.session), (None, None), "a pull request no Workflow owns");
+        let c = one(f
+            .of(Kind::PrReady)
+            .into_iter()
+            .filter(|c| c.subject == "pr:acme/shop#7")
+            .collect());
+        assert_eq!(
+            (c.plan, c.session),
+            (None, None),
+            "a pull request no Workflow owns"
+        );
     }
 
     #[test]
@@ -1927,7 +1972,13 @@ mod tests {
     }
 
     fn lookup(workflows: &[(&str, u64, GhPr)]) -> Lookup {
-        Lookup { me: ME_LOGIN.to_owned(), workflows: workflows.iter().map(|(repo, n, workflow)| (((*repo).to_owned(), *n), Some(workflow.clone()))).collect() }
+        Lookup {
+            me: ME_LOGIN.to_owned(),
+            workflows: workflows
+                .iter()
+                .map(|(repo, n, workflow)| (((*repo).to_owned(), *n), Some(workflow.clone())))
+                .collect(),
+        }
     }
 
     fn team<'a>(github: GithubLookup<'a>) -> Team<'a> {
@@ -1940,11 +1991,25 @@ mod tests {
     }
 
     /// The `review-requested` conditions for the cache's `posts` and GitHub's `prs`.
-    fn reviews(f: &mut Fixture, posts: &[Value], workflows: &[(&str, u64, GhPr)]) -> Vec<Condition> {
+    fn reviews(
+        f: &mut Fixture,
+        posts: &[Value],
+        workflows: &[(&str, u64, GhPr)],
+    ) -> Vec<Condition> {
         write_cache(f, posts);
         let lookup = lookup(workflows);
-        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Ok(lookup.clone())))).unwrap();
-        all.into_iter().filter(|c| c.kind == Kind::ReviewRequested).collect()
+        let all = conditions_with(
+            &mut f.store,
+            &f.home,
+            NOW,
+            20,
+            1,
+            Some(team(&mut |_| Ok(lookup.clone()))),
+        )
+        .unwrap();
+        all.into_iter()
+            .filter(|c| c.kind == Kind::ReviewRequested)
+            .collect()
     }
 
     #[test]
@@ -1986,27 +2051,124 @@ mod tests {
         };
         let cases: Vec<(&str, Value, GhPr, bool)> = vec![
             ("no review yet", post("acme/pay", 1), open_pr(), true),
-            ("AI review only", post("acme/pay", 1), reviewed_by("github-actions"), true),
-            ("a human is reviewing", post("acme/pay", 1), reviewed_by("wes"), false),
-            ("draft", post("acme/pay", 1), GhPr { draft: true, ..open_pr() }, false),
-            ("the User's own Workflow", post("acme/pay", 1), GhPr { author: ME_LOGIN.to_owned(), ..open_pr() }, false),
-            ("merged", post("acme/pay", 1), GhPr { state: GhState::Merged, ..open_pr() }, false),
-            ("closed", post("acme/pay", 1), GhPr { state: GhState::Closed, ..open_pr() }, false),
+            (
+                "AI review only",
+                post("acme/pay", 1),
+                reviewed_by("github-actions"),
+                true,
+            ),
+            (
+                "a human is reviewing",
+                post("acme/pay", 1),
+                reviewed_by("wes"),
+                false,
+            ),
+            (
+                "draft",
+                post("acme/pay", 1),
+                GhPr {
+                    draft: true,
+                    ..open_pr()
+                },
+                false,
+            ),
+            (
+                "the User's own Workflow",
+                post("acme/pay", 1),
+                GhPr {
+                    author: ME_LOGIN.to_owned(),
+                    ..open_pr()
+                },
+                false,
+            ),
+            (
+                "merged",
+                post("acme/pay", 1),
+                GhPr {
+                    state: GhState::Merged,
+                    ..open_pr()
+                },
+                false,
+            ),
+            (
+                "closed",
+                post("acme/pay", 1),
+                GhPr {
+                    state: GhState::Closed,
+                    ..open_pr()
+                },
+                false,
+            ),
             ("approved", post("acme/pay", 1), approved, false),
             ("changes requested", post("acme/pay", 1), changes, false),
-            ("claimed by a peer's :eyes:", claimed(post("acme/pay", 1), json!(false)), open_pr(), false),
-            ("claimed, attribution unavailable", claimed(post("acme/pay", 1), Value::Null), open_pr(), false),
-            ("assigned to someone in Slack", {
-                let mut p = post("acme/pay", 1);
-                p["claim"] = json!({"kind": "claimed", "reason": "assigned to someone in Slack"});
-                p
-            }, open_pr(), false),
-            ("the User's own :eyes: alone", claimed(post("acme/pay", 1), json!(true)), open_pr(), true),
-            ("tagged in the thread of a claimed post", tagged(claimed(post("acme/pay", 1), json!(false))), open_pr(), true),
-            ("tagged in the thread of a reviewed Workflow", tagged(post("acme/pay", 1)), reviewed_by("wes"), true),
-            ("tagged under a merged Workflow", tagged(post("acme/pay", 1)), GhPr { state: GhState::Merged, ..open_pr() }, false),
-            ("tagged under changes requested", tagged(post("acme/pay", 1)), GhPr { decision: Some("CHANGES_REQUESTED".to_owned()), ..open_pr() }, false),
-            ("tagged under a draft", tagged(post("acme/pay", 1)), GhPr { draft: true, ..open_pr() }, false),
+            (
+                "claimed by a peer's :eyes:",
+                claimed(post("acme/pay", 1), json!(false)),
+                open_pr(),
+                false,
+            ),
+            (
+                "claimed, attribution unavailable",
+                claimed(post("acme/pay", 1), Value::Null),
+                open_pr(),
+                false,
+            ),
+            (
+                "assigned to someone in Slack",
+                {
+                    let mut p = post("acme/pay", 1);
+                    p["claim"] =
+                        json!({"kind": "claimed", "reason": "assigned to someone in Slack"});
+                    p
+                },
+                open_pr(),
+                false,
+            ),
+            (
+                "the User's own :eyes: alone",
+                claimed(post("acme/pay", 1), json!(true)),
+                open_pr(),
+                true,
+            ),
+            (
+                "tagged in the thread of a claimed post",
+                tagged(claimed(post("acme/pay", 1), json!(false))),
+                open_pr(),
+                true,
+            ),
+            (
+                "tagged in the thread of a reviewed Workflow",
+                tagged(post("acme/pay", 1)),
+                reviewed_by("wes"),
+                true,
+            ),
+            (
+                "tagged under a merged Workflow",
+                tagged(post("acme/pay", 1)),
+                GhPr {
+                    state: GhState::Merged,
+                    ..open_pr()
+                },
+                false,
+            ),
+            (
+                "tagged under changes requested",
+                tagged(post("acme/pay", 1)),
+                GhPr {
+                    decision: Some("CHANGES_REQUESTED".to_owned()),
+                    ..open_pr()
+                },
+                false,
+            ),
+            (
+                "tagged under a draft",
+                tagged(post("acme/pay", 1)),
+                GhPr {
+                    draft: true,
+                    ..open_pr()
+                },
+                false,
+            ),
         ];
         let mut f = fixture("dispatch");
         for (rule, post, workflow, opens) in cases {
@@ -2020,7 +2182,15 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 5, "none", "unknown", "none");
         set(&mut f, 5, "authored = 0, review_requested = 1");
-        assert!(reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, reviewed_by("wes"))]).is_empty(), "posts of other Workflows");
+        assert!(
+            reviews(
+                &mut f,
+                &[post("acme/pay", 1)],
+                &[("acme/pay", 1, reviewed_by("wes"))]
+            )
+            .is_empty(),
+            "posts of other Workflows"
+        );
         assert!(f.of(Kind::ReviewRequested).is_empty(), "no rule at all");
         std::fs::remove_file(f.home.run_dir().join("team-review.json")).unwrap();
         let none = conditions_with(
@@ -2231,8 +2401,20 @@ mod tests {
         write_cache(&f, &[post("acme/pay", 1), post("acme/gone", 2)]);
         let mut answer = lookup(&[("acme/pay", 1, open_pr())]);
         answer.workflows.insert(("acme/gone".to_owned(), 2), None);
-        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Ok(answer.clone())))).unwrap();
-        assert_eq!(all.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(), ["pr:acme/pay#1"], "the readable one only, and no error");
+        let all = conditions_with(
+            &mut f.store,
+            &f.home,
+            NOW,
+            20,
+            1,
+            Some(team(&mut |_| Ok(answer.clone()))),
+        )
+        .unwrap();
+        assert_eq!(
+            all.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(),
+            ["pr:acme/pay#1"],
+            "the readable one only, and no error"
+        );
 
         let opened = reviews(
             &mut f,
@@ -2240,9 +2422,26 @@ mod tests {
             &[("acme/pay", 1, open_pr())],
         );
         reconcile(&mut f.store, &opened, T).unwrap();
-        let blind = Lookup { me: ME_LOGIN.to_owned(), workflows: [(("acme/pay".to_owned(), 1), None)].into() };
-        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Ok(blind.clone())))).unwrap();
-        assert_eq!(all.iter().filter(|c| c.kind == Kind::ReviewRequested).count(), 1, "every Workflow unreadable: the queue stays");
+        let blind = Lookup {
+            me: ME_LOGIN.to_owned(),
+            workflows: [(("acme/pay".to_owned(), 1), None)].into(),
+        };
+        let all = conditions_with(
+            &mut f.store,
+            &f.home,
+            NOW,
+            20,
+            1,
+            Some(team(&mut |_| Ok(blind.clone()))),
+        )
+        .unwrap();
+        assert_eq!(
+            all.iter()
+                .filter(|c| c.kind == Kind::ReviewRequested)
+                .count(),
+            1,
+            "every Workflow unreadable: the queue stays"
+        );
         assert!(all.iter().any(|c| c.kind == Kind::EngineError));
     }
 

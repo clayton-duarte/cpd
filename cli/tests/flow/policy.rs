@@ -301,8 +301,15 @@ fn pr_selects_its_repo_or_the_owner_when_unnamed() {
     let anon = show(&fx, &["--workflow", "anon", "--plan", "pl"]).ok();
     assert_eq!(key(&anon), ("acme", None));
     // The Plan may come from CPD_PLAN.
-    let out = fx.cpd_with(fx.env.root(), &["policy", "show", "--workflow", "named"], &[("CPD_PLAN", "pl")]);
-    assert_eq!(serde_json::from_str::<Value>(&out.stdout).unwrap()["key"]["repo"], "cpd");
+    let out = fx.cpd_with(
+        fx.env.root(),
+        &["policy", "show", "--workflow", "named"],
+        &[("CPD_PLAN", "pl")],
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&out.stdout).unwrap()["key"]["repo"],
+        "cpd"
+    );
 }
 
 #[test]
@@ -330,9 +337,21 @@ fn no_flag_resolves_the_callers_session() {
 fn usage_refusals() {
     let fx = world();
     refused(&show(&fx, &[]), "session_required", 2);
-    refused(&show(&fx, &["--workflow", "named", "--context", "ctx"]), "usage", 2);
-    refused(&show(&fx, &["--context", "ctx", "--owner", "acme"]), "usage", 2);
-    refused(&show(&fx, &["--workflow", "named", "--owner", "acme"]), "usage", 2);
+    refused(
+        &show(&fx, &["--workflow", "named", "--context", "ctx"]),
+        "usage",
+        2,
+    );
+    refused(
+        &show(&fx, &["--context", "ctx", "--owner", "acme"]),
+        "usage",
+        2,
+    );
+    refused(
+        &show(&fx, &["--workflow", "named", "--owner", "acme"]),
+        "usage",
+        2,
+    );
     refused(&show(&fx, &["--repo", "cpd"]), "usage", 2);
     refused(
         &show(&fx, &["--context", "ctx", "--repo", "cpd"]),
@@ -340,7 +359,11 @@ fn usage_refusals() {
         2,
     );
     refused(&show(&fx, &["--owner", "-bad"]), "usage", 2);
-    refused(&show(&fx, &["--owner", "acme", "--repo", "a b"]), "usage", 2);
+    refused(
+        &show(&fx, &["--owner", "acme", "--repo", "a b"]),
+        "usage",
+        2,
+    );
     refused(&show(&fx, &["--workflow", "named"]), "plan_required", 2);
 }
 
@@ -348,8 +371,16 @@ fn usage_refusals() {
 fn not_found_refusals() {
     let fx = world();
     refused(&show_as(&fx, "nope", None), "session_not_found", 4);
-    refused(&show(&fx, &["--workflow", "named", "--plan", "zz"]), "plan_not_found", 4);
-    refused(&show(&fx, &["--workflow", "zz", "--plan", "pl"]), "workflow_not_found", 4);
+    refused(
+        &show(&fx, &["--workflow", "named", "--plan", "zz"]),
+        "plan_not_found",
+        4,
+    );
+    refused(
+        &show(&fx, &["--workflow", "zz", "--plan", "pl"]),
+        "workflow_not_found",
+        4,
+    );
     refused(&show(&fx, &["--context", "zz"]), "context_not_found", 4);
 }
 

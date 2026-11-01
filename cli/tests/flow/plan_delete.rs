@@ -95,8 +95,30 @@ fn world_ending(fx: &Fx, plan: &str, merged: bool) -> World {
     fx.git(&bare, &["init", "-q", "--bare", "-b", "main"]);
     fx.local_origin(&repo, &bare);
     fx.git(&repo, &["push", "-q", "origin", "main"]);
-    fx.cpd(&["workflow", "add", "api", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", plan]).ok();
-    fx.cpd(&["job", "cancel", "api-config", "--reason", "a stub of the template", "--plan", plan]).ok();
+    fx.cpd(&[
+        "workflow",
+        "add",
+        "api",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        "Change the PR",
+        "--shape",
+        "config",
+        "--plan",
+        plan,
+    ])
+    .ok();
+    fx.cpd(&[
+        "job",
+        "cancel",
+        "api-config",
+        "--reason",
+        "a stub of the template",
+        "--plan",
+        plan,
+    ])
+    .ok();
 
     let (lead_worktree, attempt_worktree) = (
         fx.env.root().join("wt").join(format!("{plan}-api")),

@@ -9,8 +9,9 @@ use serde_json::json;
 
 use super::spec::{self, Spec};
 use super::{
-    EditArgs, Env, check_kind_not_reserved, check_needs_available, check_needs_known, check_needs_same_workflow, check_workflow_live, check_shape_allows, find,
-    plan_phase, sorted_needs,
+    EditArgs, Env, check_kind_not_reserved, check_needs_available, check_needs_known,
+    check_needs_same_workflow, check_shape_allows, check_workflow_live, find, plan_phase,
+    sorted_needs,
 };
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
@@ -53,7 +54,14 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
 /// [`edit`] on an open `env`: what a test hands in.
 pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
-    if args.title.is_none() && args.tier.is_none() && args.spec.is_none() && args.workflow.is_none() && args.kind.is_none() && args.needs.is_none() && !args.no_needs {
+    if args.title.is_none()
+        && args.tier.is_none()
+        && args.spec.is_none()
+        && args.workflow.is_none()
+        && args.kind.is_none()
+        && args.needs.is_none()
+        && !args.no_needs
+    {
         return Err(CpdError::new(
             ErrorCode::NothingToEdit,
             "Nothing to edit: pass --title, --tier, --spec, --workflow, --kind, --needs or --no-needs.",
@@ -163,9 +171,19 @@ fn decide(
         ));
     }
     if locked {
-        let attempts: i64 = conn.query_row("SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
-        let editable = before.status == "queued" && !matches!(before.kind.as_str(), "open" | "update") && attempts == 0;
-        let spec_only = edits.title.is_none() && edits.tier.is_none() && edits.workflow.is_none() && edits.kind.is_none() && edits.needs.is_none();
+        let attempts: i64 = conn.query_row(
+            "SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2",
+            [plan.as_str(), key.as_str()],
+            |r| r.get(0),
+        )?;
+        let editable = before.status == "queued"
+            && !matches!(before.kind.as_str(), "open" | "update")
+            && attempts == 0;
+        let spec_only = edits.title.is_none()
+            && edits.tier.is_none()
+            && edits.workflow.is_none()
+            && edits.kind.is_none()
+            && edits.needs.is_none();
         if !editable || !spec_only {
             let why = if editable {
                 "only its Spec (--spec) can change; title, Tier, Workflow, kind and Dependencies are Locked".to_owned()
@@ -209,7 +227,11 @@ fn decide(
         } else {
             // The Spec names no primary checkout of a Workflow of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
             let user_home = std::env::home_dir().unwrap_or_default();
-            spec.without_artefacts(home.root(), plan.as_str(), &user_home).check_primary_roots(&super::add::primary_roots(&load_workflows(conn, plan)?), &user_home)?;
+            spec.without_artefacts(home.root(), plan.as_str(), &user_home)
+                .check_primary_roots(
+                    &super::add::primary_roots(&load_workflows(conn, plan)?),
+                    &user_home,
+                )?;
             spec.check_files_relative()?;
         }
         after.spec = Some(spec.stored());
@@ -241,10 +263,16 @@ fn decide(
     }
     if let Some(workflow) = &edits.workflow {
         let workflows = load_workflows(conn, plan)?;
-        if !workflows.iter().any(|p| p.key.as_str() == workflow.as_str()) {
-            return Err(CpdError::new(ErrorCode::WorkflowNotFound, format!("No Workflow {workflow} in Plan {plan}."))
-                .with("plan", plan.as_str())
-                .with("pr", workflow.as_str()));
+        if !workflows
+            .iter()
+            .any(|p| p.key.as_str() == workflow.as_str())
+        {
+            return Err(CpdError::new(
+                ErrorCode::WorkflowNotFound,
+                format!("No Workflow {workflow} in Plan {plan}."),
+            )
+            .with("plan", plan.as_str())
+            .with("pr", workflow.as_str()));
         }
         check_workflow_live(&workflows, plan, workflow)?;
         after.workflow = Some(workflow.clone());
@@ -252,11 +280,22 @@ fn decide(
     let moved = after.workflow != before.workflow;
     if let (false, Some(spec)) = (explore, &edits.spec) {
         let workflows = load_workflows(conn, plan)?;
-        if let Some(workflow) = workflows.iter().find(|p| p.key.as_str() == after.workflow_str()) {
+        if let Some(workflow) = workflows
+            .iter()
+            .find(|p| p.key.as_str() == after.workflow_str())
+        {
             // A Lead Branch that is not in the repo (yet) is no tree to read: the Job starts from the Workflow's base.
             let mut workflow = workflow.clone();
-            let lead_exists = crate::git::run::run(std::path::Path::new(&workflow.repo), &["rev-parse", "--verify", "--quiet", &format!("{}^{{commit}}", workflow.lead_branch)])
-                .is_ok_and(|o| o.code == 0);
+            let lead_exists = crate::git::run::run(
+                std::path::Path::new(&workflow.repo),
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("{}^{{commit}}", workflow.lead_branch),
+                ],
+            )
+            .is_ok_and(|o| o.code == 0);
             if locked && !lead_exists {
                 workflow.lead_worktree = None;
             }
@@ -264,11 +303,26 @@ fn decide(
         }
     }
     if edits.spec.is_some() || moved {
-        let names: Option<Vec<String>> = after.resources.as_ref().and_then(|r| serde_json::from_value(r.clone()).ok());
-        super::add::check_resources_declared(conn, home, plan, after.workflow_str(), key.as_str(), names.as_deref())?;
+        let names: Option<Vec<String>> = after
+            .resources
+            .as_ref()
+            .and_then(|r| serde_json::from_value(r.clone()).ok());
+        super::add::check_resources_declared(
+            conn,
+            home,
+            plan,
+            after.workflow_str(),
+            key.as_str(),
+            names.as_deref(),
+        )?;
     }
     if !explore && (moved || after.kind != before.kind) {
-        check_shape_allows(&load_workflows(conn, plan)?, plan, after.workflow_str(), &after.kind)?;
+        check_shape_allows(
+            &load_workflows(conn, plan)?,
+            plan,
+            after.workflow_str(),
+            &after.kind,
+        )?;
     }
     // A Job that changes Workflow keeps none of its old needs: they are checked against the new Workflow.
     if let Some(needs) = &edits.needs {
@@ -289,7 +343,11 @@ fn decide(
         if !needing.is_empty() {
             return Err(CpdError::new(
                 ErrorCode::NeedsOtherWorkflow,
-                format!("Job {key} cannot change Workflow: {} need{} it.", needing.join(", "), if needing.len() == 1 { "s" } else { "" }),
+                format!(
+                    "Job {key} cannot change Workflow: {} need{} it.",
+                    needing.join(", "),
+                    if needing.len() == 1 { "s" } else { "" }
+                ),
             )
             .with("plan", plan.as_str())
             .with("pr", after.workflow_str())
@@ -381,11 +439,27 @@ fn update(tx: &Connection, plan: &PlanId, before: &Job, after: &Job) -> Result<(
             [plan.as_str(), after.key.as_str(), need.as_str()],
         )?;
     }
-    let mut written: Vec<(&str, bool, Option<String>)> =
-        vec![("title", before.title != after.title, Some(after.title.clone())), ("kind", before.kind != after.kind, Some(after.kind.clone()))];
-    written.extend(columns(before).into_iter().zip(columns(after)).map(|(b, a)| (a.0, b.1 != a.1, a.1)));
-    written.push(("pr", before.workflow != after.workflow, after.workflow.clone()));
-    let changed: Vec<&(&str, bool, Option<String>)> = written.iter().filter(|(_, changed, _)| *changed).collect();
+    let mut written: Vec<(&str, bool, Option<String>)> = vec![
+        (
+            "title",
+            before.title != after.title,
+            Some(after.title.clone()),
+        ),
+        ("kind", before.kind != after.kind, Some(after.kind.clone())),
+    ];
+    written.extend(
+        columns(before)
+            .into_iter()
+            .zip(columns(after))
+            .map(|(b, a)| (a.0, b.1 != a.1, a.1)),
+    );
+    written.push((
+        "pr",
+        before.workflow != after.workflow,
+        after.workflow.clone(),
+    ));
+    let changed: Vec<&(&str, bool, Option<String>)> =
+        written.iter().filter(|(_, changed, _)| *changed).collect();
     let fingerprint = (!after.is_draft()).then(|| jobs::locked_fingerprint(after));
     if !changed.is_empty() {
         let mut changed = changed;

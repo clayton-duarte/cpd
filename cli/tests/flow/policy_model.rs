@@ -418,8 +418,18 @@ fn m7_owner_and_repo_select_the_repos_models() {
 #[test]
 fn m7_pr_selects_its_repo() {
     let fx = tiers_world();
-    assert_tiers(&tiers(&fx, &["--workflow", "p1", "--plan", "pl"]).ok(), "one", Some("acme"), Some("r1"));
-    assert_tiers(&tiers(&fx, &["--workflow", "p2", "--plan", "pl"]).ok(), "two", Some("acme"), Some("r2"));
+    assert_tiers(
+        &tiers(&fx, &["--workflow", "p1", "--plan", "pl"]).ok(),
+        "one",
+        Some("acme"),
+        Some("r1"),
+    );
+    assert_tiers(
+        &tiers(&fx, &["--workflow", "p2", "--plan", "pl"]).ok(),
+        "two",
+        Some("acme"),
+        Some("r2"),
+    );
 }
 
 #[test]

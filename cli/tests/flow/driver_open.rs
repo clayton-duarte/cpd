@@ -520,7 +520,9 @@ fn open_live_with(config_extra: &str) -> Live {
     ));
     live.hooks("[pre-commit]\ngate = \"make quick\"\n\n[pre-merge]\ngate = \"make test\"\n");
     live.add_cpd_job("open-repo", "open");
-    live.fixture("UPDATE workflows SET started_at = '2026-10-27T09:00:00.000Z' WHERE key = 'repo';");
+    live.fixture(
+        "UPDATE workflows SET started_at = '2026-10-27T09:00:00.000Z' WHERE key = 'repo';",
+    );
     live
 }
 
@@ -645,11 +647,24 @@ fn an_open_job_with_no_conflict_merges_nothing_runs_both_gates_at_its_merge_push
         ("open", Some(812), true)
     );
     assert_eq!(live.phase(), "deploy");
-    assert_eq!(live.value::<String>("SELECT pr_url FROM workflows WHERE plan = 'pay'"), PR_URL);
+    assert_eq!(
+        live.value::<String>("SELECT pr_url FROM workflows WHERE plan = 'pay'"),
+        PR_URL
+    );
     assert_eq!(live.value::<i64>("SELECT count(*) FROM pull_requests WHERE repo = 'acme/pay' AND number = 812 AND state = 'open' AND draft = 0"), 1);
-    assert!(live.value::<Option<i64>>("SELECT pull_request FROM workflows WHERE plan = 'pay'").is_some());
-    let (merged, opened, phase) = (live.plan_events("job-merged"), live.plan_events("pr-opened"), live.plan_events("plan-phase"));
-    let ours: Vec<&(i64, Value)> = merged.iter().filter(|e| e.1["sha"] == tip.as_str() && e.1["kind"] == "open").collect();
+    assert!(
+        live.value::<Option<i64>>("SELECT pull_request FROM workflows WHERE plan = 'pay'")
+            .is_some()
+    );
+    let (merged, opened, phase) = (
+        live.plan_events("job-merged"),
+        live.plan_events("pr-opened"),
+        live.plan_events("plan-phase"),
+    );
+    let ours: Vec<&(i64, Value)> = merged
+        .iter()
+        .filter(|e| e.1["sha"] == tip.as_str() && e.1["kind"] == "open")
+        .collect();
     assert_eq!(ours.len(), 1, "{merged:?}");
     assert_eq!(
         (&ours[0].1["pr"], &ours[0].1["number"], &ours[0].1["url"]),

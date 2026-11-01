@@ -83,7 +83,9 @@ fn sha256(text: &str) -> String {
 
 /// The `## Workflow <key>` section of a render: from its heading to the next `## ` one.
 fn section<'a>(text: &'a str, pr: &str) -> &'a str {
-    let start = text.find(&format!("\n## Workflow {pr}\n")).unwrap_or_else(|| panic!("no PR {pr} section:\n{text}"));
+    let start = text
+        .find(&format!("\n## Workflow {pr}\n"))
+        .unwrap_or_else(|| panic!("no PR {pr} section:\n{text}"));
     let rest = &text[start..];
     let end = rest[1..].find("\n## ").map_or(rest.len(), |i| i + 1);
     &rest[..end]
@@ -159,9 +161,40 @@ mod inproc {
         fx.github_origin(repo);
         // `--shape config`: the template's stub drafts, `pay-config` and its opener, which these tests do not use:
         // they are cancelled, as a Lead cancels a stub it does not need.
-        fx.cpd(&["workflow", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", id]).ok();
-        fx.cpd(&["job", "cancel", "pay-config", "--reason", "a stub of the template", "--plan", id]).ok();
-        fx.cpd(&["job", "cancel", "open-pay", "--reason", "a stub of the template", "--plan", id]).ok();
+        fx.cpd(&[
+            "workflow",
+            "add",
+            "pay",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--title",
+            "Change the PR",
+            "--shape",
+            "config",
+            "--plan",
+            id,
+        ])
+        .ok();
+        fx.cpd(&[
+            "job",
+            "cancel",
+            "pay-config",
+            "--reason",
+            "a stub of the template",
+            "--plan",
+            id,
+        ])
+        .ok();
+        fx.cpd(&[
+            "job",
+            "cancel",
+            "open-pay",
+            "--reason",
+            "a stub of the template",
+            "--plan",
+            id,
+        ])
+        .ok();
         fx.drop_unreachable_origin(repo);
         out
     }
@@ -372,12 +405,74 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     );
     let real = repo.canonicalize().unwrap().display().to_string();
     let other = fx.keyed_repo("web");
-    fx.cpd(&["workflow", "add", "api", "--repo", &real, "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
-    fx.cpd(&["workflow", "add", "api2", "--repo", &real, "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
-    fx.cpd(&["workflow", "add", "web", "--repo", other.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
-    fx.cpd(&["workflow", "add", "gone", "--repo", fx.keyed_repo("old").to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
-    fx.cpd(&["job", "cancel", "gone-config", "--reason", "a stub of the template", "--plan", "pay"]).ok();
-    fx.cpd(&["workflow", "cancel", "gone", "--plan", "pay"]).ok();
+    fx.cpd(&[
+        "workflow",
+        "add",
+        "api",
+        "--repo",
+        &real,
+        "--title",
+        "Change the PR",
+        "--shape",
+        "config",
+        "--plan",
+        "pay",
+    ])
+    .ok();
+    fx.cpd(&[
+        "workflow",
+        "add",
+        "api2",
+        "--repo",
+        &real,
+        "--title",
+        "Change the PR",
+        "--shape",
+        "config",
+        "--plan",
+        "pay",
+    ])
+    .ok();
+    fx.cpd(&[
+        "workflow",
+        "add",
+        "web",
+        "--repo",
+        other.to_str().unwrap(),
+        "--title",
+        "Change the PR",
+        "--shape",
+        "config",
+        "--plan",
+        "pay",
+    ])
+    .ok();
+    fx.cpd(&[
+        "workflow",
+        "add",
+        "gone",
+        "--repo",
+        fx.keyed_repo("old").to_str().unwrap(),
+        "--title",
+        "Change the PR",
+        "--shape",
+        "config",
+        "--plan",
+        "pay",
+    ])
+    .ok();
+    fx.cpd(&[
+        "job",
+        "cancel",
+        "gone-config",
+        "--reason",
+        "a stub of the template",
+        "--plan",
+        "pay",
+    ])
+    .ok();
+    fx.cpd(&["workflow", "cancel", "gone", "--plan", "pay"])
+        .ok();
     let shown = fx.cpd(&["context", "show", "--context", "ctx"]).ok();
     let record = shown["records"]
         .as_array()
@@ -926,14 +1021,42 @@ fn pr_add_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
     fs::create_dir_all(linked.join("sub")).unwrap();
 
     inproc::new_plan_only(&fx, "pay");
-    let out = fx.cpd(&["workflow", "add", "pay", "--repo", linked.join("sub").to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
+    let out = fx
+        .cpd(&[
+            "workflow",
+            "add",
+            "pay",
+            "--repo",
+            linked.join("sub").to_str().unwrap(),
+            "--title",
+            "Change the PR",
+            "--shape",
+            "config",
+            "--plan",
+            "pay",
+        ])
+        .ok();
     assert_eq!(out["pr"]["base"], "trunk");
     assert_eq!(
         out["pr"]["repo"],
         clone.canonicalize().unwrap().display().to_string()
     );
     let error = refused(
-        &fx.cpd(&["workflow", "add", "other", "--repo", clone.to_str().unwrap(), "--title", "Change the PR", "--base", "side", "--shape", "config", "--plan", "pay"]),
+        &fx.cpd(&[
+            "workflow",
+            "add",
+            "other",
+            "--repo",
+            clone.to_str().unwrap(),
+            "--title",
+            "Change the PR",
+            "--base",
+            "side",
+            "--shape",
+            "config",
+            "--plan",
+            "pay",
+        ]),
         "base_not_found",
         4,
     );
@@ -1215,9 +1338,18 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
         (&json!("pay"), &json!("ctx"), &json!("plan"))
     );
     // The two cancelled are the stubs of the template `new_plan` cancels (`pay-config` and its opener).
-    assert_eq!(pay["counts"], json!({"draft": 2, "queued": 0, "running": 0, "merged": 0, "failed": 0, "cancelled": 2}));
-    assert_eq!(pay["workflows"][0]["repo"], repo.canonicalize().unwrap().display().to_string());
-    assert_eq!((&pay["workflows"][0]["key"], &pay["workflows"][0]["pr"]), (&json!("pay"), &Value::Null));
+    assert_eq!(
+        pay["counts"],
+        json!({"draft": 2, "queued": 0, "running": 0, "merged": 0, "failed": 0, "cancelled": 2})
+    );
+    assert_eq!(
+        pay["workflows"][0]["repo"],
+        repo.canonicalize().unwrap().display().to_string()
+    );
+    assert_eq!(
+        (&pay["workflows"][0]["key"], &pay["workflows"][0]["pr"]),
+        (&json!("pay"), &Value::Null)
+    );
     let ids = |args: &[&str]| -> Vec<String> {
         fx.cpd(args).ok()["plans"]
             .as_array()
@@ -1245,9 +1377,15 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
 
     let out = inproc::show(&fx, "pay");
     let plan = &out["plan"];
-    assert_eq!((&plan["id"], &plan["phase"]), (&json!("pay"), &json!("plan")));
+    assert_eq!(
+        (&plan["id"], &plan["phase"]),
+        (&json!("pay"), &json!("plan"))
+    );
     let pr = &out["workflows"][0];
-    assert_eq!((&pr["lead_worktree"], &pr["pr"]), (&Value::Null, &Value::Null));
+    assert_eq!(
+        (&pr["lead_worktree"], &pr["pr"]),
+        (&Value::Null, &Value::Null)
+    );
     assert_eq!(pr["pull_request"], Value::Null);
     // Not the stub of the template, which `new_plan` cancelled.
     let jobs: Vec<&Value> = out["jobs"]
@@ -1365,7 +1503,13 @@ fn render_writes_the_plan_markdown_and_its_fingerprint() {
     assert_eq!(out["path"], path.display().to_string());
     assert_eq!(out["draft_jobs"], 2);
     let (pr_key, pr_repo, pr_base): (String, String, String) = store(&fx.env)
-        .read(|c| Ok(c.query_row("SELECT key, repo, base FROM workflows WHERE plan = 'pay'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT key, repo, base FROM workflows WHERE plan = 'pay'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?)
+        })
         .unwrap();
     let spec = |key: &str, needs: &str| {
         format!(
@@ -1386,9 +1530,18 @@ fn render_writes_the_plan_markdown_and_its_fingerprint() {
         ))
     );
     let text = fs::read_to_string(&path).unwrap();
-    assert!(text.starts_with("# Plan: Plan pay\n\nContext: `ctx` · Phase: `plan`\n"), "{text}");
-    assert!(text.contains("| `b` | Job b | work | S2 | draft | `a` | `src/b.rs` |"), "{text}");
-    assert!(text.contains("```mermaid\ngraph TD\n  j1[\"a\"]\n  j2[\"b\"]\n  j1 --> j2\n```"), "{text}");
+    assert!(
+        text.starts_with("# Plan: Plan pay\n\nContext: `ctx` · Phase: `plan`\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("| `b` | Job b | work | S2 | draft | `a` | `src/b.rs` |"),
+        "{text}"
+    );
+    assert!(
+        text.contains("```mermaid\ngraph TD\n  j1[\"a\"]\n  j2[\"b\"]\n  j1 --> j2\n```"),
+        "{text}"
+    );
     assert!(text.contains("\n## Workflow pay\n"), "{text}");
     assert!(text.contains("\n### `a`: Job a\n"), "{text}");
     assert!(text.contains("\n#### Goal\n\nGoal of b.\n"), "{text}");
@@ -1417,8 +1570,30 @@ fn render_shows_the_planned_opener_and_no_placeholder() {
     let repo = inproc::setup(&fx);
     inproc::new_plan_only(&fx, "pay");
     // A template PR: `pr add` lays out its opener stub beside the shape's stubs; its other Job is merged away.
-    fx.cpd(&["workflow", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
-    fx.cpd(&["job", "cancel", "pay-config", "--reason", "not needed", "--plan", "pay"]).ok();
+    fx.cpd(&[
+        "workflow",
+        "add",
+        "pay",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        "Change the PR",
+        "--shape",
+        "config",
+        "--plan",
+        "pay",
+    ])
+    .ok();
+    fx.cpd(&[
+        "job",
+        "cancel",
+        "pay-config",
+        "--reason",
+        "not needed",
+        "--plan",
+        "pay",
+    ])
+    .ok();
     // An older PR, one whose Plan holds no open Job: it predates the template's opener stub, so its row is written
     // directly (the store is append-only: a Job row is never deleted).
     let old = fx.keyed_repo("old");
@@ -1453,13 +1628,26 @@ fn render_shows_the_planned_opener_and_no_placeholder() {
         "{pay}"
     );
     assert!(pay.contains("Status: `draft` · Kind: `open`"), "{pay}");
-    assert!(!pay.contains("Added by cpd when the PR starts"), "no placeholder for a PR whose Plan holds an open Job:\n{pay}");
-    assert!(!pay.contains("every other Job of the Workflow"), "no placeholder `Needs` cell:\n{pay}");
+    assert!(
+        !pay.contains("Added by cpd when the PR starts"),
+        "no placeholder for a PR whose Plan holds an open Job:\n{pay}"
+    );
+    assert!(
+        !pay.contains("every other Job of the Workflow"),
+        "no placeholder `Needs` cell:\n{pay}"
+    );
 
     // An older PR with no open Job still shows the placeholder, as before the template laid one out.
     let old = section(&text, "old");
-    assert!(old.contains("| `open-old` | Open the pull request: Old change | open |") && old.contains("every other Job of the Workflow"), "{old}");
-    assert!(old.contains("\n### `open-old`: Open the pull request: Old change\n"), "{old}");
+    assert!(
+        old.contains("| `open-old` | Open the pull request: Old change | open |")
+            && old.contains("every other Job of the Workflow"),
+        "{old}"
+    );
+    assert!(
+        old.contains("\n### `open-old`: Open the pull request: Old change\n"),
+        "{old}"
+    );
     assert!(old.contains("Status: — · Kind: `open`"), "{old}");
     assert!(old.contains("Added by cpd when the PR starts"), "{old}");
 }
@@ -1840,12 +2028,18 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
         "workflow",
         "add",
         "web",
-        "--repo", web.to_str().unwrap(),
-        "--title", "Change the Workflow",
-        "--base", "main",
-        "--shape", "config",
-        "--needs", "pay",
-        "--plan", "pay",
+        "--repo",
+        web.to_str().unwrap(),
+        "--title",
+        "Change the Workflow",
+        "--base",
+        "main",
+        "--shape",
+        "config",
+        "--needs",
+        "pay",
+        "--plan",
+        "pay",
     ])
     .ok();
     // Its stub drafts are drafts of the review's kind: cancelled, they are none, and the review stays current.
@@ -2219,7 +2413,13 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
     );
 
     let shown = inproc::show(&fx, "pay");
-    assert_eq!((&shown["plan"]["phase"], &shown["workflows"][0]["lead_worktree"]), (&json!("dispatch"), &json!(worktree.display().to_string())));
+    assert_eq!(
+        (
+            &shown["plan"]["phase"],
+            &shown["workflows"][0]["lead_worktree"]
+        ),
+        (&json!("dispatch"), &json!(worktree.display().to_string()))
+    );
     assert!(shown["plan"]["locked_at"].is_string());
     for job in shown["jobs"]
         .as_array()
@@ -3264,8 +3464,16 @@ fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_app
     // The Plan view of the Context holds the stub's registered work too.
     let pending = fx.cpd(&["context", "pending", "--context", "ctx"]).ok();
     let jobs = &pending["plans"][0]["workflows"][0]["jobs"];
-    let pending_stub = jobs.as_array().unwrap().iter().find(|j| j["key"] == "next-1").unwrap();
-    assert_eq!((&pending_stub["status"], &pending_stub["touches"]), (&json!("draft"), &json!([])));
+    let pending_stub = jobs
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|j| j["key"] == "next-1")
+        .unwrap();
+    assert_eq!(
+        (&pending_stub["status"], &pending_stub["touches"]),
+        (&json!("draft"), &json!([]))
+    );
 
     // The stubs count as incomplete whether they wait or not: the review is refused, naming next-1 and next-2.
     fx.outline_for_review("pay");
@@ -3432,8 +3640,15 @@ fn render_shows_what_a_stub_lacks_and_the_fingerprint_covers_it_as_it_is() {
     assert_eq!(text.matches("Spec: not written yet").count(), 2, "{text}");
 
     // The fingerprint hashes a stub as it is: its missing fields are null.
-    let (pr_repo, pr_base): (String, String) =
-        store(&fx.env).read(|c| Ok(c.query_row("SELECT repo, base FROM workflows WHERE plan = 'pay'", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).unwrap();
+    let (pr_repo, pr_base): (String, String) = store(&fx.env)
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT repo, base FROM workflows WHERE plan = 'pay'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .unwrap();
     let null_spec = |key: &str, tier: &str| {
         format!(
             "{{\"acceptance\":null,\"context\":null,\"goal\":null,\"key\":\"{key}\",\"needs\":[],\"out_of_scope\":null,\"pr\":\"pay\",\"tier\":{tier},\"title\":\"Planned {key}\",\"touches\":null}}"

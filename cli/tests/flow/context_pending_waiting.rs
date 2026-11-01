@@ -25,7 +25,12 @@ fn waiting_job_lists_its_blockers() {
     let fx = Fx::with(fixture());
     let out = fx.cpd(&["context", "pending", "--context", "ctx"]).ok();
     let prs = &out["plans"][0]["workflows"];
-    let api = prs.as_array().unwrap().iter().find(|p| p["key"] == "api").unwrap();
+    let api = prs
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["key"] == "api")
+        .unwrap();
     let jobs = api["jobs"].as_array().unwrap();
     let find = |key: &str| {
         jobs.iter()
@@ -84,8 +89,16 @@ fn markdown_shows_waiting_on_blockers() {
         run.stdout
     );
     assert!(line("- a ").starts_with("- a queued: "), "{}", run.stdout);
-    let web = run.stdout.split("### Workflow web").nth(1).unwrap_or_else(|| panic!("{}", run.stdout));
-    assert!(web.lines().take(4).any(|l| l == "waiting on api"), "{}", run.stdout);
+    let web = run
+        .stdout
+        .split("### Workflow web")
+        .nth(1)
+        .unwrap_or_else(|| panic!("{}", run.stdout));
+    assert!(
+        web.lines().take(4).any(|l| l == "waiting on api"),
+        "{}",
+        run.stdout
+    );
 }
 
 #[test]
@@ -101,11 +114,23 @@ fn pending_names_the_base_pr_of_a_stacked_pr_as_its_blocker_until_it_opens() {
     let waiting_on = || {
         let out = fx.cpd(&["context", "pending", "--context", "ctx"]).ok();
         let prs = out["plans"][0]["workflows"].as_array().unwrap();
-        let web = prs.iter().find(|p| p["key"] == "web").unwrap_or_else(|| panic!("{out}"));
-        let md = fx.env.cpd(&["context", "pending", "--context", "ctx", "--markdown"]);
+        let web = prs
+            .iter()
+            .find(|p| p["key"] == "web")
+            .unwrap_or_else(|| panic!("{out}"));
+        let md = fx
+            .env
+            .cpd(&["context", "pending", "--context", "ctx", "--markdown"]);
         assert_eq!(md.exit, 0, "{md:?}");
-        let section = md.stdout.split("### Workflow web").nth(1).unwrap_or_else(|| panic!("{}", md.stdout));
-        (web.get("waiting_on").cloned(), section.lines().take(4).any(|l| l == "waiting on api"))
+        let section = md
+            .stdout
+            .split("### Workflow web")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{}", md.stdout));
+        (
+            web.get("waiting_on").cloned(),
+            section.lines().take(4).any(|l| l == "waiting on api"),
+        )
     };
     // the base PR has not started, then has started and not opened: it is the blocker
     assert_eq!(waiting_on(), (Some(json!(["api"])), true));

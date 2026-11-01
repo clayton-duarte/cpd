@@ -73,7 +73,11 @@ fn parse_scope_of(file: &Path, text: &str, kind: Option<ScopeKind>) -> Result<Sc
     if scope.gate.is_none() {
         if let Some(alias) = scope.pr.as_ref().and_then(|pr| pr.gate) {
             let gate = alias.gate();
-            scope.gate = Some(GatesSet { merge: Some(gate), workflow: Some(gate), text: None });
+            scope.gate = Some(GatesSet {
+                merge: Some(gate),
+                workflow: Some(gate),
+                text: None,
+            });
         }
     }
     if let Some(set) = &scope.resources {

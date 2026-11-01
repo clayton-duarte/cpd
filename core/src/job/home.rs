@@ -16,7 +16,11 @@ impl JobHome {
         match workflow {
             None => Ok(JobHome::Plan),
             Some(v) => WorkflowKey::parse(v).map(JobHome::Workflow).map_err(|_| {
-                CpdError::new(ErrorCode::StoreFailed, format!("The store holds an invalid {what}: {v:?}.")).with("value", v)
+                CpdError::new(
+                    ErrorCode::StoreFailed,
+                    format!("The store holds an invalid {what}: {v:?}."),
+                )
+                .with("value", v)
             }),
         }
     }

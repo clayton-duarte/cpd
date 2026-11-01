@@ -201,7 +201,14 @@ mod tests {
         );
         assert_eq!(got.chars().count(), 20);
         let got = text(title("Workflows", Some(3), 26));
-        assert_eq!(got, format!(" ──{OPEN_CAP}Workflows{CLOSE_CAP}{}{} ", "─".repeat(26 - 1 - 2 - 11 - 3 - 1), count_pill("3")));
+        assert_eq!(
+            got,
+            format!(
+                " ──{OPEN_CAP}Workflows{CLOSE_CAP}{}{} ",
+                "─".repeat(26 - 1 - 2 - 11 - 3 - 1),
+                count_pill("3")
+            )
+        );
         assert_eq!(got.chars().count(), 26);
     }
 
@@ -268,7 +275,11 @@ mod tests {
 
     #[test]
     fn a_narrow_width_drops_the_count_then_cuts_the_title_then_the_pill() {
-        assert_eq!(text(title("Workflows", Some(3), 9)), format!(" ──{OPEN_CAP}Wor{CLOSE_CAP} "), "the non-collapsible title drops its count the same way");
+        assert_eq!(
+            text(title("Workflows", Some(3), 9)),
+            format!(" ──{OPEN_CAP}Wor{CLOSE_CAP} "),
+            "the non-collapsible title drops its count the same way"
+        );
     }
 
     // ---- section look v4 (commands.md §17, "Section titles"; hs-d475 to hs-d480) ----

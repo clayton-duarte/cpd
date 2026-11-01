@@ -27,7 +27,17 @@ fn store(fx: &Crud) -> Store {
 /// `pr add <key> --repo <repo> --shape config …`: the draft opener `open-<key>` and its Spec stay.
 fn add(fx: &Crud, key: &str, repo: &std::path::Path, extra: &[&str]) {
     let title = format!("Change {key}");
-    let mut args = vec!["workflow", "add", key, "--repo", repo.to_str().unwrap(), "--title", &title, "--shape", "config"];
+    let mut args = vec![
+        "workflow",
+        "add",
+        key,
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        &title,
+        "--shape",
+        "config",
+    ];
     args.extend(extra);
     args.extend(["--plan", "pay-1"]);
     fx.cpd(&args).ok();
@@ -42,7 +52,8 @@ fn branch(fx: &Crud, repo: &std::path::Path, name: &str) {
 }
 
 fn base_of(fx: &Crud, key: &str) -> String {
-    fx.env.query::<String>(&format!("SELECT base FROM workflows WHERE key = '{key}'"))
+    fx.env
+        .query::<String>(&format!("SELECT base FROM workflows WHERE key = '{key}'"))
 }
 
 /// The stored row of Job `job`: `(goal, status, fingerprint)`; the tests compare the `goal`, since `render` moves the status
@@ -128,7 +139,8 @@ fn an_open_jobs_worker_spec_names_the_base_a_pr_edit_set_before_the_lock() {
     let before = stored(&fx, "open-b");
     assert!(before.0.contains("develop"), "{before:?}");
 
-    fx.cpd(&["workflow", "edit", "b", "--base", "main", "--plan", "pay-1"]).ok();
+    fx.cpd(&["workflow", "edit", "b", "--base", "main", "--plan", "pay-1"])
+        .ok();
     assert_eq!(base_of(&fx, "b"), "main");
 
     let spec = render(&fx, "open-b");
@@ -146,7 +158,17 @@ fn an_open_jobs_worker_spec_names_the_base_a_restack_set_after_the_lock() {
     let before = stored(&fx, "open-b");
     assert!(before.0.contains("main"), "{before:?}");
 
-    fx.cpd(&["workflow", "edit", "b", "--base", "a", "--no-needs", "--plan", "pay-1"]).ok();
+    fx.cpd(&[
+        "workflow",
+        "edit",
+        "b",
+        "--base",
+        "a",
+        "--no-needs",
+        "--plan",
+        "pay-1",
+    ])
+    .ok();
     assert_eq!(base_of(&fx, "b"), "pay-1/a");
 
     let spec = render(&fx, "open-b");
@@ -174,7 +196,13 @@ fn an_open_jobs_worker_spec_names_the_base_an_unstack_set_when_its_base_pr_merge
     );
 
     let mut s = store(&fx);
-    cpd_core::workflow::start::unstack_for_open_job(&mut s, "test", &plan(), &cpd_core::ids::WorkflowKey::parse("b").unwrap()).unwrap();
+    cpd_core::workflow::start::unstack_for_open_job(
+        &mut s,
+        "test",
+        &plan(),
+        &cpd_core::ids::WorkflowKey::parse("b").unwrap(),
+    )
+    .unwrap();
     assert_eq!(base_of(&fx, "b"), "main");
 
     let spec = render(&fx, "open-b");
@@ -193,8 +221,13 @@ fn an_open_jobs_worker_spec_names_the_repo_a_pr_edit_set() {
         "{before:?}"
     );
 
-    fx.cpd(&["workflow", "edit", "b", "--repo", &web, "--plan", "pay-1"]).ok();
-    assert_eq!(fx.env.query::<String>("SELECT repo FROM workflows WHERE key = 'b'"), web);
+    fx.cpd(&["workflow", "edit", "b", "--repo", &web, "--plan", "pay-1"])
+        .ok();
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT repo FROM workflows WHERE key = 'b'"),
+        web
+    );
 
     let spec = render(&fx, "open-b");
     assert!(
@@ -216,15 +249,33 @@ fn an_update_jobs_worker_spec_names_the_base_a_pr_edit_set() {
     // The update Job is queued from the PR row BEFORE the edit: its stored text names `develop`.
     let mut s = store(&fx);
     let key = {
-        let workflows = s.read(|c| cpd_core::plan::fingerprint::load_workflows(c, &plan())).unwrap();
-        let pr = workflows.iter().find(|p| p.key.as_str() == "b").unwrap().clone();
-        s.write("test", |tx| queue_update(tx, &plan(), &pr, Tier::parse("H3")?, "test", Cause::Conflict)).unwrap().expect("an update Job")
+        let workflows = s
+            .read(|c| cpd_core::plan::fingerprint::load_workflows(c, &plan()))
+            .unwrap();
+        let pr = workflows
+            .iter()
+            .find(|p| p.key.as_str() == "b")
+            .unwrap()
+            .clone();
+        s.write("test", |tx| {
+            queue_update(
+                tx,
+                &plan(),
+                &pr,
+                Tier::parse("H3")?,
+                "test",
+                Cause::Conflict,
+            )
+        })
+        .unwrap()
+        .expect("an update Job")
     };
     let job = key.as_str().to_owned();
     let before = stored(&fx, &job);
     assert!(before.0.contains("develop"), "{before:?}");
 
-    fx.cpd(&["workflow", "edit", "b", "--base", "main", "--plan", "pay-1"]).ok();
+    fx.cpd(&["workflow", "edit", "b", "--base", "main", "--plan", "pay-1"])
+        .ok();
     assert_eq!(base_of(&fx, "b"), "main");
 
     let spec = render(&fx, &job);

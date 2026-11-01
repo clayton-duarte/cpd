@@ -42,7 +42,11 @@ const RETIRED_DATA_KEYS: [&str; 5] = ["pr", "prs", "from_pr", "to_pr", "until_pr
 /// Every `data` key of a kind, required and optional.
 fn data_keys(kind: Kind) -> Vec<&'static str> {
     let spec = kind.spec();
-    spec.required.iter().chain(spec.optional.iter()).copied().collect()
+    spec.required
+        .iter()
+        .chain(spec.optional.iter())
+        .copied()
+        .collect()
 }
 
 /// The kind the wire accepts, or a panic naming what it refused.
@@ -55,26 +59,54 @@ fn kinds_codes_and_protocol() {
     // Kinds: the closed set holds the `workflow-*` kinds, not the object `pr-*` ones, and keeps the
     // three pull-request kinds.
     for name in WORKFLOW_KINDS {
-        assert_eq!(parsed(name).as_str(), name, "the wire accepts and prints {name}");
+        assert_eq!(
+            parsed(name).as_str(),
+            name,
+            "the wire accepts and prints {name}"
+        );
     }
     for name in RETIRED_KINDS {
-        assert!(Kind::from_str(name).is_err(), "{name} is not a §5.2 kind any more");
+        assert!(
+            Kind::from_str(name).is_err(),
+            "{name} is not a §5.2 kind any more"
+        );
     }
     for name in PULL_REQUEST_KINDS {
-        assert_eq!(parsed(name).as_str(), name, "the pull-request kind {name} keeps its name");
+        assert_eq!(
+            parsed(name).as_str(),
+            name,
+            "the pull-request kind {name} keeps its name"
+        );
     }
 
     // Data keys: no retired key is left anywhere, and the Workflow key is `workflow`/`workflows`.
     for kind in Kind::ALL {
         for key in data_keys(*kind) {
-            assert!(!RETIRED_DATA_KEYS.contains(&key), "{} still carries the retired data key {key:?}", kind.as_str());
+            assert!(
+                !RETIRED_DATA_KEYS.contains(&key),
+                "{} still carries the retired data key {key:?}",
+                kind.as_str()
+            );
         }
     }
     for name in WORKFLOW_KINDS {
-        assert!(data_keys(parsed(name)).contains(&"workflow"), "{name} carries the `workflow` data key");
+        assert!(
+            data_keys(parsed(name)).contains(&"workflow"),
+            "{name} carries the `workflow` data key"
+        );
     }
-    for name in ["pr-opened", "pr-merged", "pr-feedback", "job-added", "job-merged", "all-merged"] {
-        assert!(data_keys(parsed(name)).contains(&"workflow"), "{name} carries the `workflow` data key");
+    for name in [
+        "pr-opened",
+        "pr-merged",
+        "pr-feedback",
+        "job-added",
+        "job-merged",
+        "all-merged",
+    ] {
+        assert!(
+            data_keys(parsed(name)).contains(&"workflow"),
+            "{name} carries the `workflow` data key"
+        );
     }
     for (kind, key) in [
         ("workflow-base-changed", "from_workflow"),
@@ -84,7 +116,10 @@ fn kinds_codes_and_protocol() {
         ("incident-started", "until_workflow"),
         ("incident-plans", "until_workflow"),
     ] {
-        assert!(data_keys(parsed(kind)).contains(&key), "{kind} carries the `{key}` data key");
+        assert!(
+            data_keys(parsed(kind)).contains(&key),
+            "{kind} carries the `{key}` data key"
+        );
     }
 
     // Error codes (map R13): the object codes are `workflow_*`; the pull-request codes stay.
@@ -111,7 +146,10 @@ fn kinds_codes_and_protocol() {
         "needs_other_workflow",
         "until_workflow_not_incident",
     ] {
-        assert!(codes.contains(code), "the object refusal code {code} exists");
+        assert!(
+            codes.contains(code),
+            "the object refusal code {code} exists"
+        );
     }
     for code in [
         "pr_required",
@@ -134,10 +172,16 @@ fn kinds_codes_and_protocol() {
         "needs_other_pr",
         "until_pr_not_incident",
     ] {
-        assert!(!codes.contains(code), "the object refusal code {code} is renamed");
+        assert!(
+            !codes.contains(code),
+            "the object refusal code {code} is renamed"
+        );
     }
     for code in ["pr_closed", "pr_not_closed", "pr_not_ready"] {
-        assert!(codes.contains(code), "the pull-request refusal code {code} stays");
+        assert!(
+            codes.contains(code),
+            "the pull-request refusal code {code} stays"
+        );
     }
 
     // The protocol number: 19 before the rename (`core/src/events/kind.rs:38`, `pi/lib/event.ts:9`), 20

@@ -12,9 +12,9 @@ use super::{ContextRow, Select};
 use crate::env::Env;
 use crate::error::CpdError;
 use crate::ids::{ContextId, PlanId};
+use crate::output::Output;
 use crate::plan::display::Display;
 use crate::plan::fingerprint::load_workflows;
-use crate::output::Output;
 use crate::plan::jobs::{self as plan_jobs, Job};
 
 #[derive(Args, Debug)]
@@ -98,7 +98,12 @@ fn explore_jobs(display: &Display, all: &[Job]) -> Vec<Value> {
 /// The Plan's Workflows not `merged` and not `cancelled`, in key order. A Workflow that cannot start yet has `waiting_on`: the keys of
 /// what it waits for, and so has each of its `queued` Jobs that cannot start, whose `status` is then `waiting` (hs-d521,
 /// hs-d523: a display status, the stored one is `queued`); see [`Display`].
-fn workflows(conn: &Connection, plan: &str, display: &Display, all_jobs: &[Job]) -> Result<Vec<Value>, CpdError> {
+fn workflows(
+    conn: &Connection,
+    plan: &str,
+    display: &Display,
+    all_jobs: &[Job],
+) -> Result<Vec<Value>, CpdError> {
     let plan_id = PlanId::parse(plan)?;
     let all_prs = load_workflows(conn, &plan_id)?;
     let mut stmt = conn.prepare(
@@ -131,14 +136,25 @@ fn workflows(conn: &Connection, plan: &str, display: &Display, all_jobs: &[Job])
 
 /// The Workflow's Jobs not `cancelled`, in `seq` order. The Workflow is not merged, so a
 /// `merged` Job is on the Lead Branch and not yet on the base.
-fn jobs(conn: &Connection, plan: &str, workflow: &str, display: &Display, all: &[Job]) -> Result<Vec<Value>, CpdError> {
+fn jobs(
+    conn: &Connection,
+    plan: &str,
+    workflow: &str,
+    display: &Display,
+    all: &[Job],
+) -> Result<Vec<Value>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT key, status, title, touches FROM jobs
           WHERE plan = ?1 AND workflow = ?2 AND status <> 'cancelled' ORDER BY seq",
     )?;
     let rows = stmt
         .query_map([plan, workflow], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
@@ -192,7 +208,13 @@ fn markdown(context: &ContextId, plans: &[Value]) -> String {
     let text = |v: &Value| v.as_str().expect("a string column").to_owned();
     let mut out = format!("# Pending work in {context}\n");
     for plan in plans {
-        let _ = write!(out, "\n## {} ({}): {}\n", text(&plan["id"]), text(&plan["phase"]), text(&plan["title"]));
+        let _ = write!(
+            out,
+            "\n## {} ({}): {}\n",
+            text(&plan["id"]),
+            text(&plan["phase"]),
+            text(&plan["title"])
+        );
         for workflow in plan["workflows"].as_array().expect("workflows") {
             let _ = write!(
                 out,
@@ -218,8 +240,12 @@ fn markdown(context: &ContextId, plans: &[Value]) -> String {
                 );
             }
             for job in workflow["jobs"].as_array().expect("jobs") {
-                let touches: Vec<String> =
-                    job["touches"].as_array().expect("touches").iter().map(text).collect();
+                let touches: Vec<String> = job["touches"]
+                    .as_array()
+                    .expect("touches")
+                    .iter()
+                    .map(text)
+                    .collect();
                 let status = match waiting_on(job) {
                     Some(keys) => format!("{} on {keys}", text(&job["status"])),
                     None => text(&job["status"]),

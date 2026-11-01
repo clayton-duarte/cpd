@@ -487,10 +487,16 @@ pub(super) fn plan_heads(
         let (context, phase, lead): (String, String, String) = (r.get(1)?, r.get(4)?, r.get(5)?);
         let phase: Phase = value_enum(&format!("Plan {plan} has phase"), &phase)?;
         let (row_state, row_checks): (Option<String>, Option<String>) = (r.get(9)?, r.get(10)?);
-        let workflow = match (r.get::<_, Option<i64>>(6)?, r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?) {
+        let workflow = match (
+            r.get::<_, Option<i64>>(6)?,
+            r.get::<_, Option<String>>(7)?,
+            r.get::<_, Option<String>>(8)?,
+        ) {
             (Some(number), Some(url), Some(opened_at)) => {
                 // A Workflow with a number has its pull request (`workflows` CHECK).
-                let checks = row_checks.ok_or_else(|| bad_row(format!("Workflow of Plan {plan} has no pull request row")))?;
+                let checks = row_checks.ok_or_else(|| {
+                    bad_row(format!("Workflow of Plan {plan} has no pull request row"))
+                })?;
                 Some(Pr {
                     number,
                     url,

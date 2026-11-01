@@ -30,7 +30,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::host::Tmux;
 use cpd_core::host::pi::{self, PiDirs};
 use cpd_core::host::spawn::Pid;
-use cpd_core::ids::{AttemptId, ContextId, PlanId, WorkflowKey, SessionId};
+use cpd_core::ids::{AttemptId, ContextId, PlanId, SessionId, WorkflowKey};
 use cpd_core::output::Output;
 use cpd_core::policy::model::{Models, models_of_attempt, models_of_context, models_of_job};
 use cpd_core::ports::Ports;
@@ -335,7 +335,9 @@ fn startable() -> String {
 
 /// The ready `waiting` Workflows E7 starts, the Plan-scoped incident hold applied (contract §3.7): a Workflow of
 /// a held Plan is left alone. Oldest Plan first, then by key (the query's order).
-pub(super) fn startable_workflows(engine: &mut Engine) -> Result<Vec<(PlanId, WorkflowKey)>, CpdError> {
+pub(super) fn startable_workflows(
+    engine: &mut Engine,
+) -> Result<Vec<(PlanId, WorkflowKey)>, CpdError> {
     engine.store.read(|conn| {
         let mut stmt = conn.prepare(&startable())?;
         let rows = stmt
@@ -371,7 +373,11 @@ fn start_prs(engine: &mut Engine) {
             return;
         }
         let about = About::Plan(plan.clone());
-        let workflow = engine.store.read(|conn| Ok(start_workflow::load(conn, &plan)?.into_iter().find(|p| p.key == key)));
+        let workflow = engine.store.read(|conn| {
+            Ok(start_workflow::load(conn, &plan)?
+                .into_iter()
+                .find(|p| p.key == key))
+        });
         let workflow = match workflow {
             Ok(Some(workflow)) => workflow,
             Ok(None) => continue,
@@ -380,15 +386,36 @@ fn start_prs(engine: &mut Engine) {
                 continue;
             }
         };
-        match start_workflow::start(&engine.home, &engine.config, &mut engine.store, &plan, &workflow, By::Engine) {
+        match start_workflow::start(
+            &engine.home,
+            &engine.config,
+            &mut engine.store,
+            &plan,
+            &workflow,
+            By::Engine,
+        ) {
             Ok(started) => {
-                engine.log.line(&format!("E7: started Workflow {key} of Plan {plan} ({})", started.to_json()["lead_branch"]));
+                engine.log.line(&format!(
+                    "E7: started Workflow {key} of Plan {plan} ({})",
+                    started.to_json()["lead_branch"]
+                ));
                 engine.clear(Step::E7, &about);
             }
             Err(Failed::Setup { step, error }) => {
-                match start_workflow::record_failure(&mut engine.store, SOURCE, &plan, &key, step, &error) {
+                match start_workflow::record_failure(
+                    &mut engine.store,
+                    SOURCE,
+                    &plan,
+                    &key,
+                    step,
+                    &error,
+                ) {
                     Ok(true) => {
-                        engine.log.line(&format!("E7: Workflow {key} of Plan {plan} could not be started ({}): {}", step.as_str(), error.message()));
+                        engine.log.line(&format!(
+                            "E7: Workflow {key} of Plan {plan} could not be started ({}): {}",
+                            step.as_str(),
+                            error.message()
+                        ));
                         engine.clear(Step::E7, &about);
                     }
                     Ok(false) => {}
@@ -397,7 +424,10 @@ fn start_prs(engine: &mut Engine) {
             }
             // The Workflow changed since it was read (`workflow start` got there first): decided again next tick.
             Err(Failed::Other(e)) if e.code() == ErrorCode::CasLost => {
-                engine.log.line(&format!("E7: skipped Workflow {key} of Plan {plan}: {}", e.message()));
+                engine.log.line(&format!(
+                    "E7: skipped Workflow {key} of Plan {plan}: {}",
+                    e.message()
+                ));
             }
             Err(Failed::Other(e)) => engine.fail(Step::E7, about, &e),
         }

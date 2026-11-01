@@ -2829,7 +2829,11 @@ fn pr_cancel_cancels_the_prs_own_open_job_with_it_and_e4_adds_none() {
         .filter(|(key, _)| key.starts_with("open-web"))
         .collect();
     assert_eq!(web, [("open-web".to_owned(), "cancelled".to_owned())]);
-    assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE plan = 'pay' AND key = 'web'"), "cancelled");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT status FROM workflows WHERE plan = 'pay' AND key = 'web'"),
+        "cancelled"
+    );
 }
 
 /// `watch_ticks` is `n` ticks of each run, whatever ran before it on the clock.
@@ -2965,9 +2969,31 @@ fn e5_queues_one_update_job_when_the_pull_request_conflicts_and_none_for_a_base_
     let added = fx.events("job-added");
     assert_eq!(added.len(), 1, "{added:?}");
     let data = &added[0].3;
-    assert_eq!((&data["kind"], &data["by"], &data["reason"], &data["workflow"]), (&json!("update"), &json!("poll"), &json!("conflict"), &json!("repo")));
-    assert_eq!(fx.events("pr-feedback").len(), 0, "a conflict is no pr-feedback reason any more");
-    assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE plan = 'pay'"), "open", "the PR's status does not change");
+    assert_eq!(
+        (
+            &data["kind"],
+            &data["by"],
+            &data["reason"],
+            &data["workflow"]
+        ),
+        (
+            &json!("update"),
+            &json!("poll"),
+            &json!("conflict"),
+            &json!("repo")
+        )
+    );
+    assert_eq!(
+        fx.events("pr-feedback").len(),
+        0,
+        "a conflict is no pr-feedback reason any more"
+    );
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT status FROM workflows WHERE plan = 'pay'"),
+        "open",
+        "the PR's status does not change"
+    );
 }
 
 /// The update Job that ended is a cause that ended: a conflict that comes after it is a new transition, and a new Job, `up-repo-2`.
@@ -3888,11 +3914,27 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     )
     .unwrap();
 
-    assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE key = 'repo'"), "merged");
-    assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE key = 'web'"), "dispatch");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT status FROM workflows WHERE key = 'repo'"),
+        "merged"
+    );
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT status FROM workflows WHERE key = 'web'"),
+        "dispatch"
+    );
     assert_eq!(fx.count("workflow-started"), 1);
-    assert!(fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'") < fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'workflow-started'"));
-    assert!(lead.exists(), "the poll that saw the merge leaves the Lead worktree to the janitor");
+    assert!(
+        fx.env
+            .query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'")
+            < fx.env
+                .query::<i64>("SELECT id FROM events WHERE kind = 'workflow-started'")
+    );
+    assert!(
+        lead.exists(),
+        "the poll that saw the merge leaves the Lead worktree to the janitor"
+    );
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
 

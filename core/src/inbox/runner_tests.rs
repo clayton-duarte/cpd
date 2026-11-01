@@ -86,7 +86,9 @@ fn github_lookup_with_parses_a_scripted_success() {
     let runner = fake(Reply::ok(&answer()));
     let lookup = github_lookup_with(&runner, &home(), &refs()).unwrap();
     assert_eq!(lookup.me, "me");
-    let workflow = lookup.workflows[&("acme/api".to_owned(), 7)].clone().unwrap();
+    let workflow = lookup.workflows[&("acme/api".to_owned(), 7)]
+        .clone()
+        .unwrap();
     assert_eq!(workflow.state, GhState::Open);
     assert_eq!(workflow.author, "bob");
     assert_eq!(workflow.decision.as_deref(), Some("APPROVED"));

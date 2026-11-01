@@ -161,7 +161,14 @@ impl Fx {
     }
 
     /// `add_job_in` with the Job's Tier `tier`.
-    pub(super) fn add_job_on(&mut self, tier: &str, workflow: &str, key: &str, needs: &[&str], then: &str) {
+    pub(super) fn add_job_on(
+        &mut self,
+        tier: &str,
+        workflow: &str,
+        key: &str,
+        needs: &[&str],
+        then: &str,
+    ) {
         let mut sql = format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
              VALUES ('pay', '{workflow}', '{key}', 'Title of {key}', '{tier}', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"

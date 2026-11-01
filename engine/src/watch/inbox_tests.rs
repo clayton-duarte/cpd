@@ -647,9 +647,21 @@ fn a_stuck_job_wakes_its_context_manager() {
     let messages = data(&mut fx, "session-message");
     assert_eq!(messages.len(), 1, "{messages:?}");
     let data = &messages[0];
-    assert_eq!((fx.query::<String>("SELECT session FROM events WHERE kind = 'session-message'").as_str(), data["from"].clone(), data["wake"].clone()), ("mgr1", Value::Null, json!(true)), "{data}");
+    assert_eq!(
+        (
+            fx.query::<String>("SELECT session FROM events WHERE kind = 'session-message'")
+                .as_str(),
+            data["from"].clone(),
+            data["wake"].clone()
+        ),
+        ("mgr1", Value::Null, json!(true)),
+        "{data}"
+    );
     // hs-d647: the stuck Jobs of a Workflow are one message (contract §3.7 "A stuck Job").
     let text = data["text"].as_str().unwrap();
-    assert!(text.starts_with("Jobs of Workflow pay/repo failed "), "{data}");
+    assert!(
+        text.starts_with("Jobs of Workflow pay/repo failed "),
+        "{data}"
+    );
     assert!(text.contains("pay/api (2 min ago, crashed)"), "{data}");
 }

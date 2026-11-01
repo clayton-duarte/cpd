@@ -42,9 +42,40 @@ fn plan_with_one_draft(fx: &Fx) -> PathBuf {
     ])
     .ok();
     fx.github_origin(&repo);
-    fx.cpd(&["workflow", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
-    fx.cpd(&["job", "cancel", "pay-config", "--reason", "a stub of the template", "--plan", "pay"]).ok();
-    fx.cpd(&["job", "cancel", "open-pay", "--reason", "a stub of the template", "--plan", "pay"]).ok();
+    fx.cpd(&[
+        "workflow",
+        "add",
+        "pay",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        "Change the PR",
+        "--shape",
+        "config",
+        "--plan",
+        "pay",
+    ])
+    .ok();
+    fx.cpd(&[
+        "job",
+        "cancel",
+        "pay-config",
+        "--reason",
+        "a stub of the template",
+        "--plan",
+        "pay",
+    ])
+    .ok();
+    fx.cpd(&[
+        "job",
+        "cancel",
+        "open-pay",
+        "--reason",
+        "a stub of the template",
+        "--plan",
+        "pay",
+    ])
+    .ok();
     fx.drop_unreachable_origin(&repo);
     fx.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
     let mut store = Store::open(&home(fx), 5000).unwrap();

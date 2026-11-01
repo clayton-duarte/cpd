@@ -82,8 +82,21 @@ impl Rig {
         repo.keyed("pay");
         let home = CpdHome::resolve(Some(root.join("cpd").into_os_string()), None).unwrap();
         std::fs::create_dir_all(home.config().parent().unwrap()).unwrap();
-        std::fs::write(home.config(), "version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"s\"\n").unwrap();
-        let rig = Rig { tmp, fakes, universe, repo, home, workflows: Vec::new(), number: 800, running: false };
+        std::fs::write(
+            home.config(),
+            "version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"s\"\n",
+        )
+        .unwrap();
+        let rig = Rig {
+            tmp,
+            fakes,
+            universe,
+            repo,
+            home,
+            workflows: Vec::new(),
+            number: 800,
+            running: false,
+        };
         rig.sql(
             "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
              INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -114,10 +127,22 @@ impl Rig {
 
     /// [`Rig::pr`] with the Job's status `job` (`merged`, `running`, `failed` or `cancelled`) and the Attempt's outcome
     /// `attempt` (`failed` or `merged`). `dispatch` is a Workflow status too: a Lead worktree and no pull request yet.
-    pub(crate) fn workflow_with(&mut self, key: &'static str, status: &'static str, job: &str, outcome: &str) -> &Workflow {
+    pub(crate) fn workflow_with(
+        &mut self,
+        key: &'static str,
+        status: &'static str,
+        job: &str,
+        outcome: &str,
+    ) -> &Workflow {
         let plan = PlanId::parse("pay").unwrap();
         let lead_branch = format!("cpd/pay/{key}");
-        let lead = workflow_lead_worktree_path(self.repo.dir(), &plan, &WorkflowKey::parse(key).unwrap(), &lead_branch).unwrap();
+        let lead = workflow_lead_worktree_path(
+            self.repo.dir(),
+            &plan,
+            &WorkflowKey::parse(key).unwrap(),
+            &lead_branch,
+        )
+        .unwrap();
         let attempt_id = format!("{key}-a1");
         let attempt_branch = format!("cpd/pay--{attempt_id}");
         let attempt = attempt_worktree_path(
@@ -194,7 +219,23 @@ impl Rig {
             fp = "f".repeat(64),
             aw = attempt.display(),
         ));
-        self.workflows.push(Workflow { key, status: if status == "dispatch" { "dispatch" } else if status == "merged" { "merged" } else if status == "cancelled" { "cancelled" } else { "open" }, lead, lead_branch, attempt, attempt_branch, attempt_id });
+        self.workflows.push(Workflow {
+            key,
+            status: if status == "dispatch" {
+                "dispatch"
+            } else if status == "merged" {
+                "merged"
+            } else if status == "cancelled" {
+                "cancelled"
+            } else {
+                "open"
+            },
+            lead,
+            lead_branch,
+            attempt,
+            attempt_branch,
+            attempt_id,
+        });
         self.workflows.last().unwrap()
     }
 
@@ -287,8 +328,18 @@ fn janitor_pass_removes_cancelled_and_merged_pr_worktrees_and_branches() {
     rig.workflow("web", "cancelled");
     let outcomes = outcomes(rig.pass());
     for workflow in &rig.workflows {
-        assert_eq!(rig.left(workflow), [false; 6], "{} Workflow {}: every worktree, registration and local branch is gone", workflow.status, workflow.key);
-        assert!(outcomes.iter().any(|(key, _)| key == workflow.key), "an outcome for Workflow {}: {outcomes:?}", workflow.key);
+        assert_eq!(
+            rig.left(workflow),
+            [false; 6],
+            "{} Workflow {}: every worktree, registration and local branch is gone",
+            workflow.status,
+            workflow.key
+        );
+        assert!(
+            outcomes.iter().any(|(key, _)| key == workflow.key),
+            "an outcome for Workflow {}: {outcomes:?}",
+            workflow.key
+        );
     }
     assert!(
         outcomes.iter().all(|(_, outcome)| outcome == "removed"),
@@ -321,10 +372,17 @@ fn janitor_pass_skips_a_pr_whose_attempt_is_still_running() {
     for key in ["api", "web"] {
         let workflow = rig.workflows.iter().find(|p| p.key == key).unwrap();
         assert_eq!(rig.left(workflow), [true; 6], "Workflow {key} is untouched");
-        assert!(outcomes.contains(&(key.to_owned(), "pending".to_owned())), "Workflow {key} is pending: {outcomes:?}");
+        assert!(
+            outcomes.contains(&(key.to_owned(), "pending".to_owned())),
+            "Workflow {key} is pending: {outcomes:?}"
+        );
     }
     let idle = rig.workflows.iter().find(|p| p.key == "lock").unwrap();
-    assert_eq!(rig.left(idle), [false; 6], "an idle Workflow is cleaned in the same pass");
+    assert_eq!(
+        rig.left(idle),
+        [false; 6],
+        "an idle Workflow is cleaned in the same pass"
+    );
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
 
@@ -335,9 +393,22 @@ fn dirty_lead_is_kept_untouched(status: &'static str, other: &str) {
     std::fs::write(workflow.lead.join("dirty.txt"), "the Lead's own change\n").unwrap();
     let outcomes = outcomes(rig.pass());
     let workflow = &rig.workflows[0];
-    assert!(workflow.lead.join("dirty.txt").exists(), "the dirty worktree is unchanged");
-    assert_eq!((rig.registered(&workflow.lead), rig.branch_exists(&workflow.lead_branch), workflow.aside().exists()), (true, true, false));
-    assert!(outcomes.contains(&("api".to_owned(), "kept".to_owned())), "{outcomes:?}");
+    assert!(
+        workflow.lead.join("dirty.txt").exists(),
+        "the dirty worktree is unchanged"
+    );
+    assert_eq!(
+        (
+            rig.registered(&workflow.lead),
+            rig.branch_exists(&workflow.lead_branch),
+            workflow.aside().exists()
+        ),
+        (true, true, false)
+    );
+    assert!(
+        outcomes.contains(&("api".to_owned(), "kept".to_owned())),
+        "{outcomes:?}"
+    );
     let errors = rig.errors();
     assert_eq!(errors.len(), 1, "one Event: {errors:?}");
     let (text, data) = &errors[0];
@@ -347,7 +418,10 @@ fn dirty_lead_is_kept_untouched(status: &'static str, other: &str) {
         "the text names the status {status}, never {other}: {text}"
     );
     assert!(text.contains("untouched"), "{text}");
-    assert!(text.contains(&workflow.lead.display().to_string()), "{text}");
+    assert!(
+        text.contains(&workflow.lead.display().to_string()),
+        "{text}"
+    );
     assert_eq!(data["details"]["status"], status);
     assert_eq!(data["details"]["outcome"], "kept");
     assert_eq!(data["details"]["path"], workflow.lead.display().to_string());
@@ -388,8 +462,19 @@ fn janitor_pass_finishes_what_a_killed_pass_left() {
     assert!(rig.registered(&workflow.lead) && rig.branch_exists(&workflow.lead_branch));
     let outcomes = outcomes(rig.pass());
     let workflow = &rig.workflows[0];
-    assert_eq!((workflow.lead.exists(), workflow.aside().exists(), rig.registered(&workflow.lead), rig.branch_exists(&workflow.lead_branch)), (false, false, false, false));
-    assert!(outcomes.iter().all(|(_, outcome)| outcome == "removed") && !outcomes.is_empty(), "{outcomes:?}");
+    assert_eq!(
+        (
+            workflow.lead.exists(),
+            workflow.aside().exists(),
+            rig.registered(&workflow.lead),
+            rig.branch_exists(&workflow.lead_branch)
+        ),
+        (false, false, false, false)
+    );
+    assert!(
+        outcomes.iter().all(|(_, outcome)| outcome == "removed") && !outcomes.is_empty(),
+        "{outcomes:?}"
+    );
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
 
@@ -404,7 +489,10 @@ fn janitor_pass_finishes_an_attempt_worktree_left_as_removing() {
     let workflow = &rig.workflows[0];
     assert_eq!(rig.left(workflow), [false; 6]);
     assert!(!workflow.attempt_aside().exists());
-    assert!(outcomes.iter().all(|(_, outcome)| outcome == "removed") && !outcomes.is_empty(), "{outcomes:?}");
+    assert!(
+        outcomes.iter().all(|(_, outcome)| outcome == "removed") && !outcomes.is_empty(),
+        "{outcomes:?}"
+    );
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
 
@@ -430,7 +518,12 @@ fn janitor_pass_while_another_holds_the_lock_does_nothing() {
     assert_eq!(map.get("skipped"), Some(&Value::from("running")), "{map:?}");
     assert!(!map.contains_key("outcomes"), "{map:?}");
     for workflow in &rig.workflows {
-        assert_eq!(rig.left(workflow), [true; 6], "Workflow {} is untouched", workflow.key);
+        assert_eq!(
+            rig.left(workflow),
+            [true; 6],
+            "Workflow {} is untouched",
+            workflow.key
+        );
     }
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
@@ -485,8 +578,14 @@ fn janitor_pass_sweeps_a_merged_attempt_of_a_live_pr_whatever_its_job_status() {
 #[test]
 fn janitor_pass_keeps_the_attempts_of_a_live_pr_whose_job_is_not_merged() {
     let (rig, left, outcomes) = live_pass("open", "failed", "failed");
-    assert_eq!(left, [true; 6], "a failed Job's Attempts are kept for debugging");
-    assert!(outcomes.iter().all(|(key, _)| key != "api"), "no outcome for the Workflow: {outcomes:?}");
+    assert_eq!(
+        left, [true; 6],
+        "a failed Job's Attempts are kept for debugging"
+    );
+    assert!(
+        outcomes.iter().all(|(key, _)| key != "api"),
+        "no outcome for the Workflow: {outcomes:?}"
+    );
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
 
@@ -514,9 +613,24 @@ fn janitor_pass_leaves_a_live_prs_running_attempt_alone_and_sweeps_the_merged_jo
         dir = dir.display(),
     ));
     let outcomes = outcomes(rig.pass());
-    assert_eq!(rig.left(&rig.workflows[0]), [true, true, true, false, false, false], "a-a1 is swept, the Lead stays");
-    assert_eq!((dir.exists(), rig.registered(&dir), rig.branch_exists(&branch)), (true, true, true), "b-a1 is untouched");
-    assert!(outcomes.contains(&("a".to_owned(), "removed".to_owned())), "{outcomes:?}");
+    assert_eq!(
+        rig.left(&rig.workflows[0]),
+        [true, true, true, false, false, false],
+        "a-a1 is swept, the Lead stays"
+    );
+    assert_eq!(
+        (
+            dir.exists(),
+            rig.registered(&dir),
+            rig.branch_exists(&branch)
+        ),
+        (true, true, true),
+        "b-a1 is untouched"
+    );
+    assert!(
+        outcomes.contains(&("a".to_owned(), "removed".to_owned())),
+        "{outcomes:?}"
+    );
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
 
@@ -537,6 +651,9 @@ fn janitor_pass_skips_a_swept_attempt_whose_driver_lock_is_held() {
     assert!(crate::lock::try_lock(&held).unwrap());
     let outcomes = outcomes(rig.pass());
     assert_eq!(rig.left(&rig.workflows[0]), [true; 6]);
-    assert!(outcomes.contains(&("api".to_owned(), "pending".to_owned())), "{outcomes:?}");
+    assert!(
+        outcomes.contains(&("api".to_owned(), "pending".to_owned())),
+        "{outcomes:?}"
+    );
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }

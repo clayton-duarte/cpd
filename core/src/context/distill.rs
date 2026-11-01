@@ -555,7 +555,10 @@ impl Run<'_> {
 
     /// For each batch record, the `<repo>:<path>` hits of `git grep -l -w <id> -- docs '*.md'` on each repo of the
     /// Context's Plans' Workflows.
-    fn grep_hits(&mut self, batch: &[&Indexed]) -> Result<HashMap<RecordId, Vec<String>>, CpdError> {
+    fn grep_hits(
+        &mut self,
+        batch: &[&Indexed],
+    ) -> Result<HashMap<RecordId, Vec<String>>, CpdError> {
         let repos: Vec<String> = self.store.read(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT DISTINCT workflows.repo FROM workflows JOIN plans ON plans.id = workflows.plan WHERE plans.context = ?1 ORDER BY workflows.repo",

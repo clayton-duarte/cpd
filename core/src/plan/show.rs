@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::fingerprint::{of_with as fingerprint_of, reviews_prs};
 use super::jobs::{self, Job};
-use super::prs::{WorkflowRow, Pull, load_needs};
+use super::prs::{Pull, WorkflowRow, load_needs};
 use super::row::{self, PlanRow};
 use super::{Env, ShowArgs};
 use crate::error::CpdError;
@@ -76,12 +76,18 @@ pub(super) fn workflow_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Va
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (plan, mut workflows, jobs, mut attempts, escalations, review, cursor) = env.store.read(|conn| snapshot(conn, &id))?;
+    let (plan, mut workflows, jobs, mut attempts, escalations, review, cursor) =
+        env.store.read(|conn| snapshot(conn, &id))?;
     let mut tamper = env.store.tamper()?;
     tamper.extend(jobs::tampered(&id, &jobs));
     for workflow in &mut workflows {
         let key = workflow["key"].as_str().expect("a Workflow key").to_owned();
-        workflow["jobs"] = json!(jobs.iter().filter(|j| j.workflow_str() == key).map(|j| j.key.as_str()).collect::<Vec<_>>());
+        workflow["jobs"] = json!(
+            jobs.iter()
+                .filter(|j| j.workflow_str() == key)
+                .map(|j| j.key.as_str())
+                .collect::<Vec<_>>()
+        );
     }
     let job_values: Vec<Value> = jobs
         .iter()
@@ -121,17 +127,37 @@ fn snapshot(conn: &Connection, id: &PlanId) -> Result<Snapshot, CpdError> {
     let attempts = attempts(conn, id)?;
     let escalations = open_escalations(conn, id)?;
     let review = latest_review(conn, id, &plan, &jobs, &workflows)?;
-    Ok((plan, workflows, jobs, attempts, escalations, review, highest_id(conn)?))
+    Ok((
+        plan,
+        workflows,
+        jobs,
+        attempts,
+        escalations,
+        review,
+        highest_id(conn)?,
+    ))
 }
 
 /// `plan_fingerprint` from rows already read: the Workflows are the `pr_values` ones, as the
 /// [`WorkflowRow`]s the fingerprint takes. It reads `key`, `repo`, `base`, `needs` and `status`;
 /// `pull_request` (expanded, not an id, in `pr_values`) is left `None`.
 fn current_fingerprint(plan: &PlanRow, jobs: &[Job], workflows: &[Value]) -> String {
-    let strings = |v: &Value| -> Vec<String> { v.as_array().into_iter().flatten().filter_map(|n| n.as_str().map(str::to_owned)).collect() };
-    let text = |p: &Value, field: &str| p[field].as_str().unwrap_or_else(|| panic!("a Workflow {field}")).to_owned();
+    let strings = |v: &Value| -> Vec<String> {
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|n| n.as_str().map(str::to_owned))
+            .collect()
+    };
+    let text = |p: &Value, field: &str| {
+        p[field]
+            .as_str()
+            .unwrap_or_else(|| panic!("a Workflow {field}"))
+            .to_owned()
+    };
     let rows: Vec<WorkflowRow> = if reviews_prs(Some(plan.phase.as_str())) {
-        workflows.iter()
+        workflows
+            .iter()
             .map(|p| WorkflowRow {
                 key: WorkflowKey::parse(&text(p, "key")).expect("a Workflow key"),
                 repo: text(p, "repo"),
@@ -205,7 +231,13 @@ fn open_escalations(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, CpdE
 /// The latest Plan review, with `current`: whether its fingerprint is still
 /// the plan fingerprint of `jobs` and `prs` (already read, `pr_values`). Null
 /// when the Plan has none.
-fn latest_review(conn: &Connection, id: &PlanId, plan: &PlanRow, jobs: &[Job], workflows: &[Value]) -> Result<Value, CpdError> {
+fn latest_review(
+    conn: &Connection,
+    id: &PlanId,
+    plan: &PlanRow,
+    jobs: &[Job],
+    workflows: &[Value],
+) -> Result<Value, CpdError> {
     let review = conn
         .query_row(
             "SELECT id, status, fingerprint, feedback, requested_at, decided_at FROM plan_reviews
@@ -282,7 +314,17 @@ mod tests {
             store.read(|conn| snapshot(conn, &id)).unwrap().5["current"].clone()
         };
         assert_eq!(current(&mut store), true);
-        store.write("fixture", |tx| Ok(tx.execute("UPDATE workflows SET base = 'develop' WHERE key = 'db'", []).map(|_| ())?)).unwrap();
-        assert_eq!(current(&mut store), false, "a Workflow's base is in the fingerprint");
+        store
+            .write("fixture", |tx| {
+                Ok(tx
+                    .execute("UPDATE workflows SET base = 'develop' WHERE key = 'db'", [])
+                    .map(|_| ())?)
+            })
+            .unwrap();
+        assert_eq!(
+            current(&mut store),
+            false,
+            "a Workflow's base is in the fingerprint"
+        );
     }
 }

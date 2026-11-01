@@ -145,7 +145,21 @@ fn add(fx: &Fx, pr: &str, tier: &str) -> common::Run {
     let spec = fx.env.root().join("spec.json");
     let body = json!({"goal": "Do it.", "context": "Because.", "touches": ["a.rs"], "acceptance": ["cargo test"], "out_of_scope": []});
     fs::write(&spec, body.to_string()).unwrap();
-    fx.cpd(&["job", "add", &format!("k-{pr}"), "--title", "T", "--tier", tier, "--spec", spec.to_str().unwrap(), "--workflow", pr, "--plan", "pl"])
+    fx.cpd(&[
+        "job",
+        "add",
+        &format!("k-{pr}"),
+        "--title",
+        "T",
+        "--tier",
+        tier,
+        "--spec",
+        spec.to_str().unwrap(),
+        "--workflow",
+        pr,
+        "--plan",
+        "pl",
+    ])
 }
 
 #[test]

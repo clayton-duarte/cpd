@@ -87,7 +87,11 @@ fn fixture(phase: &str, extra_workflow: bool) -> Fixture {
            VALUES ('pay', 'ctx', 'P', '{phase}', 'l-pay', '{T}', {locked},
                    '{{\"assumptions\":[],\"decided\":[],\"decisions\":[],\"done_when\":{{\"api\":[\"works\"]}},\"goal\":\"g\",\"out_of_scope\":[],\"risks\":[]}}');"
     );
-    for workflow in if extra_workflow { vec!["api", "web"] } else { vec!["api"] } {
+    for workflow in if extra_workflow {
+        vec!["api", "web"]
+    } else {
+        vec!["api"]
+    } {
         sql.push_str(&format!(
             "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                VALUES ('pay', '{workflow}', '/r', 'main', '{status}', 'cpd/pay/{workflow}', {worktree}, 1, '{T}', {started});"
@@ -195,7 +199,10 @@ fn lock() -> Result<Output, CpdError> {
 }
 
 fn review() -> Result<Output, CpdError> {
-    super::review::review(ReviewArgs { plan: plan_arg(), title: "Pay".parse::<WorkflowTitle>().unwrap() })
+    super::review::review(ReviewArgs {
+        plan: plan_arg(),
+        title: "Pay".parse::<WorkflowTitle>().unwrap(),
+    })
 }
 
 #[test]
@@ -332,8 +339,16 @@ fn plan_show_lists_explore_jobs_with_a_null_pr() {
     let work = jobs.iter().find(|j| j["key"] == "w1").unwrap();
     assert_eq!(work["pr"], "api");
     for workflow in out["workflows"].as_array().unwrap() {
-        let listed: Vec<&str> = workflow["jobs"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-        assert!(!listed.contains(&"s1") && !listed.contains(&"r1"), "no Workflow row mentions an explore Job: {workflow}");
+        let listed: Vec<&str> = workflow["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(
+            !listed.contains(&"s1") && !listed.contains(&"r1"),
+            "no Workflow row mentions an explore Job: {workflow}"
+        );
     }
     assert_eq!(out["counts"]["queued"], 3);
 }

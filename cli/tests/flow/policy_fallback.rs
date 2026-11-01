@@ -243,7 +243,19 @@ fn pr_fx(owner: &str, name: &str) -> (Fx, PathBuf) {
 }
 
 fn add(fx: &Fx, repo: &Path) -> Run {
-    fx.cpd(&["workflow", "add", "api", "--repo", repo.to_str().unwrap(), "--title", "Change api", "--shape", "config", "--plan", "pay-1"])
+    fx.cpd(&[
+        "workflow",
+        "add",
+        "api",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        "Change api",
+        "--shape",
+        "config",
+        "--plan",
+        "pay-1",
+    ])
 }
 
 fn repo_file(fx: &Fx, owner: &str, name: &str) {
@@ -258,7 +270,11 @@ fn f10_a_repo_with_no_origin_is_clayton_duartes() {
     repo_file(&fx, FALLBACK, "pay");
     let out = add(&fx, &repo).ok();
     assert_eq!(out["pr"]["name"], "pay", "{out}");
-    assert_eq!(fx.env.query::<String>("SELECT name FROM workflows WHERE plan = 'pay-1' AND key = 'api'"), "pay");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT name FROM workflows WHERE plan = 'pay-1' AND key = 'api'"),
+        "pay"
+    );
 }
 
 #[test]

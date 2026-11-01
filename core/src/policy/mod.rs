@@ -24,8 +24,9 @@ use crate::ids::{ContextId, OwnerLogin, RepoName};
 use crate::session::Role;
 
 pub use domain::{
-    audience, Checks, Declared, Deploys, Domain, DomainSource, Feedback, Gate, GateAlias, Gates, Jira, JiraSet, Policy, Post, PostSet, Pr, Workflow, ResourceScope, Resources, Scope, Source, Sources,
-    Text,
+    Checks, Declared, Deploys, Domain, DomainSource, Feedback, Gate, GateAlias, Gates, Jira,
+    JiraSet, Policy, Post, PostSet, Pr, ResourceScope, Resources, Scope, Source, Sources, Text,
+    Workflow, audience,
 };
 /// The `policy` commands (commands.md §22).
 #[derive(clap::Subcommand, Debug)]
@@ -319,7 +320,10 @@ mod tests {
         write(&home, "acme/owner.toml", "[gate]\npr = \"local\"\n");
         let r = resolve(&home, &repo_key("acme", "other")).unwrap();
         assert_eq!(r.policy.gate.workflow, Gate::Local);
-        assert!(matches!(r.sources.get(Domain::Gates).source, Source::Owner(_)));
+        assert!(matches!(
+            r.sources.get(Domain::Gates).source,
+            Source::Owner(_)
+        ));
     }
 
     #[test]
@@ -399,7 +403,20 @@ mod tests {
         assert_eq!(src.source, Source::Repo(real(&home, "acme/cpd.toml")));
         assert_eq!(
             src.left_out,
-            ["feedback.checks", "pr.post.enabled", "pr.post.channel", "pr.post.template", "pr.post.merged_reaction", "pr.human_gated_contexts", "pr.excused_labels", "pr.required_checks", "pr.jira.in_progress", "pr.jira.in_review", "pr.jira.done", "pr.jira.estimate_fields"]
+            [
+                "feedback.checks",
+                "pr.post.enabled",
+                "pr.post.channel",
+                "pr.post.template",
+                "pr.post.merged_reaction",
+                "pr.human_gated_contexts",
+                "pr.excused_labels",
+                "pr.required_checks",
+                "pr.jira.in_progress",
+                "pr.jira.in_review",
+                "pr.jira.done",
+                "pr.jira.estimate_fields"
+            ]
         );
         assert!(src.to_string().ends_with(" (key default)"));
         // The owner file sets every typed key: no `(key default)`.
@@ -413,12 +430,18 @@ mod tests {
         let (_d, home) = home();
         write(&home, "acme/owner.toml", "[pr]\ngate = \"local\"\n");
         let r = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
-        assert_eq!((r.policy.gate.merge, r.policy.gate.workflow), (Gate::Local, Gate::Local));
+        assert_eq!(
+            (r.policy.gate.merge, r.policy.gate.workflow),
+            (Gate::Local, Gate::Local)
+        );
         assert_eq!(r.warnings.len(), 1);
         assert!(r.warnings[0].contains("[pr] gate"), "{}", r.warnings[0]);
         write(&home, "acme/owner.toml", "[pr]\ngate = \"ci\"\n");
         let r = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
-        assert_eq!((r.policy.gate.merge, r.policy.gate.workflow), (Gate::None, Gate::None));
+        assert_eq!(
+            (r.policy.gate.merge, r.policy.gate.workflow),
+            (Gate::None, Gate::None)
+        );
         // An explicit `[gate]` table wins over the alias.
         write(
             &home,
@@ -426,7 +449,10 @@ mod tests {
             "[gate]\npr = \"local\"\n\n[pr]\ngate = \"ci\"\n",
         );
         let r = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
-        assert_eq!((r.policy.gate.merge, r.policy.gate.workflow), (Gate::None, Gate::Local));
+        assert_eq!(
+            (r.policy.gate.merge, r.policy.gate.workflow),
+            (Gate::None, Gate::Local)
+        );
     }
 
     #[test]
@@ -564,7 +590,10 @@ mod tests {
         for d in Domain::ALL {
             assert_eq!(r.sources.get(*d).source, Source::DefaultNoOwnerFile);
         }
-        assert_eq!(r.sources.get(Domain::Workflow).to_string(), "default (no owner file)");
+        assert_eq!(
+            r.sources.get(Domain::Workflow).to_string(),
+            "default (no owner file)"
+        );
         // With an owner file it resolves as `resolve` does.
         write(&home, "acme/owner.toml", "[gate]\npr = \"local\"\n");
         let r = resolve_unowned_row(&home, &repo_key("acme", "cpd")).unwrap();

@@ -103,13 +103,32 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
                 .with("plan", plan.as_str())
                 .with("attempt", id.to_string())
         })?;
-    let (job, tier, status, branch, worktree, worker_session, nudged, stop_request, (repo, lead_worktree, lead_branch), submitted_sha, (kind, workflow, head_ref, workflow_status)) = row;
+    let (
+        job,
+        tier,
+        status,
+        branch,
+        worktree,
+        worker_session,
+        nudged,
+        stop_request,
+        (repo, lead_worktree, lead_branch),
+        submitted_sha,
+        (kind, workflow, head_ref, workflow_status),
+    ) = row;
     // An explore Attempt has no Workflow: its repo and Lead Branch are none (empty), its Lead worktree is its own directory.
-    let (repo, lead_worktree, lead_branch) = match (workflow.is_some(), repo, lead_worktree, lead_branch) {
-        (true, Some(repo), Some(lead_worktree), Some(lead_branch)) => (repo, lead_worktree, lead_branch),
-        (true, ..) => return Err(corrupt(format!("Plan {plan} has an Attempt but no Lead worktree"))),
-        (false, ..) => (String::new(), worktree.clone(), String::new()),
-    };
+    let (repo, lead_worktree, lead_branch) =
+        match (workflow.is_some(), repo, lead_worktree, lead_branch) {
+            (true, Some(repo), Some(lead_worktree), Some(lead_branch)) => {
+                (repo, lead_worktree, lead_branch)
+            }
+            (true, ..) => {
+                return Err(corrupt(format!(
+                    "Plan {plan} has an Attempt but no Lead worktree"
+                )));
+            }
+            (false, ..) => (String::new(), worktree.clone(), String::new()),
+        };
     Ok(Attempt {
         plan: plan.clone(),
         context: ContextId::parse(&context)
@@ -540,7 +559,12 @@ pub fn end_opened(
                 text.push_str(" Its cancel request came too late: the merge had already happened.");
             }
             if let Some(pull) = pull {
-                text.push_str(&format!(" Pull request #{} of Workflow {} is open: {}.", pull.number, attempt.workflow_str(), pull.url));
+                text.push_str(&format!(
+                    " Pull request #{} of Workflow {} is open: {}.",
+                    pull.number,
+                    attempt.workflow_str(),
+                    pull.url
+                ));
             }
             text.push_str(&format!(" Next: {show}"));
             if attempt.kind == "work" {
@@ -556,7 +580,11 @@ pub fn end_opened(
                 }
             }
             let pull = pull.map(|p| (attempt.workflow_str(), p.number, p.url));
-            ("merged", None, NewEvent::job_merged(text, sha, &tier, &attempt.kind, turn, cancel_too_late, pull))
+            (
+                "merged",
+                None,
+                NewEvent::job_merged(text, sha, &tier, &attempt.kind, turn, cancel_too_late, pull),
+            )
         }
         End::Cancelled => {
             let reason = cancel_request(tx, &attempt.plan, &attempt.job)?
@@ -663,7 +691,13 @@ pub fn end_opened(
     if changed == 0 {
         return Err(cas_lost("The Job's status"));
     }
-    events::append(tx, event.plan(attempt.plan.clone()).job(attempt.job.clone()).attempt(attempt.id.clone()))?;
+    events::append(
+        tx,
+        event
+            .plan(attempt.plan.clone())
+            .job(attempt.job.clone())
+            .attempt(attempt.id.clone()),
+    )?;
     // pro-d89: a merge that is not an `open` or `update` Job's own requeues the failed `open`/`update` Jobs of its Workflow that it fixes.
     if matches!(end, End::Merged { .. }) && attempt.kind != "open" && attempt.kind != "update" {
         crate::job::fix_retry::retry_after_fix(tx, &attempt.plan, &attempt.job)?;

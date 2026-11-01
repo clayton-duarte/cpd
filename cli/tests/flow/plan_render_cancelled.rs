@@ -49,8 +49,14 @@ pub(crate) fn pr(env: &TestEnv, key: &str, status: &str, base: &str, needs: &[&s
         "'/w', 't'"
     };
     // the needs are written in the transaction that creates the PR: after it they are Locked
-    let needs: String =
-        needs.iter().map(|n| format!("INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', '{key}', '{n}');")).collect();
+    let needs: String = needs
+        .iter()
+        .map(|n| {
+            format!(
+                "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', '{key}', '{n}');"
+            )
+        })
+        .collect();
     env.sql(&format!(
         "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
          VALUES ('pay', '{key}', '/r/{key}', '{key}', '{base}', '{status}', 'cpd/pay/{key}', {started}, cpd_txn(), 't');{needs}"
@@ -159,7 +165,16 @@ fn with_cancelled_pr(superseded_by: Option<&str>) -> Fx {
     job(&fx.env, "api", "a", "queued", &[]);
     pr(&fx.env, "old", "dispatch", "main", &[]);
     job(&fx.env, "old", "o1", "queued", &[]);
-    fx.cpd(&["job", "cancel", "o1", "--reason", "dropped with its PR", "--plan", "pay"]).ok();
+    fx.cpd(&[
+        "job",
+        "cancel",
+        "o1",
+        "--reason",
+        "dropped with its PR",
+        "--plan",
+        "pay",
+    ])
+    .ok();
     let mut args = vec!["workflow", "cancel", "old", "--plan", "pay"];
     if let Some(by) = superseded_by {
         args.extend(["--superseded-by", by]);

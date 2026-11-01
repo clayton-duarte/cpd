@@ -101,10 +101,12 @@ fn rows(store: &mut Store) -> Vec<Value> {
 fn a_database_with_queued_merge_reactions_migrates_to_linked_rows() {
     let (_dir, home) = before_refusal();
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-    let row = |ts: &str, emoji: &str, q: &str, reacted: Value, plan: Value, workflow: Value| {
-        serde_json::json!({"ts": ts, "emoji": emoji, "queued_at": q, "reacted_at": reacted, "plan": plan, "pr": workflow, "refused_at": null, "refusal": null})
-    };
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
+    let row = |ts: &str, emoji: &str, q: &str, reacted: Value, plan: Value, workflow: Value| serde_json::json!({"ts": ts, "emoji": emoji, "queued_at": q, "reacted_at": reacted, "plan": plan, "pr": workflow, "refused_at": null, "refusal": null});
     let expected = vec![
         row(
             "1793040000.000001",
@@ -157,9 +159,21 @@ fn a_database_with_queued_merge_reactions_migrates_to_linked_rows() {
 fn slack_reactions_refuses_a_half_linked_or_half_refused_row() {
     let (_dir, home) = crate::store::tests::tmp_home();
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-    write(&mut store, &format!("{PLAN}{}", workflow("a", 1, "'git-merge'"))).unwrap();
-    let insert = |columns: &str, values: &str| format!("INSERT INTO slack_reactions (channel, ts, emoji, queued_at, {columns}) VALUES ('C0X', '1793040000.000001', 'e', 'q', {values});");
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
+    write(
+        &mut store,
+        &format!("{PLAN}{}", workflow("a", 1, "'git-merge'")),
+    )
+    .unwrap();
+    let insert = |columns: &str, values: &str| {
+        format!(
+            "INSERT INTO slack_reactions (channel, ts, emoji, queued_at, {columns}) VALUES ('C0X', '1793040000.000001', 'e', 'q', {values});"
+        )
+    };
     for (columns, values, what) in [
         ("plan", "'pay'", "plan without pr"),
         ("workflow", "'a'", "pr without plan"),
@@ -175,5 +189,9 @@ fn slack_reactions_refuses_a_half_linked_or_half_refused_row() {
         assert!(text.contains("CHECK"), "{what}: {text}");
     }
     write(&mut store, &insert("plan, workflow", "'pay', 'a'")).expect("a linked row");
-    write(&mut store, &insert("refused_at, refusal", "'t', 'invalid_name'").replace("'e'", "'f'")).expect("a refused row");
+    write(
+        &mut store,
+        &insert("refused_at, refusal", "'t', 'invalid_name'").replace("'e'", "'f'"),
+    )
+    .expect("a refused row");
 }

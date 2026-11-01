@@ -34,7 +34,10 @@ use crate::ids::{AttemptId, JobKey};
 use crate::output::Output;
 use crate::ports::Ports;
 
-pub use start::{explore_dir, Allocation, Origin, StartCtx, Started, workflow_has_live_linear, start, start_with, start_with_allocation};
+pub use start::{
+    Allocation, Origin, StartCtx, Started, explore_dir, start, start_with, start_with_allocation,
+    workflow_has_live_linear,
+};
 
 /// The arguments of `cpd attempt run` (commands.md §6.4).
 #[derive(clap::Args, Debug)]
@@ -82,7 +85,14 @@ pub fn dispatch(args: DispatchArgs) -> Result<Output, CpdError> {
     };
     // A manual dispatch asks for the linear Attempt; the starter refuses it (CasLost) when a sibling
     // of the Workflow is live, so two Attempts never share the Lead worktree (hs-d680/hs-d682/hs-d683).
-    let started = start_with_allocation(&Ports::current(), &mut store, &ctx, &plan, &args.key, Some(Allocation::Linear))?;
+    let started = start_with_allocation(
+        &Ports::current(),
+        &mut store,
+        &ctx,
+        &plan,
+        &args.key,
+        Some(Allocation::Linear),
+    )?;
     Ok(Output::success(json!({
         "attempt": started.attempt,
         "tier": started.tier.to_string(),

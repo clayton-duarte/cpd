@@ -46,7 +46,12 @@ fn context(id: &str) -> String {
 
 /// A Plan; `pr` is `(number, polled)`, where `polled` is the pull request row's `(title, review decision, checks)`: what `pr open`
 /// writes (the Plan's title, no review, no checks) until the first poll changes it.
-fn plan_row(id: &str, phase: &str, created: &str, workflow: Option<(i64, (&str, &str, &str))>) -> String {
+fn plan_row(
+    id: &str,
+    phase: &str,
+    created: &str,
+    workflow: Option<(i64, (&str, &str, &str))>,
+) -> String {
     let late = !matches!(phase, "grounding" | "plan");
     let worktree = if late { "'/wt'" } else { "NULL" };
     let locked = if late {
@@ -307,14 +312,28 @@ fn the_column_shows_the_machine_and_the_inbox_under_it_and_nothing_else() {
     let (got, _) = column(25);
     let expected = ["", " homeserver", " \u{F4BC} 23%  \u{EFC5} 41%", ""];
     assert_eq!(got[..4], expected, "\n{}", got.join("\n"));
-    assert!(!got.iter().any(|r| r.contains("Workflows") || r.contains("acme/repo#")), "\n{}", got.join("\n"));
+    assert!(
+        !got.iter()
+            .any(|r| r.contains("Workflows") || r.contains("acme/repo#")),
+        "\n{}",
+        got.join("\n")
+    );
 }
 
 #[test]
 fn a_plan_without_a_pr_is_not_listed_and_no_label_is_drawn() {
     let (got, _) = column(25);
     let got = got.join("\n");
-    for hidden in ["v1", "sketch lead", "never lead", "no Workflow", "cpd-ui", "cpd visual lead", "fresh lead", "Plans in the cockpit"] {
+    for hidden in [
+        "v1",
+        "sketch lead",
+        "never lead",
+        "no Workflow",
+        "cpd-ui",
+        "cpd visual lead",
+        "fresh lead",
+        "Plans in the cockpit",
+    ] {
         assert!(!got.contains(hidden), "{hidden}:\n{got}");
     }
 }

@@ -101,7 +101,12 @@ fn queued(env: &TestEnv) -> i64 {
 
 pub(super) fn merge(fx: &Fx) {
     fx.cpd(&["pr", "merge", REF]).ok();
-    assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE key = 'api'"), "merged", "the PR's merge is recorded");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT status FROM workflows WHERE key = 'api'"),
+        "merged",
+        "the PR's merge is recorded"
+    );
 }
 
 #[test]
@@ -154,7 +159,11 @@ fn a_merge_queues_its_reaction_linked_to_the_pr() {
     merge(&fx);
     let env = &fx.env;
     let row: serde_json::Value = serde_json::from_str(&env.query::<String>("SELECT json_object('emoji', emoji, 'plan', plan, 'workflow', workflow) FROM slack_reactions")).unwrap();
-    assert_eq!(row, json!({"emoji": "git-merged", "plan": "pay-1", "workflow": "api"}), "the row names the PR whose merge it is");
+    assert_eq!(
+        row,
+        json!({"emoji": "git-merged", "plan": "pay-1", "workflow": "api"}),
+        "the row names the PR whose merge it is"
+    );
     assert_eq!(queued(env), 1);
     drop(fx);
 
@@ -182,7 +191,11 @@ fn pr_view_reads_the_reaction_from_the_row_of_the_pr_and_shows_its_refusal() {
         "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction)
          VALUES ('pay', 'repo', '{CHANNEL}', '{TS}', 'https://acme.slack.com/archives/{CHANNEL}/p1793040197490209', 'opened', 'git-merge');"
     ));
-    let view = || pay.fx.cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"]).ok();
+    let view = || {
+        pay.fx
+            .cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"])
+            .ok()
+    };
 
     let out = view();
     assert_eq!(

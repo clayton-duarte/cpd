@@ -334,10 +334,19 @@ impl Opener<'_> {
         });
         match key {
             Err(e) => dialog::report(self.tmux, self.log, TITLE, &e),
-            Ok(None) => dialog::report_why(self.tmux, self.log, TITLE, format!("No Workflow of Plan {plan} has the pull request {pull}.")),
+            Ok(None) => dialog::report_why(
+                self.tmux,
+                self.log,
+                TITLE,
+                format!("No Workflow of Plan {plan} has the pull request {pull}."),
+            ),
             Ok(Some(key)) => {
                 let argv = ["post", "--workflow", &key, "--plan", plan.as_str()];
-                let all = std::iter::once(PROGRAM).chain(["pr"]).chain(argv).map(std::ffi::OsString::from).collect();
+                let all = std::iter::once(PROGRAM)
+                    .chain(["pr"])
+                    .chain(argv)
+                    .map(std::ffi::OsString::from)
+                    .collect();
                 if let Err(e) = (self.run_command)(all) {
                     dialog::report(self.tmux, self.log, TITLE, &e);
                 }

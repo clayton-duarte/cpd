@@ -28,8 +28,13 @@ fn world(repo_file: &str) -> Fx {
 #[test]
 fn resource_decl_policy_show_lists_the_declared_names_sorted() {
     let fx = world("[resources.e2e-port]\n\n[resources.db]\n");
-    let repo_file = fs::canonicalize(fx.env.cpd_home().join("policy/acme/cpd.toml")).unwrap().display().to_string();
-    let out = fx.cpd(&["policy", "show", "--workflow", "named", "--plan", "pl"]).ok();
+    let repo_file = fs::canonicalize(fx.env.cpd_home().join("policy/acme/cpd.toml"))
+        .unwrap()
+        .display()
+        .to_string();
+    let out = fx
+        .cpd(&["policy", "show", "--workflow", "named", "--plan", "pl"])
+        .ok();
     let domain = &out["policy"]["resources"];
     assert_eq!(
         domain["keys"]["names"],
@@ -40,8 +45,13 @@ fn resource_decl_policy_show_lists_the_declared_names_sorted() {
     assert_eq!(domain["audience"], json!([]));
 
     fs::write(fx.env.cpd_home().join("policy/acme/cpd.toml"), "").unwrap();
-    let out = fx.cpd(&["policy", "show", "--workflow", "named", "--plan", "pl"]).ok();
-    assert_eq!(out["policy"]["resources"]["keys"]["names"], json!({"value": [], "source": "default"}));
+    let out = fx
+        .cpd(&["policy", "show", "--workflow", "named", "--plan", "pl"])
+        .ok();
+    assert_eq!(
+        out["policy"]["resources"]["keys"]["names"],
+        json!({"value": [], "source": "default"})
+    );
 }
 
 #[test]
@@ -62,7 +72,9 @@ fn policy_show_resources_lists_names_with_scope_slots_and_source() {
     };
     let (host, repo) = (real("policy/host.toml"), real("policy/acme/cpd.toml"));
 
-    let out = fx.cpd(&["policy", "show", "--workflow", "named", "--plan", "pl"]).ok();
+    let out = fx
+        .cpd(&["policy", "show", "--workflow", "named", "--plan", "pl"])
+        .ok();
 
     let domain = &out["policy"]["resources"];
     assert_eq!(

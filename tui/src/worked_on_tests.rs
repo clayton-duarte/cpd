@@ -68,7 +68,11 @@ impl Fixture {
 
     /// A Job in its own transaction (so `created_txn` grows with each call).
     fn job(&mut self, workflow: &str, key: &str, status: &str) {
-        let cause = if status == "failed" { "'crashed'" } else { "NULL" };
+        let cause = if status == "failed" {
+            "'crashed'"
+        } else {
+            "NULL"
+        };
         let sha = if status == "merged" { "'abc'" } else { "NULL" };
         self.sql(&format!(
             "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
@@ -135,7 +139,11 @@ impl Fixture {
 fn plan_boxes_lists_the_failed_jobs_being_worked_on() {
     let mut idle = fixture("idle");
     idle.failures_and_fixes();
-    assert_eq!(idle.worked_on(), ["j-a", "j-c"], "idle Lead: the failed Jobs with a queued or running fix of their Workflow, sorted");
+    assert_eq!(
+        idle.worked_on(),
+        ["j-a", "j-c"],
+        "idle Lead: the failed Jobs with a queued or running fix of their Workflow, sorted"
+    );
 
     let mut working = fixture("working");
     working.failures_and_fixes();
@@ -165,7 +173,11 @@ fn a_failed_pill_turns_while_a_fix_job_of_its_pr_is_underway_and_its_lead_is_idl
     let b = read::plan_boxes(&mut f.store, &plan).unwrap();
     for frame in 0..30 {
         let chart = boxes::layout(&b.workflows, &b.jobs, &b.needs_user, frame).chart;
-        let pill = chart.pills.iter().find(|p| p.key == "j-a").expect("the failed Job's pill");
+        let pill = chart
+            .pills
+            .iter()
+            .find(|p| p.key == "j-a")
+            .expect("the failed Job's pill");
         let cell = &chart.buf[(pill.rect.x + 1, pill.rect.y)];
         assert_eq!(cell.symbol(), MOONS[frame % 28], "frame {frame}");
         assert_ne!(cell.symbol(), CLOSE_CIRCLE);

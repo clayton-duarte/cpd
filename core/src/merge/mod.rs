@@ -103,8 +103,17 @@ pub fn merge(
         Err(e) => return Err(e),
     };
     let metrics = (ctx.metrics)(&target);
-    let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
-    let workflow = crate::ids::WorkflowKey::parse(target.workflow_str()).map_err(|_| CpdError::bad_row(format!("Job {} has the Workflow key {:?}", target.job, target.workflow_str())))?;
+    let ladder = Ladder {
+        catalog: ctx.catalog,
+        retry_cap: ctx.config.retry_cap,
+    };
+    let workflow = crate::ids::WorkflowKey::parse(target.workflow_str()).map_err(|_| {
+        CpdError::bad_row(format!(
+            "Job {} has the Workflow key {:?}",
+            target.job,
+            target.workflow_str()
+        ))
+    })?;
     // Step 10, and every other end. An `open` Job's merge writes the Workflow's rows in the same transaction (§7.7).
     store.write(ctx.source, |tx| {
         let pull = pulled.as_ref().map(|p| ledger::Pull {
@@ -402,11 +411,23 @@ fn steps(
         if cpd_kind {
             if target.kind == "open" {
                 let (workflow, ..) = workflow_of_job(store, target)?;
-                store.read(|conn| crate::pr::jira_required_of(conn, home, &target.plan, &workflow.key))?;
+                store.read(|conn| {
+                    crate::pr::jira_required_of(conn, home, &target.plan, &workflow.key)
+                })?;
             }
             let workflow = workflow_row(store, target)?;
             let again = format!("cpd attempt submit {}", target.id);
-            match store.read(|conn| crate::pr::base_check(conn, &target.plan, repo, &target.worktree, &workflow, submitted, &again)) {
+            match store.read(|conn| {
+                crate::pr::base_check(
+                    conn,
+                    &target.plan,
+                    repo,
+                    &target.worktree,
+                    &workflow,
+                    submitted,
+                    &again,
+                )
+            }) {
                 Ok(()) => {}
                 Err(e) if e.code() == ErrorCode::BaseConflict => {
                     return Ok(Stepped::ends(End::Failed {
@@ -429,7 +450,13 @@ fn steps(
             return Ok(Stepped::ends(end));
         }
         if cpd_kind && policy.gate.workflow == Gate::Local {
-            if let Some(end) = run_gate(home, config, target, Hook::PreMerge, &policy.hooks.pre_merge)? {
+            if let Some(end) = run_gate(
+                home,
+                config,
+                target,
+                Hook::PreMerge,
+                &policy.hooks.pre_merge,
+            )? {
                 return Ok(Stepped::ends(end));
             }
         }
@@ -745,12 +772,24 @@ fn run_gate(
 fn workflow_row(store: &mut Store, target: &Attempt) -> Result<crate::plan::WorkflowRow, CpdError> {
     store.read(|conn| {
         let workflows = crate::plan::fingerprint::load_workflows(conn, &target.plan)?;
-        workflows.into_iter().find(|p| p.key.as_str() == target.workflow_str()).ok_or_else(|| CpdError::bad_row(format!("Plan {} has no Workflow {}", target.plan, target.workflow_str())))
+        workflows
+            .into_iter()
+            .find(|p| p.key.as_str() == target.workflow_str())
+            .ok_or_else(|| {
+                CpdError::bad_row(format!(
+                    "Plan {} has no Workflow {}",
+                    target.plan,
+                    target.workflow_str()
+                ))
+            })
     })
 }
 
 /// The Workflow of the Attempt's Job with its stored title and description, the pull request's body (§7.6 `pr open` step 3).
-fn workflow_of_job(store: &mut Store, target: &Attempt) -> Result<(crate::plan::WorkflowRow, String, Option<String>), CpdError> {
+fn workflow_of_job(
+    store: &mut Store,
+    target: &Attempt,
+) -> Result<(crate::plan::WorkflowRow, String, Option<String>), CpdError> {
     let workflow = workflow_row(store, target)?;
     let title = workflow.title.clone().ok_or_else(|| {
         CpdError::new(
@@ -760,13 +799,20 @@ fn workflow_of_job(store: &mut Store, target: &Attempt) -> Result<(crate::plan::
         .with("plan", target.plan.as_str())
         .with("pr", workflow.key.as_str())
     })?;
-    let description = store.read(|conn| crate::pr::stored_description_of(conn, &target.plan, &workflow.key))?;
+    let description =
+        store.read(|conn| crate::pr::stored_description_of(conn, &target.plan, &workflow.key))?;
     Ok((workflow, title, description))
 }
 
 /// The refusals of an `open` or `update` Job's merge that end the Attempt `gate_error` instead of leaving it `merging`.
 fn is_refusal(code: ErrorCode) -> bool {
-    matches!(code, ErrorCode::WorkflowTitleRequired | ErrorCode::DescriptionRequired | ErrorCode::JiraRequired | ErrorCode::BaseNotFound)
+    matches!(
+        code,
+        ErrorCode::WorkflowTitleRequired
+            | ErrorCode::DescriptionRequired
+            | ErrorCode::JiraRequired
+            | ErrorCode::BaseNotFound
+    )
 }
 
 /// Whether the newest pull request of the Workflow's Lead Branch is already merged on GitHub: the `open` Job adopts it at the merge (§7.4 step 8b; §7.7).
@@ -776,9 +822,19 @@ fn pull_request_is_merged(store: &mut Store, target: &Attempt) -> Result<bool, C
 }
 
 /// Step 8b (§7.4): the pull request of the Lead Branch, created or adopted, as `pr open` steps 0 and 3 do it (never `--draft`).
-fn open_pull_request(store: &mut Store, config: &Config, target: &Attempt) -> Result<crate::pr::Pulled, CpdError> {
+fn open_pull_request(
+    store: &mut Store,
+    config: &Config,
+    target: &Attempt,
+) -> Result<crate::pr::Pulled, CpdError> {
     let (workflow, title, description) = workflow_of_job(store, target)?;
-    crate::pr::pull_request(&target.lead_worktree, &workflow, &title, description.as_deref(), &config.inbox.bot_reviewers)
+    crate::pr::pull_request(
+        &target.lead_worktree,
+        &workflow,
+        &title,
+        description.as_deref(),
+        &config.inbox.bot_reviewers,
+    )
 }
 
 /// Step 8's and R2's push of `sha`: to the Workflow's remote branch, and skipped for an adopted Workflow that has not opened unless the Job is an `open` or

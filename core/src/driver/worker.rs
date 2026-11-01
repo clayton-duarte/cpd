@@ -211,10 +211,19 @@ pub fn render_spec(
         let workflow = workflows
             .iter()
             .find(|p| p.key.as_str() == job.workflow_str())
-            .ok_or_else(|| CpdError::bad_row(format!("Job {} has no Workflow row {} in Plan {}", job.key, job.workflow_str(), target.plan)))?;
+            .ok_or_else(|| {
+                CpdError::bad_row(format!(
+                    "Job {} has no Workflow row {} in Plan {}",
+                    job.key,
+                    job.workflow_str(),
+                    target.plan
+                ))
+            })?;
         // The stored text keeps the base of the insert; A3 tells the Worker the live one. The cause is the Job's
         // own (`base-merged` merges the base even without a conflict), read from its `job-added` Event.
-        let cause = (job.kind == "update").then(|| crate::job::open::cause_of(conn, &target.plan, &job.key)).transpose()?;
+        let cause = (job.kind == "update")
+            .then(|| crate::job::open::cause_of(conn, &target.plan, &job.key))
+            .transpose()?;
         crate::job::open::fixed_spec(workflow, job.kind == "update", cause)
     } else {
         job.require_spec()?.clone()

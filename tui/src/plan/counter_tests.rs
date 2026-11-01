@@ -15,7 +15,9 @@ fn chars(s: &str) -> Vec<String> {
 }
 
 fn canvas(workflows: &[WorkflowNode]) -> Buffer {
-    boxes::layout(workflows, &[], &NeedsUser::default(), 0).chart.buf
+    boxes::layout(workflows, &[], &NeedsUser::default(), 0)
+        .chart
+        .buf
 }
 
 /// The first row of `buf` that starts with `╰`, as cells.
@@ -29,7 +31,10 @@ fn bottom(buf: &Buffer) -> (usize, Vec<String>) {
 }
 
 fn with(key: &str, secs: Option<u64>) -> WorkflowNode {
-    WorkflowNode { elapsed_seconds: secs, ..sample_workflow(key) }
+    WorkflowNode {
+        elapsed_seconds: secs,
+        ..sample_workflow(key)
+    }
 }
 
 #[test]
@@ -136,7 +141,10 @@ fn a_box_is_widened_to_hold_its_counter_plus_four() {
 
 /// The `┬` columns of the first box's bottom border, its width and the canvas.
 fn exit(secs: Option<u64>) -> (Buffer, usize, usize, Vec<usize>) {
-    let web = WorkflowNode { needs: vec![WorkflowKey::parse("api").unwrap()], ..sample_workflow("web") };
+    let web = WorkflowNode {
+        needs: vec![WorkflowKey::parse("api").unwrap()],
+        ..sample_workflow("web")
+    };
     let buf = canvas(&[with("api", secs), web]);
     let r = rows(&buf);
     let y = r.iter().position(|l| l.starts_with('╰')).unwrap();

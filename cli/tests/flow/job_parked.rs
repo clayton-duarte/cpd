@@ -225,7 +225,10 @@ fn stub_in_a_pr_that_waits_for_another_pr_is_accepted() {
     let fx = locked();
     web_waits_for_repo(&fx);
     let out = stub(&fx, "k", &["--workflow", "web"]).ok();
-    assert_eq!((&out["job"]["pr"], &out["job"]["status"]), (&json!("web"), &json!("draft")));
+    assert_eq!(
+        (&out["job"]["pr"], &out["job"]["status"]),
+        (&json!("web"), &json!("draft"))
+    );
     // A complete draft in the same waiting Workflow is refused: the Workflow's wait is a wait.
     let spec = spec_file(&fx.env);
     refused(

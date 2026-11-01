@@ -18,12 +18,19 @@ pub(super) fn rerun(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     if workflow.status != "open" {
         return Err(CpdError::new(
             ErrorCode::WorkflowNotOpen,
-            format!("Workflow {} of Plan {id} is {}: pr rerun needs an open Workflow.", workflow.key, workflow.status),
+            format!(
+                "Workflow {} of Plan {id} is {}: pr rerun needs an open Workflow.",
+                workflow.key, workflow.status
+            ),
         )
         .with("pr", workflow.key.as_str())
         .with("status", workflow.status.as_str()));
     }
-    let number = workflow.pull.as_ref().expect("an open Workflow has its pull request (prs CHECK)").number;
+    let number = workflow
+        .pull
+        .as_ref()
+        .expect("an open Workflow has its pull request (prs CHECK)")
+        .number;
     let lead = workflow.lead(&id)?;
     let runner = &*env.ports.runner;
 
@@ -54,5 +61,7 @@ pub(super) fn rerun(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         }
         rerun.push(json!({"id": run.id, "name": run.name}));
     }
-    Ok(Output::success(json!({"pr": workflow.key, "head_sha": head_sha, "rerun": rerun})))
+    Ok(Output::success(
+        json!({"pr": workflow.key, "head_sha": head_sha, "rerun": rerun}),
+    ))
 }

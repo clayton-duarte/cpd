@@ -123,7 +123,19 @@ fn plan_pay(fx: &Fx) {
 
 /// `cpd pr add web` on `repo`, in Plan `pay-1`, in this process.
 fn pr_add(fx: &Fx, repo: &Path) -> crate::common::Run {
-    fx.cpd(&["workflow", "add", "web", "--repo", repo.to_str().unwrap(), "--title", "Change web", "--shape", "config", "--plan", "pay-1"])
+    fx.cpd(&[
+        "workflow",
+        "add",
+        "web",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        "Change web",
+        "--shape",
+        "config",
+        "--plan",
+        "pay-1",
+    ])
 }
 
 // ---- git_repo

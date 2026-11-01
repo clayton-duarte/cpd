@@ -106,7 +106,10 @@ fn later_of_job(conn: &Connection, event: &Event, kinds: &[&str]) -> Result<bool
 }
 
 fn pr_feedback(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
-    let (Some(plan), Some(workflow)) = (event.plan.as_deref(), event.data.get("workflow").and_then(Value::as_str)) else {
+    let (Some(plan), Some(workflow)) = (
+        event.plan.as_deref(),
+        event.data.get("workflow").and_then(Value::as_str),
+    ) else {
         return Ok(false);
     };
     if exists(
@@ -157,7 +160,11 @@ fn pr_feedback(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
             },
             "closed" => state == "closed",
             "ready_to_post" => {
-                let posted = exists(conn, "SELECT 1 FROM pr_posts WHERE plan = ?1 AND workflow = ?2 LIMIT 1", params![plan, workflow])?;
+                let posted = exists(
+                    conn,
+                    "SELECT 1 FROM pr_posts WHERE plan = ?1 AND workflow = ?2 LIMIT 1",
+                    params![plan, workflow],
+                )?;
                 let id: i64 = conn.query_row(
                     "SELECT pull_request FROM workflows WHERE plan = ?1 AND key = ?2",
                     params![plan, workflow],

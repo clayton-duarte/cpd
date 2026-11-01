@@ -47,7 +47,10 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
     if workflow.status != "open" {
         return Err(CpdError::new(
             ErrorCode::WorkflowNotOpen,
-            format!("Workflow {key} of Plan {id} is {}: pr post needs an open Workflow.", workflow.status),
+            format!(
+                "Workflow {key} of Plan {id} is {}: pr post needs an open Workflow.",
+                workflow.status
+            ),
         )
         .with("pr", key.as_str())
         .with("status", workflow.status.as_str()));
@@ -63,17 +66,28 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
     let policy = workflow_policy(&mut env, &id, &key)?;
     // (d)
     if !policy.pr.post.enabled {
-        return Err(CpdError::new(ErrorCode::PostDisabled, format!("Workflow {key}: posting is not enabled for its owner."))
-            .with("pr", key.as_str())
-            .with("key", "pr.post.enabled"));
+        return Err(CpdError::new(
+            ErrorCode::PostDisabled,
+            format!("Workflow {key}: posting is not enabled for its owner."),
+        )
+        .with("pr", key.as_str())
+        .with("key", "pr.post.enabled"));
     }
     // (e)
-    let row = workflow.pull_request.expect("an open Workflow has its pull_request row (prs CHECK)");
+    let row = workflow
+        .pull_request
+        .expect("an open Workflow has its pull_request row (prs CHECK)");
     let pull = env.store.read(|conn| super::pulls::load(conn, row))?;
     if !pull.authored {
-        return Err(CpdError::new(ErrorCode::NotAuthored, format!("Pull request {} of Workflow {key} is not the User's own.", pull.number))
-            .with("pr", key.as_str())
-            .with("number", pull.number));
+        return Err(CpdError::new(
+            ErrorCode::NotAuthored,
+            format!(
+                "Pull request {} of Workflow {key} is not the User's own.",
+                pull.number
+            ),
+        )
+        .with("pr", key.as_str())
+        .with("number", pull.number));
     }
     // (f)
     let channel = [
@@ -185,7 +199,9 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
                 .read(|conn| posts::find(conn, id.as_str(), key.as_str()))?;
             return Err(match done {
                 Some(done) => already_posted(&key, &done),
-                None => CpdError::bad_row(format!("Workflow {key} has no post after its insert was refused")),
+                None => CpdError::bad_row(format!(
+                    "Workflow {key} has no post after its insert was refused"
+                )),
             });
         }
         Err(e) => {
@@ -210,12 +226,24 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
 }
 
 /// The GitHub attempt, after the post is stored, on the read made before the send: `{state, reason}` (commands.md §9.8b).
-fn request_auto_merge(env: &mut Env, id: &PlanId, key: &WorkflowKey, read: &super::gh::AutoMergeRead) -> Result<Value, CpdError> {
-    let stacked = env.store.read(|conn| auto_merge::stacked(conn, id.as_str(), key.as_str()))?;
+fn request_auto_merge(
+    env: &mut Env,
+    id: &PlanId,
+    key: &WorkflowKey,
+    read: &super::gh::AutoMergeRead,
+) -> Result<Value, CpdError> {
+    let stacked = env
+        .store
+        .read(|conn| auto_merge::stacked(conn, id.as_str(), key.as_str()))?;
     let outcome = if !read.allowed {
         Outcome::NotAllowed
     } else if stacked {
-        return Ok(state("deferred", Some("the Workflow is stacked on another Workflow's branch: the request waits until it is unstacked")));
+        return Ok(state(
+            "deferred",
+            Some(
+                "the Workflow is stacked on another Workflow's branch: the request waits until it is unstacked",
+            ),
+        ));
     } else {
         auto_merge::after_read(&*env.ports.runner, Path::new("."), read)
     };
@@ -225,7 +253,9 @@ fn request_auto_merge(env: &mut Env, id: &PlanId, key: &WorkflowKey, read: &supe
             Some("none"),
             state(
                 "not_allowed",
-                Some("the repo does not allow auto-merge: cpd merges the Workflow when it is ready (the cockpit's Merge, or the Lead with `cpd pr merge` after a human approves)"),
+                Some(
+                    "the repo does not allow auto-merge: cpd merges the Workflow when it is ready (the cockpit's Merge, or the Lead with `cpd pr merge` after a human approves)",
+                ),
             ),
         ),
         Outcome::Refused(why) => (Some("refused"), state("refused", Some(&why))),
@@ -259,10 +289,13 @@ fn one_line(text: &str) -> String {
 }
 
 fn already_posted(key: &crate::ids::WorkflowKey, done: &PostRecord) -> CpdError {
-    CpdError::new(ErrorCode::AlreadyPosted, format!("Workflow {key} was already posted: {}.", done.link))
-        .with("pr", key.as_str())
-        .with("channel", done.channel.as_str())
-        .with("ts", done.ts.as_str())
-        .with("link", done.link.as_str())
-        .with("posted_at", done.posted_at.as_str())
+    CpdError::new(
+        ErrorCode::AlreadyPosted,
+        format!("Workflow {key} was already posted: {}.", done.link),
+    )
+    .with("pr", key.as_str())
+    .with("channel", done.channel.as_str())
+    .with("ts", done.ts.as_str())
+    .with("link", done.link.as_str())
+    .with("posted_at", done.posted_at.as_str())
 }

@@ -1221,8 +1221,10 @@ mod tests {
     /// in the migration folder. They are typed by the code they stood for.
     #[test]
     fn every_message_a_trigger_raises_is_typed_or_untyped_by_design() {
-        const SUPERSEDED: [(&str, ErrorCode); 2] =
-            [("pr_locked", ErrorCode::WorkflowLocked), ("needs_other_pr", ErrorCode::NeedsOtherWorkflow)];
+        const SUPERSEDED: [(&str, ErrorCode); 2] = [
+            ("pr_locked", ErrorCode::WorkflowLocked),
+            ("needs_other_pr", ErrorCode::NeedsOtherWorkflow),
+        ];
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/store/migrations");
         let mut seen = std::collections::BTreeSet::new();
         for file in fs::read_dir(dir).unwrap() {
@@ -1240,11 +1242,21 @@ mod tests {
             ));
             // `review_pending` guards a code path that forgot to close the Plan's reviews: a bug, so untyped by design.
             // `working_pr_invalid` is the same: the writer checks the Lead and the Workflow first, so it never fires in practice.
-            let untyped = message.starts_with("append_only: ") || message.ends_with(" must be cpd_txn()") || message == "review_pending" || message == "working_pr_invalid";
+            let untyped = message.starts_with("append_only: ")
+                || message.ends_with(" must be cpd_txn()")
+                || message == "review_pending"
+                || message == "working_pr_invalid";
             let typed_legacy = SUPERSEDED.iter().any(|(name, _)| *name == message);
-            assert!(!untyped || !typed_legacy, "{message} is both typed and untyped");
+            assert!(
+                !untyped || !typed_legacy,
+                "{message} is both typed and untyped"
+            );
             if !typed_legacy {
-                assert_eq!(err.code() == ErrorCode::StoreFailed, untyped, "{message}: {err:?}");
+                assert_eq!(
+                    err.code() == ErrorCode::StoreFailed,
+                    untyped,
+                    "{message}: {err:?}"
+                );
             }
             assert_eq!(err.details()["sqlite_message"], message);
         }

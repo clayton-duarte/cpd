@@ -114,7 +114,10 @@ pub struct Pill {
 }
 
 /// Jobs (one Workflow's) as the chart draws them, in creation order: a cancelled Job is drawn muted, in its place, with nothing after it; the needs on it, and its own, are not drawn (they count for nothing). `worked_on`: the Plan's failed Jobs being worked on.
-pub fn flow_jobs<'a>(jobs: impl IntoIterator<Item = &'a JobNode>, worked_on: &[JobKey]) -> Vec<FlowJob> {
+pub fn flow_jobs<'a>(
+    jobs: impl IntoIterator<Item = &'a JobNode>,
+    worked_on: &[JobKey],
+) -> Vec<FlowJob> {
     let all: Vec<&JobNode> = jobs.into_iter().collect();
     let cancelled = |key: &JobKey| {
         all.iter()

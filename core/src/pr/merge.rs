@@ -196,8 +196,11 @@ fn store_merge_in(
     )?;
     let after = pulls::load(tx, row.id)?;
     let owners: Vec<(String, String)> = {
-        let mut stmt = tx.prepare("SELECT plan, key FROM workflows WHERE pull_request = ?1 AND status = 'open'")?;
-        stmt.query_map([row.id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+        let mut stmt = tx.prepare(
+            "SELECT plan, key FROM workflows WHERE pull_request = ?1 AND status = 'open'",
+        )?;
+        stmt.query_map([row.id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?
     };
     for (plan, key) in owners {
         let (plan, key): (PlanId, WorkflowKey) = (plan.parse()?, key.parse()?);

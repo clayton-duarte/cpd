@@ -178,7 +178,10 @@ fn an_authored_draft_pr_is_a_white_draft_row() {
 #[test]
 fn an_authored_stacked_pr_is_a_white_stacked_row() {
     let mut f = fixture();
-    f.workflow(1, "base_ref = 'feature', default_branch = 'main', review_decision = 'approved'");
+    f.workflow(
+        1,
+        "base_ref = 'feature', default_branch = 'main', review_decision = 'approved'",
+    );
     f.workflow(2, "base_ref = NULL, default_branch = NULL");
     is(&mut f, 1, White, "stacked pr pending base merge");
     is(&mut f, 2, Cyan, "waiting");
@@ -189,7 +192,10 @@ fn an_unowned_broken_pr_is_a_red_row_named_by_its_cause() {
     let mut f = fixture();
     f.workflow(1, "mergeable = 'conflicting', merge_state = 'dirty'");
     f.workflow(2, "checks = 'failed', merge_state = 'blocked'");
-    f.workflow(3, "review_decision = 'changes_requested', merge_state = 'blocked'");
+    f.workflow(
+        3,
+        "review_decision = 'changes_requested', merge_state = 'blocked'",
+    );
     is(&mut f, 1, Red, "conflict");
     is(&mut f, 2, Red, "failing");
     is(&mut f, 3, Red, "changes requested");
@@ -199,7 +205,10 @@ fn an_unowned_broken_pr_is_a_red_row_named_by_its_cause() {
 fn a_broken_pr_shows_its_causes_in_the_order_conflict_failing_changes_requested() {
     let mut f = fixture();
     f.workflow(1, "mergeable = 'conflicting', merge_state = 'dirty', checks = 'failed', review_decision = 'changes_requested'");
-    f.workflow(2, "merge_state = 'blocked', checks = 'failed', review_decision = 'changes_requested'");
+    f.workflow(
+        2,
+        "merge_state = 'blocked', checks = 'failed', review_decision = 'changes_requested'",
+    );
     is(&mut f, 1, Red, "conflict");
     is(&mut f, 2, Red, "failing");
 }
@@ -392,8 +401,14 @@ fn an_authored_pr_that_matches_no_other_state_is_a_cyan_waiting_row() {
 fn the_states_take_the_documented_precedence() {
     let mut f = fixture();
     f.policy(POST);
-    f.workflow(1, "draft = 1, merge_state = 'draft', mergeable = 'conflicting'");
-    f.workflow(2, "mergeable = 'conflicting', merge_state = 'dirty', base_ref = 'feature'");
+    f.workflow(
+        1,
+        "draft = 1, merge_state = 'draft', mergeable = 'conflicting'",
+    );
+    f.workflow(
+        2,
+        "mergeable = 'conflicting', merge_state = 'dirty', base_ref = 'feature'",
+    );
     f.workflow(3, "base_ref = 'feature', checks = 'pending'");
     f.workflow(4, "checks = 'pending', review_decision = 'approved'");
     f.workflow(5, "review_decision = 'approved'");
@@ -486,7 +501,10 @@ fn the_newest_owning_plan_decides_the_owner_and_a_pr_has_one_row() {
 fn a_pr_that_is_not_open_or_not_authored_has_no_row() {
     let mut f = fixture();
     f.workflow(1, "authored = 0");
-    f.workflow(2, "state = 'merged', merged_at = '2026-01-01T00:00:00.000Z'");
+    f.workflow(
+        2,
+        "state = 'merged', merged_at = '2026-01-01T00:00:00.000Z'",
+    );
     f.workflow(3, "state = 'closed'");
     assert!(f.rows().is_empty(), "{:?}", f.rows());
 }
@@ -526,7 +544,10 @@ fn stack_review_a_stacked_postable_pr_is_ready_for_review() {
 fn stack_review_a_posted_stacked_pr_is_in_review() {
     let mut f = fixture();
     f.policy(POST);
-    f.workflow(1, &format!("{STACKED}, checks = 'passed', review_decision = 'none'"));
+    f.workflow(
+        1,
+        &format!("{STACKED}, checks = 'passed', review_decision = 'none'"),
+    );
     f.own("pay", 1);
     f.posted(1);
     is(&mut f, 1, Cyan, "waiting for peer review");
@@ -551,7 +572,10 @@ fn stack_review_a_stacked_pr_walks_checks_running_ready_for_review_in_review_sta
 fn stack_review_a_posted_approved_stacked_pr_is_stacked() {
     let mut f = fixture();
     f.policy(POST);
-    f.workflow(1, &format!("{STACKED}, checks = 'passed', review_decision = 'approved'"));
+    f.workflow(
+        1,
+        &format!("{STACKED}, checks = 'passed', review_decision = 'approved'"),
+    );
     f.own("pay", 1);
     f.posted(1);
     is(&mut f, 1, White, "stacked pr pending base merge");

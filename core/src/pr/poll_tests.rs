@@ -58,7 +58,9 @@ fn pr_poll_removes_and_reports_nothing_of_a_merged_or_cancelled_pr() {
     // `api` is open and GitHub says it merged; `web` is cancelled already.
     rig.workflow("api", "open");
     rig.workflow("web", "cancelled");
-    let _ = (*rig.fakes.runner).clone().route("gh", Arc::new(Gh { merged: vec![801] }));
+    let _ = (*rig.fakes.runner)
+        .clone()
+        .route("gh", Arc::new(Gh { merged: vec![801] }));
 
     // `Env::open_with` reads `$CPD_HOME`: the one variable this test sets, to its own temp dir (as `inbox/snooze_time_tests.rs`).
     unsafe { std::env::set_var("CPD_HOME", rig.home.root()) };
@@ -74,11 +76,25 @@ fn pr_poll_removes_and_reports_nothing_of_a_merged_or_cancelled_pr() {
 
     let status: String = {
         let mut store = crate::store::Store::open(&rig.home, 5000).unwrap();
-        store.read(|c| Ok(c.query_row("SELECT status FROM workflows WHERE key = 'api'", [], |r| r.get(0))?)).unwrap()
+        store
+            .read(|c| {
+                Ok(
+                    c.query_row("SELECT status FROM workflows WHERE key = 'api'", [], |r| {
+                        r.get(0)
+                    })?,
+                )
+            })
+            .unwrap()
     };
     assert_eq!(status, "merged", "the poll saw the merge: {out:?}");
     for workflow in &rig.workflows {
-        assert_eq!(rig.left(workflow), [true; 6], "{} Workflow {}: the poll leaves every worktree, registration and branch", workflow.status, workflow.key);
+        assert_eq!(
+            rig.left(workflow),
+            [true; 6],
+            "{} Workflow {}: the poll leaves every worktree, registration and branch",
+            workflow.status,
+            workflow.key
+        );
     }
     let kills: Vec<Call> = rig
         .fakes
@@ -147,7 +163,11 @@ fn guardian() -> serde_json::Value {
 }
 
 /// Polls the open Workflow `acme/pay#801` under the repo policy file `policy` and returns the `checks` its row stores.
-fn stored_checks(rollup: Option<&'static str>, nodes: Vec<serde_json::Value>, policy: &str) -> String {
+fn stored_checks(
+    rollup: Option<&'static str>,
+    nodes: Vec<serde_json::Value>,
+    policy: &str,
+) -> String {
     let mut rig = Rig::new();
     rig.workflow("api", "open");
     let dir = rig.home.root().join("policy/acme");
@@ -270,7 +290,10 @@ fn last_reason(store: &mut Store) -> Option<String> {
 fn a_base_merge_with_main_ahead_queues_an_update_job() {
     let rig = open_rig(&["api"]);
     let mut store = Store::open(&rig.home, 5000).unwrap();
-    let (pay, api) = (PlanId::parse("pay").unwrap(), WorkflowKey::parse("api").unwrap());
+    let (pay, api) = (
+        PlanId::parse("pay").unwrap(),
+        WorkflowKey::parse("api").unwrap(),
+    );
 
     // The repoint happened (GitHub moved the Workflow to the default branch) and main is ahead without a conflict.
     let queued = store
@@ -296,7 +319,11 @@ fn a_base_merge_with_main_ahead_queues_an_update_job() {
 fn a_base_merge_with_main_contained_queues_nothing() {
     let rig = open_rig(&["api", "web"]);
     let mut store = Store::open(&rig.home, 5000).unwrap();
-    let (pay, api, web) = (PlanId::parse("pay").unwrap(), WorkflowKey::parse("api").unwrap(), WorkflowKey::parse("web").unwrap());
+    let (pay, api, web) = (
+        PlanId::parse("pay").unwrap(),
+        WorkflowKey::parse("api").unwrap(),
+        WorkflowKey::parse("web").unwrap(),
+    );
 
     let (ahead, contained) = store
         .write("pr poll", |tx| {
@@ -309,15 +336,25 @@ fn a_base_merge_with_main_contained_queues_nothing() {
         .unwrap();
 
     let ahead = ahead.expect("the control: an ahead default branch queues its update Job");
-    assert_eq!(contained, None, "a default branch already contained queues nothing");
-    assert_eq!(update_jobs(&mut store), vec![ahead.as_str().to_owned()], "only the ahead Workflow's update Job exists");
+    assert_eq!(
+        contained, None,
+        "a default branch already contained queues nothing"
+    );
+    assert_eq!(
+        update_jobs(&mut store),
+        vec![ahead.as_str().to_owned()],
+        "only the ahead Workflow's update Job exists"
+    );
 }
 
 #[test]
 fn a_conflict_still_queues_an_update_job() {
     let rig = open_rig(&["api"]);
     let mut store = Store::open(&rig.home, 5000).unwrap();
-    let (pay, api) = (PlanId::parse("pay").unwrap(), WorkflowKey::parse("api").unwrap());
+    let (pay, api) = (
+        PlanId::parse("pay").unwrap(),
+        WorkflowKey::parse("api").unwrap(),
+    );
 
     let queued = store
         .write("pr poll", |tx| {
@@ -342,7 +379,10 @@ fn a_conflict_still_queues_an_update_job() {
 fn an_update_job_already_live_is_not_duplicated() {
     let rig = open_rig(&["api"]);
     let mut store = Store::open(&rig.home, 5000).unwrap();
-    let (pay, api) = (PlanId::parse("pay").unwrap(), WorkflowKey::parse("api").unwrap());
+    let (pay, api) = (
+        PlanId::parse("pay").unwrap(),
+        WorkflowKey::parse("api").unwrap(),
+    );
 
     let first = store
         .write("pr poll", |tx| {

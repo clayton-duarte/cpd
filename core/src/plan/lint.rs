@@ -257,7 +257,10 @@ fn workflow_empty_rule(i: &Input) -> Vec<Finding> {
     if i.phase != Phase::Plan {
         return Vec::new();
     }
-    one(Rule::WorkflowEmpty, workflow_empty(i.plan, i.workflows, i.jobs))
+    one(
+        Rule::WorkflowEmpty,
+        workflow_empty(i.plan, i.workflows, i.jobs),
+    )
 }
 
 fn dependency_cycle_rule(i: &Input) -> Vec<Finding> {
@@ -265,8 +268,15 @@ fn dependency_cycle_rule(i: &Input) -> Vec<Finding> {
 }
 
 /// `workflow_empty` (lock's check): a live Workflow has no draft Job (a draft `open` Job counts), or the Plan has no live Workflow.
-pub(super) fn workflow_empty(id: &PlanId, workflows: &[WorkflowRow], jobs: &[Job]) -> Option<CpdError> {
-    let live: Vec<&WorkflowRow> = workflows.iter().filter(|p| p.status != "cancelled").collect();
+pub(super) fn workflow_empty(
+    id: &PlanId,
+    workflows: &[WorkflowRow],
+    jobs: &[Job],
+) -> Option<CpdError> {
+    let live: Vec<&WorkflowRow> = workflows
+        .iter()
+        .filter(|p| p.status != "cancelled")
+        .collect();
     let empty: Vec<&str> = live
         .iter()
         .filter(|p| {

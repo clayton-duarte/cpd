@@ -56,7 +56,11 @@ impl Fixture {
 
     /// A Job in its own transaction (so `created_txn` grows with each call).
     fn job(&mut self, plan: &str, workflow: &str, key: &str, kind: &str, status: &str) {
-        let cause = if status == "failed" { "'crashed'" } else { "NULL" };
+        let cause = if status == "failed" {
+            "'crashed'"
+        } else {
+            "NULL"
+        };
         let sha = if status == "merged" { "'abc'" } else { "NULL" };
         let reason = if status == "cancelled" { "'r'" } else { "NULL" };
         let reason_at = if status == "cancelled" {
@@ -158,7 +162,14 @@ impl Fixture {
     }
 
     /// A running Job with a `running` (or `merging`) Attempt, for the ledger.
-    fn running(&mut self, plan: &str, workflow: &str, key: &str, attempt_status: &str, cancel: bool) {
+    fn running(
+        &mut self,
+        plan: &str,
+        workflow: &str,
+        key: &str,
+        attempt_status: &str,
+        cancel: bool,
+    ) {
         self.job(plan, workflow, key, "work", "running");
         if cancel {
             self.sql(&format!("UPDATE jobs SET cancel_reason = 'r', cancel_requested_at = '{T}' WHERE plan = '{plan}' AND key = '{key}'"));
@@ -262,7 +273,11 @@ fn fix_retry_waits_while_another_job_of_the_pr_created_after_the_failure_is_queu
     assert_eq!(f.status("pay", "f"), "failed");
     assert!(f.retried().is_empty());
     f.set("pay", "other", "merged");
-    assert_eq!(f.retry("pay", "j"), vec!["f"], "nothing else is working on the Workflow");
+    assert_eq!(
+        f.retry("pay", "j"),
+        vec!["f"],
+        "nothing else is working on the Workflow"
+    );
 }
 
 #[test]
@@ -311,7 +326,11 @@ fn fix_retry_ignores_other_prs_and_other_plans() {
     f.failed("ops", "api", "other-plan", "open");
     f.failed("pay", "api", "f", "update");
     f.job("pay", "api", "j", "work", "merged");
-    assert_eq!(f.retry("pay", "j"), vec!["f"], "only the Job of the fix's Workflow");
+    assert_eq!(
+        f.retry("pay", "j"),
+        vec!["f"],
+        "only the Job of the fix's Workflow"
+    );
     assert_eq!(f.status("pay", "other-pr"), "failed");
     assert_eq!(f.status("ops", "other-plan"), "failed");
     assert_eq!(f.retried().len(), 1);

@@ -11,8 +11,9 @@ use std::path::PathBuf;
 
 use super::spec::{self, Spec};
 use super::{
-    AddArgs, Env, check_kind_not_reserved, check_needs_available, check_needs_known, check_needs_same_workflow, check_workflow_live, check_shape_allows,
-    check_impl_job_required, check_test_job_required, plan_phase, sorted_needs,
+    AddArgs, Env, check_impl_job_required, check_kind_not_reserved, check_needs_available,
+    check_needs_known, check_needs_same_workflow, check_shape_allows, check_test_job_required,
+    check_workflow_live, plan_phase, sorted_needs,
 };
 use crate::args::WorkflowArg;
 use crate::error::{CpdError, ErrorCode};
@@ -20,10 +21,10 @@ use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
 use crate::ids::{JobKey, PlanId, WorkflowKey};
 use crate::output::Output;
+use crate::plan::WorkflowRow;
 use crate::plan::fingerprint::load_workflows;
 use crate::plan::jobs::{self, Job};
 use crate::plan::locked_fingerprint;
-use crate::plan::WorkflowRow;
 
 const COMMAND: &str = "job add";
 
@@ -112,30 +113,39 @@ pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
     let decision = env.store.read(|conn| decide(conn, &home, &plan, &wanted))?;
     let (job, already) = match decision {
         Decision::Already(job) => (job, true),
-        Decision::Insert(_) => env.store.write(COMMAND, |tx| match decide(tx, &home, &plan, &wanted)? {
-            Decision::Already(job) => Ok((job, true)),
-            Decision::Insert(job) => {
-                insert(tx, &plan, &job)?;
-                let text = format!("Job {} added to Plan {plan} as {}. Next: cpd job show {} --plan {plan}", job.key, job.status, job.key);
-                append(
-                    tx,
-                    NewEvent::job_added(
-                        text,
-                        &job.workflow,
-                        &job.kind,
-                        &job.status,
-                        job.appended,
-                        job.tier.as_deref(),
-                        &job.needs,
-                        job.urgent,
-                    )
-                    .plan(plan.clone())
-                    .job(wanted.key.clone()),
-                )?;
-                if let Some(workflow) = &job.workflow {
-                    crate::session::working_pr::name(tx, &plan, &crate::ids::WorkflowKey::parse(workflow)?)?;
+        Decision::Insert(_) => env.store.write(COMMAND, |tx| {
+            match decide(tx, &home, &plan, &wanted)? {
+                Decision::Already(job) => Ok((job, true)),
+                Decision::Insert(job) => {
+                    insert(tx, &plan, &job)?;
+                    let text = format!(
+                        "Job {} added to Plan {plan} as {}. Next: cpd job show {} --plan {plan}",
+                        job.key, job.status, job.key
+                    );
+                    append(
+                        tx,
+                        NewEvent::job_added(
+                            text,
+                            &job.workflow,
+                            &job.kind,
+                            &job.status,
+                            job.appended,
+                            job.tier.as_deref(),
+                            &job.needs,
+                            job.urgent,
+                        )
+                        .plan(plan.clone())
+                        .job(wanted.key.clone()),
+                    )?;
+                    if let Some(workflow) = &job.workflow {
+                        crate::session::working_pr::name(
+                            tx,
+                            &plan,
+                            &crate::ids::WorkflowKey::parse(workflow)?,
+                        )?;
+                    }
+                    Ok((job, false))
                 }
-                Ok((job, false))
             }
         })?,
     };
@@ -190,9 +200,16 @@ fn decide(
     check_workflow_live(&workflows, plan, &workflow)?;
     check_shape_allows(&workflows, plan, &workflow, &wanted.kind)?;
     let all = jobs::load(conn, plan)?;
-    let workflow_status = &workflows.iter().find(|p| p.key.as_str() == workflow).expect("check_pr_live found the Workflow").status;
+    let workflow_status = &workflows
+        .iter()
+        .find(|p| p.key.as_str() == workflow)
+        .expect("check_pr_live found the Workflow")
+        .status;
     let mut needs = wanted.needs.clone();
-    needs.extend(super::chain::leaves(&all, plan, &workflow, workflow_status, wanted.key.as_str())?.unwrap_or_default());
+    needs.extend(
+        super::chain::leaves(&all, plan, &workflow, workflow_status, wanted.key.as_str())?
+            .unwrap_or_default(),
+    );
     needs.sort();
     needs.dedup();
     let appended = phase != "plan";
@@ -253,12 +270,23 @@ fn decide(
     // The Spec names no primary checkout of a Workflow of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
     if let Some(spec) = &wanted.spec {
         let user_home = std::env::home_dir().unwrap_or_default();
-        spec.without_artefacts(home.root(), plan.as_str(), &user_home).check_primary_roots(&primary_roots(&workflows), &user_home)?;
+        spec.without_artefacts(home.root(), plan.as_str(), &user_home)
+            .check_primary_roots(&primary_roots(&workflows), &user_home)?;
         spec.check_files_relative()?;
-        check_resources_declared(conn, home, plan, job.workflow_str(), &job.key, spec.resources.as_deref())?;
+        check_resources_declared(
+            conn,
+            home,
+            plan,
+            job.workflow_str(),
+            &job.key,
+            spec.resources.as_deref(),
+        )?;
     }
     if let Some(spec) = &wanted.spec {
-        let workflow = workflows.iter().find(|p| p.key.as_str() == job.workflow_str()).expect("check_pr_live found the Workflow");
+        let workflow = workflows
+            .iter()
+            .find(|p| p.key.as_str() == job.workflow_str())
+            .expect("check_pr_live found the Workflow");
         check_touches(workflow, &workflows, &spec.touches)?;
     }
     check_needs_known(&all, plan, &job.needs)?;
@@ -281,7 +309,12 @@ fn decide(
 }
 
 /// An explore Job (R2-R5): of the Plan, no Workflow, queued at once with its fingerprint, in every phase but `done`.
-fn decide_explore(conn: &Connection, plan: &PlanId, wanted: &Wanted, phase: &str) -> Result<Decision, CpdError> {
+fn decide_explore(
+    conn: &Connection,
+    plan: &PlanId,
+    wanted: &Wanted,
+    phase: &str,
+) -> Result<Decision, CpdError> {
     if phase == "done" {
         return Err(CpdError::new(
             ErrorCode::IllegalPhase,
@@ -375,11 +408,24 @@ pub(super) fn check_needs_explore_only(
 
 /// Every resource of a Spec is declared by the policy of the Workflow's repo (`resource_undeclared`, commands.md §5.1):
 /// the first one that is not fails, with the names the repo declares and the file that declares them.
-pub(crate) fn check_resources_declared(conn: &Connection, home: &CpdHome, plan: &PlanId, workflow: &str, job: &str, resources: Option<&[String]>) -> Result<(), CpdError> {
-    let Some(resources) = resources else { return Ok(()) };
+pub(crate) fn check_resources_declared(
+    conn: &Connection,
+    home: &CpdHome,
+    plan: &PlanId,
+    workflow: &str,
+    job: &str,
+    resources: Option<&[String]>,
+) -> Result<(), CpdError> {
+    let Some(resources) = resources else {
+        return Ok(());
+    };
     let key = WorkflowKey::parse(workflow)?;
-    let declared = crate::pr::policy_of_workflow(conn, home, plan, &key)?.resources.names;
-    let Some(missing) = resources.iter().find(|r| !declared.contains(r)) else { return Ok(()) };
+    let declared = crate::pr::policy_of_workflow(conn, home, plan, &key)?
+        .resources
+        .names;
+    let Some(missing) = resources.iter().find(|r| !declared.contains(r)) else {
+        return Ok(());
+    };
     let (owner, name): (String, Option<String>) = conn.query_row(
         "SELECT c.owner, r.name FROM workflows r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context WHERE r.plan = ?1 AND r.key = ?2",
         [plan.as_str(), workflow],
@@ -433,8 +479,27 @@ fn check_needs_not_draft(all: &[Job], plan: &PlanId, job: &Job) -> Result<(), Cp
 
 /// The Locked fields (§2.2: the Spec, `title`, `tier`, `pr`, `kind`, `tests`, `test_files`, `resources`) and the needs.
 fn same_locked_fields(a: &Job, b: &Job) -> bool {
-    (&a.workflow, &a.title, &a.tier, &a.spec, &a.needs, &a.kind, &a.tests, &a.test_files, &a.resources)
-        == (&b.workflow, &b.title, &b.tier, &b.spec, &b.needs, &b.kind, &b.tests, &b.test_files, &b.resources)
+    (
+        &a.workflow,
+        &a.title,
+        &a.tier,
+        &a.spec,
+        &a.needs,
+        &a.kind,
+        &a.tests,
+        &a.test_files,
+        &a.resources,
+    ) == (
+        &b.workflow,
+        &b.title,
+        &b.tier,
+        &b.spec,
+        &b.needs,
+        &b.kind,
+        &b.tests,
+        &b.test_files,
+        &b.resources,
+    )
 }
 
 fn insert(tx: &Connection, plan: &PlanId, job: &Job) -> Result<(), CpdError> {
@@ -477,14 +542,21 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job) -> Result<(), CpdError> {
 
 /// The `(Workflow key, root)` pairs the primary-check searches: each Workflow of the Plan and its stored repo path.
 pub(super) fn primary_roots(workflows: &[WorkflowRow]) -> Vec<(String, PathBuf)> {
-    workflows.iter().map(|p| (p.key.as_str().to_owned(), PathBuf::from(&p.repo))).collect()
+    workflows
+        .iter()
+        .map(|p| (p.key.as_str().to_owned(), PathBuf::from(&p.repo)))
+        .collect()
 }
 
 /// Every `touches` entry against the tree the Job will start from (contract §2.1, hs-d512): the Workflow's Lead Branch head once
 /// the Workflow started, else its base. A literal path must exist, or its parent directory must (a new file); a glob must match a
 /// file, or its fixed prefix directory must exist. Nothing is read, and the check passes, for a Workflow that has not started and
 /// is stacked on a base Workflow that is `waiting` or `dispatch` (its Lead Branch is not in the repo yet). `touches_missing`, `details: {missing, tree}`.
-pub(super) fn check_touches(workflow: &WorkflowRow, workflows: &[WorkflowRow], touches: &[String]) -> Result<(), CpdError> {
+pub(super) fn check_touches(
+    workflow: &WorkflowRow,
+    workflows: &[WorkflowRow],
+    touches: &[String],
+) -> Result<(), CpdError> {
     // A Workflow whose repo path is not on this machine has no tree to check against (a Plan written elsewhere, a test's placeholder).
     if touches.is_empty() || !std::path::Path::new(&workflow.repo).is_dir() {
         return Ok(());
@@ -492,12 +564,23 @@ pub(super) fn check_touches(workflow: &WorkflowRow, workflows: &[WorkflowRow], t
     // A Workflow that has not started, stacked on a base Workflow (same Plan and repo, Lead Branch == its base) that is `waiting` or
     // `dispatch`, has no tree to read yet: the base's Lead Branch does not exist.
     let base_unopened = workflow.lead_worktree.is_none()
-        && workflows.iter().any(|q| q.repo == workflow.repo && q.lead_branch == workflow.base && matches!(q.status.as_str(), "waiting" | "dispatch"));
+        && workflows.iter().any(|q| {
+            q.repo == workflow.repo
+                && q.lead_branch == workflow.base
+                && matches!(q.status.as_str(), "waiting" | "dispatch")
+        });
     if base_unopened {
         return Ok(());
     }
-    let tree = if workflow.lead_worktree.is_some() { workflow.lead_branch.as_str() } else { workflow.base.as_str() };
-    let listing = crate::git::run::ok(std::path::Path::new(&workflow.repo), &["ls-tree", "-r", "--name-only", "-z", tree])?;
+    let tree = if workflow.lead_worktree.is_some() {
+        workflow.lead_branch.as_str()
+    } else {
+        workflow.base.as_str()
+    };
+    let listing = crate::git::run::ok(
+        std::path::Path::new(&workflow.repo),
+        &["ls-tree", "-r", "--name-only", "-z", tree],
+    )?;
     let files: Vec<&str> = listing.split('\0').filter(|f| !f.is_empty()).collect();
     let dirs: BTreeSet<&str> = files
         .iter()

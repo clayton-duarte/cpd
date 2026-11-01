@@ -35,7 +35,9 @@ fn workflow(plan: &str, key: &str, repo: &str) -> String {
 }
 
 fn need(workflow: &str, needs: &str) -> String {
-    format!("INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', '{workflow}', '{needs}');")
+    format!(
+        "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', '{workflow}', '{needs}');"
+    )
 }
 
 const LOCK: &str = "UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';";
@@ -64,7 +66,11 @@ fn locked(keys: &[&str], needs: &[(&str, &str)]) -> (tempfile::TempDir, Store) {
 #[test]
 fn prs_locked_lets_a_waiting_pr_stack_on_a_pr_of_its_plan_and_repo_after_the_lock() {
     let (_dir, mut store) = locked(&["a", "b"], &[]);
-    write(&mut store, "UPDATE workflows SET base = 'pay/a' WHERE key = 'b'").expect("a restack of a waiting Workflow");
+    write(
+        &mut store,
+        "UPDATE workflows SET base = 'pay/a' WHERE key = 'b'",
+    )
+    .expect("a restack of a waiting Workflow");
 }
 
 #[test]
@@ -115,11 +121,21 @@ fn pr_needs_no_delete_lets_a_waiting_prs_need_go_when_it_is_the_prs_base_pr_afte
 #[test]
 fn pr_needs_no_delete_still_refuses_after_the_lock_a_need_that_is_not_the_prs_base_pr() {
     let (_dir, mut store) = locked(&["a", "b", "c"], &[("b", "a"), ("b", "c")]);
-    write(&mut store, "UPDATE workflows SET base = 'pay/a' WHERE key = 'b'").ok();
-    assert_locked(&mut store, "DELETE FROM workflow_needs WHERE workflow = 'b' AND needs = 'c'");
+    write(
+        &mut store,
+        "UPDATE workflows SET base = 'pay/a' WHERE key = 'b'",
+    )
+    .ok();
+    assert_locked(
+        &mut store,
+        "DELETE FROM workflow_needs WHERE workflow = 'b' AND needs = 'c'",
+    );
 
     let (_dir, mut store) = locked(&["a", "b"], &[("b", "a")]);
-    assert_locked(&mut store, "DELETE FROM workflow_needs WHERE workflow = 'b' AND needs = 'a'");
+    assert_locked(
+        &mut store,
+        "DELETE FROM workflow_needs WHERE workflow = 'b' AND needs = 'a'",
+    );
 
     let (_dir, mut store) = locked(&["a", "d"], &[("d", "a")]);
     write(
@@ -128,5 +144,8 @@ fn pr_needs_no_delete_still_refuses_after_the_lock_a_need_that_is_not_the_prs_ba
     )
     .ok();
     // Whether or not the base moved, a `dispatch` Workflow keeps its needs.
-    assert_locked(&mut store, "DELETE FROM workflow_needs WHERE workflow = 'd' AND needs = 'a'");
+    assert_locked(
+        &mut store,
+        "DELETE FROM workflow_needs WHERE workflow = 'd' AND needs = 'a'",
+    );
 }

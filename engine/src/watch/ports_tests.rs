@@ -195,7 +195,8 @@ fn lock_mark(home: &CpdHome) -> String {
 // ---- run_with: the loop on virtual time ---------------------------------------------------------------------------
 
 /// One tick a second, no pull request poll in the way, a store that is not waited for in real time.
-const LOOP: &str = "[watch]\ntick_seconds = 1\npr_poll_seconds = 3600\n[timeouts]\nstore_busy_ms = 1\n";
+const LOOP: &str =
+    "[watch]\ntick_seconds = 1\npr_poll_seconds = 3600\n[timeouts]\nstore_busy_ms = 1\n";
 
 #[test]
 fn the_engine_waits_between_ticks_in_naps_of_a_tenth_of_a_second() {

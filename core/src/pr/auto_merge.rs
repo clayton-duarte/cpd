@@ -64,7 +64,10 @@ mod tests {
 
     fn conn(rows: &[(&str, &str, &str)]) -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE workflows (plan TEXT, key TEXT, base TEXT, lead_branch TEXT)").unwrap();
+        conn.execute_batch(
+            "CREATE TABLE workflows (plan TEXT, key TEXT, base TEXT, lead_branch TEXT)",
+        )
+        .unwrap();
         for (plan, key, base) in rows {
             conn.execute("INSERT INTO workflows (plan, key, base, lead_branch) VALUES (?1, ?2, ?3, 'cpd/' || ?1 || '/' || ?2)", [plan, key, base]).unwrap();
         }

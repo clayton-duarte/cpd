@@ -38,7 +38,13 @@ impl OpenPlaceholder<'_> {
     }
 
     fn title(&self) -> String {
-        format!("Open the pull request: {}", self.workflow.title.as_deref().unwrap_or(self.workflow.key.as_str()))
+        format!(
+            "Open the pull request: {}",
+            self.workflow
+                .title
+                .as_deref()
+                .unwrap_or(self.workflow.key.as_str())
+        )
     }
 }
 
@@ -192,7 +198,12 @@ fn ordered<'a>(workflows: &[&'a WorkflowRow], display: &Display) -> Vec<&'a Work
     while !rest.is_empty() {
         let next = rest
             .iter()
-            .position(|p| display.workflow_needs(p).iter().all(|n| out.iter().any(|o| o.key.as_str() == n) || !rest.iter().any(|r| r.key.as_str() == n)))
+            .position(|p| {
+                display.workflow_needs(p).iter().all(|n| {
+                    out.iter().any(|o| o.key.as_str() == n)
+                        || !rest.iter().any(|r| r.key.as_str() == n)
+                })
+            })
             .unwrap_or(0);
         out.push(rest.remove(next));
     }
@@ -286,13 +297,29 @@ struct Shown<'a> {
 /// One Workflow's section: repo, base, needs, its Jobs' table and graph, its Jobs'
 /// Specs; `later` is a phase after `plan`, where the drafts are marked. `jobs` include the cancelled ones: they are
 /// in the table, in no graph and with no Spec.
-fn workflow_section(out: &mut Vec<String>, workflow: &WorkflowRow, jobs: &[&Job], later: bool, open_tier: &str, shown: &Shown) {
+fn workflow_section(
+    out: &mut Vec<String>,
+    workflow: &WorkflowRow,
+    jobs: &[&Job],
+    later: bool,
+    open_tier: &str,
+    shown: &Shown,
+) {
     // A Workflow that has not started, and whose Plan holds no `open` Job (an older Workflow), has no opener stub: its placeholder is the last row and the last section.
-    let placeholder = (workflow.status == "waiting" && !jobs.iter().any(|j| j.kind == "open")).then_some(OpenPlaceholder { workflow, tier: open_tier });
+    let placeholder = (workflow.status == "waiting" && !jobs.iter().any(|j| j.kind == "open"))
+        .then_some(OpenPlaceholder {
+            workflow,
+            tier: open_tier,
+        });
     out.extend([
         format!("## Workflow {}", workflow.key),
         String::new(),
-        format!("Repo: {} · Base: `{}` · Needs: {}", code(&workflow.repo), workflow.base, joined(&shown.display.workflow_needs(workflow), code)),
+        format!(
+            "Repo: {} · Base: `{}` · Needs: {}",
+            code(&workflow.repo),
+            workflow.base,
+            joined(&shown.display.workflow_needs(workflow), code)
+        ),
         String::new(),
     ]);
     if jobs.is_empty() && placeholder.is_none() {
@@ -570,10 +597,24 @@ fn overlaps_section(out: &mut Vec<String>, overlaps: &[Overlap]) {
     if overlaps.is_empty() {
         out.push("No other active Plan touches these files.".to_owned());
     } else {
-        out.extend(["| Job | Other Plan | Workflow | Its Jobs (status) | Paths |".to_owned(), "|---|---|---|---|---|".to_owned()]);
+        out.extend([
+            "| Job | Other Plan | Workflow | Its Jobs (status) | Paths |".to_owned(),
+            "|---|---|---|---|---|".to_owned(),
+        ]);
         for o in overlaps {
-            let other_jobs: Vec<String> = o.other_jobs.iter().map(|j| format!("{} ({})", tcode(&j.key), j.status)).collect();
-            out.push(format!("| {} | {} | {} | {} | {} |", tcode(&o.job), tcode(&o.plan), tcode(&o.workflow), other_jobs.join(", "), paths_cell(&o.paths)));
+            let other_jobs: Vec<String> = o
+                .other_jobs
+                .iter()
+                .map(|j| format!("{} ({})", tcode(&j.key), j.status))
+                .collect();
+            out.push(format!(
+                "| {} | {} | {} | {} | {} |",
+                tcode(&o.job),
+                tcode(&o.plan),
+                tcode(&o.workflow),
+                other_jobs.join(", "),
+                paths_cell(&o.paths)
+            ));
         }
     }
     out.push(String::new());
@@ -639,7 +680,10 @@ pub fn markdown(
         Heading::Plan { title, .. } => vec![format!("# Plan: {}", inline(title)), String::new()],
     };
     let Heading::Plan { plan, .. } = heading;
-    out.extend([format!("Context: `{context}` · Phase: `{phase}`"), String::new()]);
+    out.extend([
+        format!("Context: `{context}` · Phase: `{phase}`"),
+        String::new(),
+    ]);
     let later = !matches!(phase, "grounding" | "plan");
     if later {
         out.extend([
@@ -668,12 +712,22 @@ pub fn markdown(
             ("waiting", _) => "queued".to_owned(),
             (status, _) => status.to_owned(),
         };
-        out.push(format!("| {} | {} | {} | {} | {status} |", tcode(p.key.as_str()), tcode(&p.repo), tcode(&p.base), joined(&display.workflow_needs(p), tcode)));
+        out.push(format!(
+            "| {} | {} | {} | {} | {status} |",
+            tcode(p.key.as_str()),
+            tcode(&p.repo),
+            tcode(&p.base),
+            joined(&display.workflow_needs(p), tcode)
+        ));
     }
     out.push(String::new());
     if workflows.len() >= 2 {
         let needs: Vec<Vec<String>> = order.iter().map(|p| display.workflow_needs(p)).collect();
-        let nodes: Vec<(&str, &[String])> = order.iter().zip(&needs).map(|(p, n)| (p.key.as_str(), n.as_slice())).collect();
+        let nodes: Vec<(&str, &[String])> = order
+            .iter()
+            .zip(&needs)
+            .map(|(p, n)| (p.key.as_str(), n.as_slice()))
+            .collect();
         out.extend([graph("LR", "p", &nodes), String::new()]);
     }
     overlaps_section(&mut out, overlaps);
@@ -682,7 +736,10 @@ pub fn markdown(
     let mut cancelled = cancelled;
     cancelled.sort_by(|a, b| a.key.cmp(&b.key));
     for workflow in order.into_iter().chain(cancelled) {
-        let jobs: Vec<&Job> = jobs.iter().filter(|j| j.workflow_str() == workflow.key.as_str()).collect();
+        let jobs: Vec<&Job> = jobs
+            .iter()
+            .filter(|j| j.workflow_str() == workflow.key.as_str())
+            .collect();
         workflow_section(&mut out, workflow, &jobs, later, open_tier, &shown);
     }
     out.join("\n")
@@ -764,9 +821,18 @@ mod tests {
 
     #[test]
     fn prs_are_ordered_by_needs_then_key() {
-        let all = [workflow("a-integration", &["b"]), workflow("b", &["a-contract"]), workflow("a-contract", &[]), workflow("z", &[]), workflow("c", &["gone"])];
+        let all = [
+            workflow("a-integration", &["b"]),
+            workflow("b", &["a-contract"]),
+            workflow("a-contract", &[]),
+            workflow("z", &[]),
+            workflow("c", &["gone"]),
+        ];
         let refs: Vec<&WorkflowRow> = all.iter().collect();
-        let keys: Vec<&str> = ordered(&refs, &Display::of(&all)).iter().map(|p| p.key.as_str()).collect();
+        let keys: Vec<&str> = ordered(&refs, &Display::of(&all))
+            .iter()
+            .map(|p| p.key.as_str())
+            .collect();
         assert_eq!(keys, ["a-contract", "b", "a-integration", "c", "z"]);
     }
 
@@ -834,16 +900,36 @@ mod tests {
         let mut test = job("web-tests", "web", "test");
         test.tests = Some(serde_json::json!(["t::one"]));
         test.test_files = Some(serde_json::json!(["tests/t.rs"]));
-        let md = plain("plan", &[titled_workflow("web", "waiting")], &[job("web-docs", "web", "docs"), test], "S3");
-        assert!(md.contains("| Key | Title | Kind | Tier | Status | Needs | Touches |"), "{md}");
-        assert!(md.contains("| `web-docs` | Title web-docs | docs | S2 | draft | none | `a` |"), "{md}");
+        let md = plain(
+            "plan",
+            &[titled_workflow("web", "waiting")],
+            &[job("web-docs", "web", "docs"), test],
+            "S3",
+        );
+        assert!(
+            md.contains("| Key | Title | Kind | Tier | Status | Needs | Touches |"),
+            "{md}"
+        );
+        assert!(
+            md.contains("| `web-docs` | Title web-docs | docs | S2 | draft | none | `a` |"),
+            "{md}"
+        );
         // The last row of the table: key, title, kind, `open_tier`, no status, the Ready rule in place of needs.
         let rows: Vec<&str> = md.lines().filter(|l| l.starts_with("| `")).collect();
-        assert_eq!(rows.last().unwrap(), &"| `open-web` | Open the pull request: Change web | open | S3 | — | every other Job of the Workflow | — |");
+        assert_eq!(
+            rows.last().unwrap(),
+            &"| `open-web` | Open the pull request: Change web | open | S3 | — | every other Job of the Workflow | — |"
+        );
         // The last section, with the text in place of a Spec; a `test` Job lists its tests and files.
         assert!(md.trim_end().ends_with(&format!("### `open-web`: Open the pull request: Change web\n\nStatus: — · Kind: `open` · Tier: `S3` · Needs: every other Job of the Workflow\n\n{OPEN_PLACEHOLDER}")), "{md}");
-        assert!(md.contains("Status: `draft` · Kind: `test` · Tier: `S2` · Needs: none"), "{md}");
-        assert!(md.contains("#### Tests\n\n- `t::one`\n\n#### Test files\n\n- `tests/t.rs`"), "{md}");
+        assert!(
+            md.contains("Status: `draft` · Kind: `test` · Tier: `S2` · Needs: none"),
+            "{md}"
+        );
+        assert!(
+            md.contains("#### Tests\n\n- `t::one`\n\n#### Test files\n\n- `tests/t.rs`"),
+            "{md}"
+        );
         // It is no Job: no node in the graph.
         assert!(
             !md.contains("open-web[") && !md.contains("[\"open-web\"]"),
@@ -852,8 +938,14 @@ mod tests {
     }
 
     #[test]
-    fn the_open_job_placeholder_is_for_a_pr_that_has_not_started_only_and_in_every_phase_until_then() {
-        let started = plain("dispatch", &[titled_workflow("web", "dispatch")], &[job("web-docs", "web", "docs")], "S2");
+    fn the_open_job_placeholder_is_for_a_pr_that_has_not_started_only_and_in_every_phase_until_then()
+     {
+        let started = plain(
+            "dispatch",
+            &[titled_workflow("web", "dispatch")],
+            &[job("web-docs", "web", "docs")],
+            "S2",
+        );
         assert!(!started.contains("open-web"), "{started}");
         let waiting = plain("dispatch", &[titled_workflow("web", "waiting")], &[], "S2");
         assert!(waiting.contains("| `open-web` | Open the pull request: Change web | open | S2 | — | every other Job of the Workflow | — | — |"), "{waiting}");
@@ -869,9 +961,20 @@ mod tests {
         (gone.status, gone.cancel_reason) = ("cancelled".into(), Some("not needed".into()));
         let mut queued = job("later", "web", "docs");
         (queued.status, queued.needs) = ("queued".into(), vec!["gone".into(), "web-docs".into()]);
-        let workflows = [titled_workflow("aaa", "cancelled"), titled_workflow("web", "dispatch")];
-        let md = plain("dispatch", &workflows, &[gone, queued, job("web-docs", "web", "docs")], "S2");
-        assert!(md.contains("| `gone` | Title gone | docs | S2 | cancelled: not needed | none | `a` |"), "{md}");
+        let workflows = [
+            titled_workflow("aaa", "cancelled"),
+            titled_workflow("web", "dispatch"),
+        ];
+        let md = plain(
+            "dispatch",
+            &workflows,
+            &[gone, queued, job("web-docs", "web", "docs")],
+            "S2",
+        );
+        assert!(
+            md.contains("| `gone` | Title gone | docs | S2 | cancelled: not needed | none | `a` |"),
+            "{md}"
+        );
         // a need on a cancelled Job blocks nothing: only the draft `web-docs` is waited for
         assert!(
             md.contains("waiting on [`web-docs`](#web-docs-title-web-docs) |"),

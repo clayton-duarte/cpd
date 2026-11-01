@@ -48,13 +48,25 @@ impl Display {
         let own = plan.as_str();
         let mut display = Display::default();
         let mut stmt = conn.prepare("SELECT plan, key, status FROM workflows")?;
-        for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
+        for row in stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })? {
             let (p, key, status) = row?;
             display.statuses.insert(reference(own, &p, &key), status);
         }
         // a stacked Workflow's base is the Workflow whose Lead Branch is its `base` (contract §2.2 "The base Workflow")
         let mut stmt = conn.prepare("SELECT p.key, q.plan, q.key FROM workflows p JOIN workflows q ON q.lead_branch = p.base WHERE p.plan = ?1")?;
-        for row in stmt.query_map([own], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
+        for row in stmt.query_map([own], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })? {
             let (key, base_plan, base) = row?;
             display.bases.insert(key, reference(own, &base_plan, &base));
         }
@@ -97,7 +109,9 @@ impl Display {
         for p in workflows {
             display.statuses.insert(p.key.to_string(), p.status.clone());
             if let Some(base) = workflows.iter().find(|q| q.lead_branch == p.base) {
-                display.bases.insert(p.key.to_string(), base.key.to_string());
+                display
+                    .bases
+                    .insert(p.key.to_string(), base.key.to_string());
             }
         }
         display
@@ -174,10 +188,22 @@ impl Display {
         if workflow.status != "waiting" {
             return Vec::new();
         }
-        let mut blockers: Vec<String> =
-            workflow.needs.iter().filter(|n| self.statuses.get(*n).is_none_or(|s| !matches!(s.as_str(), "merged" | "cancelled"))).cloned().collect();
+        let mut blockers: Vec<String> = workflow
+            .needs
+            .iter()
+            .filter(|n| {
+                self.statuses
+                    .get(*n)
+                    .is_none_or(|s| !matches!(s.as_str(), "merged" | "cancelled"))
+            })
+            .cloned()
+            .collect();
         // the implied need (contract §2.2): met when the base Workflow is `open` or `merged`
-        if let Some(base) = self.bases.get(workflow.key.as_str()).filter(|b| self.statuses.get(*b).is_some_and(|s| matches!(s.as_str(), "waiting" | "dispatch"))) {
+        if let Some(base) = self.bases.get(workflow.key.as_str()).filter(|b| {
+            self.statuses
+                .get(*b)
+                .is_some_and(|s| matches!(s.as_str(), "waiting" | "dispatch"))
+        }) {
             blockers.push(base.clone());
         }
         blockers.sort();

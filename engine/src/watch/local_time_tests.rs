@@ -71,7 +71,10 @@ fn limited() -> super::report::Failure {
 
 #[test]
 fn rate_limit_message_names_the_local_reset_time() {
-    assert_eq!(limited().message, "GitHub's rate limit has 12 requests left: pull request polling pauses until 2026-10-20 07:00 EDT.");
+    assert_eq!(
+        limited().message,
+        "GitHub's rate limit has 12 requests left: pull request polling pauses until 2026-10-20 07:00 EDT."
+    );
 }
 
 #[test]

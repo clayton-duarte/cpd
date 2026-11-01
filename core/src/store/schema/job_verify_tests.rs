@@ -66,7 +66,13 @@ fn before_verify() -> (tempfile::TempDir, CpdHome, Vec<Named>) {
     let mut store = crate::store::tests::open_named(&home, &earlier).unwrap();
     write(
         &mut store,
-        &FIXTURE.replace("INSERT INTO workflows", "INSERT INTO prs").replace("INSERT INTO jobs (plan, workflow", "INSERT INTO jobs (plan, pr").replace("FP", FP),
+        &FIXTURE
+            .replace("INSERT INTO workflows", "INSERT INTO prs")
+            .replace(
+                "INSERT INTO jobs (plan, workflow",
+                "INSERT INTO jobs (plan, pr",
+            )
+            .replace("FP", FP),
     )
     .unwrap();
     drop(store);

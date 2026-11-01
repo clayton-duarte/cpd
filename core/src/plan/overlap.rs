@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-use super::prs::WorkflowRow;
 use super::jobs::Job;
+use super::prs::WorkflowRow;
 use crate::error::CpdError;
 use crate::ids::PlanId;
 
@@ -46,7 +46,11 @@ pub struct Overlap {
 
 impl Overlap {
     pub fn to_json(&self) -> Value {
-        let other_jobs: Vec<Value> = self.other_jobs.iter().map(|j| json!({"key": j.key, "status": j.status})).collect();
+        let other_jobs: Vec<Value> = self
+            .other_jobs
+            .iter()
+            .map(|j| json!({"key": j.key, "status": j.status}))
+            .collect();
         json!({"job": self.job, "plan": self.plan, "pr": self.workflow, "other_jobs": other_jobs, "paths": self.paths})
     }
 }
@@ -92,7 +96,14 @@ pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdEr
                 })
                 .transpose()?
                 .unwrap_or_default();
-            Ok(Other { plan, workflow, repo, job, status, touches })
+            Ok(Other {
+                plan,
+                workflow,
+                repo,
+                job,
+                status,
+                touches,
+            })
         })
         .collect()
 }
@@ -113,7 +124,12 @@ pub fn find(workflows: &[WorkflowRow], jobs: &[Job], others: &[Other]) -> Vec<Ov
     open.sort_by(|a, b| a.key.cmp(&b.key));
     let mut out = Vec::new();
     for job in open {
-        let Some(workflow) = workflows.iter().find(|p| p.key.as_str() == job.workflow_str() && is_open(p)) else { continue };
+        let Some(workflow) = workflows
+            .iter()
+            .find(|p| p.key.as_str() == job.workflow_str() && is_open(p))
+        else {
+            continue;
+        };
         let mut paths: Vec<&str> = Vec::new();
         // A stub draft has no Spec yet, so no files to compare.
         let touches = job.spec.as_ref().and_then(|s| s.touches.as_array());
@@ -125,12 +141,18 @@ pub fn find(workflows: &[WorkflowRow], jobs: &[Job], others: &[Other]) -> Vec<Ov
         // By (other Plan, other Workflow): the Jobs there that overlap this one, and which of its paths they overlap.
         let mut groups: BTreeMap<(&str, &str), (Vec<OtherJob>, BTreeSet<usize>)> = BTreeMap::new();
         for other in others.iter().filter(|o| o.repo == workflow.repo) {
-            let hit: Vec<usize> = (0..paths.len()).filter(|&i| other.touches.iter().any(|t| overlaps(paths[i], t))).collect();
+            let hit: Vec<usize> = (0..paths.len())
+                .filter(|&i| other.touches.iter().any(|t| overlaps(paths[i], t)))
+                .collect();
             if hit.is_empty() {
                 continue;
             }
-            let (other_jobs, overlapped) = groups.entry((&other.plan, &other.workflow)).or_default();
-            other_jobs.push(OtherJob { key: other.job.clone(), status: other.status.clone() });
+            let (other_jobs, overlapped) =
+                groups.entry((&other.plan, &other.workflow)).or_default();
+            other_jobs.push(OtherJob {
+                key: other.job.clone(),
+                status: other.status.clone(),
+            });
             overlapped.extend(hit);
         }
         for ((other_plan, other_workflow), (other_jobs, overlapped)) in groups {

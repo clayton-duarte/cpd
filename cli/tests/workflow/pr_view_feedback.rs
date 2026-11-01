@@ -25,7 +25,10 @@ fn pr_view_lists_the_stored_feedback_items() {
         })
         .unwrap();
 
-    let out = fx.fx.cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"]).ok();
+    let out = fx
+        .fx
+        .cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"])
+        .ok();
 
     assert_eq!(out["feedback"], list);
     // Its existing fields stay.
@@ -37,7 +40,10 @@ fn pr_view_lists_the_stored_feedback_items() {
 fn pr_view_gives_null_feedback_for_a_pr_never_read_and_keeps_its_other_fields() {
     let fx = fx("open");
 
-    let out = fx.fx.cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"]).ok();
+    let out = fx
+        .fx
+        .cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"])
+        .ok();
 
     let object = out.as_object().unwrap();
     assert!(object.contains_key("feedback"), "{out}");

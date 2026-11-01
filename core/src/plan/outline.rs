@@ -138,8 +138,15 @@ fn decisions(fields: &Map<String, Value>) -> Result<Vec<Decision>, CpdError> {
 }
 
 fn done_when(fields: &Map<String, Value>) -> Result<BTreeMap<String, Vec<String>>, CpdError> {
-    let Some(value) = fields.get("done_when") else { return Ok(BTreeMap::new()) };
-    let Value::Object(by_workflow) = value else { return Err(invalid("done_when", "expected an object of Workflow key to lines")) };
+    let Some(value) = fields.get("done_when") else {
+        return Ok(BTreeMap::new());
+    };
+    let Value::Object(by_workflow) = value else {
+        return Err(invalid(
+            "done_when",
+            "expected an object of Workflow key to lines",
+        ));
+    };
     by_workflow
         .iter()
         .map(|(key, value)| {
@@ -229,8 +236,10 @@ fn check_against_plan(
     outline: &Outline,
 ) -> Result<(), CpdError> {
     let counts: Vec<String> = {
-        let mut stmt = conn.prepare("SELECT key FROM workflows WHERE plan = ?1 AND status <> 'cancelled'")?;
-        stmt.query_map([plan.id.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+        let mut stmt =
+            conn.prepare("SELECT key FROM workflows WHERE plan = ?1 AND status <> 'cancelled'")?;
+        stmt.query_map([plan.id.as_str()], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?
     };
     if let Some(key) = outline.done_when.keys().find(|k| !counts.contains(k)) {
         return Err(CpdError::new(

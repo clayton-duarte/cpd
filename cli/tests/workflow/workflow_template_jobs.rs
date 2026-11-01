@@ -37,7 +37,17 @@ impl Crud {
 
     /// `pr add k --shape <shape> <extra…>` on repo `pay`, in Plan `pay-1`.
     fn add_k(&self, shape: &str, extra: &[&str]) -> Run {
-        let mut args = vec!["workflow", "add", "k", "--repo", self.pay.to_str().unwrap(), "--title", "Add retries", "--shape", shape];
+        let mut args = vec![
+            "workflow",
+            "add",
+            "k",
+            "--repo",
+            self.pay.to_str().unwrap(),
+            "--title",
+            "Add retries",
+            "--shape",
+            shape,
+        ];
         args.extend(extra);
         args.extend(["--plan", "pay-1"]);
         self.cpd(&args)
@@ -54,7 +64,10 @@ impl Crud {
 
     /// The counts of `txns`, `events`, `workflows` and `jobs`: unchanged by a refusal.
     fn rows(&self) -> (i64, i64, i64, i64) {
-        let n = |table: &str| self.env.query::<i64>(&format!("SELECT count(*) FROM {table}"));
+        let n = |table: &str| {
+            self.env
+                .query::<i64>(&format!("SELECT count(*) FROM {table}"))
+        };
         (n("txns"), n("events"), n("workflows"), n("jobs"))
     }
 
@@ -111,8 +124,18 @@ fn refusal_writes_nothing() {
         refused(&fx.add_k("tdd", &["--no-needs"]), "draft_parked", 3);
         assert_eq!(fx.rows(), before, "{phase}");
         // Not even the reopening of the Plan.
-        assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay-1'"), plan, "{phase}");
-        assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE workflow = 'k'"), 0, "{phase}");
+        assert_eq!(
+            fx.env
+                .query::<String>("SELECT phase FROM plans WHERE id = 'pay-1'"),
+            plan,
+            "{phase}"
+        );
+        assert_eq!(
+            fx.env
+                .query::<i64>("SELECT count(*) FROM jobs WHERE workflow = 'k'"),
+            0,
+            "{phase}"
+        );
     }
 }
 
@@ -121,7 +144,10 @@ fn jobs_queue_the_template_after_lock() {
     let fx = crud("dispatch");
     let file = fx.jobs_file("jobs.json", &jobs_object("tdd"));
     let out = fx.add_k("tdd", &["--no-needs", "--jobs", &file]).ok();
-    assert_eq!(out["workflow"]["jobs"], json!(["k-docs", "k-tests", "k-impl", "open-k"]));
+    assert_eq!(
+        out["workflow"]["jobs"],
+        json!(["k-docs", "k-tests", "k-impl", "open-k"])
+    );
     assert_eq!(
         fx.rows_of_k(),
         json!([
@@ -167,9 +193,21 @@ fn jobs_queue_the_template_after_lock() {
             ],
         ])
     );
-    assert_eq!(fx.env.query::<String>("SELECT tests FROM jobs WHERE key = 'k-tests'"), "[\"workflow_x::it_works\"]");
-    assert_eq!(fx.env.query::<String>("SELECT test_files FROM jobs WHERE key = 'k-tests'"), "[\"cli/tests/workflow/workflow_x.rs\"]");
-    assert_eq!(fx.env.query::<String>("SELECT goal FROM jobs WHERE key = 'k-impl'"), "Do it.");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT tests FROM jobs WHERE key = 'k-tests'"),
+        "[\"workflow_x::it_works\"]"
+    );
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT test_files FROM jobs WHERE key = 'k-tests'"),
+        "[\"cli/tests/workflow/workflow_x.rs\"]"
+    );
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT goal FROM jobs WHERE key = 'k-impl'"),
+        "Do it."
+    );
     // One `job-added` Event per Job, the three queued, the opener a draft.
     let added = fx.cpd(&["events", "list", "--kind", "job-added"]).ok();
     let statuses: Vec<(Value, Value)> = added["events"]
@@ -277,7 +315,10 @@ fn jobs_on_a_workflow_that_waits_for_another_workflow_queue_the_jobs_too() {
     let file = fx.jobs_file("jobs.json", &jobs_object("tdd"));
     fx.add_k("tdd", &["--needs", "base", "--jobs", &file]).ok();
     let statuses: String = fx.env.query("SELECT group_concat(key || '=' || status) FROM (SELECT key, status FROM jobs WHERE workflow = 'k' ORDER BY rowid)");
-    assert_eq!(statuses, "k-docs=queued,k-tests=queued,k-impl=queued,open-k=draft");
+    assert_eq!(
+        statuses,
+        "k-docs=queued,k-tests=queued,k-impl=queued,open-k=draft"
+    );
 }
 
 // Guards: these pass before the change and must keep passing.

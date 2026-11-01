@@ -15,11 +15,14 @@ use std::time::Duration;
 
 use common::fx::Fx as InProcess;
 use common::{Run, refused};
-use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree, workflow_lead_worktree_path, prepare_lead_worktree};
 use cpd_core::config::{Catalog, Config, TierModel};
 use cpd_core::git::{
     Setup, create_attempt_worktree, create_lead_worktree, pr_lead_worktree_path,
     prepare_lead_worktree,
+};
+use cpd_core::git::{
+    Setup, create_attempt_worktree, create_lead_worktree, prepare_lead_worktree,
+    workflow_lead_worktree_path,
 };
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, Handler, Reply};
@@ -198,9 +201,29 @@ fn git_fixture_needing(
     let answer: Answer =
         Arc::new(|command, _| panic!("a command no test scripted (Git::sh): {command}"));
     let answer = Arc::new(Mutex::new(answer));
-    let _ = (*fx.fakes.runner).clone().route("sh", Arc::new(Sh(answer.clone())));
-    let mut git = Git { fx, home, repo, lead, work: PathBuf::new(), answer };
-    git.work = git.attempt_needing(&Workflow { key: "repo".into(), repo: git.repo.clone(), lead: git.lead.clone() }, "api", "running", kind, tests, needs);
+    let _ = (*fx.fakes.runner)
+        .clone()
+        .route("sh", Arc::new(Sh(answer.clone())));
+    let mut git = Git {
+        fx,
+        home,
+        repo,
+        lead,
+        work: PathBuf::new(),
+        answer,
+    };
+    git.work = git.attempt_needing(
+        &Workflow {
+            key: "repo".into(),
+            repo: git.repo.clone(),
+            lead: git.lead.clone(),
+        },
+        "api",
+        "running",
+        kind,
+        tests,
+        needs,
+    );
     git
 }
 
@@ -253,8 +276,21 @@ impl Git {
     fn add_pr(&self, key: &str) -> Workflow {
         let repo = self.fx.git_repo(key).canonicalize().unwrap();
         let branch = format!("cpd/pay/{key}");
-        let lead = workflow_lead_worktree_path(&repo, &plan(), &WorkflowKey::parse(key).unwrap(), &branch).unwrap();
-        in_fakes(&self.fx, || prepare_lead_worktree(&repo, &plan(), &lead, &branch, "main", &setup(&self.fx, "setup.log"))).map_err(|f| f.error).unwrap();
+        let lead =
+            workflow_lead_worktree_path(&repo, &plan(), &WorkflowKey::parse(key).unwrap(), &branch)
+                .unwrap();
+        in_fakes(&self.fx, || {
+            prepare_lead_worktree(
+                &repo,
+                &plan(),
+                &lead,
+                &branch,
+                "main",
+                &setup(&self.fx, "setup.log"),
+            )
+        })
+        .map_err(|f| f.error)
+        .unwrap();
         self.fx.env.repo_policy("acme", key, "");
         self.fx.env.sql(&format!(
             "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
@@ -262,7 +298,11 @@ impl Git {
             repo.display(),
             lead.display()
         ));
-        Workflow { key: key.into(), repo, lead }
+        Workflow {
+            key: key.into(),
+            repo,
+            lead,
+        }
     }
 
     /// A Job of `pr` and of `kind` (`work`, `test` or `impl`) with its Attempt `<key>-a1` in `status`: its worktree cut from the
@@ -274,7 +314,15 @@ impl Git {
     /// [`Git::attempt_in`] for a Job of `kind` too of `test` (`tests`: its `(tests, test_files)`, JSON arrays) and `impl`
     /// (`needs`: the merged `test` Job `t`'s `tests` as a JSON array; its `test_files` is `["tests/"]`): `t` and the Dependency are
     /// written in the Job's own transaction, since a Dependency of a Locked Job is refused later (`dependencies_locked`).
-    fn attempt_needing(&self, pr: &Workflow, key: &str, status: &str, kind: &str, tests: Option<(&str, &str)>, needs: Option<&str>) -> PathBuf {
+    fn attempt_needing(
+        &self,
+        pr: &Workflow,
+        key: &str,
+        status: &str,
+        kind: &str,
+        tests: Option<(&str, &str)>,
+        needs: Option<&str>,
+    ) -> PathBuf {
         let attempt = AttemptId::parse(&format!("{key}-a1")).unwrap();
         let made = in_fakes(&self.fx, || {
             create_attempt_worktree(
@@ -317,7 +365,16 @@ impl Git {
 
     /// [`Git::attempt_in`] for a `work` Job of the first PR.
     fn attempt_as(&self, key: &str, status: &str) -> PathBuf {
-        self.attempt_in(&Workflow { key: "repo".into(), repo: self.repo.clone(), lead: self.lead.clone() }, key, status, "work")
+        self.attempt_in(
+            &Workflow {
+                key: "repo".into(),
+                repo: self.repo.clone(),
+                lead: self.lead.clone(),
+            },
+            key,
+            status,
+            "work",
+        )
     }
 
     /// Commits `path` = `content` in `dir`, a worktree.
@@ -1311,7 +1368,9 @@ fn no_gate_takes_a_test_slot_lock_or_sets_cpd_test_slot() {
     let fx = git_fixture_kind(&[], "open");
     let seen = fx.fx.env.root().join("gate-slot.txt");
     // The open Job's Gate needs the PR's stored title and a `gh` that reports no pull request yet.
-    fx.fx.env.sql("UPDATE workflows SET title = 'Pay' WHERE plan = 'pay' AND key = 'repo'");
+    fx.fx
+        .env
+        .sql("UPDATE workflows SET title = 'Pay' WHERE plan = 'pay' AND key = 'repo'");
     fx.fx.fake_gh(Reply::ok("[]"));
     fx.fx.env.repo_policy(
         "acme",

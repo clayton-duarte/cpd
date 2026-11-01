@@ -679,11 +679,24 @@ fn a_need_names_a_pr_of_its_plan_and_one_naming_no_pr_is_refused() {
             )
         })
         .unwrap();
-    let stored: (String, String) =
-        store.read(|c| Ok(c.query_row("SELECT workflow, needs FROM workflow_needs WHERE plan = 'pay'", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).unwrap();
+    let stored: (String, String) = store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT workflow, needs FROM workflow_needs WHERE plan = 'pay'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .unwrap();
     assert_eq!(stored, ("deploy".to_owned(), "pay".to_owned()));
-    let err = refused(&mut store, "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', 'pay', 'nowhere')");
-    assert!(sqlite_message(&err).contains("FOREIGN KEY constraint failed"), "{err:?}");
+    let err = refused(
+        &mut store,
+        "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', 'pay', 'nowhere')",
+    );
+    assert!(
+        sqlite_message(&err).contains("FOREIGN KEY constraint failed"),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -860,7 +873,15 @@ fn append_only_tables_refuse_updates_and_deletes() {
         assert_eq!(sqlite_message(&err), message, "{sql}");
     }
     // The fixture's rows: the generated `<table>_no_delete` refuses them.
-    for table in ["contexts", "sessions", "plans", "workflows", "jobs", "attempts", "escalations"] {
+    for table in [
+        "contexts",
+        "sessions",
+        "plans",
+        "workflows",
+        "jobs",
+        "attempts",
+        "escalations",
+    ] {
         let err = refused(&mut store, &format!("DELETE FROM {table}"));
         assert_eq!(err.code(), ErrorCode::StoreFailed, "{table}: {err:?}");
         assert_eq!(sqlite_message(&err), format!("append_only: {table}"));

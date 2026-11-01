@@ -36,9 +36,17 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         let workflows = load_workflows(conn, &id)?;
         let mut held = HashMap::new();
         for workflow in workflows.iter().filter(|p| p.status != "cancelled") {
-            held.insert(workflow.key.to_string(), start::not_ready(conn, &id, &workflow.key)?);
+            held.insert(
+                workflow.key.to_string(),
+                start::not_ready(conn, &id, &workflow.key)?,
+            );
         }
-        Ok((row::load(conn, &id)?, jobs::load(conn, &id)?, workflows, held))
+        Ok((
+            row::load(conn, &id)?,
+            jobs::load(conn, &id)?,
+            workflows,
+            held,
+        ))
     })?;
     match plan.phase {
         Phase::Plan => {}
@@ -65,7 +73,8 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     if drafts.is_empty() {
         return Err(no_draft_jobs(&id));
     }
-    env.store.read(|conn| check_drafts_complete(conn, &id, &jobs))?;
+    env.store
+        .read(|conn| check_drafts_complete(conn, &id, &jobs))?;
     super::shape::check(&id, &workflows, &jobs)?;
     let fingerprint = env.store.read(|conn| plan_fingerprint(conn, &id))?;
     let (review, latest) = env.store.read(|conn| {
@@ -94,7 +103,9 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     // git, outside any transaction (§7.2): every Workflow with no needs is prepared first,
     // and only when all have passed are the new branches pushed. On failure nothing is left.
     let mut prepared = Vec::new();
-    for workflow in workflows.iter().filter(|p| p.status == "waiting" && held.get(p.key.as_str()).is_some_and(NotReady::is_empty)) {
+    for workflow in workflows.iter().filter(|p| {
+        p.status == "waiting" && held.get(p.key.as_str()).is_some_and(NotReady::is_empty)
+    }) {
         match start::prepare(&env.home, &env.config, &mut env.store, &id, workflow) {
             Ok(p) => prepared.push(p),
             Err(failed) => {
@@ -144,13 +155,19 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     }
 
     let watch = ensure_watch(&env, &id)?;
-    Ok(Output::success(json!({"plan": id, "phase": "dispatch", "jobs": keys, "prs": listed(&workflows, &started, &held), "watch": watch})))
+    Ok(Output::success(
+        json!({"plan": id, "phase": "dispatch", "jobs": keys, "prs": listed(&workflows, &started, &held), "watch": watch}),
+    ))
 }
 
 /// `prs` of the result (commands.md §4.8): every Workflow that is not `cancelled`, in
 /// key order. A Workflow started by this lock has its worktree and R35's outcome;
 /// every other has null for those.
-fn listed(workflows: &[WorkflowRow], started: &[Pushed], held: &HashMap<String, NotReady>) -> Vec<Value> {
+fn listed(
+    workflows: &[WorkflowRow],
+    started: &[Pushed],
+    held: &HashMap<String, NotReady>,
+) -> Vec<Value> {
     workflows.iter()
         .filter(|p| p.status != "cancelled")
         .map(|workflow| {

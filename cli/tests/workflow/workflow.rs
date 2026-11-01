@@ -237,7 +237,15 @@ pub(super) trait Rows {
     }
 
     fn workflow_status(&self, key: &str) -> String {
-        self.store().read(|c| Ok(c.query_row("SELECT status FROM workflows WHERE plan = 'pay' AND key = ?1", [key], |r| r.get(0))?)).unwrap()
+        self.store()
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT status FROM workflows WHERE plan = 'pay' AND key = ?1",
+                    [key],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap()
     }
 }
 
@@ -263,7 +271,15 @@ fn seed_web(mut store: Store, repo: &Path, lead: &Path, sha: &str, state: Web) {
             "merged",
             "",
         ),
-        Web::Waiting => ("waiting", "NULL".to_owned(), "NULL", "", String::new(), "queued", "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', 'web', 'repo');"),
+        Web::Waiting => (
+            "waiting",
+            "NULL".to_owned(),
+            "NULL",
+            "",
+            String::new(),
+            "queued",
+            "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', 'web', 'repo');",
+        ),
     };
     store
         .write("fixture", |tx| {
@@ -417,10 +433,26 @@ fn pr_open_queues_a_fresh_open_job_at_open_tier() {
         )
     );
     let (goal, context, touches, acceptance, out_of_scope) = job_spec(&fx, "open-repo");
-    assert!(goal.contains(&format!("Make the Lead Branch {branch} of Workflow repo fit its base main", branch = fx.branch)), "{goal}");
-    assert!(context.contains("You push nothing, open nothing and run no Gate"), "{context}");
-    for (what, value) in [("touches", &touches), ("acceptance", &acceptance), ("out_of_scope", &out_of_scope)] {
-        assert!(value.as_array().is_some_and(|a| !a.is_empty()), "{what}: {value}");
+    assert!(
+        goal.contains(&format!(
+            "Make the Lead Branch {branch} of Workflow repo fit its base main",
+            branch = fx.branch
+        )),
+        "{goal}"
+    );
+    assert!(
+        context.contains("You push nothing, open nothing and run no Gate"),
+        "{context}"
+    );
+    for (what, value) in [
+        ("touches", &touches),
+        ("acceptance", &acceptance),
+        ("out_of_scope", &out_of_scope),
+    ] {
+        assert!(
+            value.as_array().is_some_and(|a| !a.is_empty()),
+            "{what}: {value}"
+        );
     }
     let dependencies: i64 = fx
         .store()
@@ -570,7 +602,11 @@ fn pr_open_refuses_jobs_not_done_and_a_missing_title() {
     }
 
     let fx = poll_fx("dispatch");
-    fx.store().write("fixture", |tx| Ok(tx.execute("UPDATE workflows SET title = NULL", [])?)).unwrap();
+    fx.store()
+        .write("fixture", |tx| {
+            Ok(tx.execute("UPDATE workflows SET title = NULL", [])?)
+        })
+        .unwrap();
     let txns = fx.txns();
 
     let run = fx.pr("open");
@@ -788,11 +824,21 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
     );
     let opened = fx.events("pr-opened");
     assert_eq!(opened.len(), 1);
-    assert_eq!(opened[0].1, json!({"workflow": "repo", "number": 812, "url": URL}));
+    assert_eq!(
+        opened[0].1,
+        json!({"workflow": "repo", "number": 812, "url": URL})
+    );
     let events = fx.events("plan-phase");
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].1, json!({"from": "dispatch", "to": "deploy", "workflows": [{"key": "repo", "number": 812, "url": URL}]}));
-    assert!(events[0].0.contains("cpd pr poll --plan pay"), "{}", events[0].0);
+    assert_eq!(
+        events[0].1,
+        json!({"from": "dispatch", "to": "deploy", "workflows": [{"key": "repo", "number": 812, "url": URL}]})
+    );
+    assert!(
+        events[0].0.contains("cpd pr poll --plan pay"),
+        "{}",
+        events[0].0
+    );
 }
 
 #[test]
@@ -832,7 +878,16 @@ fn open_ignores_a_merged_pull_request_created_before_the_pr_started() {
     );
     let row = fx.plan_row();
     assert_eq!((row.0.as_str(), row.1), ("deploy", Some(812)));
-    let status: String = fx.store().read(|c| Ok(c.query_row("SELECT status FROM workflows WHERE plan = 'pay' AND key = 'repo'", [], |r| r.get(0))?)).unwrap();
+    let status: String = fx
+        .store()
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT status FROM workflows WHERE plan = 'pay' AND key = 'repo'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
     assert_eq!(status, "open");
     assert!(fx.events("pr-merged").is_empty());
 }
@@ -929,11 +984,22 @@ fn open_adopts_a_merged_pull_request_without_the_gate_and_the_plan_is_done() {
     );
     assert!(row.4.is_some() && row.5.is_some(), "{row:?}");
     assert_eq!(fx.workflow_status("repo"), "merged");
-    assert_eq!(fx.pr_data(), ("Pay the bills".into(), "none".into(), "none".into(), "merged".into()));
+    assert_eq!(
+        fx.pr_data(),
+        (
+            "Pay the bills".into(),
+            "none".into(),
+            "none".into(),
+            "merged".into()
+        )
+    );
     assert_eq!(fx.shown_pull_request()["merged_at"], "2026-10-14T10:00:00Z");
     let merged = fx.events("pr-merged");
     assert_eq!(merged.len(), 1);
-    assert_eq!(merged[0].1, json!({"workflow": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}));
+    assert_eq!(
+        merged[0].1,
+        json!({"workflow": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"})
+    );
     assert!(fx.events("pr-opened").is_empty());
     assert_eq!(fx.events("plan-phase")[0].1["to"], "deploy");
     let done = fx.events("plan-done");
@@ -976,7 +1042,10 @@ fn open_adopting_a_merged_pull_request_keeps_the_plan_in_dispatch_while_another_
     let end = fx.merge(&attempt);
 
     assert_eq!(end, End::Merged { sha: tip });
-    assert_eq!((fx.workflow_status("repo").as_str(), fx.phase().as_str()), ("merged", "dispatch"));
+    assert_eq!(
+        (fx.workflow_status("repo").as_str(), fx.phase().as_str()),
+        ("merged", "dispatch")
+    );
     assert_eq!(fx.workflow_status("web"), "waiting");
     assert_eq!(fx.events("pr-merged").len(), 1);
     assert!(fx.events("plan-phase").is_empty() && fx.events("plan-done").is_empty());
@@ -1002,7 +1071,10 @@ fn open_adopting_a_merged_pull_request_updates_the_row_the_poll_stored_open() {
 
     assert_eq!(fx.pr_data().3, "merged");
     assert_eq!(fx.workflow_status("repo"), "merged");
-    let rows: i64 = fx.store().read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?)).unwrap();
+    let rows: i64 = fx
+        .store()
+        .read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?))
+        .unwrap();
     assert_eq!(rows, 1);
 }
 
@@ -1017,7 +1089,13 @@ fn open_adopts_an_open_pull_request_of_a_lead_branch_that_is_behind_its_base() {
 
     assert_eq!(end, End::Merged { sha: tip.clone() });
     assert!(marker.exists(), "the Gate ran");
-    assert_eq!((fx.plan_row().0.as_str(), fx.workflow_status("repo").as_str()), ("deploy", "open"));
+    assert_eq!(
+        (
+            fx.plan_row().0.as_str(),
+            fx.workflow_status("repo").as_str()
+        ),
+        ("deploy", "open")
+    );
     assert_eq!(fx.remote_branch("cpd/pay"), Some(tip));
 }
 
@@ -1072,10 +1150,21 @@ fn open_after_another_open_opened_the_pr_during_its_gate_is_already_and_pushes_n
 
     // The merge ends all the same, adopting what the other opener recorded: no `gh pr create`, nothing recorded twice.
     assert_eq!(end, End::Merged { sha: tip.clone() });
-    assert_eq!(fx.plan_row().0, "dispatch", "the other opener's rows stay as they are: its own poll moves the Plan");
+    assert_eq!(
+        fx.plan_row().0,
+        "dispatch",
+        "the other opener's rows stay as they are: its own poll moves the Plan"
+    );
     assert_eq!(fx.workflow_status("repo"), "open");
-    assert!(fx.events("pr-opened").is_empty() && fx.events("plan-phase").is_empty(), "written once, by the other opener");
-    assert!(fx.gh_calls().iter().all(|c| c[1] != "create"), "{:?}", fx.gh_calls());
+    assert!(
+        fx.events("pr-opened").is_empty() && fx.events("plan-phase").is_empty(),
+        "written once, by the other opener"
+    );
+    assert!(
+        fx.gh_calls().iter().all(|c| c[1] != "create"),
+        "{:?}",
+        fx.gh_calls()
+    );
 }
 
 #[test]
@@ -1880,11 +1969,27 @@ impl Poll {
 
     /// The `base` of PR `web` of Plan `pay`.
     fn web_base(&self) -> String {
-        self.store().read(|c| Ok(c.query_row("SELECT base FROM workflows WHERE plan = 'pay' AND key = 'web'", [], |r| r.get(0))?)).unwrap()
+        self.store()
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT base FROM workflows WHERE plan = 'pay' AND key = 'web'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap()
     }
 
     fn web_status(&self) -> String {
-        self.store().read(|c| Ok(c.query_row("SELECT status FROM workflows WHERE plan = 'pay' AND key = 'web'", [], |r| r.get(0))?)).unwrap()
+        self.store()
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT status FROM workflows WHERE plan = 'pay' AND key = 'web'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap()
     }
 
     /// The Lead Branch tip.
@@ -2200,7 +2305,14 @@ pub(super) fn feedback(state: &str, checks: &str, decision: &str, reasons: &[&st
 }
 
 /// `pr-feedback`'s data for PR `repo`, with the row's `mergeable` and `merge_state`; `conflict` follows `reasons`.
-fn feedback_merge(state: &str, checks: &str, decision: &str, mergeable: &str, merge_state: &str, reasons: &[&str]) -> Value {
+fn feedback_merge(
+    state: &str,
+    checks: &str,
+    decision: &str,
+    mergeable: &str,
+    merge_state: &str,
+    reasons: &[&str],
+) -> Value {
     json!({"workflow": "repo", "number": 812, "url": URL, "state": state, "checks": checks, "review_decision": decision,
            "mergeable": mergeable, "merge_state": merge_state, "conflict": reasons.contains(&"conflict"), "reasons": reasons})
 }
@@ -2328,7 +2440,13 @@ impl Poll {
     /// `(status, base)` of PR `key` of Plan `pay`.
     fn base_of(&self, key: &str) -> (String, String) {
         self.store()
-            .read(|c| Ok(c.query_row("SELECT status, base FROM workflows WHERE plan = 'pay' AND key = ?1", [key], |r| Ok((r.get(0)?, r.get(1)?)))?))
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT status, base FROM workflows WHERE plan = 'pay' AND key = ?1",
+                    [key],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
             .unwrap()
     }
 
@@ -2452,7 +2570,11 @@ fn poll_follows_github_repointing_a_stacked_pr_when_its_base_pr_merges_and_keeps
                "number": 814, "url": "https://github.com/acme/pay/pull/814"})
     );
     assert!(fx.events("pr-feedback").is_empty());
-    assert_eq!(fx.event_count() - events, 2, "pr-merged and workflow-base-changed, nothing else");
+    assert_eq!(
+        fx.event_count() - events,
+        2,
+        "pr-merged and workflow-base-changed, nothing else"
+    );
     // cpd changes no base on GitHub, runs no Gate and opens nothing: it only asked GitHub (graphql).
     assert!(
         fx.gh_calls().iter().all(|c| c[0] == "api"),
@@ -2491,9 +2613,19 @@ fn poll_follows_a_base_retargeted_by_hand_on_any_open_pr() {
 
     let out = fx.poll();
 
-    assert_eq!(out["base_changed"], json!([{"plan": "pay", "pr": "repo", "from": "main", "to": "develop"}]));
-    assert_eq!(fx.base_of("repo"), ("open".to_owned(), "develop".to_owned()));
-    assert_eq!(fx.base_of("up"), ("open".to_owned(), "cpd/pay".to_owned()), "814 still targets 812's branch, as GitHub says");
+    assert_eq!(
+        out["base_changed"],
+        json!([{"plan": "pay", "pr": "repo", "from": "main", "to": "develop"}])
+    );
+    assert_eq!(
+        fx.base_of("repo"),
+        ("open".to_owned(), "develop".to_owned())
+    );
+    assert_eq!(
+        fx.base_of("up"),
+        ("open".to_owned(), "cpd/pay".to_owned()),
+        "814 still targets 812's branch, as GitHub says"
+    );
     let told = fx.events("workflow-base-changed");
     assert_eq!(told.len(), 1, "{told:?}");
     assert_eq!(
@@ -2543,8 +2675,12 @@ fn poll_changes_nothing_for_a_pr_stacked_above_a_base_pr_closed_unmerged() {
 /// unstacked it, `number` and `url` are the poll's, both null.
 fn web_unstacked(from: &str, by: &str) -> (String, Value) {
     let data = match by {
-        "poll" => json!({"workflow": "web", "from": from, "to": "main", "from_workflow": "pay/repo", "to_workflow": null, "by": "poll", "number": null, "url": null}),
-        _ => json!({"workflow": "web", "from": from, "to": "main", "from_workflow": "pay/repo", "to_workflow": null, "by": by}),
+        "poll" => {
+            json!({"workflow": "web", "from": from, "to": "main", "from_workflow": "pay/repo", "to_workflow": null, "by": "poll", "number": null, "url": null})
+        }
+        _ => {
+            json!({"workflow": "web", "from": from, "to": "main", "from_workflow": "pay/repo", "to_workflow": null, "by": by})
+        }
     };
     (
         format!(
@@ -2568,7 +2704,11 @@ fn poll_unstacks_a_dispatch_pr_in_the_transaction_that_records_its_base_prs_merg
 
     assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
     assert_eq!(fx.web_base(), "main");
-    assert_eq!(fx.plan_events("pay", "workflow-base-changed"), vec![web_unstacked(&fx.branch, "poll")], "once");
+    assert_eq!(
+        fx.plan_events("pay", "workflow-base-changed"),
+        vec![web_unstacked(&fx.branch, "poll")],
+        "once"
+    );
     assert_eq!(fx.plan_events("pay", "pr-feedback"), vec![]);
     assert_eq!(
         fx.web_status(),
@@ -2624,8 +2764,14 @@ fn poll_tells_the_plan_once_that_the_checks_turned_failed() {
     );
     let events = fx.events("pr-feedback");
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].1, feedback("open", "failed", "none", &["checks_failed"]));
-    assert_eq!(events[0].0, "Workflow repo (#812) of Plan pay needs attention: checks failed. Read the details with cpd pr view --plan pay --workflow repo.");
+    assert_eq!(
+        events[0].1,
+        feedback("open", "failed", "none", &["checks_failed"])
+    );
+    assert_eq!(
+        events[0].0,
+        "Workflow repo (#812) of Plan pay needs attention: checks failed. Read the details with cpd pr view --plan pay --workflow repo."
+    );
     assert_eq!(fx.plan_row().0, "deploy");
 
     // Still failing: nothing new. `ERROR` is `failed` too.
@@ -2718,7 +2864,20 @@ fn poll_queues_one_update_job_when_the_pull_request_becomes_conflicting() {
     let added = fx.events("job-added");
     assert_eq!(added.len(), 1, "{added:?}");
     let data = &added[0].1;
-    assert_eq!((&data["kind"], &data["by"], &data["reason"], &data["workflow"]), (&json!("update"), &json!("poll"), &json!("conflict"), &json!("repo")));
+    assert_eq!(
+        (
+            &data["kind"],
+            &data["by"],
+            &data["reason"],
+            &data["workflow"]
+        ),
+        (
+            &json!("update"),
+            &json!("poll"),
+            &json!("conflict"),
+            &json!("repo")
+        )
+    );
     assert_eq!(fx.workflow_status("repo"), "open");
 
     let txns = fx.txns();
@@ -3311,9 +3470,15 @@ fn with_a_plan_the_output_adds_its_prs_and_their_rows() {
 
     assert_eq!(out["polled"], 1);
     assert_eq!(out["workflows"].as_array().unwrap().len(), 2);
-    assert_eq!(out["workflows"][0], json!({"key": "repo", "status": "open", "pull_request": fx.shown_pull_request()}));
+    assert_eq!(
+        out["workflows"][0],
+        json!({"key": "repo", "status": "open", "pull_request": fx.shown_pull_request()})
+    );
     assert_eq!(out["workflows"][0]["pull_request"]["checks"], "pending");
-    assert_eq!(out["workflows"][1], json!({"key": "web", "status": "waiting", "pull_request": null}));
+    assert_eq!(
+        out["workflows"][1],
+        json!({"key": "web", "status": "waiting", "pull_request": null})
+    );
 }
 
 #[test]
@@ -3321,7 +3486,10 @@ fn poll_has_no_phase_precondition_and_knows_its_plan() {
     let fx = poll_fx("plan");
     fx.search(&[]);
     let out = fx.poll();
-    assert_eq!(out["workflows"], json!([{"key": "repo", "status": "waiting", "pull_request": null}]));
+    assert_eq!(
+        out["workflows"],
+        json!([{"key": "repo", "status": "waiting", "pull_request": null}])
+    );
 
     let run = fx.cpd(&["pr", "poll", "--plan", "nope"]);
     assert_eq!(code(&run), ("plan_not_found".into(), 4));
@@ -3700,7 +3868,13 @@ fn dispatch_card(fx: &Poll) -> DispatchCard {
     let widgets = read::widgets(&mut fx.store(), 4, 10).unwrap();
     assert_eq!(widgets.plans.len(), 1);
     let card = widgets.plans.into_iter().next().unwrap();
-    let pr = card.workflows.into_iter().next().map(|pr| (pr.number, pr.state, pr.polled.map(|p| (p.title, p.decision, p.checks))));
+    let pr = card.workflows.into_iter().next().map(|pr| {
+        (
+            pr.number,
+            pr.state,
+            pr.polled.map(|p| (p.title, p.decision, p.checks)),
+        )
+    });
     (card.label, pr)
 }
 
@@ -3818,10 +3992,18 @@ fn a_lookup_with_a_not_found_alias_and_exit_1_still_applies_the_others() {
 
     assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
     assert_eq!(out["done"], json!([]));
-    assert_eq!((fx.workflow_status("repo"), fx.workflow_status("web")), ("merged".to_owned(), "open".to_owned()));
+    assert_eq!(
+        (fx.workflow_status("repo"), fx.workflow_status("web")),
+        ("merged".to_owned(), "open".to_owned())
+    );
     assert_eq!(fx.phase(), "deploy");
     let calls = fx.gh_calls();
-    assert!(calls[1][3].contains(r#"p0: repository(owner: "acme", name: "pay")"#) && calls[1][3].contains(r#"p1: repository(owner: "acme", name: "web")"#), "{}", calls[1][3]);
+    assert!(
+        calls[1][3].contains(r#"p0: repository(owner: "acme", name: "pay")"#)
+            && calls[1][3].contains(r#"p1: repository(owner: "acme", name: "web")"#),
+        "{}",
+        calls[1][3]
+    );
     assert_eq!(out["workflows"][1]["pull_request"]["state"], "open");
 }
 
@@ -3831,17 +4013,30 @@ fn a_merged_pr_makes_its_dependent_startable_but_poll_does_not_start_it() {
     fx.add_waiting_web();
     // `pr open` only queues the PR's opener Job now: the open pull request is written straight, as the Lead's opener leaves it.
     fx.mark_opened("repo", 812);
-    assert_eq!(code(&fx.cpd(&["workflow", "start", "web", "--plan", "pay"])), ("workflow_not_ready".into(), 3));
+    assert_eq!(
+        code(&fx.cpd(&["workflow", "start", "web", "--plan", "pay"])),
+        ("workflow_not_ready".into(), 3)
+    );
 
     fx.search(&[]);
     fx.lookup(&[Some(pay("MERGED", None, None))]);
     let out = fx.poll();
 
     assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
-    assert_eq!((fx.workflow_status("repo").as_str(), fx.workflow_status("web").as_str(), fx.phase().as_str()), ("merged", "waiting", "dispatch"));
+    assert_eq!(
+        (
+            fx.workflow_status("repo").as_str(),
+            fx.workflow_status("web").as_str(),
+            fx.phase().as_str()
+        ),
+        ("merged", "waiting", "dispatch")
+    );
     assert_eq!(fx.events("pr-merged").len(), 1);
     assert!(fx.events("plan-done").is_empty());
-    assert!(fx.events("workflow-started").is_empty(), "pr poll never starts a PR");
+    assert!(
+        fx.events("workflow-started").is_empty(),
+        "pr poll never starts a PR"
+    );
     // Its need is merged now: it can start.
     let started = fx.cpd(&["workflow", "start", "web", "--plan", "pay"]).ok();
     assert_eq!(started["workflow"]["status"], "dispatch");
@@ -3899,8 +4094,14 @@ fn a_pr_whose_owner_file_is_gone_is_reported_and_the_other_plans_pr_still_merges
     let out = fx.poll_all();
 
     assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
-    assert_eq!((out["done"].clone(), out["feedback"].clone()), (json!(["pay"]), json!([])));
-    assert_eq!((fx.plan_row().0, fx.workflow_status("repo")), ("done".to_owned(), "merged".to_owned()));
+    assert_eq!(
+        (out["done"].clone(), out["feedback"].clone()),
+        (json!(["pay"]), json!([]))
+    );
+    assert_eq!(
+        (fx.plan_row().0, fx.workflow_status("repo")),
+        ("done".to_owned(), "merged".to_owned())
+    );
     assert_eq!(fx.events("pr-merged").len(), 1);
     // bob's row is written as usual, and bob is told nothing.
     let bob: String = fx
@@ -3933,7 +4134,14 @@ fn a_pr_whose_owner_file_is_gone_is_reported_and_the_other_plans_pr_still_merges
     assert_eq!(errors[0].1["details"]["plan"], "bob");
     assert_eq!(errors[0].1["details"]["pr"], "shop");
     assert_eq!(errors[0].1["details"]["owner"], "gone");
-    assert!(errors[0].1["message"].as_str().unwrap().contains("Workflow shop (#20) of Plan bob"), "{}", errors[0].1["message"]);
+    assert!(
+        errors[0].1["message"]
+            .as_str()
+            .unwrap()
+            .contains("Workflow shop (#20) of Plan bob"),
+        "{}",
+        errors[0].1["message"]
+    );
 
     // Once per episode: the next polls, still failing the same way, append nothing and write nothing.
     let events = fx.event_count();
@@ -3957,7 +4165,10 @@ fn a_pull_request_closed_without_a_merge_is_not_looked_up_again() {
     }
 
     assert_eq!(lookups(), 1, "three more ticks looked it up again");
-    assert_eq!((fx.plan_row().0, fx.workflow_status("repo")), ("deploy".to_owned(), "open".to_owned()));
+    assert_eq!(
+        (fx.plan_row().0, fx.workflow_status("repo")),
+        ("deploy".to_owned(), "open".to_owned())
+    );
 }
 
 #[test]
@@ -4135,7 +4346,22 @@ fn a_reopened_plan_whose_new_pr_merges_is_done_again_with_a_second_plan_done() {
            VALUES ('pay', 'side', '{}', 'pay', 'main', 'dispatch', 'cpd/pay/side', '/w/side', 'Side', 'config', cpd_txn(), 't', 't');",
         fx.repo.display()
     ));
-    fx.cpd(&["workflow", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--base", "pay/side", "--plan", "pay"]).ok();
+    fx.cpd(&[
+        "workflow",
+        "add",
+        "fix",
+        "--repo",
+        fx.repo.to_str().unwrap(),
+        "--title",
+        "Change the PR",
+        "--shape",
+        "config",
+        "--base",
+        "pay/side",
+        "--plan",
+        "pay",
+    ])
+    .ok();
     fx.env.sql("UPDATE workflows SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'pay' AND key = 'side';");
     assert_eq!(fx.phase(), "dispatch");
     // The engine would start the PR and the Lead open it: written straight, as the other tests do,
@@ -4154,11 +4380,26 @@ fn a_reopened_plan_whose_new_pr_merges_is_done_again_with_a_second_plan_done() {
 
     fx.lookup(&[Some(node("acme/pay", 900, "MERGED", None, None))]);
     let out = fx.poll();
-    assert_eq!((out["merged"].clone(), out["done"].clone()), (json!([{"plan": "pay", "pr": "fix"}]), json!(["pay"])));
-    assert_eq!((fx.phase().as_str(), fx.workflow_status("fix").as_str()), ("done", "merged"));
+    assert_eq!(
+        (out["merged"].clone(), out["done"].clone()),
+        (json!([{"plan": "pay", "pr": "fix"}]), json!(["pay"]))
+    );
+    assert_eq!(
+        (fx.phase().as_str(), fx.workflow_status("fix").as_str()),
+        ("done", "merged")
+    );
     let done = fx.events("plan-done");
-    assert_eq!(done.len(), 2, "plan-done once each time the Plan reaches done");
-    let listed: Vec<&str> = done[1].1["workflows"].as_array().unwrap().iter().map(|p| p["key"].as_str().unwrap()).collect();
+    assert_eq!(
+        done.len(),
+        2,
+        "plan-done once each time the Plan reaches done"
+    );
+    let listed: Vec<&str> = done[1].1["workflows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["key"].as_str().unwrap())
+        .collect();
     assert_eq!(listed, ["fix", "repo"]);
 }
 
@@ -4368,7 +4609,11 @@ fn an_owned_pull_request_that_left_the_search_and_is_closed_is_told_to_the_plan_
         events[0].0
     );
     assert_eq!(fx.pr_data().3, "closed");
-    assert_eq!((fx.plan_row().0, fx.workflow_status("repo")), ("deploy".to_owned(), "open".to_owned()), "the PR stays open in cpd");
+    assert_eq!(
+        (fx.plan_row().0, fx.workflow_status("repo")),
+        ("deploy".to_owned(), "open".to_owned()),
+        "the PR stays open in cpd"
+    );
 
     // Polled again: still closed, told once; the row is already right, so it is not looked up again (commands-W4).
     let txns = fx.txns();
@@ -4423,19 +4668,49 @@ fn an_owned_pull_request_that_left_the_search_and_is_merged_takes_the_merged_pat
     let out = fx.poll();
 
     assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
-    assert_eq!((out["done"].clone(), out["feedback"].clone(), out["polled"].clone()), (json!(["pay"]), json!([]), json!(0)));
-    assert_eq!(out["changed"], json!([{"repo": "acme/pay", "number": 812, "state": "merged", "draft": false, "checks": "passed", "review_decision": "approved", "mergeable": "unknown", "merge_state": "unknown"}]));
-    assert_eq!(out["workflows"], json!([{"key": "repo", "status": "merged", "pull_request": fx.shown_pull_request()}]));
+    assert_eq!(
+        (
+            out["done"].clone(),
+            out["feedback"].clone(),
+            out["polled"].clone()
+        ),
+        (json!(["pay"]), json!([]), json!(0))
+    );
+    assert_eq!(
+        out["changed"],
+        json!([{"repo": "acme/pay", "number": 812, "state": "merged", "draft": false, "checks": "passed", "review_decision": "approved", "mergeable": "unknown", "merge_state": "unknown"}])
+    );
+    assert_eq!(
+        out["workflows"],
+        json!([{"key": "repo", "status": "merged", "pull_request": fx.shown_pull_request()}])
+    );
     assert_eq!(fx.shown_pull_request()["merged_at"], "2026-10-14T10:00:00Z");
-    assert_eq!(fx.pr_data(), (TITLE.into(), "approved".into(), "passed".into(), "merged".into()));
-    assert_eq!((fx.plan_row().0, fx.workflow_status("repo")), ("done".to_owned(), "merged".to_owned()));
+    assert_eq!(
+        fx.pr_data(),
+        (
+            TITLE.into(),
+            "approved".into(),
+            "passed".into(),
+            "merged".into()
+        )
+    );
+    assert_eq!(
+        (fx.plan_row().0, fx.workflow_status("repo")),
+        ("done".to_owned(), "merged".to_owned())
+    );
     assert!(fx.plan_row().5.is_some());
     let done = fx.events("plan-done");
     assert_eq!(done.len(), 1);
-    assert_eq!(done[0].1, json!({"workflows": [{"key": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}]}));
+    assert_eq!(
+        done[0].1,
+        json!({"workflows": [{"key": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}]})
+    );
     let merged = fx.events("pr-merged");
     assert_eq!(merged.len(), 1);
-    assert_eq!(merged[0].1, json!({"workflow": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}));
+    assert_eq!(
+        merged[0].1,
+        json!({"workflow": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"})
+    );
     assert!(fx.events("pr-feedback").is_empty());
     // The poll cleans nothing (commands.md §9.2): the Attempt's worktree and branch, the Lead's, and the windows stay for `cpd janitor`.
     assert!(worktree.exists());
@@ -4734,8 +5009,14 @@ fn rebase_stops_at_a_conflict_in_the_lead_worktree_and_pushes_nothing() {
     let details = &run.error()["details"];
     assert_eq!(details["files"], json!(["README.md"]));
     assert_eq!(details["worktree"], fx.lead.to_str().unwrap());
-    assert_eq!(details["next"], "cpd pr rebase --workflow repo --plan pay --continue");
-    assert_eq!(details["abort"], "cpd pr rebase --workflow repo --plan pay --abort");
+    assert_eq!(
+        details["next"],
+        "cpd pr rebase --workflow repo --plan pay --continue"
+    );
+    assert_eq!(
+        details["abort"],
+        "cpd pr rebase --workflow repo --plan pay --abort"
+    );
     // The rebase waits in the Lead worktree, with markers; the ref and the remote are as they were.
     assert!(fx.rebasing());
     assert!(
@@ -4806,7 +5087,10 @@ fn rebase_continue_stops_again_at_a_second_conflicting_commit() {
 
     assert_eq!(code(&run), ("rebase_conflict".into(), 3));
     assert_eq!(run.error()["details"]["files"], json!(["README.md"]));
-    assert_eq!(run.error()["details"]["next"], "cpd pr rebase --workflow repo --plan pay --continue");
+    assert_eq!(
+        run.error()["details"]["next"],
+        "cpd pr rebase --workflow repo --plan pay --continue"
+    );
     assert!(fx.rebasing());
     assert_eq!(fx.lead_sha(), before);
     assert_eq!(fx.remote_branch("cpd/pay"), Some(before.clone()));
@@ -4835,7 +5119,10 @@ fn rebase_continue_refuses_while_conflict_markers_remain() {
     let run = fx.rebase("--continue");
     assert_eq!(code(&run), ("rebase_conflict".into(), 3));
     assert_eq!(run.error()["details"]["files"], json!(["README.md"]));
-    assert_eq!(run.error()["details"]["next"], "cpd pr rebase --workflow repo --plan pay --continue");
+    assert_eq!(
+        run.error()["details"]["next"],
+        "cpd pr rebase --workflow repo --plan pay --continue"
+    );
 
     // Staged with the markers in it.
     fx.git(&fx.lead, &["add", "README.md"]);
@@ -5046,7 +5333,9 @@ fn rebase_of_a_pr_merged_during_its_gate_pushes_nothing() {
         Store::open(&home, 5000)
             .unwrap()
             .write("pr poll", |tx| {
-                tx.execute_batch("UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'pay'")?;
+                tx.execute_batch(
+                    "UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'pay'",
+                )?;
                 Ok(())
             })
             .unwrap();
@@ -5391,7 +5680,19 @@ impl Added {
     }
 
     pub(crate) fn add(&self, key: &str, repo: &Path, extra: &[&str]) -> Run {
-        let mut args = vec!["workflow", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"];
+        let mut args = vec![
+            "workflow",
+            "add",
+            key,
+            "--repo",
+            repo.to_str().unwrap(),
+            "--title",
+            "Change the PR",
+            "--shape",
+            "config",
+            "--plan",
+            "pay",
+        ];
         args.extend(extra);
         self.fx.cpd(&args)
     }
@@ -5429,7 +5730,10 @@ fn pr_add_no_needs_and_needs_override_the_reopen_default() {
     {
         let a = added("done");
         a.side(&a.repo);
-        assert_eq!(a.add_fix(&["--no-needs", "--base", "pay/side"]).ok()["workflow"]["needs"], json!([]));
+        assert_eq!(
+            a.add_fix(&["--no-needs", "--base", "pay/side"]).ok()["workflow"]["needs"],
+            json!([])
+        );
         assert!(a.needs_of("fix").is_empty());
     }
     {
@@ -5438,7 +5742,10 @@ fn pr_add_no_needs_and_needs_override_the_reopen_default() {
         b.add("x", &b.repo, &["--no-needs", "--base", "pay/side"])
             .ok();
         // The Plan is in dispatch now; `--needs x` names a PR that is not merged.
-        assert_eq!(b.add_fix(&["--needs", "x"]).ok()["workflow"]["needs"], json!(["x"]));
+        assert_eq!(
+            b.add_fix(&["--needs", "x"]).ok()["workflow"]["needs"],
+            json!(["x"])
+        );
         assert_eq!(b.needs_of("fix"), ["x"]);
     }
     {
@@ -5457,7 +5764,9 @@ fn pr_add_on_a_plan_in_dispatch_with_no_needs_has_no_needs() {
     // Another repo: the fixture's own holds `cpd/pay` for its unmerged PR.
     let other = f.fx.keyed_repo("other").canonicalize().unwrap();
     f.side(&other);
-    let out = f.add("fix", &other, &["--no-needs", "--base", "pay/side"]).ok();
+    let out = f
+        .add("fix", &other, &["--no-needs", "--base", "pay/side"])
+        .ok();
     assert_eq!(out["workflow"]["needs"], json!([]));
     assert!(f.needs_of("fix").is_empty());
 }
@@ -5571,7 +5880,16 @@ fn red_tests_answer(call: &Call) -> Reply {
 impl Poll {
     /// The Lead worktree path of PR `key` of Plan `pay`.
     fn lead_worktree_of(&self, key: &str) -> PathBuf {
-        let path: String = self.store().read(|c| Ok(c.query_row("SELECT lead_worktree FROM workflows WHERE plan = 'pay' AND key = ?1", [key], |r| r.get(0))?)).unwrap();
+        let path: String = self
+            .store()
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT lead_worktree FROM workflows WHERE plan = 'pay' AND key = ?1",
+                    [key],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
         PathBuf::from(path)
     }
 
@@ -5685,9 +6003,19 @@ fn a_stacked_red_test_job_lists_its_test_as_found_once_the_base_fix_merges_to_ma
     let out = fx.poll();
 
     // The base follow learns the repoint, and the poll queues exactly one update Job, `reason` `base-merged`.
-    assert_eq!(out["base_changed"], json!([{"plan": "pay", "pr": "web", "from": fx.branch, "to": "main"}]));
-    assert_eq!(fx.update_jobs(), [("up-web".to_owned(), "queued".to_owned())]);
-    let added: Vec<_> = fx.events("job-added").into_iter().filter(|(_, data)| data["workflow"] == json!("web")).collect();
+    assert_eq!(
+        out["base_changed"],
+        json!([{"plan": "pay", "pr": "web", "from": fx.branch, "to": "main"}])
+    );
+    assert_eq!(
+        fx.update_jobs(),
+        [("up-web".to_owned(), "queued".to_owned())]
+    );
+    let added: Vec<_> = fx
+        .events("job-added")
+        .into_iter()
+        .filter(|(_, data)| data["workflow"] == json!("web"))
+        .collect();
     assert_eq!(added.len(), 1, "{added:?}");
     assert_eq!(
         (
@@ -5697,7 +6025,11 @@ fn a_stacked_red_test_job_lists_its_test_as_found_once_the_base_fix_merges_to_ma
         ),
         (&json!("update"), &json!("poll"), &json!("base-merged"))
     );
-    assert_eq!(fx.workflow_status("web"), "open", "the repoint changes no status");
+    assert_eq!(
+        fx.workflow_status("web"),
+        "open",
+        "the repoint changes no status"
+    );
 
     // Running that Job: its Worker merges `origin/main` into the Lead Branch even though the two do not conflict.
     fx.git(&web, &["fetch", "-q", "origin", "main"]);

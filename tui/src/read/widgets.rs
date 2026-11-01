@@ -10,8 +10,8 @@ use serde_json::Value;
 use cpd_core::error::CpdError;
 use cpd_core::events::{Event, highest_id};
 use cpd_core::host::spawn::Pid;
-use cpd_core::inbox::model::{self, Item};
 use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, WorkflowKey};
+use cpd_core::inbox::model::{self, Item};
 use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 
@@ -178,12 +178,19 @@ fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
     plan_heads(conn, None)?
         .into_iter()
         .map(|head| {
-            let (label, lead_place) = labels
-                .get(head.id.as_str())
-                .cloned()
-                .ok_or_else(|| bad_row(format!("Plan {} has no Lead Session {}", head.id, head.lead_session)))?;
+            let (label, lead_place) = labels.get(head.id.as_str()).cloned().ok_or_else(|| {
+                bad_row(format!(
+                    "Plan {} has no Lead Session {}",
+                    head.id, head.lead_session
+                ))
+            })?;
             let workflows = pulls.remove(head.id.as_str()).unwrap_or_default();
-            Ok(PlanCard { label, lead_place, workflows, head })
+            Ok(PlanCard {
+                label,
+                lead_place,
+                workflows,
+                head,
+            })
         })
         .collect()
 }
@@ -227,9 +234,18 @@ fn pulls(conn: &Connection) -> Result<BTreeMap<String, Vec<WorkflowRow>>, CpdErr
             "changes_requested" => ReviewDecision::ChangesRequested,
             _ => return Err(bad_row(format!("{what} has review_decision {decision:?}"))),
         };
-        let polled = PolledPr { title, decision, checks: Checks::parse(&what, &checks)? };
+        let polled = PolledPr {
+            title,
+            decision,
+            checks: Checks::parse(&what, &checks)?,
+        };
         let key = id("Workflow key", &key, WorkflowKey::parse)?;
-        out.entry(plan).or_default().push(WorkflowRow { key, number, state, polled: Some(polled) });
+        out.entry(plan).or_default().push(WorkflowRow {
+            key,
+            number,
+            state,
+            polled: Some(polled),
+        });
     }
     Ok(out)
 }

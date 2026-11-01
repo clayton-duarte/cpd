@@ -400,7 +400,11 @@ pub struct Wanted {
 }
 
 /// The resources Job `key` of `plan` lists in its Spec, with its Workflow's repo; `None` when it lists none.
-pub fn wanted(conn: &rusqlite::Connection, plan: &PlanId, key: &str) -> Result<Option<Wanted>, CpdError> {
+pub fn wanted(
+    conn: &rusqlite::Connection,
+    plan: &PlanId,
+    key: &str,
+) -> Result<Option<Wanted>, CpdError> {
     use rusqlite::OptionalExtension;
     // An explore Job has no Workflow (the join finds no row): it lists no resources.
     let found: Option<(String, Option<String>, Option<String>, Option<String>)> = conn.query_row(
@@ -409,15 +413,27 @@ pub fn wanted(conn: &rusqlite::Connection, plan: &PlanId, key: &str) -> Result<O
         [plan.as_str(), key],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     ).optional()?;
-    let Some((workflow, listed, owner, repo)) = found else { return Ok(None) };
-    let Some(listed) = listed else { return Ok(None) };
-    let mut names: Vec<String> =
-        serde_json::from_str(&listed).map_err(|_| CpdError::bad_row(format!("Job {key} of Plan {plan} has resources {listed:?}")))?;
+    let Some((workflow, listed, owner, repo)) = found else {
+        return Ok(None);
+    };
+    let Some(listed) = listed else {
+        return Ok(None);
+    };
+    let mut names: Vec<String> = serde_json::from_str(&listed).map_err(|_| {
+        CpdError::bad_row(format!("Job {key} of Plan {plan} has resources {listed:?}"))
+    })?;
     names.sort();
     let (Some(owner), Some(repo)) = (owner, repo) else {
-        return Err(CpdError::bad_row(format!("Job {key} of Plan {plan} lists resources but its Workflow {workflow} has no repo")));
+        return Err(CpdError::bad_row(format!(
+            "Job {key} of Plan {plan} lists resources but its Workflow {workflow} has no repo"
+        )));
     };
-    Ok(Some(Wanted { workflow, owner: OwnerLogin::parse(&owner)?, repo: RepoName::parse(&repo)?, names }))
+    Ok(Some(Wanted {
+        workflow,
+        owner: OwnerLogin::parse(&owner)?,
+        repo: RepoName::parse(&repo)?,
+        names,
+    }))
 }
 
 /// The holders of the slots of `pool`, in slot order: `None` for a free slot (whatever its file still holds), else its record.

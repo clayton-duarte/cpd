@@ -99,8 +99,14 @@ fn workflows(conn: &Connection) -> Result<BTreeMap<String, Vec<Value>>, CpdError
 }
 
 fn workflow_row(r: &Row) -> rusqlite::Result<(String, Value)> {
-    let workflow = match (r.get::<_, Option<i64>>(4)?, r.get::<_, Option<String>>(5)?, r.get::<_, Option<String>>(6)?) {
-        (Some(number), Some(url), Some(opened_at)) => json!({"number": number, "url": url, "opened_at": opened_at}),
+    let workflow = match (
+        r.get::<_, Option<i64>>(4)?,
+        r.get::<_, Option<String>>(5)?,
+        r.get::<_, Option<String>>(6)?,
+    ) {
+        (Some(number), Some(url), Some(opened_at)) => {
+            json!({"number": number, "url": url, "opened_at": opened_at})
+        }
         _ => Value::Null,
     };
     let pull_request = match r.get::<_, Option<i64>>(7)? {

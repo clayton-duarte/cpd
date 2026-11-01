@@ -32,7 +32,9 @@ fn stacked_fx(base_status: &str, branch: bool) -> (Fx, PathBuf) {
     if base_status != "waiting" {
         sql += "UPDATE workflows SET status = 'dispatch', lead_worktree = '/wt', started_at = 't' WHERE plan = 'pl' AND key = 'repo';";
     }
-    sql += &format!("UPDATE workflows SET status = '{base_status}'{set} WHERE plan = 'pl' AND key = 'repo';");
+    sql += &format!(
+        "UPDATE workflows SET status = '{base_status}'{set} WHERE plan = 'pl' AND key = 'repo';"
+    );
     sql += "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
             SELECT 'pl', 'web', repo, 'cpd/pl', 'waiting', 'pl/web', cpd_txn(), 't' FROM workflows WHERE plan = 'pl' AND key = 'repo';";
     fixture(&fx.env, &sql);
@@ -43,7 +45,21 @@ fn add_into(fx: &Fx, pr: &str, key: &str, touches: &[&str]) -> crate::common::Ru
     let mut spec = spec_json();
     spec["touches"] = json!(touches);
     let spec = write_spec(&fx.env, &format!("{key}.json"), &spec.to_string());
-    fx.cpd(&["job", "add", key, "--title", &format!("Title of {key}"), "--tier", "S2", "--spec", &spec, "--workflow", pr, "--plan", "pl"])
+    fx.cpd(&[
+        "job",
+        "add",
+        key,
+        "--title",
+        &format!("Title of {key}"),
+        "--tier",
+        "S2",
+        "--spec",
+        &spec,
+        "--workflow",
+        pr,
+        "--plan",
+        "pl",
+    ])
 }
 
 #[test]
@@ -69,7 +85,19 @@ fn job_add_skips_the_touches_check_for_a_pr_stacked_on_a_base_pr_that_has_not_op
 #[test]
 fn job_edit_skips_the_touches_check_for_a_pr_stacked_on_a_base_pr_that_has_not_opened() {
     let (fx, _) = stacked_fx("waiting", false);
-    fx.cpd(&["job", "add", "k", "--draft", "--title", "Title of k", "--workflow", "web", "--plan", "pl"]).ok();
+    fx.cpd(&[
+        "job",
+        "add",
+        "k",
+        "--draft",
+        "--title",
+        "Title of k",
+        "--workflow",
+        "web",
+        "--plan",
+        "pl",
+    ])
+    .ok();
     let mut spec = spec_json();
     spec["touches"] = json!(["nope/x.rs"]);
     let spec = write_spec(&fx.env, "edit.json", &spec.to_string());

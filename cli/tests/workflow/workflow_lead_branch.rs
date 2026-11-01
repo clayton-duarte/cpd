@@ -65,7 +65,20 @@ fn lb_in(phase: &str) -> Lb {
 impl Lb {
     /// `pr add <key> --repo <repo> --title T --shape config --no-needs --plan pay-1`.
     fn add(&self, key: &str, repo: &PathBuf) -> Run {
-        self.cpd(&["workflow", "add", key, "--repo", repo.to_str().unwrap(), "--title", "T", "--shape", "config", "--no-needs", "--plan", "pay-1"])
+        self.cpd(&[
+            "workflow",
+            "add",
+            key,
+            "--repo",
+            repo.to_str().unwrap(),
+            "--title",
+            "T",
+            "--shape",
+            "config",
+            "--no-needs",
+            "--plan",
+            "pay-1",
+        ])
     }
 
     fn start(&self, key: &str) -> Run {
@@ -93,7 +106,9 @@ impl Lb {
     }
 
     fn lead_branch(&self, key: &str) -> String {
-        self.env.query(&format!("SELECT lead_branch FROM workflows WHERE key = '{key}'"))
+        self.env.query(&format!(
+            "SELECT lead_branch FROM workflows WHERE key = '{key}'"
+        ))
     }
 }
 
@@ -160,7 +175,24 @@ fn workflow_add_leaves_a_merged_legacy_lead_branch_alone() {
            VALUES ('pay-1', 'base', '{}', 'main', 'dispatch', 'cpd/pay-1/base', '/w/base', cpd_txn(), 't', 't');",
         fx.pay.display()
     ));
-    let out = fx.cpd(&["workflow", "add", "web", "--repo", fx.pay.to_str().unwrap(), "--title", "T", "--shape", "config", "--no-needs", "--base", "pay-1/base", "--plan", "pay-1"]).ok();
+    let out = fx
+        .cpd(&[
+            "workflow",
+            "add",
+            "web",
+            "--repo",
+            fx.pay.to_str().unwrap(),
+            "--title",
+            "T",
+            "--shape",
+            "config",
+            "--no-needs",
+            "--base",
+            "pay-1/base",
+            "--plan",
+            "pay-1",
+        ])
+        .ok();
 
     assert_eq!(out["workflow"]["lead_branch"], "pay-1/web");
     assert_eq!(fx.lead_branch("old"), "cpd/pay-1");
@@ -202,8 +234,14 @@ fn workflow_start_creates_the_plan_slash_key_lead_branch_and_worktree() {
     let out = fx.start("api").ok();
 
     let worktree = fx.pay.parent().unwrap().join("pay.pay-1.api");
-    assert_eq!(out["workflow"]["lead_worktree"], worktree.display().to_string());
-    assert_eq!(fx.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "pay-1/api");
+    assert_eq!(
+        out["workflow"]["lead_worktree"],
+        worktree.display().to_string()
+    );
+    assert_eq!(
+        fx.git(&worktree, &["symbolic-ref", "--short", "HEAD"]),
+        "pay-1/api"
+    );
 }
 
 #[test]
@@ -250,7 +288,18 @@ fn workflow_edit_repo_refuses_when_the_plan_branch_exists() {
     let fx = lb();
     fx.add("api", &fx.pay).ok();
     fx.git(&fx.web, &["branch", "pay-1"]);
-    let error = fx.refuse(&fx.cpd(&["workflow", "edit", "api", "--repo", fx.web.to_str().unwrap(), "--plan", "pay-1"]), "branch_exists");
+    let error = fx.refuse(
+        &fx.cpd(&[
+            "workflow",
+            "edit",
+            "api",
+            "--repo",
+            fx.web.to_str().unwrap(),
+            "--plan",
+            "pay-1",
+        ]),
+        "branch_exists",
+    );
     assert_eq!(error["details"]["branch"], "pay-1");
 }
 
@@ -296,7 +345,17 @@ fn adopt_fx(head: &str) -> Adopt {
 
 impl Adopt {
     fn add(&self, key: &str, extra: &[&str]) -> Run {
-        let mut args = vec!["workflow", "add", key, "--repo", self.pay.to_str().unwrap(), "--title", "T", "--shape", "config"];
+        let mut args = vec![
+            "workflow",
+            "add",
+            key,
+            "--repo",
+            self.pay.to_str().unwrap(),
+            "--title",
+            "T",
+            "--shape",
+            "config",
+        ];
         args.extend(extra);
         args.extend(["--plan", "pay-1"]);
         self.env.cpd(&args)
@@ -308,7 +367,10 @@ fn workflow_adopt_refuses_a_head_branch_that_is_a_stored_lead_branch() {
     let fx = adopt_fx("pay-1/api");
     fx.add("api", &[]).ok();
     let error = refused(&fx.add("web", &["--adopt", "7"]), "adopt_cpd_branch", 3);
-    assert_eq!(error["details"], json!({"number": 7, "head_ref": "pay-1/api"}));
+    assert_eq!(
+        error["details"],
+        json!({"number": 7, "head_ref": "pay-1/api"})
+    );
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM workflows"), 1);
 }
 

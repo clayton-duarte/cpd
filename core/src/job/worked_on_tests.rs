@@ -66,7 +66,11 @@ impl Fixture {
 
     /// A Job in its own transaction (so `created_txn` grows with each call).
     fn job(&mut self, plan: &str, workflow: &str, key: &str, status: &str) {
-        let cause = if status == "failed" { "'crashed'" } else { "NULL" };
+        let cause = if status == "failed" {
+            "'crashed'"
+        } else {
+            "NULL"
+        };
         let sha = if status == "merged" { "'abc'" } else { "NULL" };
         let reason = if status == "cancelled" { "'r'" } else { "NULL" };
         let reason_at = if status == "cancelled" {
@@ -271,7 +275,11 @@ fn a_failed_job_is_not_stuck_while_a_fix_job_of_its_pr_is_queued_or_running() {
     f.failed("pay", "p1", "a");
     assert_eq!(f.stuck().len(), 1, "no fix yet");
     f.job("pay", "p2", "other", "queued");
-    assert_eq!(f.stuck().len(), 1, "a Job of another Workflow does not help");
+    assert_eq!(
+        f.stuck().len(),
+        1,
+        "a Job of another Workflow does not help"
+    );
     f.job("pay", "p1", "fix", "queued");
     assert_eq!(f.stuck(), [], "a queued fix");
     f.set("pay", "fix", "running");

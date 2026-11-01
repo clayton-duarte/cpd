@@ -9,11 +9,11 @@ use std::path::PathBuf;
 
 use super::display::Display;
 use super::fingerprint::{load_workflows, plan_fingerprint};
-use super::prs::WorkflowRow;
 use super::jobs::{self, Job};
 use super::lint::{self, Severity};
 use super::outline::Outline;
 use super::overlap::{self, Overlap};
+use super::prs::WorkflowRow;
 use super::row::{self, Phase, PlanRow};
 use super::{DecideArgs, Env, RenderArgs, ReviewArgs, read_text_file, render, summary, write_file};
 use crate::error::{CpdError, ErrorCode};
@@ -154,7 +154,9 @@ fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
 /// Branch names its Plan, so it names one Workflow (contract §2.2); the same repo is checked when a base is set, not here.
 fn base_workflows(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, String>, CpdError> {
     let mut stmt = conn.prepare("SELECT p.key, q.plan || '/' || q.key FROM workflows p JOIN workflows q ON q.plan = p.plan AND q.lead_branch = p.base WHERE p.plan = ?1")?;
-    let rows = stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    let rows = stmt.query_map([plan.as_str()], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 

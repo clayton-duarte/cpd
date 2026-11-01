@@ -30,35 +30,35 @@ mod poll_tests;
 
 pub mod auto_merge;
 pub mod closed;
-pub mod deploys;
 pub mod comments;
-pub mod jira_sync;
+pub mod deploys;
 mod feedback;
 mod gh;
+pub mod jira_sync;
 pub(crate) use gh::head_ref_oid;
 pub(crate) use gh::{Adoptable, adoptable, describe_pr, retitle_pr};
 mod merge;
 pub mod merge_method;
-pub mod review;
 pub(crate) mod open;
 pub(crate) mod poll;
-pub mod posts;
-pub mod reactions;
 mod post;
 pub(crate) mod postable;
+pub mod posts;
 pub mod pulls;
 mod push;
-mod rerun;
-mod reply;
+pub mod reactions;
 pub(crate) mod rebase;
+mod reply;
+mod rerun;
+pub mod review;
 #[cfg(test)]
 pub(crate) use rebase::remote_contains_with;
 mod status;
 mod view;
 
-pub use crate::workflow::{WorkflowCommand, run_workflow};
-pub use crate::workflow::start;
 pub use crate::workflow::cancel::{archived_with_drafts, cancel_archived_drafts};
+pub use crate::workflow::start;
+pub use crate::workflow::{WorkflowCommand, run_workflow};
 pub(crate) use crate::workflow::{cancel, row};
 
 use std::path::PathBuf;
@@ -70,11 +70,11 @@ use crate::error::{CpdError, ErrorCode};
 use crate::git::hooks::{Detached, Log as HookLog};
 use crate::git::{self, HookOutcome, Operation, Setup};
 use crate::home::{CpdHome, Hook};
-use crate::ids::{ContextId, OwnerLogin, PlanId, WorkflowKey, RepoName};
-use crate::policy::{Gate, Policy, PolicyKey, owner_unset, resolve};
+use crate::ids::{ContextId, OwnerLogin, PlanId, RepoName, WorkflowKey};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::WorkflowRow;
+use crate::policy::{Gate, Policy, PolicyKey, owner_unset, resolve};
 use row::PlanWorkflows;
 
 pub use gh::close_pr;
@@ -84,7 +84,6 @@ pub use open::{
 };
 #[cfg(test)]
 pub(crate) use rebase::{in_progress_with, rebase_onto_with, unresolved_with};
-
 
 /// The `pr` group (commands.md §9): what a command does to a Workflow's pull request, through `gh`.
 #[derive(clap::Subcommand, Debug)]
@@ -135,7 +134,6 @@ pub struct PollArgs {
     plan: PlanArg,
 }
 
-
 /// Runs `command` of the `pr` group. Only `view`, `merge` and `poll` read `ports` yet; the others open their `Env` on the real ports until their Jobs convert them.
 pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdError> {
     match command {
@@ -166,15 +164,27 @@ fn workflow_policy(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<Po
 /// [`pr_policy`] with the two kinds of failure apart: the outer error is the store's (it cannot be read, or holds
 /// a value that does not parse), the inner one the resolve's (`owner_unset`, `owner_unconfirmed`, `policy_invalid`),
 /// which a consumer of many rows (the poll) reports for its row and goes on.
-fn workflow_policy_resolved(env: &mut Env, plan: &PlanId, key: &WorkflowKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
+fn workflow_policy_resolved(
+    env: &mut Env,
+    plan: &PlanId,
+    key: &WorkflowKey,
+    resolve: ResolveFn,
+) -> Result<Result<Policy, CpdError>, CpdError> {
     let home = env.home.clone();
-    env.store.read(|conn| workflow_policy_in(conn, &home, plan, key, resolve))
+    env.store
+        .read(|conn| workflow_policy_in(conn, &home, plan, key, resolve))
 }
 
 type ResolveFn = fn(&CpdHome, &PolicyKey) -> Result<crate::policy::Resolved, CpdError>;
 
 /// [`pr_policy_resolved`] on a connection, for a consumer that has no [`Env`] (an Attempt's, the engine's).
-fn workflow_policy_in(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &WorkflowKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
+fn workflow_policy_in(
+    conn: &rusqlite::Connection,
+    home: &CpdHome,
+    plan: &PlanId,
+    key: &WorkflowKey,
+    resolve: ResolveFn,
+) -> Result<Result<Policy, CpdError>, CpdError> {
     let (context, owner, name): (String, Option<String>, Option<String>) = conn.query_row(
         "SELECT c.id, c.owner, r.name FROM workflows r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context
           WHERE r.plan = ?1 AND r.key = ?2",
@@ -194,14 +204,29 @@ fn workflow_policy_in(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId
 
 /// The policy of Workflow `key` of `plan`, from a connection: what an Attempt-level consumer (the quick check, the
 /// Worker Spec) reads, through its Job's Workflow.
-pub fn policy_of_workflow(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &WorkflowKey) -> Result<Policy, CpdError> {
+pub fn policy_of_workflow(
+    conn: &rusqlite::Connection,
+    home: &CpdHome,
+    plan: &PlanId,
+    key: &WorkflowKey,
+) -> Result<Policy, CpdError> {
     workflow_policy_in(conn, home, plan, key, resolve)?
 }
 
 /// [`policy_of_pr`] of the Workflow that holds Job `job` of `plan`.
-pub fn policy_of_job(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, job: &str) -> Result<Policy, CpdError> {
-    let workflow: String = conn.query_row("SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job], |r| r.get(0))?;
-    let key = WorkflowKey::parse(&workflow).map_err(|_| CpdError::bad_row(format!("Job {job} has the Workflow key {workflow:?}")))?;
+pub fn policy_of_job(
+    conn: &rusqlite::Connection,
+    home: &CpdHome,
+    plan: &PlanId,
+    job: &str,
+) -> Result<Policy, CpdError> {
+    let workflow: String = conn.query_row(
+        "SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2",
+        [plan.as_str(), job],
+        |r| r.get(0),
+    )?;
+    let key = WorkflowKey::parse(&workflow)
+        .map_err(|_| CpdError::bad_row(format!("Job {job} has the Workflow key {workflow:?}")))?;
     policy_of_workflow(conn, home, plan, &key)
 }
 
@@ -214,14 +239,22 @@ fn illegal_phase(plan: &PlanWorkflows, command: &str, needs: &str) -> CpdError {
 /// and `pre-merge` of a repair's Gate. The contract's layout (§1.4) names these
 /// files; `CpdHome` has no method for them.
 fn workflow_log(home: &CpdHome, plan: &PlanId, key: &WorkflowKey, hook: Hook) -> PathBuf {
-    home.plan_dir(plan).join("logs").join(format!("pr-{key}.{}.log", hook.as_str()))
+    home.plan_dir(plan)
+        .join("logs")
+        .join(format!("pr-{key}.{}.log", hook.as_str()))
 }
 
 pub(crate) fn wrong_phase(plan: &PlanId, phase: Phase, command: &str, needs: &str) -> CpdError {
-    CpdError::new(ErrorCode::IllegalPhase, format!("Plan {plan} is in phase {}: {command} needs phase {needs}.", phase.as_str()))
-        .with("plan", plan.as_str())
-        .with("phase", phase.as_str())
-        .with("needs", needs)
+    CpdError::new(
+        ErrorCode::IllegalPhase,
+        format!(
+            "Plan {plan} is in phase {}: {command} needs phase {needs}.",
+            phase.as_str()
+        ),
+    )
+    .with("plan", plan.as_str())
+    .with("phase", phase.as_str())
+    .with("needs", needs)
 }
 
 /// `pr_locked` (exit 3): the Plan is past the phases where its Workflows change (§3.8).
@@ -250,11 +283,18 @@ pub(crate) fn plan_phase(conn: &rusqlite::Connection, plan: &PlanId) -> Result<P
 }
 
 /// The Workflow `key` among `prs`, else `pr_not_found` (exit 4).
-pub(crate) fn find_workflow<'a>(workflows: &'a [WorkflowRow], plan: &PlanId, key: &WorkflowKey) -> Result<&'a WorkflowRow, CpdError> {
+pub(crate) fn find_workflow<'a>(
+    workflows: &'a [WorkflowRow],
+    plan: &PlanId,
+    key: &WorkflowKey,
+) -> Result<&'a WorkflowRow, CpdError> {
     workflows.iter().find(|p| p.key == *key).ok_or_else(|| {
-        CpdError::new(ErrorCode::WorkflowNotFound, format!("No Workflow {key} in Plan {plan}."))
-            .with("plan", plan.as_str())
-            .with("pr", key.as_str())
+        CpdError::new(
+            ErrorCode::WorkflowNotFound,
+            format!("No Workflow {key} in Plan {plan}."),
+        )
+        .with("plan", plan.as_str())
+        .with("pr", key.as_str())
     })
 }
 
@@ -282,20 +322,39 @@ struct Refused {
 }
 
 /// How the Gate runs for Workflow `pr` (contract §7.3, §7.6): the two hook pipelines and their logs.
-fn gate_hooks<'a>(env: &Env, policy: &'a Policy, plan: &PlanId, workflow: &'a WorkflowRow) -> GateHooks<'a> {
+fn gate_hooks<'a>(
+    env: &Env,
+    policy: &'a Policy,
+    plan: &PlanId,
+    workflow: &'a WorkflowRow,
+) -> GateHooks<'a> {
     let minutes = |m: u32| Duration::from_secs(u64::from(m) * 60);
     GateHooks {
         lead_branch: &workflow.lead_branch,
         base: &workflow.base,
-        pre_start: Setup { timeout: minutes(env.config.timeouts.setup_minutes), log: workflow_log(&env.home, plan, &workflow.key, Hook::PreStart) },
-        pre_merge: Setup { timeout: minutes(env.config.timeouts.gate_minutes), log: workflow_log(&env.home, plan, &workflow.key, Hook::PreMerge) },
+        pre_start: Setup {
+            timeout: minutes(env.config.timeouts.setup_minutes),
+            log: workflow_log(&env.home, plan, &workflow.key, Hook::PreStart),
+        },
+        pre_merge: Setup {
+            timeout: minutes(env.config.timeouts.gate_minutes),
+            log: workflow_log(&env.home, plan, &workflow.key, Hook::PreMerge),
+        },
         pre_start_commands: &policy.hooks.pre_start,
         pre_merge_commands: &policy.hooks.pre_merge,
     }
 }
 
 /// [`gate_in`] with the Lead's usual next step, in `worktree` at `sha`.
-fn gate(env: &Env, policy: &Policy, plan: &PlanId, workflow: &WorkflowRow, worktree: &std::path::Path, sha: &str, again: &str) -> Result<(), CpdError> {
+fn gate(
+    env: &Env,
+    policy: &Policy,
+    plan: &PlanId,
+    workflow: &WorkflowRow,
+    worktree: &std::path::Path,
+    sha: &str,
+    again: &str,
+) -> Result<(), CpdError> {
     gate_in(env, policy, plan, workflow, worktree, sha, false, again)
 }
 
@@ -316,8 +375,12 @@ fn gate_in(
         return Ok(());
     }
     let hooks = gate_hooks(env, policy, plan, workflow);
-    let then = format!("Append fix Jobs (cpd job add), then run cpd {again} again once they are Merged.");
-    let detached = Detached { branch: hooks.lead_branch, env: &[] };
+    let then =
+        format!("Append fix Jobs (cpd job add), then run cpd {again} again once they are Merged.");
+    let detached = Detached {
+        branch: hooks.lead_branch,
+        env: &[],
+    };
     let operation = Operation { branch: hooks.base };
     let mut steps = Vec::new();
     if pre_start {
@@ -336,7 +399,18 @@ fn gate_in(
             HookLog::Truncate,
         )?;
         if result.outcome != HookOutcome::Passed {
-            return Err(refusal(plan, workflow, sha, Refused { hook, outcome: result.outcome, tail: result.tail, log: setup.log.clone() }, &then));
+            return Err(refusal(
+                plan,
+                workflow,
+                sha,
+                Refused {
+                    hook,
+                    outcome: result.outcome,
+                    tail: result.tail,
+                    log: setup.log.clone(),
+                },
+                &then,
+            ));
         }
     }
     Ok(())
@@ -345,7 +419,11 @@ fn gate_in(
 /// `lead_worktree_dirty` (exit 3): the Lead worktree has tracked local changes, which a Gate
 /// run there must not test (hs-d679). Untracked files are hidden for the Gate's run
 /// ([`hide_untracked`]) and put back after it, so they are not refused.
-fn require_clean_lead(lead: &std::path::Path, plan: &PlanId, workflow: &WorkflowRow) -> Result<(), CpdError> {
+fn require_clean_lead(
+    lead: &std::path::Path,
+    plan: &PlanId,
+    workflow: &WorkflowRow,
+) -> Result<(), CpdError> {
     let dirty = git::run::ok(lead, &["status", "--porcelain", "--untracked-files=no"])?;
     if dirty.trim().is_empty() {
         return Ok(());
@@ -469,7 +547,13 @@ impl Drop for Hidden {
 /// is `gate_failed` (exit 3); a `pre-merge` that could not be judged, or a
 /// `pre-start` that did not pass in any way, is `gate_error` (exit 1). Both carry
 /// the hook's last 60 lines in `details.tail` and its log in `details.log`. `then` follows a failed `pre-merge` in its message.
-fn refusal(plan: &PlanId, workflow: &WorkflowRow, sha: &str, refused: Refused, then: &str) -> CpdError {
+fn refusal(
+    plan: &PlanId,
+    workflow: &WorkflowRow,
+    sha: &str,
+    refused: Refused,
+    then: &str,
+) -> CpdError {
     let tail = refused.tail.unwrap_or_default();
     let log = refused.log.display().to_string();
     let hook = refused.hook.as_str();
@@ -495,7 +579,13 @@ fn refusal(plan: &PlanId, workflow: &WorkflowRow, sha: &str, refused: Refused, t
             }
         }
     };
-    error.with("plan", plan.as_str()).with("pr", workflow.key.as_str()).with("hook", hook).with("sha", sha).with("tail", tail).with("log", log)
+    error
+        .with("plan", plan.as_str())
+        .with("pr", workflow.key.as_str())
+        .with("hook", hook)
+        .with("sha", sha)
+        .with("tail", tail)
+        .with("log", log)
 }
 
 /// The first 12 characters of a SHA, for messages.

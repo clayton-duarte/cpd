@@ -30,7 +30,11 @@ fn fixture(phase: &str) -> (Fx, PathBuf) {
     let fx = Fx::with_ports();
     let pay = keyed_repo(&fx, "pay");
     fx.env.write_config("version = 1\nmachine = \"t\"\n");
-    let locked = if matches!(phase, "grounding" | "plan") { "NULL" } else { "'2000-01-01T00:00:00.000Z'" };
+    let locked = if matches!(phase, "grounding" | "plan") {
+        "NULL"
+    } else {
+        "'2000-01-01T00:00:00.000Z'"
+    };
     fx.env.sql(&format!(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -54,35 +58,92 @@ fn new_commands_work() {
     // The whole group exists: each subcommand parses and its help is a successful JSON value.
     for sub in SUBCOMMANDS {
         let helped = fx.cpd(&["workflow", sub, "--help"]).ok();
-        assert!(helped["help"].as_str().is_some_and(|h| h.contains(sub)), "workflow {sub} --help: {helped}");
+        assert!(
+            helped["help"].as_str().is_some_and(|h| h.contains(sub)),
+            "workflow {sub} --help: {helped}"
+        );
     }
 
     // `workflow add` creates a `waiting` Workflow with its own title, repo and base (commands.md §9.4).
-    let added = fx.cpd(&["workflow", "add", "api", "--repo", repo, "--title", "Add the api", "--shape", "config", "--plan", "pay-1"]).ok();
+    let added = fx
+        .cpd(&[
+            "workflow",
+            "add",
+            "api",
+            "--repo",
+            repo,
+            "--title",
+            "Add the api",
+            "--shape",
+            "config",
+            "--plan",
+            "pay-1",
+        ])
+        .ok();
     assert_eq!(
-        (&added["workflow"]["key"], &added["workflow"]["status"], &added["workflow"]["title"], &added["workflow"]["base"]),
-        (&json!("api"), &json!("waiting"), &json!("Add the api"), &json!("main"))
+        (
+            &added["workflow"]["key"],
+            &added["workflow"]["status"],
+            &added["workflow"]["title"],
+            &added["workflow"]["base"]
+        ),
+        (
+            &json!("api"),
+            &json!("waiting"),
+            &json!("Add the api"),
+            &json!("main")
+        )
     );
 
     // `workflow edit` changes a field and reports it (commands.md §9.5).
-    let edited = fx.cpd(&["workflow", "edit", "api", "--title", "Add the api, again", "--plan", "pay-1"]).ok();
-    assert_eq!((&edited["workflow"]["key"], &edited["fields"]), (&json!("api"), &json!(["title"])));
+    let edited = fx
+        .cpd(&[
+            "workflow",
+            "edit",
+            "api",
+            "--title",
+            "Add the api, again",
+            "--plan",
+            "pay-1",
+        ])
+        .ok();
+    assert_eq!(
+        (&edited["workflow"]["key"], &edited["fields"]),
+        (&json!("api"), &json!(["title"]))
+    );
 
     // `workflow describe` stores the description (commands.md §9.5a).
     let description = fx.env.root().join("description.md");
     fs::write(&description, "What the api changes.\n").unwrap();
-    let described = fx.cpd(&["workflow", "describe", "api", "--file", description.to_str().unwrap(), "--plan", "pay-1"]).ok();
+    let described = fx
+        .cpd(&[
+            "workflow",
+            "describe",
+            "api",
+            "--file",
+            description.to_str().unwrap(),
+            "--plan",
+            "pay-1",
+        ])
+        .ok();
     assert_eq!(described["workflow"]["key"], json!("api"));
 
     // `plan show` speaks the new object: `workflows`, never `prs` (commands.md §4.3, R34).
     let shown = fx.cpd(&["plan", "show", "--plan", "pay-1"]).ok();
-    assert!(shown.get("prs").is_none(), "plan show has no `prs` key: {shown}");
-    let workflows = shown["workflows"].as_array().unwrap_or_else(|| panic!("plan show reports `workflows`: {shown}"));
+    assert!(
+        shown.get("prs").is_none(),
+        "plan show has no `prs` key: {shown}"
+    );
+    let workflows = shown["workflows"]
+        .as_array()
+        .unwrap_or_else(|| panic!("plan show reports `workflows`: {shown}"));
     assert_eq!(workflows.len(), 1);
     assert_eq!(workflows[0]["key"], json!("api"));
 
     // `workflow cancel` ends it, keeping its key (commands.md §9.6).
-    let cancelled = fx.cpd(&["workflow", "cancel", "api", "--plan", "pay-1"]).ok();
+    let cancelled = fx
+        .cpd(&["workflow", "cancel", "api", "--plan", "pay-1"])
+        .ok();
     assert_eq!(cancelled["workflow"]["status"], json!("cancelled"));
     let shown = fx.cpd(&["plan", "show", "--plan", "pay-1"]).ok();
     assert_eq!(shown["workflows"][0]["status"], json!("cancelled"));
@@ -98,16 +159,85 @@ fn old_forms_are_usage_errors() {
     fs::write(&description, "What the api changes.\n").unwrap();
 
     // The old object verbs are gone: `cpd pr add|edit|describe|cancel|start` exit as a usage error, no alias (pro-d138).
-    common::refused(&fx.cpd(&["pr", "add", "api", "--repo", repo, "--title", "Change api", "--shape", "config", "--plan", "pay-1"]), "usage", 2);
-    common::refused(&fx.cpd(&["pr", "edit", "api", "--title", "Change api", "--plan", "pay-1"]), "usage", 2);
-    common::refused(&fx.cpd(&["pr", "describe", "--pr", "api", "--file", description.to_str().unwrap(), "--plan", "pay-1"]), "usage", 2);
-    common::refused(&fx.cpd(&["pr", "cancel", "api", "--plan", "pay-1"]), "usage", 2);
-    common::refused(&fx.cpd(&["pr", "start", "api", "--plan", "pay-1"]), "usage", 2);
+    common::refused(
+        &fx.cpd(&[
+            "pr",
+            "add",
+            "api",
+            "--repo",
+            repo,
+            "--title",
+            "Change api",
+            "--shape",
+            "config",
+            "--plan",
+            "pay-1",
+        ]),
+        "usage",
+        2,
+    );
+    common::refused(
+        &fx.cpd(&[
+            "pr",
+            "edit",
+            "api",
+            "--title",
+            "Change api",
+            "--plan",
+            "pay-1",
+        ]),
+        "usage",
+        2,
+    );
+    common::refused(
+        &fx.cpd(&[
+            "pr",
+            "describe",
+            "--pr",
+            "api",
+            "--file",
+            description.to_str().unwrap(),
+            "--plan",
+            "pay-1",
+        ]),
+        "usage",
+        2,
+    );
+    common::refused(
+        &fx.cpd(&["pr", "cancel", "api", "--plan", "pay-1"]),
+        "usage",
+        2,
+    );
+    common::refused(
+        &fx.cpd(&["pr", "start", "api", "--plan", "pay-1"]),
+        "usage",
+        2,
+    );
 
     // `--pr <key>` is a usage error on every moved command; the selector is `--workflow <key>` (R34, §1.3).
-    common::refused(&fx.cpd(&["pr", "open", "--pr", "api", "--plan", "pay-1"]), "usage", 2);
-    common::refused(&fx.cpd(&["pr", "rebase", "--pr", "api", "--plan", "pay-1"]), "usage", 2);
-    common::refused(&fx.cpd(&["pr", "push", "--pr", "api", "--plan", "pay-1"]), "usage", 2);
-    common::refused(&fx.cpd(&["pr", "view", "--pr", "api", "--plan", "pay-1"]), "usage", 2);
-    common::refused(&fx.cpd(&["job", "edit", "api-docs", "--pr", "api", "--plan", "pay-1"]), "usage", 2);
+    common::refused(
+        &fx.cpd(&["pr", "open", "--pr", "api", "--plan", "pay-1"]),
+        "usage",
+        2,
+    );
+    common::refused(
+        &fx.cpd(&["pr", "rebase", "--pr", "api", "--plan", "pay-1"]),
+        "usage",
+        2,
+    );
+    common::refused(
+        &fx.cpd(&["pr", "push", "--pr", "api", "--plan", "pay-1"]),
+        "usage",
+        2,
+    );
+    common::refused(
+        &fx.cpd(&["pr", "view", "--pr", "api", "--plan", "pay-1"]),
+        "usage",
+        2,
+    );
+    common::refused(
+        &fx.cpd(&["job", "edit", "api-docs", "--pr", "api", "--plan", "pay-1"]),
+        "usage",
+        2,
+    );
 }

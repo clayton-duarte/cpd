@@ -234,7 +234,10 @@ fn lists_only_active_plans_unmerged_prs_and_their_live_jobs() {
         .collect();
     assert_eq!(statuses, ["merged", "queued", "running", "failed", "draft"]);
     let ui = &live["workflows"][1];
-    assert_eq!(ui["pull_request"], json!({"number": 7, "url": "https://github.com/acme/api/pull/7", "state": "open"}));
+    assert_eq!(
+        ui["pull_request"],
+        json!({"number": 7, "url": "https://github.com/acme/api/pull/7", "state": "open"})
+    );
     assert_eq!(keys(&ui["jobs"]), ["g-ui"]);
 }
 

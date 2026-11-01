@@ -15,7 +15,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::error::{CpdError, ErrorCode};
-use crate::ids::{PlanId, WorkflowKey, SessionId};
+use crate::ids::{PlanId, SessionId, WorkflowKey};
 use crate::plan::WorkflowRow;
 
 /// `--plan <id>`, else `CPD_PLAN`, else `plan_required` (exit 2).
@@ -51,15 +51,25 @@ impl WorkflowArg {
     /// A key that is not a Workflow of the Plan is `workflow_not_found` (exit 4); without
     /// `--workflow`, zero or two or more Workflows that are not `cancelled` is
     /// `workflow_required` (exit 2).
-    pub fn select<'a>(&self, plan: &PlanId, workflows: &'a [WorkflowRow]) -> Result<&'a WorkflowRow, CpdError> {
+    pub fn select<'a>(
+        &self,
+        plan: &PlanId,
+        workflows: &'a [WorkflowRow],
+    ) -> Result<&'a WorkflowRow, CpdError> {
         if let Some(key) = &self.workflow {
             return workflows.iter().find(|p| p.key == *key).ok_or_else(|| {
-                CpdError::new(ErrorCode::WorkflowNotFound, format!("No Workflow {key} in Plan {plan}."))
-                    .with("plan", plan.as_str())
-                    .with("pr", key.as_str())
+                CpdError::new(
+                    ErrorCode::WorkflowNotFound,
+                    format!("No Workflow {key} in Plan {plan}."),
+                )
+                .with("plan", plan.as_str())
+                .with("pr", key.as_str())
             });
         }
-        let live: Vec<&WorkflowRow> = workflows.iter().filter(|p| p.status != "cancelled").collect();
+        let live: Vec<&WorkflowRow> = workflows
+            .iter()
+            .filter(|p| p.status != "cancelled")
+            .collect();
         match live.as_slice() {
             [only] => Ok(only),
             [] => Err(CpdError::new(
@@ -323,8 +333,20 @@ mod tests {
         for ok in ["a", "é".repeat(72).as_str(), "a b"] {
             assert_eq!(ok.parse::<WorkflowTitle>().unwrap().as_str(), ok);
         }
-        for bad in ["", "a".repeat(73).as_str(), "a\nb", "a\r\nb", "a\tb", "a\0b", "a\u{7f}b"] {
-            assert_eq!(bad.parse::<WorkflowTitle>().unwrap_err().code(), ErrorCode::Usage, "{bad:?}");
+        for bad in [
+            "",
+            "a".repeat(73).as_str(),
+            "a\nb",
+            "a\r\nb",
+            "a\tb",
+            "a\0b",
+            "a\u{7f}b",
+        ] {
+            assert_eq!(
+                bad.parse::<WorkflowTitle>().unwrap_err().code(),
+                ErrorCode::Usage,
+                "{bad:?}"
+            );
         }
     }
 
@@ -347,16 +369,39 @@ mod tests {
     #[test]
     fn pr_selection() {
         let plan = PlanId::parse("cpd2").unwrap();
-        let workflow = |key: &str, status: &str| WorkflowRow::fixture(key, "/r", "main", &[], status);
-        let arg = |key: Option<&str>| WorkflowArg { workflow: key.map(|k| WorkflowKey::parse(k).unwrap()) };
+        let workflow =
+            |key: &str, status: &str| WorkflowRow::fixture(key, "/r", "main", &[], status);
+        let arg = |key: Option<&str>| WorkflowArg {
+            workflow: key.map(|k| WorkflowKey::parse(k).unwrap()),
+        };
         let workflows = [workflow("a", "cancelled"), workflow("b", "waiting")];
-        assert_eq!(arg(None).select(&plan, &workflows).unwrap().key.as_str(), "b");
-        assert_eq!(arg(Some("a")).select(&plan, &workflows).unwrap().key.as_str(), "a");
+        assert_eq!(
+            arg(None).select(&plan, &workflows).unwrap().key.as_str(),
+            "b"
+        );
+        assert_eq!(
+            arg(Some("a"))
+                .select(&plan, &workflows)
+                .unwrap()
+                .key
+                .as_str(),
+            "a"
+        );
         let err = arg(Some("z")).select(&plan, &workflows).unwrap_err();
-        assert_eq!((err.code(), err.exit().code()), (ErrorCode::WorkflowNotFound, 4));
-        for many in [&[workflow("a", "waiting"), workflow("b", "open")][..], &[workflow("a", "cancelled")][..], &[][..]] {
+        assert_eq!(
+            (err.code(), err.exit().code()),
+            (ErrorCode::WorkflowNotFound, 4)
+        );
+        for many in [
+            &[workflow("a", "waiting"), workflow("b", "open")][..],
+            &[workflow("a", "cancelled")][..],
+            &[][..],
+        ] {
             let err = arg(None).select(&plan, many).unwrap_err();
-            assert_eq!((err.code(), err.exit().code()), (ErrorCode::WorkflowRequired, 2));
+            assert_eq!(
+                (err.code(), err.exit().code()),
+                (ErrorCode::WorkflowRequired, 2)
+            );
         }
     }
 

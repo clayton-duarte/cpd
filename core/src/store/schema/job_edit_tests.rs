@@ -134,7 +134,13 @@ fn jobs_locked_still_refuses_the_other_locked_columns_of_that_job() {
     })
     .unwrap();
     // The Spec change that is allowed is made first: the refusal below is of the other column alone.
-    for set in ["title = 'New'", "tier = 'S3'", "workflow = 'b'", "review = 1", "kind = 'docs'"] {
+    for set in [
+        "title = 'New'",
+        "tier = 'S3'",
+        "workflow = 'b'",
+        "review = 1",
+        "kind = 'docs'",
+    ] {
         let sql = format!("UPDATE jobs SET goal = 'other goal', {set} WHERE key = 'q'");
         assert_eq!(message(&mut store, &sql), "job_locked", "{sql}");
     }

@@ -14,7 +14,14 @@ use crate::ids::PlanId;
 
 const MESSAGE_TAIL: &str = "A hint, not a conflict prediction: on the ledger of 2026-10-30, 5 of 209 such pairs (2.4%) hit a merge conflict.";
 
-fn job(key: &str, workflow: &str, kind: &str, status: &str, touches: &[&str], needs: &[&str]) -> Job {
+fn job(
+    key: &str,
+    workflow: &str,
+    kind: &str,
+    status: &str,
+    touches: &[&str],
+    needs: &[&str],
+) -> Job {
     Job {
         seq: 1,
         key: key.into(),
@@ -86,7 +93,12 @@ fn outline(prs: &[&str]) -> Outline {
     }
 }
 
-fn lint_with(phase: Phase, workflows: &[WorkflowRow], jobs: &[Job], outline: Option<&Outline>) -> Vec<Finding> {
+fn lint_with(
+    phase: Phase,
+    workflows: &[WorkflowRow],
+    jobs: &[Job],
+    outline: Option<&Outline>,
+) -> Vec<Finding> {
     let plan = PlanId::parse("pl").unwrap();
     run(&Input::new(&plan, phase, workflows, jobs, outline))
 }
@@ -437,7 +449,12 @@ fn outline_findings_follow_the_outline() {
     let missing = lint_with(Phase::Dispatch, &[workflow("web")], &jobs, None);
     assert_eq!(of(&missing, Rule::OutlineMissing).len(), 1);
     assert!(of(&missing, Rule::OutlineIncomplete).is_empty());
-    let incomplete = lint_with(Phase::Dispatch, &[workflow("web")], &jobs, Some(&outline(&[])));
+    let incomplete = lint_with(
+        Phase::Dispatch,
+        &[workflow("web")],
+        &jobs,
+        Some(&outline(&[])),
+    );
     let hits = of(&incomplete, Rule::OutlineIncomplete);
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].details["workflows"], json!(["web"]));

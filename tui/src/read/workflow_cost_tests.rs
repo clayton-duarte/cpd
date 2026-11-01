@@ -17,7 +17,15 @@ const NOW: &str = "2026-10-18T15:07:30.000Z";
 /// Job `key` of Workflow `pr` (kind `kind`) with Attempt `<key>-a<number>` and its Worker Session `w-<key>-a<number>`; `metrics`
 /// is the stored JSON of an ended Attempt, `None` for a live one (NULL `metrics`, running); `file` the Session's file.
 /// `with_job` adds the Job's own row (once per Job).
-fn attempt(workflow: &str, key: &str, kind: &str, number: u32, metrics: Option<&str>, file: Option<&str>, with_job: bool) -> String {
+fn attempt(
+    workflow: &str,
+    key: &str,
+    kind: &str,
+    number: u32,
+    metrics: Option<&str>,
+    file: Option<&str>,
+    with_job: bool,
+) -> String {
     let id = format!("{key}-a{number}");
     let (status, outcome, cause, ended, metrics) = match metrics {
         Some(m) => (

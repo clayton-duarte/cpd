@@ -25,7 +25,23 @@ fn verify(fx: &Fx, key: &str, needs: &[&str], pr: &str, draft: bool) -> crate::c
     let spec = spec_file(&fx.env);
     let needs = needs.join(",");
     let title = format!("Title of {key}");
-    let mut args = vec!["job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--kind", "verify", "--workflow", pr, "--plan", "pl"];
+    let mut args = vec![
+        "job",
+        "add",
+        key,
+        "--title",
+        &title,
+        "--tier",
+        "S2",
+        "--spec",
+        &spec,
+        "--kind",
+        "verify",
+        "--workflow",
+        pr,
+        "--plan",
+        "pl",
+    ];
     if !needs.is_empty() {
         args.extend(["--needs", &needs]);
     }

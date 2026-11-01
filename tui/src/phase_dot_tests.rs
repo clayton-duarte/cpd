@@ -198,7 +198,11 @@ fn workflow(key: &str, number: u32, status: &str, mergeable: &str) -> String {
 
 /// A Job `key` of Workflow `pr` of kind `kind` and `status`.
 fn job(workflow: &str, key: &str, kind: &str, status: &str) -> String {
-    let fp = if status == "draft" { "NULL".to_owned() } else { format!("'{FP}'") };
+    let fp = if status == "draft" {
+        "NULL".to_owned()
+    } else {
+        format!("'{FP}'")
+    };
     format!(
         "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                           created_txn, created_at, kind)
@@ -221,10 +225,32 @@ fn attempt(job: &str, status: &str) -> String {
 #[test]
 fn dots_tree_dispatch_with_open_pr_is_yellow() {
     let review = Dot::Working(Some(Work::Review));
-    assert_eq!(lead_dot(&scenario("dispatch", &workflow("api", 1, "open", "mergeable")), "px"), review, "an open Workflow");
-    assert_eq!(lead_dot(&scenario("dispatch", &workflow("api", 1, "open", "conflicting")), "px"), review, "a conflicting Workflow");
-    let second = format!("{}{}", workflow("a-first", 1, "dispatch", "unknown"), workflow("b-second", 2, "open", "mergeable"));
-    assert_eq!(lead_dot(&scenario("dispatch", &second), "px"), review, "only the second Workflow is open");
+    assert_eq!(
+        lead_dot(
+            &scenario("dispatch", &workflow("api", 1, "open", "mergeable")),
+            "px"
+        ),
+        review,
+        "an open Workflow"
+    );
+    assert_eq!(
+        lead_dot(
+            &scenario("dispatch", &workflow("api", 1, "open", "conflicting")),
+            "px"
+        ),
+        review,
+        "a conflicting Workflow"
+    );
+    let second = format!(
+        "{}{}",
+        workflow("a-first", 1, "dispatch", "unknown"),
+        workflow("b-second", 2, "open", "mergeable")
+    );
+    assert_eq!(
+        lead_dot(&scenario("dispatch", &second), "px"),
+        review,
+        "only the second Workflow is open"
+    );
     for kind in ["open", "update"] {
         for status in ["queued", "running"] {
             let extra = job("work", "j1", kind, status);
@@ -240,10 +266,21 @@ fn dots_tree_dispatch_with_open_pr_is_yellow() {
 /// `dots_tree_dispatch_with_work_jobs_only_is_cyan`: running and queued work Jobs, no open Workflow: `Work::Dispatch`.
 #[test]
 fn dots_tree_dispatch_with_work_jobs_only_is_cyan() {
-    let extra = format!("{}{}", job("work", "j1", "work", "running"), job("work", "j2", "work", "queued"));
-    assert_eq!(lead_dot(&scenario("dispatch", &extra), "px"), Dot::Working(Some(Work::Dispatch)));
+    let extra = format!(
+        "{}{}",
+        job("work", "j1", "work", "running"),
+        job("work", "j2", "work", "queued")
+    );
+    assert_eq!(
+        lead_dot(&scenario("dispatch", &extra), "px"),
+        Dot::Working(Some(Work::Dispatch))
+    );
     let conflicting = format!("{}{}", workflow("api", 1, "open", "conflicting"), extra);
-    assert_eq!(lead_dot(&scenario("dispatch", &conflicting), "px"), Dot::Working(Some(Work::Review)), "an open Workflow turns it yellow");
+    assert_eq!(
+        lead_dot(&scenario("dispatch", &conflicting), "px"),
+        Dot::Working(Some(Work::Review)),
+        "an open Workflow turns it yellow"
+    );
 }
 
 /// `dots_tree_grounding_plan_and_done_are_magenta`: never white for grounding nor green for done.
@@ -262,8 +299,16 @@ fn dots_tree_grounding_plan_and_done_are_magenta() {
 #[test]
 fn dots_tree_draft_job_beats_open_pr() {
     for phase in ["dispatch", "done"] {
-        let extra = format!("{}{}", workflow("api", 1, "open", "mergeable"), job("api", "d1", "work", "draft"));
-        assert_eq!(lead_dot(&scenario(phase, &extra), "px"), Dot::Working(Some(Work::Planning)), "{phase}");
+        let extra = format!(
+            "{}{}",
+            workflow("api", 1, "open", "mergeable"),
+            job("api", "d1", "work", "draft")
+        );
+        assert_eq!(
+            lead_dot(&scenario(phase, &extra), "px"),
+            Dot::Working(Some(Work::Planning)),
+            "{phase}"
+        );
     }
 }
 

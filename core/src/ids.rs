@@ -563,12 +563,31 @@ mod tests {
 
     #[test]
     fn workflow_keys() {
-        for ok in ["a", "schema", "web-2", "a-", &format!("a{}", "b".repeat(23))] {
+        for ok in [
+            "a",
+            "schema",
+            "web-2",
+            "a-",
+            &format!("a{}", "b".repeat(23)),
+        ] {
             assert_eq!(WorkflowKey::parse(ok).unwrap().to_string(), ok);
             assert_eq!(ok.parse::<WorkflowKey>().unwrap().as_str(), ok);
         }
-        for bad in ["", "1a", "-a", "A", "a_b", "a/b", "a.b", &format!("a{}", "b".repeat(24))] {
-            assert_eq!(code(WorkflowKey::parse(bad)), ErrorCode::InvalidWorkflowId, "{bad:?}");
+        for bad in [
+            "",
+            "1a",
+            "-a",
+            "A",
+            "a_b",
+            "a/b",
+            "a.b",
+            &format!("a{}", "b".repeat(24)),
+        ] {
+            assert_eq!(
+                code(WorkflowKey::parse(bad)),
+                ErrorCode::InvalidWorkflowId,
+                "{bad:?}"
+            );
         }
         let err = WorkflowKey::parse("Web").unwrap_err();
         assert_eq!(err.exit().code(), 2);

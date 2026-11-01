@@ -41,9 +41,19 @@ fn the_pr_boxes_are_drawn_by_the_box_widget() {
         .take_while(|line| !line.starts_with("#[cfg(test)]"))
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(product.contains("BoxWidget"), "boxes.rs draws the Workflow boxes with BoxWidget");
-    for hand_built in ["Block::bordered", "BorderType::Rounded", "rect.inner(Margin"] {
-        assert!(!product.contains(hand_built), "boxes.rs still hand-builds a box: {hand_built}");
+    assert!(
+        product.contains("BoxWidget"),
+        "boxes.rs draws the Workflow boxes with BoxWidget"
+    );
+    for hand_built in [
+        "Block::bordered",
+        "BorderType::Rounded",
+        "rect.inner(Margin",
+    ] {
+        assert!(
+            !product.contains(hand_built),
+            "boxes.rs still hand-builds a box: {hand_built}"
+        );
     }
 }
 

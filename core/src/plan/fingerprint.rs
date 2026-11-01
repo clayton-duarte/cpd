@@ -17,9 +17,23 @@ pub use super::prs::load_workflows;
 /// drafts only, so `prs` is the empty array there: a Workflow appended after the
 /// lock must not void a review of the drafts (§2.3).
 pub fn plan_fingerprint(conn: &Connection, plan: &PlanId) -> Result<String, CpdError> {
-    let phase: Option<String> = conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
-    let workflows = if reviews_prs(phase.as_deref()) { load_workflows(conn, plan)? } else { Vec::new() };
-    Ok(of_with(&jobs::load(conn, plan)?, &workflows, super::outline::load(conn, plan)?.as_ref()))
+    let phase: Option<String> = conn
+        .query_row(
+            "SELECT phase FROM plans WHERE id = ?1",
+            [plan.as_str()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let workflows = if reviews_prs(phase.as_deref()) {
+        load_workflows(conn, plan)?
+    } else {
+        Vec::new()
+    };
+    Ok(of_with(
+        &jobs::load(conn, plan)?,
+        &workflows,
+        super::outline::load(conn, plan)?.as_ref(),
+    ))
 }
 
 /// Whether the review of a Plan in `phase` (none: not found) covers its Workflows: before the lock only.
@@ -48,12 +62,20 @@ pub fn of_with(jobs: &[Job], workflows: &[WorkflowRow], outline: Option<&Outline
             let mut needs = j.needs.clone();
             needs.sort();
             let mut fields = j.locked_fields();
-            fields.extend([("key".into(), json!(j.key)), ("pr".into(), json!(j.workflow)), ("title".into(), json!(j.title)), ("needs".into(), json!(needs))]);
+            fields.extend([
+                ("key".into(), json!(j.key)),
+                ("pr".into(), json!(j.workflow)),
+                ("title".into(), json!(j.title)),
+                ("needs".into(), json!(needs)),
+            ]);
             fields.extend(j.kind_fields());
             Value::Object(fields)
         })
         .collect();
-    let mut workflows: Vec<&WorkflowRow> = workflows.iter().filter(|p| p.status != "cancelled").collect();
+    let mut workflows: Vec<&WorkflowRow> = workflows
+        .iter()
+        .filter(|p| p.status != "cancelled")
+        .collect();
     workflows.sort_by(|a, b| a.key.cmp(&b.key));
     let workflows: Vec<Value> = workflows
         .into_iter()
@@ -122,10 +144,18 @@ mod tests {
 
     #[test]
     fn the_plan_fingerprint_covers_the_drafts_by_key() {
-        let (a, b, gone) = (job("a", "draft", &[]), job("b", "draft", &["a"]), job("c", "cancelled", &[]));
+        let (a, b, gone) = (
+            job("a", "draft", &[]),
+            job("b", "draft", &["a"]),
+            job("c", "cancelled", &[]),
+        );
         let workflows = [workflow("web", &[])];
         let base = of(&[a.clone(), b.clone()], &workflows);
-        assert_eq!(of(&[b.clone(), gone, a.clone()], &workflows), base, "order and non-drafts do not count");
+        assert_eq!(
+            of(&[b.clone(), gone, a.clone()], &workflows),
+            base,
+            "order and non-drafts do not count"
+        );
         let mut retitled = b.clone();
         retitled.title = "New".into();
         assert_ne!(of(&[a.clone(), retitled], &workflows), base);
@@ -135,7 +165,10 @@ mod tests {
         let mut moved = b;
         moved.workflow = Some("api".into());
         assert_ne!(of(&[a, moved], &workflows), base, "a Job's Workflow counts");
-        assert_eq!(of(&[], &[]), format!("{:x}", Sha256::digest(br#"{"jobs":[],"prs":[]}"#)));
+        assert_eq!(
+            of(&[], &[]),
+            format!("{:x}", Sha256::digest(br#"{"jobs":[],"prs":[]}"#))
+        );
     }
 
     #[test]
@@ -168,7 +201,13 @@ mod tests {
                 br#"{"jobs":[],"prs":[{"base":"main","key":"api","needs":[],"repo":"/r/api"},{"base":"main","key":"web","needs":["api","db"],"repo":"/r/web"}]}"#
             )
         );
-        assert_eq!(of(&[], &[workflow("web", &["db", "api"]), workflow("api", &[])]), expected);
+        assert_eq!(
+            of(
+                &[],
+                &[workflow("web", &["db", "api"]), workflow("api", &[])]
+            ),
+            expected
+        );
         let base = of(&jobs, &[workflow("api", &[]), workflow("web", &["api"])]);
         let mut other_repo = workflow("web", &["api"]);
         other_repo.repo = "/elsewhere".into();
@@ -178,14 +217,24 @@ mod tests {
         cancelled.status = "cancelled".into();
         let mut with_cancelled = vec![workflow("api", &[]), workflow("web", &["api"])];
         with_cancelled.push(cancelled);
-        assert_eq!(of(&jobs, &with_cancelled), base, "a cancelled Workflow does not count");
-        for changed in [vec![workflow("api", &[]), other_repo], vec![workflow("api", &[]), other_base], vec![workflow("api", &[]), workflow("web", &[])], vec![workflow("api", &[])]] {
+        assert_eq!(
+            of(&jobs, &with_cancelled),
+            base,
+            "a cancelled Workflow does not count"
+        );
+        for changed in [
+            vec![workflow("api", &[]), other_repo],
+            vec![workflow("api", &[]), other_base],
+            vec![workflow("api", &[]), workflow("web", &[])],
+            vec![workflow("api", &[])],
+        ] {
             assert_ne!(of(&jobs, &changed), base);
         }
     }
 
     #[test]
-    fn kind_and_tests_are_in_the_plan_fingerprint_only_when_not_default_and_shape_only_when_not_free() {
+    fn kind_and_tests_are_in_the_plan_fingerprint_only_when_not_default_and_shape_only_when_not_free()
+     {
         // A `work` Job with no tests and a `free` Workflow hash as they did before migration `job-kinds` (no stored review is voided).
         let before = format!(
             "{:x}",
@@ -193,7 +242,10 @@ mod tests {
                 br#"{"jobs":[{"acceptance":["b"],"context":"c","goal":"g","key":"a","needs":[],"out_of_scope":[],"pr":"web","tier":"S2","title":"Title a","touches":["a"]}],"prs":[{"base":"main","key":"web","needs":[],"repo":"/r/web"}]}"#
             )
         );
-        assert_eq!(of(&[job("a", "draft", &[])], &[workflow("web", &[])]), before);
+        assert_eq!(
+            of(&[job("a", "draft", &[])], &[workflow("web", &[])]),
+            before
+        );
 
         let mut docs = job("a", "draft", &[]);
         docs.kind = "docs".into();
@@ -213,10 +265,18 @@ mod tests {
         test.test_files = Some(json!(["tests/t.rs"]));
         let with_tests = of(&[test.clone()], &[workflow("web", &[])]);
         test.tests = Some(json!(["t::two"]));
-        assert_ne!(of(&[test.clone()], &[workflow("web", &[])]), with_tests, "the named tests count");
+        assert_ne!(
+            of(&[test.clone()], &[workflow("web", &[])]),
+            with_tests,
+            "the named tests count"
+        );
         test.tests = Some(json!(["t::one"]));
         test.test_files = Some(json!(["tests/u.rs"]));
-        assert_ne!(of(&[test], &[workflow("web", &[])]), with_tests, "so do the files that hold them");
+        assert_ne!(
+            of(&[test], &[workflow("web", &[])]),
+            with_tests,
+            "so do the files that hold them"
+        );
         let mut approved = job("a", "draft", &[]);
         approved.kind = "impl".into();
         let without = of(&[approved.clone()], &[]);

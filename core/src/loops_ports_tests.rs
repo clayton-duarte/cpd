@@ -571,7 +571,13 @@ fn guarded(status: &str) -> (Home, Store, impl Sized) {
 
 fn settle(rig: &Rig, h: &Home) -> Result<(), CpdError> {
     let mut env = env(rig, h);
-    settle_in(&mut env, &mut None, &plan(), &WorkflowKey::parse("repo").unwrap(), &attempt())
+    settle_in(
+        &mut env,
+        &mut None,
+        &plan(),
+        &WorkflowKey::parse("repo").unwrap(),
+        &attempt(),
+    )
 }
 
 #[test]

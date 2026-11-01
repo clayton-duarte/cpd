@@ -10,12 +10,17 @@ use crate::args::WorkflowArg;
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::PlanId;
 use crate::plan::fingerprint::load_workflows;
-use crate::plan::{self, PlanRow, WorkflowRow, Pull};
+use crate::plan::{self, PlanRow, Pull, WorkflowRow};
 
 impl WorkflowRow {
     /// The Workflow's Lead worktree: set from the status `dispatch` on (`workflows` CHECK).
     pub fn lead(&self, plan: &PlanId) -> Result<&PathBuf, CpdError> {
-        self.lead_worktree.as_ref().ok_or_else(|| CpdError::bad_row(format!("Workflow {} of Plan {plan} has no Lead worktree", self.key)))
+        self.lead_worktree.as_ref().ok_or_else(|| {
+            CpdError::bad_row(format!(
+                "Workflow {} of Plan {plan} has no Lead worktree",
+                self.key
+            ))
+        })
     }
 
     /// `{key, status, pr: {number, url, opened_at}}`, as the commands print the Workflow.
@@ -27,7 +32,10 @@ impl WorkflowRow {
     pub fn refuse(&self, plan: &PlanId, command: &str, needs: &str) -> CpdError {
         CpdError::new(
             ErrorCode::IllegalTransition,
-            format!("Workflow {} of Plan {plan} is {}: {command} needs status {needs}.", self.key, self.status),
+            format!(
+                "Workflow {} of Plan {plan} is {}: {command} needs status {needs}.",
+                self.key, self.status
+            ),
         )
         .with("plan", plan.as_str())
         .with("pr", self.key.as_str())
@@ -63,5 +71,8 @@ impl PlanWorkflows {
 
 /// The Plan `id` with its Workflows, else `plan_not_found`.
 pub(crate) fn load(conn: &Connection, id: &PlanId) -> Result<PlanWorkflows, CpdError> {
-    Ok(PlanWorkflows { plan: plan::row::load(conn, id)?, workflows: load_workflows(conn, id)? })
+    Ok(PlanWorkflows {
+        plan: plan::row::load(conn, id)?,
+        workflows: load_workflows(conn, id)?,
+    })
 }

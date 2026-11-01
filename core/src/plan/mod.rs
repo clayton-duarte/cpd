@@ -65,7 +65,7 @@ mod tier_advice_tests;
 
 use std::path::{Path, PathBuf};
 
-use crate::args::{Name, PlanArg, WorkflowTitle, Text, Title};
+use crate::args::{Name, PlanArg, Text, Title, WorkflowTitle};
 use crate::config::{Tier, WorkerRunner};
 use crate::context::Jira;
 use crate::env::Env;
@@ -76,7 +76,7 @@ use crate::output::Output;
 pub use fingerprint::plan_fingerprint;
 pub use jobs::locked_fingerprint;
 pub(crate) use new::lead_message;
-pub use prs::{WorkflowRow, Pull};
+pub use prs::{Pull, WorkflowRow};
 pub use review::{Closing, close_reviews};
 pub use row::{Phase, PlanRow};
 

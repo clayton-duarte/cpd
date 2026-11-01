@@ -107,18 +107,44 @@ fn needs_cell_edges_and_order(stacked: bool) -> (String, Vec<String>, Vec<String
         .find(|l| l.starts_with("| Key") && l.contains("Needs") && l.contains("Base"))
         .unwrap_or_else(|| panic!("{text}"));
     let col = header.split('|').position(|c| c.trim() == "Needs").unwrap();
-    let cell = row(&text, "alpha").split('|').nth(col).unwrap().trim().to_string();
-    let graph = text.split("graph LR").nth(1).unwrap_or_else(|| panic!("no PR graph:\n{text}")).split("```").next().unwrap();
-    let edges = graph.lines().filter(|l| l.contains("-->")).map(|l| l.trim().to_string()).collect();
-    let sections = text.lines().filter(|l| l.starts_with("## Workflow ")).map(String::from).collect();
+    let cell = row(&text, "alpha")
+        .split('|')
+        .nth(col)
+        .unwrap()
+        .trim()
+        .to_string();
+    let graph = text
+        .split("graph LR")
+        .nth(1)
+        .unwrap_or_else(|| panic!("no PR graph:\n{text}"))
+        .split("```")
+        .next()
+        .unwrap();
+    let edges = graph
+        .lines()
+        .filter(|l| l.contains("-->"))
+        .map(|l| l.trim().to_string())
+        .collect();
+    let sections = text
+        .lines()
+        .filter(|l| l.starts_with("## Workflow "))
+        .map(String::from)
+        .collect();
     (cell, edges, sections)
 }
 
 #[test]
 fn stacked_pr_lists_its_base_pr_among_its_needs_and_follows_it_in_the_order() {
     let (cell, edges, sections) = needs_cell_edges_and_order(false);
-    assert!(cell.contains("zeta") && !edges.is_empty(), "a stored need is shown: {cell:?} {edges:?}");
-    assert_eq!(sections, ["## Workflow zeta", "## Workflow alpha"], "a need comes first");
+    assert!(
+        cell.contains("zeta") && !edges.is_empty(),
+        "a stored need is shown: {cell:?} {edges:?}"
+    );
+    assert_eq!(
+        sections,
+        ["## Workflow zeta", "## Workflow alpha"],
+        "a need comes first"
+    );
     let (stacked_cell, stacked_edges, stacked_sections) = needs_cell_edges_and_order(true);
     assert_eq!(
         stacked_cell, cell,
@@ -138,7 +164,12 @@ fn stacked_pr_lists_its_base_pr_among_its_needs_and_follows_it_in_the_order() {
     pr(&fx.env, "zeta", "dispatch", "main", &[]);
     stacked_alpha(&fx.env);
     let show = fx.cpd(&["plan", "show", "--plan", "pay"]).ok();
-    let alpha = show["workflows"].as_array().unwrap().iter().find(|p| p["key"] == "alpha").unwrap_or_else(|| panic!("{show}"));
+    let alpha = show["workflows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["key"] == "alpha")
+        .unwrap_or_else(|| panic!("{show}"));
     assert_eq!(alpha["needs"], serde_json::json!([]), "{show}");
     assert_eq!(alpha["base_pr"], "pay/zeta", "{show}");
 }

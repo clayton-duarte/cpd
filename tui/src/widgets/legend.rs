@@ -299,9 +299,19 @@ pub(crate) fn sections() -> Vec<Section> {
         plain("its Lead asks you"),
     ]);
     pr_rows.push(vec![sample(palette::PR_CONFLICT)]);
-    pr_rows.push(vec![sample(palette::PR_UPDATING_RUNNING), plain("its update Job is fixing the conflict")]);
-    pr_rows.push(vec![sample(palette::PR_UPDATING_QUEUED), plain("its update Job is queued")]);
-    let workflows = Section { title: "Workflows (Dispatch)", header: None, rows: pr_rows };
+    pr_rows.push(vec![
+        sample(palette::PR_UPDATING_RUNNING),
+        plain("its update Job is fixing the conflict"),
+    ]);
+    pr_rows.push(vec![
+        sample(palette::PR_UPDATING_QUEUED),
+        plain("its update Job is queued"),
+    ]);
+    let workflows = Section {
+        title: "Workflows (Dispatch)",
+        header: None,
+        rows: pr_rows,
+    };
     let checks = Section {
         title: "PR Checks",
         header: None,
@@ -569,15 +579,24 @@ mod tests {
         assert_eq!(
             cells,
             [
-                "▂▄▆", "activity per 5 min, first colour wins",
-                "▄", "an error, or a Job failed",
-                "▄", "a Plan or ask Event",
-                "▄", "a pull request opened",
-                "▄", "an escalation",
-                "▄", "a Job or a Workflow merged",
-                "▄", "any other activity",
-                "▁", "no activity",
-                "quiet 41m", "queued or running work with no activity for 30 min",
+                "▂▄▆",
+                "activity per 5 min, first colour wins",
+                "▄",
+                "an error, or a Job failed",
+                "▄",
+                "a Plan or ask Event",
+                "▄",
+                "a pull request opened",
+                "▄",
+                "an escalation",
+                "▄",
+                "a Job or a Workflow merged",
+                "▄",
+                "any other activity",
+                "▁",
+                "no activity",
+                "quiet 41m",
+                "queued or running work with no activity for 30 min",
             ]
         );
         let colours: Vec<_> = pulse
@@ -783,18 +802,44 @@ mod tests {
     fn the_pr_states_list_conflict_in_the_failed_colour_after_the_others() {
         let workflows = &sections()[3];
         let names: Vec<String> = workflows.rows.iter().map(|r| text(&r[0])).collect();
-        assert_eq!(names, ["#2 open", "#2 merged", "#2 closed", "#2 closed", "#2 conflict", "#2 updating", "#2 updating"]);
+        assert_eq!(
+            names,
+            [
+                "#2 open",
+                "#2 merged",
+                "#2 closed",
+                "#2 closed",
+                "#2 conflict",
+                "#2 updating",
+                "#2 updating"
+            ]
+        );
         let conflict = &workflows.rows[4][0].spans[0];
-        assert_eq!(conflict.style, palette::fg_clickable(palette::Meaning::Failed));
+        assert_eq!(
+            conflict.style,
+            palette::fg_clickable(palette::Meaning::Failed)
+        );
     }
 
     #[test]
     fn a_closed_pr_is_waiting_while_its_lead_handles_it_and_red_once_it_asks_you() {
         let workflows = &sections()[3];
         let (handled, asked) = (&workflows.rows[2], &workflows.rows[3]);
-        assert_eq!(handled[0].spans[0].style, palette::fg_clickable(Meaning::Waiting));
-        assert_eq!(asked[0].spans[0].style, palette::fg_clickable(Meaning::Failed));
-        assert_eq!((text(&handled[1]), text(&asked[1])), ("its Lead handles it".to_owned(), "its Lead asks you".to_owned()));
+        assert_eq!(
+            handled[0].spans[0].style,
+            palette::fg_clickable(Meaning::Waiting)
+        );
+        assert_eq!(
+            asked[0].spans[0].style,
+            palette::fg_clickable(Meaning::Failed)
+        );
+        assert_eq!(
+            (text(&handled[1]), text(&asked[1])),
+            (
+                "its Lead handles it".to_owned(),
+                "its Lead asks you".to_owned()
+            )
+        );
     }
 
     #[test]

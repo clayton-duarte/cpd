@@ -332,7 +332,11 @@ fn e3_starts_a_ready_job_of_another_pr_beside_a_live_linear_attempt() {
     add_live_linear(&mut fx);
     fx.add_job_in("other", "web", &[], "");
     tick_on_fake_ports(&mut fx);
-    assert_eq!(allocated(&mut fx, "web-a1"), ("cpd/pay/other".to_owned(), "/repos/o.lead".to_owned()), "not held, alone in its Workflow");
+    assert_eq!(
+        allocated(&mut fx, "web-a1"),
+        ("cpd/pay/other".to_owned(), "/repos/o.lead".to_owned()),
+        "not held, alone in its Workflow"
+    );
 }
 
 /// A config.toml whose `worker_runner` is `line` (a whole TOML line, or none), written over the engine's home after it started.

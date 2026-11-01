@@ -65,13 +65,28 @@ fn e3_does_not_start_an_open_job_whose_pr_has_no_description_raises_one_error_an
 
     ticks(&mut fx, 3);
 
-    assert_eq!(attempts(&mut fx), 0, "no Attempt for an undescribed Workflow");
+    assert_eq!(
+        attempts(&mut fx),
+        0,
+        "no Attempt for an undescribed Workflow"
+    );
     let errors = fx.events("error");
     assert_eq!(errors.len(), 1, "{errors:?}");
     let (plan, job, attempt, data) = &errors[0];
-    assert_eq!((plan.as_deref(), job.as_deref(), attempt.as_deref()), (Some("pay"), Some("open-repo"), None));
-    assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("description_required")), "{data}");
-    assert!(texts(&mut fx, "error")[0].contains("cpd workflow describe --workflow repo"), "{:?}", texts(&mut fx, "error"));
+    assert_eq!(
+        (plan.as_deref(), job.as_deref(), attempt.as_deref()),
+        (Some("pay"), Some("open-repo"), None)
+    );
+    assert_eq!(
+        (&data["source"], &data["code"]),
+        (&json!("watch"), &json!("description_required")),
+        "{data}"
+    );
+    assert!(
+        texts(&mut fx, "error")[0].contains("cpd workflow describe --workflow repo"),
+        "{:?}",
+        texts(&mut fx, "error")
+    );
     assert_eq!(fx.job_status("open-repo"), "queued");
 
     fx.fixture("UPDATE prs SET description = 'A description';");
