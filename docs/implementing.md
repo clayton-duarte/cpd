@@ -131,7 +131,7 @@ Target contract (ADR 0013): tests are in-process, with fakes behind traits for t
   | `session` | `session*`, `host`, `board`, `host_pill`, `mcp_attach` |
   | `store` | `store*`, `events`, `home`, `scripted` |
   | `tui` | `tui*`, `inbox*`, `bare` |
-  | `tooling` | `*_script`, `cargo_script`, `pnpm_fresh`, `install_script`, `harness`, `fx`, `guards`, `fake_tmux`, `fx_exec`, `dead_code`, `interface`, `no_repo_lock`, `no_gh_pr_edit`, `slot`, `layout`, `version`, `gate_run*`, `pill_parity`, `pill_sites`, `run_with`, `smoke`, `testkit*`, `usage_grammar` |
+  | `tooling` | `*_script`, `cargo_script`, `pnpm_fresh`, `install_script`, `harness`, `fx`, `guards`, `real_process_scan`, `fake_tmux`, `fx_exec`, `dead_code`, `interface`, `no_repo_lock`, `no_gh_pr_edit`, `slot`, `layout`, `version`, `gate_run*`, `pill_parity`, `pill_sites`, `run_with`, `smoke`, `testkit*`, `usage_grammar` |
 
 ### Time in tests
 
