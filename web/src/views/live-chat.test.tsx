@@ -597,3 +597,85 @@ test("a delivered message renders as the person's Bubble with its delivery line,
   expect(text).toContain("NOTICE: plan review r3 was APPROVED");
   expect(bubbles[0]!.textContent).not.toContain("NOTICE: plan review");
 });
+
+// The Chat thread and where its viewport sits: web/README.md "### The thread follows its live
+// edge". The thread opens at its newest turn and follows new output while the reader stays at
+// that live edge; no turn carries `scrollAnchor`, because an anchor settles that turn at the top
+// of the viewport and holds the mode at `anchored-to-message` — which is why new output never
+// arrived in view — and the Scroll to End control is the way back when the reader scrolls away.
+// jsdom has no layout, so the scrolling itself is not asserted: what is pinned is the composition
+// the bug came from — every rendered row's `data-scroll-anchor` and the control's `data-active`.
+test("no turn in the Chat carries a scroll anchor, which would settle that turn at the top and hold the view there", async () => {
+  await renderJsonl(
+    [
+      messageLine("u1", "user", "the person's first turn"),
+      messageLine("a1", "assistant", [{ type: "text", text: "the agent's first turn" }]),
+      messageLine("u2", "user", "the person's second turn"),
+    ].join("\n"),
+  );
+
+  const rows = [...container.querySelectorAll<HTMLElement>("[data-message-id]")];
+  // The thread rendered the turns the frame gave it, the person's included.
+  expect(rows.map((row) => row.getAttribute("data-message-id"))).toContain("u1");
+  // Not one of them is a scroll anchor: each row carries `data-scroll-anchor="false"`.
+  for (const row of rows) {
+    expect(row.getAttribute("data-scroll-anchor"), row.getAttribute("data-message-id") ?? "").toBe(
+      "false",
+    );
+  }
+});
+
+test("the Chat renders a Scroll to End control, inert while the reader is at the live edge", async () => {
+  await renderJsonl(
+    [
+      messageLine("u1", "user", "the person's turn"),
+      messageLine("a1", "assistant", [{ type: "text", text: "the agent's turn" }]),
+    ].join("\n"),
+  );
+
+  // The control that returns the reader to the live edge (web/README.md "The thread follows its
+  // live edge") is rendered as the scroller's end `MessageScrollerButton`.
+  const control = container.querySelector<HTMLElement>(
+    '[data-slot="message-scroller-button"][data-direction="end"]',
+  );
+  expect(control).not.toBeNull();
+  expect(control!.textContent).toContain("Scroll to end");
+  // While the thread reports the reader at the live edge the control is inert: `data-active` is
+  // false, which is what hides it and takes it out of the pointer's way.
+  expect(control!.getAttribute("data-active")).toBe("false");
+
+  // The live edge the control returns to is the anchor-free thread: a `scrollAnchor` row is what
+  // held the view off that edge.
+  for (const row of container.querySelectorAll<HTMLElement>("[data-message-id]")) {
+    expect(row.getAttribute("data-scroll-anchor"), row.getAttribute("data-message-id") ?? "").toBe(
+      "false",
+    );
+  }
+});
+
+test("the Chat renders the person's turns and the assistant's turns in the order the frames give them", async () => {
+  await renderJsonl(
+    [
+      messageLine("u1", "user", "first person turn"),
+      messageLine("a1", "assistant", [{ type: "text", text: "first agent turn" }]),
+      messageLine("u2", "user", "second person turn"),
+      messageLine("a2", "assistant", [{ type: "text", text: "second agent turn" }]),
+    ].join("\n"),
+  );
+
+  // The turns the frame gave render whole and in its order; the Load earlier control is not a turn.
+  const rows = [...container.querySelectorAll<HTMLElement>("[data-message-id]")].filter(
+    (row) => row.getAttribute("data-message-id") !== "load-earlier",
+  );
+  expect(rows.map((row) => row.getAttribute("data-message-id"))).toEqual(["u1", "a1", "u2", "a2"]);
+  // The person's turns are the Bubbles, the agent's are not, each on its own row in order.
+  expect(rows[0]!.querySelector('[data-slot="bubble"]')?.textContent).toContain("first person turn");
+  expect(rows[1]!.querySelector('[data-slot="bubble"]')).toBeNull();
+  // No rendered turn carries a scroll anchor: the thread belongs to its live edge
+  // (web/README.md "The thread follows its live edge").
+  for (const row of rows) {
+    expect(row.getAttribute("data-scroll-anchor"), row.getAttribute("data-message-id") ?? "").toBe(
+      "false",
+    );
+  }
+});
