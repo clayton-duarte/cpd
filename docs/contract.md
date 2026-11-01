@@ -866,6 +866,8 @@ A pair is one finding: `job` is the draft under review (the smaller key when bot
 - It is **stateless**: each call computes it from the Jobs as they are; nothing is remembered between calls.
 - It is **a hint, not a prediction of a conflict**. Measured on 2026-10-30 on this machine's ledger: of 209 such pairs (lockfiles exempt), 5 hit a merge conflict (2.4% precision), and 4 of the 8 Jobs that conflicted were in such a pair (50% recall); 8 of the 11 conflicts sit in one Plan.
 
+**Where the lint runs.** `cpd plan lint` runs every finding (errors and warnings, commands.md §4.15). `plan review` (§4.6) runs the lint and refuses with the first error finding's own code, never `lint_failed`; it returns warnings (not a refusal); errors only in phase `plan` for `pr_empty`, all errors in other phases. `plan render` (§4.5) runs the lint and returns warnings too, and never refuses. `plan lock` (§4.8) keeps its own checks (outline missing, outline incomplete, and its test and impl rules), and calls the same pure functions as the review where it overlaps with them (draft incomplete, test job required, impl job required, shape incomplete), never `lint_failed`; the two refusals specific to this phase are `pr_empty` and `dependency_cycle`, from the lint.
+
 ## 3. State machines
 
 Every transition below is the only way its state changes. Anything else is refused with `illegal_transition` (exit 3) by the command, and also by a trigger in the database (§4.4), so a bug cannot write it either. "Engine" steps are those of `cpd watch` (§3.7, E1–E15) and of the Attempt driver `cpd attempt run` (§3.4, A1–A9). Each row names the Event its transaction appends (§5.2).

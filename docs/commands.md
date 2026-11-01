@@ -975,7 +975,7 @@ The key is built in `core/src/cache.rs` from the repo path and the schema versio
 The columns are this Plan's Job, the other Plan, its PR, the Jobs of that PR that overlap this Job with their status (in the order they were created) and the paths of this Job that overlap them. `Paths` shows at most five paths and then `+N` for the N more, as in `` `a`, `b`, `c`, `d`, `e`, +2 ``. In the JSON output, `overlaps` lists the same rows, in the same order, as `{job, plan, pr, other_jobs: [{key, status}], paths}`: `other_jobs` are the Jobs of the other PR that overlap `job` and `paths` are all the paths of `job` that overlap them, deduplicated (only the table is capped); `[]` when there is none.
 
 ```json
-{"ok": true, "path": "/home/clayton/.cpd/run/pay-4521/plan.md", "summary": "/home/clayton/.cpd/run/pay-4521/summary.md", "fingerprint": "9f86d081…", "draft_jobs": 6, "prs": 2,
+{"ok": true, "path": "/home/clayton/.cpd/run/pay-4521/plan.md", "summary": "/home/clayton/.cpd/run/pay-4521/summary.md", "fingerprint": "9f86d081…", "draft_jobs": 6, "prs": 2, "warnings": [],
  "overlaps": [{"job": "x", "plan": "pay-4522", "pr": "api", "other_jobs": [{"key": "y", "status": "queued"}, {"key": "z", "status": "draft"}], "paths": ["core/src/x.rs", "core/src/lib.rs"]}]}
 ```
 
@@ -997,13 +997,14 @@ Idempotent: yes (the same PRs and Jobs, the same outline and the same other Plan
 | 6 | Jobs | `## Jobs (<n> under review, <m> locked)`, `n` the number of Jobs under review and `m` the number of locked Jobs, then a table with the columns `Job`, `Title`, `Tier`, `Needs`, one row per Job under review in PR key order, then Job key order: its key, its title, its Tier and its `needs` joined by `, ` (`—` when none). The table has its header and separator rows even with no Job under review. No locked Job has a row |
 | 7 | order | `Order: <items>`, the items joined by `, `: one `<need> → <key>` for every need of a PR that counts, whose need is a PR that counts too, in key order of the PR and then of the need; then, as the last item, the PRs that count and neither need nor are needed by any other, joined by ` · ` (no such item when there is none). Then the line `Stacked on: <entries>`, one `<key> on <base PR>` per PR that counts and has a base PR (`base_pr` of `plan show`, §4.3: `<plan>/<key>`), in key order, joined by `, `; `none` when none is stacked. Both lines are left out when no PR counts |
 | 8 | overlaps | `Overlaps: none` when §4.5's overlaps are none; else `Overlaps: <n>`, `n` the number of overlaps (the rows of §4.5's table), then one row per overlap, in §4.5's order and at most 5: `- <path>: <other plan>/<other pr>/<other job> (<status>)`, the first of the overlap's paths and the first of its other Jobs with its status, followed by ` +<k>` when the overlap has more (`k` = the other paths plus the other Jobs); when `n` is over 5, a last row `- +<n-5> more overlaps` |
-| 9 | decided | `Decided: <ids>`, the outline's `decided` record ids joined by `, `; left out when there are none |
-| 10 | later | `Later: <items>`, the work this review does not cover, joined by `, `: the keys of the stub drafts in key order, then `PR <key>` for each PR that counts and has no Job under review, in key order; left out when there are none |
-| 11 | risks | `## Risks`, then `R<n> <text>` per outline risk, `n` from 1 |
-| 12 | out of scope | `## Out of scope`, then `- <text>` per outline entry |
-| 13 | last line | for a review: `Approve \| Change` (the pipe literal); for `summary.md`: `Full plan (<path>)`, the absolute path of `plan.md` |
+| 9 | lint | `Lint: none` when there is no warning, never omitted (like `Overlaps`); else `Lint: <n>` and then one row per warning in finding order, at most 5, each `- <rule>: <row>`, and `- +<N> more warnings` for the rest. A `parallel_write_overlap` row is `<job> and <other> both name <paths>`: its paths joined by `, `, at most 3, then ` +<k>` for the k more, followed by ` (a hint, not a conflict prediction)` |
+| 10 | decided | `Decided: <ids>`, the outline's `decided` record ids joined by `, `; left out when there are none |
+| 11 | later | `Later: <items>`, the work this review does not cover, joined by `, `: the keys of the stub drafts in key order, then `PR <key>` for each PR that counts and has no Job under review, in key order; left out when there are none |
+| 12 | risks | `## Risks`, then `R<n> <text>` per outline risk, `n` from 1 |
+| 13 | out of scope | `## Out of scope`, then `- <text>` per outline entry |
+| 14 | last line | for a review: `Approve \| Change` (the pipe literal); for `summary.md`: `Full plan (<path>)`, the absolute path of `plan.md` |
 
-Blocks 4, 5, 9, 11 and 12 come from the outline and are left out when it is null or the list is empty. The sizes are bounded by the outline's own limits (§4.13: at most 3 risks, 5 out-of-scope entries, 3 done-when lines per PR) and by the overlap rows above; the decisions, assumptions and Jobs are as many as the Plan has. A `done_when` key of a PR that was cancelled after `plan outline` is not shown (the block lists PRs that count).
+Blocks 4, 5, 10, 12 and 13 come from the outline and are left out when it is null or the list is empty. The sizes are bounded by the outline's own limits (§4.13: at most 3 risks, 5 out-of-scope entries, 3 done-when lines per PR) and by the overlap rows above; the decisions, assumptions and Jobs are as many as the Plan has. A `done_when` key of a PR that was cancelled after `plan outline` is not shown (the block lists PRs that count).
 
 ```
 # Plan review in chat
@@ -1033,6 +1034,8 @@ Stacked on: none
 
 Overlaps: none
 
+Lint: none
+
 Decided: hs-d502, hs-d503
 
 Later: ux-remeasure
@@ -1045,6 +1048,8 @@ R1 pi's dialog API differs between modes
 
 Approve | Change
 ```
+
+**The Lint block** (§4.6). The warnings of the lint run on the Plan (contract §2.7, commands.md §4.15), never errors: `plan review` and `plan render` refuse with errors, but return warnings. The block lists warnings only. `Lint: none` when there is no warning, never omitted (like `Overlaps`); else `Lint: <n>` and then one row per warning in finding order, at most 5: `- <rule>: <row>`, and `- +<N> more warnings` for the rest. A `parallel_write_overlap` row is `<job> and <other> both name <paths>`: its paths joined by `, `, at most 3, then ` +<k>` for the k more, followed by ` (a hint, not a conflict prediction)`; `Finding::row(&self)` (core/src/plan/lint.rs) builds the `<row>` after the rule (an error rule's row being its message). In the JSON output, `warnings` is an array of Finding JSON (`Finding::to_json`, one per warning in finding order, `[]` when none; see commands.md §4.15). A Plan with no PR and no cancelled PR has no `## Lint` section (like `## Overlaps`).
 
 ### 4.6 `plan review`
 
@@ -1068,21 +1073,23 @@ Explore Jobs (`scout`, `research`) are in no review (Plan `explore-roles`, R3): 
 | every `impl` Job that is a `draft` needs at least one `test` Job of its PR (hs-d341; `details.jobs` lists the `impl` Jobs) | `test_job_required` | 3 |
 | every `verify` Job that is a `draft` needs at least one `impl` Job of its PR that is not `cancelled` (pro-d80; `details` `{plan, job, jobs}`; checked after `test_job_required` and before `shape_incomplete`) | `impl_job_required` | 3 |
 | every PR of shape `tdd` that has not opened has at least one `test` and one `impl` Job that is not `cancelled` (hs-d497, contract §2.2 "Job kinds"; `details` `{pr, missing}`) | `shape_incomplete` | 3 |
+| a PR that is not `cancelled` has no `draft` Job, or the Plan has no PR that is not `cancelled` (phase `plan` only; `details.prs`, and `details.next` = `cpd pr add` when the Plan has no live PR; checked after `shape_incomplete`) | `pr_empty` | 3 |
+| the `needs` of the draft Jobs contain a cycle (`details.cycle`; after `pr_empty`) | `dependency_cycle` | 3 |
 
 Effects:
-- **Files:** renders the plan to `run/<plan>/plan.md` and `run/<plan>/summary.md` (§4.5) and copies the summary to `run/<plan>/summary-<review>.md`, so a later render cannot change what the User reviews. The summary copy is the Plan summary of §4.5 with the review's heading (block 1) and its last line (block 13) and no other difference; it is what the User reviews (§15.5). The copy opens with `# <review title>`, then one line `Plan <plan id>: <Plan title> · review <review id>`, then the rendered content (hs-d291); `plan.md`, made without a review (`plan render`, §4.5), keeps `# Plan: <Plan title>`. The reviewed file carries the `## Overlaps` section of §4.5, as it is at that moment, so the User sees the warning in the review: one row per open Job of this Plan and per other PR that overlaps it, short enough to read (hs-n201); it is a warning only and the review is requested all the same.
+- **Files:** renders the plan to `run/<plan>/plan.md` and `run/<plan>/summary.md` (§4.5) and copies the summary to `run/<plan>/summary-<review>.md`, so a later render cannot change what the User reviews. The summary copy is the Plan summary of §4.5 with the review's heading (block 1) and its last line (block 14) and no other difference; it is what the User reviews (§15.5). The copy opens with `# <review title>`, then one line `Plan <plan id>: <Plan title> · review <review id>`, then the rendered content (hs-d291); `plan.md`, made without a review (`plan render`, §4.5), keeps `# Plan: <Plan title>`. The reviewed file carries the `## Overlaps` section of §4.5, as it is at that moment, so the User sees the warning in the review: one row per open Job of this Plan and per other PR that overlaps it, short enough to read (hs-n201); it is a warning only and the review is requested all the same.
 - **Closing other reviews:** every other pending review of the Plan (always older) closes `superseded` in the same transaction that inserts the new review request (the new `pending` Event comes after their `superseded` Events). Their Events say why: "Plan review r<k> of Plan P is superseded by r<k+1>." When the latest review is already pending for the current fingerprint (the `already: true` path) nothing is written, nothing closes.
 - The refusals `outline_missing` and `outline_incomplete` come **before anything is written** (D3): no render, no file, no row, no Event.
 - **Rows**, one transaction: `plan_reviews` (`id = r<k>`, `k` = 1 + the highest, `fingerprint` = the plan fingerprint (§2.3: it includes the outline), `title` = `--title`, `status = pending`). **Event** `plan-review` `{review, fingerprint, status: "pending"}`.
 
 ```json
-{"ok": true, "review": {"id": "r3", "fingerprint": "9f86d081…", "status": "pending", "requested_at": "…"}, "summary": "/home/clayton/.cpd/run/pay-4521/summary-r3.md",
+{"ok": true, "review": {"id": "r3", "fingerprint": "9f86d081…", "status": "pending", "requested_at": "…"}, "summary": "/home/clayton/.cpd/run/pay-4521/summary-r3.md", "warnings": [],
  "next": "The User reviews the plan summary in your chat and decides there. Stop and wait for the decision message."}
 ```
 
 **Stubs** (hs-d241, R1). A draft without its Tier or its Spec (a stub, §5.1) cannot be approved, so the review is **not requested**: it is refused `draft_incomplete` (exit 3) with `details.jobs` = `[{"key": "api-1", "missing": ["spec"]}, …]`, in key order, `missing` holding `"tier"` and/or `"spec"`. A stub that waits (contract §2.2 "A parked draft", hs-n615) is skipped and the request is accepted (its covered set may then hold no non-waiting draft). Nothing is rendered or written on refusal. The Lead completes each stub with `job edit --tier --spec` (§5.2) or cancels it, then asks again. The plan fingerprint covers a stub as it is (contract §2.3), so completing one changes it.
 
-Idempotent: yes. When the latest review is `pending` for the current fingerprint, it returns that review with `"already": true` (its `path` and `summary` too) and writes nothing; the two refusals above are still checked first, so a Plan with no outline is refused even when a review made before the outline existed is pending. When the Jobs or PRs changed since, it requests a new review and closes the older one `superseded`; the older one stays in the database, closed.
+Idempotent: yes. When the latest review is `pending` for the current fingerprint, it returns that review with `"already": true` (its `path`, `summary` and `warnings` too) and writes nothing; the two refusals above are still checked first, so a Plan with no outline is refused even when a review made before the outline existed is pending. When the Jobs or PRs changed since, it requests a new review and closes the older one `superseded`; the older one stays in the database, closed.
 
 ### 4.7 `plan decide` (internal)
 
@@ -1393,7 +1400,7 @@ Every finding has every key, so the output is byte-stable: `{"rule": "<id>", "se
 
 The `parallel_write_overlap` message is exactly: `<job> and <other> have no dependency path and both name <paths joined by ", ">. A hint, not a conflict prediction: on the ledger of 2026-10-30, 5 of 209 such pairs (2.4%) hit a merge conflict. Settle it with cpd job edit <job> --needs <other>, or narrow touches.` The pair is defined in contract §2.7: `job` is the draft under review (the smaller key when both are drafts under review), `other` the other Job. The rule is a warning and never a refusal; it covers equal files only, exempts the lockfiles, and its limits are in contract §2.7.
 
-`plan review` and `plan render` also return the warnings, and `plan review` refuses with the first error finding's own code, never with `lint_failed` (added by PR lint-review).
+`plan review` and `plan render` also return the warnings, and `plan review` refuses with the first error finding's own code, never with `lint_failed`.
 
 Idempotent: yes. The same Plan twice gives byte-equal stdout, and nothing is written.
 
