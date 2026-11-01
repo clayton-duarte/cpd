@@ -1354,8 +1354,9 @@ fn events_follow_carries_the_attempt_ended_payload() {
         "stop_reason": "stop"
     });
     fx.merge_with_metrics(metrics.clone());
-    // `cpd events follow --until-idle --kind attempt-ended` replays the metrics payload.
-    let run = fx.fx.cpd(&["events", "follow", "--plan", PLAN, "--until-idle", "--since", "0", "--kind", "attempt-ended"]);
+    // `cpd events follow --until-idle --kind attempt-ended` replays the metrics payload. It owns its stdout, so it runs
+    // through the spawned binary (`env.cpd`), as `session_report.rs` does.
+    let run = fx.fx.env.cpd(&["events", "follow", "--plan", PLAN, "--until-idle", "--since", "0", "--kind", "attempt-ended"]);
     assert_eq!(run.exit, 0, "{run:?}");
     let lines: Vec<Value> = run.stdout.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
     assert_eq!(lines.len(), 1, "{lines:?}");
