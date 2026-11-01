@@ -429,6 +429,7 @@ mod tests {
 
     fn job(pr: &str, key: &str, needs: &[&str]) -> JobNode {
         JobNode {
+            kind: "work".into(),
             key: JobKey::parse(key).unwrap(),
             pr: Some(PrKey::parse(pr).unwrap()),
             seq: 0,

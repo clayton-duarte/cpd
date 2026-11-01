@@ -37,6 +37,7 @@ fn pr() -> PrNode {
 
 fn job(key: &str, status: JobStatus) -> JobNode {
     JobNode {
+        kind: "work".into(),
         key: JobKey::parse(key).unwrap(),
         pr: Some(PrKey::parse("api").unwrap()),
         seq: 0,
