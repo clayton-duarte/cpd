@@ -18,7 +18,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 6. [`attempt`](#6-attempt)
 7. [`review`](#7-review)
 8. [`ask` and `answer`](#8-ask-and-answer)
-9. [`pr`](#9-pr)
+9. [`workflow` and `pr`](#9-workflow-and-pr)
 10. [`session`](#10-session)
 10a. [`board`](#10a-board)
 11. [`events`](#11-events)
@@ -1811,9 +1811,11 @@ Effects: **rows**, one transaction: `status = answered`, `answer`, `answered_at`
 
 Idempotent: no; §3.5 refuses `answer` on an Escalation that is not `open`, so a second answer is `escalation_answered`.
 
-## 9. `pr`
+## 9. `workflow` and `pr`
 
-A Plan's PRs (R34, §2.2 PR, §3.8) and their pull requests, through `gh` (§7.6). `gh` failures are `gh_failed` (exit 1) with its stderr tail. Every command here works on **one PR**: `pr open`, `pr rebase`, `pr push`, `pr view`, `pr reply`, `pr rerun` and `pr post` select it by `--pr <key>` (§1.3: omitted, the Plan's one PR that is not `cancelled`); `pr add`, `pr edit`, `pr cancel` and `pr start` (§9.4–§9.7) take its key as their argument; `pr poll` has no `--pr`: it polls every open pull request of the User. `<repo>`, `<base>`, `<lead branch>` and `<lead worktree>` are the selected PR's (§7); `gh` runs with cwd = its Lead worktree, so it addresses the PR's repo.
+Two command groups (R3). **`workflow`** is the object's group (contract §2.2 Workflow): `cpd workflow add`, `cpd workflow edit`, `cpd workflow describe`, `cpd workflow cancel` and `cpd workflow start` (§9.4–§9.7). **`pr`** keeps the commands that act on a Workflow's pull request through `gh` (§7.6): `cpd pr open`, `pr poll`, `pr rebase`, `pr view`, `pr reply`, `pr post`, `pr rerun`, `pr push` and `pr merge` (§9.1–§9.3, §9.8–§9.10); `pr` is GitHub's word, unchanged. **The old forms are usage errors, no alias, shim or deprecation** (pro-d138): `cpd pr add`, `cpd pr edit`, `cpd pr describe`, `cpd pr cancel` and `cpd pr start` are refused `usage` (exit 2) as unknown subcommands, and so is `--pr <key>` on the commands that now take `--workflow <key>` (R4). Quotes that keep the current words are verbatim strings, not names of the object: the stored `cancel_reason` `pr merged`, the Inbox subjects `pr:<owner>/<repo>#<n>`, the dialog title `Post Pull Request`, and `gh`'s own arguments.
+
+`gh` failures are `gh_failed` (exit 1) with its stderr tail. Every command here works on **one Workflow** (through its pull request, for the `pr` group): `pr open`, `pr rebase`, `pr push`, `pr view`, `pr reply`, `pr rerun` and `pr post` select it by `--workflow <key>` (§1.3: omitted, the Plan's one Workflow that is not `cancelled`); `workflow add`, `workflow edit`, `workflow cancel` and `workflow start` (§9.4, §9.5, §9.6, §9.7) take its key as their argument, and `workflow describe` selects by `--workflow <key>`; `pr poll` has no `--workflow`: it polls every open pull request of the User. `<repo>`, `<base>`, `<lead branch>` and `<lead worktree>` are the selected Workflow's (§7); `gh` runs with cwd = its Lead worktree, so it addresses the Workflow's repo.
 
 ### 9.1 `pr open`
 
