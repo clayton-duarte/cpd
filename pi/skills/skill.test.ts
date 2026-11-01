@@ -247,9 +247,12 @@ test("cpd-lead: no local review before the PR opens, and the overlaps are settle
   assert.match(approving, /cpd context note/);
 });
 
-test("the skill adds later batches as drafts and approves each with cpd_plan_review in any phase", () => {
+test("the skill adds a scoped waiting Job queued with --needs and approves undecided batches with cpd_plan_review in any phase", () => {
   const text = skillFiles("cpd-lead")[0]!.text;
-  assert.match(text, /--pr <key> --draft/, "later batches are added with job add --draft");
+  assert.match(text, /--pr <key> --needs <k1,k2>\n/, "a scoped Job that waits is added queued with its needs link");
+  assert.doesNotMatch(text, /--needs <k1,k2> --draft/, "a waiting Job is never held as a draft (hs-d822)");
+  assert.doesNotMatch(text, /--draft[^\n`]*--needs|--needs[^\n`]*--draft/, "no command holds a draft with a needs link");
+  assert.doesNotMatch(text, /waits on an explore Job|whose `--needs` name an explore Job/, "the explore-waiting form is not a legal draft form (hs-n677)");
   assert.match(text, /### Starting a later batch[\s\S]*cpd_plan_review[\s\S]*### Appending fixes/, "a later batch starts with a Plan review");
   assert.doesNotMatch(text, /no Plan review for appended work/, "the append-in-chat flow is gone");
   assert.ok(synopses().get("job add")!.has("--draft"), "commands.md documents job add --draft");
@@ -532,7 +535,10 @@ test("the skills' list of pr-feedback reasons and of ladder causes is the contra
 test("cpd-lead registers planned work at once; cpd-manager checks it", () => {
   const lead = skillFiles("cpd-lead")[0]!.text;
   assert.match(lead, /Register planned work at once/);
-  assert.match(lead, /cpd job add <k> --draft --title/);
+  assert.match(lead, /cpd job add <k> --draft --title/, "the stub form stays for genuinely unscoped work");
+  assert.match(lead, /--needs <k1,k2>`, no `--draft`/, "a scoped Job that waits is queued with its needs link (hs-d822)");
+  assert.match(lead, /never as a waiting draft/);
+  assert.match(lead, /A draft is legal only while it is a stub or under review/, "the two legal draft forms are stated (hs-n677)");
   assert.match(lead, /cpd pr add <key> --repo <path> --title "<title>" --needs/);
   assert.match(lead, /pr_title_required/);
   assert.match(lead, /cpd pr edit <key> --title/);
