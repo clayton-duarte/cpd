@@ -170,6 +170,7 @@ fn summary_markdown(s: &Snapshot, kind: &summary::Kind) -> String {
             prs: &s.prs,
             jobs: &s.jobs,
             overlaps: &s.overlaps,
+            lint: &warnings_of(s),
             base_prs: &s.base_prs,
         },
     )
@@ -185,6 +186,7 @@ fn plan_markdown(s: &Snapshot, heading: &render::Heading) -> String {
         &s.overlaps,
         &s.open_tier,
         &s.display,
+        &warnings_of(s),
     )
 }
 
@@ -321,10 +323,15 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
 
 /// The findings of severity `warn`, as JSON, in finding order.
 fn warnings(s: &Snapshot) -> Vec<Value> {
+    warnings_of(s).iter().map(lint::Finding::to_json).collect()
+}
+
+/// The findings of severity `warn`, in finding order.
+fn warnings_of(s: &Snapshot) -> Vec<lint::Finding> {
     s.findings
         .iter()
         .filter(|f| f.severity() == Severity::Warn)
-        .map(lint::Finding::to_json)
+        .cloned()
         .collect()
 }
 

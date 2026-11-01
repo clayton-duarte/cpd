@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use super::jobs::Job;
+use super::lint::Finding;
 use super::overlap::Overlap;
 use super::prs::PrRow;
 use super::render::{cell, inline};
@@ -35,6 +36,8 @@ pub struct Input<'a> {
     pub prs: &'a [PrRow],
     pub jobs: &'a [Job],
     pub overlaps: &'a [Overlap],
+    /// The lint warnings to show.
+    pub lint: &'a [Finding],
     /// The base PR (`<plan>/<key>`) of each stacked PR, by PR key (contract §2.2 "The base PR").
     pub base_prs: &'a BTreeMap<String, String>,
 }

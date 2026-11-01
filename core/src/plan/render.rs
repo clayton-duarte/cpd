@@ -12,6 +12,7 @@ use serde_json::Value;
 
 use super::display::Display;
 use super::jobs::{Job, JobSpec};
+use super::lint::Finding;
 use super::overlap::Overlap;
 use super::prs::PrRow;
 
@@ -638,6 +639,7 @@ pub fn markdown(
     overlaps: &[Overlap],
     open_tier: &str,
     display: &Display,
+    _lint: &[Finding],
 ) -> String {
     let shown = Shown {
         all_jobs: jobs,
@@ -778,7 +780,8 @@ mod tests {
                 &[],
                 &[],
                 "S2",
-                &Display::default()
+                &Display::default(),
+                &[]
             ),
             "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n"
         );
@@ -854,6 +857,7 @@ mod tests {
             &[],
             open_tier,
             &Display::of(prs),
+            &[],
         )
     }
 

@@ -151,6 +151,7 @@ fn assert_every_job_is_one_row(store: &mut Store) {
                 &[],
                 "S2",
                 &Display::of(&prs),
+                &[],
             );
             let mut stmt = conn.prepare("SELECT key FROM jobs WHERE plan = ?1")?;
             let keys = stmt

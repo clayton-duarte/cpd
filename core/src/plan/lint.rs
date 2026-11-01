@@ -92,6 +92,11 @@ impl Finding {
         self.rule.severity()
     }
 
+    /// The summary row of the finding (after `<rule>: `).
+    pub fn row(&self) -> String {
+        String::new()
+    }
+
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "rule": self.rule.as_str(),

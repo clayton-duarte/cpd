@@ -30,6 +30,8 @@ pub mod lint;
 mod lint_cmd;
 #[cfg(test)]
 mod lint_tests;
+#[cfg(test)]
+mod lint_text_tests;
 mod list;
 pub(crate) mod lock;
 mod new;

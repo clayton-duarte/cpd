@@ -171,6 +171,7 @@ fn plan_render_prints_the_shown_tier_in_the_table_and_the_section() {
                 &[],
                 "O1",
                 &display,
+                &[],
             ))
         })
         .unwrap();
