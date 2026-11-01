@@ -92,6 +92,30 @@ impl Finding {
         self.rule.severity()
     }
 
+    /// The summary row of the finding (after `<rule>: `).
+    pub fn row(&self) -> String {
+        match self.rule {
+            Rule::ParallelWriteOverlap => {
+                let mut paths = self
+                    .paths
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if self.paths.len() > 3 {
+                    paths.push_str(&format!(" +{}", self.paths.len() - 3));
+                }
+                format!(
+                    "{} and {} both name {paths} (a hint, not a conflict prediction)",
+                    self.job.as_deref().unwrap_or(""),
+                    self.other.as_deref().unwrap_or("")
+                )
+            }
+            _ => self.message.clone(),
+        }
+    }
+
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "rule": self.rule.as_str(),

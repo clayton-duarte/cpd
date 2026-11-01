@@ -112,6 +112,7 @@ fn render(jobs: &[Job]) -> String {
         &[],
         "S2",
         &Display::of(&prs),
+        &[],
     )
 }
 
@@ -165,6 +166,7 @@ fn render_no_prs(jobs: &[Job], phase: &str) -> String {
         &[],
         "S2",
         &Display::default(),
+        &[],
     )
 }
 

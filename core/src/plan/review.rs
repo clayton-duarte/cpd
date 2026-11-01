@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use super::display::Display;
 use super::fingerprint::{load_prs, plan_fingerprint};
 use super::jobs::{self, Job};
+use super::lint::{self, Severity};
 use super::outline::Outline;
 use super::overlap::{self, Overlap};
 use super::prs::PrRow;
@@ -123,6 +124,8 @@ struct Snapshot {
     display: Display,
     review: Option<Review>,
     fingerprint: String,
+    /// The lint findings of the Plan, in catalogue order.
+    findings: Vec<lint::Finding>,
 }
 
 fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
@@ -130,16 +133,19 @@ fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
     env.store.read(|conn| {
         let (prs, jobs) = (load_prs(conn, id)?, jobs::load(conn, id)?);
         let overlaps = overlap::find(&prs, &jobs, &overlap::load_others(conn, id)?);
+        let plan_row = row::load(conn, id)?;
+        let findings = super::lint_cmd::find(&plan_row, &prs, &jobs);
         Ok(Snapshot {
             open_tier,
             base_prs: base_prs(conn, id)?,
             display: Display::load(conn, id)?,
-            plan: row::load(conn, id)?,
+            plan: plan_row,
             review: latest(conn, id)?,
             fingerprint: plan_fingerprint(conn, id)?,
             prs,
             jobs,
             overlaps,
+            findings,
         })
     })
 }
@@ -163,6 +169,7 @@ fn summary_markdown(s: &Snapshot, kind: &summary::Kind) -> String {
             prs: &s.prs,
             jobs: &s.jobs,
             overlaps: &s.overlaps,
+            lint: &warnings_of(s),
             base_prs: &s.base_prs,
         },
     )
@@ -178,6 +185,7 @@ fn plan_markdown(s: &Snapshot, heading: &render::Heading) -> String {
         &s.overlaps,
         &s.open_tier,
         &s.display,
+        &warnings_of(s),
     )
 }
 
@@ -209,6 +217,7 @@ pub(super) fn render(args: RenderArgs) -> Result<Output, CpdError> {
         "draft_jobs": s.jobs.iter().filter(|j| j.is_under_review()).count(),
         "prs": s.prs.iter().filter(|p| p.status != "cancelled").count(),
         "overlaps": s.overlaps.iter().map(Overlap::to_json).collect::<Vec<_>>(),
+        "warnings": warnings(&s),
     })))
 }
 
@@ -234,10 +243,9 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     if drafts == 0 {
         return Err(no_draft_jobs(&id));
     }
-    env.store
-        .read(|conn| check_drafts_complete(conn, &id, jobs))?;
-    check_outline(&id, &s)?;
-    super::shape::check(&id, &s.prs, jobs)?;
+    if let Some(refusal) = lint::first_error(&s.findings) {
+        return Err(refusal);
+    }
     if let Some(r) = latest_review
         .as_ref()
         .filter(|r| r.status == "pending" && r.fingerprint == fingerprint)
@@ -247,6 +255,7 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
             "summary": summary_review_md(&env.home, &id, r.id).display().to_string(),
             "next": REVIEW_NEXT,
             "already": true,
+            "warnings": warnings(&s),
         })));
     }
 
@@ -307,7 +316,22 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
         "review": {"id": review, "fingerprint": fingerprint, "status": "pending", "requested_at": requested_at},
         "summary": summary.display().to_string(),
         "next": REVIEW_NEXT,
+        "warnings": warnings(&s),
     })))
+}
+
+/// The findings of severity `warn`, as JSON, in finding order.
+fn warnings(s: &Snapshot) -> Vec<Value> {
+    warnings_of(s).iter().map(lint::Finding::to_json).collect()
+}
+
+/// The findings of severity `warn`, in finding order.
+fn warnings_of(s: &Snapshot) -> Vec<lint::Finding> {
+    s.findings
+        .iter()
+        .filter(|f| f.severity() == Severity::Warn)
+        .cloned()
+        .collect()
 }
 
 /// Why [`close_reviews`] closes the pending reviews of a Plan.
@@ -363,43 +387,6 @@ pub fn close_reviews(
         closed.push(review);
     }
     Ok(closed)
-}
-
-/// The Plan has an outline, and it says when each PR with a draft Job is done (§4.6, D3): else `outline_missing` or
-/// `outline_incomplete` (`details.prs`, in key order). Before anything is written.
-fn check_outline(id: &PlanId, s: &Snapshot) -> Result<(), CpdError> {
-    let Some(outline) = &s.plan.outline else {
-        return Err(CpdError::new(
-            ErrorCode::OutlineMissing,
-            format!(
-                "Plan {id} has no outline: write what was settled with the User, then ask again."
-            ),
-        )
-        .with("plan", id.as_str())
-        .with("next", "cpd plan outline --file <outline.json>"));
-    };
-    let mut without: Vec<&str> = s
-        .prs
-        .iter()
-        .filter(|p| {
-            p.status != "cancelled"
-                && s.jobs
-                    .iter()
-                    .any(|j| j.is_draft() && j.pr_str() == p.key.as_str())
-        })
-        .map(|p| p.key.as_str())
-        .filter(|key| !outline.done_when.contains_key(*key))
-        .collect();
-    if without.is_empty() {
-        return Ok(());
-    }
-    without.sort();
-    Err(CpdError::new(
-        ErrorCode::OutlineIncomplete,
-        format!("The outline of Plan {id} has no done_when for the PRs {}: add them with cpd plan outline, then ask again.", without.join(", ")),
-    )
-    .with("plan", id.as_str())
-    .with("prs", without))
 }
 
 pub(super) fn no_draft_jobs(id: &PlanId) -> CpdError {
