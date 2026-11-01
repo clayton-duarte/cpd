@@ -102,6 +102,7 @@ fn pr_node(pull: Pull) -> PrNode {
 
 fn failed_job() -> JobNode {
     JobNode {
+        kind: "work".into(),
         key: JobKey::parse("api-1").unwrap(),
         pr: Some(PrKey::parse("api").unwrap()),
         seq: 0,

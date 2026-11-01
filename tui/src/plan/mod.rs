@@ -714,6 +714,7 @@ fn sample_pr(key: &str) -> read::PrNode {
 #[cfg(test)]
 fn sample_job(pr: &str, key: &str) -> read::JobNode {
     read::JobNode {
+        kind: "work".into(),
         key: cpd_core::ids::JobKey::parse(key).unwrap(),
         pr: Some(cpd_core::ids::PrKey::parse(pr).unwrap()),
         seq: 0,
@@ -897,6 +898,7 @@ mod tests {
             lead_dot: None,
         };
         let job = |n: usize| JobNode {
+            kind: "work".into(),
             key: JobKey::parse(&format!("job-{n}")).unwrap(),
             pr: Some(pr.clone()),
             seq: 0,

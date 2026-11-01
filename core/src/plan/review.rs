@@ -152,7 +152,7 @@ pub(super) fn render(args: RenderArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let s = snapshot(&mut env, &id)?;
     let path = env.home.plan_md(&id);
-    write_file(&path, &plan_markdown(&s, &render::Heading::Plan { title: &s.plan.title }))?;
+    write_file(&path, &plan_markdown(&s, &render::Heading::Plan { title: &s.plan.title, plan: s.plan.id.as_str() }))?;
     let summary = summary_md(&env.home, &id);
     write_file(&summary, &summary_markdown(&s, &summary::Kind::Plan { full_plan: &path }))?;
     Ok(Output::success(json!({
@@ -198,7 +198,7 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     // The files first, so the review row never names a file that is missing.
     let number = latest_review.as_ref().map_or(0, |r| r.id.number().get()) + 1;
     let review = ReviewId::new(std::num::NonZeroU32::new(number).expect("one more than a count"));
-    write_file(&env.home.plan_md(&id), &plan_markdown(&s, &render::Heading::Plan { title: &s.plan.title }))?;
+    write_file(&env.home.plan_md(&id), &plan_markdown(&s, &render::Heading::Plan { title: &s.plan.title, plan: s.plan.id.as_str() }))?;
     let plan_summary = summary_md(&env.home, &id);
     write_file(&plan_summary, &summary_markdown(&s, &summary::Kind::Plan { full_plan: &env.home.plan_md(&id) }))?;
     let summary = summary_review_md(&env.home, &id, review);

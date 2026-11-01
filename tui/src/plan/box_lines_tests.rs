@@ -35,6 +35,7 @@ fn pr(key: &str, repo: &str, needs: &[&str]) -> PrNode {
 
 fn job(pr: &str, key: &str, status: JobStatus, tier: Option<&str>, needs: &[&str]) -> JobNode {
     JobNode {
+        kind: "work".into(),
         status,
         tier: tier.map(|t| Tier::parse(t).unwrap()),
         shown_tier: tier.map(|t| Tier::parse(t).unwrap()),
