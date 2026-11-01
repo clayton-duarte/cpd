@@ -7,6 +7,7 @@
 //! - [`lead`]: Lead windows in the cockpit (`plan new`, `plan phase plan`);
 //! - [`archive`]: `plan archive` and `unarchive`, and the cascade `context archive` shares;
 //! - [`cancel`]: `plan cancel`, which abandons a Plan;
+//! - [`shared`]: `is_shared`, the predicate for lockfile paths (contract §2.6);
 //! - `new`, `list`, `show`, `phase`, `review`, `lock`: the commands.
 
 pub mod archive;
@@ -42,6 +43,9 @@ mod render_all_jobs_tests;
 mod review;
 pub mod row;
 pub(crate) mod shape;
+pub mod shared;
+#[cfg(test)]
+mod shared_tests;
 mod show;
 #[cfg(test)]
 mod sql_trace;
