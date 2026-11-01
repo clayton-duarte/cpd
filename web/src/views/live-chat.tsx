@@ -14,6 +14,7 @@
 // time and kept above it.
 import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent, type ReactElement, type ReactNode } from "react";
 import {
+  ArrowDownIcon,
   BracesIcon,
   BrainIcon,
   CircleAlertIcon,
@@ -34,11 +35,9 @@ import { Button } from "../components/ui/button";
 import { CodeBlock, CodeBlockContent } from "../components/ui/code-block";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { InputGroup, InputGroupButton, InputGroupTextarea } from "../components/ui/input-group";
-import { Marker, MarkerContent, MarkerIcon } from "../components/ui/marker";
 import { Message, MessageContent } from "../components/ui/message";
 import {
   MessageScroller,
-  MessageScrollerButton,
   MessageScrollerContent,
   MessageScrollerItem,
   MessageScrollerProvider,
@@ -56,6 +55,7 @@ import {
   TraceTitle,
 } from "../components/ui/trace";
 import type { TranscriptMessage, TranscriptPart, TranscriptToolPart } from "../transcript";
+import { useThreadScroll } from "../hooks/use-thread-scroll";
 
 /** The live Chat: the folded transcript of the given Session and a send box. */
 export interface LiveChatProps {
@@ -234,6 +234,50 @@ function ToolStep({ part }: { part: TranscriptToolPart }): ReactElement {
   );
 }
 
+/**
+ * One cpd notice (a Context dump, an engine Event, an Escalation): collapsed to its first
+ * non-empty line plus a muted `N lines` count, opening to the whole text in a height-capped
+ * scrolling box (web/README.md "A cpd notice collapses to its summary line", hs-d831). A notice
+ * of one line renders plainly - no count and no expand control. Built on Trace + TraceCollapsible
+ * so it reads exactly like the Reasoning row.
+ */
+function Notice({ text }: { text: string }): ReactElement {
+  const lines = text.split("\n");
+  const first = lines.find((line) => line.trim() !== "") ?? "";
+
+  if (lines.length <= 1) {
+    return (
+      <Trace data-slot="notice">
+        <TraceLine>
+          <TraceIcon>
+            <CircleAlertIcon />
+          </TraceIcon>
+          <TraceTitle className="whitespace-pre-wrap">{first}</TraceTitle>
+        </TraceLine>
+      </Trace>
+    );
+  }
+
+  return (
+    <Trace data-slot="notice">
+      <TraceCollapsible>
+        <TraceCollapsibleTrigger>
+          <TraceLine>
+            <TraceIcon>
+              <CircleAlertIcon />
+            </TraceIcon>
+            <TraceTitle>{first}</TraceTitle>
+            <TraceDescription data-slot="notice-count">{`${lines.length} lines`}</TraceDescription>
+          </TraceLine>
+        </TraceCollapsibleTrigger>
+        <TraceCollapsibleContent className="max-h-96 overflow-y-auto scrollbar-themed whitespace-pre-wrap">
+          {text}
+        </TraceCollapsibleContent>
+      </TraceCollapsible>
+    </Trace>
+  );
+}
+
 /** One image of a turn, inline as the data URL pi stored. */
 function Image({ part }: { part: Extract<TranscriptPart, { kind: "image" }> }): ReactElement {
   return (
@@ -249,20 +293,7 @@ function Image({ part }: { part: Extract<TranscriptPart, { kind: "image" }> }): 
 function Turn({ message }: { message: TranscriptMessage }): ReactElement | null {
   const parts: TranscriptPart[] = message.parts ?? [{ kind: "text", text: message.text }];
 
-  if (message.role === "system") {
-    // A cpd notice (a session message, a Plan review request) is long and multi-line: the plain
-    // Marker shape reads it left to right, where the separator variant would squeeze it.
-    return (
-      <Marker className="items-start border-s-2 border-border ps-2">
-        <MarkerIcon className="mt-0.5">
-          <CircleAlertIcon />
-        </MarkerIcon>
-        <MarkerContent className="max-w-full text-xs whitespace-pre-wrap">
-          {message.text}
-        </MarkerContent>
-      </Marker>
-    );
-  }
+  if (message.role === "system") return <Notice text={message.text} />;
 
   if (message.role === "user") {
     return (
@@ -351,6 +382,11 @@ export function LiveChat({ api, session }: LiveChatProps): ReactElement {
     return [...older.filter((message) => !seen.has(message.id)), ...tail];
   }, [older, tail]);
 
+  // Where the viewport sits is the authored rule's, not the primitive's (web/README.md "The
+  // thread follows its live edge"): a frame pins the view while the reader follows, and scrolling
+  // more than 40% above the newest content releases it.
+  const { viewportRef, following, jumpToLatest } = useThreadScroll(messages);
+
   const loadEarlier = (): void => {
     if (api === undefined || sessionId === undefined || loadingOlder) return;
     const oldest = messages[0]?.id;
@@ -399,8 +435,8 @@ export function LiveChat({ api, session }: LiveChatProps): ReactElement {
     // edge. The person's turns deliberately carry no `scrollAnchor` (see the comment on the
     // turn rows below): an anchor settles that turn at the top and holds the view in
     // `anchored-to-message`, so a live session's newest output never arrives in view.
-    <MessageScrollerProvider autoScroll defaultScrollPosition="end">
-      <div className="flex h-dvh flex-col">
+    <MessageScrollerProvider autoScroll={false} defaultScrollPosition="end">
+      <div className="flex h-full min-h-0 flex-col">
         {unavailable ? (
           <Empty className="flex-1">
             <EmptyHeader>
@@ -418,8 +454,8 @@ export function LiveChat({ api, session }: LiveChatProps): ReactElement {
           </Empty>
         ) : (
           <MessageScroller className="min-h-0 flex-1">
-            <MessageScrollerViewport>
-              <MessageScrollerContent>
+            <MessageScrollerViewport ref={viewportRef}>
+              <MessageScrollerContent className="pb-8">
                 {!noMore && (
                   <MessageScrollerItem className="min-w-0" messageId="load-earlier">
                     <Button
@@ -451,7 +487,22 @@ export function LiveChat({ api, session }: LiveChatProps): ReactElement {
                 ))}
               </MessageScrollerContent>
             </MessageScrollerViewport>
-            <MessageScrollerButton />
+            {/* The jump-to-latest control replaces the vendored `MessageScrollerButton`, whose
+                `data-active` came from the primitive's own 8px edge. It is rendered only while
+                following is released, and it pins the view and re-engages following on click. */}
+            {!following && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="icon-sm"
+                data-slot="thread-jump"
+                aria-label="Jump to latest"
+                className="absolute inset-s-1/2 bottom-4 -translate-x-1/2 border-border bg-background text-foreground hover:bg-muted"
+                onClick={jumpToLatest}
+              >
+                <ArrowDownIcon />
+              </Button>
+            )}
           </MessageScroller>
         )}
 

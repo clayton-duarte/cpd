@@ -113,7 +113,10 @@ function ContextColumn({
 }): ReactElement {
   return (
     <div className="h-full overflow-hidden [transform:translateZ(0)]">
-      <SidebarProvider style={{ "--sidebar-width": "100%" } as CSSProperties}>
+      <SidebarProvider
+        className="h-full min-h-0"
+        style={{ "--sidebar-width": "100%" } as CSSProperties}
+      >
         <AppSidebar sessions={sessions} selectedId={selectedId} onSelectSession={onSelectSession} />
       </SidebarProvider>
     </div>

@@ -1,6 +1,14 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* The shell's one scrolling-surface utility (web/README.md "Themed scrollbars", hs-d830): a thin
+   thumb mixing the theme's foreground into the track. Applied to the Chat viewport, each rail's
+   SidebarContent and the Code Block's scrolling content. */
+@utility scrollbar-themed {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--foreground) 22%, transparent) transparent;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -111,10 +119,21 @@
 }
 
 @layer base {
+  /* The page itself never scrolls: every scrollable thing is a column's own list (web/README.md
+     "The resizable three-column shell"). */
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
   * {
     @apply border-border outline-ring/50;
   }
   body {
     @apply bg-background text-foreground;
+    overflow: hidden;
+  }
+  .dark {
+    color-scheme: dark;
   }
 }

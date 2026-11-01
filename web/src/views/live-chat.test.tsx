@@ -10,6 +10,17 @@
 // so unlike the synchronous views harness this file needs a DOM: jsdom in a per-file comment, and
 // the client renderer drives the effects and events. Only authored code is tested; the `LiveApi`
 // is an injected fake, so no socket, server or network.
+//
+// This file also pins the amended contract of web/README.md "The thread follows its live edge",
+// "A cpd notice collapses to its summary line" and "Themed scrollbars". The four scroll tests
+// pin the authored follow rule (web/src/hooks/use-thread-scroll.ts): following lands a frame at
+// the newest content and carries `data-autoscrolling`; a view released past 40% of the viewport
+// keeps its `scrollTop` and shows `button[data-slot="thread-jump"]`; scrolling back inside the
+// margin re-engages; the control pins the view and disappears. jsdom has no layout, so those
+// tests stub the viewport's metrics and assert the rule's `scrollTop` and `data-autoscrolling` —
+// never a vendored component's internals. The two notice tests pin the collapsed row (its first
+// non-empty line, its `N lines` count, no body) and its opened whole text. The scrollbar test
+// pins `scrollbar-themed` on the Chat's viewport and on a code block's content surface.
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test } from "vitest";
@@ -152,8 +163,11 @@ function buttonWithText(text: string): HTMLButtonElement | null {
   );
 }
 
-/** Renders the Chat for one Session and folds a hand-written pi session JSONL onto it. */
-async function renderJsonl(jsonl: string): Promise<void> {
+/**
+ * Renders the Chat for one Session, folds a hand-written pi session JSONL onto it, and returns
+ * the fake api's frame emitter so a test can drive a later frame.
+ */
+async function renderChat(jsonl: string): Promise<(frame: SnapshotFrame) => void> {
   const session: TreeSession = { id: "s1", role: "lead", runner: "pi", context: "ctx", name: "Lead one" };
   const { api, emit } = fakeApi([session]);
   await act(async () => {
@@ -164,6 +178,12 @@ async function renderJsonl(jsonl: string): Promise<void> {
     emit(toSnapshotFrame(parsePiSession(jsonl)));
     await flush();
   });
+  return emit;
+}
+
+/** Renders the Chat for one Session and folds a hand-written pi session JSONL onto it. */
+async function renderJsonl(jsonl: string): Promise<void> {
+  await renderChat(jsonl);
 }
 
 /** One assistant text turn line and its wrapper, for the JSONL fixtures. */
@@ -300,6 +320,56 @@ test("a cpd notice renders as a Marker, never as a Bubble", async () => {
     ].join("\n"),
   );
   expect(container.textContent).toContain(notice);
+});
+
+/** One system notice line: a displayed cpd `custom_message`, never a delivered person's turn. */
+function noticeLine(id: string, content: string): string {
+  return JSON.stringify({ type: "custom_message", id, display: true, content });
+}
+
+test("a multi-line cpd notice renders one summary line with its line count and opens to the whole text", async () => {
+  const lines = [
+    "cpd engine notice: the plan review was approved",
+    "context: web-chat-live",
+    "attempt: chat-tests-a1",
+    "the rest of the dump",
+    "the last line of the dump",
+  ];
+  await renderJsonl(noticeLine("n1", lines.join("\n")));
+
+  const row = container.querySelector('[data-slot="notice"]');
+  expect(row).not.toBeNull();
+  if (row === null) return;
+  const trigger = row.querySelector<HTMLButtonElement>("button[aria-expanded]");
+  expect(trigger).not.toBeNull();
+  if (trigger === null) return;
+
+  // Collapsed: one summary line (the notice's first non-empty line), its count, and no body.
+  expect(trigger.textContent ?? "").toContain(lines[0] ?? "");
+  const count = row.querySelector('[data-slot="notice-count"]');
+  expect(count).not.toBeNull();
+  expect(count?.textContent ?? "").toContain("5 lines");
+  expect(container.textContent ?? "").not.toContain("the last line of the dump");
+
+  // Opened: the whole text renders.
+  await act(async () => {
+    trigger.click();
+    await flush();
+  });
+  expect(container.textContent ?? "").toContain("the last line of the dump");
+  expect(container.textContent ?? "").toContain("context: web-chat-live");
+});
+
+test("a one-line cpd notice renders plainly, with no line count and no expand control", async () => {
+  const notice = "cpd engine notice: the Session was archived";
+  await renderJsonl(noticeLine("n1", notice));
+
+  const row = container.querySelector('[data-slot="notice"]');
+  expect(row).not.toBeNull();
+  if (row === null) return;
+  expect(row.textContent ?? "").toContain(notice);
+  expect(row.querySelector('[data-slot="notice-count"]')).toBeNull();
+  expect(row.querySelector("button[aria-expanded]")).toBeNull();
 });
 
 test("an image part renders inline from its data URL", async () => {
@@ -598,13 +668,17 @@ test("a delivered message renders as the person's Bubble with its delivery line,
   expect(bubbles[0]!.textContent).not.toContain("NOTICE: plan review");
 });
 
-// The Chat thread and where its viewport sits: web/README.md "### The thread follows its live
-// edge". The thread opens at its newest turn and follows new output while the reader stays at
-// that live edge; no turn carries `scrollAnchor`, because an anchor settles that turn at the top
-// of the viewport and holds the mode at `anchored-to-message` — which is why new output never
-// arrived in view — and the Scroll to End control is the way back when the reader scrolls away.
-// jsdom has no layout, so the scrolling itself is not asserted: what is pinned is the composition
-// the bug came from — every rendered row's `data-scroll-anchor` and the control's `data-active`.
+// The Chat thread and where its viewport sits: web/README.md "The thread follows its live edge".
+// The thread opens at its newest turn and follows new output while the reader stays at that live
+// edge; no turn carries `scrollAnchor`, because an anchor settles that turn at the top of the
+// viewport and holds the mode at `anchored-to-message`, which is why new output never arrived in
+// view. The follow rule itself is authored (`web/src/hooks/use-thread-scroll.ts`), so the four
+// tests below pin it directly: following pins the newest content and carries
+// `data-autoscrolling`; a view released past 40% of the viewport keeps its `scrollTop` across a
+// frame and shows `button[data-slot="thread-jump"]`; scrolling back inside the margin re-engages;
+// and the control pins the view and disappears. jsdom has no layout, so each test stubs the
+// viewport's `clientHeight`/`scrollHeight`, reports a `scrollTop`, and asserts the authored rule's
+// `scrollTop` and `data-autoscrolling` — never a vendored component's internals.
 test("no turn in the Chat carries a scroll anchor, which would settle that turn at the top and hold the view there", async () => {
   await renderJsonl(
     [
@@ -625,31 +699,150 @@ test("no turn in the Chat carries a scroll anchor, which would settle that turn 
   }
 });
 
-test("the Chat renders a Scroll to End control, inert while the reader is at the live edge", async () => {
-  await renderJsonl(
+/** Two turns of JSONL: the tail the Chat first shows. */
+const TWO_TURNS = [
+  messageLine("u1", "user", "the person's turn"),
+  messageLine("a1", "assistant", [{ type: "text", text: "the first answer" }]),
+].join("\n");
+
+/** The same tail plus the newest turn a later frame adds. */
+const THREE_TURNS = [
+  messageLine("u1", "user", "the person's turn"),
+  messageLine("a1", "assistant", [{ type: "text", text: "the first answer" }]),
+  messageLine("a2", "assistant", [{ type: "text", text: "the newest answer" }]),
+].join("\n");
+
+/** The Chat's scrolling viewport: the vendored `[data-slot="message-scroller-viewport"]`. */
+function chatViewport(): HTMLElement {
+  const element = container.querySelector<HTMLElement>('[data-slot="message-scroller-viewport"]');
+  if (element === null) throw new Error("the Chat's viewport is not rendered");
+  return element;
+}
+
+/**
+ * jsdom has no layout: set the viewport's `clientHeight` and `scrollHeight`, the metrics the
+ * authored rule reads. The vendored primitive calls `Element.scrollTo` (absent in jsdom) while its
+ * own `autoScroll` is on, so a no-op `scrollTo` keeps the base branch's primitive from throwing
+ * and leaves the assertions to fail on the authored rule, not on a missing DOM method.
+ */
+function measureViewport(clientHeight: number, scrollHeight: number): HTMLElement {
+  const element = chatViewport();
+  Object.defineProperty(element, "clientHeight", { configurable: true, value: clientHeight });
+  Object.defineProperty(element, "scrollHeight", { configurable: true, value: scrollHeight });
+  if (typeof element.scrollTo !== "function") {
+    element.scrollTo = (() => {}) as unknown as HTMLElement["scrollTo"];
+  }
+  return element;
+}
+
+/** Reports a reader position: set `scrollTop`, then fire the 'scroll' the authored rule listens for. */
+function reportScroll(element: HTMLElement, scrollTop: number): void {
+  element.scrollTop = scrollTop;
+  element.dispatchEvent(new Event("scroll", { bubbles: true }));
+}
+
+/** Grows the viewport's content, the way a frame that adds a turn does in a real layout. */
+function growTo(element: HTMLElement, scrollHeight: number): void {
+  Object.defineProperty(element, "scrollHeight", { configurable: true, value: scrollHeight });
+}
+
+test("a new frame keeps the view at the newest content while the reader follows", async () => {
+  const emit = await renderChat(TWO_TURNS);
+  // A 700px viewport over 3000px of content, the reader at the live edge (gap 0).
+  const view = measureViewport(700, 3000);
+  reportScroll(view, 2300);
+
+  // A frame adds a turn: the surface grows, and the following view lands on the new bottom.
+  growTo(view, 3400);
+  await act(async () => {
+    emit(toSnapshotFrame(parsePiSession(THREE_TURNS)));
+    await flush();
+  });
+
+  expect(view.scrollTop).toBe(2700);
+  expect(view.hasAttribute("data-autoscrolling")).toBe(true);
+  expect(container.querySelector('button[data-slot="thread-jump"]')).toBeNull();
+});
+
+test("a view scrolled more than 40% of the viewport above the newest content stays put across a frame and shows the jump-to-latest control", async () => {
+  const emit = await renderChat(TWO_TURNS);
+  const view = measureViewport(700, 3000);
+  // 1500 is 800px above the newest content: more than 40% of 700 (280), so following is released.
+  reportScroll(view, 1500);
+
+  expect(container.querySelector('button[data-slot="thread-jump"]')).not.toBeNull();
+  expect(view.hasAttribute("data-autoscrolling")).toBe(false);
+
+  // A released view never moves on a frame.
+  growTo(view, 3400);
+  await act(async () => {
+    emit(toSnapshotFrame(parsePiSession(THREE_TURNS)));
+    await flush();
+  });
+
+  expect(view.scrollTop).toBe(1500);
+  expect(container.querySelector('button[data-slot="thread-jump"]')).not.toBeNull();
+});
+
+test("scrolling back inside the margin re-engages following and the next frame pins", async () => {
+  const emit = await renderChat(TWO_TURNS);
+  const view = measureViewport(700, 3000);
+  reportScroll(view, 1500); // released: 800px above the newest content
+  reportScroll(view, 2100); // back inside the margin: 200px above, under the 280px threshold
+
+  growTo(view, 3400);
+  await act(async () => {
+    emit(toSnapshotFrame(parsePiSession(THREE_TURNS)));
+    await flush();
+  });
+
+  expect(view.scrollTop).toBe(2700);
+  expect(container.querySelector('button[data-slot="thread-jump"]')).toBeNull();
+  expect(view.hasAttribute("data-autoscrolling")).toBe(true);
+});
+
+test("clicking the jump-to-latest control pins the view and removes the control", async () => {
+  await renderChat(TWO_TURNS);
+  const view = measureViewport(700, 3000);
+  reportScroll(view, 1500);
+
+  const jump = container.querySelector<HTMLButtonElement>('button[data-slot="thread-jump"]');
+  expect(jump).not.toBeNull();
+  if (jump === null) return;
+  await act(async () => {
+    jump.click();
+    await flush();
+  });
+
+  expect(view.scrollTop).toBe(2300);
+  expect(container.querySelector('button[data-slot="thread-jump"]')).toBeNull();
+  expect(view.hasAttribute("data-autoscrolling")).toBe(true);
+});
+
+test("the Chat's viewport, a code block's scroll surface and the Inbox rail's scroll container carry scrollbar-themed", async () => {
+  await renderChat(
     [
-      messageLine("u1", "user", "the person's turn"),
-      messageLine("a1", "assistant", [{ type: "text", text: "the agent's turn" }]),
+      messageLine("a1", "assistant", [
+        { type: "toolCall", id: "call-1", name: "bash", arguments: { command: "npm test -- --run" } },
+      ]),
+      toolResultLine("r1", "call-1", "ALL GREEN", { durationMs: 1500, isError: false }),
     ].join("\n"),
   );
+  expect(chatViewport().classList.contains("scrollbar-themed")).toBe(true);
 
-  // The control that returns the reader to the live edge (web/README.md "The thread follows its
-  // live edge") is rendered as the scroller's end `MessageScrollerButton`.
-  const control = container.querySelector<HTMLElement>(
-    '[data-slot="message-scroller-button"][data-direction="end"]',
-  );
-  expect(control).not.toBeNull();
-  expect(control!.textContent).toContain("Scroll to end");
-  // While the thread reports the reader at the live edge the control is inert: `data-active` is
-  // false, which is what hides it and takes it out of the pointer's way.
-  expect(control!.getAttribute("data-active")).toBe("false");
+  const trigger = buttonWithText("npm test");
+  expect(trigger).not.toBeNull();
+  if (trigger === null) return;
+  await act(async () => {
+    trigger.click();
+    await flush();
+  });
 
-  // The live edge the control returns to is the anchor-free thread: a `scrollAnchor` row is what
-  // held the view off that edge.
-  for (const row of container.querySelectorAll<HTMLElement>("[data-message-id]")) {
-    expect(row.getAttribute("data-scroll-anchor"), row.getAttribute("data-message-id") ?? "").toBe(
-      "false",
-    );
+  // Opened, the Tool row shows its call's arguments and result as Code Blocks.
+  const surfaces = [...container.querySelectorAll<HTMLElement>('[data-slot="code-block-content"]')];
+  expect(surfaces.length).toBeGreaterThan(0);
+  for (const surface of surfaces) {
+    expect(surface.classList.contains("scrollbar-themed")).toBe(true);
   }
 });
 

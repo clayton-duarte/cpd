@@ -156,7 +156,7 @@ function CodeBlockContent({
       tabIndex={0}
       style={{ counterReset: `line ${startLine - 1}`, ...style }}
       className={cn(
-        "min-h-0 min-w-0 overflow-auto px-2.5 py-2 text-start font-mono outline-none data-wrap:wrap-break-word data-wrap:whitespace-pre-wrap in-data-[size=sm]:px-2 in-data-[size=sm]:py-1.5",
+        "min-h-0 min-w-0 overflow-auto scrollbar-themed px-2.5 py-2 text-start font-mono outline-none data-wrap:wrap-break-word data-wrap:whitespace-pre-wrap in-data-[size=sm]:px-2 in-data-[size=sm]:py-1.5",
         className
       )}
       {...props}
