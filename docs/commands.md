@@ -63,7 +63,7 @@ Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Fiv
 | Command | What it prints | Why |
 |---|---|---|
 | `cpd events follow` | one Event per line (§5.4) | the one streaming command (§1.2) |
-| `cpd session tail` (§10.19) | one transcript line per line of the folded transcript (contract §6.20) | a read-only tail of a durable Session's host socket: it streams live frames as they complete, as the socket tail of Q33 is |
+| `cpd session tail` (§10.19) | one line per completed transcript message, the grammar of contract §6.20 (§10.19) | a read-only tail of a durable Session's host socket: it streams live frames as they complete, as the socket tail of Q33 is |
 | `cpd gate finish` (§26) | the run's report on stderr and its exit status | it prints no JSON of its own; the status is the command's, or 64 when the run left something behind |
 | `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
 | `cpd tui action` (internal) | nothing, ever | the StatusBar's click binding and the `merge` popup's confirm (`cpd tui action merge <owner>/<repo>#<n> --client <client>`, hs-d473) run it with `run-shell -b`, which puts the active pane into view mode on a failure or any output (§13.2); it reports a failure with `display-message -c <client>` and a failed merge with the cockpit's one failure dialog, a `text` dialog (§13.2, §17 "No notes") |
