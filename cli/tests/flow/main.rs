@@ -34,6 +34,7 @@ mod driver_resources;
 mod feedback_surface;
 mod driver_reload;
 mod driver;
+mod driver_stall;
 mod context_inbox_cyan;
 mod host_repair;
 mod job;
