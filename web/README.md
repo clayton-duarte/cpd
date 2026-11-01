@@ -431,6 +431,7 @@ The left rail stops being the `sidebar-03` block's sample menu and becomes the *
 - They are grouped by their `context`; each Context's manager (role `"manager"`) is the root row, and each of that Context's leads (role `"lead"`) is a nested `SidebarMenuSub` row under it.
 - Contexts sort by name.
 - A root row's label is the manager's `name`, falling back to the context; a nested row's label is the lead's `name`, falling back to its id.
+- The rail's header carries `cpd` with the Context count beneath it (`1 context`, `4 contexts`, `No contexts` at zero) — never the `sidebar-03` block's `Documentation` / `v1.0.0`.
 
 **The ids.** Every row is a real `<button>` — not a link — carrying `data-session-id` (the full uuid) and `title` (the same uuid), and showing the id's first 8 characters muted beside the label.
 

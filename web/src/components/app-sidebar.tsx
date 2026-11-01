@@ -130,6 +130,10 @@ export function AppSidebar({
   ...props
 }: React.ComponentProps<typeof Sidebar> & AppSidebarProps): React.ReactElement {
   const contexts = groupSessions(sessions)
+  const contextCount =
+    contexts.length === 0
+      ? "No contexts"
+      : `${contexts.length} context${contexts.length === 1 ? "" : "s"}`
   return (
     <Sidebar {...props}>
       <SidebarHeader>
@@ -141,8 +145,8 @@ export function AppSidebar({
                   <GalleryVerticalEnd className="size-4" />
                 </div>
                 <div className="flex flex-col gap-0.5 leading-none">
-                  <span className="font-medium">Documentation</span>
-                  <span className="">v1.0.0</span>
+                  <span className="font-medium">cpd</span>
+                  <span className="">{contextCount}</span>
                 </div>
               </a>
             </SidebarMenuButton>

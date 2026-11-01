@@ -153,6 +153,28 @@ test("every row carries its Session id and clicking one reports it", () => {
   expect(clicked).toEqual([LA1]);
 });
 
+test("the header reads cpd with the Context count, never Documentation", () => {
+  const header = (): string =>
+    container.querySelector('[data-slot="sidebar-header"]')?.textContent ?? "";
+
+  // Four Sessions across two Contexts: `2 contexts`.
+  render(SESSIONS);
+  expect(header()).toContain("cpd");
+  expect(header()).toContain("2 contexts");
+
+  // One Context: the singular.
+  render([SESSIONS[0]]);
+  expect(header()).toContain("1 context");
+
+  // No Sessions: the empty state's own pluralisation.
+  render([]);
+  expect(header()).toContain("No contexts");
+
+  // The `sidebar-03` block's sample header text is gone from the rail.
+  expect(container.textContent ?? "").not.toContain("Documentation");
+  expect(container.textContent ?? "").not.toContain("v1.0.0");
+});
+
 test("the row of the selected Session is marked active", () => {
   render(SESSIONS, LA1);
 
