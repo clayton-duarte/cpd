@@ -139,7 +139,7 @@ const FORBIDDEN: &[&str] = &[
 
 /// The cpd-1 word `workflow`/`workflows`, lower-case, outside the allowed phrases (`GitHub Actions workflow`,
 /// `[deploys] workflows`, `workflow_runs`). The object is spelled **Workflow**; a GitHub Actions workflow is written
-/// in full. `line` must already be lower-case; this is only checked for prose (`.md`).
+/// in full. Only checked for prose (`.md`); a Rust identifier or a `pi/lib` one may spell `workflow` lower-case.
 fn bare_workflow(line: &str) -> bool {
     // A line that is about GitHub Actions or the deploy policy names the GitHub object, not the cpd one.
     let lower = line.to_lowercase();
