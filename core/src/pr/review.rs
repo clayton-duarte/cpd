@@ -25,7 +25,7 @@ pub enum Command {
 #[derive(clap::Args, Debug)]
 pub struct SubmitArgs {
     /// The pull request: its URL, or owner/repo#n
-    #[arg(long, value_name = "url | owner/repo#n")]
+    #[arg(long = "pr", value_name = "url | owner/repo#n")]
     workflow: String,
     /// The review's verdict: APPROVE or REQUEST_CHANGES
     #[arg(long, value_name = "APPROVE|REQUEST_CHANGES")]
