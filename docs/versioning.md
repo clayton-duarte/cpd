@@ -17,7 +17,7 @@ The workspace version (`[workspace.package] version` in `Cargo.toml` and the fou
 - A cpd test (`version::cargo_version_is_zero_protocol_migration_files`) fails with a message naming `scripts/sync-version.sh` when the workspace version differs from the derived version.
 - `scripts/new-migration.sh <slug> additive|breaking` runs `scripts/sync-version.sh` after creating a migration file, so Cargo.toml follows the new file.
 - After raising `PROTOCOL` by hand in `kind.rs`, run `scripts/sync-version.sh` to update Cargo.toml.
-- Two PRs that each add a migration or raise `PROTOCOL` both rewrite the same line of Cargo.toml. The Gate of the second PR fails until the sync is run again: that is the check working.
+- Two Workflows that each add a migration or raise `PROTOCOL` both rewrite the same line of Cargo.toml. The Gate of the second Workflow's pull request fails until the sync is run again: that is the check working.
 
 ## Tags
 

@@ -6,9 +6,9 @@ A prototype is a quick way to preview a visual change in the live cockpit before
 
 (hs-d504, hs-d323, hs-d341, hs-n264)
 
-1. **Prototype.** The Lead adds a throwaway PR to the Plan with a Worker Job that makes the visual change. The PR is never opened; it is cancelled after the preview.
+1. **Prototype.** The Lead adds a throwaway Workflow to the Plan with a Worker Job that makes the visual change. The Workflow is never opened; it is cancelled after the preview.
 
-2. **Load.** From the PR's Lead worktree, run:
+2. **Load.** From the Workflow's Lead worktree, run:
 
    ```
    sh scripts/preview-tui.sh on <worktree>
