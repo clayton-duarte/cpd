@@ -95,8 +95,9 @@ fn open_jobs(engine: &mut Engine) -> Vec<(String, String)> {
     engine
         .store
         .read(|conn| {
-            let mut stmt =
-                conn.prepare("SELECT plan, workflow FROM jobs WHERE kind = 'open' ORDER BY plan, workflow")?;
+            let mut stmt = conn.prepare(
+                "SELECT plan, workflow FROM jobs WHERE kind = 'open' ORDER BY plan, workflow",
+            )?;
             Ok(stmt
                 .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?)

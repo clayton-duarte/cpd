@@ -52,7 +52,9 @@ fn with_open_job(key: &str, kind: &str) -> Fx {
     ));
     fx.lock_job(key, "");
     assert_eq!(
-        fx.query::<i64>("SELECT count(*) FROM workflows WHERE description IS NULL AND head_ref IS NULL"),
+        fx.query::<i64>(
+            "SELECT count(*) FROM workflows WHERE description IS NULL AND head_ref IS NULL"
+        ),
         1
     );
     fx

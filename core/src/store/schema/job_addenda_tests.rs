@@ -87,7 +87,10 @@ fn store_with_world() -> (tempfile::TempDir, Store) {
         &mut store,
         &world()
             .replace("INSERT INTO prs (", "INSERT INTO workflows (")
-            .replace("INSERT INTO jobs (plan, pr,", "INSERT INTO jobs (plan, workflow,"),
+            .replace(
+                "INSERT INTO jobs (plan, pr,",
+                "INSERT INTO jobs (plan, workflow,",
+            ),
     )
     .unwrap();
     (dir, store)
