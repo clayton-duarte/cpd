@@ -252,9 +252,11 @@ fn the_distiller_has_no_mcp_flag_and_is_unchanged() {
 fn the_title_writer_has_no_mcp_flag_and_keeps_no_extensions() {
     let source = include_str!("../../session/retitle.rs");
     let args = source
-        .lines()
-        .find(|l| l.contains("args: [\"--print\""))
+        .split_once("args: [")
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .map(|(array, _)| array)
         .expect("the title writer's argv line");
+    assert!(args.contains("\"--print\""), "{args}");
     assert!(args.contains("\"--no-extensions\""), "{args}");
     assert!(!args.contains(NO_MCP), "{args}");
 }
