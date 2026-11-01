@@ -296,18 +296,19 @@ new entries imported, `tsc --noEmit` (`pnpm run typecheck`) and `vite build`
 
 #### The full-screen composition
 
-One root fills the viewport; the message list is the only scrolling region and the prompt is a
+One root fills its column (“The shell never scrolls the document”, in “The resizable
+three-column shell”, below); the message list is the only scrolling region and the prompt is a
 sibling below it, outside that region, so it never scrolls away:
 
 ```tsx
 <MessageScrollerProvider>
-  <div className="flex h-dvh flex-col">
+  <div className="flex h-full min-h-0 flex-col">
     {/* the session picker (below) */}
     <div className="flex items-center gap-2 border-b p-2 text-sm">…</div>
 
     <MessageScroller className="min-h-0 flex-1">
       <MessageScrollerViewport>
-        <MessageScrollerContent>
+        <MessageScrollerContent className="pb-8">
           {messages.map((message) => …)}
         </MessageScrollerContent>
       </MessageScrollerViewport>
@@ -393,6 +394,21 @@ the group, so the library scales them down on first layout (~311 px at 1400 px w
 its panel box: the Context panel gets a `transform` wrapper (establishing a containing block)
 with `overflow-hidden`, and `SidebarProvider` gets `--sidebar-width: 100%` so the rail and its
 gap spacer match the panel without its content adding a panel scrollbar.
+
+**The shell never scrolls the document** (hs-d834). The Chat column’s root takes its own
+column’s height — `flex h-full min-h-0 flex-col` in `web/src/views/live-chat.tsx`, never a
+viewport unit (`h-dvh`) — so the Chat can never be taller than its panel. **Both** rails’
+`SidebarProvider` carry `h-full min-h-0` (`web/src/app/App.tsx`): the Inbox’s already did, the
+Context column’s now does too. And `web/src/index.css` clamps the document — `html, body,
+#root { height: 100% }` and `overflow: hidden` on `body` — so the page itself never scrolls and
+every scrollable thing is a column’s own list: the rails’ `SidebarContent` and the Chat’s thread
+viewport, each with the themed scrollbar (“Themed scrollbars”, below). The reason, plainly: a
+viewport-unit height inside a panel, or an unbounded rail, pushes the document taller than the
+shell and scrolls the whole page.
+
+Within that column, the Chat thread’s content box reserves **2rem** below its newest line —
+`pb-8` on the `MessageScrollerContent` in `web/src/views/live-chat.tsx` (hs-d835) — so rendered
+text never touches the prompt input.
 
 **Dark is the default.** The `<html>` element carries `class="dark"` in `web/index.html`.
 
