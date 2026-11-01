@@ -175,7 +175,7 @@ fn a_stopped_manager_without_a_pane_is_started_again_on_its_file() {
     assert_eq!(again["started"], true);
     assert_eq!(again["manager"]["session"], json!(id));
     assert_ne!(again["manager"]["pane"], first["manager"]["pane"]);
-    assert_eq!(manager_ids(&fx), [id.clone()], "no second Manager");
+    assert_eq!(manager_ids(&fx), std::slice::from_ref(&id), "no second Manager");
     assert_eq!(events(&fx, "session-registered").len(), 1);
     // `session-moved` for: parked, its pane closed, parked again.
     assert_eq!(events(&fx, "session-moved").len(), 3);
