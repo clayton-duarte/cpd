@@ -603,7 +603,7 @@ fn push_refuses_a_pr_that_is_not_open() {
         let fx = fx(status);
         let before = fx.remote_sha();
         // `--pr` names the PR: a `cancelled` one is not selected on its own (§1.3).
-        let run = fx.cpd(&["pr", "push", "--pr", "repo", "--plan", "pay"]);
+        let run = fx.cpd(&["pr", "push", "--workflow", "repo", "--plan", "pay"]);
         assert_eq!(code(&run), ("illegal_transition".into(), 3), "{status}");
         let error = run.error();
         assert_eq!(error["details"]["from"], status);

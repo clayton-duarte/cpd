@@ -612,7 +612,7 @@ fn pr_open_refuses_jobs_not_done_and_a_missing_title() {
     let run = fx.pr("open");
 
     assert_eq!(code(&run), ("workflow_title_required".into(), 3));
-    assert_eq!(run.error()["details"], json!({"plan": "pay", "pr": "repo"}));
+    assert_eq!(run.error()["details"], json!({"plan": "pay", "workflow": "repo"}));
     assert_eq!(
         (fx.plan_row().0, fx.txns(), open_jobs(&fx)),
         ("dispatch".to_owned(), txns, Vec::<(String, String)>::new())
@@ -5913,9 +5913,9 @@ impl Poll {
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                    "INSERT OR IGNORE INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at, kind, tests, test_files)
-                     VALUES ('pay', ?4, ?1, 'Red', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', 'test', ?5, ?6)",
+                     VALUES ('pay', ?4, ?1, 'Red', 'S2', 'g', 'c', '[\"tests/t.rs\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', 'test', ?5, ?6)",
                     params![job, "f".repeat(64), tx.id(), key, r#"["t::one"]"#, r#"["tests/t.rs"]"#],
                 )?;
                 tx.execute(

@@ -213,12 +213,12 @@ fn refuses_a_head_branch_another_live_pr_holds() {
     let error = fx.refuse(&fx.adopt("api", &[]), "adopt_taken");
     assert_eq!(
         error["details"],
-        json!({"head_ref": "feat/x", "plan": "pay-1", "pr": "web"})
+        json!({"head_ref": "feat/x", "plan": "pay-1", "workflow": "web"})
     );
     let error = fx.refuse(&fx.adopt_in("pay-2", "api", &[]), "adopt_taken");
     assert_eq!(
         error["details"],
-        json!({"head_ref": "feat/x", "plan": "pay-1", "pr": "web"})
+        json!({"head_ref": "feat/x", "plan": "pay-1", "workflow": "web"})
     );
     // Cancelled, the head is free again.
     fx.pr(&["cancel", "web"]).ok();
@@ -254,12 +254,12 @@ fn pr_edit_refuses_repo_and_base_of_an_adopted_pr() {
     let fx = fx();
     fx.adopt("web", &[]).ok();
     let error = fx.refuse(&fx.pr(&["edit", "web", "--base", "x"]), "workflow_adopted");
-    assert_eq!(error["details"], json!({"pr": "web", "flag": "--base"}));
+    assert_eq!(error["details"], json!({"workflow": "web", "flag": "--base"}));
     let error = fx.refuse(
         &fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]),
         "workflow_adopted",
     );
-    assert_eq!(error["details"], json!({"pr": "web", "flag": "--repo"}));
+    assert_eq!(error["details"], json!({"workflow": "web", "flag": "--repo"}));
     fx.pr(&["edit", "web", "--title", "Renamed"]).ok();
     assert_eq!(
         fx.env
