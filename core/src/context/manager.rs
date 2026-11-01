@@ -28,6 +28,9 @@ pub struct ManagerArgs {
     /// The User creates the Manager: it starts with no first message and runs no turn until the User's first prompt
     #[arg(long = "by-user")]
     by_user: bool,
+    /// The Manager's runner; default the config key `manager_runner`
+    #[arg(long, value_name = "pi|durable")]
+    runner: Option<WorkerRunner>,
 }
 
 /// The Context's live Manager, as `context manager` needs it.
@@ -122,10 +125,30 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
         .with("next", format!("cpd context unarchive {context}")));
     }
     // The runner of the Manager (contract §6.19, Q10): the stored one, or the config key for a fresh one. A durable
-    // Manager has no pane; the engine's `hosts` step starts its host at the next tick.
-    let runner = found.as_ref().map_or(config.manager_runner, |m| {
-        WorkerRunner::parse(&m.runner).unwrap_or(config.manager_runner)
-    });
+    // Manager has no pane; the engine's `hosts` step starts its host at the next tick. An existing Manager's runner
+    // wins: a `--runner` that differs is refused before any write.
+    let runner = match &found {
+        Some(m) => {
+            let stored = WorkerRunner::parse(&m.runner).unwrap_or(config.manager_runner);
+            if let Some(wanted) = args.runner {
+                if wanted != stored {
+                    return Err(CpdError::new(
+                        ErrorCode::Usage,
+                        format!(
+                            "Manager {} of Context {context} runs on the {} runner; --runner {} differs.",
+                            m.name,
+                            stored.as_str(),
+                            wanted.as_str()
+                        ),
+                    )
+                    .with("context", context.as_str())
+                    .with("runner", stored.as_str()));
+                }
+            }
+            stored
+        }
+        None => args.runner.unwrap_or(config.manager_runner),
+    };
     let durable = runner == WorkerRunner::Durable;
     let needs_pane = !durable
         && found
@@ -140,7 +163,7 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
     let (manager, registered) = match found {
         Some(manager) => (manager, false),
         None => (
-            register(&home, &config, &mut store, &context, &row, args.by_user)?,
+            register(&home, &config, &mut store, &context, &row, args.by_user, runner)?,
             true,
         ),
     };
@@ -205,6 +228,7 @@ fn register(
     context: &ContextId,
     row: &ContextRow,
     by_user: bool,
+    runner: WorkerRunner,
 ) -> Result<Live, CpdError> {
     let cwd = std::env::current_dir()
         .and_then(|d| d.canonicalize())
@@ -232,7 +256,7 @@ fn register(
                                    state, state_label, state_at, created_at, by_user, runner)
              SELECT ?1, 'manager', ?2, NULL, NULL, ?3, NULL, NULL, ?4, ?5, NULL, 'stopped', NULL, at, at, ?6, ?7
                FROM txns WHERE id = cpd_txn()",
-            rusqlite::params![id.as_str(), context.as_str(), name, cwd, tier, by_user, config.manager_runner.as_str()],
+            rusqlite::params![id.as_str(), context.as_str(), name, cwd, tier, by_user, runner.as_str()],
         )?;
         let text = format!("Manager {name} of Context {context} registered. Next: cpd session open {id}");
         let event = NewEvent::session_registered(text, "manager", &name, Value::Null, &tier);
@@ -245,7 +269,7 @@ fn register(
         cwd,
         state: "stopped".to_owned(),
         pane: None,
-        runner: config.manager_runner.as_str().to_owned(),
+        runner: runner.as_str().to_owned(),
     })
 }
 
