@@ -70,15 +70,15 @@ fn parse_scope_of(file: &Path, text: &str, kind: Option<ScopeKind>) -> Result<Sc
     scope.hooks = hooks;
     // The deprecated `[pr] gate` alias: `local` -> both gates `local`, `ci`/`none` -> both `none`.
     // An explicit `[gate]` table in the same file wins over it.
-    if scope.gate.is_none() {
-        if let Some(alias) = scope.pr.as_ref().and_then(|pr| pr.gate) {
-            let gate = alias.gate();
-            scope.gate = Some(GatesSet {
-                merge: Some(gate),
-                workflow: Some(gate),
-                text: None,
-            });
-        }
+    if scope.gate.is_none()
+        && let Some(alias) = scope.pr.as_ref().and_then(|pr| pr.gate)
+    {
+        let gate = alias.gate();
+        scope.gate = Some(GatesSet {
+            merge: Some(gate),
+            workflow: Some(gate),
+            text: None,
+        });
     }
     if let Some(set) = &scope.resources {
         for (name, decl) in &set.0 {

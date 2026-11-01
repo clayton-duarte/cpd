@@ -174,10 +174,10 @@ impl Display {
     /// The Workflows `pr` needs as the views show them: its stored needs, then its base Workflow (the implied need, derived, never stored).
     pub fn workflow_needs(&self, workflow: &WorkflowRow) -> Vec<String> {
         let mut needs = workflow.needs.clone();
-        if let Some(base) = self.bases.get(workflow.key.as_str()) {
-            if !needs.contains(base) {
-                needs.push(base.clone());
-            }
+        if let Some(base) = self.bases.get(workflow.key.as_str())
+            && !needs.contains(base)
+        {
+            needs.push(base.clone());
         }
         needs
     }

@@ -347,14 +347,11 @@ fn prune_repo(
             let lead = wt.branch.as_deref().map(lead_of);
             if lead.is_some_and(|l| args.drop.iter().any(|d| d == l)) {
                 dropped = true;
-            } else if matches!(git(ports, repo, &["merge-base", "--is-ancestor", &wt.head, "origin/main"]), Ok(o) if o.status.success())
+            } else if !matches!(git(ports, repo, &["merge-base", "--is-ancestor", &wt.head, "origin/main"]), Ok(o) if o.status.success())
+                && !wt.branch.as_deref().is_some_and(|b| {
+                    merged_via_pr(ports, repo, &workflows, b, &wt.head, &mut failed)
+                })
             {
-            } else if wt
-                .branch
-                .as_deref()
-                .is_some_and(|b| merged_via_pr(ports, repo, &workflows, b, &wt.head, &mut failed))
-            {
-            } else {
                 reason = Some("not merged");
             }
         }

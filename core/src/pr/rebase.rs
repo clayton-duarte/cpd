@@ -199,12 +199,10 @@ pub(super) fn refuse_running_conn(
             "SELECT j.key, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
               WHERE a.plan = ?1 AND j.workflow = ?2 AND a.status = 'running' ORDER BY j.key, a.id",
         )?;
-        let rows = stmt
-            .query_map([plan.as_str(), key.as_str()], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        rows
+        stmt.query_map([plan.as_str(), key.as_str()], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
     };
     if running.is_empty() {
         return Ok(());

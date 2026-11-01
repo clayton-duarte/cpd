@@ -406,8 +406,10 @@ pub fn wanted(
     key: &str,
 ) -> Result<Option<Wanted>, CpdError> {
     use rusqlite::OptionalExtension;
+    // The row's columns: workflow, the listed resources JSON, owner, repo.
+    type Found = (String, Option<String>, Option<String>, Option<String>);
     // An explore Job has no Workflow (the join finds no row): it lists no resources.
-    let found: Option<(String, Option<String>, Option<String>, Option<String>)> = conn.query_row(
+    let found: Option<Found> = conn.query_row(
         "SELECT j.workflow, j.resources, c.owner, r.name FROM jobs j JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow
            JOIN plans p ON p.id = j.plan JOIN contexts c ON c.id = p.context WHERE j.plan = ?1 AND j.key = ?2",
         [plan.as_str(), key],

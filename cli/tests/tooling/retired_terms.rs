@@ -312,14 +312,19 @@ fn offenders(forbidden: &[&str], allowed: &[&str]) -> Vec<String> {
             }
             // A fenced code block (``` or ~~~) is a quote of code or DDL, not prose: the rename must not rewrite it
             // (the contract's DDL and the event_kinds' history are pinned verbatim), so the guard skips its lines.
-            if md && (line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~")) {
+            if md && (line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~"))
+            {
                 in_fence = !in_fence;
                 continue;
             }
             if md && in_fence {
                 continue;
             }
-            let prose = if md { without_markdown_code(&line) } else { line.clone() };
+            let prose = if md {
+                without_markdown_code(&line)
+            } else {
+                line.clone()
+            };
             let lower = prose.to_lowercase();
             if forbidden.iter().any(|f| lower.contains(f)) || (md && bare_workflow(&line, &prose)) {
                 found.push(format!("{rel}:{n}: {}", line.trim_end()));

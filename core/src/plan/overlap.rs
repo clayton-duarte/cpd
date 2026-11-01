@@ -32,6 +32,9 @@ pub struct OtherJob {
     pub status: String,
 }
 
+/// The overlap groups of [`find`], by (other Plan, other Workflow): the Jobs there and the indices of the paths they overlap.
+type Groups<'a> = BTreeMap<(&'a str, &'a str), (Vec<OtherJob>, BTreeSet<usize>)>;
+
 /// One overlap: `job` of this Plan overlaps `other_jobs`, all of `pr` of `plan`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Overlap {
@@ -139,7 +142,7 @@ pub fn find(workflows: &[WorkflowRow], jobs: &[Job], others: &[Other]) -> Vec<Ov
             }
         }
         // By (other Plan, other Workflow): the Jobs there that overlap this one, and which of its paths they overlap.
-        let mut groups: BTreeMap<(&str, &str), (Vec<OtherJob>, BTreeSet<usize>)> = BTreeMap::new();
+        let mut groups: Groups = BTreeMap::new();
         for other in others.iter().filter(|o| o.repo == workflow.repo) {
             let hit: Vec<usize> = (0..paths.len())
                 .filter(|&i| other.touches.iter().any(|t| overlaps(paths[i], t)))

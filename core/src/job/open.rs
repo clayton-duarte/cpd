@@ -271,6 +271,8 @@ pub fn queue_update(
 
 /// The insert of an `open` or `update` Job: the same row, Spec apart, with `job-added` in the same transaction. The
 /// `cause` is the `update` Job's (`None` for an `open` Job): it renders the Spec and spells the Event's `reason`.
+// Eight distinct arguments are the insert's whole row; a struct would only rename them.
+#[allow(clippy::too_many_arguments)]
 fn insert(
     tx: &WriteTxn<'_>,
     plan: &PlanId,

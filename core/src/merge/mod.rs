@@ -449,16 +449,17 @@ fn steps(
         {
             return Ok(Stepped::ends(end));
         }
-        if cpd_kind && policy.gate.workflow == Gate::Local {
-            if let Some(end) = run_gate(
+        if cpd_kind
+            && policy.gate.workflow == Gate::Local
+            && let Some(end) = run_gate(
                 home,
                 config,
                 target,
                 Hook::PreMerge,
                 &policy.hooks.pre_merge,
-            )? {
-                return Ok(Stepped::ends(end));
-            }
+            )?
+        {
+            return Ok(Stepped::ends(end));
         }
         // An `open` Job whose pull request was merged on GitHub and never recorded adopts it (§7.4 step 8b; the merge finds it, submit does not check it, §7.7): it has no
         // new commits to push, so steps 5 and 8 are skipped and step 10 writes the rows of `pr open` step 0.
