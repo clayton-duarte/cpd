@@ -1,7 +1,7 @@
 //! The `workflow.jira_required` policy key (contract §8.3): default, scopes and the loader's refusal,
 //! through `cpd policy show` against a temporary `$CPD_HOME`.
 
-use super::policy_post::{keys, real, show, world, write};
+use super::policy_post::{real, show, world, write};
 use crate::common::refused;
 use serde_json::json;
 
