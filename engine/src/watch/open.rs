@@ -139,7 +139,7 @@ fn add_all(
             continue;
         };
         let draft: bool = tx.query_row(
-            "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND pr = ?2 AND status = 'draft' AND kind NOT IN ('open', 'update'))",
+            "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND workflow = ?2 AND status = 'draft' AND kind NOT IN ('open', 'update'))",
             [plan.as_str(), key.as_str()],
             |r| r.get(0),
         )?;

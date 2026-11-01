@@ -2166,7 +2166,7 @@ fn a_locked_workflow_with_a_merged_or_live_job_or_a_workflow_that_needs_it_is_re
         fx.env.query::<String>(
             "SELECT status || '/' || cancel_reason FROM jobs WHERE key = 'queued-job'"
         ),
-        "cancelled/pr cancelled"
+        "cancelled/workflow cancelled"
     );
 
     // A live PR that needs it holds it (`workflow_in_use`, `details.workflows`).
@@ -3188,7 +3188,7 @@ fn a_dispatch_workflow_cancel_cancels_its_draft_queued_and_failed_jobs_with_the_
         json!({"key": "gone", "status": "cancelled"})
     );
     for key in ["d", "q", "f", "op"] {
-        assert_eq!(fx.job_row(key), "cancelled/pr cancelled/-", "{key}");
+        assert_eq!(fx.job_row(key), "cancelled/workflow cancelled/-", "{key}");
         assert_eq!(
             fx.env.query::<i64>(&format!(
                 "SELECT cancel_requested_at IS NOT NULL FROM jobs WHERE key = '{key}'"
@@ -3232,7 +3232,7 @@ fn a_tdd_workflow_in_draft_with_a_queued_open_job_is_cancelled_by_one_workflow_c
     // ... and `pr cancel` takes it with the PR.
     fx.pr(&["cancel", "gone"]).ok();
     for key in ["gone-tests", "gone-impl", "open-gone"] {
-        assert_eq!(fx.job_row(key), "cancelled/pr cancelled/-", "{key}");
+        assert_eq!(fx.job_row(key), "cancelled/workflow cancelled/-", "{key}");
     }
     assert_eq!(
         fx.env
@@ -3273,7 +3273,7 @@ fn a_waiting_tdd_workflow_with_its_template_stubs_is_cancelled_before_the_lock()
     );
     assert_eq!(fx.workflow_status("gone"), "cancelled");
     for key in ["gone-docs", "gone-tests", "gone-impl", "open-gone"] {
-        assert_eq!(fx.job_row(key), "cancelled/pr cancelled/-", "{key}");
+        assert_eq!(fx.job_row(key), "cancelled/workflow cancelled/-", "{key}");
     }
 }
 
@@ -3304,8 +3304,8 @@ fn a_running_job_holds_the_workflow_cancel_and_nothing_is_cancelled() {
     assert_eq!(
         (fx.job_row("d"), fx.job_row("q")),
         (
-            "cancelled/pr cancelled/-".to_string(),
-            "cancelled/pr cancelled/-".to_string()
+            "cancelled/workflow cancelled/-".to_string(),
+            "cancelled/workflow cancelled/-".to_string()
         )
     );
     assert_eq!(fx.workflow_status("gone"), "cancelled");
@@ -3331,7 +3331,7 @@ fn a_merged_job_holds_the_workflow_cancel_unless_superseded_and_the_others_are_c
 
     fx.pr(&["cancel", "busyfix", "--superseded-by", "other-1/storefix"])
         .ok();
-    assert_eq!(fx.job_row("d"), "cancelled/pr cancelled/-");
+    assert_eq!(fx.job_row("d"), "cancelled/workflow cancelled/-");
     assert_eq!(
         fx.env
             .query::<String>("SELECT status FROM jobs WHERE key = 'done'"),
@@ -3377,8 +3377,8 @@ fn a_workflow_that_another_workflow_needs_still_refuses_and_none_of_its_jobs_is_
     assert_eq!(
         (fx.job_row("d"), fx.job_row("q")),
         (
-            "cancelled/pr cancelled/-".to_string(),
-            "cancelled/pr cancelled/-".to_string()
+            "cancelled/workflow cancelled/-".to_string(),
+            "cancelled/workflow cancelled/-".to_string()
         )
     );
 }
@@ -3395,7 +3395,7 @@ fn an_open_workflow_with_a_closed_pull_request_has_its_draft_queued_and_failed_j
 
     fx.pr(&["cancel", "web"]).ok();
     for key in ["d", "q", "f"] {
-        assert_eq!(fx.job_row(key), "cancelled/pr cancelled/-", "{key}");
+        assert_eq!(fx.job_row(key), "cancelled/workflow cancelled/-", "{key}");
     }
     assert_eq!(fx.cancelled_jobs(), ["d", "f", "q"]);
     assert_eq!(fx.workflow_status("web"), "cancelled");

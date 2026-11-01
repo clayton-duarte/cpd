@@ -113,14 +113,14 @@ pub(crate) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
 }
 
 /// The Workflow's Jobs go with it (contract §3.8): in the transaction that cancels a Workflow, every Job of it that is `draft`, `queued` or `failed`, of every kind,
-/// is `cancelled` (`reason` `pr cancelled`, one `job-cancelled` each, by `seq`). One already `cancelled` is untouched.
+/// is `cancelled` (`reason` `workflow cancelled`, one `job-cancelled` each, by `seq`). One already `cancelled` is untouched.
 fn cancel_jobs(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey) -> Result<(), CpdError> {
     cancel_jobs_with(
         tx,
         plan,
         key,
         &["draft", "queued", "failed"],
-        "pr cancelled",
+        "workflow cancelled",
         "was cancelled",
     )
 }
@@ -548,7 +548,7 @@ mod tests {
             .write("fixture", |tx| cancel_jobs(tx, &plan, &key))
             .unwrap();
         let others: i64 = store
-            .read(|conn| Ok(conn.query_row("SELECT count(*) FROM jobs WHERE status = 'cancelled' AND cancel_reason = 'pr cancelled'", [], |r| r.get(0))?))
+            .read(|conn| Ok(conn.query_row("SELECT count(*) FROM jobs WHERE status = 'cancelled' AND cancel_reason = 'workflow cancelled'", [], |r| r.get(0))?))
             .unwrap();
         assert_eq!(others, 3);
         let (status, reason, events): (String, String, i64) = store
@@ -562,7 +562,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             (status.as_str(), reason.as_str(), events),
-            ("cancelled", "pr cancelled", 1)
+            ("cancelled", "workflow cancelled", 1)
         );
 
         let (_dir, mut store) = fixture();

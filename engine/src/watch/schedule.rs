@@ -126,7 +126,7 @@ fn allocations(
     let mut workflows = Vec::with_capacity(ready.len());
     for (plan, key) in ready {
         let workflow: Option<String> = conn.query_row(
-            "SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2",
+            "SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2",
             params![plan.as_str(), key.as_str()],
             |r| r.get(0),
         )?;
