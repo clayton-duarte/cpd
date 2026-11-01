@@ -11,7 +11,7 @@ fn pane_of(cx: &Cx, args: &[String]) -> R<i64> {
     Ok(resolve(cx.db, Some(target), Kind::Pane)?.pane.expect("pane"))
 }
 
-pub fn ctl(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn ctl(cx: &mut Cx, args: &[String]) -> R<()> {
     let fail = |e: rusqlite::Error| e.to_string();
     let Some((sub, rest)) = args.split_first() else { return Err("__ctl: subcommand expected".into()) };
     match sub.as_str() {

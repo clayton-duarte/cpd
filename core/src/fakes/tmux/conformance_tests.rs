@@ -386,7 +386,7 @@ fn a_run_shell_b_hook_that_calls_the_fake_again_does_not_deadlock() {
     let runner = FakeRunner::new(ManualClock::new()).route("tmux", route);
     let dir = tempfile::tempdir().unwrap();
     let tmux = Tmux::with_tmpdir("t", dir.path()).with_runner(Arc::new(runner));
-    slot.set(tmux.clone()).ok().expect("set once");
+    slot.set(tmux.clone()).expect("set once");
     tmux.create_session("s", "main", &spawn()).unwrap();
     let run = |args: &[&str]| tmux.run(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>()).unwrap();
     run(&["set-hook", "-g", "pane-died", "run-shell -b 'tmux set -g @again yes'"]);

@@ -657,11 +657,10 @@ impl Universe {
         let mut seen = HashSet::new();
         let mut stack: Vec<Oid> = start.to_vec();
         while let Some(next) = stack.pop() {
-            if let Some(commit) = self.commit_data(&next) {
-                if seen.insert(next) {
+            if let Some(commit) = self.commit_data(&next)
+                && seen.insert(next) {
                     stack.extend(commit.parents);
                 }
-            }
         }
         seen
     }

@@ -42,7 +42,7 @@ fn unlinked(cx: &mut Cx, session: i64, name: String) {
 
 /// Removes the pane; when it was the last of its window, the window goes too (and fires `window-unlinked`).
 /// Ids are not reused.
-pub fn kill_pane(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn kill_pane(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("kill-pane", args, "at:")?;
     let loc = resolve(cx.db, o.val('t'), Kind::Pane)?;
     let (session, window, pane) = (loc.session, loc.window.expect("window"), loc.pane.expect("pane"));
@@ -60,7 +60,7 @@ pub fn kill_pane(cx: &mut Cx, args: &[String]) -> R<()> {
     Ok(())
 }
 
-pub fn kill_window(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn kill_window(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("kill-window", args, "t:")?;
     let loc = resolve(cx.db, o.val('t'), Kind::Window)?;
     let name = remove_window(cx.db, loc.session, loc.window.expect("window"))?;
@@ -68,7 +68,7 @@ pub fn kill_window(cx: &mut Cx, args: &[String]) -> R<()> {
     Ok(())
 }
 
-pub fn kill_session(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn kill_session(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("kill-session", args, "aCt:")?;
     let session = resolve(cx.db, o.val('t'), Kind::Session)?.session;
     let mut names = Vec::new();
@@ -83,7 +83,7 @@ pub fn kill_session(cx: &mut Cx, args: &[String]) -> R<()> {
 
 /// `-k` is required when the pane is not dead. Without `-t`, in a hook, the pane is the hook's (as `pane-died`'s
 /// `respawn-pane`), not the window's active pane.
-pub fn respawn_pane(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn respawn_pane(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("respawn-pane", args, "kc:e:t:")?;
     let loc = match (o.val('t'), cx.loc) {
         (None, Some(hook)) if hook.pane.is_some() => hook,
@@ -107,7 +107,7 @@ pub fn respawn_pane(cx: &mut Cx, args: &[String]) -> R<()> {
     store_env(cx.db, "pane", pane, &o.all('e')).map_err(fail)
 }
 
-pub fn resize_pane(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn resize_pane(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("resize-pane", args, "DLRUZMTt:x:y:")?;
     let at = resolve(cx.db, o.val('t'), Kind::Pane)?;
     let (window, pane) = (at.window.expect("window"), at.pane.expect("pane"));
@@ -129,19 +129,19 @@ pub fn resize_pane(cx: &mut Cx, args: &[String]) -> R<()> {
 }
 
 /// Accepted, geometry is not modelled.
-pub fn resize_window(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn resize_window(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("resize-window", args, "aADLRUt:x:y:")?;
     resolve(cx.db, o.val('t'), Kind::Window).map(|_| ())
 }
 
 /// Accepted, layouts are not modelled.
-pub fn select_layout(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn select_layout(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("select-layout", args, "nNopEt:")?;
     resolve(cx.db, o.val('t'), Kind::Window).map(|_| ())
 }
 
 /// Appends to the key log; `-M` (a mouse event) logs nothing.
-pub fn send_keys(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn send_keys(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("send-keys", args, "FHKlMRXc:N:t:")?;
     if o.has('M') {
         return Ok(());
@@ -154,7 +154,7 @@ pub fn send_keys(cx: &mut Cx, args: &[String]) -> R<()> {
 
 /// The screen a test seeded with `__ctl screen`; `-S`/`-E` are accepted and ignored. Without `-p` it goes
 /// to the buffer.
-pub fn capture_pane(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn capture_pane(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("capture-pane", args, "aepPqCJNS:E:b:t:")?;
     let pane = resolve(cx.db, o.val('t'), Kind::Pane)?.pane.expect("pane");
     let text: Option<String> = s(cx.db, "SELECT text FROM screens WHERE pane = ?1", [pane]);
@@ -177,13 +177,13 @@ fn store_buffer(db: &Connection, name: Option<&str>, data: &str) -> R<()> {
     Ok(())
 }
 
-pub fn set_buffer(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn set_buffer(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("set-buffer", args, "ab:n:t:w")?;
     let data = o.rest.first().ok_or("usage: set-buffer [-aw] [-b buffer-name] data")?;
     store_buffer(cx.db, o.val('b'), data)
 }
 
-pub fn show_buffer(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn show_buffer(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("show-buffer", args, "b:")?;
     let name = o.val('b').unwrap_or("buffer0");
     let data: String = s(cx.db, "SELECT data FROM buffers WHERE name = ?1", [name]).ok_or(format!("unknown buffer: {name}"))?;
@@ -195,15 +195,14 @@ pub fn show_buffer(cx: &mut Cx, args: &[String]) -> R<()> {
 /// answers writes the outcome file its command's `--out=` names, as the command it runs would.
 ///
 /// [`FakeTmux::on_popup`]: super::FakeTmux::on_popup
-pub fn record_call(cx: &mut Cx, argv: &[String]) -> R<()> {
+pub(super) fn record_call(cx: &mut Cx, argv: &[String]) -> R<()> {
     let kind = if argv[0] == "display-popup" { "popup" } else { "menu" };
     let json = serde_json::to_string(argv).expect("argv json");
     cx.db.execute("INSERT INTO calls (kind, argv) VALUES (?1, ?2)", (kind, json)).map_err(fail)?;
-    if let (true, Some(answer)) = (kind == "popup", cx.popup) {
-        if let (Some(text), Some(out)) = (answer(argv), out_path(argv)) {
+    if let (true, Some(answer)) = (kind == "popup", cx.popup)
+        && let (Some(text), Some(out)) = (answer(argv), out_path(argv)) {
             std::fs::write(&out, text).map_err(|e| format!("display-popup: cannot write {out}: {e}"))?;
         }
-    }
     Ok(())
 }
 
@@ -216,7 +215,7 @@ fn out_path(argv: &[String]) -> Option<String> {
     }
 }
 
-pub fn attach(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn attach(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("attach", args, "dErxc:f:t:")?;
     let session = resolve(cx.db, o.val('t'), Kind::Session)?.session;
     let n: i64 = s(cx.db, "SELECT count(*) FROM clients", []).expect("count");
@@ -224,7 +223,7 @@ pub fn attach(cx: &mut Cx, args: &[String]) -> R<()> {
     Ok(())
 }
 
-pub fn list_clients(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn list_clients(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("list-clients", args, "F:f:t:")?;
     let sessions = ids(cx.db, "SELECT session FROM clients ORDER BY seq", []);
     let clients = client_vars(cx.db, "SELECT name, width, height, seq FROM clients ORDER BY seq", []);

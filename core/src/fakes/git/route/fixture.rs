@@ -696,11 +696,10 @@ pub(super) fn list_branches(c: &mut Ctx, repo: RepoId, remotes: bool, format: Op
     let here = c.worktree().ok().map(|wt| c.u.head(&wt));
     let elsewhere: Vec<Head> = c.u.worktrees(repo).iter().map(|w| c.u.head(&w.path)).collect();
     let mut out = String::new();
-    if format.is_none() && !remotes {
-        if let Some(Head::Detached(oid)) = &here {
+    if format.is_none() && !remotes
+        && let Some(Head::Detached(oid)) = &here {
             out.push_str(&format!("* (HEAD detached at {})\n", sha7(oid)));
         }
-    }
     for (name, oid) in refs {
         let short = &name[prefix.len()..];
         if !patterns.is_empty() && !patterns.iter().any(|p| glob(p, short)) {
