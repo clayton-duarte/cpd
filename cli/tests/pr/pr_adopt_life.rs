@@ -195,7 +195,7 @@ const CHILD_ATTEMPT: &str = "CPD_ADOPT_LIFE_ATTEMPT";
 #[test]
 #[ignore = "run by merge_in_child, in a child process"]
 fn child_merges_the_attempt() {
-    let home = CpdHome::resolve(Some(std::env::var_os("CPD_HOME").expect("CPD_HOME").into()), None).unwrap();
+    let home = CpdHome::resolve(Some(std::env::var_os("CPD_HOME").expect("CPD_HOME")), None).unwrap();
     let attempt = AttemptId::parse(&std::env::var(CHILD_ATTEMPT).expect(CHILD_ATTEMPT)).unwrap();
     let config = Config::load(&home).unwrap();
     let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };

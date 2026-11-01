@@ -7,12 +7,11 @@ use crate::common;
 
 use std::fs;
 use std::ops::Deref;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use common::fx::Fx;
 use common::{Run, TestEnv, refused};
 use cpd_core::home::CpdHome;
-use cpd_core::store::Store;
 use serde_json::{Value, json};
 
 const TESTS_TABLE: &str = "[test-commands]\nbuild = \"true\"\nrun = \"true\"\n";
@@ -61,7 +60,7 @@ fn lb_in(phase: &str) -> Lb {
 
 impl Lb {
     /// `pr add <key> --repo <repo> --title T --shape config --no-needs --plan pay-1`.
-    fn add(&self, key: &str, repo: &PathBuf) -> Run {
+    fn add(&self, key: &str, repo: &Path) -> Run {
         self.cpd(&["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "T", "--shape", "config", "--no-needs", "--plan", "pay-1"])
     }
 

@@ -3,7 +3,7 @@
 
 use crate::common;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use common::fx::Fx;
 use common::refused;

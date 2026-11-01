@@ -40,7 +40,7 @@ pub fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         })));
     }
     let text = String::from_utf8_lossy(&stderr);
-    let message = text.lines().filter(|line| !line.trim().is_empty()).last().unwrap_or("cpd install failed.").to_owned();
+    let message = text.lines().rfind(|line| !line.trim().is_empty()).unwrap_or("cpd install failed.").to_owned();
     Err(CpdError::new(ErrorCode::InstallFailed, message).with("exit", exit))
 }
 

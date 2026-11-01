@@ -10,10 +10,9 @@ use std::time::Duration;
 use common::TestEnv;
 use common::fx::Fx;
 use cpd_core::error::ErrorCode;
-use cpd_core::fakes::git::{GitRoute, Head, Oid, Repo, Universe};
+use cpd_core::fakes::git::{GitRoute, Repo};
 use cpd_core::git::hooks::{HookError, HookOutcome, Pipeline, run_hook, run_hook_with};
 use cpd_core::host::runner::{Call, Handler, Reply};
-use cpd_core::host::spawn::{Launch, Pid, Spawn};
 use cpd_core::ports::Ports;
 use cpd_core::git::{
     Operation, Push, Setup, Synced, sync_lead, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_attempt_worktree_with, create_lead_worktree, create_lead_worktree_with,
@@ -289,10 +288,6 @@ fn fail_git(fx: &Fx, n: usize, is: fn(&Call) -> bool, stderr: &str) {
 
 fn is_fetch(call: &Call) -> bool {
     call.args.iter().any(|a| a == "fetch")
-}
-
-fn is_worktree_add(call: &Call) -> bool {
-    call.args.windows(2).any(|w| w == ["worktree", "add"])
 }
 
 fn is_worktree_list(call: &Call) -> bool {

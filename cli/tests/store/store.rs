@@ -367,6 +367,9 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
     }
 }
 
+/// A `history` row: `(txn, pk, op, before, after)`.
+type HistoryRow = (i64, String, String, Option<String>, Option<String>);
+
 #[test]
 fn writes_are_copied_into_history_with_their_txn() {
     let env = Home::new();
@@ -379,7 +382,7 @@ fn writes_are_copied_into_history_with_their_txn() {
         })
         .unwrap();
     assert_eq!(update, txn + 1);
-    let rows: Vec<(i64, String, String, Option<String>, Option<String>)> = store
+    let rows: Vec<HistoryRow> = store
         .read(|c| {
             let mut stmt = c.prepare("SELECT txn, pk, op, before, after FROM history WHERE tbl = 'escalations' ORDER BY id")?;
             let rows = stmt
@@ -1405,7 +1408,10 @@ fn a_slow_write_is_logged_with_where_its_time_went() {
     // the 1 s threshold.
     let clock = ManualClock::new();
     store.use_clock(Arc::new(clock.clone()));
-    store.write("slow", |_| Ok(clock.advance(Duration::from_millis(1100)))).unwrap();
+    store.write("slow", |_| {
+        clock.advance(Duration::from_millis(1100));
+        Ok(())
+    }).unwrap();
     let text = fs::read_to_string(env.cpd_home().join("run/store-slow.log")).unwrap();
     // Other writes of a loaded machine may be in it too: find this one.
     let line = text
