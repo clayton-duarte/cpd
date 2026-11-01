@@ -191,9 +191,9 @@ fn rig(changed: &[(&str, &str)], base_ahead: &[(&str, &str)], brings_base: bool)
                    VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '{}', 'O3', 'working', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, locked_at, created_at)
                    VALUES ('pay', 'ctx', 'Pay', 'deploy', 'lead1', 't', 't');
-                 INSERT INTO prs (plan, key, name, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, name, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
                    VALUES ('pay', 'api', 'cpd', '{}', 'main', 'dispatch', '{lead}', '{}', 't', cpd_txn(), 't');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status,
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status,
                                    appended, fingerprint, created_txn, created_at)
                    VALUES ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '{TOUCHES}', '[\"b\"]', '[]', 'work', 'running', 0, '{placeholder}', cpd_txn(), 't');
                  INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, submitted_sha, submitted_at, driver_pid, started_at)

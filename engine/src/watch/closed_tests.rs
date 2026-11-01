@@ -26,7 +26,7 @@ fn pull_request(fx: &mut Fx, n: i64, state: &str) {
 /// Workflow `key` of Plan `pay`, `open` on pull request `n`.
 fn open_pr(fx: &mut Fx, key: &str, n: i64) {
     fx.fixture(&format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                           created_txn, created_at, started_at)
            VALUES ('pay', '{key}', '/r', 'main', 'open', 'cpd/pay/{key}', '/w/{key}', {n}, 'https://github.com/acme/shop/pull/{n}', 't', {n},
                    cpd_txn(), 't', 't');"
@@ -98,7 +98,7 @@ fn a_new_pull_request_number_of_the_same_pr_wakes_the_lead_again() {
     closed::run(&mut fx.engine);
     pull_request(&mut fx, 8, "closed");
     fx.fixture(
-        "UPDATE prs SET pr_number = 8, pr_url = 'https://github.com/acme/shop/pull/8', pull_request = 8 WHERE plan = 'pay' AND key = 'ship';",
+        "UPDATE workflows SET pr_number = 8, pr_url = 'https://github.com/acme/shop/pull/8', pull_request = 8 WHERE plan = 'pay' AND key = 'ship';",
     );
     closed::run(&mut fx.engine);
     closed::run(&mut fx.engine);
@@ -128,7 +128,7 @@ fn a_cancelled_pr_or_an_open_pull_request_sends_nothing() {
     pull_request(&mut fx, 9, "open");
     open_pr(&mut fx, "live", 9);
     fx.fixture(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('pay', 'gone', '/r', 'main', 'cancelled', 'cpd/pay/gone', cpd_txn(), 't');",
     );
     closed::run(&mut fx.engine);
@@ -136,7 +136,7 @@ fn a_cancelled_pr_or_an_open_pull_request_sends_nothing() {
     // A Workflow that was open on a closed pull request and is then cancelled sends nothing either.
     pull_request(&mut fx, 7, "closed");
     open_pr(&mut fx, "ship", 7);
-    fx.fixture("UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL, pr_number = NULL, pr_url = NULL, pr_opened_at = NULL, pull_request = NULL WHERE key = 'ship';");
+    fx.fixture("UPDATE workflows SET status = 'cancelled', lead_worktree = NULL, started_at = NULL, pr_number = NULL, pr_url = NULL, pr_opened_at = NULL, pull_request = NULL WHERE key = 'ship';");
     closed::run(&mut fx.engine);
     assert_eq!(texts(&mut fx), Vec::<String>::new());
     // Only a Workflow that is open on a closed pull request is told of.

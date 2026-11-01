@@ -25,9 +25,9 @@ fn fresh() -> (tempfile::TempDir, Store) {
                VALUES ('lead', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
              INSERT INTO plans (id, context, title, phase, lead_session, created_at)
                VALUES ('pay', 'ctx', 'Plan', 'plan', 'lead', 't');
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                VALUES ('pay', 'api', '/r', 'main', 'waiting', 'pay/api', cpd_txn(), 't');
-             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+             INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
                VALUES ('pay', 'api', 'j', 'T', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'draft', 1, 'work', NULL, cpd_txn(), 't');
              UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 'j';
              UPDATE jobs SET status = 'running' WHERE key = 'j';"

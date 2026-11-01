@@ -60,9 +60,9 @@ fn seed_dispatch_workflow(engine: &mut Engine) {
                    VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'working', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, locked_at, created_at)
                    VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
                    VALUES ('pay', 'api', '/r', 'main', 'dispatch', 'cpd/pay', '/lead', 't', cpd_txn(), 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                    VALUES ('pay', 'ship', '/r', 'main', 'waiting', 'cpd/pay/ship', cpd_txn(), 't');",
             )?;
             Ok(())
@@ -80,9 +80,9 @@ fn seed_held_dispatch_workflow(engine: &mut Engine) {
                    VALUES ('lead2', 'lead', 'ctx', 'ops', 'Lead 2', '/', 'O3', 'working', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, locked_at, created_at)
                    VALUES ('ops', 'ctx', 'Ops', 'dispatch', 'lead2', 't', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
                    VALUES ('ops', 'web', '/r', 'main', 'dispatch', 'cpd/ops', '/lead2', 't', cpd_txn(), 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                    VALUES ('ops', 'app', '/r', 'main', 'waiting', 'cpd/ops/app', cpd_txn(), 't');",
             )?;
             Ok(())
@@ -96,7 +96,7 @@ fn open_jobs(engine: &mut Engine) -> Vec<(String, String)> {
         .store
         .read(|conn| {
             let mut stmt =
-                conn.prepare("SELECT plan, pr FROM jobs WHERE kind = 'open' ORDER BY plan, pr")?;
+                conn.prepare("SELECT plan, workflow FROM jobs WHERE kind = 'open' ORDER BY plan, workflow")?;
             Ok(stmt
                 .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?)

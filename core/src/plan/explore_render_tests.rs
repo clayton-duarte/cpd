@@ -132,7 +132,7 @@ fn plan_render_has_an_explore_section_with_artefact_and_summary() {
 ### a-scout
 The key is built in `core/src/cache.rs` from the repo path and the schema version.
 
-## PR web
+## Workflow web
 ",
         "q".repeat(100)
     );
@@ -142,7 +142,7 @@ The key is built in `core/src/cache.rs` from the repo path and the schema versio
             .unwrap_or_else(|| panic!("no {needle:?} in\n{md}"))
     };
     assert!(
-        at("## Overlaps") < at("## Explore") && at("## Explore") < at("## PR web"),
+        at("## Overlaps") < at("## Explore") && at("## Explore") < at("## Workflow web"),
         "{md}"
     );
     // explore Jobs are in no other block: not the PR's table, not its graph
@@ -178,7 +178,7 @@ fn plan_render_of_a_plan_with_no_prs_has_the_explore_section_after_no_prs_yet() 
 
 Context: `ctx` · Phase: `grounding`
 
-No PRs yet.
+No Workflows yet.
 
 ## Explore
 

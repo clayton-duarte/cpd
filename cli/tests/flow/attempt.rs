@@ -1280,7 +1280,7 @@ fn submit_of_an_open_job_with_no_commit_stores_an_empty_list() {
     let fx = git_fixture_kind(&[], "open");
     fx.fx
         .env
-        .sql("UPDATE prs SET title = 'Pay' WHERE plan = 'pay' AND key = 'repo'");
+        .sql("UPDATE workflows SET title = 'Pay' WHERE plan = 'pay' AND key = 'repo'");
     fx.fx.fake_gh(Reply::ok("[]"));
     fx.fx
         .env

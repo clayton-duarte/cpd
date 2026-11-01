@@ -38,22 +38,22 @@ fn texts(fx: &mut Fx, kind: &str) -> Vec<String> {
         .unwrap()
 }
 
-/// The owner `acme`'s policy file (the Context's owner), its `[pr]` table holding `pr_body`.
+/// The owner `acme`'s policy file (the Context's owner), its `[workflow]` table holding the keys.
 fn owner_policy(fx: &Fx, pr_body: &str) {
     let dir = fx.engine.home.root().join("policy/acme");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("owner.toml"), format!("[pr]\n{pr_body}")).unwrap();
+    std::fs::write(dir.join("owner.toml"), format!("[workflow]\n{pr_body}")).unwrap();
 }
 
 /// Workflow `repo` with Job `api` merged and the Workflow's Job `key` of `kind` queued: Ready. The Workflow is described and titled; its `jira` and
-/// head_ref are NULL; the owner's policy holds `policy` in its `[pr]` table.
+/// head_ref are NULL; the owner's policy holds `policy` in its `[workflow]` table.
 fn with_open_job(key: &str, kind: &str, policy: &str) -> Fx {
     let mut fx = Fx::with_plan("");
     fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
     fx.fixture(&format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
          VALUES ('pay', 'repo', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');
-         UPDATE prs SET description = 'A description';"
+         UPDATE workflows SET description = 'A description';"
     ));
     fx.lock_job(key, "");
     owner_policy(&fx, policy);
@@ -91,7 +91,7 @@ fn e3_does_not_start_an_open_job_whose_pr_has_no_jira_when_required_raises_one_e
     );
     assert_eq!(fx.job_status("open-repo"), "queued");
 
-    fx.fixture("UPDATE prs SET jira = 'ABC-1';");
+    fx.fixture("UPDATE workflows SET jira = 'ABC-1';");
     tick(&mut fx);
 
     assert_eq!(attempts(&mut fx), 1, "ticketed: started");
@@ -125,7 +125,7 @@ fn e3_starts_the_open_job_of_a_pr_with_no_jira_when_the_policy_has_no_key() {
 #[test]
 fn e3_starts_the_open_job_of_an_adopted_pr_with_no_jira_when_required() {
     let mut fx = with_open_job("open-repo", "open", "jira_required = true\n");
-    fx.fixture("DROP TRIGGER prs_head_ref_fixed; UPDATE prs SET head_ref = 'feature';");
+    fx.fixture("DROP TRIGGER workflows_head_ref_fixed; UPDATE workflows SET head_ref = 'feature';");
     ticks(&mut fx, 2);
     assert_eq!(attempts(&mut fx), 1);
     assert_eq!(fx.count("error"), 0, "{:?}", texts(&mut fx, "error"));

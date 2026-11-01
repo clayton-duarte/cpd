@@ -595,7 +595,7 @@ mod tests {
         let key: WorkflowKey = serde_json::from_str("\"web\"").unwrap();
         assert_eq!(serde_json::to_string(&key).unwrap(), "\"web\"");
         let err = serde_json::from_str::<WorkflowKey>("\"Web\"").unwrap_err();
-        assert!(err.to_string().contains("invalid_pr_id"), "{err}");
+        assert!(err.to_string().contains("invalid_workflow_id"), "{err}");
     }
 
     #[test]

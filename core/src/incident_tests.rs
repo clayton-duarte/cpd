@@ -138,7 +138,7 @@ fn incident_lead(store: &mut Store) -> Option<String> {
         .flatten()
 }
 
-/// The one `incident` row's `(until_plan, until_pr)`, if any.
+/// The one `incident` row's `(until_plan, until_workflow)`, if any.
 fn incident_until(store: &mut Store) -> Option<(Option<String>, Option<String>)> {
     store
         .read(|c| {
@@ -296,9 +296,9 @@ fn incident_start_records_the_plan_set_and_status_reports_it() {
         "the named Plans are reported"
     );
     assert_eq!(
-        out["incident"]["until_pr"],
+        out["incident"]["until_workflow"],
         json!(null),
-        "no until_pr by default"
+        "no until_workflow by default"
     );
     let started_at = out["incident"]["started_at"]
         .as_str()
@@ -335,7 +335,7 @@ fn incident_start_records_the_plan_set_and_status_reports_it() {
         ["ops", "pay"],
         "status reports the Plan set"
     );
-    assert_eq!(on["incident"]["until_pr"], json!(null));
+    assert_eq!(on["incident"]["until_workflow"], json!(null));
     assert_eq!(on["incident"]["started_at"], json!(started_at));
     assert_eq!(on["incident"]["by"], json!("mgr"));
 }
@@ -377,7 +377,7 @@ fn incident_is_held_for_plans_outside_the_set_only() {
 }
 
 #[test]
-fn incident_start_records_until_pr_and_refuses_a_foreign_plan() {
+fn incident_start_records_until_workflow_and_refuses_a_foreign_plan() {
     let mut f = fixture();
     let mgr = SessionId::parse("mgr").unwrap();
     let pay = PlanId::parse("pay").unwrap();
@@ -393,23 +393,23 @@ fn incident_start_records_until_pr_and_refuses_a_foreign_plan() {
         )
         .unwrap(),
     );
-    assert_eq!(out["incident"]["until_pr"], json!("pay/ship"));
+    assert_eq!(out["incident"]["until_workflow"], json!("pay/ship"));
     assert_eq!(
         incident_until(&mut f.store),
         Some((Some("pay".to_owned()), Some("pay/ship".to_owned()))),
-        "until_plan and until_pr are stored"
+        "until_plan and until_workflow are stored"
     );
     let on = fields(incident::status(&mut f.store).unwrap());
     assert_eq!(
-        on["incident"]["until_pr"],
+        on["incident"]["until_workflow"],
         json!("pay/ship"),
-        "status reports until_pr"
+        "status reports until_workflow"
     );
 
     incident::end(&mut f.store, Some(&mgr)).unwrap();
     assert!(incident_row(&mut f.store).is_none());
 
-    // A Workflow of a Plan not named is until_pr_not_incident (exit 3).
+    // A Workflow of a Plan not named is until_workflow_not_incident (exit 3).
     let err = incident::start(
         &mut f.store,
         Some(&mgr),
@@ -457,7 +457,7 @@ fn incident_start_records_until_pr_and_refuses_a_foreign_plan() {
 }
 
 #[test]
-fn incident_ends_when_the_until_pr_merges() {
+fn incident_ends_when_the_until_workflow_merges() {
     let mut f = fixture();
     let mgr = SessionId::parse("mgr").unwrap();
     let pay = PlanId::parse("pay").unwrap();
@@ -776,7 +776,7 @@ fn incident_started_and_ended_events_are_known_kinds() {
         (
             started,
             ["by", "reason", "started_at", "plans"].as_slice(),
-            ["until_pr"].as_slice(),
+            ["until_workflow"].as_slice(),
         ),
         (ended, ["by", "ended_at", "cause"].as_slice(), [].as_slice()),
     ] {
@@ -828,7 +828,7 @@ fn incident_started_and_ended_events_are_known_kinds() {
     );
     assert_eq!(
         until.data(),
-        &json!({"by": "mgr", "reason": "fixing Workflow ci", "started_at": "2026-10-14T21:10:00.000Z", "plans": ["pay"], "until_pr": "pay/ship"})
+        &json!({"by": "mgr", "reason": "fixing Workflow ci", "started_at": "2026-10-14T21:10:00.000Z", "plans": ["pay"], "until_workflow": "pay/ship"})
     );
 
     let ended_event = NewEvent::incident_ended(
@@ -984,7 +984,7 @@ fn incident_start_on_a_live_incident_keeps_started_at_by_and_reason() {
     );
 }
 
-/// Assumption A3 (hs-d664): an update that names the same set and the same `until_pr` reports
+/// Assumption A3 (hs-d664): an update that names the same set and the same `until_workflow` reports
 /// `changed:false` and appends no Event.
 #[test]
 fn incident_start_on_a_live_incident_is_idempotent() {
@@ -1034,7 +1034,7 @@ fn incident_start_on_a_live_incident_is_idempotent() {
 /// Assumption A2 (hs-d664): a new `--until-workflow` replaces the stored one, and an absent
 /// `--until-workflow` whose stored `until_plan` is not in the new set clears both columns.
 #[test]
-fn incident_start_on_a_live_incident_replaces_and_clears_until_pr() {
+fn incident_start_on_a_live_incident_replaces_and_clears_until_workflow() {
     let mut f = fixture();
     let mgr = SessionId::parse("mgr").unwrap();
     let pay = PlanId::parse("pay").unwrap();
@@ -1052,7 +1052,7 @@ fn incident_start_on_a_live_incident_replaces_and_clears_until_pr() {
     assert_eq!(
         incident_until(&mut f.store),
         Some((Some("ops".to_owned()), Some("ops/web".to_owned()))),
-        "the fresh start stores until_plan and until_pr"
+        "the fresh start stores until_plan and until_workflow"
     );
 
     // A new --until-workflow replaces the stored one.
@@ -1068,9 +1068,9 @@ fn incident_start_on_a_live_incident_replaces_and_clears_until_pr() {
     );
     assert_eq!(out["changed"], json!(true));
     assert_eq!(
-        out["incident"]["until_pr"],
+        out["incident"]["until_workflow"],
         json!("pay/api"),
-        "the output reports the new until_pr"
+        "the output reports the new until_workflow"
     );
     assert_eq!(
         incident_until(&mut f.store),
@@ -1091,9 +1091,9 @@ fn incident_start_on_a_live_incident_replaces_and_clears_until_pr() {
     );
     assert_eq!(out["changed"], json!(true));
     assert_eq!(
-        out["incident"]["until_pr"],
+        out["incident"]["until_workflow"],
         json!(null),
-        "the output reports no until_pr"
+        "the output reports no until_workflow"
     );
     assert_eq!(
         incident_until(&mut f.store),

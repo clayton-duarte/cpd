@@ -209,7 +209,7 @@ fn allocated(fx: &mut Fx, id: &str) -> (String, String) {
 fn lead(fx: &mut Fx) -> (String, String, String) {
     fx.engine
         .store
-        .read(|conn| Ok(conn.query_row("SELECT lead_branch, lead_worktree, repo FROM prs WHERE plan = 'pay' AND key = 'repo'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
+        .read(|conn| Ok(conn.query_row("SELECT lead_branch, lead_worktree, repo FROM workflows WHERE plan = 'pay' AND key = 'repo'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
         .unwrap()
 }
 
@@ -222,7 +222,7 @@ fn new_plan() -> Fx {
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'stopped', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
            VALUES ('pay', 'repo', '/repos/r', 'main', 'dispatch', 'cpd/pay/repo', '/repos/r.lead', 'Charge the card', 'config', cpd_txn(), 't', 't');",
     );
     fx
@@ -326,7 +326,7 @@ fn e3_starts_a_ready_job_parallel_beside_a_live_parallel_attempt() {
 fn e3_starts_a_ready_job_of_another_pr_beside_a_live_linear_attempt() {
     let mut fx = new_plan();
     fx.fixture(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
            VALUES ('pay', 'other', '/repos/o', 'main', 'dispatch', 'cpd/pay/other', '/repos/o.lead', 'Other', 'config', cpd_txn(), 't', 't');",
     );
     add_live_linear(&mut fx);

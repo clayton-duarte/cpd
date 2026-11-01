@@ -40,7 +40,7 @@ fn add_draft(fx: &mut Fx, key: &str) {
 /// `add_draft` in Workflow `pr`.
 fn add_draft_in(fx: &mut Fx, workflow: &str, key: &str) {
     fx.fixture(&format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('pay', '{workflow}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, cpd_txn(), 't');"
     ));
 }
@@ -54,7 +54,7 @@ fn add_cpd_job(fx: &mut Fx, key: &str, kind: &str, then: &str) {
 /// `add_cpd_job` in Workflow `pr`.
 fn add_cpd_job_in(fx: &mut Fx, workflow: &str, key: &str, kind: &str, then: &str) {
     fx.fixture(&format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
          VALUES ('pay', '{workflow}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');"
     ));
     fx.lock_job(key, then);
@@ -67,7 +67,7 @@ fn add_web_workflow(fx: &mut Fx) {
         fx.engine.home.root().join("lead"),
     );
     fx.fixture(&format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
            VALUES ('pay', 'web', '{}', 'main', 'dispatch', 'cpd/pay/web', '{}', 'Show the receipt', 'config', cpd_txn(), 't', 't');",
         repo.display(),
         lead.display()
@@ -128,7 +128,7 @@ fn e4_adds_one_open_job_to_a_dispatch_pr_whatever_its_other_jobs_are_doing_and_a
         .store
         .read(|conn| {
             Ok(conn.query_row(
-                "SELECT title, tier, pr, appended, urgent, fingerprint IS NOT NULL FROM jobs WHERE plan = 'pay' AND key = 'open-repo'",
+                "SELECT title, tier, workflow, appended, urgent, fingerprint IS NOT NULL FROM jobs WHERE plan = 'pay' AND key = 'open-repo'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
             )?)
@@ -163,7 +163,7 @@ fn e4_adds_one_open_job_to_a_dispatch_pr_whatever_its_other_jobs_are_doing_and_a
         (
             &data["kind"],
             &data["by"],
-            &data["pr"],
+            &data["workflow"],
             &data["status"],
             &data["tier"]
         ),
@@ -178,7 +178,7 @@ fn e4_adds_one_open_job_to_a_dispatch_pr_whatever_its_other_jobs_are_doing_and_a
     assert_eq!(data["needs"], json!([]));
     assert_eq!(fx.count("all-merged"), 0, "the all-merged steer is retired");
     assert_eq!(
-        fx.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'"),
+        fx.query::<Option<String>>("SELECT all_merged_at FROM workflows WHERE plan = 'pay'"),
         None
     );
 }
@@ -298,15 +298,15 @@ fn e4_adds_no_open_job_to_a_waiting_pr_or_to_a_pr_of_an_archived_plan() {
     add_draft(&mut waiting, "later");
     let repo = waiting.engine.home.root().join("repo");
     waiting.fixture(&format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, title, shape, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, title, shape, created_txn, created_at)
            VALUES ('pay', 'web', '{}', 'main', 'waiting', 'cpd/pay/web', 'Show the receipt', 'config', cpd_txn(), 't');
-         INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'repo');",
+         INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', 'web', 'repo');",
         repo.display()
     ));
     ticks(&mut waiting, 4);
     assert_eq!(jobs_of_kind(&mut waiting, "open").len(), 1);
     assert_eq!(
-        waiting.query::<String>("SELECT pr FROM jobs WHERE kind = 'open'"),
+        waiting.query::<String>("SELECT workflow FROM jobs WHERE kind = 'open'"),
         "repo"
     );
 
@@ -399,7 +399,7 @@ fn e4_adds_no_open_job_to_a_dispatch_pr_whose_open_job_the_lead_cancelled() {
     );
     assert_eq!(fx.count("job-added"), 1, "only Workflow web's was added");
     assert_eq!(
-        fx.query::<String>("SELECT status FROM prs WHERE plan = 'pay' AND key = 'repo'"),
+        fx.query::<String>("SELECT status FROM workflows WHERE plan = 'pay' AND key = 'repo'"),
         "dispatch"
     );
 }

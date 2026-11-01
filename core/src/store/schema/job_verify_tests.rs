@@ -67,7 +67,7 @@ fn before_verify() -> (tempfile::TempDir, CpdHome, Vec<Named>) {
     write(
         &mut store,
         &FIXTURE
-            .replace("INSERT INTO workflows", "INSERT INTO prs")
+            .replace("INSERT INTO workflows (", "INSERT INTO prs (")
             .replace(
                 "INSERT INTO jobs (plan, workflow",
                 "INSERT INTO jobs (plan, pr",

@@ -93,7 +93,7 @@ fn job_sql(key: &str, pr: Option<&str>, kind: &str, status: &str) -> String {
     };
     let pr = q(pr.map(str::to_owned));
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            failed_cause, merged_sha, cancel_reason, cancel_requested_at, summary, kind, tests, test_files, created_txn, created_at)
          VALUES ('{PLAN}', {pr}, '{key}', 'Title {key}', 'S2', 'Goal of {key}.', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, {fingerprint},
                  {failed_cause}, {merged_sha}, {cancel_reason}, {cancel_requested_at}, {summary}, '{kind}', {tests}, {test_files}, cpd_txn(), 't');\n"

@@ -26,7 +26,7 @@ pub(super) fn tick(fx: &mut Fx) {
 /// A `failed` Job `key` of Plan `pay` whose `job-failed` Event is `minutes` old.
 pub(super) fn failed_job(fx: &mut Fx, key: &str, minutes: i64) {
     fx.fixture(&format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                            fingerprint, failed_cause, created_txn, created_at)
          VALUES ('pay', 'repo', '{key}', 'Title', 'S2', 'Goal.', 'Because.', '[\"a\"]', '[\"ok\"]', '[]', 'failed', 0,
                  hex(zeroblob(32)), 'crashed', cpd_txn(), 't');
@@ -238,7 +238,7 @@ fn a_failed_job_with_a_fix_underway_sends_the_manager_no_nudge_until_the_fix_end
     manager(&mut fx);
     failed_job(&mut fx, "old", 2);
     fx.fixture(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                            fingerprint, created_txn, created_at)
          VALUES ('pay', 'repo', 'fix', 'Title', 'S2', 'Goal.', 'Because.', '[\"a\"]', '[\"ok\"]', '[]', 'queued', 1,
                  hex(zeroblob(32)), cpd_txn(), 't');",

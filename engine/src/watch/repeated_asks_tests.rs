@@ -223,7 +223,7 @@ fn shop(fx: &mut Fx) {
            VALUES ('lead2', 'lead', 'ctx', 'shop', 'Lead2', '/', 'O3', 'working', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('shop', 'ctx', 'Shop', 'dispatch', 'lead2', 't', 't');
-         INSERT INTO jobs (plan, pr, key, kind, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+         INSERT INTO jobs (plan, workflow, key, kind, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                            fingerprint, created_txn, created_at)
            VALUES ('shop', NULL, 'api', 'scout', 'Title', 'H2', 'Goal.', 'Because.', '[\"a\"]', '[\"ok\"]', '[]', 'queued', 0,
                    hex(zeroblob(32)), cpd_txn(), 't');",
@@ -367,7 +367,7 @@ fn an_explore_job_that_repeats_a_question_is_told_too() {
     let mut fx = fx();
     manager(&mut fx);
     fx.fixture(
-        "INSERT INTO jobs (plan, pr, key, kind, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+        "INSERT INTO jobs (plan, workflow, key, kind, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                            fingerprint, created_txn, created_at)
          VALUES ('pay', NULL, 'scout1', 'scout', 'Title', 'H2', 'Goal.', 'Because.', '[\"a\"]', '[\"ok\"]', '[]', 'queued', 0,
                  hex(zeroblob(32)), cpd_txn(), 't');",

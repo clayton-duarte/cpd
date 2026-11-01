@@ -39,7 +39,7 @@ fn stacked_ready_inbox_opens_no_pr_ready_for_a_stacked_pr() {
     polled(&mut fx, 3777, "approved", "'feature-a'", "'main'");
     polled(&mut fx, 3778, "none", "'feature-b'", "'main'");
     fx.fixture(
-        "UPDATE prs SET status = 'open', pull_request = (SELECT id FROM pull_requests WHERE number = 3778),
+        "UPDATE workflows SET status = 'open', pull_request = (SELECT id FROM pull_requests WHERE number = 3778),
                         pr_number = 3778, pr_url = 'https://github.com/missionlane/card-dashboard/pull/3778', pr_opened_at = 't'
           WHERE plan = 'pay';",
     );

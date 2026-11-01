@@ -720,7 +720,7 @@ fn attempt_show_and_job_show_print_the_gate_facts() {
 fn the_worker_spec_lists_every_addendum_of_the_job_in_order_and_none_when_there_is_none() {
     let fx = fx();
     fx.env.sql(&format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
            VALUES ('pay', 'repo', 'ad', 'Title of ad', 'S2', 'Do it.', 'Because.', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, 'work', '{fp}', cpd_txn(), 't');
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, started_at, ended_at)
            VALUES ('pay', 'ad-a1', 'ad', 1, 'S2', 'ladder', 'ended', 'failed', 'timed_out', 'cpd/pay--ad-a1', '{wt}-a1', '{zero}', 't', 't');

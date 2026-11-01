@@ -300,7 +300,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     assert_eq!(out["lead"]["cwd"], cwd);
     assert_eq!(out["record"], "m1-p1");
     assert_eq!(
-        fx.env.query::<i64>("SELECT count(*) FROM prs"),
+        fx.env.query::<i64>("SELECT count(*) FROM workflows"),
         0,
         "a new Plan has no PR"
     );
@@ -1209,7 +1209,7 @@ fn a_plan_with_no_pr_is_read_by_phase_list_show_archive_and_unarchive() {
     let fx = Fx::with_ports();
     inproc::setup(&fx);
     inproc::new_plan_only(&fx, "pay");
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM prs"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM workflows"), 0);
 
     assert_eq!(inproc::show(&fx, "pay")["workflows"], json!([]));
     let ids = |fx: &Fx| -> Vec<String> {

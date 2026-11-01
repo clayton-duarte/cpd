@@ -76,9 +76,9 @@ fn fixture(status: &str) -> Fixture {
                    VALUES ('l-pay', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', '{T}', '{T}');
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                    VALUES ('pay', 'ctx', 'P', 'dispatch', 'l-pay', '{T}', '{T}');
-                 INSERT INTO prs (plan, key, name, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                 INSERT INTO workflows (plan, key, name, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                    VALUES ('pay', 'api', 'cpd', '/r', 'main', 'dispatch', 'cpd/pay/api', '/lw', 1, '{T}', '{T}');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status,
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status,
                                    appended, fingerprint, created_txn, created_at, merged_sha)
                    VALUES ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"docs/research/x.md\"]', '[\"b\"]', '[]', 'work', '{status}',
                            0, '{FP}', cpd_txn(), '{T}', {sha});"

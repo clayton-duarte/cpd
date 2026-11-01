@@ -44,7 +44,7 @@ fn incomplete_draft(fx: &Fx, key: &str, kind: &str) {
 /// review covers it), never a state the door would write after the lock while it waits.
 fn complete_draft(fx: &Fx, key: &str, needs: &[&str]) {
     let mut sql = format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('pl', 'repo', '{key}', 'Title of {key}', 'S2', 'Do it.', 'Because.', '[\"src/a.rs\"]', '[\"cargo test\"]', '[]', 'draft', 1, cpd_txn(), 't');"
     );
     for need in needs {

@@ -236,9 +236,9 @@ fn rig(spec: Spec<'_>) -> Rig {
                    VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'working', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, locked_at, created_at)
                    VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-                 INSERT INTO prs (plan, key, name, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, name, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
                    VALUES ('pay', 'api', 'cpd', '{}', 'main', 'dispatch', 'cpd/pay/api', '{}', 't', cpd_txn(), 't');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status,
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status,
                                    appended, fingerprint, created_txn, created_at)
                    VALUES ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '{}', '[\"b\"]', '[]', '{}', 'running', 0, '{}', cpd_txn(), 't');
                  INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, driver_pid, started_at)
@@ -555,7 +555,7 @@ fn an_explore_job_runs_no_touches_check() {
                    VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'working', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, locked_at, created_at)
                    VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status,
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status,
                                    appended, fingerprint, created_txn, created_at)
                    VALUES ('pay', NULL, 'a', 'A', 'H2', 'g', 'c', '[\"run/pay/explore/a.md\"]', '[\"b\"]', '[]', 'scout', 'running',
                            0, '{placeholder}', cpd_txn(), 't');

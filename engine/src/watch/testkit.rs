@@ -98,7 +98,7 @@ impl Fx {
                VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'stopped', 't', 't');
              INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                VALUES ('pay', 'ctx', 'Pay', '{phase}', 'lead1', 't', {locked});
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
                VALUES ('pay', 'repo', '{}', 'main', 'dispatch', 'cpd/pay', '{}', '{PR_TITLE}', 'config', cpd_txn(), 't', 't');",
             repo.display(),
             lead.display()
@@ -170,7 +170,7 @@ impl Fx {
         then: &str,
     ) {
         let mut sql = format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
              VALUES ('pay', '{workflow}', '{key}', 'Title of {key}', '{tier}', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         );
         for need in needs {

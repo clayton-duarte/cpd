@@ -443,7 +443,7 @@ fn every_job() -> String {
                 };
                 assert!(key.len() <= 32, "key {key}");
                 sql += &format!(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                    "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                        fingerprint, created_txn, created_at, kind, failed_cause, cancel_reason, cancel_requested_at,
                                        merged_sha, summary, tests, test_files)
                      VALUES ('pay', {pr_sql}, '{key}', 'Job', 'S1', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fingerprint},
@@ -464,17 +464,17 @@ const EVERY_PR: &str = "
               '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z'),
              ('acme/repo', 2, 'https://github.com/acme/repo/pull/2', 'T', 0, 'open', 'none', 'passed', 'clean', 1, 'main', 'main',
               '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', NULL);
-    INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+    INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
       VALUES ('pay', 'p-dispatch', '/repo', 'main', 'dispatch', 'cpd/pay/p-dispatch', '/wt/d', cpd_txn(), '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
-    INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+    INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
       VALUES ('pay', 'p-waiting', '/repo', 'main', 'waiting', 'cpd/pay/p-waiting', cpd_txn(), '2026-01-01T00:00:00.000Z'),
              ('pay', 'p-cancelled', '/repo', 'main', 'cancelled', 'cpd/pay/p-cancelled', cpd_txn(), '2026-01-01T00:00:00.000Z');
-    INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+    INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                      created_txn, created_at, started_at, merged_at)
       VALUES ('pay', 'p-merged', '/repo', 'main', 'merged', 'cpd/pay/p-merged', '/wt/m', 1, 'https://github.com/acme/repo/pull/1',
               '2026-01-02T00:00:00.000Z', (SELECT id FROM pull_requests WHERE number = 1), cpd_txn(), '2026-01-01T00:00:00.000Z',
               '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
-    INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+    INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                      created_txn, created_at, started_at)
       VALUES ('pay', 'p-open', '/repo', 'main', 'open', 'cpd/pay/p-open', '/wt/o', 2, 'https://github.com/acme/repo/pull/2',
               '2026-01-02T00:00:00.000Z', (SELECT id FROM pull_requests WHERE number = 2), cpd_txn(), '2026-01-01T00:00:00.000Z',

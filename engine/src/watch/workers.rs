@@ -223,22 +223,22 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE job_tenants (plan TEXT, job TEXT, pool TEXT);
              CREATE TABLE plans (id TEXT, phase TEXT, archived_at TEXT);
-             CREATE TABLE prs (plan TEXT, key TEXT, status TEXT);
-             CREATE TABLE jobs (plan TEXT, key TEXT, pr TEXT, status TEXT, seq INTEGER, skipped_n INTEGER, urgent INTEGER NOT NULL DEFAULT 0, kind TEXT NOT NULL DEFAULT 'work');
+             CREATE TABLE workflows (plan TEXT, key TEXT, status TEXT);
+             CREATE TABLE jobs (plan TEXT, key TEXT, workflow TEXT, status TEXT, seq INTEGER, skipped_n INTEGER, urgent INTEGER NOT NULL DEFAULT 0, kind TEXT NOT NULL DEFAULT 'work');
              CREATE TABLE dependencies (plan TEXT, job TEXT, needs TEXT);
              INSERT INTO plans (id, phase) VALUES ('pay', 'dispatch');
-             INSERT INTO prs (plan, key, status) VALUES ('pay', 'a', 'dispatch'), ('pay', 'w', 'waiting');
+             INSERT INTO workflows (plan, key, status) VALUES ('pay', 'a', 'dispatch'), ('pay', 'w', 'waiting');
              INSERT INTO job_tenants (plan, job, pool) VALUES ('pay', 'busy', 'workers'), ('pay', 'busy', 'repo:acme/pay:db');
              -- ready: no Dependency
-             INSERT INTO jobs (plan, key, pr, status, seq) VALUES ('pay', 'free', 'a', 'queued', 1);
+             INSERT INTO jobs (plan, key, workflow, status, seq) VALUES ('pay', 'free', 'a', 'queued', 1);
              -- ready: its only Dependency is merged
-             INSERT INTO jobs (plan, key, pr, status, seq) VALUES ('pay', 'done', 'a', 'merged', 2), ('pay', 'after', 'a', 'queued', 3);
+             INSERT INTO jobs (plan, key, workflow, status, seq) VALUES ('pay', 'done', 'a', 'merged', 2), ('pay', 'after', 'a', 'queued', 3);
              INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'after', 'done');
              -- queued, not ready: a Dependency that is not merged
-             INSERT INTO jobs (plan, key, pr, status, seq) VALUES ('pay', 'busy', 'a', 'running', 4), ('pay', 'blocked', 'a', 'queued', 5);
+             INSERT INTO jobs (plan, key, workflow, status, seq) VALUES ('pay', 'busy', 'a', 'running', 4), ('pay', 'blocked', 'a', 'queued', 5);
              INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'blocked', 'busy');
              -- queued, not ready: its Workflow has not started
-             INSERT INTO jobs (plan, key, pr, status, seq) VALUES ('pay', 'later', 'w', 'queued', 6);",
+             INSERT INTO jobs (plan, key, workflow, status, seq) VALUES ('pay', 'later', 'w', 'queued', 6);",
         )
         .unwrap();
         conn

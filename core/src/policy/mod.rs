@@ -683,7 +683,7 @@ mod tests {
 
         let e = owner_in_use(&ctx, &acme, &["p/a".to_string()]);
         assert_eq!((e.code(), e.exit().code()), (ErrorCode::OwnerInUse, 3));
-        assert_eq!(e.details()["prs"], serde_json::json!(["p/a"]));
+        assert_eq!(e.details()["workflows"], serde_json::json!(["p/a"]));
         assert_eq!(e.details()["context"], "ctx");
         assert_eq!(e.details()["owner"], "acme");
     }

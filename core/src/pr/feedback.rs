@@ -183,7 +183,7 @@ mod tests {
                 &pull("conflicting", "dirty"),
                 &[Reason::ChecksFailed]
             ),
-            json!({"pr": "api", "number": 7, "url": url, "state": "open", "checks": "failed", "review_decision": "none",
+            json!({"workflow": "api", "number": 7, "url": url, "state": "open", "checks": "failed", "review_decision": "none",
                    "mergeable": "conflicting", "merge_state": "dirty", "conflict": false, "reasons": ["checks_failed"]})
         );
         assert_eq!(

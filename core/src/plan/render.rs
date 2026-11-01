@@ -693,6 +693,7 @@ pub fn markdown(
     }
     if workflows.is_empty() && cancelled.is_empty() {
         out.extend(["No Workflows yet.".to_owned(), String::new()]);
+        explore_section(&mut out, plan, jobs, display);
         return out.join("\n");
     }
     let order = ordered(&workflows, display);

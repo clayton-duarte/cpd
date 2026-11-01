@@ -47,12 +47,12 @@ fn with_open_job(key: &str, kind: &str) -> Fx {
     std::fs::write(dir.join("owner.toml"), "").unwrap();
     fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
     fx.fixture(&format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
          VALUES ('pay', 'repo', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');"
     ));
     fx.lock_job(key, "");
     assert_eq!(
-        fx.query::<i64>("SELECT count(*) FROM prs WHERE description IS NULL AND head_ref IS NULL"),
+        fx.query::<i64>("SELECT count(*) FROM workflows WHERE description IS NULL AND head_ref IS NULL"),
         1
     );
     fx
@@ -89,7 +89,7 @@ fn e3_does_not_start_an_open_job_whose_pr_has_no_description_raises_one_error_an
     );
     assert_eq!(fx.job_status("open-repo"), "queued");
 
-    fx.fixture("UPDATE prs SET description = 'A description';");
+    fx.fixture("UPDATE workflows SET description = 'A description';");
     tick(&mut fx);
 
     assert_eq!(attempts(&mut fx), 1, "described: started");
@@ -105,7 +105,7 @@ fn e3_does_not_start_an_open_job_whose_pr_has_no_description_raises_one_error_an
 #[test]
 fn e3_starts_the_open_job_of_an_adopted_pr_without_a_stored_description() {
     let mut fx = with_open_job("open-repo", "open");
-    fx.fixture("DROP TRIGGER prs_head_ref_fixed; UPDATE prs SET head_ref = 'feature';");
+    fx.fixture("DROP TRIGGER workflows_head_ref_fixed; UPDATE workflows SET head_ref = 'feature';");
     ticks(&mut fx, 2);
     assert_eq!(attempts(&mut fx), 1);
     assert_eq!(fx.count("error"), 0, "{:?}", texts(&mut fx, "error"));
@@ -115,7 +115,7 @@ fn e3_starts_the_open_job_of_an_adopted_pr_without_a_stored_description() {
 #[test]
 fn e3_starts_the_open_job_of_a_described_pr() {
     let mut fx = with_open_job("open-repo", "open");
-    fx.fixture("UPDATE prs SET description = 'A description';");
+    fx.fixture("UPDATE workflows SET description = 'A description';");
     ticks(&mut fx, 2);
     assert_eq!(attempts(&mut fx), 1);
     assert_eq!(fx.count("error"), 0, "{:?}", texts(&mut fx, "error"));
