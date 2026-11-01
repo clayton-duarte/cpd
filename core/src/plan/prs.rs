@@ -167,7 +167,7 @@ mod tests {
             .unwrap();
         let plan = PlanId::parse("pay").unwrap();
         let prs = store.read(|conn| load_prs(conn, &plan)).unwrap();
-        let [api, web] = prs.as_slice() else { panic!("{workflows:?}") };
+        let [api, web] = prs.as_slice() else { panic!("{prs:?}") };
         assert_eq!((api.key.as_str(), api.repo.as_str(), api.base.as_str(), api.lead_branch.as_str()), ("api", "/r/api", "main", "cpd/pay/api"));
         assert_eq!((api.status.as_str(), api.lead_worktree.as_deref(), api.needs.as_slice()), ("open", Some(Path::new("/w/api")), &[][..]));
         let pull = api.pull.as_ref().unwrap();

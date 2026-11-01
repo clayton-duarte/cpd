@@ -94,7 +94,7 @@ fn a_version_1_database_migrates_and_its_pr_gets_a_row_titled_like_the_plan() {
                 c.pragma_query_value(None, "user_version", |r| r.get(0))?,
                 c.query_row(
                     "SELECT r.key, r.pr_number, p.repo, p.title, p.review_decision, p.checks
-                       FROM prs r JOIN pull_requests p ON p.id = r.pull_request WHERE r.plan = 'pay'",
+                       FROM workflows r JOIN pull_requests p ON p.id = r.pull_request WHERE r.plan = 'pay'",
                     [],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
                 )?,
@@ -381,7 +381,7 @@ fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
         &mut store,
         "SELECT plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                 pull_request, all_merged_at, start_failed_at, created_txn, created_at, started_at, merged_at
-         FROM prs ORDER BY created_at",
+         FROM workflows ORDER BY created_at",
     );
     let n = Value::Null;
     assert_eq!(
@@ -410,11 +410,11 @@ fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
             serde_json::json!([2, "acme/pay", 7, "Open PR", 0, "open", "approved", "passed", "2026-01-03T00:00:00.004Z", n, "2026-01-03T00:00:00.004Z"]),
         ]
     );
-    assert_eq!(count(&mut store, "SELECT count(*) FROM pr_needs"), 0);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM workflow_needs"), 0);
 
     // Every Job has its Plan's one PR, is no review Job, and keeps its seq.
     assert_eq!(
-        rows(&mut store, "SELECT seq, plan, pr, review, key, status FROM jobs ORDER BY seq"),
+        rows(&mut store, "SELECT seq, plan, workflow, review, key, status FROM jobs ORDER BY seq"),
         vec![
             serde_json::json!([1, "pl", "my-repo-git", 0, "a", "draft"]),
             serde_json::json!([2, "pl", "my-repo-git", 0, "b", "draft"]),
@@ -476,7 +476,7 @@ fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
     let (job, event, record) = store
         .write("test", |tx| {
             tx.execute_batch(&format!(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status,
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status,
                                    appended, created_txn, created_at)
                    VALUES ('gr', 'pay', 'n', 'N', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), '{T}');
                  INSERT INTO events (txn, at, kind, context, plan, text, data) VALUES (cpd_txn(), '{T}', 'pr-added', 'ctx', 'gr', 'x', '{{}}');
@@ -537,7 +537,7 @@ fn a_tree_menu_version_3_database_migrates_to_6_keeping_archived_at() {
         vec![serde_json::json!(["l-ar", "2026-01-06T00:00:00.001Z"]), serde_json::json!(["l-li", n])]
     );
     assert_eq!(
-        rows(&mut store, "SELECT plan, key, repo, status, lead_branch FROM prs ORDER BY plan"),
+        rows(&mut store, "SELECT plan, key, repo, status, lead_branch FROM workflows ORDER BY plan"),
         vec![
             serde_json::json!(["ar", "pay", "/src/pay", "waiting", "cpd/ar"]),
             serde_json::json!(["li", "web", "/src/web", "waiting", "cpd/li"]),
@@ -617,7 +617,7 @@ fn a_version_4_database_with_a_done_plan_migrates_to_5_and_6_keeping_every_row()
         ]
     );
     assert_eq!(
-        rows(&mut store, "SELECT plan, key, status, lead_branch FROM prs ORDER BY plan"),
+        rows(&mut store, "SELECT plan, key, status, lead_branch FROM workflows ORDER BY plan"),
         vec![
             serde_json::json!(["di", "pay", "dispatch", "cpd/di"]),
             serde_json::json!(["dn", "web", "merged", "cpd/dn"]),
@@ -663,25 +663,25 @@ fn prs_locked_refuses_every_lead_branch_rename_even_of_a_merged_pr() {
     let mut store = migrated_4(&dir);
     for sql in [
         // another value
-        "UPDATE prs SET lead_branch = 'cpd/dn/other' WHERE plan = 'dn'",
-        "UPDATE prs SET lead_branch = 'cpd/dn/web/x' WHERE plan = 'dn'",
-        "UPDATE prs SET lead_branch = 'cpd/pr/pay' WHERE plan = 'dn'",
+        "UPDATE workflows SET lead_branch = 'cpd/dn/other' WHERE plan = 'dn'",
+        "UPDATE workflows SET lead_branch = 'cpd/dn/web/x' WHERE plan = 'dn'",
+        "UPDATE workflows SET lead_branch = 'cpd/pr/pay' WHERE plan = 'dn'",
         // the rename together with another guarded column
-        "UPDATE prs SET lead_branch = 'cpd/dn/web', repo = '/src/other' WHERE plan = 'dn'",
-        "UPDATE prs SET lead_branch = 'cpd/dn/web', base = 'main' WHERE plan = 'dn'",
+        "UPDATE workflows SET lead_branch = 'cpd/dn/web', repo = '/src/other' WHERE plan = 'dn'",
+        "UPDATE workflows SET lead_branch = 'cpd/dn/web', base = 'main' WHERE plan = 'dn'",
         // the other guarded columns alone
-        "UPDATE prs SET repo = '/src/other' WHERE plan = 'dn'",
-        "UPDATE prs SET base = 'main' WHERE plan = 'dn'",
+        "UPDATE workflows SET repo = '/src/other' WHERE plan = 'dn'",
+        "UPDATE workflows SET base = 'main' WHERE plan = 'dn'",
         // a PR that is not merged
-        "UPDATE prs SET lead_branch = 'cpd/pr/pay' WHERE plan = 'pr'",
-        "UPDATE prs SET lead_branch = 'cpd/di/pay' WHERE plan = 'di'",
+        "UPDATE workflows SET lead_branch = 'cpd/pr/pay' WHERE plan = 'pr'",
+        "UPDATE workflows SET lead_branch = 'cpd/di/pay' WHERE plan = 'di'",
     ] {
         let err = refused(&mut store, sql);
         assert_eq!(err.code(), ErrorCode::PrLocked, "{sql}: {err:?}");
         assert_eq!(err.exit().code(), 3);
     }
     // `lead-branch-name` (pro-d113 A3) removed the exception: the rename itself is refused too.
-    let err = refused(&mut store, "UPDATE prs SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'");
+    let err = refused(&mut store, "UPDATE workflows SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'");
     assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
 }
 
@@ -714,12 +714,12 @@ fn version_5(home: &CpdHome) {
     database_at(home, 5, &sql);
 }
 
-/// The triggers on `prs`, `(name, sql)` by name.
-fn prs_triggers(conn: &Connection) -> Vec<(String, String)> {
+/// The triggers on `table`, `(name, sql)` by name.
+fn triggers_on(conn: &Connection, table: &str) -> Vec<(String, String)> {
     let mut stmt = conn
-        .prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'prs' ORDER BY name")
+        .prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = ?1 ORDER BY name")
         .unwrap();
-    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<Result<_>>().unwrap()
+    stmt.query_map([table], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<Result<_>>().unwrap()
 }
 
 /// `version_5`, migrated by `Store::open`, and the triggers on `prs` before.
@@ -728,7 +728,7 @@ fn migrated_5(dir: &tempfile::TempDir) -> (Store, Vec<(String, String)>) {
     version_5(&home);
     let conn = Connection::open(home.db()).unwrap();
     assert_eq!(legacy_schema_hash(&conn).unwrap(), SCHEMA_HASHES[4]);
-    let before = prs_triggers(&conn);
+    let before = triggers_on(&conn, "prs");
     drop(conn);
     let store = Store::open(&home, 5000).unwrap();
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
@@ -752,7 +752,7 @@ fn a_version_5_database_migrates_to_6_with_the_pull_requests_back_filled() {
         ]
     );
     assert_eq!(
-        rows(&mut store, "SELECT plan, key, status, lead_branch, pr_number, pull_request FROM prs ORDER BY plan"),
+        rows(&mut store, "SELECT plan, key, status, lead_branch, pr_number, pull_request FROM workflows ORDER BY plan"),
         vec![
             serde_json::json!(["dn", "web", "merged", "cpd/dn", 9, 1]),
             serde_json::json!(["op", "pay", "open", "cpd/op", 7, 2]),
@@ -946,22 +946,27 @@ fn migration_6_keeps_migration_5s_triggers_on_prs() {
     let (store, before) = migrated_5(&dir);
     drop(store);
     // `prs_shape_fixed` is `job-kinds`' and `prs_head_ref_fixed` is `pr-adopt`'s: neither is one of migration 5's.
-    let after: Vec<(String, String)> = prs_triggers(&Connection::open(home(&dir).db()).unwrap()).into_iter().filter(|(name, _)| name != "prs_shape_fixed" && name != "prs_head_ref_fixed" && name != "prs_hist_del").collect();
-    let names = |t: &[(String, String)]| t.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
-    assert_eq!(names(&after), names(&before), "the same triggers on prs");
+    let after: Vec<(String, String)> = triggers_on(&Connection::open(home(&dir).db()).unwrap(), "workflows").into_iter().filter(|(name, _)| name != "workflows_shape_fixed" && name != "workflows_head_ref_fixed" && name != "workflows_hist_del").collect();
+    // `workflow-rename` (after this migration) renames the object triggers `prs_*` to `workflows_*`; map the old names
+    // to compare them.
+    let renamed = |name: &str| name.replacen("prs_", "workflows_", 1);
+    let names_after = |t: &[(String, String)]| t.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
+    let names_before: Vec<String> = before.iter().map(|(name, _)| renamed(name)).collect();
+    assert_eq!(names_after(&after), names_before, "the same triggers on workflows");
     for ((name, old), (_, new)) in before.iter().zip(&after) {
         // The history triggers list the rebuilt table's columns; every other keeps its text.
         // `prs_status` also has `dispatch>cancelled` since `pr-cancel-started` and `open>cancelled` since `pr-cancel-open`.
         // `prs_locked` has a second exception since `stacked-prs`: a stacked or an open PR's `base` follows GitHub.
-        // `prs_no_delete` has the delete exception since `delete-tombstone`.
-        if name != "prs_hist_ins" && name != "prs_hist_upd" && name != "prs_status" && name != "prs_locked" && name != "prs_no_delete" {
+        // `prs_no_delete` has the delete exception since `delete-tombstone`, and `workflow-rename` retargets the text.
+        let mapped = renamed(name);
+        if mapped != "workflows_hist_ins" && mapped != "workflows_hist_upd" && mapped != "workflows_status" && mapped != "workflows_locked" && mapped != "workflows_no_delete" {
             assert_eq!(new, old, "{name}");
         }
     }
-    let locked = &after.iter().find(|(name, _)| name == "prs_locked").unwrap().1;
+    let locked = &after.iter().find(|(name, _)| name == "workflows_locked").unwrap().1;
     assert!(!locked.contains("OLD.status = 'merged'"), "`lead-branch-name` dropped migration 5's exception: {locked}");
-    let status = &after.iter().find(|(name, _)| name == "prs_status").unwrap().1;
-    assert!(status.contains("'waiting>cancelled', 'dispatch>cancelled', 'open>cancelled'"), "prs_status: {status}");
+    let status = &after.iter().find(|(name, _)| name == "workflows_status").unwrap().1;
+    assert!(status.contains("'waiting>cancelled', 'dispatch>cancelled', 'open>cancelled'"), "workflows_status: {status}");
 }
 
 #[test]
@@ -969,16 +974,16 @@ fn after_migration_6_prs_locked_refuses_the_legacy_lead_branch_rename_of_a_merge
     let dir = tempfile::tempdir().unwrap();
     let (mut store, _) = migrated_5(&dir);
     for sql in [
-        "UPDATE prs SET lead_branch = 'cpd/op/pay' WHERE plan = 'op'",
-        "UPDATE prs SET lead_branch = 'cpd/wa' WHERE plan = 'wa'",
-        "UPDATE prs SET lead_branch = 'cpd/dn/web', base = 'main' WHERE plan = 'dn'",
-        "UPDATE prs SET repo = '/src/other' WHERE plan = 'dn'",
+        "UPDATE workflows SET lead_branch = 'cpd/op/pay' WHERE plan = 'op'",
+        "UPDATE workflows SET lead_branch = 'cpd/wa' WHERE plan = 'wa'",
+        "UPDATE workflows SET lead_branch = 'cpd/dn/web', base = 'main' WHERE plan = 'dn'",
+        "UPDATE workflows SET repo = '/src/other' WHERE plan = 'dn'",
     ] {
         let err = refused(&mut store, sql);
         assert_eq!(err.code(), ErrorCode::PrLocked, "{sql}: {err:?}");
     }
     // `lead-branch-name` (pro-d113 A3) removed the exception: the rename itself is refused too.
-    let err = refused(&mut store, "UPDATE prs SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'");
+    let err = refused(&mut store, "UPDATE workflows SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'");
     assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
 }
 
@@ -1345,7 +1350,7 @@ fn a_version_13_database_migrates_to_14_keeping_every_job_and_seq_and_its_checks
     // A draft with only a title is accepted, with either half given too, and a stub can be cancelled.
     let stub = |key: &str, columns: &str, values: &str| {
         format!(
-            "INSERT INTO jobs (plan, pr, key, title, {columns}status, appended, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, {columns}status, appended, created_txn, created_at)
              VALUES ('pay', 'api', '{key}', 'T', {values}'draft', 1, cpd_txn(), '{T}');"
         )
     };
@@ -1374,7 +1379,7 @@ fn a_version_13_database_migrates_to_14_keeping_every_job_and_seq_and_its_checks
     check(
         &mut store,
         &format!(
-            "INSERT INTO jobs (plan, pr, key, title, status, appended, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, status, appended, fingerprint, created_txn, created_at)
              VALUES ('pay', 'api', 's8', 'T', 'queued', 1, '{FP}', cpd_txn(), '{T}');"
         ),
     );
@@ -1387,7 +1392,7 @@ fn a_version_13_database_migrates_to_14_keeping_every_job_and_seq_and_its_checks
     assert_eq!(
         rows(&mut store, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'jobs' ORDER BY name"),
         // `jobs_kind_spec_ins` and `_upd` are `job-kinds`'; `jobs_hist_del` is `delete-tombstone`'s (the generator's).
-        ["jobs_hist_del", "jobs_hist_ins", "jobs_hist_upd", "jobs_kind_spec_ins", "jobs_kind_spec_upd", "jobs_locked", "jobs_no_delete", "jobs_pr_dependencies", "jobs_status"]
+        ["jobs_hist_del", "jobs_hist_ins", "jobs_hist_upd", "jobs_kind_spec_ins", "jobs_kind_spec_upd", "jobs_locked", "jobs_no_delete", "jobs_status", "jobs_workflow_dependencies"]
             .map(|name| serde_json::json!([name]))
     );
     assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET tier = 'S1' WHERE key = 'c'")), "job_locked");
@@ -1414,10 +1419,17 @@ fn sqlite_message(err: &CpdError) -> String {
     err.details()["sqlite_message"].as_str().unwrap_or_default().to_owned()
 }
 
-/// A second PR `web` in Plan `gr` (grounding), with a draft Job `v`.
-const WEB: &str = "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+/// A second PR `web` in Plan `gr` (grounding), with a draft Job `v`, before `workflow-rename`: the object table is `prs`.
+const WEB_BEFORE: &str = "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                      VALUES ('gr', 'web', '/src/web', 'main', 'waiting', 'cpd/gr/web', cpd_txn(), 't');
                    INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                     status, appended, created_txn, created_at)
+                     VALUES ('gr', 'pay', 'u', 'U', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't'),
+                            ('gr', 'web', 'v', 'V', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't');";
+
+const WEB: &str = "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                     VALUES ('gr', 'web', '/src/web', 'main', 'waiting', 'cpd/gr/web', cpd_txn(), 't');
+                   INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                      status, appended, created_txn, created_at)
                      VALUES ('gr', 'pay', 'u', 'U', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't'),
                             ('gr', 'web', 'v', 'V', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't');";
@@ -1427,26 +1439,26 @@ fn prs_status_refuses_a_transition_outside_3_8() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = migrated(&dir);
     for sql in [
-        "UPDATE prs SET status = 'open', lead_worktree = '/w', started_at = 't', pr_number = 1, pr_url = 'u', pr_opened_at = 't' WHERE plan = 'gr'",
-        "UPDATE prs SET status = 'waiting', lead_worktree = NULL, started_at = NULL WHERE plan = 'di'",
-        "UPDATE prs SET status = 'cancelled' WHERE plan = 'dn'",
-        "UPDATE prs SET status = 'open', merged_at = NULL WHERE plan = 'dn'",
+        "UPDATE workflows SET status = 'open', lead_worktree = '/w', started_at = 't', pr_number = 1, pr_url = 'u', pr_opened_at = 't' WHERE plan = 'gr'",
+        "UPDATE workflows SET status = 'waiting', lead_worktree = NULL, started_at = NULL WHERE plan = 'di'",
+        "UPDATE workflows SET status = 'cancelled' WHERE plan = 'dn'",
+        "UPDATE workflows SET status = 'open', merged_at = NULL WHERE plan = 'dn'",
     ] {
         let err = refused(&mut store, sql);
         assert_eq!(err.code(), ErrorCode::IllegalTransition, "{sql}: {err:?}");
     }
-    write(&mut store, "UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'gr';
-                       UPDATE prs SET status = 'cancelled' WHERE plan = 'pl';
-                       UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'gr';
+    write(&mut store, "UPDATE workflows SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'gr';
+                       UPDATE workflows SET status = 'cancelled' WHERE plan = 'pl';
+                       UPDATE workflows SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'gr';
                        INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
                          VALUES ('acme/di', 11, 'u', 'D', 0, 'open', 'none', 'none', 't', 't');
-                       UPDATE prs SET status = 'open', pr_number = 11, pr_url = 'u', pr_opened_at = 't',
+                       UPDATE workflows SET status = 'open', pr_number = 11, pr_url = 'u', pr_opened_at = 't',
                               pull_request = (SELECT id FROM pull_requests WHERE number = 11) WHERE plan = 'di';
-                       UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pr';
-                       UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL, pr_number = NULL, pr_url = NULL,
+                       UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'pr';
+                       UPDATE workflows SET status = 'cancelled', lead_worktree = NULL, started_at = NULL, pr_number = NULL, pr_url = NULL,
                               pr_opened_at = NULL, pull_request = NULL WHERE plan = 'di'")
         .unwrap();
-    let err = refused(&mut store, "UPDATE prs SET status = 'open', lead_worktree = '/w', started_at = 't', pr_number = 11, pr_url = 'u', pr_opened_at = 't', pull_request = 1 WHERE plan = 'di'");
+    let err = refused(&mut store, "UPDATE workflows SET status = 'open', lead_worktree = '/w', started_at = 't', pr_number = 11, pr_url = 'u', pr_opened_at = 't', pull_request = 1 WHERE plan = 'di'");
     assert_eq!(err.code(), ErrorCode::IllegalTransition, "{err:?}");
 }
 
@@ -1455,19 +1467,19 @@ fn prs_locked_refuses_a_change_of_identity_repo_or_base_after_the_lock() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = migrated(&dir);
     for sql in [
-        "UPDATE prs SET repo = '/src/other' WHERE plan = 'di'",
-        "UPDATE prs SET base = 'develop' WHERE plan = 'di'",
-        "UPDATE prs SET base = 'develop' WHERE plan = 'dn'",
-        "UPDATE prs SET key = 'other' WHERE plan = 'dn'",
-        "UPDATE prs SET lead_branch = 'cpd/di/pr-2fa' WHERE plan = 'di'",
+        "UPDATE workflows SET repo = '/src/other' WHERE plan = 'di'",
+        "UPDATE workflows SET base = 'develop' WHERE plan = 'di'",
+        "UPDATE workflows SET base = 'develop' WHERE plan = 'dn'",
+        "UPDATE workflows SET key = 'other' WHERE plan = 'dn'",
+        "UPDATE workflows SET lead_branch = 'cpd/di/pr-2fa' WHERE plan = 'di'",
     ] {
         let err = refused(&mut store, sql);
         assert_eq!(err.code(), ErrorCode::PrLocked, "{sql}: {err:?}");
         assert_eq!(err.exit().code(), 3);
     }
     // Before the lock they may change; after it, the other columns may.
-    write(&mut store, "UPDATE prs SET repo = '/src/other', base = 'develop' WHERE plan IN ('gr', 'pl');
-                       UPDATE prs SET all_merged_at = 't' WHERE plan = 'pr'")
+    write(&mut store, "UPDATE workflows SET repo = '/src/other', base = 'develop' WHERE plan IN ('gr', 'pl');
+                       UPDATE workflows SET all_merged_at = 't' WHERE plan = 'pr'")
         .unwrap();
 }
 
@@ -1477,38 +1489,38 @@ fn pr_needs_locked_refuses_a_need_after_the_lock_unless_the_pr_is_new() {
     let mut store = migrated(&dir);
     let add = |key: &str| {
         format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                VALUES ('di', '{key}', '/src/web', 'main', 'waiting', 'cpd/di/{key}', cpd_txn(), 't');"
         )
     };
     write(&mut store, &add("old")).unwrap();
-    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('di', 'old', 'pr-2fa')");
+    let err = refused(&mut store, "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('di', 'old', 'pr-2fa')");
     assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
     // `pr add` in dispatch: the PR and its needs in one transaction.
-    write(&mut store, &format!("{} INSERT INTO pr_needs (plan, pr, needs) VALUES ('di', 'new', 'pr-2fa');", add("new"))).unwrap();
+    write(&mut store, &format!("{} INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('di', 'new', 'pr-2fa');", add("new"))).unwrap();
     // Before the lock, any time.
     write(&mut store, WEB).unwrap();
-    write(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay')").unwrap();
+    write(&mut store, "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('gr', 'web', 'pay')").unwrap();
 }
 
 #[test]
 fn pr_needs_no_delete_refuses_after_the_lock_and_history_records_a_delete() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = migrated(&dir);
-    write(&mut store, &format!("{WEB} INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay');")).unwrap();
-    write(&mut store, "DELETE FROM pr_needs WHERE plan = 'gr'").unwrap();
+    write(&mut store, &format!("{WEB} INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('gr', 'web', 'pay');")).unwrap();
+    write(&mut store, "DELETE FROM workflow_needs WHERE plan = 'gr'").unwrap();
     assert_eq!(
-        rows(&mut store, "SELECT pk, op, before, after FROM history WHERE tbl = 'pr_needs' ORDER BY id"),
+        rows(&mut store, "SELECT pk, op, before, after FROM history WHERE tbl = 'workflow_needs' ORDER BY id"),
         vec![
-            serde_json::json!([r#"["gr","web","pay"]"#, "insert", Value::Null, r#"{"plan":"gr","pr":"web","needs":"pay"}"#]),
-            serde_json::json!([r#"["gr","web","pay"]"#, "delete", r#"{"plan":"gr","pr":"web","needs":"pay"}"#, Value::Null]),
+            serde_json::json!([r#"["gr","web","pay"]"#, "insert", Value::Null, r#"{"plan":"gr","workflow":"web","needs":"pay"}"#]),
+            serde_json::json!([r#"["gr","web","pay"]"#, "delete", r#"{"plan":"gr","workflow":"web","needs":"pay"}"#, Value::Null]),
         ]
     );
-    write(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay');
+    write(&mut store, "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('gr', 'web', 'pay');
                        UPDATE plans SET phase = 'plan' WHERE id = 'gr';
                        UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'gr'")
         .unwrap();
-    let err = refused(&mut store, "DELETE FROM pr_needs WHERE plan = 'gr'");
+    let err = refused(&mut store, "DELETE FROM workflow_needs WHERE plan = 'gr'");
     assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
 }
 
@@ -1520,7 +1532,7 @@ fn dependencies_same_pr_refuses_a_dependency_across_prs() {
     let err = refused(&mut store, "INSERT INTO dependencies (plan, job, needs) VALUES ('gr', 'v', 'u')");
     assert_eq!(err.code(), ErrorCode::NeedsOtherPr, "{err:?}");
     assert_eq!(err.exit().code(), 3);
-    write(&mut store, "UPDATE jobs SET pr = 'web' WHERE key = 'u' AND plan = 'gr';
+    write(&mut store, "UPDATE jobs SET workflow = 'web' WHERE key = 'u' AND plan = 'gr';
                        INSERT INTO dependencies (plan, job, needs) VALUES ('gr', 'v', 'u')")
         .unwrap();
 }
@@ -1530,16 +1542,16 @@ fn jobs_pr_dependencies_refuses_moving_a_job_with_dependencies() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = migrated(&dir);
     write(&mut store, WEB).unwrap();
-    write(&mut store, "UPDATE jobs SET pr = 'web' WHERE key = 'u' AND plan = 'gr';
+    write(&mut store, "UPDATE jobs SET workflow = 'web' WHERE key = 'u' AND plan = 'gr';
                        INSERT INTO dependencies (plan, job, needs) VALUES ('gr', 'v', 'u')")
         .unwrap();
-    for sql in ["UPDATE jobs SET pr = 'pay' WHERE key = 'u' AND plan = 'gr'", "UPDATE jobs SET pr = 'pay' WHERE key = 'v' AND plan = 'gr'"] {
+    for sql in ["UPDATE jobs SET workflow = 'pay' WHERE key = 'u' AND plan = 'gr'", "UPDATE jobs SET workflow = 'pay' WHERE key = 'v' AND plan = 'gr'"] {
         let err = refused(&mut store, sql);
         assert_eq!(err.code(), ErrorCode::NeedsOtherPr, "{sql}: {err:?}");
     }
     // `job edit --pr --needs`: delete the Dependencies, move, insert again.
     write(&mut store, "DELETE FROM dependencies WHERE plan = 'gr';
-                       UPDATE jobs SET pr = 'pay' WHERE plan = 'gr';
+                       UPDATE jobs SET workflow = 'pay' WHERE plan = 'gr';
                        INSERT INTO dependencies (plan, job, needs) VALUES ('gr', 'v', 'u')")
         .unwrap();
 }
@@ -1548,11 +1560,11 @@ fn jobs_pr_dependencies_refuses_moving_a_job_with_dependencies() {
 fn jobs_locked_refuses_changing_a_locked_jobs_pr_or_review() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = migrated(&dir);
-    write(&mut store, "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+    write(&mut store, "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                          VALUES ('pr', 'web', '/src/web', 'main', 'waiting', 'cpd/pr/web', cpd_txn(), 't')")
         .unwrap();
     for sql in [
-        "UPDATE jobs SET pr = 'web' WHERE plan = 'pr' AND key = 'z'",
+        "UPDATE jobs SET workflow = 'web' WHERE plan = 'pr' AND key = 'z'",
         "UPDATE jobs SET review = 1 WHERE plan = 'di' AND key = 'x'",
         "UPDATE jobs SET title = 'New' WHERE plan = 'di' AND key = 'x'",
     ] {
@@ -1586,7 +1598,7 @@ fn events_and_context_records_stay_append_only() {
         ("UPDATE context_records SET text = 'y'", "append_only: context_records"),
         ("DELETE FROM context_records", "append_only: context_records"),
         ("DELETE FROM plans", "append_only: plans"),
-        ("DELETE FROM prs", "append_only: prs"),
+        ("DELETE FROM workflows", "append_only: workflows"),
         ("DELETE FROM jobs", "append_only: jobs"),
         ("INSERT INTO events (txn, at, kind, context, text, data) VALUES (1, 't', 'pr-added', 'ctx', 'x', '{}')",
          "events.txn must be cpd_txn()"),
@@ -1614,7 +1626,7 @@ fn the_rebuilt_tables_history_triggers_list_their_new_columns() {
     assert_eq!(job["review"], 1, "{job}");
     // An update row holds the changed columns only (§4.4 "History row shape"): `pr` is listed in the trigger.
     let upd = rows(&mut store, "SELECT sql FROM sqlite_schema WHERE name = 'jobs_hist_upd'");
-    assert!(upd[0][0].as_str().unwrap().contains("WHERE OLD.pr IS NOT NEW.pr"), "{upd:?}");
+    assert!(upd[0][0].as_str().unwrap().contains("WHERE OLD.workflow IS NOT NEW.workflow"), "{upd:?}");
     let plan: Value = serde_json::from_str(after[1][1].as_str().unwrap()).unwrap();
     assert!(plan.get("repo").is_none() && plan["title"] == "G2", "{plan}");
 }
@@ -1661,7 +1673,7 @@ fn legacy_stores(upto: usize) -> Vec<Vec<u8>> {
             std::fs::write(scratch.db(), &bytes).unwrap();
             let copy = connection(&scratch.db());
             copy.pragma_update(None, "foreign_keys", "ON").unwrap();
-            copy.execute_batch(&format!("BEGIN; {WEB} INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay'); COMMIT;")).unwrap();
+            copy.execute_batch(&format!("BEGIN; {WEB_BEFORE} INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay'); COMMIT;")).unwrap();
             if n >= 12 {
                 copy.execute_batch(&format!(
                     "BEGIN; INSERT INTO inbox_items (kind, urgency, subject, plan, context, label, opened_at) VALUES ('dialog', 'red', 'plan:gr', 'gr', 'ctx', 'Answer', '{T}'); COMMIT;"
@@ -1756,6 +1768,12 @@ fn converts_keeping_every_row_and_id(n: usize) {
         conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
     assert_eq!(violations, 0, "version {n}: foreign_key_check");
     for (table, ids) in &ids_before {
+        // `workflow-rename` renames the object tables: the post-open store speaks the new names.
+        let table = match table.as_str() {
+            "prs" => "workflows",
+            "pr_needs" => "workflow_needs",
+            other => other,
+        };
         let after = rowids(&conn, table);
         if table == "tier_catalog" {
             // Migration `20261030T1100-tier-catalog-source` rebuilds tier_catalog EMPTY: it is a cache, recomputed by the next
@@ -1786,6 +1804,11 @@ fn converts_keeping_every_row_and_id(n: usize) {
         // Nothing but the runner's own rows changes in a store that is already at the last legacy version.
         let mut rows_after = dump(&conn);
         let mut rows_before = rows_before;
+        // `workflow-rename` renames the object tables: the pre-rename dump's keys follow, so the rows compare.
+        let workflows = rows_before.remove("prs").unwrap();
+        let workflow_needs = rows_before.remove("pr_needs").unwrap();
+        rows_before.insert("workflows".into(), workflows);
+        rows_before.insert("workflow_needs".into(), workflow_needs);
         assert_eq!(rows_after.remove("schema_migrations").map(|r| r.len()), Some(LEGACY.len() + NAMED.len()));
         // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
         assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(crate::events::Kind::ALL.len()));
@@ -1809,7 +1832,7 @@ fn converts_keeping_every_row_and_id(n: usize) {
             [Value::from("acme")]
         );
         // The filled column is taken out by its position: a later additive migration (`pr-title`) adds a column after it.
-        for (table, column) in [("contexts", "owner"), ("prs", "name")] {
+        for (table, column) in [("contexts", "owner"), ("workflows", "name")] {
             let at = table_columns(&conn, table).unwrap().iter().position(|(c, _)| c == column).unwrap();
             for row in rows_after.get_mut(table).unwrap() {
                 let mut values: Vec<Value> = serde_json::from_str(row).unwrap();
@@ -1844,7 +1867,7 @@ fn converts_keeping_every_row_and_id(n: usize) {
                     continue;
                 }
                 // `job-kinds` added two NOT NULL columns with a default: `jobs.kind` `work` and `prs.shape` `free`; `session-by-user` one, `sessions.by_user` 0. `session-runner` one, `sessions.runner` 'pi'.
-                let default = |v: &Value| v.is_null() || (table == "jobs" && v == "work") || (table == "prs" && v == "free") || (table == "sessions" && v == 0) || (table == "sessions" && v == "pi") || (table == "attempts" && v == "pi");
+                let default = |v: &Value| v.is_null() || (table == "jobs" && v == "work") || (table == "workflows" && v == "free") || (table == "sessions" && v == 0) || (table == "sessions" && v == "pi") || (table == "attempts" && v == "pi");
                 assert!(values[width..].iter().all(default), "{table}: an added column is set: {row}");
                 values.truncate(width);
                 *row = Value::from(values).to_string();
@@ -2074,9 +2097,9 @@ fn history_changed_keeps_the_whole_update_rows_and_writes_the_changed_columns_fr
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pl', 'ctx', 'Plan', 'grounding', 'lead', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'idle', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('pl', 'api', '/r/api', 'main', 'waiting', 'cpd/pl/api', cpd_txn(), 't');
-         INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at)
+         INSERT INTO jobs (plan, workflow, key, title, status, appended, created_txn, created_at)
            VALUES ('pl', 'api', 'j', 'J', 'draft', 1, cpd_txn(), 't');",
     )
     .unwrap();
@@ -2357,7 +2380,7 @@ fn a_version_5_database_with_polled_prs_migrates_to_6_with_the_back_filled_rows_
 
     // `pull_request` is set exactly for the open and the merged PR; every other column is kept.
     let prs: Vec<(String, String, Option<i64>, Option<i64>, Option<String>)> = conn
-        .prepare("SELECT plan, status, pull_request, pr_number, merged_at FROM prs ORDER BY plan")
+        .prepare("SELECT plan, status, pull_request, pr_number, merged_at FROM workflows ORDER BY plan")
         .unwrap()
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
         .unwrap()
@@ -2373,7 +2396,7 @@ fn a_version_5_database_with_polled_prs_migrates_to_6_with_the_back_filled_rows_
             ("wt".into(), "waiting".into(), None, None, None),
         ]
     );
-    let columns = names(&conn, "SELECT name FROM pragma_table_info('prs')");
+    let columns = names(&conn, "SELECT name FROM pragma_table_info('workflows')");
     for gone in ["pr_seen", "pr_polled_at", "pr_title", "pr_review_decision", "pr_checks"] {
         assert!(!columns.contains(gone), "{gone}");
     }
@@ -2382,8 +2405,8 @@ fn a_version_5_database_with_polled_prs_migrates_to_6_with_the_back_filled_rows_
     }
 
     // The history triggers of both tables exist; the back-fill wrote an `insert` row for each pull request.
-    let triggers = names(&conn, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name IN ('pull_requests', 'prs')");
-    for trigger in ["pull_requests_hist_ins", "pull_requests_hist_upd", "pull_requests_hist_del", "pull_requests_owned", "prs_hist_ins", "prs_hist_upd"] {
+    let triggers = names(&conn, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name IN ('pull_requests', 'workflows')");
+    for trigger in ["pull_requests_hist_ins", "pull_requests_hist_upd", "pull_requests_hist_del", "pull_requests_owned", "workflows_hist_ins", "workflows_hist_upd"] {
         assert!(triggers.contains(trigger), "{trigger}: {triggers:?}");
     }
     assert!(!triggers.contains("pull_requests_no_delete"));
@@ -2779,12 +2802,12 @@ fn stacked_prs_keeps_every_pr_and_need() {
 
     // Every `pr_needs` row is kept; every `prs` row is as it was.
     assert_eq!(
-        rows(&mut store, "SELECT plan, pr, needs FROM pr_needs"),
+        rows(&mut store, "SELECT plan, workflow, needs FROM workflow_needs"),
         vec![serde_json::json!(["pl", "b", "c"])]
     );
     let after = dump(&connection(&home.db()));
     // `job-kinds` added `prs.shape`, `free` in every row, and `pr-adopt` `prs.head_ref` after it, null in every row, `pr-description` `prs.description` after them, null in every row.
-    let without_shape: Vec<String> = after["prs"]
+    let without_shape: Vec<String> = after["workflows"]
         .iter()
         .map(|row| {
             let mut cells: Vec<serde_json::Value> = serde_json::from_str(row).unwrap();
@@ -2796,36 +2819,36 @@ fn stacked_prs_keeps_every_pr_and_need() {
         })
         .collect();
     assert_eq!(without_shape, before["prs"]);
-    assert_eq!(after["pr_needs"].len(), 1);
+    assert_eq!(after["workflow_needs"].len(), 1);
 
     // `local-needs`: a need names a PR of its own Plan; one naming no PR is refused.
     write(
         &mut store,
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('other', 'o2', '/r2', 'main', 'waiting', 'cpd/other/o2', cpd_txn(), 't');
-         INSERT INTO pr_needs (plan, pr, needs) VALUES ('other', 'o2', 'o')",
+         INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('other', 'o2', 'o')",
     )
     .unwrap();
-    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('other', 'o2', 'nope')");
+    let err = refused(&mut store, "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('other', 'o2', 'nope')");
     assert!(format!("{err:?}").contains("FOREIGN KEY"), "{err:?}");
     // A PR does not need itself.
-    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('other', 'o', 'o')");
+    let err = refused(&mut store, "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('other', 'o', 'o')");
     assert!(format!("{err:?}").contains("CHECK"), "{err:?}");
     assert_eq!(
-        rows(&mut store, "SELECT pk, after FROM history WHERE tbl = 'pr_needs' ORDER BY id DESC LIMIT 1"),
-        vec![serde_json::json!([r#"["other","o2","o"]"#, r#"{"plan":"other","pr":"o2","needs":"o"}"#])]
+        rows(&mut store, "SELECT pk, after FROM history WHERE tbl = 'workflow_needs' ORDER BY id DESC LIMIT 1"),
+        vec![serde_json::json!([r#"["other","o2","o"]"#, r#"{"plan":"other","workflow":"o2","needs":"o"}"#])]
     );
 
     // pr_needs_locked: after the lock only a PR's own insert may add needs; the Plan `pl` is locked.
-    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('pl', 'a', 'c')");
+    let err = refused(&mut store, "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pl', 'a', 'c')");
     assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
     // pr_needs_no_delete: and its history row for a delete holds the key.
-    let err = refused(&mut store, "DELETE FROM pr_needs WHERE plan = 'pl'");
+    let err = refused(&mut store, "DELETE FROM workflow_needs WHERE plan = 'pl'");
     assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
-    write(&mut store, "DELETE FROM pr_needs WHERE plan = 'other'").unwrap();
+    write(&mut store, "DELETE FROM workflow_needs WHERE plan = 'other'").unwrap();
     assert_eq!(
-        rows(&mut store, "SELECT pk, op, before FROM history WHERE tbl = 'pr_needs' ORDER BY id DESC LIMIT 1"),
-        vec![serde_json::json!([r#"["other","o2","o"]"#, "delete", r#"{"plan":"other","pr":"o2","needs":"o"}"#])]
+        rows(&mut store, "SELECT pk, op, before FROM history WHERE tbl = 'workflow_needs' ORDER BY id DESC LIMIT 1"),
+        vec![serde_json::json!([r#"["other","o2","o"]"#, "delete", r#"{"plan":"other","workflow":"o2","needs":"o"}"#])]
     );
     drop(store);
 
@@ -2848,35 +2871,35 @@ fn stacked_prs_lets_base_follow_github_on_an_open_or_stacked_pr_only() {
     assert_eq!(store.schema_mismatch(), None);
     // After it, only an `open` PR and a PR whose `base` is the Lead Branch of a PR of its repo; `pl` is locked.
     for key in ["a", "c", "d", "x", "m"] {
-        let err = refused(&mut store, &format!("UPDATE prs SET base = 'develop' WHERE plan = 'pl' AND key = '{key}'"));
+        let err = refused(&mut store, &format!("UPDATE workflows SET base = 'develop' WHERE plan = 'pl' AND key = '{key}'"));
         assert_eq!(err.code(), ErrorCode::PrLocked, "{key}: {err:?}");
     }
     for key in ["xs", "ms"] {
-        let err = refused(&mut store, &format!("UPDATE prs SET base = 'main' WHERE plan = 'pl' AND key = '{key}'"));
+        let err = refused(&mut store, &format!("UPDATE workflows SET base = 'main' WHERE plan = 'pl' AND key = '{key}'"));
         assert_eq!(err.code(), ErrorCode::PrLocked, "a {key} PR is not followed: {err:?}");
     }
     // Nothing but `base` moves: not the identity, the repo or the Lead Branch, nor with the base.
     for set in ["key = 'z'", "repo = '/x'", "lead_branch = 'cpd/pl/z'", "plan = 'other'", "base = 'main', repo = '/x'", "base = 'main', lead_branch = 'cpd/pl/z'"] {
         for key in ["b", "e", "op"] {
-            let err = refused(&mut store, &format!("UPDATE prs SET {set} WHERE plan = 'pl' AND key = '{key}'"));
+            let err = refused(&mut store, &format!("UPDATE workflows SET {set} WHERE plan = 'pl' AND key = '{key}'"));
             assert_eq!(err.code(), ErrorCode::PrLocked, "{set} on {key}: {err:?}");
         }
     }
     write(
         &mut store,
-        "UPDATE prs SET base = 'main' WHERE plan = 'pl' AND key IN ('b', 'e');
-         UPDATE prs SET base = 'develop' WHERE plan = 'pl' AND key = 'op'",
+        "UPDATE workflows SET base = 'main' WHERE plan = 'pl' AND key IN ('b', 'e');
+         UPDATE workflows SET base = 'develop' WHERE plan = 'pl' AND key = 'op'",
     )
     .unwrap();
     assert_eq!(
-        rows(&mut store, "SELECT key, base FROM prs WHERE plan = 'pl' AND key IN ('b', 'e', 'op') ORDER BY key"),
+        rows(&mut store, "SELECT key, base FROM workflows WHERE plan = 'pl' AND key IN ('b', 'e', 'op') ORDER BY key"),
         vec![serde_json::json!(["b", "main"]), serde_json::json!(["e", "main"]), serde_json::json!(["op", "develop"])]
     );
     // `b` is no longer stacked, so its base is Locked again; the legacy rename of a merged PR is unchanged.
-    let err = refused(&mut store, "UPDATE prs SET base = 'develop' WHERE plan = 'pl' AND key = 'b'");
+    let err = refused(&mut store, "UPDATE workflows SET base = 'develop' WHERE plan = 'pl' AND key = 'b'");
     assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
     // Before the lock any PR may change, as before.
-    write(&mut store, "UPDATE prs SET base = 'develop' WHERE plan = 'other'").unwrap();
+    write(&mut store, "UPDATE workflows SET base = 'develop' WHERE plan = 'other'").unwrap();
 }
 
 // ---------- named migration `event-pr-base-changed` (§4.5, §5.2) ----------
@@ -3019,7 +3042,7 @@ fn job_kinds_keeps_every_job_and_pr_as_work_and_free_and_matches_a_fresh_store()
     };
     assert_eq!(strip(&after["jobs"], 7, "work"), before["jobs"]);
     // `prs` gained `shape` (`free`), then `pr-adopt` `head_ref` and `pr-description` `description`, both null.
-    assert_eq!(strip(&after["prs"], 4, "free"), before["prs"]);
+    assert_eq!(strip(&after["workflows"], 4, "free"), before["prs"]);
     assert_eq!(count(&mut store, "SELECT count(*) FROM jobs WHERE status = 'merged'"), 1);
 
     let migrated = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
@@ -3037,12 +3060,12 @@ fn store_with_job_kinds() -> (tempfile::TempDir, Store) {
 #[test]
 fn the_shape_of_a_pr_is_one_of_four_and_never_changes() {
     let (_dir, mut store) = store_with_job_kinds();
-    assert_eq!(rows(&mut store, "SELECT shape FROM prs"), vec![serde_json::json!(["free"])], "the PR that existed before the migration");
+    assert_eq!(rows(&mut store, "SELECT shape FROM workflows"), vec![serde_json::json!(["free"])], "the PR that existed before the migration");
     for shape in ["tdd", "docs", "config"] {
         write(
             &mut store,
             &format!(
-                "INSERT INTO prs (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
+                "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
                  VALUES ('pl', 's-{shape}', '/r', 'main', 'waiting', 'cpd/pl/s-{shape}', '{shape}', cpd_txn(), 't')"
             ),
         )
@@ -3050,22 +3073,22 @@ fn the_shape_of_a_pr_is_one_of_four_and_never_changes() {
     }
     let bad = refused(
         &mut store,
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
          VALUES ('pl', 'bad', '/r', 'main', 'waiting', 'cpd/pl/bad', 'other', cpd_txn(), 't')",
     );
     assert!(sqlite_message(&bad).contains("CHECK constraint failed"), "{bad:?}");
     // The shape is the PR's identity, in any phase: `prs_shape_fixed` refuses every update of it, a same value included.
     for shape in ["docs", "tdd", "free"] {
-        assert_eq!(sqlite_message(&refused(&mut store, &format!("UPDATE prs SET shape = '{shape}' WHERE key = 's-tdd'"))), "pr_locked");
+        assert_eq!(sqlite_message(&refused(&mut store, &format!("UPDATE workflows SET shape = '{shape}' WHERE key = 's-tdd'"))), "workflow_locked");
     }
     // The PR's other columns still change where they could.
-    write(&mut store, "UPDATE prs SET title = 'New' WHERE key = 's-tdd'").unwrap();
+    write(&mut store, "UPDATE workflows SET title = 'New' WHERE key = 's-tdd'").unwrap();
 }
 
 /// A Job `key` of `kind` in PR `a`, as a draft with the Spec and the given extra columns and values.
 fn job_of_kind(key: &str, kind: &str, columns: &str, values: &str) -> String {
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind{columns}, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind{columns}, created_txn, created_at)
          VALUES ('pl', 'a', '{key}', 'T', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'draft', 1, '{kind}'{values}, cpd_txn(), 't')"
     )
 }
@@ -3092,13 +3115,13 @@ fn a_jobs_kind_is_one_of_six_and_its_spec_fields_agree_with_it() {
     // A `test` Job that is a stub draft has neither; one that is queued has both.
     write(
         &mut store,
-        "INSERT INTO jobs (plan, pr, key, title, kind, status, appended, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, kind, status, appended, created_txn, created_at)
          VALUES ('pl', 'a', 'k-stub', 'Stub', 'test', 'draft', 1, cpd_txn(), 't')",
     )
     .unwrap();
     spec_invalid(
         &mut store,
-        &format!("INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+        &format!("INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
                   VALUES ('pl', 'a', 'k-5', 'T', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, 'test', '{FP}', cpd_txn(), 't')"),
     );
     write(&mut store, "UPDATE jobs SET kind = 'work' WHERE key = 'k-stub'").unwrap();
@@ -3179,12 +3202,12 @@ fn the_history_of_jobs_and_prs_lists_the_new_columns() {
     );
     write(
         &mut store,
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
          VALUES ('pl', 'b', '/r', 'main', 'waiting', 'cpd/pl/b', 'tdd', cpd_txn(), 't')",
     )
     .unwrap();
     assert_eq!(
-        rows(&mut store, "SELECT json_extract(after, '$.shape') FROM history WHERE tbl = 'prs' AND op = 'insert' AND json_extract(after, '$.key') = 'b'"),
+        rows(&mut store, "SELECT json_extract(after, '$.shape') FROM history WHERE tbl = 'workflows' AND op = 'insert' AND json_extract(after, '$.key') = 'b'"),
         vec![serde_json::json!(["tdd"])]
     );
 }
@@ -3269,7 +3292,7 @@ fn delete_tombstone_keeps_every_row_and_lets_only_the_rows_of_a_deleted_plan_or_
     // A live Plan's rows stay undeletable, with the error each had.
     for (sql, message) in [
         ("DELETE FROM jobs WHERE plan = 'pay'", "append_only: jobs"),
-        ("DELETE FROM prs WHERE plan = 'pay'", "append_only: prs"),
+        ("DELETE FROM workflows WHERE plan = 'pay'", "append_only: workflows"),
         ("DELETE FROM events WHERE plan = 'pay'", "append_only: events"),
         ("DELETE FROM events WHERE context = 'ctx' AND plan IS NULL", "append_only: events"),
         ("DELETE FROM sessions WHERE id = 'm'", "append_only: sessions"),
@@ -3288,10 +3311,10 @@ fn delete_tombstone_keeps_every_row_and_lets_only_the_rows_of_a_deleted_plan_or_
     write(&mut store, "UPDATE plans SET title = 'Pay 2' WHERE id = 'pay'").unwrap();
     assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM jobs WHERE plan = 'live'")), "append_only: jobs");
     assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM plans WHERE id = 'pay'")), "append_only: plans");
-    write(&mut store, "DELETE FROM events WHERE plan = 'pay'; DELETE FROM jobs WHERE plan = 'pay'; DELETE FROM prs WHERE plan = 'pay';").unwrap();
+    write(&mut store, "DELETE FROM events WHERE plan = 'pay'; DELETE FROM jobs WHERE plan = 'pay'; DELETE FROM workflows WHERE plan = 'pay';").unwrap();
     assert_eq!(
         rows(&mut store, "SELECT tbl, op, json_extract(before, '$.key') FROM history WHERE op = 'delete' AND tbl <> 'history_tables' ORDER BY id"),
-        [serde_json::json!(["jobs", "delete", "api"]), serde_json::json!(["prs", "delete", "r"])]
+        [serde_json::json!(["jobs", "delete", "api"]), serde_json::json!(["workflows", "delete", "r"])]
     );
     assert_eq!(count(&mut store, "SELECT count(*) FROM events WHERE plan = 'live'"), 1);
 
@@ -3519,9 +3542,9 @@ fn tenancy_store() -> (tempfile::TempDir, Store) {
                VALUES ('lead', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'idle', 't', 't');
              INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                VALUES ('pl', 'ctx', 'Plan', 'dispatch', 'lead', 't', 't');
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                VALUES ('pl', 'a', '/r', 'main', 'waiting', 'cpd/pl/a', cpd_txn(), 't');
-             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, resources, fingerprint, created_txn, created_at)
+             INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, resources, fingerprint, created_txn, created_at)
                VALUES ('pl', 'a', 'api', 'T', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'draft', 1, '[\"e2e-port\"]', NULL, cpd_txn(), 't');
              UPDATE jobs SET status = 'queued', fingerprint = '{TENANCY_FP}' WHERE key = 'api';"
         ),
@@ -3593,7 +3616,7 @@ fn tenancy_view_lists_a_job_from_its_first_attempt_until_merged_or_cancelled() {
     write(
         &mut store,
         &format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
                VALUES ('pl', 'a', 'old', 'T', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'draft', 1, NULL, cpd_txn(), 't');
              UPDATE jobs SET status = 'queued', fingerprint = '{TENANCY_FP}' WHERE key = 'old';
              UPDATE jobs SET status = 'running' WHERE key = 'old';

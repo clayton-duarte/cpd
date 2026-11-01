@@ -23,15 +23,28 @@ const PLAN: &str = "INSERT INTO contexts (id, title, created_at, created_on) VAL
      INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
        VALUES ('pay', 'ctx', 'Pay', 'deploy', 'pay-lead', 't', 't');";
 
+/// A dispatched object, after `workflow-rename`: the table is `workflows`.
 fn pr(key: &str, jira: &str) -> String {
     format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, jira)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, jira)
            VALUES ('pay', '{key}', '/nowhere', 'main', 'dispatch', 'cpd/pay/{key}', '/nowhere/lead', cpd_txn(), 't', 't', {jira});"
     )
 }
 
 fn two_prs() -> String {
     format!("{PLAN}{}{}", pr("a", "'ABC-1'"), pr("b", "NULL"))
+}
+
+/// The same two objects before `workflow-rename`: the table is `prs`.
+fn pr_before(key: &str, jira: &str) -> String {
+    format!(
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, jira)
+           VALUES ('pay', '{key}', '/nowhere', 'main', 'dispatch', 'cpd/pay/{key}', '/nowhere/lead', cpd_txn(), 't', 't', {jira});"
+    )
+}
+
+fn two_prs_before() -> String {
+    format!("{PLAN}{}{}", pr_before("a", "'ABC-1'"), pr_before("b", "NULL"))
 }
 
 fn count(store: &mut Store, sql: &str) -> i64 {
@@ -43,7 +56,7 @@ fn before_jira_transitions() -> (tempfile::TempDir, CpdHome) {
     let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-jira-transitions")).collect();
     assert!(earlier.len() < NAMED.len(), "jira-transitions is a built-in migration");
     let mut store = crate::store::tests::open_named(&home, &earlier).unwrap();
-    write(&mut store, &two_prs()).unwrap();
+    write(&mut store, &two_prs_before()).unwrap();
     drop(store);
     (dir, home)
 }
@@ -59,9 +72,9 @@ fn a_database_before_jira_transitions_migrates_to_an_empty_queue() {
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     assert_eq!(count(&mut store, "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'jira_transitions'"), 1);
     assert_eq!(count(&mut store, "SELECT count(*) FROM jira_transitions"), 0);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM prs WHERE plan = 'pay'"), 2);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM prs WHERE key = 'a' AND jira = 'ABC-1'"), 1);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM prs WHERE key = 'b' AND jira IS NULL"), 1);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM workflows WHERE plan = 'pay'"), 2);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM workflows WHERE key = 'a' AND jira = 'ABC-1'"), 1);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM workflows WHERE key = 'b' AND jira IS NULL"), 1);
     assert_eq!(count(&mut store, "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'jira_transitions'"), 0, "not a history table");
     assert_eq!(count(&mut store, "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name LIKE '%jira_transitions%'"), 0);
 }

@@ -144,7 +144,11 @@ fn migration_keeps_every_existing_job_row_and_dependency() {
     let (jobs2, attempts2, deps2, objects2) = snapshot(&mut new, "workflow");
     assert_eq!((jobs, attempts, deps), (jobs2, attempts2, deps2), "every row survives");
     for o in &objects {
-        assert!(objects2.contains(o), "{o} survives the rebuild");
+        // `workflow-rename` renames the object triggers with the tables they guard.
+        let mapped = o
+            .replace("dependencies_same_pr", "dependencies_same_workflow")
+            .replace("jobs_pr_dependencies", "jobs_workflow_dependencies");
+        assert!(objects2.contains(&mapped), "{o} survives the rebuild");
     }
     let violations: i64 = new.read(|c| Ok(c.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0))?)).unwrap();
     assert_eq!(violations, 0, "every foreign key holds");

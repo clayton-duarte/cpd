@@ -116,6 +116,6 @@ fn prs_locked_refuses_moving_a_legacy_lead_branch() {
         )
         .unwrap();
         let moved = write(&mut store, "UPDATE workflows SET lead_branch = 'cpd/pay/api' WHERE key = 'api'");
-        assert!(message(moved, phase).contains("pr_locked"), "{phase}");
+        assert!(message(moved, phase).contains("workflow_locked"), "{phase}");
     }
 }
