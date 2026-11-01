@@ -96,17 +96,18 @@ pub fn conditions_with(
 /// The driver never writes it: E8 opens it from the store, here.
 fn stalls(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare(
-        "SELECT DISTINCT a.plan, a.id, a.job FROM attempts a
+        "SELECT DISTINCT a.plan, p.context, a.id, a.job FROM attempts a
+           JOIN plans p ON p.id = a.plan
            JOIN events e ON e.plan = a.plan AND e.attempt = a.id AND e.kind = 'error'
                 AND json_extract(e.data, '$.code') = 'worker_stalled'
           WHERE a.status <> 'ended'
           ORDER BY a.plan, a.id",
     )?;
     let rows = stmt
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut out = Vec::new();
-    for (plan, attempt, job) in rows {
+    for (plan, context, attempt, job) in rows {
         let plan = id("Plan id", &plan, PlanId::parse)?;
         let job = id("Job key", &job, JobKey::parse)?;
         out.push(Condition {
@@ -115,7 +116,7 @@ fn stalls(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
             subject: format!("error:driver/worker_stalled/{attempt}"),
             label: format!("worker stalled: cpd job cancel {job} now, or cpd attempt abort {attempt} once that command lands"),
             url: None,
-            context: None,
+            context: Some(id("Context id", &context, ContextId::parse)?),
             plan: Some(plan),
             job: Some(job),
             session: None,

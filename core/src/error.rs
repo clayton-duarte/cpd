@@ -596,6 +596,7 @@ mod tests {
             (ErrorCode::LeadBranchMoved, 3),
             (ErrorCode::PrNotFound, 4),
             (ErrorCode::TitleFailed, 1),
+            (ErrorCode::WorkerStalled, 1),
             (ErrorCode::PolicyInvalid, 1),
             (ErrorCode::OwnerUnconfirmed, 1),
             (ErrorCode::FallbackMissing, 1),
