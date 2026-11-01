@@ -28,11 +28,13 @@ test("the adapter's KINDS are exactly core's Event kinds", () => {
 });
 
 test("hs-d634, pro-d8: the protocol is 15, the incident kinds and mcp-attached are known", () => {
-  assert.equal(PROTOCOL, 19); // context pending's plan-level jobs raised it to 19; session-model-changed raised it to 18; pr-described raised it to 17; hs-d634 raised it from 13 to 14 for incident-started and incident-ended; pro-d8 raised it to 15 with mcp-attached
+  assert.equal(PROTOCOL, 20); // job-addendum raised it to 20; context pending's plan-level jobs raised it to 19; session-model-changed raised it to 18; pr-described raised it to 17; hs-d634 raised it from 13 to 14 for incident-started and incident-ended; pro-d8 raised it to 15 with mcp-attached
   for (const kind of ["incident-started", "incident-ended", "mcp-attached"]) {
     assert.ok((KINDS as readonly string[]).includes(kind), `${kind} is not in KINDS`);
   }
   assert.equal((LEAD_MESSAGES as Record<string, unknown>)["mcp-attached"], undefined, "mcp-attached is not a LEAD_MESSAGES entry: delivery none");
+  assert.ok((KINDS as readonly string[]).includes("job-addendum"), "job-addendum is not in KINDS");
+  assert.equal((LEAD_MESSAGES as Record<string, unknown>)["job-addendum"], undefined, "job-addendum is not a LEAD_MESSAGES entry: a Plan Lead gets none");
   assert.ok((KINDS as readonly string[]).includes("session-resumed"), "session-resumed is not in KINDS");
   // the message exists only while the breaker is tripped (commands.md §15.15 L6): the adapter's own rule, not a table entry
   assert.equal((LEAD_MESSAGES as Record<string, unknown>)["session-resumed"], undefined, "session-resumed is not a LEAD_MESSAGES entry");

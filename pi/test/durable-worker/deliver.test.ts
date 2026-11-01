@@ -33,3 +33,10 @@ test("an Event for another Session or of another kind becomes nothing", () => {
   assert.equal(inputOf(event(3, "job-merged", { session: "s1" }), "s1"), undefined);
   assert.equal(inputOf(event(4, "attempt-nudge", { session: null, data: { prompt: "x" } }), "s1"), undefined);
 });
+
+test("a job-addendum for this Session becomes a steer input with the Event text and requestId event:<id>", () => {
+  const e = event(51, "job-addendum", { session: "s1", job: "j", text: "Use the v2 API.", data: { addendum: 1 } });
+  assert.deepEqual(inputOf(e, "s1"), { content: "Use the v2 API.", requestId: "event:51", whenBusy: "steer" });
+  assert.equal(inputOf(event(52, "job-addendum", { session: "s2", text: "x", data: {} }), "s1"), undefined);
+  assert.equal(inputOf(event(53, "job-addendum", { session: null, text: "x", data: {} }), "s1"), undefined);
+});
