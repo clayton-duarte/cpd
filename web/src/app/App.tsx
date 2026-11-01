@@ -99,10 +99,7 @@ export function ApprovalDialog({
 function ContextColumn(): ReactElement {
   return (
     <div className="h-full overflow-hidden [transform:translateZ(0)]">
-      <SidebarProvider
-        style={{ "--sidebar-width": "100%" } as CSSProperties}
-        className="min-h-0"
-      >
+      <SidebarProvider style={{ "--sidebar-width": "100%" } as CSSProperties}>
         <AppSidebar />
       </SidebarProvider>
     </div>
@@ -133,22 +130,18 @@ export function App({ token, live }: AppProps): ReactElement {
 
   return (
     <ResizablePanelGroup orientation="horizontal" className="h-svh">
-      <ResizablePanel
-        defaultSize={CONTEXT_DEFAULT}
-        panelRef={contextPanel}
-        className="min-w-0"
-      >
+      <ResizablePanel defaultSize={CONTEXT_DEFAULT} panelRef={contextPanel}>
         <ContextColumn />
       </ResizablePanel>
       <ResizableHandle
         disableDoubleClick
         onDoubleClick={() => contextPanel.current?.resize(CONTEXT_DEFAULT)}
       />
-      <ResizablePanel defaultSize="60%" className="min-w-0">
+      <ResizablePanel defaultSize="60%">
         <LiveChat api={live} token={token} />
       </ResizablePanel>
       <ResizableHandle disableDoubleClick />
-      <ResizablePanel defaultSize="20%" className="min-w-0">
+      <ResizablePanel defaultSize="20%">
         <InboxColumn />
       </ResizablePanel>
     </ResizablePanelGroup>
