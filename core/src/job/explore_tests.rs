@@ -28,6 +28,20 @@ const T: &str = "2026-01-01T00:00:00.000Z";
 struct Fixture {
     dir: tempfile::TempDir,
     env: Env,
+    /// `CPD_ATTEMPT` is cleared for the fixture's life (a Worker pane cannot edit a Locked Job) and restored on drop.
+    saved_attempt: Option<std::ffi::OsString>,
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        // SAFETY: nextest gives each test a process of its own.
+        unsafe {
+            match &self.saved_attempt {
+                Some(v) => std::env::set_var("CPD_ATTEMPT", v),
+                None => std::env::remove_var("CPD_ATTEMPT"),
+            }
+        }
+    }
 }
 
 /// Plan `pay` in `phase` with `prs` Workflows (`api`, `web`), in a temp `$CPD_HOME` whose Catalog has every effort 0-5 of every model.
@@ -102,7 +116,10 @@ fn fixture_with(
                VALUES ('pay', '{workflow}', '{repo}', 'main', '{status}', 'cpd/pay/{workflow}', {worktree}, 1, '{T}', {started});"
         ));
     }
-    let mut f = Fixture { dir, env };
+    // SAFETY: nextest gives each test a process of its own; the fixture restores the variable on drop.
+    let saved_attempt = std::env::var_os("CPD_ATTEMPT");
+    unsafe { std::env::remove_var("CPD_ATTEMPT") };
+    let mut f = Fixture { dir, env, saved_attempt };
     f.sql(&sql);
     f
 }
