@@ -219,6 +219,11 @@ impl Core {
         self.env.query("SELECT status FROM attempts WHERE id = 'api-a1'")
     }
 
+    /// Ends the fixture Attempt `api-a1`, so that `pr push` does not refuse `attempt_running` and the Gate is reached.
+    fn end_attempt(&self) {
+        self.env.sql("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE plan = 'pay' AND id = 'api-a1'");
+    }
+
     fn lead_sha(&self) -> String {
         self.git(&self.repo, &["rev-parse", "refs/heads/cpd/pay"])
     }
@@ -300,6 +305,7 @@ fn the_gate_runs_the_pre_merge_of_the_repo_file_before_pr_push() {
     fx.fake("sh", Reply::ok(""));
     fx.commit_lead();
     assert_ne!(fx.remote_sha(), fx.lead_sha());
+    fx.end_attempt();
 
     let out = fx.push().ok();
 
@@ -315,6 +321,7 @@ fn a_failing_pre_merge_of_the_repo_file_refuses_pr_push_with_gate_failed() {
     fx.fake("sh", Reply::exit(1, "the suite is red\n", ""));
     fx.commit_lead();
     let before = fx.remote_sha();
+    fx.end_attempt();
 
     let error = refused(&fx.push(), "gate_failed", 3);
 
@@ -343,6 +350,7 @@ fn a_wt_toml_in_the_repo_tree_runs_no_hook() {
     fx.commit_file(&attempt, "b.txt", "b\n", "b");
     fx.cpd_in(&attempt, &["attempt", "submit", "api-b-a1", "--plan", "pay"]).ok();
     assert_eq!(commands(&fx), Vec::<String>::new(), "the tree's pre-commit ran");
+    fx.end_attempt();
     fx.push().ok();
     assert_eq!(commands(&fx), Vec::<String>::new(), "the tree's pre-merge ran");
 }
