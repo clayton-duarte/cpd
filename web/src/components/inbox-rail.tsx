@@ -1,11 +1,16 @@
 // The Inbox rail: sidebar-09's mail list, vendored 1:1 from the `new-york-v4` registry into the
-// shell's right column (web/README.md "The Inbox rail"). Three parts of the block are
-// deliberately not vendored: its first sidebar, the icon column (Inbox/Drafts/Sent/Junk/Trash,
-// Acme Inc, the sample user), the `Unreads` switch that sat in this header, and the
-// `Type to search...` input the block puts under the title. What is vendored is the block's
-// second sidebar: its header (the title) and its mail list, rows and classes verbatim. The mails
-// are the registry's own sample data, verbatim; reading the real Inbox is a follow-up.
+// shell's right column (web/README.md "The Inbox rail", "The live Inbox in the right rail"). Three
+// parts of the block are deliberately not vendored: its first sidebar (the icon column,
+// Inbox/Drafts/Sent/Junk/Trash, Acme Inc, the sample user), the `Unreads` switch that sat in this
+// header, and the `Type to search...` input the block puts under the title. What is vendored is the
+// block's second sidebar: its header (the title) and its mail list, rows and classes verbatim.
+//
+// The rows render the real Inbox read through the dev adapter, not registry sample data. The row's
+// name is the item's actor, its date the item's age rendered relative, its subject the label's
+// first line and its teaser the label's second line when there is one.
 import type { ReactElement } from "react";
+import type { LiveSession } from "../api/live-server";
+import type { InboxItem } from "../api/readmodel";
 import {
   Sidebar,
   SidebarContent,
@@ -14,105 +19,56 @@ import {
   SidebarHeader,
 } from "./ui/sidebar";
 
-/** One mail, the five fields the block's sample data declares. */
-interface Mail {
-  name: string;
-  email: string;
-  subject: string;
-  date: string;
-  teaser: string;
+/**
+ * The row's name: the item's actor. A `review-requested` item is `peer review`; otherwise, when
+ * the item names a Session, it is that Session's `name` (the first 8 characters of its id when the
+ * name is absent); otherwise it is `cpd engine`.
+ */
+export function inboxActor(item: InboxItem, sessions: readonly LiveSession[]): string {
+  if (item.kind === "review-requested") return "peer review";
+  if (item.session !== null) {
+    const name = sessions.find((session) => session.id === item.session)?.name;
+    return name !== undefined && name !== "" ? name : item.session.slice(0, 8);
+  }
+  return "cpd engine";
 }
 
-/** The registry's sample data, verbatim (sidebar-09's `data.mails`, in its order). */
-const mails: readonly Mail[] = [
-  {
-    name: "William Smith",
-    email: "williamsmith@example.com",
-    subject: "Meeting Tomorrow",
-    date: "09:34 AM",
-    teaser:
-      "Hi team, just a reminder about our meeting tomorrow at 10 AM.\nPlease come prepared with your project updates.",
-  },
-  {
-    name: "Alice Smith",
-    email: "alicesmith@example.com",
-    subject: "Re: Project Update",
-    date: "Yesterday",
-    teaser:
-      "Thanks for the update. The progress looks great so far.\nLet's schedule a call to discuss the next steps.",
-  },
-  {
-    name: "Bob Johnson",
-    email: "bobjohnson@example.com",
-    subject: "Weekend Plans",
-    date: "2 days ago",
-    teaser:
-      "Hey everyone! I'm thinking of organizing a team outing this weekend.\nWould you be interested in a hiking trip or a beach day?",
-  },
-  {
-    name: "Emily Davis",
-    email: "emilydavis@example.com",
-    subject: "Re: Question about Budget",
-    date: "2 days ago",
-    teaser:
-      "I've reviewed the budget numbers you sent over.\nCan we set up a quick call to discuss some potential adjustments?",
-  },
-  {
-    name: "Michael Wilson",
-    email: "michaelwilson@example.com",
-    subject: "Important Announcement",
-    date: "1 week ago",
-    teaser:
-      "Please join us for an all-hands meeting this Friday at 3 PM.\nWe have some exciting news to share about the company's future.",
-  },
-  {
-    name: "Sarah Brown",
-    email: "sarahbrown@example.com",
-    subject: "Re: Feedback on Proposal",
-    date: "1 week ago",
-    teaser:
-      "Thank you for sending over the proposal. I've reviewed it and have some thoughts.\nCould we schedule a meeting to discuss my feedback in detail?",
-  },
-  {
-    name: "David Lee",
-    email: "davidlee@example.com",
-    subject: "New Project Idea",
-    date: "1 week ago",
-    teaser:
-      "I've been brainstorming and came up with an interesting project concept.\nDo you have time this week to discuss its potential impact and feasibility?",
-  },
-  {
-    name: "Olivia Wilson",
-    email: "oliviawilson@example.com",
-    subject: "Vacation Plans",
-    date: "1 week ago",
-    teaser:
-      "Just a heads up that I'll be taking a two-week vacation next month.\nI'll make sure all my projects are up to date before I leave.",
-  },
-  {
-    name: "James Martin",
-    email: "jamesmartin@example.com",
-    subject: "Re: Conference Registration",
-    date: "1 week ago",
-    teaser:
-      "I've completed the registration for the upcoming tech conference.\nLet me know if you need any additional information from my end.",
-  },
-  {
-    name: "Sophia White",
-    email: "sophiawhite@example.com",
-    subject: "Team Dinner",
-    date: "1 week ago",
-    teaser:
-      "To celebrate our recent project success, I'd like to organize a team dinner.\nAre you available next Friday evening? Please let me know your preferences.",
-  },
-];
+/**
+ * The row's date: one `age_seconds` rendered relative (web/README.md "The live Inbox in the right
+ * rail"): `just now` under a minute, then minutes, hours, `Yesterday` from 24 to 48 hours, days
+ * under a week, weeks under 30 days and months after that.
+ */
+export function relativeAge(ageSeconds: number): string {
+  if (ageSeconds < 60) return "just now";
+  if (ageSeconds < 3600) return `${Math.floor(ageSeconds / 60)} minutes ago`;
+  if (ageSeconds < 86_400) return `${Math.floor(ageSeconds / 3600)} hours ago`;
+  if (ageSeconds < 172_800) return "Yesterday";
+  if (ageSeconds < 604_800) return `${Math.floor(ageSeconds / 86_400)} days ago`;
+  if (ageSeconds < 2_592_000) return `${Math.floor(ageSeconds / 604_800)} weeks ago`;
+  return `${Math.floor(ageSeconds / 2_592_000)} months ago`;
+}
+
+/** The subject line is the label's first line; the teaser is its second line when there is one. */
+function labelParts(item: InboxItem): { subject: string; teaser?: string } {
+  const lines = item.label.split("\n");
+  const subject = lines[0] ?? "";
+  const teaser = lines[1];
+  return teaser === undefined ? { subject } : { subject, teaser };
+}
 
 /**
- * The Inbox rail: the block's mail list, one row per mail — the name with its date pushed right,
- * the subject, then the two-line teaser — under its header's title. The rows are anchors that go
- * nowhere yet, as the block renders them; the block's search input is not vendored.
+ * The Inbox rail: the block's mail list, one row per live item — the actor with its relative age
+ * pushed right, the label's first line as the subject, then the second line as a two-line teaser
+ * only when there is one — under its header's title. Each row is an anchor to the item's `url`, or
+ * `#` when it has none; nothing in the rail writes.
  */
-export function InboxRail(): ReactElement {
+export function InboxRail({
+  items,
+  sessions,
+}: {
+  items: readonly InboxItem[];
+  sessions: readonly LiveSession[];
+}): ReactElement {
   return (
     <Sidebar collapsible="none">
       <SidebarHeader className="gap-3.5 border-b p-4">
@@ -121,22 +77,27 @@ export function InboxRail(): ReactElement {
       <SidebarContent>
         <SidebarGroup className="px-0">
           <SidebarGroupContent>
-            {mails.map((mail) => (
-              <a
-                href="#"
-                key={mail.email}
-                className="flex flex-col items-start gap-2 border-b p-4 text-sm leading-tight whitespace-nowrap last:border-b-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-              >
-                <div className="flex w-full items-center gap-2">
-                  <span>{mail.name}</span>{" "}
-                  <span className="ml-auto text-xs">{mail.date}</span>
-                </div>
-                <span className="font-medium">{mail.subject}</span>
-                <span className="line-clamp-2 w-[260px] text-xs whitespace-break-spaces">
-                  {mail.teaser}
-                </span>
-              </a>
-            ))}
+            {items.map((item, index) => {
+              const { subject, teaser } = labelParts(item);
+              return (
+                <a
+                  href={item.url ?? "#"}
+                  key={item.id ?? index}
+                  className="flex flex-col items-start gap-2 border-b p-4 text-sm leading-tight whitespace-nowrap last:border-b-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                >
+                  <div className="flex w-full items-center gap-2">
+                    <span>{inboxActor(item, sessions)}</span>{" "}
+                    <span className="ml-auto text-xs">{relativeAge(item.age_seconds)}</span>
+                  </div>
+                  <span className="font-medium">{subject}</span>
+                  {teaser === undefined ? null : (
+                    <span className="line-clamp-2 w-[260px] text-xs whitespace-break-spaces">
+                      {teaser}
+                    </span>
+                  )}
+                </a>
+              );
+            })}
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>

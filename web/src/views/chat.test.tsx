@@ -157,7 +157,6 @@ test("the chat is the only element on the screen, with no nav and no other panes
   expect(context?.querySelector('[data-slot="sidebar"]')).not.toBeNull();
   const inbox = chat!.nextElementSibling?.nextElementSibling as HTMLElement | null;
   expect(inbox?.querySelector('[data-slot="sidebar"]')).not.toBeNull();
-  expect(inbox?.textContent).toContain("William Smith");
 });
 
 test("the transcript renders inside a scroll container and the composer stays visible", async () => {

@@ -3,6 +3,10 @@
 // function, so no test spawns cpd, opens a socket or starts a server.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { parsePiSession, parseTailOutput, toSnapshotFrame, type TranscriptMessage } from "../transcript.ts";
+import type { InboxItem } from "./readmodel.ts";
+
+/** The Inbox item shape `cpd inbox list` prints, the rail's row source (web/README.md "The live Inbox in the right rail"). */
+export type { InboxItem };
 
 /**
  * Reads a durable Session's transcript over its host socket (the `chat-host` read, web/README.md "The
@@ -38,6 +42,8 @@ export interface LiveDeps {
   send(id: string, text: string, unblocks: string): Promise<void>;
   /** A pi Session's file mtime in ms, undefined when absent: the frames stream's change signal. */
   stat(id: string): Promise<number | undefined>;
+  /** The open Inbox items, from `cpd inbox list`; the rail renders them unchanged (web/README.md "The live Inbox in the right rail"). Optional so the handler's other routes build without it. */
+  inbox?(): Promise<readonly InboxItem[]>;
 }
 
 /** Handles one request; resolves true when it matched a /__cpd/ route (the caller stops), false to pass through. */
@@ -217,6 +223,10 @@ export function createLiveHandler(deps: LiveDeps): LiveHandler {
     }
     if (path === "/__cpd/sessions" && method === "GET") {
       sendJson(res, 200, { ok: true, sessions: await deps.list() });
+      return true;
+    }
+    if (path === "/__cpd/inbox" && method === "GET") {
+      sendJson(res, 200, { ok: true, items: (await deps.inbox?.()) ?? [] });
       return true;
     }
 

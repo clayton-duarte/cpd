@@ -2,9 +2,9 @@
 // subscribes to one Session's snapshot frames over EventSource and sends one message. `fetch`
 // and the EventSource factory are injected; a test never opens a real EventSource or the network.
 import type { SnapshotFrame } from "../fold/fold";
-import type { LiveSession } from "./live-server";
+import type { LiveSession, InboxItem } from "./live-server";
 
-export type { LiveSession };
+export type { LiveSession, InboxItem };
 
 /** The fixed one-line reason every browser send carries (web/README.md). */
 export const SEND_UNBLOCKS = "sent from the cpd web chat";
@@ -12,6 +12,8 @@ export const SEND_UNBLOCKS = "sent from the cpd web chat";
 /** The browser-side API the live Chat consumes. */
 export interface LiveApi {
   sessions(): Promise<readonly LiveSession[]>;
+  /** The open Inbox items the right rail renders (web/README.md "The live Inbox in the right rail"). Optional so the Chat-only fakes need not supply it. */
+  inbox?(): Promise<readonly InboxItem[]>;
   /** Subscribes to one Session's snapshot frames; the returned closure closes the stream. */
   subscribe(id: string, onFrame: (frame: SnapshotFrame) => void): () => void;
   /** Sends one message; always posts the fixed one-line reason. */
@@ -40,6 +42,14 @@ export function createLiveApi(deps: LiveApiDeps): LiveApi {
       });
       const payload = (await response.json()) as { sessions?: readonly LiveSession[] };
       return payload.sessions ?? [];
+    },
+
+    async inbox(): Promise<readonly InboxItem[]> {
+      const response = await fetchImpl(`${baseUrl}/__cpd/inbox`, {
+        headers: { "x-cpd-token": deps.token },
+      });
+      const payload = (await response.json()) as { items?: readonly InboxItem[] };
+      return payload.items ?? [];
     },
 
     subscribe(id: string, onFrame: (frame: SnapshotFrame) => void): () => void {
