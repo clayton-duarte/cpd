@@ -255,8 +255,8 @@ mod tests {
 
     /// The protocol history: 8 (`session-retiered`), 10 (`plan-outlined`), 12 (`session-resumed`), 13 (`session report`),
     /// 14 (the incident kinds), 15 (`mcp-attached`), 16 (`session switch-failed`/`switched`), 17 (`pr-described`),
-    /// 18 (`session-model-changed`, the tier-preset switch, commands.md §14.6), 19 (`attempt-aborted`) and
-    /// 20 (`context pending`'s plan-level `jobs`, commands.md §3.12, Plan explore-view).
+    /// 18 (`session-model-changed`, the tier-preset switch, commands.md §14.6), 19 (`context pending`'s plan-level `jobs`,
+    /// commands.md §3.12, Plan explore-view) and 20 (`attempt-aborted`).
     #[test]
     fn the_protocol_is_20_with_the_attempt_aborted_kind_and_the_pending_plan_jobs_field() {
         assert_eq!(PROTOCOL, 20);
