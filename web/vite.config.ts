@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin, type PluginOption } from "vite";
-import { createLiveHandler, type LiveDeps, type LiveSession } from "./src/api/live-server.ts";
+import { createLiveHandler, type LiveDeps, type LiveSession, type InboxItem } from "./src/api/live-server.ts";
 
 // The web client dev/build config (docs/research/web-client-api.md §6, A2): React + the
 // Tailwind v4 plugin, and the dev server on port 5173 against the typed mock. With
@@ -106,6 +106,10 @@ function realDeps(): LiveDeps {
       } catch {
         return undefined;
       }
+    },
+    async inbox() {
+      const parsed = JSON.parse(await runCpd(["inbox", "list"])) as { items?: readonly InboxItem[] };
+      return parsed.items ?? [];
     },
   };
 }

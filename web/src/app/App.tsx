@@ -10,6 +10,7 @@ import { usePanelRef } from "react-resizable-panels";
 import { uiResponsePost } from "../api/actions";
 import type { LiveApi } from "../api/live";
 import type { LiveSession } from "../api/live-server";
+import type { InboxItem } from "../api/readmodel";
 import type { CpdApi } from "../api/mock";
 import type { UiRequest } from "../api/types";
 import { AppSidebar } from "../components/app-sidebar";
@@ -130,17 +131,30 @@ export function App({ token, live }: AppProps): ReactElement {
   const contextPanel = usePanelRef();
   const inboxPanel = usePanelRef();
   const [sessions, setSessions] = useState<readonly LiveSession[]>([]);
+  const [inbox, setInbox] = useState<readonly InboxItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
 
-  // Fetch the lead/manager Sessions once; the cancelled flag keeps the resolution from setting
-  // state after unmount (web/README.md "The Context tree").
+  // Fetch the lead/manager Sessions and the live Inbox once; the cancelled flag keeps a
+  // resolution from setting state after unmount (web/README.md "The Context tree", "The live
+  // Inbox in the right rail"). Both stay empty when the read fails.
   useEffect(() => {
     if (live === undefined) return;
     let cancelled = false;
-    void live.sessions().then((list) => {
-      if (cancelled) return;
-      setSessions(list);
-    });
+    void live.sessions().then(
+      (list) => {
+        if (!cancelled) setSessions(list);
+      },
+      () => {},
+    );
+    const inboxRead = live.inbox?.();
+    if (inboxRead !== undefined) {
+      void inboxRead.then(
+        (items) => {
+          if (!cancelled) setInbox(items);
+        },
+        () => {},
+      );
+    }
     return () => {
       cancelled = true;
     };
@@ -176,7 +190,7 @@ export function App({ token, live }: AppProps): ReactElement {
             className="h-full min-h-0"
             style={{ "--sidebar-width": "100%" } as CSSProperties}
           >
-            <InboxRail />
+            <InboxRail items={inbox} sessions={sessions} />
           </SidebarProvider>
         </div>
       </ResizablePanel>
