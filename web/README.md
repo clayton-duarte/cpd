@@ -370,7 +370,7 @@ the shadcn **`resizable`** wrapper (`PanelGroup`, `Panel`, `PanelResizeHandle`).
 | Column | Filled by |
 |---|---|
 | Context (left) | the shadcn **`sidebar-03`** block (“a sidebar with submenus”), copied verbatim |
-| Chat (centre) | the existing `web/src/views/live-chat.tsx`, unchanged |
+| Chat (centre) | the existing `web/src/views/live-chat.tsx` — no longer unchanged: it has lost its Session picker (the rail selects, next section) and takes the selected `session` from `App` |
 | Inbox (right) | a **placeholder** (“The Inbox lands here.”) — the real Inbox and the Tree/Plan panes belong to the ui-parity Plan |
 
 **Sizing.** The Context column **defaults to `20rem`**; dragging its handle resizes it;
@@ -420,6 +420,10 @@ sidebar-03 block: components/app-sidebar.tsx + page.tsx
 
 New dep: `react-resizable-panels` exactly `4.15.3`; `radix-ui` and `lucide-react` are already
 in `web/package.json`.
+
+### The Context tree in the left rail selects the Chat
+
+Skeleton: the left rail's Context tree replaces the sidebar-03 sample menu and is the Chat's only navigation. Full documentation follows.
 
 ### The durable host-socket read (`chat-host`)
 
