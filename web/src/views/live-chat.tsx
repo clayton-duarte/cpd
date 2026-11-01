@@ -395,7 +395,11 @@ export function LiveChat({ api, session }: LiveChatProps): ReactElement {
   };
 
   return (
-    <MessageScrollerProvider autoScroll>
+    // `defaultScrollPosition="end"` states the opening position the thread wants: the live
+    // edge. The person's turns deliberately carry no `scrollAnchor` (see the comment on the
+    // turn rows below): an anchor settles that turn at the top and holds the view in
+    // `anchored-to-message`, so a live session's newest output never arrives in view.
+    <MessageScrollerProvider autoScroll defaultScrollPosition="end">
       <div className="flex h-dvh flex-col">
         {unavailable ? (
           <Empty className="flex-1">
@@ -431,11 +435,15 @@ export function LiveChat({ api, session }: LiveChatProps): ReactElement {
                     </Button>
                   </MessageScrollerItem>
                 )}
+                {/* No `scrollAnchor` on a turn: an anchor settles that turn at the top of the
+                    viewport and holds the mode at `anchored-to-message`, which the primitive
+                    never leaves for `following-bottom` — so a live session's newest turn would
+                    never arrive in view. The thread belongs to its live edge, and the Scroll to
+                    End control is the way back when the reader has scrolled away. */}
                 {messages.map((message) => (
                   <MessageScrollerItem
                     key={message.id}
                     messageId={message.id}
-                    scrollAnchor={message.role === "user"}
                     className="min-w-0"
                   >
                     <Turn message={message} />
