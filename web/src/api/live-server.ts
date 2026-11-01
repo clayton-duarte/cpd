@@ -4,6 +4,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { parsePiSession, parseTailOutput, toSnapshotFrame, type TranscriptMessage } from "../transcript.ts";
 
+/**
+ * Reads a durable Session's transcript over its host socket (the `chat-host` read, web/README.md "The
+ * durable host-socket read"). It resolves `undefined` when no live host answers — no socket file, a
+ * refused connect, a refused handshake — so the handler falls back to `cpd session tail`.
+ */
+export type DurableHostRead = (id: string) => Promise<readonly TranscriptMessage[] | undefined>;
+
 /** One Session the picker offers. */
 export interface LiveSession {
   id: string;
@@ -19,8 +26,10 @@ export interface LiveDeps {
   list(): Promise<readonly LiveSession[]>;
   /** A pi Session's session file, as its full JSONL text; undefined when there is none (a durable Session, or an unknown id). */
   readPi(id: string): Promise<string | undefined>;
-  /** A durable Session's transcript: the full stdout of `cpd session tail <id>`. Called only for runner "durable". */
+  /** A durable Session's transcript: the full stdout of `cpd session tail <id>`. Called only for runner "durable", and only as the fallback of the host-socket read (below). */
   tail(id: string): Promise<string>;
+  /** The durable Session's host-socket read; absent, or `undefined` for a Session with no live host, means `tail(id)` is used. */
+  host?: DurableHostRead;
   /** One send: `cpd session send <id> <text> --unblocks <reason>`. The only mutation there is. */
   send(id: string, text: string, unblocks: string): Promise<void>;
   /** A pi Session's file mtime in ms, undefined when absent: the frames stream's change signal. */
@@ -69,12 +78,22 @@ async function readBody(req: IncomingMessage): Promise<string> {
 
 /** Builds the injected-route handler. */
 export function createLiveHandler(deps: LiveDeps): LiveHandler {
-  const readTranscript = async (session: LiveSession): Promise<TranscriptMessage[]> => {
+  const readDurable = async (session: LiveSession): Promise<readonly TranscriptMessage[]> => {
+    // The host-socket read of the `chat-host` PR: prefer the live host (`deps.host`); a host that
+    // does not answer (no socket, a refused connect or handshake) falls back to `cpd session tail`.
+    if (deps.host !== undefined) {
+      const messages = await deps.host(session.id);
+      if (messages !== undefined) return messages;
+    }
+    return parseTailOutput(await deps.tail(session.id));
+  };
+
+  const readTranscript = async (session: LiveSession): Promise<readonly TranscriptMessage[]> => {
     if (session.runner === "pi") {
       const jsonl = await deps.readPi(session.id);
       return jsonl === undefined ? [] : parsePiSession(jsonl);
     }
-    return parseTailOutput(await deps.tail(session.id));
+    return readDurable(session);
   };
 
   const handleTranscript = async (res: ServerResponse, id: string): Promise<void> => {
