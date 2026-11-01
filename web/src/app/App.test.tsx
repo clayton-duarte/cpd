@@ -15,6 +15,9 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { App } from "./App";
+import type { LiveApi } from "../api/live";
+import type { LiveSession } from "../api/live-server";
+import type { SnapshotFrame } from "../fold/fold";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -184,6 +187,82 @@ test("the Context column defaults to 20rem and a double-click restores it", asyn
     await flush();
   });
   expect(columnWidth(context)).toBeCloseTo(expected, 2);
+});
+
+/** A Session as the tree and Chat now see it: `LiveSession` plus `context` and `name`. */
+type TreeSession = LiveSession & { context: string; name?: string };
+
+/** A fake LiveApi: the sessions it lists, the ids App subscribed to, and the frame emitter. */
+function fakeLive(sessions: readonly TreeSession[]): {
+  api: LiveApi;
+  subscribed: string[];
+  emit: (frame: SnapshotFrame) => void;
+} {
+  const subscribed: string[] = [];
+  let onFrame: ((frame: SnapshotFrame) => void) | undefined;
+  const api: LiveApi = {
+    sessions: async () => sessions,
+    subscribe: (id, callback) => {
+      subscribed.push(id);
+      onFrame = callback;
+      return () => {
+        onFrame = undefined;
+      };
+    },
+    send: async () => {},
+  };
+  return { api, subscribed, emit: (frame) => onFrame?.(frame) };
+}
+
+test("picking a lead in the rail shows that lead's transcript and leaves no picker", async () => {
+  const manager: TreeSession = {
+    id: "manager-1",
+    role: "manager",
+    runner: "durable",
+    context: "ctx",
+    name: "Manager One",
+  };
+  const lead: TreeSession = {
+    id: "lead-1",
+    role: "lead",
+    runner: "durable",
+    context: "ctx",
+    name: "Lead One",
+  };
+  const { api, subscribed, emit } = fakeLive([manager, lead]);
+
+  await act(async () => {
+    root.render(<App token="t0k" live={api} />);
+    await flush();
+  });
+
+  // The rail carries the lead's row; App grabs the Session it names.
+  const leadRow = container.querySelector<HTMLButtonElement>('button[data-session-id="lead-1"]');
+  expect(leadRow).not.toBeNull();
+  if (leadRow === null) return;
+
+  await act(async () => {
+    leadRow.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+  });
+
+  // The rail is the Chat's only navigation: picking the lead subscribes the Chat to that lead.
+  expect(subscribed).toEqual(["lead-1"]);
+
+  await act(async () => {
+    emit({
+      type: "snapshot",
+      epoch: "live",
+      seq: 1,
+      snapshot: {
+        messages: [{ id: "m1", role: "assistant", text: "the lead transcript", pending: false }],
+      },
+    });
+    await flush();
+  });
+  expect(container.textContent).toContain("the lead transcript");
+  // The old Session picker left the Chat.
+  expect(container.querySelector("select")).toBeNull();
 });
 
 test("the document defaults to the dark theme", () => {
