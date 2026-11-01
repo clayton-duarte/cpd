@@ -218,7 +218,7 @@ with a name and text and no structured input, and nothing carries citations or s
 
 | Component | Doc URL | The exports this chat uses | Declares |
 |---|---|---|---|
-| `message-scroller` | https://ui.shadcn.com/docs/components/base/message-scroller | `MessageScrollerProvider`, `MessageScroller`, `MessageScrollerViewport`, `MessageScrollerContent`, `MessageScrollerItem`, `MessageScrollerButton` | `@shadcn/react` |
+| `message-scroller` | https://ui.shadcn.com/docs/components/base/message-scroller | `MessageScrollerProvider`, `MessageScroller`, `MessageScrollerViewport`, `MessageScrollerContent`, `MessageScrollerItem` | `@shadcn/react` |
 | `message` | https://ui.shadcn.com/docs/components/base/message | `Message`, `MessageContent` | — |
 | `bubble` | https://ui.shadcn.com/docs/components/base/bubble | `Bubble`, `BubbleContent` | `radix-ui` (already present) |
 | `input-group` | https://ui.shadcn.com/docs/components/base/input-group | `InputGroup`, `InputGroupTextarea`, `InputGroupButton` | — |
@@ -300,7 +300,7 @@ One root fills the viewport; the message list is the only scrolling region and t
 sibling below it, outside that region, so it never scrolls away:
 
 ```tsx
-<MessageScrollerProvider autoScroll>
+<MessageScrollerProvider>
   <div className="flex h-dvh flex-col">
     {/* the session picker (below) */}
     <div className="flex items-center gap-2 border-b p-2 text-sm">…</div>
@@ -311,7 +311,7 @@ sibling below it, outside that region, so it never scrolls away:
           {messages.map((message) => …)}
         </MessageScrollerContent>
       </MessageScrollerViewport>
-      <MessageScrollerButton />
+      {/* the authored jump-to-latest control, rendered only while following is released */}
     </MessageScroller>
 
     {/* the prompt input: a sibling of the scroller, pinned below the viewport */}
@@ -325,24 +325,25 @@ sibling below it, outside that region, so it never scrolls away:
 </MessageScrollerProvider>
 ```
 
-**Scroll behaviour.** `MessageScrollerProvider autoScroll` opens the thread at its newest turn
-and follows the reply while the person stays at the live edge; `MessageScrollerButton` jumps back
-to the live edge. No turn carries `scrollAnchor` — the measured rule is “The thread follows its
-live edge”, below.
+**Scroll behaviour.** The vendored `MessageScroller` is the layout shell with its own
+`autoScroll` off; where the viewport sits in the thread is the authored rule of “The thread
+follows its live edge”, below (`web/src/hooks/use-thread-scroll.ts`). No turn carries
+`scrollAnchor`.
 Enter sends, Shift+Enter adds a line.
 
 #### How one message renders
 
 Every message is a `MessageScrollerItem` keyed by `message.id`, carrying `messageId`. The turn
 renders **part by part** — the full contract is “The Chat column renders a whole turn”, below —
-and the text is **never** dumped as a bare `{message.text}`:
+and the text is **never** dumped as a bare `{message.text}` (a `system` notice renders as the
+collapsed `Notice` row of “A cpd notice collapses to its summary line”, below):
 
 - The **person** is `Message align="end"` with `Bubble align="end" variant="muted"` and the
 markdown through `BubbleContent`.
 - The **agent** (and every non-`user` role) is `Message align="start"` and its parts render in
 order: text through `Markdown` (a fenced block becomes a `CodeBlock` with its language title
 and copy button), `thinking` and `tool` as `Trace` rows, an `image` inline, and a `system`
-notice as a `Marker`.
+notice as the collapsed `Notice` row of “A cpd notice collapses to its summary line”, below.
 
 #### Sessions, the live wiring and the no-adapter state
 
@@ -498,7 +499,7 @@ The Chat column renders **every part of a turn** — decided by the User on 2026
 | `thinking` | a `Trace` row: closed, its title carries the part's word count; opened, the collapsible carries the thinking's text | `web/src/components/ui/trace.tsx` |
 | `tool` | a `Trace` row (below) | `web/src/components/ui/trace.tsx` |
 | `image` | inline, an `<img>` from its base64 data URL (`data:<mimeType>;base64,<data>`) | `web/src/views/live-chat.tsx` |
-| `system` (the whole message) | a `Marker`, not a Bubble and not a markdown turn | `web/src/components/ui/marker.tsx` |
+| `system` (the whole message) | a collapsed `Notice` row, not a Bubble and not a markdown turn (“A cpd notice collapses to its summary line”, below) | `web/src/views/live-chat.tsx` |
 
 The `tool` row's title is the command or path the call names — the `arguments`' `command` of a `bash` call, its `path` of a `read`, `edit` or `write` call, else the tool's `name` — with the call's `durationMs` beside the title and the row in its error state when the result failed (`error`). Opened, the row shows the call's `arguments` and its `result` as `Code Block`s. A large result is never truncated: the Code Block carries it whole; only the live frame is bounded (next section).
 
@@ -506,40 +507,82 @@ The pairing behind a `tool` part is measured against a real pi session file unde
 
 ### The thread follows its live edge
 
-Where the viewport sits in the thread is a measured rule, not the registry recipe's. The thread
-**opens at its newest turn** (`MessageScrollerProvider autoScroll defaultScrollPosition="end"`,
-`web/src/components/ai-elements/conversation.tsx`) and **follows new output while the reader stays
-at that live edge**. **No turn carries `scrollAnchor`.**
+Where the viewport sits in the thread is an **authored rule, not the primitive's** (hs-d832). The
+rule lives in **`web/src/hooks/use-thread-scroll.ts`**; the vendored `MessageScroller` stays as the
+layout shell with its own `autoScroll` **turned off**:
 
-The registry recipe for this primitive marks the person's turns
-`scrollAnchor={message.role === "user"}`; this Chat deliberately does not, and that deviation is
-the fix, not an oversight. An anchor makes the scroller settle that turn at the **top** of the
-viewport and hold the view there: when a frame's child count grows, `handleContentChange` (in
-`@shadcn/react/dist/message-scroller/index.js`) takes the first new `scrollAnchor` row and, if
-exactly one arrived while the mode was `following-bottom`, calls
-`scrollToElement(anchor, { align: "start" })` and switches to `anchored-to-message` — a mode its
-state machine never leaves for `following-bottom`, so every later frame only re-anchored the same
-row. That is why new output never arrived in view.
+- The thread **opens at its newest turn**.
+- While the reader is **following**, every new frame keeps the view at the newest content.
+- Following is **released** only when the reader scrolls more than **40% of the viewport height**
+  above that newest content — and a released view **never moves on a frame**. No arrival drags it.
+- Scrolling back **inside that margin re-engages following automatically**.
+- A **jump-to-latest control**, shown only while following is released, re-engages it too.
 
-Measured on the dev preview, 2026-11-01, while watching live session `14bd6551…` grow with the SSE
-frames counted in the page. With the anchor in place, the frame that first filled the thread
-(items 1 → 41, exactly one `scrollAnchor` row in the tail) left the viewport at `scrollTop 1286`
-against a `scrollHeight` of 5327 and a 720 px viewport — **3321 px short of the newest turn** —
-with the root reporting `data-scrollable="start end"`; the next frame moved the view *up* (to
-1250) and the gap grew to 3497 px; three frames arrived and the gap never closed. That is the
-reported bug: the Chat did not auto-scroll down when new messages arrived.
+While following, the viewport carries **`data-autoscrolling`** — the attribute the themed
+scrollbar's rule reads to hide the thumb (“Themed scrollbars”, below).
 
-With the anchor removed and `defaultScrollPosition="end"` stated explicitly, the same measurement
-reads `gap = 0` (`scrollTop` exactly `scrollHeight − clientHeight`) at every sample across three
-frames. The rest of the contract: scrolled away to 600 px, two later frames did not move the view
-(the gap stayed 1869 px, then 2147 px — scrolling away **releases** the view; later frames never
-drag it back) while the **Scroll to End** control went active; pressing it returned the view to
-`gap = 0`, and the frame after that kept `gap = 0`, so following had re-engaged.
-`MessageScrollerButton` (`web/src/views/live-chat.tsx`) is that control — it returns the reader to
-the live edge and re-engages following.
+History, kept because both earlier rules were measured and rejected: the registry recipe's anchor
+(`scrollAnchor={message.role === "user"}`) settled the person's turn at the top of the viewport and
+the primitive's state machine never left `anchored-to-message` for `following-bottom`, so new
+output never arrived in view (dropped by the prototype commit `8597fd602` on `preview/chat-shell`).
+The primitive's own follow rule was then measured and killed too:
+`$CPD_HOME/run/web-chat-bugs/explore/scout-scroll.md` found an **8 px** end-edge released for good
+by **one upward scroll** — any wheel tick releases it at all — while the newest agent turn measured
+**~950 px against a 767 px viewport**: a reader reading the newest turn is never inside the 8 px
+edge, so every later frame was ignored. That is why the rule is authored code, not the primitive's
+`autoScroll`.
 
-The prototype is commit `8597fd602` on the local branch `preview/chat-shell` ("preview: follow the
-Chat's live edge instead of anchoring a turn").
+**The DOM contract the tests pin** (`web/src/views/live-chat.test.tsx` and
+`web/src/components/inbox-rail.test.tsx`, a new file): the Chat's scrolling viewport is the
+vendored **`[data-slot="message-scroller-viewport"]`** element; the jump-to-latest control is a
+button carrying **`data-slot="thread-jump"`**, rendered only while following is released.
+
+### A cpd notice collapses to its summary line
+
+A `system` message — a cpd notice: a Context dump, an engine Event, an Escalation — renders
+**collapsed by default** as **one summary line** (hs-d831): the notice's **first non-empty line,
+truncated**, a **muted line count** beside it (`24 lines`) and an **expand control**. Expanded,
+the whole text renders `whitespace-pre-wrap` inside a box capped at **24rem** (Tailwind
+`max-h-96`) that **scrolls with the themed scrollbar** (“Themed scrollbars”, below), and it
+collapses again. A notice of **one line** renders as one plain line: **no line count and no expand
+control**. Everything else in a turn is unchanged: the person's turns and the agent's answer and
+markdown, the Reasoning and Tool rows (already collapsed, closed by default) and the ask card.
+
+The triage that decided it: `$CPD_HOME/run/web-chat-bugs/explore/scout-blocks.md` measured the
+worst offender — one `cpd-context` dump rendered whole as a `Marker` reached **299 lines and
+51,485 characters** (Session `62b1c19b`, JSONL line 3557) — about six viewport heights for one
+transcript row — while the terminal cockpit caps the same content at **12 lines** with no
+expansion (`tui/src/history/render.rs:48-50`). The whole-`Marker` rendering of a `system` message
+is superseded by this rule.
+
+The DOM contract the tests pin (`web/src/views/live-chat.test.tsx`): the notice's row carries
+**`data-slot="notice"`**, its line count **`data-slot="notice-count"`** (text `N lines`, absent
+for a one-line notice), its expand control is a button with **`aria-expanded`** (absent for a
+one-line notice), and its body is **not in the DOM while collapsed**.
+
+### Themed scrollbars
+
+Every scrolling surface of the shell uses one authored Tailwind v4 utility, **`scrollbar-themed`**
+(hs-d830), declared in `web/src/index.css` as:
+
+```css
+scrollbar-width: thin;
+scrollbar-color: color-mix(in oklab, var(--foreground) 22%, transparent) transparent;
+```
+
+plus **`color-scheme: dark` on `.dark`** in `@layer base`, so the scrollbar corner and the native
+controls follow the theme. It is applied to the three surfaces that scroll:
+
+- the Chat's scrolling viewport — the vendored `[data-slot="message-scroller-viewport"]`
+  (`web/src/components/ui/message-scroller.tsx`);
+- `SidebarContent` (`web/src/components/ui/sidebar.tsx`) — both rails scroll there;
+- the Code Block's scrolling content (`web/src/components/ui/code-block.tsx`).
+
+The Chat viewport keeps the **`data-autoscrolling` thumb-transparent override**: the thumb hides
+while the thread follows its live edge (“The thread follows its live edge”, above). The **Tree and
+Plan panes are not in this contract** — the shell does not mount them. Pinned by
+`web/src/views/live-chat.test.tsx` (the Chat viewport) and `web/src/components/inbox-rail.test.tsx`
+(the rail).
 
 ### The markdown a turn renders
 
