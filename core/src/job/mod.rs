@@ -129,8 +129,8 @@ pub struct EditArgs {
     /// Remove every Dependency
     #[arg(long = "no-needs")]
     no_needs: bool,
-    /// Move the Job to this PR (it keeps no old Dependency)
-    #[arg(long = "pr", value_name = "key")]
+    /// Move the Job to this Workflow (it keeps no old Dependency)
+    #[arg(long = "workflow", value_name = "key")]
     workflow: Option<WorkflowKey>,
     /// The new kind (§2.2 "Job kinds"): work, docs, test or impl. open and update are cpd's
     #[arg(long, value_name = "kind", value_parser = PossibleValuesParser::new(KINDS))]

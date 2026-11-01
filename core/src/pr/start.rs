@@ -442,7 +442,7 @@ pub(super) fn run(args: StartArgs) -> Result<Output, CpdError> {
                 .with("to", "dispatch"));
         }
         _ => {
-            return Ok(Output::success(json!({"pr": {
+            return Ok(Output::success(json!({"workflow": {
                 "key": key, "status": workflow.status, "lead_branch": workflow.lead_branch, "lead_worktree": workflow.lead_worktree,
                 "base_sha": null, "reused": null, "pushed": null,
             }, "already": true})));
@@ -466,5 +466,5 @@ pub(super) fn run(args: StartArgs) -> Result<Output, CpdError> {
         return Err(error);
     }
     let pushed = start(&env.home, &env.config, &mut env.store, &plan, workflow, By::WorkflowStart).map_err(Failed::into_error)?;
-    Ok(Output::success(json!({"pr": pushed.to_json()})))
+    Ok(Output::success(json!({"workflow": pushed.to_json()})))
 }

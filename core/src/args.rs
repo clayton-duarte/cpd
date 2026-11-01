@@ -34,20 +34,20 @@ impl PlanArg {
     }
 }
 
-/// `--pr <key>`, selected within a Plan's PRs (commands.md §1.3).
+/// `--workflow <key>`, selected within a Plan's Workflows (commands.md §1.3).
 #[derive(clap::Args, Clone, Debug, PartialEq)]
 pub struct WorkflowArg {
-    /// The PR [default: the Plan's one PR that is not cancelled]
-    #[arg(long = "pr", value_name = "key")]
+    /// The Workflow [default: the Plan's one Workflow that is not cancelled]
+    #[arg(long = "workflow", value_name = "key")]
     pub workflow: Option<WorkflowKey>,
 }
 
 impl WorkflowArg {
-    /// The PR among `prs` (the Plan's, `cancelled` ones included): the one
-    /// named, else the Plan's only PR that is not `cancelled`.
-    /// A key that is not a PR of the Plan is `pr_not_found` (exit 4); without
-    /// `--pr`, zero or two or more PRs that are not `cancelled` is
-    /// `pr_required` (exit 2).
+    /// The Workflow among `workflows` (the Plan's, `cancelled` ones included): the one
+    /// named, else the Plan's only Workflow that is not `cancelled`.
+    /// A key that is not a Workflow of the Plan is `workflow_not_found` (exit 4); without
+    /// `--workflow`, zero or two or more Workflows that are not `cancelled` is
+    /// `workflow_required` (exit 2).
     pub fn select<'a>(&self, plan: &PlanId, workflows: &'a [WorkflowRow]) -> Result<&'a WorkflowRow, CpdError> {
         if let Some(key) = &self.workflow {
             return workflows.iter().find(|p| p.key == *key).ok_or_else(|| {
@@ -61,7 +61,7 @@ impl WorkflowArg {
             [only] => Ok(only),
             [] => Err(CpdError::new(
                 ErrorCode::WorkflowRequired,
-                format!("Plan {plan} has no PR: add one with cpd pr add, then pass --pr <key>."),
+                format!("Plan {plan} has no PR: add one with cpd workflow add, then pass --workflow <key>."),
             )
             .with("plan", plan.as_str())
             .with("prs", Vec::<String>::new())),
@@ -69,7 +69,7 @@ impl WorkflowArg {
                 let keys: Vec<&str> = many.iter().map(|p| p.key.as_str()).collect();
                 Err(CpdError::new(
                     ErrorCode::WorkflowRequired,
-                    format!("Plan {plan} has {} PRs ({}): pass --pr <key>.", keys.len(), keys.join(", ")),
+                    format!("Plan {plan} has {} PRs ({}): pass --workflow <key>.", keys.len(), keys.join(", ")),
                 )
                 .with("plan", plan.as_str())
                 .with("prs", keys))

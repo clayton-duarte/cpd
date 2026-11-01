@@ -60,7 +60,7 @@ pub(super) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
             (status, false)
         }
     };
-    let mut out = json!({"pr": {"key": key, "status": status}});
+    let mut out = json!({"workflow": {"key": key, "status": status}});
     if already {
         out["already"] = json!(true);
     }

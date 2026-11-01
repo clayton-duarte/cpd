@@ -1,7 +1,6 @@
 //! Pull requests (contract §7.6; commands.md §9), through `gh`:
 //!
-//! - `add`, `edit`, `cancel`: the Plan's PRs before they start (`pr add`, `pr edit`, `pr cancel`);
-//! - `start`: starting a PR (`pr start`), the routine `plan lock` and engine E7 call too;
+//! - `add`, `edit`, `describe`, `cancel`, `start`: the Plan's Workflows before and after they start (`workflow add`, `workflow edit`, `workflow describe`, `workflow cancel`, `workflow start`);
 //! - `open`: the Gate, the push and the PR (`pr open`);
 //! - `poll`, with `feedback` and `pulls` (the table `pull_requests`, written only there): one poll of every open pull request of the User (`pr poll`);
 //! - `view`: a PR's checks, reviews and comments, read-only (`pr view`);
@@ -84,18 +83,24 @@ pub use open::{Pulled, description_required, jira_required, jira_required_of, st
 #[cfg(test)]
 pub(crate) use rebase::{in_progress_with, rebase_onto_with, unresolved_with};
 
+/// The `workflow` group (commands.md §9): the Plan's Workflows, before and after they start.
+#[derive(clap::Subcommand, Debug)]
+pub enum WorkflowCommand {
+    /// Add a Workflow to the Plan (§9.4)
+    Add(AddArgs),
+    /// Change a waiting Workflow before the lock (§9.5)
+    Edit(EditArgs),
+    /// Store the Workflow's description, which becomes the pull request body (§9.5a)
+    Describe(DescribeArgs),
+    /// Remove a Workflow from the Plan before the lock; after it, end a Workflow with nothing to open, or whose work another Workflow carried (`--superseded-by`) (§9.6)
+    Cancel(CancelArgs),
+    /// Start a waiting Workflow whose needs are merged, after a failed start (§9.7)
+    Start(StartArgs),
+}
+
+/// The `pr` group (commands.md §9): what a command does to a Workflow's pull request, through `gh`.
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// Add a PR to the Plan (§9.4)
-    Add(AddArgs),
-    /// Change a waiting PR before the lock (§9.5)
-    Edit(EditArgs),
-    /// Store the PR's description, which becomes the pull request body (§9.5a)
-    Describe(DescribeArgs),
-    /// Remove a PR from the Plan before the lock; after it, end a PR with nothing to open, or whose work another PR carried (`--superseded-by`) (§9.6)
-    Cancel(CancelArgs),
-    /// Start a waiting PR whose needs are merged, after a failed start (§9.7)
-    Start(StartArgs),
     /// Push the Lead Branch and open the PR, refused only when it conflicts with its base, never as a draft (§9.1)
     Open(Args),
     /// Poll every open pull request of the User (§9.2)
@@ -210,8 +215,8 @@ pub struct EditArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct DescribeArgs {
-    /// The PR key
-    #[arg(long = "pr", value_name = "key")]
+    /// The Workflow key
+    #[arg(value_name = "key")]
     key: WorkflowKey,
     /// The description: a path to a UTF-8 file, or - for stdin
     #[arg(long, value_name = "path")]
@@ -241,14 +246,20 @@ pub struct StartArgs {
     plan: PlanArg,
 }
 
-/// Runs `command`. Only `view`, `merge` and `poll` read `ports` yet; the others open their `Env` on the real ports until their Jobs convert them.
+/// Runs `command` of the `workflow` group (commands.md §9.4–§9.7).
+pub fn run_workflow(command: WorkflowCommand) -> Result<Output, CpdError> {
+    match command {
+        WorkflowCommand::Add(args) => add::add(args),
+        WorkflowCommand::Edit(args) => edit::edit(args),
+        WorkflowCommand::Describe(args) => describe::describe(args),
+        WorkflowCommand::Cancel(args) => cancel::cancel(args),
+        WorkflowCommand::Start(args) => start::run(args),
+    }
+}
+
+/// Runs `command` of the `pr` group. Only `view`, `merge` and `poll` read `ports` yet; the others open their `Env` on the real ports until their Jobs convert them.
 pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdError> {
     match command {
-        Command::Add(args) => add::add(args),
-        Command::Edit(args) => edit::edit(args),
-        Command::Describe(args) => describe::describe(args),
-        Command::Cancel(args) => cancel::cancel(args),
-        Command::Start(args) => start::run(args),
         Command::Open(args) => open::open(args),
         Command::Poll(args) => poll::poll(ports, args),
         Command::Rebase(args) => rebase::rebase(args),

@@ -113,7 +113,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
             })?
         }
     };
-    let mut out = json!({"pr": {"key": workflow.key, "status": workflow.status}, "fields": fields});
+    let mut out = json!({"workflow": {"key": workflow.key, "status": workflow.status}, "fields": fields});
     if already {
         out["already"] = json!(true);
     }

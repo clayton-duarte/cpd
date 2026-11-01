@@ -525,7 +525,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         }
     };
     let jira = env.store.read(|conn| Ok(conn.query_row("SELECT jira FROM workflows WHERE plan = ?1 AND key = ?2", [plan.as_str(), wanted.key.as_str()], |r| r.get::<_, Option<String>>(0))?))?;
-    let mut out = json!({"pr": {
+    let mut out = json!({"workflow": {
         "key": wanted.key, "repo": wanted.repo, "name": wanted.name, "base": base, "base_pr": base_workflow, "title": wanted.title, "jira": jira, "needs": needs,
         "status": status, "lead_branch": lead_branch, "appended": appended, "shape": wanted.shape, "head_ref": head_ref,
         "jobs": template(&wanted.shape, &wanted.key, &wanted.title).iter().map(|s| s.key.clone()).collect::<Vec<_>>(),

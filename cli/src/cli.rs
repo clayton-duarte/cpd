@@ -55,9 +55,12 @@ pub enum Command {
     /// The message board (commands.md §10a)
     #[command(subcommand)]
     Board(board::Command),
-    /// Pull requests (commands.md §9)
+    /// The Plan's Workflows: add, edit, describe, cancel, start (commands.md §9)
     #[command(subcommand)]
-    Workflow(pr::Command),
+    Workflow(pr::WorkflowCommand),
+    /// Pull requests, through gh (commands.md §9)
+    #[command(subcommand)]
+    Pr(pr::Command),
     /// The GitHub review (commands.md §31.1)
     #[command(subcommand)]
     Review(pr::review::Command),
@@ -181,7 +184,8 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Ask(a) => ask::ask(a),
         Command::Answer(a) => ask::answer(a),
         Command::Board(c) => board::run(c),
-        Command::Workflow(c) => pr::run(ports, c),
+        Command::Workflow(c) => pr::run_workflow(c),
+        Command::Pr(c) => pr::run(ports, c),
         Command::Review(c) => pr::review::run(ports, c),
         Command::Policy(c) => policy::run(c),
         Command::Mcp(c) => mcp::run(c),

@@ -21,17 +21,17 @@ use crate::store::Store;
 /// The flags that select a policy key (`policy show`, `tiers`).
 #[derive(Args, Debug)]
 pub struct KeyArgs {
-    /// The PR of the selected Plan whose repo policy to show
+    /// The Workflow of the selected Plan whose repo policy to show
     #[arg(long, value_name = "key", conflicts_with_all = ["context", "owner"])]
     workflow: Option<WorkflowKey>,
-    /// The Plan of `--pr` [default: $CPD_PLAN]
+    /// The Plan of `--workflow` [default: $CPD_PLAN]
     #[arg(long, value_name = "id", env = "CPD_PLAN", hide_env = true)]
     plan: Option<PlanId>,
     /// The Context whose owner's policy to show
-    #[arg(long, value_name = "id", conflicts_with_all = ["pr", "owner"])]
+    #[arg(long, value_name = "id", conflicts_with_all = ["workflow", "owner"])]
     context: Option<ContextId>,
     /// The owner whose policy to show
-    #[arg(long, value_name = "login", conflicts_with_all = ["pr", "context"])]
+    #[arg(long, value_name = "login", conflicts_with_all = ["workflow", "context"])]
     owner: Option<OwnerLogin>,
     /// With `--owner`: the repo of that owner
     #[arg(long, value_name = "name")]

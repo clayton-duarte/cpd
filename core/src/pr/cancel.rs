@@ -90,7 +90,7 @@ pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
             }
         })?,
     };
-    let mut out = json!({"pr": {"key": key, "status": "cancelled"}});
+    let mut out = json!({"workflow": {"key": key, "status": "cancelled"}});
     if already {
         out["already"] = json!(true);
     }
