@@ -3219,6 +3219,8 @@ Idempotent: yes; the second call returns an empty list and updates nothing.
 - for any other Session (Workers, side forks): Events with `session` = itself;
 - for a Manager (B3-A5): Events with `session` = itself only, so a Plan's Events never wake it (hs-d86). It reads them itself at turn start (§15.7).
 
+The kinds `attempt-ended` and `job-blocked` and the `error` code `worker_stalled` (hs-d798, contract §5.2, §3.4) are read like any other kind: `--kind attempt-ended`, `--kind job-blocked`, `--kind error`. `attempt-ended` carries the `attempts.metrics` blob that `cpd metrics` (§14.7) aggregates.
+
 ### 11.1 `events list`
 
 ```
@@ -3276,6 +3278,8 @@ The engine, one per machine (§3.7, §6.6, D5).
 **Without `--ensure`:** runs the `@cpd_workers` step (below), then E1–E5, E7, E20, E21 and E8–E14 (E6 is removed; E4 is the `open` Jobs since hs-d340, no longer the completion step; E7, the PR start, since R34; E20, the parked drafts, after E7 and before E8 (hs-d731, contract §3.7 "Parked drafts"); E21, the closed-pull-request wake, right after E20 (contract §3.7); E8, the Inbox, §21; E9, the Context curation, since hs-d194 (hs-d549, hs-d551); E10, the Session titles, since hs-d257; E11, the team review read, §21.5; E12, the Worker archive, since hs-d516; E13, the Sleep, since hs-d515 — for a durable Session the engine also stops its host (contract §6.19); E14, archive asleep Sessions, hs-d630 — a durable Lead's or Manager's host is stopped too (contract §6.19)) every `tick_seconds` (a decimal, minimum 0.1; default 5) in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
 
 E5 (the PR poll) runs at its due time, `pr_poll_seconds` after the previous poll ended (5 s by default), not at the next tick: the engine sleeps until the earlier of its next tick and E5's due time (contract §3.7). The pi stop grace is `timeouts.pi_stop_seconds` (default 10; contract §8.2).
+
+**Two new signals** (hs-d798): E3 appends one `job-blocked` Event per waiting episode when the queue walk skips a Ready Job for want of a pool slot (contract §3.7 E3, §5.2); and a `durable` Attempt whose transcript has not grown for `timeouts.stall_minutes` (default 15) is reported by its driver with one `error` Event, code `worker_stalled`, per stall episode, for which E8 opens one `engine-error` Inbox item (contract §3.4, §2.2). The engine does not act on the stall: the Lead decides.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -3712,7 +3716,7 @@ Rerunning is safe: a restart already pending keeps its time and a server that is
 - **A3** Each follow-up's failure is printed in one line on stderr and the attach still happens when the cockpit exists. When the cockpit does not exist and could not be built, bare `cpd` prints the failure value and exits with its code.
 - **A4** Nothing new in the store: no table, column or Event kind.
 
-## 14. `doctor`, `config`, `tiers`, `models`, `preset`
+## 14. `doctor`, `config`, `tiers`, `models`, `preset`, `metrics`
 
 ### 14.1 `doctor`
 
@@ -3952,6 +3956,45 @@ The tier-preset switch (D1–D5 of Plan `tier-presets`): a named set of four mod
 ```
 
 `host` is the path of the rewritten file; `changed` lists one entry per Session whose model changed, with the Session's id and role and its Event's `from`, `to` and `event` (the Event's id). When step 3 finds the host already on the preset, the output is `{"ok": true, "preset": "fast", "already": true, "changed": []}`. Idempotent: yes — a rerun whose preset already equals the host `[model]` is the no-op above.
+
+### 14.7 `metrics`
+
+```
+cpd metrics [--format json|prometheus]
+```
+
+The read-only aggregate of the machine's Ledger (hs-d798). Callers `[Manager, Lead]` (§2). It opens the store read-only, reads the `attempts.metrics` blobs the `attempt-ended` Events carry (contract §5.2) and the queue Events, and prints one aggregate value; it writes nothing, appends nothing and touches nothing but the store file it reads. **Fail-open (hs-d798, quoted): `cpd metrics` reads the local store and `cpd` never depends on the LGTM exporter, Prometheus or the homeserver being up.** Nothing in cpd may depend on the exporter, Prometheus or the homeserver: a dead collector costs a metric, never a workflow.
+
+**The default (`--format json`) is one JSON value** with the keys `store`, `per_tier`, `per_model`, `retries`, `plans`, `queue`:
+
+- `per_tier` and `per_model`: per-Tier and per-model counts — attempts, merged, failed by cause, average and median duration, average cost, total cost.
+- `retries`: the retry-cause histogram (the `cause` of every `attempt-retry`, contract §5.2).
+- `plans`: per Plan, the cost in `$` per merged pull request.
+- `queue`: the queue-wait decomposition — the `job-added` → `attempt-started` wait (average and max, seconds) and the count of `job-blocked` episodes (contract §5.2).
+- `store`: the store the value was read from (its path), so a value can always be traced to what it was read from.
+
+**`--format prometheus` prints the same aggregates in the Prometheus text exposition format, output only**: no scrape server, no daemon, no push in cpd; the caller collects the text. The scheme is stable, all gauges, namespace `cpd_`:
+
+| Metric | Labels |
+|---|---|
+| `cpd_attempts` | `tier`, `model` |
+| `cpd_attempts_merged` | `tier` |
+| `cpd_attempts_failed` | `tier`, `cause` |
+| `cpd_attempt_duration_seconds` | `tier`, `stat="avg\|median"` |
+| `cpd_attempt_cost_usd_total` | `tier` |
+| `cpd_attempt_cost_usd_avg` | `tier` |
+| `cpd_model_attempts` | `model` |
+| `cpd_model_cost_usd_total` | `model` |
+| `cpd_attempt_retries` | `cause` |
+| `cpd_plan_cost_usd_per_merged_pr` | `plan` |
+| `cpd_queue_wait_seconds` | `phase="added_to_started"`, `stat="avg\|max"` |
+| `cpd_job_blocked_episodes` | (none) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--format` is `json` or `prometheus` | `usage` | 2 |
+
+Idempotent: read-only. `job-blocked` episodes are counted from the Events (one per waiting episode, contract §3.7 E3), so a rerun gives the same numbers while the store is unchanged.
 
 ## 15. The pi adapter's protocol
 

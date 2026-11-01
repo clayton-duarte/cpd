@@ -14,8 +14,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use cpd_core::clock::Clock;
 use cpd_core::config::catalog;
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::Reply;
 use cpd_core::host::spawn::{Launch, Pid, Signal, Spawn};
 use cpd_core::ids::{AttemptId, PlanId};
 use serde_json::{Value, json};
@@ -58,11 +60,17 @@ pub(super) fn use_runner(live: &Live, runner: &str, adapter: &Path, tables: &str
 }
 
 /// Plan `pay` with Job `api` queued, `worker_runner = "durable"` and an adapter directory that holds the runner file. `tables` is
-/// more TOML after the keys (`[timeouts]`...).
+/// more TOML after the keys (`[timeouts]`...). The models cache is made fresh and the engine's `pr poll` (E5) is answered, so a test
+/// that runs one tick of the engine ([`Fx::engine_tick`], the stall tests) makes no unscripted call.
 pub(super) fn durable_live(tables: &str) -> Live {
     let live = live("");
     let adapter = adapter(&live, true);
     use_runner(&live, "durable", &adapter, tables);
+    // E14 is not due (a fresh cache), and E5's `cpd pr poll` runs this test binary (`Spawn::self_exe`), answered here.
+    live.fx.env.quiet_models(live.fx.fakes.clock.utc());
+    let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2030-01-01T00:00:00.000Z"}});
+    let exe = std::env::current_exe().expect("the test binary's path");
+    live.fx.fake(exe.file_name().expect("a file name").to_str().expect("UTF-8"), Reply::ok(&poll.to_string()));
     live
 }
 
