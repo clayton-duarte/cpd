@@ -803,11 +803,15 @@ const TRIGGER_ERRORS: [(&str, ErrorCode, &str); 5] = [
     ("job_locked", ErrorCode::JobLocked, "The Job is Locked: its Spec and Dependencies cannot change."),
     ("illegal_transition", ErrorCode::IllegalTransition, "The state change is not a legal transition (§3)."),
     (
-        "pr_locked",
+        "workflow_locked",
         ErrorCode::PrLocked,
-        "The PR is Locked: its repo, base and needs cannot change after the Plan's lock.",
+        "The Workflow is Locked: its repo, base and needs cannot change after the Plan's lock.",
     ),
-    ("needs_other_pr", ErrorCode::NeedsOtherPr, "A Dependency can only link Jobs of the same PR."),
+    (
+        "needs_other_workflow",
+        ErrorCode::NeedsOtherPr,
+        "A Dependency can only link Jobs of the same Workflow.",
+    ),
     (
         "spec_invalid",
         ErrorCode::SpecInvalid,
@@ -947,7 +951,7 @@ impl Drop for Holder {
 
 /// A SQLite failure, as Escalation `rs-store-a1-q1` decided: busy after the
 /// busy timeout is `store_busy`, and so is `SQLITE_LOCKED`; the triggers' `RAISE(ABORT, 'job_locked')`,
-/// `'illegal_transition'`, `'pr_locked'`, `'needs_other_pr'` and `'spec_invalid'` (§4.4) are
+/// `'illegal_transition'`, `'workflow_locked'`, `'needs_other_workflow'` and `'spec_invalid'` (§4.4) are
 /// those refusals; anything else is `store_failed` with `sqlite_code` and
 /// `sqlite_message`.
 impl From<rusqlite::Error> for CpdError {
@@ -986,8 +990,15 @@ mod tests {
 
     /// store-G4: every message a trigger raises is a typed refusal or one of the
     /// two untyped families, so a new `RAISE` cannot fall to `store_failed` by accident.
+    ///
+    /// An applied migration on `main` keeps its old text as history: the rename `workflow-rename` drops and
+    /// recreates the object triggers with the messages of [`TRIGGER_ERRORS`], so the two messages of the frozen
+    /// `pr_locked`/`needs_other_pr` triggers no longer fire and are not in the live table, but their text stays
+    /// in the migration folder. They are typed by the code they stood for.
     #[test]
     fn every_message_a_trigger_raises_is_typed_or_untyped_by_design() {
+        const SUPERSEDED: [(&str, ErrorCode); 2] =
+            [("pr_locked", ErrorCode::PrLocked), ("needs_other_pr", ErrorCode::NeedsOtherPr)];
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/store/migrations");
         let mut seen = std::collections::BTreeSet::new();
         for file in fs::read_dir(dir).unwrap() {
@@ -1003,7 +1014,11 @@ mod tests {
             // `review_pending` guards a code path that forgot to close the Plan's reviews: a bug, so untyped by design.
             // `working_pr_invalid` is the same: the writer checks the Lead and the PR first, so it never fires in practice.
             let untyped = message.starts_with("append_only: ") || message.ends_with(" must be cpd_txn()") || message == "review_pending" || message == "working_pr_invalid";
-            assert_eq!(err.code() == ErrorCode::StoreFailed, untyped, "{message}: {err:?}");
+            let typed_legacy = SUPERSEDED.iter().any(|(name, _)| *name == message);
+            assert!(!untyped || !typed_legacy, "{message} is both typed and untyped");
+            if !typed_legacy {
+                assert_eq!(err.code() == ErrorCode::StoreFailed, untyped, "{message}: {err:?}");
+            }
             assert_eq!(err.details()["sqlite_message"], message);
         }
     }
