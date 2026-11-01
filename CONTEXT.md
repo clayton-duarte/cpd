@@ -92,7 +92,7 @@ How a Workflow lays out its Jobs, stored when the Workflow is added and never ch
 _Avoid_: template, type
 
 **Stacked Workflow** (new, hs-d522, hs-d523):
-A Workflow whose base is another Workflow's Lead Branch (`--base <key>`), so it is cut from that base Workflow's Lead Branch head and its pull request targets that branch. It starts when its base Workflow's pull request is open (contract §3.8 "Stacked PRs").
+A Workflow whose base is another Workflow's Lead Branch (`--base <key>`), so it is cut from that base Workflow's Lead Branch head and its pull request targets that branch. It starts when its base Workflow's pull request is open (contract §3.8 "Stacked Workflows").
 _Avoid_: dependent PR, child
 
 **Lead Branch** (changed):
@@ -146,7 +146,7 @@ _Avoid_: blocker; ask (as a noun)
 ## The CPD flow
 
 **Phase, stage and step** (entity, pro-d145, pro-d146):
-Three levels of one flow. A **phase** is the stored position of a Plan, one of five in this order: `grounding` → `plan` → `dispatch` → `deploy` → `done` (contract §3.1); a Plan in `deploy` or `done` returns to `dispatch` when a Workflow is added (`cpd pr add`). A **stage** is one of the three cockpit columns, read as past, present and future: Context, Plan, Dispatch. A **step** is a named piece of work the Lead or the Workers do inside a stage. An engine step is something else: the engine's own loop, written "engine step E7" (contract §3.7).
+Three levels of one flow. A **phase** is the stored position of a Plan, one of five in this order: `grounding` → `plan` → `dispatch` → `deploy` → `done` (contract §3.1); a Plan in `deploy` or `done` returns to `dispatch` when a Workflow is added (`workflow add`). A **stage** is one of the three cockpit columns, read as past, present and future: Context, Plan, Dispatch. A **step** is a named piece of work the Lead or the Workers do inside a stage. An engine step is something else: the engine's own loop, written "engine step E7" (contract §3.7).
 _Avoid_: stage for a phase, step for a Job
 
 **Context stage** (stage, pro-d145):
