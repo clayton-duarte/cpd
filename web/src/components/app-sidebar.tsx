@@ -1,6 +1,14 @@
+// The Context (left) rail (web/README.md "The Context tree in the left rail selects the Chat").
+// The vendored shadcn `sidebar-03` block stops rendering the registry's sample rows: `groupSessions`
+// groups the live Sessions by Context (each Context's manager is the root row, its leads nest
+// beneath it, the Contexts sort by name) and `AppSidebar` renders that tree. Every row is a real
+// <button> carrying its Session's id (`data-session-id` and `title`), the selected row carries
+// `isActive`, and clicking a row reports it through `onSelectSession` (not `onSelect`: the DOM
+// already declares that one on `Sidebar`).
 import * as React from "react"
 import { GalleryVerticalEnd } from "lucide-react"
 
+import type { LiveSession } from "../api/live-server"
 import {
   Sidebar,
   SidebarContent,
@@ -15,148 +23,113 @@ import {
   SidebarRail,
 } from "./ui/sidebar"
 
-// This is sample data.
-const data = {
-  navMain: [
-    {
-      title: "Getting Started",
-      url: "#",
-      items: [
-        {
-          title: "Installation",
-          url: "#",
-        },
-        {
-          title: "Project Structure",
-          url: "#",
-        },
-      ],
-    },
-    {
-      title: "Build Your Application",
-      url: "#",
-      items: [
-        {
-          title: "Routing",
-          url: "#",
-        },
-        {
-          title: "Data Fetching",
-          url: "#",
-          isActive: true,
-        },
-        {
-          title: "Rendering",
-          url: "#",
-        },
-        {
-          title: "Caching",
-          url: "#",
-        },
-        {
-          title: "Styling",
-          url: "#",
-        },
-        {
-          title: "Optimizing",
-          url: "#",
-        },
-        {
-          title: "Configuring",
-          url: "#",
-        },
-        {
-          title: "Testing",
-          url: "#",
-        },
-        {
-          title: "Authentication",
-          url: "#",
-        },
-        {
-          title: "Deploying",
-          url: "#",
-        },
-        {
-          title: "Upgrading",
-          url: "#",
-        },
-        {
-          title: "Examples",
-          url: "#",
-        },
-      ],
-    },
-    {
-      title: "API Reference",
-      url: "#",
-      items: [
-        {
-          title: "Components",
-          url: "#",
-        },
-        {
-          title: "File Conventions",
-          url: "#",
-        },
-        {
-          title: "Functions",
-          url: "#",
-        },
-        {
-          title: "next.config.js Options",
-          url: "#",
-        },
-        {
-          title: "CLI",
-          url: "#",
-        },
-        {
-          title: "Edge Runtime",
-          url: "#",
-        },
-      ],
-    },
-    {
-      title: "Architecture",
-      url: "#",
-      items: [
-        {
-          title: "Accessibility",
-          url: "#",
-        },
-        {
-          title: "Fast Refresh",
-          url: "#",
-        },
-        {
-          title: "Next.js Compiler",
-          url: "#",
-        },
-        {
-          title: "Supported Browsers",
-          url: "#",
-        },
-        {
-          title: "Turbopack",
-          url: "#",
-        },
-      ],
-    },
-    {
-      title: "Community",
-      url: "#",
-      items: [
-        {
-          title: "Contribution Guide",
-          url: "#",
-        },
-      ],
-    },
-  ],
+/** One Context: its manager (the root row) and its leads (the nested rows). */
+export interface ContextGroup {
+  context: string
+  manager?: LiveSession
+  leads: readonly LiveSession[]
 }
 
-export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+/**
+ * Groups Sessions by `context`: one group per Context, the manager at the root and the leads
+ * nested; the groups sort by Context name. Pure — the component renders the result and nothing
+ * else.
+ */
+export function groupSessions(sessions: readonly LiveSession[]): ContextGroup[] {
+  const byContext = new Map<string, { manager?: LiveSession; leads: LiveSession[] }>()
+  for (const session of sessions) {
+    const context = session.context ?? ""
+    let group = byContext.get(context)
+    if (group === undefined) {
+      group = { leads: [] }
+      byContext.set(context, group)
+    }
+    if (session.role === "manager") {
+      group.manager ??= session
+    } else {
+      group.leads.push(session)
+    }
+  }
+  return [...byContext.entries()]
+    .map(([context, group]) => ({ context, manager: group.manager, leads: group.leads }))
+    .sort((a, b) => a.context.localeCompare(b.context))
+}
+
+/** A row's label: the Session's name, falling back to the given fallback. The id's first 8 characters show muted beside it. */
+function RowLabel({ label, id }: { label: string; id: string }): React.ReactElement {
+  return (
+    <>
+      <span>{label}</span>
+      <span className="text-xs text-muted-foreground">{id.slice(0, 8)}</span>
+    </>
+  )
+}
+
+/** One root row per Context (its manager); its leads nest beneath it in a `SidebarMenuSub`. */
+function ContextRow({
+  group,
+  selectedId,
+  onSelectSession,
+}: {
+  group: ContextGroup
+  selectedId?: string
+  onSelectSession: (id: string) => void
+}): React.ReactElement {
+  const { context, manager, leads } = group
+  return (
+    <SidebarMenuItem>
+      {manager === undefined ? (
+        // A Context with no manager still shows its root row, disabled.
+        <SidebarMenuButton disabled>
+          <RowLabel label={context} id="" />
+        </SidebarMenuButton>
+      ) : (
+        <SidebarMenuButton
+          isActive={selectedId === manager.id}
+          data-session-id={manager.id}
+          title={manager.id}
+          onClick={() => onSelectSession(manager.id)}
+        >
+          <RowLabel label={manager.name ?? context} id={manager.id} />
+        </SidebarMenuButton>
+      )}
+      {leads.length > 0 ? (
+        <SidebarMenuSub>
+          {leads.map((lead) => (
+            <SidebarMenuSubItem key={lead.id}>
+              <SidebarMenuSubButton asChild isActive={selectedId === lead.id}>
+                <button
+                  type="button"
+                  data-session-id={lead.id}
+                  title={lead.id}
+                  onClick={() => onSelectSession(lead.id)}
+                >
+                  <RowLabel label={lead.name ?? lead.id} id={lead.id} />
+                </button>
+              </SidebarMenuSubButton>
+            </SidebarMenuSubItem>
+          ))}
+        </SidebarMenuSub>
+      ) : null}
+    </SidebarMenuItem>
+  )
+}
+
+/** The tree's props; `onSelectSession` is named so it does not collide with the DOM's `onSelect`. */
+export interface AppSidebarProps {
+  sessions: readonly LiveSession[]
+  selectedId?: string
+  onSelectSession: (id: string) => void
+}
+
+/** The Context tree: the left rail's only navigation. */
+export function AppSidebar({
+  sessions,
+  selectedId,
+  onSelectSession,
+  ...props
+}: React.ComponentProps<typeof Sidebar> & AppSidebarProps): React.ReactElement {
+  const contexts = groupSessions(sessions)
   return (
     <Sidebar {...props}>
       <SidebarHeader>
@@ -179,26 +152,20 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarContent>
         <SidebarGroup>
           <SidebarMenu>
-            {data.navMain.map((item) => (
-              <SidebarMenuItem key={item.title}>
-                <SidebarMenuButton asChild>
-                  <a href={item.url} className="font-medium">
-                    {item.title}
-                  </a>
-                </SidebarMenuButton>
-                {item.items?.length ? (
-                  <SidebarMenuSub>
-                    {item.items.map((item) => (
-                      <SidebarMenuSubItem key={item.title}>
-                        <SidebarMenuSubButton asChild isActive={item.isActive}>
-                          <a href={item.url}>{item.title}</a>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                    ))}
-                  </SidebarMenuSub>
-                ) : null}
+            {contexts.length === 0 ? (
+              <SidebarMenuItem>
+                <span className="px-2 py-1.5 text-sm text-sidebar-foreground/70">No contexts.</span>
               </SidebarMenuItem>
-            ))}
+            ) : (
+              contexts.map((group) => (
+                <ContextRow
+                  key={group.context}
+                  group={group}
+                  selectedId={selectedId}
+                  onSelectSession={onSelectSession}
+                />
+              ))
+            )}
           </SidebarMenu>
         </SidebarGroup>
       </SidebarContent>
