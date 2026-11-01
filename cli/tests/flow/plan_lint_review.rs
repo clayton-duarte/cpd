@@ -21,8 +21,14 @@ fn review_refuses_pr_empty_in_phase_plan_and_writes_nothing() {
     let error = refused(&review(&fx), "pr_empty", 3);
     assert_eq!(error["details"]["prs"], json!(["web"]), "{error}");
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM plan_reviews"), 0);
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'plan-review'"), 0);
-    let summary = super::plan_overlap::home(&fx).plan_md(&cpd_core::ids::PlanId::parse("mine").unwrap()).with_file_name("summary-r1.md");
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM events WHERE kind = 'plan-review'"),
+        0
+    );
+    let summary = super::plan_overlap::home(&fx)
+        .plan_md(&cpd_core::ids::PlanId::parse("mine").unwrap())
+        .with_file_name("summary-r1.md");
     assert!(!summary.exists(), "{}", summary.display());
 }
 
@@ -46,11 +52,17 @@ fn review_returns_the_warnings_and_is_not_refused_by_them() {
 
     let out = review(&fx).ok();
     assert!(out.get("review").is_some(), "{out}");
-    let warnings = out["warnings"].as_array().unwrap_or_else(|| panic!("{out}"));
+    let warnings = out["warnings"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{out}"));
     assert_eq!(warnings.len(), 1, "{out}");
     let f = &warnings[0];
     assert_eq!(f["rule"], "parallel_write_overlap", "{f}");
-    assert_eq!((&f["job"], &f["other"], &f["paths"]), (&json!("a"), &json!("b"), &json!(["src/a.rs"])), "{f}");
+    assert_eq!(
+        (&f["job"], &f["other"], &f["paths"]),
+        (&json!("a"), &json!("b"), &json!(["src/a.rs"])),
+        "{f}"
+    );
 
     let again = review(&fx).ok();
     assert_eq!(again["already"], true, "{again}");
@@ -62,7 +74,9 @@ fn render_returns_the_warnings_and_never_refuses() {
     let fx = pair();
     outline(&fx, &["api"]);
     let out = fx.cpd(&["plan", "render", "--plan", "mine"]).ok();
-    let warnings = out["warnings"].as_array().unwrap_or_else(|| panic!("{out}"));
+    let warnings = out["warnings"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{out}"));
     assert_eq!(warnings.len(), 1, "{out}");
     assert_eq!(warnings[0]["rule"], "parallel_write_overlap", "{out}");
 
@@ -78,5 +92,9 @@ fn review_refuses_an_error_with_its_own_code_never_lint_failed() {
     let fx = base();
     stub(&fx, "api", "s");
     let error = refused(&review(&fx), "draft_incomplete", 3);
-    assert_eq!(error["details"]["jobs"], json!([{"key": "s", "missing": ["tier", "spec"]}]), "{error}");
+    assert_eq!(
+        error["details"]["jobs"],
+        json!([{"key": "s", "missing": ["tier", "spec"]}]),
+        "{error}"
+    );
 }
