@@ -1,6 +1,7 @@
-//! A parked draft (contract §2.2 "A parked draft", hs-d731): a `draft` Job of a live Plan that is neither covered by a
-//! current Plan review (pending, or approved in phase `plan`) nor waiting. Derived from the store, never stored; this module is the one definition:
-//! the door of `job add` and `job edit` asks [`door`], the engine asks [`parked_drafts`].
+//! A parked draft (contract §2.2 "A parked draft", hs-d822): a `draft` Job of a live Plan that is neither incomplete
+//! (a stub, no Tier or no Spec) nor covered by a current Plan review (pending, or approved in phase `plan`). Derived from
+//! the store, never stored; this module is the one definition: the door of `job add` and `job edit` asks [`door`], the
+//! engine asks [`parked_drafts`].
 
 use std::collections::BTreeSet;
 
@@ -93,50 +94,19 @@ pub fn parked_drafts(conn: &Connection, plan: &PlanId) -> Result<Vec<String>, Cp
     if !all.iter().any(|j| j.is_draft() && j.kind != "open") || covered(conn, plan, &phase)? {
         return Ok(Vec::new());
     }
-    let waits = Waits {
-        all: &all,
-        pr_waits: waiting_prs(conn, plan, &phase)?,
-    };
     Ok(all
         .iter()
         .filter(|j| j.is_draft() && j.kind != "open")
-        .filter(|j| !waits.waiting(j, &mut BTreeSet::from([j.key.clone()])))
+        .filter(|j| j.missing().is_empty())
         .map(|j| j.key.clone())
         .collect())
 }
 
-/// The keys of the Plan's `draft` Jobs that wait, in Job order: a need chains, directly or through other drafts, to a
-/// `queued`, `running` or `failed` Job, or (after the lock) the Job's PR waits for another PR. Never applies the
-/// `covered` check `parked_drafts` applies: a draft is exempt from review completeness because it waits, even while a
-/// review covers it.
-pub fn waiting_set(
-    conn: &Connection,
-    plan: &PlanId,
-    all: &[Job],
-) -> Result<BTreeSet<String>, CpdError> {
-    let phase: String = conn
-        .query_row(
-            "SELECT phase FROM plans WHERE id = ?1",
-            [plan.as_str()],
-            |r| r.get(0),
-        )
-        .optional()?
-        .ok_or_else(|| CpdError::plan_not_found(plan))?;
-    let waits = Waits {
-        all,
-        pr_waits: waiting_prs(conn, plan, &phase)?,
-    };
-    Ok(all
-        .iter()
-        .filter(|j| j.is_draft())
-        .filter(|j| waits.waiting(j, &mut BTreeSet::from([j.key.clone()])))
-        .map(|j| j.key.clone())
-        .collect())
-}
-
-/// The door of `job add --draft` and `job edit` for ONE draft row, before it is written: after the lock, a stub (no Tier or
-/// no Spec) that does not wait is refused `draft_parked`. `others` are the Plan's Jobs as stored, `job` the row as it
-/// would be (never in `others`). Never refused: a full draft, the `open` Job's draft, any draft in phase `plan`.
+/// The door of `job add --draft` and `job edit` for ONE draft row, before it is written: after the lock, a complete draft
+/// (both Tier and Spec) that waits is refused `draft_parked`: it waits on a queued, running or failed Job (directly or
+/// through other drafts) or on its PR waiting for another PR. `others` are the Plan's Jobs as stored, `job` the row as it
+/// would be (never in `others`). Never refused: a stub, the `open` Job's draft, a complete draft that does not wait, any
+/// draft in phase `plan`.
 pub fn door(
     conn: &Connection,
     plan: &PlanId,
@@ -144,8 +114,7 @@ pub fn door(
     others: &[Job],
     job: &Job,
 ) -> Result<(), CpdError> {
-    let stub = job.tier.is_none() || job.spec.is_none();
-    if !locked(phase) || !job.is_draft() || job.kind == "open" || !stub {
+    if !locked(phase) || !job.is_draft() || job.kind == "open" || !job.missing().is_empty() {
         return Ok(());
     }
     let all: Vec<Job> = others
@@ -157,16 +126,16 @@ pub fn door(
         all: &all,
         pr_waits: waiting_prs(conn, plan, phase)?,
     };
-    if waits.waiting(job, &mut BTreeSet::from([job.key.clone()])) {
+    if !waits.waiting(job, &mut BTreeSet::from([job.key.clone()])) {
         return Ok(());
     }
     Err(CpdError::new(
         ErrorCode::DraftParked,
         format!(
-            "Job {} would be a parked draft: a stub (no Tier or no Spec) that waits for nothing, and no one can review a stub. The legal forms: \
-             give it a need on a queued or running Job of its PR (--needs); put it in a PR that waits for another PR; \
-             give it Tier and Spec and ask for the Plan review in the same turn (cpd_plan_review); or, when it only carries out a \
-             recorded decision, add it queued (no --draft).",
+            "Job {} would be a parked draft: a complete draft that waits for a queued, running or failed Job (directly or \
+             through other drafts) or for another PR, and no current review covers it. The legal forms: add the Job it waits \
+             for queued with --needs and no --draft; or put this complete draft under a Plan review (cpd_plan_review) in the \
+             same turn.",
             job.key
         ),
     )
