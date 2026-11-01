@@ -116,6 +116,7 @@ fn pr_empty_is_reported_in_phase_plan_and_not_in_dispatch() {
     assert_eq!((&findings[0]["rule"], &findings[0]["severity"]), (&json!("pr_empty"), &json!("error")));
     assert_eq!(findings[0]["details"]["prs"], json!(["api"]));
 
+    drop(fx);
     let fx = Fx::new();
     fs::write(home(&fx).config(), "version = 1\nmachine = \"t\"\n").unwrap();
     fx.env.sql("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');");
@@ -145,8 +146,10 @@ fn a_dependency_cycle_is_an_error_finding_with_the_cycle() {
 
 #[test]
 fn a_grounding_plan_is_illegal_phase_and_an_unknown_plan_is_not_found() {
-    let fx = base();
-    fx.env.sql("UPDATE plans SET phase = 'grounding' WHERE id = 'mine';");
+    let fx = Fx::new();
+    fs::write(home(&fx).config(), "version = 1\nmachine = \"t\"\n").unwrap();
+    fx.env.sql("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');");
+    plan(&fx, "mine", "grounding", false);
     let error = refused(&lint(&fx), "illegal_phase", 3);
     assert_eq!((&error["details"]["plan"], &error["details"]["phase"]), (&json!("mine"), &json!("grounding")), "{error}");
 
