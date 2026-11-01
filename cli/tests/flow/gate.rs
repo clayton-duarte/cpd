@@ -119,7 +119,7 @@ impl Fx {
             create_attempt_worktree(&self.repo, &self.lead, &plan(), &attempt(), &setup).unwrap();
         self.env.sql(&format!(
             "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
-               VALUES ('pay', 'repo', 'api', 'Title of api', 'S2', 'Do api.', 'Because.', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{kind}', '{}', cpd_txn(), 't');
+               VALUES ('pay', 'repo', 'api', 'Title of api', 'S2', 'Do api.', 'Because.', '[\"a.txt\"]', '[\"b\"]', '[]', 'running', 0, '{kind}', '{}', cpd_txn(), 't');
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
                VALUES ('pay', '{ATTEMPT}', 'api', 1, 'S2', 'ladder', 'running', '{branch}', '{work}', '{base}', 't');",
             "f".repeat(64),
@@ -497,7 +497,7 @@ fn every_cause_the_attempts_table_admits_is_rendered_into_the_next_spec() {
         let worktree = fx.env.root().join(&job);
         fx.env.sql(&format!(
             "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
-               VALUES ('pay', 'repo', '{job}', 'Title of {job}', 'S2', 'Do it.', 'Because.', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, 'work', '{fp}', cpd_txn(), 't');
+               VALUES ('pay', 'repo', '{job}', 'Title of {job}', 'S2', 'Do it.', 'Because.', '[\"a.txt\"]', '[\"b\"]', '[]', 'running', 0, 'work', '{fp}', cpd_txn(), 't');
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, merged_sha, started_at, ended_at)
                VALUES ('pay', '{job}-a1', '{job}', 1, 'S2', 'ladder', 'ended', '{outcome}', '{cause}', 'cpd/pay--{job}-a1', '{wt}-a1', '{zero}', {merged}, 't', 't');
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
@@ -721,7 +721,7 @@ fn the_worker_spec_lists_every_addendum_of_the_job_in_order_and_none_when_there_
     let fx = fx();
     fx.env.sql(&format!(
         "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
-           VALUES ('pay', 'repo', 'ad', 'Title of ad', 'S2', 'Do it.', 'Because.', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, 'work', '{fp}', cpd_txn(), 't');
+           VALUES ('pay', 'repo', 'ad', 'Title of ad', 'S2', 'Do it.', 'Because.', '[\"a.txt\"]', '[\"b\"]', '[]', 'running', 0, 'work', '{fp}', cpd_txn(), 't');
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, started_at, ended_at)
            VALUES ('pay', 'ad-a1', 'ad', 1, 'S2', 'ladder', 'ended', 'failed', 'timed_out', 'cpd/pay--ad-a1', '{wt}-a1', '{zero}', 't', 't');
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
