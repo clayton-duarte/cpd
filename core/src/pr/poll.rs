@@ -34,7 +34,7 @@ use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr poll";
 
-/// The `by` of the `pr-base-changed` Event the poll appends (§5.2).
+/// The `by` of the `workflow-base-changed` Event the poll appends (§5.2).
 const COMMAND_BY: &str = "poll";
 
 /// How long `pr poll` waits for `locks/pr-poll.lock` (`lock_timeout`).
@@ -501,7 +501,7 @@ fn follows(
     Ok(found)
 }
 
-/// Sets the Workflow's `base` to the one GitHub reports and appends `pr-base-changed` for its Plan (§5.2). Nothing else
+/// Sets the Workflow's `base` to the one GitHub reports and appends `workflow-base-changed` for its Plan (§5.2). Nothing else
 /// changes: no Gate, no status, no `pr-feedback`, no `gh` call (hs-d326: the tree is unchanged, a ready Workflow stays ready).
 /// When the new base is the default branch of a base Workflow's merge and `ahead` says the Lead Branch lacks commits of it
 /// without a conflict, the Workflow's `update` Job is queued in the same transaction (§3.7 E5, hs-d794). Returns the Event's

@@ -110,8 +110,17 @@ const FORBIDDEN: &[&str] = &[
     "cpd pr start",
     // The selector on the commands that moved (R4). `review submit --pr <url>` names the pull request and stays.
     "--pr <key>",
-    // The tables, the object columns and the cpd-1 words.
-    "prs",
+    // The tables, the object columns and the cpd-1 words. The object table `prs` and the wire key `"prs"` are
+    // matched precisely, not as a substring: the bare token also names the list of GitHub pull requests of
+    // `core/src/pr` (`gh.rs`'s `Vec<Listed>`) and the module `core/src/plan/prs.rs`, so a substring rule over-reaches
+    // (wfix-3). The SQL verbs name the table; the quoted form names a JSON key (`json!({.. ,"prs": ..})`).
+    "from prs",
+    "join prs",
+    "into prs",
+    "update prs",
+    "delete from prs",
+    "table prs",
+    "\"prs\"",
     "pr_needs",
     "base_pr",
     "until-pr",
@@ -164,16 +173,61 @@ const FORBIDDEN: &[&str] = &[
     "sync job",
 ];
 
+/// A markdown line with its code regions removed: the inline code spans (`` `...` ``) and the link targets
+/// (`[text](target)`). A retired word inside them is a command, a path or a wire key, not prose the rename must
+/// rewrite, so the guard does not read it. Fenced code blocks are dropped by the caller, `offenders`.
+fn without_markdown_code(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '`' => {
+                for d in chars.by_ref() {
+                    if d == '`' {
+                        break;
+                    }
+                }
+                out.push(' ');
+            }
+            ']' if chars.peek() == Some(&'(') => {
+                chars.next();
+                let mut depth = 1usize;
+                for d in chars.by_ref() {
+                    match d {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                out.push(' ');
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// The cpd-1 word `workflow`/`workflows`, lower-case, outside the allowed phrases (`GitHub Actions workflow`,
-/// `[deploys] workflows`, `workflow_runs`). The object is spelled **Workflow**; a GitHub Actions workflow is written
-/// in full. Only checked for prose (`.md`); a Rust identifier or a `pi/lib` one may spell `workflow` lower-case.
-fn bare_workflow(line: &str) -> bool {
+/// `[deploys] workflows`, `workflow_runs`, a `.github/workflows/` path, the renamed command or flag). The object is
+/// spelled **Workflow**; a GitHub Actions workflow is written in full. Only checked for prose (`.md`), and only on
+/// `prose`, the line without markdown code (`original` still feeds the allowed phrases, which may sit in code). A
+/// Rust identifier or a `pi/lib` one may spell `workflow` lower-case, so this runs on `.md` only.
+fn bare_workflow(original: &str, prose: &str) -> bool {
     // A line that is about GitHub Actions or the deploy policy names the GitHub object, not the cpd one. A line that
     // names the renamed command or flag speaks the target vocabulary, so the bare-word rule skips it.
-    let lower = line.to_lowercase();
+    let lower = original.to_lowercase();
     if lower.contains("github actions")
         || lower.contains("[deploys]")
         || lower.contains("workflow_runs")
+        || lower.contains("github/workflows")
+        || lower.contains("actions/workflows")
+        || lower.contains("deploys.workflows")
+        || lower.contains("workflow file")
     {
         return false;
     }
@@ -187,15 +241,23 @@ fn bare_workflow(line: &str) -> bool {
     {
         return false;
     }
+    let line = prose;
     let mut offset = 0;
     while let Some(i) = line[offset..].find("workflow") {
         let at = offset + i;
         let after = &line[at + "workflow".len()..];
         let plural = after.starts_with('s');
-        let word = |c: char| c.is_alphanumeric() || c == '_';
-        let before_ok = at == 0 || !line[..at].ends_with(word);
+        // A path, a filename or an anchor joins the word with `-`, `.`, `/` or `_`; such an occurrence is not prose.
+        let word = |c: char| c.is_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '/';
+        let before = line[..at].chars().last();
+        let before_ok = before.is_none_or(|c| !word(c));
         let rest = if plural { &after[1..] } else { after };
-        if before_ok && (rest.is_empty() || !rest.starts_with(word)) {
+        let after_char = rest.chars().next();
+        let bounded = before_ok && after_char.is_none_or(|c| !word(c));
+        // A JSON key is not prose: `{workflow,`, `"workflow":` and `"workflow"` name a wire key.
+        let json = before.is_some_and(|c| matches!(c, '{' | '}' | ',' | ':' | '"'))
+            || after_char.is_some_and(|c| matches!(c, '{' | '}' | ',' | ':' | '"'));
+        if bounded && !json {
             return true;
         }
         offset = at + 1;
@@ -225,6 +287,7 @@ fn offenders(forbidden: &[&str], allowed: &[&str]) -> Vec<String> {
         }
         let md = path.extension().is_some_and(|e| e == "md");
         let mut in_history = false;
+        let mut in_fence = false;
         for (n, line) in lines(&path) {
             // CONTEXT.md's `_Avoid_` lines and its "Retired words" section name the words on purpose; the contract's
             // legacy record is history too.
@@ -247,8 +310,18 @@ fn offenders(forbidden: &[&str], allowed: &[&str]) -> Vec<String> {
                     continue;
                 }
             }
-            let lower = line.to_lowercase();
-            if forbidden.iter().any(|f| lower.contains(f)) || (md && bare_workflow(&line)) {
+            // A fenced code block (``` or ~~~) is a quote of code or DDL, not prose: the rename must not rewrite it
+            // (the contract's DDL and the event_kinds' history are pinned verbatim), so the guard skips its lines.
+            if md && (line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~")) {
+                in_fence = !in_fence;
+                continue;
+            }
+            if md && in_fence {
+                continue;
+            }
+            let prose = if md { without_markdown_code(&line) } else { line.clone() };
+            let lower = prose.to_lowercase();
+            if forbidden.iter().any(|f| lower.contains(f)) || (md && bare_workflow(&line, &prose)) {
                 found.push(format!("{rel}:{n}: {}", line.trim_end()));
             }
         }
@@ -274,8 +347,14 @@ fn guard() {
         "tui/src/dialog/pane.rs",
         "tui/src/pill_colours.rs",
         "tui/src/updating_label.rs",
-        // R21 keeps `plan show`'s inner keys (base_pr), so the map allows the file.
+        // R21 keeps `plan show`'s inner `pr`/`pull_request` keys (the pull request, not the object), so the map allows
+        // the file.
         "core/src/plan/show.rs",
+        // R12 freezes the Plan fingerprint canonical keys `pr` and `prs` as the hash input (114 stored reviews stay
+        // current), so the file's `"prs"` JSON key stays.
+        "core/src/plan/fingerprint.rs",
+        // R11 keeps the `[pr] gate` policy alias unchanged, so `scope.pr`/`pr.gate` stays.
+        "core/src/policy/load.rs",
     ];
     let found = offenders(FORBIDDEN, &allowed);
     assert!(

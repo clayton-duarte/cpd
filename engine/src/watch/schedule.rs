@@ -98,20 +98,20 @@ pub(super) fn backing_off_with(
 /// an `update` Job when its Workflow is `open` and none of them is `queued` or `running`.
 /// The `workers` step counts these rows too (the StatusBar's `W waiting`).
 pub(super) const READY: &str = "SELECT j.plan, j.key, j.urgent, j.seq, j.skipped_n FROM jobs j JOIN plans p ON p.id = j.plan
-  LEFT JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+  LEFT JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow
   WHERE j.status = 'queued' AND p.archived_at IS NULL
-    AND ((j.pr IS NOT NULL AND p.phase IN ('dispatch', 'deploy') AND r.status IN ('dispatch', 'open'))
-      OR (j.pr IS NULL AND j.kind IN ('scout', 'research') AND p.archived_at IS NULL
+    AND ((j.workflow IS NOT NULL AND p.phase IN ('dispatch', 'deploy') AND r.status IN ('dispatch', 'open'))
+      OR (j.workflow IS NULL AND j.kind IN ('scout', 'research') AND p.archived_at IS NULL
           AND p.phase IN ('grounding', 'plan', 'dispatch', 'deploy')))
     AND NOT EXISTS (SELECT 1 FROM dependencies d JOIN jobs n ON n.plan = d.plan AND n.key = d.needs
                      WHERE d.plan = j.plan AND d.job = j.key AND n.status <> 'merged')
     AND (j.kind <> 'open' OR (r.status = 'dispatch'
-         AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.pr = j.pr AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
+         AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.workflow = j.workflow AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
                            AND o.status NOT IN ('merged', 'cancelled'))
-         AND EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.pr = j.pr AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
+         AND EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.workflow = j.workflow AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
                        AND o.status = 'merged')))
     AND (j.kind <> 'update' OR (r.status = 'open'
-         AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.pr = j.pr AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
+         AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.workflow = j.workflow AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
                            AND o.status IN ('queued', 'running'))))
   ORDER BY j.urgent DESC, j.seq";
 
@@ -145,7 +145,7 @@ fn allocations(
         }
         let live: i64 = conn.query_row(
             "SELECT count(*) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-              WHERE a.plan = ?1 AND j.pr = ?2 AND a.status <> 'ended'",
+              WHERE a.plan = ?1 AND j.workflow = ?2 AND a.status <> 'ended'",
             params![plan.as_str(), workflow.as_str()],
             |r| r.get(0),
         )?;

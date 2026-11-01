@@ -53,7 +53,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         Phase::Dispatch => {
             let watch = ensure_watch(&env, &id)?;
             return Ok(Output::success(json!({
-                "plan": id, "phase": "dispatch", "prs": listed(&workflows, &[], &held), "watch": watch, "already": true,
+                "plan": id, "phase": "dispatch", "workflows": listed(&workflows, &[], &held), "watch": watch, "already": true,
             })));
         }
         other => {
@@ -156,11 +156,11 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
 
     let watch = ensure_watch(&env, &id)?;
     Ok(Output::success(
-        json!({"plan": id, "phase": "dispatch", "jobs": keys, "prs": listed(&workflows, &started, &held), "watch": watch}),
+        json!({"plan": id, "phase": "dispatch", "jobs": keys, "workflows": listed(&workflows, &started, &held), "watch": watch}),
     ))
 }
 
-/// `prs` of the result (commands.md §4.8): every Workflow that is not `cancelled`, in
+/// `workflows` of the result (commands.md §4.8): every Workflow that is not `cancelled`, in
 /// key order. A Workflow started by this lock has its worktree and R35's outcome;
 /// every other has null for those.
 fn listed(
@@ -182,7 +182,7 @@ fn listed(
                     "lead_worktree": workflow.lead_worktree, "base_sha": null, "reused": null, "pushed": null,
                 }),
             };
-            one["base_pr"] = json!(held.get(workflow.key.as_str()).and_then(|h| h.base_workflow.clone()));
+            one["base_workflow"] = json!(held.get(workflow.key.as_str()).and_then(|h| h.base_workflow.clone()));
             one
         })
         .collect()

@@ -326,7 +326,7 @@ pub(super) fn incident_holds_plan(conn: &rusqlite::Connection, plan: &PlanId) ->
 /// then by key.
 fn startable() -> String {
     format!(
-        "SELECT r.plan, r.key FROM prs r JOIN plans p ON p.id = r.plan
+        "SELECT r.plan, r.key FROM workflows r JOIN plans p ON p.id = r.plan
           WHERE p.phase = 'dispatch' AND r.status = 'waiting' AND r.start_failed_at IS NULL AND {}
           ORDER BY p.created_at, r.plan, r.key",
         start_workflow::READY

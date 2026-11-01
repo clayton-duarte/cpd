@@ -77,7 +77,7 @@ impl WorkflowArg {
                 format!("Plan {plan} has no Workflow: add one with cpd workflow add, then pass --workflow <key>."),
             )
             .with("plan", plan.as_str())
-            .with("prs", Vec::<String>::new())),
+            .with("workflows", Vec::<String>::new())),
             many => {
                 let keys: Vec<&str> = many.iter().map(|p| p.key.as_str()).collect();
                 Err(CpdError::new(
@@ -85,7 +85,7 @@ impl WorkflowArg {
                     format!("Plan {plan} has {} Workflows ({}): pass --workflow <key>.", keys.len(), keys.join(", ")),
                 )
                 .with("plan", plan.as_str())
-                .with("prs", keys))
+                .with("workflows", keys))
             }
         }
     }

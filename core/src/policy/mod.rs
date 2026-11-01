@@ -200,7 +200,7 @@ pub fn owner_in_use(context: &ContextId, owner: &OwnerLogin, workflows: &[String
     )
     .with("context", context.as_str())
     .with("owner", owner.as_str())
-    .with("prs", workflows)
+    .with("workflows", workflows)
 }
 
 #[cfg(test)]

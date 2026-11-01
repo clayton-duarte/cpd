@@ -504,7 +504,7 @@ fn check_remote(repo: &Path, branch: &str, base: &str) -> Result<Remote, CpdErro
 /// The remote check and the start point of a **stacked** Workflow's Lead Branch (contract §7.2 "A stacked Workflow"): `base`
 /// is its base Workflow's Lead Branch, and the branch starts from that branch's head `S`, the local `refs/heads/<base>`
 /// (which the base Workflow's merges move), else `origin/<base>` when the local branch is gone, else `setup_failed`
-/// (`step` `base_pr_branch`). `origin/<base>` is fetched only when `origin` has it; a Lead Branch on the remote is
+/// (`step` `base_workflow_branch`). `origin/<base>` is fetched only when `origin` has it; a Lead Branch on the remote is
 /// reused when it does not conflict with `origin/<base>`, or at once when `origin` has no `base` (nothing to be behind).
 fn check_stacked(repo: &Path, branch: &str, base: &str) -> Result<(Remote, String), StartFailure> {
     let at = |step| move |error| StartFailure { step, error };
@@ -520,13 +520,13 @@ fn check_stacked(repo: &Path, branch: &str, base: &str) -> Result<(Remote, Strin
     };
     let local = format!("refs/heads/{base}");
     let start = if run(repo, &["rev-parse", "--verify", "--quiet", &local])
-        .map_err(at(Step::BasePrBranch))?
+        .map_err(at(Step::BaseWorkflowBranch))?
         .code
         == 0
     {
-        rev_parse(repo, &local).map_err(at(Step::BasePrBranch))?
+        rev_parse(repo, &local).map_err(at(Step::BaseWorkflowBranch))?
     } else if base_on_remote {
-        rev_parse(repo, &format!("origin/{base}")).map_err(at(Step::BasePrBranch))?
+        rev_parse(repo, &format!("origin/{base}")).map_err(at(Step::BaseWorkflowBranch))?
     } else {
         let error = CpdError::new(
             ErrorCode::SetupFailed,
@@ -534,7 +534,7 @@ fn check_stacked(repo: &Path, branch: &str, base: &str) -> Result<(Remote, Strin
         )
         .with("base", base);
         return Err(StartFailure {
-            step: Step::BasePrBranch,
+            step: Step::BaseWorkflowBranch,
             error,
         });
     };
@@ -553,7 +553,7 @@ fn check_stacked(repo: &Path, branch: &str, base: &str) -> Result<(Remote, Strin
 }
 
 /// The part of a Lead worktree's start that failed (contract §3.8 "A failed
-/// start": `step` of `pr_start_failed`).
+/// start": `step` of `workflow_start_failed`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
     /// The path, the local branches, `git worktree add`.
@@ -561,7 +561,7 @@ pub enum Step {
     /// `fetch origin`, `ls-remote`, the ancestor check.
     Remote,
     /// A stacked Workflow's start point: its base Workflow's Lead Branch, local or on `origin` (§7.2).
-    BasePrBranch,
+    BaseWorkflowBranch,
     /// The `pre-start` hook.
     PreStart,
 }
@@ -571,7 +571,7 @@ impl Step {
         match self {
             Step::Worktree => "worktree",
             Step::Remote => "remote",
-            Step::BasePrBranch => "base_pr_branch",
+            Step::BaseWorkflowBranch => "base_workflow_branch",
             Step::PreStart => "pre-start",
         }
     }

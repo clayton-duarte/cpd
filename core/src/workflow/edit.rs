@@ -50,7 +50,7 @@ impl Edits {
     }
 }
 
-// One variant holds a PrRow, the other two; boxing would change the code that builds and matches them.
+// One variant holds a WorkflowRow, the other two; boxing would change the code that builds and matches them.
 #[allow(clippy::large_enum_variant)]
 enum Decision {
     /// No value changes.

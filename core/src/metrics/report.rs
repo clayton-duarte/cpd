@@ -198,18 +198,18 @@ impl Report {
                         cost_by_plan.insert(plan, cost.unwrap_or(0.0));
                     }
                 }
-                let mut merged_prs: BTreeMap<String, i64> = BTreeMap::new();
+                let mut merged_workflows: BTreeMap<String, i64> = BTreeMap::new();
                 {
-                    let mut stmt = c.prepare("SELECT plan, count(*) FROM prs WHERE status = 'merged' GROUP BY plan")?;
+                    let mut stmt = c.prepare("SELECT plan, count(*) FROM workflows WHERE status = 'merged' GROUP BY plan")?;
                     let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
                     for row in rows {
                         let (plan, n) = row?;
-                        merged_prs.insert(plan, n);
+                        merged_workflows.insert(plan, n);
                     }
                 }
                 let mut plans: BTreeMap<String, f64> = BTreeMap::new();
                 for (plan, cost) in cost_by_plan {
-                    if let Some(&n) = merged_prs.get(&plan)
+                    if let Some(&n) = merged_workflows.get(&plan)
                         && n > 0 {
                             plans.insert(plan, cost / n as f64);
                         }

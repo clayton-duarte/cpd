@@ -17,10 +17,10 @@ use cpd_core::plan::fingerprint::load_workflows;
 use cpd_core::store::WriteTxn;
 
 /// The Workflows E4 is for; `?1` and `?2` are one Workflow's Plan and key, or NULL for every Workflow.
-const MISSING: &str = "SELECT r.plan, r.key FROM prs r JOIN plans p ON p.id = r.plan
+const MISSING: &str = "SELECT r.plan, r.key FROM workflows r JOIN plans p ON p.id = r.plan
   WHERE (?1 IS NULL OR r.plan = ?1) AND (?2 IS NULL OR r.key = ?2)
     AND r.status = 'dispatch' AND p.archived_at IS NULL
-    AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = r.plan AND j.pr = r.key AND j.kind = 'open' AND j.status IN ('draft', 'queued', 'running', 'failed', 'cancelled'))
+    AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = r.plan AND j.workflow = r.key AND j.kind = 'open' AND j.status IN ('draft', 'queued', 'running', 'failed', 'cancelled'))
   ORDER BY p.created_at, r.plan, r.key";
 
 pub(super) fn run(engine: &mut Engine) {
@@ -83,10 +83,10 @@ pub(super) fn run(engine: &mut Engine) {
 
 /// The draft `open` Jobs E4 queues: of a `dispatch` Workflow of a Plan that is not archived, with no other Job (as in [`others`]: not `open`
 /// or `update`) of the Workflow `draft`. `?1` is a Plan, or NULL for every Plan.
-const PROMOTABLE: &str = "SELECT o.plan, o.key FROM jobs o JOIN prs r ON r.plan = o.plan AND r.key = o.pr JOIN plans p ON p.id = o.plan
+const PROMOTABLE: &str = "SELECT o.plan, o.key FROM jobs o JOIN workflows r ON r.plan = o.plan AND r.key = o.workflow JOIN plans p ON p.id = o.plan
   WHERE (?1 IS NULL OR o.plan = ?1) AND o.kind = 'open' AND o.status = 'draft'
     AND r.status = 'dispatch' AND p.archived_at IS NULL
-    AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = o.plan AND j.pr = o.pr AND j.status = 'draft' AND j.kind NOT IN ('open', 'update'))
+    AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = o.plan AND j.workflow = o.workflow AND j.status = 'draft' AND j.kind NOT IN ('open', 'update'))
   ORDER BY p.created_at, o.plan, o.seq";
 
 fn promotable(

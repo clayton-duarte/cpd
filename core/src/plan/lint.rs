@@ -299,7 +299,7 @@ pub(super) fn workflow_empty(
     };
     let mut error = CpdError::new(ErrorCode::WorkflowEmpty, message)
         .with("plan", id.as_str())
-        .with("prs", empty);
+        .with("workflows", empty);
     if live.is_empty() {
         error = error.with(
             "next",

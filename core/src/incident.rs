@@ -113,7 +113,7 @@ pub(crate) fn row(conn: &Connection) -> Result<Option<Value>, CpdError> {
         .map(|p| p.as_str().to_owned())
         .collect();
     Ok(Some(
-        json!({"started_at": started_at, "by": by, "reason": reason, "plans": plans, "until_pr": until_workflow}),
+        json!({"started_at": started_at, "by": by, "reason": reason, "plans": plans, "until_workflow": until_workflow}),
     ))
 }
 
@@ -184,7 +184,7 @@ fn parse_until_workflow(value: &str) -> Result<(PlanId, String), CpdError> {
             ErrorCode::Usage,
             "An --until-workflow is `<plan>/<key>` with a non-empty Plan and key.",
         )
-        .with("until_pr", value)
+        .with("until_workflow", value)
     };
     let (plan, key) = value.split_once('/').ok_or_else(usage)?;
     if plan.is_empty() || key.is_empty() || key.contains('/') {
@@ -232,7 +232,7 @@ pub fn start(
                     format!("The --until-workflow Plan {until_plan} is not one of the incident's Plans."),
                 )
                 .with("plan", until_plan.as_str())
-                .with("until_pr", until_workflow.unwrap_or_default()));
+                .with("until_workflow", until_workflow.unwrap_or_default()));
             }
             let known: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM workflows WHERE plan = ?1 AND key = ?2)",

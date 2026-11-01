@@ -40,7 +40,7 @@ pub(super) fn workflow_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Va
             };
             Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(9)?, json!({
                 "key": r.get::<_, String>(0)?, "repo": r.get::<_, String>(1)?, "base": r.get::<_, String>(2)?,
-                "base_pr": r.get::<_, Option<String>>(16)?,
+                "base_workflow": r.get::<_, Option<String>>(16)?,
                 "status": r.get::<_, String>(3)?,
                 "closed_unmerged": closed.iter().any(|c| c.workflow.as_str() == r.get::<_, String>(0).as_deref().unwrap_or("")),
                 "lead_branch": r.get::<_, String>(4)?,
