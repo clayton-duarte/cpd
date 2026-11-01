@@ -64,7 +64,7 @@ fn lb_in(phase: &str) -> Lb {
 
 impl Lb {
     /// `pr add <key> --repo <repo> --title T --shape config --no-needs --plan pay-1`.
-    fn add(&self, key: &str, repo: &PathBuf) -> Run {
+    fn add(&self, key: &str, repo: &Path) -> Run {
         self.cpd(&[
             "workflow",
             "add",

@@ -751,7 +751,9 @@ fn a_parked_row_is_reopened_and_run_when_the_ticket_or_the_status_name_changes()
     // Each case parks `api`'s `in_review` row, changes something, and runs the engine until the control row behind it is
     // settled too. (change, does it reopen the row, the ticket and the name of the second run)
     type Change = Box<dyn Fn(&Probe)>;
-    let cases: Vec<(&str, Change, Option<(&str, &str)>)> = vec![
+    // (what changes, the change, the ticket and name of the second run)
+    type Case = (&'static str, Change, Option<(&'static str, &'static str)>);
+    let cases: Vec<Case> = vec![
         (
             "another ticket",
             Box::new(|p| {
