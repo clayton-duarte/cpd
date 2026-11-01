@@ -153,7 +153,13 @@ fn a_report_repeated_for_the_session_after_the_window_appends_again() {
     fx.env
         .store()
         .write("fixture", |tx| {
-            tx.execute_batch("UPDATE events SET at = '2026-01-01T00:00:00.000Z' WHERE kind = 'error';")?;
+            let guard: String = tx.query_row("SELECT sql FROM sqlite_schema WHERE name = 'events_no_update'", [], |r| r.get(0))?;
+            tx.execute_batch(&format!(
+                "DROP TRIGGER events_no_update;
+                 UPDATE events SET at = '2026-01-01T00:00:00.000Z'
+                  WHERE id = (SELECT min(id) FROM events WHERE kind = 'error');
+                 {guard};"
+            ))?;
             Ok(())
         })
         .unwrap();

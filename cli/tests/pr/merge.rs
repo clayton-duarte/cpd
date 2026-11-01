@@ -1078,7 +1078,13 @@ fn a_driver_error_repeated_for_the_plan_after_the_window_is_appended_again() {
 
     fx.store()
         .write("fixture", |tx| {
-            tx.execute("UPDATE events SET at = '2026-01-01T00:00:00.000Z' WHERE plan = 'pay' AND kind = 'error'", [])?;
+            let guard: String = tx.query_row("SELECT sql FROM sqlite_schema WHERE name = 'events_no_update'", [], |r| r.get(0))?;
+            tx.execute_batch(&format!(
+                "DROP TRIGGER events_no_update;
+                 UPDATE events SET at = '2026-01-01T00:00:00.000Z'
+                  WHERE id = (SELECT min(id) FROM events WHERE plan = 'pay' AND kind = 'error');
+                 {guard};"
+            ))?;
             Ok(())
         })
         .unwrap();
