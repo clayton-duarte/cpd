@@ -26,11 +26,11 @@ Workflow, or by engine E7 / `cpd pr start` for the others ([contract
 | Parallel Attempt worktree | `<repo-parent>/<repo-name>.<plan>--<attempt>` | `cpd/<plan>--<attempt>` |
 
 The repo's **main checkout is never touched**: workflow and Attempt worktrees are siblings
-of it ([contract §7.1](../contract.md)). The Lead worktree is a *view* of its Lead Branch —
-no Gate runs in it, cpd touches its files only at the Workflow's start (checkout and
-`pre-start`) and by rule S, and its local changes belong to the Lead or the User and are
-never overwritten ([contract §7.1](../contract.md), [contract §7.4](../contract.md) "Rule
-S"). At the start, cpd fetches `origin/<base>` and either creates the Lead Branch from the
+of it ([contract §7.1](../contract.md)). The Lead worktree is a *view* of its Lead Branch:
+cpd touches its files only at the Workflow's start (checkout and `pre-start`) and by rule
+S, and its local changes belong to the Lead or the User and are never overwritten; a Gate
+normally runs in the Attempt worktree, which for a linear Attempt is this same Lead
+worktree ([contract §7.1](../contract.md), [contract §7.4](../contract.md) "Rule S"). At the start, cpd fetches `origin/<base>` and either creates the Lead Branch from the
 base or reuses the branch already on the remote when it does not conflict with the base; a
 Lead Branch absent from the remote is pushed at once, after `pre-start` ([contract
 §7.2](../contract.md)).
