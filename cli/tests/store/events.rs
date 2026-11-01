@@ -230,6 +230,7 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("attempt-started", "cpja", "", &["number", "tier", "origin"], &[]),
     ("attempt-status", "cpja", "", &["from", "to"], &[]),
     ("attempt-retry", "cpja", "", &["outcome", "cause", "next_tier"], &["feedback"]),
+    ("attempt-aborted", "cpja", "", &["tier", "by"], &[]),
     ("attempt-nudge", "cpjas", "", &["prompt"], &[]),
     ("attempt-ended", "cpja", "", &["turns", "tokens_in", "tokens_out", "cache_read", "cache_write", "cost_usd", "duration_s", "model", "stop_reason", "thinking_level"], &[]),
     ("all-merged", "cp", "", &["pr", "merged", "cancelled"], &[]),

@@ -167,6 +167,9 @@ causes! {
     SetupFailed = "setup_failed",
     /// A5 after E2 set `stop_request = timed_out`.
     TimedOut = "timed_out",
+    /// `attempt abort` (commands.md §6.5, contract §3.4, hs-a8): the Lead ended a running Attempt. A no-ladder
+    /// cause, like `timed_out` and `setup_failed`: `next_rung` returns `None`, so the Job goes `failed`.
+    Aborted = "aborted",
     /// The Worker pane is dead, pi stopped badly, the driver failed, or (R3)
     /// the driver died before the merge's compare-and-swap.
     Crashed = "crashed",
@@ -715,7 +718,7 @@ mod tests {
     #[test]
     fn every_cause_is_listed_and_reads_back() {
         use super::{Cause, Stored};
-        assert_eq!(Cause::ALL.len(), 11);
+        assert_eq!(Cause::ALL.len(), 12);
         for cause in Cause::ALL {
             assert_eq!(Cause::parse(cause.as_str()), Some(*cause));
             assert_eq!(Stored::parse(cause.as_str()), Some(Stored::Failed(*cause)));

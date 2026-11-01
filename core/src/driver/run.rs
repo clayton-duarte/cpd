@@ -752,6 +752,14 @@ impl Driver {
                 }
             }
             let now = self.load()?;
+            // A5, the Lead's abort (contract §3.4): `attempt abort` may already have ended the Attempt in its own
+            // transaction. Stop the Worker through A9, clean up, and suppress the A4 restart. Do not end it a second
+            // time and do not surface a `cas_lost`. A `merging` Attempt is the merge's (§7.4): never torn down here.
+            if now.status != "merging" && now.stop_request.as_deref() == Some("aborted") {
+                log("A5: the Attempt was aborted; stopping the Worker and cleaning up");
+                self.cleanup(&now, false);
+                return Ok(Ended { outcome: "failed", cause: "aborted" });
+            }
             match now.status.as_str() {
                 "running" => self.reload_if_installed()?,
                 "merging" => return self.merge(dirs),

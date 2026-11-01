@@ -55,6 +55,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd attempt read` | A readable transcript of the Worker (§6.2) | Lead | |
 | `cpd attempt show` | Show an Attempt (§6.3) | Lead | |
 | `cpd attempt list` | List Attempts (§6.3) | Lead | |
+| `cpd attempt abort` | End a running Attempt failed/aborted (Lead) (§6.5) | Lead | |
 | `cpd attempt run` | The Attempt driver (internal) (§6.4) | internal | |
 | `cpd ask` | Ask the Lead a question and wait for the answer (Worker) (commands.md §8.1) | Worker | |
 | `cpd answer` | Answer a Worker's Escalation (Lead) (commands.md §8.2) | Lead | |

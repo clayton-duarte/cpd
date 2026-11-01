@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 20;
+pub const PROTOCOL: u32 = 21;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -93,6 +93,7 @@ kinds! {
     AttemptStarted = "attempt-started",
     AttemptStatus = "attempt-status",
     AttemptRetry = "attempt-retry",
+    AttemptAborted = "attempt-aborted",
     AttemptNudge = "attempt-nudge",
     AttemptEnded = "attempt-ended",
     AllMerged = "all-merged",
@@ -173,6 +174,7 @@ impl Kind {
             AttemptStarted => spec([Y, Y, Y, Y, N], &["number", "tier", "origin"], &[]),
             AttemptStatus => spec([Y, Y, Y, Y, N], &["from", "to"], &["check", "what", "died"]),
             AttemptRetry => spec([Y, Y, Y, Y, N], &["outcome", "cause", "next_tier"], &["feedback"]),
+            AttemptAborted => spec([Y, Y, Y, Y, N], &["tier", "by"], &[]),
             AttemptNudge => spec([Y, Y, Y, Y, Y], &["prompt"], &["turns"]),
             AttemptEnded => spec(
                 [Y, Y, Y, Y, N],
@@ -261,11 +263,11 @@ mod tests {
 
     /// The protocol history: 8 (`session-retiered`), 10 (`plan-outlined`), 12 (`session-resumed`), 13 (`session report`),
     /// 14 (the incident kinds), 15 (`mcp-attached`), 16 (`session switch-failed`/`switched`), 17 (`pr-described`),
-    /// 18 (`session-model-changed`, the tier-preset switch, commands.md §14.6), 19 (`context pending`'s plan-level
-    /// `jobs`, commands.md §3.12, Plan explore-view) and 20 (`attempt-ended` and `job-blocked`, hs-d798).
+    /// 18 (`session-model-changed`, the tier-preset switch, commands.md §14.6), 19 (`context pending`'s plan-level `jobs`,
+    /// commands.md §3.12, Plan explore-view), 20 (`attempt-ended` and `job-blocked`, hs-d798) and 21 (`attempt-aborted`, hs-a8).
     #[test]
-    fn the_protocol_is_20_with_the_attempt_ended_and_job_blocked_kinds() {
-        assert_eq!(PROTOCOL, 20);
+    fn the_protocol_is_21_with_the_attempt_aborted_attempt_ended_and_job_blocked_kinds_and_the_pending_plan_jobs_field() {
+        assert_eq!(PROTOCOL, 21);
     }
 
     #[test]
