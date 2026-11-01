@@ -618,6 +618,32 @@ fn overlaps_section(out: &mut Vec<String>, overlaps: &[Overlap]) {
     out.push(String::new());
 }
 
+/// The `## Lint` section (commands.md §4.5): a table of the warnings, or none.
+fn lint_section(out: &mut Vec<String>, lint: &[Finding]) {
+    out.extend(["## Lint".to_owned(), String::new()]);
+    if lint.is_empty() {
+        out.push("No lint warnings.".to_owned());
+    } else {
+        out.extend([
+            "| Rule | PR | Job | Other | Paths | Message |".to_owned(),
+            "|---|---|---|---|---|---|".to_owned(),
+        ]);
+        let opt = |v: &Option<String>| v.as_deref().map_or_else(|| "—".to_owned(), tcode);
+        for f in lint {
+            out.push(format!(
+                "| {} | {} | {} | {} | {} | {} |",
+                tcode(f.rule.as_str()),
+                opt(&f.pr),
+                opt(&f.job),
+                opt(&f.other),
+                paths_cell(&f.paths),
+                f.message.replace('|', "\\|")
+            ));
+        }
+    }
+    out.push(String::new());
+}
+
 /// What the document opens with (commands.md §4.5, §4.6; hs-d291): `plan.md`
 /// is headed by the Plan.
 pub enum Heading<'a> {
@@ -639,7 +665,7 @@ pub fn markdown(
     overlaps: &[Overlap],
     open_tier: &str,
     display: &Display,
-    _lint: &[Finding],
+    lint: &[Finding],
 ) -> String {
     let shown = Shown {
         all_jobs: jobs,
@@ -704,6 +730,7 @@ pub fn markdown(
         out.extend([graph("LR", "p", &nodes), String::new()]);
     }
     overlaps_section(&mut out, overlaps);
+    lint_section(&mut out, lint);
     explore_section(&mut out, plan, jobs, display);
     let mut cancelled = cancelled;
     cancelled.sort_by(|a, b| a.key.cmp(&b.key));

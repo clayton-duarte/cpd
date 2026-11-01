@@ -18,6 +18,9 @@ const NONE: &str = "—";
 /// The overlap rows shown before the rest are counted.
 const OVERLAPS_SHOWN: usize = 5;
 
+/// The lint rows shown before the rest are counted.
+const LINT_SHOWN: usize = 5;
+
 /// Which summary: the Plan's own (`plan render`) or a review's.
 pub enum Kind<'a> {
     /// `full_plan` is the absolute path of `plan.md`, which the last line names.
@@ -130,6 +133,21 @@ fn overlaps_block(overlaps: &[Overlap]) -> Vec<String> {
     out
 }
 
+/// `Lint:` (block 9): never omitted.
+fn lint_block(lint: &[Finding]) -> Vec<String> {
+    if lint.is_empty() {
+        return vec!["Lint: none".to_owned()];
+    }
+    let mut out = vec![format!("Lint: {}", lint.len())];
+    for f in lint.iter().take(LINT_SHOWN) {
+        out.push(format!("- {}: {}", f.rule.as_str(), f.row()));
+    }
+    if lint.len() > LINT_SHOWN {
+        out.push(format!("- +{} more warnings", lint.len() - LINT_SHOWN));
+    }
+    out
+}
+
 /// A block of `head` and its rows; no block when there are no rows.
 fn list(head: &str, rows: Vec<String>) -> Vec<String> {
     if rows.is_empty() {
@@ -232,6 +250,7 @@ pub fn markdown(kind: &Kind, i: &Input) -> String {
 
     blocks.push(order(i, &counting));
     blocks.push(overlaps_block(i.overlaps));
+    blocks.push(lint_block(i.lint));
     if let Some(o) = outline.filter(|o| !o.decided.is_empty()) {
         blocks.push(vec![format!("Decided: {}", o.decided.join(", "))]);
     }
