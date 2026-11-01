@@ -180,7 +180,7 @@ test("a failed session show records nothing", async (t) => {
 });
 
 test("the protocol is exactly one past the base", () => {
-  assert.equal(PROTOCOL, 18, "session-model-changed raised it to 18; pr-described raised it to 17; the commands the adapter runs grew it earlier (contract §5.2)");
+  assert.equal(PROTOCOL, 19, "context pending's plan-level jobs raised it to 19; session-model-changed raised it to 18; pr-described raised it to 17; the commands the adapter runs grew it earlier (contract §5.2)");
 });
 
 test("the protocol was raised past 8 and session-retiered is a known kind delivered as no message", () => {

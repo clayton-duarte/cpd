@@ -87,6 +87,7 @@ function rig(over: { role?: string; state?: string } = {}) {
     resolveModel: () => MODEL,
     models: async () => [],
     contextFiles: () => FILES,
+    validatePackage: async () => undefined,
     open: async (o) => {
       opens.push(o);
       notify();
@@ -100,9 +101,9 @@ function rig(over: { role?: string; state?: string } = {}) {
         abortSubmission: async () => "not_found",
         write: async () => ({}),
         install: () => {},
+        configure: async () => {},
         entries: async () => [],
         compact: async () => 1,
-        configure: async () => {},
         agent: async () => ({ thinkingLevel: "high" }),
         pageEntries: async () => ({ entries: [] }),
         closed,
@@ -158,7 +159,8 @@ test("runHost opens the store at run/host/<session>.sqlite", { timeout: 20_000 }
   assert.deepEqual(o.model, MODEL);
   const ext: Extension = o.extension;
   const keys = (ext.sections ?? []).map((s) => s.key);
-  assert.deepEqual(keys, ["cpd-context-files", POLICY_SECTION, TIME_ZONE_SECTION]);
+  // P1.9 adds the role's skills section and the code mode section beside the base three.
+  assert.deepEqual(keys, ["cpd-context-files", POLICY_SECTION, TIME_ZONE_SECTION, "cpd-skills", "codemode"]);
   const render = (i: number) => ext.sections![i]!.render(undefined as never, undefined as never);
   assert.equal(await render(0), "## /work/tree/AGENTS.md\nagents rules\n\n## /work/tree/CLAUDE.md\nclaude rules");
   assert.equal(await render(1), policySection(POLICY));

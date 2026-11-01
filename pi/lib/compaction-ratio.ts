@@ -63,6 +63,49 @@ const behavior: MethodBehavior = (self, args, original) => {
 	return original.apply(self, args);
 };
 
+/** The model `reserveTokensOf` derives from: the `provider/modelId` key and its declared context window. */
+export interface ReserveModel {
+  provider: string;
+  modelId: string;
+  contextWindow?: number;
+}
+
+/**
+ * The pure derivation of the compaction reserve (contract §6.18): the same precedence the prototype hook applies,
+ * `Math.round(contextWindow * ratio)`, and the same throws. One source of truth the hook and the durable host share.
+ */
+export function reserveTokensOf(compaction: CompactionSettings, model: ReserveModel | undefined): number | undefined {
+  const key = model ? `${model.provider}/${model.modelId}` : undefined;
+  const override = key ? compaction.modelOverrides?.[key] : undefined;
+
+  // An explicit absolute override wins over every ratio.
+  if (override && Object.hasOwn(override, "reserveTokens")) return override.reserveTokens;
+
+  // A present ratio is authoritative; a present global reserveTokens suppresses the built-in ratio.
+  let ratio: unknown;
+  let name: string;
+  if (override && Object.hasOwn(override, "reserveTokensRatio")) {
+    ratio = override.reserveTokensRatio;
+    name = `compaction.modelOverrides["${key}"].reserveTokensRatio`;
+  } else if (Object.hasOwn(compaction, "reserveTokensRatio")) {
+    ratio = compaction.reserveTokensRatio;
+    name = "compaction.reserveTokensRatio";
+  } else if (Object.hasOwn(compaction, "reserveTokens")) {
+    return compaction.reserveTokens;
+  } else {
+    ratio = 0.1;
+    name = "the built-in compaction ratio";
+  }
+
+  if (typeof ratio !== "number" || !Number.isFinite(ratio) || ratio <= 0 || ratio >= 1) {
+    throw new Error(`Invalid ${name} setting: ${String(ratio)}. Expected a finite number between 0 and 1.`);
+  }
+
+  const window = model?.contextWindow;
+  if (typeof window === "number" && Number.isFinite(window) && window > 0) return Math.round(window * ratio);
+  return compaction.reserveTokens;
+}
+
 /** Wraps `getCompactionReserveTokens` once per process, as the adapter loads. */
 export function registerCompactionRatio(): void {
 	hookMethod(SettingsManager.prototype, "getCompactionReserveTokens", "cpd-compaction-ratio", behavior);

@@ -33,6 +33,8 @@ export type ServerDeps = {
   history(before?: string, limit?: number): Promise<{ entries: readonly unknown[]; next?: string }>;
   abort(opts: { background: boolean }): Promise<void>;
   abortSubmission(id: number): Promise<"aborted" | "already_placed" | "settled" | "not_found">;
+  /** Rebuilds and installs the adapter extension (contract §6.18); the answer is one `result { reloaded: true }`. */
+  reload(): Promise<{ reloaded: boolean }>;
   hostState(): HostState;
   /** The process's held map, oldest first: what an attaching client is replayed (§6.15 rule 4). */
   held(): readonly HeldUI[];
@@ -168,6 +170,8 @@ export function createServer(deps: ServerDeps): Server {
           });
         } else if (msg.type === "abort_submission") {
           run(st, msg.req, async () => ({ outcome: await deps.abortSubmission(msg.submission_id) }));
+        } else if (msg.type === "reload") {
+          run(st, msg.req, () => deps.reload());
         } else if (msg.type === "ui_response") {
           const done = (): void => send(st, { type: "result", req: msg.req, data: {} });
           deps

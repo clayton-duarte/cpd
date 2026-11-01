@@ -56,6 +56,7 @@ function setup(over: Partial<ServerDeps> = {}) {
       calls.abortSubmission.push(id);
       return "aborted";
     },
+    reload: async () => ({ reloaded: true }),
     compact: async (instructions) => {
       calls.compact.push(instructions);
       throw new Error("not implemented");
