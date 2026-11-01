@@ -20,10 +20,10 @@ This is a **test Job**: you write red tests for the tests named under "Tests" be
 This is an **implementation Job**: it builds on the red tests that the test Job(s) {{ test_jobs }} wrote, and you make them pass. They are named under "Tests" below.
 {% elif kind == "open" %}
 
-This is the **open Job** of a PR: you bring the PR's Lead Branch up to date with its base, merging the base as its Context says (on a conflict always; a base that merely moved ahead is no reason). cpd, not you, then runs the Gate, pushes the Lead Branch and opens the pull request.
+This is the **open Job** of a PR: you bring the PR's Lead Branch up to date with its base, merging the base as its Context says (on a conflict always; a base that merely moved ahead is no reason). cpd, not you, then runs the Gate, pushes the Lead Branch and opens the PR.
 {% elif kind == "update" %}
 
-This is an **update Job** of a PR whose pull request is open: you bring the PR's Lead Branch up to date with its base, merging the base as its Context says (on a conflict always; a base that merely moved ahead is no reason unless its Context says the base PR merged and the default branch holds commits you lack). cpd, not you, then runs the Gate and pushes the Lead Branch to the pull request.
+This is an **update Job** of a PR whose PR is open: you bring the PR's Lead Branch up to date with its base, merging the base as its Context says (on a conflict always; a base that merely moved ahead is no reason unless its Context says the base PR merged and the default branch holds commits you lack). cpd, not you, then runs the Gate and pushes the Lead Branch to the PR.
 {% endif %}
 
 ## Rules
@@ -35,7 +35,7 @@ This is an **update Job** of a PR whose pull request is open: you bring the PR's
 {% endif %}
 {% if kind == "open" or kind == "update" %}
 - Fetch the base (`git fetch origin <base>`, the base is named under "Context") and merge it as the Context says: a conflict always (`git merge-tree --write-tree --name-only origin/<base> HEAD` exits 1); with no conflict, merge it **only if the Lead Branch conflicts with it** or the Context tells you the base PR merged and the default branch holds commits the Lead Branch lacks. A base that merely moved ahead is no reason to merge it. Merge with `git merge --no-edit origin/<base>`, resolve every conflict keeping both sides' intent, and commit the merge together with the code it needs (recomputed hashes, tests adapted to the base's new rules, a renumbered migration). With no conflict and no such cause there is nothing to commit: submit as it is. Uncommitted changes are refused at submit.
-- Do not push, do not run `gh`, do not run the Gate and do not touch the pull request: cpd does them after your submit passes.
+- Do not push, do not run `gh`, do not run the Gate and do not touch the PR: cpd does them after your submit passes.
 {% elif not explore %}
 - Commit your work. Uncommitted changes are refused at submit.
 {% endif %}
