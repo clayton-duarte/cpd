@@ -1029,6 +1029,77 @@ fn a_rejected_push_leaves_the_job_merged_with_one_push_failed_error() {
     assert!(events[2].1["details"]["stderr"].as_str().unwrap().contains("nope"));
 }
 
+impl Fx {
+    /// `data` of every `error` Event of the Plan, in order.
+    fn plan_errors(&self) -> Vec<Value> {
+        self.store()
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT data FROM events WHERE plan = 'pay' AND kind = 'error' ORDER BY id")?;
+                let rows = stmt
+                    .query_map([], |r| Ok(serde_json::from_str(&r.get::<_, String>(0)?).unwrap()))?
+                    .collect::<rusqlite::Result<Vec<Value>>>()?;
+                Ok(rows)
+            })
+            .unwrap()
+    }
+}
+
+fn codes(errors: &[Value]) -> Vec<&str> {
+    errors.iter().map(|e| e["code"].as_str().unwrap()).collect()
+}
+
+#[test]
+fn a_driver_error_repeated_for_the_plan_inside_the_window_is_appended_once() {
+    let (fx, _origin) = fx_origin();
+    fx.script(|call| is(call, "push") && is(call, "--porcelain"), declined_push());
+    let (api, _) = fx.submitted("api", "api.txt", "api\n");
+    fx.merge(&api);
+    let (web, _) = fx.submitted("web", "web.txt", "web\n");
+    fx.merge(&web);
+
+    assert_eq!(fx.job_row("api").0, "merged");
+    assert_eq!(fx.job_row("web").0, "merged");
+    let errors = fx.plan_errors();
+    assert_eq!(codes(&errors), ["push_failed"], "{errors:?}");
+
+    let (docs, _) = fx.submitted("docs", "docs.txt", "docs\n");
+    fx.script(|call| is(call, "read-tree"), Reply::exit(128, "", "error: unable to create file docs.txt: Permission denied\nfatal: Could not reset index file to revision\n"));
+    fx.merge(&docs);
+
+    let errors = fx.plan_errors();
+    assert_eq!(codes(&errors), ["push_failed", "lead_worktree_stale"], "{errors:?}");
+}
+
+#[test]
+fn a_driver_error_repeated_for_the_plan_after_the_window_is_appended_again() {
+    let (fx, _origin) = fx_origin();
+    fx.script(|call| is(call, "push") && is(call, "--porcelain"), declined_push());
+    let (api, _) = fx.submitted("api", "api.txt", "api\n");
+    fx.merge(&api);
+    let (web, _) = fx.submitted("web", "web.txt", "web\n");
+    fx.merge(&web);
+    let errors = fx.plan_errors();
+    assert_eq!(codes(&errors), ["push_failed"], "{errors:?}");
+
+    fx.store()
+        .write("fixture", |tx| {
+            let guard: String = tx.query_row("SELECT sql FROM sqlite_schema WHERE name = 'events_no_update'", [], |r| r.get(0))?;
+            tx.execute_batch(&format!(
+                "DROP TRIGGER events_no_update;
+                 UPDATE events SET at = '2026-01-01T00:00:00.000Z'
+                  WHERE id = (SELECT min(id) FROM events WHERE plan = 'pay' AND kind = 'error');
+                 {guard};"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+    let (docs, _) = fx.submitted("docs", "docs.txt", "docs\n");
+    fx.merge(&docs);
+
+    let errors = fx.plan_errors();
+    assert_eq!(codes(&errors), ["push_failed", "push_failed"], "{errors:?}");
+}
+
 #[test]
 fn a_repo_without_origin_does_not_push_and_appends_no_error() {
     let fx = fx();

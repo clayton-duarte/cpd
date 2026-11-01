@@ -1754,7 +1754,7 @@ The Attempt driver, steps A1–A9 of §3.4, started detached by E3 or `job dispa
 
 Effects: everything of §3.4 A1–A9, §7.2, §7.3, §7.4: the worktree and `pre-start`; the rendered Worker Spec (§16.1); the Worker, started by the Attempt's `runner` (contract §3.4 "The Worker runner and its seam"): for `pi` its window `cpd-work:<plan>--<attempt>` (`new-window` with the Worker's argv of §6.5, `@cpd_session`) and the Session rows (`session-registered`, `session-moved` `{place: "work"}`); for `durable` a child process with no window and no `session-moved`, its `worker_pid` stored, restarted and stopped as that section says; the nudge (`attempt-nudge`); the stall kill (a Worker's session file idle for `timeouts.stall_seconds` inside one tool call: pi's descendant processes are killed, pi is not, the Attempt goes on; one driver-log line, no Event; contract §3.4 A4); the merge, with no lock (hs-d243: rule S and rule P, contract §7.4); the end (`metrics` from the end report, the Worker's stop by runner, worktree removal on `merged`). Each status change is one transaction with the Event of §3.4.
 
-Output, printed when it exits (stdout goes to its log): `{"ok": true, "attempt": "api-schema-a1", "outcome": "merged", "cause": "merged"}`. Unexpected failures append `error` `{source: "attempt run", code, message, details}` and end the Attempt `failed` / `crashed` when it is not already ended. Idempotent: no; a second driver cannot get fd 3.
+Output, printed when it exits (stdout goes to its log): `{"ok": true, "attempt": "api-schema-a1", "outcome": "merged", "cause": "merged"}`. Unexpected failures append `error` `{source: "attempt run", code, message, details}` and end the Attempt `failed` / `crashed` when it is not already ended. An error with the same `code` and `message` as one appended for the same Plan less than `watch.error_repeat_seconds` ago appends nothing (contract §3.7). Idempotent: no; a second driver cannot get fd 3.
 
 ### 6.5 `attempt abort` (hs-a8, the User, 2026-10-31)
 
@@ -3021,13 +3021,15 @@ Reports an adapter error to the Manager (hs-d573, M4). Its callers are: **the ad
 |---|---|---|
 | the Session exists | `session_not_found` | 4 |
 
-Effects: **Rows**, one transaction: `events` (one `error` Event, source `adapter`; context = the Session's Context; **session = the reporting Session, plan null** (DEFECT 1: so the Manager can identify which Session failed; the follower rule of §11.2 excludes adapter-source errors from any Session's follower, so a Lead does not see its own adapter errors); data `{source: "adapter", code, message, details}` with `details` = the given object plus `{what, session, plan}`; text `cpd adapter: <what>: <code>: <message>`). Not idempotent by design: every call appends an Event.
+Effects: **Rows**, one transaction: `events` (one `error` Event, none when the same one is in the window (below), source `adapter`; context = the Session's Context; **session = the reporting Session, plan null** (DEFECT 1: so the Manager can identify which Session failed; the follower rule of §11.2 excludes adapter-source errors from any Session's follower, so a Lead does not see its own adapter errors); data `{source: "adapter", code, message, details}` with `details` = the given object plus `{what, session, plan}`; text `cpd adapter: <what>: <code>: <message>`). Idempotent inside the window (contract §3.7): a call whose `code` and `message` equal those of an adapter `error` Event of the same Session appended less than `watch.error_repeat_seconds` ago appends nothing and prints that Event's id; any other call appends an Event. `what` and `details` are not compared. The `mcp_register_failed` exemption above is from the adapter's own memory: each refusal is still one call, and its Event follows this window.
 
 Output:
 
 ```json
 {"ok": true, "event": "4823"}
 ```
+
+`event` is the id of the Event that reports the error: the new one, or the earlier identical one of the window.
 
 ### 10.18a `session switch-failed` (internal)
 

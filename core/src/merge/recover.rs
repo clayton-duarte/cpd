@@ -80,14 +80,14 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
             store.write(ctx.source, |tx| {
                 ledger::end(tx, attempt, &end, metrics.as_ref(), &ladder, Stage::Merge)?;
                 if let Some(e) = &stale {
-                    ledger::append_error(tx, attempt, ctx.source, e, stale_text(attempt, e))?;
+                    ledger::append_error(tx, attempt, ctx.source, e, stale_text(attempt, e), ctx.config.watch.error_repeat())?;
                 }
                 Ok(())
             })?;
             lock::remove(ctx.home, &attempt.plan, &attempt.id)?;
             // R35: push as step 8 does, by rule P with `tip`; a failure does not undo the merge.
             if let Some(e) = super::publish(attempt, &tip) {
-                store.write(ctx.source, |tx| ledger::append_error(tx, attempt, ctx.source, &e, push_text(attempt, &e)))?;
+                store.write(ctx.source, |tx| ledger::append_error(tx, attempt, ctx.source, &e, push_text(attempt, &e), ctx.config.watch.error_repeat()))?;
             }
             rest_of_a9(store, ctx, attempt)?;
             Ok(Some(end))
@@ -126,7 +126,7 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
                     attempt.id,
                     attempt.plan
                 );
-                store.write(ctx.source, |tx| ledger::append_error(tx, attempt, ctx.source, &error, text))?;
+                store.write(ctx.source, |tx| ledger::append_error(tx, attempt, ctx.source, &error, text, ctx.config.watch.error_repeat()))?;
             }
             Ok(None)
         }
