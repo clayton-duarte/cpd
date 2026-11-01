@@ -7,7 +7,9 @@ use std::path::Path;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
-use super::{DescribeArgs, Env, find_workflow, gh};
+use super::DescribeArgs;
+use crate::env::Env;
+use crate::pr::{describe_pr, find_workflow};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, WorkflowKey};
@@ -25,7 +27,7 @@ enum Decision {
     Update { status: String, open: Option<(String, i64)> },
 }
 
-pub(super) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
+pub(crate) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let key = args.key;
     let mut env = Env::open()?;
@@ -45,7 +47,7 @@ pub(super) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
         Decision::Already(status) => (status, true),
         Decision::Update { open, .. } => {
             if let Some((repo, number)) = open {
-                gh::describe_pr(env.home.root(), &repo, number, &text)?;
+                describe_pr(env.home.root(), &repo, number, &text)?;
             }
             let status = env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, Some(&text))? {
                 Decision::Already(status) => Ok(status),

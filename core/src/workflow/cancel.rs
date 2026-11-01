@@ -9,8 +9,10 @@ use rusqlite::Connection;
 use serde_json::json;
 
 use super::add::needs_refs;
-use super::open::{merged_prs, opened_prs};
-use super::{CancelArgs, Env, find_workflow, plan_phase, pulls};
+use super::CancelArgs;
+use crate::env::Env;
+use crate::pr::open::{merged_prs, opened_prs};
+use crate::pr::{find_workflow, plan_phase, pulls};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, WorkflowKey};
@@ -38,7 +40,7 @@ enum Decision {
     Already,
 }
 
-pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
+pub(crate) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let key = args.key;
     // The superseding PR as a reference of the Plan (§2.2): the bare key in the Plan itself, else `<plan>/<key>`.
@@ -112,7 +114,7 @@ fn cancel_jobs(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey) -> Result<()
 /// The Jobs of PR `key` whose status is one of `statuses`, `cancelled` in the caller's transaction with `reason`, one `job-cancelled` Event each,
 /// by `seq`. `what` is what happened to the PR, for the Event's text. `pr cancel` cancels `draft`, `queued` and `failed` ones; the merge of a PR its `draft` ones
 /// (hs-d735, `pr merged`).
-pub(super) fn cancel_jobs_with(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey, statuses: &[&str], reason: &str, what: &str) -> Result<(), CpdError> {
+pub(crate) fn cancel_jobs_with(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey, statuses: &[&str], reason: &str, what: &str) -> Result<(), CpdError> {
     let list = statuses.iter().map(|s| format!("'{s}'")).collect::<Vec<_>>().join(", ");
     let own: Vec<String> = {
         let mut stmt = tx.prepare(&format!("SELECT key FROM jobs WHERE plan = ?1 AND workflow = ?2 AND status IN ({list}) ORDER BY seq"))?;

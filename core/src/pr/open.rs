@@ -456,7 +456,7 @@ pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jo
 }
 
 /// `[{key, number, url, merged_at}]` of every `merged` PR, in key order (`plan-done`'s `prs`).
-pub(super) fn merged_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_json::Value>, CpdError> {
+pub(crate) fn merged_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_json::Value>, CpdError> {
     let mut stmt = tx.prepare("SELECT key, pr_number, pr_url, merged_at FROM workflows WHERE plan = ?1 AND status = 'merged' ORDER BY key")?;
     let rows = stmt
         .query_map([id.as_str()], |r| {
@@ -473,7 +473,7 @@ fn cas_lost(id: &PlanId, key: &WorkflowKey) -> CpdError {
 }
 
 /// `[{key, number, url}]` of every PR that is not `cancelled`, in key order.
-pub(super) fn opened_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_json::Value>, CpdError> {
+pub(crate) fn opened_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_json::Value>, CpdError> {
     let mut stmt = tx.prepare("SELECT key, pr_number, pr_url FROM workflows WHERE plan = ?1 AND status <> 'cancelled' ORDER BY key")?;
     let rows = stmt
         .query_map([id.as_str()], |r| Ok(json!({"key": r.get::<_, String>(0)?, "number": r.get::<_, i64>(1)?, "url": r.get::<_, String>(2)?})))?

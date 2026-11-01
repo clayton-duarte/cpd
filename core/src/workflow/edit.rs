@@ -9,12 +9,14 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
-use super::gh;
+use crate::pr::retitle_pr;
 use super::add::{
     BaseArg, BaseWanted, Subject, classify_base, insert_needs, key_repo, known_workflows, main_worktree, needs_refs, no_branch_clash,
     resolve_refs, stacked_on, wanted_base,
 };
-use super::{EditArgs, Env, find_workflow, plan_phase, pr_locked};
+use super::EditArgs;
+use crate::env::Env;
+use crate::pr::{find_workflow, plan_phase, pr_locked};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, WorkflowKey, RepoName};
@@ -55,7 +57,7 @@ enum Decision {
     Update { before: WorkflowRow, after: WorkflowRow, fields: Vec<&'static str> },
 }
 
-pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
+pub(crate) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     if args.repo.is_none() && args.base.is_none() && args.needs.is_none() && !args.no_needs && args.title.is_none() && args.jira.is_none() {
         return Err(CpdError::new(ErrorCode::NothingToEdit, "Nothing to edit: pass --repo, --base, --needs, --no-needs, --title or --jira."));
@@ -130,7 +132,7 @@ fn retitle_open_pull_request(env: &mut Env, plan: &PlanId, key: &WorkflowKey, ti
         Ok(stmt.query_row([plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
     })?;
     match open {
-        Some((repo, number)) => gh::retitle_pr(env.home.root(), &repo, number, title),
+        Some((repo, number)) => retitle_pr(env.home.root(), &repo, number, title),
         None => Ok(()),
     }
 }

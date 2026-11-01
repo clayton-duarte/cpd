@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::{Env, StartArgs, plan_phase, wrong_phase};
+use super::StartArgs;
+use crate::env::Env;
+use crate::pr::{plan_phase, wrong_phase};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{BasePull, NewEvent, append};
@@ -113,7 +115,7 @@ pub(crate) fn not_ready(conn: &rusqlite::Connection, plan: &PlanId, key: &Workfl
 
 /// The PR's base PR as `<plan>/<key>` (§2.2 "The base PR": derived, the PR of its repo whose Lead Branch is its
 /// `base`), `None` when it is not stacked.
-pub(super) fn base_workflow(conn: &rusqlite::Connection, plan: &PlanId, workflow: &WorkflowRow) -> Result<Option<String>, CpdError> {
+pub(crate) fn base_workflow(conn: &rusqlite::Connection, plan: &PlanId, workflow: &WorkflowRow) -> Result<Option<String>, CpdError> {
     use rusqlite::OptionalExtension;
     Ok(conn
         .query_row("SELECT plan || '/' || key FROM workflows WHERE plan = ?1 AND repo = ?2 AND lead_branch = ?3", [plan.as_str(), workflow.repo.as_str(), workflow.base.as_str()], |r| r.get(0))
@@ -149,7 +151,7 @@ fn merged_base(conn: &rusqlite::Connection, plan: &PlanId, key: &WorkflowKey) ->
 /// `base` and `pr-base-changed` is appended for its Plan, once per step down a chain of merged base PRs. GitHub deleted
 /// the merged branch, so it is never looked up. `by` is who unstacks (`poll`, `engine`, `pr start`, `pr open`); the
 /// poll's Event has `number` and `url` null. Whether anything changed.
-pub(super) fn unstack(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey, by: &str) -> Result<bool, CpdError> {
+pub(crate) fn unstack(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey, by: &str) -> Result<bool, CpdError> {
     use rusqlite::OptionalExtension;
     let mut seen = Vec::new();
     while let Some(MergedBase { repo, from, from_workflow, to }) = merged_base(tx, plan, key)? {
@@ -315,7 +317,7 @@ pub fn prepare(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId
 /// PR's Lead Branch head (§7.2).
 fn prepare_as(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, workflow: &WorkflowRow, stacked: bool) -> Result<Prepared, Failed> {
     let key = &workflow.key;
-    let policy = store.read(|conn| super::policy_of_workflow(conn, home, plan, key)).map_err(Failed::Other)?;
+    let policy = store.read(|conn| crate::pr::policy_of_workflow(conn, home, plan, key)).map_err(Failed::Other)?;
     let path = git::workflow_lead_worktree_path(Path::new(&workflow.repo), plan, key, &workflow.lead_branch).map_err(Failed::Other)?;
     let setup = Setup {
         timeout: Duration::from_secs(u64::from(config.timeouts.setup_minutes) * 60),
@@ -419,7 +421,7 @@ pub fn record_failure(store: &mut Store, source: &str, plan: &PlanId, key: &Work
 }
 
 /// `pr start` (commands.md §9.7).
-pub(super) fn run(args: StartArgs) -> Result<Output, CpdError> {
+pub(crate) fn run(args: StartArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let key = args.key;
     let mut env = Env::open()?;

@@ -11,7 +11,9 @@ use std::str::FromStr;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
-use super::{AddArgs, Env, gh, plan_phase};
+use super::AddArgs;
+use crate::env::Env;
+use crate::pr::{Adoptable, adoptable, plan_phase};
 use crate::config::Tier;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
@@ -33,7 +35,7 @@ use crate::store::WriteTxn;
 const COMMAND: &str = "pr add";
 
 /// The shapes `pr add` writes (contract §2.2 "Job kinds"); `free` is only what the migration gave an older PR.
-pub(super) const SHAPES: [&str; 3] = ["tdd", "docs", "config"];
+pub(crate) const SHAPES: [&str; 3] = ["tdd", "docs", "config"];
 
 /// One stub draft of a shape's template.
 struct Stub {
@@ -131,7 +133,7 @@ fn suffixes(stubs: &[Stub]) -> String {
 
 /// The pull request `--adopt` names, read from GitHub, and the author the Lead confirmed.
 struct Adopt {
-    pull: gh::Adoptable,
+    pull: Adoptable,
     confirm: Option<String>,
 }
 
@@ -425,7 +427,7 @@ fn find_cycle(start: &String, out: &[String], edges: &BTreeMap<String, Vec<Strin
     None
 }
 
-pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
+pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let needs = if args.no_needs {
         Some(Vec::new())
@@ -442,7 +444,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let repo = main_worktree(&args.repo)?;
     let (name, policy_file, policy) = key_repo_policy(&mut env, &plan, &repo)?;
     let unconfigured = (args.shape == "tdd" && policy.test_commands.is_none()).then(|| tests_unconfigured(&repo.display().to_string(), &policy_file));
-    let adopt = args.adopt.map(|number| gh::adoptable(&repo, number)).transpose()?;
+    let adopt = args.adopt.map(|number| adoptable(&repo, number)).transpose()?;
     let base = match &adopt {
         Some(a) => BaseArg::Branch(Some(a.base.clone())),
         None => env.store.read(|conn| classify_base(conn, &plan, &repo, args.base.as_deref()))?,
@@ -811,7 +813,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
     })?;
     // After the lock a stub that waits for nothing would be a parked draft (hs-d731): without `--jobs` only a PR that waits
     // for another PR may lay the stubs out; the error rolls the transaction back, nothing stays written.
-    if appended && wanted.jobs.is_none() && crate::pr::start::not_ready(tx, plan, &wanted.key)?.is_empty() {
+    if appended && wanted.jobs.is_none() && super::start::not_ready(tx, plan, &wanted.key)?.is_empty() {
         let jobs: Vec<&str> = stubs.iter().filter(|s| s.kind != "open").map(|s| s.key.as_str()).collect();
         return Err(CpdError::new(
             ErrorCode::DraftParked,

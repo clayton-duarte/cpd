@@ -51,6 +51,7 @@ cpd-core lock::  # m-units: unit tests that may start a real tmux
 cpd-core merge::  # m-units: unit tests that may start a real tmux
 cpd-core plan::  # m-units: unit tests that may start a real tmux
 cpd-core pr::  # m-units: unit tests that may start a real tmux
+cpd-core workflow::  # m-units: unit tests that may start a real tmux
 cpd-core store::  # m-units: unit tests that may start a real tmux
 cpd-engine watch::  # m-units: unit tests that may start a real tmux
 cpd-tui background::  # m-units: unit tests that may start a real tmux

@@ -28,23 +28,19 @@ mod incident_tests;
 #[cfg(test)]
 mod poll_tests;
 
-mod add;
 pub mod auto_merge;
-mod cancel;
 pub mod closed;
-pub use cancel::{archived_with_drafts, cancel_archived_drafts};
 pub mod deploys;
 pub mod comments;
 pub mod jira_sync;
-mod describe;
-mod edit;
 mod feedback;
 mod gh;
 pub(crate) use gh::head_ref_oid;
+pub(crate) use gh::{Adoptable, adoptable, describe_pr, retitle_pr};
 mod merge;
 pub mod merge_method;
 pub mod review;
-mod open;
+pub(crate) mod open;
 pub(crate) mod poll;
 pub mod posts;
 pub mod reactions;
@@ -57,15 +53,18 @@ mod reply;
 pub(crate) mod rebase;
 #[cfg(test)]
 pub(crate) use rebase::remote_contains_with;
-mod row;
-pub mod start;
 mod status;
 mod view;
+
+pub use crate::workflow::{WorkflowCommand, run_workflow};
+pub use crate::workflow::start;
+pub use crate::workflow::cancel::{archived_with_drafts, cancel_archived_drafts};
+pub(crate) use crate::workflow::{cancel, row};
 
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::args::{PlanArg, WorkflowArg, WorkflowTitle};
+use crate::args::{PlanArg, WorkflowArg};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::git::hooks::{Detached, Log as HookLog};
@@ -83,20 +82,6 @@ pub use open::{Pulled, description_required, jira_required, jira_required_of, st
 #[cfg(test)]
 pub(crate) use rebase::{in_progress_with, rebase_onto_with, unresolved_with};
 
-/// The `workflow` group (commands.md §9): the Plan's Workflows, before and after they start.
-#[derive(clap::Subcommand, Debug)]
-pub enum WorkflowCommand {
-    /// Add a Workflow to the Plan (§9.4)
-    Add(AddArgs),
-    /// Change a waiting Workflow before the lock (§9.5)
-    Edit(EditArgs),
-    /// Store the Workflow's description, which becomes the pull request body (§9.5a)
-    Describe(DescribeArgs),
-    /// Remove a Workflow from the Plan before the lock; after it, end a Workflow with nothing to open, or whose work another Workflow carried (`--superseded-by`) (§9.6)
-    Cancel(CancelArgs),
-    /// Start a waiting Workflow whose needs are merged, after a failed start (§9.7)
-    Start(StartArgs),
-}
 
 /// The `pr` group (commands.md §9): what a command does to a Workflow's pull request, through `gh`.
 #[derive(clap::Subcommand, Debug)]
@@ -147,115 +132,6 @@ pub struct PollArgs {
     plan: PlanArg,
 }
 
-#[derive(clap::Args, Debug)]
-pub struct AddArgs {
-    /// The PR key, chosen by the Lead
-    #[arg(value_name = "key")]
-    key: WorkflowKey,
-    /// The PR's repo: a path inside it
-    #[arg(long, value_name = "path")]
-    repo: PathBuf,
-    /// The PR's own title: names its change; 1-72 characters on one line
-    #[arg(long, value_name = "text")]
-    title: WorkflowTitle,
-    /// The PR's own Jira ticket key, e.g. ABC-123 (optional)
-    #[arg(long, value_name = "KEY")]
-    jira: Option<crate::context::Jira>,
-    /// The branch the pull request targets [default: origin's HEAD branch, else main], or <key> (or <plan>/<key>) to stack on that PR
-    #[arg(long, value_name = "branch")]
-    base: Option<String>,
-    /// PRs that must be merged before this one starts, comma-separated: a key of the Plan, or <plan>/<key> of another Plan of the Context
-    #[arg(long, value_name = "r1,r2", value_delimiter = ',', conflicts_with = "no_needs")]
-    needs: Vec<add::WorkflowRef>,
-    /// No needs, even on a reopened Plan (default there: every merged PR of the Plan)
-    #[arg(long = "no-needs")]
-    no_needs: bool,
-    /// The template of stub drafts the PR starts with, and the kinds its Jobs may have: tdd (docs, red tests, implementation), docs or config (§9.4)
-    #[arg(long, value_name = "shape", value_parser = clap::builder::PossibleValuesParser::new(add::SHAPES), default_value = "tdd")]
-    shape: String,
-    /// After the lock: the template's Jobs as decided work, a JSON object keyed by the template suffix, each `{"tier", "spec"}` (§9.4)
-    #[arg(long, value_name = "file.json")]
-    jobs: Option<PathBuf>,
-    /// Adopt the existing pull request <number> of the repo: its head branch is pushed to, its base is the pull request's (§9.4)
-    #[arg(long, value_name = "number", conflicts_with = "base", value_parser = clap::value_parser!(i64).range(1..))]
-    adopt: Option<i64>,
-    /// With --adopt: the login of the pull request's author when the User is not the author (confirmed by the User first)
-    #[arg(long = "confirm-author", value_name = "login", requires = "adopt")]
-    confirm_author: Option<String>,
-    #[command(flatten)]
-    plan: PlanArg,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct EditArgs {
-    /// The PR key
-    #[arg(value_name = "key")]
-    key: WorkflowKey,
-    /// The new repo: a path inside it
-    #[arg(long, value_name = "path")]
-    repo: Option<PathBuf>,
-    /// The new base branch, or <key> (or <plan>/<key>) to stack on that PR
-    #[arg(long, value_name = "branch")]
-    base: Option<String>,
-    /// The new needs, replacing the list, comma-separated: keys of the Plan or <plan>/<key>
-    #[arg(long, value_name = "r1,r2", value_delimiter = ',', conflicts_with = "no_needs")]
-    needs: Option<Vec<add::WorkflowRef>>,
-    /// Remove every need
-    #[arg(long = "no-needs")]
-    no_needs: bool,
-    /// The new title, in any phase while the PR is not merged or cancelled; 1-72 characters on one line
-    #[arg(long, value_name = "text")]
-    title: Option<WorkflowTitle>,
-    /// The PR's Jira ticket key, e.g. ABC-123: sets or replaces it, in any phase while the PR is not merged or cancelled
-    #[arg(long, value_name = "KEY")]
-    jira: Option<crate::context::Jira>,
-    #[command(flatten)]
-    plan: PlanArg,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct DescribeArgs {
-    /// The Workflow key
-    #[arg(value_name = "key")]
-    key: WorkflowKey,
-    /// The description: a path to a UTF-8 file, or - for stdin
-    #[arg(long, value_name = "path")]
-    file: PathBuf,
-    #[command(flatten)]
-    plan: PlanArg,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct CancelArgs {
-    /// The PR key
-    #[arg(value_name = "key")]
-    key: WorkflowKey,
-    /// Cancel a dispatch PR whose merged work another PR carried: that PR, as <plan>/<key> (a bare <key> is of the Plan)
-    #[arg(long = "superseded-by", value_name = "ref")]
-    superseded_by: Option<add::WorkflowRef>,
-    #[command(flatten)]
-    plan: PlanArg,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct StartArgs {
-    /// The PR key
-    #[arg(value_name = "key")]
-    key: WorkflowKey,
-    #[command(flatten)]
-    plan: PlanArg,
-}
-
-/// Runs `command` of the `workflow` group (commands.md §9.4–§9.7).
-pub fn run_workflow(command: WorkflowCommand) -> Result<Output, CpdError> {
-    match command {
-        WorkflowCommand::Add(args) => add::add(args),
-        WorkflowCommand::Edit(args) => edit::edit(args),
-        WorkflowCommand::Describe(args) => describe::describe(args),
-        WorkflowCommand::Cancel(args) => cancel::cancel(args),
-        WorkflowCommand::Start(args) => start::run(args),
-    }
-}
 
 /// Runs `command` of the `pr` group. Only `view`, `merge` and `poll` read `ports` yet; the others open their `Env` on the real ports until their Jobs convert them.
 pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdError> {
@@ -338,7 +214,7 @@ fn workflow_log(home: &CpdHome, plan: &PlanId, key: &WorkflowKey, hook: Hook) ->
     home.plan_dir(plan).join("logs").join(format!("pr-{key}.{}.log", hook.as_str()))
 }
 
-fn wrong_phase(plan: &PlanId, phase: Phase, command: &str, needs: &str) -> CpdError {
+pub(crate) fn wrong_phase(plan: &PlanId, phase: Phase, command: &str, needs: &str) -> CpdError {
     CpdError::new(ErrorCode::IllegalPhase, format!("Plan {plan} is in phase {}: {command} needs phase {needs}.", phase.as_str()))
         .with("plan", plan.as_str())
         .with("phase", phase.as_str())
@@ -346,7 +222,7 @@ fn wrong_phase(plan: &PlanId, phase: Phase, command: &str, needs: &str) -> CpdEr
 }
 
 /// `pr_locked` (exit 3): the Plan is past the phases where its PRs change (§3.8).
-fn pr_locked(plan: &PlanId, phase: Phase, command: &str) -> CpdError {
+pub(crate) fn pr_locked(plan: &PlanId, phase: Phase, command: &str) -> CpdError {
     CpdError::new(
         ErrorCode::WorkflowLocked,
         format!("Plan {plan} is in phase {}: {command} needs phase grounding or plan, and after the lock its PRs are Locked.", phase.as_str()),
@@ -356,7 +232,7 @@ fn pr_locked(plan: &PlanId, phase: Phase, command: &str) -> CpdError {
 }
 
 /// The Plan's phase, else `plan_not_found`.
-fn plan_phase(conn: &rusqlite::Connection, plan: &PlanId) -> Result<Phase, CpdError> {
+pub(crate) fn plan_phase(conn: &rusqlite::Connection, plan: &PlanId) -> Result<Phase, CpdError> {
     use rusqlite::OptionalExtension;
     let phase: String = conn
         .query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
@@ -367,7 +243,7 @@ fn plan_phase(conn: &rusqlite::Connection, plan: &PlanId) -> Result<Phase, CpdEr
 }
 
 /// The PR `key` among `prs`, else `pr_not_found` (exit 4).
-fn find_workflow<'a>(workflows: &'a [WorkflowRow], plan: &PlanId, key: &WorkflowKey) -> Result<&'a WorkflowRow, CpdError> {
+pub(crate) fn find_workflow<'a>(workflows: &'a [WorkflowRow], plan: &PlanId, key: &WorkflowKey) -> Result<&'a WorkflowRow, CpdError> {
     workflows.iter().find(|p| p.key == *key).ok_or_else(|| {
         CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {key} in Plan {plan}."))
             .with("plan", plan.as_str())
