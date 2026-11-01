@@ -3,7 +3,7 @@
 // function, so no test spawns cpd, opens a socket or starts a server.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { parsePiSession, parseTailOutput, toSnapshotFrame, type TranscriptMessage } from "../transcript.ts";
-import type { InboxItem } from "./readmodel";
+import type { InboxItem } from "./readmodel.ts";
 
 /** The Inbox item shape `cpd inbox list` prints, the rail's row source (web/README.md "The live Inbox in the right rail"). */
 export type { InboxItem };
