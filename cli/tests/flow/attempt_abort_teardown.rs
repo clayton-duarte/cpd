@@ -12,9 +12,11 @@
 use crate::common;
 
 use std::fs::OpenOptions;
+use std::path::Path;
 use std::time::Duration;
 
 use common::Run;
+use common::fx::Fx;
 use cpd_core::git::{Setup, create_attempt_worktree};
 use cpd_core::home::CpdHome;
 use cpd_core::host::spawn::{Launch, Pid, Signal, Spawn};
@@ -212,4 +214,44 @@ fn pi_window_and_worktree_are_cleaned_through_crash_recovery() {
     assert_ended(&live, ATTEMPT, "failed", "aborted");
     assert!(live.fx.panes().iter().all(|p| p.window_name != "pay--api-a1"), "the Worker window is killed");
     assert!(!made.path.exists(), "the worktree is removed: {}", made.path.display());
+}
+
+// ---------- the harness: a bare env a test leaks is still removed ----------
+
+/// The helper of [`a_leaked_bare_env_is_gone_when_the_test_process_exits`]: set in the child's environment, with
+/// [`LEAK_FILE`] the path the child writes its env root to, so the parent can check it after the child is gone.
+const LEAK_HELPER: &str = "CPD_LEAK_BARE_ENV_HELPER";
+const LEAK_FILE: &str = "CPD_LEAK_BARE_ENV_FILE";
+
+/// A bare env ([`Fx`]) starts no reaper, so a test process that ends without dropping it (a leaked `Fx`, a
+/// `mem::forget`, a `std::process::exit`) would leave its `cpd-test-*` for the Gate's leak check. This runs that
+/// process as a helper, which leaks its `Fx` and exits normally, then asserts its directory is gone.
+#[test]
+fn a_leaked_bare_env_is_gone_when_the_test_process_exits() {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let record = scratch.path().join("root");
+    let out = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+        .args(["--exact", "attempt_abort_teardown::leaks_a_bare_env_and_exits", "--nocapture"])
+        .env(LEAK_HELPER, "1")
+        .env(LEAK_FILE, &record)
+        .output()
+        .expect("run the helper test");
+    assert!(out.status.success(), "the helper exited {:?}: {out:?}", out.status);
+    let root = std::fs::read_to_string(&record).expect("the helper wrote its env root");
+    let root = root.trim();
+    assert!(!Path::new(root).exists(), "a leaked bare env survived its test process: {root}");
+}
+
+/// Not a test of its own: leaks an `Fx` and returns, so the process ends with the env still on disk. Does nothing
+/// unless [`LEAK_HELPER`] is set.
+#[test]
+fn leaks_a_bare_env_and_exits() {
+    if std::env::var_os(LEAK_HELPER).is_none() {
+        return;
+    }
+    // Read the file path before the `Fx` strips every `CPD_*` from the process environment ([`TestEnv::isolation`]).
+    let file = std::env::var(LEAK_FILE).expect("the leak file");
+    let fx = Fx::with_ports();
+    std::fs::write(file, fx.env.root().display().to_string()).expect("write the env root");
+    std::mem::forget(fx);
 }

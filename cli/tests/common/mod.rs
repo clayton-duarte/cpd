@@ -33,8 +33,8 @@ use std::os::unix::process::CommandExt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock, PoisonError, RwLock};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::{Mutex, Once, OnceLock, PoisonError, RwLock};
 use std::time::Duration;
 
 use clap::Parser;
@@ -313,6 +313,50 @@ fn sh_quote(s: &str) -> String {
 fn envs_dir() -> PathBuf {
     // Normalised: a TMPDIR that ends in a slash, joined with `/name` by a script, makes a `//` the components drop.
     std::env::var_os("TMPDIR").filter(|d| !d.is_empty()).map_or_else(|| PathBuf::from("/dev/shm"), |d| PathBuf::from(d).components().collect())
+}
+
+/// A `TestEnv` root this process made, in the registry [`sweep_envs`] walks at process exit.
+struct EnvRoot {
+    root: PathBuf,
+    next: AtomicPtr<EnvRoot>,
+}
+
+/// Every env root this process made, newest first. A bare env ([`TestEnv::bare`], every `Fx`) starts no reaper, so a
+/// test process that ends without dropping its `TestEnv` (a leaked `Fx` held by a `'static` or a detached thread, a
+/// `mem::forget`, a `std::process::exit`) would leave its `cpd-test-*` for the Gate's leak check. The [`sweep_envs`]
+/// registered here removes it. A reaped env is torn down by its `Drop`, or by its reaper when the test is killed; this
+/// only ever removes a directory of this process that is still there.
+static ENV_ROOTS: AtomicPtr<EnvRoot> = AtomicPtr::new(std::ptr::null_mut());
+
+/// The `atexit` handler: removes every env root still on disk. Lock-free and allocation-light, so it cannot deadlock
+/// or panic the exiting thread.
+extern "C" fn sweep_envs() {
+    let mut node = ENV_ROOTS.load(Ordering::SeqCst);
+    while !node.is_null() {
+        // SAFETY: every node is a `Box` leaked by `register_env` and never freed; only its fields are read here.
+        let found = unsafe { &*node };
+        let _ = fs::remove_dir_all(&found.root);
+        node = found.next.load(Ordering::SeqCst);
+    }
+}
+
+/// Puts `root` on the exit-sweep list, registering [`sweep_envs`] on the first call. See [`ENV_ROOTS`].
+fn register_env(root: &Path) {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: `sweep_envs` is an `extern "C"` function of no arguments that touches no lock and cannot unwind;
+        // `atexit` calls it once at process exit, on every way out including `std::process::exit`.
+        unsafe { nix::libc::atexit(sweep_envs) };
+    });
+    let node = Box::into_raw(Box::new(EnvRoot { root: root.to_path_buf(), next: AtomicPtr::new(std::ptr::null_mut()) }));
+    loop {
+        let head = ENV_ROOTS.load(Ordering::SeqCst);
+        // SAFETY: `node` is our own fresh `Box`, and its `next` is written only before the CAS publishes it.
+        unsafe { (*node).next.store(head, Ordering::SeqCst) };
+        if ENV_ROOTS.compare_exchange(head, node, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            return;
+        }
+    }
 }
 
 /// The Gate's run id (`scripts/gate-run.sh`), which every socket name carries so that the run finds its own.
@@ -881,6 +925,9 @@ impl TestEnv {
     fn build(reaped: bool) -> TestEnv {
         let envs_dir = envs_dir();
         let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir_in(&envs_dir).unwrap_or_else(|e| panic!("a temp dir in {}: {e}", envs_dir.display()));
+        // On the exit-sweep list from before anything can panic: a test process that ends without dropping this env
+        // still leaves no `cpd-test-*` behind ([`sweep_envs`]).
+        register_env(dir.path());
         let n = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
         let tmux_socket = match gate_run_id() {
             Some(run) => format!("cpdt-{run}-{}-{n}", std::process::id()),
@@ -946,6 +993,13 @@ impl TestEnv {
             let _ = spawn(&mut teardown).and_then(|mut child| child.wait());
         }
         let _ = fs::remove_dir_all(self.root());
+        // A child the teardown missed (a late supervising `cpd watch --ensure`, a process that left the group) can
+        // leave the directory there or make it again after the `rm`: stop the env's process group and remove it once
+        // more, so the `Drop` truly removes it.
+        if let (true, Some(pgid)) = (self.root().exists(), self.pgid) {
+            let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid as i32), nix::sys::signal::Signal::SIGKILL);
+            let _ = fs::remove_dir_all(self.root());
+        }
     }
 
     /// The temporary directory everything lives in.
