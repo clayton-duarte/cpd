@@ -172,6 +172,10 @@ export interface LiveChatProps {
 
 `main.tsx` probes `GET /__cpd/health` with the token before mounting: on `ok` it builds `createLiveApi({ token: DEV_TOKEN })` and hands it to `App` as a new optional **`live?: LiveApi`** prop; otherwise it builds `createMockApi()` exactly as today. On the `/chat` route, `App` renders `<LiveChat api={live} token={token}/>` when `live` is set, and the existing `<Chat …/>` otherwise. The mock, its API and its tests are unchanged.
 
+### The chat surface (shadcn AI Elements)
+
+> Skeleton — filling in the pinned AI Elements surface.
+
 ### The durable host-socket read (`chat-host`)
 
 A durable Session's transcript is read from its **host socket** — the real frames of `docs/contract.md` §6.14 — not only by shelling the CLI. The preference rule, pinned: for a durable Session the dev server **connects to the host socket when a live host answers** (a socket file that accepts and completes the handshake) and **falls back to `cpd session tail` otherwise** — no socket file, a refused connect, a refused handshake. A pi Session keeps its session-file read; the browser API is unchanged either way: the SSE `/frames` stream still emits the same `SnapshotFrame`s of `toSnapshotFrame`, and `LiveApi` is untouched. The send path stays `cpd session send`: the socket is **read-only** here, the client sends `hello` and `attach` and nothing else. The activation flag, the token and the security boundary above are unchanged — the host-socket read runs in the same dev server, behind the same token check.
