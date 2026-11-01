@@ -95,10 +95,10 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
             crate::pr::record_pull(tx, plan, &pr, pulled)?;
         }
         if let Some(e) = &stale {
-            ledger::append_error(tx, &target, ctx.source, e, recover::stale_text(&target, e))?;
+            ledger::append_error(tx, &target, ctx.source, e, recover::stale_text(&target, e), ctx.config.watch.error_repeat())?;
         }
         if let Some(e) = &push {
-            ledger::append_error(tx, &target, ctx.source, e, recover::push_text(&target, e))?;
+            ledger::append_error(tx, &target, ctx.source, e, recover::push_text(&target, e), ctx.config.watch.error_repeat())?;
         }
         Ok(())
     })?;

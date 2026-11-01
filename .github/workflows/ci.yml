@@ -49,6 +49,8 @@ jobs:
       # The Rust compiler: a compile error or warning shows here, apart from a failing test.
       - name: Rust build
         run: scripts/gate-run.sh pnpm run verify:build
+      - name: Web
+        run: scripts/gate-run.sh pnpm run verify:web
       - name: Node tests
         run: scripts/gate-run.sh pnpm run verify:node
       - name: Rust tests

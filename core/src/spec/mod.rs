@@ -69,6 +69,7 @@ fn explanation(cause: Stored, evidence: &Evidence) -> String {
         Stored::Failed(cause) => match cause {
             Cause::SetupFailed => "The worktree or its `pre-start` hook failed, so the Worker never started.".to_owned(),
             Cause::TimedOut => "The Worker ran out of time before it submitted.".to_owned(),
+            Cause::Aborted => "The Lead aborted the Attempt before its work was merged.".to_owned(),
             Cause::Crashed => "The Worker or its driver died before the work was merged.".to_owned(),
             Cause::NoSubmit => "The Worker went idle twice without running `cpd attempt submit`, even after a nudge.".to_owned(),
             Cause::MergeConflict if files.is_empty() => "Rebasing it onto the newer Lead Branch conflicted.".to_owned(),

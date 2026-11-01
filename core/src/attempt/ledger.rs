@@ -4,12 +4,14 @@
 //! `merging`; the merge (`crate::merge`) ends a `merging` one.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
 use crate::config::{Catalog, Tier};
 use crate::error::{CpdError, ErrorCode};
+use crate::events::repeat::{self, Same, Scope};
 use crate::events::{self, NewEvent};
 use crate::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
 use crate::store::WriteTxn;
@@ -165,6 +167,9 @@ causes! {
     SetupFailed = "setup_failed",
     /// A5 after E2 set `stop_request = timed_out`.
     TimedOut = "timed_out",
+    /// `attempt abort` (commands.md §6.5, contract §3.4, hs-a8): the Lead ended a running Attempt. A no-ladder
+    /// cause, like `timed_out` and `setup_failed`: `next_rung` returns `None`, so the Job goes `failed`.
+    Aborted = "aborted",
     /// The Worker pane is dead, pi stopped badly, the driver failed, or (R3)
     /// the driver died before the merge's compare-and-swap.
     Crashed = "crashed",
@@ -666,9 +671,12 @@ fn next_rung(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder
 }
 
 /// Appends an `error` Event about `attempt` (§5.2) for `error`, from `source`.
-pub fn append_error(tx: &WriteTxn<'_>, attempt: &Attempt, source: &str, error: &CpdError, text: String) -> Result<(), CpdError> {
-    events::append(
+pub fn append_error(tx: &WriteTxn<'_>, attempt: &Attempt, source: &str, error: &CpdError, text: String, window: Duration) -> Result<(), CpdError> {
+    let same = Same::Message { source, code: error.code().as_str(), message: error.message(), scope: Scope::Plan(&attempt.plan) };
+    repeat::append_once(
         tx,
+        window,
+        &same,
         NewEvent::error(text, source, error.code().as_str(), error.message(), error.details())
             .plan(attempt.plan.clone())
             .job(attempt.job.clone())
@@ -710,7 +718,7 @@ mod tests {
     #[test]
     fn every_cause_is_listed_and_reads_back() {
         use super::{Cause, Stored};
-        assert_eq!(Cause::ALL.len(), 11);
+        assert_eq!(Cause::ALL.len(), 12);
         for cause in Cause::ALL {
             assert_eq!(Cause::parse(cause.as_str()), Some(*cause));
             assert_eq!(Stored::parse(cause.as_str()), Some(Stored::Failed(*cause)));

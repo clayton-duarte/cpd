@@ -79,3 +79,29 @@ pub fn dispatch(args: DispatchArgs) -> Result<Output, CpdError> {
         "pid": started.pid,
     })))
 }
+
+/// A9 for an Attempt the Lead aborted whose driver is already dead: the `attempt abort` command calls it after its
+/// transaction ended the Attempt (`core/src/attempt/abort.rs`). It reuses the existing teardown, never a copy: the
+/// Worker is stopped by its stored runner through `runner::kill_orphan` (the `pi` window, or SIGKILL to the `durable`
+/// pid), and a parallel `pi` Attempt's worktree and branch go the way a merged end removes them; a linear Attempt
+/// keeps its workflow worktree (hs-d680). The driver lock file goes last. A live driver never calls it: it consumes
+/// the stop request itself (run.rs A5).
+pub(crate) fn teardown_aborted(
+    ports: &Ports,
+    config: &crate::config::Config,
+    home: &crate::home::CpdHome,
+    store: &mut crate::store::Store,
+    attempt: &crate::attempt::ledger::Attempt,
+) -> Result<(), CpdError> {
+    let tmux = crate::host::tmux::Tmux::new(config.tmux.socket.as_str());
+    let (runner, _pid) = store.read(|conn| runner::stored(conn, &attempt.plan, &attempt.id))?;
+    let killed = runner::kill_orphan(ports, config, home, &tmux, store, &attempt.plan, &attempt.id);
+    let removed = match runner {
+        crate::config::WorkerRunner::Pi if !crate::git::worktree::is_linear(&attempt.branch, &attempt.lead_branch) => {
+            crate::git::remove_merged_attempt(&attempt.lead_worktree, &attempt.worktree, &attempt.branch)
+        }
+        _ => Ok(()),
+    };
+    let unlocked = lock::remove(home, &attempt.plan, &attempt.id);
+    killed.and(removed).and(unlocked)
+}

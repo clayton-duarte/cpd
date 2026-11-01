@@ -181,7 +181,8 @@ pub struct Watch {
     pub models_discovery_seconds: u32,
     /// E16 starts a `cpd janitor` pass this often (§3.7, §8.2).
     pub janitor_minutes: u32,
-    /// The same `error` Event (step and code) is appended at most once per this (§3.7).
+    /// The same `error` Event is appended at most once per this (§3.7): the engine's (step, object and code), the
+    /// driver's (Plan, code and message) and `session report`'s (Session, code and message).
     pub error_repeat_seconds: u32,
     /// E5 raises an `error` once the same `gh` call of the poll has failed with an HTTP 5xx or a timeout this long (§3.7, §8.2).
     pub pr_poll_transient_minutes: u32,
@@ -216,6 +217,13 @@ pub struct Tmux {
     pub cockpit_session: String,
     /// The hidden session for Workers and watch.
     pub work_session: String,
+}
+
+impl Watch {
+    /// The window of the repeat lookup of `error` Events (`error_repeat_seconds`).
+    pub fn error_repeat(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(self.error_repeat_seconds))
+    }
 }
 
 impl Config {
