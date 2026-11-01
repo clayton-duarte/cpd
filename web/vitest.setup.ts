@@ -16,8 +16,10 @@ if (typeof globalThis.ResizeObserver === "undefined") {
 // calls it when the shell's Context rail mounts (web/src/hooks/use-mobile.ts), and this Gate run
 // proves it missing. A browser always has it: define the minimal MediaQueryList only when it is
 // missing. Its query never matches (the desktop rail, not the mobile sheet, is what renders).
-if (typeof window.matchMedia !== "function") {
-  window.matchMedia = ((query: string) => ({
+// This setup runs for every file, node and jsdom alike, so test the global and never bare
+// `window`: under node there is no window, and a browser global simply is not there.
+if (typeof globalThis.window !== "undefined" && typeof globalThis.window.matchMedia !== "function") {
+  globalThis.window.matchMedia = ((query: string) => ({
     matches: false,
     media: query,
     onchange: null,
