@@ -240,10 +240,18 @@ fn closes_when_resolved() {
     tick(&fx);
     assert_eq!(labels(&fx), ["pay: 2 parked drafts"]);
 
-    // d1 is cancelled and d2 needs a queued Job (so it waits): S is empty, whatever W and T say.
-    fx.env.sql("UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE plan = 'pay' AND key = 'd1';");
+    // A need on a queued Job no longer un-parks a complete draft (hs-n677): d2 stays a parked draft.
     fx.env
         .sql("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'd2', 'q1');");
+    tick(&fx);
+    assert_eq!(
+        labels(&fx),
+        ["pay: 2 parked drafts"],
+        "a need does not un-park a complete draft"
+    );
+
+    // Cancelling both drafts empties S, whatever W and T say.
+    fx.env.sql("UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE plan = 'pay' AND key IN ('d1', 'd2');");
     tick(&fx);
     assert_eq!(
         items(&fx),
