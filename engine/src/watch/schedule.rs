@@ -16,6 +16,7 @@ use cpd_core::driver::schedule::{Pool, Ready, Schedule, schedule};
 use cpd_core::driver::{self, Allocation, StartCtx};
 use cpd_core::resource;
 use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::events::{self, NewEvent};
 use cpd_core::host::limit::limit;
 use cpd_core::ids::{JobKey, PlanId, PrKey};
 
@@ -79,7 +80,7 @@ pub(super) fn backing_off_with(conn: &Connection, plan: &PlanId, key: &JobKey, c
 /// The `workers` step counts these rows too (the StatusBar's `W waiting`).
 pub(super) const READY: &str = "SELECT j.plan, j.key, j.urgent, j.seq, j.skipped_n FROM jobs j JOIN plans p ON p.id = j.plan
   LEFT JOIN prs r ON r.plan = j.plan AND r.key = j.pr
-  WHERE j.status = 'queued'
+  WHERE j.status = 'queued' AND p.archived_at IS NULL
     AND ((j.pr IS NOT NULL AND p.phase IN ('dispatch', 'deploy') AND r.status IN ('dispatch', 'open'))
       OR (j.pr IS NULL AND j.kind IN ('scout', 'research') AND p.archived_at IS NULL
           AND p.phase IN ('grounding', 'plan', 'dispatch', 'deploy')))
@@ -187,18 +188,34 @@ fn pick(conn: &Connection, home: &cpd_core::home::CpdHome, concurrency: u32, rea
 }
 
 /// Records the Jobs of `ids` skipped (contract §3.7 E3 "The skip order"): each Job not yet skipped gets the number above every
-/// other skip, in the order given; one already skipped keeps its place. No Event.
+/// other skip, in the order given; one already skipped keeps its place. A Job whose row the UPDATE newly set (`changes()` > 0)
+/// has just begun a waiting episode, and its episode gets one `job-blocked` Event (hs-d798), with `waiting` the number of Ready
+/// Jobs this walk skipped; a Job already skipped appends no second one.
 fn record_skips(engine: &mut Engine, jobs: &[(PlanId, JobKey)]) -> Result<(), CpdError> {
     if jobs.is_empty() {
         return Ok(());
     }
     engine.store.write(SOURCE, |tx| {
-        for (plan, key) in jobs {
-            tx.execute(
+        let mut newly: Vec<&(PlanId, JobKey)> = Vec::new();
+        for job in jobs {
+            let changed = tx.execute(
                 "UPDATE jobs SET skipped_n = (SELECT coalesce(max(skipped_n), 0) + 1 FROM jobs)
                   WHERE plan = ?1 AND key = ?2 AND status = 'queued' AND skipped_n IS NULL",
-                params![plan.as_str(), key.as_str()],
+                params![job.0.as_str(), job.1.as_str()],
             )?;
+            if changed > 0 {
+                newly.push(job);
+            }
+        }
+        // One Event per waiting episode (hs-d798): `waiting` is the number of Ready Jobs skipped this walk.
+        if !newly.is_empty() {
+            let waiting = newly.len() as u64;
+            for (plan, key) in newly {
+                let text = format!(
+                    "Job {key} of Plan {plan} waits for a slot: {waiting} Ready Job(s) are waiting for one. Next: cpd plan show --plan {plan}"
+                );
+                events::append(tx, NewEvent::job_blocked(text, waiting).plan(plan.clone()).job(key.clone()))?;
+            }
         }
         Ok(())
     })
