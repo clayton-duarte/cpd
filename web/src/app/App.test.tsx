@@ -156,14 +156,6 @@ test("the Context column renders the sidebar-03 block", async () => {
   expect(columns_[0]!.querySelector('[data-slot="sidebar"]')).not.toBeNull();
 });
 
-test("the Inbox column renders its placeholder", async () => {
-  await renderShell();
-
-  const columns_ = columns();
-  expect(columns_).toHaveLength(3);
-  expect(columns_[2]!.textContent).toContain("The Inbox lands here.");
-});
-
 /**
  * sidebar-09's registry sample data (`data.mails`), verbatim and in its order
  * (web/README.md "The Inbox rail in the right column"): the ten mails the rail lists, each with
