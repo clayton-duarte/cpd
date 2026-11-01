@@ -57,7 +57,7 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
     let pr = require_open(&mut env, &plan, &args)?.clone();
     let key = pr.key.clone();
     env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
-    refuse_running(&mut env, &id, &key)?;
+    env.store.read(|conn| refuse_running(conn, &id, &key, "do the rebase"))?;
     let policy = pr_policy(&mut env, &id, &key)?;
     let lead = pr.lead(&id)?.clone();
     let repo = std::path::Path::new(&pr.repo);
@@ -152,16 +152,28 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
     push_rebased(&mut env, &args, &id, &pr, &old, &new, &lease)
 }
 
-/// A running Attempt of any Job of the PR refuses `attempt_running`: that Worker does the rebase, steered by the Lead.
-fn refuse_running(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
-    let running: Vec<(String, String)> = env.store.read(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT j.key, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-              WHERE a.plan = ?1 AND j.pr = ?2 AND a.status = 'running' ORDER BY j.key, a.id",
-        )?;
-        let rows = stmt.query_map([plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
-    })?;
+/// The running Attempts of PR `key`'s Jobs as `(job key, attempt id)`, in job/attempt order.
+/// One query, shared by `pr rebase` and `pr push` (hs-d801).
+pub(super) fn running_attempts(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<Vec<(String, String)>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT j.key, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+          WHERE a.plan = ?1 AND j.pr = ?2 AND a.status = 'running' ORDER BY j.key, a.id",
+    )?;
+    let rows = stmt.query_map([plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// A running Attempt of any Job of the PR refuses `attempt_running`: that Worker is steered by the
+/// Lead, not by the command. `what` is what the command would have done ("do the rebase", "do the
+/// push"). The caller passes a store or an open write transaction, so `pr push` can check it inside
+/// the transaction that serialises it with an Attempt start (ADR-0014).
+pub(super) fn refuse_running(
+    conn: &rusqlite::Connection,
+    plan: &PlanId,
+    key: &PrKey,
+    what: &str,
+) -> Result<(), CpdError> {
+    let running = running_attempts(conn, plan, key)?;
     if running.is_empty() {
         return Ok(());
     }
@@ -170,7 +182,7 @@ fn refuse_running(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<(), CpdEr
     let attempts: Vec<String> = running.into_iter().map(|(_, a)| a).collect();
     Err(CpdError::new(
         ErrorCode::AttemptRunning,
-        format!("Job {} of PR {key} has a running Attempt: steer that Worker to do the rebase (message it with `cpd session send`) instead.", jobs.join(", ")),
+        format!("Job {} of PR {key} has a running Attempt: steer that Worker to {what} (message it with `cpd session send`) instead.", jobs.join(", ")),
     )
     .with("pr", key.as_str())
     .with("jobs", jobs)
@@ -187,7 +199,7 @@ fn resume(args: Args) -> Result<Output, CpdError> {
     let pr = require_open(&mut env, &plan, &args)?.clone();
     let key = pr.key.clone();
     env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
-    refuse_running(&mut env, &id, &key)?;
+    env.store.read(|conn| refuse_running(conn, &id, &key, "do the rebase"))?;
     let policy = pr_policy(&mut env, &id, &key)?;
     let lead = pr.lead(&id)?.clone();
     let repo = Path::new(&pr.repo);
