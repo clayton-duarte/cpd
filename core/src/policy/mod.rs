@@ -24,8 +24,8 @@ use crate::ids::{ContextId, OwnerLogin, RepoName};
 use crate::session::Role;
 
 pub use domain::{
-    audience, Checks, Declared, Deploys, Domain, DomainSource, Feedback, Gate, GateAlias, Gates, Jira, JiraSet, Policy, Post, PostSet, Pr, ResourceScope, Resources, Scope, Source, Sources,
-    Text,
+    audience, Checks, Declared, Deploys, Domain, DomainSource, Feedback, Gate, GateAlias, Gates, Generated, Jira, JiraSet, Policy, Post, PostSet, Pr, ResourceScope, Resources, Scope, Source,
+    Sources, Text,
 };
 /// The `policy` commands (commands.md §22).
 #[derive(clap::Subcommand, Debug)]
@@ -200,6 +200,10 @@ mod resources_tests;
 mod deploys_tests;
 
 #[cfg(test)]
+#[path = "generated_tests.rs"]
+mod generated_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::home::CpdHome;
@@ -293,6 +297,7 @@ mod tests {
             ("hooks", "[hooks]\npre-start = \"x\"\n"),
             ("test-commands", "[test-commands]\nbuild = \"b\"\nrun = \"r\"\n"),
             ("protected", "[protected]\npaths = []\n"),
+            ("generated", "[generated]\npaths = []\n"),
         ] {
             let err = invalid(text);
             assert_eq!(err.details()["key"], domain);

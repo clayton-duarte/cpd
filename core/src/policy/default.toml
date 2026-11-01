@@ -1,6 +1,7 @@
 # cpd's compiled default policy (contract §8.3): every domain, parsed by the
 # same loader as every scope file. Every `text` is empty.
-# The repo-only domains (hooks, test-commands, protected) have no `text`: no hook, no test commands, no protected path.
+# The repo-only domains (hooks, test-commands, protected, generated) have no `text`: no hook, no test commands, no
+# protected path, no generated path.
 
 [gate]
 merge = "none"
@@ -56,6 +57,9 @@ G = "github-copilot/gemini-3.8-flash"
 [test-commands]
 
 [protected]
+paths = []
+
+[generated]
 paths = []
 
 [resources]

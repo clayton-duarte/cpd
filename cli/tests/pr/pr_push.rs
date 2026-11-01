@@ -162,7 +162,7 @@ impl Fx {
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at)
-                     VALUES ('pay', 'repo', 'm', 'M', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, 't')",
+                     VALUES ('pay', 'repo', 'm', 'M', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, 't')",
                     params!["f".repeat(64), tx.id()],
                 )?;
                 tx.execute(

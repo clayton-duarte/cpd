@@ -91,7 +91,7 @@ fn start_fx() -> Start {
     fx.cpd(&["job", "cancel", "api-config", "--reason", "a stub of the template", "--plan", "pay"]).ok();
     fx.env.sql(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-         VALUES ('pay', 'api', 'schema', 'Job schema', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't');",
+         VALUES ('pay', 'api', 'schema', 'Job schema', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't');",
     );
     Start { fx, repo }
 }
@@ -191,7 +191,7 @@ impl Core {
         let made = self.scoped(|| create_attempt_worktree(&self.repo, &self.lead, &plan(), &attempt, &setup)).unwrap();
         self.env.sql(&format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
-               VALUES ('pay', 'repo', 'api', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{}', cpd_txn(), 't');
+               VALUES ('pay', 'repo', 'api', 'T', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', 0, '{}', cpd_txn(), 't');
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
                VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', '{}', '{}', '{}', 't');",
             "f".repeat(64),
@@ -363,7 +363,7 @@ impl Core {
         let made = self.scoped(|| create_attempt_worktree(&self.repo, &self.lead, &plan(), &attempt, &setup)).unwrap();
         self.env.sql(&format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
-               VALUES ('pay', 'repo', 'api-b', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{}', cpd_txn(), 't');
+               VALUES ('pay', 'repo', 'api-b', 'T', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', 0, '{}', cpd_txn(), 't');
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
                VALUES ('pay', 'api-b-a1', 'api-b', 1, 'S2', 'ladder', 'running', '{}', '{}', '{}', 't');",
             "e".repeat(64),

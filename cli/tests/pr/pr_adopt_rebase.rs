@@ -229,7 +229,7 @@ fn a_dispatch_pr_rebases_only_when_its_jobs_are_done() {
     let moved = fx.push_by_someone("feat/x", "remote.txt", "remote\n");
     fx.env.sql(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, kind, created_txn, created_at)
-           VALUES ('pay', 'web', 'w', 'W', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', 'work', cpd_txn(), 't');",
+           VALUES ('pay', 'web', 'w', 'W', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'queued', 0, 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', 'work', cpd_txn(), 't');",
     );
 
     let run = fx.rebase(&[]);

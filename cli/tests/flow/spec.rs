@@ -40,6 +40,8 @@ fn first_input<'a>(plan: &'a PlanId, attempt: &'a AttemptId, lists: &'a Lists) -
         resources: &[],
         quick_check: &lists.quick_check,
         protected: &[],
+        generated: &[],
+        approved_touches: &[],
         previous: &[],
         answers: &[],
         addenda: &[],
@@ -124,6 +126,8 @@ fn later() -> String {
         resources: &[],
         quick_check: &[],
         protected: &protected,
+        generated: &[],
+        approved_touches: &[],
         previous: &previous,
         answers: &answers,
         addenda: &[],
@@ -220,7 +224,7 @@ Your worktree is `/w/pay--api-schema-a1`. Your current directory is that worktre
 
 ## Rules
 
-- Work only in this worktree, and touch the files listed under "Files you may touch". You may change another file only when a test named in your acceptance cannot pass without it (a migration only this Job creates, a helper script the test uses, a stub of a new module): list each such file and why in your commit message, instead of asking the Lead. Never a guarded or protected path.
+- Work only in this worktree, and touch the files listed under "Files you may touch". A diff outside those files is refused `touches_violation`; the repo's generated paths (listed in the Spec) are exempt; a path the Lead approved with `job approve-touches` is exempt; otherwise ask the Lead (`cpd ask`) or revert the file. Never a guarded or protected path.
 - Commit your work. Uncommitted changes are refused at submit.
 - Before submitting, run the quick check yourself, from this worktree. It is `hooks.pre-commit` of the repo's policy file; its commands, verbatim:
 
@@ -280,6 +284,7 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `dirty_tree`: you have uncommitted changes. Commit them (or delete files that do not belong), then submit again.
 - `no_commits`: you have not committed anything on top of the base. Commit your work, then submit again.
 - `gate_tampered`: your diff touches a protected path. Revert those files to the base version and commit, then submit again.
+- `touches_violation`: your diff touches a path outside the files you may touch, and it is neither generated nor approved. Revert those files or ask the Lead (`cpd ask`), then submit again.
 - `attempt_not_running`: the Attempt was stopped. Stop.
 
 Do not stop until `cpd attempt submit` has succeeded.
@@ -295,7 +300,7 @@ Your worktree is `/w/pay--api-schema-a3`. Your current directory is that worktre
 
 ## Rules
 
-- Work only in this worktree, and touch the files listed under "Files you may touch". You may change another file only when a test named in your acceptance cannot pass without it (a migration only this Job creates, a helper script the test uses, a stub of a new module): list each such file and why in your commit message, instead of asking the Lead. Never a guarded or protected path.
+- Work only in this worktree, and touch the files listed under "Files you may touch". A diff outside those files is refused `touches_violation`; the repo's generated paths (listed in the Spec) are exempt; a path the Lead approved with `job approve-touches` is exempt; otherwise ask the Lead (`cpd ask`) or revert the file. Never a guarded or protected path.
 - Commit your work. Uncommitted changes are refused at submit.
 - Before submitting, run the quick check yourself. This repo defines no quick check.
 - Never edit the protected paths. A diff that touches one is refused. They are:
@@ -388,6 +393,7 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `dirty_tree`: you have uncommitted changes. Commit them (or delete files that do not belong), then submit again.
 - `no_commits`: you have not committed anything on top of the base. Commit your work, then submit again.
 - `gate_tampered`: your diff touches a protected path. Revert those files to the base version and commit, then submit again.
+- `touches_violation`: your diff touches a path outside the files you may touch, and it is neither generated nor approved. Revert those files or ask the Lead (`cpd ask`), then submit again.
 - `attempt_not_running`: the Attempt was stopped. Stop.
 
 Do not stop until `cpd attempt submit` has succeeded.

@@ -225,7 +225,27 @@ fn run_checks(
     // red-test diffs compare against the Attempt's `base_sha` instead (hs-d716), as the merge does (hs-d680).
     let compare = if git::worktree::is_linear(branch, &lead) { base } else { &lead };
     let policy = env.store.read(|conn| crate::pr::policy_of_job(conn, &env.home, plan, key))?;
-    git::tamper::check_over(root, compare, &policy.protected.paths, &base_refs.iter().map(String::as_str).collect::<Vec<_>>(), base, sha)?;
+    let base_refs: Vec<&str> = base_refs.iter().map(String::as_str).collect();
+    git::tamper::check_over(root, compare, &policy.protected.paths, &base_refs, base, sha)?;
+    // The Job's Spec `touches` (§7.5, hs-n641): the same diff may not change a path outside them, unless a base merge
+    // brought it, the repo's `[generated] paths` match it, or the Lead approved it (`job approve-touches`, read now so
+    // an approval reaches a running Attempt).
+    let touches = crate::job::guard::touches(job);
+    let approved = crate::job::guard::approved_touches(job);
+    let check = git::tamper::Touches { kind: &job.kind, touches: &touches, generated: &policy.generated.paths, approved: &approved };
+    let outside = git::tamper::touched_outside(root, compare, &check, &base_refs, base, sha)?;
+    if !outside.is_empty() {
+        return Err(CpdError::new(
+            ErrorCode::TouchesViolation,
+            format!(
+                "The diff changes paths outside the Job's touches: {}. Revert them, or ask the Lead, who approves a path with `cpd job approve-touches`.",
+                outside.join(", ")
+            ),
+        )
+        .with("paths", json!(outside))
+        .with("touches", json!(touches))
+        .with("generated", json!(policy.generated.paths)));
+    }
     // The red tests of the `test` Jobs an `impl` Job needs are guarded the same way (§7.5, §7.7).
     kind::guard_tests(env, plan, job, root, compare, base, sha)?;
     // The kind's check (§7.3 precondition 6, §7.7): a `test` or `impl` Job's `[test-commands]`. The test Job's diff
@@ -235,7 +255,7 @@ fn run_checks(
     }
     // The written files (§7.3): the paths of `base...sha` that differ from every comparison ref. A linear Attempt's
     // branch is the Lead Branch, so the Lead tip is not a comparison ref.
-    let mut compare_with: Vec<&str> = base_refs.iter().map(String::as_str).collect();
+    let mut compare_with: Vec<&str> = base_refs.clone();
     if !git::worktree::is_linear(branch, &lead) {
         compare_with.push(&lead);
     }

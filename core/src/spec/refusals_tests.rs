@@ -25,6 +25,8 @@ fn text(kind: JobKind) -> String {
         resources: &[],
         quick_check: &[],
         protected: &[],
+        generated: &[],
+        approved_touches: &[],
         previous: &[],
         answers: &[],
         addenda: &[],

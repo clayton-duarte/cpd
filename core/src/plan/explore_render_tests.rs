@@ -32,6 +32,7 @@ fn job(key: &str, pr: Option<&str>, kind: &str, status: &str, tier: &str, goal: 
         tests: None,
         test_files: None,
         test_approved: None,
+        touches_approved: None,
         resources: None,
         urgent: false,
         fingerprint: None,

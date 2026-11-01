@@ -215,10 +215,14 @@ impl Universe {
         self.store(repo, blob_id(bytes), Object::Blob(bytes.to_vec()))
     }
     /// Stores a FLAT tree (every path is a blob entry, mode 100644, `a/b.txt` is one entry) and adds it
-    /// to what `repo` holds. Entry order does not matter.
+    /// to what `repo` holds. Entry order does not matter; a repeated path keeps the last entry, as staging
+    /// it again would (a real tree has one entry per name).
     pub fn tree(&mut self, repo: RepoId, entries: &[(&str, &Oid)]) -> Oid {
-        let mut sorted: Vec<(String, Oid)> = entries.iter().map(|(p, o)| ((*p).to_owned(), (*o).clone())).collect();
-        sorted.sort();
+        let mut by_path: std::collections::BTreeMap<String, Oid> = std::collections::BTreeMap::new();
+        for (path, oid) in entries {
+            by_path.insert((*path).to_owned(), (*oid).clone());
+        }
+        let sorted: Vec<(String, Oid)> = by_path.into_iter().collect();
         let mut body = Vec::new();
         for (path, oid) in &sorted {
             body.extend_from_slice(format!("100644 {path}\0").as_bytes());

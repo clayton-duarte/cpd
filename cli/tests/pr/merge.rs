@@ -270,14 +270,14 @@ impl Fx {
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, kind, fingerprint, created_txn, created_at)
-                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', ?5, ?6, ?2, ?3, 't')",
+                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', ?5, ?6, ?2, ?3, 't')",
                     params![key, "f".repeat(64), tx.id(), pr.key, i64::from(kind != "work"), kind],
                 )?;
                 if let Some(files) = guarded {
                     tx.execute(
                         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                            fingerprint, created_txn, created_at, kind, tests, test_files, merged_sha)
-                         VALUES ('pay', ?1, 't', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, printf('%064d', 1),
+                         VALUES ('pay', ?1, 't', 'T', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'merged', 0, printf('%064d', 1),
                                  ?2, 't', 'test', '[\"t::one\"]', ?3, 'c0ffee')",
                         params![pr.key, tx.id(), files],
                     )?;

@@ -124,7 +124,7 @@ impl Fx {
     fn job(&self, key: &str, pr: &str) {
         self.env.sql(&format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-             VALUES ('pay', '{pr}', '{key}', 'Job {key}', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't');"
+             VALUES ('pay', '{pr}', '{key}', 'Job {key}', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         ));
     }
 

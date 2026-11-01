@@ -9,7 +9,7 @@ use std::path::Path;
 use ScopeKind::{Machine, Owner, Repo};
 
 const ALL_THREE: [&str; 7] = ["gate", "pr", "deploy", "code", "tests", "monitor", "instructions"];
-const REPO_ONLY: [&str; 3] = ["hooks", "test-commands", "protected"];
+const REPO_ONLY: [&str; 4] = ["hooks", "test-commands", "protected", "generated"];
 
 fn domain(name: &str) -> Domain {
     Domain::from_name(name).unwrap_or_else(|| panic!("the domain `{name}` is in Domain::ALL"))
