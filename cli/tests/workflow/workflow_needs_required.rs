@@ -26,7 +26,7 @@ fn assert_refused(f: &Added, key: &str, shape: &str) {
 }
 
 #[test]
-fn pr_add_in_dispatch_without_needs_or_no_needs_is_refused_needs_required() {
+fn workflow_add_in_dispatch_without_needs_or_no_needs_is_refused_needs_required() {
     let f = added("dispatch");
     assert_refused(&f, "fix", "config");
     let stub: i64 = f.fx.env.query("SELECT count(*) FROM jobs WHERE plan = 'pay' AND key = 'fix-docs'");
@@ -34,14 +34,14 @@ fn pr_add_in_dispatch_without_needs_or_no_needs_is_refused_needs_required() {
 }
 
 #[test]
-fn pr_add_in_dispatch_refusal_covers_every_shape() {
+fn workflow_add_in_dispatch_refusal_covers_every_shape() {
     let f = added("dispatch");
     assert_refused(&f, "fix", "docs");
     assert_refused(&f, "fix", "config");
 }
 
 #[test]
-fn pr_add_in_dispatch_with_no_needs_adds_a_pr_without_needs() {
+fn workflow_add_in_dispatch_with_no_needs_adds_a_workflow_without_needs() {
     let f = added("dispatch");
     // Stacked on PR `repo`, which has not merged: a PR that starts at once is refused its stub drafts after the lock (`draft_parked`).
     let out = f.add("fix", &f.repo, &["--no-needs", "--base", "pay/repo"]).ok();
@@ -50,7 +50,7 @@ fn pr_add_in_dispatch_with_no_needs_adds_a_pr_without_needs() {
 }
 
 #[test]
-fn pr_add_in_dispatch_with_needs_links_the_pr() {
+fn workflow_add_in_dispatch_with_needs_links_the_workflow() {
     let f = added("dispatch");
     let other = f.fx.keyed_repo("other").canonicalize().unwrap();
     let out = f.add("fix", &other, &["--needs", "repo"]).ok();
@@ -59,7 +59,7 @@ fn pr_add_in_dispatch_with_needs_links_the_pr() {
 }
 
 #[test]
-fn pr_add_in_plan_phase_needs_no_flag() {
+fn workflow_add_in_plan_phase_needs_no_flag() {
     let fx = crate::common::fx::Fx::with_ports();
     let repo = fx.keyed_repo("pay").canonicalize().unwrap();
     fx.env.write_config("version = 1\nmachine = \"t\"\n");
@@ -75,7 +75,7 @@ fn pr_add_in_plan_phase_needs_no_flag() {
 }
 
 #[test]
-fn pr_add_rerun_in_dispatch_without_a_flag_is_already() {
+fn workflow_add_rerun_in_dispatch_without_a_flag_is_already() {
     let f = added("dispatch");
     // Stacked on PR `repo`, which has not merged: a PR that starts at once is refused its stub drafts after the lock (`draft_parked`).
     f.add("fix", &f.repo, &["--no-needs", "--base", "pay/repo"]).ok();
@@ -93,17 +93,17 @@ fn assert_stacked_add_needs_no_flag(base: &str) {
 }
 
 #[test]
-fn pr_add_in_dispatch_needs_neither_flag_for_a_stacked_pr() {
+fn workflow_add_in_dispatch_needs_neither_flag_for_a_stacked_workflow() {
     assert_stacked_add_needs_no_flag("pay/repo");
 }
 
 #[test]
-fn pr_add_in_dispatch_needs_neither_flag_for_a_stacked_pr_named_by_its_bare_key() {
+fn workflow_add_in_dispatch_needs_neither_flag_for_a_stacked_workflow_named_by_its_bare_key() {
     assert_stacked_add_needs_no_flag("repo");
 }
 
 #[test]
-fn pr_add_in_dispatch_needs_neither_flag_for_a_pr_based_on_another_prs_lead_branch() {
+fn workflow_add_in_dispatch_needs_neither_flag_for_a_workflow_based_on_another_workflows_lead_branch() {
     // The Lead Branch of PR `repo` in the fixture is `cpd/pay`.
     assert_stacked_add_needs_no_flag("cpd/pay");
 }

@@ -201,7 +201,7 @@ impl Fx {
         self.cancel_stub(key, "pay");
     }
 
-    fn pr_status(&self, key: &str) -> String {
+    fn workflow_status(&self, key: &str) -> String {
         self.env.query(&format!("SELECT status FROM workflows WHERE plan = 'pay' AND key = '{key}'"))
     }
 
@@ -341,7 +341,7 @@ fn branch_config(fx: &Fx, repo: &Path) -> String {
 // ---------- plan lock ----------
 
 #[test]
-fn lock_starts_only_the_prs_without_needs() {
+fn lock_starts_only_the_workflows_without_needs() {
     let fx = fx();
     let (api, web) = (fx.repo("api"), fx.repo("web"));
     fx.add("api", &api.path, &[]);
@@ -368,10 +368,10 @@ fn lock_starts_only_the_prs_without_needs() {
     assert_eq!(fx.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "pay/api");
     assert_eq!(remote_branch(&fx, &api.path, "pay/api"), format!("{base}\trefs/heads/pay/api"));
     assert_eq!(branch_config(&fx, &api.path), "", "no upstream (hs-d243 G1)");
-    assert_eq!(fx.pr_status("api"), "dispatch");
+    assert_eq!(fx.workflow_status("api"), "dispatch");
     assert_eq!(fx.env.query::<String>("SELECT lead_worktree FROM workflows WHERE key = 'api'"), worktree.display().to_string());
     // The waiting one: nothing created anywhere.
-    assert_eq!(fx.pr_status("web"), "waiting");
+    assert_eq!(fx.workflow_status("web"), "waiting");
     assert!(!fx.lead_path(&web.path, "web").exists());
     assert_eq!(fx.git(&web.path, &["branch", "--list", "pay/*"]), "");
     assert_eq!(remote_branch(&fx, &web.path, "pay/web"), "");
@@ -402,7 +402,7 @@ fn lock_starts_only_the_prs_without_needs() {
 }
 
 #[test]
-fn lock_leaves_a_stacked_pr_waiting_and_starts_only_its_base_pr() {
+fn lock_leaves_a_stacked_workflow_waiting_and_starts_only_its_base_workflow() {
     let fx = fx();
     let repo = fx.repo("pay");
     fx.add("a1", &repo.path, &[]);
@@ -426,8 +426,8 @@ fn lock_leaves_a_stacked_pr_waiting_and_starts_only_its_base_pr() {
     );
     assert_eq!(fx.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "pay/a1");
     assert_eq!(remote_branch(&fx, &repo.path, "pay/a1"), format!("{base}\trefs/heads/pay/a1"));
-    assert_eq!(fx.pr_status("a1"), "dispatch");
-    assert_eq!(fx.pr_status("b1"), "waiting");
+    assert_eq!(fx.workflow_status("a1"), "dispatch");
+    assert_eq!(fx.workflow_status("b1"), "waiting");
     assert!(!fx.lead_path(&repo.path, "b1").exists());
     assert_eq!(fx.git(&repo.path, &["for-each-ref", "--format=%(refname:short)", "refs/heads/pay/"]), "pay/a1");
     assert_eq!(remote_branch(&fx, &repo.path, "pay/b1"), "");
@@ -451,7 +451,7 @@ fn lock_leaves_a_stacked_pr_waiting_and_starts_only_its_base_pr() {
 }
 
 #[test]
-fn lock_starts_no_pr_down_a_stack_and_still_starts_an_independent_pr() {
+fn lock_starts_no_workflow_down_a_stack_and_still_starts_an_independent_workflow() {
     let fx = fx();
     let (api, web) = (fx.repo("api"), fx.repo("web"));
     fx.add("a1", &api.path, &[]);
@@ -474,7 +474,7 @@ fn lock_starts_no_pr_down_a_stack_and_still_starts_an_independent_pr() {
     assert_eq!(row("b1")["base_pr"], "pay/a1");
     assert_eq!(row("c1")["base_pr"], "pay/b1");
     for key in ["b1", "c1"] {
-        assert_eq!(fx.pr_status(key), "waiting");
+        assert_eq!(fx.workflow_status(key), "waiting");
         assert!(!fx.lead_path(&api.path, key).exists(), "{key}'s worktree");
         assert_eq!(remote_branch(&fx, &api.path, &format!("pay/{key}")), "", "{key} on origin");
     }
@@ -486,7 +486,7 @@ fn lock_starts_no_pr_down_a_stack_and_still_starts_an_independent_pr() {
 }
 
 #[test]
-fn lock_is_all_or_nothing_when_a_pr_fails_to_start() {
+fn lock_is_all_or_nothing_when_a_workflow_fails_to_start() {
     let fx = fx();
     let (api, web) = (fx.repo("api"), fx.repo("web"));
     fx.pre_start(&web, "echo setting up; exit 3");
@@ -517,7 +517,7 @@ fn lock_is_all_or_nothing_when_a_pr_fails_to_start() {
 }
 
 #[test]
-fn lock_refuses_a_pr_without_a_draft_job() {
+fn lock_refuses_a_workflow_without_a_draft_job() {
     let fx = fx();
     let (api, web) = (fx.repo("api"), fx.repo("web"));
     fx.add("api", &api.path, &[]);
@@ -561,7 +561,7 @@ fn lock_reuses_a_remote_lead_branch_that_lacks_a_base_that_merely_moved_ahead() 
 }
 
 #[test]
-fn lock_refuses_a_remote_lead_branch_of_a_pr_that_conflicts_with_its_base() {
+fn lock_refuses_a_remote_lead_branch_of_a_workflow_that_conflicts_with_its_base() {
     let (fx, api, web, tip) = lock_fx_with_remote_web_branch(true);
 
     let error = refused(&fx.lock(), "branch_exists", 3);
@@ -579,7 +579,7 @@ fn lock_refuses_a_remote_lead_branch_of_a_pr_that_conflicts_with_its_base() {
 // ---------- pr start ----------
 
 #[test]
-fn pr_start_refusals_change_nothing() {
+fn workflow_start_refusals_change_nothing() {
     let fx = fx();
     let repo = fx.repo("pay");
     fx.add("a1", &repo.path, &[]);
@@ -596,7 +596,7 @@ fn pr_start_refusals_change_nothing() {
     assert_eq!(error["details"]["needs"], json!(["a1"]));
     assert_eq!(fx.cpd(&["workflow", "start", "a2"]).error()["code"], "plan_required");
 
-    assert_eq!(fx.pr_status("a2"), "waiting");
+    assert_eq!(fx.workflow_status("a2"), "waiting");
     assert_eq!(fx.git(&repo.path, &["branch", "--list", "pay/*"]), "");
     assert!(!fx.lead_path(&repo.path, "a2").exists());
     assert!(fx.events("workflow-started").is_empty());
@@ -609,7 +609,7 @@ fn pr_start_refusals_change_nothing() {
 }
 
 #[test]
-fn pr_start_creates_pushes_and_records_the_start() {
+fn workflow_start_creates_pushes_and_records_the_start() {
     let fx = fx();
     let repo = fx.repo("pay");
     fx.a2_ready(&repo.path);
@@ -626,7 +626,7 @@ fn pr_start_creates_pushes_and_records_the_start() {
     assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD"]), tip, "cut from a fresh fetch of origin/main");
     assert_eq!(remote_branch(&fx, &repo.path, "pay/a2"), format!("{tip}\trefs/heads/pay/a2"));
     assert_eq!(branch_config(&fx, &repo.path), "", "no upstream (hs-d243 G1)");
-    assert_eq!(fx.pr_status("a2"), "dispatch");
+    assert_eq!(fx.workflow_status("a2"), "dispatch");
     assert!(fx.env.query::<Option<String>>("SELECT start_failed_at FROM workflows WHERE key = 'a2'").is_none());
     let started = fx.events("workflow-started");
     assert_eq!((started.len(), &started[0]["data"]["by"], &started[0]["data"]["workflow"]), (1, &json!("workflow start"), &json!("a2")));
@@ -639,7 +639,7 @@ fn pr_start_creates_pushes_and_records_the_start() {
 }
 
 #[test]
-fn eight_pr_starts_in_one_repo_at_once_all_succeed_and_write_no_upstream() {
+fn eight_workflow_starts_in_one_repo_at_once_all_succeed_and_write_no_upstream() {
     let fx = fx();
     let repo = fx.repo("pay");
     let keys: Vec<String> = (1..=8).map(|i| format!("p{i}")).collect();
@@ -678,7 +678,7 @@ fn eight_pr_starts_in_one_repo_at_once_all_succeed_and_write_no_upstream() {
 }
 
 #[test]
-fn pr_start_reuses_a_remote_lead_branch_that_contains_the_base() {
+fn workflow_start_reuses_a_remote_lead_branch_that_contains_the_base() {
     let fx = fx();
     let repo = fx.repo("pay");
     fx.a2_ready(&repo.path);
@@ -698,7 +698,7 @@ fn pr_start_reuses_a_remote_lead_branch_that_contains_the_base() {
 }
 
 #[test]
-fn pr_start_reuses_a_remote_lead_branch_that_lacks_a_base_that_merely_moved_ahead() {
+fn workflow_start_reuses_a_remote_lead_branch_that_lacks_a_base_that_merely_moved_ahead() {
     let fx = fx();
     let repo = fx.repo("pay");
     fx.a2_ready(&repo.path);
@@ -709,11 +709,11 @@ fn pr_start_reuses_a_remote_lead_branch_that_lacks_a_base_that_merely_moved_ahea
     assert_eq!((&out["workflow"]["base_sha"], &out["workflow"]["reused"], &out["workflow"]["pushed"]), (&json!(tip), &json!(true), &json!(false)));
     assert_eq!(fx.git(&fx.lead_path(&repo.path, "a2"), &["rev-parse", "HEAD"]), tip);
     assert_eq!(remote_branch(&fx, &repo.path, "pay/a2"), format!("{tip}\trefs/heads/pay/a2"));
-    assert_eq!(fx.pr_status("a2"), "dispatch");
+    assert_eq!(fx.workflow_status("a2"), "dispatch");
 }
 
 #[test]
-fn pr_start_refuses_a_remote_lead_branch_that_conflicts_with_its_base() {
+fn workflow_start_refuses_a_remote_lead_branch_that_conflicts_with_its_base() {
     let fx = fx();
     let repo = fx.repo("pay");
     fx.a2_ready(&repo.path);
@@ -726,12 +726,12 @@ fn pr_start_refuses_a_remote_lead_branch_that_conflicts_with_its_base() {
     assert_eq!(fx.git(&repo.path, &["branch", "--list", "pay/*"]), "");
     assert!(!fx.lead_path(&repo.path, "a2").exists());
     assert_eq!(remote_branch(&fx, &repo.path, "pay/a2"), format!("{old}\trefs/heads/pay/a2"));
-    assert_eq!(fx.pr_status("a2"), "waiting");
+    assert_eq!(fx.workflow_status("a2"), "waiting");
     assert!(fx.events("workflow-started").is_empty());
 }
 
 #[test]
-fn a_push_failure_at_pr_start_still_starts_it_and_appends_one_push_failed_error() {
+fn a_push_failure_at_workflow_start_still_starts_it_and_appends_one_push_failed_error() {
     let fx = fx();
     let repo = fx.repo("pay");
     fx.a2_ready(&repo.path);
@@ -741,7 +741,7 @@ fn a_push_failure_at_pr_start_still_starts_it_and_appends_one_push_failed_error(
     let out = fx.start("a2").ok();
 
     assert_eq!((&out["workflow"]["status"], &out["workflow"]["pushed"]), (&json!("dispatch"), &json!(false)));
-    assert_eq!(fx.pr_status("a2"), "dispatch");
+    assert_eq!(fx.workflow_status("a2"), "dispatch");
     assert_eq!(remote_branch(&fx, &repo.path, "pay/a2"), "");
     let errors = fx.events("error");
     assert_eq!(errors.len(), 1, "{errors:?}");
@@ -751,7 +751,7 @@ fn a_push_failure_at_pr_start_still_starts_it_and_appends_one_push_failed_error(
 }
 
 #[test]
-fn a_repo_without_origin_starts_a_pr_as_before() {
+fn a_repo_without_origin_starts_a_workflow_as_before() {
     let fx = fx();
     let repo = fx.keyed_repo("pay").canonicalize().unwrap();
     fx.a2_ready(&repo);
@@ -767,7 +767,7 @@ fn a_repo_without_origin_starts_a_pr_as_before() {
 }
 
 #[test]
-fn a_pr_made_before_r34_keeps_its_branch_and_worktree_name() {
+fn a_workflow_made_before_r34_keeps_its_branch_and_worktree_name() {
     let fx = fx();
     let repo = fx.repo("pay");
     // As migration 4 leaves it: the Lead Branch is `cpd/<plan>`.
@@ -788,7 +788,7 @@ fn a_pr_made_before_r34_keeps_its_branch_and_worktree_name() {
 // ---------- engine E7 ----------
 
 #[test]
-fn e7_starts_a_dependent_pr_from_a_fresh_fetch_once_its_prerequisite_is_merged() {
+fn e7_starts_a_dependent_workflow_from_a_fresh_fetch_once_its_prerequisite_is_merged() {
     let fx = fx();
     let repo = fx.repo("pay");
     fx.add("a1", &repo.path, &[]);
@@ -803,7 +803,7 @@ fn e7_starts_a_dependent_pr_from_a_fresh_fetch_once_its_prerequisite_is_merged()
 
     // a1 is not merged: nothing starts, however many ticks pass (two polls of the engine).
     fx.engine_polls(2);
-    assert_eq!((fx.pr_status("a2"), fx.pr_status("a3")), ("waiting".to_owned(), "waiting".to_owned()));
+    assert_eq!((fx.workflow_status("a2"), fx.workflow_status("a3")), ("waiting".to_owned(), "waiting".to_owned()));
 
     // a1 merges on GitHub: what it brought is on the remote, which this repo has not fetched.
     let tip = fx.land_on_origin(&repo, "what a1 merged");
@@ -824,12 +824,12 @@ fn e7_starts_a_dependent_pr_from_a_fresh_fetch_once_its_prerequisite_is_merged()
     // E5 saw a1 merged (the R34 merged path) before E7 started a2.
     assert_eq!(fx.events("pr-merged").len(), 1);
     // a3 needs a2, which is started but not merged.
-    assert_eq!(fx.pr_status("a3"), "waiting");
+    assert_eq!(fx.workflow_status("a3"), "waiting");
     assert!(fx.events("error").is_empty());
 }
 
 #[test]
-fn a_failed_start_marks_the_pr_and_appends_one_error_until_pr_start_retries() {
+fn a_failed_start_marks_the_workflow_and_appends_one_error_until_workflow_start_retries() {
     let fx = fx();
     let repo = fx.repo("pay");
     let marker = fx.env.root().join("setup-ok");
@@ -853,7 +853,7 @@ fn a_failed_start_marks_the_pr_and_appends_one_error_until_pr_start_retries() {
     let data = &errors[0]["data"];
     assert_eq!((&data["code"], &data["source"]), (&json!("workflow_start_failed"), &json!("watch")));
     assert_eq!((&data["details"]["pr"], &data["details"]["step"], &data["details"]["log"]), (&json!("a2"), &json!("pre-start"), &json!(fx.log("a2"))));
-    assert_eq!(fx.pr_status("a2"), "waiting");
+    assert_eq!(fx.workflow_status("a2"), "waiting");
     let failed_at: String = fx.env.query("SELECT start_failed_at FROM workflows WHERE key = 'a2'");
     assert!(!failed_at.is_empty());
     assert_eq!(fx.git(&repo.path, &["branch", "--list", "pay/*"]), "", "the branch is removed");
@@ -875,7 +875,7 @@ fn a_failed_start_marks_the_pr_and_appends_one_error_until_pr_start_retries() {
     fs::write(&marker, "").unwrap();
     let out = fx.start("a2").ok();
     assert_eq!(out["workflow"]["status"], "dispatch");
-    assert_eq!(fx.pr_status("a2"), "dispatch");
+    assert_eq!(fx.workflow_status("a2"), "dispatch");
     assert!(fx.env.query::<Option<String>>("SELECT start_failed_at FROM workflows WHERE key = 'a2'").is_none());
     let started = fx.events("workflow-started");
     assert_eq!((started.len(), &started[0]["data"]["by"]), (1, &json!("workflow start")));
@@ -904,16 +904,16 @@ fn stacked_on_open_a1(fx: &Fx, repo: &Repo) -> String {
 }
 
 #[test]
-fn pr_start_refuses_a_stacked_pr_whose_base_pr_is_started_but_not_open() {
+fn workflow_start_refuses_a_stacked_workflow_whose_base_workflow_is_started_but_not_open() {
     let fx = fx();
     let repo = fx.repo("pay");
     let tip = stacked_on_a1(&fx, &repo);
-    assert_eq!(fx.pr_status("a1"), "dispatch");
+    assert_eq!(fx.workflow_status("a1"), "dispatch");
 
     let error = refused(&fx.start("b1"), "workflow_not_ready", 3);
 
     assert_eq!((&error["details"]["pr"], &error["details"]["base_pr"], &error["details"]["needs"]), (&json!("b1"), &json!("pay/a1"), &json!([])));
-    assert_eq!(fx.pr_status("b1"), "waiting");
+    assert_eq!(fx.workflow_status("b1"), "waiting");
     assert!(!fx.lead_path(&repo.path, "b1").exists());
     assert_eq!(fx.git(&repo.path, &["branch", "--list", "pay/b1"]), "");
     assert!(fx.events("workflow-started").iter().all(|e| e["data"]["workflow"] != "b1"));
@@ -921,18 +921,18 @@ fn pr_start_refuses_a_stacked_pr_whose_base_pr_is_started_but_not_open() {
     fx.env.sql(&Fx::opened_sql("a1"));
     fx.start("b1").ok();
     assert_eq!(fx.git(&fx.lead_path(&repo.path, "b1"), &["rev-parse", "HEAD"]), tip);
-    assert_eq!(fx.pr_status("b1"), "dispatch");
+    assert_eq!(fx.workflow_status("b1"), "dispatch");
 }
 
 #[test]
-fn e7_holds_a_stacked_pr_until_its_base_pr_is_open_and_then_starts_it_from_the_base_head() {
+fn e7_holds_a_stacked_workflow_until_its_base_workflow_is_open_and_then_starts_it_from_the_base_head() {
     let fx = fx();
     let repo = fx.repo("pay");
     let tip = stacked_on_a1(&fx, &repo);
     fx.engine_routes();
 
     fx.engine_ticks(2);
-    assert_eq!(fx.pr_status("b1"), "waiting", "pay/a1 is not open");
+    assert_eq!(fx.workflow_status("b1"), "waiting", "pay/a1 is not open");
     assert!(fx.events("workflow-started").iter().all(|e| e["data"]["workflow"] != "b1"));
 
     fx.env.sql(&Fx::opened_sql("a1"));
@@ -944,7 +944,7 @@ fn e7_holds_a_stacked_pr_until_its_base_pr_is_open_and_then_starts_it_from_the_b
 }
 
 #[test]
-fn pr_start_cuts_a_stacked_pr_from_the_base_prs_lead_branch_head() {
+fn workflow_start_cuts_a_stacked_workflow_from_the_base_workflows_lead_branch_head() {
     let fx = fx();
     let repo = fx.repo("pay");
     let tip = stacked_on_open_a1(&fx, &repo);
@@ -964,7 +964,7 @@ fn pr_start_cuts_a_stacked_pr_from_the_base_prs_lead_branch_head() {
     assert_ne!(remote_branch(&fx, &repo.path, "pay/a1"), format!("{tip}\trefs/heads/pay/a1"), "a1's commit is not pushed");
     assert_eq!(remote_branch(&fx, &repo.path, "pay/b1"), format!("{tip}\trefs/heads/pay/b1"));
     assert_eq!(branch_config(&fx, &repo.path), "", "no upstream (hs-d243 G1)");
-    assert_eq!(fx.pr_status("b1"), "dispatch");
+    assert_eq!(fx.workflow_status("b1"), "dispatch");
     let started: Vec<Value> = fx.events("workflow-started").into_iter().filter(|e| e["data"]["workflow"] == "b1").collect();
     assert_eq!(started.len(), 1, "{started:?}");
     assert_eq!(
@@ -975,7 +975,7 @@ fn pr_start_cuts_a_stacked_pr_from_the_base_prs_lead_branch_head() {
 }
 
 #[test]
-fn a_stacked_pr_starts_from_the_local_base_branch_when_the_base_prs_branch_is_not_on_origin() {
+fn a_stacked_workflow_starts_from_the_local_base_branch_when_the_base_workflows_branch_is_not_on_origin() {
     let fx = fx();
     let repo = fx.repo("pay");
     let tip = stacked_on_open_a1(&fx, &repo);
@@ -990,7 +990,7 @@ fn a_stacked_pr_starts_from_the_local_base_branch_when_the_base_prs_branch_is_no
 }
 
 #[test]
-fn a_stacked_pr_starts_from_origin_when_the_base_prs_local_branch_is_gone_and_fails_when_both_are() {
+fn a_stacked_workflow_starts_from_origin_when_the_base_workflows_local_branch_is_gone_and_fails_when_both_are() {
     let fx = fx();
     let repo = fx.repo("pay");
     stacked_on_open_a1(&fx, &repo);
@@ -1004,7 +1004,7 @@ fn a_stacked_pr_starts_from_origin_when_the_base_prs_local_branch_is_gone_and_fa
     let error = refused(&fx.start("b1"), "setup_failed", 1);
 
     assert_eq!((&error["details"]["pr"], &error["details"]["step"], &error["details"]["base"]), (&json!("b1"), &json!("base_pr_branch"), &json!("pay/a1")));
-    assert_eq!(fx.pr_status("b1"), "waiting");
+    assert_eq!(fx.workflow_status("b1"), "waiting");
     assert!(!fx.lead_path(&repo.path, "b1").exists());
     assert_eq!(fx.git(&repo.path, &["branch", "--list", "pay/*"]), "");
 
@@ -1016,7 +1016,7 @@ fn a_stacked_pr_starts_from_origin_when_the_base_prs_local_branch_is_gone_and_fa
 }
 
 #[test]
-fn pr_start_refuses_a_stacked_pr_whose_base_pr_has_not_started() {
+fn workflow_start_refuses_a_stacked_workflow_whose_base_workflow_has_not_started() {
     let fx = fx();
     let repo = fx.repo("pay");
     fx.add("a0", &repo.path, &[]);
@@ -1027,7 +1027,7 @@ fn pr_start_refuses_a_stacked_pr_whose_base_pr_has_not_started() {
     let error = refused(&fx.start("b1"), "workflow_not_ready", 3);
 
     assert_eq!((&error["details"]["pr"], &error["details"]["base_pr"], &error["details"]["needs"]), (&json!("b1"), &json!("pay/a1"), &json!([])));
-    assert_eq!(fx.pr_status("b1"), "waiting");
+    assert_eq!(fx.workflow_status("b1"), "waiting");
     assert!(!fx.lead_path(&repo.path, "b1").exists());
     assert_eq!(fx.git(&repo.path, &["branch", "--list", "pay/*"]), "");
     assert!(fx.events("workflow-started").is_empty());
@@ -1041,7 +1041,7 @@ fn pr_start_refuses_a_stacked_pr_whose_base_pr_has_not_started() {
 }
 
 #[test]
-fn pr_start_refuses_a_pr_whose_need_of_another_plan_is_not_merged() {
+fn workflow_start_refuses_a_workflow_whose_need_of_another_plan_is_not_merged() {
     let fx = fx();
     let repo = fx.repo("pay");
     fx.add("a1", &repo.path, &[]);
@@ -1053,13 +1053,13 @@ fn pr_start_refuses_a_pr_whose_need_of_another_plan_is_not_merged() {
 
     assert_eq!((&error["details"]["needs"], &error["details"]["base_pr"]), (&json!(["a1"]), &Value::Null));
     assert!(error["message"].as_str().unwrap().contains("a1"), "{error}");
-    assert_eq!(fx.pr_status("c1"), "waiting");
+    assert_eq!(fx.workflow_status("c1"), "waiting");
     fx.env.sql(&(Fx::opened_sql("a1") + &Fx::merge_sql("a1")));
     assert_eq!(fx.start("c1").ok()["workflow"]["status"], "dispatch");
 }
 
 #[test]
-fn e7_holds_a_pr_for_a_need_of_another_plan_until_it_is_merged() {
+fn e7_holds_a_workflow_for_a_need_of_another_plan_until_it_is_merged() {
     let fx = fx();
     let repo = fx.repo("pay");
     fx.add("a1", &repo.path, &[]);
@@ -1069,7 +1069,7 @@ fn e7_holds_a_pr_for_a_need_of_another_plan_until_it_is_merged() {
     fx.engine_routes();
 
     fx.engine_ticks(2);
-    assert_eq!(fx.pr_status("c1"), "waiting", "pay/a1 is not merged");
+    assert_eq!(fx.workflow_status("c1"), "waiting", "pay/a1 is not merged");
     assert!(fx.events("workflow-started").is_empty());
 
     fx.env.sql(&(Fx::opened_sql("a1") + &Fx::merge_sql("a1")));
@@ -1081,7 +1081,7 @@ fn e7_holds_a_pr_for_a_need_of_another_plan_until_it_is_merged() {
 }
 
 #[test]
-fn e7_starts_a_stacked_pr_once_its_base_pr_is_open_and_not_before() {
+fn e7_starts_a_stacked_workflow_once_its_base_workflow_is_open_and_not_before() {
     let fx = fx();
     let repo = fx.repo("pay");
     fx.add("a0", &repo.path, &[]);
@@ -1093,7 +1093,7 @@ fn e7_starts_a_stacked_pr_once_its_base_pr_is_open_and_not_before() {
 
     // a1 waits for a0, and b1 for a1 to open: nothing starts.
     fx.engine_ticks(2);
-    assert_eq!((fx.pr_status("a1"), fx.pr_status("b1")), ("waiting".to_owned(), "waiting".to_owned()));
+    assert_eq!((fx.workflow_status("a1"), fx.workflow_status("b1")), ("waiting".to_owned(), "waiting".to_owned()));
     assert!(fx.events("workflow-started").is_empty());
 
     // a0 merges: E7 starts a1, but b1 waits: a1 is started, not open.
@@ -1101,7 +1101,7 @@ fn e7_starts_a_stacked_pr_once_its_base_pr_is_open_and_not_before() {
     fx.env.sql(&(Fx::opened_sql("a0") + &Fx::merge_sql("a0")));
     fx.engine_until(|look| look.status("a1") == "dispatch");
     fx.engine_ticks(2);
-    assert_eq!(fx.pr_status("b1"), "waiting");
+    assert_eq!(fx.workflow_status("b1"), "waiting");
 
     // a1 opens: E7 starts b1 from a1's Lead Branch.
     fx.env.sql(&Fx::opened_sql("a1"));
@@ -1143,7 +1143,7 @@ fn b1_unstacked(by: &str) -> (Value, Value) {
 }
 
 #[test]
-fn pr_start_unstacks_a_pr_whose_base_pr_merged_and_starts_it_from_the_new_base() {
+fn workflow_start_unstacks_a_workflow_whose_base_workflow_merged_and_starts_it_from_the_new_base() {
     let fx = fx();
     let repo = fx.repo("pay");
     let tip = a1_merged_and_deleted(&fx, &repo);
@@ -1166,11 +1166,11 @@ fn pr_start_unstacks_a_pr_whose_base_pr_merged_and_starts_it_from_the_new_base()
 }
 
 #[test]
-fn e7_unstacks_a_waiting_pr_whose_base_pr_merged_and_starts_it_from_the_new_base() {
+fn e7_unstacks_a_waiting_workflow_whose_base_workflow_merged_and_starts_it_from_the_new_base() {
     let fx = fx();
     let repo = fx.repo("pay");
     let tip = a1_merged_and_deleted(&fx, &repo);
-    assert_eq!(fx.pr_status("b1"), "waiting");
+    assert_eq!(fx.workflow_status("b1"), "waiting");
     fx.engine_routes();
 
     fx.engine_until(|look| look.status("b1") == "dispatch");

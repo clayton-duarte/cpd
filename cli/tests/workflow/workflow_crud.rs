@@ -186,7 +186,7 @@ impl Crud {
 // ---------- pr add ----------
 
 #[test]
-fn add_creates_a_waiting_pr_with_its_event_and_no_git_write() {
+fn add_creates_a_waiting_workflow_with_its_event_and_no_git_write() {
     let fx = crud("grounding");
     let branches = fx.git(&fx.pay, &["branch", "--list"]);
     let out = fx.add("api", &fx.pay, &[]).ok();
@@ -246,7 +246,7 @@ fn add_stores_the_realpath_of_the_main_worktree_of_the_repo_given() {
 }
 
 #[test]
-fn add_in_dispatch_appends_the_pr() {
+fn add_in_dispatch_appends_the_workflow() {
     let fx = crud("dispatch");
     // The PR waits for another PR: a PR that starts at once is refused its stub drafts (`draft_parked`).
     fx.locked_pr("base", &fx.pay, "dispatch");
@@ -391,7 +391,7 @@ fn the_opener_stub_carries_the_fixed_spec_and_open_tier() {
 }
 
 #[test]
-fn the_stubs_of_a_pr_added_after_the_lock_are_appended_and_a_reopened_plan_goes_back_to_dispatch() {
+fn the_stubs_of_a_workflow_added_after_the_lock_are_appended_and_a_reopened_plan_goes_back_to_dispatch() {
     for phase in ["dispatch", "deploy"] {
         let fx = crud(phase);
         // The PR waits for another PR: a PR that starts at once is refused its stub drafts (`draft_parked`).
@@ -423,7 +423,7 @@ fn a_shape_is_one_of_tdd_docs_and_config() {
 }
 
 #[test]
-fn add_refuses_a_tdd_pr_in_a_repo_without_test_commands_and_reads_them_from_its_policy_file() {
+fn add_refuses_a_tdd_workflow_in_a_repo_without_test_commands_and_reads_them_from_its_policy_file() {
     let fx = crud("plan");
     let bare = fx.keyed_repo("bare").canonicalize().unwrap();
     let add = |shape: Option<&str>| {
@@ -822,7 +822,7 @@ fn edit_refusals_write_nothing() {
 }
 
 #[test]
-fn edit_and_cancel_of_a_pr_that_is_not_waiting_are_illegal_transitions() {
+fn edit_and_cancel_of_a_workflow_that_is_not_waiting_are_illegal_transitions() {
     let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.env.sql("UPDATE workflows SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE key = 'api'");
@@ -855,7 +855,7 @@ fn restack_fixture() -> Crud {
 }
 
 #[test]
-fn edit_after_the_lock_stacks_a_waiting_pr_on_a_pr_it_needs() {
+fn edit_after_the_lock_stacks_a_waiting_workflow_on_a_workflow_it_needs() {
     let fx = restack_fixture();
     let fingerprint = fx.fingerprint();
     let out = fx.pr(&["edit", "b", "--base", "a", "--no-needs"]).ok();
@@ -877,7 +877,7 @@ fn edit_after_the_lock_stacks_a_waiting_pr_on_a_pr_it_needs() {
 }
 
 #[test]
-fn edit_after_the_lock_refuses_any_other_change_of_a_waiting_pr() {
+fn edit_after_the_lock_refuses_any_other_change_of_a_waiting_workflow() {
     let fx = restack_fixture();
     let web = fx.web.to_str().unwrap().to_owned();
     let cases: Vec<Vec<&str>> = vec![
@@ -898,7 +898,7 @@ fn edit_after_the_lock_refuses_any_other_change_of_a_waiting_pr() {
 }
 
 #[test]
-fn a_pr_restacked_after_the_lock_waits_for_its_base_pr_to_open() {
+fn a_workflow_restacked_after_the_lock_waits_for_its_base_workflow_to_open() {
     let fx = restack_fixture();
     fx.pr(&["edit", "b", "--base", "a", "--no-needs"]).ok();
     let error = fx.refused(&fx.pr(&["start", "b"]), "workflow_not_ready", 3, fx.writes());
@@ -1007,7 +1007,7 @@ fn edit_title_of_an_open_pull_request_stores_nothing_when_github_fails() {
 }
 
 #[test]
-fn edit_title_of_a_pr_without_an_open_pull_request_calls_no_gh() {
+fn edit_title_of_a_workflow_without_an_open_pull_request_calls_no_gh() {
     let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.fake_gh(Reply::exit(1, "", "unexpected\n"));
@@ -1022,7 +1022,7 @@ fn edit_title_of_a_pr_without_an_open_pull_request_calls_no_gh() {
 }
 
 #[test]
-fn edit_title_of_a_merged_or_cancelled_pr_is_pr_ended() {
+fn edit_title_of_a_merged_or_cancelled_workflow_is_workflow_ended() {
     {
         let Legacy { fx, .. } = legacy("merged");
         let writes = fx.writes();
@@ -1054,7 +1054,7 @@ fn edit_title_refuses_a_bad_title_and_writes_nothing() {
 // ---------- pr cancel ----------
 
 #[test]
-fn cancel_removes_the_pr_and_keeps_its_key() {
+fn cancel_removes_the_workflow_and_keeps_its_key() {
     let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("web", &fx.web, &["--needs", "api"]).ok();
@@ -1076,7 +1076,7 @@ fn cancel_removes_the_pr_and_keeps_its_key() {
 }
 
 #[test]
-fn cancel_is_refused_while_a_job_or_a_pr_holds_the_pr() {
+fn cancel_is_refused_while_a_job_or_a_workflow_holds_the_workflow() {
     let fx = crud("grounding");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("web", &fx.web, &["--needs", "api"]).ok();
@@ -1126,7 +1126,7 @@ impl Crud {
         ));
     }
 
-    fn pr_status(&self, key: &str) -> String {
+    fn workflow_status(&self, key: &str) -> String {
         self.env.query(&format!("SELECT status FROM workflows WHERE key = '{key}'"))
     }
 
@@ -1152,7 +1152,7 @@ fn cancel_that_completes_the_plan_supersedes_the_pending_reviews() {
 }
 
 #[test]
-fn a_locked_pr_with_only_cancelled_jobs_is_cancelled_and_the_plan_reaches_done() {
+fn a_locked_workflow_with_only_cancelled_jobs_is_cancelled_and_the_plan_reaches_done() {
     let fx = crud("dispatch");
     fx.locked_pr("api", &fx.pay, "merged");
     fx.locked_pr("gateci", &fx.web, "dispatch");
@@ -1162,7 +1162,7 @@ fn a_locked_pr_with_only_cancelled_jobs_is_cancelled_and_the_plan_reaches_done()
     let out = fx.pr(&["cancel", "gateci"]).ok();
     assert_eq!(out["workflow"], json!({"key": "gateci", "status": "cancelled"}));
     assert_eq!(out["phase"], "done");
-    assert_eq!(fx.pr_status("gateci"), "cancelled");
+    assert_eq!(fx.workflow_status("gateci"), "cancelled");
     assert_eq!(fx.phase(), "done");
     // The Locked Job is untouched, the Events are those of the cancel and the Plan's move.
     assert_eq!(fx.env.query::<String>("SELECT status FROM jobs WHERE key = 'a'"), "cancelled");
@@ -1179,13 +1179,13 @@ fn a_locked_pr_with_only_cancelled_jobs_is_cancelled_and_the_plan_reaches_done()
 }
 
 #[test]
-fn a_locked_pr_with_no_job_is_cancelled_and_the_plan_waits_for_the_others() {
+fn a_locked_workflow_with_no_job_is_cancelled_and_the_plan_waits_for_the_others() {
     let fx = crud("dispatch");
     fx.locked_pr("api", &fx.pay, "dispatch");
     fx.locked_pr("web", &fx.web, "dispatch");
     let out = fx.pr(&["cancel", "web"]).ok();
     assert!(out.get("phase").is_none(), "{out}");
-    assert_eq!((fx.pr_status("web"), fx.phase()), ("cancelled".to_string(), "dispatch".to_string()));
+    assert_eq!((fx.workflow_status("web"), fx.phase()), ("cancelled".to_string(), "dispatch".to_string()));
     assert!(fx.events("plan-phase").is_empty());
 
     // A PR that is still `waiting` is cancelled too; the last one cancelled leaves the Plan in `dispatch`.
@@ -1200,7 +1200,7 @@ fn a_locked_pr_with_no_job_is_cancelled_and_the_plan_waits_for_the_others() {
 }
 
 #[test]
-fn a_locked_pr_with_a_merged_or_live_job_or_a_pr_that_needs_it_is_refused_and_a_merged_one_too() {
+fn a_locked_workflow_with_a_merged_or_live_job_or_a_workflow_that_needs_it_is_refused_and_a_merged_one_too() {
     let fx = crud("dispatch");
     for key in ["queued", "running", "merged"] {
         fx.locked_pr(key, &fx.pay, "dispatch");
@@ -1214,11 +1214,11 @@ fn a_locked_pr_with_a_merged_or_live_job_or_a_pr_that_needs_it_is_refused_and_a_
     for key in ["running", "merged"] {
         let error = fx.refused(&fx.pr(&["cancel", key]), "workflow_in_use", 3, writes);
         assert_eq!((error["details"]["jobs"].clone(), error["details"]["workflows"].clone()), (json!([format!("{key}-job")]), json!([])));
-        assert_eq!(fx.pr_status(key), "dispatch");
+        assert_eq!(fx.workflow_status(key), "dispatch");
     }
     // A `queued` Job does not hold the PR: it is cancelled with it.
     fx.pr(&["cancel", "queued"]).ok();
-    assert_eq!(fx.pr_status("queued"), "cancelled");
+    assert_eq!(fx.workflow_status("queued"), "cancelled");
     assert_eq!(fx.env.query::<String>("SELECT status || '/' || cancel_reason FROM jobs WHERE key = 'queued-job'"), "cancelled/pr cancelled");
 
     // A live PR that needs it holds it (`workflow_in_use`, `details.workflows`).
@@ -1249,7 +1249,7 @@ impl Crud {
 }
 
 #[test]
-fn an_open_pr_whose_pull_request_is_closed_is_cancelled_and_the_plan_reaches_done() {
+fn an_open_workflow_whose_pull_request_is_closed_is_cancelled_and_the_plan_reaches_done() {
     let fx = crud("deploy");
     fx.locked_pr("api", &fx.pay, "merged");
     fx.locked_pr("web", &fx.web, "open");
@@ -1261,7 +1261,7 @@ fn an_open_pr_whose_pull_request_is_closed_is_cancelled_and_the_plan_reaches_don
     assert_eq!(out["workflow"], json!({"key": "web", "status": "cancelled"}));
     assert_eq!(out["phase"], "done");
     assert_eq!(out["released"], json!({"number": 7, "url": "u", "lead_worktree": "/w/web", "lead_branch": "cpd/pay-1/web"}));
-    assert_eq!((fx.pr_status("web"), fx.phase()), ("cancelled".to_string(), "done".to_string()));
+    assert_eq!((fx.workflow_status("web"), fx.phase()), ("cancelled".to_string(), "done".to_string()));
     // The table's checks: no Lead worktree, start time or pull request on a cancelled PR; the old values stay in `history`.
     assert_eq!(
         fx.env.query::<i64>(
@@ -1291,7 +1291,7 @@ fn an_open_pr_whose_pull_request_is_closed_is_cancelled_and_the_plan_reaches_don
 }
 
 #[test]
-fn cancelling_an_open_pr_leaves_the_phase_while_another_pr_remains_to_open_or_merge() {
+fn cancelling_an_open_workflow_leaves_the_phase_while_another_workflow_remains_to_open_or_merge() {
     // `dispatch`: a PR is still to start.
     {
         let fx = crud("dispatch");
@@ -1300,7 +1300,7 @@ fn cancelling_an_open_pr_leaves_the_phase_while_another_pr_remains_to_open_or_me
         fx.pull_state("closed");
         let out = fx.pr(&["cancel", "web"]).ok();
         assert!(out.get("phase").is_none(), "{out}");
-        assert_eq!((fx.pr_status("web"), fx.phase()), ("cancelled".to_string(), "dispatch".to_string()));
+        assert_eq!((fx.workflow_status("web"), fx.phase()), ("cancelled".to_string(), "dispatch".to_string()));
         assert!(fx.events("plan-phase").is_empty() && fx.events("plan-done").is_empty());
     }
 
@@ -1312,7 +1312,7 @@ fn cancelling_an_open_pr_leaves_the_phase_while_another_pr_remains_to_open_or_me
     fx.pull_state("closed");
     let out = fx.pr(&["cancel", "web"]).ok();
     assert!(out.get("phase").is_none(), "{out}");
-    assert_eq!((fx.pr_status("web"), fx.phase()), ("cancelled".to_string(), "deploy".to_string()));
+    assert_eq!((fx.workflow_status("web"), fx.phase()), ("cancelled".to_string(), "deploy".to_string()));
 
     // `deploy` with nothing merged: no PR is left, the Plan stays.
     fx.pr(&["cancel", "api"]).ok();
@@ -1321,7 +1321,7 @@ fn cancelling_an_open_pr_leaves_the_phase_while_another_pr_remains_to_open_or_me
 }
 
 #[test]
-fn an_open_pr_whose_pull_request_is_open_or_merged_is_refused_pr_not_closed() {
+fn an_open_workflow_whose_pull_request_is_open_or_merged_is_refused_workflow_not_closed() {
     let fx = crud("deploy");
     fx.locked_pr("web", &fx.web, "open");
     for state in ["open", "merged"] {
@@ -1330,7 +1330,7 @@ fn an_open_pr_whose_pull_request_is_open_or_merged_is_refused_pr_not_closed() {
         let error = fx.refused(&fx.pr(&["cancel", "web"]), "pr_not_closed", 3, writes);
         assert_eq!(error["details"]["pr"], "web");
         assert_eq!((error["details"]["number"].clone(), error["details"]["url"].clone(), error["details"]["state"].clone()), (json!(7), json!("u"), json!(state)));
-        assert_eq!((fx.pr_status("web"), fx.phase()), ("open".to_string(), "deploy".to_string()));
+        assert_eq!((fx.workflow_status("web"), fx.phase()), ("open".to_string(), "deploy".to_string()));
     }
     // Closed, reopened, closed: the stored row decides.
     fx.pull_state("closed");
@@ -1338,7 +1338,7 @@ fn an_open_pr_whose_pull_request_is_open_or_merged_is_refused_pr_not_closed() {
 }
 
 #[test]
-fn an_open_pr_that_another_workflow_needs_is_refused_pr_in_use() {
+fn an_open_workflow_that_another_workflow_needs_is_refused_workflow_in_use() {
     let fx = crud("dispatch");
     fx.locked_pr("base", &fx.pay, "open");
     fx.pull_state("closed");
@@ -1351,13 +1351,13 @@ fn an_open_pr_that_another_workflow_needs_is_refused_pr_in_use() {
     let writes = fx.writes();
     let error = fx.refused(&fx.pr(&["cancel", "base"]), "workflow_in_use", 3, writes);
     assert_eq!(error["details"]["workflows"], json!(["dependent"]));
-    assert_eq!(fx.pr_status("base"), "open");
+    assert_eq!(fx.workflow_status("base"), "open");
 }
 
 // ---------- the plan fingerprint ----------
 
 #[test]
-fn the_plan_fingerprint_changes_with_a_prs_repo_base_needs_and_existence() {
+fn the_plan_fingerprint_changes_with_a_workflows_repo_base_needs_and_existence() {
     let fx = crud("plan");
     fx.git(&fx.web, &["branch", "develop"]);
     fx.git(&fx.web, &["update-ref", "refs/remotes/origin/develop", "develop"]);
@@ -1391,7 +1391,7 @@ fn the_plan_fingerprint_changes_with_a_prs_repo_base_needs_and_existence() {
 }
 
 #[test]
-fn the_plan_fingerprint_ignores_a_prs_title() {
+fn the_plan_fingerprint_ignores_a_workflows_title() {
     let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("web", &fx.web, &["--needs", "api"]).ok();
@@ -1402,7 +1402,7 @@ fn the_plan_fingerprint_ignores_a_prs_title() {
 }
 
 #[test]
-fn a_plan_review_goes_stale_when_a_pr_changes() {
+fn a_plan_review_goes_stale_when_a_workflow_changes() {
     let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("web", &fx.pay, &[]).ok();
@@ -1432,7 +1432,7 @@ fn a_plan_review_goes_stale_when_a_pr_changes() {
 // ---------- stacked PRs and needs of one Plan (contract §2.2, §3.8 "Stacked PRs"; commands.md §9.4, §9.5) ----------
 
 #[test]
-fn add_stacks_on_a_pr_of_its_own_plan_and_a_branch_that_is_a_lead_branch_is_stacked_all_the_same() {
+fn add_stacks_on_a_workflow_of_its_own_plan_and_a_branch_that_is_a_lead_branch_is_stacked_all_the_same() {
     let fx = crud("grounding");
     fx.add("api", &fx.pay, &[]).ok();
     let out = fx.add("web", &fx.pay, &["--base", "pay-1/api", "--needs", "pay-1/api"]);
@@ -1452,7 +1452,7 @@ fn add_stacks_on_a_pr_of_its_own_plan_and_a_branch_that_is_a_lead_branch_is_stac
 }
 
 #[test]
-fn a_base_that_is_not_a_pr_reference_is_a_branch() {
+fn a_base_that_is_not_a_workflow_reference_is_a_branch() {
     let fx = crud("grounding");
     fx.plan("ledger-9", "ctx", "grounding");
     fx.git(&fx.pay, &["branch", "feature/x"]);
@@ -1507,7 +1507,7 @@ fn add_refuses_a_bad_reference_and_writes_nothing() {
 }
 
 #[test]
-fn a_cycle_of_needs_and_base_prs_is_refused() {
+fn a_cycle_of_needs_and_base_workflows_is_refused() {
     let fx = crud("grounding");
     fx.add("x", &fx.pay, &[]).ok();
     // y is stacked on x: x only has to start before y; so x may not need y, which would wait for x to merge.
@@ -1528,7 +1528,7 @@ fn a_cycle_of_needs_and_base_prs_is_refused() {
 }
 
 #[test]
-fn edit_stacks_and_unstacks_and_a_pr_something_is_stacked_on_keeps_its_repo() {
+fn edit_stacks_and_unstacks_and_a_workflow_something_is_stacked_on_keeps_its_repo() {
     let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("schema", &fx.web, &[]).ok();
@@ -1565,7 +1565,7 @@ fn edit_stacks_and_unstacks_and_a_pr_something_is_stacked_on_keeps_its_repo() {
 }
 
 #[test]
-fn add_reads_a_bare_pr_key_in_base_as_the_base_pr() {
+fn add_reads_a_bare_workflow_key_in_base_as_the_base_workflow() {
     let fx = crud("grounding");
     fx.add("api", &fx.pay, &[]).ok();
     let out = fx.add("web", &fx.pay, &["--base", "api"]).ok();
@@ -1579,7 +1579,7 @@ fn add_reads_a_bare_pr_key_in_base_as_the_base_pr() {
 }
 
 #[test]
-fn add_refuses_a_bare_base_pr_that_is_cancelled_or_merged() {
+fn add_refuses_a_bare_base_workflow_that_is_cancelled_or_merged() {
     let fx = crud("grounding");
     fx.add("gone", &fx.pay, &[]).ok();
     fx.pr(&["cancel", "gone"]).ok();
@@ -1592,7 +1592,7 @@ fn add_refuses_a_bare_base_pr_that_is_cancelled_or_merged() {
 }
 
 #[test]
-fn a_bare_base_is_a_pr_reference_only_for_a_pr_of_the_plan_in_the_repo() {
+fn a_bare_base_is_a_workflow_reference_only_for_a_workflow_of_the_plan_in_the_repo() {
     let fx = crud("grounding");
     fx.plan("ledger-9", "ctx", "grounding");
     fx.add("schema", &fx.web, &[]).ok();
@@ -1614,7 +1614,7 @@ fn a_bare_base_is_a_pr_reference_only_for_a_pr_of_the_plan_in_the_repo() {
 }
 
 #[test]
-fn edit_reads_a_bare_pr_key_in_base_as_the_base_pr() {
+fn edit_reads_a_bare_workflow_key_in_base_as_the_base_workflow() {
     let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("schema", &fx.web, &[]).ok();
@@ -1653,7 +1653,7 @@ impl Crud {
 }
 
 #[test]
-fn a_dispatch_pr_with_merged_jobs_is_cancelled_when_superseded_and_the_plan_reaches_done() {
+fn a_dispatch_workflow_with_merged_jobs_is_cancelled_when_superseded_and_the_plan_reaches_done() {
     let fx = crud("dispatch");
     fx.plan("other-1", "ctx", "deploy");
     fx.merged_pr("other-1", "storefix", &fx.pay, 8);
@@ -1670,7 +1670,7 @@ fn a_dispatch_pr_with_merged_jobs_is_cancelled_when_superseded_and_the_plan_reac
     let out = fx.pr(&["cancel", "busyfix", "--superseded-by", "other-1/storefix"]).ok();
     assert_eq!(out["workflow"], json!({"key": "busyfix", "status": "cancelled"}));
     assert_eq!(out["phase"], "done");
-    assert_eq!((fx.pr_status("busyfix"), fx.phase()), ("cancelled".to_string(), "done".to_string()));
+    assert_eq!((fx.workflow_status("busyfix"), fx.phase()), ("cancelled".to_string(), "done".to_string()));
     // The merged Job stays as it is.
     assert_eq!(fx.env.query::<String>("SELECT status FROM jobs WHERE key = 'done'"), "merged");
 
@@ -1689,7 +1689,7 @@ fn a_dispatch_pr_with_merged_jobs_is_cancelled_when_superseded_and_the_plan_reac
 }
 
 #[test]
-fn a_bare_superseding_key_is_a_pr_of_the_plan_and_any_status_but_cancelled_will_do() {
+fn a_bare_superseding_key_is_a_workflow_of_the_plan_and_any_status_but_cancelled_will_do() {
     let fx = crud("dispatch");
     fx.locked_pr("busyfix", &fx.web, "dispatch");
     fx.locked_pr("storefix", &fx.pay, "dispatch");
@@ -1701,7 +1701,7 @@ fn a_bare_superseding_key_is_a_pr_of_the_plan_and_any_status_but_cancelled_will_
 }
 
 #[test]
-fn superseding_is_refused_for_a_live_job_an_unknown_or_foreign_or_cancelled_or_own_pr_and_a_pr_that_is_not_dispatch() {
+fn superseding_is_refused_for_a_live_job_an_unknown_or_foreign_or_cancelled_or_own_workflow_and_a_workflow_that_is_not_dispatch() {
     let fx = crud("dispatch");
     fx.plan("other-1", "ctx", "deploy");
     fx.plan("alien-1", "alien", "deploy");
@@ -1729,7 +1729,7 @@ fn superseding_is_refused_for_a_live_job_an_unknown_or_foreign_or_cancelled_or_o
     fx.refused(&by("dead"), "illegal_transition", 3, writes);
     fx.refused(&by("busyfix"), "usage", 2, writes);
     fx.refused(&by("pay-1/busyfix"), "usage", 2, writes);
-    assert_eq!(fx.pr_status("busyfix"), "dispatch");
+    assert_eq!(fx.workflow_status("busyfix"), "dispatch");
 
     // The flag is for a `dispatch` PR only: an open PR is ended by its closed pull request.
     fx.locked_pr("web", &fx.web, "open");
@@ -1739,7 +1739,7 @@ fn superseding_is_refused_for_a_live_job_an_unknown_or_foreign_or_cancelled_or_o
 }
 
 #[test]
-fn superseding_a_waiting_pr_before_the_lock_is_refused() {
+fn superseding_a_waiting_workflow_before_the_lock_is_refused() {
     let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("web", &fx.web, &[]).ok();
@@ -1823,7 +1823,7 @@ impl Crud {
 }
 
 #[test]
-fn a_dispatch_pr_cancel_cancels_its_draft_queued_and_failed_jobs_with_the_pr() {
+fn a_dispatch_workflow_cancel_cancels_its_draft_queued_and_failed_jobs_with_the_workflow() {
     let fx = crud("dispatch");
     fx.locked_pr("api", &fx.pay, "merged");
     fx.locked_pr("gone", &fx.web, "dispatch");
@@ -1841,11 +1841,11 @@ fn a_dispatch_pr_cancel_cancels_its_draft_queued_and_failed_jobs_with_the_pr() {
     }
     assert_eq!(fx.job_row("old"), "cancelled/x/-");
     assert_eq!(fx.cancelled_jobs(), ["d", "f", "op", "q"]);
-    assert_eq!((fx.pr_status("gone"), fx.phase()), ("cancelled".to_string(), "done".to_string()));
+    assert_eq!((fx.workflow_status("gone"), fx.phase()), ("cancelled".to_string(), "done".to_string()));
 }
 
 #[test]
-fn a_tdd_pr_in_draft_with_a_queued_open_job_is_cancelled_by_one_pr_cancel() {
+fn a_tdd_workflow_in_draft_with_a_queued_open_job_is_cancelled_by_one_workflow_cancel() {
     let fx = crud("dispatch");
     fx.locked_pr("api", &fx.pay, "merged");
     fx.locked_shaped_pr("gone", &fx.web, "dispatch", "tdd");
@@ -1866,25 +1866,25 @@ fn a_tdd_pr_in_draft_with_a_queued_open_job_is_cancelled_by_one_pr_cancel() {
         assert_eq!(fx.job_row(key), "cancelled/pr cancelled/-", "{key}");
     }
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE status <> 'cancelled'"), 0);
-    assert_eq!((fx.pr_status("gone"), fx.phase()), ("cancelled".to_string(), "done".to_string()));
+    assert_eq!((fx.workflow_status("gone"), fx.phase()), ("cancelled".to_string(), "done".to_string()));
 }
 
 #[test]
-fn a_waiting_tdd_pr_with_its_template_stubs_is_cancelled_before_the_lock() {
+fn a_waiting_tdd_workflow_with_its_template_stubs_is_cancelled_before_the_lock() {
     let fx = crud("plan");
     fx.add_with_stubs("pay-1", &["add", "gone", "--repo", fx.pay.to_str().unwrap(), "--title", "Change gone"]).ok();
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE workflow = 'gone' AND status = 'draft'"), 4);
 
     let out = fx.pr(&["cancel", "gone"]).ok();
     assert_eq!(out["workflow"], json!({"key": "gone", "status": "cancelled"}));
-    assert_eq!(fx.pr_status("gone"), "cancelled");
+    assert_eq!(fx.workflow_status("gone"), "cancelled");
     for key in ["gone-docs", "gone-tests", "gone-impl", "open-gone"] {
         assert_eq!(fx.job_row(key), "cancelled/pr cancelled/-", "{key}");
     }
 }
 
 #[test]
-fn a_running_job_holds_the_pr_cancel_and_nothing_is_cancelled() {
+fn a_running_job_holds_the_workflow_cancel_and_nothing_is_cancelled() {
     let fx = crud("dispatch");
     fx.locked_pr("api", &fx.pay, "merged");
     fx.locked_pr("gone", &fx.web, "dispatch");
@@ -1896,16 +1896,16 @@ fn a_running_job_holds_the_pr_cancel_and_nothing_is_cancelled() {
     let error = fx.refused(&fx.pr(&["cancel", "gone"]), "workflow_in_use", 3, writes);
     assert_eq!(error["details"]["jobs"], json!(["run"]));
     assert_eq!((fx.job_row("d"), fx.job_row("q"), fx.job_row("run")), ("draft/-/-".to_string(), "queued/-/-".to_string(), "running/-/-".to_string()));
-    assert_eq!(fx.pr_status("gone"), "dispatch");
+    assert_eq!(fx.workflow_status("gone"), "dispatch");
 
     fx.env.sql("UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE key = 'run'");
     fx.pr(&["cancel", "gone"]).ok();
     assert_eq!((fx.job_row("d"), fx.job_row("q")), ("cancelled/pr cancelled/-".to_string(), "cancelled/pr cancelled/-".to_string()));
-    assert_eq!(fx.pr_status("gone"), "cancelled");
+    assert_eq!(fx.workflow_status("gone"), "cancelled");
 }
 
 #[test]
-fn a_merged_job_holds_the_pr_cancel_unless_superseded_and_the_others_are_cancelled() {
+fn a_merged_job_holds_the_workflow_cancel_unless_superseded_and_the_others_are_cancelled() {
     let fx = crud("dispatch");
     fx.plan("other-1", "ctx", "deploy");
     fx.merged_pr("other-1", "storefix", &fx.pay, 8);
@@ -1917,7 +1917,7 @@ fn a_merged_job_holds_the_pr_cancel_unless_superseded_and_the_others_are_cancell
     let writes = fx.writes();
     let error = fx.refused(&fx.pr(&["cancel", "busyfix"]), "workflow_in_use", 3, writes);
     assert_eq!(error["details"]["jobs"], json!(["done"]));
-    assert_eq!((fx.job_row("d"), fx.pr_status("busyfix")), ("draft/-/-".to_string(), "dispatch".to_string()));
+    assert_eq!((fx.job_row("d"), fx.workflow_status("busyfix")), ("draft/-/-".to_string(), "dispatch".to_string()));
 
     fx.pr(&["cancel", "busyfix", "--superseded-by", "other-1/storefix"]).ok();
     assert_eq!(fx.job_row("d"), "cancelled/pr cancelled/-");
@@ -1927,7 +1927,7 @@ fn a_merged_job_holds_the_pr_cancel_unless_superseded_and_the_others_are_cancell
 }
 
 #[test]
-fn a_pr_that_another_workflow_needs_still_refuses_and_none_of_its_jobs_is_cancelled() {
+fn a_workflow_that_another_workflow_needs_still_refuses_and_none_of_its_jobs_is_cancelled() {
     let fx = crud("dispatch");
     fx.locked_pr("api", &fx.pay, "merged");
     fx.locked_pr("base", &fx.pay, "dispatch");
@@ -1951,7 +1951,7 @@ fn a_pr_that_another_workflow_needs_still_refuses_and_none_of_its_jobs_is_cancel
 }
 
 #[test]
-fn an_open_pr_with_a_closed_pull_request_has_its_draft_queued_and_failed_jobs_cancelled() {
+fn an_open_workflow_with_a_closed_pull_request_has_its_draft_queued_and_failed_jobs_cancelled() {
     let fx = crud("deploy");
     fx.locked_pr("api", &fx.pay, "merged");
     fx.locked_pr("web", &fx.web, "open");
@@ -1965,11 +1965,11 @@ fn an_open_pr_with_a_closed_pull_request_has_its_draft_queued_and_failed_jobs_ca
         assert_eq!(fx.job_row(key), "cancelled/pr cancelled/-", "{key}");
     }
     assert_eq!(fx.cancelled_jobs(), ["d", "f", "q"]);
-    assert_eq!(fx.pr_status("web"), "cancelled");
+    assert_eq!(fx.workflow_status("web"), "cancelled");
 }
 
 #[test]
-fn after_a_pr_cancel_the_plan_can_be_archived() {
+fn after_a_workflow_cancel_the_plan_can_be_archived() {
     let fx = crud("dispatch");
     fx.locked_shaped_pr("gone", &fx.web, "dispatch", "tdd");
     fx.job_of("gone-tests", "gone", "test", "draft");
@@ -1984,7 +1984,7 @@ fn after_a_pr_cancel_the_plan_can_be_archived() {
 }
 
 #[test]
-fn owner_is_in_use_while_a_plan_has_a_pr_row() {
+fn owner_is_in_use_while_a_plan_has_a_workflow_row() {
     let fx = crud("plan");
     fx.env.owner_policy("other", "");
     fx.add("api", &fx.pay, &[]).ok();
@@ -2008,7 +2008,7 @@ fn owner_is_in_use_while_a_plan_has_a_pr_row() {
 }
 
 #[test]
-fn a_null_owner_is_still_set_while_a_pr_row_exists() {
+fn a_null_owner_is_still_set_while_a_workflow_row_exists() {
     let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.env.sql("UPDATE contexts SET owner = NULL WHERE id = 'ctx'");

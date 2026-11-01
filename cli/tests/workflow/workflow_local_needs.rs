@@ -71,7 +71,7 @@ impl Pay {
 }
 
 #[test]
-fn pr_add_refuses_a_need_of_another_plan() {
+fn workflow_add_refuses_a_need_of_another_plan() {
     let fx = fx();
     let writes = fx.writes();
     fx.refused(&fx.add("pay-1", "web", &["--needs", "ops-1/deploy"]), "web", "ops-1/deploy", writes);
@@ -79,7 +79,7 @@ fn pr_add_refuses_a_need_of_another_plan() {
 }
 
 #[test]
-fn pr_add_refuses_a_base_pr_of_another_plan() {
+fn workflow_add_refuses_a_base_workflow_of_another_plan() {
     let fx = fx();
     let writes = fx.writes();
     fx.refused(&fx.add("pay-1", "web", &["--base", "ops-1/deploy"]), "web", "ops-1/deploy", writes);
@@ -87,7 +87,7 @@ fn pr_add_refuses_a_base_pr_of_another_plan() {
 }
 
 #[test]
-fn pr_edit_refuses_a_need_of_another_plan() {
+fn workflow_edit_refuses_a_need_of_another_plan() {
     let fx = fx();
     fx.add("pay-1", "web", &[]).ok();
     let writes = fx.writes();
@@ -96,7 +96,7 @@ fn pr_edit_refuses_a_need_of_another_plan() {
 }
 
 #[test]
-fn pr_edit_refuses_a_base_pr_of_another_plan() {
+fn workflow_edit_refuses_a_base_workflow_of_another_plan() {
     let fx = fx();
     fx.add("pay-1", "web", &[]).ok();
     let writes = fx.writes();
@@ -107,7 +107,7 @@ fn pr_edit_refuses_a_base_pr_of_another_plan() {
 /// What stays: a need and a base PR of the Plan itself, by bare key (a base as the Plan's own `<plan>/<key>` long form, which may stay). And `workflow_needs` is keyed by the Plan alone
 /// (no `needs_plan`, migration `local-needs`).
 #[test]
-fn needs_and_base_pr_of_the_same_plan_still_work() {
+fn needs_and_base_workflow_of_the_same_plan_still_work() {
     let fx = fx();
     fx.add("pay-1", "web", &["--needs", "api"]).ok();
     let out = fx.add("pay-1", "ui", &["--base", "pay-1/api"]).ok();

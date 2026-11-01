@@ -206,7 +206,7 @@ fn jobs_before_lock_is_refused() {
 }
 
 #[test]
-fn jobs_on_a_pr_that_waits_for_another_pr_queue_the_jobs_too() {
+fn jobs_on_a_workflow_that_waits_for_another_workflow_queue_the_jobs_too() {
     let fx = crud("dispatch");
     fx.base_pr();
     let file = fx.jobs_file("jobs.json", &jobs_object("tdd"));
@@ -218,7 +218,7 @@ fn jobs_on_a_pr_that_waits_for_another_pr_queue_the_jobs_too() {
 // Guards: these pass before the change and must keep passing.
 
 #[test]
-fn a_pr_that_waits_for_another_pr_still_lays_out_the_stubs() {
+fn a_workflow_that_waits_for_another_workflow_still_lays_out_the_stubs() {
     let fx = crud("dispatch");
     fx.base_pr();
     fx.add_k("tdd", &["--needs", "base"]).ok();

@@ -91,7 +91,7 @@ impl Lb {
 }
 
 #[test]
-fn pr_add_names_the_lead_branch_plan_slash_key() {
+fn workflow_add_names_the_lead_branch_plan_slash_key() {
     let fx = lb();
     let out = fx.add("api", &fx.pay).ok();
     assert_eq!(out["workflow"]["lead_branch"], "pay-1/api");
@@ -99,7 +99,7 @@ fn pr_add_names_the_lead_branch_plan_slash_key() {
 }
 
 #[test]
-fn pr_add_refuses_when_the_plan_slash_key_branch_exists() {
+fn workflow_add_refuses_when_the_plan_slash_key_branch_exists() {
     let fx = lb();
     fx.git(&fx.web, &["branch", "pay-1/api"]);
     let error = fx.refuse(&fx.add("api", &fx.web), "branch_exists");
@@ -107,7 +107,7 @@ fn pr_add_refuses_when_the_plan_slash_key_branch_exists() {
 }
 
 #[test]
-fn pr_add_refuses_when_the_plan_branch_exists() {
+fn workflow_add_refuses_when_the_plan_branch_exists() {
     let fx = lb();
     fx.git(&fx.web, &["branch", "pay-1"]);
     let error = fx.refuse(&fx.add("api", &fx.web), "branch_exists");
@@ -116,7 +116,7 @@ fn pr_add_refuses_when_the_plan_branch_exists() {
 }
 
 #[test]
-fn pr_add_leaves_a_merged_legacy_lead_branch_alone() {
+fn workflow_add_leaves_a_merged_legacy_lead_branch_alone() {
     let fx = lb_in("done");
     let origin = fx.env.root().join("repos/pay-origin.git");
     fx.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
@@ -156,7 +156,7 @@ fn pr_add_leaves_a_merged_legacy_lead_branch_alone() {
 }
 
 #[test]
-fn pr_start_creates_the_plan_slash_key_lead_branch_and_worktree() {
+fn workflow_start_creates_the_plan_slash_key_lead_branch_and_worktree() {
     let fx = lb();
     fx.add("api", &fx.pay).ok();
     fx.cpd(&["job", "cancel", "api-config", "--reason", "a stub", "--plan", "pay-1"]).ok();
@@ -171,7 +171,7 @@ fn pr_start_creates_the_plan_slash_key_lead_branch_and_worktree() {
 }
 
 #[test]
-fn pr_start_refuses_when_the_plan_branch_exists() {
+fn workflow_start_refuses_when_the_plan_branch_exists() {
     let fx = lb();
     fx.add("api", &fx.pay).ok();
     fx.cpd(&["job", "cancel", "api-config", "--reason", "a stub", "--plan", "pay-1"]).ok();
@@ -185,7 +185,7 @@ fn pr_start_refuses_when_the_plan_branch_exists() {
 
 /// Guard (passes today): the legacy `cpd/<plan>/<key>` still refuses on its parent `cpd/<plan>`.
 #[test]
-fn pr_start_of_a_legacy_plan_key_branch_still_refuses_on_cpd_plan() {
+fn workflow_start_of_a_legacy_plan_key_branch_still_refuses_on_cpd_plan() {
     let fx = lb();
     fx.drop_unreachable_origin(&fx.pay);
     fx.env.sql(&format!(
@@ -201,7 +201,7 @@ fn pr_start_of_a_legacy_plan_key_branch_still_refuses_on_cpd_plan() {
 }
 
 #[test]
-fn pr_edit_repo_refuses_when_the_plan_branch_exists() {
+fn workflow_edit_repo_refuses_when_the_plan_branch_exists() {
     let fx = lb();
     fx.add("api", &fx.pay).ok();
     fx.git(&fx.web, &["branch", "pay-1"]);
@@ -255,7 +255,7 @@ impl Adopt {
 }
 
 #[test]
-fn pr_adopt_refuses_a_head_branch_that_is_a_stored_lead_branch() {
+fn workflow_adopt_refuses_a_head_branch_that_is_a_stored_lead_branch() {
     let fx = adopt_fx("pay-1/api");
     fx.add("api", &[]).ok();
     let error = refused(&fx.add("web", &["--adopt", "7"]), "adopt_cpd_branch", 3);
@@ -264,7 +264,7 @@ fn pr_adopt_refuses_a_head_branch_that_is_a_stored_lead_branch() {
 }
 
 #[test]
-fn pr_adopt_accepts_a_cpd_prefixed_head_branch_that_is_no_lead_branch() {
+fn workflow_adopt_accepts_a_cpd_prefixed_head_branch_that_is_no_lead_branch() {
     let fx = adopt_fx("cpd/somebody-elses");
     let out = fx.add("web", &["--adopt", "7"]).ok();
     assert_eq!(out["workflow"]["head_ref"], "cpd/somebody-elses");
