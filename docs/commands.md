@@ -1399,6 +1399,9 @@ Every finding has every key, so the output is byte-stable: `{"rule": "<id>", "se
 The `parallel_write_overlap` message is exactly: `<job> and <other> have no dependency path and both name <paths joined by ", ">. A hint, not a conflict prediction: on the ledger of 2026-10-30, 5 of 209 such pairs (2.4%) hit a merge conflict. Settle it with cpd job edit <job> --needs <other>, or narrow touches.` The pair is defined in contract §2.7: `job` is the draft under review (the smaller key when both are drafts under review), `other` the other Job. The rule is a warning and never a refusal; it covers equal files only, exempts the lockfiles, and its limits are in contract §2.7.
 
 `plan review` and `plan render` also return the warnings, and `plan review` refuses with the first error finding's own code, never with `lint_failed` (added by PR lint-review).
+
+Idempotent: yes. The same Plan twice gives byte-equal stdout, and nothing is written.
+
 ## 5. `job`
 
 Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except where stated.

@@ -360,6 +360,67 @@ The old AI SDK Elements regression under `web/src/components/ai-elements/`
 `live-chat.tsx` imported it. With it go the deps only those files used: `use-stick-to-bottom`
 (`conversation.tsx`), `nanoid` and the `ai` SDK (`prompt-input.tsx`, `message.tsx`).
 
+### The resizable three-column shell
+
+The single-screen chat of “The chat surface (shadcn AI Elements)” becomes the **centre column
+of a resizable three-column shell** — **Context | Chat | Inbox** — decided by the User on
+2026-11-01. Sizing comes from `react-resizable-panels`, pinned **exactly `4.15.3`**, through
+the shadcn **`resizable`** wrapper (`PanelGroup`, `Panel`, `PanelResizeHandle`).
+
+| Column | Filled by |
+|---|---|
+| Context (left) | the shadcn **`sidebar-03`** block (“a sidebar with submenus”), copied verbatim |
+| Chat (centre) | the existing `web/src/views/live-chat.tsx`, unchanged |
+| Inbox (right) | a **placeholder** (“The Inbox lands here.”) — the real Inbox and the Tree/Plan panes belong to the ui-parity Plan |
+
+**Sizing.** The Context column **defaults to `20rem`**; dragging its handle resizes it;
+**double-clicking its handle restores `20rem`** (checked in a real browser: initial 320 px,
+drag to 450 px, double-click back to 320 px). The three panels’ `defaultSize`s over-constrain
+the group, so the library scales them down on first layout (~311 px at 1400 px wide); the
+`20rem` default is re-applied once on mount through the panel ref to land it exactly.
+
+**Containing the fixed rail.** `sidebar-03`’s desktop rail is `position: fixed`, so it escapes
+its panel box: the Context panel gets a `transform` wrapper (establishing a containing block)
+with `overflow-hidden`, and `SidebarProvider` gets `--sidebar-width: 100%` so the rail and its
+gap spacer match the panel without its content adding a panel scrollbar.
+
+**Dark is the default.** The `<html>` element carries `class="dark"` in `web/index.html`.
+
+#### The registry rule: new-york-v4 only
+
+The shadcn registry ships two styles whose files differ by Tailwind version; verified against
+the registry JSON (fetched 2026-11-01):
+
+- **`new-york-v4`** — Tailwind v4 syntax (`w-(--sidebar-width)`); use it.
+- **`new-york`** — Tailwind v3; its `w-[--sidebar-width]` has no effect under this repo’s
+  Tailwind v4 (4.3.3): Tailwind emits `width: --sidebar-width`, an invalid declaration the
+  browser drops, so the rail collapses to its content width, with the panel gaining a
+  scrollbar (seen and fixed on 2026-11-01).
+
+The `new-york-v4` items already import the unified `radix-ui` package (`Slot.Root`, matching
+`web/src/components/ui/button.tsx`) and lucide icons, so the only rewrites when vendoring are
+the registry paths (`@/registry/new-york-v4/…`) and `cn`: an item imports `cn` from `"cn"`,
+this repo’s is `web/src/lib/utils.ts`, imported **relatively** like every ui component here.
+No `@` alias is added to `tsconfig.json` or `vite.config.ts`.
+
+**Vendored paths** — the `sidebar` item, its registry dependencies not already vendored, and
+the `sidebar-03` block:
+
+```
+web/src/components/ui/sidebar.tsx     (registry: sidebar)
+web/src/components/ui/resizable.tsx   (registry: resizable)
+web/src/components/ui/breadcrumb.tsx
+web/src/components/ui/separator.tsx
+web/src/components/ui/sheet.tsx
+web/src/components/ui/skeleton.tsx
+web/src/components/ui/tooltip.tsx
+web/src/hooks/use-mobile.ts
+sidebar-03 block: components/app-sidebar.tsx + page.tsx
+```
+
+New dep: `react-resizable-panels` exactly `4.15.3`; `radix-ui` and `lucide-react` are already
+in `web/package.json`.
+
 ### The durable host-socket read (`chat-host`)
 
 A durable Session's transcript is read from its **host socket** — the real frames of `docs/contract.md` §6.14 — not only by shelling the CLI. The preference rule, pinned: for a durable Session the dev server **connects to the host socket when a live host answers** (a socket file that accepts and completes the handshake) and **falls back to `cpd session tail` otherwise** — no socket file, a refused connect, a refused handshake. A pi Session keeps its session-file read; the browser API is unchanged either way: the SSE `/frames` stream still emits the same `SnapshotFrame`s of `toSnapshotFrame`, and `LiveApi` is untouched. The send path stays `cpd session send`: the socket is **read-only** here, the client sends `hello` and `attach` and nothing else. The activation flag, the token and the security boundary above are unchanged — the host-socket read runs in the same dev server, behind the same token check.
