@@ -182,12 +182,19 @@ fn an_addendum_refuses_a_draft_merged_or_cancelled_job_and_an_attempt_that_is_no
     job_add(&fx, "pl", "d", "S2", &[]).ok(); // a draft appended after the lock
     job(&fx, &["cancel", "gone", "--reason", "Not needed."], "pl").ok();
     engine(&fx.env, "pl", "m", "merged");
-    for (key, status) in [("s", "starting"), ("g", "merging")] {
-        engine(&fx.env, "pl", key, "running");
-        fixture(&fx.env, &format!("UPDATE attempts SET status = '{status}' WHERE plan = 'pl' AND id = '{key}-a1';"));
+    // A running Job whose latest Attempt is `starting`, `merging` or `ended`, inserted in that status.
+    for (key, status) in [("s", "starting"), ("g", "merging"), ("e", "ended")] {
+        let ended = if status == "ended" { ", outcome, cause, ended_at" } else { "" };
+        let ended_values = if status == "ended" { ", 'failed', 'timed_out', 't'" } else { "" };
+        fixture(
+            &fx.env,
+            &format!(
+                "UPDATE jobs SET status = 'running' WHERE plan = 'pl' AND key = '{key}';
+                 INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at{ended})
+                 VALUES ('pl', '{key}-a1', '{key}', 1, 'S2', 'ladder', '{status}', 'cpd/pl--{key}-a1', '/w', 't'{ended_values});"
+            ),
+        );
     }
-    engine(&fx.env, "pl", "e", "running");
-    fixture(&fx.env, "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE plan = 'pl' AND id = 'e-a1';");
 
     let before = writes(&fx.env);
     for key in ["d", "m", "gone"] {
