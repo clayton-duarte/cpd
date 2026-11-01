@@ -9,6 +9,8 @@ use super::review::{drafts_incomplete, outline_incomplete, outline_missing};
 use super::row::Phase;
 use super::shape;
 use super::shared::is_shared;
+use super::tier_advice::{self, Advice};
+use crate::config::Tier;
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::PlanId;
 
@@ -39,10 +41,11 @@ pub enum Rule {
     PrEmpty,
     DependencyCycle,
     ParallelWriteOverlap,
+    TierAdvice,
 }
 
 impl Rule {
-    pub const ALL: [Rule; 9] = [
+    pub const ALL: [Rule; 10] = [
         Rule::DraftIncomplete,
         Rule::OutlineMissing,
         Rule::OutlineIncomplete,
@@ -52,6 +55,7 @@ impl Rule {
         Rule::PrEmpty,
         Rule::DependencyCycle,
         Rule::ParallelWriteOverlap,
+        Rule::TierAdvice,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -65,12 +69,13 @@ impl Rule {
             Rule::PrEmpty => "pr_empty",
             Rule::DependencyCycle => "dependency_cycle",
             Rule::ParallelWriteOverlap => "parallel_write_overlap",
+            Rule::TierAdvice => "tier_advice",
         }
     }
 
     pub fn severity(self) -> Severity {
         match self {
-            Rule::ParallelWriteOverlap => Severity::Warn,
+            Rule::ParallelWriteOverlap | Rule::TierAdvice => Severity::Warn,
             _ => Severity::Error,
         }
     }
@@ -112,6 +117,11 @@ impl Finding {
                     self.other.as_deref().unwrap_or("")
                 )
             }
+            Rule::TierAdvice => {
+                // The message is `<job> is <T> but history favours <A> for <kind> Jobs: ...`; the row is its head.
+                let head = self.message.split(" Jobs: ").next().unwrap_or("");
+                head.replacen(" but history", ", history", 1)
+            }
             _ => self.message.clone(),
         }
     }
@@ -136,6 +146,7 @@ pub struct Input<'a> {
     pub prs: &'a [PrRow],
     pub jobs: &'a [Job],
     pub outline: Option<&'a Outline>,
+    pub advice: &'a [crate::plan::tier_advice::Advice],
 }
 
 impl<'a> Input<'a> {
@@ -152,14 +163,19 @@ impl<'a> Input<'a> {
             prs,
             jobs,
             outline,
+            advice: &[],
         }
+    }
+
+    pub fn with_advice(self, advice: &'a [crate::plan::tier_advice::Advice]) -> Self {
+        Input { advice, ..self }
     }
 }
 
 type RuleFn = fn(&Input) -> Vec<Finding>;
 
 /// The rules, in catalogue order: another rule is one variant, one function and one line here.
-const RULES: [RuleFn; 9] = [
+const RULES: [RuleFn; 10] = [
     draft_incomplete_rule,
     outline_missing_rule,
     outline_incomplete_rule,
@@ -169,6 +185,7 @@ const RULES: [RuleFn; 9] = [
     pr_empty_rule,
     dependency_cycle_rule,
     parallel_write_overlap_rule,
+    tier_advice_rule,
 ];
 
 impl Rule {
@@ -183,7 +200,9 @@ impl Rule {
             Rule::ShapeIncomplete => ErrorCode::ShapeIncomplete,
             Rule::PrEmpty => ErrorCode::PrEmpty,
             Rule::DependencyCycle => ErrorCode::DependencyCycle,
-            Rule::ParallelWriteOverlap => unreachable!("a warning carries no refusal"),
+            Rule::ParallelWriteOverlap | Rule::TierAdvice => {
+                unreachable!("a warning carries no refusal")
+            }
         }
     }
 }
@@ -395,6 +414,65 @@ fn parallel_write_overlap_rule(i: &Input) -> Vec<Finding> {
                 });
             }
         }
+    }
+    out
+}
+
+fn message(job: &str, advice: &Advice, tier: Tier, draft: bool) -> String {
+    let a = advice.tier;
+    let mut m = format!(
+        "{job} is {tier} but history favours {a} for {} Jobs: of {} first Attempts at {a}, {} merged ({:.1}%, lower bound {:.1}%), at an expected cost of ${:.2}. That is what happened to Jobs that ran at {a}, not what the Tier causes: the Lead picks harder Jobs for higher Tiers.",
+        advice.kind,
+        advice.n,
+        advice.passed,
+        advice.rate * 100.0,
+        advice.lower * 100.0,
+        advice.expected_cost
+    );
+    if draft {
+        m.push_str(&format!(
+            " Keep {tier} if this Job is harder than the usual one, or change it with cpd job edit {job} --tier {a}."
+        ));
+    }
+    m
+}
+
+/// `tier_advice`: a draft or queued Job of a Worker kind runs a Tier dearer than the history favours (downward only).
+fn tier_advice_rule(i: &Input) -> Vec<Finding> {
+    let mut out = Vec::new();
+    for j in i.jobs {
+        if !matches!(
+            j.kind.as_str(),
+            "work" | "docs" | "test" | "impl" | "verify"
+        ) || !matches!(j.status.as_str(), "draft" | "queued")
+        {
+            continue;
+        }
+        let Some(raw) = j.tier.as_deref() else {
+            continue;
+        };
+        let Some(advice) = i.advice.iter().find(|a| a.kind == j.kind) else {
+            continue;
+        };
+        // A stored Plan's Jobs always have a valid Tier (§4.4 CHECK): a bad one is a bad row, loud.
+        let tier = Tier::parse(raw).unwrap_or_else(|_| {
+            panic!(
+                "{}",
+                CpdError::bad_row(format!("Job {} has tier {raw:?}", j.key))
+            )
+        });
+        if tier_advice::rank(advice.tier) >= tier_advice::rank(tier) {
+            continue;
+        }
+        out.push(Finding {
+            rule: Rule::TierAdvice,
+            message: message(&j.key, advice, tier, j.status == "draft"),
+            details: serde_json::Map::new(),
+            pr: Some(j.pr_str().to_owned()),
+            job: Some(j.key.clone()),
+            other: None,
+            paths: Vec::new(),
+        });
     }
     out
 }
