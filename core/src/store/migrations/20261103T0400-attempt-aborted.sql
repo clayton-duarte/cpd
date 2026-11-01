@@ -44,6 +44,7 @@ CREATE TABLE attempts_new (
   gate_hook        TEXT CHECK (gate_hook IN ('pre-commit', 'pre-merge')),
   gate_command     TEXT,
   gate_exit        INTEGER,
+  actual_files     TEXT CHECK (actual_files IS NULL OR (json_valid(actual_files) AND json_type(actual_files) = 'array')),
   PRIMARY KEY (plan, id),
   UNIQUE (plan, job, number),
   FOREIGN KEY (plan, job) REFERENCES jobs(plan, key),
@@ -60,11 +61,11 @@ CREATE TABLE attempts_new (
 INSERT INTO attempts_new (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, base_sha,
                           driver_pid, worker_session, spec_path, submitted_sha, submitted_at, check_tail, merged_sha,
                           nudged, stop_request, metrics, started_at, ended_at, runner, worker_pid, gate_hook,
-                          gate_command, gate_exit)
+                          gate_command, gate_exit, actual_files)
   SELECT plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, base_sha,
          driver_pid, worker_session, spec_path, submitted_sha, submitted_at, check_tail, merged_sha,
          nudged, stop_request, metrics, started_at, ended_at, runner, worker_pid, gate_hook,
-         gate_command, gate_exit
+         gate_command, gate_exit, actual_files
   FROM attempts;
 DROP TABLE attempts;
 ALTER TABLE attempts_new RENAME TO attempts;
