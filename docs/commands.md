@@ -216,7 +216,7 @@ The `$CPD_HOME` layout is §1.4. Commands in this file write files the contract'
 
 | File | Written by | Read by |
 |---|---|---|
-| `run/<plan>/lead-message.md` | `plan new` | the Plan's Lead `session run` (its first message) |
+| `run/<plan>/lead-message.md` | `plan new` | the Plan's Lead `session run` and durable host startup (their first message, hs-d812) |
 | `run/<context>/manager-message.md` | `context manager` (B3-A2) | the Manager's `session run` (its first message) |
 | `run/<plan>/summary.md` | `plan render` (§4.5, hs-d502): the Plan summary of the Plan as it is, without a review | the User, the Lead |
 | `run/<plan>/summary-<review>.md` | `plan review` (§4.6, hs-d502): a copy of the summary that a later render cannot change | the pi adapter, which shows it in the Lead's chat (§15.5) |
@@ -2974,7 +2974,7 @@ pi failing to start or exiting non-zero, or an answer that is empty or does not 
 cpd session first-message [--session <id>]
 ```
 
-**Internal:** the pi adapter runs it at turn start for a by-user Lead or Manager Session whose `cpd-first-message` custom message has not yet been delivered (hs-d542 A3). Renders the first message at call time with the same functions `plan new` and `context manager` use (§4.1 step 3, §3.10), writes it to the session file's destination (`run/<plan>/lead-message.md` or `run/<context>/manager-message.md`) and prints JSON for the adapter to add the message to the run (§15).
+**Internal:** the pi adapter runs it at turn start for a by-user Lead or Manager Session whose `cpd-first-message` custom message has not yet been delivered (hs-d542 A3); the durable host runs it too, at startup, for a fresh non-by-user Lead or Manager whose conversation is empty, and submits the returned text as the first turn's input (hs-d812, contract §6.13 "Delivery (P1.4)" 3). Renders the first message at call time with the same functions `plan new` and `context manager` use (§4.1 step 3, §3.10), writes it to the session file's destination (`run/<plan>/lead-message.md` or `run/<context>/manager-message.md`) and prints JSON for the adapter to add the message to the run (§15).
 
 | Precondition | Code | Exit |
 |---|---|---|
