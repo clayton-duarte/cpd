@@ -42,6 +42,7 @@ fn first_input<'a>(plan: &'a PlanId, attempt: &'a AttemptId, lists: &'a Lists) -
         protected: &[],
         previous: &[],
         answers: &[],
+        addenda: &[],
     }
 }
 
@@ -125,6 +126,7 @@ fn later() -> String {
         protected: &protected,
         previous: &previous,
         answers: &answers,
+        addenda: &[],
     })
     .unwrap()
 }

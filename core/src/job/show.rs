@@ -49,7 +49,7 @@ pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError>
     let plan = args.plan.require()?.clone();
     let home = env.home.clone();
     let concurrency = env.config.concurrency;
-    let (job, needed_by, attempts, needs, waiting_for, summary) = env.store.read(|conn| {
+    let (job, needed_by, attempts, needs, waiting_for, summary, addenda) = env.store.read(|conn| {
         plan_phase(conn, &plan)?;
         let all = jobs::load(conn, &plan)?;
         let job = find(&all, &plan, &args.key)?.clone();
@@ -94,7 +94,14 @@ pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError>
         };
         let summary: Option<String> =
             conn.query_row("SELECT summary FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.key.as_str()], |r| r.get(0))?;
-        Ok((job, needed_by, attempts, needs, waiting_for, summary))
+        let mut stmt = conn.prepare("SELECT number, attempt, session, created_at, text FROM job_addenda WHERE plan = ?1 AND job = ?2 ORDER BY number")?;
+        let addenda = stmt
+            .query_map([plan.as_str(), job.key.as_str()], |r| {
+                Ok(json!({"number": r.get::<_, i64>(0)?, "attempt": r.get::<_, Option<String>>(1)?, "session": r.get::<_, Option<String>>(2)?,
+                          "created_at": r.get::<_, String>(3)?, "text": r.get::<_, String>(4)?}))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok((job, needed_by, attempts, needs, waiting_for, summary, addenda))
     })?;
     let tamper = jobs::tampered(&plan, std::slice::from_ref(&job));
     let mut fields = job.to_json();
@@ -108,7 +115,7 @@ pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError>
         fields["waiting_for"] = json!(waiting_for);
     }
     Ok(Output::success(json!({
-        "job": fields, "needs": needs, "needed_by": needed_by, "attempts": attempts, "tamper": tamper,
+        "job": fields, "needs": needs, "needed_by": needed_by, "attempts": attempts, "tamper": tamper, "addenda": addenda,
     })))
 }
 
