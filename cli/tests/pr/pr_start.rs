@@ -653,7 +653,7 @@ fn eight_pr_starts_in_one_repo_at_once_all_succeed_and_write_no_upstream() {
         let started: Vec<_> = keys
             .iter()
             .map(|key| {
-                let ports = Ports { clock: Arc::new(Yielding(fx.fakes.ports.clock.clone())), runner: fx.fakes.ports.runner.clone(), spawn: fx.fakes.ports.spawn.clone() };
+                let ports = Ports { clock: Arc::new(Yielding(fx.fakes.ports.clock.clone())), runner: fx.fakes.ports.runner.clone(), spawn: fx.fakes.ports.spawn.clone(), ..Ports::real() };
                 s.spawn(move || {
                     let argv = ["cpd", "pr", "start", key, "--plan", "pay"].map(std::ffi::OsString::from);
                     let mut stdout = Vec::new();

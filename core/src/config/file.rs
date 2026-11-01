@@ -57,6 +57,10 @@ pub struct Config {
     pub pi_adapter: String,
     /// Which runner starts a Worker; read once per Attempt, when it is created (contract §3.4, §8.2).
     pub worker_runner: WorkerRunner,
+    /// The runner of each new Lead Session (contract §6.19, §8.2; hs-d754 Q10); default `Pi`, independent of `manager_runner` (Q11).
+    pub lead_runner: WorkerRunner,
+    /// The runner of each new Manager Session (contract §6.19, §8.2; hs-d754 Q10); default `Pi`, independent of `lead_runner` (Q11).
+    pub manager_runner: WorkerRunner,
     /// `context_engine_enabled`: the operator kill switch for the holographic engine.
     pub context_engine_enabled: bool,
     /// `""` is beside the binary: see [`Config::context_engine_bridge_path`].
@@ -383,6 +387,9 @@ impl Config {
             lead_pi_packages,
             pi_adapter,
             worker_runner,
+            // P1.10 stub: the keys are not parsed yet (`r.finish` still refuses them); the fields default to `Pi`.
+            lead_runner: WorkerRunner::Pi,
+            manager_runner: WorkerRunner::Pi,
             context_engine_enabled,
             context_engine_bridge,
             context_engine_python,

@@ -137,7 +137,7 @@ pub(crate) fn run_with_setup(home: &CpdHome, setup: impl FnOnce(&Fakes, &CpdHome
     );
     let fakes = Fakes::new();
     setup(&fakes, home);
-    let ports = Ports { clock: Arc::new(clock), runner: runner.clone(), spawn: fakes.spawn.clone() };
+    let ports = Ports { clock: Arc::new(clock), runner: runner.clone(), spawn: fakes.spawn.clone(), ..Ports::real() };
     let prepared = prepare(&ports, home.clone()).unwrap();
     script.push(Signal::InputFailed(io::Error::other("gone")));
     let feed = Feed::scripted(ports.clock.clone(), script);

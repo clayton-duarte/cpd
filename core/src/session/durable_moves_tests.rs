@@ -56,7 +56,7 @@ fn world() -> World {
         })
         .unwrap();
     let runner = FakeRunner::with_tmux();
-    let ports = Ports { clock: Arc::new(ManualClock::new()), runner: Arc::new(runner.clone()), spawn: Arc::new(FakeSpawn::new()) };
+    let ports = Ports { clock: Arc::new(ManualClock::new()), runner: Arc::new(runner.clone()), spawn: Arc::new(FakeSpawn::new()), ..Ports::real() };
     unsafe { std::env::set_var("TMUX_TMPDIR", dir.path()) };
     Tmux::new("t")
         .with_runner(Arc::new(runner.clone()))

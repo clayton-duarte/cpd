@@ -108,7 +108,7 @@ fn a_linear_attempt_submits_from_the_workflow_worktree() {
     let previous = std::env::current_dir().unwrap();
     std::env::set_current_dir(&rig.lead_worktree).unwrap();
     let worktree = PathBuf::from(&attempt.worktree);
-    let ports = Ports { clock: rig.fakes.ports.clock.clone(), runner: rig.fakes.ports.runner.clone(), spawn: rig.fakes.ports.spawn.clone() };
+    let ports = Ports { clock: rig.fakes.ports.clock.clone(), runner: rig.fakes.ports.runner.clone(), spawn: rig.fakes.ports.spawn.clone(), ..Ports::real() };
     let result = Ports::scope(&ports, || super::submit::require_inside(&attempt, &worktree));
     std::env::set_current_dir(previous).unwrap();
     assert!(result.is_ok(), "submit accepts a cwd in the workflow worktree on the Lead Branch: {result:?}");

@@ -113,7 +113,7 @@ fn run(home: &CpdHome, mut script: Vec<Signal>) -> Seen {
     let clock = ManualClock::new();
     let runner = Arc::new(FakeRunner::new(clock.clone()).on("open", |_| true, Reply::ok("")).on("tmux", |_| true, Reply::ok("")));
     let fakes = Fakes::new();
-    let ports = Ports { clock: Arc::new(clock), runner: runner.clone(), spawn: fakes.spawn.clone() };
+    let ports = Ports { clock: Arc::new(clock), runner: runner.clone(), spawn: fakes.spawn.clone(), ..Ports::real() };
     let prepared = prepare(&ports, home.clone()).unwrap();
     script.push(Signal::InputFailed(io::Error::other("gone")));
     let feed = Feed::scripted(ports.clock.clone(), script);
