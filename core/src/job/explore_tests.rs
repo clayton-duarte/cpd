@@ -12,7 +12,7 @@ use super::cancel::{Shape, cancel_in};
 use super::check_kind_tier;
 use super::edit::edit_in;
 use super::retry::retry_in;
-use super::{AddArgs, CancelArgs, EditArgs, RetryArgs};
+use super::{AddArgs, EditArgs, RetryArgs};
 use crate::args::{PlanArg, Text, WorkflowArg};
 use crate::config::{Catalog, Tier, TierModel};
 use crate::env::Env;
@@ -193,12 +193,14 @@ impl Fixture {
         ));
     }
 
+    // The test helper's eight arguments mirror the command's inputs verbatim.
+    #[allow(clippy::too_many_arguments)]
     fn add(
         &mut self,
         key: &str,
         kind: &str,
         tier: &str,
-        spec: &PathBuf,
+        spec: &Path,
         workflow: Option<&str>,
         draft: bool,
         needs: &[&str],

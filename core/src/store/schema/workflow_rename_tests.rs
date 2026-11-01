@@ -102,8 +102,7 @@ fn before_rename() -> (tempfile::TempDir, CpdHome, [Vec<Value>; 2]) {
     let mut store = crate::store::tests::open_named(&home, &earlier).unwrap();
     write(
         &mut store,
-        &format!(
-            "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
              INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                VALUES ('lead', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
              INSERT INTO plans (id, context, title, phase, lead_session, created_at)
@@ -115,8 +114,7 @@ fn before_rename() -> (tempfile::TempDir, CpdHome, [Vec<Value>; 2]) {
              INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status,
                                appended, fingerprint, cancel_reason, cancel_requested_at, kind, created_txn, created_at)
                VALUES ('pay', 'api', 'j', 'J', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'cancelled', 1, NULL,
-                       'pr cancelled', 't', 'work', cpd_txn(), 't');"
-        ),
+                       'pr cancelled', 't', 'work', cpd_txn(), 't');",
     )
     .unwrap();
     let before = [history(&mut store, "prs"), history(&mut store, "pr_needs")];

@@ -361,6 +361,8 @@ fn gate(
 /// The Gate on `sha` in `worktree`, which is already at the gated tree (contract §7.6): `pre-start`
 /// when `pre_start` is set (a temporary rebase worktree), then `pre-merge`. `again` is the command
 /// the Lead runs after fixing it. Nothing runs when the Workflow's policy says `gate.pr` is not `local` (§8.3).
+// Eight arguments are the gate's whole context; bundling them would only rename them.
+#[allow(clippy::too_many_arguments)]
 fn gate_in(
     env: &Env,
     policy: &Policy,

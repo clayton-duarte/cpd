@@ -220,10 +220,10 @@ fn the_migration_keeps_every_job_dependency_and_attempt_row() {
         if *table == "jobs" {
             // `workflow-rename` renames `jobs.pr` to `jobs.workflow`: the pre-rename snapshot's key follows.
             for row in &mut want {
-                if let Some(obj) = row.as_object_mut() {
-                    if let Some(value) = obj.remove("pr") {
-                        obj.insert("workflow".into(), value);
-                    }
+                if let Some(obj) = row.as_object_mut()
+                    && let Some(value) = obj.remove("pr")
+                {
+                    obj.insert("workflow".into(), value);
                 }
             }
         }

@@ -250,10 +250,10 @@ fn title_of(workflow: &WorkflowNode, asked: bool, frame: usize) -> Line<'static>
             (status, _) => Span::styled(status.as_str(), palette::muted_text()),
         }),
     }
-    if workflow.pull.is_none() {
-        if let Some(dot) = workflow.lead_dot {
-            spans.extend([" ".into(), palette::dot_span(dot, frame, false)]);
-        }
+    if workflow.pull.is_none()
+        && let Some(dot) = workflow.lead_dot
+    {
+        spans.extend([" ".into(), palette::dot_span(dot, frame, false)]);
     }
     spans.push(" ".into());
     if workflow.status == WorkflowStatus::Cancelled {

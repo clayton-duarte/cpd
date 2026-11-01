@@ -387,7 +387,7 @@ fn incident_start_records_until_pr_and_refuses_a_foreign_plan() {
         incident::start(
             &mut f.store,
             Some(&mgr),
-            &[pay.clone()],
+            std::slice::from_ref(&pay),
             "why",
             Some("pay/ship"),
         )
@@ -413,7 +413,7 @@ fn incident_start_records_until_pr_and_refuses_a_foreign_plan() {
     let err = incident::start(
         &mut f.store,
         Some(&mgr),
-        &[pay.clone()],
+        std::slice::from_ref(&pay),
         "why",
         Some("ops/web"),
     )
@@ -429,7 +429,7 @@ fn incident_start_records_until_pr_and_refuses_a_foreign_plan() {
     let err = incident::start(
         &mut f.store,
         Some(&mgr),
-        &[pay.clone()],
+        std::slice::from_ref(&pay),
         "why",
         Some("pay/nope"),
     )
@@ -439,8 +439,14 @@ fn incident_start_records_until_pr_and_refuses_a_foreign_plan() {
 
     // A value that is not `<plan>/<key>` is usage (exit 2).
     for bad in ["nope", "pay/", "/ship", "pay/ship/x"] {
-        let err = incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", Some(bad))
-            .expect_err("a malformed until-workflow is refused");
+        let err = incident::start(
+            &mut f.store,
+            Some(&mgr),
+            std::slice::from_ref(&pay),
+            "why",
+            Some(bad),
+        )
+        .expect_err("a malformed until-workflow is refused");
         assert_eq!(err.code(), ErrorCode::Usage, "{bad:?}");
         assert_eq!(err.exit().code(), 2, "{bad:?}");
     }
@@ -468,7 +474,7 @@ fn incident_ends_when_the_until_pr_merges() {
     // The until-Workflow is not merged: the auto-end does nothing.
     let merged = f
         .store
-        .write("test", |tx| incident::end_if_until_workflow_merged(tx))
+        .write("test", incident::end_if_until_workflow_merged)
         .unwrap();
     assert!(
         !merged,
@@ -513,7 +519,7 @@ fn incident_ends_when_the_until_pr_merges() {
     let before = events(&mut f.store).len();
     let again = f
         .store
-        .write("test", |tx| incident::end_if_until_workflow_merged(tx))
+        .write("test", incident::end_if_until_workflow_merged)
         .unwrap();
     assert!(!again);
     assert_eq!(
@@ -1001,7 +1007,16 @@ fn incident_start_on_a_live_incident_is_idempotent() {
     );
 
     // The same Plan, no --reason and no --until-workflow: nothing changed.
-    let out = fields(incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "", None).unwrap());
+    let out = fields(
+        incident::start(
+            &mut f.store,
+            Some(&mgr),
+            std::slice::from_ref(&pay),
+            "",
+            None,
+        )
+        .unwrap(),
+    );
     assert_eq!(
         out["changed"],
         json!(false),
@@ -1064,8 +1079,16 @@ fn incident_start_on_a_live_incident_replaces_and_clears_until_pr() {
     );
 
     // `ops` leaves; with no --until-workflow its stored until_plan is not in the new set, so both clear.
-    let out =
-        fields(incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", None).unwrap());
+    let out = fields(
+        incident::start(
+            &mut f.store,
+            Some(&mgr),
+            std::slice::from_ref(&pay),
+            "why",
+            None,
+        )
+        .unwrap(),
+    );
     assert_eq!(out["changed"], json!(true));
     assert_eq!(
         out["incident"]["until_pr"],

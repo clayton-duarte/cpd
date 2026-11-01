@@ -225,10 +225,10 @@ fn untold(conn: &Connection, group: &StuckGroup) -> Result<bool, CpdError> {
     if message_exists(conn, &manager, Some(group.event), &stuck_prefix(group))? {
         return Ok(false);
     }
-    if let Some(legacy) = stuck_prefix_legacy(group) {
-        if message_exists(conn, &manager, Some(group.event), &legacy)? {
-            return Ok(false);
-        }
+    if let Some(legacy) = stuck_prefix_legacy(group)
+        && message_exists(conn, &manager, Some(group.event), &legacy)?
+    {
+        return Ok(false);
     }
     Ok(true)
 }

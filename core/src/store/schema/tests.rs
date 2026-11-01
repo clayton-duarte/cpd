@@ -3675,7 +3675,7 @@ fn a_version_5_database_with_polled_prs_migrates_to_6_with_the_back_filled_rows_
     );
 
     // `pull_request` is set exactly for the open and the merged Workflow; every other column is kept.
-    let workflows: Vec<(String, String, Option<i64>, Option<i64>, Option<String>)> = conn
+    let workflows: Vec<PrsRow> = conn
         .prepare(
             "SELECT plan, status, pull_request, pr_number, merged_at FROM workflows ORDER BY plan",
         )
