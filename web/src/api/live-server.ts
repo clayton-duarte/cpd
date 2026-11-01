@@ -79,10 +79,13 @@ async function readBody(req: IncomingMessage): Promise<string> {
 /** Builds the injected-route handler. */
 export function createLiveHandler(deps: LiveDeps): LiveHandler {
   const readDurable = async (session: LiveSession): Promise<readonly TranscriptMessage[]> => {
-    // The host-socket read of the `chat-host` PR: prefer the live host (`deps.host`), else `tail`.
-    // STUB: the branch throws `not implemented` until the implementation Job fills it in.
-    void session;
-    throw new Error("not implemented");
+    // The host-socket read of the `chat-host` PR: prefer the live host (`deps.host`); a host that
+    // does not answer (no socket, a refused connect or handshake) falls back to `cpd session tail`.
+    if (deps.host !== undefined) {
+      const messages = await deps.host(session.id);
+      if (messages !== undefined) return messages;
+    }
+    return parseTailOutput(await deps.tail(session.id));
   };
 
   const readTranscript = async (session: LiveSession): Promise<readonly TranscriptMessage[]> => {

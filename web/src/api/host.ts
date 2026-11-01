@@ -2,10 +2,9 @@
 // the socket client", hs-d819/chat-host). One connect + `hello` + `attach` per `attach()` call, the
 // parsed frames out, reconnecting per the README's rule. The node socket is the one external
 // boundary: `node:net` in production, a fake in tests. No test opens a real socket.
-//
-// Stub: `createHostClient` throws `not implemented` until the implementation Job fills it in — this
-// is what makes `web/src/api/host.test.ts` RED.
 import type { Socket } from "node:net";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 /** A frame the host sent: protocol.ts's ToClient, the subset a hello/attach-only reader receives. */
 export type HostFrame =
@@ -33,6 +32,133 @@ export interface HostClient {
   attach(id: string, onFrame: (frame: HostFrame) => void): () => void;
 }
 
-export function createHostClient(_connect: HostConnect): HostClient {
-  throw new Error("not implemented");
+/** The reconnect back-off of the README's rule: 100 ms doubling to a 1 s cap over a 30 s deadline. */
+const BACKOFF_START_MS = 100;
+const BACKOFF_CAP_MS = 1000;
+const BACKOFF_DEADLINE_MS = 30_000;
+/** The client's hello: the highest protocol it speaks and its floor (protocol 1). It sends nothing else. */
+const HELLO = { type: "hello", protocol: 1, min_protocol: 1, client: "cpd web chat" } as const;
+/** The frames a hello/attach-only reader accepts; a frame outside this subset is refused. */
+const ALLOWED_FRAMES: ReadonlySet<string> = new Set([
+  "welcome",
+  "attached",
+  "snapshot",
+  "events",
+  "host_state",
+  "error",
+  "bye",
+]);
+
+/** The Session's host socket path: `$CPD_HOME/run/host/<id>.sock`, `$CPD_HOME` defaulting to `~/.cpd`. */
+function hostSocketPath(id: string): string {
+  return join(process.env.CPD_HOME ?? join(homedir(), ".cpd"), "run", "host", `${id}.sock`);
+}
+
+export function createHostClient(connect: HostConnect): HostClient {
+  return {
+    attach(id, onFrame) {
+      const path = hostSocketPath(id);
+      let closed = false;
+      let cursor: { epoch: string; seq: number } | undefined;
+      let socket: Socket | undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let attempt = 0;
+      const startedAt = Date.now();
+
+      // On any socket loss (error, EOF, close) reconnect with the back-off, giving up past the deadline.
+      const scheduleReconnect = (): void => {
+        if (closed) return;
+        if (Date.now() - startedAt > BACKOFF_DEADLINE_MS) return;
+        const delay = Math.min(BACKOFF_START_MS * 2 ** attempt, BACKOFF_CAP_MS);
+        attempt += 1;
+        timer = setTimeout(() => void open(), delay);
+      };
+
+      const open = async (): Promise<void> => {
+        if (closed) return;
+        let next: Socket;
+        try {
+          next = await connect(path);
+        } catch {
+          scheduleReconnect();
+          return;
+        }
+        if (closed) {
+          next.destroy();
+          return;
+        }
+        socket = next;
+        let buffer = "";
+        let sentAttach = false;
+        let lost = false;
+
+        const handleLine = (line: string): void => {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(line);
+          } catch {
+            // bad_frame: a line that is not JSON is skipped.
+            return;
+          }
+          if (typeof parsed !== "object" || parsed === null) return;
+          const frame = parsed as Record<string, unknown>;
+          const type = frame["type"];
+          if (typeof type !== "string" || !ALLOWED_FRAMES.has(type)) return;
+
+          // `hello` first; once `welcome` arrives, one `attach` with the saved cursor (absent on a first attach).
+          if (type === "welcome" && !sentAttach) {
+            sentAttach = true;
+            const attach: { type: "attach"; req: string; cursor?: { epoch: string; seq: number } } = {
+              type: "attach",
+              req: "r1",
+            };
+            if (cursor !== undefined) attach.cursor = cursor;
+            next.write(`${JSON.stringify(attach)}\n`);
+          }
+          // The cursor is the last applied stream frame; the reconnect sends it.
+          if (
+            (type === "snapshot" || type === "events") &&
+            typeof frame["epoch"] === "string" &&
+            typeof frame["seq"] === "number"
+          ) {
+            cursor = { epoch: frame["epoch"], seq: frame["seq"] };
+          }
+          onFrame(parsed as HostFrame);
+        };
+
+        const onData = (chunk: Buffer | string): void => {
+          buffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+          for (let index = buffer.indexOf("\n"); index >= 0; index = buffer.indexOf("\n")) {
+            const line = buffer.slice(0, index);
+            buffer = buffer.slice(index + 1);
+            if (line.length > 0) handleLine(line);
+          }
+        };
+
+        const onLost = (): void => {
+          if (lost) return;
+          lost = true;
+          next.removeListener("data", onData);
+          next.removeListener("error", onLost);
+          next.removeListener("end", onLost);
+          next.removeListener("close", onLost);
+          scheduleReconnect();
+        };
+
+        next.on("data", onData);
+        next.on("error", onLost);
+        next.on("end", onLost);
+        next.on("close", onLost);
+        next.write(`${JSON.stringify(HELLO)}\n`);
+      };
+
+      void open();
+
+      return () => {
+        closed = true;
+        if (timer !== undefined) clearTimeout(timer);
+        socket?.destroy();
+      };
+    },
+  };
 }
