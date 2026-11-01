@@ -42,8 +42,23 @@ pub(crate) fn incomplete(plan: &PlanId, workflow: &WorkflowRow, missing: &[&str]
 }
 
 /// `plan review` and `plan lock` (§4.6, §4.8): every `impl` Job that is a `draft` needs a `test` Job of its Workflow
-/// (`test_job_required`), then every `tdd` Workflow that has not opened has a `test` and an `impl` Job (`shape_incomplete`).
+/// (`test_job_required`), then every `verify` one an `impl` Job, then every `tdd` Workflow that has not opened has a `test`
+/// and an `impl` Job (`shape_incomplete`). The first refusal.
 pub(super) fn check(plan: &PlanId, workflows: &[WorkflowRow], jobs: &[Job]) -> Result<(), CpdError> {
+    if let Some(e) = test_job_required(plan, jobs) {
+        return Err(e);
+    }
+    if let Some(e) = impl_job_required(plan, jobs) {
+        return Err(e);
+    }
+    shape_incomplete(plan, workflows, jobs)
+        .into_iter()
+        .next()
+        .map_or(Ok(()), Err)
+}
+
+/// `test_job_required`: a draft `impl` Job needs no `test` Job of its Workflow.
+pub(crate) fn test_job_required(plan: &PlanId, jobs: &[Job]) -> Option<CpdError> {
     let mut lacking: Vec<&Job> = jobs
         .iter()
         .filter(|j| {
@@ -52,16 +67,23 @@ pub(super) fn check(plan: &PlanId, workflows: &[WorkflowRow], jobs: &[Job]) -> R
                 && !j.needs.iter().any(|n| jobs.iter().any(|t| t.key == *n && t.workflow == j.workflow && t.kind == "test" && t.status != "cancelled"))
         })
         .collect();
-    if !lacking.is_empty() {
-        lacking.sort_by(|a, b| a.key.cmp(&b.key));
-        let keys: Vec<&str> = lacking.iter().map(|j| j.key.as_str()).collect();
-        return Err(CpdError::new(
+    if lacking.is_empty() {
+        return None;
+    }
+    lacking.sort_by(|a, b| a.key.cmp(&b.key));
+    let keys: Vec<&str> = lacking.iter().map(|j| j.key.as_str()).collect();
+    Some(
+        CpdError::new(
             ErrorCode::TestJobRequired,
             format!("The impl Jobs {} must each need a test Job of their Workflow: their tests are the ones those Jobs name. Add the dependency with cpd job edit <key> --needs.", keys.join(", ")),
         )
         .with("plan", plan.as_str())
-        .with("jobs", keys));
-    }
+        .with("jobs", keys),
+    )
+}
+
+/// `impl_job_required`: a draft `verify` Job needs no `impl` Job of its PR.
+pub(crate) fn impl_job_required(plan: &PlanId, jobs: &[Job]) -> Option<CpdError> {
     let mut unneeding: Vec<&Job> = jobs
         .iter()
         .filter(|j| {
@@ -70,27 +92,39 @@ pub(super) fn check(plan: &PlanId, workflows: &[WorkflowRow], jobs: &[Job]) -> R
                 && !j.needs.iter().any(|n| jobs.iter().any(|t| t.key == *n && t.workflow == j.workflow && t.kind == "impl" && t.status != "cancelled"))
         })
         .collect();
-    if !unneeding.is_empty() {
-        unneeding.sort_by(|a, b| a.key.cmp(&b.key));
-        let keys: Vec<&str> = unneeding.iter().map(|j| j.key.as_str()).collect();
-        let first = unneeding[0];
-        let mut impls: Vec<&str> = jobs.iter().filter(|j| j.workflow == first.workflow && j.kind == "impl" && j.status != "cancelled").map(|j| j.key.as_str()).collect();
-        impls.sort();
-        return Err(CpdError::new(
+    if unneeding.is_empty() {
+        return None;
+    }
+    unneeding.sort_by(|a, b| a.key.cmp(&b.key));
+    let keys: Vec<&str> = unneeding.iter().map(|j| j.key.as_str()).collect();
+    let first = unneeding[0];
+    let mut impls: Vec<&str> = jobs
+        .iter()
+        .filter(|j| j.workflow == first.workflow && j.kind == "impl" && j.status != "cancelled")
+        .map(|j| j.key.as_str())
+        .collect();
+    impls.sort();
+    Some(
+        CpdError::new(
             ErrorCode::ImplJobRequired,
             format!("The verify Jobs {} must each need an impl Job of their Workflow: they check the code those Jobs build. Add the dependency with cpd job edit <key> --needs.", keys.join(", ")),
         )
         .with("plan", plan.as_str())
         .with("job", first.key.as_str())
-        .with("jobs", impls));
-    }
+        .with("jobs", impls),
+    )
+}
+
+/// `shape_incomplete`: one refusal per `tdd` Workflow that has not opened and lacks a `test` or `impl` Job, in Workflow key order.
+pub(crate) fn shape_incomplete(plan: &PlanId, workflows: &[WorkflowRow], jobs: &[Job]) -> Vec<CpdError> {
     let mut ordered: Vec<&WorkflowRow> = workflows.iter().collect();
     ordered.sort_by(|a, b| a.key.cmp(&b.key));
-    for workflow in ordered {
-        let lacks = missing(workflow, jobs, None);
-        if !lacks.is_empty() {
-            return Err(incomplete(plan, workflow, &lacks, "the review and the lock need both"));
-        }
-    }
-    Ok(())
+    ordered
+        .into_iter()
+        .filter_map(|workflow| {
+            let lacks = missing(workflow, jobs, None);
+            (!lacks.is_empty())
+                .then(|| incomplete(plan, workflow, &lacks, "the review and the lock need both"))
+        })
+        .collect()
 }

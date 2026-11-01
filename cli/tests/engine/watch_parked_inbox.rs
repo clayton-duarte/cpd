@@ -1,5 +1,5 @@
-//! Engine step E8, the `drafts-parked` Inbox item (contract §2.2 "Inbox item" `drafts-parked`, §3.7 "Parked drafts"; hs-d731,
-//! hs-d733; Plan `draft-never-parked`): a Plan whose `parked_drafts` is not empty, with a wake W newer than T (the last Event
+//! Engine step E8, the `drafts-parked` Inbox item (contract §2.2 "Inbox item" `drafts-parked`, §3.7 "Parked drafts"; hs-d822,
+//! which supersedes hs-d731; hs-d733; Plan `draft-never-parked`): a Plan whose `parked_drafts` is not empty, with a wake W newer than T (the last Event
 //! that changes a draft's legality) and a turn its Lead finished after W (a `session-state` Event `working` → `idle`), is one
 //! open magenta item linked to the Plan and its Lead. W is written here by hand (what E20 sends is `watch_parked.rs`'s), as an
 //! Event with `data.from` null; the engine runs in-process on virtual time with the fake tmux server.
@@ -240,10 +240,18 @@ fn closes_when_resolved() {
     tick(&fx);
     assert_eq!(labels(&fx), ["pay: 2 parked drafts"]);
 
-    // d1 is cancelled and d2 needs a queued Job (so it waits): S is empty, whatever W and T say.
-    fx.env.sql("UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE plan = 'pay' AND key = 'd1';");
+    // A need on a queued Job no longer un-parks a complete draft (hs-n677): d2 stays a parked draft.
     fx.env
         .sql("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'd2', 'q1');");
+    tick(&fx);
+    assert_eq!(
+        labels(&fx),
+        ["pay: 2 parked drafts"],
+        "a need does not un-park a complete draft"
+    );
+
+    // Cancelling both drafts empties S, whatever W and T say.
+    fx.env.sql("UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE plan = 'pay' AND key IN ('d1', 'd2');");
     tick(&fx);
     assert_eq!(
         items(&fx),

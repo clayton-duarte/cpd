@@ -9,7 +9,7 @@ use crate::ids::PlanId;
 
 use super::display::Display;
 use super::jobs::{Job, JobSpec};
-use super::prs::PrRow;
+use super::prs::WorkflowRow;
 use super::render::{Heading, markdown};
 
 fn job(
@@ -99,7 +99,7 @@ fn web_jobs() -> Vec<Job> {
 }
 
 fn render(jobs: &[Job]) -> String {
-    let prs = [PrRow::fixture("web", "/r", "main", &[], "dispatch")];
+    let prs = [WorkflowRow::fixture("web", "/r", "main", &[], "dispatch")];
     markdown(
         &Heading::Plan {
             title: "T",
@@ -112,6 +112,7 @@ fn render(jobs: &[Job]) -> String {
         &[],
         "S2",
         &Display::of(&prs),
+        &[],
     )
 }
 
@@ -165,6 +166,7 @@ fn render_no_prs(jobs: &[Job], phase: &str) -> String {
         &[],
         "S2",
         &Display::default(),
+        &[],
     )
 }
 

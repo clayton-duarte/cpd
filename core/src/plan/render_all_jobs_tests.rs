@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use crate::home::CpdHome;
 use crate::ids::PlanId;
 use crate::plan::display::Display;
-use crate::plan::fingerprint::load_prs;
+use crate::plan::fingerprint::load_workflows;
 use crate::plan::jobs::{self, KINDS, STATUSES, is_explore};
 use crate::plan::render::{Heading, markdown};
 use crate::store::Store;
@@ -138,7 +138,7 @@ fn assert_every_job_is_one_row(store: &mut Store) {
     let plan = PlanId::parse(PLAN).unwrap();
     let (md, mut want) = store
         .read(|conn| {
-            let prs = load_prs(conn, &plan)?;
+            let prs = load_workflows(conn, &plan)?;
             let md = markdown(
                 &Heading::Plan {
                     title: "T",
@@ -151,6 +151,7 @@ fn assert_every_job_is_one_row(store: &mut Store) {
                 &[],
                 "S2",
                 &Display::of(&prs),
+                &[],
             );
             let mut stmt = conn.prepare("SELECT key FROM jobs WHERE plan = ?1")?;
             let keys = stmt

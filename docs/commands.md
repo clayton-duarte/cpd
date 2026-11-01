@@ -195,7 +195,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `tests_not_found` | 3 | a `test` or `impl` Job's submit (§6.1, contract §7.7): the repo's optional `[test-commands]` `list` command exited non-zero for a named test, so no test has that name (hs-d497); `details` `{job, tests, tail, log}`, `tests` the names that match nothing |
 | `impl_job_required` | 3 | a `verify` Job that is not a draft, or a Plan review or lock over one (§5.1, §4.6, §4.8), needs no non-cancelled `impl` Job of its Workflow; `details` `{plan, job, jobs}`, `jobs` the Workflow's `impl` Jobs |
 | `shape_violation`, `shape_incomplete` | 3 | the Workflow's stored shape (§9.4, contract §2.2 "Job kinds", hs-d497): `job add` or `job edit --kind` gave a kind the shape does not allow (`details` `{workflow, shape, kind, allowed}`; for an `open` Workflow `{plan, workflow, status: "open", shape, kind, allowed: ["work"]}`, whatever the shape); a `tdd` Workflow has no `test` or no `impl` Job that is not `cancelled`, at `plan review`, `plan lock` or `job cancel` typed by the Lead (`details` `{workflow, missing}`); **`workflow cancel` and `plan cancel` never refuse it**: cancelling a Workflow or a Plan is never refused by the shape check (§5.3, §9.6, §4.12, hs-d573) |
-| `draft_parked` | 3 | a draft that contract §2.2 "A parked draft" calls illegal would be written after the lock: `job add --draft` or `job edit` (§5.1, §5.2) of a stub that waits for nothing, or `workflow add --shape` (§9.4) with no `--jobs` for a Workflow that would start at once (hs-d731); `details` `{plan, job, workflow, needs}` (`{plan, workflow, jobs}` for `workflow add`, `jobs` the stub keys). The message names the legal forms |
+| `draft_parked` | 3 | a draft that contract §2.2 "A parked draft" calls illegal would be written after the lock: `job add --draft` or `job edit` (§5.1, §5.2) of a complete draft whose needs chain to a queued, running or failed Job, or `workflow add --shape` (§9.4) with no `--jobs` for a Workflow that would start at once (hs-d731); `details` `{plan, job, workflow, needs}` (`{plan, workflow, jobs}` for `workflow add`, `jobs` the stub keys). The message names the legal forms |
 | `tests_error` | 1 | a `test` or `impl` Job's submit: the repo's `[test-commands]` commands could not run (killed at `gate_minutes`, killed by a signal, `sh` not startable, `hook_invalid`; `list` included); the Worker asks the Lead. `details` as above |
 | `tests_tampered` | 3 | an `impl` Job's submit (§6.1) changed a path the `test_files` of a `test` Job it needs guard and the Lead has not approved (§5.9); `details.paths`, `details.jobs` |
 | `touches_violation` | 3 | a Job's submit (§6.1) changed a path outside its Spec `touches` (§7.5), unless the repo's `[generated] paths` (§8.3), a base merge, or the Lead approved it (§5.9a); `details.paths`, `details.touches`, `details.generated` |
@@ -975,7 +975,7 @@ The key is built in `core/src/cache.rs` from the repo path and the schema versio
 The columns are this Plan's Job, the other Plan, its Workflow, the Jobs of that Workflow that overlap this Job with their status (in the order they were created) and the paths of this Job that overlap them. `Paths` shows at most five paths and then `+N` for the N more, as in `` `a`, `b`, `c`, `d`, `e`, +2 ``. In the JSON output, `overlaps` lists the same rows, in the same order, as `{job, plan, workflow, other_jobs: [{key, status}], paths}`: `other_jobs` are the Jobs of the other Workflow that overlap `job` and `paths` are all the paths of `job` that overlap them, deduplicated (only the table is capped); `[]` when there is none.
 
 ```json
-{"ok": true, "path": "/home/clayton/.cpd/run/pay-4521/plan.md", "summary": "/home/clayton/.cpd/run/pay-4521/summary.md", "fingerprint": "9f86d081…", "draft_jobs": 6, "workflows": 2,
+{"ok": true, "path": "/home/clayton/.cpd/run/pay-4521/plan.md", "summary": "/home/clayton/.cpd/run/pay-4521/summary.md", "fingerprint": "9f86d081…", "draft_jobs": 6, "workflows": 2, "warnings": [],
  "overlaps": [{"job": "x", "plan": "pay-4522", "workflow": "api", "other_jobs": [{"key": "y", "status": "queued"}, {"key": "z", "status": "draft"}], "paths": ["core/src/x.rs", "core/src/lib.rs"]}]}
 ```
 
@@ -997,13 +997,14 @@ Idempotent: yes (the same Workflows and Jobs, the same outline and the same othe
 | 6 | Jobs | `## Jobs (<n> under review, <m> locked)`, `n` the number of Jobs under review and `m` the number of locked Jobs, then a table with the columns `Job`, `Title`, `Tier`, `Needs`, one row per Job under review in Workflow key order, then Job key order: its key, its title, its Tier and its `needs` joined by `, ` (`—` when none). The table has its header and separator rows even with no Job under review. No locked Job has a row |
 | 7 | order | `Order: <items>`, the items joined by `, `: one `<need> → <key>` for every need of a Workflow that counts, whose need is a Workflow that counts too, in key order of the Workflow and then of the need; then, as the last item, the Workflows that count and neither need nor are needed by any other, joined by ` · ` (no such item when there is none). Then the line `Stacked on: <entries>`, one `<key> on <base Workflow>` per Workflow that counts and has a base Workflow (`base_workflow` of `plan show`, §4.3: `<plan>/<key>`), in key order, joined by `, `; `none` when none is stacked. Both lines are left out when no Workflow counts |
 | 8 | overlaps | `Overlaps: none` when §4.5's overlaps are none; else `Overlaps: <n>`, `n` the number of overlaps (the rows of §4.5's table), then one row per overlap, in §4.5's order and at most 5: `- <path>: <other plan>/<other workflow>/<other job> (<status>)`, the first of the overlap's paths and the first of its other Jobs with its status, followed by ` +<k>` when the overlap has more (`k` = the other paths plus the other Jobs); when `n` is over 5, a last row `- +<n-5> more overlaps` |
-| 9 | decided | `Decided: <ids>`, the outline's `decided` record ids joined by `, `; left out when there are none |
-| 10 | later | `Later: <items>`, the work this review does not cover, joined by `, `: the keys of the stub drafts in key order, then `Workflow <key>` for each Workflow that counts and has no Job under review, in key order; left out when there are none |
-| 11 | risks | `## Risks`, then `R<n> <text>` per outline risk, `n` from 1 |
-| 12 | out of scope | `## Out of scope`, then `- <text>` per outline entry |
-| 13 | last line | for a review: `Approve \| Change` (the pipe literal); for `summary.md`: `Full plan (<path>)`, the absolute path of `plan.md` |
+| 9 | lint | `Lint: none` when there is no warning, never omitted (like `Overlaps`); else `Lint: <n>` and then one row per warning in finding order, at most 5, each `- <rule>: <row>`, and `- +<N> more warnings` for the rest. A `parallel_write_overlap` row is `<job> and <other> both name <paths>`: its paths joined by `, `, at most 3, then ` +<k>` for the k more, followed by ` (a hint, not a conflict prediction)` |
+| 10 | decided | `Decided: <ids>`, the outline's `decided` record ids joined by `, `; left out when there are none |
+| 11 | later | `Later: <items>`, the work this review does not cover, joined by `, `: the keys of the stub drafts in key order, then `Workflow <key>` for each Workflow that counts and has no Job under review, in key order; left out when there are none |
+| 12 | risks | `## Risks`, then `R<n> <text>` per outline risk, `n` from 1 |
+| 13 | out of scope | `## Out of scope`, then `- <text>` per outline entry |
+| 14 | last line | for a review: `Approve \| Change` (the pipe literal); for `summary.md`: `Full plan (<path>)`, the absolute path of `plan.md` |
 
-Blocks 4, 5, 9, 11 and 12 come from the outline and are left out when it is null or the list is empty. The sizes are bounded by the outline's own limits (§4.13: at most 3 risks, 5 out-of-scope entries, 3 done-when lines per Workflow) and by the overlap rows above; the decisions, assumptions and Jobs are as many as the Plan has. A `done_when` key of a Workflow that was cancelled after `plan outline` is not shown (the block lists Workflows that count).
+Blocks 4, 5, 10, 12 and 13 come from the outline and are left out when it is null or the list is empty. The sizes are bounded by the outline's own limits (§4.13: at most 3 risks, 5 out-of-scope entries, 3 done-when lines per Workflow) and by the overlap rows above; the decisions, assumptions and Jobs are as many as the Plan has. A `done_when` key of a Workflow that was cancelled after `plan outline` is not shown (the block lists Workflows that count).
 
 ```
 # Plan review in chat
@@ -1033,6 +1034,8 @@ Stacked on: none
 
 Overlaps: none
 
+Lint: none
+
 Decided: hs-d502, hs-d503
 
 Later: ux-remeasure
@@ -1045,6 +1048,8 @@ R1 pi's dialog API differs between modes
 
 Approve | Change
 ```
+
+**The Lint block** (§4.6). The warnings of the lint run on the Plan (contract §2.7, commands.md §4.15), never errors: `plan review` and `plan render` refuse with errors, but return warnings. The block lists warnings only. `Lint: none` when there is no warning, never omitted (like `Overlaps`); else `Lint: <n>` and then one row per warning in finding order, at most 5: `- <rule>: <row>`, and `- +<N> more warnings` for the rest. A `parallel_write_overlap` row is `<job> and <other> both name <paths>`: its paths joined by `, `, at most 3, then ` +<k>` for the k more, followed by ` (a hint, not a conflict prediction)`; `Finding::row(&self)` (core/src/plan/lint.rs) builds the `<row>` after the rule (an error rule's row being its message). In the JSON output, `warnings` is an array of Finding JSON (`Finding::to_json`, one per warning in finding order, `[]` when none; see commands.md §4.15). A Plan with no PR and no cancelled PR has no `## Lint` section (like `## Overlaps`).
 
 ### 4.6 `plan review`
 
@@ -1062,27 +1067,27 @@ Explore Jobs (`scout`, `research`) are in no review (Plan `explore-roles`, R3): 
 |---|---|---|
 | the phase is `plan`, or any phase after it (not `grounding`) | `illegal_phase` | 3 |
 | at least one Job is `draft` (in a phase after `plan` too: the drafts are what is reviewed; a `draft` `open` Job does not count, it is not under review, hs-d573) | `no_draft_jobs` | 3 |
-| every `draft` Job that does not wait (contract §2.2 "A parked draft", hs-n615) has its Tier and its Spec (hs-d241, R1: no stub draft is approvable); a waiting stub is skipped and the request is accepted (its covered set may then hold no non-waiting draft); `details.jobs` lists `[{key, missing}]`, `missing` being `["tier"]`, `["spec"]` or both | `draft_incomplete` | 3 |
+| every `draft` Job has its Tier and its Spec (hs-d241, R1: no stub draft is approvable); `details.jobs` lists `[{key, missing}]`, `missing` being `["tier"]`, `["spec"]` or both | `draft_incomplete` | 3 |
+| the Plan has an outline (§4.13; hs-d502, D3); `details.next` = `cpd plan outline --file <outline.json>` | `outline_missing` | 3 |
+| every Workflow that has a `draft` Job (under review, since the previous row passed) has an entry in the outline's `done_when`; `details.workflows` lists the Workflow keys without one, in key order | `outline_incomplete` | 3 |
 | every `impl` Job that is a `draft` needs at least one `test` Job of its Workflow (hs-d341; `details.jobs` lists the `impl` Jobs) | `test_job_required` | 3 |
 | every `verify` Job that is a `draft` needs at least one `impl` Job of its Workflow that is not `cancelled` (pro-d80; `details` `{plan, job, jobs}`; checked after `test_job_required` and before `shape_incomplete`) | `impl_job_required` | 3 |
 | every Workflow of shape `tdd` that has not opened has at least one `test` and one `impl` Job that is not `cancelled` (hs-d497, contract §2.2 "Job kinds"; `details` `{workflow, missing}`) | `shape_incomplete` | 3 |
-| the Plan has an outline (§4.13; hs-d502, D3); `details.next` = `cpd plan outline --file <outline.json>` | `outline_missing` | 3 |
-| every Workflow that has a `draft` Job (under review, since the previous row passed) has an entry in the outline's `done_when`; `details.workflows` lists the Workflow keys without one, in key order | `outline_incomplete` | 3 |
 
 Effects:
-- **Files:** renders the plan to `run/<plan>/plan.md` and `run/<plan>/summary.md` (§4.5) and copies the summary to `run/<plan>/summary-<review>.md`, so a later render cannot change what the User reviews. The summary copy is the Plan summary of §4.5 with the review's heading (block 1) and its last line (block 13) and no other difference; it is what the User reviews (§15.5). The copy opens with `# <review title>`, then one line `Plan <plan id>: <Plan title> · review <review id>`, then the rendered content (hs-d291); `plan.md`, made without a review (`plan render`, §4.5), keeps `# Plan: <Plan title>`. The reviewed file carries the `## Overlaps` section of §4.5, as it is at that moment, so the User sees the warning in the review: one row per open Job of this Plan and per other Workflow that overlaps it, short enough to read (hs-n201); it is a warning only and the review is requested all the same.
+- **Files:** renders the plan to `run/<plan>/plan.md` and `run/<plan>/summary.md` (§4.5) and copies the summary to `run/<plan>/summary-<review>.md`, so a later render cannot change what the User reviews. The summary copy is the Plan summary of §4.5 with the review's heading (block 1) and its last line (block 14) and no other difference; it is what the User reviews (§15.5). The copy opens with `# <review title>`, then one line `Plan <plan id>: <Plan title> · review <review id>`, then the rendered content (hs-d291); `plan.md`, made without a review (`plan render`, §4.5), keeps `# Plan: <Plan title>`. The reviewed file carries the `## Overlaps` section of §4.5, as it is at that moment, so the User sees the warning in the review: one row per open Job of this Plan and per other Workflow that overlaps it, short enough to read (hs-n201); it is a warning only and the review is requested all the same.
 - **Closing other reviews:** every other pending review of the Plan (always older) closes `superseded` in the same transaction that inserts the new review request (the new `pending` Event comes after their `superseded` Events). Their Events say why: "Plan review r<k> of Plan P is superseded by r<k+1>." When the latest review is already pending for the current fingerprint (the `already: true` path) nothing is written, nothing closes.
 - The refusals `outline_missing` and `outline_incomplete` come **before anything is written** (D3): no render, no file, no row, no Event.
 - **Rows**, one transaction: `plan_reviews` (`id = r<k>`, `k` = 1 + the highest, `fingerprint` = the plan fingerprint (§2.3: it includes the outline), `title` = `--title`, `status = pending`). **Event** `plan-review` `{review, fingerprint, status: "pending"}`.
 
 ```json
-{"ok": true, "review": {"id": "r3", "fingerprint": "9f86d081…", "status": "pending", "requested_at": "…"}, "summary": "/home/clayton/.cpd/run/pay-4521/summary-r3.md",
+{"ok": true, "review": {"id": "r3", "fingerprint": "9f86d081…", "status": "pending", "requested_at": "…"}, "summary": "/home/clayton/.cpd/run/pay-4521/summary-r3.md", "warnings": [],
  "next": "The User reviews the plan summary in your chat and decides there. Stop and wait for the decision message."}
 ```
 
-**Stubs** (hs-d241, R1). A draft without its Tier or its Spec (a stub, §5.1) cannot be approved, so the review is **not requested**: it is refused `draft_incomplete` (exit 3) with `details.jobs` = `[{"key": "api-1", "missing": ["spec"]}, …]`, in key order, `missing` holding `"tier"` and/or `"spec"`. A stub that waits (contract §2.2 "A parked draft", hs-n615) is skipped and the request is accepted (its covered set may then hold no non-waiting draft). Nothing is rendered or written on refusal. The Lead completes each stub with `job edit --tier --spec` (§5.2) or cancels it, then asks again. The plan fingerprint covers a stub as it is (contract §2.3), so completing one changes it.
+**Stubs** (hs-d241, R1). A draft without its Tier or its Spec (a stub, §5.1) cannot be approved, so the review is **not requested**: it is refused `draft_incomplete` (exit 3) with `details.jobs` = `[{"key": "api-1", "missing": ["spec"]}, …]`, in key order, `missing` holding `"tier"` and/or `"spec"`. Nothing is rendered or written on refusal. The Lead completes each stub with `job edit --tier --spec` (§5.2) or cancels it, then asks again. The plan fingerprint covers a stub as it is (contract §2.3), so completing one changes it.
 
-Idempotent: yes. When the latest review is `pending` for the current fingerprint, it returns that review with `"already": true` (its `path` and `summary` too) and writes nothing; the two refusals above are still checked first, so a Plan with no outline is refused even when a review made before the outline existed is pending. When the Jobs or Workflows changed since, it requests a new review and closes the older one `superseded`; the older one stays in the database, closed.
+Idempotent: yes. When the latest review is `pending` for the current fingerprint, it returns that review with `"already": true` (its `path`, `summary` and `warnings` too) and writes nothing; the two refusals above are still checked first, so a Plan with no outline is refused even when a review made before the outline existed is pending. When the Jobs or Workflows changed since, it requests a new review and closes the older one `superseded`; the older one stays in the database, closed.
 
 ### 4.7 `plan decide` (internal)
 
@@ -1098,8 +1103,8 @@ Records the User's decision. Called by the pi adapter with the result of the cha
 
 Effects: **rows**, one transaction: `plan_reviews.status`, `feedback` (the file's text, or null), `decided_at`. **Event** `plan-review` `{review, fingerprint, status, feedback}`.
 
-In a phase after `plan`, an **approval** also queues the drafts the review covered (§2.2, §3.2) — the ones that do not wait (contract §2.2 "A parked draft", hs-n615) — in the same transaction:
-- **Rows:** every `draft` Job of the Plan that does not wait (contract §2.2 "A parked draft", hs-n615) becomes `queued` and gets its Locked-Job fingerprint (§2.3), as an appended Job has at `job add`; a waiting draft stays `draft` and is resolved when it stops waiting (the E20 parked-draft wake tells the Lead) or by a later review round once it is complete; `appended` stays 1. A `draft` `open` Job is one of them: it is queued here with the others, so a Workflow's `open` Job is `queued` exactly when its other Jobs are (contract §3.7 E4, hs-d573) and the `jobs` of the Event lists it too. The engine schedules each as soon as it is Ready (§3.2). **A draft of an `open` Workflow** that becomes `queued` here is a `work` Job and reaches the pull request by its own merge (§5.1; contract §3.8 "Updating"); no `update` Job is queued.
+In a phase after `plan`, an **approval** also queues the drafts the review covered (§2.2, §3.2) in the same transaction:
+- **Rows:** every `draft` Job of the Plan becomes `queued` and gets its Locked-Job fingerprint (§2.3), as an appended Job has at `job add`; `appended` stays 1. A `draft` `open` Job is one of them: it is queued here with the others, so a Workflow's `open` Job is `queued` exactly when its other Jobs are (contract §3.7 E4, hs-d573) and the `jobs` of the Event lists it too. The engine schedules each as soon as it is Ready (§3.2). **A draft of an `open` Workflow** that becomes `queued` here is a `work` Job and reaches the pull request by its own merge (§5.1; contract §3.8 "Updating"); no `update` Job is queued.
 - **Event:** the same `plan-review` Event, whose `data` gains `jobs: [key]`, the Jobs it queued, in key order. No new Event kind. `plan-phase` is not appended: the phase does not change.
 - Only a **current** approval queues (*decided*: a stale one would queue drafts the User never saw): when the drafts changed since the review (`current` false), the decision is recorded and nothing is queued, `jobs` is absent and `next` asks for a new `cpd plan review`.
 - A **rejection** queues nothing: the drafts stay drafts, editable, as in phase `plan`; the Lead revises them (`job edit`, `job add --draft`, `job cancel`) and asks again.
@@ -1121,7 +1126,7 @@ cpd plan lock [--plan <id>]
 |---|---|---|
 | the phase is `plan` (`dispatch`: `already`) | `illegal_transition` | 3 |
 | at least one Job is `draft` | `no_draft_jobs` | 3 |
-| every `draft` Job that does not wait (contract §2.2 "A parked draft", hs-n615) has its Tier and its Spec, as `plan review` requires (§4.6; `details.jobs` as there) | `draft_incomplete` | 3 |
+| every `draft` Job has its Tier and its Spec, as `plan review` requires (§4.6; `details.jobs` as there) | `draft_incomplete` | 3 |
 | every `impl` Job needs at least one `test` Job of its Workflow, as `plan review` requires (§4.6; `details.jobs` as there) | `test_job_required` | 3 |
 | every `verify` Job needs at least one `impl` Job of its Workflow that is not `cancelled`, as `plan review` requires (§4.6; `details` as there; after `test_job_required`) | `impl_job_required` | 3 |
 | every Workflow of shape `tdd` has a `test` and an `impl` Job that is not `cancelled`, as `plan review` requires (§4.6; `details` as there) | `shape_incomplete` | 3 |
@@ -1356,6 +1361,47 @@ Idempotent: yes; a Plan already deleted returns `"already": true` and writes not
 
 **Tests that assume otherwise change with this design** (hs-d527; for delete-core to have approved): `plan_rows` of `cli/tests/flow/plan_delete.rs` counts Sessions with `plan = <id>` and Events with `plan = <id>`, but the Lead's row stays with its `plan` and the `plan-deleted` Event names the Plan; the Jobs, Attempts, Workflows, the other Sessions and the other Events are what is gone.
 
+### 4.15 `plan lint`
+
+```
+cpd plan lint [--plan <id>]
+```
+
+Checks the Plan's drafts and its shape, and returns every error and warning in one list. The rules, their severities and the refusal each error carries are in contract §2.7; this section does not repeat them. The lint reads the Plan's Jobs, Workflows and outline and writes nothing: no row, no Event, no file. It runs fresh on every call.
+
+| Flag | Meaning |
+|---|---|
+| `--plan <id>` | the Plan (§1.3) |
+
+Callers: Lead; no cockpit. The about line (the clap doc comment, shown in `docs/interface.md`): `Check the Plan's drafts: every error and warning in one list (§4.15)`.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the phase is not `grounding` (`details` as `plan review`'s, §4.6) | `illegal_phase` | 3 |
+| the Plan exists | `plan_not_found` | 4 |
+| at least one finding is an error; the message names the rules of the errors, in the order of the list below | `lint_failed` | 3 |
+
+The refusal `lint_failed` has the message `Plan <id> has <n> lint errors: <rules joined by ", ">. Fix them, then ask again.` and `details` `{plan, errors, warnings, findings}`, where `findings` is every finding, errors first, in the order of contract §2.7.
+
+**Output** on success, that is with no error finding:
+
+```json
+{"ok": true, "plan": "pay-4521", "errors": 0, "warnings": 1, "findings": [
+  {"rule": "parallel_write_overlap", "severity": "warn",
+   "message": "api-2 and api-3 have no dependency path and both name api/src/lib.rs. A hint, not a conflict prediction: on the ledger of 2026-10-30, 5 of 209 such pairs (2.4%) hit a merge conflict. Settle it with cpd job edit api-2 --needs api-3, or narrow touches.",
+   "pr": "api", "job": "api-2", "other": "api-3", "paths": ["api/src/lib.rs"], "details": {}}]}
+```
+
+Every finding has every key, so the output is byte-stable: `{"rule": "<id>", "severity": "error"|"warn", "message": "<text>", "pr": <key|null>, "job": <key|null>, "other": <key|null>, "paths": [<sorted paths>], "details": {<the refusal's details for an error rule; {} for a warning>}}`.
+- An error finding has `job` and `other` null and `paths` `[]`: its subjects are in `details`, as in the refusal it carries. Its `pr` is null, except for `shape_incomplete`, whose `pr` is the Workflow it names.
+- A `parallel_write_overlap` finding has `pr`, `job`, `other` and `paths` set, and `details` `{}`.
+
+The `parallel_write_overlap` message is exactly: `<job> and <other> have no dependency path and both name <paths joined by ", ">. A hint, not a conflict prediction: on the ledger of 2026-10-30, 5 of 209 such pairs (2.4%) hit a merge conflict. Settle it with cpd job edit <job> --needs <other>, or narrow touches.` The pair is defined in contract §2.7: `job` is the draft under review (the smaller key when both are drafts under review), `other` the other Job. The rule is a warning and never a refusal; it covers equal files only, exempts the lockfiles, and its limits are in contract §2.7.
+
+`plan review` and `plan render` also return the warnings, and `plan review` refuses with the first error finding's own code, never with `lint_failed` (added by PR lint-review).
+
+Idempotent: yes. The same Plan twice gives byte-equal stdout, and nothing is written.
+
 ## 5. `job`
 
 Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except where stated.
@@ -1397,7 +1443,7 @@ cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--workflo
 | `<key>` | Job key (§2.1). Change: positional, like every other `job` command (cpd 1 had `--key`) |
 | `--workflow <key>` | the Job's Workflow (R34, A14), selected by §1.3's rule: required when the Plan has two or more Workflows that are not `cancelled`, defaulted to the one when it has one. Not for `scout` or `research`: `--workflow` is refused `explore_workflow_forbidden` and an explore Job belongs to the Plan (below) |
 | `--needs <k1,k2>` | Dependencies, comma-separated, no duplicates (`usage`); Jobs of the same Workflow only (A7) |
-| `--draft` | add the Job as a `draft` in a phase after `plan` too (User, hs-d173, hs-d174, hs-d179: every planned batch is visible in the Plan view before it is approved): `status = draft`, `appended = 1`, no fingerprint; the engine never runs it and it becomes `queued` only at the approval of a Plan review of the drafts (§4.7). In phase `plan` every Job is a draft, so `--draft` changes nothing there. Its needs may be drafts. Without `--tier` and `--spec` it is a stub (above); `--draft` is the only way to add a Job without them. A Job that only carries out a recorded User decision, with no open design choice, is added without `--draft` (User, hs-d301, amending hs-d173, hs-d174, hs-d179); drafts are for design the User has not decided and when unsure it is a draft. **After the lock a stub that waits for nothing is refused** (`draft_parked`, the row below; contract §2.2 "A parked draft"). Not for `scout` or `research` (`explore_no_draft`): an explore Job is never a draft (below) |
+| `--draft` | add the Job as a `draft` in a phase after `plan` too (User, hs-d173, hs-d174, hs-d179: every planned batch is visible in the Plan view before it is approved): `status = draft`, `appended = 1`, no fingerprint; the engine never runs it and it becomes `queued` only at the approval of a Plan review of the drafts (§4.7). In phase `plan` every Job is a draft, so `--draft` changes nothing there. Its needs may be drafts. Without `--tier` and `--spec` it is a stub (above); `--draft` is the only way to add a Job without them. A Job that only carries out a recorded User decision, with no open design choice, is added without `--draft` (User, hs-d301, amending hs-d173, hs-d174, hs-d179); drafts are for design the User has not decided and when unsure it is a draft. **After the lock a complete draft whose needs chain to a queued, running or failed Job is refused** (`draft_parked`, the row below; contract §2.2 "A parked draft"). Not for `scout` or `research` (`explore_no_draft`): an explore Job is never a draft (below) |
 | `--urgent` | add the Job with `urgent = 1` (contract §2.2): engine E3 starts it before every non-urgent Ready Job and may run it as one Attempt beyond `concurrency` (§3.7). Use it **only when the User explicitly asks**, usually for something that blocks all work or an incident. Not a Locked field and not in any fingerprint (§2.3); works with `--draft` and in every phase `job add` works in. To mark an existing Job, see §5.8 |
 | `--kind <work\|docs\|test\|impl\|verify\|scout\|research>` | the Job's kind (hs-d341, contract §2.2 "Job kinds"); default `work`. `scout` and `research` are the explore kinds, below. `verify` adds checks (end-to-end, smoke, load, contract) and changes no product behaviour: it has no Spec section of its own (no `tests` or `test_files`, `spec_invalid`) and its submit runs only the tamper check; it needs an `impl` Job of its Workflow (`impl_job_required`). `open` and `update` are cpd's: `kind_reserved`. The Workflow's stored shape (§9.4) decides which kinds it may have (`shape_violation`, below). A `test` Job's Spec file has `tests` and `test_files` (§5), an `impl` Job needs a `test` Job of its Workflow and both need the repo's `[test-commands]` (below). |
 

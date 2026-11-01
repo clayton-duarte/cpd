@@ -1,84 +1,45 @@
-// The app shell (docs/research/web-client-api.md §6): routing (react-router, hs-d770),
-// layout, the dark/light theme and the token bootstrap. It also owns the held P1.6
-// `ui_request`s and renders each one as an approval dialog answered via `ui_response`
-// (§4.3, hs-d775; the four approval purposes of §1.2). The Escalation area elsewhere shows
-// the count only (hs-d776).
-import { useMemo, useState, type ReactElement } from "react";
-import { NavLink, Route, Routes } from "react-router-dom";
+// The app root: the resizable three-column shell Context | Chat | Inbox (web/README.md "The
+// resizable three-column shell"). The Context column is the vendored shadcn `sidebar-03` block,
+// the centre column is the existing Live Chat unchanged, and the Inbox is a placeholder (the
+// real Inbox and the Tree/Plan panes belong to the ui-parity Plan). Sizing is
+// `react-resizable-panels` 4.15.3 through the vendored `resizable` wrapper; the Context column
+// defaults to 20rem and its handle restores that on double-click. `ApprovalDialog` stays
+// exported for the approval harness.
+import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
+import { usePanelRef } from "react-resizable-panels";
 import { uiResponsePost } from "../api/actions";
 import type { LiveApi } from "../api/live";
+import type { LiveSession } from "../api/live-server";
 import type { CpdApi } from "../api/mock";
 import type { UiRequest } from "../api/types";
-import type {
-  InboxListResult,
-  PlanListResult,
-  PlanShowResult,
-  SessionListResult,
-} from "../api/readmodel";
+import { AppSidebar } from "../components/app-sidebar";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Chat, Inbox, Logs, Plan, Tree, type ChatFrame, type LogEntry } from "../views";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "../components/ui/resizable";
+import { SidebarProvider } from "../components/ui/sidebar";
 import { LiveChat } from "../views/live-chat";
 
-/** The shell renders the current route and any held approval request. */
+/** The Context column's default width (web/README.md "Sizing"); the handle restores it. */
+const CONTEXT_DEFAULT = "20rem";
+
+/** The app root's props; the live adapter drives the Chat column. */
 export interface AppProps {
-  /** A held `ui_request` to show as an approval dialog, if any (§1.2 row 23). */
+  /** A held `ui_request` for the approval dialog (kept for the approval harness). */
   uiRequest?: UiRequest;
-  /** The typed API every action POSTs through, including `ui_response` (§4.4, hs-d775). */
+  /** The typed mock API (kept for the approval harness; no longer rendered here). */
   api?: CpdApi;
   /** The token every request carries (§4.2); absent when there is no socket. */
   token?: string;
   /**
    * The dev live adapter, built only when `main.tsx`'s `/__cpd/health` probe answers `ok`
-   * (web/README.md "The UI wiring"); absent otherwise, so the mock's Chat renders.
+   * (web/README.md "The UI wiring"); absent otherwise, so the explicit no-adapter state shows.
    */
   live?: LiveApi;
 }
-
-// The empty-but-valid read-model slices the shell renders before the real reads land; the
-// mirror shapes are the CLI's documented JSON (§3), so an empty read is always renderable.
-const emptyPlanList: PlanListResult = { ok: true, plans: [], events_cursor: "" };
-const emptyPlanShow: PlanShowResult = {
-  ok: true,
-  plan: {
-    id: "plan-1",
-    context: "ctx-1",
-    title: "web-client",
-    jira: null,
-    phase: "active",
-    lead_session: null,
-    created_at: "",
-    locked_at: null,
-    done_at: null,
-    archived_at: null,
-    outline: null,
-  },
-  prs: [],
-  jobs: [],
-  escalations: null,
-  review: null,
-  counts: null,
-  tamper: null,
-  events_cursor: "",
-};
-const emptySessions: SessionListResult = { ok: true, sessions: [], events_cursor: "" };
-const emptyInbox: InboxListResult = {
-  ok: true,
-  engine: { running: true },
-  items: [],
-  hidden: { snoozed: 0, dismissed: 0, claimed: 0 },
-  events_cursor: "",
-};
-const emptyLog: readonly LogEntry[] = [];
-const emptyFrames: readonly ChatFrame[] = [];
-
-const routes: readonly [string, string][] = [
-  ["/", "Tree"],
-  ["/plan", "Plan"],
-  ["/inbox", "Inbox"],
-  ["/logs", "Logs"],
-  ["/chat", "Chat"],
-];
 
 /** One approval `ui_request` as a dialog listing its options (hs-d775). */
 export function ApprovalDialog({
@@ -130,64 +91,87 @@ export function ApprovalDialog({
   );
 }
 
-/** Renders the app shell with the held approval, if any. */
-export function App({ uiRequest, api, token, live }: AppProps): ReactElement {
-  const [dark, setDark] = useState(false);
-
-  function toggleTheme(): void {
-    setDark((value) => {
-      const next = !value;
-      if (typeof document !== "undefined") {
-        document.documentElement.classList.toggle("dark", next);
-      }
-      return next;
-    });
-  }
-
-  const tree = useMemo(
-    () => ({ plans: emptyPlanList, sessions: emptySessions, inbox: emptyInbox }),
-    [],
+/**
+ * The Context (left) column: the vendored `sidebar-03` block, now the Context tree. Its desktop
+ * rail is `position: fixed`, so it needs a `transform`ed containing block and
+ * `--sidebar-width: 100%` so the rail and its gap spacer match the panel without adding a panel
+ * scrollbar (web/README.md "Containing the fixed rail").
+ */
+function ContextColumn({
+  sessions,
+  selectedId,
+  onSelectSession,
+}: {
+  sessions: readonly LiveSession[];
+  selectedId?: string;
+  onSelectSession: (id: string) => void;
+}): ReactElement {
+  return (
+    <div className="h-full overflow-hidden [transform:translateZ(0)]">
+      <SidebarProvider style={{ "--sidebar-width": "100%" } as CSSProperties}>
+        <AppSidebar sessions={sessions} selectedId={selectedId} onSelectSession={onSelectSession} />
+      </SidebarProvider>
+    </div>
   );
+}
+
+/** The Inbox (right) column: a placeholder; the real Inbox belongs to the ui-parity Plan. */
+function InboxColumn(): ReactElement {
+  return (
+    <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
+      The Inbox lands here.
+    </div>
+  );
+}
+
+/**
+ * Renders the resizable three-column shell (web/README.md "The resizable three-column shell"):
+ * Context | Chat | Inbox, with a handle between each. The Context column defaults to 20rem; the
+ * three panels' default sizes over-constrain the group, so the mount effect re-applies 20rem
+ * through the panel ref to land it exactly, and the Context handle's double-click restores it.
+ */
+export function App({ token, live }: AppProps): ReactElement {
+  const contextPanel = usePanelRef();
+  const [sessions, setSessions] = useState<readonly LiveSession[]>([]);
+  const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
+
+  // Fetch the lead/manager Sessions once; the cancelled flag keeps the resolution from setting
+  // state after unmount (web/README.md "The Context tree").
+  useEffect(() => {
+    if (live === undefined) return;
+    let cancelled = false;
+    void live.sessions().then((list) => {
+      if (cancelled) return;
+      setSessions(list);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [live]);
+
+  useEffect(() => {
+    contextPanel.current?.resize(CONTEXT_DEFAULT);
+  }, [contextPanel]);
+
+  // Nothing is selected on first render; the rail's `onSelectSession` fills it.
+  const selected = sessions.find((session) => session.id === selectedId);
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <header className="flex items-center gap-4 border-b p-3">
-        <span className="font-semibold">cpd</span>
-        <nav className="flex items-center gap-3 text-sm">
-          {routes.map(([to, label]) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === "/"}
-              className={({ isActive }) => (isActive ? "text-primary underline" : "text-muted-foreground")}
-            >
-              {label}
-            </NavLink>
-          ))}
-        </nav>
-        <Button className="ml-auto" variant="outline" size="sm" onClick={toggleTheme}>
-          {dark ? "light" : "dark"}
-        </Button>
-      </header>
-      <main className="p-4">
-        <Routes>
-          <Route path="/" element={<Tree {...tree} />} />
-          <Route path="/plan" element={<Plan plan={emptyPlanShow} />} />
-          <Route path="/inbox" element={<Inbox inbox={emptyInbox} />} />
-          <Route path="/logs" element={<Logs events={emptyLog} />} />
-          <Route
-            path="/chat"
-            element={
-              live !== undefined ? (
-                <LiveChat api={live} token={token} />
-              ) : (
-                <Chat epoch="e" frames={emptyFrames} api={api} token={token} />
-              )
-            }
-          />
-        </Routes>
-      </main>
-      {uiRequest ? <ApprovalDialog request={uiRequest} api={api} token={token} /> : null}
-    </div>
+    <ResizablePanelGroup orientation="horizontal" className="h-svh">
+      <ResizablePanel defaultSize={CONTEXT_DEFAULT} panelRef={contextPanel}>
+        <ContextColumn sessions={sessions} selectedId={selectedId} onSelectSession={setSelectedId} />
+      </ResizablePanel>
+      <ResizableHandle
+        disableDoubleClick
+        onDoubleClick={() => contextPanel.current?.resize(CONTEXT_DEFAULT)}
+      />
+      <ResizablePanel defaultSize="60%">
+        <LiveChat api={live} token={token} session={selected} />
+      </ResizablePanel>
+      <ResizableHandle disableDoubleClick />
+      <ResizablePanel defaultSize="20%">
+        <InboxColumn />
+      </ResizablePanel>
+    </ResizablePanelGroup>
   );
 }

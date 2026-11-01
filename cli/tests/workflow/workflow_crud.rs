@@ -1969,6 +1969,7 @@ fn a_plan_review_goes_stale_when_a_workflow_changes() {
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("web", &fx.pay, &[]).ok();
     fx.job("a", "api", "draft");
+    fx.job("b", "web", "draft"); // a review is refused while a live PR has no draft Job
     fx.outline_for_review("pay-1");
     let review = fx
         .cpd(&[

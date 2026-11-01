@@ -1,20 +1,32 @@
 // @vitest-environment jsdom
-// Live Chat view tests for the dev live adapter (web/README.md "The UI wiring", hs-d819). RED:
-// `LiveChat` still throws `not implemented`, so these fail now and pass once the ui Job lands.
+// Red tests for the live Chat view after the Context tree takes over the rail (web/README.md
+// "The Context tree in the left rail selects the Chat"). The Chat no longer lists Sessions or
+// renders its `Session` <select>; it takes the Session it is given (prop `session`), subscribes
+// to it exactly as before, and with no Session shows its pick-from-the-rail state. The `session`
+// prop does not exist on the base branch, so the component is reached through a narrow cast and
+// the red is a failed assertion, never a build error.
 //
 // The live Chat is async and interactive (it awaits `api.sessions()` and carries a submit box),
-// so unlike the synchronous views harness this file needs a DOM: jsdom in a per-file comment,
-// and the client renderer drives the effects and events. Only authored code is tested; the
-// `LiveApi` is an injected fake, so no socket, server or network.
-import { act } from "react";
+// so unlike the synchronous views harness this file needs a DOM: jsdom in a per-file comment, and
+// the client renderer drives the effects and events. Only authored code is tested; the `LiveApi`
+// is an injected fake, so no socket, server or network.
+import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test } from "vitest";
-import { LiveChat } from "./live-chat";
+import { LiveChat, type LiveChatProps } from "./live-chat";
 import type { LiveApi } from "../api/live";
 import type { LiveSession } from "../api/live-server";
 import type { SnapshotFrame } from "../fold/fold";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+/** A Session as the Chat now receives it: `LiveSession` plus the adapter's `context` and `name`. */
+type TreeSession = LiveSession & { context: string; name?: string };
+
+/** The Chat's props plus the new `session`; LiveChatProps lacks it on the base branch. */
+type LiveChatSessionProps = LiveChatProps & { session?: TreeSession };
+
+const LiveChatWithSession = LiveChat as unknown as (props: LiveChatSessionProps) => ReactElement;
 
 let container: HTMLDivElement;
 let root: Root;
@@ -36,17 +48,22 @@ async function flush(): Promise<void> {
 }
 
 /** A fake LiveApi: the sessions it lists, the ids it subscribed to, the messages it sent. */
-function fakeApi(sessions: LiveSession[]): {
+function fakeApi(sessions: readonly TreeSession[]): {
   api: LiveApi;
   subscribed: string[];
   sent: Array<{ id: string; text: string }>;
+  sessionsCalls: () => number;
   emit: (frame: SnapshotFrame) => void;
 } {
   const subscribed: string[] = [];
   const sent: Array<{ id: string; text: string }> = [];
+  let calls = 0;
   let onFrame: ((frame: SnapshotFrame) => void) | undefined;
   const api: LiveApi = {
-    sessions: async () => sessions,
+    sessions: async () => {
+      calls += 1;
+      return sessions;
+    },
     subscribe: (id, callback) => {
       subscribed.push(id);
       onFrame = callback;
@@ -58,7 +75,7 @@ function fakeApi(sessions: LiveSession[]): {
       sent.push({ id, text });
     },
   };
-  return { api, subscribed, sent, emit: (frame) => onFrame?.(frame) };
+  return { api, subscribed, sent, sessionsCalls: () => calls, emit: (frame) => onFrame?.(frame) };
 }
 
 /** Sets a controlled input's value the way React observes it, then fires `input`. */
@@ -70,43 +87,69 @@ function typeInto(element: HTMLInputElement | HTMLTextAreaElement, text: string)
   element.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-test("the live Chat lists sessions in a picker and renders the selected transcript", async () => {
-  const { api, subscribed, emit } = fakeApi([
-    { id: "s1", role: "lead", runner: "pi", title: "Lead one" },
-    { id: "s2", role: "manager", runner: "durable", title: "Manager two" },
-  ]);
+test("the live Chat renders the Session it is given, with no picker of its own", async () => {
+  const session: TreeSession = {
+    id: "s1",
+    role: "lead",
+    runner: "pi",
+    title: "Lead one",
+    context: "ctx",
+    name: "Lead one",
+  };
+  const { api, subscribed, sessionsCalls, emit } = fakeApi([session]);
 
   await act(async () => {
-    root.render(<LiveChat api={api} token="t0k" />);
+    root.render(<LiveChatWithSession api={api} token="t0k" session={session} />);
     await flush();
   });
 
-  // Both sessions are offered in the picker.
-  expect(container.textContent).toContain("Lead one");
-  expect(container.textContent).toContain("Manager two");
-  // The first session is selected and subscribed to.
+  // The Chat no longer lists Sessions itself and carries no picker.
+  expect(sessionsCalls()).toBe(0);
+  expect(container.querySelector("select")).toBeNull();
+  // It subscribes to the Session it was given.
   expect(subscribed).toEqual(["s1"]);
 
-  // A snapshot frame folds onto the Chat view and renders the transcript.
+  // A snapshot frame folds onto the Chat view and renders that Session's transcript.
   await act(async () => {
     emit({
       type: "snapshot",
       epoch: "live",
       seq: 1,
       snapshot: {
-        messages: [{ id: "m1", role: "assistant", text: "hello from the transcript", pending: false }],
+        messages: [{ id: "m1", role: "assistant", text: "given session transcript", pending: false }],
       },
     });
     await flush();
   });
-  expect(container.textContent).toContain("hello from the transcript");
+  expect(container.textContent).toContain("given session transcript");
+});
+
+test("with no Session the live Chat asks for one from the rail", async () => {
+  const { api, sessionsCalls } = fakeApi([]);
+
+  await act(async () => {
+    root.render(<LiveChatWithSession api={api} token="t0k" />);
+    await flush();
+  });
+
+  expect(container.textContent).toContain("Pick a manager or a lead in the left rail to see its chat.");
+  expect(container.querySelector("select")).toBeNull();
+  expect(sessionsCalls()).toBe(0);
 });
 
 test("the live Chat sends a typed message through the live api", async () => {
-  const { api, sent } = fakeApi([{ id: "s1", role: "lead", runner: "pi", title: "Lead one" }]);
+  const session: TreeSession = {
+    id: "s1",
+    role: "lead",
+    runner: "pi",
+    title: "Lead one",
+    context: "ctx",
+    name: "Lead one",
+  };
+  const { api, sent } = fakeApi([session]);
 
   await act(async () => {
-    root.render(<LiveChat api={api} token="t0k" />);
+    root.render(<LiveChatWithSession api={api} token="t0k" session={session} />);
     await flush();
   });
 

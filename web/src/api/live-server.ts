@@ -11,13 +11,17 @@ import { parsePiSession, parseTailOutput, toSnapshotFrame, type TranscriptMessag
  */
 export type DurableHostRead = (id: string) => Promise<readonly TranscriptMessage[] | undefined>;
 
-/** One Session the picker offers. */
+/** One Session the tree offers. */
 export interface LiveSession {
   id: string;
   role: "lead" | "manager";
   runner: "pi" | "durable";
   title?: string;
   state?: string;
+  /** The Context the Session belongs to (`cpd session list` row's `context`); the tree groups by it. */
+  context?: string;
+  /** The Session's display name (`cpd session list` row's `name`); the tree labels rows with it. */
+  name?: string;
 }
 
 /** Every external boundary is injected; the handler itself touches nothing real. */

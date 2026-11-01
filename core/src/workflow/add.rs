@@ -956,18 +956,32 @@ fn insert_stubs(
     open_tier: Tier,
 ) -> Result<Vec<Stub>, CpdError> {
     let stubs = template(&wanted.shape, &wanted.key, &wanted.title);
-    let workflow = load_workflows(tx, plan)?.into_iter().find(|p| p.key == wanted.key).ok_or_else(|| {
-        CpdError::bad_row(format!("Workflow {} of Plan {plan} vanished while its template was being written", wanted.key))
-    })?;
-    // After the lock a stub that waits for nothing would be a parked draft (hs-d731): without `--jobs` only a Workflow that waits
-    // for another Workflow may lay the stubs out; the error rolls the transaction back, nothing stays written.
-    if appended && wanted.jobs.is_none() && super::start::not_ready(tx, plan, &wanted.key)?.is_empty() {
-        let jobs: Vec<&str> = stubs.iter().filter(|s| s.kind != "open").map(|s| s.key.as_str()).collect();
+    let workflow = load_workflows(tx, plan)?
+        .into_iter()
+        .find(|p| p.key == wanted.key)
+        .ok_or_else(|| {
+            CpdError::bad_row(format!(
+                "Workflow {} of Plan {plan} vanished while its template was being written",
+                wanted.key
+            ))
+        })?;
+    // After the lock a Workflow that starts at once lays its template out as decided work, never as unscoped stubs (§2.2 "The
+    // template"): without `--jobs` only a Workflow that waits for another Workflow may lay the stubs out; the error rolls the
+    // transaction back, nothing stays written.
+    if appended
+        && wanted.jobs.is_none()
+        && super::start::not_ready(tx, plan, &wanted.key)?.is_empty()
+    {
+        let jobs: Vec<&str> = stubs
+            .iter()
+            .filter(|s| s.kind != "open")
+            .map(|s| s.key.as_str())
+            .collect();
         return Err(CpdError::new(
             ErrorCode::DraftParked,
             format!(
-                "Workflow {} starts at once, so its template stubs ({}) would be parked drafts that no one can review. Say --jobs <file.json> to add them as decided work \
-                 (a Tier and Spec for each: {}), or make the Workflow wait for another Workflow (--needs, --base).",
+                "Workflow {} starts at once, so without --jobs its template Jobs ({}) would stay unscoped stubs that no review has queued, and the Workflow would start with nothing to run. \
+                 Say --jobs <file.json> to add them as decided work (a Tier and Spec for each: {}), or make the Workflow wait for another Workflow (--needs, --base).",
                 wanted.key,
                 jobs.join(", "),
                 stubs.iter().filter(|s| s.kind != "open").map(|s| s.suffix).collect::<Vec<_>>().join(", ")

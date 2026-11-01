@@ -93,10 +93,10 @@ pub(super) fn abort(args: AbortArgs) -> Result<Output, CpdError> {
 
 /// The calling Lead Session's id (contract §5.2): `CPD_SESSION`, else the Plan's Lead Session.
 fn caller(env: &mut Env, plan: &PlanId) -> Result<String, CpdError> {
-    if let Ok(id) = std::env::var("CPD_SESSION") {
-        if !id.is_empty() {
-            return Ok(SessionId::parse(&id)?.to_string());
-        }
+    if let Ok(id) = std::env::var("CPD_SESSION")
+        && !id.is_empty()
+    {
+        return Ok(SessionId::parse(&id)?.to_string());
     }
     env.store
         .read(|conn| {

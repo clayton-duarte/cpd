@@ -686,7 +686,17 @@ fn lock_refuses_a_workflow_without_a_draft_job() {
     ])
     .ok();
     fx.job("ui", "web");
-    fx.approve();
+    // `plan review` refuses `pr_empty` itself, so the approved review of the current fingerprint is written by SQL:
+    // the lock then reaches its own `pr_empty` refusal.
+    fx.env.outline_for_review("pay");
+    let fingerprint = fx.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    fx.env.sql(&format!(
+        "INSERT INTO plan_reviews (plan, id, number, fingerprint, title, status, requested_at, decided_at)
+           VALUES ('pay', 'r1', 1, '{fingerprint}', 'T', 'approved', 't', 't');"
+    ));
 
     let error = refused(&fx.lock(), "workflow_empty", 3);
 

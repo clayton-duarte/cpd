@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use super::jobs::Job;
+use super::lint::Finding;
 use super::overlap::Overlap;
 use super::prs::WorkflowRow;
 use super::render::{cell, inline};
@@ -16,6 +17,9 @@ use super::row::PlanRow;
 const NONE: &str = "—";
 /// The overlap rows shown before the rest are counted.
 const OVERLAPS_SHOWN: usize = 5;
+
+/// The lint rows shown before the rest are counted.
+const LINT_SHOWN: usize = 5;
 
 /// Which summary: the Plan's own (`plan render`) or a review's.
 pub enum Kind<'a> {
@@ -35,6 +39,8 @@ pub struct Input<'a> {
     pub workflows: &'a [WorkflowRow],
     pub jobs: &'a [Job],
     pub overlaps: &'a [Overlap],
+    /// The lint warnings to show.
+    pub lint: &'a [Finding],
     /// The base Workflow (`<plan>/<key>`) of each stacked Workflow, by Workflow key (contract §2.2 "The base Workflow").
     pub base_workflows: &'a BTreeMap<String, String>,
 }
@@ -102,6 +108,21 @@ fn overlaps_block(overlaps: &[Overlap]) -> Vec<String> {
             "- +{} more overlaps",
             overlaps.len() - OVERLAPS_SHOWN
         ));
+    }
+    out
+}
+
+/// `Lint:` (block 9): never omitted.
+fn lint_block(lint: &[Finding]) -> Vec<String> {
+    if lint.is_empty() {
+        return vec!["Lint: none".to_owned()];
+    }
+    let mut out = vec![format!("Lint: {}", lint.len())];
+    for f in lint.iter().take(LINT_SHOWN) {
+        out.push(format!("- {}: {}", f.rule.as_str(), f.row()));
+    }
+    if lint.len() > LINT_SHOWN {
+        out.push(format!("- +{} more warnings", lint.len() - LINT_SHOWN));
     }
     out
 }
@@ -199,6 +220,7 @@ pub fn markdown(kind: &Kind, i: &Input) -> String {
 
     blocks.push(order(i, &counting));
     blocks.push(overlaps_block(i.overlaps));
+    blocks.push(lint_block(i.lint));
     if let Some(o) = outline.filter(|o| !o.decided.is_empty()) {
         blocks.push(vec![format!("Decided: {}", o.decided.join(", "))]);
     }

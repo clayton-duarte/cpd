@@ -31,6 +31,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd plan show` | Show a Plan: the TUI's snapshot (§4.3) | Lead, Manager | |
 | `cpd plan phase` | Move the Plan to phase `plan` (§4.4) | Lead | |
 | `cpd plan render` | Render the Plan to run/<plan>/plan.md (§4.5) | Lead | |
+| `cpd plan lint` | Check the Plan's drafts: every error and warning in one list (§4.15) | Lead | |
 | `cpd plan review` | Request the User's approval of the draft Jobs (§4.6) | Lead | |
 | `cpd plan decide` | Record the User's decision on a Plan review (§4.7) | internal | |
 | `cpd plan outline` | Set the Plan's outline: what its review summary says (§4.13) | Lead | |

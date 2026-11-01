@@ -72,7 +72,25 @@ fn a_verify_job_is_added_to_a_tdd_pr_when_it_needs_an_impl_job() {
         "verify"
     );
 
-    let out = verify(&fx, "v2", &["i"], "api", true).ok();
+    // The draft form is a stub (no Tier, no Spec): a complete draft that waits for the queued `i` would be parked.
+    let out = fx
+        .cpd(&[
+            "job",
+            "add",
+            "v2",
+            "--title",
+            "Title of v2",
+            "--kind",
+            "verify",
+            "--needs",
+            "i",
+            "--draft",
+            "--pr",
+            "api",
+            "--plan",
+            "pl",
+        ])
+        .ok();
     assert_eq!(
         (&out["job"]["kind"], &out["job"]["status"]),
         (&json!("verify"), &json!("draft")),
@@ -126,6 +144,8 @@ fn a_plan_review_and_a_lock_refuse_a_draft_verify_job_without_an_impl_need() {
     tdd(&fx);
     // A draft verify Job is added with no impl need: it is checked where it stops being a draft.
     verify(&fx, "v", &["t"], "api", true).ok();
+    // PR `repo` has no draft Job: a review is refused `pr_empty` while a live PR is empty, so end it.
+    fx.cpd(&["pr", "cancel", "repo", "--plan", "pl"]).ok();
     fx.env.outline_for_review("pl");
     let before = (writes(&fx), count(&fx.env, "plan_reviews"));
     let e = refused(&review(&fx, "pl"), "impl_job_required", 3);

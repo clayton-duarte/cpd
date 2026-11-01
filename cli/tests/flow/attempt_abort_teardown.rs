@@ -89,7 +89,7 @@ fn the_runner(live: &Live, id: &str) -> Pid {
 fn abort(live: &Live, id: &str) -> Value {
     live.fx
         .cpd_with(
-            &live.fx.env.root(),
+            live.fx.env.root(),
             &["attempt", "abort", id, "--plan", PLAN],
             &[("CPD_SESSION", LEAD)],
         )

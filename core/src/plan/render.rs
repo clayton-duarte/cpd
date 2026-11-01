@@ -12,6 +12,7 @@ use serde_json::Value;
 
 use super::display::Display;
 use super::jobs::{Job, JobSpec};
+use super::lint::Finding;
 use super::overlap::Overlap;
 use super::prs::WorkflowRow;
 
@@ -578,6 +579,32 @@ fn overlaps_section(out: &mut Vec<String>, overlaps: &[Overlap]) {
     out.push(String::new());
 }
 
+/// The `## Lint` section (commands.md §4.5): a table of the warnings, or none.
+fn lint_section(out: &mut Vec<String>, lint: &[Finding]) {
+    out.extend(["## Lint".to_owned(), String::new()]);
+    if lint.is_empty() {
+        out.push("No lint warnings.".to_owned());
+    } else {
+        out.extend([
+            "| Rule | Workflow | Job | Other | Paths | Message |".to_owned(),
+            "|---|---|---|---|---|---|".to_owned(),
+        ]);
+        let opt = |v: &Option<String>| v.as_deref().map_or_else(|| "—".to_owned(), tcode);
+        for f in lint {
+            out.push(format!(
+                "| {} | {} | {} | {} | {} | {} |",
+                tcode(f.rule.as_str()),
+                opt(&f.pr),
+                opt(&f.job),
+                opt(&f.other),
+                paths_cell(&f.paths),
+                f.message.replace('|', "\\|")
+            ));
+        }
+    }
+    out.push(String::new());
+}
+
 /// What the document opens with (commands.md §4.5, §4.6; hs-d291): `plan.md`
 /// is headed by the Plan.
 pub enum Heading<'a> {
@@ -589,9 +616,25 @@ pub enum Heading<'a> {
 /// `overlaps` are those of [`super::overlap::find`]; `open_tier` is the config key of that name, the Tier of the
 /// placeholder `open` Job of a Workflow that has not started (§4.5, hs-d497). Pure: the same Workflows, Jobs
 /// and overlaps give the same text.
-pub fn markdown(heading: &Heading, context: &str, phase: &str, workflows: &[WorkflowRow], jobs: &[Job], overlaps: &[Overlap], open_tier: &str, display: &Display) -> String {
-    let shown = Shown { all_jobs: jobs, display, anchors: Anchors::new(jobs) };
-    let (cancelled, workflows): (Vec<&WorkflowRow>, Vec<&WorkflowRow>) = workflows.iter().partition(|p| p.status == "cancelled");
+#[allow(clippy::too_many_arguments)] // a signature change is out of scope for the lint cleanup
+pub fn markdown(
+    heading: &Heading,
+    context: &str,
+    phase: &str,
+    workflows: &[WorkflowRow],
+    jobs: &[Job],
+    overlaps: &[Overlap],
+    open_tier: &str,
+    display: &Display,
+    lint: &[Finding],
+) -> String {
+    let shown = Shown {
+        all_jobs: jobs,
+        display,
+        anchors: Anchors::new(jobs),
+    };
+    let (cancelled, workflows): (Vec<&WorkflowRow>, Vec<&WorkflowRow>) =
+        workflows.iter().partition(|p| p.status == "cancelled");
     let mut out = match heading {
         Heading::Plan { title, .. } => vec![format!("# Plan: {}", inline(title)), String::new()],
     };
@@ -634,6 +677,7 @@ pub fn markdown(heading: &Heading, context: &str, phase: &str, workflows: &[Work
         out.extend([graph("LR", "p", &nodes), String::new()]);
     }
     overlaps_section(&mut out, overlaps);
+    lint_section(&mut out, lint);
     explore_section(&mut out, plan, jobs, display);
     let mut cancelled = cancelled;
     cancelled.sort_by(|a, b| a.key.cmp(&b.key));
@@ -695,7 +739,23 @@ mod tests {
 
     #[test]
     fn a_plan_without_prs_says_so() {
-        assert_eq!(markdown(&Heading::Plan { title: "T" }, "ctx", "plan", &[], &[], &[], "S2", &Display::default()), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo Workflows yet.\n");
+        assert_eq!(
+            markdown(
+                &Heading::Plan {
+                    title: "T",
+                    plan: "p1"
+                },
+                "ctx",
+                "plan",
+                &[],
+                &[],
+                &[],
+                "S2",
+                &Display::default(),
+                &[]
+            ),
+            "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo Workflows yet.\n"
+        );
     }
 
     fn workflow(key: &str, needs: &[&str]) -> WorkflowRow {
@@ -747,7 +807,20 @@ mod tests {
 
     /// The Plan `T` as `markdown` renders it for `prs` and `jobs` alone: no needs of other Plans, nothing superseded.
     fn plain(phase: &str, workflows: &[WorkflowRow], jobs: &[Job], open_tier: &str) -> String {
-        markdown(&Heading::Plan { title: "T" }, "ctx", phase, workflows, jobs, &[], open_tier, &Display::of(workflows))
+        markdown(
+            &Heading::Plan {
+                title: "T",
+                plan: "p1",
+            },
+            "ctx",
+            phase,
+            workflows,
+            jobs,
+            &[],
+            open_tier,
+            &Display::of(workflows),
+            &[],
+        )
     }
 
     fn titled_workflow(key: &str, status: &str) -> WorkflowRow {
