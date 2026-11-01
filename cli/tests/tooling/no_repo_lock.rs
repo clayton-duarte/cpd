@@ -32,9 +32,12 @@ use serde_json::Value;
 
 /// A `Runner` over `inner` that, at the first call `at` picks, first runs `during` (once) and then lets the call go on:
 /// the call is held while `during` runs, on the same thread, so the order is the test's and nothing waits on time.
+/// Which call to hold at: the program and its arguments.
+type HoldAt = Box<dyn Fn(&str, &[String]) -> bool + Send + Sync>;
+
 struct Hold {
     inner: Arc<dyn Runner>,
-    at: Box<dyn Fn(&str, &[String]) -> bool + Send + Sync>,
+    at: HoldAt,
     during: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 

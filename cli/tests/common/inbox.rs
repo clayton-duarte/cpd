@@ -235,9 +235,12 @@ pub fn input(event: Event) -> Signal {
 /// What the world does while the view draws: each step runs at the first frame, after its predecessors, that satisfies its
 /// condition (at most one step a frame). A step no frame reaches is not an error here: the test's assertions on the frames
 /// say what did not happen.
+/// A step of the world: (is the screen ready, what to do then).
+type WorldStep = (Box<dyn Fn(&Screen) -> bool>, Box<dyn FnMut()>);
+
 #[derive(Clone, Default)]
 pub struct World {
-    steps: Rc<RefCell<VecDeque<(Box<dyn Fn(&Screen) -> bool>, Box<dyn FnMut()>)>>>,
+    steps: Rc<RefCell<VecDeque<WorldStep>>>,
 }
 
 impl World {
@@ -308,8 +311,8 @@ fn show_over(fx: &Fx, height: u16, signals: Vec<Signal>, world: &World, run_comm
         Err(ViewError::Cpd(e)) => panic!("the view's own work failed: {}", e.message()),
         Ok(()) => panic!("the view ended with no terminal failure: no key ends it"),
     }
-    let frames = frames.borrow().clone();
-    frames
+    
+    frames.borrow().clone()
 }
 
 // ---------- reading the frames ----------

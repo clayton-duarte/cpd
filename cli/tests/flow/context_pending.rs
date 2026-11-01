@@ -56,10 +56,8 @@ fn pr(env: &TestEnv, plan: &str, key: &str, status: &str) {
     if status == "merged" {
         // One GitHub row per merged PR: the `number` is unique per repo.
         env.sql(
-            &format!(
-                "INSERT OR IGNORE INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-                 VALUES ('acme/api', 8, 'https://github.com/acme/api/pull/8', 'Old', 0, 'merged', 'none', 'none', 't', 't', 't');"
-            ),
+            "INSERT OR IGNORE INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                 VALUES ('acme/api', 8, 'https://github.com/acme/api/pull/8', 'Old', 0, 'merged', 'none', 'none', 't', 't', 't');",
         );
     }
     env.sql(
@@ -224,7 +222,6 @@ fn markdown_prints_the_same_content() {
     assert_eq!(run.stdout, expected);
 }
 
-#[test]
 /// commands.md §3.12 (Plan `explore-view`): a Plan `live` with PR `api` and explore Jobs shows a plan-level `jobs`
 /// array beside `prs`, in `seq` order, while the PR's own `jobs` array is unchanged.
 #[test]
@@ -310,14 +307,6 @@ fn context_pending_markdown_the_plan_level_jobs_section() {
 - look2 research running: Title look2 (explore/look2.md)\n\
 - dig research waiting on look2: Title dig (explore/dig.md)\n";
     assert_eq!(run.stdout, expected);
-}
-
-fn it_writes_nothing() {
-    let fx = fixture();
-    let events = || fx.cpd(&["events", "list"]).ok()["events"].as_array().unwrap().len();
-    let before = events();
-    fx.cpd(&["context", "pending", "--context", "ctx"]).ok();
-    assert_eq!(events(), before);
 }
 
 #[test]

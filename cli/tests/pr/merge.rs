@@ -769,7 +769,8 @@ fn merge_the_base(fx: &Fx, attempt: &AttemptId, worktree: &Path) -> String {
 
 #[test]
 fn an_attempt_that_merges_a_base_with_changed_protected_files_is_merged() {
-    for path in [".cpd/x"] {
+    {
+        let path = ".cpd/x";
         let (fx, _) = fx_origin();
         let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
         base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
@@ -785,7 +786,8 @@ fn an_attempt_that_merges_a_base_with_changed_protected_files_is_merged() {
 
 #[test]
 fn an_attempt_that_changes_a_protected_file_to_anything_but_the_bases_is_tampered() {
-    for path in [".cpd/x"] {
+    {
+        let path = ".cpd/x";
         let (fx, _) = fx_origin();
         let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
         base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
@@ -804,7 +806,8 @@ fn an_attempt_that_changes_a_protected_file_to_anything_but_the_bases_is_tampere
 
 #[test]
 fn a_protected_file_deleted_on_the_base_and_in_the_attempt_is_merged() {
-    for path in [".cpd/x"] {
+    {
+        let path = ".cpd/x";
         let (fx, _) = fx_origin();
         base_edits(&fx, path, Some("protected = []\n"));
         fx.git(&fx.lead, &["merge", "-q", "--ff-only", "origin/main"]);
@@ -844,7 +847,8 @@ fn advance_and_push(fx: &Fx, pr: &Pr, path: &str, content: &str) {
 
 #[test]
 fn a_stacked_prs_job_that_merges_the_base_prs_protected_file_changes_is_merged() {
-    for path in [".cpd/x"] {
+    {
+        let path = ".cpd/x";
         let (fx, base, web, attempt, worktree) = stacked_job();
         // The base PR's Lead Branch moves on, a protected file with it, and is pushed.
         advance_and_push(&fx, &base, path, "protected = [\"verify.sh\"]\n");
@@ -860,7 +864,8 @@ fn a_stacked_prs_job_that_merges_the_base_prs_protected_file_changes_is_merged()
 
 #[test]
 fn a_stacked_prs_job_that_merges_the_root_base_brings_its_protected_file_changes_without_tampering() {
-    for path in [".cpd/x"] {
+    {
+        let path = ".cpd/x";
         let (fx, _, web, attempt, worktree) = stacked_job();
         // `main`, the branch the stack lands on, changes a protected file the base PR's branch does not have yet.
         base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
@@ -876,7 +881,8 @@ fn a_stacked_prs_job_that_merges_the_root_base_brings_its_protected_file_changes
 
 #[test]
 fn a_stacked_prs_job_that_changes_a_protected_file_to_anything_else_is_tampered() {
-    for path in [".cpd/x"] {
+    {
+        let path = ".cpd/x";
         let (fx, base, web, attempt, worktree) = stacked_job();
         base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
         advance_and_push(&fx, &base, path, "protected = [\"base-pr\"]\n");

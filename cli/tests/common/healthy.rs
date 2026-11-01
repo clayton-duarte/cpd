@@ -58,7 +58,7 @@ fn catalog(args: &[&str]) -> String {
     for tier in args.get(start..).unwrap_or_default() {
         let (letter, model) = tier.split_once('=').expect("a tier is <letter>=<model>");
         let levels = match model.split_once('/') {
-            Some(("p", id)) if id == "m-low" => serde_json::json!(LOW),
+            Some(("p", "m-low")) => serde_json::json!(LOW),
             Some(("p", id)) if id.starts_with("m-") => serde_json::json!(ALL),
             _ => serde_json::Value::Null,
         };

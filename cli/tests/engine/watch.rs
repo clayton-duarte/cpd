@@ -32,6 +32,9 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::macros::format_description;
 
+/// An Event row: `(plan, job, attempt, data)`.
+type EventRow = (Option<String>, Option<String>, Option<String>, Value);
+
 const PLAN: &str = "pay";
 
 /// O supports efforts 0–5, S 1–5, H 0–3.
@@ -303,7 +306,7 @@ impl Fx {
     }
 
     /// Every Event of `kind`, in order: `(plan, job, attempt, data)`.
-    fn events(&self, kind: &str) -> Vec<(Option<String>, Option<String>, Option<String>, Value)> {
+    fn events(&self, kind: &str) -> Vec<EventRow> {
         self.env.read(|conn| {
             let mut stmt = conn.prepare("SELECT plan, job, attempt, data FROM events WHERE kind = ?1 ORDER BY id")?;
             let rows = stmt
@@ -320,17 +323,17 @@ impl Fx {
     fn texts(&self, kind: &str) -> Vec<String> {
         self.env.read(|conn| {
             let mut stmt = conn.prepare("SELECT text FROM events WHERE kind = ?1 ORDER BY id")?;
-            Ok(stmt.query_map([kind], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+            stmt.query_map([kind], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()
         })
     }
 
     fn attempt(&self, id: &str) -> (String, Option<String>, Option<String>, Option<String>) {
         self.env.read(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT status, outcome, cause, stop_request FROM attempts WHERE plan = 'pay' AND id = ?1",
                 [id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-            )?)
+            )
         })
     }
 
@@ -631,7 +634,7 @@ fn engine_log(fx: &Ip) -> String {
 trait Home {
     fn home(&self) -> CpdHome;
     /// Every Event of `kind`, in order: `(plan, job, attempt, data)`.
-    fn events(&self, kind: &str) -> Vec<(Option<String>, Option<String>, Option<String>, Value)>;
+    fn events(&self, kind: &str) -> Vec<EventRow>;
     fn texts(&self, kind: &str) -> Vec<String>;
     /// The messages the engine sent: `(session, context, data)`.
     fn messages(&self) -> Vec<(String, Option<String>, Value)>;
@@ -663,7 +666,7 @@ impl Home for Ip {
         CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap()
     }
 
-    fn events(&self, kind: &str) -> Vec<(Option<String>, Option<String>, Option<String>, Value)> {
+    fn events(&self, kind: &str) -> Vec<EventRow> {
         self.env.read(|conn| {
             let mut stmt = conn.prepare("SELECT plan, job, attempt, data FROM events WHERE kind = ?1 ORDER BY id")?;
             let rows = stmt
@@ -676,7 +679,7 @@ impl Home for Ip {
     fn texts(&self, kind: &str) -> Vec<String> {
         self.env.read(|conn| {
             let mut stmt = conn.prepare("SELECT text FROM events WHERE kind = ?1 ORDER BY id")?;
-            Ok(stmt.query_map([kind], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+            stmt.query_map([kind], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()
         })
     }
 
@@ -703,9 +706,9 @@ impl Home for Ip {
 
     fn attempt(&self, id: &str) -> (String, Option<String>, Option<String>, Option<String>) {
         self.env.read(|conn| {
-            Ok(conn.query_row("SELECT status, outcome, cause, stop_request FROM attempts WHERE id = ?1", [id], |r| {
+            conn.query_row("SELECT status, outcome, cause, stop_request FROM attempts WHERE id = ?1", [id], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-            })?)
+            })
         })
     }
 
@@ -1395,7 +1398,7 @@ fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
     fx.watch_ticks(OVER_ONE_TICK).unwrap();
 
     let row = |id: &str| {
-        fx.env.read(|c| Ok(c.query_row("SELECT state, tmux_pane, state_at FROM sessions WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
+        fx.env.read(|c| c.query_row("SELECT state, tmux_pane, state_at FROM sessions WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))))
     };
     let rows: Vec<(String, Option<String>, String)> = ["s-live", "s-dead", "s-gone", "s-waiting", "s-shut"].iter().map(|id| row(id)).collect();
     let (states, panes): (Vec<&str>, Vec<Option<&str>>) = rows.iter().map(|r| (r.0.as_str(), r.1.as_deref())).unzip();
@@ -1679,7 +1682,7 @@ fn e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off() 
     assert_eq!(fx.count("job-failed"), 0);
     let attempts: Vec<(String, String, String, Option<i64>)> = fx.env.read(|conn| {
         let mut stmt = conn.prepare("SELECT id, tier, origin, driver_pid FROM attempts WHERE job = 'api' AND status = 'ended' ORDER BY number")?;
-        Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?)
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()
     });
     assert_eq!(attempts.len(), 4, "{attempts:?}");
     for (id, tier, origin, pid) in &attempts {
@@ -2027,11 +2030,11 @@ fn e5_queues_one_update_job_when_the_pull_request_conflicts_and_none_for_a_base_
 
     assert_eq!(fx.jobs_of_kind("update"), [("up-repo".to_owned(), "queued".to_owned())], "once per conflict, however many polls see it");
     let row: (String, String, i64, bool) = fx.env.read(|conn| {
-        Ok(conn.query_row(
+        conn.query_row(
             "SELECT title, tier, appended, fingerprint IS NOT NULL FROM jobs WHERE plan = 'pay' AND key = 'up-repo'",
             [],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        )?)
+        )
     });
     assert_eq!(row, (format!("Bring the pull request up to date: {PR_TITLE}"), "S1".into(), 1, true));
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM dependencies WHERE plan = 'pay' AND job = 'up-repo'"), 0);
@@ -2151,7 +2154,7 @@ fn e5_polls_at_its_due_time_not_at_the_next_tick() {
     let fx = engine_home("");
     let config = fx.env.cpd_home().join("config.toml");
     let text = fs::read_to_string(&config).unwrap();
-    let tick = format!("tick_seconds = 1\n");
+    let tick = "tick_seconds = 1\n".to_string();
     assert!(text.contains(&tick), "{text}");
     fs::write(&config, text.replace(&tick, "tick_seconds = 5\n")).unwrap();
     fx.engine_base_routes();
@@ -2213,7 +2216,7 @@ fn e5_a_poll_handed_over_late_does_not_slip_to_the_next_tick() {
     let fx = engine_home("");
     let config = fx.env.cpd_home().join("config.toml");
     let text = fs::read_to_string(&config).unwrap();
-    let tick = format!("tick_seconds = 1\n");
+    let tick = "tick_seconds = 1\n".to_string();
     assert!(text.contains(&tick), "{text}");
     fs::write(&config, text.replace(&tick, "tick_seconds = 5\n")).unwrap();
     fx.engine_base_routes();
@@ -3648,7 +3651,7 @@ fn row_counts(env: &TestEnv) -> Vec<(String, i64)> {
 
 fn applied(env: &TestEnv) -> Vec<String> {
     env.read(|conn| {
-        Ok(conn.prepare("SELECT name FROM schema_migrations ORDER BY seq")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+        conn.prepare("SELECT name FROM schema_migrations ORDER BY seq")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()
     })
 }
 

@@ -4,8 +4,10 @@
 use crate::common;
 use crate::tui_titles;
 
-use common::inbox::{W, World, condition, frame_with, gone, linked_item_row, open_at, pull_requests, rows, seed, show, show_proc, view_fx};
+use common::inbox::{W, World, condition, frame_with, gone, linked_item_row, open_at, pull_requests, rows, seed, show, view_fx};
 use common::fx::Fx;
+#[cfg(target_os = "linux")]
+use common::inbox::show_proc;
 use common::sql;
 use common::tree::engine;
 use cpd_core::inbox::model::{Condition, Kind, Urgency};

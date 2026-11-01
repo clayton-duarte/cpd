@@ -61,7 +61,7 @@ fn an_open_job_that_finds_the_pull_request_already_merged_queues_done() {
         .on("gh", |c| c.args[..2] == ["pr", "list"], Reply::ok(&format!("[{{\"number\":812,\"url\":\"{PR_URL}\",\"state\":\"MERGED\",\"createdAt\":\"2026-10-28T10:00:00Z\"}}]")))
         .on("gh", |c| c.args[..2] == ["api", "graphql"], Reply::ok(&merged));
 
-    live.run_job("open-repo", |live, id| submit(live, id));
+    live.run_job("open-repo", submit);
 
     assert_eq!(live.value::<String>("SELECT status FROM prs WHERE key = 'repo'"), "merged");
     let done: Value = serde_json::from_str(&live.value::<String>("SELECT coalesce(json_group_array(json_array(plan, pr, target, settled_at IS NULL)), '[]') FROM jira_transitions WHERE target = 'done'")).unwrap();

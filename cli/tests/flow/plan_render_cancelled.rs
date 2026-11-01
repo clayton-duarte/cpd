@@ -159,7 +159,7 @@ fn summary_counts_leave_cancelled_out() {
     job(&fx.env, "api", "gone", "queued", &[]);
     fx.cpd(&["job", "cancel", "gone", "--reason", "not needed any more", "--plan", "pay"]).ok();
     let before = fx.cpd(&["plan", "show", "--plan", "pay"]).ok();
-    let (out, text) = render(&fx);
+    let (out, _text) = render(&fx);
     // the PRs counted are those that are not cancelled; the fingerprint is the one of the Plan as before
     assert_eq!(out["prs"], 1, "{out}");
     assert_eq!(out["draft_jobs"], 0, "{out}");

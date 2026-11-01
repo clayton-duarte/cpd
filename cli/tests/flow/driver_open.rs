@@ -299,13 +299,6 @@ impl Live {
         (self.attempt(&id), did.expect("the driver napped: the Worker ran"))
     }
 
-    /// The Worker's pi ends without submitting again: its window is gone from the fake server.
-    pub(super) fn end_the_worker(&self) {
-        for pane in self.fx.panes().iter().filter(|p| p.window_name != "main") {
-            assert!(self.fx.tmux(&["kill-window", "-t", &pane.window]).status.success());
-        }
-    }
-
     /// `job dispatch <key>`: the driver's `Launch` is recorded, nothing is started.
     pub(super) fn dispatch(&self, key: &str) -> common::Run {
         self.fx.cpd(&["job", "dispatch", key, "--plan", PLAN])
@@ -315,8 +308,8 @@ impl Live {
 /// What `attempt submit` answered the Worker.
 pub(super) fn submit(live: &Live, id: &str) -> Value {
     // The environment of the Worker's window: its Plan and its Attempt.
-    let r = live.fx.cpd_with(&live.worktree(id), &["attempt", "submit", id], &[("CPD_PLAN", PLAN), ("CPD_ATTEMPT", id)]).json();
-    r
+    
+    live.fx.cpd_with(&live.worktree(id), &["attempt", "submit", id], &[("CPD_PLAN", PLAN), ("CPD_ATTEMPT", id)]).json()
 }
 
 /// A Worker that did nothing: it submits the Lead Branch as it is.
@@ -725,7 +718,7 @@ fn an_open_job_ignores_a_merged_pull_request_created_before_the_pr_started() {
     live.runner()
         .on("gh", |c| c.args[..2] == ["pr", "create"], Reply::ok(PR_URL))
         .on("gh", |c| c.args[..2] == ["api", "graphql"], Reply::ok(&common::pay_lookup()))
-        .on("gh", |c| c.args[..2] == ["pr", "list"], Reply::ok(&format!("[{{\"number\":265,\"url\":\"https://github.com/acme/pay/pull/265\",\"state\":\"MERGED\",\"createdAt\":\"2026-10-22T08:00:00Z\"}}]")));
+        .on("gh", |c| c.args[..2] == ["pr", "list"], Reply::ok("[{\"number\":265,\"url\":\"https://github.com/acme/pay/pull/265\",\"state\":\"MERGED\",\"createdAt\":\"2026-10-22T08:00:00Z\"}]"));
     let tip = live.lead_sha();
 
     let (attempt, submitted) = live.run_job("open-repo", submit_only);
@@ -1069,12 +1062,11 @@ fn a_stall_is_judged_again_once_the_escalation_closes() {
                 assert!(live.fx.fakes.spawn.alive(tool), "the tool call was killed at poll {nap}");
                 assert_eq!(live.fx.fakes.spawn.signals(), [], "signalled at poll {nap}");
             }
-            9..=14 => {
-                if nap == 14 {
+            9..=14
+                if nap == 14 => {
                     assert!(!live.fx.fakes.spawn.alive(tool), "no stall judged within 6 polls after the close");
                     live.fixture(STOP);
                 }
-            }
             _ => {}
         }
     });

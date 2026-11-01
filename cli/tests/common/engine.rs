@@ -351,7 +351,7 @@ impl Fx {
     pub fn jobs_of_kind(&self, kind: &str) -> Vec<(String, String)> {
         self.env.read(|conn| {
             let mut stmt = conn.prepare("SELECT key, status FROM jobs WHERE kind = ?1 ORDER BY key")?;
-            Ok(stmt.query_map([kind], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
+            stmt.query_map([kind], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()
         })
     }
 }

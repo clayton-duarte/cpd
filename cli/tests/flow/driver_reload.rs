@@ -134,7 +134,7 @@ impl Reload {
 
     /// What the exec recorded is the same argv, of the new file, and the driver was alive and held its lock across it.
     pub(super) fn assert_exec_of_the_driver(&self, exec: &Exec, pid: Pid) {
-        assert_eq!(self.execs(), [exec.launch.clone()]);
+        assert_eq!(self.execs(), std::slice::from_ref(&exec.launch));
         assert_eq!(exec.launch.program, self.installed.display().to_string());
         assert_eq!(exec.launch.args, ["attempt", "run", ATTEMPT, "--plan", PLAN], "the same argv");
         assert_eq!(exec.fd3_cloexec, Some(false), "fd 3 is not close-on-exec at the exec: the lock stays held with no gap");

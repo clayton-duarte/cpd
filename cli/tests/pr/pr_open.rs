@@ -35,8 +35,6 @@ struct Fx {
     /// Holds the process's environment (`PATH` with the env's fake `gh`) for the test: `merge` runs in this process.
     fx: Lock,
     home: CpdHome,
-    repo: PathBuf,
-    lead: PathBuf,
     work: PathBuf,
 }
 
@@ -76,7 +74,7 @@ fn fixture(policy: &str) -> Fx {
         made.path.display(),
         made.base_sha
     ));
-    Fx { fx, home, repo, lead, work: made.path }
+    Fx { fx, home, work: made.path }
 }
 
 impl Fx {

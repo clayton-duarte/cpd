@@ -101,6 +101,7 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
     )
 }
 
+#[allow(clippy::too_many_arguments)] // a row of the sessions table: one column per argument, no struct to refactor into
 fn session_row(id: &str, role: &str, context: &str, plan: &str, attempt: Option<&str>, state: &str, label: Option<&str>, created: &str) -> String {
     let plan = if plan.is_empty() { "NULL".to_owned() } else { format!("'{plan}'") };
     let attempt = attempt.map_or("NULL".to_owned(), |a| format!("'{a}'"));
@@ -283,7 +284,7 @@ fn populate(store: &mut Store) {
     s += &event("watch-started", None, None, None, &format!(r#"{{"pid":{}}}"#, std::process::id()));
     sql(store, &s);
 
-    let fingerprint = store.read(|c| Ok(plan_fingerprint(c, &plan("ship"))?)).unwrap();
+    let fingerprint = store.read(|c| plan_fingerprint(c, &plan("ship"))).unwrap();
     sql(
         store,
         &format!(
@@ -553,7 +554,7 @@ fn a_working_lead_of_a_plan_with_a_failed_job_shows_the_red_loader() {
     // (plan, Lead state, Jobs: (key, status))
     let failed = [("f", "failed")];
     let rest = [("m", "merged"), ("r", "running"), ("q", "queued"), ("c", "cancelled"), ("d", "draft")];
-    let plans: [(&str, &str, &[(&str, &str)]); 10] = [
+    let plans: [PlanSpec; 10] = [
         ("fx", "working", &failed),
         ("fxr", "working", &failed),
         ("fxw", "working", &failed),
@@ -1324,13 +1325,19 @@ fn statements_run(store: &mut Store, f: impl FnOnce(&mut Store)) -> Vec<String> 
     run
 }
 
+/// `(Plan, Lead state, Jobs: (key, status))`.
+type PlanSpec<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+/// A read of the store, run on the small fixture (`false`) or the large store (`true`).
+type ReadFn<'a> = &'a dyn Fn(&mut Store, bool);
+
 /// §17: each read runs a fixed number of queries whatever the size of the Ledger. Counts the statements of each
 /// read on the small fixture and on the large store (a wall-clock bound measures the machine's load as much as the work).
 #[test]
 fn every_read_runs_the_same_statements_on_a_large_store_as_on_a_small_one() {
     let (_fx, mut store) = fixture();
     // The Plans and the Attempt of the small fixture, then of the large store: same reads, ten times the rows.
-    let reads: [(&str, &dyn Fn(&mut Store, bool)); 4] = [
+    let reads: [(&str, ReadFn); 4] = [
         ("tree", &|s, _| drop(read::tree(s).unwrap())),
         ("flow", &|s, large| drop(read::flow(s, &plan(if large { "p3x3" } else { "ship" })).unwrap())),
         ("chat_slot", &|s, _| drop(read::chat_slot(s).unwrap())),

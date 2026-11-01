@@ -1128,9 +1128,9 @@ fn a_draft_open_job_does_not_void_a_pending_review_and_an_approval_queues_it_wit
     let decided = inproc::events(&fx, "plan-review").last().unwrap().clone();
     assert_eq!(decided["data"]["jobs"], json!(["open-pay-2"]));
     assert_eq!(job_status(&fx.env, "open-pay-2"), "queued");
-    assert_eq!(fx.env.query::<bool>("SELECT fingerprint IS NOT NULL FROM jobs WHERE plan = 'pay' AND key = 'open-pay-2'"), true);
+    assert!(fx.env.query::<bool>("SELECT fingerprint IS NOT NULL FROM jobs WHERE plan = 'pay' AND key = 'open-pay-2'"));
     assert_eq!(job_status(&fx.env, "c"), "draft", "a waiting draft is not queued by an approval");
-    assert_eq!(fx.env.query::<bool>("SELECT fingerprint IS NULL FROM jobs WHERE plan = 'pay' AND key = 'c'"), true, "a waiting draft keeps no fingerprint");
+    assert!(fx.env.query::<bool>("SELECT fingerprint IS NULL FROM jobs WHERE plan = 'pay' AND key = 'c'"), "a waiting draft keeps no fingerprint");
 }
 
 /// B1 (hs-d573 O4): `draft_jobs` and `no_draft_jobs` do not count a draft `open` Job, and the review document shows it as context.

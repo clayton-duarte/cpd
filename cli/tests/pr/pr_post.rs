@@ -65,12 +65,10 @@ fn post_with_node(setup: Setup, node: Reply) -> Pay {
     let owner = setup.post.map(|body| format!("[pr.post]\nenabled = true\n{body}")).unwrap_or_default();
     env.repo_policy("acme", "owner", &owner);
     env.repo_policy("acme", "pay", "");
-    let sql = format!(
-        "UPDATE contexts SET owner = 'acme' WHERE id = 'ctx';
+    let sql = "UPDATE contexts SET owner = 'acme' WHERE id = 'ctx';
          UPDATE prs SET name = 'pay' WHERE plan = 'pay' AND key = 'repo';
          UPDATE pull_requests SET mergeable = 'mergeable', review_decision = 'none', checks = 'passed', authored = 1, feedback = '[]'
-           WHERE number = 812;"
-    );
+           WHERE number = 812;".to_string();
     pay.store().write("fixture", |tx| tx.execute_batch(&sql).map_err(Into::into)).unwrap();
     pay.fx.fake_node(node);
     pay

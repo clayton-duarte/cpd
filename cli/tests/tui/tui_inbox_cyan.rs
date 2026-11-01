@@ -1,7 +1,6 @@
 //! The Inbox's notice tier is cyan; blue is only for focus (commands.md §13.2 "Inbox section", §17 legend; contract §6.1.1;
 //! pro-d16). The legend is drawn with ratatui's `TestBackend`.
 
-use crate::common;
 
 use cpd_tui::palette::{self, Meaning};
 use cpd_tui::widgets::legend;

@@ -2,7 +2,6 @@
 //! after the PR's base or repo changed it names the live value, never the one written at insert. The stored Spec (the `jobs`
 //! row) keeps the text written at insert: nothing is written.
 
-use crate::common;
 
 use std::fs;
 

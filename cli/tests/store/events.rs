@@ -207,10 +207,13 @@ fn in_bare(fx: &Fx, bare: &TestEnv, run: impl FnOnce() -> Run) -> Run {
 
 // ------------------------------------------------------------------ append
 
+/// One row of [`SPEC`].
+type SpecRow = (&'static str, &'static str, &'static str, &'static [&'static str], &'static [&'static str]);
+
 /// §5.2, written out independently of `Kind::spec`:
 /// `(kind, columns always set, columns that may be set, data fields, optional data fields)`;
 /// columns are `c`ontext, `p`lan, `j`ob, `a`ttempt, `s`ession.
-const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
+const SPEC: &[SpecRow] = &[
     ("context-created", "c", "", &["title", "jira", "created_on"], &[]),
     ("context-record", "c", "", &["record", "kind", "machine", "seq"], &[]),
     ("context-grounded", "cs", "", &["seq", "forked_from"], &[]),

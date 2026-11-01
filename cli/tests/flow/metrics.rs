@@ -11,11 +11,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::common::fx::Fx;
-use crate::common::Run;
 
 use cpd_core::error::ErrorCode;
 use cpd_core::metrics::{self, Metrics};
-use serde_json::{Value, json};
+use serde_json::json;
 
 /// A Worker's session: a model, a thinking level, an entry of a kind metrics skip, a model
 /// change, two assistant messages.
@@ -150,16 +149,6 @@ fn every_complete_line_must_be_a_session_entry() {
 
 // ---------- cpd metrics (commands.md §14.7, hs-d798) ----------
 
-/// The metrics blob of an `attempt-ended` Event and its `attempts.metrics` column.
-fn attempt_metrics(cost_usd: f64, duration_s: f64, model: Option<&str>) -> String {
-    let model = model.map_or("null".to_owned(), |m| format!("\"{m}\""));
-    format!(
-        r#"{{"turns": 3, "tokens_in": 900, "tokens_out": 400, "cache_read": 2000, "cache_write": 500,
-             "cost_usd": {cost_usd}, "duration_s": {duration_s}, "model": {model}, "stop_reason": "stop",
-             "thinking_level": "high"}}"#
-    )
-}
-
 /// A fixture store: Context `ctx`, Plan `pl`, PR `repo` merged, Job `api` merged, Attempt
 /// `api-a1` ended `merged` with its `attempts.metrics` blob and its `attempt-ended` Event.
 fn fixture_metrics() -> Fx {
@@ -186,32 +175,6 @@ fn fixture_metrics() -> Fx {
            VALUES ('pl', 'api-a1', 'api', 1, 'S2', 'ladder', 'ended', 'merged', 'merged', 'cpd/pl--api-a1', '/repos/pl--api-a1',
                    '0123456789abcdef0123456789abcdef01234567', '0123456789abcdef0123456789abcdef01234567', 't', 't',
                    '{\"turns\": 3, \"tokens_in\": 900, \"tokens_out\": 400, \"cache_read\": 2000, \"cache_write\": 500, \"cost_usd\": 1.234, \"duration_s\": 62.5, \"model\": \"claude-sonnet-x\", \"stop_reason\": \"stop\", \"thinking_level\": \"high\"}');
-        ",
-    );
-    fx
-}
-
-/// A fixture store: Context `ctx`, Plan `pl`, PR `repo`, Job `api` `failed` with Attempt
-/// `api-a1` ended `failed` with a `gate_failed` cause.
-fn fixture_metrics_failed() -> Fx {
-    let fx = Fx::with_ports();
-    let env = &fx.env;
-    env.write_config("version = 1\nmachine = \"m1\"\n");
-    env.sql(
-        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
-         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-           VALUES ('lead1', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'idle', 't', 't');
-         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
-           VALUES ('pl', 'ctx', 'Pl', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at)
-           VALUES ('pl', 'repo', '/repos/pl', 'pl', 'main', 'dispatch', 'pl/repo', '/repos/pl.pl', cpd_txn(), 't');
-         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                           status, appended, fingerprint, created_txn, created_at, kind)
-           VALUES ('pl', 'repo', 'api', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'failed', 0, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', cpd_txn(), 't', 'work');
-         INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree,
-                               base_sha, started_at, ended_at)
-           VALUES ('pl', 'api-a1', 'api', 1, 'S2', 'ladder', 'ended', 'failed', 'gate_failed', 'cpd/pl--api-a1', '/repos/pl--api-a1',
-                   '0123456789abcdef0123456789abcdef01234567', 't', 't');
         ",
     );
     fx
@@ -274,7 +237,7 @@ fn parse_prometheus(body: &str) -> Prometheus {
         if let Some(rest) = line.strip_prefix("# HELP ") {
             let (name, text) = rest.split_once(' ').expect("a HELP line needs a name and text");
             assert!(prom.help.insert(name.to_owned(), text.to_owned()).is_none(), "duplicate HELP for {name}");
-            assert!(prom.series.get(name).map_or(true, BTreeMap::is_empty), "HELP for {name} comes after its series");
+            assert!(prom.series.get(name).is_none_or(BTreeMap::is_empty), "HELP for {name} comes after its series");
             continue;
         }
         if let Some(rest) = line.strip_prefix("# TYPE ") {

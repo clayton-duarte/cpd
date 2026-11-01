@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::tui_plan_cancelled::{cells_of, draw, draw_sized, plain, rows};
+use crate::tui_plan_cancelled::{cells_of, draw, draw_sized, rows};
 use common::fx::{Fx, TmuxProbe};
 use common::screen::{NoInput, Screen, SharedBackend, Steps};
 use common::TestEnv;
@@ -36,9 +36,6 @@ use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, MouseEventKind};
 use ratatui::style::Color;
 use serde_json::json;
-
-/// The expected chart of the store `cpd_jobs()` makes: the fixture of the cockpit of branch `cpd/cpd-ui`
-/// (`tui/tests/fixtures/cpd-chart.txt`), kept beside the view.
 
 /// The 27 Jobs of the cockpit's `cpd-jobs.json` fixture (cpd 1's `workflow show` of cpd-rust's `cpd` Workflow), as
 /// cpd 2 stores them: `(key, status, tier, needs, Attempts)`. cpd 1's `closed` is `merged`, and its `in_review` is a
@@ -174,11 +171,6 @@ fn is_block(cell: &common::screen::Cell) -> bool {
 /// Whether a cell of the screen is the selection's block.
 fn any_selected(screen: &Screen) -> bool {
     (0..screen.height()).any(|y| (0..screen.width()).any(|x| is_block(screen.cell(x, y))))
-}
-
-/// Whether the row that has `text` has a cell of the selection's block.
-fn row_selected(screen: &Screen, text: &str) -> bool {
-    screen.find(text).is_some_and(|(_, y)| (0..screen.width()).any(|x| is_block(screen.cell(x, y))))
 }
 
 // ---------- rows ----------

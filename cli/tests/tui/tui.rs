@@ -29,8 +29,6 @@ fn binding(fx: &Fx, table: &str, key: &str) -> String {
     out(fx, &["list-keys", "-T", table]).lines().find(|l| l.starts_with(&prefix)).unwrap_or_else(|| panic!("no {key} in {table}")).to_owned()
 }
 
-/// After `cpd tui`: `@cpd_machine` is the test config's machine and the title
-
 // ---------------------------------------------------------------------------------------------------------------------
 // The cockpit in the test process (`common::cockpit`), on the fake tmux server of an `Fx`. tmux's geometry and rendering
 // are tmux's, not ours: what a test pins is what the cockpit asked of tmux (the argv of its layout commands, in order)

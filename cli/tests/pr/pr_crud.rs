@@ -6,12 +6,12 @@ use crate::common;
 
 use std::fs;
 use std::ops::Deref;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use common::fx::Fx;
 use common::{Run, TestEnv};
 use cpd_core::home::CpdHome;
-use cpd_core::host::runner::{Call, Reply};
+use cpd_core::host::runner::Reply;
 use cpd_core::ids::PlanId;
 use cpd_core::plan::plan_fingerprint;
 use cpd_core::store::Store;
@@ -102,7 +102,7 @@ impl Crud {
     }
 
     /// `pr add <key> --repo <repo> --title "Change <key>" <extra…>`.
-    fn add(&self, key: &str, repo: &PathBuf, extra: &[&str]) -> Run {
+    fn add(&self, key: &str, repo: &Path, extra: &[&str]) -> Run {
         let title = format!("Change {key}");
         // `--shape config`: one stub draft, `<key>-config`, beside the Jobs these tests add by hand.
         let mut args = vec!["add", key, "--repo", repo.to_str().unwrap(), "--title", &title, "--shape", "config"];
@@ -156,7 +156,7 @@ impl Crud {
     }
 
     /// A `merged` PR written straight into the database, with its pull request `number`.
-    fn merged_pr(&self, plan: &str, key: &str, repo: &PathBuf, number: i64) {
+    fn merged_pr(&self, plan: &str, key: &str, repo: &Path, number: i64) {
         self.env.sql(&format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
                VALUES ('acme/pay', {number}, 'u{number}', 'T', 0, 'merged', 'none', 'none', 't', 't', 't');
@@ -687,9 +687,6 @@ fn add_to_an_archived_plan_is_archived() {
 /// has a bare `origin` with that branch, and a second worktree has it checked out.
 struct Legacy {
     fx: Crud,
-    origin: PathBuf,
-    lead: PathBuf,
-    sha: String,
 }
 
 fn legacy(status: &str) -> Legacy {
@@ -705,7 +702,6 @@ fn legacy(status: &str) -> Legacy {
     fx.git(&lead, &["config", "user.email", "test@cpd.invalid"]);
     fx.commit_file(&lead, "api.txt", "api\n", "api");
     fx.git(&lead, &["push", "-q", "-u", "origin", "cpd/pay-1"]);
-    let sha = fx.git(&lead, &["rev-parse", "HEAD"]);
     fx.env.sql(&format!(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
            VALUES ('acme/pay', 1, 'u', 'T', 0, '{status}', 'none', 'none', 't', iif('{status}' = 'merged', 't', NULL), 't');
@@ -716,7 +712,7 @@ fn legacy(status: &str) -> Legacy {
         fx.pay.display(),
         lead.display()
     ));
-    Legacy { fx, origin, lead, sha }
+    Legacy { fx }
 }
 
 // ---------- pr edit ----------
@@ -1101,12 +1097,12 @@ fn cancel_is_refused_while_a_job_or_a_pr_holds_the_pr() {
 impl Crud {
     /// A PR row as the lock and `pr open` leave it: `status` `dispatch` (a Lead worktree, no pull request),
     /// `open` or `merged` (with a pull request).
-    fn locked_pr(&self, key: &str, repo: &PathBuf, status: &str) {
+    fn locked_pr(&self, key: &str, repo: &Path, status: &str) {
         self.locked_shaped_pr(key, repo, status, "free");
     }
 
     /// [`Fx::locked_pr`] with the PR's `shape` (written once, it is never changed).
-    fn locked_shaped_pr(&self, key: &str, repo: &PathBuf, status: &str, shape: &str) {
+    fn locked_shaped_pr(&self, key: &str, repo: &Path, status: &str, shape: &str) {
         let (number, url, opened, pull, merged) = match status {
             "dispatch" => ("NULL", "NULL", "NULL", "NULL", "NULL"),
             _ => ("7", "'u'", "'t'", "(SELECT id FROM pull_requests WHERE number = 7)", if status == "merged" { "'t'" } else { "NULL" }),

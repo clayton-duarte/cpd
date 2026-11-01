@@ -59,10 +59,13 @@ impl Handler for FakePi {
     }
 }
 
+/// One recorded go-signal: `(pane, id, tmux_pane of the Session's row)`.
+type GoSignal = (String, String, Option<String>);
+
 /// What the store knew of each Session as its pane got the go signal: `set -p -t <pane> @cpd_session <id>` (the signal
 /// the wrapper's `session run` waits for, then its pi reports). Recorded as the call is about to be answered, from the
 /// store's own file on a second read-only connection: `(pane, id, tmux_pane of the Session's row)`.
-pub struct GoSignals(Arc<Mutex<Vec<(String, String, Option<String>)>>>);
+pub struct GoSignals(Arc<Mutex<Vec<GoSignal>>>);
 
 impl GoSignals {
     /// Starts recording on the `tmux` of `fx`'s `FakeRunner`.

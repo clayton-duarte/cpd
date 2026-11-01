@@ -1858,7 +1858,8 @@ fn a_draft_stored_on_a_refused_tier_is_repaired_by_edit_and_other_edits_are_not_
     assert_eq!(job(&fx, &["edit", "b", "--tier", "S3"], "pl").ok()["fields"], json!(["tier"]));
     assert_eq!(job_row(&fx.env, "pl", "b", "tier"), "S3");
     // Second pass: Tiers that were allowed before hs-d554.
-    for stored in ["S4"] {
+    {
+        let stored = "S4";
         fixture(&fx.env, &format!("UPDATE jobs SET tier = '{stored}' WHERE plan = 'pl' AND key = 'b';"));
         assert_eq!(job(&fx, &["edit", "b", "--title", &format!("Renamed {stored}")], "pl").ok()["fields"], json!(["title"]));
         assert_eq!(job_row(&fx.env, "pl", "b", "tier"), stored);

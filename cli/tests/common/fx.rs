@@ -549,6 +549,8 @@ impl Fx {
 
     /// [`Fx::run_launch_with`] for a program that may `exec`: `Err` is the [`Exec`] of a `Spawn::exec` the run reached (after
     /// [`Fx::exec_replaces_the_process`]), which ends the run where `exec(2)` ends a process; the env, directory and fd 2 are put back.
+    // Err is the Exec payload of a caught panic, a small value passed through: the signature is the test API.
+    #[allow(clippy::result_large_err)]
     pub fn run_launch_until_exec(&self, launch: &Launch, hook: impl FnMut(&Fx, usize)) -> Result<Run, Exec> {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_launch_with(launch, hook))) {
             Ok(run) => Ok(run),

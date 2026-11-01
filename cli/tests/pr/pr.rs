@@ -98,6 +98,9 @@ fn seed_pay(mut store: Store, phase: &str, job: &str, branch: &str, repo: &Path,
         .unwrap();
 }
 
+/// `(phase, pr_number, pr_url, pr_opened_at, pull_request, done_at)` of the Plan.
+type PlanRow = (String, Option<i64>, Option<String>, Option<String>, Option<i64>, Option<String>);
+
 /// What [`Poll`] reads of the database: the Plan `pay` and its PR.
 pub(super) trait Rows {
     fn home(&self) -> &CpdHome;
@@ -106,8 +109,7 @@ pub(super) trait Rows {
         Store::open(self.home(), 5000).unwrap()
     }
 
-    /// `(phase, pr_number, pr_url, pr_opened_at, pull_request, done_at)` of the Plan.
-    fn plan_row(&self) -> (String, Option<i64>, Option<String>, Option<String>, Option<i64>, Option<String>) {
+    fn plan_row(&self) -> PlanRow {
         self.store()
             .read(|c| {
                 Ok(c.query_row(
@@ -2266,7 +2268,7 @@ impl Poll {
 fn a_flag_a_search_misses_clears_only_when_the_direct_read_says_so() {
     let fx = poll_fx("dispatch");
     let a = node("acme/pay", 901, "OPEN", None, None);
-    fx.search_both(&[a.clone()], &[a.clone()]);
+    fx.search_both(std::slice::from_ref(&a), std::slice::from_ref(&a));
     fx.poll_all();
     assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, true)]);
     let id = fx.pull_request_row(901).expect("stored by the first poll").0;
@@ -2344,7 +2346,7 @@ fn the_direct_read_is_one_batched_call_and_only_when_a_stored_open_pr_is_missing
     let (p812, p901, p902, p903) =
         (pay("OPEN", None, None), node("acme/pay", 901, "OPEN", None, None), node("acme/web", 902, "OPEN", None, None), node("acme/shop", 903, "OPEN", None, None));
     // 812 is owned; 901 and 902 are authored; 903 is review-requested only.
-    fx.search_both(&[p812.clone(), p901.clone(), p902.clone()], &[p903.clone()]);
+    fx.search_both(&[p812.clone(), p901.clone(), p902.clone()], std::slice::from_ref(&p903));
     fx.poll_all();
     assert_eq!(
         fx.memberships(),
@@ -2357,7 +2359,7 @@ fn the_direct_read_is_one_batched_call_and_only_when_a_stored_open_pr_is_missing
     assert!(fx.lookup_texts().is_empty());
 
     // The searches list 812 only: 901, 902 (a) and 903 (c) are read, in id order, in one call; 812 is not.
-    fx.search_both(&[p812.clone()], &[]);
+    fx.search_both(std::slice::from_ref(&p812), &[]);
     fx.lookup(&[Some(viewer(p901.clone(), true, false)), Some(viewer(p902.clone(), true, false)), Some(viewer(p903.clone(), false, true))]);
     fx.poll_all();
     let calls = fx.gh_calls();
@@ -2661,8 +2663,11 @@ fn poll_of_the_last_merged_pull_request_supersedes_the_pending_reviews() {
 }
 
 
+/// The Dispatch card: label, then (number, state, (checks, decision, title)) when a PR is open.
+type DispatchCard = (String, Option<(i64, PrState, Option<(String, ReviewDecision, Checks)>)>);
+
 /// The Dispatch column's read of the Plan: label, number, state, checks, decision, title.
-fn dispatch_card(fx: &Poll) -> (String, Option<(i64, PrState, Option<(String, ReviewDecision, Checks)>)>) {
+fn dispatch_card(fx: &Poll) -> DispatchCard {
     let widgets = read::widgets(&mut fx.store(), 4, 10).unwrap();
     assert_eq!(widgets.plans.len(), 1);
     let card = widgets.plans.into_iter().next().unwrap();
@@ -2913,13 +2918,13 @@ fn a_pull_request_github_cannot_find_loses_its_flags_and_is_not_read_again() {
 fn a_pull_request_in_both_searches_is_authored_and_review_requested_and_each_flag_clears_only_when_a_read_says_so() {
     let fx = poll_fx("dispatch");
     let mine = node("acme/pay", 901, "OPEN", None, None);
-    fx.search_both(&[mine.clone()], &[mine.clone()]);
+    fx.search_both(std::slice::from_ref(&mine), std::slice::from_ref(&mine));
     let out = fx.poll_all();
     assert_eq!((out["polled"].clone(), out["changed"].as_array().unwrap().len()), (json!(1), 1));
     assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, true)]);
 
     // Left the author search only: the read says the viewer did not write it, so `authored` clears; the row is reported as changed.
-    fx.search_both(&[], &[mine.clone()]);
+    fx.search_both(&[], std::slice::from_ref(&mine));
     fx.lookup(&[Some(viewer(mine.clone(), false, true))]);
     let out = fx.poll_all();
     assert_eq!(out["changed"].as_array().unwrap().len(), 1);
@@ -2927,7 +2932,7 @@ fn a_pull_request_in_both_searches_is_authored_and_review_requested_and_each_fla
     assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, false, true)]);
 
     // Back in the author search only: the read shows no request, so `review_requested` clears.
-    fx.search_both(&[mine.clone()], &[]);
+    fx.search_both(std::slice::from_ref(&mine), &[]);
     fx.lookup(&[Some(viewer(mine.clone(), true, false))]);
     fx.poll_all();
     assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false)]);
@@ -2961,7 +2966,7 @@ fn a_pull_request_one_search_misses_keeps_its_row_and_the_open_list() {
     };
 
     // Poll 2: one search misses 901; the direct read says it is open, and the viewer's.
-    fx.search(&[b.clone()]);
+    fx.search(std::slice::from_ref(&b));
     fx.lookup(&[Some(viewer(a.clone(), true, false))]);
     let out = fx.poll_all();
     assert_eq!(out["changed"], json!([]));
@@ -3060,7 +3065,7 @@ fn a_review_request_is_stored_as_not_authored_and_kept_until_a_read_says_it_is_g
 fn a_search_that_lists_fewer_nodes_than_its_issue_count_deletes_and_clears_nothing() {
     let fx = poll_fx("dispatch");
     let a = node("acme/pay", 901, "OPEN", None, None);
-    fx.search(&[a.clone()]);
+    fx.search(std::slice::from_ref(&a));
     fx.poll_all();
     let id = fx.pull_request_row(901).expect("stored by the first poll").0;
 

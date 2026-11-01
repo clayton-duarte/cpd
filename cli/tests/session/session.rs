@@ -426,10 +426,13 @@ fn tmux_refusing_the_session_mark(fx: &Fx) {
     );
 }
 
+/// One signal of [`GoSignals`]: `(pane, id, tmux_pane)`.
+type GoSignal = (String, String, Option<String>);
+
 /// What the store knew of each Session as its pane got the go signal: `set -p -t <pane> @cpd_session <id>` (the signal
 /// the wrapper's `session run` waits for, then its pi reports). Recorded as the call is about to be answered, from the
 /// store's own file on a second read-only connection: `(pane, id, tmux_pane of the Session's row)`.
-struct GoSignals(Arc<Mutex<Vec<(String, String, Option<String>)>>>);
+struct GoSignals(Arc<Mutex<Vec<GoSignal>>>);
 
 impl GoSignals {
     fn record(fx: &Fx) -> GoSignals {
@@ -1797,7 +1800,7 @@ fn every_session_command_accepts_the_short_forms() {
     assert_eq!(fx.cpd(&["session", "close", "other"]).ok(), json!({"ok": true, "session": LEAD2, "pane": null, "already": true}));
     let out = fx.cpd(&["session", "archive", "pay.a1b2c3d4-0000-4000-8000-000000000001"]).ok();
     assert_eq!(out["archived"], json!([{"kind": "session", "id": UUID_A}]));
-    assert_eq!(archived_at(&fx, UUID_A).is_string(), true);
+    assert!(archived_at(&fx, UUID_A).is_string());
     // An archived Session can be named by a bare prefix to unarchive it.
     let out = fx.cpd(&["session", "unarchive", "pay.a1b2c3d4-0000-4000-8000-000000000001"]).ok();
     assert_eq!(out["archived"], json!([{"kind": "session", "id": UUID_A}]));

@@ -45,7 +45,7 @@ impl TestEnv {
                 .query_map([], |r| {
                     let session: Option<String> = r.get(0)?;
                     let data: String = r.get(1)?;
-                    Ok(json!({"session": session, "data": serde_json::from_str::<Value>(&data).unwrap_or_else(|_| Value::Null)}))
+                    Ok(json!({"session": session, "data": serde_json::from_str::<Value>(&data).unwrap_or(Value::Null)}))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)

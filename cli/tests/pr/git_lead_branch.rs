@@ -33,7 +33,7 @@ fn lead_worktree_start_refuses_when_the_plan_branch_exists() {
     let repo = fx.git_repo("pay");
     fx.git(&repo, &["branch", "pay-4521", "main"]);
 
-    let failure = start(&fx, &repo, "pay-4521/api").err().expect("a branch `pay-4521` makes `pay-4521/api` impossible");
+    let failure = start(&fx, &repo, "pay-4521/api").expect_err("a branch `pay-4521` makes `pay-4521/api` impossible");
 
     assert_eq!(failure.error.code(), ErrorCode::BranchExists);
     assert_eq!(failure.error.details()["branch"], "pay-4521");
@@ -59,7 +59,7 @@ fn guard_a_cpd_plan_slash_key_start_is_refused_when_cpd_plan_exists() {
     let repo = fx.git_repo("pay");
     fx.git(&repo, &["branch", "cpd/pay-4521", "main"]);
 
-    let failure = start(&fx, &repo, "cpd/pay-4521/api").err().expect("refused");
+    let failure = start(&fx, &repo, "cpd/pay-4521/api").expect_err("refused");
 
     assert_eq!(failure.error.code(), ErrorCode::BranchExists);
     assert_eq!(failure.error.details()["branch"], "cpd/pay-4521");
@@ -70,7 +70,7 @@ fn guard_a_legacy_start_has_no_parent_check() {
     let fx = Fx::with_ports();
     let repo = fx.git_repo("pay");
 
-    let made = start(&fx, &repo, "cpd/pay-4521").ok().expect("started");
+    let made = start(&fx, &repo, "cpd/pay-4521").expect("started");
 
     assert_eq!(made.branch, "cpd/pay-4521");
 }

@@ -517,7 +517,7 @@ fn a_push_and_an_attempt_start_race_and_exactly_one_wins() {
 fn push_gates_the_commit_and_leaves_the_lead_worktrees_local_changes_alone() {
     let fx = fx("open");
     fx.hooks("pre-merge = \"ls\"\n");
-    fx.sh(|ran| Reply::ok(&head_and_files(ran).split_once('\n').unwrap().1.to_owned()));
+    fx.sh(|ran| Reply::ok(head_and_files(ran).split_once('\n').unwrap().1));
     let tip = fx.commit("more.txt");
     fs::write(fx.lead.join("scratch.txt"), "x").unwrap();
 

@@ -223,8 +223,8 @@ fn server_tmpdir(vars: &[(&str, &str)]) -> Option<String> {
     run(&path_dir, &vars);
     let env = read_or_empty(&PathBuf::from(format!("{}.env", log.display())));
     assert!(!env.is_empty(), "the fake sccache was never run: {}", read_or_empty(&log));
-    let found = env.lines().find_map(|l| l.strip_prefix("TMPDIR=")).map(|v| v.replace(tmp.path().to_str().unwrap(), "<dir>"));
-    found
+    
+    env.lines().find_map(|l| l.strip_prefix("TMPDIR=")).map(|v| v.replace(tmp.path().to_str().unwrap(), "<dir>"))
 }
 
 #[test]

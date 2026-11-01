@@ -308,11 +308,10 @@ fn every_member_resolves_the_features_of_the_workspace_build() {
         for (member, (dir, _)) in packages() {
             let manifest = read_toml(&dir.join("Cargo.toml"));
             for (kind, table) in dependency_tables(&manifest) {
-                if let Some(spec) = table.get(unifier) {
-                    if spec.get("workspace").and_then(toml::Value::as_bool) != Some(true) {
+                if let Some(spec) = table.get(unifier)
+                    && spec.get("workspace").and_then(toml::Value::as_bool) != Some(true) {
                         problems.push(format!("{member}: [{kind}] {unifier} is not `workspace = true`"));
                     }
-                }
             }
         }
     }
