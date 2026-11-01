@@ -901,3 +901,5 @@ mod jira_transitions_tests;
 mod explore_kinds_tests;
 #[cfg(test)]
 mod working_pr_tests;
+#[cfg(test)]
+mod workflow_rename_tests;
