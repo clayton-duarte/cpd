@@ -187,6 +187,12 @@ impl NewEvent {
         make(Kind::JobCancelled, text, json!({"reason": reason}))
     }
 
+    /// `job-blocked` (§5.2, hs-d798): E3 skipped a Ready Job for want of a pool slot, one Event per
+    /// waiting episode; `waiting` is the number of Ready Jobs skipped that tick.
+    pub fn job_blocked(text: impl Into<String>, waiting: u64) -> NewEvent {
+        make(Kind::JobBlocked, text, json!({"waiting": waiting}))
+    }
+
     pub fn attempt_started(text: impl Into<String>, number: impl Serialize, tier: &str, origin: &str) -> NewEvent {
         make(Kind::AttemptStarted, text, json!({"number": number, "tier": tier, "origin": origin}))
     }
@@ -219,6 +225,17 @@ impl NewEvent {
 
     pub fn attempt_nudge(text: impl Into<String>, prompt: &str, turns: u64) -> NewEvent {
         make(Kind::AttemptNudge, text, json!({"prompt": prompt, "turns": turns}))
+    }
+
+    /// `attempt-ended` (§5.2, hs-d798): the end of a `pi` or `durable` Attempt, appended in the same
+    /// transaction that writes `attempts.metrics`. `data` is the metrics blob: the ten keys copied
+    /// from it; when there are no metrics, all ten keys are present with null.
+    pub fn attempt_ended(text: impl Into<String>, metrics: Option<&Value>) -> NewEvent {
+        let data = metrics.cloned().unwrap_or_else(|| json!({
+            "turns": null, "tokens_in": null, "tokens_out": null, "cache_read": null, "cache_write": null,
+            "cost_usd": null, "duration_s": null, "model": null, "stop_reason": null, "thinking_level": null,
+        }));
+        make(Kind::AttemptEnded, text, data)
     }
 
     pub fn all_merged(text: impl Into<String>, pr: impl Serialize, merged: impl Serialize, cancelled: impl Serialize) -> NewEvent {
@@ -551,6 +568,7 @@ mod tests {
             Kind::JobRetried => vec![NewEvent::job_retried(T, s)],
             Kind::JobCancelRequested => vec![NewEvent::job_cancel_requested(T, s)],
             Kind::JobCancelled => vec![NewEvent::job_cancelled(T, s)],
+            Kind::JobBlocked => vec![NewEvent::job_blocked(T, 1)],
             Kind::AttemptStarted => vec![NewEvent::attempt_started(T, n, s, s)],
             Kind::AttemptStatus => vec![
                 NewEvent::attempt_status(T, s, s),
@@ -560,6 +578,10 @@ mod tests {
             ],
             Kind::AttemptRetry => vec![NewEvent::attempt_retry(T, s, s, s, s)],
             Kind::AttemptNudge => vec![NewEvent::attempt_nudge(T, s, 1)],
+            Kind::AttemptEnded => vec![
+                NewEvent::attempt_ended(T, Some(&json!({"turns": 1, "tokens_in": 2, "tokens_out": 3, "cache_read": 4, "cache_write": 5, "cost_usd": 0.0, "duration_s": 6.0, "model": "m", "stop_reason": "stop", "thinking_level": "high"}))),
+                NewEvent::attempt_ended(T, None),
+            ],
             Kind::AllMerged => vec![NewEvent::all_merged(T, s, [s], [s])],
             Kind::PrFeedback => vec![NewEvent::pr_feedback(T, s, n, s, s, s, s, s, s, b, &[s])],
             Kind::PrAdded => vec![NewEvent::pr_added(T, s, s, s, s, None, None, [s], b)],
