@@ -119,3 +119,44 @@ fn report_refuses_an_unknown_session_a_bad_code_and_a_bad_details_and_writes_not
     }
     assert!(errors(&fx).is_empty());
 }
+
+fn report(fx: &Fx, session: &str, code: &str, message: &str) -> Value {
+    fx.cpd(&["session", "report", "--session", session, "--what", "w", "--code", code, "--message", message]).ok()
+}
+
+#[test]
+fn a_report_repeated_for_the_session_inside_the_window_appends_one_event() {
+    let fx = Fx::new();
+    setup_with_fork(&fx.env);
+    let first = report(&fx, "lead1", "boom", "m");
+    let second = report(&fx, "lead1", "boom", "m");
+    let events = errors(&fx);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(first, json!({"ok": true, "event": events[0]["id"]}));
+    assert_eq!(second, json!({"ok": true, "event": events[0]["id"]}));
+    report(&fx, "lead1", "boom", "m2");
+    assert_eq!(errors(&fx).len(), 2, "another message appends");
+    report(&fx, "fork1", "boom", "m");
+    assert_eq!(errors(&fx).len(), 3, "another Session appends");
+    report(&fx, "lead1", "boom2", "m");
+    assert_eq!(errors(&fx).len(), 4, "another code appends");
+}
+
+#[test]
+fn a_report_repeated_for_the_session_after_the_window_appends_again() {
+    let fx = Fx::new();
+    setup_with_fork(&fx.env);
+    report(&fx, "lead1", "boom", "m");
+    report(&fx, "lead1", "boom", "m");
+    let events = errors(&fx);
+    assert_eq!(events.len(), 1, "{events:?}");
+    fx.env
+        .store()
+        .write("fixture", |tx| {
+            tx.execute_batch("UPDATE events SET at = '2026-01-01T00:00:00.000Z' WHERE kind = 'error';")?;
+            Ok(())
+        })
+        .unwrap();
+    report(&fx, "lead1", "boom", "m");
+    assert_eq!(errors(&fx).len(), 2, "older than the window appends again");
+}
