@@ -495,9 +495,9 @@ fn lock_starts_only_the_workflows_without_needs() {
     assert_eq!(
         out,
         json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["open-api", "open-web", "schema", "ui"],
-               "prs": [{"key": "api", "status": "dispatch", "needs": [], "base_pr": null, "lead_branch": "pay/api",
+               "workflows": [{"key": "api", "status": "dispatch", "needs": [], "base_workflow": null, "lead_branch": "pay/api",
                         "lead_worktree": worktree.display().to_string(), "base_sha": base, "reused": false, "pushed": true},
-                       {"key": "web", "status": "waiting", "needs": ["api"], "base_pr": null, "lead_branch": "pay/web",
+                       {"key": "web", "status": "waiting", "needs": ["api"], "base_workflow": null, "lead_branch": "pay/web",
                         "lead_worktree": null, "base_sha": null, "reused": null, "pushed": null}],
                "watch": {"started": true, "pane": "%9"}})
     );
@@ -557,10 +557,10 @@ fn lock_starts_only_the_workflows_without_needs() {
     // Again: `already`, the PRs as they are, nothing started.
     let again = fx.lock().ok();
     assert_eq!(again["already"], true);
-    assert_eq!(again["prs"][0]["status"], "dispatch");
-    assert_eq!(again["prs"][1]["status"], "waiting");
-    assert_eq!(again["prs"][0]["base_pr"], Value::Null);
-    assert_eq!(again["prs"][1]["base_pr"], Value::Null);
+    assert_eq!(again["workflows"][0]["status"], "dispatch");
+    assert_eq!(again["workflows"][1]["status"], "waiting");
+    assert_eq!(again["workflows"][0]["base_workflow"], Value::Null);
+    assert_eq!(again["workflows"][1]["base_workflow"], Value::Null);
     assert_eq!(fx.events("workflow-started").len(), 1);
 }
 
@@ -581,9 +581,9 @@ fn lock_leaves_a_stacked_workflow_waiting_and_starts_only_its_base_workflow() {
     assert_eq!(
         out,
         json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["open-a1", "open-b1", "schema", "ui"],
-               "prs": [{"key": "a1", "status": "dispatch", "needs": [], "base_pr": null, "lead_branch": "pay/a1",
+               "workflows": [{"key": "a1", "status": "dispatch", "needs": [], "base_workflow": null, "lead_branch": "pay/a1",
                         "lead_worktree": worktree.display().to_string(), "base_sha": base, "reused": false, "pushed": true},
-                       {"key": "b1", "status": "waiting", "needs": [], "base_pr": "pay/a1", "lead_branch": "pay/b1",
+                       {"key": "b1", "status": "waiting", "needs": [], "base_workflow": "pay/a1", "lead_branch": "pay/b1",
                         "lead_worktree": null, "base_sha": null, "reused": null, "pushed": null}],
                "watch": {"started": true, "pane": "%9"}})
     );
@@ -633,8 +633,8 @@ fn lock_leaves_a_stacked_workflow_waiting_and_starts_only_its_base_workflow() {
     // Again: `a1` is started, not open, so `b1` still waits on it.
     let again = fx.lock().ok();
     assert_eq!(again["already"], true);
-    assert_eq!(again["prs"][0]["base_pr"], Value::Null);
-    assert_eq!(again["prs"][1]["base_pr"], "pay/a1");
+    assert_eq!(again["workflows"][0]["base_workflow"], Value::Null);
+    assert_eq!(again["workflows"][1]["base_workflow"], "pay/a1");
     assert_eq!(fx.events("workflow-started").len(), 1);
 }
 
@@ -653,7 +653,7 @@ fn lock_starts_no_workflow_down_a_stack_and_still_starts_an_independent_workflow
 
     let out = fx.lock().ok();
 
-    let rows = out["prs"].as_array().unwrap();
+    let rows = out["workflows"].as_array().unwrap();
     let row = |key: &str| {
         rows.iter()
             .find(|p| p["key"] == key)
@@ -663,8 +663,8 @@ fn lock_starts_no_workflow_down_a_stack_and_still_starts_an_independent_workflow
     assert_eq!(row("w1")["status"], "dispatch");
     assert_eq!(row("b1")["status"], "waiting");
     assert_eq!(row("c1")["status"], "waiting");
-    assert_eq!(row("b1")["base_pr"], "pay/a1");
-    assert_eq!(row("c1")["base_pr"], "pay/b1");
+    assert_eq!(row("b1")["base_workflow"], "pay/a1");
+    assert_eq!(row("c1")["base_workflow"], "pay/b1");
     for key in ["b1", "c1"] {
         assert_eq!(fx.workflow_status(key), "waiting");
         assert!(!fx.lead_path(&api.path, key).exists(), "{key}'s worktree");
@@ -721,7 +721,7 @@ fn lock_is_all_or_nothing_when_a_workflow_fails_to_start() {
     let error = refused(&fx.lock(), "setup_failed", 1);
 
     assert_eq!(
-        (&error["details"]["pr"], &error["details"]["step"]),
+        (&error["details"]["workflow"], &error["details"]["step"]),
         (&json!("web"), &json!("pre-start"))
     );
     assert_eq!(error["details"]["log"], fx.log("web"));
@@ -797,7 +797,7 @@ fn lock_refuses_a_workflow_without_a_draft_job() {
 
     let error = refused(&fx.lock(), "workflow_empty", 3);
 
-    assert_eq!(error["details"]["prs"], json!(["api"]));
+    assert_eq!(error["details"]["workflows"], json!(["api"]));
     assert_eq!(
         fx.env
             .query::<String>("SELECT phase FROM plans WHERE id = 'pay'"),
@@ -825,7 +825,7 @@ fn lock_reuses_a_remote_lead_branch_that_lacks_a_base_that_merely_moved_ahead() 
 
     let out = fx.lock().ok();
 
-    let started = out["prs"]
+    let started = out["workflows"]
         .as_array()
         .unwrap()
         .iter()
@@ -854,7 +854,7 @@ fn lock_refuses_a_remote_lead_branch_of_a_workflow_that_conflicts_with_its_base(
 
     let error = refused(&fx.lock(), "branch_exists", 3);
 
-    assert_eq!(error["details"]["pr"], "web");
+    assert_eq!(error["details"]["workflow"], "web");
     assert_eq!(error["details"]["branch"], "pay/web");
     assert_eq!(error["details"]["files"], json!(["clash.txt"]));
     assert_eq!(
@@ -1108,7 +1108,7 @@ fn workflow_start_refuses_a_remote_lead_branch_that_conflicts_with_its_base() {
     let error = refused(&fx.start("a2"), "branch_exists", 3);
 
     assert_eq!(
-        (&error["details"]["pr"], &error["details"]["branch"]),
+        (&error["details"]["workflow"], &error["details"]["branch"]),
         (&json!("a2"), &json!("pay/a2"))
     );
     assert_eq!(error["details"]["files"], json!(["clash.txt"]));
@@ -1146,7 +1146,7 @@ fn a_push_failure_at_workflow_start_still_starts_it_and_appends_one_push_failed_
     assert_eq!(errors.len(), 1, "{errors:?}");
     let data = &errors[0]["data"];
     assert_eq!(
-        (&data["code"], &data["source"], &data["details"]["pr"]),
+        (&data["code"], &data["source"], &data["details"]["workflow"]),
         (
             &json!("push_failed"),
             &json!("workflow start"),
@@ -1303,7 +1303,7 @@ fn a_failed_start_marks_the_workflow_and_appends_one_error_until_workflow_start_
     );
     assert_eq!(
         (
-            &data["details"]["pr"],
+            &data["details"]["workflow"],
             &data["details"]["step"],
             &data["details"]["log"]
         ),
@@ -1337,7 +1337,7 @@ fn a_failed_start_marks_the_workflow_and_appends_one_error_until_workflow_start_
     let error = refused(&fx.start("a2"), "setup_failed", 1);
     assert_eq!(
         (
-            &error["details"]["pr"],
+            &error["details"]["workflow"],
             &error["details"]["step"],
             &error["details"]["log"]
         ),
@@ -1406,8 +1406,8 @@ fn workflow_start_refuses_a_stacked_workflow_whose_base_workflow_is_started_but_
 
     assert_eq!(
         (
-            &error["details"]["pr"],
-            &error["details"]["base_pr"],
+            &error["details"]["workflow"],
+            &error["details"]["base_workflow"],
             &error["details"]["needs"]
         ),
         (&json!("b1"), &json!("pay/a1"), &json!([]))
@@ -1564,11 +1564,11 @@ fn a_stacked_workflow_starts_from_origin_when_the_base_workflows_local_branch_is
 
     assert_eq!(
         (
-            &error["details"]["pr"],
+            &error["details"]["workflow"],
             &error["details"]["step"],
             &error["details"]["base"]
         ),
-        (&json!("b1"), &json!("base_pr_branch"), &json!("pay/a1"))
+        (&json!("b1"), &json!("base_workflow_branch"), &json!("pay/a1"))
     );
     assert_eq!(fx.workflow_status("b1"), "waiting");
     assert!(!fx.lead_path(&repo.path, "b1").exists());
@@ -1605,8 +1605,8 @@ fn workflow_start_refuses_a_stacked_workflow_whose_base_workflow_has_not_started
 
     assert_eq!(
         (
-            &error["details"]["pr"],
-            &error["details"]["base_pr"],
+            &error["details"]["workflow"],
+            &error["details"]["base_workflow"],
             &error["details"]["needs"]
         ),
         (&json!("b1"), &json!("pay/a1"), &json!([]))
@@ -1636,7 +1636,7 @@ fn workflow_start_refuses_a_workflow_whose_need_of_another_plan_is_not_merged() 
     let error = refused(&fx.start("c1"), "workflow_not_ready", 3);
 
     assert_eq!(
-        (&error["details"]["needs"], &error["details"]["base_pr"]),
+        (&error["details"]["needs"], &error["details"]["base_workflow"]),
         (&json!(["a1"]), &Value::Null)
     );
     assert!(error["message"].as_str().unwrap().contains("a1"), "{error}");

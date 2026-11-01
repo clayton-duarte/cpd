@@ -94,7 +94,7 @@ fn assert_parked(shape: &str, stubs: &[&str]) {
     let error = refused(&run, "draft_parked", 3);
     assert_eq!(
         error["details"],
-        json!({"plan": "pay-1", "pr": "k", "jobs": stubs}),
+        json!({"plan": "pay-1", "workflow": "k", "jobs": stubs}),
         "{shape}"
     );
     assert_eq!(fx.rows(), before, "{shape}: a refusal wrote something");

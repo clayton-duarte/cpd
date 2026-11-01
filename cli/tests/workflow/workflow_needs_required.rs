@@ -33,7 +33,7 @@ fn assert_refused(f: &Added, key: &str, shape: &str) {
     assert_eq!(run.exit, 3, "{shape}");
     assert_eq!(
         e["details"],
-        json!({"plan": "pay", "pr": key, "phase": "dispatch"}),
+        json!({"plan": "pay", "workflow": key, "phase": "dispatch"}),
         "{shape}"
     );
     let msg = e["message"].as_str().unwrap();
@@ -134,7 +134,7 @@ fn assert_stacked_add_needs_no_flag(base: &str) {
     let f = added("dispatch");
     let out = f.add("fix", &f.repo, &["--base", base]).ok();
     assert_eq!(out["workflow"]["needs"], json!([]), "{out}");
-    assert_eq!(out["workflow"]["base_pr"], "pay/repo", "{out}");
+    assert_eq!(out["workflow"]["base_workflow"], "pay/repo", "{out}");
     assert_eq!(out["workflow"]["status"], "waiting", "{out}");
     assert!(f.needs_of("fix").is_empty());
 }

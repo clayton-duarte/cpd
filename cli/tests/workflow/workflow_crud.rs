@@ -220,7 +220,7 @@ impl Crud {
             .find(|p| p["key"] == key)
             .unwrap()
             .clone();
-        json!([pr["base"], pr["base_pr"], pr["needs"]])
+        json!([pr["base"], pr["base_workflow"], pr["needs"]])
     }
 
     /// [`common::refused`], and nothing written.
@@ -240,7 +240,7 @@ fn add_creates_a_waiting_workflow_with_its_event_and_no_git_write() {
     let out = fx.add("api", &fx.pay, &[]).ok();
     assert_eq!(
         out["workflow"],
-        json!({"key": "api", "repo": fx.pay.display().to_string(), "name": "pay", "base": "main", "base_pr": null, "title": "Change api", "needs": [], "status": "waiting",
+        json!({"key": "api", "repo": fx.pay.display().to_string(), "name": "pay", "base": "main", "base_workflow": null, "title": "Change api", "needs": [], "status": "waiting",
                "lead_branch": "pay-1/api", "appended": false, "shape": "config", "head_ref": null, "jira": null, "jobs": ["api-config", "open-api"]})
     );
     assert!(out.get("already").is_none());
@@ -860,7 +860,7 @@ fn add_refuses_a_template_whose_job_keys_the_plan_has_and_writes_nothing() {
     let error = fx.refused(&fx.add_shape("web", None), "job_key_exists", 3, writes);
     assert_eq!(
         (
-            error["details"]["pr"].clone(),
+            error["details"]["workflow"].clone(),
             error["details"]["jobs"].clone()
         ),
         (json!("web"), json!(["web-impl"]))
@@ -1642,7 +1642,7 @@ fn a_workflow_restacked_after_the_lock_waits_for_its_base_workflow_to_open() {
         fx.writes(),
     );
     assert_eq!(
-        (&error["details"]["base_pr"], &error["details"]["needs"]),
+        (&error["details"]["base_workflow"], &error["details"]["needs"]),
         (&json!("pay-1/a"), &json!([]))
     );
     assert_eq!(
@@ -2306,7 +2306,7 @@ fn an_open_workflow_whose_pull_request_is_open_or_merged_is_refused_workflow_not
         fx.pull_state(state);
         let writes = fx.writes();
         let error = fx.refused(&fx.pr(&["cancel", "web"]), "pr_not_closed", 3, writes);
-        assert_eq!(error["details"]["pr"], "web");
+        assert_eq!(error["details"]["workflow"], "web");
         assert_eq!(
             (
                 error["details"]["number"].clone(),
@@ -2483,7 +2483,7 @@ fn add_stacks_on_a_workflow_of_its_own_plan_and_a_branch_that_is_a_lead_branch_i
     assert_eq!(
         (
             out["workflow"]["base"].clone(),
-            out["workflow"]["base_pr"].clone()
+            out["workflow"]["base_workflow"].clone()
         ),
         (json!("pay-1/api"), json!("pay-1/api"))
     );
@@ -2494,7 +2494,7 @@ fn add_stacks_on_a_workflow_of_its_own_plan_and_a_branch_that_is_a_lead_branch_i
         &["update-ref", "refs/remotes/origin/pay-1/api", "pay-1/api"],
     );
     let out = fx.add("ui", &fx.pay, &["--base", "pay-1/api"]).ok();
-    assert_eq!(out["workflow"]["base_pr"], "pay-1/api");
+    assert_eq!(out["workflow"]["base_workflow"], "pay-1/api");
     fx.pr(&["cancel", "ui"]).ok();
     fx.pr(&["cancel", "web"]).ok();
     fx.pr(&["cancel", "api"]).ok();
@@ -2520,7 +2520,7 @@ fn a_base_that_is_not_a_workflow_reference_is_a_branch() {
     assert_eq!(
         (
             out["workflow"]["base"].clone(),
-            out["workflow"]["base_pr"].clone()
+            out["workflow"]["base_workflow"].clone()
         ),
         (json!("feature/x"), Value::Null)
     );
@@ -2548,7 +2548,7 @@ fn a_base_that_is_not_a_workflow_reference_is_a_branch() {
         fx.writes(),
     );
     assert_eq!(error["details"]["plan"], "pay-1");
-    assert_eq!(error["details"]["pr"], "ghost");
+    assert_eq!(error["details"]["workflow"], "ghost");
     // A Lead Branch has two slashes and is never read as a reference.
     fx.refused(
         &fx.add("b", &fx.pay, &["--base", "cpd/ledger-9/api"]),
@@ -2575,14 +2575,14 @@ fn add_refuses_a_bad_reference_and_writes_nothing() {
         3,
         writes,
     );
-    assert_eq!(error["details"]["pr"], "gone");
+    assert_eq!(error["details"]["workflow"], "gone");
     let error = fx.refused(
         &fx.add("x", &fx.pay, &["--base", "pay-1/old"]),
         "base_workflow_unavailable",
         3,
         writes,
     );
-    assert_eq!(error["details"]["pr"], "old");
+    assert_eq!(error["details"]["workflow"], "old");
     let error = fx.refused(
         &fx.add("x", &fx.pay, &["--needs", "gone"]),
         "needs_unavailable",
@@ -2599,7 +2599,7 @@ fn add_refuses_a_bad_reference_and_writes_nothing() {
     );
     assert_eq!(
         error["details"],
-        json!({"pr": "web", "repo": fx.pay.display().to_string(), "base_repo": fx.web.display().to_string()})
+        json!({"workflow": "web", "repo": fx.pay.display().to_string(), "base_repo": fx.web.display().to_string()})
     );
     // A need that is no PR.
     let error = fx.refused(
@@ -2763,7 +2763,7 @@ fn add_reads_a_bare_workflow_key_in_base_as_the_base_workflow() {
     assert_eq!(
         (
             pr["base"].clone(),
-            pr["base_pr"].clone(),
+            pr["base_workflow"].clone(),
             pr["needs"].clone(),
             pr["status"].clone()
         ),
@@ -2806,14 +2806,14 @@ fn add_refuses_a_bare_base_workflow_that_is_cancelled_or_merged() {
         3,
         writes,
     );
-    assert_eq!(error["details"]["pr"], "gone");
+    assert_eq!(error["details"]["workflow"], "gone");
     let error = fx.refused(
         &fx.add("x", &fx.pay, &["--base", "old"]),
         "base_workflow_unavailable",
         3,
         writes,
     );
-    assert_eq!(error["details"]["pr"], "old");
+    assert_eq!(error["details"]["workflow"], "old");
 }
 
 #[test]
@@ -2842,7 +2842,7 @@ fn a_bare_base_is_a_workflow_reference_only_for_a_workflow_of_the_plan_in_the_re
     assert_eq!(
         (
             out["workflow"]["base"].clone(),
-            out["workflow"]["base_pr"].clone()
+            out["workflow"]["base_workflow"].clone()
         ),
         (json!("develop"), Value::Null),
         "{out}"
@@ -2853,7 +2853,7 @@ fn a_bare_base_is_a_workflow_reference_only_for_a_workflow_of_the_plan_in_the_re
     assert_eq!(
         (
             out["workflow"]["base"].clone(),
-            out["workflow"]["base_pr"].clone()
+            out["workflow"]["base_workflow"].clone()
         ),
         (json!("pay-1/develop"), json!("pay-1/develop")),
         "{out}"
@@ -3431,7 +3431,7 @@ fn owner_is_in_use_while_a_plan_has_a_workflow_row() {
     let error = crate::common::refused(&run, "owner_in_use", 3);
     assert_eq!(error["details"]["context"], "ctx");
     assert_eq!(error["details"]["owner"], "acme");
-    assert_eq!(error["details"]["prs"], json!(["pay-1/api"]));
+    assert_eq!(error["details"]["workflows"], json!(["pay-1/api"]));
     assert_eq!(
         fx.env
             .query::<i64>("SELECT count(*) FROM contexts WHERE owner = 'acme'"),
