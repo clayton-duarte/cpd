@@ -1069,6 +1069,9 @@ Explore Jobs (`scout`, `research`) are in no review (Plan `explore-roles`, R3): 
 | at least one Job is `draft` (in a phase after `plan` too: the drafts are what is reviewed; a `draft` `open` Job does not count, it is not under review, hs-d573) | `no_draft_jobs` | 3 |
 | every `draft` Job has its Tier and its Spec (hs-d241, R1: no stub draft is approvable); `details.jobs` lists `[{key, missing}]`, `missing` being `["tier"]`, `["spec"]` or both | `draft_incomplete` | 3 |
 | the Plan has an outline (§4.13; hs-d502, D3); `details.next` = `cpd plan outline --file <outline.json>` | `outline_missing` | 3 |
+| every Workflow that has a `draft` Job (under review, since the previous row passed) has an entry in the outline `done_when`; `details.workflows` lists the Workflow keys without one, in key order | `outline_incomplete` | 3 |
+| every `impl` Job that is a `draft` needs at least one `test` Job of its Workflow (hs-d341; `details.jobs` lists the `impl` Jobs) | `test_job_required` | 3 |
+| every `verify` Job that is a `draft` needs at least one `impl` Job of its Workflow that is not `cancelled` (pro-d80; `details` `{plan, job, jobs}`; checked after `test_job_required` and before `shape_incomplete`) | `impl_job_required` | 3 |
 | every Workflow of shape `tdd` that has not opened has at least one `test` and one `impl` Job that is not `cancelled` (hs-d497, contract §2.2 "Job kinds"; `details` `{workflow, missing}`) | `shape_incomplete` | 3 |
 | a Workflow that is not `cancelled` has no `draft` Job, or the Plan has no Workflow that is not `cancelled` (phase `plan` only; `details.workflows`, and `details.next` = `cpd workflow add` when the Plan has no live Workflow; checked after `shape_incomplete`) | `workflow_empty` | 3 |
 | the `needs` of the draft Jobs contain a cycle (`details.cycle`; after `workflow_empty`) | `dependency_cycle` | 3 |
