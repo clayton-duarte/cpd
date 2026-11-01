@@ -1,7 +1,7 @@
 //! Red tests of `Background::with_waker`: a finished job wakes the loop (no sleeps, no real-time waits).
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
 use ratatui::crossterm::event::Event;

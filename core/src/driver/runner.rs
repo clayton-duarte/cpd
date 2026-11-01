@@ -19,10 +19,10 @@ use crate::attempt::ledger::{Attempt as Target, corrupt};
 use crate::config::{Catalog, Config, WorkerRunner};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::host::Tmux;
 use crate::host::git_guard;
 use crate::host::pi::{self, PiDirs};
 use crate::host::spawn::{Launch, Pid, Signal, Spawn};
-use crate::host::Tmux;
 use crate::ids::{AttemptId, PlanId, SessionId};
 use crate::metrics::{self, Metrics};
 use crate::ports::Ports;
@@ -40,13 +40,18 @@ const USAGE: i32 = 2;
 const STOP_NAP: Duration = Duration::from_secs(1);
 
 /// The Attempt's stored runner and, for a `durable` one, the pid of its process.
-pub(super) fn stored(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<(WorkerRunner, Option<Pid>), CpdError> {
+pub(super) fn stored(
+    conn: &Connection,
+    plan: &PlanId,
+    id: &AttemptId,
+) -> Result<(WorkerRunner, Option<Pid>), CpdError> {
     let (runner, pid): (String, Option<u32>) = conn.query_row(
         "SELECT runner, worker_pid FROM attempts WHERE plan = ?1 AND id = ?2",
         params![plan.as_str(), id.to_string()],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    let runner = WorkerRunner::parse(&runner).map_err(|e| corrupt(format!("runner of Attempt {id}: {e}")))?;
+    let runner = WorkerRunner::parse(&runner)
+        .map_err(|e| corrupt(format!("runner of Attempt {id}: {e}")))?;
     Ok((runner, pid.map(Pid)))
 }
 
@@ -57,15 +62,25 @@ pub(crate) fn runner_file(adapter: &Path) -> PathBuf {
 
 /// A3 for `durable`: the runner's `Launch`. `setup_failed` when its file is absent, before anything is spawned. The same
 /// launch starts the runner again (A4), so the store and the conversation resume.
-pub(super) fn launch(home: &CpdHome, config: &Config, catalog: &Catalog, target: &Target, session: &SessionId) -> Result<Launch, CpdError> {
+pub(super) fn launch(
+    home: &CpdHome,
+    config: &Config,
+    catalog: &Catalog,
+    target: &Target,
+    session: &SessionId,
+) -> Result<Launch, CpdError> {
     let file = runner_file(&config.pi_adapter_dir()?);
     if !file.is_file() {
-        return Err(CpdError::new(ErrorCode::SetupFailed, format!("The durable runner file {} does not exist.", file.display())));
+        return Err(CpdError::new(
+            ErrorCode::SetupFailed,
+            format!("The durable runner file {} does not exist.", file.display()),
+        ));
     }
     let model = catalog.model_arg(target.tier)?;
     git_guard::install(home)?;
     let spec = home.worker_spec(&target.plan, &target.id);
-    let mut env_set: std::collections::BTreeMap<String, String> = pi::worker_env(home, session, &target.plan, &target.id);
+    let mut env_set: std::collections::BTreeMap<String, String> =
+        pi::worker_env(home, session, &target.plan, &target.id);
     explore_env(&mut env_set, target);
     Ok(Launch {
         program: crate::config::catalog::node().display().to_string(),
@@ -97,8 +112,11 @@ pub(super) fn explore_env(env: &mut std::collections::BTreeMap<String, String>, 
 /// Starts the `durable` runner: `setup_failed` when the spawn fails, as every A2 or A3 failure does.
 pub(super) fn spawn(ports: &Ports, launch: &Launch) -> Result<Pid, CpdError> {
     ports.spawn.spawn(launch).map_err(|e| {
-        CpdError::new(ErrorCode::SetupFailed, format!("Starting the durable runner failed: {e}."))
-            .with("program", launch.program.as_str())
+        CpdError::new(
+            ErrorCode::SetupFailed,
+            format!("Starting the durable runner failed: {e}."),
+        )
+        .with("program", launch.program.as_str())
     })
 }
 
@@ -117,8 +135,16 @@ pub(super) fn look(spawn: &dyn Spawn, pid: Pid) -> Option<Ended> {
     if spawn.alive(pid) {
         return None;
     }
-    let code = spawn.try_wait(pid).ok().flatten().and_then(|status| status.code());
-    Some(if code == Some(USAGE) { Ended::Usage } else { Ended::Other })
+    let code = spawn
+        .try_wait(pid)
+        .ok()
+        .flatten()
+        .and_then(|status| status.code());
+    Some(if code == Some(USAGE) {
+        Ended::Usage
+    } else {
+        Ended::Other
+    })
 }
 
 /// The proof that a pid is this Attempt's runner: its command line holds the runner file and the Attempt's Spec path. Every
@@ -129,25 +155,42 @@ pub(crate) struct Guard {
 }
 
 impl Guard {
-    pub(crate) fn of(config: &Config, home: &CpdHome, plan: &PlanId, id: &AttemptId) -> Result<Guard, CpdError> {
-        Ok(Guard { runner_file: runner_file(&config.pi_adapter_dir()?), spec: home.worker_spec(plan, id) })
+    pub(crate) fn of(
+        config: &Config,
+        home: &CpdHome,
+        plan: &PlanId,
+        id: &AttemptId,
+    ) -> Result<Guard, CpdError> {
+        Ok(Guard {
+            runner_file: runner_file(&config.pi_adapter_dir()?),
+            spec: home.worker_spec(plan, id),
+        })
     }
 
     fn holds(&self, spawn: &dyn Spawn, pid: Pid) -> bool {
-        spawn
-            .cmdline(pid)
-            .is_some_and(|line| line.contains(&*self.runner_file.to_string_lossy()) && line.contains(&*self.spec.to_string_lossy()))
+        spawn.cmdline(pid).is_some_and(|line| {
+            line.contains(&*self.runner_file.to_string_lossy())
+                && line.contains(&*self.spec.to_string_lossy())
+        })
     }
 
     /// Sends `signal` to `pid` when it is the runner of this Attempt; whether it was sent. A pid that is gone is fine.
-    pub(crate) fn signal(&self, spawn: &dyn Spawn, pid: Pid, signal: Signal) -> Result<bool, CpdError> {
+    pub(crate) fn signal(
+        &self,
+        spawn: &dyn Spawn,
+        pid: Pid,
+        signal: Signal,
+    ) -> Result<bool, CpdError> {
         if !spawn.alive(pid) || !self.holds(spawn, pid) {
             return Ok(false);
         }
         match spawn.signal(pid, signal) {
             Ok(()) => Ok(true),
             Err(_) if !spawn.alive(pid) => Ok(false),
-            Err(e) => Err(CpdError::new(ErrorCode::SpawnFailed, format!("Signalling the durable runner (pid {}) failed: {e}.", pid.0))),
+            Err(e) => Err(CpdError::new(
+                ErrorCode::SpawnFailed,
+                format!("Signalling the durable runner (pid {}) failed: {e}.", pid.0),
+            )),
         }
     }
 }
@@ -194,11 +237,21 @@ pub(super) fn stop(
 /// `worker_runner`): `pi` kills its window, `durable` sends SIGKILL at once to the stored `worker_pid` through the [`Guard`]
 /// (the runner's commits survive a kill and the last report is on disk, so there is no SIGTERM and no wait). A `durable`
 /// Attempt with no pid never started a runner.
-pub fn kill_orphan(ports: &Ports, config: &Config, home: &CpdHome, tmux: &Tmux, store: &mut Store, plan: &PlanId, id: &AttemptId) -> Result<(), CpdError> {
+pub fn kill_orphan(
+    ports: &Ports,
+    config: &Config,
+    home: &CpdHome,
+    tmux: &Tmux,
+    store: &mut Store,
+    plan: &PlanId,
+    id: &AttemptId,
+) -> Result<(), CpdError> {
     match store.read(|conn| stored(conn, plan, id))? {
         (WorkerRunner::Pi, _) => worker::kill_attempt_window_with(ports, config, tmux, plan, id),
         (WorkerRunner::Durable, None) => Ok(()),
-        (WorkerRunner::Durable, Some(pid)) => Guard::of(config, home, plan, id)?.signal(&*ports.spawn, pid, Signal::Kill).map(drop),
+        (WorkerRunner::Durable, Some(pid)) => Guard::of(config, home, plan, id)?
+            .signal(&*ports.spawn, pid, Signal::Kill)
+            .map(drop),
     }
 }
 
@@ -212,7 +265,10 @@ pub(super) struct Report {
 /// The `pi` producer: the Worker's session file at `file`. `None` while it cannot be parsed (a line being written).
 pub(super) fn pi_report(file: &Path) -> Option<Report> {
     let metrics = metrics::parse_file(file).ok()?;
-    Some(Report { metrics, error_message: metrics::last_error_message(file) })
+    Some(Report {
+        metrics,
+        error_message: metrics::last_error_message(file),
+    })
 }
 
 /// The `pi` Worker's session file, once pi has created it.
@@ -244,8 +300,11 @@ pub(super) fn durable_report(file: &Path, wall_s: f64) -> Result<Option<Report>,
         Err(e) => return Err(CpdError::file_unreadable(file, e)),
     };
     let report: EndReport = serde_json::from_str(&text).map_err(|e| {
-        CpdError::new(ErrorCode::SessionMalformed, format!("The end report {} does not parse: {e}.", file.display()))
-            .with("path", file.display().to_string())
+        CpdError::new(
+            ErrorCode::SessionMalformed,
+            format!("The end report {} does not parse: {e}.", file.display()),
+        )
+        .with("path", file.display().to_string())
     })?;
     Ok(Some(Report {
         metrics: Metrics {
@@ -279,7 +338,11 @@ pub(super) fn metrics(
             match metrics::parse_file(&file) {
                 Ok(m) => Some(m.to_json()),
                 Err(e) => {
-                    super::run::log(&format!("no metrics from {}: {}", file.display(), e.message()));
+                    super::run::log(&format!(
+                        "no metrics from {}: {}",
+                        file.display(),
+                        e.message()
+                    ));
                     None
                 }
             }

@@ -101,22 +101,37 @@ fn raw(plan: &PlanId, r: &Row<'_>) -> rusqlite::Result<(Attempt, Option<String>,
 
 /// The Attempts of `plan` that satisfy `filter` (SQL over `attempts`, with `?2…`
 /// bound to `args`), in creation order.
-fn query(conn: &Connection, plan: &PlanId, filter: &str, args: &[&str]) -> Result<Vec<Attempt>, CpdError> {
+fn query(
+    conn: &Connection,
+    plan: &PlanId,
+    filter: &str,
+    args: &[&str],
+) -> Result<Vec<Attempt>, CpdError> {
     let sql = format!("SELECT {COLUMNS} FROM attempts WHERE plan = ?1 AND {filter} ORDER BY rowid");
     let mut stmt = conn.prepare(&sql)?;
     let bound = std::iter::once(plan.as_str()).chain(args.iter().copied());
-    let rows = stmt.query_map(params_from_iter(bound), |r| raw(plan, r))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let rows = stmt
+        .query_map(params_from_iter(bound), |r| raw(plan, r))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
         .map(|(mut attempt, metrics, files)| {
             attempt.metrics = match metrics {
                 None => Value::Null,
-                Some(text) => serde_json::from_str(&text)
-                    .map_err(|_| CpdError::bad_row(format!("Attempt {plan}/{} has metrics {text:?}", attempt.id)))?,
+                Some(text) => serde_json::from_str(&text).map_err(|_| {
+                    CpdError::bad_row(format!(
+                        "Attempt {plan}/{} has metrics {text:?}",
+                        attempt.id
+                    ))
+                })?,
             };
             attempt.actual_files = match files {
                 None => Value::Null,
-                Some(text) => serde_json::from_str(&text)
-                    .map_err(|_| CpdError::bad_row(format!("Attempt {plan}/{} has actual_files {text:?}", attempt.id)))?,
+                Some(text) => serde_json::from_str(&text).map_err(|_| {
+                    CpdError::bad_row(format!(
+                        "Attempt {plan}/{} has actual_files {text:?}",
+                        attempt.id
+                    ))
+                })?,
             };
             Ok(attempt)
         })
@@ -125,34 +140,56 @@ fn query(conn: &Connection, plan: &PlanId, filter: &str, args: &[&str]) -> Resul
 
 /// `plan_not_found` unless the Plan exists.
 pub(super) fn require_plan(conn: &Connection, plan: &PlanId) -> Result<(), CpdError> {
-    let found: Option<i64> = conn.query_row("SELECT 1 FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
-    found.map(|_| ()).ok_or_else(|| {
-        CpdError::plan_not_found(plan)
-    })
+    let found: Option<i64> = conn
+        .query_row("SELECT 1 FROM plans WHERE id = ?1", [plan.as_str()], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    found
+        .map(|_| ())
+        .ok_or_else(|| CpdError::plan_not_found(plan))
 }
 
 /// Attempt `id` of `plan`: `plan_not_found`, else `attempt_not_found` (exit 4).
 pub(super) fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt, CpdError> {
     require_plan(conn, plan)?;
-    query(conn, plan, "id = ?2", &[&id.to_string()])?.into_iter().next().ok_or_else(|| {
-        CpdError::new(ErrorCode::AttemptNotFound, format!("No Attempt {id} in Plan {plan}."))
+    query(conn, plan, "id = ?2", &[&id.to_string()])?
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            CpdError::new(
+                ErrorCode::AttemptNotFound,
+                format!("No Attempt {id} in Plan {plan}."),
+            )
             .with("plan", plan.as_str())
             .with("attempt", id.to_string())
-    })
+        })
 }
 
 /// The Attempts of the Plan, oldest first: of one Job (`job_not_found` when the
 /// Job does not exist), and only those not `ended` when `active`.
-pub(super) fn list(conn: &Connection, plan: &PlanId, job: Option<&JobKey>, active: bool) -> Result<Vec<Attempt>, CpdError> {
+pub(super) fn list(
+    conn: &Connection,
+    plan: &PlanId,
+    job: Option<&JobKey>,
+    active: bool,
+) -> Result<Vec<Attempt>, CpdError> {
     require_plan(conn, plan)?;
     if let Some(job) = job {
         let found: Option<i64> = conn
-            .query_row("SELECT 1 FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.as_str()], |r| r.get(0))
+            .query_row(
+                "SELECT 1 FROM jobs WHERE plan = ?1 AND key = ?2",
+                [plan.as_str(), job.as_str()],
+                |r| r.get(0),
+            )
             .optional()?;
         if found.is_none() {
-            return Err(CpdError::new(ErrorCode::JobNotFound, format!("No Job {job} in Plan {plan}."))
-                .with("plan", plan.as_str())
-                .with("job", job.as_str()));
+            return Err(CpdError::new(
+                ErrorCode::JobNotFound,
+                format!("No Job {job} in Plan {plan}."),
+            )
+            .with("plan", plan.as_str())
+            .with("job", job.as_str()));
         }
     }
     let mut attempts = match job {
@@ -166,7 +203,11 @@ pub(super) fn list(conn: &Connection, plan: &PlanId, job: Option<&JobKey>, activ
 }
 
 /// The Attempt's Escalations, in order.
-pub(super) fn escalations(conn: &Connection, plan: &PlanId, attempt: &AttemptId) -> Result<Vec<Value>, CpdError> {
+pub(super) fn escalations(
+    conn: &Connection,
+    plan: &PlanId,
+    attempt: &AttemptId,
+) -> Result<Vec<Value>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT id, number, question, status, answer, asker_pid, asked_at, answered_at, expired_at
            FROM escalations WHERE plan = ?1 AND attempt = ?2 ORDER BY number",

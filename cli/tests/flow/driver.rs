@@ -44,8 +44,11 @@ pub(super) const PR_URL: &str = "https://github.com/acme/pay/pull/812";
 const ATTEMPT: &str = "api-a1";
 
 /// O supports efforts 0–5, S 1–5, H 0–3.
-const EFFORTS: [(&str, &str, &str); 3] =
-    [("O", "p/opus", "[0,1,2,3,4,5]"), ("S", "p/sonnet", "[1,2,3,4,5]"), ("H", "p/haiku", "[0,1,2,3]")];
+const EFFORTS: [(&str, &str, &str); 3] = [
+    ("O", "p/opus", "[0,1,2,3,4,5]"),
+    ("S", "p/sonnet", "[1,2,3,4,5]"),
+    ("H", "p/haiku", "[0,1,2,3]"),
+];
 
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
@@ -66,7 +69,9 @@ pub(super) fn seed_home(env: &TestEnv, config_extra: &str) {
     .unwrap();
     fs::create_dir_all(env.root().join("install")).unwrap();
     fs::write(env.root().join("install/current-version"), "1.0.0\n").unwrap();
-    let scope = env.root().join("install/releases/1.0.0/node_modules/@earendil-works");
+    let scope = env
+        .root()
+        .join("install/releases/1.0.0/node_modules/@earendil-works");
     for package in ["pi-coding-agent", "pi-ai"] {
         fs::create_dir_all(scope.join(package).join("dist")).unwrap();
         fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
@@ -102,7 +107,11 @@ pub(super) fn seed_rows(env: &TestEnv, repo: &Path, lead: &Path) {
 }
 
 pub(super) fn store(env: &TestEnv) -> Store {
-    Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
+    Store::open(
+        &CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(),
+        5000,
+    )
+    .unwrap()
 }
 
 pub(super) fn fixture(env: &TestEnv, sql: &str) {
@@ -116,13 +125,21 @@ pub(super) fn add_job_in(env: &TestEnv, pr: &str, key: &str, needs: &[&str]) {
          VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"**\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
     );
     for need in needs {
-        sql += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');");
+        sql += &format!(
+            "INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');"
+        );
     }
     fixture(env, &sql);
     let plan = PlanId::parse(PLAN).unwrap();
     let all = store(env).read(|conn| jobs::load(conn, &plan)).unwrap();
     let job = all.iter().find(|j| j.key == key).unwrap();
-    fixture(env, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = 'pay' AND key = '{key}';", locked_fingerprint(job)));
+    fixture(
+        env,
+        &format!(
+            "UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = 'pay' AND key = '{key}';",
+            locked_fingerprint(job)
+        ),
+    );
 }
 
 /// [`Fx`] without a repo, a worktree, a tmux server, a fake pi or a child process: the same rows (Plan `pay`, PR
@@ -171,13 +188,17 @@ impl Rows {
     }
 
     fn job_status(&self, key: &str) -> String {
-        self.fx.env.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
+        self.fx.env.query(&format!(
+            "SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"
+        ))
     }
 
     /// The number of transactions, read through a store opened and closed here: `env.query` keeps a connection, and with
     /// it a descriptor, open, which could be the fd 3 a driver is handed.
     fn txns(&self) -> i64 {
-        store(&self.fx.env).read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap()
+        store(&self.fx.env)
+            .read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?))
+            .unwrap()
     }
 
     fn attempt(&self, id: &str) -> Value {
@@ -196,7 +217,10 @@ impl Rows {
 
     /// Attempt `api-a1` in `starting` and its lock file, as a starter would leave them: no worktree, no window.
     fn starting(&self) -> PathBuf {
-        let lock = self.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(ATTEMPT).unwrap());
+        let lock = self.home().attempt_lock(
+            &PlanId::parse(PLAN).unwrap(),
+            &AttemptId::parse(ATTEMPT).unwrap(),
+        );
         fs::create_dir_all(lock.parent().unwrap()).unwrap();
         File::create(&lock).unwrap();
         self.fixture(&format!(
@@ -213,7 +237,13 @@ impl Rows {
 
 /// What `attempt submit` answered the Worker, run as pi runs it in its window: cwd the worktree, its Plan and its Attempt.
 fn submit(live: &Live, id: &str) -> Value {
-    live.fx.cpd_with(&live.worktree(id), &["attempt", "submit", id], &[("CPD_PLAN", PLAN), ("CPD_ATTEMPT", id)]).json()
+    live.fx
+        .cpd_with(
+            &live.worktree(id),
+            &["attempt", "submit", id],
+            &[("CPD_PLAN", PLAN), ("CPD_ATTEMPT", id)],
+        )
+        .json()
 }
 
 /// A Worker that commits `api.txt` and submits, then stays (pi idles).
@@ -224,15 +254,36 @@ fn work(live: &Live, id: &str) -> Value {
 
 /// `job cancel api --reason <reason>` as the Worker runs it in its window.
 fn cancel(live: &Live, id: &str, reason: &str) {
-    live.fx.cpd_with(&live.worktree(id), &["job", "cancel", JOB, "--reason", reason], &[("CPD_PLAN", PLAN), ("CPD_ATTEMPT", id)]).ok();
+    live.fx
+        .cpd_with(
+            &live.worktree(id),
+            &["job", "cancel", JOB, "--reason", reason],
+            &[("CPD_PLAN", PLAN), ("CPD_ATTEMPT", id)],
+        )
+        .ok();
 }
 
 /// The Worker's pi ends with `status`: its pane is dead (remain-on-exit keeps the window), as after `exit <status>`.
 fn worker_exits(live: &Live, id: &str, status: u8) {
     let window = format!("{PLAN}--{id}");
-    let pane = live.fx.panes().into_iter().find(|p| p.window_name == window).unwrap_or_else(|| panic!("no pane in window {window}"));
-    let out = live.fx.tmux(&["__ctl", "pane-exit", &pane.pane, "--status", &status.to_string()]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let pane = live
+        .fx
+        .panes()
+        .into_iter()
+        .find(|p| p.window_name == window)
+        .unwrap_or_else(|| panic!("no pane in window {window}"));
+    let out = live.fx.tmux(&[
+        "__ctl",
+        "pane-exit",
+        &pane.pane,
+        "--status",
+        &status.to_string(),
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 /// [`Live::drive`] with what `job dispatch` printed: `(its output, what the driver printed)`.
@@ -241,49 +292,97 @@ fn drive_with_out(live: &Live, key: &str, hook: impl FnMut(&Live, &str, usize)) 
 }
 
 /// [`drive_with_out`] for a parallel Attempt ([`Live::drive_parallel`]).
-fn drive_parallel_with_out(live: &Live, key: &str, hook: impl FnMut(&Live, &str, usize)) -> (Value, Run) {
+fn drive_parallel_with_out(
+    live: &Live,
+    key: &str,
+    hook: impl FnMut(&Live, &str, usize),
+) -> (Value, Run) {
     drive_with_out_as(live, key, true, hook)
 }
 
-fn drive_with_out_as(live: &Live, key: &str, parallel: bool, mut hook: impl FnMut(&Live, &str, usize)) -> (Value, Run) {
+fn drive_with_out_as(
+    live: &Live,
+    key: &str,
+    parallel: bool,
+    mut hook: impl FnMut(&Live, &str, usize),
+) -> (Value, Run) {
     let out = live.dispatch(key).ok();
-    let id = out["attempt"].as_str().unwrap_or_else(|| panic!("no attempt in {out}")).to_owned();
+    let id = out["attempt"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no attempt in {out}"))
+        .to_owned();
     if parallel {
         live.make_parallel(&id);
     }
-    let launch = live.fx.take_launch(live.fx.fakes.spawn.launches().len() - 1);
+    let launch = live
+        .fx
+        .take_launch(live.fx.fakes.spawn.launches().len() - 1);
     let home = CpdHome::resolve(Some(live.fx.env.cpd_home().into()), None).unwrap();
-    let _fd3 = live.fx.hand_over(File::open(home.attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(&id).unwrap())).unwrap());
-    let ran = live.fx.run_launch_with(&launch, |_, nap| hook(live, &id, nap));
+    let _fd3 = live.fx.hand_over(
+        File::open(home.attempt_lock(
+            &PlanId::parse(PLAN).unwrap(),
+            &AttemptId::parse(&id).unwrap(),
+        ))
+        .unwrap(),
+    );
+    let ran = live
+        .fx
+        .run_launch_with(&launch, |_, nap| hook(live, &id, nap));
     assert_eq!(ran.exit, 0, "{}", ran.stdout);
     (out, ran)
 }
 
 /// The driver's log of Attempt `id`, for a failure's message.
 fn log(live: &Live, id: &str) -> String {
-    fs::read_to_string(live.fx.env.cpd_home().join(format!("run/pay/logs/attempt-{id}.log"))).unwrap_or_default()
+    fs::read_to_string(
+        live.fx
+            .env
+            .cpd_home()
+            .join(format!("run/pay/logs/attempt-{id}.log")),
+    )
+    .unwrap_or_default()
 }
 
 /// The Events about Attempt `id` or its Worker, in order.
 fn events(live: &Live, id: &str) -> Vec<Value> {
-    let session: Option<String> = live.value(&format!("SELECT worker_session FROM attempts WHERE plan = 'pay' AND id = '{id}'"));
-    let all = live.fx.cpd(&["events", "list", "--plan", PLAN]).ok()["events"].as_array().unwrap().clone();
-    all.into_iter().filter(|e| e["attempt"] == id || (session.is_some() && e["session"].as_str() == session.as_deref())).collect()
+    let session: Option<String> = live.value(&format!(
+        "SELECT worker_session FROM attempts WHERE plan = 'pay' AND id = '{id}'"
+    ));
+    let all = live.fx.cpd(&["events", "list", "--plan", PLAN]).ok()["events"]
+        .as_array()
+        .unwrap()
+        .clone();
+    all.into_iter()
+        .filter(|e| {
+            e["attempt"] == id || (session.is_some() && e["session"].as_str() == session.as_deref())
+        })
+        .collect()
 }
 
 /// The kinds of [`events`], in order.
 fn kinds(live: &Live, id: &str) -> Vec<String> {
-    events(live, id).iter().map(|e| e["kind"].as_str().unwrap().to_owned()).collect()
+    events(live, id)
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap().to_owned())
+        .collect()
 }
 
 fn event(live: &Live, id: &str, kind: &str) -> Value {
-    events(live, id).into_iter().find(|e| e["kind"] == kind).unwrap_or_else(|| panic!("no {kind} for {id}"))
+    events(live, id)
+        .into_iter()
+        .find(|e| e["kind"] == kind)
+        .unwrap_or_else(|| panic!("no {kind} for {id}"))
 }
 
 /// The names of the windows of the fake tmux server, one per line.
 fn windows(live: &Live) -> String {
     let state = live.fx.tmux_state().expect("the fake tmux server");
-    state.windows().into_iter().map(|w| w.name).collect::<Vec<_>>().join("\n")
+    state
+        .windows()
+        .into_iter()
+        .map(|w| w.name)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Sets the `[hooks]` of the repo `acme/pay`'s policy file: `text` is written as a `.config/wt.toml` was
@@ -291,7 +390,10 @@ fn windows(live: &Live) -> String {
 fn set_hooks(live: &Live, text: &str) {
     let file = format!("[hooks]\n{text}").replace("\n[", "\n[hooks.");
     live.fx.env.repo_policy("acme", "pay", &file);
-    live.fx.git(&live.lead, &["commit", "-q", "--allow-empty", "-m", "hooks"]);
+    live.fx.git(
+        &live.lead,
+        &["commit", "-q", "--allow-empty", "-m", "hooks"],
+    );
 }
 
 /// The argv test of [`After`]: does this call of the program count.
@@ -310,24 +412,45 @@ struct After {
 
 impl After {
     /// The ports of `live` with a runner that runs `cpd <command>` after the first `program` call `when` accepts.
-    fn install(live: &mut Live, program: &'static str, when: impl Fn(&[String]) -> bool + Send + Sync + 'static, command: &'static [&'static str]) {
+    fn install(
+        live: &mut Live,
+        program: &'static str,
+        when: impl Fn(&[String]) -> bool + Send + Sync + 'static,
+        command: &'static [&'static str],
+    ) {
         let inner = live.fx.fakes.ports.runner.clone();
-        let ports = Ports { runner: inner.clone(), ..live.fx.fakes.ports.clone() };
-        let argv: Vec<OsString> = std::iter::once("cpd").chain(command.iter().copied()).map(OsString::from).collect();
+        let ports = Ports {
+            runner: inner.clone(),
+            ..live.fx.fakes.ports.clone()
+        };
+        let argv: Vec<OsString> = std::iter::once("cpd")
+            .chain(command.iter().copied())
+            .map(OsString::from)
+            .collect();
         let then = move || {
             let mut out = Vec::new();
             cpd::run_with(&ports, argv.clone(), &mut out);
             let out: Value = serde_json::from_slice(&out).expect("cpd printed JSON");
             assert_eq!(out["ok"], true, "{out}");
         };
-        let after = After { inner, program, when: Box::new(when), then: Box::new(then), fired: AtomicBool::new(false) };
+        let after = After {
+            inner,
+            program,
+            when: Box::new(when),
+            then: Box::new(then),
+            fired: AtomicBool::new(false),
+        };
         live.fx.fakes.ports.runner = Arc::new(after);
     }
 
     fn after(&self, program: &str, args: &[String], result: &Result<Output, Failed>) {
         let name = Path::new(program).file_name().and_then(|n| n.to_str());
         let ok = result.as_ref().is_ok_and(|out| out.status.success());
-        if ok && name == Some(self.program) && (self.when)(args) && !self.fired.swap(true, Ordering::SeqCst) {
+        if ok
+            && name == Some(self.program)
+            && (self.when)(args)
+            && !self.fired.swap(true, Ordering::SeqCst)
+        {
             (self.then)();
         }
     }
@@ -336,7 +459,10 @@ impl After {
 impl Runner for After {
     fn output(&self, cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Output, Failed> {
         let result = self.inner.output(cmd, tool, deadline);
-        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
         self.after(&cmd.get_program().to_string_lossy(), &args, &result);
         result
     }
@@ -369,9 +495,16 @@ fn add_draft(live: &Live, pr: &str, key: &str) {
 fn merged_data(live: &Live, key: &str) -> Value {
     let all: Vec<Value> = store(&live.fx.env)
         .read(|c| {
-            let mut stmt = c.prepare("SELECT data FROM events WHERE plan = 'pay' AND job = ?1 AND kind = 'job-merged'")?;
-            let rows = stmt.query_map([key], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows.iter().map(|d| serde_json::from_str(d).unwrap()).collect())
+            let mut stmt = c.prepare(
+                "SELECT data FROM events WHERE plan = 'pay' AND job = ?1 AND kind = 'job-merged'",
+            )?;
+            let rows = stmt
+                .query_map([key], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows
+                .iter()
+                .map(|d| serde_json::from_str(d).unwrap())
+                .collect())
         })
         .unwrap();
     assert_eq!(all.len(), 1, "one job-merged for {key}: {all:?}");
@@ -385,7 +518,12 @@ fn job_merged_does_not_turn_while_other_jobs_run() {
     add_job_in(&live.fx.env, "repo", "web", &[]); // queued: the Plan still has work in flight
     let (attempt, _) = live.run_job(JOB, work);
     assert_eq!(attempt["outcome"], "merged", "{attempt}");
-    assert_eq!(merged_data(&live, JOB)["turn"], json!(false), "{}", merged_data(&live, JOB));
+    assert_eq!(
+        merged_data(&live, JOB)["turn"],
+        json!(false),
+        "{}",
+        merged_data(&live, JOB)
+    );
 }
 
 // ---------- PRs across repos (R34) ----------
@@ -430,11 +568,20 @@ fn a_merge_conflict_ends_failed_and_the_next_attempt_retries_the_same_tier_with_
     let attempt = live.attempt(ATTEMPT);
 
     assert_eq!(ran.ok()["outcome"], "failed");
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("failed"), &json!("merge_conflict")));
+    assert_eq!(
+        (&attempt["outcome"], &attempt["cause"]),
+        (&json!("failed"), &json!("merge_conflict"))
+    );
     assert_eq!(live.job_status(JOB), "queued");
     let retry = event(&live, ATTEMPT, "attempt-retry");
     assert_eq!(retry["data"]["next_tier"], "S2");
-    assert!(retry["data"]["feedback"].as_str().unwrap().contains("README.md"), "{retry}");
+    assert!(
+        retry["data"]["feedback"]
+            .as_str()
+            .unwrap()
+            .contains("README.md"),
+        "{retry}"
+    );
     // Failed Attempts keep their worktree for debugging.
     assert!(live.worktree(ATTEMPT).exists());
 
@@ -444,7 +591,10 @@ fn a_merge_conflict_ends_failed_and_the_next_attempt_retries_the_same_tier_with_
             worker_exits(live, id, 4);
         }
     });
-    assert_eq!((&next["attempt"], &next["tier"], &next["origin"]), (&json!("api-a2"), &json!("S2"), &json!("ladder")));
+    assert_eq!(
+        (&next["attempt"], &next["tier"], &next["origin"]),
+        (&json!("api-a2"), &json!("S2"), &json!("ladder"))
+    );
     assert_eq!(live.attempt("api-a2")["cause"], "crashed");
     let spec = fs::read_to_string(live.fx.env.cpd_home().join("run/pay/specs/api-a2.md")).unwrap();
     assert!(spec.contains("### Attempt 1 (Tier `S2`)"), "{spec}");
@@ -453,14 +603,22 @@ fn a_merge_conflict_ends_failed_and_the_next_attempt_retries_the_same_tier_with_
 }
 
 fn kill_window_calls(live: &Live) -> usize {
-    live.fx.calls("tmux").iter().filter(|c| c.args.iter().any(|a| a == "kill-window")).count()
+    live.fx
+        .calls("tmux")
+        .iter()
+        .filter(|c| c.args.iter().any(|a| a == "kill-window"))
+        .count()
 }
 
 #[test]
 fn a_failed_kill_window_is_retried_and_appends_no_error() {
     let live = live("");
     // Fails the first `kill-window` only; every other call is the fake tmux's.
-    (*live.fx.fakes.runner).clone().once("tmux", |c| c.args.iter().any(|a| a == "kill-window"), Reply::exit(1, "", "fake: kill-window failed"));
+    (*live.fx.fakes.runner).clone().once(
+        "tmux",
+        |c| c.args.iter().any(|a| a == "kill-window"),
+        Reply::exit(1, "", "fake: kill-window failed"),
+    );
 
     // The Worker's pi exits 3 at once; its pane stays, dead.
     let (id, _) = live.drive(JOB, |live, id, nap| {
@@ -469,13 +627,29 @@ fn a_failed_kill_window_is_retried_and_appends_no_error() {
         }
     });
 
-    assert_eq!(kill_window_calls(&live), 2, "the first kill-window failed and was tried again");
-    assert!(!windows(&live).contains("pay--api-a1"), "{}", windows(&live));
-    assert!(!kinds(&live, &id).contains(&"error".to_owned()), "{:?}", kinds(&live, &id));
+    assert_eq!(
+        kill_window_calls(&live),
+        2,
+        "the first kill-window failed and was tried again"
+    );
+    assert!(
+        !windows(&live).contains("pay--api-a1"),
+        "{}",
+        windows(&live)
+    );
+    assert!(
+        !kinds(&live, &id).contains(&"error".to_owned()),
+        "{:?}",
+        kinds(&live, &id)
+    );
 }
 
 fn list_panes_calls(live: &Live) -> usize {
-    live.fx.calls("tmux").iter().filter(|argv| argv.args.iter().any(|a| a == "list-panes")).count()
+    live.fx
+        .calls("tmux")
+        .iter()
+        .filter(|argv| argv.args.iter().any(|a| a == "list-panes"))
+        .count()
 }
 
 /// engine-W8 (§6.3 liveness): one tmux hiccup, the server answering neither the first
@@ -484,13 +658,28 @@ fn list_panes_calls(live: &Live) -> usize {
 #[test]
 fn one_failed_list_panes_does_not_end_a_running_attempt_crashed() {
     let live = live("");
-    let (fired, answered) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+    let (fired, answered) = (
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+    );
     let (first, second) = (fired.clone(), (fired.clone(), answered.clone()));
     let runner = (*live.fx.fakes.runner).clone();
     let sub = |c: &Call, name: &str| c.args.iter().any(|a| a == name);
     runner
-        .on("tmux", move |c| sub(c, "list-panes") && !first.swap(true, Ordering::SeqCst), Reply::exit(1, "", "lost server"))
-        .on("tmux", move |c| sub(c, "list-sessions") && second.0.load(Ordering::SeqCst) && !second.1.swap(true, Ordering::SeqCst), Reply::exit(1, "", "lost server"));
+        .on(
+            "tmux",
+            move |c| sub(c, "list-panes") && !first.swap(true, Ordering::SeqCst),
+            Reply::exit(1, "", "lost server"),
+        )
+        .on(
+            "tmux",
+            move |c| {
+                sub(c, "list-sessions")
+                    && second.0.load(Ordering::SeqCst)
+                    && !second.1.swap(true, Ordering::SeqCst)
+            },
+            Reply::exit(1, "", "lost server"),
+        );
 
     // The Worker's pi just runs. Poll 1 is the one that fails; the next polls list again.
     let (id, _) = live.drive(JOB, |live, id, nap| match nap {
@@ -506,7 +695,12 @@ fn one_failed_list_panes_does_not_end_a_running_attempt_crashed() {
         _ => {}
     });
 
-    assert_eq!(live.attempt(&id)["cause"], "timed_out", "log: {}", log(&live, &id));
+    assert_eq!(
+        live.attempt(&id)["cause"],
+        "timed_out",
+        "log: {}",
+        log(&live, &id)
+    );
 }
 
 #[test]
@@ -518,11 +712,24 @@ fn a_failing_pre_start_ends_setup_failed_and_fails_the_job() {
     let (id, _) = live.drive_parallel(JOB, |_, _, _| {});
     let attempt = live.attempt(&id);
 
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("failed"), &json!("setup_failed")));
+    assert_eq!(
+        (&attempt["outcome"], &attempt["cause"]),
+        (&json!("failed"), &json!("setup_failed"))
+    );
     assert_eq!(live.job_status(JOB), "failed");
-    assert_eq!(kinds(&live, ATTEMPT), ["attempt-started", "attempt-ended", "job-failed"]);
+    assert_eq!(
+        kinds(&live, ATTEMPT),
+        ["attempt-started", "attempt-ended", "job-failed"]
+    );
     assert!(live.fx.calls("pi").is_empty());
-    assert!(!live.fx.calls("tmux").iter().any(|c| c.args.iter().any(|a| a == "new-window")), "no Worker window was made");
+    assert!(
+        !live
+            .fx
+            .calls("tmux")
+            .iter()
+            .any(|c| c.args.iter().any(|a| a == "new-window")),
+        "no Worker window was made"
+    );
     assert!(!live.worktree(ATTEMPT).exists());
 }
 
@@ -537,9 +744,16 @@ fn a_timed_out_stop_request_ends_it_and_fails_the_job() {
     });
     let attempt = live.attempt(&id);
 
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("failed"), &json!("timed_out")));
+    assert_eq!(
+        (&attempt["outcome"], &attempt["cause"]),
+        (&json!("failed"), &json!("timed_out"))
+    );
     assert_eq!(live.job_status(JOB), "failed");
-    assert!(!windows(&live).contains("pay--api-a1"), "{}", windows(&live));
+    assert!(
+        !windows(&live).contains("pay--api-a1"),
+        "{}",
+        windows(&live)
+    );
 }
 
 #[test]
@@ -547,7 +761,9 @@ fn an_idle_worker_is_nudged_once_then_ends_no_submit() {
     let live = live("");
     let msg = r#"{"type":"message","timestamp":"2026-10-14T21:00:05.000Z","message":{"role":"assistant","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"cost":{"total":0}},"stopReason":"stop"}}"#;
     let state = |live: &Live, sid: &str, state: &str| {
-        live.fx.cpd(&["session", "state", state, "--session", sid]).ok();
+        live.fx
+            .cpd(&["session", "state", state, "--session", sid])
+            .ok();
     };
 
     let (id, _) = live.drive(JOB, |live, id, nap| {
@@ -558,12 +774,25 @@ fn an_idle_worker_is_nudged_once_then_ends_no_submit() {
             // pi's first turn ends: its session file shows it and its state is idle.
             1 => {
                 fs::create_dir_all(&dir).unwrap();
-                fs::write(&file, format!("{}\n{msg}\n", r#"{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}"#)).unwrap();
+                fs::write(
+                    &file,
+                    format!(
+                        "{}\n{msg}\n",
+                        r#"{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}"#
+                    ),
+                )
+                .unwrap();
                 state(live, &sid, "idle");
             }
             // The nudge came (the poll after it); pi answers it with a second turn and is idle again.
             2 => {
-                assert!(events(live, id).iter().any(|e| e["kind"] == "attempt-nudge"), "{:?}", kinds(live, id));
+                assert!(
+                    events(live, id)
+                        .iter()
+                        .any(|e| e["kind"] == "attempt-nudge"),
+                    "{:?}",
+                    kinds(live, id)
+                );
                 state(live, &sid, "working");
                 let mut text = fs::read_to_string(&file).unwrap();
                 text += &format!("{msg}\n");
@@ -575,21 +804,48 @@ fn an_idle_worker_is_nudged_once_then_ends_no_submit() {
     });
     let attempt = live.attempt(&id);
 
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("failed"), &json!("no_submit")), "{}", log(&live, &id));
+    assert_eq!(
+        (&attempt["outcome"], &attempt["cause"]),
+        (&json!("failed"), &json!("no_submit")),
+        "{}",
+        log(&live, &id)
+    );
     assert_eq!(attempt["nudged"], true);
     let nudge = event(&live, ATTEMPT, "attempt-nudge");
     assert_eq!(nudge["session"], attempt["worker_session"]);
-    assert!(nudge["data"]["prompt"].as_str().unwrap().starts_with("You ended your turn without running cpd attempt submit api-a1."));
-    assert_eq!(kinds(&live, ATTEMPT).iter().filter(|k| *k == "attempt-nudge").count(), 1);
-    assert_eq!(event(&live, ATTEMPT, "attempt-retry")["data"]["cause"], "no_submit");
+    assert!(
+        nudge["data"]["prompt"]
+            .as_str()
+            .unwrap()
+            .starts_with("You ended your turn without running cpd attempt submit api-a1.")
+    );
+    assert_eq!(
+        kinds(&live, ATTEMPT)
+            .iter()
+            .filter(|k| *k == "attempt-nudge")
+            .count(),
+        1
+    );
+    assert_eq!(
+        event(&live, ATTEMPT, "attempt-retry")["data"]["cause"],
+        "no_submit"
+    );
 }
 
 // ---------- cancel at each safe point ----------
 
 fn assert_cancelled(live: &Live, attempt: &Value, reason: &str) {
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("cancelled"), &json!("cancel_requested")), "{}", log(live, ATTEMPT));
+    assert_eq!(
+        (&attempt["outcome"], &attempt["cause"]),
+        (&json!("cancelled"), &json!("cancel_requested")),
+        "{}",
+        log(live, ATTEMPT)
+    );
     assert_eq!(live.job_status(JOB), "cancelled");
-    assert_eq!(event(live, ATTEMPT, "job-cancelled")["data"], json!({"reason": reason}));
+    assert_eq!(
+        event(live, ATTEMPT, "job-cancelled")["data"],
+        json!({"reason": reason})
+    );
 }
 
 #[test]
@@ -598,7 +854,12 @@ fn a_cancel_before_a3_ends_it_before_the_worker_starts() {
     // pre-start runs in A2: the request is there at the safe point before A3.
     let hook = "cpd job cancel api --reason early --plan pay";
     set_hooks(&live, &format!("pre-start = \"{hook}\"\n"));
-    After::install(&mut live, "sh", move |args| args.iter().any(|a| a == hook), &["job", "cancel", JOB, "--reason", "early", "--plan", PLAN]);
+    After::install(
+        &mut live,
+        "sh",
+        move |args| args.iter().any(|a| a == hook),
+        &["job", "cancel", JOB, "--reason", "early", "--plan", PLAN],
+    );
 
     let (id, ran) = live.drive_parallel(JOB, |_, _, _| {});
     let attempt = live.attempt(&id);
@@ -607,7 +868,15 @@ fn a_cancel_before_a3_ends_it_before_the_worker_starts() {
     assert_cancelled(&live, &attempt, "early");
     assert!(attempt["worker_session"].is_null());
     assert!(live.fx.calls("pi").is_empty());
-    assert_eq!(kinds(&live, ATTEMPT), ["attempt-started", "job-cancel-requested", "attempt-ended", "job-cancelled"]);
+    assert_eq!(
+        kinds(&live, ATTEMPT),
+        [
+            "attempt-started",
+            "job-cancel-requested",
+            "attempt-ended",
+            "job-cancelled"
+        ]
+    );
 }
 
 #[test]
@@ -633,19 +902,31 @@ fn a_cancel_before_the_compare_and_swap_ends_it_without_merging() {
     let mut live = live("");
     // The request arrives during the rebase, after the first safe point: git's `post-rewrite` hook runs `job cancel` once the rebase
     // has rewritten the Worker's commit.
-    After::install(&mut live, "git", |args| args.iter().any(|a| a == "rebase"), &["job", "cancel", JOB, "--reason", "late", "--plan", PLAN]);
+    After::install(
+        &mut live,
+        "git",
+        |args| args.iter().any(|a| a == "rebase"),
+        &["job", "cancel", JOB, "--reason", "late", "--plan", PLAN],
+    );
 
     let (id, _) = live.drive_parallel(JOB, |live, id, nap| {
         if nap == 1 {
             // Another Job merges first, so the rebase rewrites the Worker's commit.
-            live.fx.git(&live.lead, &["commit", "-q", "--allow-empty", "-m", "other"]);
+            live.fx.git(
+                &live.lead,
+                &["commit", "-q", "--allow-empty", "-m", "other"],
+            );
             work(live, id);
         }
     });
 
     assert_cancelled(&live, &live.attempt(&id), "late");
     let lead = live.lead_sha();
-    assert_eq!(live.fx.git(&live.repo, &["log", "-1", "--format=%s", &lead]), "other");
+    assert_eq!(
+        live.fx
+            .git(&live.repo, &["log", "-1", "--format=%s", &lead]),
+        "other"
+    );
 }
 
 // ---------- the driver lock ----------
@@ -668,7 +949,10 @@ fn a_driver_without_the_lock_as_fd_3_exits_without_writing() {
     assert_eq!(run.exit, 1, "{run:?}");
     let error = run.error();
     assert_eq!(error["code"], "driver_lock_missing");
-    assert!(error["message"].as_str().unwrap().contains("another file"), "{error}");
+    assert!(
+        error["message"].as_str().unwrap().contains("another file"),
+        "{error}"
+    );
 
     assert_eq!(fx.txns(), before);
     assert_eq!(fx.attempt(ATTEMPT)["status"], "starting");
@@ -696,7 +980,10 @@ fn a_driver_ending_on_store_too_new_leaves_the_infra_marker_and_ends_nothing() {
     let fx = rows();
     let lock = fx.starting();
     // Above any user_version this binary knows (contract §4.5).
-    rusqlite::Connection::open(fx.home().db()).unwrap().pragma_update(None, "user_version", 4999).unwrap();
+    rusqlite::Connection::open(fx.home().db())
+        .unwrap()
+        .pragma_update(None, "user_version", 4999)
+        .unwrap();
     let plan = PlanId::parse(PLAN).unwrap();
     let attempt = AttemptId::parse(ATTEMPT).unwrap();
     let marker = fx.home().attempt_infra(&plan, &attempt);
@@ -705,7 +992,13 @@ fn a_driver_ending_on_store_too_new_leaves_the_infra_marker_and_ends_nothing() {
     let run = fx.run_driver(Some(&lock));
 
     assert_eq!(run.error()["code"], "store_too_new", "{run:?}");
-    assert_eq!(fx.home().infra(&plan, &attempt).unwrap().map(|(infra, _)| infra.code()), Some("store_too_new"));
+    assert_eq!(
+        fx.home()
+            .infra(&plan, &attempt)
+            .unwrap()
+            .map(|(infra, _)| infra.code()),
+        Some("store_too_new")
+    );
 }
 
 /// Another failure of the driver leaves no marker: the ladder counts it.
@@ -718,7 +1011,10 @@ fn a_driver_refusing_for_another_reason_leaves_no_infra_marker() {
     let run = fx.run_driver(Some(&lock));
 
     assert_eq!(run.error()["code"], "illegal_transition", "{run:?}");
-    let marker = fx.home().attempt_infra(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(ATTEMPT).unwrap());
+    let marker = fx.home().attempt_infra(
+        &PlanId::parse(PLAN).unwrap(),
+        &AttemptId::parse(ATTEMPT).unwrap(),
+    );
     assert!(!marker.exists());
 }
 
@@ -738,7 +1034,10 @@ fn dispatch_refuses_a_job_that_is_not_ready() {
 #[test]
 fn dispatch_refuses_a_job_whose_fingerprint_does_not_match() {
     let fx = rows();
-    fx.fixture(&format!("UPDATE jobs SET fingerprint = '{}' WHERE plan = 'pay' AND key = 'api';", "0".repeat(64)));
+    fx.fixture(&format!(
+        "UPDATE jobs SET fingerprint = '{}' WHERE plan = 'pay' AND key = 'api';",
+        "0".repeat(64)
+    ));
     refused(&fx.dispatch(JOB), "locked_job_tampered", 3);
     assert_eq!(fx.job_status(JOB), "queued");
 }
@@ -746,9 +1045,17 @@ fn dispatch_refuses_a_job_whose_fingerprint_does_not_match() {
 #[test]
 fn dispatch_refuses_when_the_driver_lock_is_held() {
     let fx = rows();
-    let lock = fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(ATTEMPT).unwrap());
+    let lock = fx.home().attempt_lock(
+        &PlanId::parse(PLAN).unwrap(),
+        &AttemptId::parse(ATTEMPT).unwrap(),
+    );
     fs::create_dir_all(lock.parent().unwrap()).unwrap();
-    let held = OpenOptions::new().create(true).truncate(false).write(true).open(&lock).unwrap();
+    let held = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock)
+        .unwrap();
     held.try_lock().unwrap();
     let before = fx.txns();
 
@@ -777,7 +1084,12 @@ fn dispatch_refuses_when_no_slot_is_free() {
 
     refused(&fx.dispatch(JOB), "no_slot", 3);
     assert_eq!(fx.job_status(JOB), "queued");
-    assert_eq!(fx.fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 0);
+    assert_eq!(
+        fx.fx
+            .env
+            .query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"),
+        0
+    );
 }
 
 #[test]
@@ -791,7 +1103,9 @@ fn dispatch_after_job_retry_starts_a_retry_attempt_at_the_chosen_tier() {
          UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'api-a1';
          UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE plan = 'pay' AND key = 'api';",
     );
-    live.fx.cpd(&["job", "retry", JOB, "--tier", "S3", "--plan", PLAN]).ok();
+    live.fx
+        .cpd(&["job", "retry", JOB, "--tier", "S3", "--plan", PLAN])
+        .ok();
 
     // The Worker's pi exits 0 at once.
     let (out, _) = drive_with_out(&live, JOB, |live, id, nap| {
@@ -800,10 +1114,15 @@ fn dispatch_after_job_retry_starts_a_retry_attempt_at_the_chosen_tier() {
         }
     });
 
-    assert_eq!((&out["attempt"], &out["tier"], &out["origin"]), (&json!("api-a2"), &json!("S3"), &json!("retry")));
+    assert_eq!(
+        (&out["attempt"], &out["tier"], &out["origin"]),
+        (&json!("api-a2"), &json!("S3"), &json!("retry"))
+    );
     assert_eq!(live.attempt("api-a2")["origin"], "retry");
-    assert_eq!(event(&live, "api-a2", "attempt-started")["data"], json!({"number": 2, "tier": "S3", "origin": "retry"}));
+    assert_eq!(
+        event(&live, "api-a2", "attempt-started")["data"],
+        json!({"number": 2, "tier": "S3", "origin": "retry"})
+    );
 }
 
 // ---------- the update Job ----------
-

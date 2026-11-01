@@ -18,8 +18,11 @@ pub(super) struct WatchLock {
 }
 
 fn failed(path: &Path, what: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the engine's lock {}: {what}.", path.display()))
-        .with("lock", path.display().to_string())
+    CpdError::new(
+        ErrorCode::StoreFailed,
+        format!("Cannot use the engine's lock {}: {what}.", path.display()),
+    )
+    .with("lock", path.display().to_string())
 }
 
 fn open(path: &Path) -> Result<File, CpdError> {
@@ -27,7 +30,13 @@ fn open(path: &Path) -> Result<File, CpdError> {
         fs::create_dir_all(dir).map_err(|e| failed(path, e))?;
     }
     // Close-on-exec (std's default), so no child of the engine keeps it alive.
-    OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| failed(path, e))
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|e| failed(path, e))
 }
 
 /// Tries the exclusive lock on a fresh descriptor; `None` when held.
@@ -44,8 +53,11 @@ impl WatchLock {
         let path = home.watch_lock();
         match try_take(&path)? {
             Some(file) => Ok(WatchLock { file, path }),
-            None => Err(CpdError::new(ErrorCode::WatchRunning, "The engine is already running on this machine: there is one per machine.")
-                .with("lock", path.display().to_string())),
+            None => Err(CpdError::new(
+                ErrorCode::WatchRunning,
+                "The engine is already running on this machine: there is one per machine.",
+            )
+            .with("lock", path.display().to_string())),
         }
     }
 }
@@ -57,12 +69,17 @@ impl WatchLock {
     ///
     /// The mark is the UTC time `clock` reads (`Clock::utc`).
     pub(super) fn touch_with(&self, clock: &dyn Clock) -> Result<(), CpdError> {
-        self.file.set_modified(SystemTime::from(clock.utc())).map_err(|e| failed(&self.path, format!("cannot mark it alive: {e}")))
+        self.file
+            .set_modified(SystemTime::from(clock.utc()))
+            .map_err(|e| failed(&self.path, format!("cannot mark it alive: {e}")))
     }
 
     /// When the engine that held the lock last [`touch_with`](Self::touch_with)ed it.
     pub(super) fn last_alive(&self) -> Result<SystemTime, CpdError> {
-        self.file.metadata().and_then(|m| m.modified()).map_err(|e| failed(&self.path, format!("cannot read when it was alive: {e}")))
+        self.file
+            .metadata()
+            .and_then(|m| m.modified())
+            .map_err(|e| failed(&self.path, format!("cannot read when it was alive: {e}")))
     }
 }
 

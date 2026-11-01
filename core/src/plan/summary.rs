@@ -20,8 +20,13 @@ const OVERLAPS_SHOWN: usize = 5;
 /// Which summary: the Plan's own (`plan render`) or a review's.
 pub enum Kind<'a> {
     /// `full_plan` is the absolute path of `plan.md`, which the last line names.
-    Plan { full_plan: &'a Path },
-    Review { title: &'a str, review: &'a str },
+    Plan {
+        full_plan: &'a Path,
+    },
+    Review {
+        title: &'a str,
+        review: &'a str,
+    },
 }
 
 /// What the summary reads besides the Plan row.
@@ -45,7 +50,14 @@ fn locked(job: &Job) -> bool {
 }
 
 fn repo_name(pr: &PrRow) -> String {
-    pr.name.clone().or_else(|| Path::new(&pr.repo).file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| pr.repo.clone())
+    pr.name
+        .clone()
+        .or_else(|| {
+            Path::new(&pr.repo)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| pr.repo.clone())
 }
 
 /// `Order:` and `Stacked on:` (block 7): empty when no PR counts.
@@ -67,10 +79,24 @@ fn order(i: &Input, counting: &[&PrRow]) -> Vec<String> {
     if !tied.is_empty() {
         items.push(tied.into_iter().collect::<Vec<_>>().join(" · "));
     }
-    let stacked: Vec<String> = counting.iter().filter_map(|p| i.base_prs.get(p.key.as_str()).map(|base| format!("{} on {base}", p.key))).collect();
+    let stacked: Vec<String> = counting
+        .iter()
+        .filter_map(|p| {
+            i.base_prs
+                .get(p.key.as_str())
+                .map(|base| format!("{} on {base}", p.key))
+        })
+        .collect();
     vec![
         format!("Order: {}", items.join(", ")),
-        format!("Stacked on: {}", if stacked.is_empty() { "none".to_owned() } else { stacked.join(", ") }),
+        format!(
+            "Stacked on: {}",
+            if stacked.is_empty() {
+                "none".to_owned()
+            } else {
+                stacked.join(", ")
+            }
+        ),
     ]
 }
 
@@ -82,18 +108,32 @@ fn overlaps_block(overlaps: &[Overlap]) -> Vec<String> {
     for o in overlaps.iter().take(OVERLAPS_SHOWN) {
         let (path, other) = (o.paths.first().map_or("", String::as_str), &o.other_jobs[0]);
         let more = o.paths.len() - 1 + o.other_jobs.len() - 1;
-        let more = if more > 0 { format!(" +{more}") } else { String::new() };
-        out.push(format!("- {path}: {}/{}/{} ({}){more}", o.plan, o.pr, other.key, other.status));
+        let more = if more > 0 {
+            format!(" +{more}")
+        } else {
+            String::new()
+        };
+        out.push(format!(
+            "- {path}: {}/{}/{} ({}){more}",
+            o.plan, o.pr, other.key, other.status
+        ));
     }
     if overlaps.len() > OVERLAPS_SHOWN {
-        out.push(format!("- +{} more overlaps", overlaps.len() - OVERLAPS_SHOWN));
+        out.push(format!(
+            "- +{} more overlaps",
+            overlaps.len() - OVERLAPS_SHOWN
+        ));
     }
     out
 }
 
 /// A block of `head` and its rows; no block when there are no rows.
 fn list(head: &str, rows: Vec<String>) -> Vec<String> {
-    if rows.is_empty() { Vec::new() } else { [vec![head.to_owned()], rows].concat() }
+    if rows.is_empty() {
+        Vec::new()
+    } else {
+        [vec![head.to_owned()], rows].concat()
+    }
 }
 
 /// The summary of `i`, as `kind` says.
@@ -108,37 +148,82 @@ pub fn markdown(kind: &Kind, i: &Input) -> String {
 
     let mut blocks: Vec<Vec<String>> = Vec::new();
     blocks.push(match kind {
-        Kind::Plan { .. } => vec![format!("# Plan: {}", inline(&plan.title)), format!("Plan {} · phase {}", plan.id, plan.phase.as_str())],
+        Kind::Plan { .. } => vec![
+            format!("# Plan: {}", inline(&plan.title)),
+            format!("Plan {} · phase {}", plan.id, plan.phase.as_str()),
+        ],
         Kind::Review { title, review } => {
-            vec![format!("# {}", inline(title)), format!("Plan {}: {} · review {review}", plan.id, inline(&plan.title))]
+            vec![
+                format!("# {}", inline(title)),
+                format!(
+                    "Plan {}: {} · review {review}",
+                    plan.id,
+                    inline(&plan.title)
+                ),
+            ]
         }
     });
-    blocks.push(vec![format!("Goal: {}", outline.map_or(NONE.to_owned(), |o| inline(&o.goal)))]);
+    blocks.push(vec![format!(
+        "Goal: {}",
+        outline.map_or(NONE.to_owned(), |o| inline(&o.goal))
+    )]);
 
     let mut prs = vec!["## PRs".to_owned()];
     for pr in counting.iter().filter(|p| has_review(p)) {
         let title = pr.title.as_deref().map_or(NONE.to_owned(), inline);
-        prs.push(format!("- {} ({}, base {}): {title}", pr.key, inline(&repo_name(pr)), inline(&pr.base)));
-        for done in outline.and_then(|o| o.done_when.get(pr.key.as_str())).into_iter().flatten() {
+        prs.push(format!(
+            "- {} ({}, base {}): {title}",
+            pr.key,
+            inline(&repo_name(pr)),
+            inline(&pr.base)
+        ));
+        for done in outline
+            .and_then(|o| o.done_when.get(pr.key.as_str()))
+            .into_iter()
+            .flatten()
+        {
             prs.push(format!("  Done when: {}", inline(done)));
         }
     }
     blocks.push(if prs.len() > 1 { prs } else { Vec::new() });
 
     let decisions = outline.iter().flat_map(|o| &o.decisions).enumerate();
-    blocks.push(list("## Decisions", decisions.map(|(n, d)| format!("D{} {} → {}", n + 1, inline(&d.question), inline(&d.answer))).collect()));
+    blocks.push(list(
+        "## Decisions",
+        decisions
+            .map(|(n, d)| format!("D{} {} → {}", n + 1, inline(&d.question), inline(&d.answer)))
+            .collect(),
+    ));
     let assumptions = outline.iter().flat_map(|o| &o.assumptions).enumerate();
-    blocks.push(list("## Assumptions", assumptions.map(|(n, a)| format!("A{} {}", n + 1, inline(a))).collect()));
+    blocks.push(list(
+        "## Assumptions",
+        assumptions
+            .map(|(n, a)| format!("A{} {}", n + 1, inline(a)))
+            .collect(),
+    ));
 
     let locked_jobs = i.jobs.iter().filter(|j| locked(j)).count();
     let mut jobs = vec![
-        format!("## Jobs ({} under review, {locked_jobs} locked)", reviewed.len()),
+        format!(
+            "## Jobs ({} under review, {locked_jobs} locked)",
+            reviewed.len()
+        ),
         "| Job | Title | Tier | Needs |".to_owned(),
         "|---|---|---|---|".to_owned(),
     ];
     for job in &reviewed {
-        let needs = if job.needs.is_empty() { NONE.to_owned() } else { job.needs.join(", ") };
-        jobs.push(format!("| {} | {} | {} | {} |", cell(&job.key), cell(&job.title), job.tier.as_deref().unwrap_or(NONE), cell(&needs)));
+        let needs = if job.needs.is_empty() {
+            NONE.to_owned()
+        } else {
+            job.needs.join(", ")
+        };
+        jobs.push(format!(
+            "| {} | {} | {} | {} |",
+            cell(&job.key),
+            cell(&job.title),
+            job.tier.as_deref().unwrap_or(NONE),
+            cell(&needs)
+        ));
     }
     blocks.push(jobs);
 
@@ -148,23 +233,51 @@ pub fn markdown(kind: &Kind, i: &Input) -> String {
         blocks.push(vec![format!("Decided: {}", o.decided.join(", "))]);
     }
 
-    let mut stubs: Vec<&Job> = i.jobs.iter().filter(|j| j.is_draft() && !j.missing().is_empty()).collect();
+    let mut stubs: Vec<&Job> = i
+        .jobs
+        .iter()
+        .filter(|j| j.is_draft() && !j.missing().is_empty())
+        .collect();
     stubs.sort_by(|a, b| a.key.cmp(&b.key));
-    let later: Vec<String> =
-        stubs.iter().map(|j| j.key.clone()).chain(counting.iter().filter(|p| !has_review(p)).map(|p| format!("PR {}", p.key))).collect();
+    let later: Vec<String> = stubs
+        .iter()
+        .map(|j| j.key.clone())
+        .chain(
+            counting
+                .iter()
+                .filter(|p| !has_review(p))
+                .map(|p| format!("PR {}", p.key)),
+        )
+        .collect();
     if !later.is_empty() {
         blocks.push(vec![format!("Later: {}", later.join(", "))]);
     }
 
     let risks = outline.iter().flat_map(|o| &o.risks).enumerate();
-    blocks.push(list("## Risks", risks.map(|(n, r)| format!("R{} {}", n + 1, inline(r))).collect()));
-    blocks.push(list("## Out of scope", outline.iter().flat_map(|o| &o.out_of_scope).map(|s| format!("- {}", inline(s))).collect()));
+    blocks.push(list(
+        "## Risks",
+        risks
+            .map(|(n, r)| format!("R{} {}", n + 1, inline(r)))
+            .collect(),
+    ));
+    blocks.push(list(
+        "## Out of scope",
+        outline
+            .iter()
+            .flat_map(|o| &o.out_of_scope)
+            .map(|s| format!("- {}", inline(s)))
+            .collect(),
+    ));
 
     blocks.push(vec![match kind {
         Kind::Plan { full_plan } => format!("Full plan ({})", full_plan.display()),
         Kind::Review { .. } => "Approve | Change".to_owned(),
     }]);
 
-    let blocks: Vec<String> = blocks.into_iter().filter(|b| !b.is_empty()).map(|b| b.join("\n")).collect();
+    let blocks: Vec<String> = blocks
+        .into_iter()
+        .filter(|b| !b.is_empty())
+        .map(|b| b.join("\n"))
+        .collect();
     format!("{}\n", blocks.join("\n\n"))
 }

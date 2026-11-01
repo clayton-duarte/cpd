@@ -57,7 +57,13 @@ mod tests {
     fn pair() -> (tempfile::TempDir, File, File) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("x.lock");
-        let a = File::options().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
+        let a = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
         let b = File::options().read(true).write(true).open(&path).unwrap();
         (dir, a, b)
     }
@@ -77,7 +83,11 @@ mod tests {
         let (_dir, a, b) = pair();
         assert!(shared(&a).unwrap());
         assert!(shared(&b).unwrap());
-        let c = File::options().read(true).write(true).open(_dir.path().join("x.lock")).unwrap();
+        let c = File::options()
+            .read(true)
+            .write(true)
+            .open(_dir.path().join("x.lock"))
+            .unwrap();
         assert!(!try_lock(&c).unwrap());
     }
 
@@ -104,13 +114,22 @@ mod tests {
     /// the `flock` API.
     #[test]
     fn no_other_file_takes_a_flock() {
-        const TOKENS: [&str; 6] = ["Flock::", "FlockArg", "nix::fcntl::Flock", ".try_lock(", ".try_lock_shared(", ".lock_shared("];
+        const TOKENS: [&str; 6] = [
+            "Flock::",
+            "FlockArg",
+            "nix::fcntl::Flock",
+            ".try_lock(",
+            ".try_lock_shared(",
+            ".lock_shared(",
+        ];
         fn walk(dir: &Path, found: &mut Vec<String>) {
             for entry in fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
                 if path.is_dir() {
                     walk(&path, found);
-                } else if path.extension().is_some_and(|e| e == "rs") && !path.ends_with("src/lock.rs") {
+                } else if path.extension().is_some_and(|e| e == "rs")
+                    && !path.ends_with("src/lock.rs")
+                {
                     let text = fs::read_to_string(&path).unwrap();
                     for token in TOKENS {
                         if text.contains(token) {
@@ -121,7 +140,14 @@ mod tests {
             }
         }
         let mut found = Vec::new();
-        walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut found);
-        assert!(found.is_empty(), "flock outside core/src/lock.rs:\n{}", found.join("\n"));
+        walk(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut found,
+        );
+        assert!(
+            found.is_empty(),
+            "flock outside core/src/lock.rs:\n{}",
+            found.join("\n")
+        );
     }
 }

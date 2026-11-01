@@ -11,8 +11,20 @@ fn wrap_splits_wide_text_by_columns_not_characters() {
     let lines = vec![Line::from("計".repeat(10))];
     let rows = wrap(&lines, 10);
     for (i, row) in rows.iter().enumerate() {
-        assert!(row.width() <= 10, "row {i} is {} columns wide in a 10-column body: {row:?}", row.width());
+        assert!(
+            row.width() <= 10,
+            "row {i} is {} columns wide in a 10-column body: {row:?}",
+            row.width()
+        );
     }
-    assert_eq!(rows.len(), 2, "twenty columns at width ten are two rows: {rows:?}");
-    assert_eq!(rows.iter().map(Line::width).sum::<usize>(), 20, "the two rows keep all twenty columns");
+    assert_eq!(
+        rows.len(),
+        2,
+        "twenty columns at width ten are two rows: {rows:?}"
+    );
+    assert_eq!(
+        rows.iter().map(Line::width).sum::<usize>(),
+        20,
+        "the two rows keep all twenty columns"
+    );
 }

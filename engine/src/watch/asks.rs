@@ -26,7 +26,10 @@ fn text(ask: &RepeatedAsk, minutes: i64) -> String {
 }
 
 /// Tells each case's Context's live Manager once, ever. With no live Manager nothing is written. Returns how many were sent.
-pub(super) fn tell_repeated_asks(store: &mut Store, asks: &[RepeatedAsk]) -> Result<usize, CpdError> {
+pub(super) fn tell_repeated_asks(
+    store: &mut Store,
+    asks: &[RepeatedAsk],
+) -> Result<usize, CpdError> {
     let mut sent = 0;
     for ask in asks {
         let untold = store.read(|conn| match live_manager(conn, &ask.context)? {
@@ -37,7 +40,9 @@ pub(super) fn tell_repeated_asks(store: &mut Store, asks: &[RepeatedAsk]) -> Res
             continue;
         }
         let text = text(ask, ask.minutes);
-        sent += store.write(SOURCE, |tx| tell_manager_of(tx, Some(ask.context.as_str()), &text))?;
+        sent += store.write(SOURCE, |tx| {
+            tell_manager_of(tx, Some(ask.context.as_str()), &text)
+        })?;
     }
     Ok(sent)
 }

@@ -55,7 +55,9 @@ fn write_executable_over_a_running_script_does_not_fail() {
     let mut cmd = env.command(&path);
     cmd.env("PATH", env.bin())
         .env("CPD_SESSION", "s1")
-        .args(["secret", "create", "item", "--vault", "cpd", "--field", "field"])
+        .args([
+            "secret", "create", "item", "--vault", "cpd", "--field", "field",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

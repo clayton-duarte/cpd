@@ -60,7 +60,10 @@ pub(super) fn effort_of_level(level: &str) -> Option<Option<u8>> {
     if level == "minimal" {
         return Some(None);
     }
-    LEVELS.iter().position(|l| *l == level).map(|i| Some(i as u8))
+    LEVELS
+        .iter()
+        .position(|l| *l == level)
+        .map(|i| Some(i as u8))
 }
 
 /// The Tiers a Worker may have (pro-d53, hs-d554), as `details.allowed` and the message give them.
@@ -84,10 +87,16 @@ impl Tier {
     /// `tier_invalid` (exit 2) when `s` is not `^(O|S|H)([0-5])$` or `GX`.
     pub fn parse(s: &str) -> Result<Tier, CpdError> {
         if s == "GX" {
-            return Ok(Tier { letter: Letter::G, effort: 0 });
+            return Ok(Tier {
+                letter: Letter::G,
+                effort: 0,
+            });
         }
         let mut peek = s.chars();
-        if peek.next() == Some('G') && peek.next().is_some_and(|c| c.is_ascii_digit()) && peek.next().is_none() {
+        if peek.next() == Some('G')
+            && peek.next().is_some_and(|c| c.is_ascii_digit())
+            && peek.next().is_none()
+        {
             return Err(CpdError::new(
                 ErrorCode::TierInvalid,
                 format!("invalid Tier {s:?}: G has no effort, write GX (hs-d562)."),
@@ -245,7 +254,11 @@ impl Catalog {
         let efforts: Vec<String> = model.efforts.iter().map(u8::to_string).collect();
         Err(CpdError::new(
             ErrorCode::TierInvalid,
-            format!("Tier {tier} is not valid: {} supports efforts {}.", model.model, efforts.join(",")),
+            format!(
+                "Tier {tier} is not valid: {} supports efforts {}.",
+                model.model,
+                efforts.join(",")
+            ),
         )
         .with("tier", tier.to_string())
         .with("model", model.model.clone())
@@ -255,7 +268,11 @@ impl Catalog {
     /// pi's `--model` argument for `tier`: `<provider>/<model-id>:<level>`.
     pub fn model_arg(&self, tier: Tier) -> Result<String, CpdError> {
         self.check(tier)?;
-        Ok(format!("{}:{}", self.model(tier.letter).model, tier.level()))
+        Ok(format!(
+            "{}:{}",
+            self.model(tier.letter).model,
+            tier.level()
+        ))
     }
 
     /// The ladder's next step (contract §9, pro-d82, pro-d83, hs-d554, hs-d791): within the same
@@ -282,10 +299,21 @@ impl Catalog {
         {
             return Ok(Some(up));
         }
-        let at = Letter::LADDER.iter().position(|l| *l == tier.letter).expect("an allowed letter is on the ladder");
+        let at = Letter::LADDER
+            .iter()
+            .position(|l| *l == tier.letter)
+            .expect("an allowed letter is on the ladder");
         for letter in &Letter::LADDER[at + 1..] {
-            let lowest = self.model(*letter).efforts.iter().copied().find(|e| *e >= 1);
-            if let Some(next) = lowest.and_then(|effort| Tier::new(*letter, effort)).filter(allowed) {
+            let lowest = self
+                .model(*letter)
+                .efforts
+                .iter()
+                .copied()
+                .find(|e| *e >= 1);
+            if let Some(next) = lowest
+                .and_then(|effort| Tier::new(*letter, effort))
+                .filter(allowed)
+            {
                 return Ok(Some(next));
             }
         }
@@ -315,10 +343,21 @@ impl Catalog {
             return Some(same);
         }
         // Then `H → S`, at the lowest valid effort at or above the Tier's.
-        let at = Letter::LADDER.iter().position(|l| *l == tier.letter).expect("an allowed letter is on the ladder");
+        let at = Letter::LADDER
+            .iter()
+            .position(|l| *l == tier.letter)
+            .expect("an allowed letter is on the ladder");
         for letter in &Letter::LADDER[at + 1..] {
-            let lowest = self.model(*letter).efforts.iter().copied().find(|e| *e >= 1);
-            if let Some(next) = lowest.and_then(|effort| Tier::new(*letter, effort)).filter(allowed) {
+            let lowest = self
+                .model(*letter)
+                .efforts
+                .iter()
+                .copied()
+                .find(|e| *e >= 1);
+            if let Some(next) = lowest
+                .and_then(|effort| Tier::new(*letter, effort))
+                .filter(allowed)
+            {
                 return Some(next);
             }
         }

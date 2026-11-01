@@ -11,7 +11,9 @@ use crate::host::runner::{Call, Handler, Reply};
 use crate::ports::Fakes;
 
 fn cargo_toml(version: &str) -> String {
-    format!("[workspace]\nmembers = []\n\n[workspace.package]\nversion = \"{version}\"\npublish = false\n\n[workspace.dependencies]\nclap = {{ version = \"4.6\" }}\n")
+    format!(
+        "[workspace]\nmembers = []\n\n[workspace.package]\nversion = \"{version}\"\npublish = false\n\n[workspace.dependencies]\nclap = {{ version = \"4.6\" }}\n"
+    )
 }
 
 fn version_of(toml: &str) -> Option<String> {
@@ -48,7 +50,11 @@ fn fail(stderr: &str) -> Reply {
 }
 
 fn oid_of(tag: &Tag) -> String {
-    if tag.0 { format!("a{}", &tag.1[1..]) } else { tag.1.clone() }
+    if tag.0 {
+        format!("a{}", &tag.1[1..])
+    } else {
+        tag.1.clone()
+    }
 }
 
 impl Handler for Origin {
@@ -61,25 +67,40 @@ impl Handler for Origin {
         }
         let sub = args.first().copied().unwrap_or("");
         if sub == "ls-remote"
-            && let Some((asked, sha)) = s.racing.clone() {
-                s.racing = Some((asked + 1, sha.clone()));
-                if asked >= 1 {
-                    let name = args.last().unwrap().trim_end_matches("^{}").trim_start_matches("refs/tags/").to_owned();
-                    s.origin_tags.insert(name, (true, sha));
-                }
+            && let Some((asked, sha)) = s.racing.clone()
+        {
+            s.racing = Some((asked + 1, sha.clone()));
+            if asked >= 1 {
+                let name = args
+                    .last()
+                    .unwrap()
+                    .trim_end_matches("^{}")
+                    .trim_start_matches("refs/tags/")
+                    .to_owned();
+                s.origin_tags.insert(name, (true, sha));
             }
+        }
         let failing = s.failing.contains(&sub);
-        
+
         match (sub, &args[1..]) {
             _ if failing => fail("fatal: scripted failure\n"),
             ("fetch", ["--quiet", "origin", "main"]) => Reply::ok(""),
             ("show", [spec]) => match spec.split_once(':') {
-                Some(("origin/main", "Cargo.toml")) => match s.commits.last().and_then(|c| c.1.clone()) {
-                    Some(text) => Reply::ok(&text),
-                    None => fail("fatal: path 'Cargo.toml' does not exist in 'origin/main'\n"),
-                },
-                Some(("HEAD", "Cargo.toml")) => Reply::ok(&s.checkout_toml.clone().unwrap_or_default()),
-                Some((sha, "Cargo.toml")) => match s.commits.iter().find(|c| c.0 == sha).and_then(|c| c.1.clone()) {
+                Some(("origin/main", "Cargo.toml")) => {
+                    match s.commits.last().and_then(|c| c.1.clone()) {
+                        Some(text) => Reply::ok(&text),
+                        None => fail("fatal: path 'Cargo.toml' does not exist in 'origin/main'\n"),
+                    }
+                }
+                Some(("HEAD", "Cargo.toml")) => {
+                    Reply::ok(&s.checkout_toml.clone().unwrap_or_default())
+                }
+                Some((sha, "Cargo.toml")) => match s
+                    .commits
+                    .iter()
+                    .find(|c| c.0 == sha)
+                    .and_then(|c| c.1.clone())
+                {
                     Some(text) => Reply::ok(&text),
                     None => fail("fatal: bad object\n"),
                 },
@@ -96,35 +117,69 @@ impl Handler for Origin {
                     _ => Reply::ok(""),
                 }
             }
-            ("log", ["-1", "--first-parent", g, "--format=%H", "origin/main", "--", "Cargo.toml"]) if g.starts_with("-G") => {
+            (
+                "log",
+                [
+                    "-1",
+                    "--first-parent",
+                    g,
+                    "--format=%H",
+                    "origin/main",
+                    "--",
+                    "Cargo.toml",
+                ],
+            ) if g.starts_with("-G") => {
                 match s.log_says.clone() {
-                    Some(sha) => Reply::ok(&if sha.is_empty() { sha } else { format!("{sha}\n") }),
+                    Some(sha) => Reply::ok(&if sha.is_empty() {
+                        sha
+                    } else {
+                        format!("{sha}\n")
+                    }),
                     None => {
                         // The newest commit whose Cargo.toml version differs from its parent's.
-                        let versions: Vec<Option<String>> = s.commits.iter().map(|c| c.1.as_deref().and_then(version_of)).collect();
-                        let hit = (0..versions.len()).rev().find(|&i| versions[i].is_some() && (i == 0 || versions[i - 1] != versions[i]));
-                        Reply::ok(&hit.map(|i| format!("{}\n", s.commits[i].0)).unwrap_or_default())
+                        let versions: Vec<Option<String>> = s
+                            .commits
+                            .iter()
+                            .map(|c| c.1.as_deref().and_then(version_of))
+                            .collect();
+                        let hit = (0..versions.len()).rev().find(|&i| {
+                            versions[i].is_some() && (i == 0 || versions[i - 1] != versions[i])
+                        });
+                        Reply::ok(
+                            &hit.map(|i| format!("{}\n", s.commits[i].0))
+                                .unwrap_or_default(),
+                        )
                     }
                 }
             }
-            ("rev-parse", ["-q", "--verify", name]) => match s.local_tags.get(name.trim_start_matches("refs/tags/")) {
-                Some(t) => Reply::ok(&format!("{}\n", oid_of(t))),
-                None => Reply::exit(1, "", ""),
-            },
+            ("rev-parse", ["-q", "--verify", name]) => {
+                match s.local_tags.get(name.trim_start_matches("refs/tags/")) {
+                    Some(t) => Reply::ok(&format!("{}\n", oid_of(t))),
+                    None => Reply::exit(1, "", ""),
+                }
+            }
             ("rev-parse", [spec]) if spec.ends_with("^{commit}") => {
-                let name = spec.trim_end_matches("^{commit}").trim_start_matches("refs/tags/");
+                let name = spec
+                    .trim_end_matches("^{commit}")
+                    .trim_start_matches("refs/tags/");
                 match s.local_tags.get(name) {
                     Some(t) => Reply::ok(&format!("{}\n", t.1)),
                     None => fail("fatal: bad revision\n"),
                 }
             }
             ("tag", ["-a", name, sha, "-m", message]) if name == message => {
-                s.local_tags.insert((*name).to_owned(), (true, (*sha).to_owned()));
+                s.local_tags
+                    .insert((*name).to_owned(), (true, (*sha).to_owned()));
                 Reply::ok("")
             }
-            ("push", ["--quiet", "origin", spec]) => match s.local_tags.get(spec.trim_start_matches("refs/tags/")).cloned() {
+            ("push", ["--quiet", "origin", spec]) => match s
+                .local_tags
+                .get(spec.trim_start_matches("refs/tags/"))
+                .cloned()
+            {
                 Some(t) => {
-                    s.origin_tags.insert(spec.trim_start_matches("refs/tags/").to_owned(), t);
+                    s.origin_tags
+                        .insert(spec.trim_start_matches("refs/tags/").to_owned(), t);
                     Reply::ok("")
                 }
                 None => fail("error: src refspec does not match any\n"),
@@ -160,7 +215,14 @@ impl Fixture {
         let fakes = Fakes::new();
         let origin = Arc::new(Origin(Mutex::new(State::default())));
         let _ = (*fakes.runner).clone().route("git", origin.clone());
-        let fx = Fixture { fakes, origin, root: Path::new("/repo").to_owned(), c1: sha(1), c2: sha(2), c3: sha(3) };
+        let fx = Fixture {
+            fakes,
+            origin,
+            root: Path::new("/repo").to_owned(),
+            c1: sha(1),
+            c2: sha(2),
+            c3: sha(3),
+        };
         fx.push_commit(&fx.c1, Some(&cargo_toml("0.0.5")));
         fx.push_commit(&fx.c2, Some(&cargo_toml("0.13.45")));
         fx.push_commit(&fx.c3, Some(&cargo_toml("0.13.45")));
@@ -180,7 +242,12 @@ impl Fixture {
     }
 
     fn origin_tags(&self) -> Vec<(String, Tag)> {
-        self.state(|s| s.origin_tags.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        self.state(|s| {
+            s.origin_tags
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        })
     }
 
     fn origin_tag(&self, name: &str) -> Option<Tag> {
@@ -201,7 +268,15 @@ impl Fixture {
             .calls()
             .iter()
             .map(|c| {
-                let a: Vec<&String> = c.args.iter().skip(if c.args.first().map(String::as_str) == Some("-C") { 2 } else { 0 }).collect();
+                let a: Vec<&String> = c
+                    .args
+                    .iter()
+                    .skip(if c.args.first().map(String::as_str) == Some("-C") {
+                        2
+                    } else {
+                        0
+                    })
+                    .collect();
                 a.first().map(|s| s.to_string()).unwrap_or_default()
             })
             .collect()
@@ -214,11 +289,17 @@ fn tags_the_commit_that_last_changed_the_version() {
 
     let line = fx.run().unwrap_or_else(|e| panic!("{e}"));
 
-    let (annotated, target) = fx.origin_tag("v0.13.45").unwrap_or_else(|| panic!("origin has no v0.13.45: {:?}", fx.origin_tags()));
+    let (annotated, target) = fx
+        .origin_tag("v0.13.45")
+        .unwrap_or_else(|| panic!("origin has no v0.13.45: {:?}", fx.origin_tags()));
     assert!(annotated, "the tag is annotated");
     assert_eq!(target, fx.c2, "v0.13.45 is on c2, not on c3 ({})", fx.c3);
     assert_eq!(line, format!("tag-version: tagged v0.13.45 on {}", fx.c2));
-    assert!(fx.state(|s| s.refused.is_empty()), "{:?}", fx.state(|s| s.refused.clone()));
+    assert!(
+        fx.state(|s| s.refused.is_empty()),
+        "{:?}",
+        fx.state(|s| s.refused.clone())
+    );
 }
 
 #[test]
@@ -234,7 +315,10 @@ fn a_second_run_changes_nothing() {
     assert_eq!(line, "tag-version: v0.13.45 exists; nothing to do");
     assert_eq!(fx.origin_tags(), before);
     let second: Vec<String> = fx.subcommands().split_off(calls);
-    assert!(!second.iter().any(|s| s == "tag" || s == "push"), "the second run wrote: {second:?}");
+    assert!(
+        !second.iter().any(|s| s == "tag" || s == "push"),
+        "the second run wrote: {second:?}"
+    );
 }
 
 #[test]
@@ -244,7 +328,11 @@ fn an_existing_remote_tag_is_left_alone() {
 
     let line = fx.run().unwrap_or_else(|e| panic!("{e}"));
 
-    assert_eq!(fx.origin_tag("v0.13.45").map(|t| t.1), Some(fx.c1.clone()), "the tag still points at c1");
+    assert_eq!(
+        fx.origin_tag("v0.13.45").map(|t| t.1),
+        Some(fx.c1.clone()),
+        "the tag still points at c1"
+    );
     assert_eq!(line, "tag-version: v0.13.45 exists; nothing to do");
     assert!(fx.local_tags().is_empty(), "no local tag");
 }
@@ -260,8 +348,16 @@ fn a_new_version_gets_its_own_tag() {
     let line = fx.run().unwrap_or_else(|e| panic!("{e}"));
 
     assert_eq!(line, format!("tag-version: tagged v0.13.46 on {c4}"));
-    assert_eq!(fx.origin_tag("v0.13.46").map(|t| t.1), Some(c4), "v0.13.46 is on c4");
-    assert_eq!(fx.origin_tag("v0.13.45").map(|t| t.1), Some(fx.c2.clone()), "v0.13.45 stays on c2");
+    assert_eq!(
+        fx.origin_tag("v0.13.46").map(|t| t.1),
+        Some(c4),
+        "v0.13.46 is on c4"
+    );
+    assert_eq!(
+        fx.origin_tag("v0.13.45").map(|t| t.1),
+        Some(fx.c2.clone()),
+        "v0.13.45 stays on c2"
+    );
 }
 
 #[test]
@@ -272,11 +368,24 @@ fn it_reads_origin_main_not_the_checkout() {
     let line = fx.run().unwrap_or_else(|e| panic!("{e}"));
 
     assert_eq!(line, format!("tag-version: tagged v0.13.45 on {}", fx.c2));
-    assert_eq!(fx.origin_tag("v0.13.45").map(|t| t.1), Some(fx.c2.clone()), "{:?}", fx.origin_tags());
+    assert_eq!(
+        fx.origin_tag("v0.13.45").map(|t| t.1),
+        Some(fx.c2.clone()),
+        "{:?}",
+        fx.origin_tags()
+    );
     assert!(fx.origin_tag("v0.99.9").is_none(), "{:?}", fx.origin_tags());
-    assert!(!fx.local_tags().contains(&"v0.99.9".to_owned()), "no local v0.99.9");
+    assert!(
+        !fx.local_tags().contains(&"v0.99.9".to_owned()),
+        "no local v0.99.9"
+    );
     let subs = fx.subcommands();
-    assert!(!subs.iter().any(|s| ["checkout", "switch", "reset", "merge", "pull"].contains(&s.as_str())), "no checkout: {subs:?}");
+    assert!(
+        !subs
+            .iter()
+            .any(|s| ["checkout", "switch", "reset", "merge", "pull"].contains(&s.as_str())),
+        "no checkout: {subs:?}"
+    );
 }
 
 #[test]
@@ -300,8 +409,16 @@ fn a_local_tag_whose_push_failed_is_pushed_by_the_next_run() {
     let line = fx.run().unwrap_or_else(|e| panic!("{e}"));
 
     assert_eq!(line, format!("tag-version: tagged v0.13.45 on {}", fx.c2));
-    assert_eq!(fx.origin_tag("v0.13.45").map(|t| t.1), Some(fx.c2.clone()), "{:?}", fx.origin_tags());
-    assert!(!fx.subcommands().iter().any(|s| s == "tag"), "the local tag is not created again");
+    assert_eq!(
+        fx.origin_tag("v0.13.45").map(|t| t.1),
+        Some(fx.c2.clone()),
+        "{:?}",
+        fx.origin_tags()
+    );
+    assert!(
+        !fx.subcommands().iter().any(|s| s == "tag"),
+        "the local tag is not created again"
+    );
 }
 
 // ---- every other `tag-version:` line of commands.md §26.1 ----
@@ -311,16 +428,25 @@ fn no_cargo_toml_on_origin_main_fails_loud() {
     let fx = Fixture::new();
     fx.push_commit(&sha(4), None);
 
-    assert_eq!(fx.run(), Err("tag-version: cannot read Cargo.toml on origin/main".to_owned()));
+    assert_eq!(
+        fx.run(),
+        Err("tag-version: cannot read Cargo.toml on origin/main".to_owned())
+    );
     assert!(fx.origin_tags().is_empty());
 }
 
 #[test]
 fn no_workspace_version_fails_loud() {
     let fx = Fixture::new();
-    fx.push_commit(&sha(4), Some("[workspace]\nmembers = []\n\n[workspace.dependencies]\nversion = \"1\"\n"));
+    fx.push_commit(
+        &sha(4),
+        Some("[workspace]\nmembers = []\n\n[workspace.dependencies]\nversion = \"1\"\n"),
+    );
 
-    assert_eq!(fx.run(), Err("tag-version: no workspace version in Cargo.toml on origin/main".to_owned()));
+    assert_eq!(
+        fx.run(),
+        Err("tag-version: no workspace version in Cargo.toml on origin/main".to_owned())
+    );
     assert!(fx.origin_tags().is_empty());
 }
 
@@ -329,7 +455,10 @@ fn a_failing_ls_remote_fails_loud_and_tags_nothing() {
     let fx = Fixture::new();
     fx.fails("ls-remote");
 
-    assert_eq!(fx.run(), Err("tag-version: cannot list the tags of origin".to_owned()));
+    assert_eq!(
+        fx.run(),
+        Err("tag-version: cannot list the tags of origin".to_owned())
+    );
     assert!(fx.local_tags().is_empty() && fx.origin_tags().is_empty());
 }
 
@@ -338,7 +467,10 @@ fn a_failing_log_fails_loud_and_tags_nothing() {
     let fx = Fixture::new();
     fx.fails("log");
 
-    assert_eq!(fx.run(), Err("tag-version: cannot find the commit that set v0.13.45".to_owned()));
+    assert_eq!(
+        fx.run(),
+        Err("tag-version: cannot find the commit that set v0.13.45".to_owned())
+    );
     assert!(fx.local_tags().is_empty() && fx.origin_tags().is_empty());
 }
 
@@ -347,7 +479,10 @@ fn an_empty_log_fails_loud_and_tags_nothing() {
     let fx = Fixture::new();
     fx.state(|s| s.log_says = Some(String::new()));
 
-    assert_eq!(fx.run(), Err("tag-version: no commit on origin/main changed the version".to_owned()));
+    assert_eq!(
+        fx.run(),
+        Err("tag-version: no commit on origin/main changed the version".to_owned())
+    );
     assert!(fx.local_tags().is_empty() && fx.origin_tags().is_empty());
 }
 
@@ -356,7 +491,13 @@ fn a_commit_with_another_version_fails_loud_and_tags_nothing() {
     let fx = Fixture::new();
     fx.state(|s| s.log_says = Some(sha(1)));
 
-    assert_eq!(fx.run(), Err(format!("tag-version: commit {} has version '0.0.5', not 0.13.45", fx.c1)));
+    assert_eq!(
+        fx.run(),
+        Err(format!(
+            "tag-version: commit {} has version '0.0.5', not 0.13.45",
+            fx.c1
+        ))
+    );
     assert!(fx.local_tags().is_empty() && fx.origin_tags().is_empty());
 }
 
@@ -365,9 +506,18 @@ fn a_local_tag_that_points_elsewhere_fails_loud_and_pushes_nothing() {
     let fx = Fixture::new();
     fx.state(|s| s.local_tags.insert("v0.13.45".to_owned(), (true, sha(1))));
 
-    assert_eq!(fx.run(), Err(format!("tag-version: local tag v0.13.45 points at {}, not {}", fx.c1, fx.c2)));
+    assert_eq!(
+        fx.run(),
+        Err(format!(
+            "tag-version: local tag v0.13.45 points at {}, not {}",
+            fx.c1, fx.c2
+        ))
+    );
     assert!(fx.origin_tags().is_empty());
-    assert!(!fx.subcommands().iter().any(|s| s == "push"), "nothing is pushed");
+    assert!(
+        !fx.subcommands().iter().any(|s| s == "push"),
+        "nothing is pushed"
+    );
 }
 
 #[test]
@@ -375,9 +525,15 @@ fn a_failing_tag_fails_loud_and_pushes_nothing() {
     let fx = Fixture::new();
     fx.fails("tag");
 
-    assert_eq!(fx.run(), Err("tag-version: cannot create v0.13.45".to_owned()));
+    assert_eq!(
+        fx.run(),
+        Err("tag-version: cannot create v0.13.45".to_owned())
+    );
     assert!(fx.origin_tags().is_empty());
-    assert!(!fx.subcommands().iter().any(|s| s == "push"), "nothing is pushed");
+    assert!(
+        !fx.subcommands().iter().any(|s| s == "push"),
+        "nothing is pushed"
+    );
 }
 
 #[test]
@@ -385,7 +541,10 @@ fn a_failing_push_that_left_the_remote_without_the_commit_fails_loud() {
     let fx = Fixture::new();
     fx.fails("push");
 
-    assert_eq!(fx.run(), Err("tag-version: push of v0.13.45 failed".to_owned()));
+    assert_eq!(
+        fx.run(),
+        Err("tag-version: push of v0.13.45 failed".to_owned())
+    );
     assert!(fx.origin_tags().is_empty());
 }
 

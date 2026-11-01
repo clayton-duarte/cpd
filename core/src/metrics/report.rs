@@ -55,7 +55,13 @@ struct Agg {
 }
 
 impl Agg {
-    fn add(&mut self, outcome: Option<&str>, cause: Option<&str>, duration: Option<f64>, cost: Option<f64>) {
+    fn add(
+        &mut self,
+        outcome: Option<&str>,
+        cause: Option<&str>,
+        duration: Option<f64>,
+        cost: Option<f64>,
+    ) {
         self.attempts += 1;
         if outcome == Some("merged") {
             self.merged += 1;
@@ -247,13 +253,25 @@ impl Report {
                 Ok((tiers, models, tier_model, retries, plans, queue_avg, queue_max, job_blocked as u64))
             })?;
 
-        Ok(Report { store, tiers, models, tier_model, retries, plans, queue_avg, queue_max, job_blocked })
+        Ok(Report {
+            store,
+            tiers,
+            models,
+            tier_model,
+            retries,
+            plans,
+            queue_avg,
+            queue_max,
+            job_blocked,
+        })
     }
 
     /// The default JSON value (commands.md §14.7): `store`, `per_tier`, `per_model`, `retries`, `plans`, `queue`.
     fn to_json(&self) -> Value {
-        let per_tier: BTreeMap<&String, Value> = self.tiers.iter().map(|(k, a)| (k, a.to_json())).collect();
-        let per_model: BTreeMap<&String, Value> = self.models.iter().map(|(k, a)| (k, a.to_json())).collect();
+        let per_tier: BTreeMap<&String, Value> =
+            self.tiers.iter().map(|(k, a)| (k, a.to_json())).collect();
+        let per_model: BTreeMap<&String, Value> =
+            self.models.iter().map(|(k, a)| (k, a.to_json())).collect();
         json!({
             "store": self.store,
             "per_tier": per_tier,
@@ -273,15 +291,27 @@ impl Report {
 
         family(&mut out, "cpd_attempts", "Attempts per tier and model.");
         for ((tier, model), n) in &self.tier_model {
-            out.push_str(&format!("cpd_attempts{{tier=\"{}\",model=\"{}\"}} {n}\n", escape(tier), escape(model)));
+            out.push_str(&format!(
+                "cpd_attempts{{tier=\"{}\",model=\"{}\"}} {n}\n",
+                escape(tier),
+                escape(model)
+            ));
         }
 
         family(&mut out, "cpd_attempts_merged", "Merged attempts per tier.");
         for (tier, a) in &self.tiers {
-            out.push_str(&format!("cpd_attempts_merged{{tier=\"{}\"}} {}\n", escape(tier), a.merged));
+            out.push_str(&format!(
+                "cpd_attempts_merged{{tier=\"{}\"}} {}\n",
+                escape(tier),
+                a.merged
+            ));
         }
 
-        family(&mut out, "cpd_attempts_failed", "Failed attempts per tier and cause.");
+        family(
+            &mut out,
+            "cpd_attempts_failed",
+            "Failed attempts per tier and cause.",
+        );
         for (tier, a) in &self.tiers {
             for (cause, n) in &a.failed_by_cause {
                 out.push_str(&format!(
@@ -292,7 +322,11 @@ impl Report {
             }
         }
 
-        family(&mut out, "cpd_attempt_duration_seconds", "Attempt duration in seconds per tier.");
+        family(
+            &mut out,
+            "cpd_attempt_duration_seconds",
+            "Attempt duration in seconds per tier.",
+        );
         for (tier, a) in &self.tiers {
             out.push_str(&format!(
                 "cpd_attempt_duration_seconds{{tier=\"{}\",stat=\"avg\"}} {}\n",
@@ -306,37 +340,79 @@ impl Report {
             ));
         }
 
-        family(&mut out, "cpd_attempt_cost_usd_total", "Total attempt cost in USD per tier.");
+        family(
+            &mut out,
+            "cpd_attempt_cost_usd_total",
+            "Total attempt cost in USD per tier.",
+        );
         for (tier, a) in &self.tiers {
-            out.push_str(&format!("cpd_attempt_cost_usd_total{{tier=\"{}\"}} {}\n", escape(tier), a.cost_total));
+            out.push_str(&format!(
+                "cpd_attempt_cost_usd_total{{tier=\"{}\"}} {}\n",
+                escape(tier),
+                a.cost_total
+            ));
         }
 
-        family(&mut out, "cpd_attempt_cost_usd_avg", "Average attempt cost in USD per tier.");
+        family(
+            &mut out,
+            "cpd_attempt_cost_usd_avg",
+            "Average attempt cost in USD per tier.",
+        );
         for (tier, a) in &self.tiers {
-            out.push_str(&format!("cpd_attempt_cost_usd_avg{{tier=\"{}\"}} {}\n", escape(tier), a.avg_cost()));
+            out.push_str(&format!(
+                "cpd_attempt_cost_usd_avg{{tier=\"{}\"}} {}\n",
+                escape(tier),
+                a.avg_cost()
+            ));
         }
 
         family(&mut out, "cpd_model_attempts", "Attempts per model.");
         for (model, a) in &self.models {
-            out.push_str(&format!("cpd_model_attempts{{model=\"{}\"}} {}\n", escape(model), a.attempts));
+            out.push_str(&format!(
+                "cpd_model_attempts{{model=\"{}\"}} {}\n",
+                escape(model),
+                a.attempts
+            ));
         }
 
-        family(&mut out, "cpd_model_cost_usd_total", "Total attempt cost in USD per model.");
+        family(
+            &mut out,
+            "cpd_model_cost_usd_total",
+            "Total attempt cost in USD per model.",
+        );
         for (model, a) in &self.models {
-            out.push_str(&format!("cpd_model_cost_usd_total{{model=\"{}\"}} {}\n", escape(model), a.cost_total));
+            out.push_str(&format!(
+                "cpd_model_cost_usd_total{{model=\"{}\"}} {}\n",
+                escape(model),
+                a.cost_total
+            ));
         }
 
         family(&mut out, "cpd_attempt_retries", "Retries per cause.");
         for (cause, n) in &self.retries {
-            out.push_str(&format!("cpd_attempt_retries{{cause=\"{}\"}} {n}\n", escape(cause)));
+            out.push_str(&format!(
+                "cpd_attempt_retries{{cause=\"{}\"}} {n}\n",
+                escape(cause)
+            ));
         }
 
-        family(&mut out, "cpd_plan_cost_usd_per_merged_pr", "Attempt cost in USD per merged pull request, per Plan.");
+        family(
+            &mut out,
+            "cpd_plan_cost_usd_per_merged_pr",
+            "Attempt cost in USD per merged pull request, per Plan.",
+        );
         for (plan, v) in &self.plans {
-            out.push_str(&format!("cpd_plan_cost_usd_per_merged_pr{{plan=\"{}\"}} {v}\n", escape(plan)));
+            out.push_str(&format!(
+                "cpd_plan_cost_usd_per_merged_pr{{plan=\"{}\"}} {v}\n",
+                escape(plan)
+            ));
         }
 
-        family(&mut out, "cpd_queue_wait_seconds", "Job-added to first attempt-started wait in seconds.");
+        family(
+            &mut out,
+            "cpd_queue_wait_seconds",
+            "Job-added to first attempt-started wait in seconds.",
+        );
         out.push_str(&format!(
             "cpd_queue_wait_seconds{{phase=\"added_to_started\",stat=\"avg\"}} {}\n",
             self.queue_avg
@@ -346,7 +422,11 @@ impl Report {
             self.queue_max
         ));
 
-        family(&mut out, "cpd_job_blocked_episodes", "Job-blocked episodes.");
+        family(
+            &mut out,
+            "cpd_job_blocked_episodes",
+            "Job-blocked episodes.",
+        );
         out.push_str(&format!("cpd_job_blocked_episodes {}\n", self.job_blocked));
 
         out
@@ -361,12 +441,17 @@ fn family(out: &mut String, name: &str, help: &str) {
 
 /// A label value escaped per the Prometheus text format: backslash, double quote and newline.
 fn escape(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }
 
 /// The seconds since the epoch of an RFC 3339 timestamp, or None when it does not parse.
 fn parse_at(text: &str) -> Option<f64> {
-    OffsetDateTime::parse(text, &Rfc3339).ok().map(|t| t.unix_timestamp_nanos() as f64 / 1_000_000_000.0)
+    OffsetDateTime::parse(text, &Rfc3339)
+        .ok()
+        .map(|t| t.unix_timestamp_nanos() as f64 / 1_000_000_000.0)
 }
 
 #[cfg(test)]
@@ -391,6 +476,9 @@ mod tests {
     #[test]
     fn empty_aggregate_is_zero() {
         let a = Agg::default();
-        assert_eq!((a.avg_duration(), a.median_duration(), a.avg_cost()), (0.0, 0.0, 0.0));
+        assert_eq!(
+            (a.avg_duration(), a.median_duration(), a.avg_cost()),
+            (0.0, 0.0, 0.0)
+        );
     }
 }

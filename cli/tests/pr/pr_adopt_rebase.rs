@@ -35,7 +35,10 @@ struct Fx {
 /// of Plan `pay` adopts #7 and is in `status`, its Lead worktree on `pay/web` cut from `origin/feat/x`.
 fn fx(status: &str) -> Fx {
     let env = TestEnv::new();
-    let config = format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket());
+    let config = format!(
+        "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[tmux]\nsocket = \"{}\"\n",
+        env.tmux_socket()
+    );
     fs::write(env.cpd_home().join("config.toml"), config).unwrap();
     env.owner_policy("acme", "[pr]\ngate = \"ci\"\n");
     env.fake_gh(&GH.replace("ROOT", &env.root().display().to_string()));
@@ -65,12 +68,48 @@ fn fx(status: &str) -> Fx {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at)
            VALUES ('pay', 'ctx', 'Pay the bills', 'plan', 'lead1', 't');",
     );
-    env.cpd(&["pr", "add", "web", "--repo", repo.to_str().unwrap(), "--title", "Polish", "--shape", "config", "--adopt", "7", "--plan", "pay"]).ok();
-    env.cpd(&["job", "cancel", "web-config", "--reason", "a stub of the template", "--plan", "pay"]).ok();
+    env.cpd(&[
+        "pr",
+        "add",
+        "web",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        "Polish",
+        "--shape",
+        "config",
+        "--adopt",
+        "7",
+        "--plan",
+        "pay",
+    ])
+    .ok();
+    env.cpd(&[
+        "job",
+        "cancel",
+        "web-config",
+        "--reason",
+        "a stub of the template",
+        "--plan",
+        "pay",
+    ])
+    .ok();
 
     // The start of the PR, as `pr start` leaves it: the Lead worktree on the local branch, cut from the remote head.
     let lead = repo.parent().unwrap().join("pay.pay.web");
-    env.git(&repo, &["worktree", "add", "-q", "--no-track", "-b", "pay/web", lead.to_str().unwrap(), "origin/feat/x"]);
+    env.git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--no-track",
+            "-b",
+            "pay/web",
+            lead.to_str().unwrap(),
+            "origin/feat/x",
+        ],
+    );
     env.git(&lead, &["config", "user.name", "cpd test"]);
     env.git(&lead, &["config", "user.email", "test@cpd.invalid"]);
     let opened = if status == "open" {
@@ -89,7 +128,12 @@ fn fx(status: &str) -> Fx {
          {opened}",
         lead.display()
     ));
-    Fx { env, repo, origin, lead }
+    Fx {
+        env,
+        repo,
+        origin,
+        lead,
+    }
 }
 
 impl Fx {
@@ -126,8 +170,19 @@ impl Fx {
     /// Someone else commits `name` (with `content`) to `branch` of `origin`, through a second clone the repo has not fetched
     /// from. Returns the new tip.
     fn push_by_someone(&self, branch: &str, name: &str, content: &str) -> String {
-        let clone = self.env.root().join(format!("clone-{}", branch.replace('/', "-")));
-        self.git(self.env.root(), &["clone", "-q", self.origin.to_str().unwrap(), clone.to_str().unwrap()]);
+        let clone = self
+            .env
+            .root()
+            .join(format!("clone-{}", branch.replace('/', "-")));
+        self.git(
+            self.env.root(),
+            &[
+                "clone",
+                "-q",
+                self.origin.to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        );
         self.git(&clone, &["config", "user.name", "someone"]);
         self.git(&clone, &["config", "user.email", "someone@cpd.invalid"]);
         self.git(&clone, &["checkout", "-q", branch]);
@@ -139,12 +194,16 @@ impl Fx {
     }
 
     fn is_ancestor(&self, ancestor: &str, of: &str) -> bool {
-        self.git(&self.repo, &["merge-base", ancestor, of]) == self.git(&self.repo, &["rev-parse", ancestor])
+        self.git(&self.repo, &["merge-base", ancestor, of])
+            == self.git(&self.repo, &["rev-parse", ancestor])
     }
 
     fn rebasing(&self) -> bool {
         ["rebase-merge", "rebase-apply"].iter().any(|name| {
-            let path = self.git(&self.lead, &["rev-parse", "--path-format=absolute", "--git-path", name]);
+            let path = self.git(
+                &self.lead,
+                &["rev-parse", "--path-format=absolute", "--git-path", name],
+            );
             Path::new(&path).exists()
         })
     }
@@ -163,16 +222,47 @@ fn rebase_puts_the_unpushed_commits_on_the_moved_remote_head_and_pushes_plain() 
     let out: Value = fx.rebase(&[]).ok();
 
     let new = fx.lead_sha();
-    assert_eq!(out, json!({"ok": true, "plan": "pay", "pr": "web", "rebased": true, "old": b, "new": new, "pushed": true}));
-    assert!(fx.is_ancestor(&moved, &new), "the Lead Branch holds the moved remote head");
-    assert_eq!(fx.git(&fx.repo, &["rev-list", "--count", &format!("{moved}..{new}")]), "2", "plus the PR's own two commits");
-    assert_eq!(fx.git(&fx.repo, &["rev-list", "--merges", &new]), "", "linear");
-    assert!(!fx.is_ancestor(&a, &new) && !fx.is_ancestor(&b, &new), "the old commits are gone");
+    assert_eq!(
+        out,
+        json!({"ok": true, "plan": "pay", "pr": "web", "rebased": true, "old": b, "new": new, "pushed": true})
+    );
+    assert!(
+        fx.is_ancestor(&moved, &new),
+        "the Lead Branch holds the moved remote head"
+    );
+    assert_eq!(
+        fx.git(
+            &fx.repo,
+            &["rev-list", "--count", &format!("{moved}..{new}")]
+        ),
+        "2",
+        "plus the PR's own two commits"
+    );
+    assert_eq!(
+        fx.git(&fx.repo, &["rev-list", "--merges", &new]),
+        "",
+        "linear"
+    );
+    assert!(
+        !fx.is_ancestor(&a, &new) && !fx.is_ancestor(&b, &new),
+        "the old commits are gone"
+    );
     assert_eq!(fx.git(&fx.repo, &["show", &format!("{new}:a.txt")]), "a");
     assert_eq!(fx.git(&fx.repo, &["show", &format!("{new}:b.txt")]), "b");
-    assert_eq!(fx.git(&fx.repo, &["show", &format!("{new}:remote.txt")]), "remote");
-    assert_eq!(fx.remote_head(), new, "pushed plain, under denyNonFastForwards");
-    assert_eq!(fx.git(&fx.origin, &["branch", "--list", "pay/*"]), "", "no pay/* branch on origin");
+    assert_eq!(
+        fx.git(&fx.repo, &["show", &format!("{new}:remote.txt")]),
+        "remote"
+    );
+    assert_eq!(
+        fx.remote_head(),
+        new,
+        "pushed plain, under denyNonFastForwards"
+    );
+    assert_eq!(
+        fx.git(&fx.origin, &["branch", "--list", "pay/*"]),
+        "",
+        "no pay/* branch on origin"
+    );
     assert_eq!(fx.git(&fx.lead, &["status", "--porcelain"]), "");
 }
 
@@ -188,7 +278,10 @@ fn rebase_never_rebases_onto_the_base() {
 
     let new = fx.lead_sha();
     assert!(fx.is_ancestor(&moved, &new), "it caught up with the head");
-    assert!(!fx.is_ancestor(&base, &new), "the new main commit is not in the Lead Branch");
+    assert!(
+        !fx.is_ancestor(&base, &new),
+        "the new main commit is not in the Lead Branch"
+    );
     assert_eq!(fx.remote_head(), new);
     assert_eq!(fx.remote_main(), base, "main untouched");
 }
@@ -201,10 +294,21 @@ fn rebase_fast_forwards_when_nothing_is_unpushed() {
 
     let out = fx.rebase(&[]).ok();
 
-    assert_eq!(fx.lead_sha(), moved, "the Lead Branch fast-forwarded to the remote tip");
-    assert_eq!(out, json!({"ok": true, "plan": "pay", "pr": "web", "rebased": true, "old": old, "new": moved, "pushed": false}));
+    assert_eq!(
+        fx.lead_sha(),
+        moved,
+        "the Lead Branch fast-forwarded to the remote tip"
+    );
+    assert_eq!(
+        out,
+        json!({"ok": true, "plan": "pay", "pr": "web", "rebased": true, "old": old, "new": moved, "pushed": false})
+    );
     assert_eq!(fx.remote_head(), moved, "nothing to push");
-    assert_eq!(fx.git(&fx.lead, &["rev-parse", "HEAD"]), moved, "the Lead worktree followed");
+    assert_eq!(
+        fx.git(&fx.lead, &["rev-parse", "HEAD"]),
+        moved,
+        "the Lead worktree followed"
+    );
 }
 
 #[test]
@@ -257,7 +361,10 @@ fn a_conflict_stops_and_continue_finishes_with_a_plain_push() {
 
     assert_eq!(code(&run), ("rebase_conflict".into(), 3));
     assert_eq!(run.error()["details"]["files"], json!(["clash.txt"]));
-    assert_eq!(run.error()["details"]["worktree"], fx.lead.to_str().unwrap());
+    assert_eq!(
+        run.error()["details"]["worktree"],
+        fx.lead.to_str().unwrap()
+    );
     assert!(fx.rebasing(), "the rebase waits in the Lead worktree");
     assert_eq!(fx.lead_sha(), old);
     assert_eq!(fx.remote_head(), moved, "nothing pushed");
@@ -267,10 +374,20 @@ fn a_conflict_stops_and_continue_finishes_with_a_plain_push() {
     let out = fx.rebase(&["--continue"]).ok();
 
     let new = fx.lead_sha();
-    assert_eq!(out, json!({"ok": true, "plan": "pay", "pr": "web", "rebased": true, "old": old, "new": new, "pushed": true}));
+    assert_eq!(
+        out,
+        json!({"ok": true, "plan": "pay", "pr": "web", "rebased": true, "old": old, "new": new, "pushed": true})
+    );
     assert!(!fx.rebasing());
     assert!(fx.is_ancestor(&moved, &new));
     assert_eq!(fx.git(&fx.repo, &["rev-list", "--merges", &new]), "");
-    assert_eq!(fx.git(&fx.repo, &["show", &format!("{new}:clash.txt")]), "resolved");
-    assert_eq!(fx.remote_head(), new, "pushed plain, under denyNonFastForwards");
+    assert_eq!(
+        fx.git(&fx.repo, &["show", &format!("{new}:clash.txt")]),
+        "resolved"
+    );
+    assert_eq!(
+        fx.remote_head(),
+        new,
+        "pushed plain, under denyNonFastForwards"
+    );
 }

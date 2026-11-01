@@ -20,7 +20,9 @@ pub(crate) fn truncate(text: &str, width: usize) -> String {
     if self::width(text) <= width {
         return text.to_string();
     }
-    let Some(room) = width.checked_sub(1) else { return String::new() };
+    let Some(room) = width.checked_sub(1) else {
+        return String::new();
+    };
     format!("{}…", take(text, room))
 }
 

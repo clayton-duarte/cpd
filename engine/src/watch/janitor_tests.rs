@@ -39,27 +39,51 @@ fn e16_starts_the_janitor_on_the_first_tick_and_then_every_janitor_minutes() {
 
     tick(&mut fx);
     let launches = started(&fakes);
-    assert_eq!(launches.len(), 1, "the first tick of an engine's life starts a pass: {launches:?}");
+    assert_eq!(
+        launches.len(),
+        1,
+        "the first tick of an engine's life starts a pass: {launches:?}"
+    );
     assert_eq!(launches[0].program, "/fake/cpd");
     assert_eq!(launches[0].args, ["janitor"]);
     assert!(launches[0].setsid, "detached");
-    assert_eq!(launches[0].stdout_to, Some(cpd_core::janitor::log_path(&fx.engine.home)), "its output is in the janitor log");
+    assert_eq!(
+        launches[0].stdout_to,
+        Some(cpd_core::janitor::log_path(&fx.engine.home)),
+        "its output is in the janitor log"
+    );
 
     fakes.clock.advance(Duration::from_secs(9 * 60 + 59));
     tick(&mut fx);
-    assert_eq!(started(&fakes).len(), 1, "a tick before janitor_minutes later starts none");
+    assert_eq!(
+        started(&fakes).len(),
+        1,
+        "a tick before janitor_minutes later starts none"
+    );
 
     fakes.clock.advance(Duration::from_secs(1));
     tick(&mut fx);
-    assert_eq!(started(&fakes).len(), 2, "a tick at janitor_minutes starts one");
+    assert_eq!(
+        started(&fakes).len(),
+        2,
+        "a tick at janitor_minutes starts one"
+    );
 
     fakes.clock.advance(Duration::from_secs(9 * 60));
     tick(&mut fx);
-    assert_eq!(started(&fakes).len(), 2, "the window counts from the last start");
+    assert_eq!(
+        started(&fakes).len(),
+        2,
+        "the window counts from the last start"
+    );
 
     fakes.clock.advance(Duration::from_secs(5 * 60));
     tick(&mut fx);
-    assert_eq!(started(&fakes).len(), 3, "a tick after janitor_minutes starts one");
+    assert_eq!(
+        started(&fakes).len(),
+        3,
+        "a tick after janitor_minutes starts one"
+    );
 }
 
 #[test]
@@ -68,7 +92,10 @@ fn e16_starts_nothing_while_the_janitor_lock_is_held() {
     let locks = fx.engine.home.locks_dir();
     fs::create_dir_all(&locks).unwrap();
     let held = File::create(locks.join("janitor.lock")).unwrap();
-    assert!(cpd_core::lock::try_lock(&held).unwrap(), "the test takes the lock");
+    assert!(
+        cpd_core::lock::try_lock(&held).unwrap(),
+        "the test takes the lock"
+    );
 
     tick(&mut fx);
     fakes.clock.advance(Duration::from_secs(3600));
@@ -90,7 +117,11 @@ fn e16_holds_while_incident_mode_is_on() {
 
     tick(&mut fx);
 
-    assert!(watch_log(&fx).contains("E16: holding: incident mode is on"), "{}", watch_log(&fx));
+    assert!(
+        watch_log(&fx).contains("E16: holding: incident mode is on"),
+        "{}",
+        watch_log(&fx)
+    );
     assert!(started(&fakes).is_empty(), "{:?}", started(&fakes));
 }
 
@@ -105,6 +136,9 @@ fn e16_reports_a_failed_spawn_as_spawn_failed() {
 
     let errors = fx.events("error");
     assert_eq!(errors.len(), 1, "{errors:?}");
-    assert_eq!((&errors[0].3["source"], &errors[0].3["code"]), (&json!("watch"), &json!("spawn_failed")));
+    assert_eq!(
+        (&errors[0].3["source"], &errors[0].3["code"]),
+        (&json!("watch"), &json!("spawn_failed"))
+    );
     assert!(started(&fakes).is_empty());
 }

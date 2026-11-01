@@ -19,7 +19,9 @@ pub(super) fn run(engine: &mut Engine) {
         Ok(plans) => {
             for plan in plans {
                 match cancel(engine, &plan) {
-                    Ok(()) => engine.log.line(&format!("E20: cancelled the drafts of archived Plan {plan}")),
+                    Ok(()) => engine.log.line(&format!(
+                        "E20: cancelled the drafts of archived Plan {plan}"
+                    )),
                     Err(e) => engine.fail(Step::E20, About::Plan(plan), &e),
                 }
             }
@@ -31,7 +33,9 @@ pub(super) fn run(engine: &mut Engine) {
             for (plan, lead) in leads {
                 match wake(engine, &plan, &lead) {
                     Ok(true) => {
-                        engine.log.line(&format!("E20: woke the Lead of Plan {plan}: its drafts are parked"));
+                        engine.log.line(&format!(
+                            "E20: woke the Lead of Plan {plan}: its drafts are parked"
+                        ));
                         engine.clear(Step::E20, &About::Plan(plan));
                     }
                     Ok(false) => engine.clear(Step::E20, &About::Plan(plan)),
@@ -50,7 +54,9 @@ fn archived_plans(engine: &mut Engine) -> Result<Vec<PlanId>, CpdError> {
 
 /// W2: one transaction per Plan, which writes nothing when the Plan has no draft left.
 fn cancel(engine: &mut Engine, plan: &PlanId) -> Result<(), CpdError> {
-    engine.store.write(SOURCE, |tx| cancel_archived_drafts(tx, plan))
+    engine
+        .store
+        .write(SOURCE, |tx| cancel_archived_drafts(tx, plan))
 }
 
 /// The live Plans not held by an incident whose Lead is a live Lead in state `idle`.

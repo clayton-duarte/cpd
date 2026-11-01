@@ -22,11 +22,11 @@ use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 use cpd_tui::ViewError;
-use nix::fcntl::{Flock, FlockArg};
 use cpd_tui::palette;
 use cpd_tui::pump::{Feed, Signal};
 use cpd_tui::view_ports::Ctx;
 use cpd_tui::widgets;
+use nix::fcntl::{Flock, FlockArg};
 use ratatui::crossterm::event::{Event, KeyCode, MouseEventKind};
 
 use super::fx::Fx;
@@ -40,7 +40,10 @@ pub const W: usize = 46;
 /// Row 1 of an item (trimmed): ` <glyph> <label>`, spaces, and the `age` ending at column `W - 2`; the last column is blank.
 /// An item is one row, or two when it has a subtitle: [`item_rows`] returns its rows.
 pub fn item_row(glyph: &str, label: &str, age: &str) -> String {
-    format!(" {glyph} {label}{}{age}", " ".repeat(W - 4 - label.chars().count() - age.chars().count()))
+    format!(
+        " {glyph} {label}{}{age}",
+        " ".repeat(W - 4 - label.chars().count() - age.chars().count())
+    )
 }
 
 /// The rows of an item (trimmed): Row 1 is [`item_row`]; Row 2 is three spaces then the `subtitle` (the column, then the
@@ -74,8 +77,14 @@ pub fn open_at(home: &Path) -> Store {
 /// [`World`], which cannot hold the `Fx`.
 pub fn engine_at(home: &Path) -> Flock<File> {
     let path = home.join("locks/watch.lock");
-    std::fs::create_dir_all(path.parent().expect("the locks directory")).expect("create the locks directory");
-    Flock::lock(File::create(path).expect("the engine lock file"), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).expect("lock the engine")
+    std::fs::create_dir_all(path.parent().expect("the locks directory"))
+        .expect("create the locks directory");
+    Flock::lock(
+        File::create(path).expect("the engine lock file"),
+        FlockArg::LockExclusiveNonblock,
+    )
+    .map_err(|(_, e)| e)
+    .expect("lock the engine")
 }
 
 /// An `Fx` whose config is the one a view needs (machine `m1`, the private tmux server) and whose machine reads fail: the
@@ -103,7 +112,11 @@ fn context(id: &str) -> String {
 pub fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str) -> String {
     let late = !matches!(phase, "grounding" | "plan");
     let worktree = if late { "'/wt'" } else { "NULL" };
-    let locked = if late { "'2026-01-02T00:00:00.000Z'" } else { "NULL" };
+    let locked = if late {
+        "'2026-01-02T00:00:00.000Z'"
+    } else {
+        "NULL"
+    };
     let status = if late { "dispatch" } else { "waiting" };
     format!(
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
@@ -117,7 +130,11 @@ pub fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str)
 
 /// An idle Session `id` of `role` in `context` (a Lead's `plan`, or `""`), created at `created`.
 pub fn session_row(id: &str, role: &str, context: &str, plan: &str, created: &str) -> String {
-    let plan = if plan.is_empty() { "NULL".to_owned() } else { format!("'{plan}'") };
+    let plan = if plan.is_empty() {
+        "NULL".to_owned()
+    } else {
+        format!("'{plan}'")
+    };
     format!(
         "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
          VALUES ('{id}', '{role}', '{context}', {plan}, NULL, '{id} name', '/sessions/{id}.jsonl', '/repo', 'O3',
@@ -154,16 +171,40 @@ pub const FOUR: [(&str, &str); 4] = [
 /// Four items: two red, one magenta, one white (their order on screen is [`FOUR`]'s).
 pub fn four() -> Vec<Condition> {
     vec![
-        condition(Kind::Dialog, Urgency::Red, "session:f-blocked", "f-blocked label"),
+        condition(
+            Kind::Dialog,
+            Urgency::Red,
+            "session:f-blocked",
+            "f-blocked label",
+        ),
         condition(Kind::Dialog, Urgency::Red, "session:l-rel", "l-rel label"),
-        condition(Kind::Unread, Urgency::White, "session:m-alpha", "m-alpha label"),
-        condition(Kind::Dialog, Urgency::Magenta, "session:m-beta", "m-beta label"),
+        condition(
+            Kind::Unread,
+            Urgency::White,
+            "session:m-alpha",
+            "m-alpha label",
+        ),
+        condition(
+            Kind::Dialog,
+            Urgency::Magenta,
+            "session:m-beta",
+            "m-beta label",
+        ),
     ]
 }
 
 /// `n` red one-row items (Row 2 blank) labelled `item 00`, `item 01`, … (drawn in that order).
 pub fn many(n: usize) -> Vec<Condition> {
-    (0..n).map(|i| condition(Kind::Dialog, Urgency::Red, &format!("session:item-{i:02}"), &format!("item {i:02}"))).collect()
+    (0..n)
+        .map(|i| {
+            condition(
+                Kind::Dialog,
+                Urgency::Red,
+                &format!("session:item-{i:02}"),
+                &format!("item {i:02}"),
+            )
+        })
+        .collect()
 }
 
 /// The Contexts `alpha` and `beta`, and `items` opened `age` seconds before the clock's time.
@@ -249,8 +290,14 @@ impl World {
     }
 
     /// At the first frame whose rows satisfy `when`: `then` runs.
-    pub fn at(self, when: impl Fn(&[String]) -> bool + 'static, then: impl FnMut() + 'static) -> World {
-        self.steps.borrow_mut().push_back((Box::new(move |s| when(&s.shown_rows())), Box::new(then)));
+    pub fn at(
+        self,
+        when: impl Fn(&[String]) -> bool + 'static,
+        then: impl FnMut() + 'static,
+    ) -> World {
+        self.steps
+            .borrow_mut()
+            .push_back((Box::new(move |s| when(&s.shown_rows())), Box::new(then)));
         self
     }
 }
@@ -268,17 +315,39 @@ pub fn show(fx: &Fx, height: u16, signals: Vec<Signal>, world: &World) -> Vec<Sc
 }
 
 /// [`show`] with `run_command` as what a click runs `cpd` through (the in-process command tree, or a test's own).
-pub fn show_with(fx: &Fx, height: u16, signals: Vec<Signal>, world: &World, run_command: cpd_tui::RunCommand) -> Vec<Screen> {
+pub fn show_with(
+    fx: &Fx,
+    height: u16,
+    signals: Vec<Signal>,
+    world: &World,
+    run_command: cpd_tui::RunCommand,
+) -> Vec<Screen> {
     show_over(fx, height, signals, world, run_command, &[])
 }
 
 /// [`show`] on a machine whose `/proc` files are `files` (path, text; Linux reads them): what is not scripted is unreadable.
-pub fn show_proc(fx: &Fx, height: u16, signals: Vec<Signal>, world: &World, files: &[(&str, &str)]) -> Vec<Screen> {
+pub fn show_proc(
+    fx: &Fx,
+    height: u16,
+    signals: Vec<Signal>,
+    world: &World,
+    files: &[(&str, &str)],
+) -> Vec<Screen> {
     show_over(fx, height, signals, world, run_command, files)
 }
 
-fn show_over(fx: &Fx, height: u16, signals: Vec<Signal>, world: &World, run_command: cpd_tui::RunCommand, files: &[(&str, &str)]) -> Vec<Screen> {
-    let files: std::collections::HashMap<String, String> = files.iter().map(|(p, t)| ((*p).to_owned(), (*t).to_owned())).collect();
+fn show_over(
+    fx: &Fx,
+    height: u16,
+    signals: Vec<Signal>,
+    world: &World,
+    run_command: cpd_tui::RunCommand,
+    files: &[(&str, &str)],
+) -> Vec<Screen> {
+    let files: std::collections::HashMap<String, String> = files
+        .iter()
+        .map(|(p, t)| ((*p).to_owned(), (*t).to_owned()))
+        .collect();
     let proc: widgets::ProcReader = std::sync::Arc::new(move |path| files.get(path).cloned());
     let backend = SharedBackend::new(W as u16, height);
     let frames = Rc::new(RefCell::new(Vec::new()));
@@ -304,14 +373,21 @@ fn show_over(fx: &Fx, height: u16, signals: Vec<Signal>, world: &World, run_comm
         let prepared = widgets::prepare_with(ports, home, proc).unwrap();
         let mut input = NoInput;
         let mut ctx = Ctx::new(ports, backend.terminal(), &mut input);
-        widgets::show_with(&mut ctx, Feed::scripted(ports.clock.clone(), signals), prepared, run_command)
+        widgets::show_with(
+            &mut ctx,
+            Feed::scripted(ports.clock.clone(), signals),
+            prepared,
+            run_command,
+        )
     });
     match ended {
-        Err(ViewError::Terminal(e)) => assert_eq!(e.to_string(), "gone", "the view's terminal failed"),
+        Err(ViewError::Terminal(e)) => {
+            assert_eq!(e.to_string(), "gone", "the view's terminal failed")
+        }
         Err(ViewError::Cpd(e)) => panic!("the view's own work failed: {}", e.message()),
         Ok(()) => panic!("the view ended with no terminal failure: no key ends it"),
     }
-    
+
     frames.borrow().clone()
 }
 
@@ -319,13 +395,21 @@ fn show_over(fx: &Fx, height: u16, signals: Vec<Signal>, world: &World, run_comm
 
 /// The index, from `from` on, of the first frame whose rows satisfy `pred`; the failure names what it looked for and shows
 /// the last frame.
-pub fn frame_with(frames: &[Screen], from: usize, what: &str, pred: impl Fn(&[String]) -> bool) -> usize {
+pub fn frame_with(
+    frames: &[Screen],
+    from: usize,
+    what: &str,
+    pred: impl Fn(&[String]) -> bool,
+) -> usize {
     let found = (from..frames.len()).find(|&i| pred(&frames[i].shown_rows()));
     assert!(
         found.is_some(),
         "no frame from #{from} on shows {what}; {} frames, the last:\n{}",
         frames.len(),
-        frames.last().map(|f| f.shown_rows().join("\n")).unwrap_or_default()
+        frames
+            .last()
+            .map(|f| f.shown_rows().join("\n"))
+            .unwrap_or_default()
     );
     found.unwrap_or_default()
 }
@@ -333,7 +417,9 @@ pub fn frame_with(frames: &[Screen], from: usize, what: &str, pred: impl Fn(&[St
 /// [`frame_with`] for exact rows: the first frame from `from` on whose last rows are `bottom`.
 pub fn frame_ending_with(frames: &[Screen], from: usize, what: &str, bottom: &[String]) -> usize {
     let what = format!("{what}, its last rows being\n{}\n", bottom.join("\n"));
-    frame_with(frames, from, &what, |rows| rows.len() >= bottom.len() && rows[rows.len() - bottom.len()..] == *bottom)
+    frame_with(frames, from, &what, |rows| {
+        rows.len() >= bottom.len() && rows[rows.len() - bottom.len()..] == *bottom
+    })
 }
 
 /// The rows of frame `i`.

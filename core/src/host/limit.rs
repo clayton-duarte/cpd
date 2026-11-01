@@ -15,9 +15,13 @@ pub fn limit(name: &str, default: Duration) -> Duration {
     }
     let var = format!("CPD_TEST_{name}");
     match std::env::var(&var) {
-        Ok(text) => parse(&text).unwrap_or_else(|| panic!("{var}={text:?} is not a number of seconds >= 0")),
+        Ok(text) => {
+            parse(&text).unwrap_or_else(|| panic!("{var}={text:?} is not a number of seconds >= 0"))
+        }
         Err(std::env::VarError::NotPresent) => default,
-        Err(std::env::VarError::NotUnicode(text)) => panic!("{var}={text:?} is not a number of seconds >= 0"),
+        Err(std::env::VarError::NotUnicode(text)) => {
+            panic!("{var}={text:?} is not a number of seconds >= 0")
+        }
     }
 }
 
@@ -43,6 +47,9 @@ mod tests {
 
     #[test]
     fn an_unset_variable_is_the_default() {
-        assert_eq!(limit("NO_SUCH_LIMIT_IN_ANY_TEST", Duration::from_secs(7)), Duration::from_secs(7));
+        assert_eq!(
+            limit("NO_SUCH_LIMIT_IN_ANY_TEST", Duration::from_secs(7)),
+            Duration::from_secs(7)
+        );
     }
 }

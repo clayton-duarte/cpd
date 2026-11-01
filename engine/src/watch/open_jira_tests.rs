@@ -31,7 +31,9 @@ fn texts(fx: &mut Fx, kind: &str) -> Vec<String> {
         .store
         .read(|conn| {
             let mut stmt = conn.prepare("SELECT text FROM events WHERE kind = ?1 ORDER BY id")?;
-            Ok(stmt.query_map([kind], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+            Ok(stmt
+                .query_map([kind], |r| r.get(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .unwrap()
 }
@@ -59,7 +61,8 @@ fn with_open_job(key: &str, kind: &str, policy: &str) -> Fx {
 }
 
 #[test]
-fn e3_does_not_start_an_open_job_whose_pr_has_no_jira_when_required_raises_one_error_and_starts_it_once_set() {
+fn e3_does_not_start_an_open_job_whose_pr_has_no_jira_when_required_raises_one_error_and_starts_it_once_set()
+ {
     let mut fx = with_open_job("open-repo", "open", "jira_required = true\n");
 
     ticks(&mut fx, 3);
@@ -68,16 +71,32 @@ fn e3_does_not_start_an_open_job_whose_pr_has_no_jira_when_required_raises_one_e
     let errors = fx.events("error");
     assert_eq!(errors.len(), 1, "{errors:?}");
     let (plan, job, attempt, data) = &errors[0];
-    assert_eq!((plan.as_deref(), job.as_deref(), attempt.as_deref()), (Some("pay"), Some("open-repo"), None));
-    assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("jira_required")), "{data}");
-    assert!(texts(&mut fx, "error")[0].contains("cpd pr edit repo --jira"), "{:?}", texts(&mut fx, "error"));
+    assert_eq!(
+        (plan.as_deref(), job.as_deref(), attempt.as_deref()),
+        (Some("pay"), Some("open-repo"), None)
+    );
+    assert_eq!(
+        (&data["source"], &data["code"]),
+        (&json!("watch"), &json!("jira_required")),
+        "{data}"
+    );
+    assert!(
+        texts(&mut fx, "error")[0].contains("cpd pr edit repo --jira"),
+        "{:?}",
+        texts(&mut fx, "error")
+    );
     assert_eq!(fx.job_status("open-repo"), "queued");
 
     fx.fixture("UPDATE prs SET jira = 'ABC-1';");
     tick(&mut fx);
 
     assert_eq!(attempts(&mut fx), 1, "ticketed: started");
-    assert_eq!(fx.count("error"), 1, "no further error: {:?}", texts(&mut fx, "error"));
+    assert_eq!(
+        fx.count("error"),
+        1,
+        "no further error: {:?}",
+        texts(&mut fx, "error")
+    );
 }
 
 /// Guard: a policy that leaves the key false never needs a ticket.

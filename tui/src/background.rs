@@ -23,13 +23,23 @@ pub(crate) struct Background<T> {
 impl<T: Send + 'static> Background<T> {
     pub(crate) fn with_waker(waker: crate::pump::Waker) -> Background<T> {
         let (tx, rx) = channel();
-        Background { tx, rx, queued: VecDeque::new(), running: false, waker, inline: false }
+        Background {
+            tx,
+            rx,
+            queued: VecDeque::new(),
+            running: false,
+            waker,
+            inline: false,
+        }
     }
 
     /// The background of the loop `pump` drives: threads, or for a scripted pump each job runs in `submit` and is finished
     /// when it returns.
     pub(crate) fn on(pump: &crate::pump::Pump) -> Background<T> {
-        Background { inline: pump.inline(), ..Background::with_waker(pump.waker()) }
+        Background {
+            inline: pump.inline(),
+            ..Background::with_waker(pump.waker())
+        }
     }
 
     /// Runs `job` on a thread, after the jobs submitted before it.
@@ -55,7 +65,9 @@ impl<T: Send + 'static> Background<T> {
         if self.running {
             return;
         }
-        let Some(job) = self.queued.pop_front() else { return };
+        let Some(job) = self.queued.pop_front() else {
+            return;
+        };
         self.running = true;
         let tx = self.tx.clone();
         let waker = self.waker.clone();

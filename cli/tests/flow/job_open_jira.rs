@@ -13,8 +13,15 @@ const WITH_JIRA: &str = "UPDATE prs SET jira = 'ABC-1' WHERE key = 'repo';";
 /// `open_live` whose owner `acme` requires a ticket (`required`) or says nothing of it.
 fn live_requiring(required: bool) -> Live {
     let live = open_live();
-    let key = if required { "[pr]\njira_required = true\n" } else { "[pr]\njira_required = false\n" };
-    live.fx.env.owner_policy("acme", &format!("[gate]\nmerge = \"local\"\npr = \"local\"\n{key}"));
+    let key = if required {
+        "[pr]\njira_required = true\n"
+    } else {
+        "[pr]\njira_required = false\n"
+    };
+    live.fx.env.owner_policy(
+        "acme",
+        &format!("[gate]\nmerge = \"local\"\npr = \"local\"\n{key}"),
+    );
     live
 }
 
@@ -29,9 +36,19 @@ fn job_dispatch_refuses_an_open_job_whose_pr_has_no_jira_when_the_policy_require
     let run = live.dispatch("open-repo");
 
     let error = common::refused(&run, "jira_required", 3);
-    assert!(error["message"].as_str().unwrap().contains("cpd pr edit repo --jira"), "{error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("cpd pr edit repo --jira"),
+        "{error}"
+    );
     assert_eq!(attempts(&live), 0, "no Attempt row");
-    assert_eq!(live.fx.fakes.spawn.launches().len(), 0, "no driver launched");
+    assert_eq!(
+        live.fx.fakes.spawn.launches().len(),
+        0,
+        "no driver launched"
+    );
     assert_eq!(live.job_status("open-repo"), "queued");
 }
 
@@ -64,7 +81,8 @@ fn job_dispatch_starts_the_open_job_of_a_pr_with_no_jira_when_the_policy_does_no
 #[test]
 fn job_dispatch_starts_the_open_job_of_an_adopted_pr_with_no_jira_when_required() {
     let live = live_requiring(true);
-    let trigger: String = live.value("SELECT sql FROM sqlite_master WHERE name = 'prs_head_ref_fixed'");
+    let trigger: String =
+        live.value("SELECT sql FROM sqlite_master WHERE name = 'prs_head_ref_fixed'");
     live.fixture(&format!("DROP TRIGGER prs_head_ref_fixed; UPDATE prs SET head_ref = 'feature' WHERE key = 'repo'; {trigger};"));
     let out = live.dispatch("open-repo").ok();
     assert_eq!(out["attempt"], "open-repo-a1", "{out}");
@@ -74,7 +92,10 @@ fn job_dispatch_starts_the_open_job_of_an_adopted_pr_with_no_jira_when_required(
 #[test]
 fn job_dispatch_starts_an_update_job_whose_pr_has_no_jira_when_required() {
     let live = open_pr_live();
-    live.fx.env.owner_policy("acme", "[gate]\nmerge = \"local\"\npr = \"local\"\n[pr]\njira_required = true\n");
+    live.fx.env.owner_policy(
+        "acme",
+        "[gate]\nmerge = \"local\"\npr = \"local\"\n[pr]\njira_required = true\n",
+    );
     live.add_cpd_job("up-repo", "update");
     let out = live.dispatch("up-repo").ok();
     assert_eq!(out["attempt"], "up-repo-a1", "{out}");

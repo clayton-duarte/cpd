@@ -53,7 +53,13 @@ fn world() -> World {
     let universe = Arc::new(Mutex::new(universe));
     let route = Arc::new(GitRoute::new(universe.clone()));
     let runner = FakeRunner::new(clock).with_git(&route);
-    World { tmp: tempfile::tempdir().unwrap(), universe, route, runner, repos: 0 }
+    World {
+        tmp: tempfile::tempdir().unwrap(),
+        universe,
+        route,
+        runner,
+        repos: 0,
+    }
 }
 
 fn run(runner: &dyn Runner, cmd: &mut Command) -> Out {
@@ -115,7 +121,10 @@ impl World {
     /// A repo on `main` with one commit, `README.md` = `one\n`.
     fn repo(&mut self) -> Repo {
         self.repos += 1;
-        let repo = Repo::init(&self.universe, &self.root().join(format!("repo{}", self.repos)));
+        let repo = Repo::init(
+            &self.universe,
+            &self.root().join(format!("repo{}", self.repos)),
+        );
         repo.write("README.md", "one\n");
         repo.commit("one");
         repo
@@ -138,7 +147,9 @@ impl World {
     }
     /// Whether `git rev-parse --verify --quiet <rev>` finds it in `dir`.
     fn has_rev(&self, dir: &Path, rev: &str) -> bool {
-        self.git(dir, &["rev-parse", "--verify", "--quiet", rev]).code == 0
+        self.git(dir, &["rev-parse", "--verify", "--quiet", rev])
+            .code
+            == 0
     }
     /// The subcommand of every call the runner saw, in order.
     fn subcommands(&self) -> Vec<String> {
@@ -196,7 +207,10 @@ impl World {
     /// the same `origin`.
     fn writer(&mut self, origin: &Repo, source: &Repo, at: &Oid) -> Repo {
         self.repos += 1;
-        let writer = Repo::init(&self.universe, &self.root().join(format!("repo{}", self.repos)));
+        let writer = Repo::init(
+            &self.universe,
+            &self.root().join(format!("repo{}", self.repos)),
+        );
         writer.config_add("remote.origin.url", p(origin.dir()));
         writer.write("README.md", "one\n");
         self.u(|u| {
@@ -214,7 +228,14 @@ impl World {
         let b2 = self.next(&b, "by b\n");
         b.push();
         let a2 = self.next(&a, "by a\n");
-        Diverged { a, origin, url, c1, a2, b2 }
+        Diverged {
+            a,
+            origin,
+            url,
+            c1,
+            a2,
+            b2,
+        }
     }
     /// `a` fetched what `origin` holds of `oid`, without a call.
     fn learn(&self, origin: &Repo, a: &Repo, oid: &Oid) {
@@ -229,7 +250,10 @@ fn an_unlisted_flag_of_fetch_is_unsupported_exit_1_and_recorded() {
     let mut w = world();
     let (repo, _origin, _url) = w.linked();
     let out = w.git(repo.dir(), &["fetch", "--bogus", "origin", "main"]);
-    assert_eq!((out.code, out.stdout.as_str(), out.stderr.as_str()), (1, "", "fake-git: unsupported: fetch --bogus\n"));
+    assert_eq!(
+        (out.code, out.stdout.as_str(), out.stderr.as_str()),
+        (1, "", "fake-git: unsupported: fetch --bogus\n")
+    );
     assert_eq!(w.route.unsupported(), vec!["fetch --bogus".to_owned()]);
 }
 
@@ -238,7 +262,10 @@ fn an_unlisted_flag_of_push_is_unsupported_exit_1_and_recorded() {
     let mut w = world();
     let (repo, _origin, _url) = w.linked();
     let out = w.git(repo.dir(), &["push", "--bogus", "origin", "main"]);
-    assert_eq!((out.code, out.stdout.as_str(), out.stderr.as_str()), (1, "", "fake-git: unsupported: push --bogus\n"));
+    assert_eq!(
+        (out.code, out.stdout.as_str(), out.stderr.as_str()),
+        (1, "", "fake-git: unsupported: push --bogus\n")
+    );
     assert_eq!(w.route.unsupported(), vec!["push --bogus".to_owned()]);
 }
 
@@ -254,7 +281,11 @@ fn fetch_of_an_unresolvable_url_is_exit_128_could_not_resolve_host() {
     let out = w.git(repo.dir(), &["fetch", "origin", "main"]);
     assert_eq!(
         (out.code, out.stdout.as_str(), out.stderr.as_str()),
-        (128, "", format!("fatal: unable to access '{GITHUB}': Could not resolve host\n").as_str())
+        (
+            128,
+            "",
+            format!("fatal: unable to access '{GITHUB}': Could not resolve host\n").as_str()
+        )
     );
 }
 
@@ -266,7 +297,11 @@ fn push_of_an_unresolvable_url_is_exit_128_could_not_resolve_host() {
     let out = w.git(repo.dir(), &["push", "origin", "main"]);
     assert_eq!(
         (out.code, out.stdout.as_str(), out.stderr.as_str()),
-        (128, "", format!("fatal: unable to access '{GITHUB}': Could not resolve host\n").as_str())
+        (
+            128,
+            "",
+            format!("fatal: unable to access '{GITHUB}': Could not resolve host\n").as_str()
+        )
     );
 }
 
@@ -276,9 +311,20 @@ fn a_porcelain_push_of_an_unresolvable_url_prints_no_ref_line() {
     let repo = w.repo();
     repo.keyed("x");
     let sha = w.rev(repo.dir(), "main");
-    let out = w.git(repo.dir(), &["push", "--porcelain", "origin", &format!("{sha}:refs/heads/main")]);
+    let out = w.git(
+        repo.dir(),
+        &[
+            "push",
+            "--porcelain",
+            "origin",
+            &format!("{sha}:refs/heads/main"),
+        ],
+    );
     assert_eq!((out.code, out.stdout.as_str()), (128, ""));
-    assert_eq!(out.stderr, format!("fatal: unable to access '{GITHUB}': Could not resolve host\n"));
+    assert_eq!(
+        out.stderr,
+        format!("fatal: unable to access '{GITHUB}': Could not resolve host\n")
+    );
 }
 
 #[test]
@@ -313,7 +359,10 @@ fn a_url_that_insteadof_rewrites_to_a_repo_is_resolved_for_fetch_and_push() {
     repo.config_add(&format!("url.{}.insteadOf", dir.display()), GITHUB);
     let sha = w.rev(repo.dir(), "main");
     assert_eq!(w.git(repo.dir(), &["push", "origin", "main"]).code, 0);
-    assert_eq!(w.u(|u| u.ref_oid(origin, "refs/heads/main")), Some(sha.clone()));
+    assert_eq!(
+        w.u(|u| u.ref_oid(origin, "refs/heads/main")),
+        Some(sha.clone())
+    );
     assert_eq!(w.git(repo.dir(), &["fetch", "origin", "main"]).code, 0);
     assert_eq!(w.rev(repo.dir(), "origin/main"), sha);
 }
@@ -327,7 +376,10 @@ fn a_repo_with_no_origin_cannot_fetch_or_push() {
         assert_eq!(out.code, 128, "{args:?}");
         assert_eq!(
             lines(&out.stderr)[..2],
-            ["fatal: 'origin' does not appear to be a git repository", "fatal: Could not read from remote repository."],
+            [
+                "fatal: 'origin' does not appear to be a git repository",
+                "fatal: Could not read from remote repository."
+            ],
             "{args:?}"
         );
     }
@@ -341,7 +393,10 @@ fn ls_remote_lists_what_a_push_put_on_the_remote() {
     let (repo, origin, _url) = w.linked();
     w.ok(repo.dir(), &["push", "origin", "main"]);
     let main = w.tip(&origin, "refs/heads/main").unwrap();
-    assert_eq!(w.ok(repo.dir(), &["ls-remote", "--heads", "origin"]), format!("{main}\trefs/heads/main\n"));
+    assert_eq!(
+        w.ok(repo.dir(), &["ls-remote", "--heads", "origin"]),
+        format!("{main}\trefs/heads/main\n")
+    );
 }
 
 #[test]
@@ -365,8 +420,14 @@ fn ls_remote_exit_code_of_a_branch_that_was_never_pushed_is_exit_2() {
     let (repo, _origin, _url) = w.linked();
     repo.branch("b");
     w.ok(repo.dir(), &["push", "origin", "main"]);
-    let out = w.git(repo.dir(), &["ls-remote", "--exit-code", "--heads", "origin", "b"]);
-    assert_eq!((out.code, out.stdout.as_str(), out.stderr.as_str()), (2, "", ""));
+    let out = w.git(
+        repo.dir(),
+        &["ls-remote", "--exit-code", "--heads", "origin", "b"],
+    );
+    assert_eq!(
+        (out.code, out.stdout.as_str(), out.stderr.as_str()),
+        (2, "", "")
+    );
 }
 
 #[test]
@@ -376,7 +437,10 @@ fn ls_remote_prints_the_tip_the_last_push_left() {
     w.ok(repo.dir(), &["push", "origin", "main"]);
     let two = w.next(&repo, "two\n");
     w.ok(repo.dir(), &["push", "origin", "main"]);
-    assert_eq!(w.ok(repo.dir(), &["ls-remote", "origin", "refs/heads/main"]), format!("{two}\trefs/heads/main\n"));
+    assert_eq!(
+        w.ok(repo.dir(), &["ls-remote", "origin", "refs/heads/main"]),
+        format!("{two}\trefs/heads/main\n")
+    );
 }
 
 // ---- fetch ------------------------------------------------------------------------------------------------
@@ -394,7 +458,13 @@ fn fetch_copies_the_remote_tips_whole_closure_into_the_repo() {
     let mut w = world();
     let d = w.diverged();
     let tree = w.u(|u| u.commit_data(&d.b2).unwrap().tree);
-    let blobs: Vec<Oid> = w.u(|u| u.tree_entries(&tree).unwrap().into_iter().map(|(_, o)| o).collect());
+    let blobs: Vec<Oid> = w.u(|u| {
+        u.tree_entries(&tree)
+            .unwrap()
+            .into_iter()
+            .map(|(_, o)| o)
+            .collect()
+    });
     assert!(!w.holds(&d.a, &d.b2));
     w.ok(d.a.dir(), &["fetch", "origin", "main"]);
     assert!(w.holds(&d.a, &d.b2));
@@ -441,7 +511,10 @@ fn fetch_leaves_the_local_branches_and_head_alone() {
     w.ok(d.a.dir(), &["fetch", "origin", "main"]);
     assert_eq!(w.rev(d.a.dir(), "refs/heads/main"), d.a2);
     assert_eq!(w.rev(d.a.dir(), "HEAD"), d.a2);
-    assert_eq!(w.ok(d.a.dir(), &["symbolic-ref", "--short", "-q", "HEAD"]), "main\n");
+    assert_eq!(
+        w.ok(d.a.dir(), &["symbolic-ref", "--short", "-q", "HEAD"]),
+        "main\n"
+    );
 }
 
 #[test]
@@ -476,7 +549,10 @@ fn fetch_of_a_branch_the_remote_does_not_have_is_exit_128_couldnt_find_remote_re
     let (repo, _origin, _url) = w.linked();
     repo.push();
     let out = w.git(repo.dir(), &["fetch", "origin", "nope"]);
-    assert_eq!((out.code, out.stdout.as_str(), out.stderr.as_str()), (128, "", "fatal: couldn't find remote ref nope\n"));
+    assert_eq!(
+        (out.code, out.stdout.as_str(), out.stderr.as_str()),
+        (128, "", "fatal: couldn't find remote ref nope\n")
+    );
 }
 
 #[test]
@@ -484,9 +560,19 @@ fn after_a_fetch_origin_main_contains_the_common_ancestor_and_not_the_unpushed_c
     let mut w = world();
     let d = w.diverged();
     w.ok(d.a.dir(), &["fetch", "origin", "main"]);
-    let out = w.git(d.a.dir(), &["merge-base", "--is-ancestor", d.c1.as_str(), "origin/main"]);
+    let out = w.git(
+        d.a.dir(),
+        &["merge-base", "--is-ancestor", d.c1.as_str(), "origin/main"],
+    );
     assert_eq!(out.code, 0);
-    assert_eq!(w.git(d.a.dir(), &["merge-base", "--is-ancestor", d.a2.as_str(), "origin/main"]).code, 1);
+    assert_eq!(
+        w.git(
+            d.a.dir(),
+            &["merge-base", "--is-ancestor", d.a2.as_str(), "origin/main"]
+        )
+        .code,
+        1
+    );
 }
 
 // ---- per-repo object sets ---------------------------------------------------------------------------------
@@ -511,7 +597,13 @@ fn a_push_copies_the_commit_its_tree_its_blobs_and_its_ancestors() {
     let c2 = w.next(&repo, "two\n");
     w.ok(repo.dir(), &["push", "origin", "main"]);
     let tree = w.u(|u| u.commit_data(&c2).unwrap().tree);
-    let blobs: Vec<Oid> = w.u(|u| u.tree_entries(&tree).unwrap().into_iter().map(|(_, o)| o).collect());
+    let blobs: Vec<Oid> = w.u(|u| {
+        u.tree_entries(&tree)
+            .unwrap()
+            .into_iter()
+            .map(|(_, o)| o)
+            .collect()
+    });
     assert!(w.holds(&origin, &c2) && w.holds(&origin, &c1) && w.holds(&origin, &tree));
     assert!(blobs.len() >= 2 && blobs.iter().all(|blob| w.holds(&origin, blob)));
 }
@@ -556,7 +648,10 @@ fn push_of_a_new_branch_prints_to_the_url_and_the_new_branch_line_on_stderr() {
     let (repo, _origin, url) = w.linked();
     let out = w.git(repo.dir(), &["push", "origin", "main"]);
     assert_eq!((out.code, out.stdout.as_str()), (0, ""));
-    assert_eq!(out.stderr, format!("{} * [new branch]      main -> main\n", to(&url)));
+    assert_eq!(
+        out.stderr,
+        format!("{} * [new branch]      main -> main\n", to(&url))
+    );
 }
 
 #[test]
@@ -575,7 +670,10 @@ fn push_of_what_the_remote_has_says_everything_up_to_date() {
     let (repo, _origin, _url) = w.linked();
     w.ok(repo.dir(), &["push", "origin", "main"]);
     let out = w.git(repo.dir(), &["push", "origin", "main"]);
-    assert_eq!((out.code, out.stdout.as_str(), out.stderr.as_str()), (0, "", "Everything up-to-date\n"));
+    assert_eq!(
+        (out.code, out.stdout.as_str(), out.stderr.as_str()),
+        (0, "", "Everything up-to-date\n")
+    );
 }
 
 #[test]
@@ -587,7 +685,15 @@ fn push_of_a_fast_forward_prints_the_old_and_new_abbreviations() {
     let two = w.next(&repo, "two\n");
     let out = w.git(repo.dir(), &["push", "origin", "main"]);
     assert_eq!(out.code, 0);
-    assert_eq!(out.stderr, format!("{}   {}..{}  main -> main\n", to(&url), short(&one), short(&two)));
+    assert_eq!(
+        out.stderr,
+        format!(
+            "{}   {}..{}  main -> main\n",
+            to(&url),
+            short(&one),
+            short(&two)
+        )
+    );
     assert_eq!(w.tip(&origin, "refs/heads/main"), Some(two));
 }
 
@@ -641,7 +747,9 @@ fn push_of_a_branch_that_does_not_exist_is_exit_1_src_refspec_does_not_match_any
     assert_eq!((out.code, out.stdout.as_str()), (1, ""));
     assert_eq!(
         out.stderr,
-        format!("error: src refspec nope does not match any\nerror: failed to push some refs to '{url}'\n")
+        format!(
+            "error: src refspec nope does not match any\nerror: failed to push some refs to '{url}'\n"
+        )
     );
 }
 
@@ -662,7 +770,14 @@ fn porcelain_push_of_a_new_branch_is_a_star_and_new_branch_then_done() {
     let one = w.rev(repo.dir(), "main");
     let out = porcelain_push(&w, &repo, &one, &[]);
     assert_eq!(out.code, 0);
-    assert_eq!(out.stdout, format!("{}{}Done\n", to(&url), porcelain("*", one.as_str(), "refs/heads/main", "[new branch]")));
+    assert_eq!(
+        out.stdout,
+        format!(
+            "{}{}Done\n",
+            to(&url),
+            porcelain("*", one.as_str(), "refs/heads/main", "[new branch]")
+        )
+    );
     assert_eq!(w.tip(&origin, "refs/heads/main"), Some(one));
 }
 
@@ -674,7 +789,14 @@ fn porcelain_push_of_what_the_remote_has_is_an_equals_and_up_to_date() {
     let one = w.rev(repo.dir(), "main");
     let out = porcelain_push(&w, &repo, &one, &[]);
     assert_eq!(out.code, 0);
-    assert_eq!(out.stdout, format!("{}{}Done\n", to(&url), porcelain("=", one.as_str(), "refs/heads/main", "[up to date]")));
+    assert_eq!(
+        out.stdout,
+        format!(
+            "{}{}Done\n",
+            to(&url),
+            porcelain("=", one.as_str(), "refs/heads/main", "[up to date]")
+        )
+    );
 }
 
 #[test]
@@ -687,7 +809,14 @@ fn porcelain_push_of_a_fast_forward_is_a_space_and_the_old_and_new_abbreviations
     let out = porcelain_push(&w, &repo, &two, &[]);
     assert_eq!(out.code, 0);
     let summary = format!("{}..{}", short(&one), short(&two));
-    assert_eq!(out.stdout, format!("{}{}Done\n", to(&url), porcelain(" ", two.as_str(), "refs/heads/main", &summary)));
+    assert_eq!(
+        out.stdout,
+        format!(
+            "{}{}Done\n",
+            to(&url),
+            porcelain(" ", two.as_str(), "refs/heads/main", &summary)
+        )
+    );
     assert_eq!(w.tip(&origin, "refs/heads/main"), Some(two));
 }
 
@@ -710,7 +839,12 @@ fn porcelain_push_rejected_as_fetch_first_is_a_bang_with_the_reason_and_exit_1()
     let out = porcelain_push(&w, &d.a, &d.a2, &[]);
     assert_eq!(out.code, 1);
     assert!(out.stdout.starts_with(&to(&d.url)), "{}", out.stdout);
-    let line = porcelain("!", d.a2.as_str(), "refs/heads/main", "[rejected] (fetch first)");
+    let line = porcelain(
+        "!",
+        d.a2.as_str(),
+        "refs/heads/main",
+        "[rejected] (fetch first)",
+    );
     assert!(out.stdout.contains(&line), "{}", out.stdout);
     assert_eq!(w.tip(&d.origin, "refs/heads/main"), Some(d.b2));
 }
@@ -722,7 +856,12 @@ fn porcelain_push_rejected_as_non_fast_forward_is_a_bang_with_the_reason_and_exi
     w.learn(&d.origin, &d.a, &d.b2);
     let out = porcelain_push(&w, &d.a, &d.a2, &[]);
     assert_eq!(out.code, 1);
-    let line = porcelain("!", d.a2.as_str(), "refs/heads/main", "[rejected] (non-fast-forward)");
+    let line = porcelain(
+        "!",
+        d.a2.as_str(),
+        "refs/heads/main",
+        "[rejected] (non-fast-forward)",
+    );
     assert!(out.stdout.contains(&line), "{}", out.stdout);
     assert_eq!(w.tip(&d.origin, "refs/heads/main"), Some(d.b2));
 }
@@ -737,7 +876,12 @@ fn porcelain_push_of_an_older_commit_the_remote_has_gone_past_is_rejected_non_fa
     let two = w.rev(repo.dir(), "main");
     let out = porcelain_push(&w, &repo, &one, &[]);
     assert_eq!(out.code, 1);
-    let line = porcelain("!", one.as_str(), "refs/heads/main", "[rejected] (non-fast-forward)");
+    let line = porcelain(
+        "!",
+        one.as_str(),
+        "refs/heads/main",
+        "[rejected] (non-fast-forward)",
+    );
     assert!(out.stdout.contains(&line), "{}", out.stdout);
     assert_eq!(w.tip(&origin, "refs/heads/main"), Some(two));
 }
@@ -772,7 +916,14 @@ fn a_lease_that_matches_the_remote_tip_lets_a_rewrite_through_as_a_forced_update
     let out = porcelain_push(&w, &repo, &alt, &[&lease]);
     assert_eq!(out.code, 0, "{}", out.stderr);
     let summary = format!("{}...{} (forced update)", short(&two), short(&alt));
-    assert_eq!(out.stdout, format!("{}{}Done\n", to(&url), porcelain("+", alt.as_str(), "refs/heads/main", &summary)));
+    assert_eq!(
+        out.stdout,
+        format!(
+            "{}{}Done\n",
+            to(&url),
+            porcelain("+", alt.as_str(), "refs/heads/main", &summary)
+        )
+    );
     assert_eq!(w.tip(&origin, "refs/heads/main"), Some(alt));
 }
 
@@ -783,7 +934,12 @@ fn a_stale_lease_is_rejected_with_stale_info_and_exit_1() {
     let lease = format!("--force-with-lease=refs/heads/main:{one}");
     let out = porcelain_push(&w, &repo, &alt, &[&lease]);
     assert_eq!(out.code, 1);
-    let line = porcelain("!", alt.as_str(), "refs/heads/main", "[rejected] (stale info)");
+    let line = porcelain(
+        "!",
+        alt.as_str(),
+        "refs/heads/main",
+        "[rejected] (stale info)",
+    );
     assert!(out.stdout.contains(&line), "{}", out.stdout);
     assert_eq!(w.tip(&origin, "refs/heads/main"), Some(two));
 }
@@ -796,7 +952,12 @@ fn a_stale_lease_rejects_even_a_fast_forward() {
     let lease = format!("--force-with-lease=refs/heads/main:{one}");
     let out = porcelain_push(&w, &repo, &three, &[&lease]);
     assert_eq!(out.code, 1);
-    let line = porcelain("!", three.as_str(), "refs/heads/main", "[rejected] (stale info)");
+    let line = porcelain(
+        "!",
+        three.as_str(),
+        "refs/heads/main",
+        "[rejected] (stale info)",
+    );
     assert!(out.stdout.contains(&line), "{}", out.stdout);
     assert_eq!(w.tip(&origin, "refs/heads/main"), Some(two));
 }
@@ -808,7 +969,14 @@ fn a_push_of_what_the_remote_already_has_succeeds_whatever_the_lease() {
     let lease = format!("--force-with-lease=refs/heads/main:{one}");
     let out = porcelain_push(&w, &repo, &two, &[&lease]);
     assert_eq!(out.code, 0, "{}", out.stderr);
-    assert_eq!(out.stdout, format!("{}{}Done\n", to(&url), porcelain("=", two.as_str(), "refs/heads/main", "[up to date]")));
+    assert_eq!(
+        out.stdout,
+        format!(
+            "{}{}Done\n",
+            to(&url),
+            porcelain("=", two.as_str(), "refs/heads/main", "[up to date]")
+        )
+    );
 }
 
 #[test]
@@ -818,7 +986,14 @@ fn an_empty_lease_lets_a_branch_the_remote_does_not_have_be_made() {
     let one = w.rev(repo.dir(), "main");
     let out = porcelain_push(&w, &repo, &one, &["--force-with-lease=refs/heads/main:"]);
     assert_eq!(out.code, 0, "{}", out.stderr);
-    assert_eq!(out.stdout, format!("{}{}Done\n", to(&url), porcelain("*", one.as_str(), "refs/heads/main", "[new branch]")));
+    assert_eq!(
+        out.stdout,
+        format!(
+            "{}{}Done\n",
+            to(&url),
+            porcelain("*", one.as_str(), "refs/heads/main", "[new branch]")
+        )
+    );
     assert_eq!(w.tip(&origin, "refs/heads/main"), Some(one));
 }
 
@@ -828,7 +1003,12 @@ fn an_empty_lease_on_a_branch_the_remote_has_is_stale_info() {
     let (repo, origin, _url, _one, two, alt) = leased(&mut w);
     let out = porcelain_push(&w, &repo, &alt, &["--force-with-lease=refs/heads/main:"]);
     assert_eq!(out.code, 1);
-    let line = porcelain("!", alt.as_str(), "refs/heads/main", "[rejected] (stale info)");
+    let line = porcelain(
+        "!",
+        alt.as_str(),
+        "refs/heads/main",
+        "[rejected] (stale info)",
+    );
     assert!(out.stdout.contains(&line), "{}", out.stdout);
     assert_eq!(w.tip(&origin, "refs/heads/main"), Some(two));
 }
@@ -839,7 +1019,12 @@ fn a_rewrite_without_a_lease_is_rejected_non_fast_forward() {
     let (repo, origin, _url, _one, two, alt) = leased(&mut w);
     let out = porcelain_push(&w, &repo, &alt, &[]);
     assert_eq!(out.code, 1);
-    let line = porcelain("!", alt.as_str(), "refs/heads/main", "[rejected] (non-fast-forward)");
+    let line = porcelain(
+        "!",
+        alt.as_str(),
+        "refs/heads/main",
+        "[rejected] (non-fast-forward)",
+    );
     assert!(out.stdout.contains(&line), "{}", out.stdout);
     assert_eq!(w.tip(&origin, "refs/heads/main"), Some(two));
 }
@@ -882,7 +1067,9 @@ fn push_delete_of_a_branch_the_remote_does_not_have_is_exit_1_remote_ref_does_no
     assert_eq!((out.code, out.stdout.as_str()), (1, ""));
     assert_eq!(
         out.stderr,
-        format!("error: unable to delete 'b': remote ref does not exist\nerror: failed to push some refs to '{url}'\n")
+        format!(
+            "error: unable to delete 'b': remote ref does not exist\nerror: failed to push some refs to '{url}'\n"
+        )
     );
 }
 
@@ -893,9 +1080,15 @@ fn a_porcelain_delete_is_a_minus_with_an_empty_source_and_deleted() {
     repo.branch("b");
     w.ok(repo.dir(), &["push", "origin", "main"]);
     w.ok(repo.dir(), &["push", "origin", "b"]);
-    let out = w.git(repo.dir(), &["push", "--porcelain", "origin", "--delete", "b"]);
+    let out = w.git(
+        repo.dir(),
+        &["push", "--porcelain", "origin", "--delete", "b"],
+    );
     assert_eq!(out.code, 0, "{}", out.stderr);
-    assert_eq!(out.stdout, format!("{}-\t:refs/heads/b\t[deleted]\nDone\n", to(&url)));
+    assert_eq!(
+        out.stdout,
+        format!("{}-\t:refs/heads/b\t[deleted]\nDone\n", to(&url))
+    );
     assert_eq!(w.tip(&origin, "refs/heads/b"), None);
 }
 
@@ -906,9 +1099,23 @@ fn ls_remote_exit_code_of_a_branch_that_was_deleted_on_the_remote_is_exit_2() {
     repo.branch("b");
     w.ok(repo.dir(), &["push", "origin", "main"]);
     w.ok(repo.dir(), &["push", "origin", "b"]);
-    assert_eq!(w.git(repo.dir(), &["ls-remote", "--exit-code", "--heads", "origin", "b"]).code, 0);
+    assert_eq!(
+        w.git(
+            repo.dir(),
+            &["ls-remote", "--exit-code", "--heads", "origin", "b"]
+        )
+        .code,
+        0
+    );
     w.ok(repo.dir(), &["push", "origin", "--delete", "b"]);
-    assert_eq!(w.git(repo.dir(), &["ls-remote", "--exit-code", "--heads", "origin", "b"]).code, 2);
+    assert_eq!(
+        w.git(
+            repo.dir(),
+            &["ls-remote", "--exit-code", "--heads", "origin", "b"]
+        )
+        .code,
+        2
+    );
 }
 
 // ---- git/worktree.rs::push_commit_with (rule P) ------------------------------------------------------------
@@ -965,7 +1172,12 @@ fn push_commit_of_an_older_commit_the_remote_contains_is_contained_and_pushes_no
     w.next(&repo, "two\n");
     repo.push();
     let two = w.rev(repo.dir(), "main");
-    assert_eq!(pushed(&w, &repo, &one), Push::Contained { remote: two.to_string() });
+    assert_eq!(
+        pushed(&w, &repo, &one),
+        Push::Contained {
+            remote: two.to_string()
+        }
+    );
     assert_eq!(w.tip(&origin, "refs/heads/main"), Some(two));
 }
 
@@ -977,7 +1189,11 @@ fn lock_race() -> Reply {
         "refs/heads/main",
         "[remote rejected] (cannot lock ref 'refs/heads/main': is at 1111111111111111111111111111111111111111 but expected 2222222222222222222222222222222222222222)",
     );
-    Reply::exit(1, &format!("To origin\n{line}Done\n"), "error: failed to push some refs to 'origin'\n")
+    Reply::exit(
+        1,
+        &format!("To origin\n{line}Done\n"),
+        "error: failed to push some refs to 'origin'\n",
+    )
 }
 
 fn is_push(call: &Call) -> bool {
@@ -997,21 +1213,39 @@ fn push_commit_after_a_remote_rejected_lock_race_the_remote_already_contains_is_
     repo.push();
     let two = w.rev(repo.dir(), "main");
     let _ = w.runner.clone().once("git", is_push, lock_race());
-    assert_eq!(pushed(&w, &repo, &one), Push::Contained { remote: two.to_string() });
+    assert_eq!(
+        pushed(&w, &repo, &one),
+        Push::Contained {
+            remote: two.to_string()
+        }
+    );
     assert_eq!(w.tip(&origin, "refs/heads/main"), Some(two));
 }
 
 #[test]
-fn push_commit_after_a_remote_rejected_lock_race_the_remote_does_not_contain_is_git_failed_naming_the_reason() {
+fn push_commit_after_a_remote_rejected_lock_race_the_remote_does_not_contain_is_git_failed_naming_the_reason()
+ {
     let mut w = world();
     let d = w.diverged();
     w.learn(&d.origin, &d.a, &d.b2);
     let _ = w.runner.clone().once("git", is_push, lock_race());
     let err = push_commit_with(&w.runner, d.a.dir(), "main", d.a2.as_str()).unwrap_err();
     assert_eq!(err.code(), ErrorCode::GitFailed);
-    assert!(err.message().contains("cannot lock ref"), "{}", err.message());
-    assert!(err.message().starts_with("git push exited 1: "), "{}", err.message());
-    assert!(!err.details()["stderr"].as_str().unwrap_or("").is_empty(), "{:?}", err.details());
+    assert!(
+        err.message().contains("cannot lock ref"),
+        "{}",
+        err.message()
+    );
+    assert!(
+        err.message().starts_with("git push exited 1: "),
+        "{}",
+        err.message()
+    );
+    assert!(
+        !err.details()["stderr"].as_str().unwrap_or("").is_empty(),
+        "{:?}",
+        err.details()
+    );
 }
 
 #[test]
@@ -1020,10 +1254,22 @@ fn push_commit_whose_lock_race_check_cannot_reach_the_remote_reports_the_push_er
     let d = w.diverged();
     w.learn(&d.origin, &d.a, &d.b2);
     let _ = w.runner.clone().once("git", is_push, lock_race());
-    let _ = w.runner.clone().once("git", is_ls_remote, Reply::exit(128, "", "fatal: unable to access 'origin': Connection closed\n"));
+    let _ = w.runner.clone().once(
+        "git",
+        is_ls_remote,
+        Reply::exit(
+            128,
+            "",
+            "fatal: unable to access 'origin': Connection closed\n",
+        ),
+    );
     let err = push_commit_with(&w.runner, d.a.dir(), "main", d.a2.as_str()).unwrap_err();
     assert_eq!(err.code(), ErrorCode::GitFailed);
-    assert!(err.message().contains("cannot lock ref"), "{}", err.message());
+    assert!(
+        err.message().contains("cannot lock ref"),
+        "{}",
+        err.message()
+    );
 }
 
 #[test]
@@ -1042,7 +1288,10 @@ fn push_commit_failing_without_a_rejection_line_names_the_first_stderr_line() {
     );
     let err = push_commit_with(&w.runner, repo.dir(), "main", one.as_str()).unwrap_err();
     assert_eq!(err.code(), ErrorCode::GitFailed);
-    assert_eq!(err.message(), "git push exited 128: Connection closed by 140.82.112.4 port 22.");
+    assert_eq!(
+        err.message(),
+        "git push exited 128: Connection closed by 140.82.112.4 port 22."
+    );
 }
 
 #[test]
@@ -1050,7 +1299,9 @@ fn push_commit_of_a_diverged_commit_whose_remote_tip_is_held_is_rejected_non_fas
     let mut w = world();
     let d = w.diverged();
     w.learn(&d.origin, &d.a, &d.b2);
-    let Push::Rejected { stderr } = pushed(&w, &d.a, &d.a2) else { panic!("expected a rejection") };
+    let Push::Rejected { stderr } = pushed(&w, &d.a, &d.a2) else {
+        panic!("expected a rejection")
+    };
     assert!(stderr.contains("(non-fast-forward)"), "{stderr}");
     assert_eq!(w.tip(&d.origin, "refs/heads/main"), Some(d.b2));
 }
@@ -1059,7 +1310,9 @@ fn push_commit_of_a_diverged_commit_whose_remote_tip_is_held_is_rejected_non_fas
 fn push_commit_whose_remote_tip_is_not_held_here_is_rejected_fetch_first_never_contained() {
     let mut w = world();
     let d = w.diverged();
-    let Push::Rejected { stderr } = pushed(&w, &d.a, &d.a2) else { panic!("expected a rejection") };
+    let Push::Rejected { stderr } = pushed(&w, &d.a, &d.a2) else {
+        panic!("expected a rejection")
+    };
     assert!(stderr.contains("(fetch first)"), "{stderr}");
 }
 
@@ -1068,7 +1321,9 @@ fn push_commit_after_a_fetch_turns_a_fetch_first_rejection_into_a_non_fast_forwa
     let mut w = world();
     let d = w.diverged();
     w.ok(d.a.dir(), &["fetch", "origin", "main"]);
-    let Push::Rejected { stderr } = pushed(&w, &d.a, &d.a2) else { panic!("expected a rejection") };
+    let Push::Rejected { stderr } = pushed(&w, &d.a, &d.a2) else {
+        panic!("expected a rejection")
+    };
     assert!(stderr.contains("(non-fast-forward)"), "{stderr}");
 }
 
@@ -1089,7 +1344,11 @@ fn push_commit_to_an_unresolvable_url_is_git_failed_with_the_stderr() {
     let one = w.rev(repo.dir(), "main");
     let err = push_commit_with(&w.runner, repo.dir(), "main", one.as_str()).unwrap_err();
     assert_eq!(err.code(), ErrorCode::GitFailed);
-    let stderr = err.details().get("stderr").and_then(|v| v.as_str()).unwrap_or_default();
+    let stderr = err
+        .details()
+        .get("stderr")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     assert!(stderr.contains("Could not resolve host"), "{stderr}");
 }
 
@@ -1159,7 +1418,10 @@ fn remote_contains_asks_ls_remote_then_cat_file_then_merge_base() {
     let one = w.rev(repo.dir(), "main");
     let before = w.subcommands().len();
     assert!(contains(&w, &repo, &one));
-    assert_eq!(w.subcommands()[before..], ["ls-remote", "cat-file", "merge-base"]);
+    assert_eq!(
+        w.subcommands()[before..],
+        ["ls-remote", "cat-file", "merge-base"]
+    );
 }
 
 #[test]
@@ -1170,6 +1432,10 @@ fn remote_contains_of_an_unresolvable_url_is_git_failed_with_the_stderr() {
     let one = w.rev(repo.dir(), "main");
     let err = remote_contains_with(&w.runner, repo.dir(), MAIN, one.as_str()).unwrap_err();
     assert_eq!(err.code(), ErrorCode::GitFailed);
-    let stderr = err.details().get("stderr").and_then(|v| v.as_str()).unwrap_or_default();
+    let stderr = err
+        .details()
+        .get("stderr")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     assert!(stderr.contains("Could not resolve host"), "{stderr}");
 }

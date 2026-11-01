@@ -1,14 +1,14 @@
 //! `cpd secret allow` and `cpd secret approve` (commands.md §24.6, §24.7): the refusals and the grant files.
 
-use crate::secret::{approve_args, denied, strs, Fx, Who};
+use crate::secret::{Fx, Who, approve_args, denied, strs};
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use serde_json::{json, Value};
-use time::format_description::well_known::Rfc3339;
+use serde_json::{Value, json};
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 fn mode(path: &Path) -> u32 {
     fs::metadata(path).unwrap().permissions().mode() & 0o777
@@ -35,7 +35,12 @@ fn allow_names_an_attempt_of_the_leads_own_plan() {
         denied(&r, "attempt_not_found", 4);
         fx.assert_op_not_called(&r);
     }
-    assert!(!fx.env.cpd_home().join("run/secret/allow/b-a1.json").exists());
+    assert!(
+        !fx.env
+            .cpd_home()
+            .join("run/secret/allow/b-a1.json")
+            .exists()
+    );
 }
 
 #[test]
@@ -43,7 +48,12 @@ fn allow_refuses_an_ended_attempt() {
     let fx = Fx::new();
     let r = allow(&fx, Who::Lead, "e-a1", "cpd", "deployment");
     denied(&r, "secret_attempt_ended", 3);
-    assert!(!fx.env.cpd_home().join("run/secret/allow/e-a1.json").exists());
+    assert!(
+        !fx.env
+            .cpd_home()
+            .join("run/secret/allow/e-a1.json")
+            .exists()
+    );
     fx.assert_op_not_called(&r);
 }
 
@@ -60,7 +70,10 @@ fn allow_writes_a_private_grant_file_and_is_idempotent() {
     assert_eq!(mode(file.parent().unwrap()), 0o700);
     let first = fs::read_to_string(&file).unwrap();
     let held: Value = serde_json::from_str(&first).unwrap();
-    assert_eq!(held, json!([{"vault": "cpd", "item": "deployment", "field": "password"}]));
+    assert_eq!(
+        held,
+        json!([{"vault": "cpd", "item": "deployment", "field": "password"}])
+    );
 
     let r = allow(&fx, Who::Lead, "a-a1", "cpd", "deployment");
     assert_eq!(r.ok()["already"], true, "{r:?}");
@@ -85,17 +98,28 @@ fn allow_refuses_another_vault() {
     let fx = Fx::new();
     let r = allow(&fx, Who::Lead, "a-a1", "other", "deployment");
     denied(&r, "secret_vault_denied", 3);
-    assert!(!fx.env.cpd_home().join("run/secret/allow/a-a1.json").exists());
+    assert!(
+        !fx.env
+            .cpd_home()
+            .join("run/secret/allow/a-a1.json")
+            .exists()
+    );
     fx.assert_op_not_called(&r);
 }
 
 fn approvals(fx: &Fx) -> Vec<Value> {
     let dir = fx.env.cpd_home().join("run/secret/approve");
-    let Ok(entries) = fs::read_dir(&dir) else { return Vec::new() };
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
     entries
         .map(|e| {
             let path = e.unwrap().path();
-            assert_eq!(path.extension().and_then(|e| e.to_str()), Some("json"), "{path:?}");
+            assert_eq!(
+                path.extension().and_then(|e| e.to_str()),
+                Some("json"),
+                "{path:?}"
+            );
             assert_eq!(mode(&path), 0o600, "{path:?}");
             assert_eq!(mode(&dir), 0o700);
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap()
@@ -103,8 +127,18 @@ fn approvals(fx: &Fx) -> Vec<Value> {
         .collect()
 }
 
-fn approve(fx: &Fx, who: Who, action: &str, item: Option<&str>, field: Option<&str>) -> crate::common::Run {
-    fx.run(who, &strs(&approve_args(action, "other", item, field)), None)
+fn approve(
+    fx: &Fx,
+    who: Who,
+    action: &str,
+    item: Option<&str>,
+    field: Option<&str>,
+) -> crate::common::Run {
+    fx.run(
+        who,
+        &strs(&approve_args(action, "other", item, field)),
+        None,
+    )
 }
 
 #[test]
@@ -118,8 +152,16 @@ fn approve_writes_a_private_grant_file() {
         assert_eq!(out["vault"], "other", "{r:?}");
         let files = approvals(&fx);
         assert_eq!(files.len(), before + 1, "{r:?}");
-        let file = files.iter().find(|f| f["session"] == session).unwrap_or_else(|| panic!("no file of {session}: {files:?}"));
-        let mut keys: Vec<&str> = file.as_object().unwrap().keys().map(String::as_str).collect();
+        let file = files
+            .iter()
+            .find(|f| f["session"] == session)
+            .unwrap_or_else(|| panic!("no file of {session}: {files:?}"));
+        let mut keys: Vec<&str> = file
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         keys.sort_unstable();
         assert_eq!(keys, ["action", "at", "field", "item", "session", "vault"]);
         assert_eq!(file["action"], "get");
@@ -145,7 +187,13 @@ fn approve_writes_a_private_grant_file() {
 fn approve_is_for_a_lead_or_a_manager_and_another_vault() {
     let fx = Fx::new();
     // the neighbouring case only the implementation answers
-    let r = approve(&fx, Who::Worker, "get", Some("deployment"), Some("password"));
+    let r = approve(
+        &fx,
+        Who::Worker,
+        "get",
+        Some("deployment"),
+        Some("password"),
+    );
     denied(&r, "secret_role_denied", 3);
 
     for vault in ["cpd", "homeserver"] {

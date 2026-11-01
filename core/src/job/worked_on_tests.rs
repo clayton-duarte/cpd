@@ -28,8 +28,14 @@ fn fixture(lead_state: &str) -> Fixture {
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
     let store = Store::open(&home, 5000).unwrap();
     let mut f = Fixture { _dir: dir, store };
-    let label = if lead_state == "waiting" || lead_state == "blocked" { "'Which?'" } else { "NULL" };
-    let mut sql = format!("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');");
+    let label = if lead_state == "waiting" || lead_state == "blocked" {
+        "'Which?'"
+    } else {
+        "NULL"
+    };
+    let mut sql = format!(
+        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');"
+    );
     for plan in ["pay", "ops"] {
         sql.push_str(&format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_label, state_at, created_at)
@@ -60,11 +66,23 @@ impl Fixture {
 
     /// A Job in its own transaction (so `created_txn` grows with each call).
     fn job(&mut self, plan: &str, pr: &str, key: &str, status: &str) {
-        let cause = if status == "failed" { "'crashed'" } else { "NULL" };
+        let cause = if status == "failed" {
+            "'crashed'"
+        } else {
+            "NULL"
+        };
         let sha = if status == "merged" { "'abc'" } else { "NULL" };
         let reason = if status == "cancelled" { "'r'" } else { "NULL" };
-        let reason_at = if status == "cancelled" { format!("'{T}'") } else { "NULL".to_owned() };
-        let fp = if status == "draft" { "NULL".to_owned() } else { format!("'{FP}'") };
+        let reason_at = if status == "cancelled" {
+            format!("'{T}'")
+        } else {
+            "NULL".to_owned()
+        };
+        let fp = if status == "draft" {
+            "NULL".to_owned()
+        } else {
+            format!("'{FP}'")
+        };
         self.sql(&format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                fingerprint, created_txn, created_at, failed_cause, merged_sha, cancel_reason, cancel_requested_at)
@@ -87,33 +105,56 @@ impl Fixture {
     }
 
     fn set(&mut self, plan: &str, key: &str, status: &str) {
-        let cause = if status == "failed" { "'crashed'" } else { "NULL" };
+        let cause = if status == "failed" {
+            "'crashed'"
+        } else {
+            "NULL"
+        };
         let sha = if status == "merged" { "'abc'" } else { "NULL" };
         let reason = if status == "cancelled" { "'r'" } else { "NULL" };
-        let reason_at = if status == "cancelled" { format!("'{T}'") } else { "NULL".to_owned() };
+        let reason_at = if status == "cancelled" {
+            format!("'{T}'")
+        } else {
+            "NULL".to_owned()
+        };
         self.sql(&format!("UPDATE jobs SET status = '{status}', failed_cause = {cause}, merged_sha = {sha}, cancel_reason = {reason}, cancel_requested_at = {reason_at} WHERE plan = '{plan}' AND key = '{key}'"));
     }
 
     fn lead(&mut self, plan: &str, state: &str) {
-        let label = if state == "waiting" || state == "blocked" { "'Which?'" } else { "NULL" };
-        self.sql(&format!("UPDATE sessions SET state = '{state}', state_label = {label} WHERE id = 'l-{plan}'"));
+        let label = if state == "waiting" || state == "blocked" {
+            "'Which?'"
+        } else {
+            "NULL"
+        };
+        self.sql(&format!(
+            "UPDATE sessions SET state = '{state}', state_label = {label} WHERE id = 'l-{plan}'"
+        ));
     }
 
     fn worked(&mut self, plan: Option<&str>) -> BTreeSet<(String, String)> {
         let plan = plan.map(|p| PlanId::parse(p).unwrap());
-        let set = self.store.read(|c| failed_worked_on(c, plan.as_ref())).unwrap();
-        set.into_iter().map(|(p, j)| (p.as_str().to_owned(), j.as_str().to_owned())).collect()
+        let set = self
+            .store
+            .read(|c| failed_worked_on(c, plan.as_ref()))
+            .unwrap();
+        set.into_iter()
+            .map(|(p, j)| (p.as_str().to_owned(), j.as_str().to_owned()))
+            .collect()
     }
 
     fn holds(&mut self, key: &str) -> bool {
-        self.worked(Some("pay")).contains(&("pay".to_owned(), key.to_owned()))
+        self.worked(Some("pay"))
+            .contains(&("pay".to_owned(), key.to_owned()))
     }
 
     fn stuck(&mut self) -> Vec<(String, i64, String, i64)> {
-        stuck_jobs(&mut self.store, NOW, TEN).unwrap().into_iter().map(|s| (s.job.as_str().to_owned(), s.minutes, s.cause, s.event)).collect()
+        stuck_jobs(&mut self.store, NOW, TEN)
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.job.as_str().to_owned(), s.minutes, s.cause, s.event))
+            .collect()
     }
 }
-
 
 #[test]
 fn worked_on_holds_for_a_failed_job_while_its_lead_works() {
@@ -127,7 +168,8 @@ fn worked_on_holds_for_a_failed_job_while_its_lead_works() {
 }
 
 #[test]
-fn worked_on_holds_for_a_failed_job_with_a_queued_or_running_job_of_its_pr_created_after_the_failure() {
+fn worked_on_holds_for_a_failed_job_with_a_queued_or_running_job_of_its_pr_created_after_the_failure()
+ {
     let mut f = fixture("idle");
     f.failed("pay", "p1", "a");
     assert!(!f.holds("a"));
@@ -141,18 +183,30 @@ fn worked_on_holds_for_a_failed_job_with_a_queued_or_running_job_of_its_pr_creat
     f.set("pay", "a", "queued");
     f.set("pay", "a", "failed");
     f.failure("pay", "a");
-    assert!(!f.holds("a"), "a Job created before the second failure does not count");
+    assert!(
+        !f.holds("a"),
+        "a Job created before the second failure does not count"
+    );
     f.job("pay", "p1", "again", "queued");
-    assert!(f.holds("a"), "a Job created after the second failure counts");
+    assert!(
+        f.holds("a"),
+        "a Job created after the second failure counts"
+    );
 }
 
 #[test]
-fn worked_on_ignores_jobs_created_before_the_failure_other_prs_and_jobs_that_are_not_queued_or_running() {
+fn worked_on_ignores_jobs_created_before_the_failure_other_prs_and_jobs_that_are_not_queued_or_running()
+ {
     let mut f = fixture("idle");
     f.job("pay", "p1", "early", "queued");
     f.failed("pay", "p1", "a");
     f.job("pay", "p2", "other", "queued");
-    for (key, status) in [("d", "draft"), ("m", "merged"), ("f", "failed"), ("c", "cancelled")] {
+    for (key, status) in [
+        ("d", "draft"),
+        ("m", "merged"),
+        ("f", "failed"),
+        ("c", "cancelled"),
+    ] {
         f.job("pay", "p1", key, status);
     }
     assert!(!f.holds("a"));
@@ -164,14 +218,23 @@ fn worked_on_ignores_jobs_created_before_the_failure_other_prs_and_jobs_that_are
 #[test]
 fn worked_on_never_holds_for_a_job_that_is_not_failed() {
     let mut f = fixture("working");
-    for (key, status) in [("q", "queued"), ("r", "running"), ("m", "merged"), ("c", "cancelled"), ("d", "draft")] {
+    for (key, status) in [
+        ("q", "queued"),
+        ("r", "running"),
+        ("m", "merged"),
+        ("c", "cancelled"),
+        ("d", "draft"),
+    ] {
         f.job("pay", "p1", key, status);
         f.failure("pay", key);
     }
     assert_eq!(f.worked(None), BTreeSet::new());
     // Control: a failed Job with its Lead working is in the set, and only it.
     f.failed("pay", "p1", "x");
-    assert_eq!(f.worked(None), BTreeSet::from([("pay".to_owned(), "x".to_owned())]));
+    assert_eq!(
+        f.worked(None),
+        BTreeSet::from([("pay".to_owned(), "x".to_owned())])
+    );
 }
 
 #[test]
@@ -232,6 +295,10 @@ fn a_failed_job_is_stuck_when_its_fix_job_ended_and_its_lead_is_idle() {
             f.set("pay", "fix", "running");
         }
         f.set("pay", "fix", end);
-        assert_eq!(f.stuck(), before, "the fix {end}: stuck again, same event, minutes and cause");
+        assert_eq!(
+            f.stuck(),
+            before,
+            "the fix {end}: stuck again, same event, minutes and cause"
+        );
     }
 }

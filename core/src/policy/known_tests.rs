@@ -10,7 +10,10 @@ fn touch(path: &Path) {
 }
 
 fn names(dir: &Path) -> Vec<String> {
-    known_owners(dir).iter().map(|o| o.as_str().to_owned()).collect()
+    known_owners(dir)
+        .iter()
+        .map(|o| o.as_str().to_owned())
+        .collect()
 }
 
 #[test]
@@ -20,7 +23,10 @@ fn a_directory_with_owner_toml_is_listed_sorted() {
     touch(&dir.path().join("acme/owner.toml"));
     touch(&dir.path().join("mid/owner.toml"));
     assert_eq!(names(dir.path()), ["acme", "mid", "zeta"]);
-    assert_eq!(known_owners(dir.path())[0], OwnerLogin::parse("acme").unwrap());
+    assert_eq!(
+        known_owners(dir.path())[0],
+        OwnerLogin::parse("acme").unwrap()
+    );
 }
 
 #[test]
@@ -36,7 +42,11 @@ fn a_symlink_owner_toml_that_resolves_is_listed() {
     let dir = tempfile::tempdir().unwrap();
     touch(&dir.path().join("clayton-duarte/owner.toml"));
     fs::create_dir(dir.path().join("stranger")).unwrap();
-    symlink("../clayton-duarte/owner.toml", dir.path().join("stranger/owner.toml")).unwrap();
+    symlink(
+        "../clayton-duarte/owner.toml",
+        dir.path().join("stranger/owner.toml"),
+    )
+    .unwrap();
     assert_eq!(names(dir.path()), ["clayton-duarte", "stranger"]);
 }
 
@@ -44,7 +54,11 @@ fn a_symlink_owner_toml_that_resolves_is_listed() {
 fn a_dangling_symlink_owner_toml_is_not_listed() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir(dir.path().join("stranger")).unwrap();
-    symlink("../clayton-duarte/owner.toml", dir.path().join("stranger/owner.toml")).unwrap();
+    symlink(
+        "../clayton-duarte/owner.toml",
+        dir.path().join("stranger/owner.toml"),
+    )
+    .unwrap();
     assert_eq!(names(dir.path()), Vec::<String>::new());
 }
 

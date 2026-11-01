@@ -10,7 +10,9 @@ use time::{OffsetDateTime, UtcOffset};
 /// `at` as contract §1.3 writes times: RFC 3339 UTC with milliseconds.
 pub fn timestamp(at: OffsetDateTime) -> String {
     at.to_offset(UtcOffset::UTC)
-        .format(format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"))
+        .format(format_description!(
+            "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
+        ))
         .expect("a UTC time always formats")
 }
 
@@ -20,15 +22,23 @@ pub fn now() -> String {
 }
 
 fn zoned(at: OffsetDateTime, zone: &TimeZone) -> jiff::Zoned {
-    let ts = jiff::Timestamp::from_nanosecond(at.unix_timestamp_nanos()).expect("a time in jiff's range");
+    let ts = jiff::Timestamp::from_nanosecond(at.unix_timestamp_nanos())
+        .expect("a time in jiff's range");
     ts.to_zoned(zone.clone())
 }
 
 /// `at` as prose for a person (`YYYY-MM-DD HH:MM ZZZ`) in `zone`: the abbreviation when letters only, else the numeric offset.
 pub fn prose(at: OffsetDateTime, zone: &TimeZone) -> String {
     let z = zoned(at, zone);
-    let abbr = zone.to_offset_info(z.timestamp()).abbreviation().to_string();
-    let label = if !abbr.is_empty() && abbr.chars().all(|c| c.is_ascii_alphabetic()) { abbr } else { z.strftime("%:z").to_string() };
+    let abbr = zone
+        .to_offset_info(z.timestamp())
+        .abbreviation()
+        .to_string();
+    let label = if !abbr.is_empty() && abbr.chars().all(|c| c.is_ascii_alphabetic()) {
+        abbr
+    } else {
+        z.strftime("%:z").to_string()
+    };
     format!("{} {label}", z.strftime("%Y-%m-%d %H:%M"))
 }
 
@@ -89,10 +99,15 @@ pub struct ManualClock {
 
 impl ManualClock {
     pub fn new() -> Self {
-        ManualClock { start: Instant::now(), state: Arc::default() }
+        ManualClock {
+            start: Instant::now(),
+            state: Arc::default(),
+        }
     }
     fn state(&self) -> MutexGuard<'_, State> {
-        self.state.lock().expect("the clock's state is never held across a panic")
+        self.state
+            .lock()
+            .expect("the clock's state is never held across a panic")
     }
     /// Moves virtual time forward without recording a nap.
     pub fn advance(&self, d: Duration) {
@@ -138,6 +153,9 @@ mod tests {
 
     #[test]
     fn a_time_is_written_in_utc_with_milliseconds() {
-        assert_eq!(timestamp(datetime!(2026-05-01 12:34:56.789_123 +02:00)), "2026-05-01T10:34:56.789Z");
+        assert_eq!(
+            timestamp(datetime!(2026-05-01 12:34:56.789_123 +02:00)),
+            "2026-05-01T10:34:56.789Z"
+        );
     }
 }

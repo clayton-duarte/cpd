@@ -8,7 +8,8 @@ use super::migrate::{MIGRATIONS, apply};
 const STALE: &str = "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"H2\"  # stale\ntest_concurrency = 2\nconcurrency = 5\n";
 
 /// `STALE` after the two migrations: the value rewritten and the key's line removed.
-const MIGRATED: &str = "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"GX\"  # stale\nconcurrency = 5\n";
+const MIGRATED: &str =
+    "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"GX\"  # stale\nconcurrency = 5\n";
 
 /// Migrations run in the order of [`MIGRATIONS`], whose first two entries are the two
 /// named in the contract, then `drop-plannotator-ports`.
@@ -18,7 +19,11 @@ fn migrate_reports_the_applied_names_in_order() {
     assert_eq!(names, vec!["distill-tier-gx", "drop-test-concurrency"]);
     assert_eq!(
         MIGRATIONS.iter().map(|m| m.name).collect::<Vec<_>>(),
-        vec!["distill-tier-gx", "drop-test-concurrency", "drop-plannotator-ports"]
+        vec![
+            "distill-tier-gx",
+            "drop-test-concurrency",
+            "drop-plannotator-ports"
+        ]
     );
 
     // A config only one migration touches reports only that one.
@@ -75,7 +80,8 @@ fn migrate_leaves_a_non_h2_value_alone() {
 /// The top-level `plannotator_ports` line is removed, its neighbours and comments kept.
 #[test]
 fn migrate_drops_plannotator_ports() {
-    let input = "version = 1\n# keep\nplannotator_ports = \"19432-19456\"  # old\nconcurrency = 5\n";
+    let input =
+        "version = 1\n# keep\nplannotator_ports = \"19432-19456\"  # old\nconcurrency = 5\n";
     let (text, names) = apply(input);
     assert_eq!(text, "version = 1\n# keep\nconcurrency = 5\n");
     assert_eq!(names, vec!["drop-plannotator-ports"]);

@@ -41,7 +41,12 @@ const NAMES: [&str; 16] = [
 const DEADLINE: Duration = Duration::from_secs(10);
 
 /// A rule of the `FakeRunner`: `reply` answers a call of `program` that `matches`. It wins over the healthy route.
-fn script(fx: &Fx, program: &str, matches: impl Fn(&Call) -> bool + Send + Sync + 'static, reply: Reply) {
+fn script(
+    fx: &Fx,
+    program: &str,
+    matches: impl Fn(&Call) -> bool + Send + Sync + 'static,
+    reply: Reply,
+) {
     let _ = (*fx.fakes.runner).clone().on(program, matches, reply);
 }
 
@@ -74,7 +79,11 @@ fn write_config(fx: &Fx, extra: &str) {
 fn machine_models(fx: &Fx, [o, s, h, g]: [&str; 4]) {
     let path = fx.env.cpd_home().join("policy/host.toml");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, format!("[model]\nO = \"{o}\"\nS = \"{s}\"\nH = \"{h}\"\nG = \"{g}\"\n")).unwrap();
+    fs::write(
+        path,
+        format!("[model]\nO = \"{o}\"\nS = \"{s}\"\nH = \"{h}\"\nG = \"{g}\"\n"),
+    )
+    .unwrap();
 }
 
 /// A machine where every check passes: on fake ports, with the healthy tools ([`Fx::healthy_tools`]) and a config.
@@ -100,12 +109,21 @@ fn doctor(fx: &Fx) -> Run {
 /// The checks of a success, or of a `doctor_failed`.
 fn checks(run: &Run) -> Vec<Value> {
     let json = run.json();
-    let list = if json["ok"] == true { &json["checks"] } else { &json["error"]["details"]["checks"] };
-    list.as_array().unwrap_or_else(|| panic!("no checks in {run:?}")).clone()
+    let list = if json["ok"] == true {
+        &json["checks"]
+    } else {
+        &json["error"]["details"]["checks"]
+    };
+    list.as_array()
+        .unwrap_or_else(|| panic!("no checks in {run:?}"))
+        .clone()
 }
 
 fn check(run: &Run, name: &str) -> Value {
-    checks(run).into_iter().find(|c| c["name"] == name).unwrap_or_else(|| panic!("no check {name} in {run:?}"))
+    checks(run)
+        .into_iter()
+        .find(|c| c["name"] == name)
+        .unwrap_or_else(|| panic!("no check {name} in {run:?}"))
 }
 
 fn assert_passes(run: &Run, name: &str) {
@@ -118,7 +136,10 @@ fn assert_fails(run: &Run, name: &str, severity: &str, message: &str) -> Value {
     let c = check(run, name);
     assert_eq!(c["ok"], false, "{c}");
     assert_eq!(c["severity"], severity, "{c}");
-    assert!(c["message"].as_str().unwrap_or_default().contains(message), "{message:?} not in {c}");
+    assert!(
+        c["message"].as_str().unwrap_or_default().contains(message),
+        "{message:?} not in {c}"
+    );
     c
 }
 
@@ -126,12 +147,19 @@ fn assert_fails(run: &Run, name: &str, severity: &str, message: &str) -> Value {
 fn assert_doctor_failed(run: &Run) {
     assert_eq!(run.exit, 1, "{run:?}");
     assert_eq!(run.error()["code"], "doctor_failed", "{run:?}");
-    let names: Vec<_> = checks(run).iter().map(|c| c["name"].as_str().unwrap().to_owned()).collect();
+    let names: Vec<_> = checks(run)
+        .iter()
+        .map(|c| c["name"].as_str().unwrap().to_owned())
+        .collect();
     assert_eq!(names, NAMES);
 }
 
 fn open_store(env: &TestEnv) -> Store {
-    Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
+    Store::open(
+        &CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(),
+        5000,
+    )
+    .unwrap()
 }
 
 // ------------------------------------------------------------------ success
@@ -146,13 +174,24 @@ fn a_healthy_machine_passes_every_check_in_order() {
     assert_eq!(names, NAMES);
     for c in &all {
         assert_eq!(c["ok"], true, "{c}");
-        assert!(["error", "warn"].contains(&c["severity"].as_str().unwrap()), "{c}");
+        assert!(
+            ["error", "warn"].contains(&c["severity"].as_str().unwrap()),
+            "{c}"
+        );
     }
-    assert_eq!(json.as_object().unwrap().len(), 2, "only ok and checks: {json}");
+    assert_eq!(
+        json.as_object().unwrap().len(),
+        2,
+        "only ok and checks: {json}"
+    );
 
     let tool = |name: &str, found: &str, expected: &str| {
         let c = check(&run, name);
-        assert_eq!((c["found"].as_str(), c["expected"].as_str()), (Some(found), Some(expected)), "{c}");
+        assert_eq!(
+            (c["found"].as_str(), c["expected"].as_str()),
+            (Some(found), Some(expected)),
+            "{c}"
+        );
         assert_eq!(c["severity"], "error");
     };
     tool("git", "2.43.0", ">= 2.43.0");
@@ -174,7 +213,8 @@ fn doctor_is_idempotent_and_writes_nothing_but_the_migration() {
     let db = fx.env.cpd_home().join("cpd.db");
     let txns = |fx: &Fx| -> i64 {
         let conn = Connection::open(fx.env.cpd_home().join("cpd.db")).unwrap();
-        conn.query_row("SELECT count(*) FROM txns", [], |r| r.get(0)).unwrap()
+        conn.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))
+            .unwrap()
     };
     assert!(db.exists());
     assert_eq!(txns(&fx), 1, "the migration's transaction only");
@@ -183,7 +223,9 @@ fn doctor_is_idempotent_and_writes_nothing_but_the_migration() {
     assert_eq!(txns(&fx), 1);
     // The tiers check asks pi and does not fill the cache.
     let conn = Connection::open(db).unwrap();
-    let cached: i64 = conn.query_row("SELECT count(*) FROM tier_catalog", [], |r| r.get(0)).unwrap();
+    let cached: i64 = conn
+        .query_row("SELECT count(*) FROM tier_catalog", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(cached, 0);
 }
 
@@ -203,7 +245,13 @@ fn a_missing_config_fails_and_what_needs_it_is_not_checked() {
     let run = doctor(&fx);
     assert_doctor_failed(&run);
     assert_fails(&run, "config", "error", "config_missing");
-    for name in ["store", "tiers", "pi_adapter", "worker_runner", "host_runner"] {
+    for name in [
+        "store",
+        "tiers",
+        "pi_adapter",
+        "worker_runner",
+        "host_runner",
+    ] {
         assert_fails(&run, name, "error", "not checked");
     }
     assert_fails(&run, "lead_packages", "warn", "not checked");
@@ -213,7 +261,11 @@ fn a_missing_config_fails_and_what_needs_it_is_not_checked() {
 #[test]
 fn an_invalid_config_fails_with_its_key() {
     let fx = healthy();
-    fs::write(fx.env.cpd_home().join("config.toml"), "version = 1\nmachine = \"hs\"\nconcurrency = 0\n").unwrap();
+    fs::write(
+        fx.env.cpd_home().join("config.toml"),
+        "version = 1\nmachine = \"hs\"\nconcurrency = 0\n",
+    )
+    .unwrap();
     let run = doctor(&fx);
     assert_doctor_failed(&run);
     let c = assert_fails(&run, "config", "error", "config_invalid");
@@ -245,7 +297,12 @@ fn each_tool_must_be_at_or_above_its_minimum() {
     for (tool, output, passes, found) in cases {
         let fx = healthy();
         // `gh auth status` stays healthy: only the version probe is changed.
-        script(&fx, tool, |call| !is_auth(call), Reply::ok(&format!("{output}\n")));
+        script(
+            &fx,
+            tool,
+            |call| !is_auth(call),
+            Reply::ok(&format!("{output}\n")),
+        );
         let run = doctor(&fx);
         let c = check(&run, tool);
         assert_eq!(c["ok"], passes, "{tool} {output:?}: {c}");
@@ -294,7 +351,13 @@ fn gh_auth_is_a_warning_that_never_fails_doctor() {
     run.ok();
     assert_fails(&run, "gh_auth", "warn", "exited 1");
     assert_passes(&run, "gh");
-    assert_eq!(fx.calls("gh").iter().filter(|c| c.args == ["auth", "status"]).count(), 1);
+    assert_eq!(
+        fx.calls("gh")
+            .iter()
+            .filter(|c| c.args == ["auth", "status"])
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -313,7 +376,12 @@ fn pi_node_must_run() {
     fs::create_dir_all(&pi_node).unwrap();
     fs::write(pi_node.join("node"), "").unwrap();
     let program = pi_node.join("node").display().to_string();
-    script(&fx, "node", move |call| call.program == program, Reply::exit(7, "", "node broke\n"));
+    script(
+        &fx,
+        "node",
+        move |call| call.program == program,
+        Reply::exit(7, "", "node broke\n"),
+    );
     let run = doctor(&fx);
     assert_doctor_failed(&run);
     assert_fails(&run, "pi_node", "error", "exited 7");
@@ -326,7 +394,10 @@ fn tiers_fail_for_a_model_pi_does_not_have() {
     let fx = healthy();
     fs::write(
         fx.env.cpd_home().join("config.toml"),
-        format!("version = 1\nmachine = \"hs\"\npi_adapter = \"{}\"\n", fx.env.root().join("adapter").display()),
+        format!(
+            "version = 1\nmachine = \"hs\"\npi_adapter = \"{}\"\n",
+            fx.env.root().join("adapter").display()
+        ),
     )
     .unwrap();
     machine_models(&fx, ["p/m-opus", "p/nope", "p/m-low", "p/m-aux"]);
@@ -370,11 +441,18 @@ fn the_adapter_directory_needs_a_package_json() {
     {
         // The default, beside the binary, does not exist in a build tree.
         let fx = healthy();
-        fs::write(fx.env.cpd_home().join("config.toml"), "version = 1\nmachine = \"hs\"\n").unwrap();
+        fs::write(
+            fx.env.cpd_home().join("config.toml"),
+            "version = 1\nmachine = \"hs\"\n",
+        )
+        .unwrap();
         let run = doctor(&fx);
         assert_doctor_failed(&run);
         let c = assert_fails(&run, "pi_adapter", "error", "package.json");
-        assert!(c["found"].as_str().unwrap().ends_with("share/cpd/pi"), "{c}");
+        assert!(
+            c["found"].as_str().unwrap().ends_with("share/cpd/pi"),
+            "{c}"
+        );
     }
 
     // A directory removed after the config was written.
@@ -416,18 +494,30 @@ fn lead_packages_say_how_a_lead_gets_each() {
     let run = doctor(&fx);
     let c = check(&run, "lead_packages");
     assert_eq!(c["ok"], true, "{c}");
-    assert_eq!(c["found"][1], json!({"package": "./local-pkg", "by": "settings", "settings": project.canonicalize().unwrap().display().to_string()}));
+    assert_eq!(
+        c["found"][1],
+        json!({"package": "./local-pkg", "by": "settings", "settings": project.canonicalize().unwrap().display().to_string()})
+    );
 }
 
 #[test]
 fn an_entry_neither_declared_nor_resolvable_is_a_warning() {
     let fx = healthy();
-    write_config(&fx, "lead_pi_packages = [\"/nonexistent/pi-package\", \"npm:left-pad@1.0.0\"]");
+    write_config(
+        &fx,
+        "lead_pi_packages = [\"/nonexistent/pi-package\", \"npm:left-pad@1.0.0\"]",
+    );
     let run = doctor(&fx);
     run.ok();
     let c = assert_fails(&run, "lead_packages", "warn", "/nonexistent/pi-package");
-    assert_eq!(c["found"][1], json!({"package": "/nonexistent/pi-package", "by": "-e", "resolvable": false}));
-    assert_eq!(c["found"][2], json!({"package": "npm:left-pad@1.0.0", "by": "-e"}));
+    assert_eq!(
+        c["found"][1],
+        json!({"package": "/nonexistent/pi-package", "by": "-e", "resolvable": false})
+    );
+    assert_eq!(
+        c["found"][2],
+        json!({"package": "npm:left-pad@1.0.0", "by": "-e"})
+    );
 }
 
 // -------------------------------------------------------------- the store
@@ -436,11 +526,17 @@ fn an_entry_neither_declared_nor_resolvable_is_a_warning() {
 fn a_changed_schema_fails_store_and_tamper() {
     let fx = healthy();
     open_store(&fx.env);
-    Connection::open(fx.env.cpd_home().join("cpd.db")).unwrap().execute_batch("DROP TRIGGER contexts_no_delete").unwrap();
+    Connection::open(fx.env.cpd_home().join("cpd.db"))
+        .unwrap()
+        .execute_batch("DROP TRIGGER contexts_no_delete")
+        .unwrap();
     let run = doctor(&fx);
     assert_doctor_failed(&run);
     let c = assert_fails(&run, "store", "error", "schema");
-    assert!(c["found"].is_string() && c["expected"].is_string() && c["found"] != c["expected"], "{c}");
+    assert!(
+        c["found"].is_string() && c["expected"].is_string() && c["found"] != c["expected"],
+        "{c}"
+    );
     let c = assert_fails(&run, "tamper", "error", "outside cpd");
     assert_eq!(c["found"][0]["kind"], "schema");
 }
@@ -451,13 +547,22 @@ fn a_history_row_without_a_txn_fails_tamper_only() {
     open_store(&fx.env);
     let conn = Connection::open(fx.env.cpd_home().join("cpd.db")).unwrap();
     conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
-    conn.create_scalar_function("cpd_txn", 0, rusqlite::functions::FunctionFlags::SQLITE_UTF8, |_| Ok(999i64)).unwrap();
+    conn.create_scalar_function(
+        "cpd_txn",
+        0,
+        rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+        |_| Ok(999i64),
+    )
+    .unwrap();
     conn.execute_batch("INSERT INTO history (txn, tbl, pk, op, before, after) VALUES (999, 'contexts', '[\"x\"]', 'insert', NULL, '{}')").unwrap();
     let run = doctor(&fx);
     assert_doctor_failed(&run);
     assert_passes(&run, "store");
     let c = assert_fails(&run, "tamper", "error", "outside cpd");
-    assert_eq!(c["found"], json!([{"kind": "history", "id": 1, "txn": 999}]));
+    assert_eq!(
+        c["found"],
+        json!([{"kind": "history", "id": 1, "txn": 999}])
+    );
 }
 
 /// Plan `pl` in `plan` with Locked Jobs `a` and `b` (queued, fingerprints stored
@@ -487,7 +592,9 @@ fn locked_jobs(env: &TestEnv) {
         })
         .unwrap();
     let id = cpd_core::ids::PlanId::parse("pl").unwrap();
-    let jobs = store.read(|conn| cpd_core::plan::jobs::load(conn, &id)).unwrap();
+    let jobs = store
+        .read(|conn| cpd_core::plan::jobs::load(conn, &id))
+        .unwrap();
     store
         .write("fixture", |tx| {
             for job in jobs.iter().filter(|j| j.key != "c") {
@@ -505,7 +612,10 @@ fn row_counts(env: &TestEnv) -> Vec<i64> {
     let conn = Connection::open(env.cpd_home().join("cpd.db")).unwrap();
     ["txns", "events", "history", "jobs", "plans"]
         .iter()
-        .map(|t| conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0)).unwrap())
+        .map(|t| {
+            conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0))
+                .unwrap()
+        })
         .collect()
 }
 
@@ -514,11 +624,29 @@ fn row_counts(env: &TestEnv) -> Vec<i64> {
 /// schema check stays quiet and only the fingerprint tells.
 fn edit_locked_job_outside_cpd(env: &TestEnv) {
     let conn = Connection::open(env.cpd_home().join("cpd.db")).unwrap();
-    let txn: i64 = conn.query_row("SELECT max(id) FROM txns", [], |r| r.get(0)).unwrap();
-    conn.create_scalar_function("cpd_txn", 0, rusqlite::functions::FunctionFlags::SQLITE_UTF8, move |_| Ok(txn)).unwrap();
-    let sql: String = conn.query_row("SELECT sql FROM sqlite_schema WHERE name = 'jobs_locked'", [], |r| r.get(0)).unwrap();
+    let txn: i64 = conn
+        .query_row("SELECT max(id) FROM txns", [], |r| r.get(0))
+        .unwrap();
+    conn.create_scalar_function(
+        "cpd_txn",
+        0,
+        rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+        move |_| Ok(txn),
+    )
+    .unwrap();
+    let sql: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE name = 'jobs_locked'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     conn.execute_batch("DROP TRIGGER jobs_locked").unwrap();
-    conn.execute("UPDATE jobs SET goal = 'Something else.' WHERE plan = 'pl' AND key = 'a'", []).unwrap();
+    conn.execute(
+        "UPDATE jobs SET goal = 'Something else.' WHERE plan = 'pl' AND key = 'a'",
+        [],
+    )
+    .unwrap();
     conn.execute_batch(&sql).unwrap();
 }
 
@@ -543,16 +671,29 @@ fn a_locked_job_edited_outside_cpd_fails_tamper_and_nothing_is_written() {
     let c = assert_fails(&run, "tamper", "error", "outside cpd");
     let found = c["found"].as_array().unwrap();
     assert_eq!(found.len(), 1, "only the edited Job is reported: {c}");
-    assert_eq!((&found[0]["kind"], &found[0]["plan"], &found[0]["job"]), (&json!("fingerprint"), &json!("pl"), &json!("a")));
-    let (expected, got) = (found[0]["expected"].as_str().unwrap(), found[0]["found"].as_str().unwrap());
-    assert!(expected.len() == 64 && got.len() == 64 && expected != got, "{c}");
+    assert_eq!(
+        (&found[0]["kind"], &found[0]["plan"], &found[0]["job"]),
+        (&json!("fingerprint"), &json!("pl"), &json!("a"))
+    );
+    let (expected, got) = (
+        found[0]["expected"].as_str().unwrap(),
+        found[0]["found"].as_str().unwrap(),
+    );
+    assert!(
+        expected.len() == 64 && got.len() == 64 && expected != got,
+        "{c}"
+    );
     assert_eq!(row_counts(&fx.env), before, "doctor writes nothing");
 }
 
 #[test]
 fn a_database_that_is_not_cpds_fails_store() {
     let fx = healthy();
-    fs::write(fx.env.cpd_home().join("cpd.db"), "not a database, not a database, not a database").unwrap();
+    fs::write(
+        fx.env.cpd_home().join("cpd.db"),
+        "not a database, not a database, not a database",
+    )
+    .unwrap();
     let run = doctor(&fx);
     assert_doctor_failed(&run);
     assert_fails(&run, "store", "error", "store_failed");
@@ -563,13 +704,22 @@ fn a_database_that_is_not_cpds_fails_store() {
 fn a_database_newer_than_this_binary_fails_store() {
     let fx = healthy();
     open_store(&fx.env);
-    Connection::open(fx.env.cpd_home().join("cpd.db")).unwrap().pragma_update(None, "user_version", 99).unwrap();
+    Connection::open(fx.env.cpd_home().join("cpd.db"))
+        .unwrap()
+        .pragma_update(None, "user_version", 99)
+        .unwrap();
     let run = doctor(&fx);
     assert_doctor_failed(&run);
     let c = assert_fails(&run, "store", "error", "store_too_new");
     // `found` is the verdict's refusal (commands.md §14.1).
     assert_eq!(c["found"]["code"], "store_too_new", "{c}");
-    assert!(c["found"]["message"].as_str().unwrap().contains("newer cpd"), "{c}");
+    assert!(
+        c["found"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("newer cpd"),
+        "{c}"
+    );
 }
 
 #[test]
@@ -590,7 +740,10 @@ fn additive_migrations_this_binary_lacks_are_no_failure_and_have_no_check_of_the
     run.ok();
     assert_passes(&run, "store");
     assert_passes(&run, "tamper");
-    let names: Vec<_> = checks(&run).iter().map(|c| c["name"].as_str().unwrap().to_owned()).collect();
+    let names: Vec<_> = checks(&run)
+        .iter()
+        .map(|c| c["name"].as_str().unwrap().to_owned())
+        .collect();
     assert_eq!(names, NAMES, "no store_window check (hs-d178 D1)");
 }
 
@@ -600,9 +753,13 @@ fn apply_newer(env: &TestEnv, name: &str, compat: &str) {
     use rusqlite::functions::FunctionFlags;
     drop(open_store(env));
     let conn = Connection::open(env.cpd_home().join("cpd.db")).unwrap();
-    let txn: i64 = conn.query_row("SELECT max(id) FROM txns", [], |r| r.get(0)).unwrap();
-    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, move |_| Ok(txn)).unwrap();
-    conn.execute_batch("CREATE TABLE newer_things (id INTEGER PRIMARY KEY) STRICT;").unwrap();
+    let txn: i64 = conn
+        .query_row("SELECT max(id) FROM txns", [], |r| r.get(0))
+        .unwrap();
+    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, move |_| Ok(txn))
+        .unwrap();
+    conn.execute_batch("CREATE TABLE newer_things (id INTEGER PRIMARY KEY) STRICT;")
+        .unwrap();
     conn.execute(
         "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted)
          VALUES (?1, ?2, lower(hex(zeroblob(32))), (SELECT max(seq) + 1 FROM schema_migrations), ?3, 0)",
@@ -621,7 +778,10 @@ fn doctor_has_no_contexts_check_and_ignores_an_old_store_folder() {
     fs::create_dir_all(fx.env.cpd_home().join("contexts/no-git")).unwrap();
     let run = doctor(&fx);
     run.ok();
-    assert!(checks(&run).iter().all(|c| c["name"] != "contexts"), "{run:?}");
+    assert!(
+        checks(&run).iter().all(|c| c["name"] != "contexts"),
+        "{run:?}"
+    );
 }
 
 // -------------------------------------------------------------------- watch
@@ -634,10 +794,19 @@ fn plan_in_phase(env: &TestEnv, phase: &str) {
     let (worktree, locked, status, pr) = match phase {
         "grounding" | "plan" => ("NULL", "NULL", "waiting", ""),
         "dispatch" => ("'/w'", "'t'", "dispatch", ""),
-        "deploy" => ("'/w'", "'t'", "open", ", pr_number, pr_url, pr_opened_at, pull_request"),
+        "deploy" => (
+            "'/w'",
+            "'t'",
+            "open",
+            ", pr_number, pr_url, pr_opened_at, pull_request",
+        ),
         other => panic!("{other}"),
     };
-    let pr_values = if phase == "deploy" { ", 1, 'https://github.com/acme/r/pull/1', 't', (SELECT id FROM pull_requests WHERE number = 1)" } else { "" };
+    let pr_values = if phase == "deploy" {
+        ", 1, 'https://github.com/acme/r/pull/1', 't', (SELECT id FROM pull_requests WHERE number = 1)"
+    } else {
+        ""
+    };
     // `pr open` writes the pull request's row first (D6): an `open` PR points to one.
     let pull = if phase == "deploy" { PULL_REQUEST } else { "" };
     open_store(env)
@@ -660,7 +829,12 @@ fn plan_in_phase(env: &TestEnv, phase: &str) {
 fn hold_watch_lock(env: &TestEnv) -> Flock<fs::File> {
     let lock = env.cpd_home().join("locks/watch.lock");
     fs::create_dir_all(lock.parent().unwrap()).unwrap();
-    Flock::lock(fs::File::create(&lock).unwrap(), FlockArg::LockExclusiveNonblock).map_err(|e| e.1).unwrap()
+    Flock::lock(
+        fs::File::create(&lock).unwrap(),
+        FlockArg::LockExclusiveNonblock,
+    )
+    .map_err(|e| e.1)
+    .unwrap()
 }
 
 #[test]
@@ -696,7 +870,10 @@ fn no_engine_is_needed_when_no_plan_is_in_dispatch_or_pr() {
     plan_in_phase(&fx.env, "plan");
     let run = doctor(&fx);
     assert_passes(&run, "watch");
-    assert!(!Path::new(&fx.env.cpd_home().join("locks/watch.lock")).exists(), "doctor must not create the lock");
+    assert!(
+        !Path::new(&fx.env.cpd_home().join("locks/watch.lock")).exists(),
+        "doctor must not create the lock"
+    );
 }
 
 // ---------------------------------------------------------------- deadlines
@@ -705,7 +882,13 @@ fn no_engine_is_needed_when_no_plan_is_in_dispatch_or_pr() {
 fn assert_timed_out(run: &Run, name: &str, severity: &str, tool: &str, argv: &str) {
     let c = assert_fails(run, name, severity, "tool_timeout");
     let message = c["message"].as_str().unwrap();
-    assert!(message.contains(&format!("{tool} ran past its deadline of {}s", DEADLINE.as_secs())), "{message}");
+    assert!(
+        message.contains(&format!(
+            "{tool} ran past its deadline of {}s",
+            DEADLINE.as_secs()
+        )),
+        "{message}"
+    );
     assert!(message.contains(argv), "{message}");
 }
 
@@ -717,7 +900,11 @@ fn a_hung_gh_auth_is_a_failed_warning_and_doctor_finishes() {
     run.ok();
     assert_timed_out(&run, "gh_auth", "warn", "gh", "auth status");
     assert_eq!(checks(&run).len(), NAMES.len());
-    assert_eq!(fx.fakes.clock.elapsed(), DEADLINE, "the hung probe took its deadline of virtual time");
+    assert_eq!(
+        fx.fakes.clock.elapsed(),
+        DEADLINE,
+        "the hung probe took its deadline of virtual time"
+    );
 }
 
 #[test]
@@ -760,7 +947,10 @@ fn add_runner_file(fx: &Fx) {
 
 /// The `node --version` calls: pi's Node, asked by `pi_node` and by `worker_runner` when it needs the version.
 fn version_calls(fx: &Fx) -> usize {
-    fx.calls("node").iter().filter(|c| c.args == ["--version"]).count()
+    fx.calls("node")
+        .iter()
+        .filter(|c| c.args == ["--version"])
+        .count()
 }
 
 #[test]
@@ -769,14 +959,23 @@ fn worker_runner_passes_for_pi_and_never_looks_at_the_adapter() {
     for extra in ["", "worker_runner = \"pi\""] {
         let fx = healthy();
         write_config(&fx, extra);
-        script(&fx, "node", |call| call.args == ["--version"], Reply::ok("v18.0.0\n"));
+        script(
+            &fx,
+            "node",
+            |call| call.args == ["--version"],
+            Reply::ok("v18.0.0\n"),
+        );
         assert!(!runner_file(&fx).exists());
         let run = doctor(&fx);
         run.ok();
         assert_passes(&run, "worker_runner");
         let c = check(&run, "worker_runner");
         assert_eq!(c["severity"], "error", "{c}");
-        assert_eq!(version_calls(&fx), 1, "only `pi_node` asked for the version: {extra:?}");
+        assert_eq!(
+            version_calls(&fx),
+            1,
+            "only `pi_node` asked for the version: {extra:?}"
+        );
     }
 }
 
@@ -785,13 +984,22 @@ fn worker_runner_durable_passes_with_the_runner_file_and_node_22_19_0() {
     let fx = healthy();
     write_config(&fx, "worker_runner = \"durable\"");
     add_runner_file(&fx);
-    script(&fx, "node", |call| call.args == ["--version"], Reply::ok("v22.19.0\n"));
+    script(
+        &fx,
+        "node",
+        |call| call.args == ["--version"],
+        Reply::ok("v22.19.0\n"),
+    );
     let run = doctor(&fx);
     run.ok();
     let c = check(&run, "worker_runner");
     assert_eq!(c["ok"], true, "{c}");
     assert_eq!(c["severity"], "error", "{c}");
-    assert_eq!((c["found"].as_str(), c["expected"].as_str()), (Some("22.19.0"), Some(">= 22.19.0")), "{c}");
+    assert_eq!(
+        (c["found"].as_str(), c["expected"].as_str()),
+        (Some("22.19.0"), Some(">= 22.19.0")),
+        "{c}"
+    );
 }
 
 #[test]
@@ -802,7 +1010,13 @@ fn worker_runner_durable_fails_when_the_runner_file_is_missing() {
     let run = doctor(&fx);
     assert_doctor_failed(&run);
     let c = assert_fails(&run, "worker_runner", "error", "main.ts");
-    assert!(c["message"].as_str().unwrap().contains(runner_file(&fx).to_str().unwrap()), "names the file it looked for: {c}");
+    assert!(
+        c["message"]
+            .as_str()
+            .unwrap()
+            .contains(runner_file(&fx).to_str().unwrap()),
+        "names the file it looked for: {c}"
+    );
 }
 
 #[test]
@@ -811,12 +1025,28 @@ fn worker_runner_durable_fails_when_node_is_older_than_22_19_0() {
         let fx = healthy();
         write_config(&fx, "worker_runner = \"durable\"");
         add_runner_file(&fx);
-        script(&fx, "node", |call| call.args == ["--version"], Reply::ok(&format!("{old}\n")));
+        script(
+            &fx,
+            "node",
+            |call| call.args == ["--version"],
+            Reply::ok(&format!("{old}\n")),
+        );
         let run = doctor(&fx);
         assert_doctor_failed(&run);
         let c = check(&run, "worker_runner");
-        assert_eq!((c["ok"].clone(), c["severity"].clone()), (json!(false), json!("error")), "{old}: {c}");
-        assert_eq!((c["found"].as_str(), c["expected"].as_str()), (Some(&old[1..]), Some(">= 22.19.0")), "{old}: {c}");
-        assert!(c["message"].as_str().is_some_and(|m| m.contains("22.19.0")), "{old}: {c}");
+        assert_eq!(
+            (c["ok"].clone(), c["severity"].clone()),
+            (json!(false), json!("error")),
+            "{old}: {c}"
+        );
+        assert_eq!(
+            (c["found"].as_str(), c["expected"].as_str()),
+            (Some(&old[1..]), Some(">= 22.19.0")),
+            "{old}: {c}"
+        );
+        assert!(
+            c["message"].as_str().is_some_and(|m| m.contains("22.19.0")),
+            "{old}: {c}"
+        );
     }
 }

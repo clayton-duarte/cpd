@@ -8,7 +8,9 @@ fn two() -> T {
 }
 
 fn name(t: &T, target: &str) -> String {
-    t.ok(&["display-message", "-p", "-t", target, "#{session_name}"]).trim_end().to_string()
+    t.ok(&["display-message", "-p", "-t", target, "#{session_name}"])
+        .trim_end()
+        .to_string()
 }
 
 #[test]
@@ -19,19 +21,28 @@ fn equals_name_is_an_exact_session_target() {
 #[test]
 fn equals_name_colon_is_a_session_target_for_its_current_window() {
     let t = two();
-    assert_eq!(t.ok(&["display-message", "-p", "-t", "=alpine:", "#{window_id}"]), "@1\n");
+    assert_eq!(
+        t.ok(&["display-message", "-p", "-t", "=alpine:", "#{window_id}"]),
+        "@1\n"
+    );
 }
 
 #[test]
 fn a_pane_id_target_resolves_the_pane() {
     let t = two();
-    assert_eq!(t.ok(&["display-message", "-p", "-t", "%1", "#{pane_id}"]), "%1\n");
+    assert_eq!(
+        t.ok(&["display-message", "-p", "-t", "%1", "#{pane_id}"]),
+        "%1\n"
+    );
 }
 
 #[test]
 fn a_window_id_target_resolves_the_window() {
     let t = two();
-    assert_eq!(t.ok(&["display-message", "-p", "-t", "@1", "#{session_name}"]), "alpine\n");
+    assert_eq!(
+        t.ok(&["display-message", "-p", "-t", "@1", "#{session_name}"]),
+        "alpine\n"
+    );
 }
 
 #[test]
@@ -73,7 +84,10 @@ fn an_ambiguous_prefix_is_not_found() {
 
 #[test]
 fn a_missing_window_name_in_a_session_is_not_found() {
-    t_fail(&["select-pane", "-t", "=alpha:nope"], "can't find window: nope");
+    t_fail(
+        &["select-pane", "-t", "=alpha:nope"],
+        "can't find window: nope",
+    );
 }
 
 fn t_fail(args: &[&str], stderr: &str) {

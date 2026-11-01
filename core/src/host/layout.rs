@@ -29,7 +29,13 @@ pub enum View {
 }
 
 impl View {
-    pub const ALL: [View; 5] = [View::Tree, View::Plan, View::Widgets, View::Chat, View::History];
+    pub const ALL: [View; 5] = [
+        View::Tree,
+        View::Plan,
+        View::Widgets,
+        View::Chat,
+        View::History,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -86,19 +92,24 @@ fn in_main(pane: &Pane, cockpit_session: &str) -> bool {
 /// which is why the slot is found by this rule and not by a fixed option.
 pub fn chat_slot<'a>(panes: &'a [Pane], cockpit_session: &str) -> Option<&'a Pane> {
     panes.iter().find(|p| {
-        in_main(p, cockpit_session) && (p.cpd_session.is_some() || matches!(p.cpd_view, Some(View::Chat | View::History)))
+        in_main(p, cockpit_session)
+            && (p.cpd_session.is_some() || matches!(p.cpd_view, Some(View::Chat | View::History)))
     })
 }
 
 /// The pane of `<cockpit>:main` running `view` (not the chat placeholder,
 /// which is found with [`chat_slot`]).
 pub fn view_pane<'a>(panes: &'a [Pane], cockpit_session: &str, view: View) -> Option<&'a Pane> {
-    panes.iter().find(|p| in_main(p, cockpit_session) && p.cpd_view == Some(view))
+    panes
+        .iter()
+        .find(|p| in_main(p, cockpit_session) && p.cpd_view == Some(view))
 }
 
 /// The pane running Session `session` (`@cpd_session`), wherever it is.
 pub fn session_pane<'a>(panes: &'a [Pane], session: &SessionId) -> Option<&'a Pane> {
-    panes.iter().find(|p| p.cpd_session.as_ref() == Some(session))
+    panes
+        .iter()
+        .find(|p| p.cpd_session.as_ref() == Some(session))
 }
 
 #[cfg(test)]
@@ -109,7 +120,13 @@ mod tests {
     use crate::host::tmux::{PaneId, WindowId};
     use crate::ids::JobKey;
 
-    fn pane(id: &str, session_name: &str, window: &str, session: Option<&str>, view: Option<View>) -> Pane {
+    fn pane(
+        id: &str,
+        session_name: &str,
+        window: &str,
+        session: Option<&str>,
+        view: Option<View>,
+    ) -> Pane {
         Pane {
             pane: PaneId::parse(id).unwrap(),
             window: WindowId::parse("@1").unwrap(),
@@ -129,8 +146,14 @@ mod tests {
         let plan = PlanId::parse("cpd2").unwrap();
         assert_eq!(park_window(&session, Some(&plan)), "park-cpd2");
         assert_eq!(park_window(&session, None), "park-596d007f");
-        assert_eq!(context_window(&ContextId::parse("building-cpd").unwrap()), "ctx-building-cpd");
-        let attempt = AttemptId::new(JobKey::parse("rs-host").unwrap(), NonZeroU32::new(1).unwrap());
+        assert_eq!(
+            context_window(&ContextId::parse("building-cpd").unwrap()),
+            "ctx-building-cpd"
+        );
+        let attempt = AttemptId::new(
+            JobKey::parse("rs-host").unwrap(),
+            NonZeroU32::new(1).unwrap(),
+        );
         assert_eq!(attempt_window(&plan, &attempt), "cpd2--rs-host-a1");
     }
 
@@ -151,16 +174,46 @@ mod tests {
         let lead = pane("%7", "cpd", "main", Some("lead-a"), None);
         let other = pane("%8", "other", "main", Some("lead-c"), None);
 
-        let panes = vec![worker.clone(), tree.clone(), parked.clone(), other.clone(), placeholder.clone()];
+        let panes = vec![
+            worker.clone(),
+            tree.clone(),
+            parked.clone(),
+            other.clone(),
+            placeholder.clone(),
+        ];
         assert_eq!(chat_slot(&panes, "cpd"), Some(&placeholder));
-        let panes = vec![worker.clone(), tree.clone(), parked.clone(), other.clone(), lead.clone()];
+        let panes = vec![
+            worker.clone(),
+            tree.clone(),
+            parked.clone(),
+            other.clone(),
+            lead.clone(),
+        ];
         assert_eq!(chat_slot(&panes, "cpd"), Some(&lead));
         let history = pane("%4", "cpd", "main", None, Some(View::History));
-        let panes = vec![worker.clone(), tree.clone(), parked.clone(), other.clone(), history.clone()];
+        let panes = vec![
+            worker.clone(),
+            tree.clone(),
+            parked.clone(),
+            other.clone(),
+            history.clone(),
+        ];
         assert_eq!(chat_slot(&panes, "cpd"), Some(&history));
-        assert_eq!(chat_slot(&[worker, tree.clone(), parked.clone(), other], "cpd"), None);
+        assert_eq!(
+            chat_slot(&[worker, tree.clone(), parked.clone(), other], "cpd"),
+            None
+        );
 
-        assert_eq!(view_pane(&[parked.clone(), tree.clone()], "cpd", View::Tree), Some(&tree));
-        assert_eq!(session_pane(&[tree, parked.clone()], &SessionId::parse("lead-b").unwrap()), Some(&parked));
+        assert_eq!(
+            view_pane(&[parked.clone(), tree.clone()], "cpd", View::Tree),
+            Some(&tree)
+        );
+        assert_eq!(
+            session_pane(
+                &[tree, parked.clone()],
+                &SessionId::parse("lead-b").unwrap()
+            ),
+            Some(&parked)
+        );
     }
 }

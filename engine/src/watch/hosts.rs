@@ -64,7 +64,9 @@ impl State {
     }
 
     fn bound(&self, session: &SessionId) -> Option<(u32, Option<OffsetDateTime>)> {
-        self.hosts.get(session).map(|host| (host.count, host.window_start))
+        self.hosts
+            .get(session)
+            .map(|host| (host.count, host.window_start))
     }
 
     fn set_bound(&mut self, session: &SessionId, count: u32, window_start: Option<OffsetDateTime>) {
@@ -93,7 +95,11 @@ fn log_path(home: &CpdHome, session: &SessionId) -> PathBuf {
 }
 
 fn io(path: &Path, e: std::io::Error) -> CpdError {
-    CpdError::new(ErrorCode::SetupFailed, format!("Cannot use {}: {e}.", path.display())).with("path", path.display().to_string())
+    CpdError::new(
+        ErrorCode::SetupFailed,
+        format!("Cannot use {}: {e}.", path.display()),
+    )
+    .with("path", path.display().to_string())
 }
 
 /// A Session the engine starts a host for (contract §6.19).
@@ -114,7 +120,13 @@ fn due(engine: &mut Engine) -> Result<Vec<Due>, CpdError> {
     engine.store.read(|conn| {
         let mut stmt = conn.prepare(DUE_SESSIONS)?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?)))?
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
             .map(|(id, context, plan)| {
@@ -132,11 +144,18 @@ fn due(engine: &mut Engine) -> Result<Vec<Due>, CpdError> {
 pub fn run(engine: &mut Engine) {
     let due = match due(engine) {
         Ok(due) => due,
-        Err(e) => return engine.log.line(&format!("hosts: cannot read the due Sessions: {}", e.message())),
+        Err(e) => {
+            return engine.log.line(&format!(
+                "hosts: cannot read the due Sessions: {}",
+                e.message()
+            ));
+        }
     };
     for session in due {
         if let Err(e) = due_one(engine, &session) {
-            engine.log.line(&format!("hosts: Session {}: {}", session.id, e.message()));
+            engine
+                .log
+                .line(&format!("hosts: Session {}: {}", session.id, e.message()));
         }
     }
 }
@@ -150,7 +169,15 @@ fn due_one(engine: &mut Engine, due: &Due) -> Result<(), CpdError> {
         return restart(engine, due);
     }
     if let Some(pid) = live_pid_file(engine, &due.id) {
-        engine.hosts.hosts.insert(due.id.clone(), Host { pid, lock: None, count: 0, window_start: Some(engine.ports.clock.utc()) });
+        engine.hosts.hosts.insert(
+            due.id.clone(),
+            Host {
+                pid,
+                lock: None,
+                count: 0,
+                window_start: Some(engine.ports.clock.utc()),
+            },
+        );
         return Ok(());
     }
     start_ignoring_running(engine, &due.id)
@@ -191,8 +218,13 @@ fn restart(engine: &mut Engine, due: &Due) -> Result<(), CpdError> {
 
 /// The bound is reached: stop the Session with the label `host crash loop` and one `session-state` Event (Q15).
 fn latch(engine: &mut Engine, due: &Due) -> Result<(), CpdError> {
-    let from: String =
-        engine.store.read(|conn| Ok(conn.query_row("SELECT state FROM sessions WHERE id = ?1", [due.id.as_str()], |r| r.get(0))?))?;
+    let from: String = engine.store.read(|conn| {
+        Ok(conn.query_row(
+            "SELECT state FROM sessions WHERE id = ?1",
+            [due.id.as_str()],
+            |r| r.get(0),
+        )?)
+    })?;
     engine.store.write(SOURCE, |tx| {
         let changed = tx.execute(
             "UPDATE sessions SET state = 'stopped', state_label = ?1, state_at = (SELECT at FROM txns WHERE id = cpd_txn())
@@ -212,7 +244,10 @@ fn latch(engine: &mut Engine, due: &Due) -> Result<(), CpdError> {
         append(tx, event)?;
         Ok(())
     })?;
-    engine.log.line(&format!("hosts: Session {} stopped with the label {CRASH_LABEL:?}", due.id));
+    engine.log.line(&format!(
+        "hosts: Session {} stopped with the label {CRASH_LABEL:?}",
+        due.id
+    ));
     Ok(())
 }
 
@@ -230,40 +265,83 @@ fn start_ignoring_running(engine: &mut Engine, session: &SessionId) -> Result<()
 pub(super) fn start(engine: &mut Engine, session: &SessionId) -> Result<(Pid, File), CpdError> {
     let home = engine.home.clone();
     let dir = host_dir(&home);
-    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir).map_err(|e| io(&dir, e))?;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)
+        .map_err(|e| io(&dir, e))?;
     let lock = lock_path(&home, session);
-    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&lock).map_err(|e| io(&lock, e))?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock)
+        .map_err(|e| io(&lock, e))?;
     if !cpd_core::lock::try_lock(&file).map_err(|e| io(&lock, e))? {
-        return Err(CpdError::new(ErrorCode::HostRunning, format!("A host already runs for Session {session}.")).with("session", session.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::HostRunning,
+            format!("A host already runs for Session {session}."),
+        )
+        .with("session", session.as_str()));
     }
     let launch = launch(engine, session, &home, file.as_raw_fd())?;
     let pid = engine.ports.spawn.spawn(&launch).map_err(|e| {
-        CpdError::new(ErrorCode::SetupFailed, format!("Starting the host of Session {session} failed: {e}."))
-            .with("program", launch.program.as_str())
+        CpdError::new(
+            ErrorCode::SetupFailed,
+            format!("Starting the host of Session {session} failed: {e}."),
+        )
+        .with("program", launch.program.as_str())
     })?;
     write_pid(&pid_path(&home, session), pid)?;
     let held = file.try_clone().map_err(|e| io(&lock, e))?;
-    engine.hosts.hosts.insert(session.clone(), Host { pid, lock: Some(held), count: 0, window_start: None });
+    engine.hosts.hosts.insert(
+        session.clone(),
+        Host {
+            pid,
+            lock: Some(held),
+            count: 0,
+            window_start: None,
+        },
+    );
     Ok((pid, file))
 }
 
 /// The host's `Launch` (contract §6.19): pi's Node, `<pi_adapter>/durable-host/main.ts --session <id> --model
 /// <pattern>`, `CPD_HOME`/`CPD_SESSION`/`PATH` (with `$CPD_HOME/bin` first), cwd the Session's, its log, detached,
 /// and the lock handed as fd 3.
-fn launch(engine: &mut Engine, session: &SessionId, home: &CpdHome, lock: RawFd) -> Result<Launch, CpdError> {
+fn launch(
+    engine: &mut Engine,
+    session: &SessionId,
+    home: &CpdHome,
+    lock: RawFd,
+) -> Result<Launch, CpdError> {
     let (tier, context, cwd) = session_row(engine, session)?;
     let catalog: Catalog = engine.catalog_of_session(&context)?;
     let model = catalog.model_arg(tier)?;
-    let file = engine.config.pi_adapter_dir()?.join("durable-host").join("main.ts");
+    let file = engine
+        .config
+        .pi_adapter_dir()?
+        .join("durable-host")
+        .join("main.ts");
     git_guard::install(home)?;
     let env_set = vec![
         ("CPD_HOME".to_owned(), home.root().display().to_string()),
         ("CPD_SESSION".to_owned(), session.to_string()),
-        ("PATH".to_owned(), git_guard::path_with_bin(home, std::env::var_os("PATH"))),
+        (
+            "PATH".to_owned(),
+            git_guard::path_with_bin(home, std::env::var_os("PATH")),
+        ),
     ];
     Ok(Launch {
         program: cpd_core::config::catalog::node().display().to_string(),
-        args: vec![file.display().to_string(), "--session".to_owned(), session.to_string(), "--model".to_owned(), model],
+        args: vec![
+            file.display().to_string(),
+            "--session".to_owned(),
+            session.to_string(),
+            "--model".to_owned(),
+            model,
+        ],
         env_set,
         env_remove: Vec::new(),
         cwd: Some(PathBuf::from(cwd)),
@@ -276,10 +354,16 @@ fn launch(engine: &mut Engine, session: &SessionId, home: &CpdHome, lock: RawFd)
 }
 
 /// The Session's Tier, Context and cwd, read when its host starts.
-fn session_row(engine: &mut Engine, session: &SessionId) -> Result<(Tier, ContextId, String), CpdError> {
+fn session_row(
+    engine: &mut Engine,
+    session: &SessionId,
+) -> Result<(Tier, ContextId, String), CpdError> {
     engine.store.read(|conn| {
-        let (tier, context, cwd): (String, String, String) =
-            conn.query_row("SELECT tier, context, cwd FROM sessions WHERE id = ?1", [session.as_str()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        let (tier, context, cwd): (String, String, String) = conn.query_row(
+            "SELECT tier, context, cwd FROM sessions WHERE id = ?1",
+            [session.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
         Ok((Tier::parse(&tier)?, ContextId::parse(&context)?, cwd))
     })
 }
@@ -287,7 +371,9 @@ fn session_row(engine: &mut Engine, session: &SessionId) -> Result<(Tier, Contex
 /// Writes `pid` and a newline to `path`, renamed into place (the `record_detached` pattern).
 fn write_pid(path: &Path, pid: Pid) -> Result<(), CpdError> {
     let tmp = path.with_extension(format!("pid.{}.tmp", pid.0));
-    std::fs::write(&tmp, format!("{}\n", pid.0)).and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| io(path, e))
+    std::fs::write(&tmp, format!("{}\n", pid.0))
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .map_err(|e| io(path, e))
 }
 
 /// The pid of the host recorded in a Session's pid file, if it parses.
@@ -306,18 +392,19 @@ pub fn stop(engine: &mut Engine, session: &SessionId) {
         None => read_pid(&engine.home, session),
     };
     if let Some(pid) = pid
-        && engine.ports.spawn.alive(pid) {
-            let _ = engine.ports.spawn.signal(pid, Signal::Term);
-            let grace = Duration::from_secs(u64::from(engine.config.timeouts.pi_stop_seconds));
-            let mut waited = Duration::ZERO;
-            while waited < grace && engine.ports.spawn.alive(pid) {
-                engine.ports.clock.sleep(STOP_NAP);
-                waited += STOP_NAP;
-            }
-            if engine.ports.spawn.alive(pid) {
-                let _ = engine.ports.spawn.signal(pid, Signal::Kill);
-            }
+        && engine.ports.spawn.alive(pid)
+    {
+        let _ = engine.ports.spawn.signal(pid, Signal::Term);
+        let grace = Duration::from_secs(u64::from(engine.config.timeouts.pi_stop_seconds));
+        let mut waited = Duration::ZERO;
+        while waited < grace && engine.ports.spawn.alive(pid) {
+            engine.ports.clock.sleep(STOP_NAP);
+            waited += STOP_NAP;
         }
+        if engine.ports.spawn.alive(pid) {
+            let _ = engine.ports.spawn.signal(pid, Signal::Kill);
+        }
+    }
     let _ = std::fs::remove_file(pid_path(&engine.home, session));
     // `held` drops here, releasing the lock (the host's own fd is already gone).
     drop(held);

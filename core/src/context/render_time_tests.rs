@@ -9,7 +9,10 @@ fn record() -> Record {
     Record {
         id: RecordId::parse("pro-d41").unwrap(),
         at: "2026-10-26T03:03:34.352Z".into(),
-        by: By { session: None, plan: None },
+        by: By {
+            session: None,
+            plan: None,
+        },
         text: "Use local time.".into(),
         draft: Draft::Decision { supersedes: None },
     }
@@ -20,7 +23,10 @@ fn context_show_dates_are_labelled_utc() {
     let md = markdown("Building", None, &[(1, record())], 0, &Repos::new());
     assert!(md.contains("(2026-10-26 UTC)"), "{md}");
     let one = single("Building", None, &record());
-    assert!(one.contains("## pro-d41 (decision, 2026-10-26 UTC)"), "{one}");
+    assert!(
+        one.contains("## pro-d41 (decision, 2026-10-26 UTC)"),
+        "{one}"
+    );
 }
 
 #[test]

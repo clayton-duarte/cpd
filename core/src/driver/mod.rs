@@ -9,10 +9,10 @@
 //! - [`schedule`]: E3's queue walk, a pure function;
 //! - `stall`: A4's stall rule, the kill of a Worker's idle tool call.
 
-pub mod lock;
 mod explore;
 #[cfg(test)]
 mod explore_tests;
+pub mod lock;
 #[cfg(test)]
 pub(crate) mod ports_tests;
 mod run;
@@ -34,7 +34,10 @@ use crate::ids::{AttemptId, JobKey};
 use crate::output::Output;
 use crate::ports::Ports;
 
-pub use start::{explore_dir, Allocation, Origin, StartCtx, Started, pr_has_live_linear, start, start_with, start_with_allocation};
+pub use start::{
+    Allocation, Origin, StartCtx, Started, explore_dir, pr_has_live_linear, start, start_with,
+    start_with_allocation,
+};
 
 /// The arguments of `cpd attempt run` (commands.md §6.4).
 #[derive(clap::Args, Debug)]
@@ -65,13 +68,31 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
 /// `cpd job dispatch` (commands.md §5.5): starts one Ready Job now, as E3 does.
 pub fn dispatch(args: DispatchArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
-    let Env { home, config, mut store, .. } = Env::open()?;
-    let models = store.read(|conn| crate::policy::model::models_of_job(conn, &home, &plan, args.key.as_str()))?;
+    let Env {
+        home,
+        config,
+        mut store,
+        ..
+    } = Env::open()?;
+    let models = store
+        .read(|conn| crate::policy::model::models_of_job(conn, &home, &plan, args.key.as_str()))?;
     let catalog = load_catalog(&config, &models)?;
-    let ctx = StartCtx { home: &home, config: &config, catalog: &catalog, command: "job dispatch" };
+    let ctx = StartCtx {
+        home: &home,
+        config: &config,
+        catalog: &catalog,
+        command: "job dispatch",
+    };
     // A manual dispatch asks for the linear Attempt; the starter refuses it (CasLost) when a sibling
     // of the PR is live, so two Attempts never share the workflow worktree (hs-d680/hs-d682/hs-d683).
-    let started = start_with_allocation(&Ports::current(), &mut store, &ctx, &plan, &args.key, Some(Allocation::Linear))?;
+    let started = start_with_allocation(
+        &Ports::current(),
+        &mut store,
+        &ctx,
+        &plan,
+        &args.key,
+        Some(Allocation::Linear),
+    )?;
     Ok(Output::success(json!({
         "attempt": started.attempt,
         "tier": started.tier.to_string(),
@@ -95,10 +116,24 @@ pub(crate) fn teardown_aborted(
 ) -> Result<(), CpdError> {
     let tmux = crate::host::tmux::Tmux::new(config.tmux.socket.as_str());
     let (runner, _pid) = store.read(|conn| runner::stored(conn, &attempt.plan, &attempt.id))?;
-    let killed = runner::kill_orphan(ports, config, home, &tmux, store, &attempt.plan, &attempt.id);
+    let killed = runner::kill_orphan(
+        ports,
+        config,
+        home,
+        &tmux,
+        store,
+        &attempt.plan,
+        &attempt.id,
+    );
     let removed = match runner {
-        crate::config::WorkerRunner::Pi if !crate::git::worktree::is_linear(&attempt.branch, &attempt.lead_branch) => {
-            crate::git::remove_merged_attempt(&attempt.lead_worktree, &attempt.worktree, &attempt.branch)
+        crate::config::WorkerRunner::Pi
+            if !crate::git::worktree::is_linear(&attempt.branch, &attempt.lead_branch) =>
+        {
+            crate::git::remove_merged_attempt(
+                &attempt.lead_worktree,
+                &attempt.worktree,
+                &attempt.branch,
+            )
         }
         _ => Ok(()),
     };

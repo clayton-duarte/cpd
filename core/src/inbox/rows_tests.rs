@@ -30,7 +30,11 @@ fn sql(store: &mut Store, sql: &str) {
 }
 
 fn conditions(store: &mut Store, home: &CpdHome, kind: Kind) -> Vec<Condition> {
-    conditions_with(store, home, NOW, 20, 1, None).unwrap().into_iter().filter(|c| c.kind == kind).collect()
+    conditions_with(store, home, NOW, 20, 1, None)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.kind == kind)
+        .collect()
 }
 
 fn item(kind: Kind, label: &str) -> Item {
@@ -85,15 +89,27 @@ fn a_pr_ready_label_is_the_status_row_and_the_pull_request_title_on_row_two() {
                      'mergeable', 1, 0, 'draft', '[]', 'main', 'main');"
         ),
     );
-    let found: Vec<Condition> = conditions(&mut store, &home, Kind::PrReady).into_iter().filter(|c| c.subject == "pr:acme/shop#3").collect();
+    let found: Vec<Condition> = conditions(&mut store, &home, Kind::PrReady)
+        .into_iter()
+        .filter(|c| c.subject == "pr:acme/shop#3")
+        .collect();
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].label, "shop#3 draft\nAdd retries");
 }
 
 #[test]
 fn status_of_item_reads_only_the_first_row_of_a_two_row_pr_ready_label() {
-    assert_eq!(Status::of_item(&item(Kind::PrReady, "shop#3 ready to merge\nready to merge soon")), Some(Status::ReadyToMerge));
-    assert_eq!(Status::of_item(&item(Kind::PrReady, "shop#3 draft\nfix the thing")), Some(Status::Draft));
+    assert_eq!(
+        Status::of_item(&item(
+            Kind::PrReady,
+            "shop#3 ready to merge\nready to merge soon"
+        )),
+        Some(Status::ReadyToMerge)
+    );
+    assert_eq!(
+        Status::of_item(&item(Kind::PrReady, "shop#3 draft\nfix the thing")),
+        Some(Status::Draft)
+    );
 }
 
 #[test]
@@ -103,7 +119,11 @@ fn a_deploy_label_is_the_repo_and_environment_with_the_run_title_on_row_two() {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let run = json!({"repo": "acme/pay", "workflow": "main.yml", "run_id": 7, "environment": "production", "title": "Release 1.2",
                      "url": "https://github.com/acme/pay/actions/runs/7", "created_at": "2026-10-27T13:05:00Z"});
-    std::fs::write(&path, json!({"version": 1, "polled_at": "2026-10-27T14:59:55.000Z", "runs": [run]}).to_string()).unwrap();
+    std::fs::write(
+        &path,
+        json!({"version": 1, "polled_at": "2026-10-27T14:59:55.000Z", "runs": [run]}).to_string(),
+    )
+    .unwrap();
     let found = conditions(&mut store, &home, Kind::Deploy);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].label, "acme/pay deploy production\nRelease 1.2");
@@ -129,9 +149,22 @@ fn a_verdict_dialog_label_is_who_verdict_with_the_option_on_row_two() {
         ),
     );
     let found = conditions(&mut store, &home, Kind::Dialog);
-    let label_of = |session: &str| found.iter().find(|c| c.session.as_ref().is_some_and(|s| s.as_str() == session)).map(|c| c.label.clone());
-    assert_eq!(label_of("l-pay").as_deref(), Some("pay verdict\nApprove with comments"), "{found:?}");
-    assert_eq!(label_of("mgr").as_deref(), Some("ctx asks you"), "{found:?}");
+    let label_of = |session: &str| {
+        found
+            .iter()
+            .find(|c| c.session.as_ref().is_some_and(|s| s.as_str() == session))
+            .map(|c| c.label.clone())
+    };
+    assert_eq!(
+        label_of("l-pay").as_deref(),
+        Some("pay verdict\nApprove with comments"),
+        "{found:?}"
+    );
+    assert_eq!(
+        label_of("mgr").as_deref(),
+        Some("ctx asks you"),
+        "{found:?}"
+    );
 }
 
 #[test]
@@ -149,13 +182,25 @@ fn the_events_of_a_two_row_item_say_one_line_and_the_opened_data_keeps_the_label
     reconcile(&mut store, &[], "2026-01-01T00:05:00.000Z").unwrap();
     let read = |store: &mut Store, kind: &str| -> (String, String) {
         store
-            .read(|c| Ok(c.query_row("SELECT text, data FROM events WHERE kind = ?1", [kind], |r| Ok((r.get(0)?, r.get(1)?)))?))
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT text, data FROM events WHERE kind = ?1",
+                    [kind],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
             .unwrap()
     };
     let (text, data) = read(&mut store, "inbox-opened");
-    assert_eq!(text, format!("Inbox item {id} opened: shop#3 draft: Add retries."));
+    assert_eq!(
+        text,
+        format!("Inbox item {id} opened: shop#3 draft: Add retries.")
+    );
     let data: serde_json::Value = serde_json::from_str(&data).unwrap();
     assert_eq!(data["label"], "shop#3 draft\nAdd retries");
     let (text, _) = read(&mut store, "inbox-closed");
-    assert_eq!(text, format!("Inbox item {id} closed: shop#3 draft: Add retries."));
+    assert_eq!(
+        text,
+        format!("Inbox item {id} closed: shop#3 draft: Add retries.")
+    );
 }

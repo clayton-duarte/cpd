@@ -25,40 +25,40 @@
 //! Session's pane; `?` opens the legend. A Context is a fold ([`crate::fold`]): only a click on its `╰󰬦 expand` / `╰󰬬 collapse` row shows or hides its archived rows (its live rows always show; with none archived it closes with `╰─`, with no row at all it ends with the terminator `╰󰬪`; hs-d574); a click on the title row of a live Context opens its Manager (`context manager`, then `session open`), on a live Session opens it, on an archived Session shows its history; a right click opens the menu.
 
 pub(crate) mod actions;
-mod ask;
-mod cursor;
-pub(crate) mod folds;
 #[cfg(test)]
 mod archived_folder_tests;
-mod kinds;
+mod ask;
 #[cfg(test)]
-mod look;
-#[cfg(test)]
-mod manager_tests;
-#[cfg(test)]
-mod scroll_tests;
-#[cfg(test)]
-mod cue_lines_tests;
-#[cfg(test)]
-mod fixing_tests;
-#[cfg(test)]
-mod inbox_merge_tests;
-#[cfg(test)]
-mod no_confirm_tests;
-#[cfg(test)]
-mod counter_tests;
+mod asleep_tests;
 #[cfg(test)]
 mod cost_tests;
 #[cfg(test)]
 mod cost_toggle_tests;
 #[cfg(test)]
-mod asleep_tests;
+mod counter_tests;
+#[cfg(test)]
+mod cue_lines_tests;
+mod cursor;
+#[cfg(test)]
+mod fixing_tests;
+pub(crate) mod folds;
+#[cfg(test)]
+mod inbox_merge_tests;
+mod kinds;
+#[cfg(test)]
+mod look;
 #[cfg(test)]
 mod loop_guard_tests;
+#[cfg(test)]
+mod manager_tests;
 mod menu;
+#[cfg(test)]
+mod no_confirm_tests;
 #[cfg(test)]
 mod prepared_tests;
 mod rows;
+#[cfg(test)]
+mod scroll_tests;
 mod slug;
 mod view;
 #[cfg(test)]
@@ -76,7 +76,11 @@ mod needs_tests;
 /// The clocks the tree's screen needs: `frame` is `view.animated()`, `second` is false (no row shows a time), `at` is `None`
 /// (the safety read covers the engine's lock, which the dots read through the Inbox, and a snooze's end).
 fn needs(view: &View) -> crate::pump::Needs {
-    crate::pump::Needs { frame: view.animated(), second: false, at: None }
+    crate::pump::Needs {
+        frame: view.animated(),
+        second: false,
+        at: None,
+    }
 }
 
 use std::sync::{Arc, Mutex};
@@ -84,18 +88,21 @@ use std::time::Duration;
 
 use std::io::Write;
 
+use crate::pump::{self, Pump, Schedule, Signal};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::crossterm::event::{self, Event};
-use crate::pump::{self, Pump, Schedule, Signal};
 use time::OffsetDateTime;
 
 use super::background::Background;
 use super::pace::{self, Reads};
+use super::read;
 use super::runner::kept;
 use super::view_ports::{Ctx, Input, Tty, frame_now, run_view_with, snooze_over, wall_ms};
+use super::viewlog::ViewLog;
 use super::{Capture, run_view_on};
-use super::read;
+use crate::trace::Trace;
+use actions::{Failed, Runner};
 use cpd_core::clock;
 use cpd_core::config::Config;
 use cpd_core::error::CpdError;
@@ -104,13 +111,10 @@ use cpd_core::inbox::model;
 use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::store::Store;
-use actions::{Failed, Runner};
 use folds::FoldsFile;
 use kinds::KINDS;
-pub(crate) use view::View;
 use view::Effect;
-use super::viewlog::ViewLog;
-use crate::trace::Trace;
+pub(crate) use view::View;
 
 /// What one poll of the reader thread found: each read apart, so each has its own error (`runner::kept`).
 struct Polled {
@@ -126,7 +130,16 @@ struct Read {
 
 /// What the view reads before it draws: the home, the first snapshot's view, the reader (and when the first snooze ends),
 /// the poll and the runner of the commands.
-type Opened = (CpdHome, View, (Arc<Mutex<pace::Owned<read::Follow>>>, Option<OffsetDateTime>), Duration, Arc<Runner>);
+type Opened = (
+    CpdHome,
+    View,
+    (
+        Arc<Mutex<pace::Owned<read::Follow>>>,
+        Option<OffsetDateTime>,
+    ),
+    Duration,
+    Arc<Runner>,
+);
 
 /// The first read: a failure is the command's error, with the screen untouched.
 fn open(ports: &Ports) -> Result<Opened, CpdError> {
@@ -140,12 +153,22 @@ fn open(ports: &Ports) -> Result<Opened, CpdError> {
     let poll = Duration::from_millis(u64::from(config.events.poll_ms));
     let runner = Arc::new(Runner::new(home.clone(), &config, ports));
     // the reads after them run on the reader thread, with a store of its own (R4)
-    let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), follow);
+    let reader = pace::Owned::new(
+        home.clone(),
+        u64::from(config.timeouts.store_busy_ms),
+        follow,
+    );
     Ok((home, view, (reader, snooze_end), poll, runner))
 }
 
 pub(super) fn run(ports: &Ports) -> Result<Output, CpdError> {
-    run_view_on(ports, "tree", Capture::MouseAndFocus, || open(ports), |ctx, opened| Ok(event_loop(ctx, opened, Driven::No)?))
+    run_view_on(
+        ports,
+        "tree",
+        Capture::MouseAndFocus,
+        || open(ports),
+        |ctx, opened| Ok(event_loop(ctx, opened, Driven::No)?),
+    )
 }
 
 /// [`run`] on a terminal, its facts and its input that the caller gives (a test's `TestBackend`, scripted input and a
@@ -158,7 +181,17 @@ pub fn run_on<B: Backend, W: Write>(
     terminal: Terminal<B>,
     input: &mut dyn Input,
 ) -> Result<Output, CpdError> {
-    run_view_with(ports, tty, out, terminal, input, "tree", Capture::MouseAndFocus, || open(ports), |ctx, opened| Ok(event_loop(ctx, opened, Driven::Yes)?))
+    run_view_with(
+        ports,
+        tty,
+        out,
+        terminal,
+        input,
+        "tree",
+        Capture::MouseAndFocus,
+        || open(ports),
+        |ctx, opened| Ok(event_loop(ctx, opened, Driven::Yes)?),
+    )
 }
 
 /// Whether the loop is driven by the [`Ctx`]'s input ([`run_on`]) or reads the terminal on a thread and watches the store's directory.
@@ -175,20 +208,35 @@ fn event_loop<B: Backend>(
 ) -> std::io::Result<()> {
     let ports = ctx.ports;
     let (runner, home) = (&runner, &home);
-    let mut log = Log { file: ViewLog::of(home, "tree"), unwritable_said: false };
+    let mut log = Log {
+        file: ViewLog::of(home, "tree"),
+        unwritable_said: false,
+    };
     let mut trace = Trace::new(std::env::var("CPD_TUI_TRACE").ok().as_deref());
     let epoch = ports.clock.now();
-    let pump = if driven == Driven::Yes { Pump::undriven() } else { Pump::new(event::read) };
+    let pump = if driven == Driven::Yes {
+        Pump::undriven()
+    } else {
+        Pump::new(event::read)
+    };
     // the store's directory is watched once; a watcher that cannot start is said in the error row, and the schedule polls.
     // A driven loop (a test's) watches nothing, says nothing of it and polls.
     let (_watch, watch_error, mut schedule) = if driven == Driven::Yes {
         (None, None, Schedule::new(ports.clock.now(), poll))
     } else {
         match read::watch::Watch::start(home.root(), pump.waker()) {
-            Ok(watch) => (Some(watch), None, Schedule::new(ports.clock.now(), pump::SAFETY)),
+            Ok(watch) => (
+                Some(watch),
+                None,
+                Schedule::new(ports.clock.now(), pump::SAFETY),
+            ),
             Err(why) => (
                 None,
-                Some(format!("no commit watcher: {}; polling every {} ms", why.message(), poll.as_millis())),
+                Some(format!(
+                    "no commit watcher: {}; polling every {} ms",
+                    why.message(),
+                    poll.as_millis()
+                )),
                 Schedule::new(ports.clock.now(), poll),
             ),
         }
@@ -220,7 +268,11 @@ fn event_loop<B: Backend>(
         while let Some(result) = popups.finished() {
             // only a failure is logged: a popup that failed cannot be asked to say so
             if let Err(why) = result {
-                show(log.line(&format!("failed: popup: {why}")), &mut popups, runner);
+                show(
+                    log.line(&format!("failed: popup: {why}")),
+                    &mut popups,
+                    runner,
+                );
             }
         }
         while let Some(done) = trace.read(|| reads.take()) {
@@ -233,7 +285,9 @@ fn event_loop<B: Backend>(
                 if let Some((end, tree)) = kept(next, &mut snapshot_error) {
                     snooze_end = end;
                     let t = &view.tree;
-                    if (&tree.contexts, &tree.inbox, tree.engine_running) != (&t.contexts, &t.inbox, t.engine_running) {
+                    if (&tree.contexts, &tree.inbox, tree.engine_running)
+                        != (&t.contexts, &t.inbox, t.engine_running)
+                    {
                         view.refresh(tree);
                         redraw = true;
                     }
@@ -254,22 +308,31 @@ fn event_loop<B: Backend>(
             let engine_shown = view.tree.engine_running;
             let retry = snapshot_error.is_some() || kind.force || snooze_over(ports, snooze_end);
             reads.request(move || {
-                let changes = pace::Owned::read(&shared, |store, follow| follow.poll_changes(store));
+                let changes =
+                    pace::Owned::read(&shared, |store, follow| follow.poll_changes(store));
                 let engine = model::engine_running(&home);
                 let due = retry
                     || changes.as_ref().is_ok_and(|c| c.any())
                     || engine.as_ref().is_ok_and(|on| *on != engine_shown);
                 let snapshot = due.then(|| {
                     pace::Owned::read(&shared, |store, _| {
-                        read::snooze_end_at(store, Some(&now_text)).and_then(|end| Ok((end, read::tree_at(store, Some(&now_text))?)))
+                        read::snooze_end_at(store, Some(&now_text))
+                            .and_then(|end| Ok((end, read::tree_at(store, Some(&now_text))?)))
                     })
                 });
-                Read { poll: Polled { changes, engine }, snapshot }
+                Read {
+                    poll: Polled { changes, engine },
+                    snapshot,
+                }
             });
         }
         // An engine down for 60 s is told to the Managers (commands.md §13.2, hs-d363): this view only, not every pane. Its
         // lines go to the log, never to the terminal or the frame; a log that cannot be written is a dialog.
-        let lines = view.watch_engine(ports.clock.now(), &mut |action| actions::call_with(&*ports.runner, action), &mut || runner.live_managers());
+        let lines = view.watch_engine(
+            ports.clock.now(),
+            &mut |action| actions::call_with(&*ports.runner, action),
+            &mut || runner.live_managers(),
+        );
         for line in lines {
             show(log.line(&line), &mut popups, runner);
         }
@@ -281,10 +344,16 @@ fn event_loop<B: Backend>(
         let wants = needs(&view);
         redraw |= view.error != error || (wants.frame && frame != drawn_frame);
         if redraw {
-            let (drawn, written) = trace.draw(epoch, &log.file, frame, || ctx.draw(|f| view.draw(f, frame)));
+            let (drawn, written) = trace.draw(epoch, &log.file, frame, || {
+                ctx.draw(|f| view.draw(f, frame))
+            });
             drawn?;
             if let Err(why) = written {
-                show(log.line(&format!("failed: trace: {why}")), &mut popups, runner);
+                show(
+                    log.line(&format!("failed: trace: {why}")),
+                    &mut popups,
+                    runner,
+                );
             }
             (redraw, drawn_frame) = (false, frame);
         }
@@ -330,23 +399,44 @@ fn event_loop<B: Backend>(
             Effect::Ask(question) => {
                 // `display-popup` returns when the popup closes; a cancel runs nothing. The tree is drawn first, so it
                 // shows the item picked, not the menu, behind the popup.
-                let (drawn, written) = trace.draw(epoch, &log.file, frame, || ctx.draw(|f| view.draw(f, frame)));
+                let (drawn, written) = trace.draw(epoch, &log.file, frame, || {
+                    ctx.draw(|f| view.draw(f, frame))
+                });
                 drawn?;
                 if let Err(why) = written {
-                    show(log.line(&format!("failed: trace: {why}")), &mut popups, runner);
+                    show(
+                        log.line(&format!("failed: trace: {why}")),
+                        &mut popups,
+                        runner,
+                    );
                 }
                 let title = question.title();
                 match runner.ask(question) {
                     Ok(None) => {}
                     Ok(Some(action)) => {
-                        show(said(&mut view, &mut log, runner.run(&action)), &mut popups, runner);
+                        show(
+                            said(&mut view, &mut log, runner.run(&action)),
+                            &mut popups,
+                            runner,
+                        );
                         // the tree shows the result on this loop's snapshot
                         schedule.force();
                     }
                     // the dialog failed, or the answer is refused (a title no id can be made of): the User must see it
                     Err(why) => {
-                        show(log.line(&format!("failed: {title}: {why}")), &mut popups, runner);
-                        show(Effect::Text { title: title.to_owned(), text: why }, &mut popups, runner);
+                        show(
+                            log.line(&format!("failed: {title}: {why}")),
+                            &mut popups,
+                            runner,
+                        );
+                        show(
+                            Effect::Text {
+                                title: title.to_owned(),
+                                text: why,
+                            },
+                            &mut popups,
+                            runner,
+                        );
                     }
                 }
             }
@@ -373,7 +463,10 @@ impl Log {
     /// Appends `line`; the dialog to open when the log cannot be written (the first time only), else [`Effect::None`].
     fn line(&mut self, line: &str) -> Effect {
         match self.file.append(line) {
-            Err(why) if !std::mem::replace(&mut self.unwritable_said, true) => Effect::Text { title: "Tree Log".into(), text: why },
+            Err(why) if !std::mem::replace(&mut self.unwritable_said, true) => Effect::Text {
+                title: "Tree Log".into(),
+                text: why,
+            },
             _ => Effect::None,
         }
     }

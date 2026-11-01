@@ -14,8 +14,16 @@ const FP: &str = "00000000000000000000000000000000000000000000000000000000000000
 
 /// A Plan of `context` in `phase`, its Lead Session beside it; `archived` and `done` as its phase needs.
 fn plan(env: &TestEnv, context: &str, id: &str, phase: &str, archived: bool) {
-    let done = if phase == "done" { "'2000-01-02T00:00:00.000Z'" } else { "NULL" };
-    let archived = if archived { "'2000-01-03T00:00:00.000Z'" } else { "NULL" };
+    let done = if phase == "done" {
+        "'2000-01-02T00:00:00.000Z'"
+    } else {
+        "NULL"
+    };
+    let archived = if archived {
+        "'2000-01-03T00:00:00.000Z'"
+    } else {
+        "NULL"
+    };
     env.sql(
         &format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -86,13 +94,23 @@ fn job(env: &TestEnv, plan: &str, pr: &str, key: &str, status: &str) {
 
 /// An explore Job of `plan` (its `pr` NULL): `kind` `scout` or `research` at `tier`, stored `status`, touching `explore/<key>.md`,
 /// and `needs` of other explore Jobs. A `running` one gets a running Attempt.
-fn explore(env: &TestEnv, plan: &str, key: &str, kind: &str, tier: &str, status: &str, needs: &[&str]) {
+fn explore(
+    env: &TestEnv,
+    plan: &str,
+    key: &str,
+    kind: &str,
+    tier: &str,
+    status: &str,
+    needs: &[&str],
+) {
     let mut sql = format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
          VALUES ('{plan}', NULL, '{key}', 'Title {key}', '{tier}', 'Goal.', 'Context.', '[\"explore/{key}.md\"]', '[\"ok\"]', '[]', '{kind}', '{status}', 1, '{FP}', cpd_txn(), 't');"
     );
     for need in needs {
-        sql.push_str(&format!("INSERT INTO dependencies (plan, job, needs) VALUES ('{plan}', '{key}', '{need}');"));
+        sql.push_str(&format!(
+            "INSERT INTO dependencies (plan, job, needs) VALUES ('{plan}', '{key}', '{need}');"
+        ));
     }
     if status == "running" {
         sql.push_str(&format!(
@@ -119,7 +137,14 @@ fn fixture() -> Fx {
     let fx = env();
     plan(&fx.env, "ctx", "live", "dispatch", false);
     pr(&fx.env, "live", "api", "dispatch");
-    for (key, status) in [("a-merged", "merged"), ("b-queued", "queued"), ("c-running", "running"), ("d-failed", "failed"), ("e-draft", "draft"), ("f-gone", "cancelled")] {
+    for (key, status) in [
+        ("a-merged", "merged"),
+        ("b-queued", "queued"),
+        ("c-running", "running"),
+        ("d-failed", "failed"),
+        ("e-draft", "draft"),
+        ("f-gone", "cancelled"),
+    ] {
         job(&fx.env, "live", "api", key, status);
     }
     pr(&fx.env, "live", "ui", "open");
@@ -142,7 +167,12 @@ fn fixture() -> Fx {
 }
 
 fn keys(values: &Value) -> Vec<&str> {
-    values.as_array().unwrap().iter().map(|v| v["key"].as_str().unwrap()).collect()
+    values
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["key"].as_str().unwrap())
+        .collect()
 }
 
 #[test]
@@ -155,26 +185,59 @@ fn lists_only_active_plans_unmerged_prs_and_their_live_jobs() {
     assert_eq!(plans.len(), 1, "{out}");
     let live = &plans[0];
     assert_eq!(
-        (&live["id"], &live["title"], &live["phase"], &live["lead_session"]),
-        (&json!("live"), &json!("Title of live"), &json!("dispatch"), &json!("lead-live"))
+        (
+            &live["id"],
+            &live["title"],
+            &live["phase"],
+            &live["lead_session"]
+        ),
+        (
+            &json!("live"),
+            &json!("Title of live"),
+            &json!("dispatch"),
+            &json!("lead-live")
+        )
     );
     // Not `old` (merged) and not `gone` (cancelled), in key order.
     assert_eq!(keys(&live["prs"]), ["api", "ui"]);
     let api = &live["prs"][0];
     assert_eq!(
-        (&api["repo"], &api["base"], &api["status"], &api["lead_branch"], &api["pull_request"]),
-        (&json!("/r/api"), &json!("main"), &json!("dispatch"), &json!("cpd/live/api"), &Value::Null)
+        (
+            &api["repo"],
+            &api["base"],
+            &api["status"],
+            &api["lead_branch"],
+            &api["pull_request"]
+        ),
+        (
+            &json!("/r/api"),
+            &json!("main"),
+            &json!("dispatch"),
+            &json!("cpd/live/api"),
+            &Value::Null
+        )
     );
     // Not `f-gone` (cancelled); the Job merged on the Lead Branch is there, with its title and touches.
-    assert_eq!(keys(&api["jobs"]), ["a-merged", "b-queued", "c-running", "d-failed", "e-draft"]);
+    assert_eq!(
+        keys(&api["jobs"]),
+        ["a-merged", "b-queued", "c-running", "d-failed", "e-draft"]
+    );
     assert_eq!(
         api["jobs"][0],
         json!({"key": "a-merged", "status": "merged", "title": "Title a-merged", "touches": ["src/a-merged.rs", "docs/a-merged.md"]})
     );
-    let statuses: Vec<&str> = api["jobs"].as_array().unwrap().iter().map(|j| j["status"].as_str().unwrap()).collect();
+    let statuses: Vec<&str> = api["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| j["status"].as_str().unwrap())
+        .collect();
     assert_eq!(statuses, ["merged", "queued", "running", "failed", "draft"]);
     let ui = &live["prs"][1];
-    assert_eq!(ui["pull_request"], json!({"number": 7, "url": "https://github.com/acme/api/pull/7", "state": "open"}));
+    assert_eq!(
+        ui["pull_request"],
+        json!({"number": 7, "url": "https://github.com/acme/api/pull/7", "state": "open"})
+    );
     assert_eq!(keys(&ui["jobs"]), ["g-ui"]);
 }
 
@@ -192,20 +255,27 @@ fn a_context_without_an_active_plan_has_no_plans() {
     let out = fx.cpd(&["context", "pending", "--context", "empty"]).ok();
     assert_eq!(out["plans"], json!([]));
     // `--markdown` prints on the process's own stdout (`print!`): the binary, which Fx cannot read.
-    let text = fx.env.cpd(&["context", "pending", "--context", "empty", "--markdown"]);
+    let text = fx
+        .env
+        .cpd(&["context", "pending", "--context", "empty", "--markdown"]);
     assert_eq!((text.exit, text.stdout.as_str()), (0, "No pending work.\n"));
     // A Context whose only Plans are done or archived has none either.
     plan(&fx.env, "empty", "fin2", "done", false);
     plan(&fx.env, "empty", "shelf2", "dispatch", true);
     pr(&fx.env, "shelf2", "api", "dispatch");
-    assert_eq!(fx.cpd(&["context", "pending", "--context", "empty"]).ok()["plans"], json!([]));
+    assert_eq!(
+        fx.cpd(&["context", "pending", "--context", "empty"]).ok()["plans"],
+        json!([])
+    );
 }
 
 #[test]
 fn markdown_prints_the_same_content() {
     let fx = fixture();
     // `--markdown` prints on the process's own stdout (`print!`): the binary, which Fx cannot read.
-    let run = fx.env.cpd(&["context", "pending", "--context", "ctx", "--markdown"]);
+    let run = fx
+        .env
+        .cpd(&["context", "pending", "--context", "ctx", "--markdown"]);
     assert_eq!(run.exit, 0, "{run:?}");
     let expected = "# Pending work in ctx\n\
 \n## live (dispatch): Title of live\n\
@@ -237,7 +307,10 @@ fn context_pending_a_plans_plan_level_explore_jobs_in_json() {
     assert_eq!(plans.len(), 1, "{out}");
     let live = &plans[0];
     assert_eq!(live["id"], "live");
-    assert!(live["jobs"].is_array(), "the Plan carries a plan-level jobs array: {out}");
+    assert!(
+        live["jobs"].is_array(),
+        "the Plan carries a plan-level jobs array: {out}"
+    );
     assert_eq!(keys(&live["jobs"]), ["look", "look2"], "{out}");
     assert_eq!(
         live["jobs"][0],
@@ -259,9 +332,19 @@ fn context_pending_an_explore_job_waiting_on_another_explore_job() {
     let fx = env();
     plan(&fx.env, "ctx", "live", "dispatch", false);
     explore(&fx.env, "live", "scan", "scout", "H2", "running", &[]);
-    explore(&fx.env, "live", "dig", "research", "S2", "queued", &["scan"]);
+    explore(
+        &fx.env,
+        "live",
+        "dig",
+        "research",
+        "S2",
+        "queued",
+        &["scan"],
+    );
     let out = fx.cpd(&["context", "pending", "--context", "ctx"]).ok();
-    let jobs = out["plans"][0]["jobs"].as_array().expect("the Plan's plan-level jobs");
+    let jobs = out["plans"][0]["jobs"]
+        .as_array()
+        .expect("the Plan's plan-level jobs");
     assert_eq!(jobs[0]["key"], "scan");
     assert_eq!(jobs[0]["status"], "running");
     assert_eq!(
@@ -294,8 +377,18 @@ fn context_pending_markdown_the_plan_level_jobs_section() {
     job(&fx.env, "live", "api", "w1", "queued");
     explore(&fx.env, "live", "look", "scout", "H2", "queued", &[]);
     explore(&fx.env, "live", "look2", "research", "S2", "running", &[]);
-    explore(&fx.env, "live", "dig", "research", "S2", "queued", &["look2"]);
-    let run = fx.env.cpd(&["context", "pending", "--context", "ctx", "--markdown"]);
+    explore(
+        &fx.env,
+        "live",
+        "dig",
+        "research",
+        "S2",
+        "queued",
+        &["look2"],
+    );
+    let run = fx
+        .env
+        .cpd(&["context", "pending", "--context", "ctx", "--markdown"]);
     assert_eq!(run.exit, 0, "{run:?}");
     let expected = "# Pending work in ctx\n\
 \n## live (dispatch): Title of live\n\
@@ -313,7 +406,13 @@ fn context_pending_markdown_the_plan_level_jobs_section() {
 fn refusals() {
     let fx = fixture();
     let run = fx.cpd(&["context", "pending", "--context", "nope"]);
-    assert_eq!((run.error()["code"].clone(), run.exit), (json!("context_not_found"), 4));
+    assert_eq!(
+        (run.error()["code"].clone(), run.exit),
+        (json!("context_not_found"), 4)
+    );
     let run = fx.cpd(&["context", "pending"]);
-    assert_eq!((run.error()["code"].clone(), run.exit), (json!("context_required"), 2));
+    assert_eq!(
+        (run.error()["code"].clone(), run.exit),
+        (json!("context_required"), 2)
+    );
 }

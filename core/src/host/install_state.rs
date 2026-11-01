@@ -77,25 +77,37 @@ impl InstallState {
     /// field, an unknown status, a `reason` present exactly when the status is `skipped`, a known
     /// reason, and a `since` that is an RFC 3339 UTC time ending in `Z`.
     pub fn parse(text: &str) -> Result<InstallState, CpdError> {
-        let raw: Raw = serde_json::from_str(text)
-            .map_err(|e| invalid(format!("The install state is not the one JSON object of contract §1.4: {e}.")).with("reason", e.to_string()))?;
+        let raw: Raw = serde_json::from_str(text).map_err(|e| {
+            invalid(format!(
+                "The install state is not the one JSON object of contract §1.4: {e}."
+            ))
+            .with("reason", e.to_string())
+        })?;
         let reason = match (raw.status, raw.reason) {
             (Status::Ok, None) => None,
             (Status::Skipped, Some(reason)) => Some(reason),
             (Status::Ok, Some(_)) => {
-                return Err(invalid("The install state is `ok` but carries a `reason`.").with("reason", "reason present with status ok"));
+                return Err(invalid("The install state is `ok` but carries a `reason`.")
+                    .with("reason", "reason present with status ok"));
             }
             (Status::Skipped, None) => {
-                return Err(invalid("The install state is `skipped` but carries no `reason`.").with("reason", "reason missing with status skipped"));
+                return Err(
+                    invalid("The install state is `skipped` but carries no `reason`.")
+                        .with("reason", "reason missing with status skipped"),
+                );
             }
         };
         if !utc_z(&raw.since) {
-            return Err(
-                invalid(format!("The install state's `since` is not an RFC 3339 UTC time ending in `Z`: {:?}.", raw.since))
-                    .with("reason", "since is not an RFC 3339 UTC time ending in Z"),
-            );
+            return Err(invalid(format!(
+                "The install state's `since` is not an RFC 3339 UTC time ending in `Z`: {:?}.",
+                raw.since
+            ))
+            .with("reason", "since is not an RFC 3339 UTC time ending in Z"));
         }
-        Ok(InstallState { reason, since: raw.since })
+        Ok(InstallState {
+            reason,
+            since: raw.since,
+        })
     }
 
     /// The file `$CPD_HOME/run/cpd-install.json`, or `None` when it does not exist; a file that
@@ -106,12 +118,17 @@ impl InstallState {
             Ok(text) => text,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => {
-                return Err(invalid(format!("Cannot read the install state {}: {e}.", path.display()))
-                    .with("path", path.display().to_string())
-                    .with("reason", e.to_string()));
+                return Err(invalid(format!(
+                    "Cannot read the install state {}: {e}.",
+                    path.display()
+                ))
+                .with("path", path.display().to_string())
+                .with("reason", e.to_string()));
             }
         };
-        InstallState::parse(&text).map(Some).map_err(|e| e.with("path", path.display().to_string()))
+        InstallState::parse(&text)
+            .map(Some)
+            .map_err(|e| e.with("path", path.display().to_string()))
     }
 
     /// The reason the version pill turns red, or `None` when the state does not alert.

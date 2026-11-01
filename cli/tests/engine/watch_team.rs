@@ -52,14 +52,30 @@ struct Gate {
 impl Handler for Helper {
     fn handle(&self, _call: &Call) -> Reply {
         if let Some(gate) = &self.gate {
-            gate.entered.lock().unwrap().send(()).expect("the test holds the receiver of `entered`");
-            if gate.open.lock().unwrap().recv_timeout(GATE_DEADLINE).is_err() {
+            gate.entered
+                .lock()
+                .unwrap()
+                .send(())
+                .expect("the test holds the receiver of `entered`");
+            if gate
+                .open
+                .lock()
+                .unwrap()
+                .recv_timeout(GATE_DEADLINE)
+                .is_err()
+            {
                 return Reply::exit(70, "", "the gate of the helper never opened");
             }
         }
         let answer = self.answer.lock().unwrap().clone();
-        let (status, json) = answer.split_once(' ').expect("an answer is `<exit> <json>`");
-        Reply::exit(status.parse().expect("the exit status is a number"), &format!("{json}\n"), "")
+        let (status, json) = answer
+            .split_once(' ')
+            .expect("an answer is `<exit> <json>`");
+        Reply::exit(
+            status.parse().expect("the exit status is a number"),
+            &format!("{json}\n"),
+            "",
+        )
     }
 }
 
@@ -102,7 +118,10 @@ fn team_with(period: Option<u32>, gate: Option<Gate>, gh: &str) -> Team {
     fx.engine_routes();
     fx.install_pi();
     fx.fake_gh(Reply::ok(gh));
-    let helper = Arc::new(Helper { answer: Mutex::new(format!("0 {OK}")), gate });
+    let helper = Arc::new(Helper {
+        answer: Mutex::new(format!("0 {OK}")),
+        gate,
+    });
     let _ = (*fx.fakes.runner).clone().route("node", helper.clone());
     Team { fx, helper }
 }
@@ -137,12 +156,17 @@ impl Team {
     fn run_until(&self, mut done: impl FnMut(Duration) -> bool + Send + 'static) {
         let clock = self.fx.fakes.clock.clone();
         let start = clock.elapsed();
-        self.fx.watch_steps(move |_| done(clock.elapsed() - start)).unwrap();
+        self.fx
+            .watch_steps(move |_| done(clock.elapsed() - start))
+            .unwrap();
     }
 }
 
 /// `done` once `cond` has held for `ticks` whole ticks.
-fn then_ticks(ticks: u32, mut cond: impl FnMut() -> bool + Send + 'static) -> impl FnMut(Duration) -> bool + Send + 'static {
+fn then_ticks(
+    ticks: u32,
+    mut cond: impl FnMut() -> bool + Send + 'static,
+) -> impl FnMut(Duration) -> bool + Send + 'static {
     let mut since = None;
     move |now| {
         if since.is_none() && cond() {
@@ -163,20 +187,38 @@ fn reader(db: &Path) -> Connection {
 /// The `error` Events of E11 and E8: `(code, data)`, but those of `gh` (E8's lookup of the one fake answer).
 fn errors(db: &Path) -> Vec<Value> {
     let conn = reader(db);
-    let mut stmt = conn.prepare("SELECT data FROM events WHERE kind = 'error' ORDER BY id").unwrap();
-    let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
-    rows.iter().map(|d| serde_json::from_str::<Value>(d).unwrap()).filter(|d| d["code"].as_str().is_some_and(|c| c != "gh_failed")).collect()
+    let mut stmt = conn
+        .prepare("SELECT data FROM events WHERE kind = 'error' ORDER BY id")
+        .unwrap();
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    rows.iter()
+        .map(|d| serde_json::from_str::<Value>(d).unwrap())
+        .filter(|d| d["code"].as_str().is_some_and(|c| c != "gh_failed"))
+        .collect()
 }
 
 /// The open Inbox items: `(subject, label)`.
 fn items(db: &Path) -> Vec<(String, String)> {
     let conn = reader(db);
-    let mut stmt = conn.prepare("SELECT subject, label FROM inbox_items WHERE closed_at IS NULL ORDER BY id").unwrap();
-    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    let mut stmt = conn
+        .prepare("SELECT subject, label FROM inbox_items WHERE closed_at IS NULL ORDER BY id")
+        .unwrap();
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
 }
 
 fn node_calls(runner: &cpd_core::host::runner::FakeRunner) -> usize {
-    runner.calls().iter().filter(|call| call.program.rsplit('/').next() == Some("node")).count()
+    runner
+        .calls()
+        .iter()
+        .filter(|call| call.program.rsplit('/').next() == Some("node"))
+        .count()
 }
 
 #[test]
@@ -190,9 +232,19 @@ fn e11_runs_the_helper_with_its_arguments_and_writes_the_cache_by_rename() {
     assert_eq!(cache["version"], 1);
     assert_eq!(cache["channel"], CHANNEL);
     assert_eq!(cache["read"], 74);
-    assert_eq!(cache["posts"], serde_json::from_str::<Value>(OK).unwrap()["posts"]);
+    assert_eq!(
+        cache["posts"],
+        serde_json::from_str::<Value>(OK).unwrap()["posts"]
+    );
     assert!(cache["polled_at"].as_str().unwrap().ends_with('Z'));
-    assert!(!t.fx.env.cpd_home().join("run/team-review.json.tmp").exists(), "written by rename");
+    assert!(
+        !t.fx
+            .env
+            .cpd_home()
+            .join("run/team-review.json.tmp")
+            .exists(),
+        "written by rename"
+    );
 
     let calls = t.fx.calls("node");
     let script = t.fx.env.root().join("adapter/lib/slack-channel.ts");
@@ -211,7 +263,11 @@ fn e11_runs_the_helper_with_its_arguments_and_writes_the_cache_by_rename() {
             ME
         ]
     );
-    let agent_dir = calls[0].envs.iter().find(|(key, _)| key == "PI_CODING_AGENT_DIR").and_then(|(_, value)| value.as_deref());
+    let agent_dir = calls[0]
+        .envs
+        .iter()
+        .find(|(key, _)| key == "PI_CODING_AGENT_DIR")
+        .and_then(|(_, value)| value.as_deref());
     assert_eq!(agent_dir, Some(root.to_str().unwrap()));
 
     assert_eq!(t.helper_calls(), 1);
@@ -225,7 +281,14 @@ fn e11_runs_the_helper_with_its_arguments_and_writes_the_cache_by_rename() {
 fn e11_never_holds_the_tick_while_the_helper_runs() {
     let (entered_tx, entered) = channel();
     let (open_tx, open) = channel();
-    let t = team_with(Some(3600), Some(Gate { entered: Mutex::new(entered_tx), open: Mutex::new(open) }), NOBODY_REVIEWED);
+    let t = team_with(
+        Some(3600),
+        Some(Gate {
+            entered: Mutex::new(entered_tx),
+            open: Mutex::new(open),
+        }),
+        NOBODY_REVIEWED,
+    );
     let cache_file = t.cache_path();
     let runner = t.fx.fakes.runner.clone();
     let clock: Arc<ManualClock> = t.fx.fakes.clock.clone();
@@ -249,8 +312,15 @@ fn e11_never_holds_the_tick_while_the_helper_runs() {
     })
     .unwrap();
 
-    let (while_running, calls, ticked) = seen.lock().unwrap().take().expect("the engine ticked on while the helper ran");
-    assert!(ticked >= TICK * 2, "the engine ticked at least twice while the helper ran: {ticked:?}");
+    let (while_running, calls, ticked) = seen
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the engine ticked on while the helper ran");
+    assert!(
+        ticked >= TICK * 2,
+        "the engine ticked at least twice while the helper ran: {ticked:?}"
+    );
     assert_eq!(calls, 1);
     assert!(while_running.is_none(), "the helper has not answered yet");
     assert!(t.cache().is_some(), "and then it did");
@@ -279,8 +349,14 @@ fn e11_keeps_the_last_good_cache_when_a_run_fails_and_reports_the_failure_once()
             }
             1 => {
                 if node_calls(&runner) >= from + 3 {
-                    *record.lock().unwrap() = Some((good.take().unwrap(), cache(&cache_file), errors(&db), items(&db)));
-                    *helper.answer.lock().unwrap() = format!("0 {}", OK.replace("\"read\":74", "\"read\":75"));
+                    *record.lock().unwrap() = Some((
+                        good.take().unwrap(),
+                        cache(&cache_file),
+                        errors(&db),
+                        items(&db),
+                    ));
+                    *helper.answer.lock().unwrap() =
+                        format!("0 {}", OK.replace("\"read\":74", "\"read\":75"));
                     phase = 2;
                 }
             }
@@ -294,8 +370,16 @@ fn e11_keeps_the_last_good_cache_when_a_run_fails_and_reports_the_failure_once()
     assert_eq!(errors.len(), 1, "once, however many runs fail: {errors:?}");
     assert_eq!(errors[0]["code"], "slack_auth");
     assert_eq!(errors[0]["source"], "watch");
-    assert!(errors[0]["message"].as_str().unwrap().contains("pi mcp login slack"));
-    assert!(items.is_empty(), "an engine error opens no Inbox item: it goes to the Manager (hs-d314)");
+    assert!(
+        errors[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("pi mcp login slack")
+    );
+    assert!(
+        items.is_empty(),
+        "an engine error opens no Inbox item: it goes to the Manager (hs-d314)"
+    );
 
     // Signed in again: the cache is replaced.
     assert_eq!(t.cache().unwrap()["read"], 75);
@@ -310,7 +394,13 @@ fn e11_does_not_replace_the_cache_with_an_answer_that_holds_no_posts() {
 
     assert_eq!(t.errors()[0]["code"], "slack_helper_failed");
     assert!(t.cache().is_none());
-    assert!(!t.fx.env.cpd_home().join("run/team-review.json.tmp").exists());
+    assert!(
+        !t.fx
+            .env
+            .cpd_home()
+            .join("run/team-review.json.tmp")
+            .exists()
+    );
 }
 
 #[test]
@@ -346,5 +436,10 @@ fn e8_opens_the_review_item_for_a_cached_post_hermes_calls_needs_review() {
         .replace("TS", &now.to_string());
     t.answer(&format!("0 {post}"));
     let db = t.db();
-    t.run_until(move |_| items(&db).contains(&("pr:acme/pay#812".to_owned(), "review pay#812\nAdd retries".to_owned())));
+    t.run_until(move |_| {
+        items(&db).contains(&(
+            "pr:acme/pay#812".to_owned(),
+            "review pay#812\nAdd retries".to_owned(),
+        ))
+    });
 }

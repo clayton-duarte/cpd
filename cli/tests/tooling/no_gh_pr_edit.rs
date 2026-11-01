@@ -17,7 +17,12 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// True when the code of `text` (comment lines dropped, whitespace removed) holds the argv literal of `gh pr edit`.
 fn runs_gh_pr_edit(text: &str) -> bool {
-    let code: String = text.lines().filter(|l| !l.trim().starts_with("//")).flat_map(|l| l.chars()).filter(|c| !c.is_whitespace()).collect();
+    let code: String = text
+        .lines()
+        .filter(|l| !l.trim().starts_with("//"))
+        .flat_map(|l| l.chars())
+        .filter(|c| !c.is_whitespace())
+        .collect();
     code.contains(concat!("\"pr\",", "\"edit\""))
 }
 
@@ -39,5 +44,9 @@ fn no_product_code_runs_gh_pr_edit() {
         .filter(|f| runs_gh_pr_edit(&fs::read_to_string(f).unwrap()))
         .map(|f| f.strip_prefix(&root).unwrap().display().to_string())
         .collect();
-    assert!(bad.is_empty(), "product code runs `gh pr edit`:\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "product code runs `gh pr edit`:\n{}",
+        bad.join("\n")
+    );
 }

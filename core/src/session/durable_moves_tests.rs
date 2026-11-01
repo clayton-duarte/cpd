@@ -44,7 +44,11 @@ fn world() -> World {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
     fs::create_dir_all(home.config().parent().unwrap()).unwrap();
-    fs::write(home.config(), "version = 1\nmachine = \"m1\"\n[tmux]\nsocket = \"t\"\n").unwrap();
+    fs::write(
+        home.config(),
+        "version = 1\nmachine = \"m1\"\n[tmux]\nsocket = \"t\"\n",
+    )
+    .unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
     store
         .write("fixture", |tx| {
@@ -70,7 +74,19 @@ fn world() -> World {
     unsafe { std::env::set_var("TMUX_TMPDIR", dir.path()) };
     Tmux::new("t")
         .with_runner(Arc::new(runner.clone()))
-        .run(&["new-session", "-d", "-s", "cpd", "-n", "main", "sleep", "600"].map(str::to_owned))
+        .run(
+            &[
+                "new-session",
+                "-d",
+                "-s",
+                "cpd",
+                "-n",
+                "main",
+                "sleep",
+                "600",
+            ]
+            .map(str::to_owned),
+        )
         .unwrap();
     // The chat slot: the placeholder pane of `cpd:main`.
     Tmux::new("t")
@@ -83,11 +99,20 @@ fn world() -> World {
         std::env::remove_var("PI_SESSION_ID");
     }
     let base = runner.calls().len();
-    World { _dir: dir, store, ports, runner, host_socket, base }
+    World {
+        _dir: dir,
+        store,
+        ports,
+        runner,
+        host_socket,
+        base,
+    }
 }
 
 fn try_cpd(world: &World, words: &[&str]) -> Result<Value, CpdError> {
-    let command = Cli::try_parse_from(["cpd"].into_iter().chain(words.iter().copied())).unwrap().command;
+    let command = Cli::try_parse_from(["cpd"].into_iter().chain(words.iter().copied()))
+        .unwrap()
+        .command;
     match Ports::scope(&world.ports, || run(command))? {
         Output::Success(fields) => Ok(Value::Object(fields)),
         _ => panic!("a success"),
@@ -95,22 +120,37 @@ fn try_cpd(world: &World, words: &[&str]) -> Result<Value, CpdError> {
 }
 
 fn tmux_calls_since_start(w: &World) -> Vec<String> {
-    w.runner.calls().iter().skip(w.base).map(|c| c.args.join(" ")).collect()
+    w.runner
+        .calls()
+        .iter()
+        .skip(w.base)
+        .map(|c| c.args.join(" "))
+        .collect()
 }
 
 fn new_windows(w: &World) -> usize {
-    w.runner.calls().iter().filter(|c| c.args.iter().any(|a| a == "new-window")).count()
+    w.runner
+        .calls()
+        .iter()
+        .filter(|c| c.args.iter().any(|a| a == "new-window"))
+        .count()
 }
 
 fn refused(w: &World, words: &[&str]) {
     let err = try_cpd(w, words).expect_err("a durable Session is refused");
     assert_eq!(err.code(), ErrorCode::DurableSession, "{}", err.message());
     assert_eq!(err.code().exit().code(), 3);
-    assert!(tmux_calls_since_start(w).is_empty(), "no tmux call: {:?}", tmux_calls_since_start(w));
+    assert!(
+        tmux_calls_since_start(w).is_empty(),
+        "no tmux call: {:?}",
+        tmux_calls_since_start(w)
+    );
 }
 
 fn count(w: &mut World, sql: &str) -> i64 {
-    w.store.read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?)).unwrap()
+    w.store
+        .read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?))
+        .unwrap()
 }
 
 #[test]
@@ -120,9 +160,17 @@ fn open_of_a_durable_session_waits_for_the_socket_and_starts_no_pane() {
     w.host_socket.script(vec![Reach::Absent, Reach::Accepted]);
     let out = try_cpd(&w, &["open", "dlead"]).unwrap();
     assert_eq!(out["session"], "dlead");
-    assert_eq!(out["pane"], Value::Null, "a durable Session never enters a pane");
+    assert_eq!(
+        out["pane"],
+        Value::Null,
+        "a durable Session never enters a pane"
+    );
     assert_eq!(new_windows(&w), 0, "no pane");
-    assert!(tmux_calls_since_start(&w).is_empty(), "no tmux call: {:?}", tmux_calls_since_start(&w));
+    assert!(
+        tmux_calls_since_start(&w).is_empty(),
+        "no tmux call: {:?}",
+        tmux_calls_since_start(&w)
+    );
     assert_eq!(w.host_socket.paths().len(), 2, "probed until it accepted");
 }
 
@@ -135,7 +183,14 @@ fn park_refuses_a_durable_session_with_durable_session() {
 #[test]
 fn history_refuses_a_durable_session_with_durable_session() {
     let mut w = world();
-    w.store.write("fixture", |tx| Ok(tx.execute("UPDATE sessions SET archived_at = 't' WHERE id = 'dlead'", [])?)).unwrap();
+    w.store
+        .write("fixture", |tx| {
+            Ok(tx.execute(
+                "UPDATE sessions SET archived_at = 't' WHERE id = 'dlead'",
+                [],
+            )?)
+        })
+        .unwrap();
     refused(&w, &["history", "dlead"]);
     assert_eq!(new_windows(&w), 0, "no history pane");
 }
@@ -144,7 +199,11 @@ fn history_refuses_a_durable_session_with_durable_session() {
 fn fork_refuses_a_durable_session_with_durable_session() {
     let mut w = world();
     refused(&w, &["fork", "dlead"]);
-    assert_eq!(count(&mut w, "SELECT count(*) FROM sessions"), 2, "no Session written");
+    assert_eq!(
+        count(&mut w, "SELECT count(*) FROM sessions"),
+        2,
+        "no Session written"
+    );
     assert_eq!(new_windows(&w), 0, "no pane");
 }
 
@@ -153,8 +212,19 @@ fn close_of_a_durable_session_succeeds_as_already_and_calls_no_tmux() {
     let mut w = world();
     let out = try_cpd(&w, &["close", "dlead"]).unwrap();
     assert_eq!(out["already"], Value::Bool(true), "{out}");
-    assert!(tmux_calls_since_start(&w).is_empty(), "no tmux call: {:?}", tmux_calls_since_start(&w));
-    assert_eq!(count(&mut w, "SELECT count(*) FROM events WHERE session = 'dlead'"), 0, "writes nothing");
+    assert!(
+        tmux_calls_since_start(&w).is_empty(),
+        "no tmux call: {:?}",
+        tmux_calls_since_start(&w)
+    );
+    assert_eq!(
+        count(
+            &mut w,
+            "SELECT count(*) FROM events WHERE session = 'dlead'"
+        ),
+        0,
+        "writes nothing"
+    );
 }
 
 #[test]
@@ -171,8 +241,18 @@ fn archive_of_a_durable_session_writes_archived_at_and_calls_no_tmux() {
         })
         .unwrap();
     try_cpd(&w, &["archive", "dfork"]).unwrap();
-    assert_eq!(count(&mut w, "SELECT count(*) FROM sessions WHERE id = 'dfork' AND archived_at IS NOT NULL"), 1);
-    assert!(tmux_calls_since_start(&w).is_empty(), "no tmux call: {:?}", tmux_calls_since_start(&w));
+    assert_eq!(
+        count(
+            &mut w,
+            "SELECT count(*) FROM sessions WHERE id = 'dfork' AND archived_at IS NOT NULL"
+        ),
+        1
+    );
+    assert!(
+        tmux_calls_since_start(&w).is_empty(),
+        "no tmux call: {:?}",
+        tmux_calls_since_start(&w)
+    );
 }
 
 #[test]

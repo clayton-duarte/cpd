@@ -43,10 +43,28 @@ impl Folds {
     pub fn of(state: &TreeState<Id>, tree: &Tree) -> Folds {
         let opened = state.opened();
         let open = |c: &&crate::read::ContextNode| opened.contains(&vec![toggle_id(c.id.as_str())]);
-        let collapsed = tree.contexts.iter().filter(|c| !c.is_archived() && !open(c)).map(|c| c.id.to_string()).collect();
-        let expanded = tree.contexts.iter().filter(|c| c.is_archived() && open(c)).map(|c| vec![c.id.to_string()]).collect();
-        let archived = tree.contexts.iter().any(crate::read::ContextNode::is_archived) && opened.contains(&vec![super::rows::ARCHIVE.to_owned()]);
-        Folds { collapsed, expanded, archived }
+        let collapsed = tree
+            .contexts
+            .iter()
+            .filter(|c| !c.is_archived() && !open(c))
+            .map(|c| c.id.to_string())
+            .collect();
+        let expanded = tree
+            .contexts
+            .iter()
+            .filter(|c| c.is_archived() && open(c))
+            .map(|c| vec![c.id.to_string()])
+            .collect();
+        let archived = tree
+            .contexts
+            .iter()
+            .any(crate::read::ContextNode::is_archived)
+            && opened.contains(&vec![super::rows::ARCHIVE.to_owned()]);
+        Folds {
+            collapsed,
+            expanded,
+            archived,
+        }
     }
 
     /// Applies the folds to a state that has opened every live Context: the live rows of a Context always show, so its
@@ -60,7 +78,11 @@ impl Folds {
             let context = vec![id.clone()];
             state.open(context.clone());
             let toggle = vec![toggle_id(id)];
-            if expanded { state.open(toggle) } else { state.close(&toggle) };
+            if expanded {
+                state.open(toggle)
+            } else {
+                state.close(&toggle)
+            };
             known.insert(context);
         };
         for id in &self.collapsed {
@@ -90,7 +112,11 @@ impl FoldsFile {
     pub fn at(home: &CpdHome) -> FoldsFile {
         // Not in `CpdHome` (contract §1.4): the layout's one source of truth lists this file there.
         let path = home.run_dir().join("tui").join("tree-folds.json");
-        FoldsFile { path, saved: Folds::default(), written: None }
+        FoldsFile {
+            path,
+            saved: Folds::default(),
+            written: None,
+        }
     }
 
     /// The folds in the file: the defaults when it is missing; `Err` with the reason when it cannot be read or is not
@@ -101,9 +127,13 @@ impl FoldsFile {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Folds::default()),
             Err(e) => return Err(format!("{}: {e}", self.path.display())),
         };
-        let folds: Folds = serde_json::from_slice(&text).map_err(|e| format!("{}: {e}", self.path.display()))?;
+        let folds: Folds =
+            serde_json::from_slice(&text).map_err(|e| format!("{}: {e}", self.path.display()))?;
         match folds.expanded.iter().any(Vec::is_empty) {
-            true => Err(format!("{}: an expanded path is empty", self.path.display())),
+            true => Err(format!(
+                "{}: an expanded path is empty",
+                self.path.display()
+            )),
             false => Ok(folds),
         }
     }
@@ -123,11 +153,16 @@ impl FoldsFile {
     /// [`FoldsFile::save`] with the second counted on the clock of `ports`.
     pub fn save_with(&mut self, ports: &Ports, folds: &Folds) -> Result<(), String> {
         let now = ports.clock.now();
-        if *folds == self.saved || self.written.is_some_and(|at| now.saturating_duration_since(at) < SAVE_EVERY) {
+        if *folds == self.saved
+            || self
+                .written
+                .is_some_and(|at| now.saturating_duration_since(at) < SAVE_EVERY)
+        {
             return Ok(());
         }
         self.written = Some(now);
-        self.write(folds).map_err(|e| format!("fold state not saved: {}: {e}", self.path.display()))?;
+        self.write(folds)
+            .map_err(|e| format!("fold state not saved: {}: {e}", self.path.display()))?;
         self.saved.clone_from(folds);
         Ok(())
     }
@@ -155,7 +190,10 @@ mod tests {
     fn folds(collapsed: &[&str], expanded: &[&[&str]]) -> Folds {
         Folds {
             collapsed: collapsed.iter().map(|s| (*s).to_owned()).collect(),
-            expanded: expanded.iter().map(|p| p.iter().map(|s| (*s).to_owned()).collect()).collect(),
+            expanded: expanded
+                .iter()
+                .map(|p| p.iter().map(|s| (*s).to_owned()).collect())
+                .collect(),
             archived: false,
         }
     }
@@ -220,7 +258,10 @@ mod tests {
         file.save(&folds(&["alpha"], &[])).unwrap();
         file.written = None;
         file.save(&folds(&["beta"], &[])).unwrap();
-        let names: Vec<_> = fs::read_dir(dir.path().join("run/tui")).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let names: Vec<_> = fs::read_dir(dir.path().join("run/tui"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         assert_eq!(names, ["tree-folds.json"]);
     }
 
@@ -233,7 +274,11 @@ mod tests {
         let want = folds(&["alpha"], &[]);
         let error = file.save(&want).unwrap_err();
         assert!(error.starts_with("fold state not saved: "), "{error}");
-        assert_eq!(fs::read_dir(&tui).unwrap().count(), 1, "only the directory is there");
+        assert_eq!(
+            fs::read_dir(&tui).unwrap().count(),
+            1,
+            "only the directory is there"
+        );
         fs::remove_dir(tui.join("tree-folds.json")).unwrap();
         file.written = None;
         file.save(&want).unwrap();
@@ -248,10 +293,18 @@ mod tests {
         assert!(!path_of(&dir).exists(), "nothing changed: nothing written");
         file.save(&folds(&["alpha"], &[])).unwrap();
         file.save(&folds(&["alpha", "beta"], &[])).unwrap();
-        assert_eq!(file_in(&dir).load().unwrap(), folds(&["alpha"], &[]), "the second change waits");
+        assert_eq!(
+            file_in(&dir).load().unwrap(),
+            folds(&["alpha"], &[]),
+            "the second change waits"
+        );
         file.written = Some(Instant::now() - SAVE_EVERY);
         file.save(&folds(&["alpha", "beta"], &[])).unwrap();
-        assert_eq!(file_in(&dir).load().unwrap(), folds(&["alpha", "beta"], &[]), "a second later it writes");
+        assert_eq!(
+            file_in(&dir).load().unwrap(),
+            folds(&["alpha", "beta"], &[]),
+            "a second later it writes"
+        );
     }
 
     #[test]
@@ -259,16 +312,36 @@ mod tests {
         let tree = archived();
         let (mut state, mut known) = (TreeState::default(), HashSet::new());
         super::super::rows::open_new(&mut state, &mut known, &tree);
-        let stored = folds(&["beta", "vanished"], &[&["zeta"], &["alpha"], &["gone"], &["alpha", "ship"]]);
+        let stored = folds(
+            &["beta", "vanished"],
+            &[&["zeta"], &["alpha"], &["gone"], &["alpha", "ship"]],
+        );
         stored.merge(&mut state, &mut known);
-        let open = |state: &TreeState<Id>, path: &[&str]| state.opened().contains(&path.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>());
+        let open = |state: &TreeState<Id>, path: &[&str]| {
+            state
+                .opened()
+                .contains(&path.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
+        };
         let (alpha, beta, zeta) = (toggle_id("alpha"), toggle_id("beta"), toggle_id("zeta"));
         assert!(!open(&state, &[&beta]), "beta's archived rows are hidden");
-        assert!(open(&state, &["beta"]), "but its Context stays open: its live rows show");
+        assert!(
+            open(&state, &["beta"]),
+            "but its Context stays open: its live rows show"
+        );
         assert!(open(&state, &[&alpha]), "alpha is expanded");
-        assert!(open(&state, &["zeta"]) && open(&state, &[&zeta]), "the archived zeta is expanded");
-        assert!(known.contains(&vec!["vanished".to_owned()]), "a collapsed Context counts as known");
+        assert!(
+            open(&state, &["zeta"]) && open(&state, &[&zeta]),
+            "the archived zeta is expanded"
+        );
+        assert!(
+            known.contains(&vec!["vanished".to_owned()]),
+            "a collapsed Context counts as known"
+        );
         assert!(open(&state, &["vanished"]), "and opens when it appears");
-        assert_eq!(Folds::of(&state, &tree), folds(&["beta"], &[&["zeta"]]), "unknown ids, a live Context open as it starts and paths below a Context are dropped");
+        assert_eq!(
+            Folds::of(&state, &tree),
+            folds(&["beta"], &[&["zeta"]]),
+            "unknown ids, a live Context open as it starts and paths below a Context are dropped"
+        );
     }
 }

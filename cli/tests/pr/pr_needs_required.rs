@@ -5,22 +5,49 @@ use crate::pr::{Added, added};
 use serde_json::{Value, json};
 
 fn error(run: &crate::common::Run) -> Value {
-    let v: Value = serde_json::from_str(run.stdout.trim()).unwrap_or_else(|e| panic!("not JSON ({e}): {} / {}", run.stdout, run.stderr));
+    let v: Value = serde_json::from_str(run.stdout.trim())
+        .unwrap_or_else(|e| panic!("not JSON ({e}): {} / {}", run.stdout, run.stderr));
     v["error"].clone()
 }
 
 fn assert_refused(f: &Added, key: &str, shape: &str) {
-    let other = f.fx.keyed_repo(&format!("other-{shape}")).canonicalize().unwrap();
-    let run = f.fx.cpd(&["pr", "add", key, "--repo", other.to_str().unwrap(), "--title", "Change the PR", "--shape", shape, "--plan", "pay"]);
+    let other =
+        f.fx.keyed_repo(&format!("other-{shape}"))
+            .canonicalize()
+            .unwrap();
+    let run = f.fx.cpd(&[
+        "pr",
+        "add",
+        key,
+        "--repo",
+        other.to_str().unwrap(),
+        "--title",
+        "Change the PR",
+        "--shape",
+        shape,
+        "--plan",
+        "pay",
+    ]);
     let e = error(&run);
     assert_eq!(e["code"], "needs_required", "{shape}: {e}");
     assert_eq!(run.exit, 3, "{shape}");
-    assert_eq!(e["details"], json!({"plan": "pay", "pr": key, "phase": "dispatch"}), "{shape}");
+    assert_eq!(
+        e["details"],
+        json!({"plan": "pay", "pr": key, "phase": "dispatch"}),
+        "{shape}"
+    );
     let msg = e["message"].as_str().unwrap();
-    assert!(msg.contains("--needs") && msg.contains("--no-needs"), "{msg}");
+    assert!(
+        msg.contains("--needs") && msg.contains("--no-needs"),
+        "{msg}"
+    );
     // Nothing written.
-    let prs: i64 = f.fx.env.query(&format!("SELECT count(*) FROM prs WHERE plan = 'pay' AND key = '{key}'"));
-    let jobs: i64 = f.fx.env.query(&format!("SELECT count(*) FROM jobs WHERE plan = 'pay' AND pr = '{key}'"));
+    let prs: i64 = f.fx.env.query(&format!(
+        "SELECT count(*) FROM prs WHERE plan = 'pay' AND key = '{key}'"
+    ));
+    let jobs: i64 = f.fx.env.query(&format!(
+        "SELECT count(*) FROM jobs WHERE plan = 'pay' AND pr = '{key}'"
+    ));
     assert_eq!((prs, jobs), (0, 0), "{shape}");
     assert!(f.pr_added().is_empty(), "{shape}");
 }
@@ -29,7 +56,9 @@ fn assert_refused(f: &Added, key: &str, shape: &str) {
 fn pr_add_in_dispatch_without_needs_or_no_needs_is_refused_needs_required() {
     let f = added("dispatch");
     assert_refused(&f, "fix", "config");
-    let stub: i64 = f.fx.env.query("SELECT count(*) FROM jobs WHERE plan = 'pay' AND key = 'fix-docs'");
+    let stub: i64 =
+        f.fx.env
+            .query("SELECT count(*) FROM jobs WHERE plan = 'pay' AND key = 'fix-docs'");
     assert_eq!(stub, 0);
 }
 
@@ -44,7 +73,9 @@ fn pr_add_in_dispatch_refusal_covers_every_shape() {
 fn pr_add_in_dispatch_with_no_needs_adds_a_pr_without_needs() {
     let f = added("dispatch");
     // Stacked on PR `repo`, which has not merged: a PR that starts at once is refused its stub drafts after the lock (`draft_parked`).
-    let out = f.add("fix", &f.repo, &["--no-needs", "--base", "pay/repo"]).ok();
+    let out = f
+        .add("fix", &f.repo, &["--no-needs", "--base", "pay/repo"])
+        .ok();
     assert_eq!(out["pr"]["needs"], json!([]));
     assert!(f.needs_of("fix").is_empty());
 }
@@ -70,7 +101,19 @@ fn pr_add_in_plan_phase_needs_no_flag() {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at)
            VALUES ('pay', 'ctx', 'Pay the bills', 'plan', 'lead1', 't');",
     );
-    let run = fx.cpd(&["pr", "add", "fix", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]);
+    let run = fx.cpd(&[
+        "pr",
+        "add",
+        "fix",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        "Change the PR",
+        "--shape",
+        "config",
+        "--plan",
+        "pay",
+    ]);
     assert_eq!(run.json()["pr"]["needs"], json!([]));
 }
 
@@ -78,8 +121,12 @@ fn pr_add_in_plan_phase_needs_no_flag() {
 fn pr_add_rerun_in_dispatch_without_a_flag_is_already() {
     let f = added("dispatch");
     // Stacked on PR `repo`, which has not merged: a PR that starts at once is refused its stub drafts after the lock (`draft_parked`).
-    f.add("fix", &f.repo, &["--no-needs", "--base", "pay/repo"]).ok();
-    assert_eq!(f.add("fix", &f.repo, &["--base", "pay/repo"]).ok()["already"], true);
+    f.add("fix", &f.repo, &["--no-needs", "--base", "pay/repo"])
+        .ok();
+    assert_eq!(
+        f.add("fix", &f.repo, &["--base", "pay/repo"]).ok()["already"],
+        true
+    );
 }
 
 /// A stacked PR (`--base` names a PR of the Plan in its repo, or that PR's Lead Branch) needs neither flag: its base is its link.

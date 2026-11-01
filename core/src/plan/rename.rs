@@ -18,9 +18,17 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
         .store
         .read(|conn| {
             Ok(conn
-                .query_row("SELECT context, title, lead_session FROM plans WHERE id = ?1", [id.as_str()], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
-                })
+                .query_row(
+                    "SELECT context, title, lead_session FROM plans WHERE id = ?1",
+                    [id.as_str()],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                        ))
+                    },
+                )
                 .optional()?)
         })?
         .ok_or_else(|| CpdError::plan_not_found(&id))?;
@@ -34,9 +42,14 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
         return Ok(Output::success(out));
     }
     env.store.write("plan rename", |tx| {
-        tx.execute("UPDATE plans SET title = ?1 WHERE id = ?2", [title, id.as_str()])?;
+        tx.execute(
+            "UPDATE plans SET title = ?1 WHERE id = ?2",
+            [title, id.as_str()],
+        )?;
         let text = format!("Plan {id} renamed to {title:?}.");
-        let event = NewEvent::plan_renamed(text, title).context(context.clone()).plan(id.clone());
+        let event = NewEvent::plan_renamed(text, title)
+            .context(context.clone())
+            .plan(id.clone());
         append(tx, event)?;
         Ok(())
     })?;

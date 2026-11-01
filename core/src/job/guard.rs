@@ -22,7 +22,13 @@ pub struct Guard {
 
 /// A JSON array of text as a list; anything else is empty (the schema's CHECKs keep it an array).
 fn texts(value: Option<&Value>) -> Vec<String> {
-    value.and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect()
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect()
 }
 
 fn push_new(into: &mut Vec<String>, items: Vec<String>) {
@@ -35,9 +41,14 @@ fn push_new(into: &mut Vec<String>, items: Vec<String>) {
 
 /// The guard of `job`: its direct Dependencies of kind `test`. Empty for a Job that needs none.
 pub fn of(jobs: &[Job], job: &Job) -> Guard {
-    let mut guard = Guard { approved: texts(job.test_approved.as_ref()), ..Guard::default() };
+    let mut guard = Guard {
+        approved: texts(job.test_approved.as_ref()),
+        ..Guard::default()
+    };
     for need in &job.needs {
-        let Some(test) = jobs.iter().find(|j| j.key == *need && j.kind == "test") else { continue };
+        let Some(test) = jobs.iter().find(|j| j.key == *need && j.kind == "test") else {
+            continue;
+        };
         guard.jobs.push(test.key.clone());
         push_new(&mut guard.tests, texts(test.tests.as_ref()));
         push_new(&mut guard.files, texts(test.test_files.as_ref()));
@@ -52,7 +63,10 @@ pub fn resources(job: &Job) -> Vec<String> {
 
 /// The Job's Spec `touches` (contract §7.5); empty when the Job has no Spec (a stub never checks).
 pub fn touches(job: &Job) -> Vec<String> {
-    job.spec.as_ref().map(|s| texts(Some(&s.touches))).unwrap_or_default()
+    job.spec
+        .as_ref()
+        .map(|s| texts(Some(&s.touches)))
+        .unwrap_or_default()
 }
 
 /// The paths the Lead approved for the Job (`jobs.touches_approved`); empty when it approved none.
@@ -121,6 +135,9 @@ mod tests {
     #[test]
     fn a_job_that_needs_no_test_job_has_an_empty_guard() {
         let i = job("i", "impl", &["d"]);
-        assert_eq!(of(&[job("d", "docs", &[]), i.clone()], &i), Guard::default());
+        assert_eq!(
+            of(&[job("d", "docs", &[]), i.clone()], &i),
+            Guard::default()
+        );
     }
 }

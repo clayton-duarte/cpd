@@ -18,7 +18,9 @@ const WORKER: &str = "worker1";
 fn fixture(env: &TestEnv) {
     setup(env);
     env.write_models();
-    env.write_tmux_config("lead_tier = \"O2\"\nmanager_tier = \"O4\"\n[timeouts]\nfork_quiet_seconds = 1\n");
+    env.write_tmux_config(
+        "lead_tier = \"O2\"\nmanager_tier = \"O4\"\n[timeouts]\nfork_quiet_seconds = 1\n",
+    );
 }
 
 fn all_events(fx: &Fx) -> Value {
@@ -30,7 +32,17 @@ fn switch(fx: &Fx, id: &str) -> Value {
 }
 
 fn failed(fx: &Fx, id: &str) {
-    fx.cpd(&["session", "switch-failed", "--session", id, "--code", "model_unavailable", "--message", "p/opus: pi has no authentication"]).ok();
+    fx.cpd(&[
+        "session",
+        "switch-failed",
+        "--session",
+        id,
+        "--code",
+        "model_unavailable",
+        "--message",
+        "p/opus: pi has no authentication",
+    ])
+    .ok();
 }
 
 /// A failed switch of a retiered Lead: `switch` has the row's tier (the target), the code and message as given, a time
@@ -41,14 +53,42 @@ fn switch_failed_shows_on_session_show_with_the_target_tier() {
     fixture(&fx.env);
     fx.cpd(&["session", "retier", LEAD]).ok();
     assert_eq!(switch(&fx, LEAD), Value::Null);
-    assert_eq!(show(&fx, "lead2").get("switch"), Some(&Value::Null), "the key is there, null");
+    assert_eq!(
+        show(&fx, "lead2").get("switch"),
+        Some(&Value::Null),
+        "the key is there, null"
+    );
 
     failed(&fx, LEAD);
     let s = switch(&fx, LEAD);
-    assert_eq!((s["tier"].as_str(), s["code"].as_str(), s["message"].as_str()), (Some("O2"), Some("model_unavailable"), Some("p/opus: pi has no authentication")), "{s}");
-    assert!(s["at"].as_str().is_some_and(|at| at.ends_with('Z') && at.len() >= 20), "an RFC 3339 UTC time: {s}");
-    assert!(s["next"].as_str().is_some_and(|n| n.starts_with("cpd ")), "next is a cpd command: {s}");
-    assert_eq!(show(&fx, LEAD)["tier"], "O2", "the row's tier stays the target");
+    assert_eq!(
+        (
+            s["tier"].as_str(),
+            s["code"].as_str(),
+            s["message"].as_str()
+        ),
+        (
+            Some("O2"),
+            Some("model_unavailable"),
+            Some("p/opus: pi has no authentication")
+        ),
+        "{s}"
+    );
+    assert!(
+        s["at"]
+            .as_str()
+            .is_some_and(|at| at.ends_with('Z') && at.len() >= 20),
+        "an RFC 3339 UTC time: {s}"
+    );
+    assert!(
+        s["next"].as_str().is_some_and(|n| n.starts_with("cpd ")),
+        "next is a cpd command: {s}"
+    );
+    assert_eq!(
+        show(&fx, LEAD)["tier"],
+        "O2",
+        "the row's tier stays the target"
+    );
     assert_eq!(switch(&fx, "lead2"), Value::Null, "only that Session");
 }
 
@@ -65,7 +105,18 @@ fn switched_clears_the_failure_and_both_are_idempotent() {
     assert_ne!(once, Value::Null);
     failed(&fx, LEAD);
     let twice = switch(&fx, LEAD);
-    assert_eq!((twice["tier"].clone(), twice["code"].clone(), twice["message"].clone()), (once["tier"].clone(), once["code"].clone(), once["message"].clone()));
+    assert_eq!(
+        (
+            twice["tier"].clone(),
+            twice["code"].clone(),
+            twice["message"].clone()
+        ),
+        (
+            once["tier"].clone(),
+            once["code"].clone(),
+            once["message"].clone()
+        )
+    );
     assert_eq!(all_events(&fx), events, "switch-failed appends no Event");
 
     fx.cpd(&["session", "switched", "--session", LEAD]).ok();
@@ -81,9 +132,29 @@ fn switch_commands_refuse_a_worker_and_an_unknown_session() {
     let fx = Fx::new();
     fixture(&fx.env);
     let events = all_events(&fx);
-    for (id, code, exit) in [(WORKER, "not_a_lead", 3), ("no-such-session", "session_not_found", 4)] {
-        refused(&fx.cpd(&["session", "switch-failed", "--session", id, "--code", "model_unavailable", "--message", "x"]), code, exit);
-        refused(&fx.cpd(&["session", "switched", "--session", id]), code, exit);
+    for (id, code, exit) in [
+        (WORKER, "not_a_lead", 3),
+        ("no-such-session", "session_not_found", 4),
+    ] {
+        refused(
+            &fx.cpd(&[
+                "session",
+                "switch-failed",
+                "--session",
+                id,
+                "--code",
+                "model_unavailable",
+                "--message",
+                "x",
+            ]),
+            code,
+            exit,
+        );
+        refused(
+            &fx.cpd(&["session", "switched", "--session", id]),
+            code,
+            exit,
+        );
     }
     assert_eq!(switch(&fx, WORKER), Value::Null, "nothing was written");
     assert_eq!(all_events(&fx), events);
@@ -94,7 +165,18 @@ fn switch_commands_refuse_a_worker_and_an_unknown_session() {
 fn switch_commands_refuse_a_bad_code_or_message() {
     let fx = Fx::new();
     fixture(&fx.env);
-    let run = |code: &str, message: &str| fx.cpd(&["session", "switch-failed", "--session", LEAD, "--code", code, "--message", message]);
+    let run = |code: &str, message: &str| {
+        fx.cpd(&[
+            "session",
+            "switch-failed",
+            "--session",
+            LEAD,
+            "--code",
+            code,
+            "--message",
+            message,
+        ])
+    };
     let long_code = format!("a{}", "b".repeat(64));
     for code in ["", "Model", "1abc", "a-b", "a b", long_code.as_str()] {
         refused(&run(code, "m"), "usage", 2);
@@ -105,7 +187,10 @@ fn switch_commands_refuse_a_bad_code_or_message() {
 
     // The limits themselves are accepted.
     let ok_code = format!("a{}", "b".repeat(63));
-    assert!(run(&ok_code, &"x".repeat(2000)).exit == 0, "63+1 character code and a 2000 character message are valid");
+    assert!(
+        run(&ok_code, &"x".repeat(2000)).exit == 0,
+        "63+1 character code and a 2000 character message are valid"
+    );
 }
 
 /// A retier that moves the Session clears the recorded failure (a new target is a new attempt); one that moves nothing leaves it.
@@ -120,20 +205,37 @@ fn retier_that_moves_a_session_clears_its_failed_switch() {
     // lead1 is on its target: nothing moves.
     let again = fx.cpd(&["session", "retier", LEAD]).ok();
     assert_eq!(again["retiered"], json!([]));
-    assert_ne!(switch(&fx, LEAD), Value::Null, "a retier that moves nothing leaves the failure");
+    assert_ne!(
+        switch(&fx, LEAD),
+        Value::Null,
+        "a retier that moves nothing leaves the failure"
+    );
 
     // A new target moves it.
-    fx.env.write_tmux_config("lead_tier = \"O1\"\nmanager_tier = \"O4\"\n[timeouts]\nfork_quiet_seconds = 1\n");
+    fx.env.write_tmux_config(
+        "lead_tier = \"O1\"\nmanager_tier = \"O4\"\n[timeouts]\nfork_quiet_seconds = 1\n",
+    );
     let moved = fx.cpd(&["session", "retier", LEAD]).ok();
-    assert_eq!(moved["retiered"].as_array().map(Vec::len), Some(1), "{moved}");
-    assert_eq!(switch(&fx, LEAD), Value::Null, "a moved Session starts a new attempt");
+    assert_eq!(
+        moved["retiered"].as_array().map(Vec::len),
+        Some(1),
+        "{moved}"
+    );
+    assert_eq!(
+        switch(&fx, LEAD),
+        Value::Null,
+        "a moved Session starts a new attempt"
+    );
 }
 
 /// A store from before the migration that adds `switch_failed` keeps every session row and has the column NULL.
 #[test]
 fn migration_adds_switch_failed_as_null() {
     let list = named_migrations();
-    let index = list.iter().position(|(_, _, sql)| sql.contains("switch_failed")).expect("a migration adds switch_failed");
+    let index = list
+        .iter()
+        .position(|(_, _, sql)| sql.contains("switch_failed"))
+        .expect("a migration adds switch_failed");
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
     let conn = prefix_database(index, &home).unwrap();

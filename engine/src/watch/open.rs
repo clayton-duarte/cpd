@@ -27,7 +27,9 @@ pub(super) fn run(engine: &mut Engine) {
     let missing = engine.store.read(|conn| {
         let mut stmt = conn.prepare(MISSING)?;
         let rows = stmt
-            .query_map([None::<&str>, None::<&str>], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .query_map([None::<&str>, None::<&str>], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut missing = Vec::new();
         for (plan, key) in rows {
@@ -61,13 +63,19 @@ pub(super) fn run(engine: &mut Engine) {
         engine.clear(Step::E4, &About::Machine);
         return;
     }
-    match engine.store.write(SOURCE, |tx| Ok((add_all(tx, &missing, tier)?, promote_all(tx)?))) {
+    match engine.store.write(SOURCE, |tx| {
+        Ok((add_all(tx, &missing, tier)?, promote_all(tx)?))
+    }) {
         Ok((added, promoted)) => {
             for (plan, pr, key) in added {
-                engine.log.line(&format!("E4: added the open Job {key} to PR {pr} of Plan {plan}"));
+                engine.log.line(&format!(
+                    "E4: added the open Job {key} to PR {pr} of Plan {plan}"
+                ));
             }
             for (plan, key) in promoted {
-                engine.log.line(&format!("E4: queued the draft open Job {key} of Plan {plan}: no draft of its PR remains"));
+                engine.log.line(&format!(
+                    "E4: queued the draft open Job {key} of Plan {plan}: no draft of its PR remains"
+                ));
             }
             engine.clear(Step::E4, &About::Machine);
         }
@@ -83,9 +91,16 @@ const PROMOTABLE: &str = "SELECT o.plan, o.key FROM jobs o JOIN prs r ON r.plan 
     AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = o.plan AND j.pr = o.pr AND j.status = 'draft' AND j.kind NOT IN ('open', 'update'))
   ORDER BY p.created_at, o.plan, o.seq";
 
-fn promotable(conn: &rusqlite::Connection, plan: Option<&str>) -> Result<Vec<(String, String)>, CpdError> {
+fn promotable(
+    conn: &rusqlite::Connection,
+    plan: Option<&str>,
+) -> Result<Vec<(String, String)>, CpdError> {
     let mut stmt = conn.prepare(PROMOTABLE)?;
-    Ok(stmt.query_map([plan], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
+    Ok(stmt
+        .query_map([plan], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// Decides again inside the transaction, then queues each draft `open` Job with its fingerprint as the insert computes it.
@@ -93,7 +108,10 @@ fn promote_all(tx: &WriteTxn<'_>) -> Result<Vec<(String, String)>, CpdError> {
     let found = promotable(tx, None)?;
     for (plan, key) in &found {
         let all = cpd_core::plan::jobs::load(tx, &PlanId::parse(plan)?)?;
-        let job = all.iter().find(|j| j.key == *key).ok_or_else(|| CpdError::bad_row(format!("Job {key} of Plan {plan} vanished")))?;
+        let job = all
+            .iter()
+            .find(|j| j.key == *key)
+            .ok_or_else(|| CpdError::bad_row(format!("Job {key} of Plan {plan} vanished")))?;
         tx.execute(
             "UPDATE jobs SET status = 'queued', fingerprint = ?1 WHERE plan = ?2 AND key = ?3 AND status = 'draft'",
             [cpd_core::plan::jobs::locked_fingerprint(job).as_str(), plan.as_str(), key.as_str()],
@@ -103,15 +121,25 @@ fn promote_all(tx: &WriteTxn<'_>) -> Result<Vec<(String, String)>, CpdError> {
 }
 
 /// Decides again inside the transaction (a hand `pr open` or `job cancel` may have changed a PR), then adds each missing Job.
-fn add_all(tx: &WriteTxn<'_>, missing: &[(PlanId, PrKey)], tier: cpd_core::config::Tier) -> Result<Vec<(PlanId, PrKey, cpd_core::ids::JobKey)>, CpdError> {
+fn add_all(
+    tx: &WriteTxn<'_>,
+    missing: &[(PlanId, PrKey)],
+    tier: cpd_core::config::Tier,
+) -> Result<Vec<(PlanId, PrKey, cpd_core::ids::JobKey)>, CpdError> {
     let mut added = Vec::new();
     for (plan, key) in missing {
-        let still: bool = tx.query_row(&format!("SELECT EXISTS ({MISSING})"), [Some(plan.as_str()), Some(key.as_str())], |r| r.get(0))?;
+        let still: bool = tx.query_row(
+            &format!("SELECT EXISTS ({MISSING})"),
+            [Some(plan.as_str()), Some(key.as_str())],
+            |r| r.get(0),
+        )?;
         if !still {
             continue;
         }
         let prs = load_prs(tx, plan)?;
-        let Some(pr) = prs.iter().find(|p| p.key == *key) else { continue };
+        let Some(pr) = prs.iter().find(|p| p.key == *key) else {
+            continue;
+        };
         let draft: bool = tx.query_row(
             "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND pr = ?2 AND status = 'draft' AND kind NOT IN ('open', 'update'))",
             [plan.as_str(), key.as_str()],

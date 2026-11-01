@@ -48,10 +48,17 @@ pub fn run(ports: &Ports, command: Command) -> Result<Finished, CpdError> {
         Command::Finish(a) => {
             let dir = run_dir();
             let wanted = format!("gate-run.{}", a.run);
-            if dir.as_deref().and_then(Path::file_name).and_then(|n| n.to_str()) != Some(wanted.as_str()) {
+            if dir
+                .as_deref()
+                .and_then(Path::file_name)
+                .and_then(|n| n.to_str())
+                != Some(wanted.as_str())
+            {
                 return Err(CpdError::new(
                     ErrorCode::Usage,
-                    format!("TMPDIR must be the run's directory `{wanted}` (scripts/gate-run.sh sets it); it is {dir:?}."),
+                    format!(
+                        "TMPDIR must be the run's directory `{wanted}` (scripts/gate-run.sh sets it); it is {dir:?}."
+                    ),
                 ));
             }
             Ok(finish(ports, &a.run, a.status))
@@ -61,7 +68,9 @@ pub fn run(ports: &Ports, command: Command) -> Result<Finished, CpdError> {
 
 /// The run's directory: `$TMPDIR`, which `scripts/gate-run.sh` exported.
 fn run_dir() -> Option<PathBuf> {
-    std::env::var_os("TMPDIR").filter(|v| !v.is_empty()).map(PathBuf::from)
+    std::env::var_os("TMPDIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
 }
 
 /// What a leftover process shows when the OS does not tell its test.
@@ -95,7 +104,9 @@ fn parents_of(ports: &Ports, pid: Pid) -> String {
 /// The sockets named `*-<id>-*` in tmux's directories: `/tmp/tmux-<uid>` and `$TMUX_TMPDIR/tmux-<uid>`.
 /// The uid in the directory names is this user's: the owner of the run's directory, which the wrapper made.
 fn sockets_of(run_id: &str, run_dir: Option<&Path>) -> Vec<PathBuf> {
-    let Some(uid) = run_dir.and_then(|d| fs::metadata(d).ok()).map(|m| m.uid()) else { return Vec::new() };
+    let Some(uid) = run_dir.and_then(|d| fs::metadata(d).ok()).map(|m| m.uid()) else {
+        return Vec::new();
+    };
     let mut dirs = vec![PathBuf::from(format!("/tmp/tmux-{uid}"))];
     if let Some(root) = std::env::var_os("TMUX_TMPDIR").filter(|v| !v.is_empty()) {
         let dir = Path::new(&root).join(format!("tmux-{uid}"));
@@ -107,7 +118,9 @@ fn sockets_of(run_id: &str, run_dir: Option<&Path>) -> Vec<PathBuf> {
     let marker = format!("-{run_id}-");
     let mut found = Vec::new();
     for dir in dirs {
-        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
         let mut names: Vec<PathBuf> = entries
             .filter_map(Result::ok)
             .filter(|e| e.file_name().to_string_lossy().contains(&marker))
@@ -122,7 +135,9 @@ fn sockets_of(run_id: &str, run_dir: Option<&Path>) -> Vec<PathBuf> {
 
 /// The entries of the run's directory, hidden ones included, by name.
 fn paths_of(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
     let mut paths: Vec<PathBuf> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
     paths.sort();
     paths
@@ -159,7 +174,10 @@ pub fn finish(ports: &Ports, run_id: &str, status: i32) -> Finished {
     }
     found.sort();
     found.dedup();
-    let pids: Vec<Pid> = found.into_iter().filter(|p| ports.spawn.alive(*p)).collect();
+    let pids: Vec<Pid> = found
+        .into_iter()
+        .filter(|p| ports.spawn.alive(*p))
+        .collect();
     let sockets = sockets_of(run_id, dir.as_deref());
     let paths = dir.as_deref().map(paths_of).unwrap_or_default();
     let count = pids.len() + sockets.len() + paths.len();
@@ -172,10 +190,26 @@ pub fn finish(ports: &Ports, run_id: &str, status: i32) -> Finished {
 
     let mut listing = String::new();
     for &pid in &pids {
-        let ppid = ports.spawn.ppid(pid).map(|p| p.0.to_string()).unwrap_or_default();
-        let test = ports.spawn.env_of(pid, "NEXTEST_TEST_NAME").filter(|t| !t.is_empty());
-        let _ = writeln!(listing, "  process {} (ppid {ppid}) {}", pid.0, command_of(ports, pid));
-        let _ = writeln!(listing, "    NEXTEST_TEST_NAME={}", test.as_deref().unwrap_or(NO_TEST));
+        let ppid = ports
+            .spawn
+            .ppid(pid)
+            .map(|p| p.0.to_string())
+            .unwrap_or_default();
+        let test = ports
+            .spawn
+            .env_of(pid, "NEXTEST_TEST_NAME")
+            .filter(|t| !t.is_empty());
+        let _ = writeln!(
+            listing,
+            "  process {} (ppid {ppid}) {}",
+            pid.0,
+            command_of(ports, pid)
+        );
+        let _ = writeln!(
+            listing,
+            "    NEXTEST_TEST_NAME={}",
+            test.as_deref().unwrap_or(NO_TEST)
+        );
         let _ = writeln!(listing, "    parents: {}", parents_of(ports, pid));
     }
     for socket in &sockets {
@@ -184,14 +218,23 @@ pub fn finish(ports: &Ports, run_id: &str, status: i32) -> Finished {
     for path in &paths {
         let _ = writeln!(listing, "  path    {}", path.display());
     }
-    let _ = writeln!(report, "gate-run: FAIL: this run (GATE_RUN={run_id}) left {count} things behind:");
+    let _ = writeln!(
+        report,
+        "gate-run: FAIL: this run (GATE_RUN={run_id}) left {count} things behind:"
+    );
     report += &listing;
     if let Some(first) = pids.first() {
         // A hint that names a command this OS has: `/proc` where it exists, `ps -E` where it does not.
         let how = if Path::new("/proc/self").exists() {
-            format!("tr '\\0' '\\n' </proc/{}/environ | grep NEXTEST_TEST_NAME", first.0)
+            format!(
+                "tr '\\0' '\\n' </proc/{}/environ | grep NEXTEST_TEST_NAME",
+                first.0
+            )
         } else {
-            format!("ps -E -p {} -o command= | tr ' ' '\\n' | grep NEXTEST_TEST_NAME", first.0)
+            format!(
+                "ps -E -p {} -o command= | tr ' ' '\\n' | grep NEXTEST_TEST_NAME",
+                first.0
+            )
         };
         let _ = writeln!(
             report,

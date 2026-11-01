@@ -30,7 +30,14 @@ pub struct Check {
 
 impl Check {
     pub fn new(name: &'static str, severity: Severity, ok: bool) -> Check {
-        Check { name, ok, severity, found: None, expected: None, message: None }
+        Check {
+            name,
+            ok,
+            severity,
+            found: None,
+            expected: None,
+            message: None,
+        }
     }
 
     pub fn pass(name: &'static str, severity: Severity) -> Check {
@@ -48,7 +55,11 @@ impl Check {
 
     /// A check that failed with `err`: its code and message, and its details as `found`.
     pub fn from_error(name: &'static str, severity: Severity, err: &CpdError) -> Check {
-        let mut check = Check::fail(name, severity, format!("{}: {}", err.code().as_str(), err.message()));
+        let mut check = Check::fail(
+            name,
+            severity,
+            format!("{}: {}", err.code().as_str(), err.message()),
+        );
         if !err.details().is_empty() {
             check.found = Some(Value::Object(err.details().clone()));
         }

@@ -13,7 +13,15 @@ const WHOLE: &str = "github-copilot";
 
 /// The non-chat ids (case-insensitive substrings, the pattern `/embed|tts|transcribe|live|image|nano-banana|ocr/i`):
 /// the cache keeps them, the announcement leaves them out.
-const NON_CHAT: [&str; 7] = ["embed", "tts", "transcribe", "live", "image", "nano-banana", "ocr"];
+const NON_CHAT: [&str; 7] = [
+    "embed",
+    "tts",
+    "transcribe",
+    "live",
+    "image",
+    "nano-banana",
+    "ocr",
+];
 
 /// The ids of a change the User is told: `(appeared, went_away)`.
 #[must_use]
@@ -45,7 +53,10 @@ pub fn parse_subject(subject: &str) -> Option<(&str, &str)> {
 /// `<provider>: <N> new, <M> gone`, a zero part omitted.
 #[must_use]
 pub fn label(provider: &str, new: usize, gone: usize) -> String {
-    let parts: Vec<String> =
-        [(new, "new"), (gone, "gone")].into_iter().filter(|(n, _)| *n > 0).map(|(n, what)| format!("{n} {what}")).collect();
+    let parts: Vec<String> = [(new, "new"), (gone, "gone")]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{n} {what}"))
+        .collect();
     format!("{provider}: {}", parts.join(", "))
 }

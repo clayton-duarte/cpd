@@ -29,22 +29,34 @@ pub struct FakeContextEngine {
 impl FakeContextEngine {
     /// A fake with scripted replies, used in order; a run past the script answers nothing.
     pub fn new(replies: Vec<Reply>) -> FakeContextEngine {
-        FakeContextEngine { replies: Mutex::new(replies), calls: Mutex::new(Vec::new()) }
+        FakeContextEngine {
+            replies: Mutex::new(replies),
+            calls: Mutex::new(Vec::new()),
+        }
     }
 
     /// A fake whose every `run` answers these responses.
     pub fn answering(responses: Vec<Value>) -> FakeContextEngine {
-        FakeContextEngine { replies: Mutex::new(vec![Reply::Answers(responses)]), calls: Mutex::new(Vec::new()) }
+        FakeContextEngine {
+            replies: Mutex::new(vec![Reply::Answers(responses)]),
+            calls: Mutex::new(Vec::new()),
+        }
     }
 
     /// The `(db, requests)` of every run, in order.
     pub fn calls(&self) -> Vec<(PathBuf, Vec<Value>)> {
-        self.calls.lock().map(|calls| calls.clone()).unwrap_or_default()
+        self.calls
+            .lock()
+            .map(|calls| calls.clone())
+            .unwrap_or_default()
     }
 
     /// Every request sent, in order, whatever its run.
     pub fn requests(&self) -> Vec<Value> {
-        self.calls().into_iter().flat_map(|(_, requests)| requests).collect()
+        self.calls()
+            .into_iter()
+            .flat_map(|(_, requests)| requests)
+            .collect()
     }
 }
 

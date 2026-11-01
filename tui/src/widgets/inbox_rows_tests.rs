@@ -30,13 +30,26 @@ fn ready(id: i64, label: &str) -> Item {
 fn drawn(items: &[Item], shape: &Shape, width: u16, height: u16) -> (Buffer, Links) {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     let mut links = Links::default();
-    terminal.draw(|f| links = inbox::draw(f, Rect::new(0, 0, width, height), items, shape, now(), &|_| None)).unwrap();
+    terminal
+        .draw(|f| {
+            links = inbox::draw(
+                f,
+                Rect::new(0, 0, width, height),
+                items,
+                shape,
+                now(),
+                &|_| None,
+            )
+        })
+        .unwrap();
     (terminal.backend().buffer().clone(), links)
 }
 
 /// `n` items, each with a Row 2 (two rows).
 fn two_rows(n: i64) -> Vec<Item> {
-    (1..=n).map(|i| ready(i, &format!("item {i}\nsub {i}"))).collect()
+    (1..=n)
+        .map(|i| ready(i, &format!("item {i}\nsub {i}")))
+        .collect()
 }
 
 fn flat(items: &[Item]) -> (Buffer, Links) {
@@ -72,7 +85,10 @@ fn both_rows_of_an_item_are_hits_for_that_item() {
 fn row_two_is_the_muted_subtitle_indented_under_the_label() {
     let (buf, _) = flat(&[ready(1, "acme/api#3 ready\nAdd retries")]);
     let one = row(&buf, 3);
-    assert!(one.starts_with(" ") && one.contains(" acme/api#3 ready") && one.ends_with("5m"), "{one:?}");
+    assert!(
+        one.starts_with(" ") && one.contains(" acme/api#3 ready") && one.ends_with("5m"),
+        "{one:?}"
+    );
     assert!(!one.contains("Add retries"), "{one:?}");
     assert_eq!(row(&buf, 4), "   Add retries");
     assert_eq!(buf[(3, 4)].fg, palette::muted_text().fg.unwrap());
@@ -92,7 +108,10 @@ fn an_item_with_no_subtitle_takes_one_row_and_the_next_item_starts_under_it() {
     for label in ["acme/api#3 ready", "acme/api#3 ready\n"] {
         let (buf, _) = flat(&[ready(1, label), ready(2, "acme/api#4 ready\nSub")]);
         assert!(row(&buf, 3).contains("acme/api#3 ready"), "{label:?}");
-        assert!(row(&buf, 4).contains("acme/api#4 ready"), "{label:?}: the next item starts right under it");
+        assert!(
+            row(&buf, 4).contains("acme/api#4 ready"),
+            "{label:?}: the next item starts right under it"
+        );
         assert_eq!(row(&buf, 5), "   Sub", "{label:?}");
     }
 }
@@ -104,8 +123,13 @@ fn the_link_covers_row_one_only() {
     let (_, links) = flat(&[it]);
     assert_eq!(links.at(Position::new(3, 3)), Some(URL));
     assert_eq!(links.at(Position::new(3, 4)), None);
-    let linked = (0..40).filter(|x| links.at(Position::new(*x, 3)).is_some()).count();
-    assert!(linked <= "acme/api#3 ready".chars().count() + 2, "the Link is Row 1's label (and its cue), not the whole label: {linked} cells");
+    let linked = (0..40)
+        .filter(|x| links.at(Position::new(*x, 3)).is_some())
+        .count();
+    assert!(
+        linked <= "acme/api#3 ready".chars().count() + 2,
+        "the Link is Row 1's label (and its cue), not the whole label: {linked} cells"
+    );
 }
 
 #[test]
@@ -114,24 +138,62 @@ fn the_list_holds_as_many_two_row_items_as_fit_and_a_spare_row_stays_blank() {
     let ten = Shape::new(&items).capped(10);
     assert_eq!((ten.max_scroll(), ten.wheeled(true)), (7, 3));
     let (buf, _) = drawn(&items, &ten, 40, 10);
-    assert!(row(&buf, 7).contains("item 3") && row(&buf, 8).contains("sub 3") && row(&buf, 9).contains("▼ 7 more"), "3 items shown");
+    assert!(
+        row(&buf, 7).contains("item 3")
+            && row(&buf, 8).contains("sub 3")
+            && row(&buf, 9).contains("▼ 7 more"),
+        "3 items shown"
+    );
 
     let (buf, _) = drawn(&items, &Shape::new(&items).capped(9), 40, 9);
-    assert!(row(&buf, 5).contains("item 2") && row(&buf, 6).contains("sub 2"), "2 items shown");
+    assert!(
+        row(&buf, 5).contains("item 2") && row(&buf, 6).contains("sub 2"),
+        "2 items shown"
+    );
     assert_eq!(row(&buf, 7), "");
     assert!(row(&buf, 8).ends_with("▼ 8 more"), "{:?}", row(&buf, 8));
 }
 
 #[test]
 fn the_column_grows_two_rows_for_each_item() {
-    let items: Vec<Item> = (1..=2).map(|i| ready(i, &format!("item {i}\nsub {i}"))).collect();
-    let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } };
+    let items: Vec<Item> = (1..=2)
+        .map(|i| ready(i, &format!("item {i}\nsub {i}")))
+        .collect();
+    let machine = Machine {
+        name: "homeserver".to_owned(),
+        usage: Usage {
+            cpu: Some(23),
+            gpus: vec![],
+            mem: Some(41),
+        },
+    };
     let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
     let mut got = None;
-    terminal.draw(|f| got = Some(column::draw(f, f.area(), &machine, 0, &items, 0, now(), &Default::default()))).unwrap();
+    terminal
+        .draw(|f| {
+            got = Some(column::draw(
+                f,
+                f.area(),
+                &machine,
+                0,
+                &items,
+                0,
+                now(),
+                &Default::default(),
+            ))
+        })
+        .unwrap();
     let drawn = got.unwrap();
     let buf = terminal.backend().buffer().clone();
     assert_eq!(drawn.inbox.height, 8);
-    assert_eq!(drawn.inbox.y + drawn.inbox.height, 20, "pinned to the pane's bottom");
-    assert_eq!(row(&buf, 18), "   sub 2", "Row 2 of the last item is above the ▼ line");
+    assert_eq!(
+        drawn.inbox.y + drawn.inbox.height,
+        20,
+        "pinned to the pane's bottom"
+    );
+    assert_eq!(
+        row(&buf, 18),
+        "   sub 2",
+        "Row 2 of the last item is above the ▼ line"
+    );
 }

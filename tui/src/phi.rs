@@ -30,7 +30,10 @@ mod tests {
     use crate::palette;
 
     fn rendered(spans: &[Span<'static>]) -> Vec<(String, Style)> {
-        spans.iter().map(|s| (s.content.to_string(), s.style)).collect()
+        spans
+            .iter()
+            .map(|s| (s.content.to_string(), s.style))
+            .collect()
     }
 
     #[test]
@@ -46,7 +49,10 @@ mod tests {
                 ("φ".to_owned(), bold),
             ]
         );
-        assert_eq!(rendered(&spans("no mark", base)), [("no mark".to_owned(), base)]);
+        assert_eq!(
+            rendered(&spans("no mark", base)),
+            [("no mark".to_owned(), base)]
+        );
         assert_eq!(rendered(&spans("", base)), Vec::<(String, Style)>::new());
         assert_eq!(rendered(&spans("φ", base)), [("φ".to_owned(), bold)]);
     }

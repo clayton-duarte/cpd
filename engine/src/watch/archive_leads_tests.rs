@@ -9,7 +9,9 @@ use super::testkit::{Fx, ago_seconds};
 
 /// Context `ctx`, `timeouts.archive_sleep_seconds` as given (the default when `None`).
 fn fx(archive_sleep_seconds: Option<u32>) -> Fx {
-    let threshold = archive_sleep_seconds.map(|n| format!("archive_sleep_seconds = {n}\n")).unwrap_or_default();
+    let threshold = archive_sleep_seconds
+        .map(|n| format!("archive_sleep_seconds = {n}\n"))
+        .unwrap_or_default();
     Fx::new(&format!("[timeouts]\n{threshold}"))
 }
 
@@ -33,15 +35,21 @@ fn plan(fx: &mut Fx, plan: &str, asleep_seconds: i64) {
 }
 
 fn plan_archived_at(fx: &mut Fx, plan: &str) -> Option<String> {
-    fx.query(&format!("SELECT archived_at FROM plans WHERE id = '{plan}'"))
+    fx.query(&format!(
+        "SELECT archived_at FROM plans WHERE id = '{plan}'"
+    ))
 }
 
 fn session_archived_at(fx: &mut Fx, session: &str) -> Option<String> {
-    fx.query(&format!("SELECT archived_at FROM sessions WHERE id = '{session}'"))
+    fx.query(&format!(
+        "SELECT archived_at FROM sessions WHERE id = '{session}'"
+    ))
 }
 
 fn session_asleep_at(fx: &mut Fx, session: &str) -> Option<String> {
-    fx.query(&format!("SELECT asleep_at FROM sessions WHERE id = '{session}'"))
+    fx.query(&format!(
+        "SELECT asleep_at FROM sessions WHERE id = '{session}'"
+    ))
 }
 
 /// The values of column `column` of the Events of `kind`, in order.
@@ -49,8 +57,12 @@ fn event_column(fx: &mut Fx, column: &str, kind: &str) -> Vec<String> {
     fx.engine
         .store
         .read(|conn| {
-            let mut stmt = conn.prepare(&format!("SELECT {column} FROM events WHERE kind = ?1 ORDER BY id"))?;
-            Ok(stmt.query_map([kind], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?)
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {column} FROM events WHERE kind = ?1 ORDER BY id"
+            ))?;
+            Ok(stmt
+                .query_map([kind], |r| r.get(0))?
+                .collect::<rusqlite::Result<Vec<String>>>()?)
         })
         .unwrap()
 }
@@ -68,7 +80,11 @@ fn a_lead_asleep_past_the_threshold_archives_its_done_plan() {
     assert!(plan_archived_at(&mut fx, "pay").is_some());
     assert!(session_archived_at(&mut fx, "pay-lead").is_some());
     assert!(session_archived_at(&mut fx, "pay-fork").is_some());
-    assert_eq!(session_asleep_at(&mut fx, "pay-lead"), None, "archiving wakes the Session (contract §2.2 'Asleep')");
+    assert_eq!(
+        session_asleep_at(&mut fx, "pay-lead"),
+        None,
+        "archiving wakes the Session (contract §2.2 'Asleep')"
+    );
     assert_eq!(session_asleep_at(&mut fx, "pay-fork"), None);
     assert_eq!(event_column(&mut fx, "plan", "plan-archived"), ["pay"]);
     let mut sessions = event_column(&mut fx, "session", "session-archived");
@@ -78,7 +94,10 @@ fn a_lead_asleep_past_the_threshold_archives_its_done_plan() {
     // The Lead asleep inside the threshold stays asleep and unarchived.
     assert_eq!(plan_archived_at(&mut fx, "recent"), None);
     assert_eq!(session_archived_at(&mut fx, "recent-lead"), None);
-    assert!(session_asleep_at(&mut fx, "recent-lead").is_some(), "a Lead asleep inside the threshold stays");
+    assert!(
+        session_asleep_at(&mut fx, "recent-lead").is_some(),
+        "a Lead asleep inside the threshold stays"
+    );
 }
 
 /// E14 (contract §3.7, hs-d716): a Plan with `deleted_at` set (a tombstone, §2.2 "Deleted") is never an archive
@@ -99,7 +118,13 @@ fn a_deleted_plan_is_not_archived_and_appends_no_error() {
     let errors = fx
         .engine
         .store
-        .read(|conn| Ok(conn.query_row("SELECT count(*) FROM events WHERE kind = 'error'", [], |r| r.get::<_, i64>(0))?))
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT count(*) FROM events WHERE kind = 'error'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )?)
+        })
         .unwrap();
     assert_eq!(errors, 0, "E14 must not error on a deleted Plan");
     let not_found = fx
@@ -113,9 +138,16 @@ fn a_deleted_plan_is_not_archived_and_appends_no_error() {
             )?)
         })
         .unwrap();
-    assert_eq!(not_found, 0, "E14 must not append plan_not_found for a deleted Plan");
+    assert_eq!(
+        not_found, 0,
+        "E14 must not append plan_not_found for a deleted Plan"
+    );
 
-    assert_eq!(plan_archived_at(&mut fx, "gone"), None, "a tombstoned Plan is never archived");
+    assert_eq!(
+        plan_archived_at(&mut fx, "gone"),
+        None,
+        "a tombstoned Plan is never archived"
+    );
     assert_eq!(session_archived_at(&mut fx, "gone-lead"), None);
     assert!(
         session_asleep_at(&mut fx, "gone-lead").is_some(),
@@ -139,7 +171,11 @@ fn the_configured_threshold_decides() {
     for _ in 0..4 {
         tick(&mut default);
     }
-    assert_eq!(plan_archived_at(&mut default, "past"), None, "the default threshold does not archive a Lead asleep 2 s");
+    assert_eq!(
+        plan_archived_at(&mut default, "past"),
+        None,
+        "the default threshold does not archive a Lead asleep 2 s"
+    );
     assert_eq!(session_archived_at(&mut default, "past-lead"), None);
     assert!(session_asleep_at(&mut default, "past-lead").is_some());
     assert!(event_column(&mut default, "plan", "plan-archived").is_empty());

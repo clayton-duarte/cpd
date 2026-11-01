@@ -18,9 +18,15 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
         return Ok(Output::success(out));
     }
     store.write("context rename", |tx| {
-        tx.execute("UPDATE contexts SET title = ?1 WHERE id = ?2", [title, id.as_str()])?;
+        tx.execute(
+            "UPDATE contexts SET title = ?1 WHERE id = ?2",
+            [title, id.as_str()],
+        )?;
         let text = format!("Context {id} renamed to {title:?}.");
-        append(tx, NewEvent::context_renamed(text, title).context(id.clone()))?;
+        append(
+            tx,
+            NewEvent::context_renamed(text, title).context(id.clone()),
+        )?;
         Ok(())
     })?;
     Ok(Output::success(out))

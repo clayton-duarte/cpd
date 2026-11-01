@@ -10,26 +10,26 @@ pub mod rules;
 pub mod team;
 
 #[cfg(test)]
-mod blue_tests;
-#[cfg(test)]
 mod approve_tests;
 #[cfg(test)]
-mod deploy_tests;
+mod blue_tests;
 #[cfg(test)]
 mod claim_tests;
 #[cfg(test)]
-mod runner_tests;
+mod closed_tests;
 #[cfg(test)]
-mod pr_tests;
-#[cfg(test)]
-mod follow_tests;
+mod deploy_tests;
 #[cfg(test)]
 mod dialog_tests;
 #[cfg(test)]
-mod rows_tests;
+mod follow_tests;
+#[cfg(test)]
+mod pr_tests;
 #[cfg(test)]
 mod rows_review_tests;
 #[cfg(test)]
-mod unread_rows_tests;
+mod rows_tests;
 #[cfg(test)]
-mod closed_tests;
+mod runner_tests;
+#[cfg(test)]
+mod unread_rows_tests;

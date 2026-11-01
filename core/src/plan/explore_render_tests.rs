@@ -3,16 +3,24 @@
 
 use serde_json::json;
 
+use super::jobs;
 use super::render_all_jobs_tests::{PLAN, store_with};
 use crate::ids::PlanId;
-use super::jobs;
 
 use super::display::Display;
 use super::jobs::{Job, JobSpec};
 use super::prs::PrRow;
 use super::render::{Heading, markdown};
 
-fn job(key: &str, pr: Option<&str>, kind: &str, status: &str, tier: &str, goal: &str, needs: &[&str]) -> Job {
+fn job(
+    key: &str,
+    pr: Option<&str>,
+    kind: &str,
+    status: &str,
+    tier: &str,
+    goal: &str,
+    needs: &[&str],
+) -> Job {
     Job {
         seq: 1,
         key: key.into(),
@@ -22,7 +30,11 @@ fn job(key: &str, pr: Option<&str>, kind: &str, status: &str, tier: &str, goal: 
         spec: Some(JobSpec {
             goal: goal.into(),
             context: "c".into(),
-            touches: if pr.is_some() { json!(["a"]) } else { json!([format!("run/p1/explore/{key}.md")]) },
+            touches: if pr.is_some() {
+                json!(["a"])
+            } else {
+                json!([format!("run/p1/explore/{key}.md")])
+            },
             acceptance: json!(["b"]),
             out_of_scope: json!([]),
         }),
@@ -49,20 +61,58 @@ fn job(key: &str, pr: Option<&str>, kind: &str, status: &str, tier: &str, goal: 
 
 /// The merged `scout` `a-scout` (with its summary) and the queued `research` `b-research`, which needs it.
 fn explore_jobs() -> Vec<Job> {
-    let mut scout = job("a-scout", None, "scout", "merged", "H2", "Where is the cache key built?\nAnd who reads it?", &[]);
+    let mut scout = job(
+        "a-scout",
+        None,
+        "scout",
+        "merged",
+        "H2",
+        "Where is the cache key built?\nAnd who reads it?",
+        &[],
+    );
     scout.merged_sha = Some("0".repeat(64));
-    scout.summary = Some("The key is built in `core/src/cache.rs` from the repo path and the schema version.".into());
-    let research = job("b-research", None, "research", "queued", "S1", &format!("{}{}", "q".repeat(100), "TAIL"), &["a-scout"]);
+    scout.summary = Some(
+        "The key is built in `core/src/cache.rs` from the repo path and the schema version.".into(),
+    );
+    let research = job(
+        "b-research",
+        None,
+        "research",
+        "queued",
+        "S1",
+        &format!("{}{}", "q".repeat(100), "TAIL"),
+        &["a-scout"],
+    );
     vec![scout, research]
 }
 
 fn web_jobs() -> Vec<Job> {
-    vec![job("web-docs", Some("web"), "docs", "draft", "S2", "g", &[])]
+    vec![job(
+        "web-docs",
+        Some("web"),
+        "docs",
+        "draft",
+        "S2",
+        "g",
+        &[],
+    )]
 }
 
 fn render(jobs: &[Job]) -> String {
     let prs = [PrRow::fixture("web", "/r", "main", &[], "dispatch")];
-    markdown(&Heading::Plan { title: "T", plan: "p1" }, "ctx", "plan", &prs, jobs, &[], "S2", &Display::of(&prs))
+    markdown(
+        &Heading::Plan {
+            title: "T",
+            plan: "p1",
+        },
+        "ctx",
+        "plan",
+        &prs,
+        jobs,
+        &[],
+        "S2",
+        &Display::of(&prs),
+    )
 }
 
 #[test]
@@ -86,15 +136,36 @@ The key is built in `core/src/cache.rs` from the repo path and the schema versio
         "q".repeat(100)
     );
     assert!(md.contains(&section), "{md}");
-    let at = |needle: &str| md.find(needle).unwrap_or_else(|| panic!("no {needle:?} in\n{md}"));
-    assert!(at("## Overlaps") < at("## Explore") && at("## Explore") < at("## PR web"), "{md}");
+    let at = |needle: &str| {
+        md.find(needle)
+            .unwrap_or_else(|| panic!("no {needle:?} in\n{md}"))
+    };
+    assert!(
+        at("## Overlaps") < at("## Explore") && at("## Explore") < at("## PR web"),
+        "{md}"
+    );
     // explore Jobs are in no other block: not the PR's table, not its graph
-    assert!(!md.contains("TAIL") && !md.contains("[\"a-scout\"]") && !md.contains("### `b-research`"), "{md}");
+    assert!(
+        !md.contains("TAIL") && !md.contains("[\"a-scout\"]") && !md.contains("### `b-research`"),
+        "{md}"
+    );
     assert_eq!(md.matches("| `web-docs` |").count(), 1, "{md}");
 }
 
 fn render_no_prs(jobs: &[Job], phase: &str) -> String {
-    markdown(&Heading::Plan { title: "T", plan: "p1" }, "ctx", phase, &[], jobs, &[], "S2", &Display::default())
+    markdown(
+        &Heading::Plan {
+            title: "T",
+            plan: "p1",
+        },
+        "ctx",
+        phase,
+        &[],
+        jobs,
+        &[],
+        "S2",
+        &Display::default(),
+    )
 }
 
 #[test]
@@ -122,13 +193,30 @@ The key is built in `core/src/cache.rs` from the repo path and the schema versio
 
 #[test]
 fn plan_render_marks_a_cancelled_explore_job_and_gives_it_no_summary() {
-    let mut cancelled = job("x-scout", None, "scout", "cancelled", "H1", "Never asked?", &[]);
+    let mut cancelled = job(
+        "x-scout",
+        None,
+        "scout",
+        "cancelled",
+        "H1",
+        "Never asked?",
+        &[],
+    );
     cancelled.cancel_reason = Some("not needed".into());
     cancelled.cancel_requested_at = Some("t".into());
     let got = render_no_prs(&[explore_jobs().remove(0), cancelled], "grounding");
-    let row = got.lines().find(|l| l.starts_with("| `x-scout` |")).unwrap_or_else(|| panic!("no row of x-scout in\n{got}"));
-    assert!(row.contains("| cancelled: not needed |"), "row: {row}\n{got}");
-    assert!(got.contains("### a-scout") && !got.contains("### x-scout"), "{got}");
+    let row = got
+        .lines()
+        .find(|l| l.starts_with("| `x-scout` |"))
+        .unwrap_or_else(|| panic!("no row of x-scout in\n{got}"));
+    assert!(
+        row.contains("| cancelled: not needed |"),
+        "row: {row}\n{got}"
+    );
+    assert!(
+        got.contains("### a-scout") && !got.contains("### x-scout"),
+        "{got}"
+    );
 }
 
 #[test]
@@ -146,7 +234,14 @@ fn job_load_reads_the_summary_of_a_merged_explore_job() {
     let (_dir, mut store) = store_with(&sql);
     let plan = PlanId::parse(PLAN).unwrap();
     let loaded = store.read(|conn| jobs::load(conn, &plan)).unwrap();
-    let summary = |key: &str| loaded.iter().find(|j| j.key == key).unwrap_or_else(|| panic!("no Job {key}")).summary.clone();
+    let summary = |key: &str| {
+        loaded
+            .iter()
+            .find(|j| j.key == key)
+            .unwrap_or_else(|| panic!("no Job {key}"))
+            .summary
+            .clone()
+    };
     assert_eq!(
         (summary("scout-m"), summary("scout-q"), summary("work-m")),
         (Some("S".to_owned()), None, None)

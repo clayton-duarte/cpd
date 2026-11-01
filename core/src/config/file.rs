@@ -146,13 +146,18 @@ impl TickSeconds {
         };
         let millis = (seconds * 1000.0).round();
         if (seconds * 1000.0 - millis).abs() > 1e-6 {
-            return Err(format!("must be a whole number of milliseconds, got {seconds}"));
+            return Err(format!(
+                "must be a whole number of milliseconds, got {seconds}"
+            ));
         }
         if millis < f64::from(Self::MIN_MILLIS) {
             return Err(format!("must be at least 0.1, got {seconds}"));
         }
         if millis > f64::from(u32::MAX) {
-            return Err(format!("must be at most {}, got {seconds}", u32::MAX / 1000));
+            return Err(format!(
+                "must be at most {}, got {seconds}",
+                u32::MAX / 1000
+            ));
         }
         Ok(Self(millis as u32))
     }
@@ -167,7 +172,11 @@ impl std::fmt::Display for TickSeconds {
 /// A whole number of seconds is shown as an integer, as it was when the key was one.
 impl Serialize for TickSeconds {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if self.0.is_multiple_of(1000) { serializer.serialize_u32(self.0 / 1000) } else { serializer.serialize_f64(f64::from(self.0) / 1000.0) }
+        if self.0.is_multiple_of(1000) {
+            serializer.serialize_u32(self.0 / 1000)
+        } else {
+            serializer.serialize_f64(f64::from(self.0) / 1000.0)
+        }
     }
 }
 
@@ -202,7 +211,11 @@ pub struct Inbox {
     pub bot_reviewers: Vec<String>,
 }
 
-const DEFAULT_BOT_REVIEWERS: [&str; 3] = ["mission-lane-claude-code-assistant", "github-actions", "copilot-pull-request-reviewer"];
+const DEFAULT_BOT_REVIEWERS: [&str; 3] = [
+    "mission-lane-claude-code-assistant",
+    "github-actions",
+    "copilot-pull-request-reviewer",
+];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Events {
@@ -246,8 +259,11 @@ impl Config {
                 .with("path", path.display().to_string()));
             }
             Err(e) => {
-                return Err(CpdError::new(ErrorCode::ConfigInvalid, format!("cannot read config.toml: {e}."))
-                    .with("path", path.display().to_string()));
+                return Err(CpdError::new(
+                    ErrorCode::ConfigInvalid,
+                    format!("cannot read config.toml: {e}."),
+                )
+                .with("path", path.display().to_string()));
             }
         };
         Config::parse(&text, &path)
@@ -256,22 +272,41 @@ impl Config {
     /// Parses the text of a `config.toml`; `path` only names the file in errors.
     pub fn parse(text: &str, path: &Path) -> Result<(Config, Sources), CpdError> {
         let table: Table = text.parse().map_err(|e: toml::de::Error| {
-            CpdError::new(ErrorCode::ConfigInvalid, format!("config.toml is not valid TOML: {}", e.message().trim_end()))
-                .with("path", path.display().to_string())
+            CpdError::new(
+                ErrorCode::ConfigInvalid,
+                format!("config.toml is not valid TOML: {}", e.message().trim_end()),
+            )
+            .with("path", path.display().to_string())
         })?;
-        let mut r = Reader { table, path, sources: Sources::new() };
+        let mut r = Reader {
+            table,
+            path,
+            sources: Sources::new(),
+        };
         r.sections_are_tables(&["timeouts", "watch", "inbox", "events", "tmux", "presets"])?;
 
         let version = r.require("version", |v| int(v, 1, 1))?;
-        let machine = r.require("machine", |v| MachineName::parse(text_of(&v)?).map_err(|e| e.message().to_owned()))?;
+        let machine = r.require("machine", |v| {
+            MachineName::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
+        })?;
         let concurrency = r.get("concurrency", 3, |v| int(v, 1, u32::MAX))?;
         let retry_cap = r.get("retry_cap", 2, |v| int(v, 0, u32::MAX))?;
         // Tier rules (contract §9, hs-d506): no agent uses effort 5; Leads and the Manager may be `O`;
         // an auxiliary run (the distiller) is `H` only; `open_tier` is a Worker's Tier.
         // The default is the Tier `docs/research/opener-tier.md` recommends.
-        let lead_tier = r.get("lead_tier", Tier::parse("O2").expect("a valid Tier"), |v| leader_tier(&v))?;
-        let review_lead_tier = r.get("review_lead_tier", Tier::parse("S3").expect("a valid Tier"), |v| leader_tier(&v))?;
-        let manager_tier = r.get("manager_tier", Tier::parse("O4").expect("a valid Tier"), |v| leader_tier(&v))?;
+        let lead_tier = r.get("lead_tier", Tier::parse("O2").expect("a valid Tier"), |v| {
+            leader_tier(&v)
+        })?;
+        let review_lead_tier = r.get(
+            "review_lead_tier",
+            Tier::parse("S3").expect("a valid Tier"),
+            |v| leader_tier(&v),
+        )?;
+        let manager_tier = r.get(
+            "manager_tier",
+            Tier::parse("O4").expect("a valid Tier"),
+            |v| leader_tier(&v),
+        )?;
         let context_distill_tier = r.get("context_distill_tier", Tier::parse("GX").expect("a valid Tier"), |v| {
             let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
             if tier.letter() != Letter::G {
@@ -279,21 +314,21 @@ impl Config {
             }
             Ok(tier)
         })?;
-        let context_curation_min_records = r.get("context_curation_min_records", 25, |v| int(v, 1, u32::MAX))?;
+        let context_curation_min_records =
+            r.get("context_curation_min_records", 25, |v| int(v, 1, u32::MAX))?;
         let loop_guard_turns = r.get("loop_guard_turns", 20, |v| int(v, 1, u32::MAX))?;
         let open_tier = r.get("open_tier", Tier::parse("H3").expect("a valid Tier"), |v| {
             let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
             tier.check_worker().map_err(|e| e.message().to_owned())?;
             Ok(tier)
         })?;
-        let lead_pi_packages = r.get(
-            "lead_pi_packages",
-            Vec::new(),
-            |v| match v {
-                Value::Array(items) => items.iter().map(|i| non_empty(text_of(i)?)).collect(),
-                other => Err(format!("must be an array of text, not {}", other.type_str())),
-            },
-        )?;
+        let lead_pi_packages = r.get("lead_pi_packages", Vec::new(), |v| match v {
+            Value::Array(items) => items.iter().map(|i| non_empty(text_of(i)?)).collect(),
+            other => Err(format!(
+                "must be an array of text, not {}",
+                other.type_str()
+            )),
+        })?;
         let pi_adapter = r.get("pi_adapter", String::new(), |v| {
             let dir = text_of(&v)?;
             if !dir.is_empty() && !Path::new(dir).join("package.json").is_file() {
@@ -302,22 +337,39 @@ impl Config {
             Ok(dir.to_owned())
         })?;
 
-        let worker_runner = r.get("worker_runner", WorkerRunner::Pi, |v| WorkerRunner::parse(text_of(&v)?))?;
+        let worker_runner = r.get("worker_runner", WorkerRunner::Pi, |v| {
+            WorkerRunner::parse(text_of(&v)?)
+        })?;
         // The runner of each new Lead and Manager Session (contract §6.19, hs-d754 Q10); independent keys (Q11).
-        let lead_runner = r.get("lead_runner", WorkerRunner::Pi, |v| WorkerRunner::parse(text_of(&v)?))?;
-        let manager_runner = r.get("manager_runner", WorkerRunner::Pi, |v| WorkerRunner::parse(text_of(&v)?))?;
+        let lead_runner = r.get("lead_runner", WorkerRunner::Pi, |v| {
+            WorkerRunner::parse(text_of(&v)?)
+        })?;
+        let manager_runner = r.get("manager_runner", WorkerRunner::Pi, |v| {
+            WorkerRunner::parse(text_of(&v)?)
+        })?;
 
         let context_engine_enabled = r.get("context_engine_enabled", true, |v| match v {
             Value::Boolean(b) => Ok(b),
             other => Err(format!("must be a boolean, not {}", other.type_str())),
         })?;
-        let context_engine_bridge = r.get("context_engine_bridge", String::new(), |v| Ok(text_of(&v)?.to_owned()))?;
-        let context_engine_python = r.get("context_engine_python", String::new(), |v| Ok(text_of(&v)?.to_owned()))?;
-        let context_engine_dir = r.get("context_engine_dir", String::new(), |v| Ok(text_of(&v)?.to_owned()))?;
-        let context_engine_timeout_ms = r.get("context_engine_timeout_ms", 30000, |v| int(v, 1, u32::MAX))?;
-        let context_engine_reindex_timeout_ms = r.get("context_engine_reindex_timeout_ms", 600000, |v| int(v, 1, u32::MAX))?;
+        let context_engine_bridge = r.get("context_engine_bridge", String::new(), |v| {
+            Ok(text_of(&v)?.to_owned())
+        })?;
+        let context_engine_python = r.get("context_engine_python", String::new(), |v| {
+            Ok(text_of(&v)?.to_owned())
+        })?;
+        let context_engine_dir = r.get("context_engine_dir", String::new(), |v| {
+            Ok(text_of(&v)?.to_owned())
+        })?;
+        let context_engine_timeout_ms =
+            r.get("context_engine_timeout_ms", 30000, |v| int(v, 1, u32::MAX))?;
+        let context_engine_reindex_timeout_ms =
+            r.get("context_engine_reindex_timeout_ms", 600000, |v| {
+                int(v, 1, u32::MAX)
+            })?;
 
-        let positive = |r: &mut Reader, key: &str, default: u32| r.get(key, default, |v| int(v, 1, u32::MAX));
+        let positive =
+            |r: &mut Reader, key: &str, default: u32| r.get(key, default, |v| int(v, 1, u32::MAX));
         let timeouts = Timeouts {
             attempt_minutes: positive(&mut r, "timeouts.attempt_minutes", 30)?,
             explore_minutes: positive(&mut r, "timeouts.explore_minutes", 20)?,
@@ -342,11 +394,23 @@ impl Config {
             error_repeat_seconds: positive(&mut r, "watch.error_repeat_seconds", 600)?,
             pr_poll_transient_minutes: positive(&mut r, "watch.pr_poll_transient_minutes", 10)?,
         };
-        let slack_id = |first: char| move |v: Value| {
-            let id = text_of(&v)?;
-            let ok = id.is_empty()
-                || (id.starts_with(first) && id.len() > 1 && id.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
-            if ok { Ok(id.to_owned()) } else { Err(format!("{id:?} is not \"\" or a Slack id starting with {first}")) }
+        let slack_id = |first: char| {
+            move |v: Value| {
+                let id = text_of(&v)?;
+                let ok = id.is_empty()
+                    || (id.starts_with(first)
+                        && id.len() > 1
+                        && id
+                            .chars()
+                            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
+                if ok {
+                    Ok(id.to_owned())
+                } else {
+                    Err(format!(
+                        "{id:?} is not \"\" or a Slack id starting with {first}"
+                    ))
+                }
+            }
         };
         let inbox = Inbox {
             stuck_job_minutes: positive(&mut r, "inbox.stuck_job_minutes", 10)?,
@@ -354,12 +418,25 @@ impl Config {
             slack_user_id: r.get("inbox.slack_user_id", String::new(), slack_id('U'))?,
             review_context: r.get("inbox.review_context", String::new(), |v| {
                 let id = text_of(&v)?;
-                if id.is_empty() { Ok(String::new()) } else { ContextId::parse(id).map(|c| c.as_str().to_owned()).map_err(|e| e.to_string()) }
+                if id.is_empty() {
+                    Ok(String::new())
+                } else {
+                    ContextId::parse(id)
+                        .map(|c| c.as_str().to_owned())
+                        .map_err(|e| e.to_string())
+                }
             })?,
-            bot_reviewers: r.get("inbox.bot_reviewers", DEFAULT_BOT_REVIEWERS.map(str::to_owned).to_vec(), |v| match v {
-                Value::Array(items) => items.iter().map(|i| non_empty(text_of(i)?)).collect(),
-                other => Err(format!("must be an array of text, not {}", other.type_str())),
-            })?,
+            bot_reviewers: r.get(
+                "inbox.bot_reviewers",
+                DEFAULT_BOT_REVIEWERS.map(str::to_owned).to_vec(),
+                |v| match v {
+                    Value::Array(items) => items.iter().map(|i| non_empty(text_of(i)?)).collect(),
+                    other => Err(format!(
+                        "must be an array of text, not {}",
+                        other.type_str()
+                    )),
+                },
+            )?,
         };
         // The claim and mention rules cannot run without the User's id, nor without the channel.
         if inbox.team_channel.is_empty() != inbox.slack_user_id.is_empty() {
@@ -368,13 +445,22 @@ impl Config {
             } else {
                 ("inbox.slack_user_id", "inbox.team_channel")
             };
-            return Err(r.invalid(key, format!("must be set together with {other}: both or neither")));
+            return Err(r.invalid(
+                key,
+                format!("must be set together with {other}: both or neither"),
+            ));
         }
-        let events = Events { poll_ms: r.get("events.poll_ms", 200, |v| int(v, 20, 10_000))? };
+        let events = Events {
+            poll_ms: r.get("events.poll_ms", 200, |v| int(v, 20, 10_000))?,
+        };
         let tmux = Tmux {
             socket: r.get("tmux.socket", "cpd".into(), |v| tmux_name(text_of(&v)?))?,
-            cockpit_session: r.get("tmux.cockpit_session", "cpd".into(), |v| tmux_name(text_of(&v)?))?,
-            work_session: r.get("tmux.work_session", "cpd-work".into(), |v| tmux_name(text_of(&v)?))?,
+            cockpit_session: r.get("tmux.cockpit_session", "cpd".into(), |v| {
+                tmux_name(text_of(&v)?)
+            })?,
+            work_session: r.get("tmux.work_session", "cpd-work".into(), |v| {
+                tmux_name(text_of(&v)?)
+            })?,
         };
         if tmux.cockpit_session == tmux.work_session {
             // The error names the later key, `work_session`, as the one to change.
@@ -427,8 +513,11 @@ impl Config {
             return Ok(PathBuf::from(&self.pi_adapter));
         }
         let exe = std::env::current_exe().map_err(|e| {
-            CpdError::new(ErrorCode::ConfigInvalid, format!("cannot find the cpd binary to locate the pi adapter: {e}."))
-                .with("key", "pi_adapter")
+            CpdError::new(
+                ErrorCode::ConfigInvalid,
+                format!("cannot find the cpd binary to locate the pi adapter: {e}."),
+            )
+            .with("key", "pi_adapter")
         })?;
         let bin_dir = exe.parent().expect("an executable path has a parent");
         Ok(bin_dir.join("..").join("share").join("cpd").join("pi"))
@@ -442,11 +531,19 @@ impl Config {
             return Ok(PathBuf::from(&self.context_engine_bridge));
         }
         let exe = std::env::current_exe().map_err(|e| {
-            CpdError::new(ErrorCode::ConfigInvalid, format!("cannot find the cpd binary to locate the holographic bridge: {e}."))
-                .with("key", "context_engine_bridge")
+            CpdError::new(
+                ErrorCode::ConfigInvalid,
+                format!("cannot find the cpd binary to locate the holographic bridge: {e}."),
+            )
+            .with("key", "context_engine_bridge")
         })?;
         let bin_dir = exe.parent().expect("an executable path has a parent");
-        Ok(bin_dir.join("..").join("share").join("cpd").join("holographic").join("bridge.py"))
+        Ok(bin_dir
+            .join("..")
+            .join("share")
+            .join("cpd")
+            .join("holographic")
+            .join("bridge.py"))
     }
 
     /// The interpreter's path: `context_engine_python`, else `<bridge dir>/venv/bin/python`, the
@@ -490,16 +587,24 @@ struct Reader<'a> {
 impl Reader<'_> {
     fn invalid(&self, key: &str, why: impl std::fmt::Display) -> CpdError {
         let why = why.to_string();
-        CpdError::new(ErrorCode::ConfigInvalid, format!("config.toml: `{key}` {}.", why.trim_end_matches('.')))
-            .with("key", key)
-            .with("path", self.path.display().to_string())
+        CpdError::new(
+            ErrorCode::ConfigInvalid,
+            format!("config.toml: `{key}` {}.", why.trim_end_matches('.')),
+        )
+        .with("key", key)
+        .with("path", self.path.display().to_string())
     }
 
     fn sections_are_tables(&self, sections: &[&str]) -> Result<(), CpdError> {
         for section in sections {
             match self.table.get(*section) {
                 Some(Value::Table(_)) | None => {}
-                Some(other) => return Err(self.invalid(section, format!("must be a table, not {}", other.type_str()))),
+                Some(other) => {
+                    return Err(self.invalid(
+                        section,
+                        format!("must be a table, not {}", other.type_str()),
+                    ));
+                }
             }
         }
         Ok(())
@@ -517,10 +622,16 @@ impl Reader<'_> {
     }
 
     /// The value at `key`, converted; the default when the file has no such key.
-    fn get<T>(&mut self, key: &str, default: T, convert: impl FnOnce(Value) -> Result<T, String>) -> Result<T, CpdError> {
+    fn get<T>(
+        &mut self,
+        key: &str,
+        default: T,
+        convert: impl FnOnce(Value) -> Result<T, String>,
+    ) -> Result<T, CpdError> {
         match self.take(key) {
             Some(value) => {
-                let converted = convert(value).map_err(|why| self.invalid(key, format!("is invalid: {why}")))?;
+                let converted = convert(value)
+                    .map_err(|why| self.invalid(key, format!("is invalid: {why}")))?;
                 self.sources.insert(key.to_owned(), Source::File);
                 Ok(converted)
             }
@@ -532,11 +643,16 @@ impl Reader<'_> {
     }
 
     /// Like [`Reader::get`] for a key without a default.
-    fn require<T>(&mut self, key: &str, convert: impl FnOnce(Value) -> Result<T, String>) -> Result<T, CpdError> {
+    fn require<T>(
+        &mut self,
+        key: &str,
+        convert: impl FnOnce(Value) -> Result<T, String>,
+    ) -> Result<T, CpdError> {
         let Some(value) = self.take(key) else {
             return Err(self.invalid(key, "is required but missing"));
         };
-        let converted = convert(value).map_err(|why| self.invalid(key, format!("is invalid: {why}")))?;
+        let converted =
+            convert(value).map_err(|why| self.invalid(key, format!("is invalid: {why}")))?;
         self.sources.insert(key.to_owned(), Source::File);
         Ok(converted)
     }
@@ -566,27 +682,52 @@ impl Reader<'_> {
         };
         for (name, value) in names {
             if !is_preset_name(&name) {
-                return Err(self.invalid(&format!("presets.{name}"), "is not a preset name `^[a-z][a-z0-9-]{0,31}$`"));
+                return Err(self.invalid(
+                    &format!("presets.{name}"),
+                    "is not a preset name `^[a-z][a-z0-9-]{0,31}$`",
+                ));
             }
             let Value::Table(letters) = value else {
-                return Err(self.invalid(&format!("presets.{name}"), "must be a table of the four model refs O, S, H and G"));
+                return Err(self.invalid(
+                    &format!("presets.{name}"),
+                    "must be a table of the four model refs O, S, H and G",
+                ));
             };
             for key in letters.keys() {
                 if !matches!(key.as_str(), "O" | "S" | "H" | "G") {
-                    return Err(self.invalid(&format!("presets.{name}.{key}"), "is not a known key"));
+                    return Err(
+                        self.invalid(&format!("presets.{name}.{key}"), "is not a known key")
+                    );
                 }
             }
             for letter in ["O", "S", "H", "G"] {
                 if !letters.contains_key(letter) {
-                    return Err(self.invalid(&format!("presets.{name}"), format!("is missing the {letter} model ref")));
+                    return Err(self.invalid(
+                        &format!("presets.{name}"),
+                        format!("is missing the {letter} model ref"),
+                    ));
                 }
             }
-            let mut preset = Preset { o: String::new(), s: String::new(), h: String::new(), g: String::new() };
-            for (letter, slot) in [("O", &mut preset.o), ("S", &mut preset.s), ("H", &mut preset.h), ("G", &mut preset.g)] {
-                let value = letters.get(letter).expect("the four letters were checked above");
+            let mut preset = Preset {
+                o: String::new(),
+                s: String::new(),
+                h: String::new(),
+                g: String::new(),
+            };
+            for (letter, slot) in [
+                ("O", &mut preset.o),
+                ("S", &mut preset.s),
+                ("H", &mut preset.h),
+                ("G", &mut preset.g),
+            ] {
+                let value = letters
+                    .get(letter)
+                    .expect("the four letters were checked above");
                 let key = format!("presets.{name}.{letter}");
-                let text = text_of(value).map_err(|why| self.invalid(&key, format!("is invalid: {why}")))?;
-                *slot = preset_ref(text).map_err(|why| self.invalid(&key, format!("is invalid: {why}")))?;
+                let text = text_of(value)
+                    .map_err(|why| self.invalid(&key, format!("is invalid: {why}")))?;
+                *slot = preset_ref(text)
+                    .map_err(|why| self.invalid(&key, format!("is invalid: {why}")))?;
                 self.sources.insert(key, Source::File);
             }
             presets.insert(name, preset);
@@ -601,10 +742,15 @@ const KNOWN_SECTIONS: [&str; 6] = ["timeouts", "watch", "inbox", "events", "tmux
 fn leader_tier(value: &Value) -> Result<Tier, String> {
     let tier = Tier::parse(text_of(value)?).map_err(|e| e.message().to_owned())?;
     if tier.letter() == Letter::G {
-        return Err("must not be a G Tier, not GX: a Lead or the Manager is never on G (hs-d562)".to_owned());
+        return Err(
+            "must not be a G Tier, not GX: a Lead or the Manager is never on G (hs-d562)"
+                .to_owned(),
+        );
     }
     if !tier.is_lead_allowed() {
-        return Err(format!("must have effort 0-4, not {tier}: no agent uses effort 5, to keep cost down (hs-d506)"));
+        return Err(format!(
+            "must have effort 0-4, not {tier}: no agent uses effort 5, to keep cost down (hs-d506)"
+        ));
     }
     Ok(tier)
 }
@@ -620,7 +766,9 @@ fn int(value: Value, min: u32, max: u32) -> Result<u32, String> {
     match value {
         Value::Integer(i) => match u32::try_from(i) {
             Ok(n) if (min..=max).contains(&n) => Ok(n),
-            _ if max == u32::MAX && i > i64::from(max) => Err(format!("must be at most {max}, got {i}")),
+            _ if max == u32::MAX && i > i64::from(max) => {
+                Err(format!("must be at most {max}, got {i}"))
+            }
             _ if max == u32::MAX => Err(format!("must be at least {min}, got {i}")),
             _ if min == max => Err(format!("must be {min}, got {i}")),
             _ => Err(format!("must be between {min} and {max}, got {i}")),
@@ -630,7 +778,11 @@ fn int(value: Value, min: u32, max: u32) -> Result<u32, String> {
 }
 
 fn non_empty(s: &str) -> Result<String, String> {
-    if s.is_empty() { Err("must not contain an empty string".into()) } else { Ok(s.to_owned()) }
+    if s.is_empty() {
+        Err("must not contain an empty string".into())
+    } else {
+        Ok(s.to_owned())
+    }
 }
 
 /// `^[a-z][a-z0-9-]{0,31}$` (contract §8.2): a preset name starts with a lowercase letter, then lowercase
@@ -646,15 +798,23 @@ fn is_preset_name(name: &str) -> bool {
 /// A preset model ref (contract §8.2): §8.3's `<provider>/<id>` shape, 1–200 characters, no NUL.
 fn preset_ref(s: &str) -> Result<String, String> {
     if s.is_empty() || s.chars().count() > 200 || s.contains('\0') {
-        return Err(format!("{s:?} is not <provider>/<model-id> of 1 to 200 characters"));
+        return Err(format!(
+            "{s:?} is not <provider>/<model-id> of 1 to 200 characters"
+        ));
     }
     crate::policy::model::model_ref(s)
 }
 
 /// `^[A-Za-z0-9_-]{1,32}$`.
 fn tmux_name(s: &str) -> Result<String, String> {
-    let ok = (1..=32).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-    if ok { Ok(s.to_owned()) } else { Err(format!("{s:?} is not 1-32 characters of A-Z a-z 0-9 _ -")) }
+    let ok = (1..=32).contains(&s.len())
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if ok {
+        Ok(s.to_owned())
+    } else {
+        Err(format!("{s:?} is not 1-32 characters of A-Z a-z 0-9 _ -"))
+    }
 }
 
 #[cfg(test)]
@@ -663,7 +823,8 @@ mod tests {
 
     #[test]
     fn default_lead_pi_packages_is_empty() {
-        let (config, _) = Config::parse("version = 1\nmachine = \"hs\"\n", Path::new("/config.toml")).unwrap();
+        let (config, _) =
+            Config::parse("version = 1\nmachine = \"hs\"\n", Path::new("/config.toml")).unwrap();
         assert!(config.lead_pi_packages.is_empty());
     }
 }

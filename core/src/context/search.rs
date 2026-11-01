@@ -64,12 +64,20 @@ pub(super) struct Snapshot {
 pub(super) fn snapshot(store: &mut Store, context: &ContextId) -> Result<Snapshot, CpdError> {
     store.read(|conn| {
         let row = ContextRow::require(conn, context)?;
-        let mut stmt =
-            conn.prepare(&format!("SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq", Record::COLUMNS))?;
-        let records = stmt.query_map([context.as_str()], Record::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq",
+            Record::COLUMNS
+        ))?;
+        let records = stmt
+            .query_map([context.as_str()], Record::from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         let as_of = records.last().map(|(seq, _)| *seq).unwrap_or(0);
         let curated = curations(conn, context)?;
-        let max_curated = curated.values().filter_map(|(_, _, at)| at.as_deref()).max().map(str::to_owned);
+        let max_curated = curated
+            .values()
+            .filter_map(|(_, _, at)| at.as_deref())
+            .max()
+            .map(str::to_owned);
         let retired_ids = inforce::retired(conn, context)?;
         let in_force = inforce::in_force_without(&records, as_of, &retired_ids)
             .into_iter()
@@ -89,27 +97,51 @@ pub(super) fn snapshot(store: &mut Store, context: &ContextId) -> Result<Snapsho
 }
 
 /// The approved retirements of `context`, labelled `<reason> <target>` by record id.
-pub(super) fn retired_labels(conn: &Connection, context: &ContextId) -> Result<HashMap<String, String>, CpdError> {
+pub(super) fn retired_labels(
+    conn: &Connection,
+    context: &ContextId,
+) -> Result<HashMap<String, String>, CpdError> {
     let mut stmt =
         conn.prepare("SELECT record, reason, target FROM record_retirements WHERE context = ?1 AND status = 'approved'")?;
     let rows = stmt.query_map([context.as_str()], |r| {
-        Ok((r.get::<_, String>(0)?, format!("{} {}", r.get::<_, String>(1)?, r.get::<_, String>(2)?)))
+        Ok((
+            r.get::<_, String>(0)?,
+            format!("{} {}", r.get::<_, String>(1)?, r.get::<_, String>(2)?),
+        ))
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// The record id each superseded record is named by, from `context_records`.
 fn successors(conn: &Connection, context: &ContextId) -> Result<HashMap<String, String>, CpdError> {
-    let mut stmt = conn.prepare("SELECT id, supersedes FROM context_records WHERE context = ?1 AND supersedes IS NOT NULL")?;
-    let rows = stmt.query_map([context.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-    Ok(rows.map(|row| row.map(|(id, old)| (old, id))).collect::<rusqlite::Result<_>>()?)
+    let mut stmt = conn.prepare(
+        "SELECT id, supersedes FROM context_records WHERE context = ?1 AND supersedes IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([context.as_str()], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })?;
+    Ok(rows
+        .map(|row| row.map(|(id, old)| (old, id)))
+        .collect::<rusqlite::Result<_>>()?)
 }
 
 /// The curation (topic, short and clock) of every curated record of `context`.
-pub(super) fn curations(conn: &Connection, context: &ContextId) -> Result<HashMap<String, Curation>, CpdError> {
-    let mut stmt = conn.prepare("SELECT record, topic, short, curated_at FROM record_curations WHERE context = ?1")?;
+pub(super) fn curations(
+    conn: &Connection,
+    context: &ContextId,
+) -> Result<HashMap<String, Curation>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT record, topic, short, curated_at FROM record_curations WHERE context = ?1",
+    )?;
     let rows = stmt.query_map([context.as_str()], |r| {
-        Ok((r.get::<_, String>(0)?, (r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?)))
+        Ok((
+            r.get::<_, String>(0)?,
+            (
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ),
+        ))
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
@@ -117,7 +149,10 @@ pub(super) fn curations(conn: &Connection, context: &ContextId) -> Result<HashMa
 /// A projected fact: the record id, its index position, its text and its curation (topic, short).
 pub(super) fn fact(seq: i64, record: &Record, curations: &HashMap<String, Curation>) -> Value {
     let id = record.id.to_string();
-    let (topic, short): (&str, &str) = curations.get(&id).map(|(topic, short, _)| (topic.as_str(), short.as_str())).unwrap_or(("", ""));
+    let (topic, short): (&str, &str) = curations
+        .get(&id)
+        .map(|(topic, short, _)| (topic.as_str(), short.as_str()))
+        .unwrap_or(("", ""));
     json!({"record": id, "seq": seq, "topic": topic, "short": short, "text": record.text})
 }
 
@@ -125,11 +160,19 @@ pub(super) fn fact(seq: i64, record: &Record, curations: &HashMap<String, Curati
 pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
     let query = args.query.as_str().trim().to_owned();
     if query.is_empty() {
-        return Err(CpdError::new(ErrorCode::Usage, "A search query must not be empty.").with("query", args.query.as_str()));
+        return Err(
+            CpdError::new(ErrorCode::Usage, "A search query must not be empty.")
+                .with("query", args.query.as_str()),
+        );
     }
     let sent = query::sanitise(&query);
     let kinds = kinds(&args.kind)?;
-    let Env { home, config, mut store, .. } = Env::open()?;
+    let Env {
+        home,
+        config,
+        mut store,
+        ..
+    } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     let snap = snapshot(&mut store, &context)?;
     let bridge = Bridge::new(
@@ -138,7 +181,9 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
         config.context_engine_python_path()?,
         config.context_engine_timeout(),
     )?;
-    let db = config.context_engine_dir(&home).join(format!("{}.db", context.as_str()));
+    let db = config
+        .context_engine_dir(&home)
+        .join(format!("{}.db", context.as_str()));
 
     let stats = bridge.run(&db, &[json!({"cmd": "stats"})])?.remove(0);
     check_ok(&stats, &query)?;
@@ -155,7 +200,8 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
             .records
             .iter()
             .filter(|(seq, record)| {
-                *seq > indexed_seq || curation_is_newer(&snap, &record.id.to_string(), indexed_curated.as_deref())
+                *seq > indexed_seq
+                    || curation_is_newer(&snap, &record.id.to_string(), indexed_curated.as_deref())
             })
             .cloned()
             .collect();
@@ -184,10 +230,18 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
         hits = hits_of(&again[0], &snap, &kinds, args.all);
     }
 
-    let take = if args.limit == 0 { usize::MAX } else { args.limit as usize };
+    let take = if args.limit == 0 {
+        usize::MAX
+    } else {
+        args.limit as usize
+    };
     let page: Vec<&Hit> = hits.iter().take(take).collect();
     let records: Vec<Value> = page.iter().map(|hit| hit.json()).collect();
-    let markdown = page.iter().map(|hit| hit.line(&snap)).collect::<Vec<_>>().join("\n");
+    let markdown = page
+        .iter()
+        .map(|hit| hit.line(&snap))
+        .collect::<Vec<_>>()
+        .join("\n");
     Ok(Output::success(json!({
         "context": {"id": snap.row.id, "title": snap.row.title, "jira": snap.row.jira},
         "query": query,
@@ -199,16 +253,25 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
 /// The kinds to keep: the four searchable kinds by default, else the named ones.
 fn kinds(names: &[String]) -> Result<HashSet<&'static str>, CpdError> {
     if names.is_empty() {
-        return Ok([RecordKind::Decision, RecordKind::Note, RecordKind::Question, RecordKind::Answer]
-            .into_iter()
-            .map(RecordKind::as_str)
-            .collect());
+        return Ok([
+            RecordKind::Decision,
+            RecordKind::Note,
+            RecordKind::Question,
+            RecordKind::Answer,
+        ]
+        .into_iter()
+        .map(RecordKind::as_str)
+        .collect());
     }
     let mut kinds = HashSet::new();
     for name in names {
-        let kind = RecordKind::ALL.into_iter().find(|kind| kind.as_str() == name).ok_or_else(|| {
-            CpdError::new(ErrorCode::Usage, format!("Unknown record kind {name:?}.")).with("kind", name.as_str())
-        })?;
+        let kind = RecordKind::ALL
+            .into_iter()
+            .find(|kind| kind.as_str() == name)
+            .ok_or_else(|| {
+                CpdError::new(ErrorCode::Usage, format!("Unknown record kind {name:?}."))
+                    .with("kind", name.as_str())
+            })?;
         kinds.insert(kind.as_str());
     }
     Ok(kinds)
@@ -226,7 +289,10 @@ fn curation_is_newer(snap: &Snapshot, id: &str, indexed_curated: Option<&str>) -
 /// carrying the Context's watermark so the bridge advances it even when only an
 /// older record's curation changed.
 pub(super) fn index(snap: &Snapshot, records: &[Indexed]) -> Value {
-    let facts: Vec<Value> = records.iter().map(|(seq, record)| fact(*seq, record, &snap.curations)).collect();
+    let facts: Vec<Value> = records
+        .iter()
+        .map(|(seq, record)| fact(*seq, record, &snap.curations))
+        .collect();
     json!({
         "cmd": "index",
         "facts": facts,
@@ -250,7 +316,9 @@ fn over_fetch(total: u64, limit: u32) -> u64 {
 
 /// The number of hits in a `search` response.
 fn response_len(response: &Value) -> u64 {
-    response["hits"].as_array().map_or(0, |hits| hits.len() as u64)
+    response["hits"]
+        .as_array()
+        .map_or(0, |hits| hits.len() as u64)
 }
 
 /// A response that is not `ok` is a refusal: `bad_query` is `usage`, anything else `engine_failed`.
@@ -259,13 +327,23 @@ pub(super) fn check_ok(response: &Value, query: &str) -> Result<(), CpdError> {
         return Ok(());
     }
     let error = response["error"].as_str().unwrap_or("engine_error");
-    let message = response["message"].as_str().unwrap_or("the engine failed").to_owned();
+    let message = response["message"]
+        .as_str()
+        .unwrap_or("the engine failed")
+        .to_owned();
     if error == "bad_query" {
-        return Err(CpdError::new(ErrorCode::Usage, format!("The search query is malformed: {message}"))
-            .with("query", query)
-            .with("message", message));
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            format!("The search query is malformed: {message}"),
+        )
+        .with("query", query)
+        .with("message", message));
     }
-    Err(CpdError::new(ErrorCode::EngineFailed, format!("The holographic engine failed: {message}")).with("message", message))
+    Err(CpdError::new(
+        ErrorCode::EngineFailed,
+        format!("The holographic engine failed: {message}"),
+    )
+    .with("message", message))
 }
 
 /// One mapped, filtered hit, in the engine's order (before the tie-break sort).
@@ -307,14 +385,22 @@ impl Hit {
 
 /// Maps the response's hits back to live rows, filters by kind and (unless `all`)
 /// force, and breaks exact ties by `seq` descending, keeping the engine's order.
-fn hits_of(response: &Value, snap: &Snapshot, kinds: &HashSet<&'static str>, all: bool) -> Vec<Hit> {
+fn hits_of(
+    response: &Value,
+    snap: &Snapshot,
+    kinds: &HashSet<&'static str>,
+    all: bool,
+) -> Vec<Hit> {
     let mut hits: Vec<Hit> = response["hits"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|hit| {
             let id = hit["record"].as_str()?;
-            let (seq, record) = snap.records.iter().find(|(_, record)| record.id.to_string() == id)?;
+            let (seq, record) = snap
+                .records
+                .iter()
+                .find(|(_, record)| record.id.to_string() == id)?;
             let in_force = snap.in_force.contains(id);
             // `--all` governs supersession and retirement, which only the four
             // force kinds have; a `plan`/`brief` is never in force and is shown
@@ -336,13 +422,21 @@ fn hits_of(response: &Value, snap: &Snapshot, kinds: &HashSet<&'static str>, all
             })
         })
         .collect();
-    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then(b.seq.cmp(&a.seq)));
+    hits.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.seq.cmp(&a.seq))
+    });
     hits
 }
 
 /// Whether a record kind is ever in force (`inforce.rs`).
 fn force_kind(kind: RecordKind) -> bool {
-    matches!(kind, RecordKind::Decision | RecordKind::Note | RecordKind::Question | RecordKind::Answer)
+    matches!(
+        kind,
+        RecordKind::Decision | RecordKind::Note | RecordKind::Question | RecordKind::Answer
+    )
 }
 
 /// The curated short form, else the record's first line at most 120 bytes.

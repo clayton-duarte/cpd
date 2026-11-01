@@ -28,7 +28,9 @@ fn drawn(items: &[Item]) -> (Buffer, Links) {
     let now = OffsetDateTime::parse("2026-01-01T00:03:00.000Z", &Rfc3339).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(WIDTH, 12)).unwrap();
     let mut links = Links::default();
-    terminal.draw(|f| links = inbox::draw(f, pane, items, &shape, now, &|_| None)).unwrap();
+    terminal
+        .draw(|f| links = inbox::draw(f, pane, items, &shape, now, &|_| None))
+        .unwrap();
     (terminal.backend().buffer().clone(), links)
 }
 
@@ -38,7 +40,8 @@ fn glyph_colour(item: Item, glyph: &str) -> Option<Option<Color>> {
     (0..buf.area.height)
         .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
         .find(|&(x, y)| buf[(x, y)].symbol() == glyph)
-        .map(|(x, y)| buf[(x, y)].fg).map(Some)
+        .map(|(x, y)| buf[(x, y)].fg)
+        .map(Some)
 }
 
 fn clickable(m: Meaning) -> Option<Color> {
@@ -47,45 +50,105 @@ fn clickable(m: Meaning) -> Option<Color> {
 
 #[test]
 fn deploy_item_draws_f15a9_in_the_yellow_tier_colour() {
-    let it = item(1, Kind::Deploy, Urgency::Yellow, "acme/api deploy prod: ship", OPENED);
-    assert_eq!(glyph_colour(it, "\u{F15A9}"), Some(clickable(Meaning::Review)));
+    let it = item(
+        1,
+        Kind::Deploy,
+        Urgency::Yellow,
+        "acme/api deploy prod: ship",
+        OPENED,
+    );
+    assert_eq!(
+        glyph_colour(it, "\u{F15A9}"),
+        Some(clickable(Meaning::Review))
+    );
 }
 
 #[test]
 fn pr_ready_item_draws_f12f4_in_the_yellow_tier_colour() {
-    let it = item(1, Kind::PrReady, Urgency::Yellow, "acme/api#1 ready", OPENED);
-    assert_eq!(glyph_colour(it, "\u{F12F4}"), Some(clickable(Meaning::Review)));
+    let it = item(
+        1,
+        Kind::PrReady,
+        Urgency::Yellow,
+        "acme/api#1 ready",
+        OPENED,
+    );
+    assert_eq!(
+        glyph_colour(it, "\u{F12F4}"),
+        Some(clickable(Meaning::Review))
+    );
 }
 
 #[test]
 fn review_requested_item_draws_f12f2_in_the_blue_tier_colour() {
-    let it = item(1, Kind::ReviewRequested, Urgency::Blue, "acme/api#2 review", OPENED);
-    assert_eq!(glyph_colour(it, "\u{F12F2}"), Some(clickable(Meaning::External)));
+    let it = item(
+        1,
+        Kind::ReviewRequested,
+        Urgency::Blue,
+        "acme/api#2 review",
+        OPENED,
+    );
+    assert_eq!(
+        glyph_colour(it, "\u{F12F2}"),
+        Some(clickable(Meaning::External))
+    );
 }
 
 #[test]
 fn legend_inbox_section_lists_the_three_kind_lines_after_the_six_tiers() {
     let all = legend::sections();
-    let inbox = all.iter().find(|s| s.title == "Inbox").expect("an Inbox section");
+    let inbox = all
+        .iter()
+        .find(|s| s.title == "Inbox")
+        .expect("an Inbox section");
     let text = |line: &Line| -> String { line.spans.iter().map(|s| s.content.as_ref()).collect() };
     let cells: Vec<String> = inbox.rows.iter().flatten().map(text).collect();
-    let tail: Vec<&str> = cells.iter().skip(cells.len().saturating_sub(6)).map(String::as_str).collect();
+    let tail: Vec<&str> = cells
+        .iter()
+        .skip(cells.len().saturating_sub(6))
+        .map(String::as_str)
+        .collect();
     assert_eq!(
         tail,
         [
-            "\u{F15A9}", "a deploy waits for your approval",
-            "\u{F12F4}", "a pull request of yours, coloured by its state",
-            "\u{F12F2}", "a review asked of you",
+            "\u{F15A9}",
+            "a deploy waits for your approval",
+            "\u{F12F4}",
+            "a pull request of yours, coloured by its state",
+            "\u{F12F2}",
+            "a review asked of you",
         ]
     );
-    let colours: Vec<_> = inbox.rows.iter().rev().take(3).map(|r| r[0].spans[0].style.fg).collect();
-    assert_eq!(colours, [clickable(Meaning::External), clickable(Meaning::Review), clickable(Meaning::Review)]);
-    assert_eq!(inbox.rows.len(), 11, "eight old lines and the three kind lines");
+    let colours: Vec<_> = inbox
+        .rows
+        .iter()
+        .rev()
+        .take(3)
+        .map(|r| r[0].spans[0].style.fg)
+        .collect();
+    assert_eq!(
+        colours,
+        [
+            clickable(Meaning::External),
+            clickable(Meaning::Review),
+            clickable(Meaning::Review)
+        ]
+    );
+    assert_eq!(
+        inbox.rows.len(),
+        11,
+        "eight old lines and the three kind lines"
+    );
 }
 
 #[test]
 fn clicking_a_deploy_item_label_opens_its_url() {
-    let mut it = item(1, Kind::Deploy, Urgency::Yellow, "acme/api deploy prod: ship", OPENED);
+    let mut it = item(
+        1,
+        Kind::Deploy,
+        Urgency::Yellow,
+        "acme/api deploy prod: ship",
+        OPENED,
+    );
     it.url = Some(URL.to_owned());
     let (buf, links) = drawn(&[it]);
     let at = (0..buf.area.height)
@@ -95,5 +158,9 @@ fn clicking_a_deploy_item_label_opens_its_url() {
     let runner = FakeRunner::new(ManualClock::new()).on("open", |_| true, Reply::ok(""));
     open_url(&runner, url).unwrap();
     let calls = runner.calls();
-    assert_eq!(calls.iter().map(|c| c.args.clone()).collect::<Vec<_>>(), [vec![URL.to_owned()]], "`open <url>`");
+    assert_eq!(
+        calls.iter().map(|c| c.args.clone()).collect::<Vec<_>>(),
+        [vec![URL.to_owned()]],
+        "`open <url>`"
+    );
 }

@@ -20,9 +20,22 @@ fn phrase(reason: Reason) -> &'static str {
 
 /// The Event's `text`, written for the Lead (§5.1). `comments` is the number of new and of open feedback items: it is
 /// stated when `comments` is a reason.
-pub(super) fn text(plan: &str, key: &str, number: i64, reasons: &[Reason], comments: (usize, usize)) -> String {
+pub(super) fn text(
+    plan: &str,
+    key: &str,
+    number: i64,
+    reasons: &[Reason],
+    comments: (usize, usize),
+) -> String {
     let why: Vec<&str> = reasons.iter().map(|r| phrase(*r)).collect();
-    let counts = if reasons.contains(&Reason::Comments) { format!(" {} new and {} open review comments.", comments.0, comments.1) } else { String::new() };
+    let counts = if reasons.contains(&Reason::Comments) {
+        format!(
+            " {} new and {} open review comments.",
+            comments.0, comments.1
+        )
+    } else {
+        String::new()
+    };
     format!(
         "PR {key} (#{number}) of Plan {plan} needs attention: {}.{counts} Read the details with cpd pr view --plan {plan} --pr {key}.",
         why.join(", ")
@@ -52,8 +65,8 @@ pub(super) fn event(text: String, key: &str, pull: &PullRequest, reasons: &[Reas
 mod tests {
     use super::super::gh::Check;
     use super::super::status::ChecksSummary;
-    use serde_json::{Value, json};
     use super::*;
+    use serde_json::{Value, json};
 
     fn view(checks: Vec<(&str, &str)>) -> View {
         View {
@@ -82,25 +95,53 @@ mod tests {
 
     #[test]
     fn checks_are_summarised_failed_over_pending_over_passed() {
-        let summary = |checks: Vec<(&str, &str)>| ChecksSummary::of(view(checks).checks.as_deref().unwrap_or_default(), &[], &[]);
+        let summary = |checks: Vec<(&str, &str)>| {
+            ChecksSummary::of(view(checks).checks.as_deref().unwrap_or_default(), &[], &[])
+        };
         assert_eq!(summary(vec![]), ChecksSummary::None);
         assert_eq!(summary(vec![("a", "success")]), ChecksSummary::Passed);
-        assert_eq!(summary(vec![("a", "SUCCESS"), ("b", "")]), ChecksSummary::Pending);
-        assert_eq!(summary(vec![("a", "SKIPPED"), ("b", "queued"), ("c", "startup_failure")]), ChecksSummary::Failed);
-        assert_eq!(summary(vec![("a", "CANCELLED"), ("b", "SUCCESS")]), ChecksSummary::Passed);
-        assert_eq!(summary(vec![("a", "CANCELLED"), ("b", "")]), ChecksSummary::Pending);
+        assert_eq!(
+            summary(vec![("a", "SUCCESS"), ("b", "")]),
+            ChecksSummary::Pending
+        );
+        assert_eq!(
+            summary(vec![
+                ("a", "SKIPPED"),
+                ("b", "queued"),
+                ("c", "startup_failure")
+            ]),
+            ChecksSummary::Failed
+        );
+        assert_eq!(
+            summary(vec![("a", "CANCELLED"), ("b", "SUCCESS")]),
+            ChecksSummary::Passed
+        );
+        assert_eq!(
+            summary(vec![("a", "CANCELLED"), ("b", "")]),
+            ChecksSummary::Pending
+        );
     }
 
     #[test]
     fn the_text_names_every_reason_and_the_command() {
-        let all = [Reason::ChecksFailed, Reason::ChangesRequested, Reason::Closed];
+        let all = [
+            Reason::ChecksFailed,
+            Reason::ChangesRequested,
+            Reason::Closed,
+        ];
         assert_eq!(
             text("pay", "api", 7, &all, (0, 0)),
             "PR api (#7) of Plan pay needs attention: checks failed, changes requested, closed without a merge. \
              Read the details with cpd pr view --plan pay --pr api."
         );
-        assert!(text("pay", "api", 7, &all[..1], (0, 0)).contains("needs attention: checks failed. Read"));
-        assert!(text("pay", "api", 7, &all[2..], (0, 0)).contains("needs attention: closed without a merge. Read"));
+        assert!(
+            text("pay", "api", 7, &all[..1], (0, 0))
+                .contains("needs attention: checks failed. Read")
+        );
+        assert!(
+            text("pay", "api", 7, &all[2..], (0, 0))
+                .contains("needs attention: closed without a merge. Read")
+        );
     }
 
     /// The `data` of the Event.
@@ -137,10 +178,17 @@ mod tests {
     fn the_data_carries_the_mergeable_state_and_a_conflict_flag_that_is_always_false() {
         let url = "https://github.com/acme/pay/pull/7";
         assert_eq!(
-            data("api", &pull("conflicting", "dirty"), &[Reason::ChecksFailed]),
+            data(
+                "api",
+                &pull("conflicting", "dirty"),
+                &[Reason::ChecksFailed]
+            ),
             json!({"pr": "api", "number": 7, "url": url, "state": "open", "checks": "failed", "review_decision": "none",
                    "mergeable": "conflicting", "merge_state": "dirty", "conflict": false, "reasons": ["checks_failed"]})
         );
-        assert_eq!(data("api", &pull("unknown", "unknown"), &[Reason::Closed])["conflict"], json!(false));
+        assert_eq!(
+            data("api", &pull("unknown", "unknown"), &[Reason::Closed])["conflict"],
+            json!(false)
+        );
     }
 }

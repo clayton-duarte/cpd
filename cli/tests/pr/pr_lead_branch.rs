@@ -47,7 +47,11 @@ fn lb_in(phase: &str) -> Lb {
     let pay = repo(&fx, "pay");
     let web = repo(&fx, "web");
     fx.env.write_config("version = 1\nmachine = \"t\"\n");
-    let (locked, done) = if phase == "done" { ("'t'", "'t'") } else { ("NULL", "NULL") };
+    let (locked, done) = if phase == "done" {
+        ("'t'", "'t'")
+    } else {
+        ("NULL", "NULL")
+    };
     fx.env.sql(&format!(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -61,7 +65,20 @@ fn lb_in(phase: &str) -> Lb {
 impl Lb {
     /// `pr add <key> --repo <repo> --title T --shape config --no-needs --plan pay-1`.
     fn add(&self, key: &str, repo: &Path) -> Run {
-        self.cpd(&["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "T", "--shape", "config", "--no-needs", "--plan", "pay-1"])
+        self.cpd(&[
+            "pr",
+            "add",
+            key,
+            "--repo",
+            repo.to_str().unwrap(),
+            "--title",
+            "T",
+            "--shape",
+            "config",
+            "--no-needs",
+            "--plan",
+            "pay-1",
+        ])
     }
 
     fn start(&self, key: &str) -> Run {
@@ -69,11 +86,15 @@ impl Lb {
     }
 
     fn dispatch(&self) {
-        self.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay-1';");
+        self.env
+            .sql("UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay-1';");
     }
 
     fn writes(&self) -> (i64, i64) {
-        (self.env.query("SELECT count(*) FROM txns"), self.env.query("SELECT count(*) FROM events"))
+        (
+            self.env.query("SELECT count(*) FROM txns"),
+            self.env.query("SELECT count(*) FROM events"),
+        )
     }
 
     /// [`common::refused`] with exit 3, and nothing written.
@@ -85,7 +106,8 @@ impl Lb {
     }
 
     fn lead_branch(&self, key: &str) -> String {
-        self.env.query(&format!("SELECT lead_branch FROM prs WHERE key = '{key}'"))
+        self.env
+            .query(&format!("SELECT lead_branch FROM prs WHERE key = '{key}'"))
     }
 }
 
@@ -118,7 +140,17 @@ fn pr_add_refuses_when_the_plan_branch_exists() {
 fn pr_add_leaves_a_merged_legacy_lead_branch_alone() {
     let fx = lb_in("done");
     let origin = fx.env.root().join("repos/pay-origin.git");
-    fx.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
+    fx.git(
+        fx.env.root(),
+        &[
+            "init",
+            "--bare",
+            "-q",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
     fx.local_origin(&fx.pay, &origin);
     fx.git(&fx.pay, &["push", "-q", "origin", "main"]);
     fx.git(&fx.pay, &["fetch", "-q", "origin"]);
@@ -142,14 +174,41 @@ fn pr_add_leaves_a_merged_legacy_lead_branch_alone() {
            VALUES ('pay-1', 'base', '{}', 'main', 'dispatch', 'cpd/pay-1/base', '/w/base', cpd_txn(), 't', 't');",
         fx.pay.display()
     ));
-    let out = fx.cpd(&["pr", "add", "web", "--repo", fx.pay.to_str().unwrap(), "--title", "T", "--shape", "config", "--no-needs", "--base", "pay-1/base", "--plan", "pay-1"]).ok();
+    let out = fx
+        .cpd(&[
+            "pr",
+            "add",
+            "web",
+            "--repo",
+            fx.pay.to_str().unwrap(),
+            "--title",
+            "T",
+            "--shape",
+            "config",
+            "--no-needs",
+            "--base",
+            "pay-1/base",
+            "--plan",
+            "pay-1",
+        ])
+        .ok();
 
     assert_eq!(out["pr"]["lead_branch"], "pay-1/web");
     assert_eq!(fx.lead_branch("old"), "cpd/pay-1");
-    assert_eq!(fx.git(&fx.pay, &["rev-parse", "refs/heads/cpd/pay-1"]), sha, "the legacy branch stays");
-    assert_ne!(fx.git(&origin, &["branch", "--list", "cpd/pay-1"]), "", "and so does its remote branch");
+    assert_eq!(
+        fx.git(&fx.pay, &["rev-parse", "refs/heads/cpd/pay-1"]),
+        sha,
+        "the legacy branch stays"
+    );
+    assert_ne!(
+        fx.git(&origin, &["branch", "--list", "cpd/pay-1"]),
+        "",
+        "and so does its remote branch"
+    );
     assert!(
-        fx.calls("git").iter().all(|call| !call.args.iter().any(|a| a == "--delete")),
+        fx.calls("git")
+            .iter()
+            .all(|call| !call.args.iter().any(|a| a == "--delete")),
         "no `git push origin --delete` ran"
     );
 }
@@ -158,7 +217,16 @@ fn pr_add_leaves_a_merged_legacy_lead_branch_alone() {
 fn pr_start_creates_the_plan_slash_key_lead_branch_and_worktree() {
     let fx = lb();
     fx.add("api", &fx.pay).ok();
-    fx.cpd(&["job", "cancel", "api-config", "--reason", "a stub", "--plan", "pay-1"]).ok();
+    fx.cpd(&[
+        "job",
+        "cancel",
+        "api-config",
+        "--reason",
+        "a stub",
+        "--plan",
+        "pay-1",
+    ])
+    .ok();
     fx.drop_unreachable_origin(&fx.pay);
     fx.dispatch();
 
@@ -166,14 +234,26 @@ fn pr_start_creates_the_plan_slash_key_lead_branch_and_worktree() {
 
     let worktree = fx.pay.parent().unwrap().join("pay.pay-1.api");
     assert_eq!(out["pr"]["lead_worktree"], worktree.display().to_string());
-    assert_eq!(fx.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "pay-1/api");
+    assert_eq!(
+        fx.git(&worktree, &["symbolic-ref", "--short", "HEAD"]),
+        "pay-1/api"
+    );
 }
 
 #[test]
 fn pr_start_refuses_when_the_plan_branch_exists() {
     let fx = lb();
     fx.add("api", &fx.pay).ok();
-    fx.cpd(&["job", "cancel", "api-config", "--reason", "a stub", "--plan", "pay-1"]).ok();
+    fx.cpd(&[
+        "job",
+        "cancel",
+        "api-config",
+        "--reason",
+        "a stub",
+        "--plan",
+        "pay-1",
+    ])
+    .ok();
     fx.drop_unreachable_origin(&fx.pay);
     fx.dispatch();
     fx.git(&fx.pay, &["branch", "pay-1"]);
@@ -204,7 +284,18 @@ fn pr_edit_repo_refuses_when_the_plan_branch_exists() {
     let fx = lb();
     fx.add("api", &fx.pay).ok();
     fx.git(&fx.web, &["branch", "pay-1"]);
-    let error = fx.refuse(&fx.cpd(&["pr", "edit", "api", "--repo", fx.web.to_str().unwrap(), "--plan", "pay-1"]), "branch_exists");
+    let error = fx.refuse(
+        &fx.cpd(&[
+            "pr",
+            "edit",
+            "api",
+            "--repo",
+            fx.web.to_str().unwrap(),
+            "--plan",
+            "pay-1",
+        ]),
+        "branch_exists",
+    );
     assert_eq!(error["details"]["branch"], "pay-1");
 }
 
@@ -220,7 +311,11 @@ fn adopt_fx(head: &str) -> Adopt {
     let env = TestEnv::new();
     let pay = env.keyed_repo("pay").canonicalize().unwrap();
     fs::create_dir_all(pay.join(".config")).unwrap();
-    fs::write(pay.join(".config/cpd.toml"), "[tests]\nbuild = \"true\"\nrun = \"true\"\n").unwrap();
+    fs::write(
+        pay.join(".config/cpd.toml"),
+        "[tests]\nbuild = \"true\"\nrun = \"true\"\n",
+    )
+    .unwrap();
     env.git(&pay, &["add", "-A"]);
     env.git(&pay, &["commit", "-q", "-m", "tests table"]);
     env.git(&pay, &["update-ref", "refs/remotes/origin/main", "main"]);
@@ -246,7 +341,17 @@ fn adopt_fx(head: &str) -> Adopt {
 
 impl Adopt {
     fn add(&self, key: &str, extra: &[&str]) -> Run {
-        let mut args = vec!["pr", "add", key, "--repo", self.pay.to_str().unwrap(), "--title", "T", "--shape", "config"];
+        let mut args = vec![
+            "pr",
+            "add",
+            key,
+            "--repo",
+            self.pay.to_str().unwrap(),
+            "--title",
+            "T",
+            "--shape",
+            "config",
+        ];
         args.extend(extra);
         args.extend(["--plan", "pay-1"]);
         self.env.cpd(&args)
@@ -258,7 +363,10 @@ fn pr_adopt_refuses_a_head_branch_that_is_a_stored_lead_branch() {
     let fx = adopt_fx("pay-1/api");
     fx.add("api", &[]).ok();
     let error = refused(&fx.add("web", &["--adopt", "7"]), "adopt_cpd_branch", 3);
-    assert_eq!(error["details"], json!({"number": 7, "head_ref": "pay-1/api"}));
+    assert_eq!(
+        error["details"],
+        json!({"number": 7, "head_ref": "pay-1/api"})
+    );
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM prs"), 1);
 }
 

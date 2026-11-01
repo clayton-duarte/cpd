@@ -54,7 +54,12 @@ pub struct Bridge {
 impl Bridge {
     /// The resolved client. `engine_disabled` (exit 3) when `enabled` is false;
     /// `engine_missing` (exit 4) when the bridge or the interpreter is absent.
-    pub fn new(enabled: bool, script: PathBuf, python: PathBuf, timeout: Duration) -> Result<Bridge, CpdError> {
+    pub fn new(
+        enabled: bool,
+        script: PathBuf,
+        python: PathBuf,
+        timeout: Duration,
+    ) -> Result<Bridge, CpdError> {
         if !enabled {
             return Err(CpdError::new(
                 ErrorCode::EngineDisabled,
@@ -68,7 +73,11 @@ impl Bridge {
         if !interpreter_exists(&python) {
             return Err(missing(&script, &python));
         }
-        Ok(Bridge { script, python, timeout })
+        Ok(Bridge {
+            script,
+            python,
+            timeout,
+        })
     }
 
     /// The resolved bridge script.
@@ -134,12 +143,16 @@ impl Guard {
     }
 
     fn child(&mut self) -> &mut Child {
-        self.child.as_mut().expect("the child is live until it is reaped")
+        self.child
+            .as_mut()
+            .expect("the child is live until it is reaped")
     }
 
     /// `SIGKILL` the child's process group, then reap the child. Idempotent.
     fn kill_and_wait(&mut self) {
-        let Some(mut child) = self.child.take() else { return };
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
         let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
         let _ = child.kill();
         let _ = child.wait();
@@ -232,7 +245,11 @@ impl ContextEngine for Bridge {
                         "The holographic bridge failed ({what}; exit {}).{}{}",
                         status,
                         tail(&stderr),
-                        if status.success() { " It exited 0 without answering." } else { "" }
+                        if status.success() {
+                            " It exited 0 without answering."
+                        } else {
+                            ""
+                        }
                     )));
                 }
                 Err(RecvTimeoutError::Timeout) => {
@@ -241,7 +258,9 @@ impl ContextEngine for Bridge {
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     guard.kill_and_wait();
-                    return Err(failed("The holographic bridge stopped before answering a request."));
+                    return Err(failed(
+                        "The holographic bridge stopped before answering a request.",
+                    ));
                 }
             }
         }
@@ -250,7 +269,10 @@ impl ContextEngine for Bridge {
         let status = wait_or_kill(&mut guard, until)?;
         if !status.success() {
             let stderr = errors.lock().map(|text| text.clone()).unwrap_or_default();
-            return Err(failed(format!("The holographic bridge exited {status}.{}", tail(&stderr))));
+            return Err(failed(format!(
+                "The holographic bridge exited {status}.{}",
+                tail(&stderr)
+            )));
         }
         Ok(responses)
     }
@@ -270,13 +292,17 @@ impl Bridge {
 fn wait_or_kill(guard: &mut Guard, until: Instant) -> Result<std::process::ExitStatus, CpdError> {
     loop {
         if let Some(status) = guard.reap_if_exited().map_err(|e| {
-            failed(format!("The holographic bridge could not be waited for: {e}."))
+            failed(format!(
+                "The holographic bridge could not be waited for: {e}."
+            ))
         })? {
             return Ok(status);
         }
         if Instant::now() >= until {
             guard.kill_and_wait();
-            return Err(failed("The holographic bridge ran past its deadline and was killed."));
+            return Err(failed(
+                "The holographic bridge ran past its deadline and was killed.",
+            ));
         }
         thread::sleep(Duration::from_millis(5));
     }
@@ -284,7 +310,9 @@ fn wait_or_kill(guard: &mut Guard, until: Instant) -> Result<std::process::ExitS
 
 /// `Ok(line)` for each line on `pipe`; the final `Err` says why the pipe ended:
 /// `None` for EOF, `Some(e)` for a read error.
-fn read_lines(pipe: impl Read + Send + 'static) -> Receiver<Result<String, Option<std::io::Error>>> {
+fn read_lines(
+    pipe: impl Read + Send + 'static,
+) -> Receiver<Result<String, Option<std::io::Error>>> {
     let (tx, rx) = channel();
     thread::spawn(move || {
         let mut reader = BufReader::new(pipe);

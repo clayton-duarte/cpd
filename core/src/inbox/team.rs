@@ -72,9 +72,17 @@ pub fn read_cache(home: &CpdHome) -> Result<Option<Cache>, CpdError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(bad(&path, format!("Cannot read {}: {e}.", path.display()))),
     };
-    let cache: Cache = serde_json::from_str(&text).map_err(|e| bad(&path, format!("{} is not a team review cache: {e}.", path.display())))?;
+    let cache: Cache = serde_json::from_str(&text).map_err(|e| {
+        bad(
+            &path,
+            format!("{} is not a team review cache: {e}.", path.display()),
+        )
+    })?;
     if cache.version != 1 {
-        return Err(bad(&path, format!("{} has version {}, not 1.", path.display(), cache.version)));
+        return Err(bad(
+            &path,
+            format!("{} has version {}, not 1.", path.display(), cache.version),
+        ));
     }
     Ok(Some(cache))
 }
@@ -82,7 +90,10 @@ pub fn read_cache(home: &CpdHome) -> Result<Option<Cache>, CpdError> {
 impl Cache {
     /// The primary post of pull request `repo#number`: the newest by `ts`.
     pub fn primary_post(&self, repo: &str, number: u64) -> Option<&Post> {
-        self.posts.iter().filter(|p| p.primary && p.repo == repo && p.number == number).max_by(|a, b| a.ts.total_cmp(&b.ts))
+        self.posts
+            .iter()
+            .filter(|p| p.primary && p.repo == repo && p.number == number)
+            .max_by(|a, b| a.ts.total_cmp(&b.ts))
     }
 }
 
@@ -159,7 +170,11 @@ pub fn classify(pr: &GhPr, me: &str, bots: &[String]) -> Status {
         _ => {}
     }
     let is_bot = |login: &str| bots.iter().any(|b| b == login);
-    if pr.reviews.iter().any(|r| !is_bot(&r.author) && r.author != me) {
+    if pr
+        .reviews
+        .iter()
+        .any(|r| !is_bot(&r.author) && r.author != me)
+    {
         return Status::InReview;
     }
     if pr.reviews.iter().any(|r| is_bot(&r.author)) {
@@ -174,7 +189,11 @@ pub fn classify(pr: &GhPr, me: &str, bots: &[String]) -> Status {
 pub fn status(post: &Post, pr: &GhPr, me: &str, bots: &[String]) -> Status {
     let mut status = classify(pr, me, bots);
     if matches!(status, Status::NeedsReview(_)) && post.claim.is_some() {
-        status = if post.eyes_me == Some(true) && !post.reactions.is_empty() { Status::NeedsReview(CLAIMED_BY_ME) } else { Status::InReview };
+        status = if post.eyes_me == Some(true) && !post.reactions.is_empty() {
+            Status::NeedsReview(CLAIMED_BY_ME)
+        } else {
+            Status::InReview
+        };
     }
     if matches!(status, Status::InReview | Status::NeedsReview(_)) && post.thread_tags_me {
         status = Status::NeedsReview(TAGGED);
@@ -186,12 +205,28 @@ pub fn status(post: &Post, pr: &GhPr, me: &str, bots: &[String]) -> Status {
 
 /// `owner/name` with each part of `[A-Za-z0-9_.-]+`: nothing else reaches a query text.
 fn repo_parts(repo: &str) -> Option<(&str, &str)> {
-    let part = |p: &str| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
-    repo.split_once('/').filter(|(owner, name)| part(owner) && part(name))
+    let part = |p: &str| {
+        !p.is_empty()
+            && p.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+    };
+    repo.split_once('/')
+        .filter(|(owner, name)| part(owner) && part(name))
 }
 
 fn gh_failed(message: String, stderr: &str) -> CpdError {
-    CpdError::new(ErrorCode::GhFailed, message).with("stderr", stderr.lines().rev().take(20).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n"))
+    CpdError::new(ErrorCode::GhFailed, message).with(
+        "stderr",
+        stderr
+            .lines()
+            .rev()
+            .take(20)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 /// The one `gh api graphql` call: `viewer { login }` and one alias `p<i>` per pull request, 15 s at most. A pull
@@ -202,10 +237,16 @@ pub fn github_lookup(home: &CpdHome, refs: &[(String, u64)]) -> Result<Lookup, C
 }
 
 /// [`github_lookup`] on `runner`.
-pub fn github_lookup_with(runner: &dyn Runner, home: &CpdHome, refs: &[(String, u64)]) -> Result<Lookup, CpdError> {
+pub fn github_lookup_with(
+    runner: &dyn Runner,
+    home: &CpdHome,
+    refs: &[(String, u64)],
+) -> Result<Lookup, CpdError> {
     let mut query = String::from("query { viewer { login }");
     for (i, (repo, number)) in refs.iter().enumerate() {
-        let Some((owner, name)) = repo_parts(repo) else { continue };
+        let Some((owner, name)) = repo_parts(repo) else {
+            continue;
+        };
         query.push_str(&format!(
             " p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ title isDraft state reviewDecision author {{ login }} latestReviews(first: 50) {{ nodes {{ state author {{ login }} }} }} }} }}"
         ));
@@ -219,28 +260,56 @@ pub fn github_lookup_with(runner: &dyn Runner, home: &CpdHome, refs: &[(String, 
         .stdin(std::process::Stdio::null());
     let out = match runner.output(&mut cmd, "gh", GITHUB_DEADLINE) {
         Ok(out) => out,
-        Err(Failed::Io(e)) => return Err(gh_failed(format!("Cannot run gh: {e}."), &e.to_string())),
+        Err(Failed::Io(e)) => {
+            return Err(gh_failed(format!("Cannot run gh: {e}."), &e.to_string()));
+        }
         Err(Failed::Timeout(e)) => return Err(e),
     };
     // `gh` exits 1 when an alias is NOT_FOUND, with data: the stdout decides, whatever the exit.
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let reply: Value = serde_json::from_str(&stdout).map_err(|e| gh_failed(format!("gh api graphql printed unexpected JSON: {e}."), &stderr))?;
+    let reply: Value = serde_json::from_str(&stdout).map_err(|e| {
+        gh_failed(
+            format!("gh api graphql printed unexpected JSON: {e}."),
+            &stderr,
+        )
+    })?;
     parse_lookup(&reply, refs).map_err(|message| gh_failed(message, &stderr))
 }
 
 /// The reply of [`github_lookup`]; `Err` is the message of its `gh_failed`.
 pub fn parse_lookup(reply: &Value, refs: &[(String, u64)]) -> Result<Lookup, String> {
-    let errors = reply["errors"].as_array().map(Vec::as_slice).unwrap_or_default();
-    if let Some(other) = errors.iter().find(|e| e["type"].as_str() != Some("NOT_FOUND")) {
-        return Err(format!("gh api graphql answered with errors: {}", other["message"].as_str().unwrap_or("(no message)")));
+    let errors = reply["errors"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    if let Some(other) = errors
+        .iter()
+        .find(|e| e["type"].as_str() != Some("NOT_FOUND"))
+    {
+        return Err(format!(
+            "gh api graphql answered with errors: {}",
+            other["message"].as_str().unwrap_or("(no message)")
+        ));
     }
-    let data = reply["data"].as_object().ok_or("gh api graphql answered without data.")?;
-    let me = data["viewer"]["login"].as_str().filter(|l| !l.is_empty()).ok_or("gh api graphql answered without viewer.login.")?.to_owned();
+    let data = reply["data"]
+        .as_object()
+        .ok_or("gh api graphql answered without data.")?;
+    let me = data["viewer"]["login"]
+        .as_str()
+        .filter(|l| !l.is_empty())
+        .ok_or("gh api graphql answered without viewer.login.")?
+        .to_owned();
     let mut prs = BTreeMap::new();
     for (i, key) in refs.iter().enumerate() {
-        let raw = &data.get(&format!("p{i}")).map_or(&Value::Null, |v| &v["pullRequest"]);
-        let pr = if raw.is_null() { None } else { Some(parse_pr(raw)?) };
+        let raw = &data
+            .get(&format!("p{i}"))
+            .map_or(&Value::Null, |v| &v["pullRequest"]);
+        let pr = if raw.is_null() {
+            None
+        } else {
+            Some(parse_pr(raw)?)
+        };
         prs.insert(key.clone(), pr);
     }
     Ok(Lookup { me, prs })
@@ -251,7 +320,11 @@ fn parse_pr(raw: &Value) -> Result<GhPr, String> {
         Some("OPEN") => GhState::Open,
         Some("MERGED") => GhState::Merged,
         Some("CLOSED") => GhState::Closed,
-        other => return Err(format!("gh api graphql answered a pull request state {other:?}.")),
+        other => {
+            return Err(format!(
+                "gh api graphql answered a pull request state {other:?}."
+            ));
+        }
     };
     let login = |v: &Value| v["author"]["login"].as_str().unwrap_or_default().to_owned();
     let reviews = raw["latestReviews"]["nodes"]
@@ -259,11 +332,19 @@ fn parse_pr(raw: &Value) -> Result<GhPr, String> {
         .map(Vec::as_slice)
         .unwrap_or_default()
         .iter()
-        .map(|r| Review { author: login(r), state: r["state"].as_str().unwrap_or_default().to_owned() })
+        .map(|r| Review {
+            author: login(r),
+            state: r["state"].as_str().unwrap_or_default().to_owned(),
+        })
         .collect();
     Ok(GhPr {
-        title: raw["title"].as_str().ok_or("gh api graphql answered a pull request without title.")?.to_owned(),
-        draft: raw["isDraft"].as_bool().ok_or("gh api graphql answered a pull request without isDraft.")?,
+        title: raw["title"]
+            .as_str()
+            .ok_or("gh api graphql answered a pull request without title.")?
+            .to_owned(),
+        draft: raw["isDraft"]
+            .as_bool()
+            .ok_or("gh api graphql answered a pull request without isDraft.")?,
         state,
         author: login(raw),
         decision: raw["reviewDecision"].as_str().map(str::to_owned),
@@ -290,9 +371,11 @@ impl Memo {
         fetch: impl FnOnce(&[(String, u64)]) -> Result<Lookup, CpdError>,
     ) -> Result<Lookup, CpdError> {
         if let Some((held, at, answer)) = &self.held
-            && held == refs && now.saturating_duration_since(*at) < GITHUB_TTL {
-                return answer.clone();
-            }
+            && held == refs
+            && now.saturating_duration_since(*at) < GITHUB_TTL
+        {
+            return answer.clone();
+        }
         let answer = fetch(refs);
         self.held = Some((refs.to_vec(), now, answer.clone()));
         answer
@@ -308,24 +391,50 @@ mod tests {
     const ME: &str = "clayton-duarte";
 
     fn bots() -> Vec<String> {
-        vec!["mission-lane-claude-code-assistant".to_owned(), "github-actions".to_owned()]
+        vec![
+            "mission-lane-claude-code-assistant".to_owned(),
+            "github-actions".to_owned(),
+        ]
     }
 
     fn pr() -> GhPr {
-        GhPr { title: "Add retries".to_owned(), draft: false, state: GhState::Open, author: "ryan".to_owned(), decision: None, reviews: Vec::new() }
+        GhPr {
+            title: "Add retries".to_owned(),
+            draft: false,
+            state: GhState::Open,
+            author: "ryan".to_owned(),
+            decision: None,
+            reviews: Vec::new(),
+        }
     }
 
     fn review(author: &str, state: &str) -> Review {
-        Review { author: author.to_owned(), state: state.to_owned() }
+        Review {
+            author: author.to_owned(),
+            state: state.to_owned(),
+        }
     }
 
     fn post() -> Post {
-        Post { repo: "acme/pay".to_owned(), number: 1, ts: 0.0, ts_raw: String::new(), primary: true, reactions: Vec::new(), claim: None, eyes_me: None, thread_tags_me: false }
+        Post {
+            repo: "acme/pay".to_owned(),
+            number: 1,
+            ts: 0.0,
+            ts_raw: String::new(),
+            primary: true,
+            reactions: Vec::new(),
+            claim: None,
+            eyes_me: None,
+            thread_tags_me: false,
+        }
     }
 
     fn claimed(mut p: Post, eyes_me: Option<bool>) -> Post {
         p.reactions = vec!["eyes".to_owned()];
-        p.claim = Some(Claim { kind: "claimed".to_owned(), reason: "claimed with :eyes: in Slack".to_owned() });
+        p.claim = Some(Claim {
+            kind: "claimed".to_owned(),
+            reason: "claimed with :eyes: in Slack".to_owned(),
+        });
         p.eyes_me = eyes_me;
         p
     }
@@ -334,28 +443,81 @@ mod tests {
 
     #[test]
     fn no_review_and_a_bot_only_review_need_review() {
-        assert_eq!(classify(&pr(), ME, &bots()), Status::NeedsReview("no review yet"));
-        let bot = GhPr { reviews: vec![review("github-actions", "COMMENTED")], ..pr() };
-        assert_eq!(classify(&bot, ME, &bots()), Status::NeedsReview("AI review only"));
-        let own_review_only = GhPr { reviews: vec![review(ME, "COMMENTED")], ..pr() };
-        assert_eq!(classify(&own_review_only, ME, &bots()), Status::NeedsReview("no review yet"), "the User's own review is no human's");
+        assert_eq!(
+            classify(&pr(), ME, &bots()),
+            Status::NeedsReview("no review yet")
+        );
+        let bot = GhPr {
+            reviews: vec![review("github-actions", "COMMENTED")],
+            ..pr()
+        };
+        assert_eq!(
+            classify(&bot, ME, &bots()),
+            Status::NeedsReview("AI review only")
+        );
+        let own_review_only = GhPr {
+            reviews: vec![review(ME, "COMMENTED")],
+            ..pr()
+        };
+        assert_eq!(
+            classify(&own_review_only, ME, &bots()),
+            Status::NeedsReview("no review yet"),
+            "the User's own review is no human's"
+        );
     }
 
     #[test]
     fn a_human_reviewer_is_in_review_even_beside_a_bot() {
-        let human = GhPr { reviews: vec![review("github-actions", "COMMENTED"), review("wes", "COMMENTED")], ..pr() };
+        let human = GhPr {
+            reviews: vec![
+                review("github-actions", "COMMENTED"),
+                review("wes", "COMMENTED"),
+            ],
+            ..pr()
+        };
         assert_eq!(classify(&human, ME, &bots()), Status::InReview);
     }
 
     #[test]
     fn a_draft_is_a_draft_whoever_wrote_it() {
-        assert_eq!(classify(&GhPr { draft: true, ..pr() }, ME, &bots()), Status::Draft);
-        assert_eq!(classify(&GhPr { draft: true, author: ME.to_owned(), ..pr() }, ME, &bots()), Status::Draft);
+        assert_eq!(
+            classify(
+                &GhPr {
+                    draft: true,
+                    ..pr()
+                },
+                ME,
+                &bots()
+            ),
+            Status::Draft
+        );
+        assert_eq!(
+            classify(
+                &GhPr {
+                    draft: true,
+                    author: ME.to_owned(),
+                    ..pr()
+                },
+                ME,
+                &bots()
+            ),
+            Status::Draft
+        );
     }
 
     #[test]
     fn the_users_own_pull_request_is_hidden() {
-        assert_eq!(classify(&GhPr { author: ME.to_owned(), ..pr() }, ME, &bots()), Status::Hidden);
+        assert_eq!(
+            classify(
+                &GhPr {
+                    author: ME.to_owned(),
+                    ..pr()
+                },
+                ME,
+                &bots()
+            ),
+            Status::Hidden
+        );
     }
 
     #[test]
@@ -363,15 +525,43 @@ mod tests {
         for state in [GhState::Merged, GhState::Closed] {
             assert_eq!(classify(&GhPr { state, ..pr() }, ME, &bots()), Status::Done);
         }
-        assert_eq!(classify(&GhPr { decision: Some("APPROVED".to_owned()), ..pr() }, ME, &bots()), Status::Done);
-        assert_eq!(classify(&GhPr { decision: Some("REVIEW_REQUIRED".to_owned()), ..pr() }, ME, &bots()), Status::NeedsReview("no review yet"));
+        assert_eq!(
+            classify(
+                &GhPr {
+                    decision: Some("APPROVED".to_owned()),
+                    ..pr()
+                },
+                ME,
+                &bots()
+            ),
+            Status::Done
+        );
+        assert_eq!(
+            classify(
+                &GhPr {
+                    decision: Some("REVIEW_REQUIRED".to_owned()),
+                    ..pr()
+                },
+                ME,
+                &bots()
+            ),
+            Status::NeedsReview("no review yet")
+        );
     }
 
     #[test]
     fn changes_requested_by_anyone_is_the_authors_move() {
-        let theirs = GhPr { decision: Some("CHANGES_REQUESTED".to_owned()), reviews: vec![review("wes", "CHANGES_REQUESTED")], ..pr() };
+        let theirs = GhPr {
+            decision: Some("CHANGES_REQUESTED".to_owned()),
+            reviews: vec![review("wes", "CHANGES_REQUESTED")],
+            ..pr()
+        };
         assert_eq!(classify(&theirs, ME, &bots()), Status::ChangesRequested);
-        let mine = GhPr { decision: Some("CHANGES_REQUESTED".to_owned()), reviews: vec![review(ME, "CHANGES_REQUESTED")], ..pr() };
+        let mine = GhPr {
+            decision: Some("CHANGES_REQUESTED".to_owned()),
+            reviews: vec![review(ME, "CHANGES_REQUESTED")],
+            ..pr()
+        };
         assert_eq!(classify(&mine, ME, &bots()), Status::ChangesRequested);
     }
 
@@ -379,36 +569,112 @@ mod tests {
 
     #[test]
     fn a_claim_in_slack_makes_needs_review_in_review() {
-        assert_eq!(status(&claimed(post(), Some(false)), &pr(), ME, &bots()), Status::InReview);
-        assert_eq!(status(&claimed(post(), None), &pr(), ME, &bots()), Status::InReview, "attribution unavailable: a peer's");
-        let mention_only = Post { claim: Some(Claim { kind: "claimed".to_owned(), reason: "assigned to someone in Slack".to_owned() }), ..post() };
+        assert_eq!(
+            status(&claimed(post(), Some(false)), &pr(), ME, &bots()),
+            Status::InReview
+        );
+        assert_eq!(
+            status(&claimed(post(), None), &pr(), ME, &bots()),
+            Status::InReview,
+            "attribution unavailable: a peer's"
+        );
+        let mention_only = Post {
+            claim: Some(Claim {
+                kind: "claimed".to_owned(),
+                reason: "assigned to someone in Slack".to_owned(),
+            }),
+            ..post()
+        };
         assert_eq!(status(&mention_only, &pr(), ME, &bots()), Status::InReview);
-        assert_eq!(status(&post(), &pr(), ME, &bots()), Status::NeedsReview("no review yet"), "no claim");
+        assert_eq!(
+            status(&post(), &pr(), ME, &bots()),
+            Status::NeedsReview("no review yet"),
+            "no claim"
+        );
     }
 
     #[test]
     fn the_users_own_eyes_alone_keeps_it_needing_review() {
-        assert_eq!(status(&claimed(post(), Some(true)), &pr(), ME, &bots()), Status::NeedsReview(CLAIMED_BY_ME));
+        assert_eq!(
+            status(&claimed(post(), Some(true)), &pr(), ME, &bots()),
+            Status::NeedsReview(CLAIMED_BY_ME)
+        );
     }
 
     #[test]
     fn a_tag_in_the_thread_makes_in_review_and_needs_review_need_review() {
-        let tagged = Post { thread_tags_me: true, ..post() };
-        assert_eq!(status(&Post { thread_tags_me: true, ..claimed(post(), Some(false)) }, &pr(), ME, &bots()), Status::NeedsReview(TAGGED));
-        let human = GhPr { reviews: vec![review("wes", "COMMENTED")], ..pr() };
-        assert_eq!(status(&tagged, &human, ME, &bots()), Status::NeedsReview(TAGGED));
-        assert_eq!(status(&tagged, &pr(), ME, &bots()), Status::NeedsReview(TAGGED));
+        let tagged = Post {
+            thread_tags_me: true,
+            ..post()
+        };
+        assert_eq!(
+            status(
+                &Post {
+                    thread_tags_me: true,
+                    ..claimed(post(), Some(false))
+                },
+                &pr(),
+                ME,
+                &bots()
+            ),
+            Status::NeedsReview(TAGGED)
+        );
+        let human = GhPr {
+            reviews: vec![review("wes", "COMMENTED")],
+            ..pr()
+        };
+        assert_eq!(
+            status(&tagged, &human, ME, &bots()),
+            Status::NeedsReview(TAGGED)
+        );
+        assert_eq!(
+            status(&tagged, &pr(), ME, &bots()),
+            Status::NeedsReview(TAGGED)
+        );
     }
 
     #[test]
     fn a_tag_does_not_revive_finished_or_hidden_work() {
-        let tagged = Post { thread_tags_me: true, ..post() };
+        let tagged = Post {
+            thread_tags_me: true,
+            ..post()
+        };
         for (pr, want) in [
-            (GhPr { state: GhState::Merged, ..pr() }, Status::Done),
-            (GhPr { decision: Some("APPROVED".to_owned()), ..pr() }, Status::Done),
-            (GhPr { decision: Some("CHANGES_REQUESTED".to_owned()), ..pr() }, Status::ChangesRequested),
-            (GhPr { draft: true, ..pr() }, Status::Draft),
-            (GhPr { author: ME.to_owned(), ..pr() }, Status::Hidden),
+            (
+                GhPr {
+                    state: GhState::Merged,
+                    ..pr()
+                },
+                Status::Done,
+            ),
+            (
+                GhPr {
+                    decision: Some("APPROVED".to_owned()),
+                    ..pr()
+                },
+                Status::Done,
+            ),
+            (
+                GhPr {
+                    decision: Some("CHANGES_REQUESTED".to_owned()),
+                    ..pr()
+                },
+                Status::ChangesRequested,
+            ),
+            (
+                GhPr {
+                    draft: true,
+                    ..pr()
+                },
+                Status::Draft,
+            ),
+            (
+                GhPr {
+                    author: ME.to_owned(),
+                    ..pr()
+                },
+                Status::Hidden,
+            ),
         ] {
             assert_eq!(status(&tagged, &pr, ME, &bots()), want);
         }
@@ -430,7 +696,13 @@ mod tests {
         let refs = [("acme/pay".to_owned(), 1), ("acme/gone".to_owned(), 2)];
         let lookup = parse_lookup(&reply(), &refs).unwrap();
         assert_eq!(lookup.me, ME);
-        assert_eq!(lookup.prs[&refs[0]], Some(GhPr { reviews: vec![review("github-actions", "COMMENTED")], ..pr() }));
+        assert_eq!(
+            lookup.prs[&refs[0]],
+            Some(GhPr {
+                reviews: vec![review("github-actions", "COMMENTED")],
+                ..pr()
+            })
+        );
         assert_eq!(lookup.prs[&refs[1]], None);
     }
 
@@ -439,8 +711,16 @@ mod tests {
         let refs = [("acme/pay".to_owned(), 1)];
         let mut other = reply();
         other["errors"] = json!([{"type": "RATE_LIMITED", "message": "slow down"}]);
-        assert!(parse_lookup(&other, &refs).unwrap_err().contains("slow down"));
-        assert!(parse_lookup(&json!({"errors": []}), &refs).unwrap_err().contains("without data"));
+        assert!(
+            parse_lookup(&other, &refs)
+                .unwrap_err()
+                .contains("slow down")
+        );
+        assert!(
+            parse_lookup(&json!({"errors": []}), &refs)
+                .unwrap_err()
+                .contains("without data")
+        );
         let mut state = reply();
         state["data"]["p0"]["pullRequest"]["state"] = json!("WEIRD");
         assert!(parse_lookup(&state, &refs).unwrap_err().contains("state"));
@@ -450,8 +730,14 @@ mod tests {
 
     #[test]
     fn the_memo_asks_again_only_for_other_posts_or_after_the_ttl() {
-        let (a, b) = (vec![("acme/pay".to_owned(), 1)], vec![("acme/pay".to_owned(), 2)]);
-        let lookup = Lookup { me: ME.to_owned(), prs: BTreeMap::new() };
+        let (a, b) = (
+            vec![("acme/pay".to_owned(), 1)],
+            vec![("acme/pay".to_owned(), 2)],
+        );
+        let lookup = Lookup {
+            me: ME.to_owned(),
+            prs: BTreeMap::new(),
+        };
         let mut calls = 0;
         let mut memo = Memo::default();
         let t0 = Instant::now();

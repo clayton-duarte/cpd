@@ -40,16 +40,34 @@ impl Env {
     /// on `ports.clock`.
     pub fn open_home_with(ports: &Ports, home: CpdHome) -> Result<Env, CpdError> {
         let config = Config::load(&home)?;
-        let store = Store::open_with(&*ports.clock, &home, u64::from(config.timeouts.store_busy_ms), None)?;
-        Ok(Env { home, config, store, ports: ports.clone(), catalog: None })
+        let store = Store::open_with(
+            &*ports.clock,
+            &home,
+            u64::from(config.timeouts.store_busy_ms),
+            None,
+        )?;
+        Ok(Env {
+            home,
+            config,
+            store,
+            ports: ports.clone(),
+            catalog: None,
+        })
     }
 
     /// [`Env::open_home`] whose store persists through transient errors, the
     /// open included (see [`Store::open_persistent`]).
     pub fn open_home_persistent(home: CpdHome, persist: Persist) -> Result<Env, CpdError> {
         let config = Config::load(&home)?;
-        let store = Store::open_persistent(&home, u64::from(config.timeouts.store_busy_ms), persist)?;
-        Ok(Env { home, config, store, ports: Ports::current(), catalog: None })
+        let store =
+            Store::open_persistent(&home, u64::from(config.timeouts.store_busy_ms), persist)?;
+        Ok(Env {
+            home,
+            config,
+            store,
+            ports: Ports::current(),
+            catalog: None,
+        })
     }
 }
 
@@ -67,10 +85,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = home(&dir);
         std::fs::create_dir_all(home.config().parent().unwrap()).unwrap();
-        std::fs::write(home.config(), "version = 1\nmachine = \"test\"\n[timeouts]\nstore_busy_ms = 1234\n").unwrap();
+        std::fs::write(
+            home.config(),
+            "version = 1\nmachine = \"test\"\n[timeouts]\nstore_busy_ms = 1234\n",
+        )
+        .unwrap();
         let mut env = Env::open_home(home.clone()).unwrap();
-        assert_eq!((env.home.clone(), env.config.timeouts.store_busy_ms), (home, 1234));
-        assert_eq!(env.store.read(|c| Ok(c.query_row("SELECT count(*) FROM plans", [], |r| r.get::<_, i64>(0))?)).unwrap(), 0);
+        assert_eq!(
+            (env.home.clone(), env.config.timeouts.store_busy_ms),
+            (home, 1234)
+        );
+        assert_eq!(
+            env.store
+                .read(
+                    |c| Ok(c.query_row("SELECT count(*) FROM plans", [], |r| r.get::<_, i64>(0))?)
+                )
+                .unwrap(),
+            0
+        );
     }
 
     #[test]
@@ -79,7 +111,10 @@ mod tests {
         let home = home(&dir);
         let err = Env::open_home(home.clone()).err().expect("no config.toml");
         assert_eq!(err.code(), ErrorCode::ConfigMissing);
-        assert!(!home.root().join("cpd.db").exists(), "the store is opened after the config");
+        assert!(
+            !home.root().join("cpd.db").exists(),
+            "the store is opened after the config"
+        );
     }
 
     /// commands-G2: the open sequence is written once. Every other module of
@@ -91,11 +126,23 @@ mod tests {
             ("env.rs", "the one place"),
             ("config/file.rs", "defines the key"),
             ("store/mod.rs", "documents the parameter"),
-            ("config/catalog.rs", "opens the cache's store from a Config it was handed"),
+            (
+                "config/catalog.rs",
+                "opens the cache's store from a Config it was handed",
+            ),
             ("doctor/mod.rs", "must run when the config is invalid"),
-            ("watch/engine.rs", "takes the engine lock between the config and the store"),
-            ("watch/ensure.rs", "checks the engine lock between the config and the store"),
-            ("pr/merge.rs", "needs no config: opens the store alone with the default busy timeout"),
+            (
+                "watch/engine.rs",
+                "takes the engine lock between the config and the store",
+            ),
+            (
+                "watch/ensure.rs",
+                "checks the engine lock between the config and the store",
+            ),
+            (
+                "pr/merge.rs",
+                "needs no config: opens the store alone with the default busy timeout",
+            ),
         ];
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut sites = Vec::new();
@@ -106,15 +153,24 @@ mod tests {
                 if path.is_dir() {
                     dirs.push(path);
                 } else if path.extension().is_some_and(|e| e == "rs") {
-                    let rel = path.strip_prefix(&src).unwrap().to_string_lossy().into_owned();
+                    let rel = path
+                        .strip_prefix(&src)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
                     let text = std::fs::read_to_string(&path).unwrap();
-                    if text.contains("timeouts.store_busy_ms") && !BY_HAND.iter().any(|(f, _)| *f == rel) {
+                    if text.contains("timeouts.store_busy_ms")
+                        && !BY_HAND.iter().any(|(f, _)| *f == rel)
+                    {
                         sites.push(rel);
                     }
                 }
             }
         }
         sites.sort();
-        assert!(sites.is_empty(), "these files write the open sequence by hand; use Env::open: {sites:?}");
+        assert!(
+            sites.is_empty(),
+            "these files write the open sequence by hand; use Env::open: {sites:?}"
+        );
     }
 }

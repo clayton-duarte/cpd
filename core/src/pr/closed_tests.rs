@@ -42,7 +42,11 @@ impl Fixture {
 
     /// A pull request `acme/api#n` in `state` (`merged` has its `merged_at`).
     fn pull(&mut self, n: i64, state: &str) {
-        let merged = if state == "merged" { format!("'{T}'") } else { "NULL".to_owned() };
+        let merged = if state == "merged" {
+            format!("'{T}'")
+        } else {
+            "NULL".to_owned()
+        };
         self.sql(&format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
              VALUES ('acme/api', {n}, 'https://github.com/acme/api/pull/{n}', 'Title {n}', 0, '{state}', 'none', 'none', '{T}', {merged}, '{T}');"
@@ -51,7 +55,11 @@ impl Fixture {
 
     /// PR `key` of `plan` in `status` (`open` or `merged`) on pull request `n`.
     fn pr_on(&mut self, plan: &str, key: &str, status: &str, n: i64) {
-        let merged = if status == "merged" { format!("'{T}'") } else { "NULL".to_owned() };
+        let merged = if status == "merged" {
+            format!("'{T}'")
+        } else {
+            "NULL".to_owned()
+        };
         self.sql(&format!(
             "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                               created_txn, created_at, started_at, merged_at)
@@ -129,7 +137,14 @@ fn the_plan_filter_returns_only_that_plans_prs() {
     f.pull(8, "closed");
     f.pr_on("shop", "web", "open", 8);
     f.pr_on("pay", "api", "open", 7);
-    assert_eq!(f.found(None), [row("pay", "api", "l-pay", 7), row("shop", "web", "l-shop", 8)], "every Plan, by plan id then key");
+    assert_eq!(
+        f.found(None),
+        [
+            row("pay", "api", "l-pay", 7),
+            row("shop", "web", "l-shop", 8)
+        ],
+        "every Plan, by plan id then key"
+    );
     assert_eq!(f.found(Some("shop")), [row("shop", "web", "l-shop", 8)]);
     assert_eq!(f.found(Some("pay")), [row("pay", "api", "l-pay", 7)]);
 }

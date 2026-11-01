@@ -12,15 +12,16 @@ use common::fx::Fx;
 use cpd_core::error::ErrorCode;
 use cpd_core::fakes::git::{GitRoute, Repo};
 use cpd_core::git::hooks::{HookError, HookOutcome, Pipeline, run_hook, run_hook_with};
-use cpd_core::host::runner::{Call, Handler, Reply};
-use cpd_core::ports::Ports;
 use cpd_core::git::{
-    Operation, Push, Setup, Synced, sync_lead, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_attempt_worktree_with, create_lead_worktree, create_lead_worktree_with,
-    discard_worktree, push_commit, remove_merged_attempt, legacy_lead_branch, lead_worktree_path, tamper_check,
-    touched_protected,
+    Operation, Push, Setup, Synced, attempt_branch, attempt_worktree_path, create_attempt_worktree,
+    create_attempt_worktree_with, create_lead_worktree, create_lead_worktree_with,
+    discard_worktree, lead_worktree_path, legacy_lead_branch, push_commit, remove_merged_attempt,
+    sync_lead, tamper_check, touched_protected,
 };
 use cpd_core::home::Hook;
+use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::ids::{AttemptId, PlanId};
+use cpd_core::ports::Ports;
 
 fn plan() -> PlanId {
     PlanId::parse("pay-4521").unwrap()
@@ -33,7 +34,12 @@ fn attempt() -> AttemptId {
 /// The pipeline of `hook` in `wt`, written as a `.config/wt.toml` was (`pre-start = "cmd"`, `[pre-commit]`,
 /// `[[pre-merge]]`): read as the `[hooks]` table of a repo policy file is. `Err` is the loader's `policy_invalid`.
 fn try_pipeline(wt: &str, hook: Hook) -> Result<Pipeline, cpd_core::error::CpdError> {
-    let scope = cpd_core::policy::parse_scope(Path::new("pay.toml"), &format!("[hooks]\n{wt}").replace("\n[", "\n[hooks.").replace("[hooks.[", "[[hooks."))?;
+    let scope = cpd_core::policy::parse_scope(
+        Path::new("pay.toml"),
+        &format!("[hooks]\n{wt}")
+            .replace("\n[", "\n[hooks.")
+            .replace("[hooks.[", "[[hooks."),
+    )?;
     let hooks = scope.hooks.unwrap_or_default();
     Ok(match hook {
         Hook::PreStart => hooks.pre_start,
@@ -60,28 +66,53 @@ fn pre_start_replies(fx: &Fx, reply: Reply) {
 
 /// The `Call`s of the hooks' `sh`: `(command, directory)`, in order.
 fn sh_calls(fx: &Fx) -> Vec<(String, Option<PathBuf>)> {
-    fx.calls("sh").into_iter().map(|call| (call.args[1].clone(), call.cwd)).collect()
+    fx.calls("sh")
+        .into_iter()
+        .map(|call| (call.args[1].clone(), call.cwd))
+        .collect()
 }
 
 #[test]
 fn lead_worktree_is_a_sibling_on_cpd_plan_cut_from_the_base() {
     let fx = Fx::with_ports();
     let repo = fx.git_repo("pay");
-    let pre_start = pipeline("[pre-start]\nmark = \"echo {{ branch }} {{ base }} > setup-ran\"\n", Hook::PreStart);
+    let pre_start = pipeline(
+        "[pre-start]\nmark = \"echo {{ branch }} {{ base }} > setup-ran\"\n",
+        Hook::PreStart,
+    );
     let main_sha = fx.git(&repo, &["rev-parse", "main"]);
     pre_start_replies(&fx, Reply::ok(""));
 
-    let made = fx.scoped(|| create_lead_worktree_with(&repo, &plan(), "main", &setup_in(&fx, "lead.log"), &pre_start)).unwrap();
+    let made = fx
+        .scoped(|| {
+            create_lead_worktree_with(
+                &repo,
+                &plan(),
+                "main",
+                &setup_in(&fx, "lead.log"),
+                &pre_start,
+            )
+        })
+        .unwrap();
 
     assert_eq!(made.path, repo.parent().unwrap().join("pay.pay-4521"));
     assert_eq!(made.path, lead_worktree_path(&repo, &plan()).unwrap());
     assert_eq!(made.branch, "cpd/pay-4521");
     assert_eq!(made.branch, legacy_lead_branch(&plan()));
     assert_eq!(made.base_sha, main_sha);
-    assert_eq!(fx.git(&made.path, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay-4521");
+    assert_eq!(
+        fx.git(&made.path, &["symbolic-ref", "--short", "HEAD"]),
+        "cpd/pay-4521"
+    );
     assert_eq!(fx.git(&made.path, &["rev-parse", "HEAD"]), main_sha);
     // pre-start ran in it, with its variables: the command `sh` got is rendered, in the new worktree.
-    assert_eq!(sh_calls(&fx), [("echo cpd/pay-4521 main > setup-ran".to_owned(), Some(made.path.canonicalize().unwrap()))]);
+    assert_eq!(
+        sh_calls(&fx),
+        [(
+            "echo cpd/pay-4521 main > setup-ran".to_owned(),
+            Some(made.path.canonicalize().unwrap())
+        )]
+    );
     // The main checkout is untouched.
     assert_eq!(fx.git(&repo, &["symbolic-ref", "--short", "HEAD"]), "main");
     assert_eq!(fx.git(&repo, &["status", "--porcelain"]), "");
@@ -94,20 +125,37 @@ fn lead_worktree_is_cut_from_a_freshly_fetched_origin_base() {
     let origin = fx.env.root().join("origins").join("pay.git");
     fs::create_dir_all(&origin).unwrap();
     fx.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
-    fx.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    fx.git(
+        &repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
     fx.git(&repo, &["push", "-q", "origin", "main"]);
     // Someone else advances origin/main; the repo's own refs are stale.
     let other = fx.env.root().join("other");
-    fx.git(fx.env.root(), &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
+    fx.git(
+        fx.env.root(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
     fx.commit_file(&other, "new.txt", "new\n", "edit new.txt");
     fx.git(&other, &["push", "-q", "origin", "main"]);
     let pushed = fx.git(&other, &["rev-parse", "HEAD"]);
 
-    let made = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log"))).unwrap();
+    let made = fx
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log")))
+        .unwrap();
 
     assert_eq!(made.base_sha, pushed);
     assert!(made.path.join("new.txt").exists());
-    assert_ne!(fx.git(&repo, &["rev-parse", "main"]), pushed, "the local base is not moved");
+    assert_ne!(
+        fx.git(&repo, &["rev-parse", "main"]),
+        pushed,
+        "the local base is not moved"
+    );
 }
 
 #[test]
@@ -118,7 +166,9 @@ fn a_failing_pre_start_removes_the_worktree_and_branch() {
     let setup = setup_in(&fx, "lead.log");
     pre_start_replies(&fx, Reply::exit(3, "no luck\n", ""));
 
-    let err = fx.scoped(|| create_lead_worktree_with(&repo, &plan(), "main", &setup, &pre_start)).unwrap_err();
+    let err = fx
+        .scoped(|| create_lead_worktree_with(&repo, &plan(), "main", &setup, &pre_start))
+        .unwrap_err();
 
     assert_eq!(err.code(), ErrorCode::SetupFailed);
     assert_eq!(err.details()["tail"], "no luck");
@@ -133,11 +183,24 @@ fn an_invalid_pre_start_is_setup_failed_too() {
     let fx = Fx::with_ports();
     let repo = fx.git_repo("pay");
     let pre_start = pipeline("pre-start = \"echo {{ nope }}\"\n", Hook::PreStart);
-    let err = fx.scoped(|| create_lead_worktree_with(&repo, &plan(), "main", &setup_in(&fx, "lead.log"), &pre_start)).unwrap_err();
+    let err = fx
+        .scoped(|| {
+            create_lead_worktree_with(
+                &repo,
+                &plan(),
+                "main",
+                &setup_in(&fx, "lead.log"),
+                &pre_start,
+            )
+        })
+        .unwrap_err();
     assert_eq!(err.code(), ErrorCode::SetupFailed);
     assert!(!lead_worktree_path(&repo, &plan()).unwrap().exists());
     assert_eq!(fx.git(&repo, &["branch", "--list", "cpd/*"]), "");
-    assert!(fx.calls("sh").is_empty(), "the command did not render: nothing ran");
+    assert!(
+        fx.calls("sh").is_empty(),
+        "the command did not render: nothing ran"
+    );
 }
 
 #[test]
@@ -147,12 +210,16 @@ fn lead_worktree_refuses_what_is_in_the_way() {
     let path = lead_worktree_path(&repo, &plan()).unwrap();
 
     fs::create_dir_all(&path).unwrap();
-    let err = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "l.log"))).unwrap_err();
+    let err = fx
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "l.log")))
+        .unwrap_err();
     assert_eq!(err.code(), ErrorCode::WorktreeExists);
     fs::remove_dir(&path).unwrap();
 
     fx.git(&repo, &["branch", "cpd/pay-4521"]);
-    let err = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "l.log"))).unwrap_err();
+    let err = fx
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "l.log")))
+        .unwrap_err();
     assert_eq!(err.code(), ErrorCode::BranchExists);
     assert!(!path.exists());
 }
@@ -162,40 +229,80 @@ fn lead_worktree_replaces_the_leftover_of_an_interrupted_lock() {
     let fx = Fx::with_ports();
     let repo = fx.git_repo("pay");
     let path = lead_worktree_path(&repo, &plan()).unwrap();
-    fx.git(&repo, &["worktree", "add", "-q", "-b", "cpd/pay-4521", path.to_str().unwrap(), "main"]);
+    fx.git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "cpd/pay-4521",
+            path.to_str().unwrap(),
+            "main",
+        ],
+    );
     fs::write(path.join("junk"), "left behind").unwrap();
 
-    let made = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "l.log"))).unwrap();
+    let made = fx
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "l.log")))
+        .unwrap();
 
     assert_eq!(made.path, path);
     assert!(!path.join("junk").exists());
-    assert_eq!(fx.git(&path, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay-4521");
+    assert_eq!(
+        fx.git(&path, &["symbolic-ref", "--short", "HEAD"]),
+        "cpd/pay-4521"
+    );
 }
 
 #[test]
 fn attempt_worktree_is_cut_from_the_lead_branch_head() {
     let fx = Fx::with_ports();
     let repo = fx.git_repo("pay");
-    let pre_start = pipeline("[pre-start]\nmark = \"echo {{ branch }} {{ base }} {{ base_worktree_path }} > setup-ran\"\n", Hook::PreStart);
+    let pre_start = pipeline(
+        "[pre-start]\nmark = \"echo {{ branch }} {{ base }} {{ base_worktree_path }} > setup-ran\"\n",
+        Hook::PreStart,
+    );
     let setup = setup_in(&fx, "attempt.log");
-    let lead = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup)).unwrap();
+    let lead = fx
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup))
+        .unwrap();
     // The Lead Branch has moved on from main.
     fx.commit_file(&lead.path, "lead.txt", "lead\n", "edit lead.txt");
     let lead_sha = fx.git(&lead.path, &["rev-parse", "HEAD"]);
     pre_start_replies(&fx, Reply::ok(""));
 
-    let made = fx.scoped(|| create_attempt_worktree_with(&repo, &lead.path, &plan(), &attempt(), &setup, &pre_start)).unwrap();
+    let made = fx
+        .scoped(|| {
+            create_attempt_worktree_with(&repo, &lead.path, &plan(), &attempt(), &setup, &pre_start)
+        })
+        .unwrap();
 
-    assert_eq!(made.path, repo.parent().unwrap().join("pay.pay-4521--api-a1"));
-    assert_eq!(made.path, attempt_worktree_path(&repo, &plan(), &attempt()).unwrap());
+    assert_eq!(
+        made.path,
+        repo.parent().unwrap().join("pay.pay-4521--api-a1")
+    );
+    assert_eq!(
+        made.path,
+        attempt_worktree_path(&repo, &plan(), &attempt()).unwrap()
+    );
     assert_eq!(made.branch, "cpd/pay-4521--api-a1");
     assert_eq!(made.branch, attempt_branch(&plan(), &attempt()));
     assert_eq!(made.base_sha, lead_sha);
     assert_eq!(fx.git(&made.path, &["rev-parse", "HEAD"]), lead_sha);
-    assert_eq!(fx.git(&made.path, &["symbolic-ref", "--short", "HEAD"]), made.branch);
+    assert_eq!(
+        fx.git(&made.path, &["symbolic-ref", "--short", "HEAD"]),
+        made.branch
+    );
     // The command `sh` got is rendered with the variables, in the new worktree.
-    let command = format!("echo cpd/pay-4521--api-a1 cpd/pay-4521 {} > setup-ran", lead.path.canonicalize().unwrap().display());
-    assert_eq!(sh_calls(&fx), [(command, Some(made.path.canonicalize().unwrap()))]);
+    let command = format!(
+        "echo cpd/pay-4521--api-a1 cpd/pay-4521 {} > setup-ran",
+        lead.path.canonicalize().unwrap().display()
+    );
+    assert_eq!(
+        sh_calls(&fx),
+        [(command, Some(made.path.canonicalize().unwrap()))]
+    );
 }
 
 #[test]
@@ -203,14 +310,24 @@ fn a_failing_attempt_pre_start_removes_the_worktree_and_branch() {
     let fx = Fx::with_ports();
     let repo = fx.git_repo("pay");
     let setup = setup_in(&fx, "attempt.log");
-    let lead = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup)).unwrap();
+    let lead = fx
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup))
+        .unwrap();
     let pre_start = pipeline("pre-start = \"exit 1\"\n", Hook::PreStart);
     pre_start_replies(&fx, Reply::exit(1, "", ""));
 
-    let err = fx.scoped(|| create_attempt_worktree_with(&repo, &lead.path, &plan(), &attempt(), &setup, &pre_start)).unwrap_err();
+    let err = fx
+        .scoped(|| {
+            create_attempt_worktree_with(&repo, &lead.path, &plan(), &attempt(), &setup, &pre_start)
+        })
+        .unwrap_err();
 
     assert_eq!(err.code(), ErrorCode::SetupFailed);
-    assert!(!attempt_worktree_path(&repo, &plan(), &attempt()).unwrap().exists());
+    assert!(
+        !attempt_worktree_path(&repo, &plan(), &attempt())
+            .unwrap()
+            .exists()
+    );
     assert_eq!(fx.git(&repo, &["branch", "--list", "cpd/pay-4521--*"]), "");
     assert_eq!(fx.git(&repo, &["symbolic-ref", "--short", "HEAD"]), "main");
 }
@@ -220,13 +337,19 @@ fn discard_removes_whatever_state_and_is_idempotent() {
     let fx = Fx::with_ports();
     let repo = fx.git_repo("pay");
     let setup = setup_in(&fx, "attempt.log");
-    let lead = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup)).unwrap();
-    let made = fx.scoped(|| create_attempt_worktree(&repo, &lead.path, &plan(), &attempt(), &setup)).unwrap();
+    let lead = fx
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup))
+        .unwrap();
+    let made = fx
+        .scoped(|| create_attempt_worktree(&repo, &lead.path, &plan(), &attempt(), &setup))
+        .unwrap();
     fx.commit_file(&made.path, "work.txt", "unmerged\n", "edit work.txt");
     fs::write(made.path.join("dirty.txt"), "dirty").unwrap();
 
-    fx.scoped(|| discard_worktree(&lead.path, &made.path, &made.branch)).unwrap();
-    fx.scoped(|| discard_worktree(&lead.path, &made.path, &made.branch)).unwrap();
+    fx.scoped(|| discard_worktree(&lead.path, &made.path, &made.branch))
+        .unwrap();
+    fx.scoped(|| discard_worktree(&lead.path, &made.path, &made.branch))
+        .unwrap();
 
     assert!(!made.path.exists());
     assert_eq!(fx.git(&repo, &["branch", "--list", &made.branch]), "");
@@ -250,19 +373,34 @@ fn a_failed_lead_branch_push_names_the_first_stderr_line_in_its_message() {
     let repo = fx.git_repo("pay");
     with_origin(&fx, &repo);
     let stderr = "Connection closed by 140.82.112.4 port 22\nfatal: Could not read from remote repository.\n";
-    let _ = (*fx.fakes.runner).clone().once("git", |c| c.args.iter().any(|a| a == "push"), Reply::exit(128, "", stderr));
+    let _ = (*fx.fakes.runner).clone().once(
+        "git",
+        |c| c.args.iter().any(|a| a == "push"),
+        Reply::exit(128, "", stderr),
+    );
 
-    let made = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log"))).unwrap();
+    let made = fx
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log")))
+        .unwrap();
 
     let e = made.push_failed.expect("the push failed");
     assert_eq!(e.code(), ErrorCode::PushFailed);
-    assert!(e.message().contains("Connection closed by 140.82.112.4 port 22"), "{}", e.message());
+    assert!(
+        e.message()
+            .contains("Connection closed by 140.82.112.4 port 22"),
+        "{}",
+        e.message()
+    );
     assert_eq!(e.details()["stderr"].as_str().unwrap(), stderr.trim_end());
 }
 
 /// The `branch.*` entries of `repo`'s `.git/config`, one per line (exit 1 and no output when there is none).
 fn branch_config(fx: &Fx, repo: &Path) -> String {
-    String::from_utf8(fx.git_output(repo, &["config", "--get-regexp", r"^branch\."]).stdout).unwrap()
+    String::from_utf8(
+        fx.git_output(repo, &["config", "--get-regexp", r"^branch\."])
+            .stdout,
+    )
+    .unwrap()
 }
 
 #[test]
@@ -271,11 +409,20 @@ fn a_lead_worktree_from_origin_has_no_upstream_and_its_push_writes_no_config() {
     let repo = fx.git_repo("pay");
     with_origin(&fx, &repo);
 
-    let made = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log"))).unwrap();
+    let made = fx
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log")))
+        .unwrap();
 
     assert!(made.push_failed.is_none());
-    assert_eq!(fx.git(&repo, &["ls-remote", "--heads", "origin", &made.branch]), format!("{}\trefs/heads/{}", made.base_sha, made.branch));
-    assert_eq!(branch_config(&fx, &repo), "", "no upstream: nothing in .git/config");
+    assert_eq!(
+        fx.git(&repo, &["ls-remote", "--heads", "origin", &made.branch]),
+        format!("{}\trefs/heads/{}", made.base_sha, made.branch)
+    );
+    assert_eq!(
+        branch_config(&fx, &repo),
+        "",
+        "no upstream: nothing in .git/config"
+    );
 }
 
 /// Scripts the next `n` calls of git that `is` accepts: each exits 128 with `stderr`.
@@ -303,7 +450,11 @@ fn git_calls(fx: &Fx, is: fn(&Call) -> bool) -> Vec<Call> {
 fn assert_retry_naps(fx: &Fx, rounds: usize) {
     let naps = fx.fakes.clock.naps();
     assert_eq!(naps.len(), rounds, "{naps:?}");
-    assert!(naps.iter().all(|n| (Duration::from_millis(100)..=Duration::from_millis(500)).contains(n)), "{naps:?}");
+    assert!(
+        naps.iter()
+            .all(|n| (Duration::from_millis(100)..=Duration::from_millis(500)).contains(n)),
+        "{naps:?}"
+    );
 }
 
 #[test]
@@ -312,21 +463,43 @@ fn git_calls_wait_for_a_ref_lock_held_for_one_second() {
     let repo = fx.git_repo("pay");
     // Another git process holds the lock of the repo's tracking ref: git waits it out inside the one call (the wait
     // is git's, bounded by the `core.filesRefLockTimeout` that every call of ours carries), so the call takes a second.
-    let _ = (*fx.fakes.runner).clone().once("git", is_fetch, Reply::ok("").takes(Duration::from_secs(1)));
+    let _ = (*fx.fakes.runner).clone().once(
+        "git",
+        is_fetch,
+        Reply::ok("").takes(Duration::from_secs(1)),
+    );
 
     let fetched = fx.scoped(|| cpd_core::git::run::ok(&repo, &["fetch", "origin", "main"]));
 
     fetched.unwrap();
-    assert!(fx.fakes.clock.elapsed() >= Duration::from_secs(1), "it waited for the lock");
+    assert!(
+        fx.fakes.clock.elapsed() >= Duration::from_secs(1),
+        "it waited for the lock"
+    );
     // One call: a held lock is not a race to retry, and the call is allowed the ten seconds of the lock timeouts.
     let fetches = git_calls(&fx, is_fetch);
     assert_eq!(fetches.len(), 1);
-    assert_eq!(fetches[0].args, ["-C", repo.to_str().unwrap(), "fetch", "origin", "main"]);
-    assert_eq!(fx.fakes.clock.naps(), [Duration::from_secs(1)], "the one wait is git's own, no retry pause");
-    let has = |k: &str, v: &str| fetches[0].envs.contains(&(k.to_owned(), Some(v.to_owned())));
+    assert_eq!(
+        fetches[0].args,
+        ["-C", repo.to_str().unwrap(), "fetch", "origin", "main"]
+    );
+    assert_eq!(
+        fx.fakes.clock.naps(),
+        [Duration::from_secs(1)],
+        "the one wait is git's own, no retry pause"
+    );
+    let has = |k: &str, v: &str| {
+        fetches[0]
+            .envs
+            .contains(&(k.to_owned(), Some(v.to_owned())))
+    };
     assert!(has("GIT_CONFIG_COUNT", "2"));
-    assert!(has("GIT_CONFIG_KEY_0", "core.filesRefLockTimeout") && has("GIT_CONFIG_VALUE_0", "10000"));
-    assert!(has("GIT_CONFIG_KEY_1", "core.packedRefsTimeout") && has("GIT_CONFIG_VALUE_1", "10000"));
+    assert!(
+        has("GIT_CONFIG_KEY_0", "core.filesRefLockTimeout") && has("GIT_CONFIG_VALUE_0", "10000")
+    );
+    assert!(
+        has("GIT_CONFIG_KEY_1", "core.packedRefsTimeout") && has("GIT_CONFIG_VALUE_1", "10000")
+    );
 }
 
 #[test]
@@ -336,28 +509,59 @@ fn a_fetch_outlasts_a_worktree_add_in_progress() {
     let origin = fx.env.root().join("origins").join("pay.git");
     fs::create_dir_all(&origin).unwrap();
     fx.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
-    fx.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    fx.git(
+        &repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
     fx.git(&repo, &["push", "-q", "origin", "main"]);
     let other = fx.env.root().join("other");
-    fx.git(fx.env.root(), &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
+    fx.git(
+        fx.env.root(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
     fx.commit_file(&other, "new.txt", "new\n", "edit new.txt");
     fx.git(&other, &["push", "-q", "origin", "main"]);
     // What `git worktree add` leaves for a moment: an entry whose HEAD is the all-zero placeholder, on which the
     // fetch's connectivity check dies, until the entry is whole.
-    fail_git(&fx, 3, is_fetch, "fatal: bad object worktrees/adding/HEAD\nerror: https://example.invalid did not send all necessary objects\n");
+    fail_git(
+        &fx,
+        3,
+        is_fetch,
+        "fatal: bad object worktrees/adding/HEAD\nerror: https://example.invalid did not send all necessary objects\n",
+    );
 
     let fetched = fx.scoped(|| cpd_core::git::run::fetch(&repo, &["origin", "main"]));
 
     fetched.unwrap();
-    assert_eq!(git_calls(&fx, is_fetch).len(), 4, "three rounds on the race, the fourth fetched");
+    assert_eq!(
+        git_calls(&fx, is_fetch).len(),
+        4,
+        "three rounds on the race, the fourth fetched"
+    );
     assert_retry_naps(&fx, 3);
-    assert_eq!(fx.git(&repo, &["rev-parse", "origin/main"]), fx.git(&other, &["rev-parse", "HEAD"]));
+    assert_eq!(
+        fx.git(&repo, &["rev-parse", "origin/main"]),
+        fx.git(&other, &["rev-parse", "HEAD"])
+    );
     // Any other failure is not retried.
     let before = (git_calls(&fx, is_fetch).len(), fx.fakes.clock.naps());
-    let err = fx.scoped(|| cpd_core::git::run::fetch(&repo, &["origin", "no-such-branch"])).unwrap_err();
-    assert_eq!((err.code(), &err.details()["argv"][3]), (ErrorCode::GitFailed, &serde_json::json!("fetch")));
+    let err = fx
+        .scoped(|| cpd_core::git::run::fetch(&repo, &["origin", "no-such-branch"]))
+        .unwrap_err();
+    assert_eq!(
+        (err.code(), &err.details()["argv"][3]),
+        (ErrorCode::GitFailed, &serde_json::json!("fetch"))
+    );
     // time-claim replaced: a failure that is not the race returns at once, with no nap (20 retries would nap 19 times).
-    assert_eq!((git_calls(&fx, is_fetch).len(), fx.fakes.clock.naps()), (before.0 + 1, before.1));
+    assert_eq!(
+        (git_calls(&fx, is_fetch).len(), fx.fakes.clock.naps()),
+        (before.0 + 1, before.1)
+    );
 }
 
 #[test]
@@ -365,16 +569,34 @@ fn rule_p_pushes_the_named_commit_not_the_branch_tip() {
     let fx = Fx::with_ports();
     let repo = fx.git_repo("pay");
     let origin = with_origin(&fx, &repo);
-    let lead = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log"))).unwrap();
+    let lead = fx
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log")))
+        .unwrap();
     fx.commit_file(&lead.path, "one.txt", "one\n", "edit one.txt");
     let one = fx.git(&lead.path, &["rev-parse", "HEAD"]);
     fx.commit_file(&lead.path, "two.txt", "two\n", "edit two.txt");
     let two = fx.git(&lead.path, &["rev-parse", "HEAD"]);
 
-    assert_eq!(fx.scoped(|| push_commit(&lead.path, &lead.branch, &one)).unwrap(), Push::Pushed { new: true });
-    assert_eq!(fx.git(&origin, &["rev-parse", &lead.branch]), one, "the named commit, not the tip");
-    assert_eq!(fx.scoped(|| push_commit(&lead.path, &lead.branch, &one)).unwrap(), Push::Pushed { new: false });
-    assert_eq!(fx.scoped(|| push_commit(&lead.path, &lead.branch, &two)).unwrap(), Push::Pushed { new: true });
+    assert_eq!(
+        fx.scoped(|| push_commit(&lead.path, &lead.branch, &one))
+            .unwrap(),
+        Push::Pushed { new: true }
+    );
+    assert_eq!(
+        fx.git(&origin, &["rev-parse", &lead.branch]),
+        one,
+        "the named commit, not the tip"
+    );
+    assert_eq!(
+        fx.scoped(|| push_commit(&lead.path, &lead.branch, &one))
+            .unwrap(),
+        Push::Pushed { new: false }
+    );
+    assert_eq!(
+        fx.scoped(|| push_commit(&lead.path, &lead.branch, &two))
+            .unwrap(),
+        Push::Pushed { new: true }
+    );
     assert_eq!(fx.git(&origin, &["rev-parse", &lead.branch]), two);
     assert_eq!(branch_config(&fx, &repo), "", "no -u");
 }
@@ -384,16 +606,30 @@ fn rule_p_an_ancestor_pushed_after_its_descendant_is_a_success_that_pushed_nothi
     let fx = Fx::with_ports();
     let repo = fx.git_repo("pay");
     let origin = with_origin(&fx, &repo);
-    let lead = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log"))).unwrap();
+    let lead = fx
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log")))
+        .unwrap();
     fx.commit_file(&lead.path, "a.txt", "a\n", "edit a.txt");
     let a = fx.git(&lead.path, &["rev-parse", "HEAD"]);
     fx.commit_file(&lead.path, "b.txt", "b\n", "edit b.txt");
     let b = fx.git(&lead.path, &["rev-parse", "HEAD"]);
     // Merge B pushed first; merge A's push of its own `new` comes late.
-    assert_eq!(fx.scoped(|| push_commit(&lead.path, &lead.branch, &b)).unwrap(), Push::Pushed { new: true });
+    assert_eq!(
+        fx.scoped(|| push_commit(&lead.path, &lead.branch, &b))
+            .unwrap(),
+        Push::Pushed { new: true }
+    );
 
-    assert_eq!(fx.scoped(|| push_commit(&lead.path, &lead.branch, &a)).unwrap(), Push::Contained { remote: b.clone() });
-    assert_eq!(fx.git(&origin, &["rev-parse", &lead.branch]), b, "the remote is not moved back");
+    assert_eq!(
+        fx.scoped(|| push_commit(&lead.path, &lead.branch, &a))
+            .unwrap(),
+        Push::Contained { remote: b.clone() }
+    );
+    assert_eq!(
+        fx.git(&origin, &["rev-parse", &lead.branch]),
+        b,
+        "the remote is not moved back"
+    );
 }
 
 #[test]
@@ -401,34 +637,74 @@ fn rule_p_a_rejection_whose_remote_tip_lacks_the_commit_stands() {
     let fx = Fx::with_ports();
     let repo = fx.git_repo("pay");
     let origin = with_origin(&fx, &repo);
-    let lead = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log"))).unwrap();
+    let lead = fx
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log")))
+        .unwrap();
     // A known commit that does not descend from ours, pushed to the remote branch.
     fx.commit_file(&lead.path, "theirs.txt", "theirs\n", "edit theirs.txt");
     let theirs = fx.git(&lead.path, &["rev-parse", "HEAD"]);
-    fx.git(&lead.path, &["push", "-q", "origin", &format!("{theirs}:refs/heads/{}", lead.branch)]);
+    fx.git(
+        &lead.path,
+        &[
+            "push",
+            "-q",
+            "origin",
+            &format!("{theirs}:refs/heads/{}", lead.branch),
+        ],
+    );
     fx.git(&lead.path, &["reset", "-q", "--hard", &lead.base_sha]);
     fx.commit_file(&lead.path, "ours.txt", "ours\n", "edit ours.txt");
     let ours = fx.git(&lead.path, &["rev-parse", "HEAD"]);
 
-    let Push::Rejected { stderr } = fx.scoped(|| push_commit(&lead.path, &lead.branch, &ours)).unwrap() else { panic!("not rejected") };
+    let Push::Rejected { stderr } = fx
+        .scoped(|| push_commit(&lead.path, &lead.branch, &ours))
+        .unwrap()
+    else {
+        panic!("not rejected")
+    };
     assert!(stderr.contains("rejected"), "{stderr}");
     assert_eq!(fx.git(&origin, &["rev-parse", &lead.branch]), theirs);
 
     // A remote tip not in the local object store is a rejection too.
     let other = fx.env.root().join("other");
-    fx.git(fx.env.root(), &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
-    fx.git(&other, &["switch", "-q", "-c", &lead.branch, &format!("origin/{}", lead.branch)]);
+    fx.git(
+        fx.env.root(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    fx.git(
+        &other,
+        &[
+            "switch",
+            "-q",
+            "-c",
+            &lead.branch,
+            &format!("origin/{}", lead.branch),
+        ],
+    );
     fx.commit_file(&other, "unknown.txt", "unknown\n", "edit unknown.txt");
     fx.git(&other, &["push", "-q", "origin", &lead.branch]);
-    assert!(matches!(fx.scoped(|| push_commit(&lead.path, &lead.branch, &theirs)).unwrap(), Push::Rejected { .. }));
+    assert!(matches!(
+        fx.scoped(|| push_commit(&lead.path, &lead.branch, &theirs))
+            .unwrap(),
+        Push::Rejected { .. }
+    ));
 }
 
 #[test]
 fn rule_p_without_origin_is_git_failed() {
     let fx = Fx::with_ports();
     let repo = fx.git_repo("pay");
-    let lead = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log"))).unwrap();
-    let err = fx.scoped(|| push_commit(&lead.path, &lead.branch, &lead.base_sha)).unwrap_err();
+    let lead = fx
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log")))
+        .unwrap();
+    let err = fx
+        .scoped(|| push_commit(&lead.path, &lead.branch, &lead.base_sha))
+        .unwrap_err();
     assert_eq!(err.code(), ErrorCode::GitFailed);
     assert_eq!(err.details()["argv"][3], "push");
 }
@@ -448,7 +724,12 @@ fn hooks(wt: &str) -> Hooks {
     let env = TestEnv::new();
     let repo = env.git_repo("pay");
     let log = env.root().join("logs").join("h.log");
-    Hooks { _env: env, repo, log, wt: wt.to_owned() }
+    Hooks {
+        _env: env,
+        repo,
+        log,
+        wt: wt.to_owned(),
+    }
 }
 
 impl Hooks {
@@ -458,7 +739,15 @@ impl Hooks {
 
     fn run_for(&self, hook: Hook, timeout: Duration) -> cpd_core::git::HookResult {
         let op = Operation { branch: "main" };
-        run_hook(hook, &pipeline(&self.wt, hook), &self.repo, Some(&op), timeout, &self.log).unwrap()
+        run_hook(
+            hook,
+            &pipeline(&self.wt, hook),
+            &self.repo,
+            Some(&op),
+            timeout,
+            &self.log,
+        )
+        .unwrap()
     }
 
     fn file(&self, name: &str) -> String {
@@ -497,7 +786,13 @@ fn hooked(wt: &str) -> Hooked {
     repo.write("README.md", "pay\n");
     repo.commit("init");
     let log = root.join("logs").join("h.log");
-    Hooked { fx, repo, route, log, wt: wt.to_owned() }
+    Hooked {
+        fx,
+        repo,
+        route,
+        log,
+        wt: wt.to_owned(),
+    }
 }
 
 impl Drop for Hooked {
@@ -514,12 +809,18 @@ impl Hooked {
 
     /// The hooks answer by their command: `script(command)`.
     fn script(&self, script: impl Fn(&str) -> Reply + Send + Sync + 'static) {
-        let _ = (*self.fx.fakes.runner).clone().route("sh", Arc::new(Sh(Box::new(script))));
+        let _ = (*self.fx.fakes.runner)
+            .clone()
+            .route("sh", Arc::new(Sh(Box::new(script))));
     }
 
     /// The commands the hooks were run with (`sh -c <command>`), in the order they were called.
     fn commands(&self) -> Vec<String> {
-        self.fx.calls("sh").iter().map(|call| call.args[1].clone()).collect()
+        self.fx
+            .calls("sh")
+            .iter()
+            .map(|call| call.args[1].clone())
+            .collect()
     }
 
     fn run(&self, hook: Hook) -> cpd_core::git::HookResult {
@@ -534,7 +835,16 @@ impl Hooked {
     fn run_table(&self, wt: &str, hook: Hook, timeout: Duration) -> cpd_core::git::HookResult {
         let operation = Operation { branch: "main" };
         let ports = &self.fx.fakes.ports;
-        run_hook_with(ports, hook, &pipeline(wt, hook), self.repo.dir(), Some(&operation), timeout, &self.log).unwrap()
+        run_hook_with(
+            ports,
+            hook,
+            &pipeline(wt, hook),
+            self.repo.dir(),
+            Some(&operation),
+            timeout,
+            &self.log,
+        )
+        .unwrap()
     }
 }
 
@@ -543,7 +853,16 @@ fn no_file_and_no_table_mean_no_commands_and_the_hook_passes() {
     let h = hooked("");
     let run = |wt: &str| {
         let ports = &h.fx.fakes.ports;
-        run_hook_with(ports, Hook::PreCommit, &pipeline(wt, Hook::PreCommit), h.repo.dir(), None, Duration::from_secs(5), &h.log).unwrap()
+        run_hook_with(
+            ports,
+            Hook::PreCommit,
+            &pipeline(wt, Hook::PreCommit),
+            h.repo.dir(),
+            None,
+            Duration::from_secs(5),
+            &h.log,
+        )
+        .unwrap()
     };
 
     let result = run("");
@@ -555,7 +874,10 @@ fn no_file_and_no_table_mean_no_commands_and_the_hook_passes() {
     assert_eq!(result.outcome, HookOutcome::Passed);
     assert_eq!(result.tail, None);
     assert!(!h.log.exists());
-    assert!(h.fx.fakes.runner.calls().is_empty(), "nothing was run, not even a git call for the variables");
+    assert!(
+        h.fx.fakes.runner.calls().is_empty(),
+        "nothing was run, not even a git call for the variables"
+    );
 }
 
 #[test]
@@ -574,7 +896,13 @@ fn a_failing_hook_reports_its_exit_status_and_output() {
     let h = hooked("pre-merge = \"echo broken; exit 7\"\n");
     h.sh(Reply::exit(7, "broken\n", ""));
     let result = h.run(Hook::PreMerge);
-    assert_eq!(result.outcome, HookOutcome::Failed { exit: 7, command: "echo broken; exit 7".to_owned() });
+    assert_eq!(
+        result.outcome,
+        HookOutcome::Failed {
+            exit: 7,
+            command: "echo broken; exit 7".to_owned()
+        }
+    );
     assert_eq!(result.tail.as_deref(), Some("broken"));
 }
 
@@ -582,7 +910,9 @@ fn a_failing_hook_reports_its_exit_status_and_output() {
 fn a_failing_hook_reports_its_rendered_command_not_the_template() {
     let h = hooked("pre-merge = \"echo {{ branch }}; exit 4\"\n");
     h.sh(Reply::exit(4, "", ""));
-    let HookOutcome::Failed { exit, command } = h.run(Hook::PreMerge).outcome else { panic!("the hook fails") };
+    let HookOutcome::Failed { exit, command } = h.run(Hook::PreMerge).outcome else {
+        panic!("the hook fails")
+    };
     assert_eq!(exit, 4);
     assert_eq!(command, h.commands()[0]);
     assert!(!command.contains("{{"), "{command}");
@@ -591,7 +921,9 @@ fn a_failing_hook_reports_its_rendered_command_not_the_template() {
 #[test]
 fn only_the_last_60_lines_are_returned_and_the_log_has_all() {
     let h = hooked("pre-merge = \"seq 1 100\"\n");
-    h.sh(Reply::ok(&(1..=100).map(|n| format!("{n}\n")).collect::<String>()));
+    h.sh(Reply::ok(
+        &(1..=100).map(|n| format!("{n}\n")).collect::<String>(),
+    ));
     let result = h.run(Hook::PreMerge);
     let tail = result.tail.unwrap();
     assert_eq!(tail.lines().count(), 60);
@@ -624,7 +956,13 @@ fn a_table_runs_together_waits_for_all_and_fails_with_the_first_in_file_order() 
         }
     });
     let result = h.run(Hook::PreMerge);
-    assert_eq!(result.outcome, HookOutcome::Failed { exit: 5, command: "zeta".to_owned() });
+    assert_eq!(
+        result.outcome,
+        HookOutcome::Failed {
+            exit: 5,
+            command: "zeta".to_owned()
+        }
+    );
     assert!(result.tail.unwrap().contains("slow │ slow-done"));
 }
 
@@ -637,7 +975,10 @@ fn commands_of_a_table_run_concurrently() {
         started.wait();
         Reply::ok("")
     });
-    assert_eq!(h.run_for(Hook::PreMerge, Duration::from_secs(20)).outcome, HookOutcome::Passed);
+    assert_eq!(
+        h.run_for(Hook::PreMerge, Duration::from_secs(20)).outcome,
+        HookOutcome::Passed
+    );
     assert_eq!(h.fx.calls("sh").len(), 3);
 }
 
@@ -646,16 +987,32 @@ fn a_pipeline_runs_its_blocks_in_order_and_a_failing_block_stops_it() {
     let h = hooked(
         "[[pre-merge]]\none = \"echo one > one.txt\"\n\n[[pre-merge]]\ntwo = \"test -f one.txt && echo two > two.txt\"\nfail = \"exit 4\"\n\n[[pre-merge]]\nthree = \"echo three > three.txt\"\n",
     );
-    h.script(|command| if command == "exit 4" { Reply::exit(4, "", "") } else { Reply::ok("") });
+    h.script(|command| {
+        if command == "exit 4" {
+            Reply::exit(4, "", "")
+        } else {
+            Reply::ok("")
+        }
+    });
     let result = h.run(Hook::PreMerge);
-    assert_eq!(result.outcome, HookOutcome::Failed { exit: 4, command: "exit 4".to_owned() });
+    assert_eq!(
+        result.outcome,
+        HookOutcome::Failed {
+            exit: 4,
+            command: "exit 4".to_owned()
+        }
+    );
     let commands = h.commands();
     // The second block started after the first ended (`two` reads the file `one` writes), and ran whole.
     assert_eq!(commands[0], "echo one > one.txt");
     let mut second = commands[1..].to_vec();
     second.sort();
     assert_eq!(second, ["exit 4", "test -f one.txt && echo two > two.txt"]);
-    assert_eq!(commands.len(), 3, "the third block did not run: {commands:?}");
+    assert_eq!(
+        commands.len(),
+        3,
+        "the third block did not run: {commands:?}"
+    );
 }
 
 #[test]
@@ -671,10 +1028,18 @@ fn output_of_concurrent_commands_is_prefixed_with_their_names() {
 #[test]
 fn an_undefined_variable_or_worktrunk_filter_fails_before_anything_runs() {
     let h = hooked("");
-    for bad in ["{{ nope }}", "{{ branch | sanitize }}", "{{ vars.x }}", "{{ target_worktree_path_of('x') }}"] {
+    for bad in [
+        "{{ nope }}",
+        "{{ branch | sanitize }}",
+        "{{ vars.x }}",
+        "{{ target_worktree_path_of('x') }}",
+    ] {
         let wt = format!("[pre-merge]\nfirst = \"touch ran.txt\"\nsecond = \"echo {bad}\"\n");
         let result = h.run_table(&wt, Hook::PreMerge, Duration::from_secs(30));
-        assert!(matches!(result.outcome, HookOutcome::Error(HookError::Invalid(_))), "{bad}: {result:?}");
+        assert!(
+            matches!(result.outcome, HookOutcome::Error(HookError::Invalid(_))),
+            "{bad}: {result:?}"
+        );
         assert_eq!(result.tail, None);
         assert!(h.fx.calls("sh").is_empty(), "{bad}: a command ran");
     }
@@ -691,9 +1056,13 @@ fn a_malformed_hooks_table_is_policy_invalid() {
 #[test]
 fn a_wt_toml_in_the_tree_is_not_read() {
     let h = hooked("pre-commit = \"echo from the policy\"\n");
-    h.repo.write(".config/wt.toml", "pre-commit = \"echo from the tree\"\n");
+    h.repo
+        .write(".config/wt.toml", "pre-commit = \"echo from the tree\"\n");
     h.script(|command| Reply::ok(&format!("{}\n", command.trim_start_matches("echo "))));
-    assert_eq!(h.run(Hook::PreCommit).tail.as_deref(), Some("from the policy"));
+    assert_eq!(
+        h.run(Hook::PreCommit).tail.as_deref(),
+        Some("from the policy")
+    );
     assert_eq!(h.commands(), ["echo from the policy"]);
 }
 
@@ -711,23 +1080,37 @@ fn cockpit_pi_and_cpd_variables_do_not_reach_hooks() {
     // The variables are in this process's environment, which `Fx` puts back; the hook's call removes each of them
     // (`Call.envs`: `None`), and leaves the others to be inherited (`GITTEST_KEEP` is not named).
     let h = hooked("pre-merge = \"env > env.txt\"\n");
-    for (key, value) in [("TMUX", "/tmp/fake,1,0"), ("TMUX_PANE", "%9"), ("PI_GITTEST", "x"), ("CPD_GITTEST", "x"), ("GITTEST_KEEP", "kept")] {
+    for (key, value) in [
+        ("TMUX", "/tmp/fake,1,0"),
+        ("TMUX_PANE", "%9"),
+        ("PI_GITTEST", "x"),
+        ("CPD_GITTEST", "x"),
+        ("GITTEST_KEEP", "kept"),
+    ] {
         h.fx.export(key, value);
     }
     h.sh(Reply::ok(""));
     assert_eq!(h.run(Hook::PreMerge).outcome, HookOutcome::Passed);
     let envs = h.fx.calls("sh")[0].envs.clone();
     for gone in ["TMUX", "TMUX_PANE", "PI_GITTEST", "CPD_GITTEST"] {
-        assert!(envs.contains(&(gone.to_owned(), None)), "{gone} leaked: {envs:?}");
+        assert!(
+            envs.contains(&(gone.to_owned(), None)),
+            "{gone} leaked: {envs:?}"
+        );
     }
-    assert!(envs.iter().all(|(key, _)| key != "GITTEST_KEEP"), "GITTEST_KEEP is the caller's to inherit: {envs:?}");
+    assert!(
+        envs.iter().all(|(key, _)| key != "GITTEST_KEEP"),
+        "GITTEST_KEEP is the caller's to inherit: {envs:?}"
+    );
 }
 
 #[test]
 fn the_commands_of_a_hook_can_be_listed_in_file_order() {
     let wt = "[[pre-commit]]\nz = \"first {{ branch }}\"\n\n[[pre-commit]]\nb = \"second\"\na = \"third\"\n";
-    let commands: Vec<_> =
-        pipeline(wt, Hook::PreCommit).commands().map(|c| (c.name.clone().unwrap(), c.template.clone())).collect();
+    let commands: Vec<_> = pipeline(wt, Hook::PreCommit)
+        .commands()
+        .map(|c| (c.name.clone().unwrap(), c.template.clone()))
+        .collect();
     assert_eq!(
         commands,
         vec![
@@ -749,11 +1132,26 @@ fn commands_get_the_variables_as_a_template_and_as_json_on_stdin() {
 
     let repo = h.repo.dir().canonicalize().unwrap();
     let calls = h.fx.calls("sh");
-    let by = |command: &str| calls.iter().find(|call| call.args[1] == command).unwrap_or_else(|| panic!("no call of {command:?}: {calls:?}"));
+    let by = |command: &str| {
+        calls
+            .iter()
+            .find(|call| call.args[1] == command)
+            .unwrap_or_else(|| panic!("no call of {command:?}: {calls:?}"))
+    };
     // The template is rendered with the variables before `sh` gets it.
-    assert_eq!(by(&format!("echo pre-merge echo main main {} > echo.txt", repo.display())).args[0], "-c");
+    assert_eq!(
+        by(&format!(
+            "echo pre-merge echo main main {} > echo.txt",
+            repo.display()
+        ))
+        .args[0],
+        "-c"
+    );
     // The same variables, as JSON, on the stdin of every command.
-    let stdin = by("cat > ctx.json").stdin.clone().expect("the command has the context on its stdin");
+    let stdin = by("cat > ctx.json")
+        .stdin
+        .clone()
+        .expect("the command has the context on its stdin");
     let ctx: serde_json::Value = serde_json::from_slice(&stdin).unwrap();
     assert_eq!(ctx["branch"], "main");
     assert_eq!(ctx["hook_type"], "pre-merge");
@@ -783,24 +1181,47 @@ fn the_command_runs_with_sh_in_the_worktree_root() {
     // `sh -c <command>` in the worktree root.
     assert_eq!(calls[0].program.rsplit('/').next(), Some("sh"));
     assert_eq!(calls[0].args, ["-c", "pwd > pwd.txt; echo $0 > shell.txt"]);
-    assert_eq!(calls[0].cwd.as_deref(), Some(h.repo.dir().canonicalize().unwrap().as_path()));
+    assert_eq!(
+        calls[0].cwd.as_deref(),
+        Some(h.repo.dir().canonicalize().unwrap().as_path())
+    );
 }
 
 #[test]
 fn target_worktree_path_is_undefined_when_no_worktree_has_the_target() {
     let h = hooked("pre-merge = \"echo {{ target_worktree_path }}\"\n");
-    let operation = Operation { branch: "no-such-branch" };
+    let operation = Operation {
+        branch: "no-such-branch",
+    };
     let ports = &h.fx.fakes.ports;
-    let result = run_hook_with(ports, Hook::PreMerge, &pipeline(&h.wt, Hook::PreMerge), h.repo.dir(), Some(&operation), Duration::from_secs(5), &h.log).unwrap();
-    assert!(matches!(result.outcome, HookOutcome::Error(HookError::Invalid(_))));
-    assert!(h.fx.calls("sh").is_empty(), "nothing ran: the command did not render");
+    let result = run_hook_with(
+        ports,
+        Hook::PreMerge,
+        &pipeline(&h.wt, Hook::PreMerge),
+        h.repo.dir(),
+        Some(&operation),
+        Duration::from_secs(5),
+        &h.log,
+    )
+    .unwrap();
+    assert!(matches!(
+        result.outcome,
+        HookOutcome::Error(HookError::Invalid(_))
+    ));
+    assert!(
+        h.fx.calls("sh").is_empty(),
+        "nothing ran: the command did not render"
+    );
 }
 
 /// Dead means no such process or state Z. The hook's sh is gone, so a background child is
 /// an orphan: after SIGKILL it is a zombie (`kill -0` still succeeds) until init reaps it,
 /// and on a loaded runner that window is visible.
 fn is_dead(pid: &str) -> bool {
-    let out = std::process::Command::new("ps").args(["-o", "stat=", "-p", pid]).output().unwrap();
+    let out = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", pid])
+        .output()
+        .unwrap();
     let state = String::from_utf8(out.stdout).unwrap();
     state.trim().is_empty() || state.trim().starts_with('Z')
 }
@@ -812,7 +1233,9 @@ fn a_background_child_of_a_finished_hook_is_killed_when_the_hook_returns() {
     let pid = h.file("pid").trim().to_owned();
     // The contract is that the child is dead, not that its pid is already free: wait a
     // bounded time for the kill to land.
-    common::wait_until("the background child to die when the hook returns", || is_dead(&pid));
+    common::wait_until("the background child to die when the hook returns", || {
+        is_dead(&pid)
+    });
 }
 
 // --------------------------------------------------------------- tamper
@@ -847,13 +1270,17 @@ fn on_att(fx: &Fx, repo: &Path, edit: impl FnOnce(&Path)) {
 }
 
 fn touched(fx: &Fx, repo: &Path) -> Vec<String> {
-    fx.scoped(|| touched_protected(repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att").unwrap())
+    fx.scoped(|| {
+        touched_protected(repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att").unwrap()
+    })
 }
 
 #[test]
 fn deleting_a_protected_path_is_refused() {
     let (fx, repo) = tamper_repo();
-    on_att(&fx, &repo, |r| fs::remove_file(r.join("verify.sh")).unwrap());
+    on_att(&fx, &repo, |r| {
+        fs::remove_file(r.join("verify.sh")).unwrap()
+    });
     assert_eq!(touched(&fx, &repo), vec!["verify.sh"]);
 }
 
@@ -888,7 +1315,18 @@ fn each_protected_path_is_refused() {
             fs::write(full, "changed\n").unwrap();
         });
         assert_eq!(touched(&fx, &repo), vec![path.to_owned()], "{path}");
-        let err = fx.scoped(|| tamper_check(&repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att")).unwrap_err();
+        let err = fx
+            .scoped(|| {
+                tamper_check(
+                    &repo,
+                    "cpd/pay-4521",
+                    &list(),
+                    "main",
+                    "cpd/pay-4521",
+                    "att",
+                )
+            })
+            .unwrap_err();
         assert_eq!(err.code(), ErrorCode::GateTampered, "{path}");
         assert_eq!(err.details()["paths"], serde_json::json!([path]));
     }
@@ -898,14 +1336,30 @@ fn each_protected_path_is_refused() {
 fn unprotected_paths_pass() {
     let (fx, repo) = tamper_repo();
     on_att(&fx, &repo, |r| {
-        for p in ["src/a.rs", "scripts/cix.sh", "verify.sh.bak", ".cpdx/y", ".config/other.toml"] {
+        for p in [
+            "src/a.rs",
+            "scripts/cix.sh",
+            "verify.sh.bak",
+            ".cpdx/y",
+            ".config/other.toml",
+        ] {
             let full = r.join(p);
             fs::create_dir_all(full.parent().unwrap()).unwrap();
             fs::write(full, "x\n").unwrap();
         }
     });
     assert_eq!(touched(&fx, &repo), Vec::<String>::new());
-    fx.scoped(|| tamper_check(&repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att")).unwrap();
+    fx.scoped(|| {
+        tamper_check(
+            &repo,
+            "cpd/pay-4521",
+            &list(),
+            "main",
+            "cpd/pay-4521",
+            "att",
+        )
+    })
+    .unwrap();
 }
 
 #[test]
@@ -932,7 +1386,9 @@ fn no_list_means_only_the_cpd_directory() {
         fs::create_dir_all(r.join(".cpd")).unwrap();
         fs::write(r.join(".cpd/x"), "x\n").unwrap();
     });
-    let found = fx.scoped(|| touched_protected(&repo, "cpd/pay-4521", &[], "main", "cpd/pay-4521", "att").unwrap());
+    let found = fx.scoped(|| {
+        touched_protected(&repo, "cpd/pay-4521", &[], "main", "cpd/pay-4521", "att").unwrap()
+    });
     assert_eq!(found, vec![".cpd/x"]);
 }
 
@@ -951,7 +1407,10 @@ fn base_merge_repo(path: &str, content: Option<&str>) -> (Fx, PathBuf) {
         }
     }
     fx.git(&repo, &["switch", "-q", "att"]);
-    fx.git(&repo, &["merge", "-q", "--no-ff", "-m", "merge the base", "main"]);
+    fx.git(
+        &repo,
+        &["merge", "-q", "--no-ff", "-m", "merge the base", "main"],
+    );
     fx.git(&repo, &["switch", "-q", "main"]);
     (fx, repo)
 }
@@ -961,7 +1420,17 @@ fn a_protected_path_the_attempt_has_as_the_base_has_it_is_allowed() {
     for path in [".cpd/x", "verify.sh", "scripts/ci/run.sh"] {
         let (fx, repo) = base_merge_repo(path, Some("from the base\n"));
         assert_eq!(touched(&fx, &repo), Vec::<String>::new(), "{path}");
-        fx.scoped(|| tamper_check(&repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att")).unwrap();
+        fx.scoped(|| {
+            tamper_check(
+                &repo,
+                "cpd/pay-4521",
+                &list(),
+                "main",
+                "cpd/pay-4521",
+                "att",
+            )
+        })
+        .unwrap();
     }
 }
 
@@ -981,10 +1450,22 @@ fn a_protected_path_that_matches_the_lead_tip_is_allowed() {
     fx.git(&repo, &["switch", "-q", "cpd/pay-4521"]);
     fx.commit_file(&repo, ".cpd/x", "lead\n", "edit .cpd/x");
     fx.git(&repo, &["switch", "-q", "att"]);
-    fx.git(&repo, &["merge", "-q", "--no-ff", "-m", "merge the lead", "cpd/pay-4521"]);
+    fx.git(
+        &repo,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "merge the lead",
+            "cpd/pay-4521",
+        ],
+    );
     fx.git(&repo, &["switch", "-q", "main"]);
     let base = fx.git(&repo, &["merge-base", "main", "att"]);
-    let found = fx.scoped(|| touched_protected(&repo, "cpd/pay-4521", &list(), "main", &base, "att").unwrap());
+    let found = fx.scoped(|| {
+        touched_protected(&repo, "cpd/pay-4521", &list(), "main", &base, "att").unwrap()
+    });
     assert_eq!(found, Vec::<String>::new());
 }
 
@@ -999,16 +1480,29 @@ fn a_protected_file_deleted_on_the_base_and_in_the_attempt_is_allowed() {
 #[test]
 fn a_protected_file_deleted_in_the_attempt_alone_is_tampered() {
     let (fx, repo) = tamper_repo();
-    on_att(&fx, &repo, |r| fs::remove_file(r.join("verify.sh")).unwrap());
+    on_att(&fx, &repo, |r| {
+        fs::remove_file(r.join("verify.sh")).unwrap()
+    });
     assert_eq!(touched(&fx, &repo), vec!["verify.sh"]);
 }
 
 #[test]
 fn base_ref_is_origin_slash_base_only_with_an_origin() {
     let (fx, repo) = tamper_repo();
-    assert_eq!(fx.scoped(|| cpd_core::git::tamper::base_ref(&repo, "main")).unwrap(), "main");
-    fx.git(&repo, &["remote", "add", "origin", "https://example.invalid/pay.git"]);
-    assert_eq!(fx.scoped(|| cpd_core::git::tamper::base_ref(&repo, "main")).unwrap(), "origin/main");
+    assert_eq!(
+        fx.scoped(|| cpd_core::git::tamper::base_ref(&repo, "main"))
+            .unwrap(),
+        "main"
+    );
+    fx.git(
+        &repo,
+        &["remote", "add", "origin", "https://example.invalid/pay.git"],
+    );
+    assert_eq!(
+        fx.scoped(|| cpd_core::git::tamper::base_ref(&repo, "main"))
+            .unwrap(),
+        "origin/main"
+    );
 }
 
 // ---------------------------------------------------------------- rule S
@@ -1027,16 +1521,37 @@ struct Moving {
 
 /// The `Setup` of a worktree's hooks, its log `name` under the `Fx`'s root.
 fn setup_in(fx: &Fx, name: &str) -> Setup {
-    Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("logs").join(name) }
+    Setup {
+        timeout: Duration::from_secs(30),
+        log: fx.env.root().join("logs").join(name),
+    }
 }
 
 fn moving() -> Moving {
     let fx = Fx::with_ports();
     let repo = fx.git_repo("pay");
-    let made = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log"))).unwrap();
+    let made = fx
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log")))
+        .unwrap();
     let scratch = fx.env.root().join("scratch");
-    fx.git(&repo, &["worktree", "add", "-q", "--detach", scratch.to_str().unwrap(), &made.branch]);
-    Moving { fx, repo, lead: made.path, branch: made.branch, scratch }
+    fx.git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            scratch.to_str().unwrap(),
+            &made.branch,
+        ],
+    );
+    Moving {
+        fx,
+        repo,
+        lead: made.path,
+        branch: made.branch,
+        scratch,
+    }
 }
 
 impl Moving {
@@ -1045,10 +1560,22 @@ impl Moving {
     fn merge(&self, path: &str, content: &str) -> String {
         let reference = format!("refs/heads/{}", self.branch);
         let old = self.fx.git(&self.repo, &["rev-parse", &reference]);
-        self.fx.git(&self.scratch, &["checkout", "-q", "--detach", &old]);
-        self.fx.commit_file(&self.scratch, path, content, &format!("edit {path}"));
+        self.fx
+            .git(&self.scratch, &["checkout", "-q", "--detach", &old]);
+        self.fx
+            .commit_file(&self.scratch, path, content, &format!("edit {path}"));
         let new = self.fx.git(&self.scratch, &["rev-parse", "HEAD"]);
-        self.fx.git(&self.repo, &["update-ref", "-m", "cpd: merge test", &reference, &new, &old]);
+        self.fx.git(
+            &self.repo,
+            &[
+                "update-ref",
+                "-m",
+                "cpd: merge test",
+                &reference,
+                &new,
+                &old,
+            ],
+        );
         new
     }
 
@@ -1058,7 +1585,11 @@ impl Moving {
 
     fn assert_at_tip_and_clean(&self, tip: &str) {
         assert_eq!(self.fx.git(&self.lead, &["rev-parse", "HEAD"]), tip);
-        assert_eq!(self.fx.git(&self.lead, &["status", "--porcelain"]), "", "the Lead worktree holds the tip's tree");
+        assert_eq!(
+            self.fx.git(&self.lead, &["status", "--porcelain"]),
+            "",
+            "the Lead worktree holds the tip's tree"
+        );
     }
 }
 
@@ -1110,11 +1641,24 @@ fn rule_s_keeps_a_staged_edit_and_reports_it_stale() {
     assert_eq!(err.code(), ErrorCode::LeadWorktreeStale);
     assert_eq!(err.details()["worktree"], m.lead.display().to_string());
     // Nothing was overwritten: the edit is still staged and on disk, and the tip's file is not checked out.
-    assert_eq!(m.fx.git(&m.lead, &["diff", "--cached", "--name-only"]), "README.md\na.txt");
-    assert_eq!(m.fx.git(&m.lead, &["show", ":README.md"]), "staged by the Lead");
-    assert_eq!(fs::read_to_string(m.lead.join("README.md")).unwrap(), "staged by the Lead\n");
+    assert_eq!(
+        m.fx.git(&m.lead, &["diff", "--cached", "--name-only"]),
+        "README.md\na.txt"
+    );
+    assert_eq!(
+        m.fx.git(&m.lead, &["show", ":README.md"]),
+        "staged by the Lead"
+    );
+    assert_eq!(
+        fs::read_to_string(m.lead.join("README.md")).unwrap(),
+        "staged by the Lead\n"
+    );
     assert!(!m.lead.join("a.txt").exists());
-    assert_eq!(m.fx.git(&m.lead, &["rev-parse", "HEAD"]), tip, "the ref move stands");
+    assert_eq!(
+        m.fx.git(&m.lead, &["rev-parse", "HEAD"]),
+        tip,
+        "the ref move stands"
+    );
 }
 
 #[test]
@@ -1126,7 +1670,10 @@ fn rule_s_keeps_an_unstaged_edit_and_reports_it_stale() {
     let err = m.sync().unwrap_err();
 
     assert_eq!(err.code(), ErrorCode::LeadWorktreeStale);
-    assert_eq!(fs::read_to_string(m.lead.join("README.md")).unwrap(), "edited by the Lead\n");
+    assert_eq!(
+        fs::read_to_string(m.lead.join("README.md")).unwrap(),
+        "edited by the Lead\n"
+    );
     assert!(!m.lead.join("a.txt").exists());
 }
 
@@ -1135,12 +1682,25 @@ fn rule_s_waits_out_an_index_lock_held_for_one_second() {
     let m = moving();
     let tip = m.merge("a.txt", "a\n");
     // Another git process holds the index lock for one second of virtual time: `write-tree` finds it held until then.
-    let lock = PathBuf::from(m.fx.git(&m.lead, &["rev-parse", "--path-format=absolute", "--git-path", "index.lock"]));
-    let held = format!("fatal: Unable to create '{}': File exists.\n", lock.display());
+    let lock = PathBuf::from(m.fx.git(
+        &m.lead,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "index.lock",
+        ],
+    ));
+    let held = format!(
+        "fatal: Unable to create '{}': File exists.\n",
+        lock.display()
+    );
     let clock = m.fx.fakes.clock.clone();
     let _ = (*m.fx.fakes.runner).clone().on(
         "git",
-        move |call| call.args.iter().any(|a| a == "write-tree") && clock.elapsed() < Duration::from_secs(1),
+        move |call| {
+            call.args.iter().any(|a| a == "write-tree") && clock.elapsed() < Duration::from_secs(1)
+        },
         Reply::exit(128, "", &held),
     );
 
@@ -1148,9 +1708,19 @@ fn rule_s_waits_out_an_index_lock_held_for_one_second() {
 
     assert_eq!(synced.unwrap(), Synced::Done);
     let naps = m.fx.fakes.clock.naps();
-    assert!(m.fx.fakes.clock.elapsed() >= Duration::from_secs(1), "it waited for the lock");
-    assert!(naps.len() >= 2 && naps.len() < 20, "a nap per round that found the lock: {naps:?}");
-    assert!(naps.iter().all(|n| (Duration::from_millis(100)..=Duration::from_millis(500)).contains(n)), "{naps:?}");
+    assert!(
+        m.fx.fakes.clock.elapsed() >= Duration::from_secs(1),
+        "it waited for the lock"
+    );
+    assert!(
+        naps.len() >= 2 && naps.len() < 20,
+        "a nap per round that found the lock: {naps:?}"
+    );
+    assert!(
+        naps.iter()
+            .all(|n| (Duration::from_millis(100)..=Duration::from_millis(500)).contains(n)),
+        "{naps:?}"
+    );
     m.assert_at_tip_and_clean(&tip);
 }
 
@@ -1166,7 +1736,11 @@ fn rule_s_on_an_up_to_date_lead_worktree_is_done_and_touches_nothing() {
 
 /// strerror(0): "Success" on Linux, "Undefined error: 0" on macOS.
 fn strerror_zero() -> &'static str {
-    if cfg!(target_os = "macos") { "Undefined error: 0" } else { "Success" }
+    if cfg!(target_os = "macos") {
+        "Undefined error: 0"
+    } else {
+        "Success"
+    }
 }
 
 #[test]
@@ -1174,22 +1748,33 @@ fn a_merged_attempt_is_removed_with_branch_d_and_an_unmerged_one_is_refused() {
     let fx = Fx::with_ports();
     let repo = fx.git_repo("pay");
     let setup = setup_in(&fx, "attempt.log");
-    let lead = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup)).unwrap();
-    let made = fx.scoped(|| create_attempt_worktree(&repo, &lead.path, &plan(), &attempt(), &setup)).unwrap();
+    let lead = fx
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup))
+        .unwrap();
+    let made = fx
+        .scoped(|| create_attempt_worktree(&repo, &lead.path, &plan(), &attempt(), &setup))
+        .unwrap();
     fx.commit_file(&made.path, "work.txt", "work\n", "edit work.txt");
 
     // Unmerged: git's own guard refuses the branch deletion.
-    let err = fx.scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch)).unwrap_err();
+    let err = fx
+        .scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch))
+        .unwrap_err();
     assert_eq!(err.code(), ErrorCode::GitFailed);
     assert_eq!(err.details()["argv"][3], "branch");
-    assert_eq!(fx.git(&repo, &["branch", "--list", &made.branch]).trim(), made.branch);
+    assert_eq!(
+        fx.git(&repo, &["branch", "--list", &made.branch]).trim(),
+        made.branch
+    );
 
     fx.git(&lead.path, &["merge", "-q", "--ff-only", &made.branch]);
-    fx.scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch)).unwrap();
+    fx.scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch))
+        .unwrap();
     assert!(!made.path.exists());
     assert_eq!(fx.git(&repo, &["branch", "--list", &made.branch]), "");
     // Rerunning is safe.
-    fx.scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch)).unwrap();
+    fx.scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch))
+        .unwrap();
 }
 
 // ------------------------------------------------ `worktree::list` over a half-written admin dir (contract §7)
@@ -1205,13 +1790,28 @@ fn a_merged_attempt_is_removed_with_branch_d_and_an_unmerged_one_is_refused() {
 fn repo_with_a_linked_worktree(fx: &Fx) -> (PathBuf, PathBuf) {
     let repo = fx.git_repo("pay");
     let worktree = fx.env.root().join("pay.held");
-    fx.git(&repo, &["worktree", "add", "-q", "-b", "held", worktree.to_str().unwrap()]);
+    fx.git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "held",
+            worktree.to_str().unwrap(),
+        ],
+    );
     (repo, worktree)
 }
 
 /// The paths `worktree::list` found, symlinks resolved.
 fn listed(fx: &Fx, repo: &Path) -> Result<Vec<PathBuf>, cpd_core::error::CpdError> {
-    fx.scoped(|| Ok(cpd_core::git::worktree::list(repo)?.into_iter().map(|w| w.path.canonicalize().unwrap_or(w.path)).collect()))
+    fx.scoped(|| {
+        Ok(cpd_core::git::worktree::list(repo)?
+            .into_iter()
+            .map(|w| w.path.canonicalize().unwrap_or(w.path))
+            .collect())
+    })
 }
 
 #[test]
@@ -1219,14 +1819,32 @@ fn list_reads_again_when_the_admin_dir_it_read_half_written_is_completed() {
     let fx = Fx::with_ports();
     let (repo, worktree) = repo_with_a_linked_worktree(&fx);
     // The first read got an empty `commondir`; the writer has finished before the second.
-    fail_git(&fx, 1, is_worktree_list, &format!("fatal: failed to read .git/worktrees/pay.held/commondir: {}\n", strerror_zero()));
+    fail_git(
+        &fx,
+        1,
+        is_worktree_list,
+        &format!(
+            "fatal: failed to read .git/worktrees/pay.held/commondir: {}\n",
+            strerror_zero()
+        ),
+    );
 
     let found = listed(&fx, &repo);
 
-    assert_eq!(git_calls(&fx, is_worktree_list).len(), 2, "the failed read, then the second");
+    assert_eq!(
+        git_calls(&fx, is_worktree_list).len(),
+        2,
+        "the failed read, then the second"
+    );
     assert_retry_naps(&fx, 1);
     let found = found.expect("list reads again: the admin dir is complete at the second read");
-    assert_eq!(found, [repo.canonicalize().unwrap_or(repo), worktree.canonicalize().unwrap_or(worktree)]);
+    assert_eq!(
+        found,
+        [
+            repo.canonicalize().unwrap_or(repo),
+            worktree.canonicalize().unwrap_or(worktree)
+        ]
+    );
 }
 
 #[test]
@@ -1234,12 +1852,24 @@ fn list_reads_again_when_the_admin_dir_it_read_is_removed() {
     let fx = Fx::with_ports();
     let (repo, worktree) = repo_with_a_linked_worktree(&fx);
     // `git worktree remove` deleted the dir while the first read was in it: the second read lists the main one only.
-    fail_git(&fx, 1, is_worktree_list, "fatal: failed to read .git/worktrees/pay.held/commondir: No such file or directory\n");
-    fx.git(&repo, &["worktree", "remove", "--force", worktree.to_str().unwrap()]);
+    fail_git(
+        &fx,
+        1,
+        is_worktree_list,
+        "fatal: failed to read .git/worktrees/pay.held/commondir: No such file or directory\n",
+    );
+    fx.git(
+        &repo,
+        &["worktree", "remove", "--force", worktree.to_str().unwrap()],
+    );
 
     let found = listed(&fx, &repo);
 
-    assert_eq!(git_calls(&fx, is_worktree_list).len(), 2, "the failed read, then the second");
+    assert_eq!(
+        git_calls(&fx, is_worktree_list).len(),
+        2,
+        "the failed read, then the second"
+    );
     assert_retry_naps(&fx, 1);
     let found = found.expect("list reads again: the admin dir is gone at the second read");
     assert_eq!(found, [repo.canonicalize().unwrap_or(repo)]);
@@ -1249,22 +1879,42 @@ fn list_reads_again_when_the_admin_dir_it_read_is_removed() {
 fn an_admin_dir_that_stays_half_written_is_one_git_failed_after_twenty_reads() {
     let fx = Fx::with_ports();
     let (repo, _worktree) = repo_with_a_linked_worktree(&fx);
-    let stderr = format!("fatal: failed to read .git/worktrees/pay.held/commondir: {}\n", strerror_zero());
-    let _ = (*fx.fakes.runner).clone().on("git", is_worktree_list, Reply::exit(128, "", &stderr));
+    let stderr = format!(
+        "fatal: failed to read .git/worktrees/pay.held/commondir: {}\n",
+        strerror_zero()
+    );
+    let _ = (*fx.fakes.runner)
+        .clone()
+        .on("git", is_worktree_list, Reply::exit(128, "", &stderr));
 
     let found = listed(&fx, &repo);
 
     // The bound is the one of `worktree add` (§7): 20 rounds, 19 pauses between them; the 20th failure is the error.
-    assert_eq!(git_calls(&fx, is_worktree_list).len(), 20, "each round ran git once");
+    assert_eq!(
+        git_calls(&fx, is_worktree_list).len(),
+        20,
+        "each round ran git once"
+    );
     assert_retry_naps(&fx, 19);
     let error = found.unwrap_err();
     assert_eq!(error.code(), ErrorCode::GitFailed);
     let details = error.details();
     assert_eq!(details["exit"], 128);
-    assert_eq!(details["argv"].as_array().unwrap()[3..], [serde_json::json!("worktree"), serde_json::json!("list"), serde_json::json!("--porcelain")]);
+    assert_eq!(
+        details["argv"].as_array().unwrap()[3..],
+        [
+            serde_json::json!("worktree"),
+            serde_json::json!("list"),
+            serde_json::json!("--porcelain")
+        ]
+    );
     let stderr = details["stderr"].as_str().unwrap();
     assert!(
-        stderr.contains("fatal: failed to read ") && stderr.contains(&format!("worktrees/pay.held/commondir: {}", strerror_zero())),
+        stderr.contains("fatal: failed to read ")
+            && stderr.contains(&format!(
+                "worktrees/pay.held/commondir: {}",
+                strerror_zero()
+            )),
         "{stderr}"
     );
 }
@@ -1275,7 +1925,12 @@ fn any_other_worktree_list_failure_is_git_failed_at_once() {
     let (repo, _worktree) = repo_with_a_linked_worktree(&fx);
     // The first read of the config finds a line git cannot parse: not the half-written admin dir. The next read
     // would succeed (the script is used up), so a retry would show.
-    fail_git(&fx, 1, is_worktree_list, "fatal: bad config line 1 in file .git/config\n");
+    fail_git(
+        &fx,
+        1,
+        is_worktree_list,
+        "fatal: bad config line 1 in file .git/config\n",
+    );
 
     let found = listed(&fx, &repo);
 
@@ -1284,7 +1939,13 @@ fn any_other_worktree_list_failure_is_git_failed_at_once() {
     let error = found.expect_err("no second read: the failure is not the half-written admin dir");
     assert_eq!(error.code(), ErrorCode::GitFailed);
     assert_eq!(error.details()["exit"], 128);
-    assert!(error.details()["stderr"].as_str().unwrap().contains("bad config"), "{error:?}");
+    assert!(
+        error.details()["stderr"]
+            .as_str()
+            .unwrap()
+            .contains("bad config"),
+        "{error:?}"
+    );
 }
 
 // ------------------------------------------------ removal of a Lead worktree (DESIGN 4): whole or untouched
@@ -1293,7 +1954,14 @@ fn any_other_worktree_list_failure_is_git_failed_at_once() {
 // the deadline kill: it makes the n-th git call of the removal fail, and `git worktree remove` of the Lead worktree
 // first deletes about half of its files (git deletes in place, so a kill inside it leaves a partial tree).
 
-const TRACKED: [&str; 6] = ["README.md", "a.txt", "b.txt", "dir/c.txt", "dir/d.txt", "dir/e.txt"];
+const TRACKED: [&str; 6] = [
+    "README.md",
+    "a.txt",
+    "b.txt",
+    "dir/c.txt",
+    "dir/d.txt",
+    "dir/e.txt",
+];
 
 /// A [`Runner`] over `inner` that fails the `stop`-th git call it sees (exit 137, as a kill), and counts them.
 struct Stopper {
@@ -1317,7 +1985,8 @@ impl Stopper {
         if *seen != self.stop {
             return None;
         }
-        let removes_lead = call.args.windows(2).any(|w| w == ["worktree", "remove"]) && call.args.iter().any(|a| Path::new(a) == self.lead);
+        let removes_lead = call.args.windows(2).any(|w| w == ["worktree", "remove"])
+            && call.args.iter().any(|a| Path::new(a) == self.lead);
         if removes_lead {
             let mut files: Vec<PathBuf> = TRACKED.iter().map(|f| self.lead.join(f)).collect();
             files.truncate(TRACKED.len() / 2);
@@ -1326,16 +1995,28 @@ impl Stopper {
             }
         }
         use std::os::unix::process::ExitStatusExt;
-        Some(std::process::Output { status: std::process::ExitStatus::from_raw(137 << 8), stdout: Vec::new(), stderr: b"killed\n".to_vec() })
+        Some(std::process::Output {
+            status: std::process::ExitStatus::from_raw(137 << 8),
+            stdout: Vec::new(),
+            stderr: b"killed\n".to_vec(),
+        })
     }
 }
 
 impl cpd_core::host::runner::Runner for Stopper {
-    fn output(&self, cmd: &mut std::process::Command, tool: &str, deadline: Duration) -> Result<std::process::Output, cpd_core::host::deadline::Failed> {
+    fn output(
+        &self,
+        cmd: &mut std::process::Command,
+        tool: &str,
+        deadline: Duration,
+    ) -> Result<std::process::Output, cpd_core::host::deadline::Failed> {
         let call = Call {
             tool: tool.to_owned(),
             program: cmd.get_program().to_string_lossy().into_owned(),
-            args: cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect(),
+            args: cmd
+                .get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect(),
             envs: Vec::new(),
             cwd: cmd.get_current_dir().map(Path::to_path_buf),
             deadline,
@@ -1347,7 +2028,11 @@ impl cpd_core::host::runner::Runner for Stopper {
             None => self.inner.output(cmd, tool, deadline),
         }
     }
-    fn output_unbounded(&self, cmd: &mut std::process::Command, tool: &str) -> std::io::Result<std::process::Output> {
+    fn output_unbounded(
+        &self,
+        cmd: &mut std::process::Command,
+        tool: &str,
+    ) -> std::io::Result<std::process::Output> {
         self.inner.output_unbounded(cmd, tool)
     }
     fn run(&self, call: &Call) -> Result<std::process::Output, cpd_core::host::deadline::Failed> {
@@ -1368,7 +2053,17 @@ fn lead_to_remove(fx: &Fx, name: &str, dir: &str) -> (PathBuf, PathBuf, String) 
     let parent = fx.env.root().join(dir);
     fs::create_dir_all(&parent).unwrap();
     let path = parent.join("pay.pay-4521");
-    fx.git(&repo, &["worktree", "add", "-q", "-b", &legacy_lead_branch(&plan()), path.to_str().unwrap()]);
+    fx.git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &legacy_lead_branch(&plan()),
+            path.to_str().unwrap(),
+        ],
+    );
     let head = fx.git(&path, &["rev-parse", "HEAD"]);
     (repo, path, head)
 }
@@ -1381,22 +2076,33 @@ fn removing(path: &Path) -> PathBuf {
 
 /// `path` with the symlinks of its directory resolved (the file itself may be gone).
 fn resolved(path: &Path) -> PathBuf {
-    path.parent().and_then(|p| p.canonicalize().ok()).map_or_else(|| path.to_path_buf(), |p| p.join(path.file_name().unwrap()))
+    path.parent()
+        .and_then(|p| p.canonicalize().ok())
+        .map_or_else(|| path.to_path_buf(), |p| p.join(path.file_name().unwrap()))
 }
 
 fn registered(fx: &Fx, repo: &Path, path: &Path) -> bool {
     let want = resolved(path);
-    fx.git(repo, &["worktree", "list", "--porcelain"]).lines().any(|l| l.strip_prefix("worktree ").is_some_and(|p| resolved(Path::new(p)) == want))
+    fx.git(repo, &["worktree", "list", "--porcelain"])
+        .lines()
+        .any(|l| {
+            l.strip_prefix("worktree ")
+                .is_some_and(|p| resolved(Path::new(p)) == want)
+        })
 }
 
 fn branch_exists(fx: &Fx, repo: &Path) -> bool {
-    !fx.git(repo, &["branch", "--list", &legacy_lead_branch(&plan())]).is_empty()
+    !fx.git(repo, &["branch", "--list", &legacy_lead_branch(&plan())])
+        .is_empty()
 }
 
 /// Every file under `dir` with its bytes, sorted.
 fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     fn walk(dir: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
-        let mut entries: Vec<_> = fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).collect();
+        let mut entries: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
         entries.sort();
         for entry in entries {
             if entry.is_dir() {
@@ -1411,8 +2117,17 @@ fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     out
 }
 
-fn remove_lead(fx: &Fx, repo: &Path, path: &Path, head: &str) -> Result<cpd_core::git::LeadRemoval, cpd_core::error::CpdError> {
-    fx.scoped(|| cpd_core::git::remove_merged_lead(repo, path, &legacy_lead_branch(&plan()), || Some(head.to_owned())))
+fn remove_lead(
+    fx: &Fx,
+    repo: &Path,
+    path: &Path,
+    head: &str,
+) -> Result<cpd_core::git::LeadRemoval, cpd_core::error::CpdError> {
+    fx.scoped(|| {
+        cpd_core::git::remove_merged_lead(repo, path, &legacy_lead_branch(&plan()), || {
+            Some(head.to_owned())
+        })
+    })
 }
 
 #[test]
@@ -1420,10 +2135,22 @@ fn lead_removal_stopped_after_any_step_leaves_the_worktree_whole_or_gone() {
     let fx = Fx::with_ports();
     for n in 1.. {
         let (repo, path, head) = lead_to_remove(&fx, &format!("pay{n}"), &format!("n{n}"));
-        let stopper = Arc::new(Stopper { inner: fx.fakes.ports.runner.clone(), stop: n, seen: Mutex::new(0), lead: path.clone() });
-        let ports = Ports { runner: stopper.clone(), ..fx.fakes.ports.clone() };
+        let stopper = Arc::new(Stopper {
+            inner: fx.fakes.ports.runner.clone(),
+            stop: n,
+            seen: Mutex::new(0),
+            lead: path.clone(),
+        });
+        let ports = Ports {
+            runner: stopper.clone(),
+            ..fx.fakes.ports.clone()
+        };
 
-        let _ = Ports::scope(&ports, || cpd_core::git::remove_merged_lead(&repo, &path, &legacy_lead_branch(&plan()), || Some(head.clone())));
+        let _ = Ports::scope(&ports, || {
+            cpd_core::git::remove_merged_lead(&repo, &path, &legacy_lead_branch(&plan()), || {
+                Some(head.clone())
+            })
+        });
 
         if stopper.calls() < n {
             assert!(n > 3, "the removal made only {} git calls", stopper.calls());
@@ -1431,10 +2158,20 @@ fn lead_removal_stopped_after_any_step_leaves_the_worktree_whole_or_gone() {
         }
         if path.exists() {
             for file in TRACKED {
-                assert!(path.join(file).exists(), "stop at git call {n}: {file} is missing from the worktree that still exists");
+                assert!(
+                    path.join(file).exists(),
+                    "stop at git call {n}: {file} is missing from the worktree that still exists"
+                );
             }
-            assert!(registered(&fx, &repo, &path), "stop at git call {n}: the worktree that still exists is not registered");
-            assert_eq!(fx.git(&path, &["branch", "--show-current"]), legacy_lead_branch(&plan()), "stop at git call {n}");
+            assert!(
+                registered(&fx, &repo, &path),
+                "stop at git call {n}: the worktree that still exists is not registered"
+            );
+            assert_eq!(
+                fx.git(&path, &["branch", "--show-current"]),
+                legacy_lead_branch(&plan()),
+                "stop at git call {n}"
+            );
         }
     }
 }
@@ -1451,13 +2188,25 @@ fn lead_removal_after_a_stop_is_finished_by_the_next_call() {
 
     assert!(!path.exists());
     assert!(!removing(&path).exists(), "the marker is deleted");
-    assert!(!registered(&fx, &repo, &path), "the registration is dropped");
+    assert!(
+        !registered(&fx, &repo, &path),
+        "the registration is dropped"
+    );
     assert!(!branch_exists(&fx, &repo), "the Lead Branch is deleted");
 
-    let before = (fx.git(&repo, &["worktree", "list", "--porcelain"]), fx.git(&repo, &["branch", "--list"]));
+    let before = (
+        fx.git(&repo, &["worktree", "list", "--porcelain"]),
+        fx.git(&repo, &["branch", "--list"]),
+    );
     let again = remove_lead(&fx, &repo, &path, &head).expect("a third call is not an error");
     assert_eq!(again, cpd_core::git::LeadRemoval::Removed);
-    assert_eq!(before, (fx.git(&repo, &["worktree", "list", "--porcelain"]), fx.git(&repo, &["branch", "--list"])));
+    assert_eq!(
+        before,
+        (
+            fx.git(&repo, &["worktree", "list", "--porcelain"]),
+            fx.git(&repo, &["branch", "--list"])
+        )
+    );
     assert!(!path.exists() && !removing(&path).exists());
 }
 
@@ -1481,7 +2230,11 @@ fn lead_removal_keeps_a_dirty_or_unpushed_worktree_untouched_without_renaming() 
     let (repo, path, _) = lead_to_remove(&fx, "unpushed", "u");
     fx.commit_file(&path, "local.txt", "local\n", "local work");
     let before = snapshot(&path);
-    let kept = fx.scoped(|| cpd_core::git::remove_merged_lead(&repo, &path, &legacy_lead_branch(&plan()), || None)).unwrap();
+    let kept = fx
+        .scoped(|| {
+            cpd_core::git::remove_merged_lead(&repo, &path, &legacy_lead_branch(&plan()), || None)
+        })
+        .unwrap();
     assert_eq!(kept, LeadRemoval::Kept(Kept::Unpushed));
     assert_eq!(snapshot(&path), before);
     assert!(!removing(&path).exists());
@@ -1510,7 +2263,9 @@ fn lead_removal_with_a_failing_rename_is_kept_untouched() {
 
     fs::set_permissions(&parent, mode).unwrap();
     match result.expect("a failing rename is kept, not an error") {
-        cpd_core::git::LeadRemoval::Kept(cpd_core::git::Kept::Rename(reason)) => assert!(!reason.is_empty(), "the error is the reason"),
+        cpd_core::git::LeadRemoval::Kept(cpd_core::git::Kept::Rename(reason)) => {
+            assert!(!reason.is_empty(), "the error is the reason")
+        }
         other => panic!("expected kept with the rename error, got {other:?}"),
     }
     assert_eq!(snapshot(&path), before);
@@ -1526,20 +2281,41 @@ fn is_worktree_remove(call: &Call) -> bool {
 
 /// Every `git worktree remove` takes 120 s: the fake runner turns it into `tool_timeout`.
 fn worktree_remove_times_out(fx: &Fx) {
-    (*fx.fakes.runner).clone().on("git", is_worktree_remove, Reply::ok("").takes(Duration::from_secs(120)));
+    (*fx.fakes.runner).clone().on(
+        "git",
+        is_worktree_remove,
+        Reply::ok("").takes(Duration::from_secs(120)),
+    );
 }
 
 /// A repo with a Lead worktree and a parallel Attempt worktree of `id`.
-fn lead_and_attempt(fx: &Fx, id: &str) -> (PathBuf, cpd_core::git::Created, cpd_core::git::Created) {
+fn lead_and_attempt(
+    fx: &Fx,
+    id: &str,
+) -> (PathBuf, cpd_core::git::Created, cpd_core::git::Created) {
     let repo = fx.git_repo("pay");
     let setup = setup_in(fx, "attempt.log");
-    let lead = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup)).unwrap();
-    let made = fx.scoped(|| create_attempt_worktree(&repo, &lead.path, &plan(), &AttemptId::parse(id).unwrap(), &setup)).unwrap();
+    let lead = fx
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup))
+        .unwrap();
+    let made = fx
+        .scoped(|| {
+            create_attempt_worktree(
+                &repo,
+                &lead.path,
+                &plan(),
+                &AttemptId::parse(id).unwrap(),
+                &setup,
+            )
+        })
+        .unwrap();
     (repo, lead, made)
 }
 
 fn has_branch(fx: &Fx, repo: &Path, branch: &str) -> bool {
-    !fx.git(repo, &["branch", "--list", branch]).trim().is_empty()
+    !fx.git(repo, &["branch", "--list", branch])
+        .trim()
+        .is_empty()
 }
 
 #[test]
@@ -1550,14 +2326,19 @@ fn a_merged_attempt_is_removed_though_git_worktree_remove_would_time_out() {
     fx.git(&lead.path, &["merge", "-q", "--ff-only", &made.branch]);
     worktree_remove_times_out(&fx);
 
-    fx.scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch)).unwrap();
+    fx.scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch))
+        .unwrap();
 
     assert!(!made.path.exists());
     assert!(!removing(&made.path).exists());
     assert!(!registered(&fx, &repo, &made.path));
     assert!(!has_branch(&fx, &repo, &made.branch));
-    assert!(git_calls(&fx, is_worktree_remove).is_empty(), "no git worktree remove call");
-    fx.scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch)).unwrap();
+    assert!(
+        git_calls(&fx, is_worktree_remove).is_empty(),
+        "no git worktree remove call"
+    );
+    fx.scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch))
+        .unwrap();
 }
 
 #[test]
@@ -1569,7 +2350,9 @@ fn a_merged_attempt_with_untracked_files_is_refused_by_status_and_left_whole() {
     fx.git(&lead.path, &["merge", "-q", "--ff-only", &made.branch]);
     worktree_remove_times_out(&fx);
 
-    let err = fx.scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch)).unwrap_err();
+    let err = fx
+        .scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch))
+        .unwrap_err();
 
     assert_eq!(err.code(), ErrorCode::GitFailed);
     assert!(made.path.join("untracked.txt").exists());
@@ -1586,13 +2369,17 @@ fn discard_worktree_removes_a_dirty_unmerged_worktree_though_git_worktree_remove
     fs::write(made.path.join("dirty.txt"), "dirty").unwrap();
     worktree_remove_times_out(&fx);
 
-    fx.scoped(|| discard_worktree(&lead.path, &made.path, &made.branch)).unwrap();
+    fx.scoped(|| discard_worktree(&lead.path, &made.path, &made.branch))
+        .unwrap();
 
     assert!(!made.path.exists());
     assert!(!removing(&made.path).exists());
     assert!(!registered(&fx, &repo, &made.path));
     assert!(!has_branch(&fx, &repo, &made.branch));
-    assert!(git_calls(&fx, is_worktree_remove).is_empty(), "no git worktree remove call");
+    assert!(
+        git_calls(&fx, is_worktree_remove).is_empty(),
+        "no git worktree remove call"
+    );
 }
 
 #[test]
@@ -1603,7 +2390,8 @@ fn a_removal_finishes_or_replaces_a_removing_aside_left_by_an_earlier_stop() {
     fs::rename(&made.path, removing(&made.path)).unwrap();
     fs::write(removing(&made.path).join("left.txt"), "x").unwrap();
 
-    fx.scoped(|| discard_worktree(&lead.path, &made.path, &made.branch)).unwrap();
+    fx.scoped(|| discard_worktree(&lead.path, &made.path, &made.branch))
+        .unwrap();
 
     assert!(!made.path.exists());
     assert!(!removing(&made.path).exists());
@@ -1612,11 +2400,22 @@ fn a_removal_finishes_or_replaces_a_removing_aside_left_by_an_earlier_stop() {
 
     // (ii) A stale aside beside a live worktree.
     let setup = setup_in(&fx, "attempt2.log");
-    let other = fx.scoped(|| create_attempt_worktree(&repo, &lead.path, &plan(), &AttemptId::parse("web-a1").unwrap(), &setup)).unwrap();
+    let other = fx
+        .scoped(|| {
+            create_attempt_worktree(
+                &repo,
+                &lead.path,
+                &plan(),
+                &AttemptId::parse("web-a1").unwrap(),
+                &setup,
+            )
+        })
+        .unwrap();
     fs::create_dir_all(removing(&other.path)).unwrap();
     fs::write(removing(&other.path).join("stale.txt"), "x").unwrap();
 
-    fx.scoped(|| discard_worktree(&lead.path, &other.path, &other.branch)).unwrap();
+    fx.scoped(|| discard_worktree(&lead.path, &other.path, &other.branch))
+        .unwrap();
 
     assert!(!other.path.exists());
     assert!(!removing(&other.path).exists());

@@ -1,6 +1,6 @@
 //! The pure Tier advice (contract §3.4b): the rule over in-memory rows and the first-Attempt query over a tempdir store.
 
-use super::tier_advice::{first_attempts, qualifying, recommend, wilson_lower, Row};
+use super::tier_advice::{Row, first_attempts, qualifying, recommend, wilson_lower};
 use crate::config::{Catalog, Tier, TierModel};
 use crate::home::CpdHome;
 use crate::store::Store;
@@ -12,7 +12,10 @@ fn near(a: f64, b: f64) {
 }
 
 fn model(name: &str, efforts: &[u8]) -> TierModel {
-    TierModel { model: name.into(), efforts: efforts.to_vec() }
+    TierModel {
+        model: name.into(),
+        efforts: efforts.to_vec(),
+    }
 }
 
 /// The real `Catalog::next` as the ladder (H3 -> S1, S3 -> none).
@@ -32,12 +35,22 @@ fn t(s: &str) -> Tier {
 }
 
 fn row(kind: &str, tier: &str, n: u32, passed: u32, avg_cost: Option<f64>) -> Row {
-    Row { kind: kind.into(), tier: t(tier), n, passed, avg_cost }
+    Row {
+        kind: kind.into(),
+        tier: t(tier),
+        n,
+        passed,
+        avg_cost,
+    }
 }
 
 #[test]
 fn needs_the_minimum_sample() {
-    let rows = [row("work", "S1", 29, 29, Some(0.2)), row("work", "S2", 40, 40, Some(0.5)), row("work", "S3", 5, 5, Some(1.0))];
+    let rows = [
+        row("work", "S1", 29, 29, Some(0.2)),
+        row("work", "S2", 40, 40, Some(0.5)),
+        row("work", "S3", 5, 5, Some(1.0)),
+    ];
     let got = recommend(&rows[..1], 30, ladder());
     assert!(got.is_empty());
     let got = recommend(&rows, 30, ladder());
@@ -55,7 +68,14 @@ fn wilson_floor_26_of_30_qualifies_25_of_30_does_not() {
 
 #[test]
 fn wilson_lower_is_the_95_percent_score_interval() {
-    for (passed, n, want) in [(26, 30, 0.7032), (25, 30, 0.6644), (304, 310, 0.9584), (76, 76, 0.9519), (0, 1, 0.0), (0, 0, 0.0)] {
+    for (passed, n, want) in [
+        (26, 30, 0.7032),
+        (25, 30, 0.6644),
+        (304, 310, 0.9584),
+        (76, 76, 0.9519),
+        (0, 1, 0.0),
+        (0, 0, 0.0),
+    ] {
         near(wilson_lower(passed, n), want);
     }
 }
@@ -75,7 +95,10 @@ fn picks_the_lowest_expected_cost_not_the_lowest_tier() {
 
 #[test]
 fn ties_go_to_the_lower_tier() {
-    let rows = [row("work", "S2", 40, 40, Some(0.5)), row("work", "S3", 40, 40, Some(0.5))];
+    let rows = [
+        row("work", "S2", 40, 40, Some(0.5)),
+        row("work", "S3", 40, 40, Some(0.5)),
+    ];
     let got = recommend(&rows, 30, ladder());
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].tier, t("S2"));
@@ -116,7 +139,11 @@ fn store() -> (tempfile::TempDir, Store) {
 
 /// SQL for the Job `key` of kind `kind` (status `merged` or `failed`, a stub spec).
 fn job(key: &str, kind: &str, status: &str) -> String {
-    let (failed, merged) = if status == "failed" { ("'gate_failed'", "NULL") } else { ("NULL", "'abc'") };
+    let (failed, merged) = if status == "failed" {
+        ("'gate_failed'", "NULL")
+    } else {
+        ("NULL", "'abc'")
+    };
     format!(
         "INSERT INTO jobs (plan, pr, key, title, kind, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, failed_cause, merged_sha, cancel_reason, cancel_requested_at, created_txn, created_at)
          VALUES ('pl', 'r', '{key}', 'T', '{kind}', 'S1', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 1, '{}', {failed}, {merged}, NULL, NULL, cpd_txn(), 't');",
@@ -125,8 +152,19 @@ fn job(key: &str, kind: &str, status: &str) -> String {
 }
 
 /// SQL for Attempt `number` of `job`: `outcome` and `cause` are SQL literals (`NULL` while running), `metrics` a SQL literal.
-fn attempt(job: &str, number: u32, tier: &str, outcome: &str, cause: &str, metrics: &str) -> String {
-    let (status, ended) = if outcome == "NULL" { ("running", "NULL") } else { ("ended", "'t'") };
+fn attempt(
+    job: &str,
+    number: u32,
+    tier: &str,
+    outcome: &str,
+    cause: &str,
+    metrics: &str,
+) -> String {
+    let (status, ended) = if outcome == "NULL" {
+        ("running", "NULL")
+    } else {
+        ("ended", "'t'")
+    };
     format!(
         "INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, ended_at, branch, worktree, started_at, metrics, merged_sha)
          VALUES ('pl', '{job}-a{number}', '{job}', {number}, '{tier}', 'ladder', '{status}', {outcome}, {cause}, {ended}, 'cpd/pl--{job}-a{number}', '/w', 't', {metrics}, CASE WHEN {outcome} = 'merged' THEN 'abc' END);"
@@ -169,8 +207,22 @@ fn excludes_provider_error_and_cancelled() {
 fn query_counts_first_attempts_only() {
     let sql = [
         job("j1", "impl", "merged"),
-        attempt("j1", 1, "S1", "'failed'", "'gate_failed'", "'{\"cost_usd\": 0.25}'"),
-        attempt("j1", 2, "S2", "'merged'", "'merged'", "'{\"cost_usd\": 0.75}'"),
+        attempt(
+            "j1",
+            1,
+            "S1",
+            "'failed'",
+            "'gate_failed'",
+            "'{\"cost_usd\": 0.25}'",
+        ),
+        attempt(
+            "j1",
+            2,
+            "S2",
+            "'merged'",
+            "'merged'",
+            "'{\"cost_usd\": 0.75}'",
+        ),
         job("j2", "impl", "merged"),
         attempt("j2", 1, "S1", "'merged'", "'merged'", "NULL"),
     ]
@@ -180,7 +232,13 @@ fn query_counts_first_attempts_only() {
     assert_eq!((rows[0].tier, rows[0].n, rows[0].passed), (t("S1"), 2, 1));
     near(rows[0].avg_cost.expect("the one cost"), 0.25);
 
-    let none = load(&[job("j1", "impl", "merged"), attempt("j1", 1, "S1", "'merged'", "'merged'", "NULL")].concat());
+    let none = load(
+        &[
+            job("j1", "impl", "merged"),
+            attempt("j1", 1, "S1", "'merged'", "'merged'", "NULL"),
+        ]
+        .concat(),
+    );
     assert_eq!(none.len(), 1);
     assert_eq!(none[0].n, 1);
     assert_eq!(none[0].avg_cost, None);
@@ -196,7 +254,10 @@ fn expected_cost_adds_the_next_rungs_cost_scaled_by_the_failure_rate() {
         row("impl", "S3", 35, 35, Some(0.8365)),
     ];
     let got = qualifying(&rows, 30, ladder());
-    assert_eq!(got.iter().map(|a| a.tier).collect::<Vec<_>>(), [t("S1"), t("S2"), t("S3")]);
+    assert_eq!(
+        got.iter().map(|a| a.tier).collect::<Vec<_>>(),
+        [t("S1"), t("S2"), t("S3")]
+    );
     near(got[0].expected_cost, 0.2377);
     near(got[1].expected_cost, 0.6736);
     near(got[2].expected_cost, 0.8365);
@@ -225,7 +286,10 @@ fn a_tier_whose_next_rung_has_no_cost_is_not_advised() {
 
 #[test]
 fn a_cell_without_a_cost_gives_no_advice() {
-    let rows = [row("scout", "H3", 40, 40, None), row("scout", "S1", 3, 3, Some(0.3))];
+    let rows = [
+        row("scout", "H3", 40, 40, None),
+        row("scout", "S1", 3, 3, Some(0.3)),
+    ];
     assert!(qualifying(&rows, 30, ladder()).is_empty());
     assert!(recommend(&rows, 30, ladder()).is_empty());
 }
@@ -234,7 +298,11 @@ fn a_cell_without_a_cost_gives_no_advice() {
 fn a_tier_a_worker_may_not_have_is_never_advised() {
     let o2 = row("work", "O2", 100, 100, Some(0.01));
     assert!(recommend(std::slice::from_ref(&o2), 30, ladder()).is_empty());
-    let rows = [o2, row("work", "S1", 40, 40, Some(0.3)), row("work", "S2", 3, 3, Some(0.5))];
+    let rows = [
+        o2,
+        row("work", "S1", 40, 40, Some(0.3)),
+        row("work", "S2", 3, 3, Some(0.5)),
+    ];
     let got = recommend(&rows, 30, ladder());
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].tier, t("S1"));

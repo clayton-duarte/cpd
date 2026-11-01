@@ -71,9 +71,18 @@ fn target(conn: &Connection, to: &str, from: Option<&SessionId>) -> Result<Strin
                 .optional()?,
             None => None,
         };
-        return found.ok_or_else(|| CpdError::new(ErrorCode::NoManager, "The sender's Context has no live Manager."));
+        return found.ok_or_else(|| {
+            CpdError::new(
+                ErrorCode::NoManager,
+                "The sender's Context has no live Manager.",
+            )
+        });
     }
-    let lead: Option<String> = conn.query_row("SELECT lead_session FROM plans WHERE id = ?1", [to], |r| r.get(0)).optional()?;
+    let lead: Option<String> = conn
+        .query_row("SELECT lead_session FROM plans WHERE id = ?1", [to], |r| {
+            r.get(0)
+        })
+        .optional()?;
     if let Some(lead) = lead {
         session::plan_inactive(conn, to)?;
         return Ok(lead);
@@ -84,7 +93,11 @@ fn target(conn: &Connection, to: &str, from: Option<&SessionId>) -> Result<Strin
 fn post(args: PostArgs) -> Result<Output, CpdError> {
     let chars = args.text.chars().count();
     if chars == 0 || chars > TEXT_MAX_CHARS || args.text.contains('\0') {
-        return Err(CpdError::new(ErrorCode::Usage, format!("A post is 1 to {TEXT_MAX_CHARS} characters with no NUL.")).with("chars", chars));
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            format!("A post is 1 to {TEXT_MAX_CHARS} characters with no NUL."),
+        )
+        .with("chars", chars));
     }
     let from = session::sender()?;
     let mut env = Env::open()?;
@@ -101,7 +114,9 @@ fn post(args: PostArgs) -> Result<Output, CpdError> {
         )?;
         Ok((session, context, at))
     })?;
-    Ok(Output::success(json!({"session": session, "context": context, "posted_at": at})))
+    Ok(Output::success(
+        json!({"session": session, "context": context, "posted_at": at}),
+    ))
 }
 
 /// The Session `reference` names, which must exist.
@@ -127,7 +142,12 @@ fn list(args: ListArgs) -> Result<Output, CpdError> {
         Some(reference) => reference,
         None => match std::env::var("CPD_SESSION") {
             Ok(id) if !id.is_empty() => id.parse::<SessionRef>()?,
-            _ => return Err(CpdError::new(ErrorCode::Usage, "Name the Session with --session, or run inside one ($CPD_SESSION).")),
+            _ => {
+                return Err(CpdError::new(
+                    ErrorCode::Usage,
+                    "Name the Session with --session, or run inside one ($CPD_SESSION).",
+                ));
+            }
         },
     };
     let mut env = Env::open()?;
@@ -144,9 +164,14 @@ fn take(args: TakeArgs) -> Result<Output, CpdError> {
     let (session, taken) = env.store.write("board take", |tx| {
         let session = existing(tx, &args.session)?;
         let mut taken = rows(tx, &session, false)?;
-        tx.execute("UPDATE board_posts SET read_at = ?1 WHERE to_session = ?2 AND read_at IS NULL", rusqlite::params![clock::now(), session])?;
+        tx.execute(
+            "UPDATE board_posts SET read_at = ?1 WHERE to_session = ?2 AND read_at IS NULL",
+            rusqlite::params![clock::now(), session],
+        )?;
         for post in &mut taken {
-            post.as_object_mut().expect("a post is an object").remove("read_at");
+            post.as_object_mut()
+                .expect("a post is an object")
+                .remove("read_at");
         }
         Ok((session, taken))
     })?;

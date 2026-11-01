@@ -54,7 +54,10 @@ fn a_box_with_a_running_update_job_reads_updating_in_the_running_colour() {
     let (title, style) = box_word(Some(UpdateState::Running), "updating");
     assert!(title.contains("#12 updating"), "{title:?}");
     assert!(!title.contains("conflict"), "{title:?}");
-    assert_eq!(style.expect("an `updating` span"), palette::fg_clickable(RUNNING));
+    assert_eq!(
+        style.expect("an `updating` span"),
+        palette::fg_clickable(RUNNING)
+    );
 }
 
 #[test]
@@ -62,34 +65,65 @@ fn a_box_with_a_queued_update_job_reads_updating_in_the_waiting_colour() {
     let (title, style) = box_word(Some(UpdateState::Queued), "updating");
     assert!(title.contains("#12 updating"), "{title:?}");
     assert!(!title.contains("conflict"), "{title:?}");
-    assert_eq!(style.expect("an `updating` span"), palette::fg_clickable(Meaning::Waiting));
+    assert_eq!(
+        style.expect("an `updating` span"),
+        palette::fg_clickable(Meaning::Waiting)
+    );
 }
 
 #[test]
 fn a_box_with_no_update_job_still_reads_conflict() {
     let (title, style) = box_word(None, "conflict");
-    assert!(title.contains("#12 conflict") && !title.contains("updating"), "{title:?}");
-    assert_eq!(style.expect("a `conflict` span"), palette::fg_clickable(Meaning::Waiting));
+    assert!(
+        title.contains("#12 conflict") && !title.contains("updating"),
+        "{title:?}"
+    );
+    assert_eq!(
+        style.expect("a `conflict` span"),
+        palette::fg_clickable(Meaning::Waiting)
+    );
     // and only the absence of the update Job: with one, the same box no longer reads `conflict`
     let (with, _) = box_word(Some(UpdateState::Queued), "updating");
-    assert!(with.contains("#12 updating") && !with.contains("conflict"), "{with:?}");
+    assert!(
+        with.contains("#12 updating") && !with.contains("conflict"),
+        "{with:?}"
+    );
 }
 
 #[test]
 fn the_legend_lists_updating_in_both_colours() {
     let sections = legend::sections();
-    let prs = sections.iter().find(|s| s.title == "PRs (Dispatch)").expect("the PRs section");
-    let cell = |row: &Vec<Line<'static>>| row.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(" | ");
+    let prs = sections
+        .iter()
+        .find(|s| s.title == "PRs (Dispatch)")
+        .expect("the PRs section");
+    let cell = |row: &Vec<Line<'static>>| {
+        row.iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
     let row = |word: &str, says: &str| {
         let r = prs
             .rows
             .iter()
             .find(|r| r[0].to_string() == word && r.get(1).is_some_and(|l| l.to_string() == says))
-            .unwrap_or_else(|| panic!("no `{word}` row saying {says:?}: {:?}", prs.rows.iter().map(cell).collect::<Vec<_>>()));
+            .unwrap_or_else(|| {
+                panic!(
+                    "no `{word}` row saying {says:?}: {:?}",
+                    prs.rows.iter().map(cell).collect::<Vec<_>>()
+                )
+            });
         r[0].spans[0].style
     };
-    assert_eq!(row("#2 updating", "its update Job is fixing the conflict"), palette::fg_clickable(RUNNING));
-    assert_eq!(row("#2 updating", "its update Job is queued"), palette::fg_clickable(Meaning::Waiting));
+    assert_eq!(
+        row("#2 updating", "its update Job is fixing the conflict"),
+        palette::fg_clickable(RUNNING)
+    );
+    assert_eq!(
+        row("#2 updating", "its update Job is queued"),
+        palette::fg_clickable(Meaning::Waiting)
+    );
 }
 
 fn fixture(store: &mut Store, sql: &str) {
@@ -134,11 +168,17 @@ fn the_plan_read_reports_the_update_job_state() {
     let update = |store: &mut Store| {
         let boxes = crate::read::plan_boxes(store, &plan).unwrap();
         assert_eq!(boxes.context, ContextId::parse("ctx").unwrap());
-        let pull = boxes.prs[0].pull.clone().expect("the PR has a pull request");
+        let pull = boxes.prs[0]
+            .pull
+            .clone()
+            .expect("the PR has a pull request");
         assert!(pull.conflicting);
         pull.update
     };
     assert_eq!(update(&mut store), Some(UpdateState::Queued));
-    fixture(&mut store, "UPDATE jobs SET status = 'running' WHERE key = 'up-repo';");
+    fixture(
+        &mut store,
+        "UPDATE jobs SET status = 'running' WHERE key = 'up-repo';",
+    );
     assert_eq!(update(&mut store), Some(UpdateState::Running));
 }

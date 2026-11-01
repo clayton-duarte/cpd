@@ -4,8 +4,8 @@
 use ratatui::buffer::Buffer;
 
 use super::prepared_tests::{Env, draw, text_rows};
-use crate::palette::numbered::C9;
 use crate::palette::NEEDS_YOU;
+use crate::palette::numbered::C9;
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 
@@ -53,8 +53,22 @@ fn a_loop_guard_item_fills_its_sessions_tree_dot_red() {
     let mut env = tripped(Kind::LoopGuard);
     let buf = screen_of(&mut env);
     let rows = text_rows(&buf);
-    assert!(rows.iter().any(|l| l.contains(&format!("{NEEDS_YOU} sketch"))), "the Lead's row: {rows:?}");
-    let y = rows.iter().position(|l| l.contains("sketch") && !l.contains("loop guard")).expect("the Lead's row") as u16;
-    let dot = (0..buf.area.width).find(|&x| buf[(x, y)].symbol() == NEEDS_YOU).expect("the filled dot");
-    assert_eq!(buf[(dot, y)].fg, C9, "the filled dot in red (colour 9): {:?}", rows[y as usize]);
+    assert!(
+        rows.iter()
+            .any(|l| l.contains(&format!("{NEEDS_YOU} sketch"))),
+        "the Lead's row: {rows:?}"
+    );
+    let y = rows
+        .iter()
+        .position(|l| l.contains("sketch") && !l.contains("loop guard"))
+        .expect("the Lead's row") as u16;
+    let dot = (0..buf.area.width)
+        .find(|&x| buf[(x, y)].symbol() == NEEDS_YOU)
+        .expect("the filled dot");
+    assert_eq!(
+        buf[(dot, y)].fg,
+        C9,
+        "the filled dot in red (colour 9): {:?}",
+        rows[y as usize]
+    );
 }

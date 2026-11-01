@@ -33,7 +33,13 @@ fn explore_job(key: &str, status: &str) -> String {
 /// Attempt `<key>-a1` of explore Job `key` (`metrics` JSON stored: ended; `None`: running).
 fn explore_attempt(key: &str, metrics: Option<&str>) -> String {
     let (status, outcome, cause, ended, metrics) = match metrics {
-        Some(m) => ("ended", "'failed'", "'crashed'", "'2026-01-02T02:00:00.000Z'", format!("'{m}'")),
+        Some(m) => (
+            "ended",
+            "'failed'",
+            "'crashed'",
+            "'2026-01-02T02:00:00.000Z'",
+            format!("'{m}'"),
+        ),
         None => ("running", "NULL", "NULL", "NULL", "NULL".to_owned()),
     };
     format!(
@@ -59,7 +65,10 @@ fn work() -> String {
 /// Plan `pay` with PR `api` (one work Job, cost 0.25) and scout Job `look` (cost 0.40).
 fn mixed() -> (tempfile::TempDir, Store) {
     let (dir, mut store) = store_with(&["api"]);
-    run(&mut store, &(work() + &explore("look", Some(r#"{"cost_usd":0.40}"#))));
+    run(
+        &mut store,
+        &(work() + &explore("look", Some(r#"{"cost_usd":0.40}"#))),
+    );
     (dir, store)
 }
 
@@ -70,16 +79,34 @@ fn job_node<'a>(jobs: &'a [read::JobNode], key: &str) -> Option<&'a read::JobNod
 #[test]
 fn the_read_model_lists_a_plans_explore_job_beside_its_pr_jobs() {
     let (_dir, mut store) = store_with(&["api"]);
-    run(&mut store, &(job("api", "work", "work", "queued") + &explore("look", Some(r#"{"cost_usd":0.40}"#))));
+    run(
+        &mut store,
+        &(job("api", "work", "work", "queued") + &explore("look", Some(r#"{"cost_usd":0.40}"#))),
+    );
 
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
-    assert!(job_node(&boxes.jobs, "work").is_some(), "the PR Job is a node: {:?}", keys(&boxes.jobs));
+    assert!(
+        job_node(&boxes.jobs, "work").is_some(),
+        "the PR Job is a node: {:?}",
+        keys(&boxes.jobs)
+    );
     let look = job_node(&boxes.jobs, "look").expect("the explore Job is a node");
-    assert_eq!(look.attempts.len(), 1, "the explore Job carries its Attempts");
+    assert_eq!(
+        look.attempts.len(),
+        1,
+        "the explore Job carries its Attempts"
+    );
 
     let flow = read::flow(&mut store, &pay()).unwrap();
-    assert!(job_node(&flow.jobs, "work").is_some(), "the PR Job is in the flow: {:?}", keys(&flow.jobs));
-    assert!(job_node(&flow.jobs, "look").is_some(), "the explore Job is in the flow");
+    assert!(
+        job_node(&flow.jobs, "work").is_some(),
+        "the PR Job is in the flow: {:?}",
+        keys(&flow.jobs)
+    );
+    assert!(
+        job_node(&flow.jobs, "look").is_some(),
+        "the explore Job is in the flow"
+    );
 }
 
 fn keys(jobs: &[read::JobNode]) -> Vec<String> {
@@ -93,7 +120,10 @@ fn a_plan_with_only_explore_jobs_is_not_empty() {
 
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
     assert!(boxes.prs.is_empty(), "no PR box");
-    assert!(job_node(&boxes.jobs, "look").is_some(), "the explore Job is the Plan's content");
+    assert!(
+        job_node(&boxes.jobs, "look").is_some(),
+        "the explore Job is the Plan's content"
+    );
     assert_every_cockpit_read_is_ok(&mut store);
 }
 
@@ -102,11 +132,17 @@ fn assert_every_cockpit_read_is_ok(store: &mut Store) {
     let context = ContextId::parse("ctx").unwrap();
     let reads: Vec<(&str, Result<(), CpdError>)> = vec![
         ("read::flow", read::flow(store, &pay()).map(drop)),
-        ("read::plan_boxes_at", read::plan_boxes_at(store, &pay(), NOW_MS).map(drop)),
+        (
+            "read::plan_boxes_at",
+            read::plan_boxes_at(store, &pay(), NOW_MS).map(drop),
+        ),
         ("read::tree_at", read::tree_at(store, Some(NOW)).map(drop)),
         ("read::widgets", read::widgets(store, 3, 5).map(drop)),
         ("read::slots", read::slots(store, 3).map(drop)),
-        ("read::pulse", read::pulse(store, &context, NOW_MS, 12).map(drop)),
+        (
+            "read::pulse",
+            read::pulse(store, &context, NOW_MS, 12).map(drop),
+        ),
     ];
     for (name, result) in reads {
         assert!(result.is_ok(), "{name} failed: {result:?}");
@@ -117,12 +153,20 @@ fn assert_every_cockpit_read_is_ok(store: &mut Store) {
 fn an_explore_attempts_cost_is_in_no_pr_box_and_in_the_plan_total() {
     let (_dir, mut store) = mixed();
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
-    assert!(job_node(&boxes.jobs, "look").is_some(), "the explore Job is a node");
+    assert!(
+        job_node(&boxes.jobs, "look").is_some(),
+        "the explore Job is a node"
+    );
     assert_eq!(boxes.prs.len(), 1);
     near(boxes.prs[0].cost_usd, 0.25); // the explore Attempt is in no PR box
 
     let tree = read::tree_at(&mut store, Some(NOW)).unwrap();
-    let plan = tree.contexts.iter().flat_map(|c| &c.plans).find(|p| p.head.id.as_str() == "pay").unwrap();
+    let plan = tree
+        .contexts
+        .iter()
+        .flat_map(|c| &c.plans)
+        .find(|p| p.head.id.as_str() == "pay")
+        .unwrap();
     near(plan.cost_usd, 0.65); // 0.25 + the explore 0.40
 }
 
@@ -141,7 +185,14 @@ fn an_explore_attempts_active_time_is_in_no_pr_box() {
                        '2026-01-02T11:00:00.000Z', '2026-01-02T11:10:00.000Z', '{\"cost_usd\":0.40}');"),
     );
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
-    assert!(job_node(&boxes.jobs, "look").is_some(), "the explore Job is a node");
+    assert!(
+        job_node(&boxes.jobs, "look").is_some(),
+        "the explore Job is a node"
+    );
     assert_eq!(boxes.prs.len(), 1);
-    assert_eq!(boxes.prs[0].elapsed_seconds, Some(60), "only the PR Job's Attempt counts");
+    assert_eq!(
+        boxes.prs[0].elapsed_seconds,
+        Some(60),
+        "only the PR Job's Attempt counts"
+    );
 }

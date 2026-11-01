@@ -40,7 +40,11 @@ pub(super) fn approve_in(env: &mut Env, args: ApproveTouchesArgs) -> Result<Outp
     let mut paths: Vec<String> = Vec::new();
     for path in args.paths {
         if path.is_empty() || path.starts_with('/') {
-            return Err(CpdError::new(ErrorCode::Usage, format!("--path {path:?} must be a non-empty path relative to the repo.")).with("path", path));
+            return Err(CpdError::new(
+                ErrorCode::Usage,
+                format!("--path {path:?} must be a non-empty path relative to the repo."),
+            )
+            .with("path", path));
         }
         if !paths.contains(&path) {
             paths.push(path);
@@ -80,7 +84,12 @@ pub(super) fn approve_in(env: &mut Env, args: ApproveTouchesArgs) -> Result<Outp
 }
 
 /// The preconditions of §5.9a, in order; returns what `touches_approved` is, or is to become.
-fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, paths: &[String]) -> Result<Decision, CpdError> {
+fn decide(
+    conn: &Connection,
+    plan: &PlanId,
+    key: &JobKey,
+    paths: &[String],
+) -> Result<Decision, CpdError> {
     plan_phase(conn, plan)?;
     let all = jobs::load(conn, plan)?;
     let job = find(&all, plan, key)?.clone();
@@ -100,5 +109,9 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, paths: &[String]) -> R
             approved.push(path.clone());
         }
     }
-    Ok(if approved.len() == before { Decision::Already(job, approved) } else { Decision::Approve(job, approved) })
+    Ok(if approved.len() == before {
+        Decision::Already(job, approved)
+    } else {
+        Decision::Approve(job, approved)
+    })
 }

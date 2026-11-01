@@ -3,7 +3,11 @@ use super::T;
 #[test]
 fn a_command_with_no_server_says_no_server_running() {
     let t = T::new();
-    let want = format!("no server running on {}/tmux-{}/t", t.path().display(), t.uid());
+    let want = format!(
+        "no server running on {}/tmux-{}/t",
+        t.path().display(),
+        t.uid()
+    );
     t.fail(&["list-sessions"], 1, &want);
 }
 
@@ -19,7 +23,15 @@ fn has_session_exits_1_when_the_session_is_absent_and_0_when_present() {
 fn new_session_starts_the_server_with_ids_from_zero() {
     let t = T::new();
     assert!(t.state().is_none());
-    let out = t.ok(&["new-session", "-d", "-s", "n", "-P", "-F", "#{session_id} #{window_id} #{pane_id}"]);
+    let out = t.ok(&[
+        "new-session",
+        "-d",
+        "-s",
+        "n",
+        "-P",
+        "-F",
+        "#{session_id} #{window_id} #{pane_id}",
+    ]);
     assert_eq!(out.trim_end(), "$0 @0 %0");
     assert!(t.path().join("fake-tmux-t.db").exists());
     assert!(t.state().is_some());
@@ -51,7 +63,9 @@ fn a_missing_tmux_tmpdir_is_refused_and_named() {
     let t = T::new();
     let gone = t.path().join("gone");
     let o = super::run(&super::Invocation {
-        argv: ["-u", "-L", "t", "list-sessions"].map(String::from).to_vec(),
+        argv: ["-u", "-L", "t", "list-sessions"]
+            .map(String::from)
+            .to_vec(),
         tmux_tmpdir: gone.clone(),
         cwd: t.path(),
         env: vec![],

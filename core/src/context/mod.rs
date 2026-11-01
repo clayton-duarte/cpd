@@ -13,30 +13,30 @@
 mod distill_runner_tests;
 
 mod archive;
-mod delete;
 mod contexts;
-pub mod curation;
 pub mod curated;
+pub mod curation;
+mod delete;
 pub mod distill;
+#[cfg(test)]
+mod distill_git_tests;
 pub mod engine;
 pub mod inforce;
-mod list;
 pub(crate) mod legacy;
+mod list;
 pub(crate) mod manager;
 mod owner;
 mod pending;
+mod query;
+#[cfg(test)]
+mod query_tests;
 mod record;
 mod reindex;
-pub(crate) mod render;
 mod rename;
-mod query;
+pub(crate) mod render;
 mod search;
 mod show;
 mod write;
-#[cfg(test)]
-mod distill_git_tests;
-#[cfg(test)]
-mod query_tests;
 
 use std::fmt;
 use std::str::FromStr;
@@ -126,7 +126,11 @@ impl FromStr for Jira {
         if valid {
             Ok(Jira(s.to_owned()))
         } else {
-            Err(CpdError::new(ErrorCode::Usage, format!("{s:?} is not a Jira key: ^[A-Z][A-Z0-9]+-[0-9]+$.")).with("value", s))
+            Err(CpdError::new(
+                ErrorCode::Usage,
+                format!("{s:?} is not a Jira key: ^[A-Z][A-Z0-9]+-[0-9]+$."),
+            )
+            .with("value", s))
         }
     }
 }
@@ -162,12 +166,14 @@ impl Select {
         };
         let context = store.read(|conn| {
             Ok(conn
-                .query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get::<_, String>(0))
+                .query_row(
+                    "SELECT context FROM plans WHERE id = ?1",
+                    [plan.as_str()],
+                    |r| r.get::<_, String>(0),
+                )
                 .optional()?)
         })?;
-        let context = context.ok_or_else(|| {
-            CpdError::plan_not_found(plan)
-        })?;
+        let context = context.ok_or_else(|| CpdError::plan_not_found(plan))?;
         ContextId::parse(&context)
     }
 }
@@ -286,7 +292,9 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Search(args) => search::search(args),
         Command::Reindex(args) => reindex::reindex(args),
         Command::Decide(args) => {
-            let draft = Draft::Decision { supersedes: args.supersedes };
+            let draft = Draft::Decision {
+                supersedes: args.supersedes,
+            };
             write::write("context decide", &args.select, &args.text, draft)
         }
         Command::Note(args) => {
@@ -296,10 +304,17 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
             };
             write::write("context note", &args.select, &args.text, draft)
         }
-        Command::Ask(args) => write::write("context ask", &args.select, &args.question, Draft::Question),
-        Command::Answer(args) => {
-            write::write("context answer", &args.select, &args.text, Draft::Answer { question: args.question })
+        Command::Ask(args) => {
+            write::write("context ask", &args.select, &args.question, Draft::Question)
         }
+        Command::Answer(args) => write::write(
+            "context answer",
+            &args.select,
+            &args.text,
+            Draft::Answer {
+                question: args.question,
+            },
+        ),
         Command::Rename(args) => rename::rename(args),
         Command::Archive(args) => archive::archive(args),
         Command::Unarchive(args) => archive::unarchive(args),
@@ -314,7 +329,6 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
     }
 }
 
-
 fn context_json(row: &ContextRow) -> Value {
     json!({"id": row.id, "title": row.title, "jira": row.jira, "owner": row.owner, "created_at": row.created_at,
            "created_on": row.created_on})
@@ -322,9 +336,21 @@ fn context_json(row: &ContextRow) -> Value {
 
 /// `context new` (§3.1).
 fn new(args: NewArgs) -> Result<Output, CpdError> {
-    let Env { home, config, mut store, .. } = Env::open()?;
+    let Env {
+        home,
+        config,
+        mut store,
+        ..
+    } = Env::open()?;
     let title = Text::from(args.title.clone());
-    let (row, already) = Contexts::new(&config, &mut store).create(&home, &args.id, &title, args.jira.as_ref(), &args.owner, args.confirm_fallback)?;
+    let (row, already) = Contexts::new(&config, &mut store).create(
+        &home,
+        &args.id,
+        &title,
+        args.jira.as_ref(),
+        &args.owner,
+        args.confirm_fallback,
+    )?;
     let mut out = json!({"context": context_json(&row)});
     if already {
         out["already"] = json!(true);

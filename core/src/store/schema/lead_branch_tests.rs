@@ -15,14 +15,21 @@ fn write(store: &mut Store, sql: &str) -> Result<(), CpdError> {
 }
 
 fn message(result: Result<(), CpdError>, what: &str) -> String {
-    result.expect_err(what).details()["sqlite_message"].as_str().unwrap_or_default().to_owned()
+    result.expect_err(what).details()["sqlite_message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// A fully migrated store with Plan `pay` (in `phase`) and its Lead.
 fn fresh(phase: &str) -> (tempfile::TempDir, Store) {
     let (dir, home) = crate::store::tests::tmp_home();
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     let (locked, done) = match phase {
         "plan" => ("NULL", "NULL"),
         "dispatch" => ("'t'", "NULL"),
@@ -65,7 +72,11 @@ fn prs_still_accepts_the_two_legacy_lead_branch_forms() {
 #[test]
 fn prs_refuses_a_lead_branch_that_is_not_derived_from_plan_and_key() {
     let (_dir, mut store) = fresh("plan");
-    for (key, branch) in [("api", "other/api"), ("api", "pay/other"), ("api", "cpd/other/api")] {
+    for (key, branch) in [
+        ("api", "other/api"),
+        ("api", "pay/other"),
+        ("api", "cpd/other/api"),
+    ] {
         let failed = message(write(&mut store, &pr("pay", key, branch)), branch);
         assert!(failed.contains("CHECK"), "{branch}: {failed}");
     }
@@ -89,15 +100,20 @@ fn attempt_on(branch: &str) -> String {
 fn attempts_accepts_a_linear_attempt_on_a_plan_slash_key_branch() {
     let (_dir, mut store) = fresh("plan");
     write(&mut store, &pr("pay", "api", "pay/api")).expect("the PR");
-    write(&mut store, &attempt_on("pay/api")).expect("a linear Attempt's branch is its PR's Lead Branch");
+    write(&mut store, &attempt_on("pay/api"))
+        .expect("a linear Attempt's branch is its PR's Lead Branch");
 
     let (_dir, mut store) = fresh("plan");
     write(&mut store, &pr("pay", "api", "pay/api")).expect("the PR");
-    write(&mut store, &attempt_on("cpd/pay--j-a1")).expect("a parallel Attempt branch keeps its name");
+    write(&mut store, &attempt_on("cpd/pay--j-a1"))
+        .expect("a parallel Attempt branch keeps its name");
 
     let (_dir, mut store) = fresh("plan");
     write(&mut store, &pr("pay", "api", "pay/api")).expect("the PR");
-    let failed = message(write(&mut store, &attempt_on("paid/api")), "another plan's branch");
+    let failed = message(
+        write(&mut store, &attempt_on("paid/api")),
+        "another plan's branch",
+    );
     assert!(failed.contains("CHECK"), "{failed}");
 }
 
@@ -115,7 +131,10 @@ fn prs_locked_refuses_moving_a_legacy_lead_branch() {
                        (SELECT id FROM pull_requests WHERE number = 1), 't');",
         )
         .unwrap();
-        let moved = write(&mut store, "UPDATE prs SET lead_branch = 'cpd/pay/api' WHERE key = 'api'");
+        let moved = write(
+            &mut store,
+            "UPDATE prs SET lead_branch = 'cpd/pay/api' WHERE key = 'api'",
+        );
         assert!(message(moved, phase).contains("pr_locked"), "{phase}");
     }
 }

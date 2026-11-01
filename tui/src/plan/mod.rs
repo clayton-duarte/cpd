@@ -38,18 +38,18 @@ use ratatui::widgets::Paragraph;
 
 use self::actions::Actions;
 use self::boxes::Boxes;
+use super::background::Background;
+use super::pace::{self, Reads};
+use super::read::{self, ChatSlot, PlanBoxes, Pulse};
+use super::runner::{ViewError, kept};
+use super::view_ports::{Ctx, Input as ViewInput, Tty, frame_now, run_view_with, wall_ms};
+use super::viewlog::ViewLog;
+use super::{Capture, RunCommand, run_view_on};
 use crate::box_widget::spacing;
 use crate::dialog::scroll::Scroll;
 use crate::palette;
-use super::background::Background;
-use super::viewlog::ViewLog;
+use crate::pump::{Feed, SAFETY, Schedule, Signal};
 use crate::trace::Trace;
-use super::read::{self, ChatSlot, PlanBoxes, Pulse};
-use super::pace::{self, Reads};
-use crate::pump::{Feed, Schedule, Signal, SAFETY};
-use super::runner::{ViewError, kept};
-use super::view_ports::{Ctx, Input as ViewInput, Tty, frame_now, run_view_with, wall_ms};
-use super::{Capture, RunCommand, run_view_on};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{Event, highest_id};
@@ -65,7 +65,10 @@ const PULSE_REFRESH: Duration = Duration::from_secs(60);
 
 /// The blank space around the chart's content, inside the canvas the view scrolls over: at scroll (0, 0) nothing of the
 /// chart touches the pane's edges, and scrolled the chart reaches them.
-const MARGIN: Margin = Margin { horizontal: 2, vertical: 1 };
+const MARGIN: Margin = Margin {
+    horizontal: 2,
+    vertical: 1,
+};
 /// The blank space around the chart's canvas of boxes: the container's one column of box margin
 /// ([`spacing::MARGIN_X`]) each side and one row; Pulse and the message row keep `MARGIN`.
 pub(crate) const CHART_MARGIN: Margin = Margin::new(spacing::MARGIN_X, 1);
@@ -73,7 +76,12 @@ pub(crate) const CHART_MARGIN: Margin = Margin::new(spacing::MARGIN_X, 1);
 /// Whether a spinner is on screen for `jobs` of a Plan: a running Job's pill (hs-d586: also a failed one being worked on,
 /// `needs_user.worked_on`).
 pub(crate) fn spins(jobs: &[read::JobNode], needs_user: &read::NeedsUser) -> bool {
-    jobs.iter().any(|j| matches!(flow::Live::of(j, needs_user.worked_on.contains(&j.key)), flow::Live::Running | flow::Live::FailedWorked))
+    jobs.iter().any(|j| {
+        matches!(
+            flow::Live::of(j, needs_user.worked_on.contains(&j.key)),
+            flow::Live::Running | flow::Live::FailedWorked
+        )
+    })
 }
 
 /// What the pane shows when a Lead is in the chat slot.
@@ -106,7 +114,10 @@ impl Centre {
     fn turn_traced(&mut self, frame: usize, _trace: &mut Trace) -> bool {
         let turned = frame != self.frame && self.spins();
         if turned {
-            let (from, to) = (palette::SPINNER[self.frame % palette::SPINNER.len()], palette::SPINNER[frame % palette::SPINNER.len()]);
+            let (from, to) = (
+                palette::SPINNER[self.frame % palette::SPINNER.len()],
+                palette::SPINNER[frame % palette::SPINNER.len()],
+            );
             for cell in &mut self.boxes.chart.buf.content {
                 if cell.symbol().contains(from) {
                     let turned = cell.symbol().replace(from, to);
@@ -147,27 +158,65 @@ fn snapshot(store: &mut Store, width: u16, now_ms: i64) -> Result<Snapshot, CpdE
 
 /// [`snapshot`]'s chart, with the spinner frame and the time read on the clock of `ports`.
 #[cfg(test)]
-pub(crate) fn snapshot_with(ports: &Ports, store: &mut Store, width: u16) -> Result<Option<Centre>, CpdError> {
+pub(crate) fn snapshot_with(
+    ports: &Ports,
+    store: &mut Store,
+    width: u16,
+) -> Result<Option<Centre>, CpdError> {
     Ok(snapshot_timed(ports, store, width, now_ms(ports), false)?.centre)
 }
 
 /// [`snapshot`], timing its layout when `timed`; the frame and the timing are read on the clock of `ports`.
-fn snapshot_timed(ports: &Ports, store: &mut Store, width: u16, now_ms: i64, timed: bool) -> Result<Snapshot, CpdError> {
+fn snapshot_timed(
+    ports: &Ports,
+    store: &mut Store,
+    width: u16,
+    now_ms: i64,
+    timed: bool,
+) -> Result<Snapshot, CpdError> {
     // Read first: whatever the later reads see is at least this new, so following from here loses nothing.
     let cursor = store.read(highest_id)?;
     if let Some(manager) = read::manager_slot(store)? {
         // Read for the widest the ids allow; the drawing keeps the last buckets that fit.
-        let buckets = pulse::buckets(usize::from(width).saturating_sub(2 * usize::from(MARGIN.horizontal)), 0);
+        let buckets = pulse::buckets(
+            usize::from(width).saturating_sub(2 * usize::from(MARGIN.horizontal)),
+            0,
+        );
         let pulse = read::pulse(store, &manager.context, now_ms, buckets)?;
-        return Ok(Snapshot { cursor, centre: None, pulse: Some(pulse), layout: Duration::ZERO });
+        return Ok(Snapshot {
+            cursor,
+            centre: None,
+            pulse: Some(pulse),
+            layout: Duration::ZERO,
+        });
     }
-    let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None, pulse: None, layout: Duration::ZERO }) };
+    let Some(slot) = read::chat_slot(store)? else {
+        return Ok(Snapshot {
+            cursor,
+            centre: None,
+            pulse: None,
+            layout: Duration::ZERO,
+        });
+    };
     let plan = read::plan_boxes_at(store, &slot.plan, now_ms)?;
     let frame = frame_now(ports);
     let began = timed.then(|| ports.clock.now());
-    let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame).with_margin(CHART_MARGIN);
-    let layout = began.map_or(Duration::ZERO, |b| ports.clock.now().saturating_duration_since(b));
-    Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, boxes, frame }), pulse: None, layout })
+    let boxes =
+        boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame).with_margin(CHART_MARGIN);
+    let layout = began.map_or(Duration::ZERO, |b| {
+        ports.clock.now().saturating_duration_since(b)
+    });
+    Ok(Snapshot {
+        cursor,
+        centre: Some(Centre {
+            slot,
+            plan,
+            boxes,
+            frame,
+        }),
+        pulse: None,
+        layout,
+    })
 }
 
 /// What the reader thread brings back from one read: the poll's outcome and, when the poll found a change that concerns the
@@ -213,11 +262,21 @@ fn concerns(event: &Event, centre: Option<&Centre>, pulse: Option<&Pulse>) -> bo
 /// The line at the foot of the chart: an error, ` no Lead session in the centre` (dim), `no PR yet: cpd pr add` (dim)
 /// or `no Plan yet`: lasting states of the view (commands.md §17 "No notes", rule (b)).
 fn message(error: Option<&str>, centre: Option<&Centre>) -> Option<Line<'static>> {
-    let mut parts: Vec<Span<'static>> = error.into_iter().map(|e| Span::styled(e.to_owned(), palette::error())).collect();
+    let mut parts: Vec<Span<'static>> = error
+        .into_iter()
+        .map(|e| Span::styled(e.to_owned(), palette::error()))
+        .collect();
     match centre {
-        None => parts.push(Span::styled(" no Lead session in the centre", palette::muted_text())),
-        Some(c) if c.plan.prs.is_empty() => parts.push(Span::styled("no PR yet: cpd pr add", palette::muted_text())),
-        Some(c) if c.plan.jobs.is_empty() => parts.push(Span::styled("no Plan yet", palette::muted_text())),
+        None => parts.push(Span::styled(
+            " no Lead session in the centre",
+            palette::muted_text(),
+        )),
+        Some(c) if c.plan.prs.is_empty() => {
+            parts.push(Span::styled("no PR yet: cpd pr add", palette::muted_text()))
+        }
+        Some(c) if c.plan.jobs.is_empty() => {
+            parts.push(Span::styled("no Plan yet", palette::muted_text()))
+        }
         Some(_) => {}
     }
     (!parts.is_empty()).then(|| Line::from(spaced(parts)))
@@ -258,12 +317,18 @@ impl Ui {
     /// A mouse event on the frame last drawn: a left press (any modifiers) on a drawn link opens its url through
     /// `ports.runner` and answers `Ok(true)`, changing nothing else; any other event answers `Ok(false)` and changes
     /// nothing. A failed `open` is the `Err`.
-    fn click(&mut self, ports: &Ports, m: ratatui::crossterm::event::MouseEvent) -> Result<bool, CpdError> {
+    fn click(
+        &mut self,
+        ports: &Ports,
+        m: ratatui::crossterm::event::MouseEvent,
+    ) -> Result<bool, CpdError> {
         let cell = Position::new(m.column, m.row);
         if m.kind != MouseEventKind::Down(MouseButton::Left) || !self.body.contains(cell) {
             return Ok(false);
         }
-        let at = |screen: u16, body: u16, scroll: u16, origin: u16| (screen - body + scroll).checked_sub(origin);
+        let at = |screen: u16, body: u16, scroll: u16, origin: u16| {
+            (screen - body + scroll).checked_sub(origin)
+        };
         let (Some(x), Some(y)) = (
             at(m.column, self.body.x, self.scroll.0, self.links_origin.0),
             at(m.row, self.body.y, self.scroll.1, self.links_origin.1),
@@ -282,7 +347,9 @@ impl Ui {
         if let Some(from) = from {
             self.remembered.insert(from.clone(), self.scroll);
         }
-        self.scroll = to.and_then(|plan| self.remembered.get(plan).copied()).unwrap_or((0, 0));
+        self.scroll = to
+            .and_then(|plan| self.remembered.get(plan).copied())
+            .unwrap_or((0, 0));
     }
 
     /// Records the offset of `plan`, the Plan on show, once it differs from the one remembered (a Plan never scrolled
@@ -296,16 +363,23 @@ impl Ui {
     /// Draws Pulse: the rows inside the margin, then the message row (an error, ` no Plans yet`).
     fn draw_pulse(&mut self, f: &mut Frame, pulse: &Pulse) {
         let mut window = f.area();
-        let mut parts: Vec<Span<'static>> =
-            self.error.iter().map(|e| Span::styled(e.clone(), palette::error())).collect();
+        let mut parts: Vec<Span<'static>> = self
+            .error
+            .iter()
+            .map(|e| Span::styled(e.clone(), palette::error()))
+            .collect();
         if pulse.rows.is_empty() {
             parts.push(Span::styled(" no Plans yet", palette::muted_text()));
         }
         if !parts.is_empty() {
-            let [rows, message_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(window);
+            let [rows, message_area] =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(window);
             f.render_widget(
                 Paragraph::new(Line::from(spaced(parts))),
-                message_area.inner(Margin { horizontal: MARGIN.horizontal, vertical: 0 }),
+                message_area.inner(Margin {
+                    horizontal: MARGIN.horizontal,
+                    vertical: 0,
+                }),
             );
             window = rows;
         }
@@ -325,9 +399,16 @@ impl Ui {
         let body = f.area();
         let mut window = body; // the chart's own margin keeps it off the pane's edges at scroll (0, 0)
         if let Some(text) = message(self.error.as_deref(), centre) {
-            let [chart_area, message_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(window);
+            let [chart_area, message_area] =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(window);
             // the pane's last row, at column `MARGIN.horizontal` (2)
-            f.render_widget(Paragraph::new(text), message_area.inner(Margin { horizontal: MARGIN.horizontal, vertical: 0 }));
+            f.render_widget(
+                Paragraph::new(text),
+                message_area.inner(Margin {
+                    horizontal: MARGIN.horizontal,
+                    vertical: 0,
+                }),
+            );
             window = chart_area;
         }
         self.body = window;
@@ -355,7 +436,11 @@ impl Offsets {
     pub(crate) fn at(home: &CpdHome) -> Offsets {
         // Not in `CpdHome` (contract §1.4): the layout's one source of truth lists this file there.
         let path = home.run_dir().join("tui").join("plan-scroll.json");
-        Offsets { path, saved: HashMap::new(), written: None }
+        Offsets {
+            path,
+            saved: HashMap::new(),
+            written: None,
+        }
     }
 
     /// The offsets in the file: none when it is missing; `Err` with the reason when it cannot be read or is not
@@ -374,7 +459,9 @@ impl Offsets {
 
     /// When a write that is due but held back by [`SAVE_EVERY`] can be made, if one is waiting.
     fn due_at(&self, offsets: &HashMap<PlanId, (u16, u16)>) -> Option<Instant> {
-        (*offsets != self.saved).then(|| self.written.map(|at| at + SAVE_EVERY)).flatten()
+        (*offsets != self.saved)
+            .then(|| self.written.map(|at| at + SAVE_EVERY))
+            .flatten()
     }
 
     /// Writes `offsets` when they differ from the file and, unless `now` (the Plan changed), a second has passed
@@ -385,20 +472,34 @@ impl Offsets {
     }
 
     /// [`Offsets::save`] with the second counted on the clock of `ports`.
-    pub(crate) fn save_with(&mut self, ports: &Ports, offsets: &HashMap<PlanId, (u16, u16)>, now: bool) -> Result<(), String> {
+    pub(crate) fn save_with(
+        &mut self,
+        ports: &Ports,
+        offsets: &HashMap<PlanId, (u16, u16)>,
+        now: bool,
+    ) -> Result<(), String> {
         let at_now = ports.clock.now();
-        if *offsets == self.saved || (!now && self.written.is_some_and(|at| at_now.saturating_duration_since(at) < SAVE_EVERY)) {
+        if *offsets == self.saved
+            || (!now
+                && self
+                    .written
+                    .is_some_and(|at| at_now.saturating_duration_since(at) < SAVE_EVERY))
+        {
             return Ok(());
         }
         self.written = Some(at_now);
-        self.write(offsets).map_err(|e| format!("scroll positions not saved: {}: {e}", self.path.display()))?;
+        self.write(offsets)
+            .map_err(|e| format!("scroll positions not saved: {}: {e}", self.path.display()))?;
         self.saved.clone_from(offsets);
         Ok(())
     }
 
     /// Replaces the file through [`cpd_core::atomic::write_atomic`].
     fn write(&self, offsets: &HashMap<PlanId, (u16, u16)>) -> io::Result<()> {
-        let sorted: BTreeMap<&str, (u16, u16)> = offsets.iter().map(|(plan, at)| (plan.as_str(), *at)).collect();
+        let sorted: BTreeMap<&str, (u16, u16)> = offsets
+            .iter()
+            .map(|(plan, at)| (plan.as_str(), *at))
+            .collect();
         let text = serde_json::to_vec(&sorted).map_err(io::Error::other)?;
         cpd_core::atomic::write_atomic(&self.path, text)
     }
@@ -421,8 +522,13 @@ pub(super) fn run(ports: &Ports, run_command: RunCommand) -> Result<Output, CpdE
             prepare(ports, CpdHome::from_env()?, run_command, || {
                 Ok(ratatui::crossterm::terminal::size()
                     .map_err(|e| {
-                        CpdError::new(ErrorCode::NotATerminal, format!("The size of the terminal of cpd tui view plan is unknown: {e}."))
-                            .with("command", "tui view plan")
+                        CpdError::new(
+                            ErrorCode::NotATerminal,
+                            format!(
+                                "The size of the terminal of cpd tui view plan is unknown: {e}."
+                            ),
+                        )
+                        .with("command", "tui view plan")
                     })?
                     .0)
             })
@@ -458,8 +564,18 @@ pub fn prepare(
     let poll = Duration::from_millis(u64::from(config.events.poll_ms));
     let follow = read::Follow::new(&mut store, &[], snap.cursor)?;
     // the reads after the first run on the reader thread, with a store of its own (R4)
-    let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), follow);
-    Ok(Prepared { home, snap, poll, reader, actions })
+    let reader = pace::Owned::new(
+        home.clone(),
+        u64::from(config.timeouts.store_busy_ms),
+        follow,
+    );
+    Ok(Prepared {
+        home,
+        snap,
+        poll,
+        reader,
+        actions,
+    })
 }
 
 /// [`run`] on a terminal, its facts and its input that the caller gives (a test's `TestBackend`, scripted input and a
@@ -484,7 +600,12 @@ pub fn run_on<B: Backend, W: io::Write>(
         Capture::Mouse,
         || {
             prepare(ports, CpdHome::from_env()?, run_command, || {
-                width.map_err(|e| CpdError::new(ErrorCode::NotATerminal, format!("The size of the terminal of cpd tui view plan is unknown: {e}.")))
+                width.map_err(|e| {
+                    CpdError::new(
+                        ErrorCode::NotATerminal,
+                        format!("The size of the terminal of cpd tui view plan is unknown: {e}."),
+                    )
+                })
             })
         },
         |ctx, prepared| show_with(ctx, Feed::driven(), prepared),
@@ -503,14 +624,28 @@ fn begin(ui: &mut Ui, offsets: &mut Offsets, plan: Option<&PlanId>) -> Vec<Strin
     let loaded = offsets.load();
     ui.remembered = loaded.clone().unwrap_or_default();
     ui.switch(None, plan);
-    loaded.err().map(|reason| format!("scroll positions reset: {reason}")).into_iter().collect()
+    loaded
+        .err()
+        .map(|reason| format!("scroll positions reset: {reason}"))
+        .into_iter()
+        .collect()
 }
 
 /// Draws, follows Events and takes input until the terminal fails. The loop's one wait is `feed`'s pump: a test's is
 /// scripted (signals, the `ManualClock` of `ctx.ports`, reads and Worker actions inline, no watcher) and `ctx.input` is not
 /// read; the end of a script is `Signal::InputFailed`.
-pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -> Result<(), ViewError> {
-    let Prepared { home, mut snap, poll, reader, actions } = prepared;
+pub fn show_with<B: Backend>(
+    ctx: &mut Ctx<B>,
+    feed: Feed,
+    prepared: Prepared,
+) -> Result<(), ViewError> {
+    let Prepared {
+        home,
+        mut snap,
+        poll,
+        reader,
+        actions,
+    } = prepared;
     let (ports, home, snap, actions) = (ctx.ports, &home, &mut snap, &actions);
     let Feed { pump, watch } = feed;
     let mut ui = Ui::default();
@@ -524,7 +659,11 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
             ui.error = Some(why);
         }
     };
-    for line in begin(&mut ui, &mut offsets, snap.centre.as_ref().map(|c| &c.plan.plan)) {
+    for line in begin(
+        &mut ui,
+        &mut offsets,
+        snap.centre.as_ref().map(|c| &c.plan.plan),
+    ) {
         write(&mut ui, &line);
     }
     // a failed poll is made again at the next read, a failed snapshot likewise; both are shown (runner::kept), the
@@ -532,10 +671,24 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
     let (mut snapshot_error, mut follow_error) = (None, None);
     let (watch, watch_error) = match watch {
         Ok(w) => (w, None),
-        Err(e) => (None, Some(format!("no commit watcher: {}; polling every {} ms", e.message(), poll.as_millis()))),
+        Err(e) => (
+            None,
+            Some(format!(
+                "no commit watcher: {}; polling every {} ms",
+                e.message(),
+                poll.as_millis()
+            )),
+        ),
     };
     let _watch = watch; // lives as long as the loop
-    let mut schedule = Schedule::new(ports.clock.now(), if watch_error.is_some() || pump.is_driven() { poll } else { SAFETY });
+    let mut schedule = Schedule::new(
+        ports.clock.now(),
+        if watch_error.is_some() || pump.is_driven() {
+            poll
+        } else {
+            SAFETY
+        },
+    );
     if watch_error.is_some() {
         ui.error = watch_error.clone();
     }
@@ -557,15 +710,24 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
             kept(done.poll, &mut follow_error);
             if let Some(result) = done.snapshot {
                 ctx.snapshot_read();
-                let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
+                let before = snap
+                    .centre
+                    .as_ref()
+                    .map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
                 let before_pulse = snap.pulse.as_ref().map(|p| p.context.clone());
-                let next = kept(result.inspect(|s| {
-                    trace.add_layout(s.layout);
-                }), &mut snapshot_error);
+                let next = kept(
+                    result.inspect(|s| {
+                        trace.add_layout(s.layout);
+                    }),
+                    &mut snapshot_error,
+                );
                 if let Some(next) = next {
                     redraw = true;
                     *snap = next;
-                    let after = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
+                    let after = snap
+                        .centre
+                        .as_ref()
+                        .map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
                     if before_pulse != snap.pulse.as_ref().map(|p| p.context.clone()) {
                         ui.pulse_scroll = Scroll::default();
                     }
@@ -578,7 +740,10 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
                 }
                 taken = ports.clock.now();
             }
-            ui.error = snapshot_error.clone().or_else(|| follow_error.clone()).or_else(|| watch_error.clone());
+            ui.error = snapshot_error
+                .clone()
+                .or_else(|| follow_error.clone())
+                .or_else(|| watch_error.clone());
             redraw |= ui.error != shown;
         }
         if let Some(kind) = schedule.take(ports.clock.now()) {
@@ -592,8 +757,11 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
                 let poll = polled.map(|changes| {
                     changed = changes.pulls || changes.events.iter().any(|e| watching.concerns(e));
                 });
-                let snapshot = (changed || kind.force || retry)
-                    .then(|| pace::Owned::read(&shared, |store, _| snapshot_timed(&ports, store, width, now_ms(&ports), timed)));
+                let snapshot = (changed || kind.force || retry).then(|| {
+                    pace::Owned::read(&shared, |store, _| {
+                        snapshot_timed(&ports, store, width, now_ms(&ports), timed)
+                    })
+                });
                 Read { poll, snapshot }
             });
         }
@@ -624,9 +792,22 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
         let wall_ms = wall_ms(ports);
         // a scroll offset not yet saved (held back by SAVE_EVERY) wakes the loop when it may be written
         let save_at = offsets.due_at(&ui.remembered);
-        let until = crate::pump::wake(now, wall_ms, &needs(snap, taken), [schedule.deadline(now), save_at].into_iter().flatten().min());
+        let until = crate::pump::wake(
+            now,
+            wall_ms,
+            &needs(snap, taken),
+            [schedule.deadline(now), save_at]
+                .into_iter()
+                .flatten()
+                .min(),
+        );
         let signal = if pump.is_driven() {
-            pump.wait_driven(ports, &mut *ctx.input, until, schedule.is_out() || background.busy())
+            pump.wait_driven(
+                ports,
+                &mut *ctx.input,
+                until,
+                schedule.is_out() || background.busy(),
+            )
         } else {
             pump.wait(until)
         };
@@ -651,11 +832,19 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
         match input {
             Input::Resize(..) => schedule.force(), // the bucket count changes
             Input::Mouse(m) if snap.pulse.is_some() => {
-                let Some(pulse) = snap.pulse.as_ref() else { continue };
+                let Some(pulse) = snap.pulse.as_ref() else {
+                    continue;
+                };
                 match m.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
-                        lead = pulse::row_at(ui.body, ui.pulse_scroll.offset(), pulse.rows.len(), m.column, m.row)
-                            .map(|i| pulse.rows[i].lead.clone());
+                        lead = pulse::row_at(
+                            ui.body,
+                            ui.pulse_scroll.offset(),
+                            pulse.rows.len(),
+                            m.column,
+                            m.row,
+                        )
+                        .map(|i| pulse.rows[i].lead.clone());
                     }
                     MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                         ui.pulse_scroll.mouse(m);
@@ -745,8 +934,18 @@ fn sample_centre(prs: Vec<read::PrNode>, jobs: Vec<read::JobNode>) -> Centre {
         needs_user,
         events_cursor: 0,
     };
-    let slot = ChatSlot { session: SessionId::parse("lead").unwrap(), name: "n".into(), plan: plan.plan.clone(), moved_event: 1 };
-    Centre { slot, plan, boxes, frame: 0 }
+    let slot = ChatSlot {
+        session: SessionId::parse("lead").unwrap(),
+        name: "n".into(),
+        plan: plan.plan.clone(),
+        moved_event: 1,
+    };
+    Centre {
+        slot,
+        plan,
+        boxes,
+        frame: 0,
+    }
 }
 
 /// The layout test's sample (`layout_tests`): the Plan view drawn by [`Ui::draw`] into a `width` x `height` pane at a
@@ -755,15 +954,23 @@ fn sample_centre(prs: Vec<read::PrNode>, jobs: Vec<read::JobNode>) -> Centre {
 /// the canvas by its corners (`╭` to the next `╮` on its row, `╭` to the next `╰` down its column). A box the window
 /// clips is `Rule::Clipped`.
 #[cfg(test)]
-pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::PlanCase) -> crate::layout_tests::Sample {
-    use crate::layout_tests::{Exempt, Kind, PlanCase, Placed, Rule, Sample, Scroll};
+pub(crate) fn layout_sample(
+    width: u16,
+    height: u16,
+    case: crate::layout_tests::PlanCase,
+) -> crate::layout_tests::Sample {
+    use crate::layout_tests::{Exempt, Kind, Placed, PlanCase, Rule, Sample, Scroll};
     use ratatui::backend::TestBackend;
     let (scroll, prs, jobs) = match case {
         PlanCase::Empty(scroll) => (scroll, vec![sample_pr("api")], Vec::new()),
         PlanCase::Three(scroll) => (
             scroll,
             vec![sample_pr("api"), sample_pr("web")],
-            vec![sample_job("api", "api-1"), sample_job("api", "api-2"), sample_job("web", "web-1")],
+            vec![
+                sample_job("api", "api-1"),
+                sample_job("api", "api-2"),
+                sample_job("web", "web-1"),
+            ],
         ),
     };
     let expected = prs.len();
@@ -785,21 +992,46 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
             }
             let right = (x + 1..canvas.area.width).find(|&x2| canvas[(x2, y)].symbol() == "╮");
             let bottom = (y + 1..canvas.area.height).find(|&y2| canvas[(x, y2)].symbol() == "╰");
-            let (Some(right), Some(bottom)) = (right, bottom) else { continue };
+            let (Some(right), Some(bottom)) = (right, bottom) else {
+                continue;
+            };
             let whole = Rect::new(x, y, right - x + 1, bottom - y + 1);
             let view = Rect::new(ox, oy, window.width, window.height);
             let seen = view.intersection(whole);
-            let rect = Rect::new(window.x + seen.x.saturating_sub(ox), window.y + seen.y.saturating_sub(oy), seen.width, seen.height);
+            let rect = Rect::new(
+                window.x + seen.x.saturating_sub(ox),
+                window.y + seen.y.saturating_sub(oy),
+                seen.width,
+                seen.height,
+            );
             let exempt = if seen == whole {
                 Vec::new()
             } else {
-                vec![Exempt { name: "the pane clips the box: the canvas scrolls", row: rect.y, rule: Rule::Clipped }]
+                vec![Exempt {
+                    name: "the pane clips the box: the canvas scrolls",
+                    row: rect.y,
+                    rule: Rule::Clipped,
+                }]
             };
-            boxes.push(Placed { name: "pr box", kind: Kind::FullText, rect, exempt });
+            boxes.push(Placed {
+                name: "pr box",
+                kind: Kind::FullText,
+                rect,
+                exempt,
+            });
         }
     }
-    assert_eq!(boxes.len(), expected, "one box per PR on the canvas\n{}", crate::layout_tests::dump(canvas));
-    Sample { buf: terminal.backend().buffer().clone(), container: Rect::new(0, 0, width, height), boxes }
+    assert_eq!(
+        boxes.len(),
+        expected,
+        "one box per PR on the canvas\n{}",
+        crate::layout_tests::dump(canvas)
+    );
+    Sample {
+        buf: terminal.backend().buffer().clone(),
+        container: Rect::new(0, 0, width, height),
+        boxes,
+    }
 }
 
 #[cfg(test)]
@@ -808,25 +1040,25 @@ mod box_link_tests;
 mod box_tests;
 
 #[cfg(test)]
+mod box_lines_tests;
+#[cfg(test)]
+mod chain_tests;
+#[cfg(test)]
+mod counter_tests;
+#[cfg(test)]
+mod explore_view_tests;
+#[cfg(test)]
+mod footer_cost_tests;
+#[cfg(test)]
+mod lines_tests;
+#[cfg(test)]
 mod margin_tests;
+#[cfg(test)]
+mod needs_tests;
 #[cfg(test)]
 mod pill_label_tests;
 #[cfg(test)]
 mod pill_tier_tests;
-#[cfg(test)]
-mod lines_tests;
-#[cfg(test)]
-mod box_lines_tests;
-#[cfg(test)]
-mod counter_tests;
-#[cfg(test)]
-mod footer_cost_tests;
-#[cfg(test)]
-mod needs_tests;
-#[cfg(test)]
-mod chain_tests;
-#[cfg(test)]
-mod explore_view_tests;
 
 #[cfg(test)]
 mod tests {
@@ -840,9 +1072,9 @@ mod tests {
     use cpd_core::config::Tier;
     use cpd_core::ids::{ContextId, JobKey, PrKey, SessionId};
 
-
     #[test]
-    fn a_read_is_taken_for_a_commit_at_most_once_per_frame_and_for_no_change_only_on_the_safety_time() {
+    fn a_read_is_taken_for_a_commit_at_most_once_per_frame_and_for_no_change_only_on_the_safety_time()
+     {
         use crate::pump::{FRAME, SAFETY, Schedule};
         let t0 = Instant::now();
         let mut s = Schedule::new(t0, SAFETY);
@@ -851,13 +1083,20 @@ mod tests {
         assert!(s.take(t0 + FRAME).is_some(), "a commit: one read");
         s.done();
         s.commit();
-        assert!(s.take(t0 + FRAME + FRAME / 2).is_none(), "a second commit in the same frame waits");
+        assert!(
+            s.take(t0 + FRAME + FRAME / 2).is_none(),
+            "a second commit in the same frame waits"
+        );
         assert!(s.take(t0 + FRAME * 2).is_some());
     }
 
     #[test]
     fn the_watching_ids_say_which_events_concern_the_view() {
-        let w = Watching { plan: Some("p".into()), context: Some("c".into()), pulse: None };
+        let w = Watching {
+            plan: Some("p".into()),
+            context: Some("c".into()),
+            pulse: None,
+        };
         let event = |kind: &str, plan: &str| Event {
             id: 1,
             at: String::new(),
@@ -922,14 +1161,20 @@ mod tests {
             needs_user: read::NeedsUser::default(),
             events_cursor: 0,
         };
-        let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, 0).with_margin(CHART_MARGIN);
+        let boxes =
+            boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, 0).with_margin(CHART_MARGIN);
         let slot = ChatSlot {
             session: SessionId::parse("00000000-0000-4000-8000-000000000000").unwrap(),
             name: "lead".into(),
             plan: plan.plan.clone(),
             moved_event: 0,
         };
-        Centre { slot, plan, boxes, frame: 0 }
+        Centre {
+            slot,
+            plan,
+            boxes,
+            frame: 0,
+        }
     }
 
     fn draw(ui: &mut Ui, centre: &Centre) {
@@ -972,7 +1217,10 @@ mod tests {
     #[test]
     fn two_leads_of_one_plan_share_its_offset() {
         let a = plan("plan-a");
-        let mut ui = Ui { scroll: (4, 9), ..Ui::default() };
+        let mut ui = Ui {
+            scroll: (4, 9),
+            ..Ui::default()
+        };
         ui.switch(Some(&a), Some(&a));
         assert_eq!(ui.scroll, (4, 9));
     }
@@ -980,7 +1228,10 @@ mod tests {
     #[test]
     fn no_lead_and_back_is_the_same_plan() {
         let a = plan("plan-a");
-        let mut ui = Ui { scroll: (0, 5), ..Ui::default() };
+        let mut ui = Ui {
+            scroll: (0, 5),
+            ..Ui::default()
+        };
         ui.switch(Some(&a), None);
         assert_eq!(ui.scroll, (0, 0));
         ui.switch(None, Some(&a));
@@ -990,15 +1241,29 @@ mod tests {
     #[test]
     fn a_chart_that_shrank_clamps_the_restored_offset_when_drawn() {
         let (a, b) = (plan("plan-a"), plan("plan-b"));
-        let mut ui = Ui { scroll: (0, 20), ..Ui::default() };
+        let mut ui = Ui {
+            scroll: (0, 20),
+            ..Ui::default()
+        };
         ui.switch(Some(&a), Some(&b));
         ui.switch(Some(&b), Some(&a));
         assert_eq!(ui.scroll, (0, 20), "restored as it was left");
 
         let small = scroll_centre("plan-a", 12);
         draw(&mut ui, &small);
-        let height = small.boxes.chart.pills.iter().map(|p| p.rect.bottom()).max().unwrap();
-        assert!(ui.scroll.1 < 20 && ui.scroll.1 + PANE.1 >= height, "{:?}, chart {height} rows", ui.scroll);
+        let height = small
+            .boxes
+            .chart
+            .pills
+            .iter()
+            .map(|p| p.rect.bottom())
+            .max()
+            .unwrap();
+        assert!(
+            ui.scroll.1 < 20 && ui.scroll.1 + PANE.1 >= height,
+            "{:?}, chart {height} rows",
+            ui.scroll
+        );
     }
 
     #[test]
@@ -1017,7 +1282,11 @@ mod tests {
         ui.remember(&a);
         ui.scroll = (0, 0);
         ui.remember(&a);
-        assert_eq!(ui.remembered.get(&a), Some(&(0, 0)), "back at the corner is a change too");
+        assert_eq!(
+            ui.remembered.get(&a),
+            Some(&(0, 0)),
+            "back at the corner is a change too"
+        );
     }
 
     fn offsets_in(dir: &tempfile::TempDir) -> Offsets {
@@ -1035,7 +1304,10 @@ mod tests {
         let mut writer = offsets_in(&dir);
         writer.save(&offsets, true).unwrap();
         let path = dir.path().join("run/tui/plan-scroll.json");
-        assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"plan-a":[0,7],"plan-b":[4,9]}"#);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            r#"{"plan-a":[0,7],"plan-b":[4,9]}"#
+        );
         assert_eq!(offsets_in(&dir).load().unwrap(), offsets);
     }
 
@@ -1050,7 +1322,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("run/tui/plan-scroll.json");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        for bad in ["", "{not json", "[]", r#"{"Bad Id":[0,1]}"#, r#"{"plan-a":[0]}"#, r#"{"plan-a":[0,-1]}"#, r#"{"plan-a":"top"}"#] {
+        for bad in [
+            "",
+            "{not json",
+            "[]",
+            r#"{"Bad Id":[0,1]}"#,
+            r#"{"plan-a":[0]}"#,
+            r#"{"plan-a":[0,-1]}"#,
+            r#"{"plan-a":"top"}"#,
+        ] {
             fs::write(&path, bad).unwrap();
             let reason = offsets_in(&dir).load().unwrap_err();
             assert!(reason.contains("plan-scroll.json"), "{bad:?}: {reason}");
@@ -1075,7 +1355,10 @@ mod tests {
         let mut offsets = offsets_in(&dir);
         offsets.save(&map(&[("plan-a", (1, 2))]), true).unwrap();
         offsets.save(&map(&[("plan-a", (3, 4))]), true).unwrap();
-        let names: Vec<_> = fs::read_dir(dir.path().join("run/tui")).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let names: Vec<_> = fs::read_dir(dir.path().join("run/tui"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         assert_eq!(names, ["plan-scroll.json"]);
     }
 
@@ -1088,14 +1371,19 @@ mod tests {
         let want = map(&[("plan-a", (0, 5))]);
         let error = offsets.save(&want, true).unwrap_err();
         assert!(error.starts_with("scroll positions not saved: "), "{error}");
-        assert_eq!(fs::read_dir(&tui).unwrap().count(), 1, "only the directory is there");
+        assert_eq!(
+            fs::read_dir(&tui).unwrap().count(),
+            1,
+            "only the directory is there"
+        );
         fs::remove_dir(tui.join("plan-scroll.json")).unwrap();
         offsets.save(&want, true).unwrap();
         assert_eq!(offsets_in(&dir).load().unwrap(), want);
     }
 
     #[test]
-    fn a_write_waits_a_second_after_the_last_unless_the_plan_changed_and_unchanged_offsets_write_nothing() {
+    fn a_write_waits_a_second_after_the_last_unless_the_plan_changed_and_unchanged_offsets_write_nothing()
+     {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("run/tui/plan-scroll.json");
         let mut offsets = offsets_in(&dir);
@@ -1103,16 +1391,34 @@ mod tests {
         assert!(!path.exists(), "nothing changed: nothing written");
         offsets.save(&map(&[("plan-a", (0, 1))]), false).unwrap();
         offsets.save(&map(&[("plan-a", (0, 2))]), false).unwrap();
-        assert_eq!(offsets_in(&dir).load().unwrap(), map(&[("plan-a", (0, 1))]), "the second change waits");
+        assert_eq!(
+            offsets_in(&dir).load().unwrap(),
+            map(&[("plan-a", (0, 1))]),
+            "the second change waits"
+        );
         offsets.save(&map(&[("plan-a", (0, 2))]), true).unwrap();
-        assert_eq!(offsets_in(&dir).load().unwrap(), map(&[("plan-a", (0, 2))]), "a Plan change writes at once");
+        assert_eq!(
+            offsets_in(&dir).load().unwrap(),
+            map(&[("plan-a", (0, 2))]),
+            "a Plan change writes at once"
+        );
         offsets.written = Some(Instant::now() - SAVE_EVERY);
         offsets.save(&map(&[("plan-a", (0, 3))]), false).unwrap();
-        assert_eq!(offsets_in(&dir).load().unwrap(), map(&[("plan-a", (0, 3))]), "a second later it writes");
+        assert_eq!(
+            offsets_in(&dir).load().unwrap(),
+            map(&[("plan-a", (0, 3))]),
+            "a second later it writes"
+        );
     }
 
     fn pulse_of(rows: &[&str]) -> Pulse {
-        let bucket = |count| read::Bucket { count, kind: Some(read::Kind::Other), job_merged: false, pr_merged: false, worker_ran: false };
+        let bucket = |count| read::Bucket {
+            count,
+            kind: Some(read::Kind::Other),
+            job_merged: false,
+            pr_merged: false,
+            worker_ran: false,
+        };
         let rows = rows
             .iter()
             .map(|id| read::PulseRow {
@@ -1125,7 +1431,12 @@ mod tests {
                 quiet: false,
             })
             .collect();
-        Pulse { context: ContextId::parse("ctx").unwrap(), rows, max: 1, events_cursor: 0 }
+        Pulse {
+            context: ContextId::parse("ctx").unwrap(),
+            rows,
+            max: 1,
+            events_cursor: 0,
+        }
     }
 
     fn pulse_screen(ui: &mut Ui, pulse: &Pulse, height: u16) -> (Buffer, Vec<String>) {
@@ -1133,7 +1444,13 @@ mod tests {
         terminal.draw(|f| ui.draw_pulse(f, pulse)).unwrap();
         let buf = terminal.backend().buffer().clone();
         let rows = (0..height)
-            .map(|y| (0..60).map(|x| buf[(x, y)].symbol().to_owned()).collect::<String>().trim_end().to_owned())
+            .map(|y| {
+                (0..60)
+                    .map(|x| buf[(x, y)].symbol().to_owned())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
             .collect();
         (buf, rows)
     }
@@ -1148,7 +1465,8 @@ mod tests {
         assert!(rows[1].ends_with("         3m"), "{:?}", rows[1]);
         assert_eq!(ui.body, Rect::new(2, 1, 56, 3));
         let lead = |ui: &Ui, y| {
-            pulse::row_at(ui.body, ui.pulse_scroll.offset(), pulse.rows.len(), 5, y).map(|i| pulse.rows[i].lead.to_string())
+            pulse::row_at(ui.body, ui.pulse_scroll.offset(), pulse.rows.len(), 5, y)
+                .map(|i| pulse.rows[i].lead.to_string())
         };
         assert_eq!(lead(&ui, 2).as_deref(), Some("lead-bb"));
         ui.pulse_scroll.by(WHEEL_ROWS as isize);
@@ -1185,7 +1503,11 @@ mod tests {
         let pulse = pulse_of(&["aa"]);
         assert!(concerns(&event("job-merged", "ctx"), None, Some(&pulse)));
         assert!(!concerns(&event("job-merged", "other"), None, Some(&pulse)));
-        assert!(concerns(&event("session-moved", "other"), None, Some(&pulse)));
+        assert!(concerns(
+            &event("session-moved", "other"),
+            None,
+            Some(&pulse)
+        ));
     }
 
     fn fixture(store: &mut Store, sql: &str) {
@@ -1215,7 +1537,8 @@ mod tests {
     }
 
     #[test]
-    fn the_snapshot_holds_pulse_while_the_manager_is_newest_in_the_slot_and_the_plan_once_a_lead_moved_there() {
+    fn the_snapshot_holds_pulse_while_the_manager_is_newest_in_the_slot_and_the_plan_once_a_lead_moved_there()
+     {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().to_path_buf().into()), None).unwrap();
         let mut store = Store::open(&home, 5000).unwrap();
@@ -1240,13 +1563,31 @@ mod tests {
         let pulse = snap.pulse.expect("the Manager is in the slot");
         assert!(snap.centre.is_none());
         assert_eq!(pulse.context.as_str(), "ctx");
-        assert_eq!(pulse.rows.iter().map(|r| r.plan.as_str()).collect::<Vec<_>>(), ["p1"]);
-        assert_eq!(pulse.rows[0].buckets.len(), 125 - 4 - 13, "as wide as the pane allows for ids of any width");
+        assert_eq!(
+            pulse
+                .rows
+                .iter()
+                .map(|r| r.plan.as_str())
+                .collect::<Vec<_>>(),
+            ["p1"]
+        );
+        assert_eq!(
+            pulse.rows[0].buckets.len(),
+            125 - 4 - 13,
+            "as wide as the pane allows for ids of any width"
+        );
 
         fixture(&mut store, &moved("lead"));
         let snap = snapshot(&mut store, 125, now).unwrap();
         assert!(snap.pulse.is_none());
-        assert_eq!(snap.centre.expect("the Lead is in the slot").plan.plan.as_str(), "p1");
+        assert_eq!(
+            snap.centre
+                .expect("the Lead is in the slot")
+                .plan
+                .plan
+                .as_str(),
+            "p1"
+        );
     }
 
     /// The pane `ui` draws for `centre`, as the buffer.
@@ -1272,9 +1613,15 @@ mod tests {
         fs::write(&path, "{not json").unwrap();
         let mut ui = Ui::default();
         let lines = begin(&mut ui, &mut offsets_in(&dir), Some(&plan_id));
-        assert_eq!(frame_of(&mut ui, &centre), plain, "the frame is the one of a start with no file");
+        assert_eq!(
+            frame_of(&mut ui, &centre),
+            plain,
+            "the frame is the one of a start with no file"
+        );
         assert!(
-            lines.iter().any(|l| l.starts_with("scroll positions reset: ") && l.contains("plan-scroll.json")),
+            lines.iter().any(
+                |l| l.starts_with("scroll positions reset: ") && l.contains("plan-scroll.json")
+            ),
             "logged: {lines:?}"
         );
     }

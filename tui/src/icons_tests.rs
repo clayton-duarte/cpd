@@ -13,7 +13,9 @@ use crate::widgets::legend;
 use crate::{fold, link};
 
 /// The code points the swap removed (none of the moon_alt frames is among them).
-const OLD: [u32; 8] = [0xF1787, 0xF0996, 0xF073A, 0xF03CC, 0xF0B95, 0xF004B, 0xF0063, 0xF005A];
+const OLD: [u32; 8] = [
+    0xF1787, 0xF0996, 0xF073A, 0xF03CC, 0xF0B95, 0xF004B, 0xF0063, 0xF005A,
+];
 
 fn text(line: &Line) -> String {
     line.spans.iter().map(|s| s.content.as_ref()).collect()
@@ -21,8 +23,16 @@ fn text(line: &Line) -> String {
 
 fn section_text(title: &str) -> String {
     let sections = legend::sections();
-    let s = sections.iter().find(|s| s.title == title).unwrap_or_else(|| panic!("the {title} section"));
-    s.rows.iter().flatten().map(text).collect::<Vec<_>>().join("\n")
+    let s = sections
+        .iter()
+        .find(|s| s.title == title)
+        .unwrap_or_else(|| panic!("the {title} section"));
+    s.rows
+        .iter()
+        .flatten()
+        .map(text)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[test]
@@ -36,18 +46,21 @@ fn the_job_and_check_glyphs_are_the_decided_code_points() {
     assert_eq!(palette::QUEUED, "\u{F0766}");
     assert_eq!(palette::job_status(JobStatus::Draft, false).0, "\u{F059}");
     assert_eq!(palette::job_status(JobStatus::Running, true).0, "\u{F1464}");
-    assert_eq!(palette::job_status(JobStatus::Cancelled, false).0, "\u{F0159}");
+    assert_eq!(
+        palette::job_status(JobStatus::Cancelled, false).0,
+        "\u{F0159}"
+    );
 }
 
 #[test]
 fn the_waiting_glyph_is_circle_opacity_and_the_moon_alt_loader_has_28_frames() {
     assert_eq!(palette::WAITING, "\u{F1853}");
-let frames: [&str; 28] = [
-    "\u{E3E3}", "\u{E3C8}", "\u{E3C9}", "\u{E3CA}", "\u{E3CB}", "\u{E3CC}", "\u{E3CD}",
-    "\u{E3CE}", "\u{E3CF}", "\u{E3D0}", "\u{E3D1}", "\u{E3D2}", "\u{E3D3}", "\u{E3D4}",
-    "\u{E3D5}", "\u{E3D6}", "\u{E3D7}", "\u{E3D8}", "\u{E3D9}", "\u{E3DA}", "\u{E3DB}",
-    "\u{E3DC}", "\u{E3DD}", "\u{E3DE}", "\u{E3DF}", "\u{E3E0}", "\u{E3E1}", "\u{E3E2}",
-];
+    let frames: [&str; 28] = [
+        "\u{E3E3}", "\u{E3C8}", "\u{E3C9}", "\u{E3CA}", "\u{E3CB}", "\u{E3CC}", "\u{E3CD}",
+        "\u{E3CE}", "\u{E3CF}", "\u{E3D0}", "\u{E3D1}", "\u{E3D2}", "\u{E3D3}", "\u{E3D4}",
+        "\u{E3D5}", "\u{E3D6}", "\u{E3D7}", "\u{E3D8}", "\u{E3D9}", "\u{E3DA}", "\u{E3DB}",
+        "\u{E3DC}", "\u{E3DD}", "\u{E3DE}", "\u{E3DF}", "\u{E3E0}", "\u{E3E1}", "\u{E3E2}",
+    ];
     assert_eq!(palette::SPINNER.to_vec(), frames.to_vec());
     assert!(!palette::SPINNER.contains(&palette::WAITING));
     assert_eq!(palette::IDLE, "\u{E3D5}");
@@ -66,13 +79,25 @@ fn the_fold_arrows_and_the_terminator_are_the_chevrons() {
     assert_eq!(text(&collapse), "╰\u{F0B2C} collapse");
     assert_eq!(text(&plain), "╰\u{F0B2A}");
     for line in [&expand, &collapse] {
-        assert_eq!(line.spans[0].style, palette::muted_text(), "the corner is muted");
-        assert_eq!(line.spans[1].style, palette::toggle_text(), "the glyph and the word");
+        assert_eq!(
+            line.spans[0].style,
+            palette::muted_text(),
+            "the corner is muted"
+        );
+        assert_eq!(
+            line.spans[1].style,
+            palette::toggle_text(),
+            "the glyph and the word"
+        );
     }
     {
         let line = &plain;
         assert_eq!(line.spans.len(), 1);
-        assert_eq!(line.spans[0].style, palette::muted_text(), "the terminator rows are muted");
+        assert_eq!(
+            line.spans[0].style,
+            palette::muted_text(),
+            "the terminator rows are muted"
+        );
     }
 }
 
@@ -80,11 +105,19 @@ fn the_fold_arrows_and_the_terminator_are_the_chevrons() {
 fn the_legend_draws_the_new_glyphs() {
     let sections = legend::sections();
     let sample = |name: &str| -> String {
-        let jobs = sections.iter().flat_map(|s| s.rows.iter()).find(|r| r.len() == 3 && text(&r[0]) == name).unwrap_or_else(|| panic!("{name} row"));
+        let jobs = sections
+            .iter()
+            .flat_map(|s| s.rows.iter())
+            .find(|r| r.len() == 3 && text(&r[0]) == name)
+            .unwrap_or_else(|| panic!("{name} row"));
         text(&jobs[1])
     };
     assert!(sample("draft").contains('\u{F059}'), "{}", sample("draft"));
-    assert!(sample("landing").contains('\u{F1464}'), "{}", sample("landing"));
+    assert!(
+        sample("landing").contains('\u{F1464}'),
+        "{}",
+        sample("landing")
+    );
     let dots = section_text("Session Dots");
     assert!(dots.contains('\u{F1853}'), "{dots:?}");
     let precedence = "> \u{E3E3} > \u{F1853} > \u{E3D5} > \u{E3D5}";
@@ -132,7 +165,9 @@ fn files(dir: &Path, out: &mut Vec<PathBuf>) {
 fn offenders(paths: &[PathBuf], skip: &Path) -> Vec<String> {
     let mut bad = vec![];
     for p in paths.iter().filter(|p| p.as_path() != skip) {
-        let Ok(body) = fs::read_to_string(p) else { continue };
+        let Ok(body) = fs::read_to_string(p) else {
+            continue;
+        };
         for (i, line) in body.lines().enumerate() {
             if OLD.iter().any(|o| spells(line, *o)) {
                 bad.push(format!("{}:{}", p.display(), i + 1));
@@ -143,7 +178,10 @@ fn offenders(paths: &[PathBuf], skip: &Path) -> Vec<String> {
 }
 
 fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 #[test]
@@ -159,7 +197,10 @@ fn the_cockpit_sources_and_tests_spell_none_of_the_old_glyphs() {
 #[test]
 fn the_docs_spell_none_of_the_old_glyphs() {
     let root = root();
-    let paths: Vec<PathBuf> = ["commands.md", "contract.md", "implementing.md"].iter().map(|f| root.join("docs").join(f)).collect();
+    let paths: Vec<PathBuf> = ["commands.md", "contract.md", "implementing.md"]
+        .iter()
+        .map(|f| root.join("docs").join(f))
+        .collect();
     let bad = offenders(&paths, Path::new(""));
     assert!(bad.is_empty(), "old glyphs left:\n{}", bad.join("\n"));
 }

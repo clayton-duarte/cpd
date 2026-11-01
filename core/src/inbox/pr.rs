@@ -67,7 +67,11 @@ impl Status {
         match self {
             Status::Draft | Status::Stacked => Urgency::White,
             Status::Conflict | Status::Failing | Status::ChangesRequested => Urgency::Red,
-            Status::Updating | Status::Fixing | Status::ChecksRunning | Status::InReview | Status::Waiting => Urgency::Cyan,
+            Status::Updating
+            | Status::Fixing
+            | Status::ChecksRunning
+            | Status::InReview
+            | Status::Waiting => Urgency::Cyan,
             Status::ReadyForReview | Status::ReadyToMerge => Urgency::Yellow,
         }
     }
@@ -138,7 +142,10 @@ fn classify(f: &Facts<'_>, mut post_enabled: impl FnMut() -> bool) -> Status {
 /// The `pr-ready` conditions: one per open authored pull request, linking its owner (the newest Plan with a `prs` row
 /// that points to it). A policy that does not resolve counts as post disabled.
 pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
-    let columns: Vec<String> = pulls::COLUMNS.split(", ").map(|c| format!("r.{c}")).collect();
+    let columns: Vec<String> = pulls::COLUMNS
+        .split(", ")
+        .map(|c| format!("r.{c}"))
+        .collect();
     let mut stmt = conn.prepare(&format!(
         "SELECT {}, {}, o.plan, o.key, p.context, p.lead_session,
                 COALESCE(s.state = 'working', 0)
@@ -165,24 +172,47 @@ pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, C
         let get = |i: usize| row.get::<_, Option<String>>(width + i);
         let (plan, key, context, lead) = (get(1)?, get(2)?, get(3)?, get(4)?);
         let (handled, posted): (bool, bool) = (row.get(width + 5)?, row.get(width + 6)?);
-        let plan = plan.as_deref().map(|p| id("Plan id", p, PlanId::parse)).transpose()?;
-        let key = key.as_deref().map(|k| id("PR key", k, PrKey::parse)).transpose()?;
+        let plan = plan
+            .as_deref()
+            .map(|p| id("Plan id", p, PlanId::parse))
+            .transpose()?;
+        let key = key
+            .as_deref()
+            .map(|k| id("PR key", k, PrKey::parse))
+            .transpose()?;
         let owner = plan.as_ref().zip(key.as_ref());
-        let facts = Facts { row: &pull, handled, owned: owner.is_some(), posted, clean };
+        let facts = Facts {
+            row: &pull,
+            handled,
+            owned: owner.is_some(),
+            posted,
+            clean,
+        };
         let status = classify(&facts, || {
-            owner.is_some_and(|(plan, key)| crate::pr::policy_of_pr(conn, home, plan, key).is_ok_and(|p| p.pr.post.enabled))
+            owner.is_some_and(|(plan, key)| {
+                crate::pr::policy_of_pr(conn, home, plan, key).is_ok_and(|p| p.pr.post.enabled)
+            })
         });
-        let name = pull.repo.split_once('/').map_or(pull.repo.as_str(), |(_, name)| name);
+        let name = pull
+            .repo
+            .split_once('/')
+            .map_or(pull.repo.as_str(), |(_, name)| name);
         out.push(Condition {
             kind: Kind::PrReady,
             urgency: status.urgency(),
             subject: format!("pr:{}#{}", pull.repo, pull.number),
             label: format!("{name}#{} {}\n{}", pull.number, status.text(), pull.title),
             url: Some(pull.url.clone()),
-            context: context.as_deref().map(|c| id("Context id", c, ContextId::parse)).transpose()?,
+            context: context
+                .as_deref()
+                .map(|c| id("Context id", c, ContextId::parse))
+                .transpose()?,
             plan,
             job: None,
-            session: lead.as_deref().map(|s| id("Session id", s, SessionId::parse)).transpose()?,
+            session: lead
+                .as_deref()
+                .map(|s| id("Session id", s, SessionId::parse))
+                .transpose()?,
             record: None,
             event: None,
             opened_at: None,
@@ -196,7 +226,10 @@ pub fn closed_conditions(conn: &Connection) -> Result<Vec<Condition>, CpdError> 
     Ok(crate::pr::closed::closed_unmerged(conn, None)?
         .into_iter()
         .map(|c| {
-            let name = c.repo.split_once('/').map_or(c.repo.as_str(), |(_, name)| name);
+            let name = c
+                .repo
+                .split_once('/')
+                .map_or(c.repo.as_str(), |(_, name)| name);
             Condition {
                 kind: Kind::PrClosed,
                 urgency: Urgency::Red,
@@ -224,7 +257,20 @@ mod tests {
         let texts: Vec<&str> = Status::ALL.iter().map(|s| s.text()).collect();
         assert_eq!(
             texts,
-            ["draft", "conflict", "failing", "changes requested", "updating", "fixing", "stacked pr pending base merge", "checks running", "ready for user review", "ready to merge", "waiting for peer review", "waiting"]
+            [
+                "draft",
+                "conflict",
+                "failing",
+                "changes requested",
+                "updating",
+                "fixing",
+                "stacked pr pending base merge",
+                "checks running",
+                "ready for user review",
+                "ready to merge",
+                "waiting for peer review",
+                "waiting"
+            ]
         );
         assert_eq!(Status::Stacked.urgency(), Urgency::White);
         assert_eq!(Status::Failing.urgency(), Urgency::Red);
@@ -257,8 +303,14 @@ mod tests {
     #[test]
     fn of_item_round_trips_every_status_and_refuses_the_rest() {
         for s in Status::ALL {
-            assert_eq!(Status::of_item(&item(Kind::PrReady, &format!("b#1 {}", s.text()))), Some(s));
-            assert_eq!(Status::of_item(&item(Kind::ReviewRequested, &format!("b#1 {}", s.text()))), None);
+            assert_eq!(
+                Status::of_item(&item(Kind::PrReady, &format!("b#1 {}", s.text()))),
+                Some(s)
+            );
+            assert_eq!(
+                Status::of_item(&item(Kind::ReviewRequested, &format!("b#1 {}", s.text()))),
+                None
+            );
         }
         assert_eq!(Status::of_item(&item(Kind::PrReady, "b#1 nonsense")), None);
         assert_eq!(Status::of_item(&item(Kind::PrReady, "nospace")), None);

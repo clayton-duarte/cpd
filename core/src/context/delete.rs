@@ -13,21 +13,35 @@ use crate::host::Tmux;
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
 use crate::plan::archive::{Objects, refuse_chat_slot};
-use crate::plan::delete::{Inventory, Targets, blockers, delete_rows, finish, megabytes, rerun, tombstone};
+use crate::plan::delete::{
+    Inventory, Targets, blockers, delete_rows, finish, megabytes, rerun, tombstone,
+};
 use crate::session::archive_blocked;
 
 const COMMAND: &str = "context delete";
 
 /// The Plans of `context` (`live` only: those not deleted) as ids.
-fn plans(conn: &rusqlite::Connection, context: &ContextId, live: bool) -> Result<Vec<PlanId>, CpdError> {
+fn plans(
+    conn: &rusqlite::Connection,
+    context: &ContextId,
+    live: bool,
+) -> Result<Vec<PlanId>, CpdError> {
     let filter = if live { "AND deleted_at IS NULL" } else { "" };
-    let mut stmt = conn.prepare(&format!("SELECT id FROM plans WHERE context = ?1 {filter} ORDER BY created_at, id"))?;
-    let ids = stmt.query_map([context.as_str()], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id FROM plans WHERE context = ?1 {filter} ORDER BY created_at, id"
+    ))?;
+    let ids = stmt
+        .query_map([context.as_str()], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     ids.iter().map(|id| PlanId::parse(id)).collect()
 }
 
 /// Where the delete's files are: every Plan's (tombstoned ones too), the Managers' Session files, the digests.
-fn targets_of(conn: &rusqlite::Connection, home: &crate::home::CpdHome, context: &ContextId) -> Result<Targets, CpdError> {
+fn targets_of(
+    conn: &rusqlite::Connection,
+    home: &crate::home::CpdHome,
+    context: &ContextId,
+) -> Result<Targets, CpdError> {
     let mut targets = Targets::of_managers(conn, context)?;
     for plan in plans(conn, context, false)? {
         targets.extend(Targets::of_plan(conn, home, &plan)?);
@@ -39,38 +53,73 @@ fn targets_of(conn: &rusqlite::Connection, home: &crate::home::CpdHome, context:
 /// `context delete` (§3.14).
 pub(super) fn delete(args: DeleteArgs) -> Result<Output, CpdError> {
     let id = args.id;
-    let Env { home, config, mut store, .. } = Env::open()?;
-    let deleted: Option<Option<String>> =
-        store.read(|conn| Ok(conn.query_row("SELECT deleted_at FROM contexts WHERE id = ?1", [id.as_str()], |r| r.get(0)).optional()?))?;
+    let Env {
+        home,
+        config,
+        mut store,
+        ..
+    } = Env::open()?;
+    let deleted: Option<Option<String>> = store.read(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT deleted_at FROM contexts WHERE id = ?1",
+                [id.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?)
+    })?;
     match deleted {
-        None => Err(CpdError::new(ErrorCode::ContextNotFound, format!("No Context {id}.")).with("context", id.as_str())),
+        None => Err(
+            CpdError::new(ErrorCode::ContextNotFound, format!("No Context {id}."))
+                .with("context", id.as_str()),
+        ),
         Some(Some(_)) => rerun(&store.read(|conn| targets_of(conn, &home, &id))?, args.yes),
         Some(None) => {
             let (archived, live_plans, managers, objects) = store.read(|conn| {
-                let archived: bool = conn.query_row("SELECT archived_at IS NOT NULL FROM contexts WHERE id = ?1", [id.as_str()], |r| r.get(0))?;
-                let mut stmt = conn.prepare("SELECT id FROM sessions WHERE context = ?1 AND role = 'manager'")?;
+                let archived: bool = conn.query_row(
+                    "SELECT archived_at IS NOT NULL FROM contexts WHERE id = ?1",
+                    [id.as_str()],
+                    |r| r.get(0),
+                )?;
+                let mut stmt = conn
+                    .prepare("SELECT id FROM sessions WHERE context = ?1 AND role = 'manager'")?;
                 let managers = stmt
                     .query_map([id.as_str()], |r| r.get::<_, String>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?
                     .iter()
                     .map(|m| SessionId::parse(m))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok((archived, plans(conn, &id, true)?, managers, Objects::of_context(conn, &id)?))
+                Ok((
+                    archived,
+                    plans(conn, &id, true)?,
+                    managers,
+                    Objects::of_context(conn, &id)?,
+                ))
             })?;
-            let check = |conn: &rusqlite::Connection| blockers(conn, &live_plans, &managers, !archived);
+            let check =
+                |conn: &rusqlite::Connection| blockers(conn, &live_plans, &managers, !archived);
             let live = store.read(|conn| check(conn))?;
             if !live.is_empty() {
                 return Err(archive_blocked(&live, None));
             }
             let tmux = Tmux::new(config.tmux.socket.clone());
-            refuse_chat_slot(&mut store, &tmux, &config.tmux.cockpit_session, &objects.sessions)?;
+            refuse_chat_slot(
+                &mut store,
+                &tmux,
+                &config.tmux.cockpit_session,
+                &objects.sessions,
+            )?;
 
             let (per_plan, sessions, targets) = store.read(|conn| {
                 let mut per_plan = Vec::new();
                 for plan in &live_plans {
                     per_plan.push((plan.clone(), Inventory::of_plan(conn, plan)?));
                 }
-                let sessions: i64 = conn.query_row("SELECT count(*) FROM sessions WHERE context = ?1", [id.as_str()], |r| r.get(0))?;
+                let sessions: i64 = conn.query_row(
+                    "SELECT count(*) FROM sessions WHERE context = ?1",
+                    [id.as_str()],
+                    |r| r.get(0),
+                )?;
                 let sessions = sessions as u64;
                 Ok((per_plan, sessions, targets_of(conn, &home, &id)?))
             })?;

@@ -30,7 +30,9 @@ fn read_columns(buf: &Buffer, x: u16, y: u16, width: usize) -> String {
 /// The text rows of a box `w` wide, from the body of the frame (`wall`, `pad`, text, `pad`, `wall`).
 fn body_rows(buf: &Buffer, w: usize) -> Vec<String> {
     let width = text_width(w);
-    (1..buf.area.height.saturating_sub(1)).map(|y| read_columns(buf, 2, y, width)).collect()
+    (1..buf.area.height.saturating_sub(1))
+        .map(|y| read_columns(buf, 2, y, width))
+        .collect()
 }
 
 fn draw(text: &str, cursor: usize, w: usize, h: u16) -> Buffer {
@@ -54,15 +56,25 @@ fn the_input_box_wraps_wide_text_by_columns_and_puts_the_cursor_in_its_column() 
     let rows = body_rows(&buf, width);
     let mut drawn = String::new();
     for (n, row) in rows.iter().enumerate() {
-        assert!(Line::from(row.as_str()).width() <= tw, "text row {n} is wider than {tw} columns: {row:?}");
+        assert!(
+            Line::from(row.as_str()).width() <= tw,
+            "text row {n} is wider than {tw} columns: {row:?}"
+        );
         drawn.push_str(row.trim_end());
     }
-    assert_eq!(drawn, text, "every character is drawn, wrapped at the text width: {rows:?}");
+    assert_eq!(
+        drawn, text,
+        "every character is drawn, wrapped at the text width: {rows:?}"
+    );
 
     let selected: Vec<(u16, u16, String)> = (1..buf.area.height.saturating_sub(1))
         .flat_map(|y| (2..u16::try_from(width - 2).unwrap()).map(move |x| (x, y)))
         .filter(|&(x, y)| palette::check::is_selected(&buf[(x, y)]))
         .map(|(x, y)| (x, y, buf[(x, y)].symbol().to_owned()))
         .collect();
-    assert_eq!(selected, [(2 + 6, 2, "a".to_owned())], "the cursor is in the column the ten `計` before it occupy");
+    assert_eq!(
+        selected,
+        [(2 + 6, 2, "a".to_owned())],
+        "the cursor is in the column the ten `計` before it occupy"
+    );
 }

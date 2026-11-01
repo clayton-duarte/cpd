@@ -90,7 +90,11 @@ impl NewEvent {
 /// it is `internal` (exit 1, "something unexpected", contract §1.2): the
 /// transaction rolls back and nothing is appended.
 fn malformed(kind: Kind, message: String) -> CpdError {
-    CpdError::new(ErrorCode::Internal, format!("Cannot append a {kind} Event: {message}.")).with("kind", kind.as_str())
+    CpdError::new(
+        ErrorCode::Internal,
+        format!("Cannot append a {kind} Event: {message}."),
+    )
+    .with("kind", kind.as_str())
 }
 
 /// Appends `event` in the caller's write transaction and returns its `id`
@@ -101,7 +105,16 @@ fn malformed(kind: Kind, message: String) -> CpdError {
 /// column set that the kind does not set (or not set that it must), a
 /// missing `data` field, an unknown one, or an empty `text`.
 pub fn append(tx: &WriteTxn<'_>, event: NewEvent) -> Result<i64, CpdError> {
-    let NewEvent { kind, mut context, plan, job, attempt, session, text, data } = event;
+    let NewEvent {
+        kind,
+        mut context,
+        plan,
+        job,
+        attempt,
+        session,
+        text,
+        data,
+    } = event;
     let spec = kind.spec();
 
     for (column, set, present) in [
@@ -119,7 +132,9 @@ pub fn append(tx: &WriteTxn<'_>, event: NewEvent) -> Result<i64, CpdError> {
         };
         if refused {
             let what = if present { "must not set" } else { "must set" };
-            return Err(malformed(kind, format!("a {kind} Event {what} {column}")).with("column", column));
+            return Err(
+                malformed(kind, format!("a {kind} Event {what} {column}")).with("column", column)
+            );
         }
     }
     if job.is_some() && plan.is_none() {
@@ -132,16 +147,20 @@ pub fn append(tx: &WriteTxn<'_>, event: NewEvent) -> Result<i64, CpdError> {
     if spec.context != Set::No && context.is_none() {
         context = match (&plan, &session) {
             (Some(plan), _) => Some(
-                tx.query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get::<_, String>(0))
-                    .optional()?
-                    .ok_or_else(|| {
-                        CpdError::plan_not_found(plan)
-                    })?,
+                tx.query_row(
+                    "SELECT context FROM plans WHERE id = ?1",
+                    [plan.as_str()],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()?
+                .ok_or_else(|| CpdError::plan_not_found(plan))?,
             ),
             (None, Some(session)) => Some(
-                tx.query_row("SELECT context FROM sessions WHERE id = ?1", [session.as_str()], |r| {
-                    r.get::<_, String>(0)
-                })
+                tx.query_row(
+                    "SELECT context FROM sessions WHERE id = ?1",
+                    [session.as_str()],
+                    |r| r.get::<_, String>(0),
+                )
                 .optional()?
                 .ok_or_else(|| {
                     CpdError::new(ErrorCode::SessionNotFound, format!("No Session {session}."))
@@ -154,17 +173,27 @@ pub fn append(tx: &WriteTxn<'_>, event: NewEvent) -> Result<i64, CpdError> {
         .transpose()?;
     }
     if spec.context == Set::Yes && context.is_none() {
-        return Err(malformed(kind, format!("a {kind} Event must set context")).with("column", "context"));
+        return Err(
+            malformed(kind, format!("a {kind} Event must set context")).with("column", "context")
+        );
     }
 
-    let fields = data
-        .as_object()
-        .ok_or_else(|| malformed(kind, "data must be a JSON object".into()).with("column", "data"))?;
+    let fields = data.as_object().ok_or_else(|| {
+        malformed(kind, "data must be a JSON object".into()).with("column", "data")
+    })?;
     if let Some(missing) = spec.required.iter().find(|k| !fields.contains_key(**k)) {
-        return Err(malformed(kind, format!("data has no field {missing:?}")).with("field", *missing));
+        return Err(
+            malformed(kind, format!("data has no field {missing:?}")).with("field", *missing)
+        );
     }
-    if let Some(unknown) = fields.keys().find(|k| !spec.required.contains(&k.as_str()) && !spec.optional.contains(&k.as_str())) {
-        return Err(malformed(kind, format!("data has an unknown field {unknown:?}")).with("field", unknown.as_str()));
+    if let Some(unknown) = fields
+        .keys()
+        .find(|k| !spec.required.contains(&k.as_str()) && !spec.optional.contains(&k.as_str()))
+    {
+        return Err(
+            malformed(kind, format!("data has an unknown field {unknown:?}"))
+                .with("field", unknown.as_str()),
+        );
     }
     if text.is_empty() {
         return Err(malformed(kind, "text is empty".into()).with("column", "text"));

@@ -9,7 +9,7 @@ use ratatui::DefaultTerminal;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use super::view_ports::{Ctx, CrosstermInput, StdTty, run_view_with};
+use super::view_ports::{CrosstermInput, Ctx, StdTty, run_view_with};
 use super::{not_a_terminal, on_a_terminal};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::output::Output;
@@ -60,7 +60,13 @@ pub fn run_view<P>(
     prepare: impl FnOnce() -> Result<P, CpdError>,
     body: impl FnOnce(&mut DefaultTerminal, P) -> Result<(), ViewError>,
 ) -> Result<Output, CpdError> {
-    run_view_on(&Ports::current(), name, capture, prepare, |ctx, prepared| body(&mut ctx.terminal, prepared))
+    run_view_on(
+        &Ports::current(),
+        name,
+        capture,
+        prepare,
+        |ctx, prepared| body(&mut ctx.terminal, prepared),
+    )
 }
 
 /// [`run_view`] on this process's terminal and input, with `body` on a [`Ctx`] over `ports`: what the views whose loops
@@ -76,8 +82,11 @@ pub fn run_view_on<P>(
         return Err(not_a_terminal(&format!("tui view {name}")));
     }
     let terminal = Terminal::new(CrosstermBackend::new(stdout())).map_err(|e| {
-        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view {name} failed: {e}."))
-            .with("command", format!("tui view {name}"))
+        CpdError::new(
+            ErrorCode::NotATerminal,
+            format!("The terminal of cpd tui view {name} failed: {e}."),
+        )
+        .with("command", format!("tui view {name}"))
     })?;
     // ratatui's `init` does this too: the panic message is printed on the normal screen, not lost with the alternate one.
     let previous = std::panic::take_hook();
@@ -85,7 +94,17 @@ pub fn run_view_on<P>(
         ratatui::restore();
         previous(info);
     }));
-    run_view_with(ports, &mut StdTty, &mut stdout(), terminal, &mut CrosstermInput, name, capture, prepare, body)
+    run_view_with(
+        ports,
+        &mut StdTty,
+        &mut stdout(),
+        terminal,
+        &mut CrosstermInput,
+        name,
+        capture,
+        prepare,
+        body,
+    )
 }
 
 /// The policy of every view for a failed read: the last good snapshot stays on screen and `error` holds the

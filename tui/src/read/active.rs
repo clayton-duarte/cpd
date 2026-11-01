@@ -11,7 +11,8 @@ type Span = (i64, i64);
 
 /// A stored RFC 3339 timestamp as Unix milliseconds.
 pub(super) fn parse_ms(what: &str, value: &str) -> Result<i64, CpdError> {
-    let t = OffsetDateTime::parse(value, &Rfc3339).map_err(|_| bad_row(format!("{what} has time {value:?}")))?;
+    let t = OffsetDateTime::parse(value, &Rfc3339)
+        .map_err(|_| bad_row(format!("{what} has time {value:?}")))?;
     Ok((t.unix_timestamp_nanos() / 1_000_000) as i64)
 }
 

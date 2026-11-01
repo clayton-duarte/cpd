@@ -15,20 +15,43 @@ use crate::host::runner::Call;
 const TAIL_LINES: usize = 20;
 
 /// The `Call` of helper `script` with `--name value` arguments `args`, `stdin` and `deadline`.
-pub fn call(config: &Config, script: &str, args: &[(&str, &str)], stdin: Option<Vec<u8>>, deadline: Duration) -> Result<Call, CpdError> {
+pub fn call(
+    config: &Config,
+    script: &str,
+    args: &[(&str, &str)],
+    stdin: Option<Vec<u8>>,
+    deadline: Duration,
+) -> Result<Call, CpdError> {
     let pi = locate_pi()?;
     let adapter = config.pi_adapter_dir()?;
     let adapter = std::fs::canonicalize(&adapter).map_err(|e| {
-        CpdError::new(ErrorCode::AdapterMissing, format!("Cannot resolve the pi adapter {}: {e}.", adapter.display()))
-            .with("path", adapter.display().to_string())
+        CpdError::new(
+            ErrorCode::AdapterMissing,
+            format!("Cannot resolve the pi adapter {}: {e}.", adapter.display()),
+        )
+        .with("path", adapter.display().to_string())
     })?;
-    build(&node(), &adapter, &pi.coding_agent_entry, &pi.agent_dir, config_home()?, script, args, stdin, deadline)
+    build(
+        &node(),
+        &adapter,
+        &pi.coding_agent_entry,
+        &pi.agent_dir,
+        config_home()?,
+        script,
+        args,
+        stdin,
+        deadline,
+    )
 }
 
 fn config_home() -> Result<std::path::PathBuf, CpdError> {
     let root = crate::home::CpdHome::from_env()?.root().to_path_buf();
     std::fs::canonicalize(&root).map_err(|e| {
-        CpdError::new(ErrorCode::ConfigInvalid, format!("Cannot resolve CPD_HOME {}: {e}.", root.display())).with("path", root.display().to_string())
+        CpdError::new(
+            ErrorCode::ConfigInvalid,
+            format!("Cannot resolve CPD_HOME {}: {e}.", root.display()),
+        )
+        .with("path", root.display().to_string())
     })
 }
 
@@ -58,7 +81,10 @@ fn build(
         program: node.display().to_string(),
         args: argv,
         envs: vec![
-            ("PI_CODING_AGENT_DIR".to_owned(), Some(agent_dir.display().to_string())),
+            (
+                "PI_CODING_AGENT_DIR".to_owned(),
+                Some(agent_dir.display().to_string()),
+            ),
             ("CPD_HOME".to_owned(), Some(home.display().to_string())),
             ("CPD_PLAN".to_owned(), None),
             ("CPD_SESSION".to_owned(), None),
@@ -91,7 +117,12 @@ pub fn answer(out: &Output, argv: &[String]) -> Result<Value, CpdError> {
 }
 
 /// [`answer`] for any helper: `known` are its codes, `fallback` the code of an unknown one.
-pub(crate) fn answer_with(out: &Output, argv: &[String], known: &[ErrorCode], fallback: ErrorCode) -> Result<Value, CpdError> {
+pub(crate) fn answer_with(
+    out: &Output,
+    argv: &[String],
+    known: &[ErrorCode],
+    fallback: ErrorCode,
+) -> Result<Value, CpdError> {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let printed: Option<Value> = serde_json::from_str(stdout.trim()).ok();
     match printed {
@@ -142,7 +173,11 @@ mod tests {
     use super::*;
 
     fn output(code: i32, stdout: &str) -> Output {
-        Output { status: ExitStatus::from_raw(code << 8), stdout: stdout.as_bytes().to_vec(), stderr: Vec::new() }
+        Output {
+            status: ExitStatus::from_raw(code << 8),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: Vec::new(),
+        }
     }
 
     fn failed(line: &str) -> CpdError {
@@ -165,7 +200,16 @@ mod tests {
         .unwrap();
         assert_eq!(call.tool, "node");
         assert_eq!(call.program, "/n/node");
-        assert_eq!(call.args, ["/adapter/lib/slack-post.ts", "--coding-agent", "/pi/dist/index.js", "--channel", "C0POLICY1"]);
+        assert_eq!(
+            call.args,
+            [
+                "/adapter/lib/slack-post.ts",
+                "--coding-agent",
+                "/pi/dist/index.js",
+                "--channel",
+                "C0POLICY1"
+            ]
+        );
         assert_eq!(
             call.envs,
             [
@@ -184,12 +228,22 @@ mod tests {
     #[test]
     fn an_ok_line_is_its_value() {
         let line = r#"{"ok":true,"channel":"C1","ts":"1.2","link":"l"}"#;
-        assert_eq!(answer(&output(0, &format!("{line}\n")), &[]).unwrap()["ts"], "1.2");
+        assert_eq!(
+            answer(&output(0, &format!("{line}\n")), &[]).unwrap()["ts"],
+            "1.2"
+        );
     }
 
     #[test]
     fn each_known_code_keeps_its_message_and_details() {
-        for code in [ErrorCode::SlackAuth, ErrorCode::SlackNotConfigured, ErrorCode::SlackFailed, ErrorCode::SlackRefused, ErrorCode::SlackUnparseable, ErrorCode::SlackHelperFailed] {
+        for code in [
+            ErrorCode::SlackAuth,
+            ErrorCode::SlackNotConfigured,
+            ErrorCode::SlackFailed,
+            ErrorCode::SlackRefused,
+            ErrorCode::SlackUnparseable,
+            ErrorCode::SlackHelperFailed,
+        ] {
             let line = json!({"ok": false, "error": {"code": code.as_str(), "message": "m", "details": {"k": 1}}}).to_string();
             let error = failed(&line);
             assert_eq!((error.code(), error.message()), (code, "m"));
@@ -199,9 +253,13 @@ mod tests {
 
     #[test]
     fn an_unknown_code_is_slack_helper_failed_with_the_code() {
-        let error = failed(r#"{"ok":false,"error":{"code":"weird","message":"m","details":{"k":1}}}"#);
+        let error =
+            failed(r#"{"ok":false,"error":{"code":"weird","message":"m","details":{"k":1}}}"#);
         assert_eq!(error.code(), ErrorCode::SlackHelperFailed);
-        assert_eq!((&error.details()["code"], &error.details()["k"]), (&json!("weird"), &json!(1)));
+        assert_eq!(
+            (&error.details()["code"], &error.details()["k"]),
+            (&json!("weird"), &json!(1))
+        );
     }
 
     #[test]

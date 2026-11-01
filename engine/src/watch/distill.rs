@@ -9,8 +9,8 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::engine::{Engine, incident_holds, stopping};
-use super::{detached_launch, record_detached, sweep_detached};
 use super::report::{About, Step};
+use super::{detached_launch, record_detached, sweep_detached};
 use cpd_core::config::Config;
 use cpd_core::context::curation::not_curable;
 use cpd_core::context::distill::{State, log_path, running};
@@ -27,13 +27,17 @@ const BACKLOG: usize = 20;
 /// Whether the newest record, written at `newest`, is quiet at `now`.
 fn quiet(newest: &str, now: OffsetDateTime) -> Result<bool, CpdError> {
     let at = OffsetDateTime::parse(newest, &Rfc3339).map_err(|e| {
-        CpdError::new(ErrorCode::StoreFailed, format!("The store holds an invalid value: a Context record's at {newest:?}: {e}."))
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("The store holds an invalid value: a Context record's at {newest:?}: {e}."),
+        )
     })?;
     Ok(now - at >= QUIET)
 }
 
 /// The ids of the live (not archived) Contexts.
-const LIVE: &str = "SELECT id FROM contexts WHERE archived_at IS NULL AND deleted_at IS NULL ORDER BY id";
+const LIVE: &str =
+    "SELECT id FROM contexts WHERE archived_at IS NULL AND deleted_at IS NULL ORDER BY id";
 
 pub(super) fn run(engine: &mut Engine) {
     sweep_detached(engine);
@@ -43,8 +47,12 @@ pub(super) fn run(engine: &mut Engine) {
     }
     let contexts = engine.store.read(|conn| {
         let mut stmt = conn.prepare(LIVE)?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        rows.iter().map(|id| ContextId::parse(id)).collect::<Result<Vec<_>, CpdError>>()
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.iter()
+            .map(|id| ContextId::parse(id))
+            .collect::<Result<Vec<_>, CpdError>>()
     });
     let contexts = match contexts {
         Ok(contexts) => contexts,
@@ -76,16 +84,33 @@ const BATCHES: [u8; 5] = [60, 30, 15, 5, 1];
 /// run that has ended with the state unchanged failed: the next tick starts the next run for the same state with
 /// the next smaller batch (60, 30, 15, 5, 1) and records the batch with the state; after a failed run of batch 1
 /// nothing starts until the state changes or the engine restarts. So a state has at most five runs.
-fn start_if_due(engine: &mut Engine, context: &ContextId, now: OffsetDateTime) -> Result<(), CpdError> {
+fn start_if_due(
+    engine: &mut Engine,
+    context: &ContextId,
+    now: OffsetDateTime,
+) -> Result<(), CpdError> {
     let floor = Config::load(&engine.home)?.context_curation_min_records;
-    if engine.store.read(|conn| not_curable(conn, context, floor))?.is_some() {
+    if engine
+        .store
+        .read(|conn| not_curable(conn, context, floor))?
+        .is_some()
+    {
         return Ok(());
     }
     let state = engine.store.read(|conn| State::read(conn, context))?;
     let uncurated = state.uncurated();
-    let Some(newest) = uncurated.last() else { return Ok(()) };
-    let key = (state.highest().expect("an uncurated record is a record"), i64::try_from(uncurated.len()).unwrap_or(i64::MAX));
-    let previous = engine.distill_started.get(context).filter(|(started, _)| *started == key).map(|(_, batch)| *batch);
+    let Some(newest) = uncurated.last() else {
+        return Ok(());
+    };
+    let key = (
+        state.highest().expect("an uncurated record is a record"),
+        i64::try_from(uncurated.len()).unwrap_or(i64::MAX),
+    );
+    let previous = engine
+        .distill_started
+        .get(context)
+        .filter(|(started, _)| *started == key)
+        .map(|(_, batch)| *batch);
     if previous == Some(BATCHES[BATCHES.len() - 1]) {
         return Ok(());
     }
@@ -94,10 +119,18 @@ fn start_if_due(engine: &mut Engine, context: &ContextId, now: OffsetDateTime) -
     }
     // A run that is alive, or this engine's own run that has not ended yet (its pid file is still there; one an
     // earlier engine left behind says nothing, so only a state this engine started is asked).
-    if running(&engine.home, context)? || (previous.is_some() && engine.home.distill_pid(context).exists()) {
+    if running(&engine.home, context)?
+        || (previous.is_some() && engine.home.distill_pid(context).exists())
+    {
         return Ok(());
     }
-    let batch = previous.map_or(BATCHES[0], |last| BATCHES.iter().copied().find(|b| *b < last).expect("batch 1 stops before this"));
+    let batch = previous.map_or(BATCHES[0], |last| {
+        BATCHES
+            .iter()
+            .copied()
+            .find(|b| *b < last)
+            .expect("batch 1 stops before this")
+    });
     let pid = spawn(engine, context, batch)?;
     engine.distill_started.insert(context.clone(), (key, batch));
     engine.log.line(&format!("E9: started the distill run of Context {context} up to record {} with batch {batch} (pid {pid})", key.0));
@@ -108,15 +141,37 @@ fn start_if_due(engine: &mut Engine, context: &ContextId, now: OffsetDateTime) -
 /// `/dev/null`, stdout and stderr appended to the Context's `distill.log`, its pid recorded in `distill.pid`
 /// ([`record_detached`]). Returns its pid.
 fn spawn(engine: &mut Engine, context: &ContextId, batch: u8) -> Result<u32, CpdError> {
-    let failed = |why: String| CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start the distill run of Context {context}: {why}.")).with("context", context.as_str());
+    let failed = |why: String| {
+        CpdError::new(
+            ErrorCode::SpawnFailed,
+            format!("Cannot start the distill run of Context {context}: {why}."),
+        )
+        .with("context", context.as_str())
+    };
     let exe = engine.ports.spawn.self_exe()?;
     let log_path = log_path(&engine.home, context);
     let dir = log_path.parent().expect("a log lives in a directory");
     fs::create_dir_all(dir).map_err(|e| failed(format!("cannot create {}: {e}", dir.display())))?;
-    let args = ["context", "distill", "--context", context.as_str(), "--batch", &batch.to_string()];
-    let pid = engine.ports.spawn.spawn(&detached_launch(&exe, &args, &engine.home, log_path)).map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
+    let args = [
+        "context",
+        "distill",
+        "--context",
+        context.as_str(),
+        "--batch",
+        &batch.to_string(),
+    ];
+    let pid = engine
+        .ports
+        .spawn
+        .spawn(&detached_launch(&exe, &args, &engine.home, log_path))
+        .map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
     let pid_path = engine.home.distill_pid(context);
-    record_detached(engine, pid, pid_path.clone()).map_err(|e| failed(format!("it runs, but its pid cannot be written to {}: {e}", pid_path.display())))
+    record_detached(engine, pid, pid_path.clone()).map_err(|e| {
+        failed(format!(
+            "it runs, but its pid cannot be written to {}: {e}",
+            pid_path.display()
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -138,6 +193,11 @@ mod tests {
 
     #[test]
     fn an_unreadable_time_is_an_error() {
-        assert_eq!(quiet("yesterday", at("2026-10-18T12:00:00Z")).unwrap_err().code(), ErrorCode::StoreFailed);
+        assert_eq!(
+            quiet("yesterday", at("2026-10-18T12:00:00Z"))
+                .unwrap_err()
+                .code(),
+            ErrorCode::StoreFailed
+        );
     }
 }

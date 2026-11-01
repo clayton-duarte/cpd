@@ -9,7 +9,11 @@ use serde_json::json;
 fn jira_required_is_false_by_default() {
     let fx = world("");
     let out = show(&fx, false).ok();
-    assert_eq!(keys(&out)["pr.jira_required"], json!({"value": false, "source": "default"}), "{out}");
+    assert_eq!(
+        keys(&out)["pr.jira_required"],
+        json!({"value": false, "source": "default"}),
+        "{out}"
+    );
 }
 
 #[test]
@@ -17,12 +21,20 @@ fn an_owner_file_sets_jira_required_and_a_repo_file_overrides_it() {
     let fx = world("[pr]\njira_required = true\n");
     let out = show(&fx, false).ok();
     let owner = format!("owner:{}", real(&fx, "acme/owner.toml"));
-    assert_eq!(keys(&out)["pr.jira_required"], json!({"value": true, "source": owner}), "{out}");
+    assert_eq!(
+        keys(&out)["pr.jira_required"],
+        json!({"value": true, "source": owner}),
+        "{out}"
+    );
 
     write(&fx, "acme/r.toml", "[pr]\njira_required = false\n");
     let out = show(&fx, true).ok();
     let repo = format!("repo:{}", real(&fx, "acme/r.toml"));
-    assert_eq!(keys(&out)["pr.jira_required"], json!({"value": false, "source": repo}), "{out}");
+    assert_eq!(
+        keys(&out)["pr.jira_required"],
+        json!({"value": false, "source": repo}),
+        "{out}"
+    );
 }
 
 #[test]

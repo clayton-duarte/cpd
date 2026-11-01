@@ -17,7 +17,14 @@ fn inbox_items_accepts_the_drafts_parked_kind() {
             Ok::<(), crate::error::CpdError>(())
         })
         .expect("inbox_items accepts the kind `drafts-parked`");
-    let kind: String = store.read(|c| Ok(c.query_row("SELECT kind FROM inbox_items", [], |r| r.get(0))?)).unwrap();
+    let kind: String = store
+        .read(|c| Ok(c.query_row("SELECT kind FROM inbox_items", [], |r| r.get(0))?))
+        .unwrap();
     assert_eq!(kind, "drafts-parked");
-    assert!(NAMED.iter().any(|m| m.name.ends_with("20261102T1600-drafts-parked-kind")), "the migration drafts-parked-kind is declared");
+    assert!(
+        NAMED
+            .iter()
+            .any(|m| m.name.ends_with("20261102T1600-drafts-parked-kind")),
+        "the migration drafts-parked-kind is declared"
+    );
 }

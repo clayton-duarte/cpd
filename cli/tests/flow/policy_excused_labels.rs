@@ -11,7 +11,11 @@ const KEY: &str = "pr.excused_labels";
 fn excused_labels_default_is_empty() {
     let fx = world("");
     let out = show(&fx, false).ok();
-    assert_eq!(keys(&out)[KEY], json!({"value": [], "source": "default"}), "{out}");
+    assert_eq!(
+        keys(&out)[KEY],
+        json!({"value": [], "source": "default"}),
+        "{out}"
+    );
 }
 
 #[test]
@@ -19,12 +23,24 @@ fn excused_labels_is_set_by_an_owner_file_and_overridden_by_a_repo_file() {
     let fx = world("[pr]\nexcused_labels = [\"No Merges on Friday\"]\n");
     let out = show(&fx, false).ok();
     let owner = format!("owner:{}", real(&fx, "acme/owner.toml"));
-    assert_eq!(keys(&out)[KEY], json!({"value": ["No Merges on Friday"], "source": owner}), "{out}");
+    assert_eq!(
+        keys(&out)[KEY],
+        json!({"value": ["No Merges on Friday"], "source": owner}),
+        "{out}"
+    );
 
-    write(&fx, "acme/r.toml", "[pr]\nexcused_labels = [\"a\", \"b\"]\n");
+    write(
+        &fx,
+        "acme/r.toml",
+        "[pr]\nexcused_labels = [\"a\", \"b\"]\n",
+    );
     let out = show(&fx, true).ok();
     let repo = format!("repo:{}", real(&fx, "acme/r.toml"));
-    assert_eq!(keys(&out)[KEY], json!({"value": ["a", "b"], "source": repo}), "{out}");
+    assert_eq!(
+        keys(&out)[KEY],
+        json!({"value": ["a", "b"], "source": repo}),
+        "{out}"
+    );
 }
 
 #[test]
@@ -33,7 +49,11 @@ fn a_repo_pr_table_without_excused_labels_resets_it_to_empty() {
     write(&fx, "acme/r.toml", "[pr]\njira_required = true\n");
     let out = show(&fx, true).ok();
     let repo = format!("repo:{}", real(&fx, "acme/r.toml"));
-    assert_eq!(keys(&out)[KEY], json!({"value": [], "source": format!("{repo} (key default)")}), "{out}");
+    assert_eq!(
+        keys(&out)[KEY],
+        json!({"value": [], "source": format!("{repo} (key default)")}),
+        "{out}"
+    );
 }
 
 #[test]

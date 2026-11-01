@@ -13,14 +13,19 @@ const ALLOWED: &str = "O0-O4, S0-S4, H0-H4";
 
 /// The config: `lead_tier = "O2"`, the review Context `review`, and `extra` (top-level keys, before `[inbox]`).
 fn config(fx: &Fx, extra: &str, review_context: &str) {
-    fx.env.write_tmux_config(&format!("lead_tier = \"O2\"\n{extra}\n[inbox]\nreview_context = \"{review_context}\"\n"));
+    fx.env.write_tmux_config(&format!(
+        "lead_tier = \"O2\"\n{extra}\n[inbox]\nreview_context = \"{review_context}\"\n"
+    ));
 }
 
 /// Contexts `ctx` and `review`, a fake pi install with a Tier catalog (O and S efforts 0-4, H 0-3), and the cockpit.
 fn setup(fx: &Fx, extra: &str, review_context: &str) {
     fx.env.write_models();
     config(fx, extra, review_context);
-    let scope = fx.env.root().join("install/releases/1.0.0/node_modules/@earendil-works");
+    let scope = fx
+        .env
+        .root()
+        .join("install/releases/1.0.0/node_modules/@earendil-works");
     fs::create_dir_all(fx.env.root().join("install")).unwrap();
     fs::write(fx.env.root().join("install/current-version"), "1.0.0\n").unwrap();
     for package in ["pi-coding-agent", "pi-ai"] {
@@ -28,8 +33,14 @@ fn setup(fx: &Fx, extra: &str, review_context: &str) {
         fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
     }
     fx.env.owner_policy("acme", "");
-    fx.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
-    fx.cpd(&["context", "new", "review", "--title", "Review", "--owner", "acme"]).ok();
+    fx.cpd(&[
+        "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
+    ])
+    .ok();
+    fx.cpd(&[
+        "context", "new", "review", "--title", "Review", "--owner", "acme",
+    ])
+    .ok();
     seed_catalog(fx, "[0,1,2,3,4]", "[0,1,2,3,4]");
     fx.cockpit();
 }
@@ -58,7 +69,10 @@ fn lead(out: &Value) -> String {
 }
 
 fn tier_of(fx: &Fx, session: &str) -> String {
-    fx.cpd(&["session", "show", session]).ok()["session"]["tier"].as_str().unwrap().to_owned()
+    fx.cpd(&["session", "show", session]).ok()["session"]["tier"]
+        .as_str()
+        .unwrap()
+        .to_owned()
 }
 
 /// The Tier a new Plan's Lead gets, read from the session.
@@ -72,7 +86,12 @@ fn count(fx: &Fx, table: &str) -> i64 {
 }
 
 fn counts(fx: &Fx) -> (i64, i64, i64, i64) {
-    (count(fx, "txns"), count(fx, "events"), count(fx, "plans"), count(fx, "sessions"))
+    (
+        count(fx, "txns"),
+        count(fx, "events"),
+        count(fx, "plans"),
+        count(fx, "sessions"),
+    )
 }
 
 fn not_allowed(run: &common::Run, tier: &str) {
@@ -81,7 +100,10 @@ fn not_allowed(run: &common::Run, tier: &str) {
     assert_eq!(e["details"]["allowed"], ALLOWED, "{run:?}");
     assert_eq!(e["details"]["rule"], "hs-d506, hs-d562", "{run:?}");
     let message = e["message"].as_str().unwrap();
-    assert!(message.contains("Lead") && message.contains(tier), "{message}");
+    assert!(
+        message.contains("Lead") && message.contains(tier),
+        "{message}"
+    );
 }
 
 #[test]
@@ -112,8 +134,17 @@ fn override_wins(context: &str) {
     let fx = Fx::with_ports();
     setup(&fx, "review_lead_tier = \"H1\"", "review");
     assert_eq!(lead_tier(&fx, "pl", context, Some("S2")), "S2");
-    let registered = fx.cpd(&["events", "list", "--kind", "session-registered"]).ok()["events"].as_array().unwrap().clone();
-    assert_eq!(registered.last().unwrap()["data"]["tier"], "S2", "{registered:?}");
+    let registered = fx
+        .cpd(&["events", "list", "--kind", "session-registered"])
+        .ok()["events"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        registered.last().unwrap()["data"]["tier"],
+        "S2",
+        "{registered:?}"
+    );
 }
 
 #[test]

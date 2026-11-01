@@ -64,7 +64,8 @@ mod tests {
 
     fn conn(rows: &[(&str, &str, &str)]) -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE prs (plan TEXT, key TEXT, base TEXT, lead_branch TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE prs (plan TEXT, key TEXT, base TEXT, lead_branch TEXT)")
+            .unwrap();
         for (plan, key, base) in rows {
             conn.execute("INSERT INTO prs (plan, key, base, lead_branch) VALUES (?1, ?2, ?3, 'cpd/' || ?1 || '/' || ?2)", [plan, key, base]).unwrap();
         }
@@ -73,7 +74,11 @@ mod tests {
 
     #[test]
     fn a_pr_based_on_a_lead_branch_of_any_plan_is_stacked() {
-        let conn = conn(&[("a", "one", "main"), ("b", "two", "cpd/a/one"), ("b", "three", "main")]);
+        let conn = conn(&[
+            ("a", "one", "main"),
+            ("b", "two", "cpd/a/one"),
+            ("b", "three", "main"),
+        ]);
         assert!(stacked(&conn, "b", "two").unwrap());
         assert!(!stacked(&conn, "a", "one").unwrap());
         assert!(!stacked(&conn, "b", "three").unwrap());

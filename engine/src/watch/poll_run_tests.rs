@@ -50,10 +50,16 @@ fn waiting_returns_the_result_and_end_time_of_the_poll_once() {
     drop(release);
     let finished = run.wait().expect("the finished poll");
     let after = Instant::now();
-    assert_eq!(finished.result.expect("the job's result"), json!({"polled": 3}));
+    assert_eq!(
+        finished.result.expect("the job's result"),
+        json!({"polled": 3})
+    );
     assert!(finished.ended >= before && finished.ended <= after);
     assert!(run.wait().is_none(), "a second wait");
-    assert!(run.try_take().is_none(), "try_take after the result was taken");
+    assert!(
+        run.try_take().is_none(),
+        "try_take after the result was taken"
+    );
 }
 
 #[test]
@@ -66,5 +72,9 @@ fn a_panicking_poll_is_a_failure_and_not_a_dead_engine() {
     let finished = run.wait().expect("the finished poll");
     let failure = finished.result.expect_err("a panic is a failure");
     assert_eq!(failure.code, "spawn_failed");
-    assert!(failure.message.contains("poll exploded"), "{}", failure.message);
+    assert!(
+        failure.message.contains("poll exploded"),
+        "{}",
+        failure.message
+    );
 }

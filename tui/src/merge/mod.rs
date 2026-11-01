@@ -11,10 +11,10 @@ pub mod marker;
 use std::ffi::OsString;
 use std::fmt;
 
-use super::popup;
-use super::viewlog::ViewLog;
-use super::view_ports::RunFn;
 use super::dialog;
+use super::popup;
+use super::view_ports::RunFn;
+use super::viewlog::ViewLog;
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
@@ -43,11 +43,18 @@ impl Pull {
     pub fn parse(text: &str) -> Result<Pull, String> {
         let bad = || format!("{text:?} is not <owner>/<repo>#<n>, with n a positive integer.");
         let (repo, number) = text.split_once('#').ok_or_else(bad)?;
-        let number = number.parse::<i64>().ok().filter(|n| *n > 0).ok_or_else(bad)?;
+        let number = number
+            .parse::<i64>()
+            .ok()
+            .filter(|n| *n > 0)
+            .ok_or_else(bad)?;
         if !repo.contains('/') {
             return Err(bad());
         }
-        Ok(Pull { repo: repo.to_owned(), number })
+        Ok(Pull {
+            repo: repo.to_owned(),
+            number,
+        })
     }
 }
 
@@ -63,9 +70,15 @@ pub(crate) fn start(tmux: &Tmux, arg: &str) -> Result<(), CpdError> {
     let pull = Pull::parse(arg).map_err(|e| CpdError::new(ErrorCode::ArgsInvalid, e))?;
     let format = "#{client_activity} #{client_width} #{client_height} #{client_name}";
     let clients = tmux.run(&["list-clients", "-F", format].map(str::to_owned))?;
-    let name = popup::newest_client(&clients).and_then(|(name, _)| name).ok_or_else(|| {
-        CpdError::new(ErrorCode::TmuxFailed, "No tmux client is attached to the cockpit.").with("socket", tmux.socket())
-    })?;
+    let name = popup::newest_client(&clients)
+        .and_then(|(name, _)| name)
+        .ok_or_else(|| {
+            CpdError::new(
+                ErrorCode::TmuxFailed,
+                "No tmux client is attached to the cockpit.",
+            )
+            .with("socket", tmux.socket())
+        })?;
     tmux.run(&start_args(&pull, &name)).map(drop)
 }
 
@@ -73,8 +86,17 @@ pub(crate) fn start(tmux: &Tmux, arg: &str) -> Result<(), CpdError> {
 /// quoted for the shell, then every `#` doubled for `run-shell`'s format expansion, so it reaches `cpd` unchanged;
 /// stderr is dropped, as the StatusBar's binding drops it (`run-shell -b` shows any output in view mode).
 fn start_args(pull: &Pull, client: &str) -> Vec<String> {
-    let command = format!("{PROGRAM} tui action merge {} --client {} 2>/dev/null", popup::sh_quote(&pull.to_string()), popup::sh_quote(client));
-    ["run-shell".to_owned(), "-b".to_owned(), command.replace('#', "##")].to_vec()
+    let command = format!(
+        "{PROGRAM} tui action merge {} --client {} 2>/dev/null",
+        popup::sh_quote(&pull.to_string()),
+        popup::sh_quote(client)
+    );
+    [
+        "run-shell".to_owned(),
+        "-b".to_owned(),
+        command.replace('#', "##"),
+    ]
+    .to_vec()
 }
 
 /// The open pull requests as `<owner>/<repo>#<n>` (`SELECT repo, number FROM pull_requests WHERE state = 'open'`).
@@ -93,12 +115,25 @@ fn open_pulls(store: &mut Store) -> Result<std::collections::BTreeSet<String>, C
 /// after the poll on a success, before the dialog on a failure, on any other exit. While a live marker of `pull`
 /// exists, the action does nothing but log `merge already running`.
 #[cfg(test)]
-pub(crate) fn action(home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run_command: super::RunCommand) -> Result<(), CpdError> {
+pub(crate) fn action(
+    home: &CpdHome,
+    tmux: &Tmux,
+    pull: &Pull,
+    client: &str,
+    run_command: super::RunCommand,
+) -> Result<(), CpdError> {
     action_with(&Ports::real(), home, tmux, pull, client, &run_command)
 }
 
 /// [`action`] on injected ports: the clock stamps the marker and the log, the commands are `run`'s, tmux is `tmux`'s.
-pub(crate) fn action_with(ports: &Ports, home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run: RunFn) -> Result<(), CpdError> {
+pub(crate) fn action_with(
+    ports: &Ports,
+    home: &CpdHome,
+    tmux: &Tmux,
+    pull: &Pull,
+    client: &str,
+    run: RunFn,
+) -> Result<(), CpdError> {
     let log = ViewLog::of(home, LOG);
     let config = Config::load(home)?;
     let mut store = Store::open(home, u64::from(config.timeouts.store_busy_ms))?;
@@ -111,21 +146,36 @@ pub(crate) fn action_with(ports: &Ports, home: &CpdHome, tmux: &Tmux, pull: &Pul
         return Ok(());
     }
     marker::write_on(ports, home, pull)?;
-    let mut marked = Marked { home, pull, keep: false };
-    let cpd = |words: &[&str]| run(std::iter::once(PROGRAM).chain(words.iter().copied()).map(OsString::from).collect());
+    let mut marked = Marked {
+        home,
+        pull,
+        keep: false,
+    };
+    let cpd = |words: &[&str]| {
+        run(std::iter::once(PROGRAM)
+            .chain(words.iter().copied())
+            .map(OsString::from)
+            .collect())
+    };
     let failed = match cpd(&["pr", "merge", &pull.to_string()]) {
         Ok(_) => {
             // The merge happened: the marker stays, marked merged, until a read stores it (hs-d550).
             marker::write_merged_on(ports, home, pull)?;
             if let Err(e) = cpd(&["pr", "poll"]) {
                 // Nothing else to show it with: the next periodic poll refreshes the column.
-                let _ = log.append_with(ports, &format!("pr poll after merge {pull}: {}: {}", e.code(), e.message()));
+                let _ = log.append_with(
+                    ports,
+                    &format!("pr poll after merge {pull}: {}: {}", e.code(), e.message()),
+                );
             }
             match open_pulls(&mut store) {
                 Ok(open) => marked.keep = open.contains(&pull.to_string()),
                 Err(e) => {
                     marked.keep = true;
-                    let _ = log.append_with(ports, &format!("read after merge {pull}: {}: {}", e.code(), e.message()));
+                    let _ = log.append_with(
+                        ports,
+                        &format!("read after merge {pull}: {}: {}", e.code(), e.message()),
+                    );
                 }
             }
             return Ok(());
@@ -184,16 +234,28 @@ mod tests {
     fn the_merge_starts_the_action_in_the_background_with_every_hash_doubled_for_run_shell() {
         assert_eq!(
             start_args(&pull(), "/dev/pts/9"),
-            ["run-shell", "-b", "cpd tui action merge 'o/r##7' --client '/dev/pts/9' 2>/dev/null"]
+            [
+                "run-shell",
+                "-b",
+                "cpd tui action merge 'o/r##7' --client '/dev/pts/9' 2>/dev/null"
+            ]
         );
     }
 
     #[test]
     fn the_merge_runs_on_the_newest_named_client() {
-        let named = |listing: &str| popup::newest_client(listing).and_then(|(name, size)| Some((name?, size)));
+        let named = |listing: &str| {
+            popup::newest_client(listing).and_then(|(name, size)| Some((name?, size)))
+        };
         let listing = "100 80 24 /dev/pts/1\n300 215 62 /dev/pts/4\n200 120 30 /dev/pts/2\n";
         assert_eq!(named(listing), Some(("/dev/pts/4".to_owned(), (215, 62))));
-        for bad in ["", "junk\n", "100 80 24\n", "100 80 24 \n", "x 80 24 /dev/pts/1\n"] {
+        for bad in [
+            "",
+            "junk\n",
+            "100 80 24\n",
+            "100 80 24 \n",
+            "x 80 24 /dev/pts/1\n",
+        ] {
             assert_eq!(named(bad), None, "{bad:?}");
         }
     }

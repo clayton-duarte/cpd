@@ -21,13 +21,13 @@ use super::engine::{Engine, incident_holds};
 use super::pr::printed;
 use super::report::{About, Failure, Step};
 use cpd_core::clock::timestamp;
+use cpd_core::config::PiInstall;
 use cpd_core::config::catalog::node;
 use cpd_core::config::locate_pi;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host::deadline::Failed;
 use cpd_core::host::runner::Runner;
-use cpd_core::config::PiInstall;
 use cpd_core::ports::Ports;
 
 /// The helper's deadline (contract §3.7): above its 45 s channel read and its thread reads of 30 s, eight at a time.
@@ -61,15 +61,18 @@ pub(super) fn run(engine: &mut Engine) {
         let answer = match running.try_recv() {
             Ok(answer) => answer,
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => {
-                Err(Failure::from(&CpdError::new(ErrorCode::SpawnFailed, "The team review helper's reader ended without an answer.")))
-            }
+            Err(TryRecvError::Disconnected) => Err(Failure::from(&CpdError::new(
+                ErrorCode::SpawnFailed,
+                "The team review helper's reader ended without an answer.",
+            ))),
         };
         engine.team.running = None;
         engine.team.last_end = Some(engine.ports.clock.now());
         match answer.and_then(|value| store(engine, &value)) {
             Ok(posts) => {
-                engine.log.line(&format!("E11: cached {posts} post(s) of the team channel"));
+                engine
+                    .log
+                    .line(&format!("E11: cached {posts} post(s) of the team channel"));
                 engine.clear(Step::E11, &About::Machine);
             }
             Err(failure) => engine.fail(Step::E11, About::Machine, failure),
@@ -77,7 +80,11 @@ pub(super) fn run(engine: &mut Engine) {
         return;
     }
     let period = Duration::from_secs(u64::from(engine.config.watch.team_review_seconds));
-    if engine.team.last_end.is_some_and(|end| engine.ports.clock.now().saturating_duration_since(end) < period) {
+    if engine
+        .team
+        .last_end
+        .is_some_and(|end| engine.ports.clock.now().saturating_duration_since(end) < period)
+    {
         return;
     }
     match start(engine) {
@@ -103,7 +110,12 @@ pub(super) fn start_with(
     pi: &PiInstall,
     node: &Path,
 ) -> Result<Receiver<Result<Value, Failure>>, Failure> {
-    let script = engine.config.pi_adapter_dir().map_err(|e| Failure::from(&e))?.join("lib").join("slack-channel.ts");
+    let script = engine
+        .config
+        .pi_adapter_dir()
+        .map_err(|e| Failure::from(&e))?
+        .join("lib")
+        .join("slack-channel.ts");
     let args = [
         script.display().to_string(),
         "--coding-agent".to_owned(),
@@ -113,7 +125,9 @@ pub(super) fn start_with(
         "--me".to_owned(),
         engine.config.inbox.slack_user_id.clone(),
     ];
-    let argv: Vec<String> = std::iter::once(node.display().to_string()).chain(args.iter().cloned()).collect();
+    let argv: Vec<String> = std::iter::once(node.display().to_string())
+        .chain(args.iter().cloned())
+        .collect();
     let mut cmd = Command::new(node);
     cmd.args(&args)
         .env("PI_CODING_AGENT_DIR", &pi.agent_dir)
@@ -129,7 +143,11 @@ pub(super) fn start_with(
         let answer = match runner.output(&mut cmd, "node", DEADLINE) {
             Ok(out) => printed(&out, &argv.iter().map(String::as_str).collect::<Vec<_>>()),
             Err(Failed::Io(e)) => Err(Failure::from(
-                &CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run {}: {e}.", argv.join(" "))).with("argv", json!(argv)),
+                &CpdError::new(
+                    ErrorCode::SpawnFailed,
+                    format!("Cannot run {}: {e}.", argv.join(" ")),
+                )
+                .with("argv", json!(argv)),
             )),
             Err(Failed::Timeout(e)) => Err(Failure::from(&e)),
         };
@@ -159,10 +177,20 @@ fn store(engine: &Engine, answer: &Value) -> Result<usize, Failure> {
     let path = cache_path(&engine.home);
     let tmp = path.with_extension("json.tmp");
     let io = |what: &str, e: std::io::Error| {
-        Failure::from(&CpdError::new(ErrorCode::StoreFailed, format!("Cannot {what} {}: {e}.", path.display())).with("path", path.display().to_string()))
+        Failure::from(
+            &CpdError::new(
+                ErrorCode::StoreFailed,
+                format!("Cannot {what} {}: {e}.", path.display()),
+            )
+            .with("path", path.display().to_string()),
+        )
     };
     fs::create_dir_all(engine.home.run_dir()).map_err(|e| io("create the directory of", e))?;
-    fs::write(&tmp, serde_json::to_vec_pretty(&cache).expect("a JSON value serializes")).map_err(|e| io("write", e))?;
+    fs::write(
+        &tmp,
+        serde_json::to_vec_pretty(&cache).expect("a JSON value serializes"),
+    )
+    .map_err(|e| io("write", e))?;
     fs::rename(&tmp, &path).map_err(|e| io("replace", e))?;
     Ok(posts.len())
 }

@@ -35,7 +35,11 @@ pub(super) fn approve(args: ApproveArgs) -> Result<Output, CpdError> {
     let mut paths: Vec<String> = Vec::new();
     for path in args.paths {
         if path.is_empty() || path.starts_with('/') {
-            return Err(CpdError::new(ErrorCode::Usage, format!("--path {path:?} must be a non-empty path relative to the repo.")).with("path", path));
+            return Err(CpdError::new(
+                ErrorCode::Usage,
+                format!("--path {path:?} must be a non-empty path relative to the repo."),
+            )
+            .with("path", path));
         }
         if !paths.contains(&path) {
             paths.push(path);
@@ -76,7 +80,12 @@ pub(super) fn approve(args: ApproveArgs) -> Result<Output, CpdError> {
 }
 
 /// The preconditions of §5.9, in order; returns what `test_approved` is, or is to become.
-fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, paths: &[String]) -> Result<Decision, CpdError> {
+fn decide(
+    conn: &Connection,
+    plan: &PlanId,
+    key: &JobKey,
+    paths: &[String],
+) -> Result<Decision, CpdError> {
     plan_phase(conn, plan)?;
     let all = jobs::load(conn, plan)?;
     let job = find(&all, plan, key)?.clone();
@@ -99,7 +108,10 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, paths: &[String]) -> R
         .with("status", job.status.as_str()));
     }
     let guard = guard::of(&all, &job);
-    let unguarded: Vec<&String> = paths.iter().filter(|p| !guard.files.iter().any(|entry| path_matches(entry, p))).collect();
+    let unguarded: Vec<&String> = paths
+        .iter()
+        .filter(|p| !guard.files.iter().any(|entry| path_matches(entry, p)))
+        .collect();
     if !unguarded.is_empty() {
         return Err(CpdError::new(
             ErrorCode::PathNotGuarded,
@@ -117,5 +129,9 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, paths: &[String]) -> R
             approved.push(path.clone());
         }
     }
-    Ok(if approved.len() == before { Decision::Already(job, approved) } else { Decision::Approve(job, approved) })
+    Ok(if approved.len() == before {
+        Decision::Already(job, approved)
+    } else {
+        Decision::Approve(job, approved)
+    })
 }

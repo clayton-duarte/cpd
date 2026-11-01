@@ -78,14 +78,23 @@ impl<'a> Verdict<'a> {
             Ok(Start::Convert(version)) => version as usize,
             _ => LEGACY.len(),
         };
-        LEGACY[legacy_from..].iter().map(|l| l.name).chain(self.pending.iter().map(|n| n.name)).collect()
+        LEGACY[legacy_from..]
+            .iter()
+            .map(|l| l.name)
+            .chain(self.pending.iter().map(|n| n.name))
+            .collect()
     }
 
     /// What the migrating transaction does, or the refusal; `None` when the
     /// store needs nothing.
     pub(super) fn into_plan(self) -> Result<Option<Plan<'a>>, CpdError> {
         let start = self.outcome?;
-        Ok((start != Start::Named || !self.pending.is_empty()).then_some(Plan { start, pending: self.pending }))
+        Ok(
+            (start != Start::Named || !self.pending.is_empty()).then_some(Plan {
+                start,
+                pending: self.pending,
+            }),
+        )
     }
 }
 
@@ -96,17 +105,32 @@ pub fn verdict(conn: &Connection) -> Result<Verdict<'static>, CpdError> {
 }
 
 /// §4.5 W1–W3: the first row of the table that matches decides.
-pub(super) fn verdict_with<'a>(conn: &Connection, catalog: &Catalog<'a>) -> Result<Verdict<'a>, CpdError> {
+pub(super) fn verdict_with<'a>(
+    conn: &Connection,
+    catalog: &Catalog<'a>,
+) -> Result<Verdict<'a>, CpdError> {
     let all_named = || catalog.named.iter().collect::<Vec<_>>();
     let version = super::user_version(conn)?;
     if version == 0 {
-        return Ok(Verdict { outcome: Ok(Start::Fresh), unknown: Vec::new(), pending: all_named() });
+        return Ok(Verdict {
+            outcome: Ok(Start::Fresh),
+            unknown: Vec::new(),
+            pending: all_named(),
+        });
     }
     if (1..=LEGACY.len() as i64).contains(&version) {
-        return Ok(Verdict { outcome: Ok(Start::Convert(version)), unknown: Vec::new(), pending: all_named() });
+        return Ok(Verdict {
+            outcome: Ok(Start::Convert(version)),
+            unknown: Vec::new(),
+            pending: all_named(),
+        });
     }
     if version != VERSION {
-        return Ok(Verdict { outcome: Err(too_new(version, None, &[])), unknown: Vec::new(), pending: Vec::new() });
+        return Ok(Verdict {
+            outcome: Err(too_new(version, None, &[])),
+            unknown: Vec::new(),
+            pending: Vec::new(),
+        });
     }
     let table: i64 = conn.query_row(
         "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'schema_migrations'",
@@ -116,14 +140,22 @@ pub(super) fn verdict_with<'a>(conn: &Connection, catalog: &Catalog<'a>) -> Resu
     if table == 0 {
         let refusal = CpdError::new(
             ErrorCode::StoreFailed,
-            format!("The database has user_version {VERSION} but no schema_migrations: it is not a store cpd wrote."),
+            format!(
+                "The database has user_version {VERSION} but no schema_migrations: it is not a store cpd wrote."
+            ),
         );
-        return Ok(Verdict { outcome: Err(refusal), unknown: Vec::new(), pending: Vec::new() });
+        return Ok(Verdict {
+            outcome: Err(refusal),
+            unknown: Vec::new(),
+            pending: Vec::new(),
+        });
     }
 
-    let mut stmt = conn.prepare("SELECT name, compat, checksum FROM schema_migrations ORDER BY seq")?;
-    let applied: Vec<(String, String, String)> =
-        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+    let mut stmt =
+        conn.prepare("SELECT name, compat, checksum FROM schema_migrations ORDER BY seq")?;
+    let applied: Vec<(String, String, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
     // The checksum of the text this binary embeds for `name`, when it knows the migration.
     let known = |name: &str| -> Option<String> {
         LEGACY
@@ -133,14 +165,25 @@ pub(super) fn verdict_with<'a>(conn: &Connection, catalog: &Catalog<'a>) -> Resu
             .or_else(|| catalog.named.iter().find(|n| n.name == name).map(|n| n.sql))
             .map(schema::sha256_hex)
     };
-    let mut unknown: Vec<String> = applied.iter().map(|(n, ..)| n.clone()).filter(|n| known(n).is_none()).collect();
+    let mut unknown: Vec<String> = applied
+        .iter()
+        .map(|(n, ..)| n.clone())
+        .filter(|n| known(n).is_none())
+        .collect();
     unknown.sort();
-    let mut pending: Vec<&Named> =
-        catalog.named.iter().filter(|n| !applied.iter().any(|(name, ..)| name == n.name)).collect();
+    let mut pending: Vec<&Named> = catalog
+        .named
+        .iter()
+        .filter(|n| !applied.iter().any(|(name, ..)| name == n.name))
+        .collect();
     pending.sort_by_key(|n| n.name);
 
     let outcome = decide(version, &applied, &known, &unknown, &pending);
-    Ok(Verdict { outcome, unknown, pending })
+    Ok(Verdict {
+        outcome,
+        unknown,
+        pending,
+    })
 }
 
 /// The rows of the table below "no schema_migrations": `applied` is
@@ -155,26 +198,34 @@ fn decide(
     // R3: an applied migration this binary knows, with another checksum.
     for (name, _, checksum) in applied {
         if let Some(embedded) = known(name)
-            && *checksum != embedded {
-                return Err(CpdError::new(
+            && *checksum != embedded
+        {
+            return Err(CpdError::new(
                     ErrorCode::MigrationChanged,
                     format!("The store applied migration {name} with other text than this cpd's: restore the migration's file from origin/main."),
                 )
                 .with("name", name.as_str())
                 .with("recorded", checksum.as_str())
                 .with("embedded", embedded));
-            }
+        }
     }
     // R4: the floor is the breaking row with the highest `seq`. A binary that does not know it
     // lacks a breaking migration; one that does, lacks only additive ones (A1) and opens.
-    let floor = applied.iter().rev().find(|(_, compat, _)| compat == Compat::Breaking.as_str()).map(|(n, ..)| n.as_str());
+    let floor = applied
+        .iter()
+        .rev()
+        .find(|(_, compat, _)| compat == Compat::Breaking.as_str())
+        .map(|(n, ..)| n.as_str());
     if let Some(floor) = floor.filter(|f| known(f).is_none()) {
         return Err(too_new(version, Some(floor), unknown));
     }
     // O3: a breaking migration is a barrier.
     for named in pending.iter().filter(|n| n.compat == Compat::Breaking) {
-        let after: Vec<&str> =
-            applied.iter().map(|(n, ..)| n.as_str()).filter(|n| *n > named.name).collect();
+        let after: Vec<&str> = applied
+            .iter()
+            .map(|(n, ..)| n.as_str())
+            .filter(|n| *n > named.name)
+            .collect();
         if !after.is_empty() || !unknown.is_empty() {
             return Err(order(named.name, &after, unknown));
         }
@@ -200,12 +251,14 @@ fn too_new(version: i64, floor: Option<&str>, unknown: &[String]) -> CpdError {
         Some(floor) => format!(
             "The database was migrated by a newer cpd (schema {version}): it applied migration {floor}, which this cpd does not know. Upgrade cpd."
         ),
-        None => format!("The database was migrated by a newer cpd (schema {version}): upgrade cpd."),
+        None => {
+            format!("The database was migrated by a newer cpd (schema {version}): upgrade cpd.")
+        }
     };
     CpdError::new(ErrorCode::StoreTooNew, message)
-    .with("user_version", version)
-    .with("floor", floor)
-    .with("unknown", unknown)
+        .with("user_version", version)
+        .with("floor", floor)
+        .with("unknown", unknown)
 }
 
 /// `migration_order` (§4.5 O3): `name` cannot be applied to this store; nothing is written.
@@ -242,14 +295,22 @@ pub(super) fn subset_mismatch(
     let store = schema::canonical_entries(conn)?;
     let find = |kind: &Value, name: &Value| store.iter().find(|e| e[0] == *kind && e[1] == *name);
     let mismatch = |name: &Value, expected: String, found: String| {
-        Ok(Some(SchemaMismatch { expected, found, object: Some(name.as_str().unwrap_or_default().to_owned()) }))
+        Ok(Some(SchemaMismatch {
+            expected,
+            found,
+            object: Some(name.as_str().unwrap_or_default().to_owned()),
+        }))
     };
     for entry in &reference {
-        let Some(found) = find(&entry[0], &entry[1]) else { return mismatch(&entry[1], entry.to_string(), "missing".to_owned()) };
+        let Some(found) = find(&entry[0], &entry[1]) else {
+            return mismatch(&entry[1], entry.to_string(), "missing".to_owned());
+        };
         let same = if entry[0] == "table" {
             let columns = |e: &Value| e[2].as_array().cloned().unwrap_or_default();
             let store_columns = columns(found);
-            found[3] == entry[3] && found[4] == entry[4] && columns(entry).iter().all(|c| store_columns.contains(c))
+            found[3] == entry[3]
+                && found[4] == entry[4]
+                && columns(entry).iter().all(|c| store_columns.contains(c))
         } else {
             found == entry
         };
@@ -257,16 +318,28 @@ pub(super) fn subset_mismatch(
             return mismatch(&entry[1], entry.to_string(), found.to_string());
         }
     }
-    let tables: HashSet<&str> = reference.iter().filter(|e| e[0] == "table").filter_map(|e| e[1].as_str()).collect();
-    let in_reference: HashSet<(&str, &str)> =
-        reference.iter().filter_map(|e| Some((e[0].as_str()?, e[1].as_str()?))).collect();
-    let mut stmt = conn.prepare("SELECT name, tbl_name, sql FROM sqlite_schema WHERE type = 'trigger' ORDER BY name")?;
-    let triggers: Vec<(String, String, Option<String>)> =
-        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+    let tables: HashSet<&str> = reference
+        .iter()
+        .filter(|e| e[0] == "table")
+        .filter_map(|e| e[1].as_str())
+        .collect();
+    let in_reference: HashSet<(&str, &str)> = reference
+        .iter()
+        .filter_map(|e| Some((e[0].as_str()?, e[1].as_str()?)))
+        .collect();
+    let mut stmt = conn.prepare(
+        "SELECT name, tbl_name, sql FROM sqlite_schema WHERE type = 'trigger' ORDER BY name",
+    )?;
+    let triggers: Vec<(String, String, Option<String>)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
     for (name, table, sql) in triggers {
         // A generated trigger is not an entry: item 5 checks it.
         let is_entry = find(&Value::from("trigger"), &Value::from(name.as_str())).is_some();
-        if is_entry && tables.contains(table.as_str()) && !in_reference.contains(&("trigger", name.as_str())) {
+        if is_entry
+            && tables.contains(table.as_str())
+            && !in_reference.contains(&("trigger", name.as_str()))
+        {
             return Ok(Some(SchemaMismatch {
                 expected: "no trigger".to_owned(),
                 found: sql.unwrap_or_default(),
@@ -282,11 +355,11 @@ pub(super) fn subset_mismatch(
 /// per process for the built-in list.
 fn reference_entries(catalog: &Catalog<'_>, home: &CpdHome) -> Result<Vec<Value>, CpdError> {
     static BUILT_IN: OnceLock<Vec<Value>> = OnceLock::new();
-    let built_in = catalog.named.len() == schema::NAMED.len() && std::ptr::eq(catalog.named.as_ptr(), schema::NAMED.as_ptr());
-    if built_in
-        && let Some(entries) = BUILT_IN.get() {
-            return Ok(entries.clone());
-        }
+    let built_in = catalog.named.len() == schema::NAMED.len()
+        && std::ptr::eq(catalog.named.as_ptr(), schema::NAMED.as_ptr());
+    if built_in && let Some(entries) = BUILT_IN.get() {
+        return Ok(entries.clone());
+    }
     let entries = schema::canonical_entries(&reference_database(catalog, home)?)?;
     if built_in {
         let _ = BUILT_IN.set(entries.clone());
@@ -297,11 +370,17 @@ fn reference_entries(catalog: &Catalog<'_>, home: &CpdHome) -> Result<Vec<Value>
 /// A fresh in-memory database after the legacy set, the runner's table, every
 /// named migration and the reconcile: what a fresh store has (§4.5 O1).
 /// `cpd_txn()` is a stand-in: no row is written.
-pub(super) fn reference_database(catalog: &Catalog<'_>, home: &CpdHome) -> Result<Connection, CpdError> {
+pub(super) fn reference_database(
+    catalog: &Catalog<'_>,
+    home: &CpdHome,
+) -> Result<Connection, CpdError> {
     let failed = |name: &str, e: &dyn std::fmt::Display| {
-        CpdError::new(ErrorCode::MigrationFailed, format!("The reference schema (migration {name}) could not be built: {e}."))
-            .with("migration", name)
-            .with("sqlite_message", e.to_string())
+        CpdError::new(
+            ErrorCode::MigrationFailed,
+            format!("The reference schema (migration {name}) could not be built: {e}."),
+        )
+        .with("migration", name)
+        .with("sqlite_message", e.to_string())
     };
     let conn = Connection::open_in_memory()?;
     conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, |_| Ok(1_i64))?;
@@ -310,9 +389,11 @@ pub(super) fn reference_database(catalog: &Catalog<'_>, home: &CpdHome) -> Resul
     for legacy in LEGACY {
         (legacy.apply)(&conn).map_err(|e| failed(legacy.name, &e))?;
     }
-    conn.execute_batch(RUNNER_DDL).map_err(|e| failed("schema_migrations", &e))?;
+    conn.execute_batch(RUNNER_DDL)
+        .map_err(|e| failed("schema_migrations", &e))?;
     for named in catalog.named {
-        conn.execute_batch(named.sql).map_err(|e| failed(named.name, &e))?;
+        conn.execute_batch(named.sql)
+            .map_err(|e| failed(named.name, &e))?;
         if let Some(run) = named.run {
             run(&conn, home).map_err(|e| failed(named.name, &e.message()))?;
         }
@@ -331,12 +412,16 @@ mod tests {
     use crate::store::tests::{ADD_A, ADD_B, applied, open_named, tmp_home};
 
     fn catalog(named: &[Named]) -> Catalog<'_> {
-        Catalog { named, schema_hash: "" }
+        Catalog {
+            named,
+            schema_hash: "",
+        }
     }
 
     /// The verdict of `home`'s database for a binary whose list is `named`, read-only.
     fn judge<'a>(home: &CpdHome, named: &'a [Named]) -> Verdict<'a> {
-        let conn = Connection::open_with_flags(home.db(), OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let conn =
+            Connection::open_with_flags(home.db(), OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
         verdict_with(&conn, &catalog(named)).unwrap()
     }
 
@@ -347,17 +432,26 @@ mod tests {
     }
 
     fn refusal(verdict: &Verdict<'_>) -> (ErrorCode, serde_json::Map<String, Value>) {
-        let err = verdict.refusal().unwrap_or_else(|| panic!("expected a refusal: {verdict:?}"));
+        let err = verdict
+            .refusal()
+            .unwrap_or_else(|| panic!("expected a refusal: {verdict:?}"));
         (err.code(), err.details().clone())
     }
 
     fn breaking(named: Named) -> Named {
-        Named { compat: Compat::Breaking, sql: "-- cpd-migration: breaking after 0\nSELECT 1;\n", ..named }
+        Named {
+            compat: Compat::Breaking,
+            sql: "-- cpd-migration: breaking after 0\nSELECT 1;\n",
+            ..named
+        }
     }
 
     /// A tool that is not cpd, like the `sqlite3` shell.
     fn raw(home: &CpdHome, sql: &str) {
-        Connection::open(home.db()).unwrap().execute_batch(sql).unwrap();
+        Connection::open(home.db())
+            .unwrap()
+            .execute_batch(sql)
+            .unwrap();
     }
 
     #[test]
@@ -366,10 +460,20 @@ mod tests {
         let named = || schema::NAMED.iter().map(|n| n.name);
         let fresh = at_version(0);
         assert_eq!(fresh.outcome.as_ref().ok(), Some(&Start::Fresh));
-        assert_eq!(fresh.pending_names(), legacy.iter().copied().chain(named()).collect::<Vec<_>>());
+        assert_eq!(
+            fresh.pending_names(),
+            legacy.iter().copied().chain(named()).collect::<Vec<_>>()
+        );
         let convert = at_version(3);
         assert_eq!(convert.outcome.as_ref().ok(), Some(&Start::Convert(3)));
-        assert_eq!(convert.pending_names(), legacy[3..].iter().copied().chain(named()).collect::<Vec<_>>());
+        assert_eq!(
+            convert.pending_names(),
+            legacy[3..]
+                .iter()
+                .copied()
+                .chain(named())
+                .collect::<Vec<_>>()
+        );
         assert!(convert.unknown.is_empty());
         for numbered in [LEGACY.len() as i64 + 1, 99, 999, 1001] {
             let (code, details) = refusal(&at_version(numbered));
@@ -379,7 +483,11 @@ mod tests {
             assert_eq!(details["unknown"], json!([]));
         }
         let (code, _) = refusal(&at_version(VERSION));
-        assert_eq!(code, ErrorCode::StoreFailed, "user_version 1000 without schema_migrations");
+        assert_eq!(
+            code,
+            ErrorCode::StoreFailed,
+            "user_version 1000 without schema_migrations"
+        );
     }
 
     #[test]
@@ -388,7 +496,10 @@ mod tests {
             refuse_user_version(version).unwrap();
         }
         for version in [15, 999, 1001] {
-            assert_eq!(refuse_user_version(version).unwrap_err().code(), ErrorCode::StoreTooNew);
+            assert_eq!(
+                refuse_user_version(version).unwrap_err().code(),
+                ErrorCode::StoreTooNew
+            );
         }
     }
 
@@ -417,9 +528,21 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        let title: String = store.read(|c| Ok(c.query_row("SELECT title FROM contexts WHERE id = 'ctx'", [], |r| r.get(0))?)).unwrap();
+        let title: String = store
+            .read(|c| {
+                Ok(
+                    c.query_row("SELECT title FROM contexts WHERE id = 'ctx'", [], |r| {
+                        r.get(0)
+                    })?,
+                )
+            })
+            .unwrap();
         assert_eq!(title, "Ctx");
-        assert_eq!(applied(&mut store).len(), LEGACY.len() + 2, "nothing was applied: the store has the legacy set and a and b");
+        assert_eq!(
+            applied(&mut store).len(),
+            LEGACY.len() + 2,
+            "nothing was applied: the store has the legacy set and a and b"
+        );
     }
 
     #[test]
@@ -433,8 +556,16 @@ mod tests {
         assert_eq!(verdict.unknown, [ADD_B.name]);
         assert_eq!(verdict.pending_names(), [ADD_A.name]);
         let mut store = open_named(&home, &branch).unwrap();
-        assert_eq!(store.schema_mismatch(), None, "the generated triggers cover the unknown column, the subset check the known one");
-        let names: Vec<String> = applied(&mut store).into_iter().skip(LEGACY.len()).map(|(n, ..)| n).collect();
+        assert_eq!(
+            store.schema_mismatch(),
+            None,
+            "the generated triggers cover the unknown column, the subset check the known one"
+        );
+        let names: Vec<String> = applied(&mut store)
+            .into_iter()
+            .skip(LEGACY.len())
+            .map(|(n, ..)| n)
+            .collect();
         assert_eq!(names, [ADD_B.name, ADD_A.name]);
     }
 
@@ -451,7 +582,10 @@ mod tests {
         assert_eq!(details["user_version"], VERSION);
         // Every unknown name is listed, additive ones too; the answer comes with `unknown` filled.
         let verdict = judge(&home, &[]);
-        assert_eq!(refusal(&verdict).1["unknown"], json!([ADD_A.name, ADD_B.name]));
+        assert_eq!(
+            refusal(&verdict).1["unknown"],
+            json!([ADD_A.name, ADD_B.name])
+        );
         assert_eq!(verdict.unknown, [ADD_A.name, ADD_B.name]);
         // Store::open refuses with the verdict's code and writes nothing.
         let err = open_named(&home, &older).err().unwrap();
@@ -466,9 +600,15 @@ mod tests {
         let newer = breaking(ADD_B);
         drop(open_named(&home, &[ADD_A, newer]).unwrap());
         let verdict = judge(&home, &[ADD_A]);
-        let err = verdict.refusal().expect("a store whose floor the binary lacks is refused");
+        let err = verdict
+            .refusal()
+            .expect("a store whose floor the binary lacks is refused");
         assert_eq!(err.code(), ErrorCode::StoreTooNew);
-        assert!(err.message().contains(ADD_B.name), "the message names the floor migration: {}", err.message());
+        assert!(
+            err.message().contains(ADD_B.name),
+            "the message names the floor migration: {}",
+            err.message()
+        );
         assert_eq!(err.details()["floor"], ADD_B.name);
     }
 
@@ -494,7 +634,10 @@ mod tests {
         let (_dir, home) = tmp_home();
         // Build a live store as what it was: applied only the migrations up to the restored name.
         // The prefix is ordered by name (contract §4.5 O1), so slice to the first migration after the floor.
-        let upto = schema::NAMED.iter().position(|n| n.name > "20261025T2300-queue-failed").unwrap();
+        let upto = schema::NAMED
+            .iter()
+            .position(|n| n.name > "20261025T2300-queue-failed")
+            .unwrap();
         drop(open_named(&home, &schema::NAMED[..upto]).unwrap());
         // Every later migration, breaking or not, is still pending whatever lands after it.
         let verdict = judge(&home, schema::NAMED);
@@ -502,9 +645,16 @@ mod tests {
         assert!(verdict.unknown.is_empty(), "{verdict:?}");
 
         let mut store = open_named(&home, schema::NAMED).unwrap();
-        let queue: Vec<String> =
-            applied(&mut store).into_iter().map(|(name, ..)| name).filter(|name| name.contains("queue-failed")).collect();
-        assert_eq!(queue, ["20261025T2300-queue-failed"], "the restored name stays applied; it is not applied again under a new name");
+        let queue: Vec<String> = applied(&mut store)
+            .into_iter()
+            .map(|(name, ..)| name)
+            .filter(|name| name.contains("queue-failed"))
+            .collect();
+        assert_eq!(
+            queue,
+            ["20261025T2300-queue-failed"],
+            "the restored name stays applied; it is not applied again under a new name"
+        );
     }
 
     /// hs-d710 part 1: hs and mac-pro applied the queue-failed migration with
@@ -515,10 +665,19 @@ mod tests {
     fn a_store_that_applied_the_live_queue_failed_text_opens() {
         let (_dir, home) = tmp_home();
         let file = include_str!("migrations/20261025T2300-queue-failed.sql");
-        let applied = format!("-- cpd-migration: breaking after 47\n{}", file.split_once('\n').unwrap().1);
+        let applied = format!(
+            "-- cpd-migration: breaking after 47\n{}",
+            file.split_once('\n').unwrap().1
+        );
         let mut named: Vec<Named> = schema::NAMED.to_vec();
-        let entry = named.iter_mut().find(|n| n.name == "20261025T2300-queue-failed").expect("the queue-failed migration is in the list");
-        *entry = Named { sql: Box::leak(applied.into_boxed_str()), ..*entry };
+        let entry = named
+            .iter_mut()
+            .find(|n| n.name == "20261025T2300-queue-failed")
+            .expect("the queue-failed migration is in the list");
+        *entry = Named {
+            sql: Box::leak(applied.into_boxed_str()),
+            ..*entry
+        };
         drop(open_named(&home, &named).unwrap());
         let checksum: String = Connection::open(home.db())
             .unwrap()
@@ -528,7 +687,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(checksum, "91fbcf723d8e4961ca0d99fa1dec8fc6b27a4d7251e48f9755352c5a4b179a0d");
+        assert_eq!(
+            checksum,
+            "91fbcf723d8e4961ca0d99fa1dec8fc6b27a4d7251e48f9755352c5a4b179a0d"
+        );
         let verdict = judge(&home, schema::NAMED);
         assert!(verdict.opens(), "{verdict:?}");
     }
@@ -549,7 +711,9 @@ mod tests {
         // Nothing is written: the same rows and no new `txns` row.
         let count = |home: &CpdHome| -> (i64, usize) {
             let mut store = open_named(home, &[ADD_B]).unwrap();
-            let txns = store.read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap();
+            let txns = store
+                .read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?))
+                .unwrap();
             (txns, applied(&mut store).len())
         };
         let (txns, migrations) = count(&home);
@@ -593,17 +757,32 @@ mod tests {
         assert!(verdict.opens(), "{verdict:?}");
         assert_eq!(verdict.pending_names(), [ADD_A.name]);
         let mut store = open_named(&home, &list).unwrap();
-        let names: Vec<String> = applied(&mut store).into_iter().skip(LEGACY.len()).map(|(n, ..)| n).collect();
-        assert_eq!(names, [floor.name, ADD_A.name], "the store applied the floor first, then the pending additive a by O2");
+        let names: Vec<String> = applied(&mut store)
+            .into_iter()
+            .skip(LEGACY.len())
+            .map(|(n, ..)| n)
+            .collect();
+        assert_eq!(
+            names,
+            [floor.name, ADD_A.name],
+            "the store applied the floor first, then the pending additive a by O2"
+        );
     }
 
     #[test]
     fn a_changed_applied_migration_is_migration_changed_before_anything_else() {
         let (_dir, home) = tmp_home();
         drop(open_named(&home, &[ADD_A, breaking(ADD_B)]).unwrap());
-        let edited = Named { sql: "-- cpd-migration: additive\nALTER TABLE plans ADD COLUMN note_a TEXT;\n", ..ADD_A };
+        let edited = Named {
+            sql: "-- cpd-migration: additive\nALTER TABLE plans ADD COLUMN note_a TEXT;\n",
+            ..ADD_A
+        };
         let (code, details) = refusal(&judge(&home, &[edited]));
-        assert_eq!(code, ErrorCode::MigrationChanged, "the floor b is also unknown");
+        assert_eq!(
+            code,
+            ErrorCode::MigrationChanged,
+            "the floor b is also unknown"
+        );
         assert_eq!(details["name"], ADD_A.name);
     }
 
@@ -623,7 +802,10 @@ mod tests {
         let (_dir, home) = tmp_home();
         let conn = reference_database(&Catalog::BUILT_IN, &home).unwrap();
         assert_eq!(schema::canonical_hash(&conn).unwrap(), schema::SCHEMA_HASH);
-        assert_eq!(reference_entries(&Catalog::BUILT_IN, &home).unwrap(), reference_entries(&Catalog::BUILT_IN, &home).unwrap());
+        assert_eq!(
+            reference_entries(&Catalog::BUILT_IN, &home).unwrap(),
+            reference_entries(&Catalog::BUILT_IN, &home).unwrap()
+        );
     }
 
     /// Prints the hash a fresh store has, for `scripts/repin.sh` (§4.3), which writes it as `SCHEMA_HASH`.
@@ -658,13 +840,20 @@ mod tests {
 
         let (_d, store) = tampered("DROP INDEX b_things_label", &known);
         let found = store.schema_mismatch().unwrap();
-        assert_eq!((mismatch_object(&store), found.found.as_str()), (Some("b_things_label"), "missing"));
+        assert_eq!(
+            (mismatch_object(&store), found.found.as_str()),
+            (Some("b_things_label"), "missing")
+        );
 
         let (_d, store) = tampered(
             "DROP TABLE b_things; CREATE TABLE b_things (id INTEGER PRIMARY KEY, label TEXT) STRICT; CREATE INDEX b_things_label ON b_things (label);",
             &known,
         );
-        assert_eq!(mismatch_object(&store), Some("b_things"), "a known column declared another way");
+        assert_eq!(
+            mismatch_object(&store),
+            Some("b_things"),
+            "a known column declared another way"
+        );
 
         let (_d, store) = tampered("DROP TABLE b_things", &known);
         // Dropping the table drops its index, which sorts first among the missing objects.
@@ -673,11 +862,17 @@ mod tests {
 
     #[test]
     fn inside_the_window_a_trigger_on_a_table_of_the_reference_is_a_mismatch() {
-        let (_d, store) = tampered("CREATE TRIGGER sneaky AFTER UPDATE ON plans BEGIN SELECT 1; END", &[ADD_B]);
+        let (_d, store) = tampered(
+            "CREATE TRIGGER sneaky AFTER UPDATE ON plans BEGIN SELECT 1; END",
+            &[ADD_B],
+        );
         assert_eq!(mismatch_object(&store), Some("sneaky"));
         assert_eq!(store.schema_mismatch().unwrap().expected, "no trigger");
         // ... and a trigger on a table of an unknown migration is not checked.
-        let (_d, store) = tampered("CREATE TRIGGER fine AFTER INSERT ON b_things BEGIN SELECT 1; END", &[ADD_A]);
+        let (_d, store) = tampered(
+            "CREATE TRIGGER fine AFTER INSERT ON b_things BEGIN SELECT 1; END",
+            &[ADD_A],
+        );
         assert_eq!(store.schema_mismatch(), None);
     }
 
@@ -708,7 +903,10 @@ mod tests {
     fn without_unknown_migrations_the_whole_schema_hash_is_checked() {
         let (_dir, home) = tmp_home();
         drop(open_named(&home, &[ADD_A]).unwrap());
-        raw(&home, "CREATE TABLE somebody_elses (id INTEGER PRIMARY KEY) STRICT");
+        raw(
+            &home,
+            "CREATE TABLE somebody_elses (id INTEGER PRIMARY KEY) STRICT",
+        );
         let store = open_named(&home, &[ADD_A]).unwrap();
         let m = store.schema_mismatch().unwrap();
         assert_eq!(m.object, None, "the hash differs: {m:?}");

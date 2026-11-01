@@ -10,7 +10,11 @@ use cpd_core::store::Store;
 use serde_json::json;
 
 fn failure(code: &str) -> Failure {
-    Failure { code: code.to_owned(), message: "It failed.".to_owned(), details: json!({}) }
+    Failure {
+        code: code.to_owned(),
+        message: "It failed.".to_owned(),
+        details: json!({}),
+    }
 }
 
 fn restarted() -> Report {
@@ -18,11 +22,22 @@ fn restarted() -> Report {
 }
 
 fn job(name: &str) -> About {
-    About::Job(PlanId::parse("plan-a").unwrap(), JobKey::parse(name).unwrap())
+    About::Job(
+        PlanId::parse("plan-a").unwrap(),
+        JobKey::parse(name).unwrap(),
+    )
 }
 
 fn errors(store: &mut Store) -> i64 {
-    store.read(|conn| Ok(conn.query_row("SELECT count(*) FROM events WHERE kind = 'error'", [], |r| r.get(0))?)).unwrap()
+    store
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT count(*) FROM events WHERE kind = 'error'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap()
 }
 
 /// Context `ctx-a` with a Lead and its Plan `plan-a` (a copy of the fixture of report.rs's `managers`).
@@ -55,14 +70,30 @@ fn fixture() -> (tempfile::TempDir, Log, Store) {
 /// The text a Report writes for E3, `description_required`, Job `j1`: appended into a scratch store, read back.
 fn written_text() -> String {
     let (_dir, mut log, mut store) = fixture();
-    restarted().fail(&mut store, &mut log, Step::E3, job("j1"), failure("description_required"));
-    store.read(|conn| Ok(conn.query_row("SELECT text FROM events WHERE kind = 'error'", [], |r| r.get(0))?)).unwrap()
+    restarted().fail(
+        &mut store,
+        &mut log,
+        Step::E3,
+        job("j1"),
+        failure("description_required"),
+    );
+    store
+        .read(|conn| {
+            Ok(
+                conn.query_row("SELECT text FROM events WHERE kind = 'error'", [], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .unwrap()
 }
 
 /// Inserts an `error` Event of `source` for Job `j1` of `plan-a` appended at `at` (SQL expression).
 fn insert_error(store: &mut Store, source: &str, at: &str) {
     let text = written_text();
-    let data = json!({"source": source, "code": "description_required", "message": "m", "details": {}}).to_string();
+    let data =
+        json!({"source": source, "code": "description_required", "message": "m", "details": {}})
+            .to_string();
     store
         .write("test", |tx| {
             tx.execute(
@@ -80,31 +111,83 @@ fn insert_error(store: &mut Store, source: &str, at: &str) {
 #[test]
 fn a_restarted_report_appends_nothing_for_an_error_appended_within_the_repeat_period() {
     let (_dir, mut log, mut store) = fixture();
-    restarted().fail(&mut store, &mut log, Step::E3, job("j1"), failure("description_required"));
+    restarted().fail(
+        &mut store,
+        &mut log,
+        Step::E3,
+        job("j1"),
+        failure("description_required"),
+    );
     assert_eq!(errors(&mut store), 1);
 
     let mut second = restarted();
-    second.fail(&mut store, &mut log, Step::E3, job("j1"), failure("description_required"));
+    second.fail(
+        &mut store,
+        &mut log,
+        Step::E3,
+        job("j1"),
+        failure("description_required"),
+    );
     assert_eq!(errors(&mut store), 1, "a restart forgot the repeat window");
     second.clear(Step::E3, &job("j1"));
-    second.fail(&mut store, &mut log, Step::E3, job("j1"), failure("description_required"));
-    assert_eq!(errors(&mut store), 1, "clear and fail again after a restart");
+    second.fail(
+        &mut store,
+        &mut log,
+        Step::E3,
+        job("j1"),
+        failure("description_required"),
+    );
+    assert_eq!(
+        errors(&mut store),
+        1,
+        "clear and fail again after a restart"
+    );
 
-    restarted().fail(&mut store, &mut log, Step::E3, job("j1"), failure("description_required"));
+    restarted().fail(
+        &mut store,
+        &mut log,
+        Step::E3,
+        job("j1"),
+        failure("description_required"),
+    );
     assert_eq!(errors(&mut store), 1, "a second restart");
 }
 
 #[test]
 fn a_restarted_report_still_appends_a_different_code_step_or_scope() {
     let (_dir, mut log, mut store) = fixture();
-    restarted().fail(&mut store, &mut log, Step::E3, job("j1"), failure("description_required"));
+    restarted().fail(
+        &mut store,
+        &mut log,
+        Step::E3,
+        job("j1"),
+        failure("description_required"),
+    );
 
     let mut report = restarted();
-    report.fail(&mut store, &mut log, Step::E3, job("j1"), failure("store_failed"));
+    report.fail(
+        &mut store,
+        &mut log,
+        Step::E3,
+        job("j1"),
+        failure("store_failed"),
+    );
     assert_eq!(errors(&mut store), 2, "another code");
-    report.fail(&mut store, &mut log, Step::E4, job("j1"), failure("description_required"));
+    report.fail(
+        &mut store,
+        &mut log,
+        Step::E4,
+        job("j1"),
+        failure("description_required"),
+    );
     assert_eq!(errors(&mut store), 3, "another step");
-    report.fail(&mut store, &mut log, Step::E3, job("j2"), failure("description_required"));
+    report.fail(
+        &mut store,
+        &mut log,
+        Step::E3,
+        job("j2"),
+        failure("description_required"),
+    );
     assert_eq!(errors(&mut store), 4, "another Job");
 }
 
@@ -113,15 +196,31 @@ fn a_restarted_report_appends_again_when_the_last_event_is_older_than_the_repeat
     let (_dir, mut log, mut store) = fixture();
     insert_error(&mut store, "watch", "'2026-01-01T00:00:00.000Z'");
     assert_eq!(errors(&mut store), 1);
-    restarted().fail(&mut store, &mut log, Step::E3, job("j1"), failure("description_required"));
+    restarted().fail(
+        &mut store,
+        &mut log,
+        Step::E3,
+        job("j1"),
+        failure("description_required"),
+    );
     assert_eq!(errors(&mut store), 2);
 }
 
 #[test]
 fn an_error_event_of_another_source_does_not_hold_a_restarted_report_back() {
     let (_dir, mut log, mut store) = fixture();
-    insert_error(&mut store, "pr poll", "strftime('%Y-%m-%dT%H:%M:%fZ','now')");
+    insert_error(
+        &mut store,
+        "pr poll",
+        "strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+    );
     assert_eq!(errors(&mut store), 1);
-    restarted().fail(&mut store, &mut log, Step::E3, job("j1"), failure("description_required"));
+    restarted().fail(
+        &mut store,
+        &mut log,
+        Step::E3,
+        job("j1"),
+        failure("description_required"),
+    );
     assert_eq!(errors(&mut store), 2);
 }

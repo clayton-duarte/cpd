@@ -25,15 +25,25 @@ const INSERT_ITEM: &str = "INSERT INTO inbox_items (kind, urgency, subject, labe
 fn drop_plannotator_fresh_store_has_no_plannotator_reviews_table() {
     let dir = tempfile::tempdir().unwrap();
     let conn = fresh(&dir);
-    assert_eq!(count(&conn, "SELECT count(*) FROM sqlite_master WHERE name = 'plannotator_reviews'"), 0);
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT count(*) FROM sqlite_master WHERE name = 'plannotator_reviews'"
+        ),
+        0
+    );
 }
 
 #[test]
 fn drop_plannotator_inbox_items_refuse_the_review_waiting_kind() {
     let dir = tempfile::tempdir().unwrap();
     let conn = fresh(&dir);
-    assert!(conn.execute(INSERT_ITEM, ["review-waiting"]).is_err(), "the check must refuse review-waiting");
-    conn.execute(INSERT_ITEM, ["plan-review"]).expect("plan-review is still accepted");
+    assert!(
+        conn.execute(INSERT_ITEM, ["review-waiting"]).is_err(),
+        "the check must refuse review-waiting"
+    );
+    conn.execute(INSERT_ITEM, ["plan-review"])
+        .expect("plan-review is still accepted");
 }
 
 #[test]
@@ -47,7 +57,9 @@ fn drop_plannotator_migration_drops_table_and_open_review_waiting_rows_and_keeps
     // The store before the migration: every migration that sorts before `drop-plannotator` (all of today's, until it
     // exists); the migration's SQL is applied once it exists.
     let list = named_migrations();
-    let at = list.iter().position(|(name, ..)| name.ends_with("-drop-plannotator"));
+    let at = list
+        .iter()
+        .position(|(name, ..)| name.ends_with("-drop-plannotator"));
     let dir = tempfile::tempdir().unwrap();
     let conn = prefix_database(at.unwrap_or(list.len()), &home(&dir)).unwrap();
     conn.execute_batch(
@@ -69,8 +81,22 @@ fn drop_plannotator_migration_drops_table_and_open_review_waiting_rows_and_keeps
     if let Some(index) = at {
         conn.execute_batch(list[index].2).unwrap();
     }
-    assert_eq!(count(&conn, "SELECT count(*) FROM sqlite_master WHERE name = 'plannotator_reviews'"), 0, "the table is dropped");
-    assert_eq!(count(&conn, "SELECT count(*) FROM inbox_items WHERE kind = 'review-waiting'"), 0, "the review-waiting row is gone");
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT count(*) FROM sqlite_master WHERE name = 'plannotator_reviews'"
+        ),
+        0,
+        "the table is dropped"
+    );
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT count(*) FROM inbox_items WHERE kind = 'review-waiting'"
+        ),
+        0,
+        "the review-waiting row is gone"
+    );
     let after: (i64, String, String, String, Option<String>, String) = conn
         .query_row("SELECT id, kind, urgency, subject, url, label FROM inbox_items WHERE kind = 'plan-review'", [], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))

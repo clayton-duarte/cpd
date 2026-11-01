@@ -9,18 +9,18 @@ use std::path::PathBuf;
 
 use super::display::Display;
 use super::fingerprint::{load_prs, plan_fingerprint};
-use super::prs::PrRow;
 use super::jobs::{self, Job};
 use super::overlap::{self, Overlap};
 use super::parked;
+use super::prs::PrRow;
 use super::row::{self, Phase, PlanRow};
 use super::{DecideArgs, Env, RenderArgs, ReviewArgs, read_text_file, render, summary, write_file};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
-use crate::store::WriteTxn;
 use crate::ids::{PlanId, ReviewId};
 use crate::output::Output;
+use crate::store::WriteTxn;
 
 /// What the Lead does after requesting a review (commands.md §4.6).
 const REVIEW_NEXT: &str = "The User reviews the plan summary in your chat and decides there. Stop and wait for the decision message.";
@@ -32,7 +32,8 @@ fn summary_md(home: &CpdHome, plan: &PlanId) -> PathBuf {
 
 /// `run/<plan>/summary-<review>.md`, beside `summary.md`.
 fn summary_review_md(home: &CpdHome, plan: &PlanId, review: ReviewId) -> PathBuf {
-    home.plan_md(plan).with_file_name(format!("summary-{review}.md"))
+    home.plan_md(plan)
+        .with_file_name(format!("summary-{review}.md"))
 }
 
 /// A `plan_reviews` row.
@@ -49,16 +50,39 @@ struct Review {
 const REVIEW_COLUMNS: &str = "id, status, fingerprint, feedback, requested_at, decided_at";
 
 /// One `reviews` row: id, status, fingerprint, feedback, requested_at, decided_at.
-type ReviewRow = (String, String, String, Option<String>, String, Option<String>);
+type ReviewRow = (
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    Option<String>,
+);
 
 fn review_row(r: &rusqlite::Row) -> rusqlite::Result<ReviewRow> {
-    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+    Ok((
+        r.get(0)?,
+        r.get(1)?,
+        r.get(2)?,
+        r.get(3)?,
+        r.get(4)?,
+        r.get(5)?,
+    ))
 }
 
 fn parse_review(raw: Option<ReviewRow>) -> Result<Option<Review>, CpdError> {
-    raw.map(|(id, status, fingerprint, feedback, requested_at, decided_at)| {
-        Ok(Review { id: ReviewId::parse(&id)?, status, fingerprint, feedback, requested_at, decided_at })
-    })
+    raw.map(
+        |(id, status, fingerprint, feedback, requested_at, decided_at)| {
+            Ok(Review {
+                id: ReviewId::parse(&id)?,
+                status,
+                fingerprint,
+                feedback,
+                requested_at,
+                decided_at,
+            })
+        },
+    )
     .transpose()
 }
 
@@ -124,7 +148,9 @@ fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
 /// Branch names its Plan, so it names one PR (contract §2.2); the same repo is checked when a base is set, not here.
 fn base_prs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, String>, CpdError> {
     let mut stmt = conn.prepare("SELECT p.key, q.plan || '/' || q.key FROM prs p JOIN prs q ON q.plan = p.plan AND q.lead_branch = p.base WHERE p.plan = ?1")?;
-    let rows = stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    let rows = stmt.query_map([plan.as_str()], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
@@ -143,7 +169,16 @@ fn summary_markdown(s: &Snapshot, kind: &summary::Kind) -> String {
 }
 
 fn plan_markdown(s: &Snapshot, heading: &render::Heading) -> String {
-    render::markdown(heading, s.plan.context.as_str(), s.plan.phase.as_str(), &s.prs, &s.jobs, &s.overlaps, &s.open_tier, &s.display)
+    render::markdown(
+        heading,
+        s.plan.context.as_str(),
+        s.plan.phase.as_str(),
+        &s.prs,
+        &s.jobs,
+        &s.overlaps,
+        &s.open_tier,
+        &s.display,
+    )
 }
 
 /// `plan render` (§4.5).
@@ -152,9 +187,21 @@ pub(super) fn render(args: RenderArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let s = snapshot(&mut env, &id)?;
     let path = env.home.plan_md(&id);
-    write_file(&path, &plan_markdown(&s, &render::Heading::Plan { title: &s.plan.title, plan: s.plan.id.as_str() }))?;
+    write_file(
+        &path,
+        &plan_markdown(
+            &s,
+            &render::Heading::Plan {
+                title: &s.plan.title,
+                plan: s.plan.id.as_str(),
+            },
+        ),
+    )?;
     let summary = summary_md(&env.home, &id);
-    write_file(&summary, &summary_markdown(&s, &summary::Kind::Plan { full_plan: &path }))?;
+    write_file(
+        &summary,
+        &summary_markdown(&s, &summary::Kind::Plan { full_plan: &path }),
+    )?;
     Ok(Output::success(json!({
         "path": path.display().to_string(),
         "summary": summary.display().to_string(),
@@ -170,11 +217,15 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
     let s = snapshot(&mut env, &id)?;
-    let (plan, jobs, latest_review, fingerprint) = (&s.plan, &s.jobs, s.review.clone(), s.fingerprint.clone());
+    let (plan, jobs, latest_review, fingerprint) =
+        (&s.plan, &s.jobs, s.review.clone(), s.fingerprint.clone());
     if plan.phase == Phase::Grounding {
         return Err(CpdError::new(
             ErrorCode::IllegalPhase,
-            format!("Plan {id} is in phase {}: a Plan review is requested from phase plan on.", plan.phase.as_str()),
+            format!(
+                "Plan {id} is in phase {}: a Plan review is requested from phase plan on.",
+                plan.phase.as_str()
+            ),
         )
         .with("plan", id.as_str())
         .with("phase", plan.phase.as_str()));
@@ -183,10 +234,14 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     if drafts == 0 {
         return Err(no_draft_jobs(&id));
     }
-    env.store.read(|conn| check_drafts_complete(conn, &id, jobs))?;
+    env.store
+        .read(|conn| check_drafts_complete(conn, &id, jobs))?;
     check_outline(&id, &s)?;
     super::shape::check(&id, &s.prs, jobs)?;
-    if let Some(r) = latest_review.as_ref().filter(|r| r.status == "pending" && r.fingerprint == fingerprint) {
+    if let Some(r) = latest_review
+        .as_ref()
+        .filter(|r| r.status == "pending" && r.fingerprint == fingerprint)
+    {
         return Ok(Output::success(json!({
             "review": {"id": r.id, "fingerprint": r.fingerprint, "status": r.status, "requested_at": r.requested_at},
             "summary": summary_review_md(&env.home, &id, r.id).display().to_string(),
@@ -198,11 +253,37 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     // The files first, so the review row never names a file that is missing.
     let number = latest_review.as_ref().map_or(0, |r| r.id.number().get()) + 1;
     let review = ReviewId::new(std::num::NonZeroU32::new(number).expect("one more than a count"));
-    write_file(&env.home.plan_md(&id), &plan_markdown(&s, &render::Heading::Plan { title: &s.plan.title, plan: s.plan.id.as_str() }))?;
+    write_file(
+        &env.home.plan_md(&id),
+        &plan_markdown(
+            &s,
+            &render::Heading::Plan {
+                title: &s.plan.title,
+                plan: s.plan.id.as_str(),
+            },
+        ),
+    )?;
     let plan_summary = summary_md(&env.home, &id);
-    write_file(&plan_summary, &summary_markdown(&s, &summary::Kind::Plan { full_plan: &env.home.plan_md(&id) }))?;
+    write_file(
+        &plan_summary,
+        &summary_markdown(
+            &s,
+            &summary::Kind::Plan {
+                full_plan: &env.home.plan_md(&id),
+            },
+        ),
+    )?;
     let summary = summary_review_md(&env.home, &id, review);
-    write_file(&summary, &summary_markdown(&s, &summary::Kind::Review { title: args.title.as_str(), review: &review.to_string() }))?;
+    write_file(
+        &summary,
+        &summary_markdown(
+            &s,
+            &summary::Kind::Review {
+                title: args.title.as_str(),
+                review: &review.to_string(),
+            },
+        ),
+    )?;
 
     let requested_at = env.store.write("plan review", |tx| {
         // Compare-and-swap on what was read: the phase, the plan fingerprint and the latest review.
@@ -241,13 +322,20 @@ pub enum Closing {
 
 /// Closes the pending reviews of `plan` named by `why` as `superseded` (`decided_at` is the transaction's time,
 /// `feedback` stays null) and appends one `plan-review` Event for each, in number order. The ids closed.
-pub fn close_reviews(tx: &WriteTxn<'_>, plan: &PlanId, why: &Closing) -> Result<Vec<ReviewId>, CpdError> {
+pub fn close_reviews(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    why: &Closing,
+) -> Result<Vec<ReviewId>, CpdError> {
     let below = match why {
         Closing::Newer(r) => i64::from(r.number().get()),
         Closing::Done | Closing::Cancelled => i64::MAX,
     };
     let mut stmt = tx.prepare("SELECT id, fingerprint FROM plan_reviews WHERE plan = ?1 AND status = 'pending' AND number < ?2 ORDER BY number")?;
-    let pending = stmt.query_map(rusqlite::params![plan.as_str(), below], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+    let pending = stmt
+        .query_map(rusqlite::params![plan.as_str(), below], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut closed = Vec::new();
     for (id, fingerprint) in pending {
@@ -258,11 +346,20 @@ pub fn close_reviews(tx: &WriteTxn<'_>, plan: &PlanId, why: &Closing) -> Result<
         )?;
         let review = ReviewId::parse(&id)?;
         let text = match why {
-            Closing::Newer(r) => format!("Plan review {review} of Plan {plan} is superseded by {r}."),
-            Closing::Done => format!("Plan review {review} of Plan {plan} is superseded: the Plan is done."),
-            Closing::Cancelled => format!("Plan review {review} of Plan {plan} is superseded: the Plan was cancelled."),
+            Closing::Newer(r) => {
+                format!("Plan review {review} of Plan {plan} is superseded by {r}.")
+            }
+            Closing::Done => {
+                format!("Plan review {review} of Plan {plan} is superseded: the Plan is done.")
+            }
+            Closing::Cancelled => format!(
+                "Plan review {review} of Plan {plan} is superseded: the Plan was cancelled."
+            ),
         };
-        append(tx, NewEvent::plan_review_superseded(text, review, &fingerprint).plan(plan.clone()))?;
+        append(
+            tx,
+            NewEvent::plan_review_superseded(text, review, &fingerprint).plan(plan.clone()),
+        )?;
         closed.push(review);
     }
     Ok(closed)
@@ -274,7 +371,9 @@ fn check_outline(id: &PlanId, s: &Snapshot) -> Result<(), CpdError> {
     let Some(outline) = &s.plan.outline else {
         return Err(CpdError::new(
             ErrorCode::OutlineMissing,
-            format!("Plan {id} has no outline: write what was settled with the User, then ask again."),
+            format!(
+                "Plan {id} has no outline: write what was settled with the User, then ask again."
+            ),
         )
         .with("plan", id.as_str())
         .with("next", "cpd plan outline --file <outline.json>"));
@@ -282,7 +381,12 @@ fn check_outline(id: &PlanId, s: &Snapshot) -> Result<(), CpdError> {
     let mut without: Vec<&str> = s
         .prs
         .iter()
-        .filter(|p| p.status != "cancelled" && s.jobs.iter().any(|j| j.is_draft() && j.pr_str() == p.key.as_str()))
+        .filter(|p| {
+            p.status != "cancelled"
+                && s.jobs
+                    .iter()
+                    .any(|j| j.is_draft() && j.pr_str() == p.key.as_str())
+        })
         .map(|p| p.key.as_str())
         .filter(|key| !outline.done_when.contains_key(*key))
         .collect();
@@ -299,22 +403,35 @@ fn check_outline(id: &PlanId, s: &Snapshot) -> Result<(), CpdError> {
 }
 
 pub(super) fn no_draft_jobs(id: &PlanId) -> CpdError {
-    CpdError::new(ErrorCode::NoDraftJobs, format!("Plan {id} has no draft Job: add Jobs with cpd job add first."))
-        .with("plan", id.as_str())
+    CpdError::new(
+        ErrorCode::NoDraftJobs,
+        format!("Plan {id} has no draft Job: add Jobs with cpd job add first."),
+    )
+    .with("plan", id.as_str())
 }
 
 /// Every `draft` Job has its Tier and its Spec (§4.6, §4.8, hs-d241): else
 /// `draft_incomplete`, `details.jobs` = `[{key, missing}]` in key order. A stub
 /// cannot be approved, so neither `plan review` nor `plan lock` goes on.
-pub(super) fn check_drafts_complete(conn: &Connection, id: &PlanId, jobs: &[Job]) -> Result<(), CpdError> {
+pub(super) fn check_drafts_complete(
+    conn: &Connection,
+    id: &PlanId,
+    jobs: &[Job],
+) -> Result<(), CpdError> {
     let waiting = parked::waiting_set(conn, id, jobs)?;
-    let mut stubs: Vec<&Job> = jobs.iter().filter(|j| j.is_draft() && !waiting.contains(j.key.as_str()) && !j.missing().is_empty()).collect();
+    let mut stubs: Vec<&Job> = jobs
+        .iter()
+        .filter(|j| j.is_draft() && !waiting.contains(j.key.as_str()) && !j.missing().is_empty())
+        .collect();
     if stubs.is_empty() {
         return Ok(());
     }
     stubs.sort_by(|a, b| a.key.cmp(&b.key));
     let keys: Vec<&str> = stubs.iter().map(|j| j.key.as_str()).collect();
-    let listed: Vec<Value> = stubs.iter().map(|j| json!({"key": j.key, "missing": j.missing()})).collect();
+    let listed: Vec<Value> = stubs
+        .iter()
+        .map(|j| json!({"key": j.key, "missing": j.missing()}))
+        .collect();
     Err(CpdError::new(
         ErrorCode::DraftIncomplete,
         format!(
@@ -331,14 +448,21 @@ pub(super) fn check_drafts_complete(conn: &Connection, id: &PlanId, jobs: &[Job]
 pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let status = if args.approve { "approved" } else { "rejected" };
-    let feedback = args.feedback_file.as_deref().map(read_text_file).transpose()?;
+    let feedback = args
+        .feedback_file
+        .as_deref()
+        .map(read_text_file)
+        .transpose()?;
     let mut env = Env::open()?;
     let (phase, review, fingerprint, queued) = env.store.read(|conn| {
         let phase = row::load(conn, &id)?.phase;
         let review = find(conn, &id, args.review)?.ok_or_else(|| {
-            CpdError::new(ErrorCode::ReviewNotFound, format!("Plan {id} has no review {}.", args.review))
-                .with("plan", id.as_str())
-                .with("review", args.review.to_string())
+            CpdError::new(
+                ErrorCode::ReviewNotFound,
+                format!("Plan {id} has no review {}.", args.review),
+            )
+            .with("plan", id.as_str())
+            .with("review", args.review.to_string())
         })?;
         let queued = queued_by(conn, &id, review.id)?;
         Ok((phase, review, plan_fingerprint(conn, &id)?, queued))
@@ -401,7 +525,11 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
 
 /// The Jobs an approval of `review` queued (its decision Event's `data.jobs`),
 /// if it queued any: what a rerun of `plan decide` reports again.
-fn queued_by(conn: &Connection, plan: &PlanId, review: ReviewId) -> Result<Option<Vec<String>>, CpdError> {
+fn queued_by(
+    conn: &Connection,
+    plan: &PlanId,
+    review: ReviewId,
+) -> Result<Option<Vec<String>>, CpdError> {
     let raw: Option<String> = conn
         .query_row(
             "SELECT json_extract(data, '$.jobs') FROM events
@@ -412,21 +540,37 @@ fn queued_by(conn: &Connection, plan: &PlanId, review: ReviewId) -> Result<Optio
             |r| r.get(0),
         )
         .optional()?;
-    raw.map(|text| serde_json::from_str(&text).map_err(|e| CpdError::bad_row(format!("plan-review Event of {plan}/{review}: {e}")))).transpose()
+    raw.map(|text| {
+        serde_json::from_str(&text)
+            .map_err(|e| CpdError::bad_row(format!("plan-review Event of {plan}/{review}: {e}")))
+    })
+    .transpose()
 }
 
 fn review_decided(id: &PlanId, review: &Review) -> CpdError {
-    CpdError::new(ErrorCode::ReviewDecided, format!("Plan review {} of Plan {id} is already {}.", review.id, review.status))
-        .with("plan", id.as_str())
-        .with("review", review.id.to_string())
-        .with("status", review.status.clone())
+    CpdError::new(
+        ErrorCode::ReviewDecided,
+        format!(
+            "Plan review {} of Plan {id} is already {}.",
+            review.id, review.status
+        ),
+    )
+    .with("plan", id.as_str())
+    .with("review", review.id.to_string())
+    .with("status", review.status.clone())
 }
 
 /// `plan decide`'s output (§4.7): in phase `plan`, `next` is `cpd plan lock`
 /// only when the review is approved and current. In a later phase, an
 /// approval that queued the drafts lists them in `jobs` and has no `next`;
 /// one that did not (the drafts changed since) asks for a new review.
-fn decided(review: &Review, phase: Phase, current: bool, queued: Option<&[String]>, already: bool) -> Output {
+fn decided(
+    review: &Review,
+    phase: Phase,
+    current: bool,
+    queued: Option<&[String]>,
+    already: bool,
+) -> Output {
     let approved = review.status == "approved";
     let next = match (phase, queued) {
         (_, Some(_)) => Value::Null,
@@ -451,11 +595,20 @@ fn decided(review: &Review, phase: Phase, current: bool, queued: Option<&[String
 }
 
 /// The latest review, for `plan lock`: approved for `fingerprint`.
-pub(super) fn latest_approved_for(conn: &Connection, plan: &PlanId, fingerprint: &str) -> Result<Option<String>, CpdError> {
-    Ok(latest(conn, plan)?.filter(|r| r.status == "approved" && r.fingerprint == fingerprint).map(|r| r.id.to_string()))
+pub(super) fn latest_approved_for(
+    conn: &Connection,
+    plan: &PlanId,
+    fingerprint: &str,
+) -> Result<Option<String>, CpdError> {
+    Ok(latest(conn, plan)?
+        .filter(|r| r.status == "approved" && r.fingerprint == fingerprint)
+        .map(|r| r.id.to_string()))
 }
 
 /// The latest review as `plan_not_approved` reports it.
 pub(super) fn latest_json(conn: &Connection, plan: &PlanId) -> Result<Value, CpdError> {
-    Ok(latest(conn, plan)?.map_or(Value::Null, |r| json!({"id": r.id, "status": r.status, "fingerprint": r.fingerprint})))
+    Ok(latest(conn, plan)?.map_or(
+        Value::Null,
+        |r| json!({"id": r.id, "status": r.status, "fingerprint": r.fingerprint}),
+    ))
 }

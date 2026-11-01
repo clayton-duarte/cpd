@@ -54,7 +54,10 @@ fn npm_name(spec: &str) -> String {
 /// `http(s)://`, `ssh://`, `git://` URLs. None when it is not a git source.
 fn git_identity(source: &str) -> Option<String> {
     let lower = source.to_ascii_lowercase();
-    let url = if ["https://", "http://", "ssh://", "git://"].iter().any(|s| lower.starts_with(s)) {
+    let url = if ["https://", "http://", "ssh://", "git://"]
+        .iter()
+        .any(|s| lower.starts_with(s))
+    {
         source
     } else {
         source.strip_prefix("git:")?.trim()
@@ -79,7 +82,12 @@ fn git_identity(source: &str) -> Option<String> {
     let path = path.strip_suffix(".git").unwrap_or(path);
     let segments: Vec<&str> = path.split('/').collect();
     let unsafe_part = |s: &str| s.contains('\\') || s.contains('\0');
-    if host.is_empty() || segments.len() < 2 || segments.contains(&"..") || unsafe_part(&host) || unsafe_part(path) {
+    if host.is_empty()
+        || segments.len() < 2
+        || segments.contains(&"..")
+        || unsafe_part(&host)
+        || unsafe_part(path)
+    {
         return None;
     }
     Some(format!("{host}/{path}"))
@@ -92,7 +100,6 @@ fn resolve_path(input: &str, base_dir: &Path, home: &Path) -> PathBuf {
     let path = expand_tilde(input, home);
     normalize(&base_dir.join(path))
 }
-
 
 fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
@@ -125,19 +132,33 @@ pub fn declared(settings: &Path, home: &Path, log: &mut dyn Write) -> Vec<Declar
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
         Err(e) => {
-            note(log, &format!("cannot read pi settings {}: {e}; treating it as declaring no packages", settings.display()));
+            note(
+                log,
+                &format!(
+                    "cannot read pi settings {}: {e}; treating it as declaring no packages",
+                    settings.display()
+                ),
+            );
             return Vec::new();
         }
     };
     let value: Value = match serde_json::from_str(text.trim_start_matches('\u{feff}')) {
         Ok(value) => value,
         Err(e) => {
-            note(log, &format!("pi settings {} are not valid JSON ({e}); treating it as declaring no packages", settings.display()));
+            note(
+                log,
+                &format!(
+                    "pi settings {} are not valid JSON ({e}); treating it as declaring no packages",
+                    settings.display()
+                ),
+            );
             return Vec::new();
         }
     };
     let base_dir = settings.parent().expect("a settings file has a directory");
-    let Some(Value::Array(packages)) = value.get("packages") else { return Vec::new() };
+    let Some(Value::Array(packages)) = value.get("packages") else {
+        return Vec::new();
+    };
     packages
         .iter()
         .filter_map(|entry| match entry {
@@ -169,7 +190,12 @@ const RETIRED_NPM_PACKAGE: &str = "@juicesharp/rpiv-ask-user-question";
 /// candidate is logged to `log` with the settings file that declares it.
 /// A candidate that is the retired package (`RETIRED_NPM_PACKAGE`, whatever
 /// the version) is dropped first, with one log line, before the settings rule.
-pub fn extensions_to_pass(candidates: &[String], cwd: &Path, dirs: &PiDirs, log: &mut dyn Write) -> Vec<String> {
+pub fn extensions_to_pass(
+    candidates: &[String],
+    cwd: &Path,
+    dirs: &PiDirs,
+    log: &mut dyn Write,
+) -> Vec<String> {
     let mut declared_packages = declared(&dirs.global_settings(), &dirs.home, log);
     declared_packages.extend(declared(&project_settings(cwd), &dirs.home, log));
     candidates
@@ -177,7 +203,12 @@ pub fn extensions_to_pass(candidates: &[String], cwd: &Path, dirs: &PiDirs, log:
         .filter(|candidate| {
             let id = package_identity(candidate, cwd, &dirs.home);
             if id == PackageId::Npm(RETIRED_NPM_PACKAGE.to_owned()) {
-                note(log, &format!("not passing -e {candidate}: cpd's adapter carries its own copy of it"));
+                note(
+                    log,
+                    &format!(
+                        "not passing -e {candidate}: cpd's adapter carries its own copy of it"
+                    ),
+                );
                 return false;
             }
             match declared_packages.iter().find(|d| d.id == id) {
@@ -223,12 +254,30 @@ mod tests {
         assert_eq!(id("npm:pi-tools@^1.2"), npm("pi-tools"));
         assert_eq!(id(" npm: pi-tools "), npm("pi-tools"));
 
-        assert_eq!(id("git:github.com/example/pi-tools@v1"), git("github.com/example/pi-tools"));
-        assert_eq!(id("git:github.com/example/pi-tools"), git("github.com/example/pi-tools"));
-        assert_eq!(id("https://github.com/example/pi-tools"), git("github.com/example/pi-tools"));
-        assert_eq!(id("https://github.com/example/pi-tools.git@abc123"), git("github.com/example/pi-tools"));
-        assert_eq!(id("ssh://git@GitHub.com:22/example/pi-tools.git"), git("github.com/example/pi-tools"));
-        assert_eq!(id("git:git@github.com:example/pi-tools@v2"), git("github.com/example/pi-tools"));
+        assert_eq!(
+            id("git:github.com/example/pi-tools@v1"),
+            git("github.com/example/pi-tools")
+        );
+        assert_eq!(
+            id("git:github.com/example/pi-tools"),
+            git("github.com/example/pi-tools")
+        );
+        assert_eq!(
+            id("https://github.com/example/pi-tools"),
+            git("github.com/example/pi-tools")
+        );
+        assert_eq!(
+            id("https://github.com/example/pi-tools.git@abc123"),
+            git("github.com/example/pi-tools")
+        );
+        assert_eq!(
+            id("ssh://git@GitHub.com:22/example/pi-tools.git"),
+            git("github.com/example/pi-tools")
+        );
+        assert_eq!(
+            id("git:git@github.com:example/pi-tools@v2"),
+            git("github.com/example/pi-tools")
+        );
 
         assert_eq!(id("./pkg"), local("/base/dir/pkg"));
         assert_eq!(id("../other/./pkg/"), local("/base/other/pkg"));
@@ -252,7 +301,11 @@ mod tests {
             fs::create_dir_all(cwd.join(".pi")).unwrap();
             let dirs = PiDirs::resolve(Some(home.clone()), None, None).unwrap();
             fs::create_dir_all(&dirs.agent_dir).unwrap();
-            Fixture { _dir: dir, dirs, cwd }
+            Fixture {
+                _dir: dir,
+                dirs,
+                cwd,
+            }
         }
 
         fn global(&self, json: &str) -> PathBuf {
@@ -298,17 +351,26 @@ mod tests {
         assert_eq!(lines.len(), 2, "{log}");
         assert!(lines[0].contains("-e npm:@example/ext@0.28.17"), "{log}");
         assert!(lines[0].contains(&settings.display().to_string()), "{log}");
-        assert!(lines[1].contains("-e npm:@example/other-tool@2.0.0"), "{log}");
+        assert!(
+            lines[1].contains("-e npm:@example/other-tool@2.0.0"),
+            "{log}"
+        );
     }
 
     #[test]
     fn skips_git_sources_declared_in_the_project_whatever_the_ref() {
         let f = Fixture::new();
         let settings = f.project(r#"{"packages": ["git:github.com/example/pi-tools@v1"]}"#);
-        let candidates = strs(&["https://github.com/example/pi-tools@v2", "git:github.com/example/other"]);
+        let candidates = strs(&[
+            "https://github.com/example/pi-tools@v2",
+            "git:github.com/example/other",
+        ]);
         let (kept, log) = f.pass(&candidates);
         assert_eq!(kept, strs(&["git:github.com/example/other"]));
-        assert!(log.contains("-e https://github.com/example/pi-tools@v2"), "{log}");
+        assert!(
+            log.contains("-e https://github.com/example/pi-tools@v2"),
+            "{log}"
+        );
         assert!(log.contains(&settings.display().to_string()), "{log}");
     }
 
@@ -324,13 +386,23 @@ mod tests {
             adapter.display().to_string(),
             "./tools/x".to_owned(),
             "./tools/y".to_owned(),
-            f.dirs.agent_dir.join("../../share/cpd/other").display().to_string(),
+            f.dirs
+                .agent_dir
+                .join("../../share/cpd/other")
+                .display()
+                .to_string(),
         ];
         let (kept, log) = f.pass(&candidates);
         assert_eq!(kept, vec!["./tools/y".to_owned(), candidates[3].clone()]);
         assert_eq!(log.lines().count(), 2, "{log}");
-        assert!(log.contains(&f.dirs.global_settings().display().to_string()), "{log}");
-        assert!(log.contains(&project_settings(&f.cwd).display().to_string()), "{log}");
+        assert!(
+            log.contains(&f.dirs.global_settings().display().to_string()),
+            "{log}"
+        );
+        assert!(
+            log.contains(&project_settings(&f.cwd).display().to_string()),
+            "{log}"
+        );
     }
 
     #[test]
@@ -357,7 +429,9 @@ mod tests {
         };
         let cwd = root.path().join("cwd");
         fs::create_dir_all(&cwd).unwrap();
-        let candidates: Vec<String> = ["/opt/pi", SAMPLE, RETIRED, "npm:@other/pkg@1.0.0"].map(str::to_owned).to_vec();
+        let candidates: Vec<String> = ["/opt/pi", SAMPLE, RETIRED, "npm:@other/pkg@1.0.0"]
+            .map(str::to_owned)
+            .to_vec();
         let mut log = Vec::new();
         let kept = extensions_to_pass(&candidates, &cwd, &dirs, &mut log);
         assert_eq!(kept, ["/opt/pi", SAMPLE, "npm:@other/pkg@1.0.0"]);

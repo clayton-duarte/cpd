@@ -17,8 +17,11 @@ impl Log {
     pub(super) fn open(home: &CpdHome) -> Result<Log, CpdError> {
         let path = home.watch_log();
         let failed = |e: std::io::Error| {
-            CpdError::new(ErrorCode::StoreFailed, format!("Cannot open the engine's log {}: {e}.", path.display()))
-                .with("path", path.display().to_string())
+            CpdError::new(
+                ErrorCode::StoreFailed,
+                format!("Cannot open the engine's log {}: {e}.", path.display()),
+            )
+            .with("path", path.display().to_string())
         };
         if let Some(dir) = path.parent() {
             // `run/` only, never the home above it: a home that was removed stays removed (hygiene.md 3c).
@@ -27,7 +30,11 @@ impl Log {
                 _ => {}
             }
         }
-        let file = OpenOptions::new().create(true).append(true).open(&path).map_err(failed)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(failed)?;
         Ok(Log { file })
     }
 

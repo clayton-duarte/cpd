@@ -33,7 +33,9 @@ fn fx() -> Archive {
     fx.engine_routes();
     fs::create_dir_all(env.root().join("install")).unwrap();
     fs::write(env.root().join("install/current-version"), "1.0.0\n").unwrap();
-    let scope = env.root().join("install/releases/1.0.0/node_modules/@earendil-works");
+    let scope = env
+        .root()
+        .join("install/releases/1.0.0/node_modules/@earendil-works");
     for package in ["pi-coding-agent", "pi-ai"] {
         fs::create_dir_all(scope.join(package).join("dist")).unwrap();
         fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
@@ -77,16 +79,29 @@ fn fx() -> Archive {
     env.sql(&sql);
 
     // The live Attempt's driver holds its lock, so E2 leaves it alone.
-    let path = home.attempt_lock(&PlanId::parse("pay").unwrap(), &AttemptId::parse("live-a1").unwrap());
+    let path = home.attempt_lock(
+        &PlanId::parse("pay").unwrap(),
+        &AttemptId::parse("live-a1").unwrap(),
+    );
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let lock = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
-    let lock = Flock::lock(lock, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .unwrap();
+    let lock = Flock::lock(lock, FlockArg::LockExclusiveNonblock)
+        .map_err(|(_, e)| e)
+        .unwrap();
     Archive { fx, _lock: lock }
 }
 
 impl Archive {
     fn archived_at(&self, id: &str) -> Option<String> {
-        self.fx.env.query(&format!("SELECT archived_at FROM sessions WHERE id = '{id}'"))
+        self.fx.env.query(&format!(
+            "SELECT archived_at FROM sessions WHERE id = '{id}'"
+        ))
     }
 }
 
@@ -96,9 +111,15 @@ fn archived_worker_is_still_readable_by_attempt_read() {
     fx.fx.watch_first_tick().unwrap();
     assert!(fx.archived_at("w-done").is_some(), "the Worker is archived");
 
-    let read = fx.fx.cpd(&["attempt", "read", "done-a1", "--plan", "pay"]).ok();
+    let read = fx
+        .fx
+        .cpd(&["attempt", "read", "done-a1", "--plan", "pay"])
+        .ok();
     assert_eq!(read["session"], "w-done");
     assert_eq!(read["lines"], json!(["assistant: The schema compiles."]));
-    let show = fx.fx.cpd(&["attempt", "show", "done-a1", "--plan", "pay"]).ok();
+    let show = fx
+        .fx
+        .cpd(&["attempt", "show", "done-a1", "--plan", "pay"])
+        .ok();
     assert_eq!(show["attempt"]["id"], "done-a1");
 }

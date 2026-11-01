@@ -18,18 +18,28 @@ pub(super) fn rerun(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     if pr.status != "open" {
         return Err(CpdError::new(
             ErrorCode::PrNotOpen,
-            format!("PR {} of Plan {id} is {}: pr rerun needs an open PR.", pr.key, pr.status),
+            format!(
+                "PR {} of Plan {id} is {}: pr rerun needs an open PR.",
+                pr.key, pr.status
+            ),
         )
         .with("pr", pr.key.as_str())
         .with("status", pr.status.as_str()));
     }
-    let number = pr.pull.as_ref().expect("an open PR has its pull request (prs CHECK)").number;
+    let number = pr
+        .pull
+        .as_ref()
+        .expect("an open PR has its pull request (prs CHECK)")
+        .number;
     let lead = pr.lead(&id)?;
     let runner = &*env.ports.runner;
 
     let head_sha = gh::head_commit(runner, lead, number)?;
     let runs = gh::workflow_runs(runner, lead, &head_sha)?;
-    let failed: Vec<&gh::WorkflowRun> = runs.iter().filter(|r| FAILED.contains(&r.conclusion.to_lowercase().as_str())).collect();
+    let failed: Vec<&gh::WorkflowRun> = runs
+        .iter()
+        .filter(|r| FAILED.contains(&r.conclusion.to_lowercase().as_str()))
+        .collect();
     if failed.is_empty() {
         let listed: Vec<Value> = runs
             .iter()
@@ -51,5 +61,7 @@ pub(super) fn rerun(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         }
         rerun.push(json!({"id": run.id, "name": run.name}));
     }
-    Ok(Output::success(json!({"pr": pr.key, "head_sha": head_sha, "rerun": rerun})))
+    Ok(Output::success(
+        json!({"pr": pr.key, "head_sha": head_sha, "rerun": rerun}),
+    ))
 }

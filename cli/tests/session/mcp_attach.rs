@@ -3,8 +3,8 @@
 //!
 //! Every test here fails before the command exists, for the reason its comment gives.
 
-use crate::common::{TestEnv, refused};
 use crate::common::session::{events, setup};
+use crate::common::{TestEnv, refused};
 
 use std::fs;
 use std::path::PathBuf;
@@ -74,7 +74,10 @@ fn host_file(env: &TestEnv) -> PathBuf {
 /// `session.rs`'s fixture on machine `pro`, with no machine file.
 fn bare(env: &TestEnv) {
     setup(env);
-    env.write_config(&format!("version = 1\nmachine = \"pro\"\nlead_pi_packages = []\n\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket()));
+    env.write_config(&format!(
+        "version = 1\nmachine = \"pro\"\nlead_pi_packages = []\n\n[tmux]\nsocket = \"{}\"\n",
+        env.tmux_socket()
+    ));
 }
 
 /// The fixture and the machine file `text`.
@@ -90,7 +93,11 @@ fn fixture(env: &TestEnv) {
 
 /// `cpd mcp attach <name>` as `session`, through `CPD_SESSION`.
 fn attach(env: &TestEnv, session: &str, name: &str) -> crate::common::Run {
-    env.cpd_with(env.root(), &["mcp", "attach", name], &[("CPD_SESSION", session)])
+    env.cpd_with(
+        env.root(),
+        &["mcp", "attach", name],
+        &[("CPD_SESSION", session)],
+    )
 }
 
 fn attached(env: &TestEnv) -> Vec<Value> {
@@ -98,7 +105,10 @@ fn attached(env: &TestEnv) -> Vec<Value> {
 }
 
 fn all_events(env: &TestEnv) -> Vec<Value> {
-    env.cpd(&["events", "list", "--limit", "5000"]).ok()["events"].as_array().unwrap().clone()
+    env.cpd(&["events", "list", "--limit", "5000"]).ok()["events"]
+        .as_array()
+        .unwrap()
+        .clone()
 }
 
 /// Every table's row count, by table name, from the store itself.
@@ -150,8 +160,15 @@ fn check_attach(env: &TestEnv, session: &str, plan: Value) {
     assert_eq!(event["plan"], plan);
     assert_eq!(event["kind"], "mcp-attached");
     assert_eq!(event["data"], json!({"name": "slack", "server": slack()}));
-    assert_eq!(event["text"], format!("Server slack attached to Session {session}."));
-    assert_eq!(out["attached"], json!({"name": "slack", "session": session, "event": event["id"]}), "{out}");
+    assert_eq!(
+        event["text"],
+        format!("Server slack attached to Session {session}.")
+    );
+    assert_eq!(
+        out["attached"],
+        json!({"name": "slack", "session": session, "event": event["id"]}),
+        "{out}"
+    );
 }
 
 // ---------- a: one Event, addressed to the Session ----------
@@ -204,8 +221,21 @@ fn mcp_attach_another_server_does_not_touch_the_first() {
     assert_eq!(out["attached"]["name"], "files");
     let sent = attached(&env);
     assert_eq!(sent.len(), 2, "{sent:?}");
-    assert_eq!((sent[0]["data"].clone(), sent[1]["data"].clone()), (json!({"name": "slack", "server": slack()}), json!({"name": "files", "server": files()})));
-    assert!(sent[1]["data"]["server"].as_object().unwrap().keys().eq(["url"]), "a key left out is absent");
+    assert_eq!(
+        (sent[0]["data"].clone(), sent[1]["data"].clone()),
+        (
+            json!({"name": "slack", "server": slack()}),
+            json!({"name": "files", "server": files()})
+        )
+    );
+    assert!(
+        sent[1]["data"]["server"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .eq(["url"]),
+        "a key left out is absent"
+    );
 }
 
 /// Attaching twice appends two Events with equal `data`, both addressed to the Session. Fails now: `usage`, exit 2.
@@ -232,11 +262,35 @@ fn mcp_attach_event_is_not_in_another_sessions_stream() {
     fixture(&env);
     let out = attach(&env, LEAD, "slack").ok();
     let id = out["attached"]["event"].clone();
-    let mine = env.cpd(&["events", "list", "--session", LEAD, "--kind", "mcp-attached"]).ok();
-    assert_eq!(mine["events"].as_array().unwrap().iter().map(|e| e["id"].clone()).collect::<Vec<_>>(), [id]);
+    let mine = env
+        .cpd(&[
+            "events",
+            "list",
+            "--session",
+            LEAD,
+            "--kind",
+            "mcp-attached",
+        ])
+        .ok();
+    assert_eq!(
+        mine["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["id"].clone())
+            .collect::<Vec<_>>(),
+        [id]
+    );
     for other in [OTHER, MANAGER, WORKER] {
         let theirs = env.cpd(&["events", "list", "--session", other]).ok();
-        assert!(theirs["events"].as_array().unwrap().iter().all(|e| e["kind"] != "mcp-attached"), "{other}: {theirs}");
+        assert!(
+            theirs["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|e| e["kind"] != "mcp-attached"),
+            "{other}: {theirs}"
+        );
     }
 }
 
@@ -264,7 +318,14 @@ fn mcp_attach_with_no_machine_file_lists_nothing() {
     assert!(!host_file(&env).exists());
     let before = all_events(&env);
     let error = refused(&attach(&env, LEAD, "slack"), "mcp_unknown", 4);
-    assert_eq!((error["details"]["name"].clone(), error["details"]["machine"].clone(), error["details"]["available"].clone()), (json!("slack"), json!("pro"), json!([])));
+    assert_eq!(
+        (
+            error["details"]["name"].clone(),
+            error["details"]["machine"].clone(),
+            error["details"]["available"].clone()
+        ),
+        (json!("slack"), json!("pro"), json!([]))
+    );
     assert_eq!(all_events(&env), before);
 }
 
@@ -276,7 +337,9 @@ fn mcp_attach_reads_servers_from_a_host_toml_that_also_holds_the_model_table() {
     let env = TestEnv::new();
     with_file(
         &env,
-        &format!("[model]\nO = \"github-copilot/o\"\nS = \"github-copilot/s\"\nH = \"github-copilot/h\"\nG = \"github-copilot/g\"\n\n{MACHINE}"),
+        &format!(
+            "[model]\nO = \"github-copilot/o\"\nS = \"github-copilot/s\"\nH = \"github-copilot/h\"\nG = \"github-copilot/g\"\n\n{MACHINE}"
+        ),
     );
     attach(&env, LEAD, "slack").ok();
     assert_eq!(attached(&env)[0]["data"]["server"], slack());
@@ -302,7 +365,10 @@ fn mcp_attach_does_not_read_a_file_of_the_old_machines_directory() {
 #[test]
 fn mcp_attach_invalid_machine_file_is_policy_invalid_and_appends_nothing() {
     let env = TestEnv::new();
-    with_file(&env, "[mcp.servers.slack]\nurl = \"https://mcp.slack.com/mcp\"\nheaders = \"x\"\n");
+    with_file(
+        &env,
+        "[mcp.servers.slack]\nurl = \"https://mcp.slack.com/mcp\"\nheaders = \"x\"\n",
+    );
     let before = all_events(&env);
     refused(&attach(&env, LEAD, "slack"), "policy_invalid", 1);
     assert_eq!(all_events(&env), before);
@@ -319,7 +385,11 @@ fn mcp_attach_a_bad_name_is_usage_before_the_policy_is_read() {
     with_file(&env, "this is not toml [");
     let before = all_events(&env);
     for bad in ["Slack", "slack_x", "", "1slack", "slack.x", &"a".repeat(33)] {
-        let run = env.cpd_with(env.root(), &["mcp", "attach", bad, "--session", "nobody"], &[]);
+        let run = env.cpd_with(
+            env.root(),
+            &["mcp", "attach", bad, "--session", "nobody"],
+            &[],
+        );
         refused(&run, "usage", 2);
         refused(&attach(&env, LEAD, bad), "usage", 2);
     }
@@ -338,7 +408,11 @@ fn mcp_attach_needs_a_known_session() {
     fixture(&env);
     let before = all_events(&env);
     refused(&env.cpd(&["mcp", "attach", "slack"]), "session_required", 2);
-    let error = refused(&env.cpd(&["mcp", "attach", "slack", "--session", "nobody"]), "session_not_found", 4);
+    let error = refused(
+        &env.cpd(&["mcp", "attach", "slack", "--session", "nobody"]),
+        "session_not_found",
+        4,
+    );
     assert_eq!(error["details"]["session"], "nobody");
     refused(&attach(&env, "nobody", "slack"), "session_not_found", 4);
     assert_eq!(all_events(&env), before);
@@ -363,9 +437,18 @@ fn mcp_attach_writes_nothing_but_the_event() {
     assert_eq!(events_after[..events_before.len()], events_before[..]);
     assert_eq!(events_after.last().unwrap()["kind"], "mcp-attached");
     let rows_after = row_counts(&env);
-    let changed: Vec<_> = rows_before.iter().zip(&rows_after).filter(|(a, b)| a != b).collect();
+    let changed: Vec<_> = rows_before
+        .iter()
+        .zip(&rows_after)
+        .filter(|(a, b)| a != b)
+        .collect();
     // The `txns` row is the transaction's own bookkeeping, not a row of the command (commands.md §1 Effects, contract §4.2).
-    assert!(changed.iter().all(|(a, _)| a.0 == "events" || a.0 == "txns"), "only the events table grows, and txns by its row: {changed:?}");
+    assert!(
+        changed
+            .iter()
+            .all(|(a, _)| a.0 == "events" || a.0 == "txns"),
+        "only the events table grows, and txns by its row: {changed:?}"
+    );
     let txns = |rows: &[(String, i64)]| rows.iter().find(|r| r.0 == "txns").unwrap().1;
     assert_eq!(txns(&rows_after), txns(&rows_before) + 1);
     assert_eq!(files_of_home(&env), files_before);
@@ -378,8 +461,18 @@ fn mcp_attach_writes_nothing_but_the_event() {
 fn mcp_attach_is_in_the_help_tree_under_mcp() {
     let env = TestEnv::new();
     let help = env.cpd(&["--help"]).json();
-    let mcp = help["tree"].as_array().unwrap().iter().find(|n| n["name"] == "mcp").unwrap_or_else(|| panic!("no `mcp` in the tree: {help}"));
-    let names: Vec<&str> = mcp["commands"].as_array().unwrap().iter().map(|n| n["name"].as_str().unwrap()).collect();
+    let mcp = help["tree"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["name"] == "mcp")
+        .unwrap_or_else(|| panic!("no `mcp` in the tree: {help}"));
+    let names: Vec<&str> = mcp["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["name"].as_str().unwrap())
+        .collect();
     assert_eq!(names, ["attach"]);
 }
 
@@ -390,7 +483,10 @@ fn mcp_attach_help_shows_the_name_argument() {
     let run = env.cpd(&["mcp", "attach", "--help"]);
     let text = format!("{}{}", run.stdout, run.stderr);
     assert_eq!(run.exit, 0, "{text}");
-    assert!(text.contains("<name>") || text.contains("<NAME>"), "no <name> in: {text}");
+    assert!(
+        text.contains("<name>") || text.contains("<NAME>"),
+        "no <name> in: {text}"
+    );
 }
 
 #[test]
@@ -410,7 +506,9 @@ fn the_event_of_a_server_with_oauth_client_name_carries_the_entry_verbatim() {
 // ---------- k: a durable Worker has no MCP client (pro-d253) ----------
 
 fn set_runner(env: &TestEnv, runner: &str) {
-    env.sql(&format!("UPDATE attempts SET runner = '{runner}' WHERE id = 'api-a1'"));
+    env.sql(&format!(
+        "UPDATE attempts SET runner = '{runner}' WHERE id = 'api-a1'"
+    ));
 }
 
 /// Fails now: the command refuses `runner_no_tools`. A durable Worker attaches like any Session (pro-d263, pro-d269).
@@ -423,17 +521,34 @@ fn mcp_attach_a_durable_worker_attaches_like_any_other_session() {
     let rows_before = row_counts(&env);
     let out = attach(&env, WORKER, "slack").ok();
     let after = all_events(&env);
-    assert_eq!(after.len(), before.len() + 1, "exactly one new Event: {after:?}");
+    assert_eq!(
+        after.len(),
+        before.len() + 1,
+        "exactly one new Event: {after:?}"
+    );
     assert_eq!(after[..before.len()], before[..]);
     let event = after.last().unwrap();
     assert_eq!(event["kind"], "mcp-attached", "no error Event: {event}");
     assert_eq!(event["session"], WORKER);
     assert_eq!(event["data"], json!({"name": "slack", "server": slack()}));
-    assert_eq!(out["attached"], json!({"name": "slack", "session": WORKER, "event": event["id"]}), "{out}");
+    assert_eq!(
+        out["attached"],
+        json!({"name": "slack", "session": WORKER, "event": event["id"]}),
+        "{out}"
+    );
     assert_eq!(attached(&env).len(), 1);
     let rows_after = row_counts(&env);
-    let changed: Vec<_> = rows_before.iter().zip(&rows_after).filter(|(a, b)| a != b).collect();
-    assert!(changed.iter().all(|(a, _)| a.0 == "events" || a.0 == "txns"), "only events (and txns by its row) change: {changed:?}");
+    let changed: Vec<_> = rows_before
+        .iter()
+        .zip(&rows_after)
+        .filter(|(a, b)| a != b)
+        .collect();
+    assert!(
+        changed
+            .iter()
+            .all(|(a, _)| a.0 == "events" || a.0 == "txns"),
+        "only events (and txns by its row) change: {changed:?}"
+    );
 }
 
 /// Passes now and after: a pi Worker attaches as before.

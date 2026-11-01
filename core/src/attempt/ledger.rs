@@ -56,13 +56,21 @@ impl Attempt {
 }
 
 pub(crate) fn corrupt(what: String) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("The Ledger holds an invalid value: {what}."))
+    CpdError::new(
+        ErrorCode::StoreFailed,
+        format!("The Ledger holds an invalid value: {what}."),
+    )
 }
 
 /// Attempt `id` of `plan`: `plan_not_found`, else `attempt_not_found` (exit 4).
 pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt, CpdError> {
-    let found: Option<String> =
-        conn.query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
+    let found: Option<String> = conn
+        .query_row(
+            "SELECT context FROM plans WHERE id = ?1",
+            [plan.as_str()],
+            |r| r.get(0),
+        )
+        .optional()?;
     let context = found.ok_or_else(|| CpdError::plan_not_found(plan))?;
     // The repo and Lead worktree are those of the Job's PR (R34 A7).
     let row = conn
@@ -95,16 +103,36 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
                 .with("plan", plan.as_str())
                 .with("attempt", id.to_string())
         })?;
-    let (job, tier, status, branch, worktree, worker_session, nudged, stop_request, (repo, lead_worktree, lead_branch), submitted_sha, (kind, pr, head_ref, pr_status)) = row;
+    let (
+        job,
+        tier,
+        status,
+        branch,
+        worktree,
+        worker_session,
+        nudged,
+        stop_request,
+        (repo, lead_worktree, lead_branch),
+        submitted_sha,
+        (kind, pr, head_ref, pr_status),
+    ) = row;
     // An explore Attempt has no PR: its repo and Lead Branch are none (empty), its Lead worktree is its own directory.
-    let (repo, lead_worktree, lead_branch) = match (pr.is_some(), repo, lead_worktree, lead_branch) {
-        (true, Some(repo), Some(lead_worktree), Some(lead_branch)) => (repo, lead_worktree, lead_branch),
-        (true, ..) => return Err(corrupt(format!("Plan {plan} has an Attempt but no Lead worktree"))),
+    let (repo, lead_worktree, lead_branch) = match (pr.is_some(), repo, lead_worktree, lead_branch)
+    {
+        (true, Some(repo), Some(lead_worktree), Some(lead_branch)) => {
+            (repo, lead_worktree, lead_branch)
+        }
+        (true, ..) => {
+            return Err(corrupt(format!(
+                "Plan {plan} has an Attempt but no Lead worktree"
+            )));
+        }
         (false, ..) => (String::new(), worktree.clone(), String::new()),
     };
     Ok(Attempt {
         plan: plan.clone(),
-        context: ContextId::parse(&context).map_err(|_| corrupt(format!("context id {context:?}")))?,
+        context: ContextId::parse(&context)
+            .map_err(|_| corrupt(format!("context id {context:?}")))?,
         repo: PathBuf::from(repo),
         remote_branch: head_ref.clone().unwrap_or_else(|| lead_branch.clone()),
         adopted: head_ref.is_some() && pr_status.as_deref() != Some("open"),
@@ -128,7 +156,11 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
 }
 
 /// The Job's cancel reason when a cancel was requested (§3.2 "Cancel").
-pub fn cancel_request(conn: &Connection, plan: &PlanId, job: &JobKey) -> Result<Option<String>, CpdError> {
+pub fn cancel_request(
+    conn: &Connection,
+    plan: &PlanId,
+    job: &JobKey,
+) -> Result<Option<String>, CpdError> {
     Ok(conn
         .query_row(
             "SELECT cancel_reason FROM jobs WHERE plan = ?1 AND key = ?2 AND cancel_requested_at IS NOT NULL",
@@ -242,7 +274,10 @@ impl Cause {
     /// The causes whose retry keeps the Attempt's own Tier: `provider_error`, `crashed`, `merge_conflict`
     /// (pro-d102, pro-d265). The ledger and the starter both rely on this one rule.
     pub fn retries_same_tier(self) -> bool {
-        matches!(self, Cause::ProviderError | Cause::Crashed | Cause::MergeConflict)
+        matches!(
+            self,
+            Cause::ProviderError | Cause::Crashed | Cause::MergeConflict
+        )
     }
 }
 
@@ -349,7 +384,14 @@ impl Stage {
 /// transaction (§3.2, §3.4): `cas_lost` when either changed. Records
 /// `metrics` (A9) and appends the Event of §3.4's table: `job-merged`,
 /// `job-cancelled`, `attempt-retry` or `job-failed`.
-pub fn end(tx: &WriteTxn<'_>, attempt: &Attempt, end: &End, metrics: Option<&Value>, ladder: &Ladder<'_>, stage: Stage) -> Result<(), CpdError> {
+pub fn end(
+    tx: &WriteTxn<'_>,
+    attempt: &Attempt,
+    end: &End,
+    metrics: Option<&Value>,
+    ladder: &Ladder<'_>,
+    stage: Stage,
+) -> Result<(), CpdError> {
     end_opened(tx, attempt, end, metrics, ladder, stage, None)
 }
 
@@ -357,12 +399,24 @@ pub fn end(tx: &WriteTxn<'_>, attempt: &Attempt, end: &End, metrics: Option<&Val
 /// `running` to `ended` / `merged`, the Job `merged` with its `summary`, and the `job-merged` Event of §5.2 with the three-line
 /// text of §5.3. `sha` is the artefact's SHA-256 (what was accepted; no commit exists). No compare-and-swap: `cas_lost` only when
 /// the Attempt or the Job is no longer `running`.
-pub fn end_explore(tx: &WriteTxn<'_>, attempt: &Attempt, sha: &str, summary: &str) -> Result<(), CpdError> {
-    let (plan, job, id) = (attempt.plan.as_str(), attempt.job.as_str(), attempt.id.to_string());
+pub fn end_explore(
+    tx: &WriteTxn<'_>,
+    attempt: &Attempt,
+    sha: &str,
+    summary: &str,
+) -> Result<(), CpdError> {
+    let (plan, job, id) = (
+        attempt.plan.as_str(),
+        attempt.job.as_str(),
+        attempt.id.to_string(),
+    );
     let cas_lost = |what: &str| {
-        CpdError::new(ErrorCode::CasLost, format!("{what} changed while the submit ran; nothing was written."))
-            .with("plan", plan)
-            .with("attempt", id.clone())
+        CpdError::new(
+            ErrorCode::CasLost,
+            format!("{what} changed while the submit ran; nothing was written."),
+        )
+        .with("plan", plan)
+        .with("attempt", id.clone())
     };
     let changed = tx.execute(
         "UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = ?3, submitted_sha = ?3, actual_files = '[]',
@@ -388,10 +442,17 @@ pub fn end_explore(tx: &WriteTxn<'_>, attempt: &Attempt, sha: &str, summary: &st
     );
     events::append(
         tx,
-        NewEvent::job_merged_explore(text, sha, &attempt.tier.to_string(), &attempt.kind, summary, &artefact)
-            .plan(attempt.plan.clone())
-            .job(attempt.job.clone())
-            .attempt(attempt.id.clone()),
+        NewEvent::job_merged_explore(
+            text,
+            sha,
+            &attempt.tier.to_string(),
+            &attempt.kind,
+            summary,
+            &artefact,
+        )
+        .plan(attempt.plan.clone())
+        .job(attempt.job.clone())
+        .attempt(attempt.id.clone()),
     )?;
     Ok(())
 }
@@ -414,12 +475,25 @@ pub fn end_opened(
     stage: Stage,
     pull: Option<Pull<'_>>,
 ) -> Result<(), CpdError> {
-    debug_assert!(stage == Stage::Merge || !matches!(end, End::Merged { .. }), "only the merge ends an Attempt merged");
-    let (plan, job, id) = (attempt.plan.as_str(), attempt.job.as_str(), attempt.id.to_string());
+    debug_assert!(
+        stage == Stage::Merge || !matches!(end, End::Merged { .. }),
+        "only the merge ends an Attempt merged"
+    );
+    let (plan, job, id) = (
+        attempt.plan.as_str(),
+        attempt.job.as_str(),
+        attempt.id.to_string(),
+    );
     let cas_lost = |what: &str| {
-        CpdError::new(ErrorCode::CasLost, format!("{what} changed while the {} ran; nothing was written.", stage.ran()))
-            .with("plan", plan)
-            .with("attempt", id.clone())
+        CpdError::new(
+            ErrorCode::CasLost,
+            format!(
+                "{what} changed while the {} ran; nothing was written.",
+                stage.ran()
+            ),
+        )
+        .with("plan", plan)
+        .with("attempt", id.clone())
     };
     if !stage.accepts(&attempt.status) {
         return Err(cas_lost("The Attempt's status").with("status", attempt.status.clone()));
@@ -476,12 +550,21 @@ pub fn end_opened(
                     |r| r.get::<_, bool>(0),
                 )?;
             let cancel_too_late = cancel_request(tx, &attempt.plan, &attempt.job)?.is_some();
-            let mut text = format!("Job {job} merged: Attempt {id} fast-forwarded {} to {}.", attempt.lead_branch, short(sha));
+            let mut text = format!(
+                "Job {job} merged: Attempt {id} fast-forwarded {} to {}.",
+                attempt.lead_branch,
+                short(sha)
+            );
             if cancel_too_late {
                 text.push_str(" Its cancel request came too late: the merge had already happened.");
             }
             if let Some(pull) = pull {
-                text.push_str(&format!(" Pull request #{} of PR {} is open: {}.", pull.number, attempt.pr_str(), pull.url));
+                text.push_str(&format!(
+                    " Pull request #{} of PR {} is open: {}.",
+                    pull.number,
+                    attempt.pr_str(),
+                    pull.url
+                ));
             }
             text.push_str(&format!(" Next: {show}"));
             if attempt.kind == "work" {
@@ -497,13 +580,22 @@ pub fn end_opened(
                 }
             }
             let pull = pull.map(|p| (attempt.pr_str(), p.number, p.url));
-            ("merged", None, NewEvent::job_merged(text, sha, &tier, &attempt.kind, turn, cancel_too_late, pull))
+            (
+                "merged",
+                None,
+                NewEvent::job_merged(text, sha, &tier, &attempt.kind, turn, cancel_too_late, pull),
+            )
         }
         End::Cancelled => {
-            let reason = cancel_request(tx, &attempt.plan, &attempt.job)?.ok_or_else(|| cas_lost("The Job's cancel request"))?;
+            let reason = cancel_request(tx, &attempt.plan, &attempt.job)?
+                .ok_or_else(|| cas_lost("The Job's cancel request"))?;
             let text = match stage {
-                Stage::Driver => format!("Job {job} cancelled ({reason}): its driver stopped Attempt {id}. Next: cpd plan show --plan {plan}"),
-                Stage::Merge => format!("Job {job} cancelled ({reason}): Attempt {id} stopped before its merge. Next: cpd plan show --plan {plan}"),
+                Stage::Driver => format!(
+                    "Job {job} cancelled ({reason}): its driver stopped Attempt {id}. Next: cpd plan show --plan {plan}"
+                ),
+                Stage::Merge => format!(
+                    "Job {job} cancelled ({reason}): Attempt {id} stopped before its merge. Next: cpd plan show --plan {plan}"
+                ),
             };
             ("cancelled", None, NewEvent::job_cancelled(text, &reason))
         }
@@ -515,54 +607,81 @@ pub fn end_opened(
             let text = format!(
                 "Attempt {id} of Job {job} was interrupted by incident mode. The Job is queued again at Tier {next}. Next: {show}"
             );
-            ("queued", None, NewEvent::attempt_retry(text, "cancelled", "cancel_requested", &next, &feedback))
+            (
+                "queued",
+                None,
+                NewEvent::attempt_retry(text, "cancelled", "cancel_requested", &next, &feedback),
+            )
         }
         End::Failed { .. } | End::GateFailed { .. } => {
-        let (cause, detail) = end.failure().expect("a failed end");
-        let (cause, detail) = (&cause, &detail.to_owned());
-        match next_tier(tx, attempt, *cause, ladder)? {
-            Some(next) => {
-                let said = match cause {
-                    Cause::ProviderError => format!(
-                        "{detail} Retry {} of {PROVIDER_RETRIES} at the same Tier, not before {PROVIDER_RETRY_SECONDS} s have passed.",
-                        ended_with(tx, plan, job, Cause::ProviderError)?
-                    ),
-                    _ => detail.clone(),
-                };
-                let gate = (*cause == Cause::GateFailed).then(|| crate::merge::gate_text_body(detail)).flatten();
-                let text = match gate {
-                    Some(body) => format!(
-                        "Attempt {id} of Job {job} failed ({}): {body}\nThe Job is queued again at Tier {next}. Next: {show}",
-                        cause.as_str()
-                    ),
-                    None => format!(
-                        "Attempt {id} of Job {job} failed ({}): {said} The Job is queued again at Tier {next}. Next: {show}",
-                        cause.as_str()
-                    ),
-                };
-                ("queued", None, NewEvent::attempt_retry(text, "failed", cause.as_str(), &next.to_string(), detail))
+            let (cause, detail) = end.failure().expect("a failed end");
+            let (cause, detail) = (&cause, &detail.to_owned());
+            match next_tier(tx, attempt, *cause, ladder)? {
+                Some(next) => {
+                    let said = match cause {
+                        Cause::ProviderError => format!(
+                            "{detail} Retry {} of {PROVIDER_RETRIES} at the same Tier, not before {PROVIDER_RETRY_SECONDS} s have passed.",
+                            ended_with(tx, plan, job, Cause::ProviderError)?
+                        ),
+                        _ => detail.clone(),
+                    };
+                    let gate = (*cause == Cause::GateFailed)
+                        .then(|| crate::merge::gate_text_body(detail))
+                        .flatten();
+                    let text = match gate {
+                        Some(body) => format!(
+                            "Attempt {id} of Job {job} failed ({}): {body}\nThe Job is queued again at Tier {next}. Next: {show}",
+                            cause.as_str()
+                        ),
+                        None => format!(
+                            "Attempt {id} of Job {job} failed ({}): {said} The Job is queued again at Tier {next}. Next: {show}",
+                            cause.as_str()
+                        ),
+                    };
+                    (
+                        "queued",
+                        None,
+                        NewEvent::attempt_retry(
+                            text,
+                            "failed",
+                            cause.as_str(),
+                            &next.to_string(),
+                            detail,
+                        ),
+                    )
+                }
+                None => {
+                    let attempts: i64 = tx.query_row(
+                        "SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2",
+                        params![plan, job],
+                        |r| r.get(0),
+                    )?;
+                    let used_up = match cause {
+                        Cause::ProviderError => {
+                            format!(" The {PROVIDER_RETRIES} retries are used up.")
+                        }
+                        _ => String::new(),
+                    };
+                    let gate = matches!(cause, Cause::GateFailed | Cause::GateError)
+                        .then(|| crate::merge::gate_text_body(detail))
+                        .flatten();
+                    let text = match gate {
+                        Some(body) => format!(
+                            "Job {job} failed ({}): {body}\nDecide: cpd job retry {job} --tier <T> --plan {plan}, or cpd job cancel {job} --reason <text> --plan {plan}",
+                            cause.as_str()
+                        ),
+                        None => format!(
+                            "Job {job} failed ({}): {detail}{used_up} Decide: cpd job retry {job} --tier <T> --plan {plan}, or cpd job cancel {job} --reason <text> --plan {plan}",
+                            cause.as_str()
+                        ),
+                    };
+                    (
+                        "failed",
+                        Some(cause.as_str()),
+                        NewEvent::job_failed(text, cause.as_str(), detail, &tier, attempts),
+                    )
+                }
             }
-            None => {
-                let attempts: i64 =
-                    tx.query_row("SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2", params![plan, job], |r| r.get(0))?;
-                let used_up = match cause {
-                    Cause::ProviderError => format!(" The {PROVIDER_RETRIES} retries are used up."),
-                    _ => String::new(),
-                };
-                let gate = matches!(cause, Cause::GateFailed | Cause::GateError).then(|| crate::merge::gate_text_body(detail)).flatten();
-                let text = match gate {
-                    Some(body) => format!(
-                        "Job {job} failed ({}): {body}\nDecide: cpd job retry {job} --tier <T> --plan {plan}, or cpd job cancel {job} --reason <text> --plan {plan}",
-                        cause.as_str()
-                    ),
-                    None => format!(
-                        "Job {job} failed ({}): {detail}{used_up} Decide: cpd job retry {job} --tier <T> --plan {plan}, or cpd job cancel {job} --reason <text> --plan {plan}",
-                        cause.as_str()
-                    ),
-                };
-                ("failed", Some(cause.as_str()), NewEvent::job_failed(text, cause.as_str(), detail, &tier, attempts))
-            }
-        }
         }
     };
     let changed = tx.execute(
@@ -572,7 +691,13 @@ pub fn end_opened(
     if changed == 0 {
         return Err(cas_lost("The Job's status"));
     }
-    events::append(tx, event.plan(attempt.plan.clone()).job(attempt.job.clone()).attempt(attempt.id.clone()))?;
+    events::append(
+        tx,
+        event
+            .plan(attempt.plan.clone())
+            .job(attempt.job.clone())
+            .attempt(attempt.id.clone()),
+    )?;
     // pro-d89: a merge that is not an `open` or `update` Job's own requeues the failed `open`/`update` Jobs of its PR that it fixes.
     if matches!(end, End::Merged { .. }) && attempt.kind != "open" && attempt.kind != "update" {
         crate::job::fix_retry::retry_after_fix(tx, &attempt.plan, &attempt.job)?;
@@ -590,7 +715,11 @@ pub fn end_opened(
 /// `failed` counts; an Interrupted (or otherwise `cancelled`) one never does
 /// (contract §3.7). An ended Attempt whose driver never started (`driver_pid`
 /// null, §3.4) is not one either: it does not use up a try.
-pub(crate) fn automatic_attempts(tx: &WriteTxn<'_>, plan: &str, job: &str) -> Result<i64, CpdError> {
+pub(crate) fn automatic_attempts(
+    tx: &WriteTxn<'_>,
+    plan: &str,
+    job: &str,
+) -> Result<i64, CpdError> {
     Ok(tx.query_row(
         "SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2
            AND number >= coalesce((SELECT max(number) FROM attempts WHERE plan = ?1 AND job = ?2 AND origin = 'retry'), 1)
@@ -618,13 +747,25 @@ fn ended_with(tx: &WriteTxn<'_>, plan: &str, job: &str, cause: Cause) -> Result<
 /// automatic Attempts since the last `job retry` are fewer than `1 + retry_cap`. An Attempt whose driver never started
 /// (`driver_pid` null, §3.4) does not raise the Tier: its own Tier again.
 /// (A `merging` Attempt always had a driver.) A `provider_error` is a retry cause: see below.
-fn next_tier(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder<'_>) -> Result<Option<Tier>, CpdError> {
+fn next_tier(
+    tx: &WriteTxn<'_>,
+    attempt: &Attempt,
+    cause: Cause,
+    ladder: &Ladder<'_>,
+) -> Result<Option<Tier>, CpdError> {
     let next = next_rung(tx, attempt, cause, ladder)?;
     // An explore Job stays inside the letter of its kind (scout H, research S): a `no_submit` after the top rung fails.
-    Ok(next.filter(|t| !crate::plan::jobs::is_explore(&attempt.kind) || t.letter() == attempt.tier.letter()))
+    Ok(next.filter(|t| {
+        !crate::plan::jobs::is_explore(&attempt.kind) || t.letter() == attempt.tier.letter()
+    }))
 }
 
-fn next_rung(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder<'_>) -> Result<Option<Tier>, CpdError> {
+fn next_rung(
+    tx: &WriteTxn<'_>,
+    attempt: &Attempt,
+    cause: Cause,
+    ladder: &Ladder<'_>,
+) -> Result<Option<Tier>, CpdError> {
     // pro-d102: a provider error requeues at the Attempt's own Tier, never raising it, up to PROVIDER_RETRIES times.
     if cause == Cause::ProviderError {
         let used = ended_with(tx, attempt.plan.as_str(), attempt.job.as_str(), cause)?;
@@ -653,13 +794,17 @@ fn next_rung(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder
         |r| r.get(0),
     )?;
     if never_started {
-        return Ok(Some(ladder.catalog.step_up(attempt.tier).unwrap_or(attempt.tier)));
+        return Ok(Some(
+            ladder.catalog.step_up(attempt.tier).unwrap_or(attempt.tier),
+        ));
     }
     // hs-n465, hs-d632: the catalog refuses the Attempt's Tier: step to the next valid Worker Tier at or above it, never propagate `tier_invalid`.
     if !ladder.catalog.is_valid(attempt.tier) {
         return Ok(ladder.catalog.step_up(attempt.tier));
     }
-    if automatic_attempts(tx, attempt.plan.as_str(), attempt.job.as_str())? > i64::from(ladder.retry_cap) {
+    if automatic_attempts(tx, attempt.plan.as_str(), attempt.job.as_str())?
+        > i64::from(ladder.retry_cap)
+    {
         return Ok(None);
     }
     // pro-d265: a crash or a conflict is not a capability problem: same Tier. Only `no_submit` climbs.
@@ -671,16 +816,34 @@ fn next_rung(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder
 }
 
 /// Appends an `error` Event about `attempt` (§5.2) for `error`, from `source`.
-pub fn append_error(tx: &WriteTxn<'_>, attempt: &Attempt, source: &str, error: &CpdError, text: String, window: Duration) -> Result<(), CpdError> {
-    let same = Same::Message { source, code: error.code().as_str(), message: error.message(), scope: Scope::Plan(&attempt.plan) };
+pub fn append_error(
+    tx: &WriteTxn<'_>,
+    attempt: &Attempt,
+    source: &str,
+    error: &CpdError,
+    text: String,
+    window: Duration,
+) -> Result<(), CpdError> {
+    let same = Same::Message {
+        source,
+        code: error.code().as_str(),
+        message: error.message(),
+        scope: Scope::Plan(&attempt.plan),
+    };
     repeat::append_once(
         tx,
         window,
         &same,
-        NewEvent::error(text, source, error.code().as_str(), error.message(), error.details())
-            .plan(attempt.plan.clone())
-            .job(attempt.job.clone())
-            .attempt(attempt.id.clone()),
+        NewEvent::error(
+            text,
+            source,
+            error.code().as_str(),
+            error.message(),
+            error.details(),
+        )
+        .plan(attempt.plan.clone())
+        .job(attempt.job.clone())
+        .attempt(attempt.id.clone()),
     )?;
     Ok(())
 }
@@ -725,7 +888,10 @@ mod tests {
             assert_eq!(Stored::Failed(*cause).outcome(), "failed");
         }
         assert_eq!(Stored::parse("merged"), Some(Stored::Merged));
-        assert_eq!(Stored::parse("cancel_requested").map(Stored::outcome), Some("cancelled"));
+        assert_eq!(
+            Stored::parse("cancel_requested").map(Stored::outcome),
+            Some("cancelled")
+        );
         assert_eq!(Stored::parse("review_rejected"), None);
         assert_eq!(Cause::parse("merged"), None);
     }
@@ -738,8 +904,15 @@ mod tests {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files = Vec::new();
         rust_files(&src, &mut files);
-        let texts: Vec<(PathBuf, String)> =
-            files.into_iter().map(|f| (f.strip_prefix(&src).unwrap().to_owned(), std::fs::read_to_string(&f).unwrap())).collect();
+        let texts: Vec<(PathBuf, String)> = files
+            .into_iter()
+            .map(|f| {
+                (
+                    f.strip_prefix(&src).unwrap().to_owned(),
+                    std::fs::read_to_string(&f).unwrap(),
+                )
+            })
+            .collect();
         let needles = [
             ["struct ", "Ladder"],
             ["enum ", "End "],
@@ -752,11 +925,18 @@ mod tests {
         let mut twice = Vec::new();
         for needle in needles {
             let needle = needle.concat();
-            let defined: Vec<_> = texts.iter().filter(|(_, text)| text.contains(&needle)).map(|(p, _)| p.display().to_string()).collect();
+            let defined: Vec<_> = texts
+                .iter()
+                .filter(|(_, text)| text.contains(&needle))
+                .map(|(p, _)| p.display().to_string())
+                .collect();
             if defined.len() != 1 {
                 twice.push(format!("{needle:?}: {defined:?}"));
             }
         }
-        assert!(twice.is_empty(), "each belongs in attempt/ledger.rs only: {twice:#?}");
+        assert!(
+            twice.is_empty(),
+            "each belongs in attempt/ledger.rs only: {twice:#?}"
+        );
     }
 }

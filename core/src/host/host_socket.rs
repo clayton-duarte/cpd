@@ -58,7 +58,9 @@ struct Fake {
 #[cfg(feature = "fakes")]
 impl FakeHostSocket {
     pub fn new() -> FakeHostSocket {
-        FakeHostSocket { inner: Mutex::new(Fake::default()) }
+        FakeHostSocket {
+            inner: Mutex::new(Fake::default()),
+        }
     }
 
     /// The answers, in order; after they run out, `reach` returns [`Reach::Absent`].
@@ -68,7 +70,11 @@ impl FakeHostSocket {
 
     /// Every path `reach` was asked for, in order.
     pub fn paths(&self) -> Vec<PathBuf> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).paths.clone()
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .paths
+            .clone()
     }
 }
 

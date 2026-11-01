@@ -16,20 +16,20 @@ use ratatui::widgets::Widget;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::tree::actions::Action;
+use super::Window;
 use crate::cells::{self, truncate};
+use crate::dialog::scroll::WHEEL_ROWS;
+use crate::dialog::scroll::{Cue, cue};
+use crate::link::{Link, Links};
 pub(crate) use crate::merge::Pull;
 use crate::palette;
 use crate::phi;
 use crate::read::{Tree, age_text};
 use crate::section;
-use crate::dialog::scroll::{Cue, cue};
-use crate::dialog::scroll::WHEEL_ROWS;
-use super::Window;
+use crate::tree::actions::Action;
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Item, Kind};
 use cpd_core::inbox::pr::Status;
-use crate::link::{Link, Links};
 
 /// The columns before the label: the item's tier glyph and a space.
 const LEAD_WIDTH: usize = 2;
@@ -43,7 +43,8 @@ const AROUND: usize = TOP + 1;
 /// Whether the merge of the `pr-ready` `item`'s pull request runs: `merging` is the pull requests (`<owner>/<repo>#<n>`) with a live
 /// merge marker (hs-d495).
 pub(crate) fn merges(merging: &std::collections::BTreeSet<String>, item: &Item) -> bool {
-    item.kind == Kind::PrReady && Pull::from_subject(&item.subject).is_some_and(|pull| merging.contains(&pull.to_string()))
+    item.kind == Kind::PrReady
+        && Pull::from_subject(&item.subject).is_some_and(|pull| merging.contains(&pull.to_string()))
 }
 
 /// What a row of the section is, by its offset from the section's first row (the blank one).
@@ -71,7 +72,11 @@ pub struct Shape {
 impl Shape {
     /// The section as tall as its `items` want (no cap), at the top.
     pub fn new(items: &[Item]) -> Shape {
-        Shape { heights: items.iter().map(item_height).collect(), cap: u16::MAX, scroll: 0 }
+        Shape {
+            heights: items.iter().map(item_height).collect(),
+            cap: u16::MAX,
+            scroll: 0,
+        }
     }
 
     /// The same, at most `cap` rows tall.
@@ -86,7 +91,8 @@ impl Shape {
 
     /// The rows the section wants: the list (the items' heights, one row at least: the up-to-date row) and four more, at most the cap.
     pub fn height(&self) -> u16 {
-        let height = (self.heights.iter().sum::<usize>().max(1) + AROUND).min(usize::from(self.cap));
+        let height =
+            (self.heights.iter().sum::<usize>().max(1) + AROUND).min(usize::from(self.cap));
         u16::try_from(height).unwrap_or(u16::MAX)
     }
 
@@ -109,7 +115,11 @@ impl Shape {
     pub fn wheeled(&self, down: bool) -> usize {
         let max = self.max_scroll();
         let scroll = self.scroll.min(max);
-        if down { (scroll + WHEEL_ROWS).min(max) } else { scroll.saturating_sub(WHEEL_ROWS) }
+        if down {
+            (scroll + WHEEL_ROWS).min(max)
+        } else {
+            scroll.saturating_sub(WHEEL_ROWS)
+        }
     }
 
     /// The row `row` rows below the section's first: the header, or either row of an item; the blank row, the spare blank row, the
@@ -134,7 +144,8 @@ impl Shape {
 
 /// The age of an item opened at `opened_at` (§1.3's RFC 3339), at `now`; `?` when the stored time does not parse.
 fn age_of(opened_at: &str, now: OffsetDateTime) -> String {
-    OffsetDateTime::parse(opened_at, &Rfc3339).map_or_else(|_| "?".to_owned(), |t| age_text((now - t).whole_seconds()))
+    OffsetDateTime::parse(opened_at, &Rfc3339)
+        .map_or_else(|_| "?".to_owned(), |t| age_text((now - t).whole_seconds()))
 }
 
 /// What a click on an item does besides the link's.
@@ -151,19 +162,31 @@ pub enum Jump {
 /// The body of the `models-changed` dialog (commands.md §13.2): the announced ids of the change `at` of `provider`, the new
 /// ones under `New (<N>)` and the gone ones under `Gone (<M>)`, one id per line, a part with no ids omitted; when the file
 /// no longer has that change, it says so.
-pub fn models_body(home: &cpd_core::home::CpdHome, provider: &str, at: &str) -> Result<String, cpd_core::error::CpdError> {
+pub fn models_body(
+    home: &cpd_core::home::CpdHome,
+    provider: &str,
+    at: &str,
+) -> Result<String, cpd_core::error::CpdError> {
     use cpd_core::inbox::models::announced;
     use cpd_core::models::Read;
-    let file = cpd_core::models::read_all(home)?.into_iter().find_map(|r| match r {
-        Read::Good(f) if f.provider == provider => Some(f),
-        _ => None,
-    });
+    let file = cpd_core::models::read_all(home)?
+        .into_iter()
+        .find_map(|r| match r {
+            Read::Good(f) if f.provider == provider => Some(f),
+            _ => None,
+        });
     let Some(changes) = file.and_then(|f| f.changes).filter(|c| c.at == at) else {
         return Ok("changed again; the item closes at the next tick".to_owned());
     };
     let (new, gone) = announced(provider, &changes);
-    let part = |name: &str, ids: &[String]| (!ids.is_empty()).then(|| format!("{name} ({})\n{}", ids.len(), ids.join("\n")));
-    Ok([part("New", &new), part("Gone", &gone)].into_iter().flatten().collect::<Vec<_>>().join("\n\n"))
+    let part = |name: &str, ids: &[String]| {
+        (!ids.is_empty()).then(|| format!("{name} ({})\n{}", ids.len(), ids.join("\n")))
+    };
+    Ok([part("New", &new), part("Gone", &gone)]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n\n"))
 }
 
 /// One row of a curation checklist: the record, its full text and the detail after the dash.
@@ -183,7 +206,11 @@ pub struct Checklist {
 
 /// The checklist of `kind` for `context` from the reply of `cpd context curation` (commands.md §13.2): the pending
 /// `retire` or `docs` entries; `None` when none is pending (or the reply has none of the shape).
-pub fn checklist(kind: Kind, context: &cpd_core::ids::ContextId, reply: &serde_json::Value) -> Option<Checklist> {
+pub fn checklist(
+    kind: Kind,
+    context: &cpd_core::ids::ContextId,
+    reply: &serde_json::Value,
+) -> Option<Checklist> {
     let (key, title) = match kind {
         Kind::CurateRetire => ("retire", format!("Retire records of {context}")),
         Kind::CurateDocs => ("docs", format!("Documentation candidates of {context}")),
@@ -197,13 +224,29 @@ pub fn checklist(kind: Kind, context: &cpd_core::ids::ContextId, reply: &serde_j
             let detail = if key == "retire" {
                 format!("{} {}", text(e, "reason")?, text(e, "target")?)
             } else {
-                e["paths"].as_array()?.iter().filter_map(|p| p.as_str()).collect::<Vec<_>>().join(", ")
+                e["paths"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(|p| p.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             };
-            Some(Row { id: text(e, "record")?, text: text(e, "text")?, detail })
+            Some(Row {
+                id: text(e, "record")?,
+                text: text(e, "text")?,
+                detail,
+            })
         })
         .collect::<Option<Vec<_>>>()?;
-    let total = reply[format!("{key}_total")].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(rows.len());
-    let title = if total > rows.len() { format!("{title} ({} of {total})", rows.len()) } else { title };
+    let total = reply[format!("{key}_total")]
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(rows.len());
+    let title = if total > rows.len() {
+        format!("{title} ({} of {total})", rows.len())
+    } else {
+        title
+    };
     (!rows.is_empty()).then_some(Checklist { title, rows })
 }
 
@@ -212,13 +255,31 @@ const CURATION_LIMIT: usize = 10;
 
 /// The `cpd` arguments of the curation request: at most [`CURATION_LIMIT`] entries of each list.
 pub fn curation_argv(context: &cpd_core::ids::ContextId) -> Vec<String> {
-    vec!["context".into(), "curation".into(), format!("--context={context}"), format!("--limit={CURATION_LIMIT}")]
+    vec![
+        "context".into(),
+        "curation".into(),
+        format!("--context={context}"),
+        format!("--limit={CURATION_LIMIT}"),
+    ]
 }
 
 /// The `cpd` arguments an approved checklist runs (commands.md §13.2); a flag with no ids is left out.
-pub fn approved(kind: Kind, context: &cpd_core::ids::ContextId, ticked: &[String], unticked: &[String]) -> Vec<String> {
-    let (verb, yes, no) = if kind == Kind::CurateDocs { ("docs", "send", "dismiss") } else { ("retire", "approve", "reject") };
-    let mut argv = vec!["context".to_owned(), verb.to_owned(), format!("--context={context}")];
+pub fn approved(
+    kind: Kind,
+    context: &cpd_core::ids::ContextId,
+    ticked: &[String],
+    unticked: &[String],
+) -> Vec<String> {
+    let (verb, yes, no) = if kind == Kind::CurateDocs {
+        ("docs", "send", "dismiss")
+    } else {
+        ("retire", "approve", "reject")
+    };
+    let mut argv = vec![
+        "context".to_owned(),
+        verb.to_owned(),
+        format!("--context={context}"),
+    ];
     for (flag, ids) in [(yes, ticked), (no, unticked)] {
         if !ids.is_empty() {
             argv.push(format!("--{flag}={}", ids.join(",")));
@@ -236,37 +297,53 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
         .flat_map(|p| &p.sessions)
         .find(|s| &s.id == id)
         .is_some_and(|s| s.is_archived());
-    if archived { Action::History(id.clone()) } else { Action::Open(id.clone()) }
+    if archived {
+        Action::History(id.clone())
+    } else {
+        Action::Open(id.clone())
+    }
 }
 
 /// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts, but a row of the old `engine-error` or `job-stuck` kind (hs-d314, hs-d318) or the terminator `╰󰬪` (hs-d574). `engine-down`
 /// starts the engine; `pr-ready` has none (the label is a link; Merge is in its menu); `plan-review` opens the Lead of its Plan; the `url` is copied for `review-requested` (a click on the label of a link kind opens its page instead, see [`Link`]). `None` only for an item without what its jump needs.
 pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     match item.kind {
-        Kind::Dialog | Kind::Unread => item.session.as_ref().map(|s| Jump::Run(open_or_history(tree, s))),
+        Kind::Dialog | Kind::Unread => item
+            .session
+            .as_ref()
+            .map(|s| Jump::Run(open_or_history(tree, s))),
         // no click: the engine's errors, the stuck Jobs and PR check/review state reach no Inbox (hs-d314, hs-d318, hs-d470); only a row an older engine opened remains
         Kind::EngineError | Kind::JobStuck | Kind::PrFailing | Kind::PrChanges => None,
         Kind::EngineDown => Some(Jump::Run(Action::EnsureWatch)),
-        Kind::Question => item.context.as_ref().map(|c| Jump::Run(Action::OpenManager(c.clone()))),
+        Kind::Question => item
+            .context
+            .as_ref()
+            .map(|c| Jump::Run(Action::OpenManager(c.clone()))),
         Kind::PlanReview => {
             // a plan-review has no url (hs-d739): the Lead of its Plan opens
             open_lead(tree, item.plan.as_ref()?).map(Jump::Run)
         }
-        Kind::CurateRetire | Kind::CurateDocs => item.context.as_ref().map(|c| Jump::Curate(item.kind, c.clone())),
+        Kind::CurateRetire | Kind::CurateDocs => item
+            .context
+            .as_ref()
+            .map(|c| Jump::Curate(item.kind, c.clone())),
         // one background `session resume`: the pane does not open; a refusal is the failure dialog
-        Kind::LoopGuard => item.session.as_ref().map(|s| Jump::Run(Action::SessionResume(s.clone()))),
-        Kind::ModelsChanged => {
-            cpd_core::inbox::models::parse_subject(&item.subject).map(|(p, at)| Jump::Models(p.to_owned(), at.to_owned()))
-        }
+        Kind::LoopGuard => item
+            .session
+            .as_ref()
+            .map(|s| Jump::Run(Action::SessionResume(s.clone()))),
+        Kind::ModelsChanged => cpd_core::inbox::models::parse_subject(&item.subject)
+            .map(|(p, at)| Jump::Models(p.to_owned(), at.to_owned())),
         // a deploy item has no jump; its label is a Link to the run's page (pro-d100)
         Kind::Deploy => None,
         // hs-d731: the Lead of the Plan opens, as for a `plan-review` with no url
         Kind::DraftsParked => open_lead(tree, item.plan.as_ref()?).map(Jump::Run),
         // the label is a Link to the pull request; a click on the rest of the row opens the owning Plan's Lead (pro-d130)
         Kind::PrReady | Kind::PrClosed => open_lead(tree, item.plan.as_ref()?).map(Jump::Run),
-        Kind::ReviewRequested => {
-            item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))
-        }
+        Kind::ReviewRequested => item
+            .url
+            .as_ref()
+            .map(|url| Jump::Run(Action::CopyUrl(url.clone()))),
     }
 }
 
@@ -274,8 +351,14 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
 /// chat slot is dropped.
 pub fn click(tree: &Tree, item: &Item) -> Option<Jump> {
     let in_focus = |action: &Action| {
-        let Action::Open(id) = action else { return false };
-        tree.contexts.iter().flat_map(|c| &c.plans).flat_map(|p| &p.sessions).any(|s| &s.id == id && s.is_active())
+        let Action::Open(id) = action else {
+            return false;
+        };
+        tree.contexts
+            .iter()
+            .flat_map(|c| &c.plans)
+            .flat_map(|p| &p.sessions)
+            .any(|s| &s.id == id && s.is_active())
     };
     match jump(tree, item)? {
         Jump::Run(action) if in_focus(&action) => None,
@@ -297,7 +380,12 @@ pub enum Choice {
 impl Choice {
     /// The entries of the menu of a row of `kind`, in order: `Approve` first on `deploy` rows only, `Claim` first on `review-requested` rows only.
     pub fn entries(kind: Kind) -> Vec<Choice> {
-        let rest = [Choice::Snooze15, Choice::Snooze1h, Choice::SnoozeTomorrow, Choice::Dismiss];
+        let rest = [
+            Choice::Snooze15,
+            Choice::Snooze1h,
+            Choice::SnoozeTomorrow,
+            Choice::Dismiss,
+        ];
         let first = match kind {
             Kind::Deploy => Some(Choice::Approve),
             Kind::ReviewRequested => Some(Choice::Claim),
@@ -362,7 +450,11 @@ impl Entry {
         }
         if item.kind == Kind::PrReady {
             match Status::of_item(item) {
-                Some(Status::ReadyToMerge) => entries.push(if merging { Entry::Merging } else { Entry::Merge }),
+                Some(Status::ReadyToMerge) => entries.push(if merging {
+                    Entry::Merging
+                } else {
+                    Entry::Merge
+                }),
                 Some(Status::ReadyForReview) if item.plan.is_some() => entries.push(Entry::Post),
                 _ => {}
             }
@@ -396,13 +488,20 @@ impl crate::menu::Entry for Entry {
 
 /// `session open` of the Lead of Plan `plan` (`session history` if archived); none for a Plan the tree does not have.
 fn open_lead(tree: &Tree, plan: &PlanId) -> Option<Action> {
-    let plan = tree.contexts.iter().flat_map(|c| &c.plans).find(|p| &p.head.id == plan)?;
+    let plan = tree
+        .contexts
+        .iter()
+        .flat_map(|c| &c.plans)
+        .find(|p| &p.head.id == plan)?;
     Some(open_or_history(tree, &plan.head.lead_session))
 }
 
 /// The kinds whose label is a `Link` to the item's `url`.
 fn is_link(kind: Kind) -> bool {
-    matches!(kind, Kind::PlanReview | Kind::PrReady | Kind::PrClosed | Kind::ReviewRequested | Kind::Deploy)
+    matches!(
+        kind,
+        Kind::PlanReview | Kind::PrReady | Kind::PrClosed | Kind::ReviewRequested | Kind::Deploy
+    )
 }
 
 /// A label's two rows: the text before its one `\n`, and the subtitle after it (empty for a one-row label).
@@ -419,8 +518,16 @@ fn item_line(item: &Item, age: &str, width: usize, spin: Option<usize>) -> (Line
     let room = width.saturating_sub(LEAD_WIDTH + 1 + cells::width(age));
     let head = rows_of(&item.label).0;
     let linked = link_url(item).is_some();
-    let label = if linked { String::new() } else { truncate(head, room) };
-    let label_width = if linked { (cells::width(head) + 2).min(room) } else { cells::width(&label) };
+    let label = if linked {
+        String::new()
+    } else {
+        truncate(head, room)
+    };
+    let label_width = if linked {
+        (cells::width(head) + 2).min(room)
+    } else {
+        cells::width(&label)
+    };
     let gap = width.saturating_sub(LEAD_WIDTH + label_width + cells::width(age));
     let mut glyph = palette::item_span(item.kind, item.urgency);
     if let Some(frame) = spin {
@@ -448,7 +555,14 @@ fn link_url(item: &Item) -> Option<&str> {
 /// bottom): `items` are the snapshot's visible open items, `now` the clock the ages are taken from, `shape` is the section's, as
 /// capped and scrolled. `spinning` says, of an item whose merge runs, the frame of the spinner its glyph cell shows instead of its
 /// tier glyph (hs-d495).
-pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: &Shape, now: OffsetDateTime, spinning: &dyn Fn(&Item) -> Option<usize>) -> Links {
+pub fn draw(
+    f: &mut Frame,
+    area: Rect,
+    items: &[Item],
+    shape: &Shape,
+    now: OffsetDateTime,
+    spinning: &dyn Fn(&Item) -> Option<usize>,
+) -> Links {
     let mut drawn = Links::default();
     let width = usize::from(area.width);
     let inner = width.saturating_sub(2);
@@ -457,33 +571,55 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: &Shape, now: Offse
     let buf = f.buffer_mut();
     // a line `row` rows below the section's first, `skip` columns in: rows below the area are cut
     let put = |buf: &mut Buffer, row: usize, skip: u16, line: Line<'static>| {
-        let y = area.y.saturating_add(u16::try_from(row).unwrap_or(u16::MAX));
+        let y = area
+            .y
+            .saturating_add(u16::try_from(row).unwrap_or(u16::MAX));
         if y < area.bottom() && skip < area.width {
             line.render(Rect::new(area.x + skip, y, area.width - skip, 1), buf);
         }
     };
-    put(buf, 1, 0, section::flush_title("Inbox", Some(items.len()), width));
+    put(
+        buf,
+        1,
+        0,
+        section::flush_title("Inbox", Some(items.len()), width),
+    );
     if win.cue_above {
         put(buf, 2, 1, cue(Cue::Above, win.first, inner));
     }
     if items.is_empty() {
-        put(buf, TOP, 1, Line::styled("up to date, drink some water", palette::muted_text()));
+        put(
+            buf,
+            TOP,
+            1,
+            Line::styled("up to date, drink some water", palette::muted_text()),
+        );
     }
     let mut row = TOP;
     for item in &items[win.first..win.first + win.shown] {
         let (head, sub) = rows_of(&item.label);
-        let (line, label_width) = item_line(item, &age_of(&item.opened_at, now), inner, spinning(item));
+        let (line, label_width) =
+            item_line(item, &age_of(&item.opened_at, now), inner, spinning(item));
         put(buf, row, 1, line);
         if !sub.is_empty() {
             let mut spans = vec![" ".repeat(LEAD_WIDTH).into()];
-            spans.extend(phi::spans(&truncate(sub, inner.saturating_sub(LEAD_WIDTH)), palette::muted_text()));
+            spans.extend(phi::spans(
+                &truncate(sub, inner.saturating_sub(LEAD_WIDTH)),
+                palette::muted_text(),
+            ));
             put(buf, row + 1, 1, Line::from(spans));
         }
-        let y = area.y.saturating_add(u16::try_from(row).unwrap_or(u16::MAX));
+        let y = area
+            .y
+            .saturating_add(u16::try_from(row).unwrap_or(u16::MAX));
         row += item_height(item);
         if let Some(url) = link_url(item).filter(|_| y < area.bottom()) {
             let text = Line::from(phi::spans(head, palette::clickable_text()));
-            drawn.draw(Link::new(url).text(text), Rect::new(area.x + 1 + LEAD_WIDTH as u16, y, label_width as u16, 1), buf);
+            drawn.draw(
+                Link::new(url).text(text),
+                Rect::new(area.x + 1 + LEAD_WIDTH as u16, y, label_width as u16, 1),
+                buf,
+            );
         }
     }
     if win.below > 0 {
@@ -494,7 +630,13 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: &Shape, now: Offse
 
 /// An open item for the tests: `kind` and `urgency`, its `label`, opened at `opened_at`; the rest is none.
 #[cfg(test)]
-pub(crate) fn item(id: i64, kind: Kind, urgency: cpd_core::inbox::model::Urgency, label: &str, opened_at: &str) -> Item {
+pub(crate) fn item(
+    id: i64,
+    kind: Kind,
+    urgency: cpd_core::inbox::model::Urgency,
+    label: &str,
+    opened_at: &str,
+) -> Item {
     Item {
         id,
         kind,
@@ -520,8 +662,8 @@ pub(crate) fn item(id: i64, kind: Kind, urgency: cpd_core::inbox::model::Urgency
 mod tests {
     use crate::palette::Meaning;
 
-    use crate::tree::fixture::{archived, sample};
     use super::*;
+    use crate::tree::fixture::{archived, sample};
     use cpd_core::ids::{ContextId, JobKey, PlanId};
     use cpd_core::inbox::model::Urgency;
 
@@ -560,11 +702,32 @@ mod tests {
             plan(item);
             item.job = Some(JobKey::parse("c").unwrap());
         };
-        assert_eq!(jump(&tree, &with(Kind::JobStuck, &job)), None, "job-stuck: no click, a stuck Job goes to the Manager (hs-d318)");
-        assert_eq!(jump(&tree, &with(Kind::JobStuck, &plan)), None, "not even with no Job: the Lead of the item's Plan stays closed");
-        assert_eq!(jump(&tree, &with(Kind::EngineError, &|_| {})), None, "engine-error: no click (hs-d314)");
-        assert_eq!(jump(&tree, &with(Kind::EngineDown, &|_| {})), Some(Jump::Run(Action::EnsureWatch)), "engine-down starts the engine");
-        assert_eq!(jump(&tree, &with(Kind::Question, &context)), Some(Jump::Run(Action::OpenManager(ContextId::parse("alpha").unwrap()))));
+        assert_eq!(
+            jump(&tree, &with(Kind::JobStuck, &job)),
+            None,
+            "job-stuck: no click, a stuck Job goes to the Manager (hs-d318)"
+        );
+        assert_eq!(
+            jump(&tree, &with(Kind::JobStuck, &plan)),
+            None,
+            "not even with no Job: the Lead of the item's Plan stays closed"
+        );
+        assert_eq!(
+            jump(&tree, &with(Kind::EngineError, &|_| {})),
+            None,
+            "engine-error: no click (hs-d314)"
+        );
+        assert_eq!(
+            jump(&tree, &with(Kind::EngineDown, &|_| {})),
+            Some(Jump::Run(Action::EnsureWatch)),
+            "engine-down starts the engine"
+        );
+        assert_eq!(
+            jump(&tree, &with(Kind::Question, &context)),
+            Some(Jump::Run(Action::OpenManager(
+                ContextId::parse("alpha").unwrap()
+            )))
+        );
         let url = |item: &mut Item| item.url = Some("https://example.com".into());
         let owned = |item: &mut Item| {
             plan(item);
@@ -581,9 +744,14 @@ mod tests {
             Some(Jump::Run(Action::Open(sid("l-ship")))),
             "no port file: the Lead opens and nothing else happens"
         );
-        let ready = |subject: &'static str| move |item: &mut Item| item.subject = subject.to_owned();
+        let ready =
+            |subject: &'static str| move |item: &mut Item| item.subject = subject.to_owned();
         for subject in ["pr:acme/api#3", "acme/api#3", "pr:", "session:l-ship"] {
-            assert_eq!(jump(&tree, &with(Kind::PrReady, &ready(subject))), None, "{subject:?}: an unowned row: a click on the rest of it does nothing (pro-d130)");
+            assert_eq!(
+                jump(&tree, &with(Kind::PrReady, &ready(subject))),
+                None,
+                "{subject:?}: an unowned row: a click on the rest of it does nothing (pro-d130)"
+            );
         }
         assert_eq!(
             jump(&tree, &with(Kind::PrReady, &owned)),
@@ -591,19 +759,38 @@ mod tests {
             "a Plan's pull request: a click outside the link opens its Lead (pro-d130)"
         );
         for kind in [Kind::PrFailing, Kind::PrChanges] {
-            assert_eq!(jump(&tree, &with(kind, &owned)), None, "{kind:?} (an old row, hs-d470): no click, a Plan's or not");
-            assert_eq!(jump(&tree, &with(kind, &url)), None, "{kind:?} (an old row, hs-d470): no url copy");
+            assert_eq!(
+                jump(&tree, &with(kind, &owned)),
+                None,
+                "{kind:?} (an old row, hs-d470): no click, a Plan's or not"
+            );
+            assert_eq!(
+                jump(&tree, &with(kind, &url)),
+                None,
+                "{kind:?} (an old row, hs-d470): no url copy"
+            );
         }
         assert_eq!(jump(&tree, &with(Kind::ReviewRequested, &url)), copy);
-        assert_eq!(jump(&tree, &with(Kind::ReviewRequested, &owned)), copy, "a review request is never a Plan's");
-        assert_eq!(jump(&tree, &with(Kind::ReviewRequested, &|_| {})), None, "a link without a url has nothing to copy");
+        assert_eq!(
+            jump(&tree, &with(Kind::ReviewRequested, &owned)),
+            copy,
+            "a review request is never a Plan's"
+        );
+        assert_eq!(
+            jump(&tree, &with(Kind::ReviewRequested, &|_| {})),
+            None,
+            "a link without a url has nothing to copy"
+        );
         assert_eq!(jump(&tree, &with(Kind::PlanReview, &|_| {})), None);
         // an item without what its jump needs jumps nowhere
         assert_eq!(jump(&tree, &with(Kind::Dialog, &|_| {})), None);
         assert_eq!(jump(&tree, &with(Kind::Question, &|_| {})), None);
         // an archived Session shows its history, as a click on its tree row
         assert_eq!(
-            jump(&archived(), &with(Kind::Unread, &|i| i.session = Some(sid("f-blocked")))),
+            jump(
+                &archived(),
+                &with(Kind::Unread, &|i| i.session = Some(sid("f-blocked")))
+            ),
             Some(Jump::Run(Action::History(sid("f-blocked"))))
         );
     }
@@ -613,14 +800,36 @@ mod tests {
     #[test]
     fn a_plan_review_opens_the_lead_and_copies_nothing() {
         let tree = sample();
-        let mut review = item(1, Kind::PlanReview, Urgency::Magenta, "ship plan review", OPENED);
+        let mut review = item(
+            1,
+            Kind::PlanReview,
+            Urgency::Magenta,
+            "ship plan review",
+            OPENED,
+        );
         review.plan = Some(PlanId::parse("ship").unwrap());
-        assert_eq!(jump(&tree, &review), Some(Jump::Run(Action::Open(sid("l-ship")))));
+        assert_eq!(
+            jump(&tree, &review),
+            Some(Jump::Run(Action::Open(sid("l-ship"))))
+        );
     }
 
-    fn curate_click(kind: Kind, label: &str, reply: serde_json::Value, title: &str, rows: [(&str, &str, &str); 2], command: [&str; 5]) {
+    fn curate_click(
+        kind: Kind,
+        label: &str,
+        reply: serde_json::Value,
+        title: &str,
+        rows: [(&str, &str, &str); 2],
+        command: [&str; 5],
+    ) {
         let alpha = ContextId::parse("alpha").unwrap();
-        assert_eq!(curation_argv(&alpha), ["context", "curation", "--context=alpha", "--limit=10"].map(String::from).to_vec(), "asks for at most ten entries");
+        assert_eq!(
+            curation_argv(&alpha),
+            ["context", "curation", "--context=alpha", "--limit=10"]
+                .map(String::from)
+                .to_vec(),
+            "asks for at most ten entries"
+        );
         let tree = sample();
         let alpha = ContextId::parse("alpha").unwrap();
         let mut it = item(5, kind, Urgency::Magenta, label, OPENED);
@@ -629,11 +838,21 @@ mod tests {
         assert_eq!(jump(&tree, &it), Some(Jump::Curate(kind, alpha.clone())));
         let list = checklist(kind, &alpha, &reply).expect("something is pending");
         assert_eq!(list.title, title);
-        let want: Vec<Row> = rows.iter().map(|(id, text, detail)| Row { id: (*id).into(), text: (*text).into(), detail: (*detail).into() }).collect();
+        let want: Vec<Row> = rows
+            .iter()
+            .map(|(id, text, detail)| Row {
+                id: (*id).into(),
+                text: (*text).into(),
+                detail: (*detail).into(),
+            })
+            .collect();
         assert_eq!(list.rows, want);
         let ticked = vec!["r-1".to_owned()];
         let unticked = vec!["r-2".to_owned()];
-        assert_eq!(approved(kind, &alpha, &ticked, &unticked), command.map(String::from).to_vec());
+        assert_eq!(
+            approved(kind, &alpha, &ticked, &unticked),
+            command.map(String::from).to_vec()
+        );
         // a flag with no ids is left out
         let only = approved(kind, &alpha, &ticked, &[]);
         assert_eq!(only.len(), 4, "{only:?}");
@@ -648,8 +867,17 @@ mod tests {
                 {"record": "r-1", "kind": "decision", "text": "use sqlite is the full text", "reason": "duplicate", "target": "r-0"},
                 {"record": "r-2", "kind": "note", "text": "old plan is the full text", "reason": "superseded", "target": "r-9"}]}),
             "Retire records of alpha",
-            [("r-1", "use sqlite is the full text", "duplicate r-0"), ("r-2", "old plan is the full text", "superseded r-9")],
-            ["context", "retire", "--context=alpha", "--approve=r-1", "--reject=r-2"],
+            [
+                ("r-1", "use sqlite is the full text", "duplicate r-0"),
+                ("r-2", "old plan is the full text", "superseded r-9"),
+            ],
+            [
+                "context",
+                "retire",
+                "--context=alpha",
+                "--approve=r-1",
+                "--reject=r-2",
+            ],
         );
     }
 
@@ -662,8 +890,17 @@ mod tests {
                 {"record": "r-1", "kind": "decision", "text": "use sqlite is the full text", "paths": ["docs/a.md", "README.md"]},
                 {"record": "r-2", "kind": "note", "text": "old plan is the full text", "paths": ["docs/b.md"]}]}),
             "Documentation candidates of alpha",
-            [("r-1", "use sqlite is the full text", "docs/a.md, README.md"), ("r-2", "old plan is the full text", "docs/b.md")],
-            ["context", "docs", "--context=alpha", "--send=r-1", "--dismiss=r-2"],
+            [
+                ("r-1", "use sqlite is the full text", "docs/a.md, README.md"),
+                ("r-2", "old plan is the full text", "docs/b.md"),
+            ],
+            [
+                "context",
+                "docs",
+                "--context=alpha",
+                "--send=r-1",
+                "--dismiss=r-2",
+            ],
         );
     }
 
@@ -679,39 +916,79 @@ mod tests {
                 .collect()
         };
         let retire = serde_json::json!({"ok": true, "context": "alpha", "docs": [], "retire": entries(10, "retire"), "retire_total": 56, "docs_total": 0});
-        assert_eq!(checklist(Kind::CurateRetire, &alpha, &retire).unwrap().title, "Retire records of alpha (10 of 56)");
+        assert_eq!(
+            checklist(Kind::CurateRetire, &alpha, &retire)
+                .unwrap()
+                .title,
+            "Retire records of alpha (10 of 56)"
+        );
         let docs = serde_json::json!({"ok": true, "context": "alpha", "retire": [], "docs": entries(10, "docs"), "docs_total": 11, "retire_total": 0});
-        assert_eq!(checklist(Kind::CurateDocs, &alpha, &docs).unwrap().title, "Documentation candidates of alpha (10 of 11)");
+        assert_eq!(
+            checklist(Kind::CurateDocs, &alpha, &docs).unwrap().title,
+            "Documentation candidates of alpha (10 of 11)"
+        );
         let all = serde_json::json!({"ok": true, "context": "alpha", "docs": [], "retire": entries(3, "retire"), "retire_total": 3, "docs_total": 0});
-        assert_eq!(checklist(Kind::CurateRetire, &alpha, &all).unwrap().title, "Retire records of alpha", "no suffix when all are shown");
+        assert_eq!(
+            checklist(Kind::CurateRetire, &alpha, &all).unwrap().title,
+            "Retire records of alpha",
+            "no suffix when all are shown"
+        );
     }
 
     #[test]
     fn a_curate_click_asks_cpd_for_at_most_ten_entries() {
         let alpha = ContextId::parse("alpha").unwrap();
-        assert_eq!(curation_argv(&alpha), ["context", "curation", "--context=alpha", "--limit=10"].map(String::from).to_vec());
+        assert_eq!(
+            curation_argv(&alpha),
+            ["context", "curation", "--context=alpha", "--limit=10"]
+                .map(String::from)
+                .to_vec()
+        );
     }
 
     #[test]
     fn a_loop_guard_item_click_runs_session_resume_in_the_background() {
         let tree = sample();
-        let mut guard = item(1, Kind::LoopGuard, Urgency::Red, "m-alpha: loop guard tripped", OPENED);
+        let mut guard = item(
+            1,
+            Kind::LoopGuard,
+            Urgency::Red,
+            "m-alpha: loop guard tripped",
+            OPENED,
+        );
         assert_eq!(jump(&tree, &guard), None, "no Session: nowhere to go");
         guard.session = Some(sid("m-alpha"));
         // one command, no dialog and no `session open`: the Session's pane does not open
         let resume = Action::SessionResume(sid("m-alpha"));
         assert_eq!(jump(&tree, &guard), Some(Jump::Run(resume.clone())));
-        assert_eq!(resume.argv(), ["session", "resume", "m-alpha"].map(String::from).to_vec());
+        assert_eq!(
+            resume.argv(),
+            ["session", "resume", "m-alpha"].map(String::from).to_vec()
+        );
         // an archived Session is resumed too: it is never opened
         guard.session = Some(sid("f-blocked"));
-        assert_eq!(jump(&archived(), &guard), Some(Jump::Run(Action::SessionResume(sid("f-blocked")))));
+        assert_eq!(
+            jump(&archived(), &guard),
+            Some(Jump::Run(Action::SessionResume(sid("f-blocked"))))
+        );
     }
 
     /// The glyph span of the row `item_line` draws for `item`.
     fn glyph_of(item: &Item) -> (String, Option<ratatui::style::Color>) {
         let (line, _) = item_line(item, "3m", 41, None);
-        let glyphs = ["\u{F06F1}", "\u{F0653}", "\u{F116E}", "\u{F173A}", "\u{F0362}", "\u{F069A}", "\u{F0366}"];
-        let span = line.spans.iter().find(|s| glyphs.contains(&s.content.as_ref()));
+        let glyphs = [
+            "\u{F06F1}",
+            "\u{F0653}",
+            "\u{F116E}",
+            "\u{F173A}",
+            "\u{F0362}",
+            "\u{F069A}",
+            "\u{F0366}",
+        ];
+        let span = line
+            .spans
+            .iter()
+            .find(|s| glyphs.contains(&s.content.as_ref()));
         match span {
             Some(s) => (s.content.to_string(), s.style.fg),
             None => panic!("no glyph in {line:?}"),
@@ -719,16 +996,34 @@ mod tests {
     }
 
     #[test]
-    fn a_curate_item_draws_its_own_glyph_in_the_cyan_colour_and_another_cyan_item_the_generic_one() {
+    fn a_curate_item_draws_its_own_glyph_in_the_cyan_colour_and_another_cyan_item_the_generic_one()
+    {
         let cyan = Some(palette::color_clickable(Meaning::Notice));
         let row = |kind| glyph_of(&item(1, kind, Urgency::Cyan, "alpha: 2", OPENED));
-        assert_eq!(row(Kind::CurateDocs), ("\u{F0653}".to_owned(), cyan), "a documentation candidate");
-        assert_eq!(row(Kind::CurateRetire), ("\u{F116E}".to_owned(), cyan), "a record to retire");
-        assert_eq!(row(Kind::Unread), ("\u{F06F1}".to_owned(), cyan), "the generic system item is the cyan tier's");
+        assert_eq!(
+            row(Kind::CurateDocs),
+            ("\u{F0653}".to_owned(), cyan),
+            "a documentation candidate"
+        );
+        assert_eq!(
+            row(Kind::CurateRetire),
+            ("\u{F116E}".to_owned(), cyan),
+            "a record to retire"
+        );
+        assert_eq!(
+            row(Kind::Unread),
+            ("\u{F06F1}".to_owned(), cyan),
+            "the generic system item is the cyan tier's"
+        );
         // the other tiers: magenta is back to U+F173A
         let tier = |u| glyph_of(&item(1, Kind::PlanReview, u, "x", OPENED)).0;
         assert_eq!(
-            [tier(Urgency::Red), tier(Urgency::Yellow), tier(Urgency::Magenta), tier(Urgency::White)],
+            [
+                tier(Urgency::Red),
+                tier(Urgency::Yellow),
+                tier(Urgency::Magenta),
+                tier(Urgency::White)
+            ],
             ["\u{F0362}", "\u{F069A}", "\u{F173A}", "\u{F0366}"]
         );
     }

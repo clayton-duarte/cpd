@@ -15,7 +15,12 @@ use crate::plan::{self, PlanRow, PrRow, Pull};
 impl PrRow {
     /// The PR's Lead worktree: set from the status `dispatch` on (`prs` CHECK).
     pub fn lead(&self, plan: &PlanId) -> Result<&PathBuf, CpdError> {
-        self.lead_worktree.as_ref().ok_or_else(|| CpdError::bad_row(format!("PR {} of Plan {plan} has no Lead worktree", self.key)))
+        self.lead_worktree.as_ref().ok_or_else(|| {
+            CpdError::bad_row(format!(
+                "PR {} of Plan {plan} has no Lead worktree",
+                self.key
+            ))
+        })
     }
 
     /// `{key, status, pr: {number, url, opened_at}}`, as the commands print the PR.
@@ -27,7 +32,10 @@ impl PrRow {
     pub fn refuse(&self, plan: &PlanId, command: &str, needs: &str) -> CpdError {
         CpdError::new(
             ErrorCode::IllegalTransition,
-            format!("PR {} of Plan {plan} is {}: {command} needs status {needs}.", self.key, self.status),
+            format!(
+                "PR {} of Plan {plan} is {}: {command} needs status {needs}.",
+                self.key, self.status
+            ),
         )
         .with("plan", plan.as_str())
         .with("pr", self.key.as_str())
@@ -63,5 +71,8 @@ impl PlanPrs {
 
 /// The Plan `id` with its PRs, else `plan_not_found`.
 pub(super) fn load(conn: &Connection, id: &PlanId) -> Result<PlanPrs, CpdError> {
-    Ok(PlanPrs { plan: plan::row::load(conn, id)?, prs: load_prs(conn, id)? })
+    Ok(PlanPrs {
+        plan: plan::row::load(conn, id)?,
+        prs: load_prs(conn, id)?,
+    })
 }

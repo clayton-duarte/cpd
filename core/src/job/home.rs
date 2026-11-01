@@ -16,7 +16,11 @@ impl JobHome {
         match pr {
             None => Ok(JobHome::Plan),
             Some(v) => PrKey::parse(v).map(JobHome::Pr).map_err(|_| {
-                CpdError::new(ErrorCode::StoreFailed, format!("The store holds an invalid {what}: {v:?}.")).with("value", v)
+                CpdError::new(
+                    ErrorCode::StoreFailed,
+                    format!("The store holds an invalid {what}: {v:?}."),
+                )
+                .with("value", v)
             }),
         }
     }

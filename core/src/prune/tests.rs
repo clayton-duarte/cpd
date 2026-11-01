@@ -59,17 +59,32 @@ impl Fixture {
         repo.push();
 
         let home = CpdHome::resolve(Some(root.join("cpd").into_os_string()), None).unwrap();
-        Fixture { tmp, fakes, universe, route, home, repo, origin, worktrees: 0 }
+        Fixture {
+            tmp,
+            fakes,
+            universe,
+            route,
+            home,
+            repo,
+            origin,
+            worktrees: 0,
+        }
     }
 
     /// `gh pr list` answers `json` (exit 0).
     pub(super) fn merged_prs(&self, json: &str) {
-        let _ = (*self.fakes.runner).clone().on("gh", |c| c.args.starts_with(&["pr".to_owned(), "list".to_owned()]), Reply::ok(json));
+        let _ = (*self.fakes.runner).clone().on(
+            "gh",
+            |c| c.args.starts_with(&["pr".to_owned(), "list".to_owned()]),
+            Reply::ok(json),
+        );
     }
 
     /// Every `gh` call fails with `stderr`.
     fn gh_fails(&self, stderr: &str) {
-        let _ = (*self.fakes.runner).clone().on("gh", |_| true, Reply::exit(1, "", stderr));
+        let _ = (*self.fakes.runner)
+            .clone()
+            .on("gh", |_| true, Reply::exit(1, "", stderr));
     }
 
     /// The store of the home with `sql` run on it.
@@ -87,16 +102,48 @@ impl Fixture {
     pub(super) fn git(&self, dir: &Path, args: &[&str]) -> String {
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(dir).args(args);
-        let out = self.fakes.ports.runner.output(&mut cmd, "git", Duration::from_secs(60)).expect("the fake git answers");
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        let out = self
+            .fakes
+            .ports
+            .runner
+            .output(&mut cmd, "git", Duration::from_secs(60))
+            .expect("the fake git answers");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8(out.stdout).unwrap().trim().to_owned()
     }
 
     /// A worktree `wt-<dir>` of the repo on the new branch `branch` from `start`, with one commit in `file`.
-    pub(super) fn worktree(&mut self, dir: &str, branch: &str, start: &str, file: Option<&str>) -> PathBuf {
+    pub(super) fn worktree(
+        &mut self,
+        dir: &str,
+        branch: &str,
+        start: &str,
+        file: Option<&str>,
+    ) -> PathBuf {
         self.worktrees += 1;
-        let wt = self.tmp.path().canonicalize().unwrap().join(format!("wt-{dir}"));
-        self.git(self.repo.dir(), &["worktree", "add", "-q", "--no-track", "-b", branch, wt.to_str().unwrap(), start]);
+        let wt = self
+            .tmp
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join(format!("wt-{dir}"));
+        self.git(
+            self.repo.dir(),
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--no-track",
+                "-b",
+                branch,
+                wt.to_str().unwrap(),
+                start,
+            ],
+        );
         if let Some(file) = file {
             std::fs::write(wt.join(file), format!("{file}\n")).unwrap();
             self.git(&wt, &["add", "-A"]);
@@ -110,7 +157,11 @@ impl Fixture {
     }
 
     pub(super) fn prune(&self, flags: &[&str]) -> Outcome {
-        let mut args = Args { apply: false, drop: Vec::new(), repos: vec![self.repo.dir().to_path_buf()] };
+        let mut args = Args {
+            apply: false,
+            drop: Vec::new(),
+            repos: vec![self.repo.dir().to_path_buf()],
+        };
         let mut it = flags.iter();
         while let Some(flag) = it.next() {
             match *flag {
@@ -132,19 +183,31 @@ impl Fixture {
 
     /// The worktrees the Universe knows for the repo, the main one first.
     fn worktrees_listed(&self) -> Vec<PathBuf> {
-        self.universe.lock().unwrap().worktrees(self.repo.id()).into_iter().map(|w| w.path).collect()
+        self.universe
+            .lock()
+            .unwrap()
+            .worktrees(self.repo.id())
+            .into_iter()
+            .map(|w| w.path)
+            .collect()
     }
 
     /// The local branches of the repo.
     pub(super) fn branches(&self) -> BTreeSet<String> {
         let u = self.universe.lock().unwrap();
-        u.refs(self.repo.id(), "refs/heads/").into_iter().map(|(name, _)| name.trim_start_matches("refs/heads/").to_owned()).collect()
+        u.refs(self.repo.id(), "refs/heads/")
+            .into_iter()
+            .map(|(name, _)| name.trim_start_matches("refs/heads/").to_owned())
+            .collect()
     }
 
     /// The branches of `origin` and their commits.
     fn remote_branches(&self) -> Vec<String> {
         let u = self.universe.lock().unwrap();
-        u.refs(self.origin.id(), "refs/heads/").into_iter().map(|(name, oid)| format!("{name} {oid}")).collect()
+        u.refs(self.origin.id(), "refs/heads/")
+            .into_iter()
+            .map(|(name, oid)| format!("{name} {oid}"))
+            .collect()
     }
 
     fn removals_and_deletions(&self) -> Vec<Vec<String>> {
@@ -236,7 +299,10 @@ fn keeps_what_cpd_still_runs() {
     assert_eq!((out.exit, out.stderr.as_str()), (0, ""), "{}", out.stdout);
     assert!(lead.exists() && attempt.exists());
     assert!(!merged_lead.exists() && !merged_attempt.exists());
-    assert_eq!(fx.branches(), set(&["cpd/qq--j-a1", "cpd/qq/followups", "main"]));
+    assert_eq!(
+        fx.branches(),
+        set(&["cpd/qq--j-a1", "cpd/qq/followups", "main"])
+    );
 }
 
 #[test]
@@ -246,7 +312,9 @@ fn matches_a_legacy_lead_branch_renamed_locally() {
     let renamed = fx.worktree("renamed", "cpd/p/k", "main", Some("k.txt"));
     let head = fx.head(&renamed);
     let other = fx.worktree("other", "cpd/o/k", "main", Some("o.txt"));
-    fx.merged_prs(&format!(r#"[{{"number":1,"headRefName":"cpd/p","baseRefName":"main","headRefOid":"{head}"}}]"#));
+    fx.merged_prs(&format!(
+        r#"[{{"number":1,"headRefName":"cpd/p","baseRefName":"main","headRefOid":"{head}"}}]"#
+    ));
 
     let out = fx.run(true);
     assert_eq!((out.exit, out.stderr.as_str()), (0, ""), "{}", out.stdout);
@@ -285,7 +353,11 @@ fn drop_removes_clean_unmerged_worktrees_of_the_named_lead_branch() {
     // Without --drop all of them are kept.
     let out = fx.run(true);
     assert_eq!((out.exit, out.stderr.as_str()), (0, ""), "{}", out.stdout);
-    assert!(!out.stdout.lines().any(|l| l.starts_with("remove ")), "{}", out.stdout);
+    assert!(
+        !out.stdout.lines().any(|l| l.starts_with("remove ")),
+        "{}",
+        out.stdout
+    );
 
     let out = fx.prune(&["--drop", "cpd/old"]);
     assert_eq!((out.exit, out.stderr.as_str()), (0, ""), "{}", out.stdout);
@@ -317,8 +389,18 @@ fn a_failing_cpd_exits_2_and_removes_nothing() {
     assert!(ff.exists());
     assert_eq!(fx.worktrees_listed(), worktrees);
     assert_eq!(fx.branches(), branches);
-    assert!(fx.removals_and_deletions().is_empty(), "{:?}", fx.removals_and_deletions());
-    assert!(fx.fakes.runner.calls().iter().all(|c| !c.program.ends_with("gh")));
+    assert!(
+        fx.removals_and_deletions().is_empty(),
+        "{:?}",
+        fx.removals_and_deletions()
+    );
+    assert!(
+        fx.fakes
+            .runner
+            .calls()
+            .iter()
+            .all(|c| !c.program.ends_with("gh"))
+    );
 
     // The same when the database is not even a file.
     std::fs::remove_file(fx.home.db()).unwrap();

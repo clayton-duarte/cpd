@@ -34,28 +34,28 @@ pub mod auto_merge;
 mod cancel;
 pub mod closed;
 pub use cancel::{archived_with_drafts, cancel_archived_drafts};
-pub mod deploys;
 pub mod comments;
-pub mod jira_sync;
+pub mod deploys;
 mod describe;
 mod edit;
 mod feedback;
 mod gh;
+pub mod jira_sync;
 pub(crate) use gh::head_ref_oid;
 mod merge;
 pub mod merge_method;
-pub mod review;
 mod open;
 pub(crate) mod poll;
-pub mod posts;
-pub mod reactions;
 mod post;
 pub(crate) mod postable;
+pub mod posts;
 pub mod pulls;
 mod push;
-mod rerun;
-mod reply;
+pub mod reactions;
 pub(crate) mod rebase;
+mod reply;
+mod rerun;
+pub mod review;
 #[cfg(test)]
 pub(crate) use rebase::remote_contains_with;
 mod row;
@@ -73,14 +73,17 @@ use crate::git::hooks::{Detached, Log as HookLog};
 use crate::git::{self, HookOutcome, Operation, Setup};
 use crate::home::{CpdHome, Hook};
 use crate::ids::{ContextId, OwnerLogin, PlanId, PrKey, RepoName};
-use crate::policy::{Gate, Policy, PolicyKey, owner_unset, resolve};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::PrRow;
+use crate::policy::{Gate, Policy, PolicyKey, owner_unset, resolve};
 use row::PlanPrs;
 
 pub use gh::close_pr;
-pub use open::{Pulled, description_required, jira_required, jira_required_of, stored_description_of, base_check, is_merged_on_github, pull_request, record as record_pull, submit_checks};
+pub use open::{
+    Pulled, base_check, description_required, is_merged_on_github, jira_required, jira_required_of,
+    pull_request, record as record_pull, stored_description_of, submit_checks,
+};
 #[cfg(test)]
 pub(crate) use rebase::{in_progress_with, rebase_onto_with, unresolved_with};
 
@@ -160,7 +163,12 @@ pub struct AddArgs {
     #[arg(long, value_name = "branch")]
     base: Option<String>,
     /// PRs that must be merged before this one starts, comma-separated: a key of the Plan, or <plan>/<key> of another Plan of the Context
-    #[arg(long, value_name = "r1,r2", value_delimiter = ',', conflicts_with = "no_needs")]
+    #[arg(
+        long,
+        value_name = "r1,r2",
+        value_delimiter = ',',
+        conflicts_with = "no_needs"
+    )]
     needs: Vec<add::PrRef>,
     /// No needs, even on a reopened Plan (default there: every merged PR of the Plan)
     #[arg(long = "no-needs")]
@@ -193,7 +201,12 @@ pub struct EditArgs {
     #[arg(long, value_name = "branch")]
     base: Option<String>,
     /// The new needs, replacing the list, comma-separated: keys of the Plan or <plan>/<key>
-    #[arg(long, value_name = "r1,r2", value_delimiter = ',', conflicts_with = "no_needs")]
+    #[arg(
+        long,
+        value_name = "r1,r2",
+        value_delimiter = ',',
+        conflicts_with = "no_needs"
+    )]
     needs: Option<Vec<add::PrRef>>,
     /// Remove every need
     #[arg(long = "no-needs")]
@@ -276,15 +289,27 @@ fn pr_policy(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Policy, CpdErr
 /// [`pr_policy`] with the two kinds of failure apart: the outer error is the store's (it cannot be read, or holds
 /// a value that does not parse), the inner one the resolve's (`owner_unset`, `owner_unconfirmed`, `policy_invalid`),
 /// which a consumer of many rows (the poll) reports for its row and goes on.
-fn pr_policy_resolved(env: &mut Env, plan: &PlanId, key: &PrKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
+fn pr_policy_resolved(
+    env: &mut Env,
+    plan: &PlanId,
+    key: &PrKey,
+    resolve: ResolveFn,
+) -> Result<Result<Policy, CpdError>, CpdError> {
     let home = env.home.clone();
-    env.store.read(|conn| pr_policy_in(conn, &home, plan, key, resolve))
+    env.store
+        .read(|conn| pr_policy_in(conn, &home, plan, key, resolve))
 }
 
 type ResolveFn = fn(&CpdHome, &PolicyKey) -> Result<crate::policy::Resolved, CpdError>;
 
 /// [`pr_policy_resolved`] on a connection, for a consumer that has no [`Env`] (an Attempt's, the engine's).
-fn pr_policy_in(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &PrKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
+fn pr_policy_in(
+    conn: &rusqlite::Connection,
+    home: &CpdHome,
+    plan: &PlanId,
+    key: &PrKey,
+    resolve: ResolveFn,
+) -> Result<Result<Policy, CpdError>, CpdError> {
     let (context, owner, name): (String, Option<String>, Option<String>) = conn.query_row(
         "SELECT c.id, c.owner, r.name FROM prs r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context
           WHERE r.plan = ?1 AND r.key = ?2",
@@ -304,14 +329,29 @@ fn pr_policy_in(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key:
 
 /// The policy of PR `key` of `plan`, from a connection: what an Attempt-level consumer (the quick check, the
 /// Worker Spec) reads, through its Job's PR.
-pub fn policy_of_pr(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &PrKey) -> Result<Policy, CpdError> {
+pub fn policy_of_pr(
+    conn: &rusqlite::Connection,
+    home: &CpdHome,
+    plan: &PlanId,
+    key: &PrKey,
+) -> Result<Policy, CpdError> {
     pr_policy_in(conn, home, plan, key, resolve)?
 }
 
 /// [`policy_of_pr`] of the PR that holds Job `job` of `plan`.
-pub fn policy_of_job(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, job: &str) -> Result<Policy, CpdError> {
-    let pr: String = conn.query_row("SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job], |r| r.get(0))?;
-    let key = PrKey::parse(&pr).map_err(|_| CpdError::bad_row(format!("Job {job} has the PR key {pr:?}")))?;
+pub fn policy_of_job(
+    conn: &rusqlite::Connection,
+    home: &CpdHome,
+    plan: &PlanId,
+    job: &str,
+) -> Result<Policy, CpdError> {
+    let pr: String = conn.query_row(
+        "SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2",
+        [plan.as_str(), job],
+        |r| r.get(0),
+    )?;
+    let key = PrKey::parse(&pr)
+        .map_err(|_| CpdError::bad_row(format!("Job {job} has the PR key {pr:?}")))?;
     policy_of_pr(conn, home, plan, &key)
 }
 
@@ -324,14 +364,22 @@ fn illegal_phase(plan: &PlanPrs, command: &str, needs: &str) -> CpdError {
 /// and `pre-merge` of a repair's Gate. The contract's layout (§1.4) names these
 /// files; `CpdHome` has no method for them.
 fn pr_log(home: &CpdHome, plan: &PlanId, key: &PrKey, hook: Hook) -> PathBuf {
-    home.plan_dir(plan).join("logs").join(format!("pr-{key}.{}.log", hook.as_str()))
+    home.plan_dir(plan)
+        .join("logs")
+        .join(format!("pr-{key}.{}.log", hook.as_str()))
 }
 
 fn wrong_phase(plan: &PlanId, phase: Phase, command: &str, needs: &str) -> CpdError {
-    CpdError::new(ErrorCode::IllegalPhase, format!("Plan {plan} is in phase {}: {command} needs phase {needs}.", phase.as_str()))
-        .with("plan", plan.as_str())
-        .with("phase", phase.as_str())
-        .with("needs", needs)
+    CpdError::new(
+        ErrorCode::IllegalPhase,
+        format!(
+            "Plan {plan} is in phase {}: {command} needs phase {needs}.",
+            phase.as_str()
+        ),
+    )
+    .with("plan", plan.as_str())
+    .with("phase", phase.as_str())
+    .with("needs", needs)
 }
 
 /// `pr_locked` (exit 3): the Plan is past the phases where its PRs change (§3.8).
@@ -348,7 +396,11 @@ fn pr_locked(plan: &PlanId, phase: Phase, command: &str) -> CpdError {
 fn plan_phase(conn: &rusqlite::Connection, plan: &PlanId) -> Result<Phase, CpdError> {
     use rusqlite::OptionalExtension;
     let phase: String = conn
-        .query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
+        .query_row(
+            "SELECT phase FROM plans WHERE id = ?1",
+            [plan.as_str()],
+            |r| r.get(0),
+        )
         .optional()?
         .ok_or_else(|| CpdError::plan_not_found(plan))?;
     Phase::parse(&phase)
@@ -358,9 +410,12 @@ fn plan_phase(conn: &rusqlite::Connection, plan: &PlanId) -> Result<Phase, CpdEr
 /// The PR `key` among `prs`, else `pr_not_found` (exit 4).
 fn find_pr<'a>(prs: &'a [PrRow], plan: &PlanId, key: &PrKey) -> Result<&'a PrRow, CpdError> {
     prs.iter().find(|p| p.key == *key).ok_or_else(|| {
-        CpdError::new(ErrorCode::PrNotFound, format!("No PR {key} in Plan {plan}."))
-            .with("plan", plan.as_str())
-            .with("pr", key.as_str())
+        CpdError::new(
+            ErrorCode::PrNotFound,
+            format!("No PR {key} in Plan {plan}."),
+        )
+        .with("plan", plan.as_str())
+        .with("pr", key.as_str())
     })
 }
 
@@ -393,15 +448,29 @@ fn gate_hooks<'a>(env: &Env, policy: &'a Policy, plan: &PlanId, pr: &'a PrRow) -
     GateHooks {
         lead_branch: &pr.lead_branch,
         base: &pr.base,
-        pre_start: Setup { timeout: minutes(env.config.timeouts.setup_minutes), log: pr_log(&env.home, plan, &pr.key, Hook::PreStart) },
-        pre_merge: Setup { timeout: minutes(env.config.timeouts.gate_minutes), log: pr_log(&env.home, plan, &pr.key, Hook::PreMerge) },
+        pre_start: Setup {
+            timeout: minutes(env.config.timeouts.setup_minutes),
+            log: pr_log(&env.home, plan, &pr.key, Hook::PreStart),
+        },
+        pre_merge: Setup {
+            timeout: minutes(env.config.timeouts.gate_minutes),
+            log: pr_log(&env.home, plan, &pr.key, Hook::PreMerge),
+        },
         pre_start_commands: &policy.hooks.pre_start,
         pre_merge_commands: &policy.hooks.pre_merge,
     }
 }
 
 /// [`gate_in`] with the Lead's usual next step, in `worktree` at `sha`.
-fn gate(env: &Env, policy: &Policy, plan: &PlanId, pr: &PrRow, worktree: &std::path::Path, sha: &str, again: &str) -> Result<(), CpdError> {
+fn gate(
+    env: &Env,
+    policy: &Policy,
+    plan: &PlanId,
+    pr: &PrRow,
+    worktree: &std::path::Path,
+    sha: &str,
+    again: &str,
+) -> Result<(), CpdError> {
     gate_in(env, policy, plan, pr, worktree, sha, false, again)
 }
 
@@ -423,8 +492,12 @@ fn gate_in(
         return Ok(());
     }
     let hooks = gate_hooks(env, policy, plan, pr);
-    let then = format!("Append fix Jobs (cpd job add), then run cpd {again} again once they are Merged.");
-    let detached = Detached { branch: hooks.lead_branch, env: &[] };
+    let then =
+        format!("Append fix Jobs (cpd job add), then run cpd {again} again once they are Merged.");
+    let detached = Detached {
+        branch: hooks.lead_branch,
+        env: &[],
+    };
     let operation = Operation { branch: hooks.base };
     let mut steps = Vec::new();
     if pre_start {
@@ -432,9 +505,29 @@ fn gate_in(
     }
     steps.push((Hook::PreMerge, hooks.pre_merge_commands, &hooks.pre_merge));
     for (hook, pipeline, setup) in steps {
-        let result = git::run_hook_as(hook, pipeline, worktree, &detached, Some(&operation), setup.timeout, &setup.log, HookLog::Truncate)?;
+        let result = git::run_hook_as(
+            hook,
+            pipeline,
+            worktree,
+            &detached,
+            Some(&operation),
+            setup.timeout,
+            &setup.log,
+            HookLog::Truncate,
+        )?;
         if result.outcome != HookOutcome::Passed {
-            return Err(refusal(plan, pr, sha, Refused { hook, outcome: result.outcome, tail: result.tail, log: setup.log.clone() }, &then));
+            return Err(refusal(
+                plan,
+                pr,
+                sha,
+                Refused {
+                    hook,
+                    outcome: result.outcome,
+                    tail: result.tail,
+                    log: setup.log.clone(),
+                },
+                &then,
+            ));
         }
     }
     Ok(())
@@ -472,16 +565,41 @@ struct Hidden {
 /// Moves every untracked entry of `lead` beside the worktree, so the Gate sees the tree of the
 /// gated commit and not these files (hs-d679). They are put back by [`Hidden::restore`].
 fn hide_untracked(lead: &std::path::Path) -> Result<Hidden, CpdError> {
-    let listed = git::run::ok(lead, &["ls-files", "--others", "--exclude-standard", "--directory", "-z"])?;
-    let entries: Vec<PathBuf> = listed.split('\0').filter(|e| !e.is_empty()).map(PathBuf::from).collect();
-    let name = lead.file_name().map_or_else(|| "worktree".into(), |n| n.to_string_lossy().into_owned());
-    let hidden = Hidden { lead: lead.to_path_buf(), dir: lead.with_file_name(format!("{name}.cpd-gate-{}", std::process::id())), moved: Vec::new() };
+    let listed = git::run::ok(
+        lead,
+        &[
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+        ],
+    )?;
+    let entries: Vec<PathBuf> = listed
+        .split('\0')
+        .filter(|e| !e.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    let name = lead
+        .file_name()
+        .map_or_else(|| "worktree".into(), |n| n.to_string_lossy().into_owned());
+    let hidden = Hidden {
+        lead: lead.to_path_buf(),
+        dir: lead.with_file_name(format!("{name}.cpd-gate-{}", std::process::id())),
+        moved: Vec::new(),
+    };
     if entries.is_empty() {
         return Ok(hidden);
     }
     let fail = |e: std::io::Error| {
-        CpdError::new(ErrorCode::GateError, format!("Cannot hide {}'s untracked files for the Gate: {e}.", lead.display()))
-            .with("worktree", lead.display().to_string())
+        CpdError::new(
+            ErrorCode::GateError,
+            format!(
+                "Cannot hide {}'s untracked files for the Gate: {e}.",
+                lead.display()
+            ),
+        )
+        .with("worktree", lead.display().to_string())
     };
     std::fs::create_dir_all(&hidden.dir).map_err(fail)?;
     let mut hidden = hidden;
@@ -500,8 +618,14 @@ impl Hidden {
     /// Puts every hidden entry back; an empty list means it was restored already.
     fn restore(mut self) -> Result<(), CpdError> {
         let fail = |e: std::io::Error| {
-            CpdError::new(ErrorCode::GateError, format!("Cannot put back {}'s untracked files after the Gate: {e}.", self.lead.display()))
-                .with("worktree", self.lead.display().to_string())
+            CpdError::new(
+                ErrorCode::GateError,
+                format!(
+                    "Cannot put back {}'s untracked files after the Gate: {e}.",
+                    self.lead.display()
+                ),
+            )
+            .with("worktree", self.lead.display().to_string())
         };
         for (entry, held) in std::mem::take(&mut self.moved) {
             let target = self.lead.join(&entry);
@@ -562,7 +686,13 @@ fn refusal(plan: &PlanId, pr: &PrRow, sha: &str, refused: Refused, then: &str) -
             }
         }
     };
-    error.with("plan", plan.as_str()).with("pr", pr.key.as_str()).with("hook", hook).with("sha", sha).with("tail", tail).with("log", log)
+    error
+        .with("plan", plan.as_str())
+        .with("pr", pr.key.as_str())
+        .with("hook", hook)
+        .with("sha", sha)
+        .with("tail", tail)
+        .with("log", log)
 }
 
 /// The first 12 characters of a SHA, for messages.

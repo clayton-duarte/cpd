@@ -11,15 +11,21 @@ pub mod worktree;
 #[cfg(test)]
 mod runner_tests;
 
-pub use hooks::{HookError, HookOutcome, HookResult, Log, Operation, Pipeline, run_hook, run_hook_as, run_hook_with};
+pub use hooks::{
+    HookError, HookOutcome, HookResult, Log, Operation, Pipeline, run_hook, run_hook_as,
+    run_hook_with,
+};
 pub use lead::{Synced, sync_lead};
 pub use tamper::{check as tamper_check, touched_protected};
-pub use worktree::{
-    Created, Cut, Kept, LeadRemoval, Prepared, Push, RebaseWorktree, Remote, Setup, StartFailure, Step, attempt_branch, attempt_worktree_path, create_attempt_worktree,
-    create_attempt_worktree_with, create_lead_worktree, create_lead_worktree_with, prepare_pr_lead_worktree, discard_worktree, gate_worktree_path, legacy_lead_branch, lead_worktree_path, merge_conflicts, pr_lead_worktree_path, prepare_lead_worktree,
-    push_commit, push_commit_with, push_lead_branch, remove_merged_attempt, remove_merged_lead,
-};
 pub use worktree::merge_conflicts_with;
+pub use worktree::{
+    Created, Cut, Kept, LeadRemoval, Prepared, Push, RebaseWorktree, Remote, Setup, StartFailure,
+    Step, attempt_branch, attempt_worktree_path, create_attempt_worktree,
+    create_attempt_worktree_with, create_lead_worktree, create_lead_worktree_with,
+    discard_worktree, gate_worktree_path, lead_worktree_path, legacy_lead_branch, merge_conflicts,
+    pr_lead_worktree_path, prepare_lead_worktree, prepare_pr_lead_worktree, push_commit,
+    push_commit_with, push_lead_branch, remove_merged_attempt, remove_merged_lead,
+};
 
 /// The last `lines` lines of `text`, joined with `\n` (contract §7.3: results
 /// carry the last 60 lines of a log).

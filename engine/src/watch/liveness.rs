@@ -97,10 +97,11 @@ fn attempts(engine: &mut Engine) {
     for attempt in &active {
         // A submit that died inside its check span left the span open: close it (§7.7), before the Attempt's end or its timeout reads it.
         if attempt.status == "running"
-            && let Err(e) = close_dead_span(engine, attempt) {
-                engine.fail(Step::E2, attempt.about(), &e);
-                continue;
-            }
+            && let Err(e) = close_dead_span(engine, attempt)
+        {
+            engine.fail(Step::E2, attempt.about(), &e);
+            continue;
+        }
         let probe = lock::probe(&engine.home, &attempt.plan, &attempt.id);
         let result = match probe {
             // Released at once: R takes it again itself.
@@ -155,7 +156,9 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
     if !matches!(target.status.as_str(), "starting" | "running") {
         return Ok(());
     }
-    let cancel = engine.store.read(|conn| ledger::cancel_request(conn, plan, &target.job))?;
+    let cancel = engine
+        .store
+        .read(|conn| ledger::cancel_request(conn, plan, &target.job))?;
     // Incident mode asked the Attempt to stop but the Job carries no cancel request: it ends `Interrupted`,
     // which requeues the Job at the same Tier (contract §3.7).
     let incident_stop = cancel.is_none() && active.stop_request.as_deref() == Some("cancelled");
@@ -177,12 +180,21 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
         },
         (None, false, false, Some((why, message))) => End::Failed {
             cause: Cause::Crashed,
-            detail: format!("Its driver ended on {} ({message}), not through its Worker.", why.code()),
+            detail: format!(
+                "Its driver ended on {} ({message}), not through its Worker.",
+                why.code()
+            ),
         },
-        (None, false, false, None) => End::Failed { cause: Cause::Crashed, detail: format!("Its driver died while it was {}.", target.status) },
+        (None, false, false, None) => End::Failed {
+            cause: Cause::Crashed,
+            detail: format!("Its driver died while it was {}.", target.status),
+        },
     };
     let catalog = engine.catalog_of_job(plan, target.job.as_str())?;
-    let ladder = Ladder { catalog: &catalog, retry_cap: engine.config.retry_cap };
+    let ladder = Ladder {
+        catalog: &catalog,
+        retry_cap: engine.config.retry_cap,
+    };
     let metrics = metrics(target.worker_session.as_ref());
     engine.store.write(SOURCE, |tx| {
         if infra.is_some() {
@@ -197,8 +209,20 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
     lock::remove(&engine.home, plan, id)?;
     engine.home.remove_infra(plan, id)?;
     drop(lock);
-    engine.log.line(&format!("E2: the driver of {id} (Plan {plan}) is dead: ended {} / {}", end.outcome(), end.cause()));
-    runner::kill_orphan(&engine.ports, &engine.config, &engine.home, &engine.tmux, &mut engine.store, plan, id)
+    engine.log.line(&format!(
+        "E2: the driver of {id} (Plan {plan}) is dead: ended {} / {}",
+        end.outcome(),
+        end.cause()
+    ));
+    runner::kill_orphan(
+        &engine.ports,
+        &engine.config,
+        &engine.home,
+        &engine.tmux,
+        &mut engine.store,
+        plan,
+        id,
+    )
 }
 
 /// R (§7.4) for the orphaned merge `active`, with no repo lock (hs-d243): R
@@ -207,11 +231,23 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
 fn recover(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
     let catalog = engine.catalog_of_attempt(&active.plan, &active.id)?;
     let metrics = |a: &merge::Attempt| metrics(a.worker_session.as_ref());
-    let ctx = merge::Ctx { home: &engine.home, config: &engine.config, catalog: &catalog, source: SOURCE, metrics: &metrics };
+    let ctx = merge::Ctx {
+        home: &engine.home,
+        config: &engine.config,
+        catalog: &catalog,
+        source: SOURCE,
+        metrics: &metrics,
+    };
     let recovered = merge::recover_attempt(&mut engine.store, &ctx, &active.plan, &active.id)?;
     if let Some(r) = recovered {
-        let how = r.end.map_or_else(|| "nothing changed: git failed".to_owned(), |e| format!("ended {} / {}", e.outcome(), e.cause()));
-        engine.log.line(&format!("E2: recovered the merge of {} (Plan {}): {how}", r.attempt, r.plan));
+        let how = r.end.map_or_else(
+            || "nothing changed: git failed".to_owned(),
+            |e| format!("ended {} / {}", e.outcome(), e.cause()),
+        );
+        engine.log.line(&format!(
+            "E2: recovered the merge of {} (Plan {}): {how}",
+            r.attempt, r.plan
+        ));
     }
     Ok(())
 }
@@ -229,7 +265,11 @@ fn stop_request(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
         "cancelled"
     } else {
         let timeouts = &engine.config.timeouts;
-        let minutes = if active.explore { timeouts.explore_minutes } else { timeouts.attempt_minutes };
+        let minutes = if active.explore {
+            timeouts.explore_minutes
+        } else {
+            timeouts.attempt_minutes
+        };
         let limit = Duration::from_secs(u64::from(minutes) * 60);
         if active.status != "running" || active_time(engine, active)? <= limit {
             return Ok(());
@@ -244,7 +284,9 @@ fn stop_request(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
         )?)
     })?;
     if changed == 1 {
-        engine.log.line(&format!("E2: asked the driver of {id} (Plan {plan}) to stop: {request}"));
+        engine.log.line(&format!(
+            "E2: asked the driver of {id} (Plan {plan}) to stop: {request}"
+        ));
     }
     Ok(())
 }
@@ -277,18 +319,33 @@ fn active_time(engine: &mut Engine, active: &Active) -> Result<Duration, CpdErro
     })?;
     let mut escalations = Vec::with_capacity(open.len());
     for (asked, closed) in &open {
-        escalations.push((parse_time(asked)?, closed.as_deref().map(parse_time).transpose()?));
+        escalations.push((
+            parse_time(asked)?,
+            closed.as_deref().map(parse_time).transpose()?,
+        ));
     }
-    Ok(active_between(parse_time(&running)?, engine.ports.clock.utc(), &escalations))
+    Ok(active_between(
+        parse_time(&running)?,
+        engine.ports.clock.utc(),
+        &escalations,
+    ))
 }
 
 /// The check spans of the Attempt as `(start, end)`, `end` `None` for a span still open: each `start` Event pairs with the next `end`.
-fn check_spans(conn: &rusqlite::Connection, plan: &str, id: &str) -> rusqlite::Result<Vec<(String, Option<String>)>> {
+fn check_spans(
+    conn: &rusqlite::Connection,
+    plan: &str,
+    id: &str,
+) -> rusqlite::Result<Vec<(String, Option<String>)>> {
     let mut stmt = conn.prepare(
         "SELECT at, json_extract(data, '$.check') FROM events
           WHERE plan = ?1 AND attempt = ?2 AND kind = 'attempt-status' AND json_extract(data, '$.check') IS NOT NULL ORDER BY id",
     )?;
-    let events = stmt.query_map([plan, id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let events = stmt
+        .query_map([plan, id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut spans: Vec<(String, Option<String>)> = Vec::new();
     for (at, check) in events {
         match (check.as_str(), spans.last_mut()) {
@@ -303,7 +360,11 @@ fn check_spans(conn: &rusqlite::Connection, plan: &str, id: &str) -> rusqlite::R
 
 /// The time from `running` to `now`, minus the union of the Escalation
 /// intervals (asked, closed; none while still `open`) clipped to that span.
-fn active_between(running: OffsetDateTime, now: OffsetDateTime, escalations: &[(OffsetDateTime, Option<OffsetDateTime>)]) -> Duration {
+fn active_between(
+    running: OffsetDateTime,
+    now: OffsetDateTime,
+    escalations: &[(OffsetDateTime, Option<OffsetDateTime>)],
+) -> Duration {
     let mut intervals = Vec::with_capacity(escalations.len());
     for &(asked, closed) in escalations {
         let from = asked.max(running);
@@ -339,7 +400,11 @@ fn union_length(mut intervals: Vec<(OffsetDateTime, OffsetDateTime)>) -> time::D
 
 fn parse_time(text: &str) -> Result<OffsetDateTime, CpdError> {
     OffsetDateTime::parse(text, &Rfc3339).map_err(|e| {
-        CpdError::new(ErrorCode::StoreFailed, format!("The Ledger holds a time that is not RFC 3339: {text:?} ({e}).")).with("time", text)
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("The Ledger holds a time that is not RFC 3339: {text:?} ({e})."),
+        )
+        .with("time", text)
     })
 }
 
@@ -347,8 +412,7 @@ fn parse_time(text: &str) -> Result<OffsetDateTime, CpdError> {
 /// (migration `read-indexes`, engine-F2), written the same: SQLite reads the index only for a query whose
 /// `WHERE` it can prove implies the index's, so the read costs the live Sessions, not every Session ever made
 /// (`sessions` only grows). A test pins the plan.
-const LIVE_SESSIONS: &str =
-    "SELECT id, role, state, tmux_pane, name, runner FROM sessions WHERE state <> 'stopped' OR tmux_pane IS NOT NULL ORDER BY id";
+const LIVE_SESSIONS: &str = "SELECT id, role, state, tmux_pane, name, runner FROM sessions WHERE state <> 'stopped' OR tmux_pane IS NOT NULL ORDER BY id";
 
 /// A Session not `stopped`, or with a pane, as read before the panes are listed.
 struct Live {
@@ -383,7 +447,16 @@ fn sessions(engine: &mut Engine) {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
-            .map(|(id, role, state, pane, name, runner)| Ok(Live { id: SessionId::parse(&id)?, role, state, pane, name, runner }))
+            .map(|(id, role, state, pane, name, runner)| {
+                Ok(Live {
+                    id: SessionId::parse(&id)?,
+                    role,
+                    state,
+                    pane,
+                    name,
+                    runner,
+                })
+            })
             .collect::<Result<Vec<_>, CpdError>>()
     });
     let panes = live.and_then(|live| Ok((live, engine.tmux.list_panes()?)));
@@ -399,7 +472,10 @@ fn sessions(engine: &mut Engine) {
         if session.runner == "durable" && matches!(session.role.as_str(), "lead" | "manager") {
             continue;
         }
-        let found = session.pane.as_deref().and_then(|p| panes.iter().find(|pane| pane.pane.as_str() == p));
+        let found = session
+            .pane
+            .as_deref()
+            .and_then(|p| panes.iter().find(|pane| pane.pane.as_str() == p));
         let why = match (&session.pane, found) {
             (_, Some(pane)) if !pane.dead => continue,
             (Some(pane), Some(_)) => format!("its pane {pane} is dead"),
@@ -426,7 +502,11 @@ fn sessions(engine: &mut Engine) {
 
 /// R9: whether `session` is a paneless Worker Session whose Attempt is not `ended` and has the stored runner `durable`: it
 /// has no pane by design, so it is live. Any other paneless Session is not.
-fn live_durable_worker(engine: &mut Engine, session: &Live, has_pane: bool) -> Result<bool, CpdError> {
+fn live_durable_worker(
+    engine: &mut Engine,
+    session: &Live,
+    has_pane: bool,
+) -> Result<bool, CpdError> {
     if has_pane || session.role != "worker" {
         return Ok(false);
     }
@@ -446,18 +526,32 @@ fn live_durable_worker(engine: &mut Engine, session: &Live, has_pane: bool) -> R
 /// the chat slot is killed with its window before the write, so a failure is
 /// tried again at the next tick; the chat slot's pane is replaced by the
 /// placeholder after the write that records it gone.
-fn stop_and_clean(engine: &mut Engine, session: &Live, why: &str, dead_lead: Option<&Pane>) -> Result<(), CpdError> {
-    let in_slot = dead_lead.is_some_and(|pane| pane.session_name == engine.config.tmux.cockpit_session && pane.window_name == MAIN_WINDOW);
+fn stop_and_clean(
+    engine: &mut Engine,
+    session: &Live,
+    why: &str,
+    dead_lead: Option<&Pane>,
+) -> Result<(), CpdError> {
+    let in_slot = dead_lead.is_some_and(|pane| {
+        pane.session_name == engine.config.tmux.cockpit_session && pane.window_name == MAIN_WINDOW
+    });
     if let Some(pane) = dead_lead.filter(|_| !in_slot) {
         engine.tmux.kill_window(&pane.window)?;
-        engine.log.line(&format!("E2: killed the window {} of Lead {}'s dead pane {}", pane.window, session.name, pane.pane));
+        engine.log.line(&format!(
+            "E2: killed the window {} of Lead {}'s dead pane {}",
+            pane.window, session.name, pane.pane
+        ));
     }
     let changed = stop(engine, session, why)?;
     if let Some(pane) = dead_lead.filter(|_| in_slot && changed) {
         replace_with_placeholder(engine, pane)?;
-        engine.log.line(&format!("E2: replaced Lead {}'s dead pane {} in the chat slot by the placeholder", session.name, pane.pane));
+        engine.log.line(&format!(
+            "E2: replaced Lead {}'s dead pane {} in the chat slot by the placeholder",
+            session.name, pane.pane
+        ));
     }
-    if changed && session.state != "stopped" && matches!(session.role.as_str(), "lead" | "manager") {
+    if changed && session.state != "stopped" && matches!(session.role.as_str(), "lead" | "manager")
+    {
         restart(engine, session)?;
     }
     Ok(())
@@ -479,15 +573,24 @@ fn read_restarts(engine: &mut Engine) -> BTreeMap<String, OffsetDateTime> {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return BTreeMap::new(),
         Err(e) => {
-            engine.log.line(&format!("E2: cannot read {}: {e}", path.display()));
+            engine
+                .log
+                .line(&format!("E2: cannot read {}: {e}", path.display()));
             return BTreeMap::new();
         }
     };
     let parsed = serde_json::from_str::<BTreeMap<String, String>>(&text)
         .ok()
-        .and_then(|m| m.into_iter().map(|(id, at)| Some((id, OffsetDateTime::parse(&at, &Rfc3339).ok()?))).collect());
+        .and_then(|m| {
+            m.into_iter()
+                .map(|(id, at)| Some((id, OffsetDateTime::parse(&at, &Rfc3339).ok()?)))
+                .collect()
+        });
     parsed.unwrap_or_else(|| {
-        engine.log.line(&format!("E2: {} is not a map of Session to time: deleted, written again", path.display()));
+        engine.log.line(&format!(
+            "E2: {} is not a map of Session to time: deleted, written again",
+            path.display()
+        ));
         let _ = std::fs::remove_file(&path);
         BTreeMap::new()
     })
@@ -498,12 +601,17 @@ fn write_restart(engine: &mut Engine, id: &str, now: OffsetDateTime) {
     let mut all = read_restarts(engine);
     all.insert(id.to_owned(), now);
     let limit = time::Duration::try_from(RESTART_GUARD).unwrap_or(time::Duration::ZERO);
-    let kept: BTreeMap<String, String> =
-        all.into_iter().filter(|(_, at)| now - *at < limit).map(|(id, at)| (id, cpd_core::clock::timestamp(at))).collect();
+    let kept: BTreeMap<String, String> = all
+        .into_iter()
+        .filter(|(_, at)| now - *at < limit)
+        .map(|(id, at)| (id, cpd_core::clock::timestamp(at)))
+        .collect();
     let path = restarts_path(engine);
     let text = serde_json::to_string(&kept).expect("a map of strings serializes");
     if let Err(e) = cpd_core::atomic::write_atomic(&path, text) {
-        engine.log.line(&format!("E2: cannot write {}: {e}", path.display()));
+        engine
+            .log
+            .line(&format!("E2: cannot write {}: {e}", path.display()));
     }
 }
 
@@ -512,8 +620,11 @@ fn write_restart(engine: &mut Engine, id: &str, now: OffsetDateTime) {
 fn restart(engine: &mut Engine, session: &Live) -> Result<(), CpdError> {
     let id = session.id.as_str();
     let live: bool = engine.store.read(|conn| {
-        let (archived, plan): (bool, Option<String>) =
-            conn.query_row("SELECT archived_at IS NOT NULL, plan FROM sessions WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let (archived, plan): (bool, Option<String>) = conn.query_row(
+            "SELECT archived_at IS NOT NULL, plan FROM sessions WHERE id = ?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
         Ok(!archived
             && match (&plan, session.role.as_str()) {
                 (Some(plan), "lead") => cpd_core::session::plan_inactive(conn, plan).is_ok(),
@@ -536,9 +647,14 @@ fn restart(engine: &mut Engine, session: &Live) -> Result<(), CpdError> {
             .with("seconds", seconds));
         }
     }
-    if let Some(pane) = cpd_core::session::start_parked_as(&engine.ports, engine.home.clone(), &session.id, SOURCE)? {
+    if let Some(pane) =
+        cpd_core::session::start_parked_as(&engine.ports, engine.home.clone(), &session.id, SOURCE)?
+    {
         write_restart(engine, id, now);
-        engine.log.line(&format!("E2: restarted Session {} ({}) in the parked pane {pane}", session.id, session.name));
+        engine.log.line(&format!(
+            "E2: restarted Session {} ({}) in the parked pane {pane}",
+            session.id, session.name
+        ));
     }
     Ok(())
 }
@@ -547,7 +663,9 @@ fn restart(engine: &mut Engine, session: &Live) -> Result<(), CpdError> {
 /// and `@cpd_session` unset (§3.6): the placeholder `session park` builds.
 fn replace_with_placeholder(engine: &mut Engine, pane: &Pane) -> Result<(), CpdError> {
     let spawn = Spawn {
-        argv: [cpd_core::session::PROGRAM, "tui", "view", "chat"].map(str::to_owned).into(),
+        argv: [cpd_core::session::PROGRAM, "tui", "view", "chat"]
+            .map(str::to_owned)
+            .into(),
         ..Spawn::default()
     };
     engine.tmux.respawn_pane_killing(&pane.pane, &spawn)?;
@@ -558,11 +676,20 @@ fn replace_with_placeholder(engine: &mut Engine, pane: &Pane) -> Result<(), CpdE
 
 /// Whether the write changed the Session.
 fn stop(engine: &mut Engine, session: &Live, why: &str) -> Result<bool, CpdError> {
-    let changed = engine
-        .store
-        .write(SOURCE, |tx| cpd_core::session::pane_gone(tx, &session.id, &session.state, session.pane.as_deref(), why))?;
+    let changed = engine.store.write(SOURCE, |tx| {
+        cpd_core::session::pane_gone(
+            tx,
+            &session.id,
+            &session.state,
+            session.pane.as_deref(),
+            why,
+        )
+    })?;
     if changed {
-        engine.log.line(&format!("E2: Session {} ({}) is stopped with no pane: {why}", session.id, session.name));
+        engine.log.line(&format!(
+            "E2: Session {} ({}) is stopped with no pane: {why}",
+            session.id, session.name
+        ));
     }
     Ok(changed)
 }
@@ -581,19 +708,36 @@ mod tests {
         let plan: Vec<String> = store
             .read(|conn| {
                 let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {LIVE_SESSIONS}"))?;
-                Ok(stmt.query_map([], |r| r.get::<_, String>(3))?.collect::<rusqlite::Result<_>>()?)
+                Ok(stmt
+                    .query_map([], |r| r.get::<_, String>(3))?
+                    .collect::<rusqlite::Result<_>>()?)
             })
             .unwrap();
-        assert!(plan.iter().any(|step| step.contains("USING INDEX sessions_live")), "{plan:?}");
-        assert!(!plan.iter().any(|step| step.contains("sqlite_autoindex_sessions_1")), "{plan:?}");
+        assert!(
+            plan.iter()
+                .any(|step| step.contains("USING INDEX sessions_live")),
+            "{plan:?}"
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|step| step.contains("sqlite_autoindex_sessions_1")),
+            "{plan:?}"
+        );
     }
 
     #[test]
     fn overlapping_escalations_pause_the_clock_once() {
         let t = |m: i64| datetime!(2026-10-14 10:00 UTC) + time::Duration::minutes(m);
         assert_eq!(union_length(vec![]), time::Duration::ZERO);
-        assert_eq!(union_length(vec![(t(0), t(10)), (t(5), t(15)), (t(20), t(25))]), time::Duration::minutes(20));
-        assert_eq!(union_length(vec![(t(20), t(25)), (t(0), t(10))]), time::Duration::minutes(15));
+        assert_eq!(
+            union_length(vec![(t(0), t(10)), (t(5), t(15)), (t(20), t(25))]),
+            time::Duration::minutes(20)
+        );
+        assert_eq!(
+            union_length(vec![(t(20), t(25)), (t(0), t(10))]),
+            time::Duration::minutes(15)
+        );
     }
 
     #[test]
@@ -611,7 +755,10 @@ mod tests {
     #[test]
     fn active_time_counts_from_running_not_from_starting() {
         // The Attempt started 40 minutes before `running`: those minutes are not active time.
-        assert_eq!(active_between(RUNNING, minutes(5), &[]), Duration::from_secs(5 * 60));
+        assert_eq!(
+            active_between(RUNNING, minutes(5), &[]),
+            Duration::from_secs(5 * 60)
+        );
     }
 
     #[test]
@@ -621,13 +768,23 @@ mod tests {
 
     #[test]
     fn open_escalation_time_is_not_active_time_and_overlaps_count_once() {
-        let escalations = [(minutes(10), Some(minutes(25))), (minutes(20), Some(minutes(30))), (minutes(35), None)];
+        let escalations = [
+            (minutes(10), Some(minutes(25))),
+            (minutes(20), Some(minutes(30))),
+            (minutes(35), None),
+        ];
         // 40 minutes, minus 10–30 and 35–40 waiting for answers.
-        assert_eq!(active_between(RUNNING, minutes(40), &escalations), Duration::from_secs(15 * 60));
+        assert_eq!(
+            active_between(RUNNING, minutes(40), &escalations),
+            Duration::from_secs(15 * 60)
+        );
     }
 
     #[test]
     fn an_escalation_asked_before_running_is_clipped_to_running() {
-        assert_eq!(active_between(RUNNING, minutes(10), &[(minutes(-5), Some(minutes(4)))]), Duration::from_secs(6 * 60));
+        assert_eq!(
+            active_between(RUNNING, minutes(10), &[(minutes(-5), Some(minutes(4)))]),
+            Duration::from_secs(6 * 60)
+        );
     }
 }

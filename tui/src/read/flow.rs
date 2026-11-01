@@ -11,24 +11,24 @@ use rusqlite::{Connection, OptionalExtension};
 use cpd_core::config::Tier;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::highest_id;
+use cpd_core::ids::{AttemptId, ContextId, EscalationId, JobKey, PlanId, PrKey, SessionId};
 use cpd_core::inbox::model::{Item, Kind};
+use cpd_core::job::home::JobHome;
 use cpd_core::job::open::shown_needs;
 use cpd_core::job::worked_on::failed_worked_on;
-use cpd_core::job::home::JobHome;
-use cpd_core::ids::{AttemptId, ContextId, EscalationId, JobKey, PlanId, PrKey, SessionId};
 use cpd_core::plan::display::Display;
 use cpd_core::plan::fingerprint::load_prs;
-use cpd_core::plan::{jobs, plan_fingerprint, Phase};
+use cpd_core::plan::{Phase, jobs, plan_fingerprint};
 use cpd_core::session::State;
 use cpd_core::store::Store;
 
 use super::active;
 use super::dot::{Dot, Work};
-use super::tree::visible_items;
 use super::shared::{
-    AttemptStatus, JobStatus, Origin, Outcome, PlanHead, PrState, ReviewStatus, SHOWN_STATUS, bad_row, id, stored_cause, plan_heads, tier,
-    value_enum,
+    AttemptStatus, JobStatus, Origin, Outcome, PlanHead, PrState, ReviewStatus, SHOWN_STATUS,
+    bad_row, id, plan_heads, stored_cause, tier, value_enum,
 };
+use super::tree::visible_items;
 
 /// A Plan, for the flow chart.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,14 +78,23 @@ pub struct NeedsUser {
 
 impl NeedsUser {
     /// Of the `visible` items (not snoozed, not dismissed) of `plan`, whose Lead is `lead` and whose Lead works on `lead_work` (pro-d200).
-    fn of(visible: &[Item], plan: &PlanId, lead: &SessionId, lead_working: bool, lead_work: Option<Work>, worked_on: Vec<JobKey>) -> NeedsUser {
+    fn of(
+        visible: &[Item],
+        plan: &PlanId,
+        lead: &SessionId,
+        lead_working: bool,
+        lead_work: Option<Work>,
+        worked_on: Vec<JobKey>,
+    ) -> NeedsUser {
         NeedsUser {
             stuck_jobs: visible
                 .iter()
                 .filter(|i| i.kind == Kind::JobStuck && i.plan.as_ref() == Some(plan))
                 .filter_map(|i| i.job.clone())
                 .collect(),
-            lead_dialog: visible.iter().any(|i| i.kind == Kind::Dialog && i.session.as_ref() == Some(lead)),
+            lead_dialog: visible
+                .iter()
+                .any(|i| i.kind == Kind::Dialog && i.session.as_ref() == Some(lead)),
             lead_working,
             lead_work,
             worked_on,
@@ -166,12 +175,17 @@ pub struct Pull {
 }
 
 /// The [`UpdateState`] of a `jobs.status` read for a not-ended update Job (`None`: there is none).
-pub(super) fn update_state(what: &str, status: Option<&str>) -> Result<Option<UpdateState>, CpdError> {
+pub(super) fn update_state(
+    what: &str,
+    status: Option<&str>,
+) -> Result<Option<UpdateState>, CpdError> {
     match status {
         None => Ok(None),
         Some("queued") => Ok(Some(UpdateState::Queued)),
         Some("running") => Ok(Some(UpdateState::Running)),
-        Some(other) => Err(bad_row(format!("{what} has an update Job with status {other:?}"))),
+        Some(other) => Err(bad_row(format!(
+            "{what} has an update Job with status {other:?}"
+        ))),
     }
 }
 
@@ -215,7 +229,9 @@ pub struct JobNode {
 impl JobNode {
     /// The Attempt not `ended`, if there is one (at most one exists).
     pub fn active_attempt(&self) -> Option<&AttemptNode> {
-        self.attempts.iter().find(|a| a.status != AttemptStatus::Ended)
+        self.attempts
+            .iter()
+            .find(|a| a.status != AttemptStatus::Ended)
     }
 
     /// The Attempt a pill shows: the active one, else the last.
@@ -276,10 +292,18 @@ fn plan_not_found(plan: &PlanId) -> CpdError {
 /// The snapshot of `plan` (`plan show`): `plan_not_found` when it does not exist.
 pub fn flow(store: &mut Store, plan: &PlanId) -> Result<Flow, CpdError> {
     store.read(|conn| {
-        let head = plan_heads(conn, Some(plan))?.pop().ok_or_else(|| plan_not_found(plan))?;
+        let head = plan_heads(conn, Some(plan))?
+            .pop()
+            .ok_or_else(|| plan_not_found(plan))?;
         let review = latest_review(conn, plan, &plan_fingerprint(conn, plan)?)?;
         let jobs = job_nodes(conn, plan)?;
-        Ok(Flow { head, jobs, escalations: open_escalations(conn, plan)?, review, events_cursor: highest_id(conn)? })
+        Ok(Flow {
+            head,
+            jobs,
+            escalations: open_escalations(conn, plan)?,
+            review,
+            events_cursor: highest_id(conn)?,
+        })
     })
 }
 
@@ -293,14 +317,22 @@ pub fn plan_boxes_at(store: &mut Store, plan: &PlanId, now_ms: i64) -> Result<Pl
 /// The Workflows' active time is read at the store's clock.
 pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdError> {
     store.read(|conn| {
-        let now: String = conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?;
+        let now: String =
+            conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| {
+                r.get(0)
+            })?;
         let now_ms = active::parse_ms("The database clock", &now)?;
         boxes(conn, plan, Some(now), now_ms)
     })
 }
 
 /// The body of both reads: `now` is the database clock text (read here when `None`), `now_ms` the elapsed time's clock.
-fn boxes(conn: &Connection, plan: &PlanId, now: Option<String>, now_ms: i64) -> Result<PlanBoxes, CpdError> {
+fn boxes(
+    conn: &Connection,
+    plan: &PlanId,
+    now: Option<String>,
+    now_ms: i64,
+) -> Result<PlanBoxes, CpdError> {
     {
         let (context, lead, lead_working, phase, working_pr): (String, String, bool, String, Option<String>) = conn
             .query_row(
@@ -311,12 +343,19 @@ fn boxes(conn: &Connection, plan: &PlanId, now: Option<String>, now_ms: i64) -> 
             .optional()?
             .ok_or_else(|| plan_not_found(plan))?;
         Phase::parse(&phase).ok_or_else(|| bad_row(format!("Plan {plan} has phase {phase:?}")))?;
-        let head = plan_heads(conn, Some(plan))?.pop().ok_or_else(|| plan_not_found(plan))?;
+        let head = plan_heads(conn, Some(plan))?
+            .pop()
+            .ok_or_else(|| plan_not_found(plan))?;
         let now: String = match now {
             Some(now) => now,
-            None => conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?,
+            None => conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| {
+                r.get(0)
+            })?,
         };
-        let worked_on = failed_worked_on(conn, Some(plan))?.into_iter().map(|(_, job)| job).collect(); // a BTreeSet: sorted
+        let worked_on = failed_worked_on(conn, Some(plan))?
+            .into_iter()
+            .map(|(_, job)| job)
+            .collect(); // a BTreeSet: sorted
         let needs_user = NeedsUser::of(
             &visible_items(conn, &now)?,
             plan,
@@ -329,7 +368,15 @@ fn boxes(conn: &Connection, plan: &PlanId, now: Option<String>, now_ms: i64) -> 
         Ok(PlanBoxes {
             needs_user,
             context: id("Context id", &context, ContextId::parse)?,
-            prs: pr_nodes(conn, plan, lead_working.then_some(working_pr).flatten().as_deref(), Some(head.work()), &lead, &jobs, now_ms)?,
+            prs: pr_nodes(
+                conn,
+                plan,
+                lead_working.then_some(working_pr).flatten().as_deref(),
+                Some(head.work()),
+                &lead,
+                &jobs,
+                now_ms,
+            )?,
             jobs,
             events_cursor: highest_id(conn)?,
             plan: plan.clone(),
@@ -338,15 +385,33 @@ fn boxes(conn: &Connection, plan: &PlanId, now: Option<String>, now_ms: i64) -> 
 }
 
 /// The PRs of `plan` that are not `cancelled`, in key order, with their needs; `working_pr`: the PR the working Lead's turn concerns, `lead_work` the Plan phase's work.
-fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_work: Option<Work>, lead: &str, jobs: &[JobNode], now_ms: i64) -> Result<Vec<PrNode>, CpdError> {
+fn pr_nodes(
+    conn: &Connection,
+    plan: &PlanId,
+    working_pr: Option<&str>,
+    lead_work: Option<Work>,
+    lead: &str,
+    jobs: &[JobNode],
+    now_ms: i64,
+) -> Result<Vec<PrNode>, CpdError> {
     let mut events = Vec::new();
     let mut stmt = conn.prepare("SELECT at, json_extract(data, '$.to') FROM events WHERE session = ?1 AND kind = 'session-state' ORDER BY id")?;
-    for row in stmt.query_map([lead], |r| Ok((r.get::<_, String>(0)?, r.get::<_, rusqlite::types::Value>(1)?)))? {
+    for row in stmt.query_map([lead], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, rusqlite::types::Value>(1)?,
+        ))
+    })? {
         let (at, to) = row?;
         let rusqlite::types::Value::Text(to) = to else {
-            return Err(bad_row(format!("A session-state Event of {lead} has no string `to`")));
+            return Err(bad_row(format!(
+                "A session-state Event of {lead} has no string `to`"
+            )));
         };
-        events.push((active::parse_ms(&format!("A session-state Event of {lead}"), &at)?, to));
+        events.push((
+            active::parse_ms(&format!("A session-state Event of {lead}"), &at)?,
+            to,
+        ));
     }
     let blocked = active::blocked_spans(&events, now_ms);
     let mut spans: BTreeMap<&str, Vec<(i64, i64)>> = BTreeMap::new();
@@ -356,8 +421,16 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
         for a in &job.attempts {
             let what = format!("Attempt {}", a.id);
             let start = active::parse_ms(&what, &a.started_at)?;
-            let end = a.ended_at.as_deref().map(|e| active::parse_ms(&what, e)).transpose()?.unwrap_or(now_ms);
-            spans.entry(pr.as_str()).or_default().push((start, end.max(start)));
+            let end = a
+                .ended_at
+                .as_deref()
+                .map(|e| active::parse_ms(&what, e))
+                .transpose()?
+                .unwrap_or(now_ms);
+            spans
+                .entry(pr.as_str())
+                .or_default()
+                .push((start, end.max(start)));
         }
     }
     let mut costs: BTreeMap<String, Vec<Option<f64>>> = BTreeMap::new();
@@ -368,14 +441,26 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
           WHERE a.plan = ?1 AND j.pr IS NOT NULL",
     )?;
     for row in stmt.query_map([plan.as_str()], |r| {
-        Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<rusqlite::types::Value>>(1)?, r.get::<_, bool>(2)?, r.get::<_, Option<String>>(3)?))
+        Ok((
+            r.get::<_, Option<String>>(0)?,
+            r.get::<_, Option<rusqlite::types::Value>>(1)?,
+            r.get::<_, bool>(2)?,
+            r.get::<_, Option<String>>(3)?,
+        ))
     })? {
         let (pr, stored, no_metrics, file) = row?;
         let JobHome::Pr(pr) = JobHome::of("PR key", pr.as_deref())? else {
             // An explore Attempt belongs to no PR box (contract §2.2 Totals): only the Plan's cost holds it.
             continue;
         };
-        costs.entry(pr.to_string()).or_default().push(super::cost::attempt_cost(stored, no_metrics, file.as_deref()));
+        costs
+            .entry(pr.to_string())
+            .or_default()
+            .push(super::cost::attempt_cost(
+                stored,
+                no_metrics,
+                file.as_deref(),
+            ));
     }
     let mut failed_prs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut stmt = conn.prepare(
@@ -389,10 +474,16 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
     let display = Display::load(conn, plan)?;
     let pr_rows = load_prs(conn, plan)?;
     let mut needs: BTreeMap<String, Vec<PrKey>> = BTreeMap::new();
-    let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1 ORDER BY pr, needs")?;
-    for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+    let mut stmt =
+        conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1 ORDER BY pr, needs")?;
+    for row in stmt.query_map([plan.as_str()], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })? {
         let (pr, need) = row?;
-        needs.entry(pr).or_default().push(id("PR key", &need, PrKey::parse)?);
+        needs
+            .entry(pr)
+            .or_default()
+            .push(id("PR key", &need, PrKey::parse)?);
     }
     let ready = cpd_core::pr::pulls::ready_to_merge_sql("q");
     let mut stmt = conn.prepare(&format!(
@@ -406,9 +497,14 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
     let mut rows = stmt.query([plan.as_str()])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
-        let (key, repo, base, status): (String, String, String, String) = (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
-        let (number, row_state, url, mergeable): (Option<i64>, Option<String>, Option<String>, Option<String>) =
-            (r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?);
+        let (key, repo, base, status): (String, String, String, String) =
+            (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
+        let (number, row_state, url, mergeable): (
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = (r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?);
         let clean: bool = r.get(8)?;
         let draft: bool = r.get(9)?;
         let update: Option<String> = r.get(10)?;
@@ -424,8 +520,13 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
         // `pr_number` is set with `pull_request` (contract §2.5), so a pull request has its row's url
         let pull = number
             .map(|number| {
-                let url = url.ok_or_else(|| bad_row(format!("{what} has pr_number {number} and no pull request row")))?;
-                let mergeable = mergeable.ok_or_else(|| bad_row(format!("{what} has no mergeable")))?;
+                let url = url.ok_or_else(|| {
+                    bad_row(format!(
+                        "{what} has pr_number {number} and no pull request row"
+                    ))
+                })?;
+                let mergeable =
+                    mergeable.ok_or_else(|| bad_row(format!("{what} has no mergeable")))?;
                 Ok::<_, CpdError>(Pull {
                     number,
                     state: PrState::of(status == PrStatus::Merged, row_state.as_deref()),
@@ -442,8 +543,9 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
             .map(|n| n.to_string_lossy().into_owned())
             .ok_or_else(|| bad_row(format!("{what} has repo {repo:?}")))?;
         let row = pr_rows.iter().find(|p| p.key.as_str() == key);
-        let lead_dot = (working_pr == Some(key.as_str()) && !matches!(status, PrStatus::Merged | PrStatus::Cancelled))
-            .then(|| Dot::working(failed_prs.contains(&key), lead_work));
+        let lead_dot = (working_pr == Some(key.as_str())
+            && !matches!(status, PrStatus::Merged | PrStatus::Cancelled))
+        .then(|| Dot::working(failed_prs.contains(&key), lead_work));
         out.push(PrNode {
             lead_dot,
             waiting_on: row.map(|p| display.pr_blockers(p)).unwrap_or_default(),
@@ -451,7 +553,15 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
             needs: {
                 let mut n = needs.remove(&key).unwrap_or_default();
                 // the implied need: the base PR of the Plan (a base PR of another Plan has no node here)
-                if let Some(base) = row.and_then(|p| display.pr_needs(p).into_iter().find(|b| !p.needs.contains(b))).filter(|b| !b.contains('/')) {
+                if let Some(base) = row
+                    .and_then(|p| {
+                        display
+                            .pr_needs(p)
+                            .into_iter()
+                            .find(|b| !p.needs.contains(b))
+                    })
+                    .filter(|b| !b.contains('/'))
+                {
                     n.push(id("PR key", &base, PrKey::parse)?);
                     n.sort();
                 }
@@ -462,7 +572,10 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
             base,
             status,
             pull,
-            elapsed_seconds: active::elapsed_seconds(spans.get(key.as_str()).map(Vec::as_slice).unwrap_or(&[]), &blocked),
+            elapsed_seconds: active::elapsed_seconds(
+                spans.get(key.as_str()).map(Vec::as_slice).unwrap_or(&[]),
+                &blocked,
+            ),
             cost_usd: super::cost::total(costs.remove(key.as_str()).unwrap_or_default()),
         });
     }
@@ -473,7 +586,10 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
 fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError> {
     let rows = jobs::load(conn, plan)?;
     let display = Display::load(conn, plan)?;
-    let waiting_on: Vec<Vec<String>> = rows.iter().map(|j| display.job_blockers(&rows, j)).collect();
+    let waiting_on: Vec<Vec<String>> = rows
+        .iter()
+        .map(|j| display.job_blockers(&rows, j))
+        .collect();
     let mut attempts = attempts(conn, plan)?;
     rows.iter()
         .zip(waiting_on)
@@ -490,9 +606,20 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
                 pr,
                 status: JobStatus::parse(&format!("{what} has status"), &j.status)?,
                 tier: j.tier.as_deref().map(|t| tier(&what, t)).transpose()?,
-                needs: shown_needs(&rows, j).iter().map(|n| id("Job key", n, JobKey::parse)).collect::<Result<_, _>>()?,
-                retry_tier: j.retry_tier.as_deref().map(|t| tier(&what, t)).transpose()?,
-                shown_tier: display.job_tier(j).as_deref().map(|t| tier(&what, t)).transpose()?,
+                needs: shown_needs(&rows, j)
+                    .iter()
+                    .map(|n| id("Job key", n, JobKey::parse))
+                    .collect::<Result<_, _>>()?,
+                retry_tier: j
+                    .retry_tier
+                    .as_deref()
+                    .map(|t| tier(&what, t))
+                    .transpose()?,
+                shown_tier: display
+                    .job_tier(j)
+                    .as_deref()
+                    .map(|t| tier(&what, t))
+                    .transpose()?,
                 attempts: attempts.remove(j.key.as_str()).unwrap_or_default(),
                 seq: j.seq,
                 waiting_on,
@@ -508,7 +635,10 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
 }
 
 /// Every Attempt of the Plan by Job key, oldest first, with its Worker's state.
-fn attempts(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, Vec<AttemptNode>>, CpdError> {
+fn attempts(
+    conn: &Connection,
+    plan: &PlanId,
+) -> Result<BTreeMap<String, Vec<AttemptNode>>, CpdError> {
     let mut stmt = conn.prepare(
         &format!("SELECT a.job, a.id, a.number, a.tier, a.origin, {SHOWN_STATUS}, a.outcome, a.cause, a.started_at, a.submitted_at,
                 a.ended_at, a.worker_session, s.state, s.state_label, s.state_at
@@ -521,13 +651,16 @@ fn attempts(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, Vec<Att
         let (job, aid): (String, String) = (r.get(0)?, r.get(1)?);
         let attempt_id = id("Attempt id", &aid, AttemptId::parse)?;
         let what = format!("Attempt {plan}/{aid}");
-        let (tier_text, origin, status): (String, String, String) = (r.get(3)?, r.get(4)?, r.get(5)?);
+        let (tier_text, origin, status): (String, String, String) =
+            (r.get(3)?, r.get(4)?, r.get(5)?);
         let (outcome, cause): (Option<String>, Option<String>) = (r.get(6)?, r.get(7)?);
         let worker = match r.get::<_, Option<String>>(11)? {
             None => None,
             Some(session) => {
                 let state: Option<String> = r.get(12)?;
-                let state = state.ok_or_else(|| bad_row(format!("{what} has Worker {session}, which is no Session")))?;
+                let state = state.ok_or_else(|| {
+                    bad_row(format!("{what} has Worker {session}, which is no Session"))
+                })?;
                 Some(WorkerRef {
                     session: id("Session id", &session, SessionId::parse)?,
                     state: value_enum(&format!("{what} has Worker state"), &state)?,
@@ -541,8 +674,12 @@ fn attempts(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, Vec<Att
             tier: tier(&what, &tier_text)?,
             origin: Origin::parse(&format!("{what} has origin"), &origin)?,
             status: AttemptStatus::parse(&format!("{what} has status"), &status)?,
-            outcome: outcome.map(|o| Outcome::parse(&format!("{what} has outcome"), &o)).transpose()?,
-            cause: cause.map(|c| stored_cause(&format!("{what} has cause"), &c)).transpose()?,
+            outcome: outcome
+                .map(|o| Outcome::parse(&format!("{what} has outcome"), &o))
+                .transpose()?,
+            cause: cause
+                .map(|c| stored_cause(&format!("{what} has cause"), &c))
+                .transpose()?,
             started_at: r.get(8)?,
             submitted_at: r.get(9)?,
             ended_at: r.get(10)?,
@@ -566,7 +703,12 @@ fn open_escalations(conn: &Connection, plan: &PlanId) -> Result<Vec<OpenEscalati
 }
 
 /// An `open` Escalation row, parsed.
-pub(super) fn open_escalation(eid: String, attempt: String, question: String, asked_at: String) -> Result<OpenEscalation, CpdError> {
+pub(super) fn open_escalation(
+    eid: String,
+    attempt: String,
+    question: String,
+    asked_at: String,
+) -> Result<OpenEscalation, CpdError> {
     Ok(OpenEscalation {
         id: id("Escalation id", &eid, EscalationId::parse)?,
         attempt: id("Attempt id", &attempt, AttemptId::parse)?,
@@ -575,7 +717,11 @@ pub(super) fn open_escalation(eid: String, attempt: String, question: String, as
     })
 }
 
-fn latest_review(conn: &Connection, plan: &PlanId, plan_fingerprint: &str) -> Result<Option<Review>, CpdError> {
+fn latest_review(
+    conn: &Connection,
+    plan: &PlanId,
+    plan_fingerprint: &str,
+) -> Result<Option<Review>, CpdError> {
     let row = conn
         .query_row(
             "SELECT id, number, status, fingerprint, feedback, requested_at, decided_at FROM plan_reviews
@@ -594,18 +740,23 @@ fn latest_review(conn: &Connection, plan: &PlanId, plan_fingerprint: &str) -> Re
             },
         )
         .optional()?;
-    row.map(|(rid, number, status, fingerprint, feedback, requested_at, decided_at)| {
-        Ok(Review {
-            status: ReviewStatus::parse(&format!("Plan review {plan}/{rid} has status"), &status)?,
-            current: fingerprint == plan_fingerprint,
-            id: rid,
-            number,
-            fingerprint,
-            feedback,
-            requested_at,
-            decided_at,
-        })
-    })
+    row.map(
+        |(rid, number, status, fingerprint, feedback, requested_at, decided_at)| {
+            Ok(Review {
+                status: ReviewStatus::parse(
+                    &format!("Plan review {plan}/{rid} has status"),
+                    &status,
+                )?,
+                current: fingerprint == plan_fingerprint,
+                id: rid,
+                number,
+                fingerprint,
+                feedback,
+                requested_at,
+                decided_at,
+            })
+        },
+    )
     .transpose()
 }
 

@@ -14,8 +14,8 @@ pub mod rules;
 #[cfg(test)]
 mod runner_tests;
 
-use std::io::{IsTerminal, Read};
 use std::fmt;
+use std::io::{IsTerminal, Read};
 use std::str::FromStr;
 
 use clap::Args;
@@ -47,10 +47,17 @@ impl FromStr for SecretName {
     type Err = CpdError;
     fn from_str(s: &str) -> Result<SecretName, CpdError> {
         let chars = s.chars().count();
-        if chars == 0 || chars > SecretName::MAX_CHARS || s.chars().any(char::is_control) || s.starts_with('-') {
+        if chars == 0
+            || chars > SecretName::MAX_CHARS
+            || s.chars().any(char::is_control)
+            || s.starts_with('-')
+        {
             return Err(CpdError::new(
                 ErrorCode::Usage,
-                format!("A name must be 1 to {} characters, with no control character and no leading `-`.", SecretName::MAX_CHARS),
+                format!(
+                    "A name must be 1 to {} characters, with no control character and no leading `-`.",
+                    SecretName::MAX_CHARS
+                ),
             ));
         }
         Ok(SecretName(s.to_owned()))
@@ -182,13 +189,17 @@ fn identify() -> Result<(Env, Caller), CpdError> {
     };
     let reference: SessionRef = raw.parse().map_err(|_| session_not_found(&raw))?;
     let mut env = Env::open()?;
-    let from_env = env_var("CPD_ATTEMPT").map(|a| AttemptId::parse(&a)).transpose()?;
+    let from_env = env_var("CPD_ATTEMPT")
+        .map(|a| AttemptId::parse(&a))
+        .transpose()?;
     let who = env.store.read(|conn| {
         let session = session::resolve(conn, &reference)?;
         let (role, plan, attempt): (String, Option<String>, Option<String>) = conn
-            .query_row("SELECT role, plan, attempt FROM sessions WHERE id = ?1", [session.as_str()], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            })
+            .query_row(
+                "SELECT role, plan, attempt FROM sessions WHERE id = ?1",
+                [session.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
             .optional()?
             .ok_or_else(|| session_not_found(session.as_str()))?;
         let role = match role.as_str() {
@@ -197,13 +208,22 @@ fn identify() -> Result<(Env, Caller), CpdError> {
             "worker" => Role::Worker,
             other => return Err(CpdError::bad_row(format!("sessions.role {other:?}"))),
         };
-        let role = if from_env.is_some() { Role::Worker } else { role };
+        let role = if from_env.is_some() {
+            Role::Worker
+        } else {
+            role
+        };
         let attempt = match (&from_env, attempt) {
             (Some(a), _) => Some(a.clone()),
             (None, Some(a)) => Some(AttemptId::parse(&a)?),
             (None, None) => None,
         };
-        Ok(Caller { session, role, plan, attempt })
+        Ok(Caller {
+            session,
+            role,
+            plan,
+            attempt,
+        })
     })?;
     Ok((env, who))
 }
@@ -224,17 +244,30 @@ fn action_name(action: Action) -> &'static str {
 fn refusal(code: ErrorCode, who: &Caller, action: Action, vault: &SecretName) -> CpdError {
     let command = action_name(action);
     let message = match code {
-        ErrorCode::SecretRoleDenied => format!("A {} may not run `cpd secret {command}`.", who.role.as_str()),
+        ErrorCode::SecretRoleDenied => format!(
+            "A {} may not run `cpd secret {command}`.",
+            who.role.as_str()
+        ),
         ErrorCode::SecretVaultDenied => format!(
             "Vault {vault} is not allowed for `cpd secret {command}` by this caller: only {} are.",
             rules::VAULTS.join(" and ")
         ),
-        _ => format!("`cpd secret {command}` needs no approval for vault {vault}: approve is for another vault."),
+        _ => format!(
+            "`cpd secret {command}` needs no approval for vault {vault}: approve is for another vault."
+        ),
     };
-    CpdError::new(code, message).with("action", command).with("vault", vault.as_str())
+    CpdError::new(code, message)
+        .with("action", command)
+        .with("vault", vault.as_str())
 }
 
-fn grant_required(grant: &str, op: Op, vault: &SecretName, item: Option<&SecretName>, field: Option<&SecretName>) -> CpdError {
+fn grant_required(
+    grant: &str,
+    op: Op,
+    vault: &SecretName,
+    item: Option<&SecretName>,
+    field: Option<&SecretName>,
+) -> CpdError {
     let next = if grant == "allowance" {
         "ask the Lead with cpd ask"
     } else {
@@ -242,7 +275,15 @@ fn grant_required(grant: &str, op: Op, vault: &SecretName, item: Option<&SecretN
     };
     CpdError::new(
         ErrorCode::SecretGrantRequired,
-        format!("`cpd secret {}` in vault {vault} needs the {grant} of {}.", op.as_str(), if grant == "allowance" { "the Lead" } else { "the User" }),
+        format!(
+            "`cpd secret {}` in vault {vault} needs the {grant} of {}.",
+            op.as_str(),
+            if grant == "allowance" {
+                "the Lead"
+            } else {
+                "the User"
+            }
+        ),
     )
     .with("grant", grant)
     .with("action", op.as_str())
@@ -257,10 +298,14 @@ fn read_value() -> Result<String, CpdError> {
     let usage = |m: &str| CpdError::new(ErrorCode::Usage, m.to_owned());
     let mut stdin = std::io::stdin();
     if stdin.is_terminal() {
-        return Err(usage("The value is read from stdin, which is a terminal: pipe the value in."));
+        return Err(usage(
+            "The value is read from stdin, which is a terminal: pipe the value in.",
+        ));
     }
     let mut bytes = Vec::new();
-    stdin.read_to_end(&mut bytes).map_err(|e| usage(&format!("Cannot read the value from stdin: {e}.")))?;
+    stdin
+        .read_to_end(&mut bytes)
+        .map_err(|e| usage(&format!("Cannot read the value from stdin: {e}.")))?;
     if bytes.last() == Some(&b'\n') {
         bytes.pop();
     }
@@ -271,10 +316,17 @@ fn read_value() -> Result<String, CpdError> {
 }
 
 /// The five op commands: the guard, then op.
-fn operate(op: Op, vault: &SecretName, item: Option<&SecretName>, field: Option<&SecretName>) -> Result<Output, CpdError> {
+fn operate(
+    op: Op,
+    vault: &SecretName,
+    item: Option<&SecretName>,
+    field: Option<&SecretName>,
+) -> Result<Output, CpdError> {
     let (mut env, who) = identify()?;
     let action = Action::Op(op);
-    match rules::check(who.role, action, vault.as_str()).map_err(|c| refusal(c, &who, action, vault))? {
+    match rules::check(who.role, action, vault.as_str())
+        .map_err(|c| refusal(c, &who, action, vault))?
+    {
         Grant::None => {}
         Grant::Allowance => {
             let entry = Allowed {
@@ -283,7 +335,9 @@ fn operate(op: Op, vault: &SecretName, item: Option<&SecretName>, field: Option<
                 field: field.map(SecretName::as_str).unwrap_or_default().to_owned(),
             };
             let held = match &who.attempt {
-                Some(attempt) => env.store.read(|conn| grants::allowance_held(&env.home, conn, attempt, &entry))?,
+                Some(attempt) => env
+                    .store
+                    .read(|conn| grants::allowance_held(&env.home, conn, attempt, &entry))?,
                 None => false,
             };
             if !held {
@@ -304,7 +358,11 @@ fn operate(op: Op, vault: &SecretName, item: Option<&SecretName>, field: Option<
             }
         }
     }
-    let (v, i, f) = (vault.as_str(), item.map_or("", SecretName::as_str), field.map_or("", SecretName::as_str));
+    let (v, i, f) = (
+        vault.as_str(),
+        item.map_or("", SecretName::as_str),
+        field.map_or("", SecretName::as_str),
+    );
     let fields = match op {
         Op::Get => op::get(v, i, f)?,
         Op::List => op::list(v)?,
@@ -327,20 +385,31 @@ fn operate(op: Op, vault: &SecretName, item: Option<&SecretName>, field: Option<
 /// `secret allow` (commands.md §24.6).
 fn allow(a: AllowArgs) -> Result<Output, CpdError> {
     let (mut env, who) = identify()?;
-    rules::check(who.role, Action::Allow, a.vault.as_str()).map_err(|c| refusal(c, &who, Action::Allow, &a.vault))?;
+    rules::check(who.role, Action::Allow, a.vault.as_str())
+        .map_err(|c| refusal(c, &who, Action::Allow, &a.vault))?;
     let not_found = || {
-        CpdError::new(ErrorCode::AttemptNotFound, format!("No Attempt {} in your Plan.", a.attempt))
-            .with("attempt", a.attempt.to_string())
+        CpdError::new(
+            ErrorCode::AttemptNotFound,
+            format!("No Attempt {} in your Plan.", a.attempt),
+        )
+        .with("attempt", a.attempt.to_string())
     };
     let plan = who.plan.as_deref().ok_or_else(not_found)?;
     let status: Option<String> = env.store.read(|conn| {
         Ok(conn
-            .query_row("SELECT status FROM attempts WHERE plan = ?1 AND id = ?2", [plan.to_owned(), a.attempt.to_string()], |r| r.get(0))
+            .query_row(
+                "SELECT status FROM attempts WHERE plan = ?1 AND id = ?2",
+                [plan.to_owned(), a.attempt.to_string()],
+                |r| r.get(0),
+            )
             .optional()?)
     })?;
     if status.ok_or_else(not_found)? == "ended" {
-        return Err(CpdError::new(ErrorCode::SecretAttemptEnded, format!("Attempt {} has ended.", a.attempt))
-            .with("attempt", a.attempt.to_string()));
+        return Err(CpdError::new(
+            ErrorCode::SecretAttemptEnded,
+            format!("Attempt {} has ended.", a.attempt),
+        )
+        .with("attempt", a.attempt.to_string()));
     }
     let entry = Allowed {
         vault: a.vault.as_str().to_owned(),
@@ -362,13 +431,18 @@ fn approve(a: ApproveArgs) -> Result<Output, CpdError> {
     let usage = |m: &str| CpdError::new(ErrorCode::Usage, m.to_owned());
     let name = a.action.as_str();
     if (a.action == Op::List) == a.item.is_some() {
-        return Err(usage(&format!("--item is required for every action but list, and forbidden for list (action {name}).")));
+        return Err(usage(&format!(
+            "--item is required for every action but list, and forbidden for list (action {name})."
+        )));
     }
     if matches!(a.action, Op::Get | Op::Create | Op::Edit) != a.field.is_some() {
-        return Err(usage(&format!("--field is required for get, create and edit, and forbidden otherwise (action {name}).")));
+        return Err(usage(&format!(
+            "--field is required for get, create and edit, and forbidden otherwise (action {name})."
+        )));
     }
     let (env, who) = identify()?;
-    rules::check(who.role, Action::Approve, a.vault.as_str()).map_err(|c| refusal(c, &who, Action::Approve, &a.vault))?;
+    rules::check(who.role, Action::Approve, a.vault.as_str())
+        .map_err(|c| refusal(c, &who, Action::Approve, &a.vault))?;
     let approval = Approval {
         session: who.session.to_string(),
         action: name.to_owned(),

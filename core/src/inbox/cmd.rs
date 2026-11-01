@@ -9,17 +9,17 @@ use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime, Time, UtcOffset};
 
 use super::model::{self, Filter, Item, Kind, State, Urgency};
+use super::team;
 use crate::clock::timestamp;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::host::deadline::Failed;
 use crate::host::runner::{NO_DEADLINE, Runner};
-use super::team;
 use crate::ids::{ContextId, SessionId};
-use crate::session;
 use crate::output::Output;
 use crate::ports::Ports;
+use crate::session;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -108,12 +108,14 @@ pub fn run_with(ports: &Ports, command: Command) -> Result<Output, CpdError> {
 /// `--limit`'s default with `--closed` (§21.1).
 const DEFAULT_LIMIT: u32 = 50;
 
-
 fn parse_time(item: &Item, column: &str, value: &str) -> Result<OffsetDateTime, CpdError> {
     OffsetDateTime::parse(value, &Rfc3339).map_err(|_| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Inbox item {} has an invalid {column}: {value:?}.", item.id))
-            .with("item", item.id)
-            .with("column", column)
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Inbox item {} has an invalid {column}: {value:?}.", item.id),
+        )
+        .with("item", item.id)
+        .with("column", column)
     })
 }
 
@@ -171,26 +173,47 @@ fn engine_down(now: OffsetDateTime) -> Value {
 }
 
 fn context_exists(conn: &Connection, context: &ContextId) -> Result<(), CpdError> {
-    let found: Option<i64> =
-        conn.query_row("SELECT 1 FROM contexts WHERE id = ?1", [context.as_str()], |r| r.get(0)).optional()?;
+    let found: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM contexts WHERE id = ?1",
+            [context.as_str()],
+            |r| r.get(0),
+        )
+        .optional()?;
     found.map(|_| ()).ok_or_else(|| {
-        CpdError::new(ErrorCode::ContextNotFound, format!("No Context {context}.")).with("context", context.as_str())
+        CpdError::new(ErrorCode::ContextNotFound, format!("No Context {context}."))
+            .with("context", context.as_str())
     })
 }
 
 /// `inbox list` (§21.1).
 fn list(ports: &Ports, args: ListArgs) -> Result<Output, CpdError> {
-    let Env { home, mut store, .. } = Env::open_with(ports)?;
+    let Env {
+        home, mut store, ..
+    } = Env::open_with(ports)?;
     let now = ports.clock.utc();
-    let filter = |state| Filter { context: args.context.clone(), state };
+    let filter = |state| Filter {
+        context: args.context.clone(),
+        state,
+    };
     let (open, visible, closed, cursor, manager) = store.read(|conn| {
         if let Some(context) = &args.context {
             context_exists(conn, context)?;
         }
         let open = model::list(conn, &filter(State::Open))?;
-        let visible = model::list(conn, &filter(State::Visible { now: timestamp(now) }))?;
+        let visible = model::list(
+            conn,
+            &filter(State::Visible {
+                now: timestamp(now),
+            }),
+        )?;
         let closed = match args.closed {
-            true => model::list(conn, &filter(State::Closed { limit: args.limit.unwrap_or(DEFAULT_LIMIT) }))?,
+            true => model::list(
+                conn,
+                &filter(State::Closed {
+                    limit: args.limit.unwrap_or(DEFAULT_LIMIT),
+                }),
+            )?,
             false => Vec::new(),
         };
         // A live Manager (role `manager`, not archived) handles a stopped engine: the tree restarts it and a failure goes to
@@ -233,7 +256,11 @@ fn list(ports: &Ports, args: ListArgs) -> Result<Output, CpdError> {
         }
         items.push(value);
     }
-    let count = |what: &str| open.iter().filter(|i| !is_visible(i) && hidden(i) == what).count();
+    let count = |what: &str| {
+        open.iter()
+            .filter(|i| !is_visible(i) && hidden(i) == what)
+            .count()
+    };
     Ok(Output::success(json!({
         "engine": {"running": running},
         "items": items,
@@ -247,9 +274,12 @@ fn not_found(id: i64) -> CpdError {
 }
 
 fn closed(item: &Item) -> CpdError {
-    CpdError::new(ErrorCode::ItemClosed, format!("Inbox item {} is closed: it cannot be hidden.", item.id))
-        .with("item", item.id)
-        .with("closed_at", item.closed_at.clone())
+    CpdError::new(
+        ErrorCode::ItemClosed,
+        format!("Inbox item {} is closed: it cannot be hidden.", item.id),
+    )
+    .with("item", item.id)
+    .with("closed_at", item.closed_at.clone())
 }
 
 /// The item `id`, which must be open.
@@ -271,9 +301,15 @@ fn show(ports: &Ports, args: ShowArgs) -> Result<Output, CpdError> {
 
 /// The offset of local time, as `date +%z` prints it (`+0200`, `-0530`): one call on `runner`.
 pub fn local_offset_with(runner: &dyn Runner) -> Result<UtcOffset, CpdError> {
-    let fail = |message: String| CpdError::new(ErrorCode::SpawnFailed, message).with("argv", json!(["date", "+%z"]));
+    let fail = |message: String| {
+        CpdError::new(ErrorCode::SpawnFailed, message).with("argv", json!(["date", "+%z"]))
+    };
     let out = runner
-        .output(Process::new("date").arg("+%z").stdin(Stdio::null()), "date", NO_DEADLINE)
+        .output(
+            Process::new("date").arg("+%z").stdin(Stdio::null()),
+            "date",
+            NO_DEADLINE,
+        )
         .map_err(|e| match e {
             Failed::Io(e) => fail(format!("Cannot run `date +%z`: {e}.")),
             Failed::Timeout(e) => e,
@@ -283,8 +319,12 @@ pub fn local_offset_with(runner: &dyn Runner) -> Result<UtcOffset, CpdError> {
         return Err(fail(format!("`date +%z` failed: {stderr}")).with("stderr", stderr));
     }
     let text = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-    parse_offset(&text)
-        .ok_or_else(|| fail(format!("`date +%z` printed {text:?}, not an offset like +0200.")).with("stdout", text))
+    parse_offset(&text).ok_or_else(|| {
+        fail(format!(
+            "`date +%z` printed {text:?}, not an offset like +0200."
+        ))
+        .with("stdout", text)
+    })
 }
 
 fn parse_offset(text: &str) -> Option<UtcOffset> {
@@ -301,14 +341,22 @@ fn parse_offset(text: &str) -> Option<UtcOffset> {
 }
 
 /// When `until` is, counting from `now`; `tomorrow`'s local offset comes from `date +%z` on `runner` (§21.3).
-fn snooze_until(runner: &dyn Runner, until: Until, now: OffsetDateTime) -> Result<OffsetDateTime, CpdError> {
+fn snooze_until(
+    runner: &dyn Runner,
+    until: Until,
+    now: OffsetDateTime,
+) -> Result<OffsetDateTime, CpdError> {
     match until {
         Until::Minutes15 => Ok(now + Duration::minutes(15)),
         Until::Hour1 => Ok(now + Duration::hours(1)),
         Until::Tomorrow => {
             let local = now.to_offset(local_offset_with(runner)?);
             let today = local.replace_time(Time::from_hms(9, 0, 0).expect("09:00 is a time"));
-            Ok(if today > local { today } else { today + Duration::days(1) })
+            Ok(if today > local {
+                today
+            } else {
+                today + Duration::days(1)
+            })
         }
     }
 }
@@ -327,8 +375,19 @@ fn snooze(ports: &Ports, args: SnoozeArgs) -> Result<Output, CpdError> {
     let said = crate::clock::prose(until_at, &ports.clock.zone());
     let item = store.write("inbox snooze", |tx| {
         let item = open_item(tx, args.id)?;
-        tx.execute("UPDATE inbox_items SET snoozed_until = ?2 WHERE id = ?1", params![item.id, until])?;
-        let event = NewEvent::inbox_snoozed(format!("Inbox item {} snoozed until {said}: {}.", item.id, model::one_line(&item.label)), item.id, &until);
+        tx.execute(
+            "UPDATE inbox_items SET snoozed_until = ?2 WHERE id = ?1",
+            params![item.id, until],
+        )?;
+        let event = NewEvent::inbox_snoozed(
+            format!(
+                "Inbox item {} snoozed until {said}: {}.",
+                item.id,
+                model::one_line(&item.label)
+            ),
+            item.id,
+            &until,
+        );
         events::append(tx, scoped(event, &item))?;
         model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))
     })?;
@@ -342,17 +401,32 @@ fn dismiss(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
     // Already dismissed writes nothing, not even a `txns` row.
     let before = store.read(|conn| open_item(conn, args.id))?;
     if before.dismissed_at.is_some() {
-        return Ok(Output::success(json!({"already": true, "item": item_json(&before, now)?})));
+        return Ok(Output::success(
+            json!({"already": true, "item": item_json(&before, now)?}),
+        ));
     }
     let (item, already) = store.write("inbox dismiss", |tx| {
         let item = open_item(tx, args.id)?;
         if item.dismissed_at.is_some() {
             return Ok((item, true));
         }
-        tx.execute("UPDATE inbox_items SET dismissed_at = ?2 WHERE id = ?1", params![item.id, timestamp(now)])?;
-        let event = NewEvent::inbox_dismissed(format!("Inbox item {} dismissed: {}.", item.id, model::one_line(&item.label)), item.id);
+        tx.execute(
+            "UPDATE inbox_items SET dismissed_at = ?2 WHERE id = ?1",
+            params![item.id, timestamp(now)],
+        )?;
+        let event = NewEvent::inbox_dismissed(
+            format!(
+                "Inbox item {} dismissed: {}.",
+                item.id,
+                model::one_line(&item.label)
+            ),
+            item.id,
+        );
         events::append(tx, scoped(event, &item))?;
-        Ok((model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))?, false))
+        Ok((
+            model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))?,
+            false,
+        ))
     })?;
     let mut fields = json!({"item": item_json(&item, now)?});
     if already {
@@ -374,17 +448,28 @@ fn approve(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
 pub(super) fn approve_in(env: &mut Env, id: i64) -> Result<Output, CpdError> {
     let item = env.store.read(|conn| open_item(conn, id))?;
     if item.kind != Kind::Deploy {
-        return Err(CpdError::new(ErrorCode::NotApprovable, format!("Inbox item {id} is not approvable: only a deploy item is."))
-            .with("item", item.id)
-            .with("kind", item.kind.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::NotApprovable,
+            format!("Inbox item {id} is not approvable: only a deploy item is."),
+        )
+        .with("item", item.id)
+        .with("kind", item.kind.as_str()));
     }
     let (repo, run_id) = item
         .subject
         .strip_prefix("deploy:")
         .and_then(|s| s.split_once('#'))
         .and_then(|(repo, run)| Some((repo, run.parse::<u64>().ok()?)))
-        .filter(|(repo, _)| repo.split_once('/').is_some_and(|(o, r)| !o.is_empty() && !r.is_empty()))
-        .ok_or_else(|| CpdError::bad_row(format!("Inbox item {id} has an invalid deploy subject: {:?}.", item.subject)))?;
+        .filter(|(repo, _)| {
+            repo.split_once('/')
+                .is_some_and(|(o, r)| !o.is_empty() && !r.is_empty())
+        })
+        .ok_or_else(|| {
+            CpdError::bad_row(format!(
+                "Inbox item {id} has an invalid deploy subject: {:?}.",
+                item.subject
+            ))
+        })?;
     let environments = crate::pr::deploys::approvable(&*env.ports.runner, &env.home, repo, run_id)?;
     if !environments.is_empty() {
         crate::pr::deploys::approve(&*env.ports.runner, &env.home, repo, run_id, &environments)?;
@@ -414,12 +499,17 @@ fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
     let now = ports.clock.utc();
     let item = env.store.read(|conn| open_item(conn, args.id))?;
     if item.claimed_at.is_some() {
-        return Ok(Output::success(json!({"already": true, "item": item_json(&item, now)?})));
+        return Ok(Output::success(
+            json!({"already": true, "item": item_json(&item, now)?}),
+        ));
     }
     if item.kind != Kind::ReviewRequested || item.dismissed_at.is_some() {
         return Err(CpdError::new(
             ErrorCode::NotClaimable,
-            format!("Inbox item {} is not claimable: only an undismissed review-requested item is.", item.id),
+            format!(
+                "Inbox item {} is not claimable: only an undismissed review-requested item is.",
+                item.id
+            ),
         )
         .with("item", item.id)
         .with("kind", item.kind.as_str()));
@@ -427,9 +517,12 @@ fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
     let key = "inbox.review_context";
     let review = &env.config.inbox.review_context;
     if review.is_empty() {
-        return Err(CpdError::new(ErrorCode::ReviewContextUnset, format!("{key} is not set: there is no Context to claim into."))
-            .with("key", key)
-            .with("next", format!("cpd config set {key} <context>")));
+        return Err(CpdError::new(
+            ErrorCode::ReviewContextUnset,
+            format!("{key} is not set: there is no Context to claim into."),
+        )
+        .with("key", key)
+        .with("next", format!("cpd config set {key} <context>")));
     }
     let context = ContextId::parse(review)?;
     let manager = env.store.read(|conn| {
@@ -453,9 +546,15 @@ fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
     })?;
     let manager = SessionId::parse(&manager)?;
     let missing = || {
-        CpdError::new(ErrorCode::PostNotFound, format!("No Slack post of {} is in the team review cache.", item.subject))
-            .with("item", item.id)
-            .with("subject", item.subject.clone())
+        CpdError::new(
+            ErrorCode::PostNotFound,
+            format!(
+                "No Slack post of {} is in the team review cache.",
+                item.subject
+            ),
+        )
+        .with("item", item.id)
+        .with("subject", item.subject.clone())
     };
     let cache = team::read_cache(&env.home)?.ok_or_else(missing)?;
     let (repo, number) = item
@@ -473,16 +572,35 @@ fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
     let claimed = timestamp(now);
     let (channel, ts_raw) = (cache.channel.clone(), post.ts_raw.clone());
     let item = Ports::scope(ports, || {
-        session::send::send_as_user(&mut env, &manager, "inbox claim", &text, &format!("the review of {}", model::one_line(&item.label)), |tx| {
-            let item = open_item(tx, args.id)?;
-            tx.execute("UPDATE inbox_items SET claimed_at = ?2 WHERE id = ?1", params![item.id, claimed])?;
-            let event = NewEvent::inbox_claimed(format!("Inbox item {} claimed: {}.", item.id, model::one_line(&item.label)), item.id);
-            events::append(tx, scoped(event, &item))?;
-            crate::pr::reactions::queue(tx, &channel, &ts_raw, "eyes")?;
-            model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))
-        })
+        session::send::send_as_user(
+            &mut env,
+            &manager,
+            "inbox claim",
+            &text,
+            &format!("the review of {}", model::one_line(&item.label)),
+            |tx| {
+                let item = open_item(tx, args.id)?;
+                tx.execute(
+                    "UPDATE inbox_items SET claimed_at = ?2 WHERE id = ?1",
+                    params![item.id, claimed],
+                )?;
+                let event = NewEvent::inbox_claimed(
+                    format!(
+                        "Inbox item {} claimed: {}.",
+                        item.id,
+                        model::one_line(&item.label)
+                    ),
+                    item.id,
+                );
+                events::append(tx, scoped(event, &item))?;
+                crate::pr::reactions::queue(tx, &channel, &ts_raw, "eyes")?;
+                model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))
+            },
+        )
     })?;
-    Ok(Output::success(json!({"item": item_json(&item, now)?, "manager": manager.as_str()})))
+    Ok(Output::success(
+        json!({"item": item_json(&item, now)?, "manager": manager.as_str()}),
+    ))
 }
 
 /// `event` with the links of `item` (§5.2: `context?, plan?, job?, session?`).
@@ -538,9 +656,27 @@ mod tests {
         // opened newest tier-first, so only the tier rank (and then age) can produce the expected order
         for (at, rows) in [
             ("t1", vec![(Urgency::White, "w-old")]),
-            ("t2", vec![(Urgency::White, "w-old"), (Urgency::Cyan, "b-old")]),
-            ("t3", vec![(Urgency::White, "w-old"), (Urgency::Cyan, "b-old"), (Urgency::Magenta, "m-old")]),
-            ("t4", vec![(Urgency::White, "w-old"), (Urgency::Cyan, "b-old"), (Urgency::Magenta, "m-old"), (Urgency::Yellow, "y-old")]),
+            (
+                "t2",
+                vec![(Urgency::White, "w-old"), (Urgency::Cyan, "b-old")],
+            ),
+            (
+                "t3",
+                vec![
+                    (Urgency::White, "w-old"),
+                    (Urgency::Cyan, "b-old"),
+                    (Urgency::Magenta, "m-old"),
+                ],
+            ),
+            (
+                "t4",
+                vec![
+                    (Urgency::White, "w-old"),
+                    (Urgency::Cyan, "b-old"),
+                    (Urgency::Magenta, "m-old"),
+                    (Urgency::Yellow, "y-old"),
+                ],
+            ),
             (
                 "t5",
                 vec![
@@ -553,13 +689,25 @@ mod tests {
                 ],
             ),
         ] {
-            let conditions: Vec<Condition> = rows.into_iter().map(|(u, s)| condition(u, s)).collect();
+            let conditions: Vec<Condition> =
+                rows.into_iter().map(|(u, s)| condition(u, s)).collect();
             reconcile(&mut store, &conditions, at).unwrap();
         }
         let items = store
-            .read(|c| model::list(c, &Filter { context: None, state: State::Open }))
+            .read(|c| {
+                model::list(
+                    c,
+                    &Filter {
+                        context: None,
+                        state: State::Open,
+                    },
+                )
+            })
             .unwrap();
         let order: Vec<&str> = items.iter().map(|i| i.subject.as_str()).collect();
-        assert_eq!(order, ["r-old", "y-old", "m-old", "b-old", "b-new", "w-old"]);
+        assert_eq!(
+            order,
+            ["r-old", "y-old", "m-old", "b-old", "b-new", "w-old"]
+        );
     }
 }

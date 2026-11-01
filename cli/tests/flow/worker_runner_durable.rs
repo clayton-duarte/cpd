@@ -56,7 +56,13 @@ pub(super) fn runner_file(adapter: &Path) -> PathBuf {
 /// The config of `live` from now on: `worker_runner = <runner>` and `pi_adapter = <adapter>`, then `tables` (`[timeouts]` and the
 /// like). An Attempt takes its runner from this file when it is dispatched.
 pub(super) fn use_runner(live: &Live, runner: &str, adapter: &Path, tables: &str) {
-    seed_home(&live.fx.env, &format!("worker_runner = \"{runner}\"\npi_adapter = \"{}\"\n{tables}", adapter.display()));
+    seed_home(
+        &live.fx.env,
+        &format!(
+            "worker_runner = \"{runner}\"\npi_adapter = \"{}\"\n{tables}",
+            adapter.display()
+        ),
+    );
 }
 
 /// Plan `pay` with Job `api` queued, `worker_runner = "durable"` and an adapter directory that holds the runner file. `tables` is
@@ -70,14 +76,27 @@ pub(super) fn durable_live(tables: &str) -> Live {
     live.fx.env.quiet_models(live.fx.fakes.clock.utc());
     let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2030-01-01T00:00:00.000Z"}});
     let exe = std::env::current_exe().expect("the test binary's path");
-    live.fx.fake(exe.file_name().expect("a file name").to_str().expect("UTF-8"), Reply::ok(&poll.to_string()));
+    live.fx.fake(
+        exe.file_name()
+            .expect("a file name")
+            .to_str()
+            .expect("UTF-8"),
+        Reply::ok(&poll.to_string()),
+    );
     live
 }
 
 /// Writes the end report of Attempt `id`'s runner, `run/pay/attempts/<id>.report.json` (contract §6.12 `EndReport`): what the real
 /// runner leaves after each settle. `report` is the JSON of the file.
 pub(super) fn write_report(live: &Live, id: &str, report: &Value) {
-    let path = live.fx.env.cpd_home().join("run").join(PLAN).join("attempts").join(format!("{id}.report.json"));
+    let path = live
+        .fx
+        .env
+        .cpd_home()
+        .join("run")
+        .join(PLAN)
+        .join("attempts")
+        .join(format!("{id}.report.json"));
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, report.to_string()).unwrap();
 }
@@ -104,19 +123,28 @@ fn pid_of_launch(i: usize) -> Pid {
 /// The pid stored as the Worker's (`attempt show`'s `worker_pid`); the test fails when none is stored.
 fn stored_pid(live: &Live, id: &str) -> Pid {
     let attempt = live.attempt(id);
-    let pid = attempt["worker_pid"].as_u64().unwrap_or_else(|| panic!("no worker_pid is stored: {attempt}"));
+    let pid = attempt["worker_pid"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("no worker_pid is stored: {attempt}"));
     Pid(u32::try_from(pid).unwrap())
 }
 
 /// What a process of `launch` shows as its command line.
 fn cmdline_of(launch: &Launch) -> String {
-    std::iter::once(launch.program.as_str()).chain(launch.args.iter().map(String::as_str)).collect::<Vec<_>>().join(" ")
+    std::iter::once(launch.program.as_str())
+        .chain(launch.args.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The runner's `Launch`, the second of the `FakeSpawn` (after the driver's), when the driver started it; the test fails otherwise.
 fn the_runners_launch(live: &Live) -> Launch {
     let launches = live.fx.fakes.spawn.launches();
-    assert_eq!(launches.len(), 2, "the driver's launch and the runner's: {launches:#?}");
+    assert_eq!(
+        launches.len(),
+        2,
+        "the driver's launch and the runner's: {launches:#?}"
+    );
     launches[1].clone()
 }
 
@@ -132,8 +160,16 @@ fn the_runner(live: &Live, id: &str) -> Pid {
 
 /// `job cancel` as the Worker's pi runs it, and the engine's E2 that sets the stop request of the Attempt it finds with a cancel.
 fn cancel(live: &Live, id: &str) {
-    live.fx.cpd_with(&live.worktree(id), &["job", "cancel", JOB, "--reason", "no longer needed"], &[("CPD_PLAN", PLAN), ("CPD_ATTEMPT", id)]).ok();
-    live.fixture(&format!("UPDATE attempts SET stop_request = 'cancelled' WHERE plan = 'pay' AND id = '{id}';"));
+    live.fx
+        .cpd_with(
+            &live.worktree(id),
+            &["job", "cancel", JOB, "--reason", "no longer needed"],
+            &[("CPD_PLAN", PLAN), ("CPD_ATTEMPT", id)],
+        )
+        .ok();
+    live.fixture(&format!(
+        "UPDATE attempts SET stop_request = 'cancelled' WHERE plan = 'pay' AND id = '{id}';"
+    ));
 }
 
 /// A Worker that commits `api.txt` and submits.
@@ -158,49 +194,88 @@ fn end_detail(live: &Live, id: &str) -> String {
 
 fn assert_ended(live: &Live, id: &str, outcome: &str, cause: &str) {
     let attempt = live.attempt(id);
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!(outcome), &json!(cause)), "{attempt}");
+    assert_eq!(
+        (&attempt["outcome"], &attempt["cause"]),
+        (&json!(outcome), &json!(cause)),
+        "{attempt}"
+    );
 }
 
 /// The Attempt never got a Worker: no `starting -> running` transition, no pid, no window.
 fn assert_never_ran(live: &Live, id: &str) {
     let attempt = live.attempt(id);
     assert_eq!(attempt["worker_pid"], Value::Null, "{attempt}");
-    let running = live.events(id).into_iter().filter(|e| e["kind"] == "attempt-status" && e["data"]["to"] == "running").count();
+    let running = live
+        .events(id)
+        .into_iter()
+        .filter(|e| e["kind"] == "attempt-status" && e["data"]["to"] == "running")
+        .count();
     assert_eq!(running, 0, "the Attempt ran: {attempt}");
     assert_eq!(new_windows(live), 0);
 }
 
 /// How many windows the driver asked tmux for.
 fn new_windows(live: &Live) -> usize {
-    live.fx.calls("tmux").iter().filter(|c| c.args.iter().any(|a| a == "new-window")).count()
+    live.fx
+        .calls("tmux")
+        .iter()
+        .filter(|c| c.args.iter().any(|a| a == "new-window"))
+        .count()
 }
 
 /// The driver's log of Attempt `id`.
 fn driver_log(live: &Live, id: &str) -> String {
-    fs::read_to_string(home(live).driver_log(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(id).unwrap())).unwrap_or_default()
+    fs::read_to_string(home(live).driver_log(
+        &PlanId::parse(PLAN).unwrap(),
+        &AttemptId::parse(id).unwrap(),
+    ))
+    .unwrap_or_default()
 }
 
 /// The txn of the one `history` row that satisfies `where_`.
 fn txn_of(live: &Live, where_: &str) -> i64 {
-    live.value(&format!("SELECT txn FROM history WHERE {where_} ORDER BY id LIMIT 1"))
+    live.value(&format!(
+        "SELECT txn FROM history WHERE {where_} ORDER BY id LIMIT 1"
+    ))
 }
 
 /// pi's Node as the driver reads it: the one `config::catalog::node()` finds under this env's `$HOME` (no `XDG_DATA_HOME`).
 fn pi_node(live: &Live) -> String {
     let home = live.fx.env.home();
-    let (home_s, data_s) = (home.display().to_string(), home.join(".local").join("share").display().to_string());
-    live.fx.with_vars(&[("HOME", home_s.as_str()), ("XDG_DATA_HOME", data_s.as_str())], || catalog::node().display().to_string())
+    let (home_s, data_s) = (
+        home.display().to_string(),
+        home.join(".local").join("share").display().to_string(),
+    );
+    live.fx.with_vars(
+        &[
+            ("HOME", home_s.as_str()),
+            ("XDG_DATA_HOME", data_s.as_str()),
+        ],
+        || catalog::node().display().to_string(),
+    )
 }
 
 /// `Live::drive` of Job `api`, with `before` run between `job dispatch` and the driver (the one place a test can change the fakes after
 /// the starter spawned the driver): `hook(live, id, n)` is called after the driver's `n`th nap.
-fn drive_after(live: &Live, before: impl FnOnce(), mut hook: impl FnMut(&Live, &str, usize)) -> String {
-    let id = live.dispatch(JOB).ok()["attempt"].as_str().unwrap().to_owned();
+fn drive_after(
+    live: &Live,
+    before: impl FnOnce(),
+    mut hook: impl FnMut(&Live, &str, usize),
+) -> String {
+    let id = live.dispatch(JOB).ok()["attempt"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let launch = live.fx.take_launch(0);
-    let lock = home(live).attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(&id).unwrap());
+    let lock = home(live).attempt_lock(
+        &PlanId::parse(PLAN).unwrap(),
+        &AttemptId::parse(&id).unwrap(),
+    );
     let _fd3 = live.fx.hand_over(fs::File::open(lock).unwrap());
     before();
-    let ran = live.fx.run_launch_with(&launch, |_, nap| hook(live, &id, nap));
+    let ran = live
+        .fx
+        .run_launch_with(&launch, |_, nap| hook(live, &id, nap));
     assert_eq!(ran.exit, 0, "{}", ran.stdout);
     id
 }
@@ -271,8 +346,15 @@ fn a_durable_attempt_runs_the_runner_as_a_detached_child_and_not_in_a_tmux_windo
     assert!(checked, "the driver napped");
     assert_ended(&live, &id, "merged", "merged");
     // The runner ended on the SIGTERM of the stop before the merge: no SIGKILL for a process that is gone.
-    assert_eq!(live.fx.fakes.spawn.signals(), [(pid_of_launch(1), Signal::Term)]);
-    assert_eq!(live.fx.fakes.spawn.launches().len(), 2, "nothing started the runner again");
+    assert_eq!(
+        live.fx.fakes.spawn.signals(),
+        [(pid_of_launch(1), Signal::Term)]
+    );
+    assert_eq!(
+        live.fx.fakes.spawn.launches().len(),
+        2,
+        "nothing started the runner again"
+    );
 }
 
 #[test]
@@ -282,10 +364,16 @@ fn a_missing_runner_file_ends_the_attempt_setup_failed_before_any_spawn() {
     let adapter = adapter(&live, false);
     use_runner(&live, "durable", &adapter, "");
 
-    let (id, _) = live.drive(JOB, |_, _, nap| panic!("the driver waited for a Worker at nap {nap}: it started one"));
+    let (id, _) = live.drive(JOB, |_, _, nap| {
+        panic!("the driver waited for a Worker at nap {nap}: it started one")
+    });
 
     assert_ended(&live, &id, "failed", "setup_failed");
-    assert_eq!(live.fx.fakes.spawn.launches().len(), 1, "the driver's own launch is the only one: nothing was spawned");
+    assert_eq!(
+        live.fx.fakes.spawn.launches().len(),
+        1,
+        "the driver's own launch is the only one: nothing was spawned"
+    );
     assert_never_ran(&live, &id);
 }
 
@@ -295,14 +383,30 @@ fn a_spawn_that_fails_ends_the_attempt_setup_failed() {
 
     let id = drive_after(
         &live,
-        || live.fx.fakes.spawn.fail_spawn(io::ErrorKind::PermissionDenied),
+        || {
+            live.fx
+                .fakes
+                .spawn
+                .fail_spawn(io::ErrorKind::PermissionDenied)
+        },
         |_, _, nap| panic!("the driver waited for a Worker at nap {nap}: its spawn failed"),
     );
 
     assert_ended(&live, &id, "failed", "setup_failed");
     let launches = live.fx.fakes.spawn.launches();
-    assert_eq!(launches.len(), 2, "the driver's launch, and the runner's that failed: {launches:#?}");
-    assert!(launches[1].args.iter().any(|a| a.ends_with("durable-worker/main.ts")), "{:?}", launches[1]);
+    assert_eq!(
+        launches.len(),
+        2,
+        "the driver's launch, and the runner's that failed: {launches:#?}"
+    );
+    assert!(
+        launches[1]
+            .args
+            .iter()
+            .any(|a| a.ends_with("durable-worker/main.ts")),
+        "{:?}",
+        launches[1]
+    );
     assert_never_ran(&live, &id);
 }
 
@@ -319,12 +423,23 @@ fn a_durable_runner_that_exits_1_is_started_again_up_to_three_times_then_the_att
         let launches = spawn.launches();
         let n = nap;
         // The runner of this nap is the (nap)th started: the driver's own launch is the first.
-        assert_eq!(launches.len(), n + 1, "nap {nap}: the runner was started again in place: {launches:#?}");
+        assert_eq!(
+            launches.len(),
+            n + 1,
+            "nap {nap}: the runner was started again in place: {launches:#?}"
+        );
         let pid = pid_of_launch(n);
-        assert_eq!(stored_pid(live, id), pid, "nap {nap}: the new pid is stored");
+        assert_eq!(
+            stored_pid(live, id),
+            pid,
+            "nap {nap}: the new pid is stored"
+        );
         match &first {
             None => first = Some(launches[1].clone()),
-            Some(first) => assert_eq!(&launches[n], first, "nap {nap}: the same launch again, so the store and the conversation resume"),
+            Some(first) => assert_eq!(
+                &launches[n], first,
+                "nap {nap}: the same launch again, so the store and the conversation resume"
+            ),
         }
         assert!(spawn.alive(pid));
         match nap {
@@ -336,9 +451,19 @@ fn a_durable_runner_that_exits_1_is_started_again_up_to_three_times_then_the_att
     });
 
     assert_ended(&live, &id, "failed", "crashed");
-    assert_eq!(spawn.launches().len(), 5, "the driver and the runner four times: three restarts");
+    assert_eq!(
+        spawn.launches().len(),
+        5,
+        "the driver and the runner four times: three restarts"
+    );
     let log = driver_log(&live, &id);
-    assert!(log.lines().filter(|l| l.to_lowercase().contains("restart")).count() >= 3, "each restart is logged: {log}");
+    assert!(
+        log.lines()
+            .filter(|l| l.to_lowercase().contains("restart"))
+            .count()
+            >= 3,
+        "each restart is logged: {log}"
+    );
 }
 
 #[test]
@@ -354,10 +479,25 @@ fn a_durable_runner_that_exits_2_ends_the_attempt_crashed_without_a_restart() {
     });
 
     assert_ended(&live, &id, "failed", "crashed");
-    assert_eq!(spawn.launches().len(), 2, "the runner was not started again");
-    let log = live.fx.env.cpd_home().join("run").join(PLAN).join("logs").join(format!("worker-{id}.log"));
+    assert_eq!(
+        spawn.launches().len(),
+        2,
+        "the runner was not started again"
+    );
+    let log = live
+        .fx
+        .env
+        .cpd_home()
+        .join("run")
+        .join(PLAN)
+        .join("logs")
+        .join(format!("worker-{id}.log"));
     let detail = end_detail(&live, &id);
-    assert!(detail.contains(&log.display().to_string()), "the detail names the Worker's log file {}: {detail}", log.display());
+    assert!(
+        detail.contains(&log.display().to_string()),
+        "the detail names the Worker's log file {}: {detail}",
+        log.display()
+    );
 }
 
 // ---------- stop (R8) ----------
@@ -386,10 +526,17 @@ fn a_cancel_stops_the_runner_with_term_then_kill_after_the_grace() {
 
     let pid = pid.unwrap();
     assert_ended(&live, &id, "cancelled", "cancel_requested");
-    assert_eq!(spawn.signals(), [(pid, Signal::Term), (pid, Signal::Kill)], "SIGTERM, then SIGKILL");
+    assert_eq!(
+        spawn.signals(),
+        [(pid, Signal::Term), (pid, Signal::Kill)],
+        "SIGTERM, then SIGKILL"
+    );
     assert!(!spawn.alive(pid));
     let waited = live.fx.fakes.clock.elapsed() - asked_at.unwrap();
-    assert!(waited >= std::time::Duration::from_secs(GRACE_SECONDS), "SIGKILL came after {waited:?} of clock, before the {GRACE_SECONDS} s of timeouts.pi_stop_seconds");
+    assert!(
+        waited >= std::time::Duration::from_secs(GRACE_SECONDS),
+        "SIGKILL came after {waited:?} of clock, before the {GRACE_SECONDS} s of timeouts.pi_stop_seconds"
+    );
 }
 
 /// A signal goes to a stored `worker_pid` only when its command line holds the runner file and this Attempt's Spec path: the pid may
@@ -400,8 +547,15 @@ fn a_stop_sends_no_signal_to_a_pid_that_is_not_the_runner_of_this_attempt() {
     type Shown = fn(&str, &str) -> String;
     let others: [(&str, Shown); 3] = [
         ("an unrelated process", |_, _| "sleep 100".to_owned()),
-        ("the runner of another Attempt", |runner, spec| format!("node {runner} --model p/sonnet:medium --spec {}", spec.replace("api-a1", "api-a2"))),
-        ("another program on this Attempt's Spec", |_, spec| format!("node /elsewhere/main.ts --model p/sonnet:medium --spec {spec}")),
+        ("the runner of another Attempt", |runner, spec| {
+            format!(
+                "node {runner} --model p/sonnet:medium --spec {}",
+                spec.replace("api-a1", "api-a2")
+            )
+        }),
+        ("another program on this Attempt's Spec", |_, spec| {
+            format!("node /elsewhere/main.ts --model p/sonnet:medium --spec {spec}")
+        }),
     ];
     for (what, shown) in others {
         let live = durable_live(GRACE);
@@ -412,15 +566,29 @@ fn a_stop_sends_no_signal_to_a_pid_that_is_not_the_runner_of_this_attempt() {
         let (id, _) = live.drive(JOB, |live, id, nap| {
             if nap == 1 {
                 let runner = stored_pid(live, id);
-                let spec = home(live).worker_spec(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(id).unwrap());
-                spawn.set_cmdline(runner, &shown(&runner_file(&adapter).display().to_string(), &spec.display().to_string()));
+                let spec = home(live).worker_spec(
+                    &PlanId::parse(PLAN).unwrap(),
+                    &AttemptId::parse(id).unwrap(),
+                );
+                spawn.set_cmdline(
+                    runner,
+                    &shown(
+                        &runner_file(&adapter).display().to_string(),
+                        &spec.display().to_string(),
+                    ),
+                );
                 pid = Some(runner);
                 cancel(live, id);
             }
         });
 
         assert_ended(&live, &id, "cancelled", "cancel_requested");
-        assert_eq!(spawn.signals(), [], "{what}: a signal went to pid {:?}", pid);
+        assert_eq!(
+            spawn.signals(),
+            [],
+            "{what}: a signal went to pid {:?}",
+            pid
+        );
         drop(live);
     }
 }
@@ -437,7 +605,11 @@ fn a_reloaded_driver_resumes_a_pi_attempt_as_pi_when_the_config_now_says_durable
 
     let (exec, _fd3) = run_until_exec(&re, &launch, |_, nap| {
         if nap == 1 {
-            assert_eq!(re.fx().fakes.spawn.launches().len(), 1, "a pi Worker runs in a window: the driver is the only process");
+            assert_eq!(
+                re.fx().fakes.spawn.launches().len(),
+                1,
+                "a pi Worker runs in a window: the driver is the only process"
+            );
             assert_eq!(new_windows(&re.live), 1);
             // The flag moves while the driver runs, and a new cpd is installed.
             use_runner(&re.live, "durable", &adapter, "");
@@ -454,10 +626,22 @@ fn a_reloaded_driver_resumes_a_pi_attempt_as_pi_when_the_config_now_says_durable
 
     re.assert_merged(&old_lead);
     let attempt = re.live.attempt(ATTEMPT);
-    assert_eq!((&attempt["runner"], &attempt["worker_pid"]), (&json!("pi"), &Value::Null), "{attempt}");
+    assert_eq!(
+        (&attempt["runner"], &attempt["worker_pid"]),
+        (&json!("pi"), &Value::Null),
+        "{attempt}"
+    );
     // Still pi: the Worker's window, no runner, no signal.
-    assert_eq!(new_windows(&re.live), 1, "the reloaded driver started no other window");
-    assert_eq!(re.fx().fakes.spawn.launches().len(), 2, "the driver and its exec: no runner was started");
+    assert_eq!(
+        new_windows(&re.live),
+        1,
+        "the reloaded driver started no other window"
+    );
+    assert_eq!(
+        re.fx().fakes.spawn.launches().len(),
+        2,
+        "the driver and its exec: no runner was started"
+    );
     assert_eq!(re.fx().fakes.spawn.signals(), []);
 }
 
@@ -480,12 +664,22 @@ fn a_reloaded_driver_resumes_a_durable_attempt_by_its_stored_pid_when_the_config
     });
     let runner = runner.expect("the driver napped");
     re.assert_exec_of_the_driver(&exec, Pid(1000));
-    assert!(re.fx().fakes.spawn.alive(runner), "the reload leaves the runner running");
-    assert_eq!(re.fx().fakes.spawn.launches().len(), 3, "the driver, the runner and the exec");
+    assert!(
+        re.fx().fakes.spawn.alive(runner),
+        "the reload leaves the runner running"
+    );
+    assert_eq!(
+        re.fx().fakes.spawn.launches().len(),
+        3,
+        "the driver, the runner and the exec"
+    );
 
     re.run_new(exec, |_, nap| {
         if nap == 1 {
-            assert!(re.fx().fakes.spawn.alive(runner), "the new driver found the runner alive by its stored pid");
+            assert!(
+                re.fx().fakes.spawn.alive(runner),
+                "the new driver found the runner alive by its stored pid"
+            );
             re.submit();
         }
     });
@@ -496,6 +690,10 @@ fn a_reloaded_driver_resumes_a_durable_attempt_by_its_stored_pid_when_the_config
     assert_eq!(attempt["worker_pid"], runner.0, "{attempt}");
     // Still durable: the same runner, stopped by its stored pid (SIGTERM, which it obeyed) before the merge; no window, no second runner.
     assert_eq!(re.fx().fakes.spawn.signals(), [(runner, Signal::Term)]);
-    assert_eq!(re.fx().fakes.spawn.launches().len(), 3, "the reloaded driver started no runner");
+    assert_eq!(
+        re.fx().fakes.spawn.launches().len(),
+        3,
+        "the reloaded driver started no runner"
+    );
     assert_eq!(new_windows(&re.live), 0);
 }

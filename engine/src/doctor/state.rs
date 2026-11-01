@@ -25,9 +25,13 @@ pub fn store(opened: Result<Store, CpdError>) -> (Check, Option<Store>) {
         Ok(store) => {
             let check = match store.schema_mismatch() {
                 None => Check::pass("store", Severity::Error),
-                Some(m) => Check::fail("store", Severity::Error, "The schema is not this cpd's: a table or trigger was changed outside cpd.")
-                    .found(m.found.clone())
-                    .expected(m.expected.clone()),
+                Some(m) => Check::fail(
+                    "store",
+                    Severity::Error,
+                    "The schema is not this cpd's: a table or trigger was changed outside cpd.",
+                )
+                .found(m.found.clone())
+                .expected(m.expected.clone()),
             };
             (check, Some(store))
         }
@@ -50,11 +54,14 @@ fn refusal_check(e: &CpdError) -> Check {
 /// The tamper report (contract §4.3) is empty; `found` lists it.
 pub fn tamper(store: Option<&mut Store>) -> Check {
     let name = "tamper";
-    let Some(store) = store else { return Check::not_checked(name, Severity::Error, NO_STORE) };
+    let Some(store) = store else {
+        return Check::not_checked(name, Severity::Error, NO_STORE);
+    };
     match tamper_report(store) {
         Err(e) => Check::from_error(name, Severity::Error, &e),
         Ok(report) if report.is_empty() => Check::pass(name, Severity::Error),
-        Ok(report) => Check::fail(name, Severity::Error, "The Ledger was changed outside cpd.").found(Value::Array(report)),
+        Ok(report) => Check::fail(name, Severity::Error, "The Ledger was changed outside cpd.")
+            .found(Value::Array(report)),
     }
 }
 
@@ -65,7 +72,9 @@ fn tamper_report(store: &mut Store) -> Result<Vec<Value>, CpdError> {
     let mut report = store.tamper()?;
     let fingerprints = store.read(|conn| {
         let mut stmt = conn.prepare("SELECT id FROM plans ORDER BY id")?;
-        let ids = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let ids = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut found = Vec::new();
         for id in ids {
             let id = PlanId::parse(&id)?;
@@ -80,9 +89,15 @@ fn tamper_report(store: &mut Store) -> Result<Vec<Value>, CpdError> {
 /// The engine runs (it holds `locks/watch.lock`) when any Plan is in `dispatch` or `deploy`.
 pub fn watch(home: &CpdHome, store: Option<&mut Store>) -> Check {
     let name = "watch";
-    let Some(store) = store else { return Check::not_checked(name, Severity::Warn, NO_STORE) };
+    let Some(store) = store else {
+        return Check::not_checked(name, Severity::Warn, NO_STORE);
+    };
     let plans = store.read(|conn| {
-        Ok(conn.query_row("SELECT count(*) FROM plans WHERE phase IN ('dispatch', 'deploy')", [], |r| r.get::<_, i64>(0))?)
+        Ok(conn.query_row(
+            "SELECT count(*) FROM plans WHERE phase IN ('dispatch', 'deploy')",
+            [],
+            |r| r.get::<_, i64>(0),
+        )?)
     });
     let plans = match plans {
         Ok(plans) => plans,
@@ -92,8 +107,16 @@ pub fn watch(home: &CpdHome, store: Option<&mut Store>) -> Check {
         return Check::pass(name, Severity::Warn).message("No Plan is in dispatch or pr.");
     }
     match engine_runs(&home.watch_lock()) {
-        Ok(true) => Check::pass(name, Severity::Warn).found(format!("{plans} Plan(s) in dispatch or pr; the engine runs")),
-        Ok(false) => Check::fail(name, Severity::Warn, format!("{plans} Plan(s) are in dispatch or pr and no engine runs: start it with `cpd watch --ensure`.")),
+        Ok(true) => Check::pass(name, Severity::Warn).found(format!(
+            "{plans} Plan(s) in dispatch or pr; the engine runs"
+        )),
+        Ok(false) => Check::fail(
+            name,
+            Severity::Warn,
+            format!(
+                "{plans} Plan(s) are in dispatch or pr and no engine runs: start it with `cpd watch --ensure`."
+            ),
+        ),
         Err(message) => Check::fail(name, Severity::Warn, message),
     }
 }
@@ -107,5 +130,7 @@ fn engine_runs(lock: &Path) -> Result<bool, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(format!("cannot open {}: {e}.", lock.display())),
     };
-    lock::shared(&file).map(|free| !free).map_err(|e| format!("cannot probe {}: {e}.", lock.display()))
+    lock::shared(&file)
+        .map(|free| !free)
+        .map_err(|e| format!("cannot probe {}: {e}.", lock.display()))
 }

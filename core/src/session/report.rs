@@ -5,13 +5,13 @@ use std::str::FromStr;
 
 use serde_json::{Map, Value, json};
 
+use super::row;
 use super::{Env, ReportArgs};
 use crate::args::SessionArg;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::NewEvent;
 use crate::events::repeat::{self, Same, Scope};
 use crate::output::Output;
-use super::row;
 
 const TEXT_MAX: usize = 2000;
 const CODE_MAX: usize = 64;
@@ -29,7 +29,9 @@ impl FromStr for Short {
     fn from_str(s: &str) -> Result<Short, CpdError> {
         let chars = s.chars().count();
         if chars == 0 || chars > TEXT_MAX {
-            return Err(usage(format!("The text must be 1 to {TEXT_MAX} characters.")).with("chars", chars));
+            return Err(
+                usage(format!("The text must be 1 to {TEXT_MAX} characters.")).with("chars", chars),
+            );
         }
         Ok(Short(s.to_owned()))
     }
@@ -47,7 +49,9 @@ impl FromStr for Code {
             && bytes.next().is_some_and(|b| b.is_ascii_lowercase())
             && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
         if !ok {
-            return Err(usage("The code must match ^[a-z][a-z0-9_]{0,63}$.".to_owned()).with("code", s));
+            return Err(
+                usage("The code must match ^[a-z][a-z0-9_]{0,63}$.".to_owned()).with("code", s),
+            );
         }
         Ok(Code(s.to_owned()))
     }
@@ -68,11 +72,21 @@ impl FromStr for Details {
 }
 
 pub(super) fn report(args: ReportArgs) -> Result<Output, CpdError> {
-    let reference = SessionArg { session: args.session }.require()?.clone();
+    let reference = SessionArg {
+        session: args.session,
+    }
+    .require()?
+    .clone();
     let mut env = Env::open()?;
     let id = env.resolve(&reference)?;
     let window = env.config.watch.error_repeat();
-    let ReportArgs { what, code, message, details, .. } = args;
+    let ReportArgs {
+        what,
+        code,
+        message,
+        details,
+        ..
+    } = args;
     let event = env.store.write("session report", |tx| {
         let session = row::load(tx, &id)?;
         let mut details = details.map_or_else(Map::new, |d| d.0);
@@ -80,8 +94,15 @@ pub(super) fn report(args: ReportArgs) -> Result<Output, CpdError> {
         details.insert("session".into(), json!(session.id));
         details.insert("plan".into(), json!(session.plan));
         let text = format!("φ adapter: {}: {}: {}", what.0, code.0, message.0);
-        let event = NewEvent::error(text, "adapter", &code.0, &message.0, Value::Object(details)).context(session.context.clone()).session(session.id.clone());
-        let same = Same::Message { source: "adapter", code: &code.0, message: &message.0, scope: Scope::Session(&session.id) };
+        let event = NewEvent::error(text, "adapter", &code.0, &message.0, Value::Object(details))
+            .context(session.context.clone())
+            .session(session.id.clone());
+        let same = Same::Message {
+            source: "adapter",
+            code: &code.0,
+            message: &message.0,
+            scope: Scope::Session(&session.id),
+        };
         repeat::append_once(tx, window, &same, event)
     })?;
     Ok(Output::success(json!({"event": event})))

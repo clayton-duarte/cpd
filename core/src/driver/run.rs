@@ -11,13 +11,13 @@ use std::time::{Duration, Instant, SystemTime};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
-use crate::clock;
-use crate::attempt::ledger::{self, Attempt as Target, Cause, End, Ladder, Stage};
+use super::RunArgs;
 use super::lock;
 use super::runner;
 use super::stall;
 use super::worker;
-use super::RunArgs;
+use crate::attempt::ledger::{self, Attempt as Target, Cause, End, Ladder, Stage};
+use crate::clock;
 use crate::config::{Catalog, Config, WorkerRunner, load_catalog};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -25,15 +25,15 @@ use crate::events::{self, NewEvent};
 use crate::git::{self, Setup};
 use crate::home::{CpdHome, Hook, Infra};
 use crate::host::exe::{Exe, Refusal};
-use crate::host::spawn::{Pid as SpawnPid, Spawn};
 use crate::host::pi::PiDirs;
+use crate::host::spawn::{Pid as SpawnPid, Spawn};
 use crate::host::{PaneId, Tmux};
 use crate::ids::{AttemptId, PlanId, SessionId};
 use crate::merge;
 use crate::output::Output;
 use crate::plan::jobs;
-use crate::ports::Ports;
 use crate::plan::locked_fingerprint;
+use crate::ports::Ports;
 use crate::store::{Persist, Store};
 
 /// The `txns.command` and the `source` of the driver's `error` Events.
@@ -70,21 +70,34 @@ pub(super) struct PaneWatch {
 
 /// One A4 poll on `ports`: the nap of `POLL` (500 ms) on `ports.clock`, then the look at the Worker's pane
 /// (`PaneWatch::look_with` on `ports.spawn`).
-pub(super) fn poll_with(ports: &Ports, watch: &mut PaneWatch, tmux: &Tmux, pane: &PaneId) -> Result<Look, CpdError> {
+pub(super) fn poll_with(
+    ports: &Ports,
+    watch: &mut PaneWatch,
+    tmux: &Tmux,
+    pane: &PaneId,
+) -> Result<Look, CpdError> {
     ports.clock.sleep(POLL);
     watch.look_with(&*ports.spawn, tmux, pane)
 }
 
 impl PaneWatch {
     /// The look at the pane: the pid test (`alive`) asks `spawn`.
-    pub(super) fn look_with(&mut self, spawn: &dyn Spawn, tmux: &Tmux, pane: &PaneId) -> Result<Look, CpdError> {
+    pub(super) fn look_with(
+        &mut self,
+        spawn: &dyn Spawn,
+        tmux: &Tmux,
+        pane: &PaneId,
+    ) -> Result<Look, CpdError> {
         if let Some(pid) = self.pid.filter(|&pid| spawn.alive(SpawnPid(pid))) {
             return Ok(Look::Alive(Some(pid)));
         }
         let panes = match tmux.list_panes() {
             Ok(panes) => panes,
             Err(e) if !self.failed => {
-                log(&format!("A4: listing the panes failed, trying again at the next poll: {}", e.message()));
+                log(&format!(
+                    "A4: listing the panes failed, trying again at the next poll: {}",
+                    e.message()
+                ));
                 self.failed = true;
                 return Ok(Look::Unknown);
             }
@@ -94,8 +107,12 @@ impl PaneWatch {
         Ok(match panes.iter().find(|p| p.pane == *pane) {
             None => Look::Gone("The Worker's pane is gone.".to_owned()),
             Some(p) if p.dead => {
-                let status = p.dead_status.map_or_else(String::new, |s| format!(" (exit status {s})"));
-                Look::Gone(format!("The Worker's pane died{status} before it submitted."))
+                let status = p
+                    .dead_status
+                    .map_or_else(String::new, |s| format!(" (exit status {s})"));
+                Look::Gone(format!(
+                    "The Worker's pane died{status} before it submitted."
+                ))
             }
             Some(p) => {
                 self.pid = p.pid;
@@ -124,7 +141,13 @@ enum Decision {
 /// assistant message's `stopReason` and `turns` the count of assistant messages
 /// (both read from the session file only when `state` is `idle`), `error_message` the last one's `errorMessage`; `nudged` is
 /// the turn count when the Worker was nudged, None when it was not.
-fn judge(state: &str, last_stop: Option<&str>, error_message: Option<&str>, turns: u64, nudged: Option<u64>) -> Decision {
+fn judge(
+    state: &str,
+    last_stop: Option<&str>,
+    error_message: Option<&str>,
+    turns: u64,
+    nudged: Option<u64>,
+) -> Decision {
     if state != "idle" {
         return Decision::Wait;
     }
@@ -242,8 +265,12 @@ impl DurableStall {
             self.suppressed_at = Some(now);
             return false;
         }
-        let Ok(meta) = std::fs::metadata(path) else { return false };
-        let Ok(modified) = meta.modified() else { return false };
+        let Ok(meta) = std::fs::metadata(path) else {
+            return false;
+        };
+        let Ok(modified) = meta.modified() else {
+            return false;
+        };
         let identity = (modified, meta.len());
         match self.grown {
             Some((seen_m, seen_len, since)) if (seen_m, seen_len) == identity => {
@@ -292,7 +319,13 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     // A transient store error never ends the Attempt: every read and write of
     // this driver waits it out (§3.4), the open included.
     let opened = Env::open_home_persistent(home.clone(), Persist::new(log, || false));
-    let Env { home, config, store, ports, .. } = match opened {
+    let Env {
+        home,
+        config,
+        store,
+        ports,
+        ..
+    } = match opened {
         Ok(env) => env,
         Err(e) => {
             leave_infra(&home, &plan, &id, &e);
@@ -300,14 +333,29 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
         }
     };
     let tmux = Tmux::new(config.tmux.socket.as_str());
-    let mut driver = Driver { home, config, store, tmux, plan, id, lock, exe, catalog: None, runner: None, began: None, ports };
+    let mut driver = Driver {
+        home,
+        config,
+        store,
+        tmux,
+        plan,
+        id,
+        lock,
+        exe,
+        catalog: None,
+        runner: None,
+        began: None,
+        ports,
+    };
 
     let outcome = (|| {
         let target = driver.load()?;
         let entry = entry(&target.id, &target.status)?;
         let task = driver.task(entry, &target)?;
         match driver.drive(task, target) {
-            Ok(ended) => Ok(Output::success(json!({"attempt": driver.id, "outcome": ended.outcome, "cause": ended.cause}))),
+            Ok(ended) => Ok(Output::success(
+                json!({"attempt": driver.id, "outcome": ended.outcome, "cause": ended.cause}),
+            )),
             Err(e) => {
                 driver.fail(&e);
                 Err(e)
@@ -324,10 +372,18 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
 /// `store_too_new`. Leaves the marker E2 reads to end the Attempt as one whose driver never started. Call it
 /// while the driver lock is still held: a free lock is what E2 acts on.
 fn leave_infra(home: &CpdHome, plan: &PlanId, id: &AttemptId, error: &CpdError) {
-    let Some(infra) = Infra::of(error.code()) else { return };
+    let Some(infra) = Infra::of(error.code()) else {
+        return;
+    };
     match home.leave_infra(plan, id, infra, error.message()) {
-        Ok(()) => log(&format!("{}: not the Worker's failure; the Job will be queued again at the same Tier", infra.code())),
-        Err(e) => log(&format!("cannot leave the infrastructure marker: {}", e.message())),
+        Ok(()) => log(&format!(
+            "{}: not the Worker's failure; the Job will be queued again at the same Tier",
+            infra.code()
+        )),
+        Err(e) => log(&format!(
+            "cannot leave the infrastructure marker: {}",
+            e.message()
+        )),
     }
 }
 
@@ -338,7 +394,12 @@ pub(super) fn log(line: &str) {
 
 /// Appends an `error` Event about `target` (§5.2): an unexpected failure of
 /// the driver (commands.md §6.4).
-fn append_error(tx: &crate::store::WriteTxn<'_>, target: &Target, error: &CpdError, window: Duration) -> Result<(), CpdError> {
+fn append_error(
+    tx: &crate::store::WriteTxn<'_>,
+    target: &Target,
+    error: &CpdError,
+    window: Duration,
+) -> Result<(), CpdError> {
     let text = format!(
         "The driver of Attempt {} failed: {} See: cpd attempt show {} --plan {}",
         target.id,
@@ -386,7 +447,15 @@ impl Driver {
                 self.store.read(|conn| runner::stored(conn, plan, id))?.1
             }
         };
-        runner::stop(&self.ports, &self.config, &self.home, &self.tmux, &self.plan, &self.id, (runner, pid))
+        runner::stop(
+            &self.ports,
+            &self.config,
+            &self.home,
+            &self.tmux,
+            &self.plan,
+            &self.id,
+            (runner, pid),
+        )
     }
 
     /// A1 (after the lock) to A9, from `entry`.
@@ -411,24 +480,44 @@ impl Driver {
             0.0
         } else {
             let started_at: String = self.store.read(|conn| {
-                Ok(conn.query_row("SELECT started_at FROM attempts WHERE plan = ?1 AND id = ?2", params![plan.as_str(), id.to_string()], |r| r.get(0))?)
+                Ok(conn.query_row(
+                    "SELECT started_at FROM attempts WHERE plan = ?1 AND id = ?2",
+                    params![plan.as_str(), id.to_string()],
+                    |r| r.get(0),
+                )?)
             })?;
-            let started = time::OffsetDateTime::parse(&started_at, &time::format_description::well_known::Rfc3339)
-                .map_err(|e| ledger::corrupt(format!("started_at {started_at:?} of Attempt {id}: {e}")))?;
+            let started = time::OffsetDateTime::parse(
+                &started_at,
+                &time::format_description::well_known::Rfc3339,
+            )
+            .map_err(|e| {
+                ledger::corrupt(format!("started_at {started_at:?} of Attempt {id}: {e}"))
+            })?;
             (time::OffsetDateTime::now_utc() - started).as_seconds_f64()
         };
         self.began = Some((age, self.ports.clock.now()));
-        let models = self.store.read(|conn| crate::policy::model::models_of_job(conn, &self.home, &target.plan, target.job.as_str()))?;
+        let models = self.store.read(|conn| {
+            crate::policy::model::models_of_job(conn, &self.home, &target.plan, target.job.as_str())
+        })?;
         self.catalog = Some(load_catalog(&self.config, &models)?);
         let all = self.store.read(|conn| jobs::load(conn, &target.plan))?;
-        let job = all.into_iter().find(|j| j.key == target.job.as_str()).ok_or_else(|| {
-            CpdError::new(ErrorCode::JobNotFound, format!("No Job {} in Plan {}.", target.job, target.plan))
-        })?;
+        let job = all
+            .into_iter()
+            .find(|j| j.key == target.job.as_str())
+            .ok_or_else(|| {
+                CpdError::new(
+                    ErrorCode::JobNotFound,
+                    format!("No Job {} in Plan {}.", target.job, target.plan),
+                )
+            })?;
         let found = locked_fingerprint(&job);
         if job.fingerprint.as_deref() != Some(found.as_str()) {
             return Err(CpdError::new(
                 ErrorCode::LockedJobTampered,
-                format!("Job {} does not match its Locked-Job fingerprint.", target.job),
+                format!(
+                    "Job {} does not match its Locked-Job fingerprint.",
+                    target.job
+                ),
             )
             .with("plan", target.plan.as_str())
             .with("job", target.job.as_str())
@@ -439,48 +528,98 @@ impl Driver {
     }
 
     /// A2 to A5, for a `starting` Attempt.
-    fn start(&mut self, target: &Target, job: &jobs::Job, dirs: &PiDirs) -> Result<Ended, CpdError> {
+    fn start(
+        &mut self,
+        target: &Target,
+        job: &jobs::Job,
+        dirs: &PiDirs,
+    ) -> Result<Ended, CpdError> {
         // A2: an `open` Job's PR stacked on a merged base PR is unstacked first, so the Worker is told a base that exists (§3.4).
         if job.kind == "open" {
-            let pr = crate::ids::PrKey::parse(job.pr_str()).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", job.key, job.pr_str())))?;
+            let pr = crate::ids::PrKey::parse(job.pr_str()).map_err(|_| {
+                CpdError::bad_row(format!("Job {} has the PR key {:?}", job.key, job.pr_str()))
+            })?;
             crate::pr::start::unstack_for_open_job(&mut self.store, SOURCE, &self.plan, &pr)?;
         }
         if crate::plan::jobs::is_explore(&job.kind) {
             // A2 of an explore Attempt (R7): no worktree, no pre-start, no base_sha; only the explore directory.
             log("A2: preparing the explore directory");
             if let Err(e) = super::explore::prepare(&self.ports, &self.home, target) {
-                return self.end(target, End::Failed { cause: Cause::SetupFailed, detail: e.message().to_owned() }, dirs);
+                return self.end(
+                    target,
+                    End::Failed {
+                        cause: Cause::SetupFailed,
+                        detail: e.message().to_owned(),
+                    },
+                    dirs,
+                );
             }
         } else {
             // A2 (hs-d680): a linear Attempt reuses the PR's workflow worktree as it is; a parallel sibling creates
             // its own worktree from the Lead Branch HEAD and runs pre-start. A linear Attempt never runs pre-start.
             let linear = git::worktree::is_linear(&target.branch, &target.lead_branch);
-            log(if linear { "A2: reusing the workflow worktree on the Lead Branch" } else { "A2: creating the worktree and running pre-start" });
+            log(if linear {
+                "A2: reusing the workflow worktree on the Lead Branch"
+            } else {
+                "A2: creating the worktree and running pre-start"
+            });
             let setup = Setup {
                 timeout: Duration::from_secs(u64::from(self.config.timeouts.setup_minutes) * 60),
                 log: self.home.hook_log(&self.plan, &self.id, Hook::PreStart),
             };
-            let policy = match self.store.read(|conn| crate::pr::policy_of_job(conn, &self.home, &self.plan, &job.key)) {
+            let policy = match self
+                .store
+                .read(|conn| crate::pr::policy_of_job(conn, &self.home, &self.plan, &job.key))
+            {
                 Ok(policy) => policy,
                 Err(e) => {
                     let detail = format!("Reading the policy of the PR failed: {}", e.message());
-                    return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
+                    return self.end(
+                        target,
+                        End::Failed {
+                            cause: Cause::SetupFailed,
+                            detail,
+                        },
+                        dirs,
+                    );
                 }
             };
             let base_sha = if linear {
                 match verify_linear_worktree(target) {
                     Ok(sha) => sha,
                     Err(e) => {
-                        let detail = format!("The workflow worktree is not usable: {}", e.message());
-                        return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
+                        let detail =
+                            format!("The workflow worktree is not usable: {}", e.message());
+                        return self.end(
+                            target,
+                            End::Failed {
+                                cause: Cause::SetupFailed,
+                                detail,
+                            },
+                            dirs,
+                        );
                     }
                 }
             } else {
-                let created = match git::create_attempt_worktree_with(&target.repo, &target.lead_worktree, &self.plan, &self.id, &setup, &policy.hooks.pre_start) {
+                let created = match git::create_attempt_worktree_with(
+                    &target.repo,
+                    &target.lead_worktree,
+                    &self.plan,
+                    &self.id,
+                    &setup,
+                    &policy.hooks.pre_start,
+                ) {
                     Ok(created) => created,
                     Err(e) => {
                         let detail = format!("Setting up the worktree failed: {}", e.message());
-                        return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
+                        return self.end(
+                            target,
+                            End::Failed {
+                                cause: Cause::SetupFailed,
+                                detail,
+                            },
+                            dirs,
+                        );
                     }
                 };
                 created.base_sha
@@ -496,7 +635,11 @@ impl Driver {
         }
 
         // The safe point before A3.
-        if self.store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
+        if self
+            .store
+            .read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?
+            .is_some()
+        {
             log("cancel requested before A3");
             return self.end(target, End::Cancelled, dirs);
         }
@@ -504,21 +647,41 @@ impl Driver {
         // A3: the Spec, the Session, the Worker.
         log("A3: rendering the Spec and starting the Worker");
         let home = &self.home;
-        let spec = self.store.read(|conn| worker::render_spec(conn, home, target, job))?;
+        let spec = self
+            .store
+            .read(|conn| worker::render_spec(conn, home, target, job))?;
         let session = SessionId::new_v4();
         let worker = match self.runner() {
             WorkerRunner::Pi => {
                 self.register(target, &session, &spec)?;
-                let pane = worker::start(&self.home, &self.config, self.catalog(), &self.tmux, dirs, target, &session)?;
+                let pane = worker::start(
+                    &self.home,
+                    &self.config,
+                    self.catalog(),
+                    &self.tmux,
+                    dirs,
+                    target,
+                    &session,
+                )?;
                 self.running(target, &session, &pane)?;
                 Worker::Pane(pane.pane)
             }
             WorkerRunner::Durable => {
                 // The runner file is checked before anything is registered or spawned; a failed spawn ends `setup_failed` too.
-                let launched = runner::launch(&self.home, &self.config, self.catalog(), target, &session);
+                let launched =
+                    runner::launch(&self.home, &self.config, self.catalog(), target, &session);
                 let launch = match launched {
                     Ok(launch) => launch,
-                    Err(e) => return self.end(target, End::Failed { cause: Cause::SetupFailed, detail: e.message().to_owned() }, dirs),
+                    Err(e) => {
+                        return self.end(
+                            target,
+                            End::Failed {
+                                cause: Cause::SetupFailed,
+                                detail: e.message().to_owned(),
+                            },
+                            dirs,
+                        );
+                    }
                 };
                 self.register(target, &session, &spec)?;
                 match runner::spawn(&self.ports, &launch) {
@@ -526,7 +689,16 @@ impl Driver {
                         self.running_durable(target, pid)?;
                         Worker::Process(pid)
                     }
-                    Err(e) => return self.end(target, End::Failed { cause: Cause::SetupFailed, detail: e.message().to_owned() }, dirs),
+                    Err(e) => {
+                        return self.end(
+                            target,
+                            End::Failed {
+                                cause: Cause::SetupFailed,
+                                detail: e.message().to_owned(),
+                            },
+                            dirs,
+                        );
+                    }
                 }
             }
         };
@@ -552,18 +724,31 @@ impl Driver {
                     .with("attempt", target.id.to_string())
                     .with("status", target.status.as_str())
                 };
-                let session = target.worker_session.clone().ok_or_else(|| nothing("Session"))?;
+                let session = target
+                    .worker_session
+                    .clone()
+                    .ok_or_else(|| nothing("Session"))?;
                 let (plan, id) = (&self.plan, &self.id);
                 // By the Attempt's stored runner, never today's flag.
                 let (stored, pid) = self.store.read(|conn| runner::stored(conn, plan, id))?;
                 let worker = match stored {
                     WorkerRunner::Pi => {
                         let pane: Option<String> = self.store.read(|conn| {
-                            Ok(conn.query_row("SELECT tmux_pane FROM sessions WHERE id = ?1", [session.as_str()], |r| r.get(0))?)
+                            Ok(conn.query_row(
+                                "SELECT tmux_pane FROM sessions WHERE id = ?1",
+                                [session.as_str()],
+                                |r| r.get(0),
+                            )?)
                         })?;
-                        Worker::Pane(pane.as_deref().and_then(PaneId::parse).ok_or_else(|| nothing("pane"))?)
+                        Worker::Pane(
+                            pane.as_deref()
+                                .and_then(PaneId::parse)
+                                .ok_or_else(|| nothing("pane"))?,
+                        )
                     }
-                    WorkerRunner::Durable => Worker::Process(pid.ok_or_else(|| nothing("process"))?),
+                    WorkerRunner::Durable => {
+                        Worker::Process(pid.ok_or_else(|| nothing("process"))?)
+                    }
                 };
                 Ok(Task::Resume(session, worker))
             }
@@ -583,7 +768,10 @@ impl Driver {
         match self.exe.check_store() {
             Ok(()) => {}
             Err(Refusal::New(reason)) => {
-                log(&format!("reload skipped: {} {reason}", self.exe.path().display()));
+                log(&format!(
+                    "reload skipped: {} {reason}",
+                    self.exe.path().display()
+                ));
                 return Ok(());
             }
             Err(Refusal::Known) => return Ok(()),
@@ -601,7 +789,12 @@ impl Driver {
 
     /// A3's first transaction: the Worker's Session, registered before pi
     /// starts (§3.6), and the Attempt's `worker_session` and `spec_path`.
-    fn register(&mut self, target: &Target, session: &SessionId, spec: &std::path::Path) -> Result<(), CpdError> {
+    fn register(
+        &mut self,
+        target: &Target,
+        session: &SessionId,
+        spec: &std::path::Path,
+    ) -> Result<(), CpdError> {
         let name = format!("{} {} a{}", target.plan, target.job, target.id.number());
         let worktree = target.worktree.to_string_lossy().into_owned();
         let tier = target.tier.to_string();
@@ -642,7 +835,12 @@ impl Driver {
 
     /// A3's second transaction: `starting → running` once the pane runs,
     /// with the Session's pane (`attempt-status`, `session-moved`).
-    fn running(&mut self, target: &Target, session: &SessionId, pane: &worker::Pane) -> Result<(), CpdError> {
+    fn running(
+        &mut self,
+        target: &Target,
+        session: &SessionId,
+        pane: &worker::Pane,
+    ) -> Result<(), CpdError> {
         self.store.write(SOURCE, |tx| {
             let changed = tx.execute(
                 "UPDATE attempts SET status = 'running' WHERE plan = ?1 AND id = ?2 AND status = 'starting'",
@@ -704,7 +902,8 @@ impl Driver {
     /// A4's restart of the `durable` runner: the same launch again, in place, and the new `worker_pid` stored. `Err` is the
     /// detail the Attempt ends `crashed` with.
     fn restart_runner(&mut self, target: &Target, session: &SessionId) -> Result<SpawnPid, String> {
-        let launch = runner::launch(&self.home, &self.config, self.catalog(), target, session).map_err(|e| e.message().to_owned())?;
+        let launch = runner::launch(&self.home, &self.config, self.catalog(), target, session)
+            .map_err(|e| e.message().to_owned())?;
         let pid = runner::spawn(&self.ports, &launch).map_err(|e| e.message().to_owned())?;
         let stored = self.store.write(SOURCE, |tx| {
             tx.execute(
@@ -719,7 +918,12 @@ impl Driver {
 
     /// A4 and A5: waits until the Attempt is submitted (A8), stopped, or its
     /// Worker is gone or idle for good.
-    fn wait(&mut self, session: &SessionId, mut worker: Worker, dirs: &PiDirs) -> Result<Ended, CpdError> {
+    fn wait(
+        &mut self,
+        session: &SessionId,
+        mut worker: Worker,
+        dirs: &PiDirs,
+    ) -> Result<Ended, CpdError> {
         log("A4: waiting for the Worker");
         // The Worker's session file, recorded once pi has created it.
         let mut file: Option<std::path::PathBuf> = None;
@@ -734,7 +938,9 @@ impl Driver {
         loop {
             // The Worker before the row: a Worker that submits and exits is seen `merging`.
             let seen = match &worker {
-                Worker::Pane(pane) => Seen::Pane(poll_with(&self.ports, &mut watch, &self.tmux, pane)?),
+                Worker::Pane(pane) => {
+                    Seen::Pane(poll_with(&self.ports, &mut watch, &self.tmux, pane)?)
+                }
                 Worker::Process(pid) => {
                     self.ports.clock.sleep(POLL);
                     Seen::Runner(runner::look(&*self.ports.spawn, *pid))
@@ -746,7 +952,10 @@ impl Driver {
                     // A data write, no Event: metrics, `attempt read` and the TUI read it.
                     let path = found.to_string_lossy().into_owned();
                     self.store.write(SOURCE, |tx| {
-                        tx.execute("UPDATE sessions SET file = ?2 WHERE id = ?1 AND file IS NULL", params![session.as_str(), path])?;
+                        tx.execute(
+                            "UPDATE sessions SET file = ?2 WHERE id = ?1 AND file IS NULL",
+                            params![session.as_str(), path],
+                        )?;
                         Ok(())
                     })?;
                 }
@@ -758,7 +967,10 @@ impl Driver {
             if now.status != "merging" && now.stop_request.as_deref() == Some("aborted") {
                 log("A5: the Attempt was aborted; stopping the Worker and cleaning up");
                 self.cleanup(&now, false);
-                return Ok(Ended { outcome: "failed", cause: "aborted" });
+                return Ok(Ended {
+                    outcome: "failed",
+                    cause: "aborted",
+                });
             }
             match now.status.as_str() {
                 "running" => self.reload_if_installed()?,
@@ -766,7 +978,10 @@ impl Driver {
                 // A8, explore variant: `attempt submit` ended the Attempt and the Job itself; only A9 is left.
                 "ended" if crate::plan::jobs::is_explore(&now.kind) => {
                     self.cleanup(&now, true);
-                    return Ok(Ended { outcome: "merged", cause: "merged" });
+                    return Ok(Ended {
+                        outcome: "merged",
+                        cause: "merged",
+                    });
                 }
                 other => {
                     return Err(CpdError::new(
@@ -781,16 +996,36 @@ impl Driver {
                 Some("cancelled") => {
                     // A real cancel (the Job has `cancel_requested_at`) ends `Cancelled`; incident mode's stop (no
                     // cancel request) ends `Interrupted`, which requeues the Job at the same Tier (contract §3.7).
-                    let cancelled = self.store.read(|conn| ledger::cancel_request(conn, &now.plan, &now.job))?.is_some();
-                    let end = if cancelled { End::Cancelled } else { End::Interrupted };
+                    let cancelled = self
+                        .store
+                        .read(|conn| ledger::cancel_request(conn, &now.plan, &now.job))?
+                        .is_some();
+                    let end = if cancelled {
+                        End::Cancelled
+                    } else {
+                        End::Interrupted
+                    };
                     return self.end(&now, end, dirs);
                 }
                 Some("timed_out") => {
-                    let detail = format!("It used its {} minutes of active time.", self.config.timeouts.attempt_minutes);
-                    return self.end(&now, End::Failed { cause: Cause::TimedOut, detail }, dirs);
+                    let detail = format!(
+                        "It used its {} minutes of active time.",
+                        self.config.timeouts.attempt_minutes
+                    );
+                    return self.end(
+                        &now,
+                        End::Failed {
+                            cause: Cause::TimedOut,
+                            detail,
+                        },
+                        dirs,
+                    );
                 }
                 Some(other) => {
-                    return Err(CpdError::new(ErrorCode::StoreFailed, format!("Unknown stop_request {other:?}.")));
+                    return Err(CpdError::new(
+                        ErrorCode::StoreFailed,
+                        format!("Unknown stop_request {other:?}."),
+                    ));
                 }
             }
             let look = match seen {
@@ -803,7 +1038,7 @@ impl Driver {
                     let path = self.home.durable_store(&now.plan, &now.id);
                     self.report_stall(&now, &mut durable, &path, suppressed)?;
                     None
-                },
+                }
                 Seen::Runner(Some(ended)) => {
                     let log_file = self.home.worker_log(&now.plan, &now.id);
                     let detail = match ended {
@@ -819,20 +1054,48 @@ impl Driver {
                         runner::Ended::Other => None,
                     };
                     if let Some(detail) = detail {
-                        return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs);
+                        return self.end(
+                            &now,
+                            End::Failed {
+                                cause: Cause::Crashed,
+                                detail,
+                            },
+                            dirs,
+                        );
                     }
                     restarts += 1;
-                    log(&format!("A4: the durable runner ended; restart {restarts} of {}", runner::MAX_RESTARTS));
+                    log(&format!(
+                        "A4: the durable runner ended; restart {restarts} of {}",
+                        runner::MAX_RESTARTS
+                    ));
                     match self.restart_runner(&now, session) {
                         Ok(pid) => worker = Worker::Process(pid),
-                        Err(detail) => return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs),
+                        Err(detail) => {
+                            return self.end(
+                                &now,
+                                End::Failed {
+                                    cause: Cause::Crashed,
+                                    detail,
+                                },
+                                dirs,
+                            );
+                        }
                     }
                     continue;
                 }
             };
             if let Some(look) = look {
                 let pi = match look {
-                    Look::Gone(detail) => return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs),
+                    Look::Gone(detail) => {
+                        return self.end(
+                            &now,
+                            End::Failed {
+                                cause: Cause::Crashed,
+                                detail,
+                            },
+                            dirs,
+                        );
+                    }
                     // `list-panes` failed: whether the pane is gone is decided at the next poll.
                     Look::Unknown => continue,
                     Look::Alive(pid) => pid,
@@ -844,21 +1107,36 @@ impl Driver {
                 // Not while the Worker's `attempt submit` holds a check span (§7.7): it is silent for as long as its Gate runs.
                 // Nor while an Escalation of this Attempt is open: a pending `cpd ask` is quiet by design.
                 let span_open = self.stall_suppressed()?;
-                let descendants = |pi: u32| self.ports.spawn.descendants(SpawnPid(pi)).into_iter().map(|p| p.0).collect();
-                if let Some(line) = pi.and_then(|pi| stall.check_with(&self.ports, &descendants, file, pi, span_open)) {
+                let descendants = |pi: u32| {
+                    self.ports
+                        .spawn
+                        .descendants(SpawnPid(pi))
+                        .into_iter()
+                        .map(|p| p.0)
+                        .collect()
+                };
+                if let Some(line) = pi
+                    .and_then(|pi| stall.check_with(&self.ports, &descendants, file, pi, span_open))
+                {
                     log(&line);
                 }
             }
             // Idle is read from the Session state and confirmed from the file (A5).
-            let state: String =
-                self.store.read(|conn| Ok(conn.query_row("SELECT state FROM sessions WHERE id = ?1", [session.as_str()], |r| r.get(0))?))?;
+            let state: String = self.store.read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT state FROM sessions WHERE id = ?1",
+                    [session.as_str()],
+                    |r| r.get(0),
+                )?)
+            })?;
             // A5 reads the end report, never pi's session file directly: the same value from either runner.
             let report = if state == "idle" {
                 let read = match &worker {
                     Worker::Pane(_) => Ok(file.as_deref().and_then(runner::pi_report)),
-                    Worker::Process(_) => {
-                        runner::durable_report(&self.home.worker_report(&now.plan, &now.id), self.wall_seconds())
-                    }
+                    Worker::Process(_) => runner::durable_report(
+                        &self.home.worker_report(&now.plan, &now.id),
+                        self.wall_seconds(),
+                    ),
                 };
                 match read {
                     // Absent, or a line of pi's file being written: judged at the next poll.
@@ -867,14 +1145,25 @@ impl Driver {
                     // A report that exists and does not parse is the runner's fault (it writes atomically).
                     Err(e) => {
                         let detail = e.message().to_owned();
-                        return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs);
+                        return self.end(
+                            &now,
+                            End::Failed {
+                                cause: Cause::Crashed,
+                                detail,
+                            },
+                            dirs,
+                        );
                     }
                 }
             } else {
                 None
             };
             let (stop, turns, error) = match report {
-                Some(report) => (report.metrics.stop_reason, report.metrics.turns, report.error_message),
+                Some(report) => (
+                    report.metrics.stop_reason,
+                    report.metrics.turns,
+                    report.error_message,
+                ),
                 None => (None, 0, None),
             };
             // An Attempt nudged by a driver that left (a reload) has its baseline in the Event;
@@ -882,7 +1171,13 @@ impl Driver {
             if state == "idle" && now.nudged {
                 nudged_at.get_or_insert(turns);
             }
-            match judge(&state, stop.as_deref(), error.as_deref(), turns, nudged_at.filter(|_| now.nudged)) {
+            match judge(
+                &state,
+                stop.as_deref(),
+                error.as_deref(),
+                turns,
+                nudged_at.filter(|_| now.nudged),
+            ) {
                 Decision::Wait => {}
                 Decision::Nudge => {
                     if self.nudge(&now, session, turns)? {
@@ -890,16 +1185,39 @@ impl Driver {
                     }
                 }
                 Decision::NoSubmit => {
-                    let detail = "The Worker went idle twice without submitting, once after a nudge.".to_owned();
-                    return self.end(&now, End::Failed { cause: Cause::NoSubmit, detail }, dirs);
+                    let detail =
+                        "The Worker went idle twice without submitting, once after a nudge."
+                            .to_owned();
+                    return self.end(
+                        &now,
+                        End::Failed {
+                            cause: Cause::NoSubmit,
+                            detail,
+                        },
+                        dirs,
+                    );
                 }
                 Decision::ProviderError(message) => {
                     let detail = format!("pi stopped on a provider error: \"{message}\".");
-                    return self.end(&now, End::Failed { cause: Cause::ProviderError, detail }, dirs);
+                    return self.end(
+                        &now,
+                        End::Failed {
+                            cause: Cause::ProviderError,
+                            detail,
+                        },
+                        dirs,
+                    );
                 }
                 Decision::Crashed(reason) => {
                     let detail = format!("pi stopped with stopReason {reason}.");
-                    return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs);
+                    return self.end(
+                        &now,
+                        End::Failed {
+                            cause: Cause::Crashed,
+                            detail,
+                        },
+                        dirs,
+                    );
                 }
             }
         }
@@ -925,7 +1243,13 @@ impl Driver {
     /// A4's durable stall rule (hs-d798): when the transcript of a live `durable` runner has not grown for
     /// `timeouts.stall_minutes`, append one `worker_stalled` `error` Event for `target` and log a line. The watch is
     /// idempotent per episode, and the driver kills nothing: the engine informs (E8 opens the Inbox item), the Lead decides.
-    fn report_stall(&mut self, target: &Target, watch: &mut DurableStall, path: &Path, suppressed: bool) -> Result<(), CpdError> {
+    fn report_stall(
+        &mut self,
+        target: &Target,
+        watch: &mut DurableStall,
+        path: &Path,
+        suppressed: bool,
+    ) -> Result<(), CpdError> {
         if !watch.stall(&self.ports, path, suppressed) {
             return Ok(());
         }
@@ -938,8 +1262,13 @@ impl Driver {
         .with("minutes", minutes);
         let text = error.message().to_owned();
         // The stall is deduped per episode by the watch, so no repeat window (contract §3.4 A4).
-        self.store.write(SOURCE, |tx| ledger::append_error(tx, target, STALL_SOURCE, &error, text, Duration::ZERO))?;
-        log(&format!("A4: stall: the durable Worker has not written {} for {minutes} minutes; appended worker_stalled", path.display()));
+        self.store.write(SOURCE, |tx| {
+            ledger::append_error(tx, target, STALL_SOURCE, &error, text, Duration::ZERO)
+        })?;
+        log(&format!(
+            "A4: stall: the durable Worker has not written {} for {minutes} minutes; appended worker_stalled",
+            path.display()
+        ));
         Ok(())
     }
 
@@ -964,7 +1293,12 @@ impl Driver {
 
     /// A5's nudge, once: `attempt-nudge` to the Worker's Session, and
     /// `nudged`. False when the Attempt left `running` meanwhile.
-    fn nudge(&mut self, target: &Target, session: &SessionId, turns: u64) -> Result<bool, CpdError> {
+    fn nudge(
+        &mut self,
+        target: &Target,
+        session: &SessionId,
+        turns: u64,
+    ) -> Result<bool, CpdError> {
         log("A5: the Worker is idle without a submit; nudging it");
         let id = &target.id;
         let prompt = format!(
@@ -996,7 +1330,10 @@ impl Driver {
     fn end(&mut self, target: &Target, end: End, dirs: &PiDirs) -> Result<Ended, CpdError> {
         log(&format!("ending: {} / {}", end.outcome(), end.cause()));
         let metrics = self.metrics(dirs, target.worker_session.as_ref());
-        let ladder = Ladder { catalog: self.catalog.as_ref().expect("A1 loads the catalog"), retry_cap: self.config.retry_cap };
+        let ladder = Ladder {
+            catalog: self.catalog.as_ref().expect("A1 loads the catalog"),
+            retry_cap: self.config.retry_cap,
+        };
         let (plan, id) = (&self.plan, &self.id);
         let submitted = self.store.write(SOURCE, |tx| {
             // Re-read: the status this transaction swaps from.
@@ -1016,7 +1353,10 @@ impl Driver {
             return self.merge(dirs);
         }
         self.cleanup(target, false);
-        Ok(Ended { outcome: end.outcome(), cause: end.cause() })
+        Ok(Ended {
+            outcome: end.outcome(),
+            cause: end.cause(),
+        })
     }
 
     /// A8: the merge (§7.4), then the rest of A9. An `Err` leaves the Attempt
@@ -1029,7 +1369,9 @@ impl Driver {
         let target = self.load()?;
         if let Err(e) = self.stop_worker() {
             log(&format!("stopping the Worker failed: {}", e.message()));
-            let _ = self.store.write(SOURCE, |tx| append_error(tx, &target, &e, self.config.watch.error_repeat()));
+            let _ = self.store.write(SOURCE, |tx| {
+                append_error(tx, &target, &e, self.config.watch.error_repeat())
+            });
         }
         // The safe point before A8's rebase.
         self.reload_if_installed()?;
@@ -1037,7 +1379,9 @@ impl Driver {
         let runner = self.runner();
         let report = self.home.worker_report(&self.plan, &self.id);
         let wall = self.wall_seconds();
-        let metrics = |a: &merge::Attempt| -> Option<Value> { runner::metrics(runner, dirs, a.worker_session.as_ref(), &report, wall) };
+        let metrics = |a: &merge::Attempt| -> Option<Value> {
+            runner::metrics(runner, dirs, a.worker_session.as_ref(), &report, wall)
+        };
         let ctx = merge::Ctx {
             home: &self.home,
             config: &self.config,
@@ -1049,7 +1393,10 @@ impl Driver {
         let target = self.load()?;
         let merged = matches!(done.end, merge::End::Merged { .. });
         self.cleanup(&target, merged);
-        Ok(Ended { outcome: done.end.outcome(), cause: done.end.cause() })
+        Ok(Ended {
+            outcome: done.end.outcome(),
+            cause: done.end.cause(),
+        })
     }
 
     /// The rest of A9: kill the Attempt's window; on `merged`, remove the
@@ -1068,7 +1415,11 @@ impl Driver {
             if !merged {
                 match self.linear_base_sha() {
                     Ok(Some(base_sha)) => {
-                        if let Err(e) = reset_linear_lead_branch(&target.worktree, &target.lead_branch, &base_sha) {
+                        if let Err(e) = reset_linear_lead_branch(
+                            &target.worktree,
+                            &target.lead_branch,
+                            &base_sha,
+                        ) {
                             result = result.and(Err(e));
                         }
                     }
@@ -1077,13 +1428,16 @@ impl Driver {
                 }
             }
         } else if merged && result.is_ok() {
-            result = git::remove_merged_attempt(&target.lead_worktree, &target.worktree, &target.branch);
+            result =
+                git::remove_merged_attempt(&target.lead_worktree, &target.worktree, &target.branch);
         }
         let removed = lock::remove(&self.home, &self.plan, &self.id);
         result = result.and(removed);
         if let Err(e) = result {
             log(&format!("A9 failed: {}", e.message()));
-            let _ = self.store.write(SOURCE, |tx| append_error(tx, target, &e, self.config.watch.error_repeat()));
+            let _ = self.store.write(SOURCE, |tx| {
+                append_error(tx, target, &e, self.config.watch.error_repeat())
+            });
         }
     }
 
@@ -1106,9 +1460,15 @@ impl Driver {
     /// Attempt is left to E2, which ends it `crashed` once this driver is dead. So is one that failed on an
     /// install or a store migration ([`Infra`]), which E2 ends uncounted.
     fn fail(&mut self, error: &CpdError) {
-        log(&format!("failed: {}: {}", error.code().as_str(), error.message()));
+        log(&format!(
+            "failed: {}: {}",
+            error.code().as_str(),
+            error.message()
+        ));
         let Ok(target) = self.load() else { return };
-        if let Err(e) = self.store.write(SOURCE, |tx| append_error(tx, &target, error, self.config.watch.error_repeat())) {
+        if let Err(e) = self.store.write(SOURCE, |tx| {
+            append_error(tx, &target, error, self.config.watch.error_repeat())
+        }) {
             log(&format!("cannot append the error Event: {}", e.message()));
         }
         // An install or a store migration, not the Worker (hs-n278): the marker is left; E2 ends the Attempt
@@ -1120,10 +1480,25 @@ impl Driver {
             return;
         }
         let detail = format!("Its driver failed: {}", error.message());
-        let metrics = PiDirs::from_env().ok().and_then(|dirs| self.metrics(&dirs, target.worker_session.as_ref()));
-        let ladder = Ladder { catalog: self.catalog.as_ref().expect("A1 loads the catalog"), retry_cap: self.config.retry_cap };
+        let metrics = PiDirs::from_env()
+            .ok()
+            .and_then(|dirs| self.metrics(&dirs, target.worker_session.as_ref()));
+        let ladder = Ladder {
+            catalog: self.catalog.as_ref().expect("A1 loads the catalog"),
+            retry_cap: self.config.retry_cap,
+        };
         let ended = self.store.write(SOURCE, |tx| {
-            ledger::end(tx, &target, &End::Failed { cause: Cause::Crashed, detail: detail.clone() }, metrics.as_ref(), &ladder, Stage::Driver)
+            ledger::end(
+                tx,
+                &target,
+                &End::Failed {
+                    cause: Cause::Crashed,
+                    detail: detail.clone(),
+                },
+                metrics.as_ref(),
+                &ladder,
+                Stage::Driver,
+            )
         });
         if let Err(e) = ended {
             log(&format!("cannot end the Attempt: {}", e.message()));
@@ -1138,21 +1513,43 @@ impl Driver {
 fn verify_linear_worktree(target: &Target) -> Result<String, CpdError> {
     let worktree = &target.worktree;
     if !worktree.exists() {
-        return Err(CpdError::new(ErrorCode::SetupFailed, format!("the workflow worktree {} does not exist", worktree.display())));
+        return Err(CpdError::new(
+            ErrorCode::SetupFailed,
+            format!(
+                "the workflow worktree {} does not exist",
+                worktree.display()
+            ),
+        ));
     }
     match git::run::current_branch(worktree)? {
         Some(branch) if branch == target.lead_branch => {}
         Some(branch) => {
             return Err(CpdError::new(
                 ErrorCode::SetupFailed,
-                format!("the workflow worktree {} is on {branch}, not the Lead Branch {}", worktree.display(), target.lead_branch),
-            ))
+                format!(
+                    "the workflow worktree {} is on {branch}, not the Lead Branch {}",
+                    worktree.display(),
+                    target.lead_branch
+                ),
+            ));
         }
-        None => return Err(CpdError::new(ErrorCode::SetupFailed, format!("the workflow worktree {} has a detached HEAD", worktree.display()))),
+        None => {
+            return Err(CpdError::new(
+                ErrorCode::SetupFailed,
+                format!(
+                    "the workflow worktree {} has a detached HEAD",
+                    worktree.display()
+                ),
+            ));
+        }
     }
     let status = git::run::ok(worktree, &["--no-optional-locks", "status", "--porcelain"])?;
     if !status.trim().is_empty() {
-        return Err(CpdError::new(ErrorCode::SetupFailed, format!("the workflow worktree {} is not clean", worktree.display())).with("status", status.trim()));
+        return Err(CpdError::new(
+            ErrorCode::SetupFailed,
+            format!("the workflow worktree {} is not clean", worktree.display()),
+        )
+        .with("status", status.trim()));
     }
     git::run::rev_parse(worktree, &format!("refs/heads/{}", target.lead_branch))
 }
@@ -1170,8 +1567,11 @@ pub(super) fn reset_linear_lead_branch(
         other => {
             return Err(CpdError::new(
                 ErrorCode::SetupFailed,
-                format!("Cannot reset the Lead Branch: the workflow worktree {} is on {other:?}, not {lead_branch}.", lead_worktree.display()),
-            ))
+                format!(
+                    "Cannot reset the Lead Branch: the workflow worktree {} is on {other:?}, not {lead_branch}.",
+                    lead_worktree.display()
+                ),
+            ));
         }
     }
     // One call moves the Lead Branch and discards the Attempt's working-tree changes.
@@ -1202,7 +1602,11 @@ mod tests {
         // Not reaped yet: a zombie once it has exited.
         spawn.exit(pid, 0);
         assert!(!spawn.alive(pid));
-        assert_eq!(spawn.try_wait(pid).unwrap().map(|s| s.success()), Some(true), "waited for: reaped");
+        assert_eq!(
+            spawn.try_wait(pid).unwrap().map(|s| s.success()),
+            Some(true),
+            "waited for: reaped"
+        );
         assert!(!spawn.alive(pid));
         assert!(!spawn.alive(SpawnPid(4_000_000)), "a pid nobody started");
     }
@@ -1211,7 +1615,14 @@ mod tests {
     fn a5_judges_the_worker_by_state_stop_reason_turns_and_nudge() {
         use Decision::*;
         // A case of the table: the columns the test names below, then the expected Decision.
-        type Case<'a> = (&'a str, Option<&'a str>, Option<&'a str>, u64, Option<u64>, Decision);
+        type Case<'a> = (
+            &'a str,
+            Option<&'a str>,
+            Option<&'a str>,
+            u64,
+            Option<u64>,
+            Decision,
+        );
         let table: &[Case] = &[
             ("working", Some("stop"), None, 3, None, Wait),
             ("working", Some("stop"), None, 5, Some(3), Wait),
@@ -1225,15 +1636,61 @@ mod tests {
             ("idle", Some("stop"), None, 3, Some(3), Wait),
             ("idle", Some("stop"), None, 2, Some(3), Wait),
             ("idle", Some("stop"), None, 4, Some(3), NoSubmit),
-            ("idle", Some("error"), None, 3, None, Crashed("error".to_owned())),
-            ("idle", Some("aborted"), None, 3, Some(3), Crashed("aborted".to_owned())),
-            ("idle", Some("error"), Some("Connection error."), 3, None, ProviderError("Connection error.".to_owned())),
-            ("idle", Some("error"), Some("503 no available server\n"), 3, Some(3), ProviderError("503 no available server\n".to_owned())),
-            ("idle", Some("error"), Some("404 404 page not found"), 3, None, Crashed("error".to_owned())),
-            ("idle", Some("aborted"), Some("Connection error."), 3, None, Crashed("aborted".to_owned())),
+            (
+                "idle",
+                Some("error"),
+                None,
+                3,
+                None,
+                Crashed("error".to_owned()),
+            ),
+            (
+                "idle",
+                Some("aborted"),
+                None,
+                3,
+                Some(3),
+                Crashed("aborted".to_owned()),
+            ),
+            (
+                "idle",
+                Some("error"),
+                Some("Connection error."),
+                3,
+                None,
+                ProviderError("Connection error.".to_owned()),
+            ),
+            (
+                "idle",
+                Some("error"),
+                Some("503 no available server\n"),
+                3,
+                Some(3),
+                ProviderError("503 no available server\n".to_owned()),
+            ),
+            (
+                "idle",
+                Some("error"),
+                Some("404 404 page not found"),
+                3,
+                None,
+                Crashed("error".to_owned()),
+            ),
+            (
+                "idle",
+                Some("aborted"),
+                Some("Connection error."),
+                3,
+                None,
+                Crashed("aborted".to_owned()),
+            ),
         ];
         for (state, stop, error, turns, nudged, want) in table {
-            assert_eq!(judge(state, *stop, *error, *turns, *nudged), *want, "{state} {stop:?} {error:?} turns {turns} nudged {nudged:?}");
+            assert_eq!(
+                judge(state, *stop, *error, *turns, *nudged),
+                *want,
+                "{state} {stop:?} {error:?} turns {turns} nudged {nudged:?}"
+            );
         }
     }
 

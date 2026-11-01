@@ -42,7 +42,9 @@ pub struct FakePi {
 impl FakePi {
     /// Routes the `pi` of `fx`'s `FakeRunner` to a new `FakePi` that exits 0 with an empty answer.
     pub fn install(fx: &Fx) -> Arc<FakePi> {
-        let pi = Arc::new(FakePi { reply: Mutex::new(Reply::ok("")) });
+        let pi = Arc::new(FakePi {
+            reply: Mutex::new(Reply::ok("")),
+        });
         let _ = (*fx.fakes.runner).clone().route("pi", pi.clone());
         pi
     }
@@ -55,7 +57,10 @@ impl FakePi {
 
 impl Handler for FakePi {
     fn handle(&self, _: &Call) -> Reply {
-        self.reply.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        self.reply
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -83,9 +88,21 @@ impl GoSignals {
                     && key == "@cpd_session"
                     && !id.is_empty()
                 {
-                    let conn = rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).expect("open the store");
-                    let row = conn.query_row("SELECT tmux_pane FROM sessions WHERE id = ?1", [id], |r| r.get::<_, Option<String>>(0)).expect("the Session's row");
-                    log.lock().unwrap_or_else(PoisonError::into_inner).push((pane.clone(), id.clone(), row));
+                    let conn = rusqlite::Connection::open_with_flags(
+                        &db,
+                        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                    )
+                    .expect("open the store");
+                    let row = conn
+                        .query_row("SELECT tmux_pane FROM sessions WHERE id = ?1", [id], |r| {
+                            r.get::<_, Option<String>>(0)
+                        })
+                        .expect("the Session's row");
+                    log.lock().unwrap_or_else(PoisonError::into_inner).push((
+                        pane.clone(),
+                        id.clone(),
+                        row,
+                    ));
                 }
                 false
             },
@@ -97,7 +114,10 @@ impl GoSignals {
     /// The pane `session` was given the go signal on, and the `tmux_pane` the store had for it at that moment.
     pub fn pane_and_store(&self, session: &str) -> (String, Value) {
         let seen = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let (pane, _, row) = seen.iter().find(|(_, id, _)| id == session).unwrap_or_else(|| panic!("{session} never got @cpd_session: {seen:?}"));
+        let (pane, _, row) = seen
+            .iter()
+            .find(|(_, id, _)| id == session)
+            .unwrap_or_else(|| panic!("{session} never got @cpd_session: {seen:?}"));
         (pane.clone(), json!(row))
     }
 
@@ -105,7 +125,11 @@ impl GoSignals {
     /// the store has the pane writes a row with no pane that the engine then stops (hs-d238).
     pub fn assert_the_store_had_the_pane(&self, session: &str) {
         let (pane, recorded) = self.pane_and_store(session);
-        assert_eq!(recorded, json!(pane), "pane {pane} got @cpd_session {session} while the store's tmux_pane for it was {recorded}");
+        assert_eq!(
+            recorded,
+            json!(pane),
+            "pane {pane} got @cpd_session {session} while the store's tmux_pane for it was {recorded}"
+        );
     }
 }
 
@@ -116,7 +140,10 @@ pub fn home(env: &TestEnv) -> CpdHome {
 
 /// The Events of `kind`, in order.
 pub fn events(cpd: &impl Cpd, kind: &str) -> Vec<Value> {
-    cpd.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
+    cpd.cpd(&["events", "list", "--kind", kind]).ok()["events"]
+        .as_array()
+        .unwrap()
+        .clone()
 }
 
 /// The `session` of `cpd session show <id>`.
@@ -179,7 +206,11 @@ pub fn setup(env: &TestEnv) {
 /// Context `ctx`; Plans `pay` (Lead `lead1`, idle, with a side fork `fork1`) and
 /// `other` (Lead `lead2`, stopped); Worker `worker1` of `pay`. No Manager, no Escalation, every Session's cwd `/`.
 pub fn setup_with_fork(env: &TestEnv) {
-    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n").unwrap();
+    fs::write(
+        env.cpd_home().join("config.toml"),
+        "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n",
+    )
+    .unwrap();
     let fp = "a".repeat(64);
     let mut store = env.store();
     store

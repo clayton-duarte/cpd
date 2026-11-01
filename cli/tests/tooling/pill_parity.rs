@@ -34,13 +34,18 @@ const COLOURS: [Color; 16] = [
 fn index_of(c: Color) -> u8 {
     match c {
         Color::Indexed(i) => i,
-        c => COLOURS.iter().position(|k| *k == c).unwrap_or_else(|| panic!("a colour outside the palette: {c:?}")) as u8,
+        c => COLOURS
+            .iter()
+            .position(|k| *k == c)
+            .unwrap_or_else(|| panic!("a colour outside the palette: {c:?}")) as u8,
     }
 }
 
 /// The ratatui tuple: the atom painted into a `Buffer`, one cell per character.
 fn from_ratatui(index: u8, text: &str) -> Tuple {
-    let block = Style::new().fg(COLOURS[index as usize]).add_modifier(Modifier::REVERSED);
+    let block = Style::new()
+        .fg(COLOURS[index as usize])
+        .add_modifier(Modifier::REVERSED);
     let line = Line::from(cpd_tui::pill::pill(text, block));
     let width = text.chars().count() as u16 + 2;
     let mut buf = Buffer::empty(Rect::new(0, 0, width, 1));
@@ -49,7 +54,10 @@ fn from_ratatui(index: u8, text: &str) -> Tuple {
     let (first, last) = (&cells[0], &cells[cells.len() - 1]);
     let mid = &cells[1..cells.len() - 1];
     let reversed = |c: &ratatui::buffer::Cell| c.modifier.contains(Modifier::REVERSED);
-    assert!(cells.iter().all(|c| index_of(c.fg) == index), "one colour on every cell");
+    assert!(
+        cells.iter().all(|c| index_of(c.fg) == index),
+        "one colour on every cell"
+    );
     (
         first.symbol().to_string(),
         last.symbol().to_string(),
@@ -66,10 +74,19 @@ fn decode(text: &str) -> Vec<(char, Option<u8>, bool)> {
     let (mut out, mut rest) = (Vec::new(), text);
     while let Some(ch) = rest.chars().next() {
         if let Some(inner) = rest.strip_prefix("#[") {
-            let end = inner.find(']').unwrap_or_else(|| panic!("an unclosed style in {text}"));
+            let end = inner
+                .find(']')
+                .unwrap_or_else(|| panic!("an unclosed style in {text}"));
             for token in inner[..end].split(',') {
                 match token.split_once('=') {
-                    Some(("fg", c)) => fg = Some(c.strip_prefix("colour").unwrap_or_else(|| panic!("fg={c}")).parse().unwrap()),
+                    Some(("fg", c)) => {
+                        fg = Some(
+                            c.strip_prefix("colour")
+                                .unwrap_or_else(|| panic!("fg={c}"))
+                                .parse()
+                                .unwrap(),
+                        )
+                    }
                     _ if token == "default" => (fg, reverse) = (None, false),
                     _ if token == "reverse" => reverse = true,
                     _ if token == "noreverse" => reverse = false,
@@ -91,7 +108,10 @@ fn from_tmux(index: u8, text: &str) -> Tuple {
     let cells = decode(&tmux::pill(&tmux::fg(index), "", text));
     let (first, last) = (cells[0], cells[cells.len() - 1]);
     let mid = &cells[1..cells.len() - 1];
-    assert!(cells.iter().all(|c| c.1 == Some(index)), "one colour on every cell");
+    assert!(
+        cells.iter().all(|c| c.1 == Some(index)),
+        "one colour on every cell"
+    );
     (
         first.0.to_string(),
         last.0.to_string(),
@@ -106,12 +126,28 @@ fn from_tmux(index: u8, text: &str) -> Tuple {
 fn the_ratatui_and_tmux_pills_decode_to_the_same_tuple_for_every_meaning() {
     let s = spec();
     let m = &s.meanings;
-    let bases = [m.plain, m.in_progress, m.review, m.done, m.failed, m.planning, m.nothing, m.focus];
+    let bases = [
+        m.plain,
+        m.in_progress,
+        m.review,
+        m.done,
+        m.failed,
+        m.planning,
+        m.nothing,
+        m.focus,
+    ];
     for index in bases.into_iter().flat_map(|i| [i, s.clickable(i)]) {
         for text in ["two words", "x", "wait…"] {
             let tmux = from_tmux(index, text);
-            assert_eq!(from_ratatui(index, text), tmux, "colour {index}, text {text:?}");
-            assert_eq!((tmux.0.as_str(), tmux.1.as_str()), (s.caps.left.as_str(), s.caps.right.as_str()));
+            assert_eq!(
+                from_ratatui(index, text),
+                tmux,
+                "colour {index}, text {text:?}"
+            );
+            assert_eq!(
+                (tmux.0.as_str(), tmux.1.as_str()),
+                (s.caps.left.as_str(), s.caps.right.as_str())
+            );
         }
     }
 }

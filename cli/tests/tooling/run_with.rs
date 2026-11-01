@@ -23,11 +23,18 @@ fn run_with_version_succeeds_and_writes_the_version_json_with_no_process() {
 
     assert_eq!(code, ExitCode::SUCCESS);
     let text = String::from_utf8(out).expect("the output is UTF-8");
-    assert_eq!(text.lines().count(), 1, "one JSON value on one line: {text:?}");
+    assert_eq!(
+        text.lines().count(),
+        1,
+        "one JSON value on one line: {text:?}"
+    );
     let json: serde_json::Value = serde_json::from_str(&text).expect("the output is JSON");
     assert_eq!(json["ok"], true);
     assert_eq!(json["version"], cpd::cli::version());
     assert_eq!(json["protocol"], cpd_core::events::PROTOCOL);
     assert!(fakes.runner.calls().is_empty(), "--version runs no program");
-    assert!(fakes.spawn.launches().is_empty(), "--version spawns nothing");
+    assert!(
+        fakes.spawn.launches().is_empty(),
+        "--version spawns nothing"
+    );
 }

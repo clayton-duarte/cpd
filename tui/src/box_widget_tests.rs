@@ -6,7 +6,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
-use crate::box_widget::{geometry, spacing, BoxWidget, Walls};
+use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
 use crate::palette;
 
 /// A body: a row of `x` over its whole area.
@@ -41,12 +41,19 @@ fn full() -> Walls<'static> {
 }
 
 fn rail() -> Walls<'static> {
-    Walls::Rail { closing: Line::from(Span::styled("done", palette::muted_text())) }
+    Walls::Rail {
+        closing: Line::from(Span::styled("done", palette::muted_text())),
+    }
 }
 
 /// Draw into a buffer one cell larger than `area` all round.
 fn draw(widget: BoxWidget<'_, Xs>, area: Rect) -> Buffer {
-    let mut buf = Buffer::empty(Rect::new(0, 0, area.x + area.width + 1, area.y + area.height + 1));
+    let mut buf = Buffer::empty(Rect::new(
+        0,
+        0,
+        area.x + area.width + 1,
+        area.y + area.height + 1,
+    ));
     widget.render(area, &mut buf);
     buf
 }
@@ -60,13 +67,18 @@ fn box_geometry_full_has_a_wall_a_pad_column_and_no_vertical_padding() {
             assert_eq!(g.wall, area, "{w}x{h}");
             assert_eq!(g.title_row, 2, "{w}x{h}");
             assert_eq!(g.closing_row, None, "{w}x{h}");
-            assert_eq!(g.inner, Rect::new(3 + 1 + spacing::PAD_X, 3, w - 4, h - 2), "{w}x{h}");
+            assert_eq!(
+                g.inner,
+                Rect::new(3 + 1 + spacing::PAD_X, 3, w - 4, h - 2),
+                "{w}x{h}"
+            );
         }
     }
 }
 
 #[test]
-fn box_geometry_rail_has_blank_rows_a_title_row_and_a_closing_row_and_ends_content_four_columns_short() {
+fn box_geometry_rail_has_blank_rows_a_title_row_and_a_closing_row_and_ends_content_four_columns_short()
+ {
     let area = Rect::new(3, 2, 40, 9);
     let g = geometry(&rail(), area);
     assert_eq!(g.wall, area);
@@ -77,7 +89,10 @@ fn box_geometry_rail_has_blank_rows_a_title_row_and_a_closing_row_and_ends_conte
     // Content ends at column W-4 of a pane the container passed through `contain`.
     let pane = Rect::new(0, 0, 40, 9);
     let g = geometry(&rail(), spacing::contain(pane));
-    assert_eq!(g.inner.x + g.inner.width, pane.width - spacing::RIGHT_PAD - spacing::MARGIN_X);
+    assert_eq!(
+        g.inner.x + g.inner.width,
+        pane.width - spacing::RIGHT_PAD - spacing::MARGIN_X
+    );
 }
 
 #[test]
@@ -92,9 +107,13 @@ fn box_geometry_below_the_minimum_width_has_an_empty_inner() {
 }
 
 #[test]
-fn box_full_draws_rounded_walls_the_title_after_the_corner_and_a_line_and_the_body_inside_the_padding() {
+fn box_full_draws_rounded_walls_the_title_after_the_corner_and_a_line_and_the_body_inside_the_padding()
+ {
     let border = palette::input_border(true);
-    let title = Line::from(vec![Span::raw("ab"), Span::styled("cd", palette::muted_text())]);
+    let title = Line::from(vec![
+        Span::raw("ab"),
+        Span::styled("cd", palette::muted_text()),
+    ]);
     let area = Rect::new(1, 1, 12, 4);
     let buf = draw(BoxWidget::new(full(), border, Xs).title(title), area);
     assert_eq!(row(&buf, 1, 1, 13), "╭─abcd─────╮");
@@ -139,7 +158,10 @@ fn box_highlight_paints_the_body_rows_between_the_walls_padding_included_and_a_r
     let border = palette::input_border(true);
     let sel = palette::selected();
     // Full: body row 1 (the second) only, between the walls.
-    let buf = draw(BoxWidget::new(full(), border, Xs).highlight(1..2), Rect::new(1, 1, 10, 5));
+    let buf = draw(
+        BoxWidget::new(full(), border, Xs).highlight(1..2),
+        Rect::new(1, 1, 10, 5),
+    );
     for x in 2..10 {
         assert!(lit(&buf, x, 3, sel), "x={x}");
         assert!(!lit(&buf, x, 2, sel), "x={x}");
@@ -160,7 +182,10 @@ fn box_highlight_paints_the_body_rows_between_the_walls_padding_included_and_a_r
 fn box_below_the_minimum_width_writes_nothing() {
     let area = Rect::new(1, 1, 4, 6);
     for walls in [full(), rail()] {
-        let buf = draw(BoxWidget::new(walls, Style::default(), Xs).title(Line::from("t")), area);
+        let buf = draw(
+            BoxWidget::new(walls, Style::default(), Xs).title(Line::from("t")),
+            area,
+        );
         assert_eq!(buf, Buffer::empty(buf.area));
     }
 }
@@ -177,9 +202,16 @@ fn box_never_writes_outside_its_area() {
         );
         for y in 0..buf.area.height {
             for x in 0..buf.area.width {
-                let inside = x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height;
+                let inside = x >= area.x
+                    && x < area.x + area.width
+                    && y >= area.y
+                    && y < area.y + area.height;
                 if !inside {
-                    assert_eq!(buf[(x, y)], ratatui::buffer::Cell::default(), "stray write at {x},{y}");
+                    assert_eq!(
+                        buf[(x, y)],
+                        ratatui::buffer::Cell::default(),
+                        "stray write at {x},{y}"
+                    );
                 }
             }
         }
@@ -196,15 +228,15 @@ fn a_box_nested_in_a_box_inner_sits_one_padding_column_from_the_parents_wall() {
         (parent.x + parent.width - 1) - (child.wall.x + child.wall.width - 1) - 1,
         spacing::PAD_X
     );
-    let buf = draw(
-        BoxWidget::new(full(), Style::default(), Xs),
-        parent,
-    );
+    let buf = draw(BoxWidget::new(full(), Style::default(), Xs), parent);
     assert_eq!(sym(&buf, 0, 2), "│");
     assert_eq!(sym(&buf, 1, 2), " ");
 }
 
 #[test]
 fn spacing_contain_takes_the_margin_off_each_side() {
-    assert_eq!(spacing::contain(Rect::new(0, 0, 10, 4)), Rect::new(1, 0, 8, 4));
+    assert_eq!(
+        spacing::contain(Rect::new(0, 0, 10, 4)),
+        Rect::new(1, 0, 8, 4)
+    );
 }

@@ -14,7 +14,9 @@ use crate::ids::{OwnerLogin, RepoName};
 
 /// The owner and name of a GitHub URL; `None` for any other URL or invalid owner or name.
 pub fn parse_origin(url: &str) -> Option<(OwnerLogin, RepoName)> {
-    let path = url.strip_prefix("https://github.com/").or_else(|| url.strip_prefix("git@github.com:"))?;
+    let path = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("git@github.com:"))?;
     let path = path.strip_suffix(".git").unwrap_or(path);
     let (owner, name) = path.split_once('/')?;
     if name.contains('/') {
@@ -29,13 +31,21 @@ pub fn repo_key(repo: &Path) -> Result<(OwnerLogin, RepoName), CpdError> {
     let url = origin_url(repo)?;
     if url.is_none() {
         // No remote: clayton-duarte's, named by the directory (contract §8.3).
-        let name = repo.file_name().and_then(|n| n.to_str()).and_then(|n| RepoName::parse(n).ok());
+        let name = repo
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| RepoName::parse(n).ok());
         return match name {
-            Some(name) => Ok((OwnerLogin::parse(super::FALLBACK_OWNER).expect("a valid login"), name)),
+            Some(name) => Ok((
+                OwnerLogin::parse(super::FALLBACK_OWNER).expect("a valid login"),
+                name,
+            )),
             None => Err(repo_unkeyed(None)),
         };
     }
-    url.as_deref().and_then(parse_origin).ok_or_else(|| repo_unkeyed(url.as_deref()))
+    url.as_deref()
+        .and_then(parse_origin)
+        .ok_or_else(|| repo_unkeyed(url.as_deref()))
 }
 
 #[cfg(test)]
@@ -61,14 +71,20 @@ mod tests {
 
     #[test]
     fn owner_and_name_are_lowercased() {
-        assert_eq!(key("https://github.com/Clayton-Duarte/My.Repo_X.git"), some("clayton-duarte", "my.repo_x"));
+        assert_eq!(
+            key("https://github.com/Clayton-Duarte/My.Repo_X.git"),
+            some("clayton-duarte", "my.repo_x")
+        );
         assert_eq!(key("git@github.com:ACME/CPD"), some("acme", "cpd"));
     }
 
     #[test]
     fn a_name_with_dots_keeps_all_but_one_git_suffix() {
         assert_eq!(key("https://github.com/acme/a.b.git"), some("acme", "a.b"));
-        assert_eq!(key("https://github.com/acme/a.git.git"), some("acme", "a.git"));
+        assert_eq!(
+            key("https://github.com/acme/a.git.git"),
+            some("acme", "a.git")
+        );
     }
 
     #[test]
@@ -105,7 +121,12 @@ mod tests {
         let dir = tmp.path().join("my-repo");
         std::fs::create_dir(&dir).unwrap();
         let git = |args: &[&str]| {
-            let st = std::process::Command::new("git").arg("-C").arg(&dir).args(args).status().unwrap();
+            let st = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .status()
+                .unwrap();
             assert!(st.success());
         };
         git(&["init", "-q"]);

@@ -31,7 +31,11 @@ fn pills(sample: &Sample, y: u16) -> Result<Vec<String>, u16> {
             (_, None) => {}
         }
     }
-    if open.is_some() { Err(frame.right() - 1) } else { Ok(found) }
+    if open.is_some() {
+        Err(frame.right() - 1)
+    } else {
+        Ok(found)
+    }
 }
 
 fn rows(kind: &Kind) {
@@ -43,13 +47,32 @@ fn rows(kind: &Kind) {
             let frame = sample.boxes[0].rect;
             let top = frame.y;
             // the title is a pill after `╭─` when it fits (the room is the width less `╭─`, a `─` and `╮`, and the pill's caps)
-            if usize::from(width) >= kind.title.chars().count() + 6 && sym(&sample.buf, frame.x + 2, top) != PILL_LEFT {
-                panic!("{subject} at width {width}: the title {:?} fits and is not a pill at ({}, {top})\n{}", kind.title, frame.x + 2, dump(&sample.buf));
+            if usize::from(width) >= kind.title.chars().count() + 6
+                && sym(&sample.buf, frame.x + 2, top) != PILL_LEFT
+            {
+                panic!(
+                    "{subject} at width {width}: the title {:?} fits and is not a pill at ({}, {top})\n{}",
+                    kind.title,
+                    frame.x + 2,
+                    dump(&sample.buf)
+                );
             }
             // the buttons: whole or absent, never overlapping; both when they fit, else only the accepting one (A13)
             let y = frame.bottom() - 2;
-            let found = pills(&sample, y).unwrap_or_else(|x| panic!("{subject} at width {width}: a pill is cut or overlapped at ({x}, {y})\n{}", dump(&sample.buf)));
-            let need = |labels: &[&str]| 4 + labels.iter().map(|l| l.chars().count() as u16 + 2).sum::<u16>() + labels.len() as u16 - 1;
+            let found = pills(&sample, y).unwrap_or_else(|x| {
+                panic!(
+                    "{subject} at width {width}: a pill is cut or overlapped at ({x}, {y})\n{}",
+                    dump(&sample.buf)
+                )
+            });
+            let need = |labels: &[&str]| {
+                4 + labels
+                    .iter()
+                    .map(|l| l.chars().count() as u16 + 2)
+                    .sum::<u16>()
+                    + labels.len() as u16
+                    - 1
+            };
             let expected: Vec<&str> = if width >= need(kind.buttons) {
                 kind.buttons.to_vec()
             } else if width >= need(&kind.buttons[..1]) {
@@ -57,14 +80,25 @@ fn rows(kind: &Kind) {
             } else {
                 Vec::new()
             };
-            assert_eq!(found, expected, "{subject} at width {width}: the buttons row\n{}", dump(&sample.buf));
+            assert_eq!(
+                found,
+                expected,
+                "{subject} at width {width}: the buttons row\n{}",
+                dump(&sample.buf)
+            );
         }
     }
 }
 
 #[test]
 fn layout_dialog_confirm() {
-    rows(&Kind { subject: "confirm dialog", cases: &[Case::Confirm], height: 8, title: "Archive", buttons: &["Archive", "Cancel"] });
+    rows(&Kind {
+        subject: "confirm dialog",
+        cases: &[Case::Confirm],
+        height: 8,
+        title: "Archive",
+        buttons: &["Archive", "Cancel"],
+    });
 }
 
 #[test]
@@ -80,7 +114,13 @@ fn layout_dialog_input() {
 
 #[test]
 fn layout_dialog_text() {
-    rows(&Kind { subject: "text dialog", cases: &[Case::Text], height: 8, title: "Legend", buttons: &["Close"] });
+    rows(&Kind {
+        subject: "text dialog",
+        cases: &[Case::Text],
+        height: 8,
+        title: "Legend",
+        buttons: &["Close"],
+    });
 }
 
 #[test]

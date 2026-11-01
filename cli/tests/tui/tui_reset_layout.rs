@@ -11,18 +11,54 @@ fn tui_action_reset_resizes_the_cockpit_20_50_30_columns_and_30_70_rows() {
     let fx = fx();
     let tmux = |args: &[&str]| {
         let out = fx.tmux(args);
-        assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8(out.stdout).expect("tmux's stdout is UTF-8").trim().to_owned()
+        assert!(
+            out.status.success(),
+            "tmux {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout)
+            .expect("tmux's stdout is UTF-8")
+            .trim()
+            .to_owned()
     };
     // `cpd:main` holds four views: %0 tree, %1 chat, %2 widgets, %3 plan.
-    let first = tmux(&["new-session", "-d", "-s", "cpd", "-n", "main", "-P", "-F", "#{pane_id}", "cpd tui view tree"]);
+    let first = tmux(&[
+        "new-session",
+        "-d",
+        "-s",
+        "cpd",
+        "-n",
+        "main",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "cpd tui view tree",
+    ]);
     tmux(&["set", "-p", "-t", &first, "@cpd_view", "tree"]);
     for view in ["chat", "widgets", "plan"] {
-        let pane = tmux(&["split-window", "-d", "-t", &first, "-P", "-F", "#{pane_id}", &format!("cpd tui view {view}")]);
+        let pane = tmux(&[
+            "split-window",
+            "-d",
+            "-t",
+            &first,
+            "-P",
+            "-F",
+            "#{pane_id}",
+            &format!("cpd tui view {view}"),
+        ]);
         tmux(&["set", "-p", "-t", &pane, "@cpd_view", view]);
     }
     // (tmux lists a pane split from %0 next to it, so the list order is not the creation order)
-    let mut panes: Vec<String> = tmux(&["list-panes", "-t", "=cpd:main", "-F", "#{pane_id} #{@cpd_view}"]).lines().map(str::to_owned).collect();
+    let mut panes: Vec<String> = tmux(&[
+        "list-panes",
+        "-t",
+        "=cpd:main",
+        "-F",
+        "#{pane_id} #{@cpd_view}",
+    ])
+    .lines()
+    .map(str::to_owned)
+    .collect();
     panes.sort();
     assert_eq!(panes, ["%0 tree", "%1 chat", "%2 widgets", "%3 plan"]);
 
@@ -31,7 +67,12 @@ fn tui_action_reset_resizes_the_cockpit_20_50_30_columns_and_30_70_rows() {
 
     let resizes: Vec<Vec<String>> = fx.calls("tmux")[before..]
         .iter()
-        .filter_map(|c| c.args.iter().position(|a| a == "resize-pane").map(|i| c.args[i..].to_vec()))
+        .filter_map(|c| {
+            c.args
+                .iter()
+                .position(|a| a == "resize-pane")
+                .map(|i| c.args[i..].to_vec())
+        })
         .collect();
     let want: Vec<Vec<String>> = [
         ["resize-pane", "-t", "%0", "-x", "20%"],
@@ -42,5 +83,8 @@ fn tui_action_reset_resizes_the_cockpit_20_50_30_columns_and_30_70_rows() {
     .map(|c| c.iter().map(|s| s.to_string()).collect())
     .collect();
     assert_eq!(resizes, want);
-    assert!(resizes.iter().all(|c| c[2] != "%1"), "the chat slot is never resized");
+    assert!(
+        resizes.iter().all(|c| c[2] != "%1"),
+        "the chat slot is never resized"
+    );
 }

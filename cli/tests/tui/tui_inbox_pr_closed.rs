@@ -10,7 +10,10 @@ use std::cell::RefCell;
 use std::ffi::OsString;
 
 use common::fx::Fx;
-use common::inbox::{World, condition, frame_with, gone, item_row, linked_item_row, open, plan_row, rows, seed, session_row, show, show_with, view_fx};
+use common::inbox::{
+    World, condition, frame_with, gone, item_row, linked_item_row, open, plan_row, rows, seed,
+    session_row, show, show_with, view_fx,
+};
 use common::screen::right_click;
 use common::sql;
 use common::tree::{engine, stamp};
@@ -34,7 +37,10 @@ thread_local! {
 }
 
 fn recording(argv: Vec<OsString>) -> Result<Output, CpdError> {
-    let mut words: Vec<String> = argv.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+    let mut words: Vec<String> = argv
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
     if words.first().is_some_and(|w| w == "cpd") {
         words.remove(0);
     }
@@ -64,16 +70,60 @@ fn rig(url: Option<&str>) -> Fx {
     let fx = view_fx();
     seed(&fx, &[], 330);
     let mut store = open(&fx.env);
-    sql(&mut store, &(plan_row("ship", "alpha", "dispatch", "l-ship", "2026-01-02T00:00:10.000Z") + &session_row("l-ship", "lead", "alpha", "ship", "2026-01-02T00:00:10.000Z")));
+    sql(
+        &mut store,
+        &(plan_row(
+            "ship",
+            "alpha",
+            "dispatch",
+            "l-ship",
+            "2026-01-02T00:00:10.000Z",
+        ) + &session_row(
+            "l-ship",
+            "lead",
+            "alpha",
+            "ship",
+            "2026-01-02T00:00:10.000Z",
+        )),
+    );
     reconcile(&mut store, &[closed(url)], &stamp(&fx, -330)).unwrap();
     let ok = |args: &[&str]| {
         let out = fx.tmux(args);
-        assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "tmux {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8(out.stdout).unwrap().trim().to_owned()
     };
-    let view = ok(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "120", "-y", "40", "-P", "-F", "#{pane_id}", "cpd tui view widgets"]);
+    let view = ok(&[
+        "new-session",
+        "-d",
+        "-s",
+        "cpd",
+        "-n",
+        "main",
+        "-x",
+        "120",
+        "-y",
+        "40",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "cpd tui view widgets",
+    ]);
     ok(&["set", "-p", "-t", &view, "@cpd_view", "widgets"]);
-    let chat = ok(&["split-window", "-h", "-d", "-t", &view, "-P", "-F", "#{pane_id}", "cpd tui view chat"]);
+    let chat = ok(&[
+        "split-window",
+        "-h",
+        "-d",
+        "-t",
+        &view,
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "cpd tui view chat",
+    ]);
     ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
     fx.tmux_route.fake().add_client(CLIENT, 200, 60);
     fx
@@ -81,7 +131,9 @@ fn rig(url: Option<&str>) -> Fx {
 
 fn first_rows(fx: &Fx) -> Vec<String> {
     let frames = show(fx, HEIGHT, vec![Signal::Commit, gone()], &World::new());
-    let at = frame_with(&frames, 0, "the item's row", |r| r.iter().any(|row| row.contains(LABEL)));
+    let at = frame_with(&frames, 0, "the item's row", |r| {
+        r.iter().any(|row| row.contains(LABEL))
+    });
     rows(&frames, at)
 }
 
@@ -91,7 +143,11 @@ fn a_pr_closed_item_row_is_red_and_names_the_pr() {
     let _engine = engine(&fx);
     let screen = first_rows(&fx);
     let expected = item_row(palette::TIER_RED, LABEL, "5m");
-    assert!(screen.contains(&expected), "the exact red row {expected:?} on\n{}", screen.join("\n"));
+    assert!(
+        screen.contains(&expected),
+        "the exact red row {expected:?} on\n{}",
+        screen.join("\n")
+    );
 }
 
 #[test]
@@ -99,12 +155,27 @@ fn clicking_a_pr_closed_item_goes_to_its_lead() {
     let fx = rig(None);
     let _engine = engine(&fx);
     let screen = first_rows(&fx);
-    let row = screen.iter().position(|r| r.contains(LABEL)).expect("the row");
+    let row = screen
+        .iter()
+        .position(|r| r.contains(LABEL))
+        .expect("the row");
     fx.fake("cpd", Reply::ok(r#"{"ok":true}"#));
     RAN.with(|ran| ran.borrow_mut().clear());
-    let signals = vec![Signal::Commit, common::inbox::click(1, u16::try_from(row).unwrap()), gone()];
+    let signals = vec![
+        Signal::Commit,
+        common::inbox::click(1, u16::try_from(row).unwrap()),
+        gone(),
+    ];
     show_with(&fx, HEIGHT, signals, &World::new(), recording);
-    assert_eq!(cpd_calls(&fx), [vec!["session".to_owned(), "open".to_owned(), "l-ship".to_owned()]], "the Lead of the Plan opens");
+    assert_eq!(
+        cpd_calls(&fx),
+        [vec![
+            "session".to_owned(),
+            "open".to_owned(),
+            "l-ship".to_owned()
+        ]],
+        "the Lead of the Plan opens"
+    );
 }
 
 #[test]
@@ -112,13 +183,42 @@ fn the_menu_of_a_pr_closed_item_has_no_merge_and_no_post() {
     let fx = rig(Some(URL));
     let _engine = engine(&fx);
     let screen = first_rows(&fx);
-    let row = screen.iter().position(|r| r.contains(LABEL)).expect("the row");
-    let frames = show(&fx, HEIGHT, vec![Signal::Commit, Signal::Input(right_click(10, u16::try_from(row).unwrap())), gone()], &World::new());
-    let at = frame_with(&frames, 0, "a menu", |r| r.iter().any(|row| row.contains('╮')));
+    let row = screen
+        .iter()
+        .position(|r| r.contains(LABEL))
+        .expect("the row");
+    let frames = show(
+        &fx,
+        HEIGHT,
+        vec![
+            Signal::Commit,
+            Signal::Input(right_click(10, u16::try_from(row).unwrap())),
+            gone(),
+        ],
+        &World::new(),
+    );
+    let at = frame_with(&frames, 0, "a menu", |r| {
+        r.iter().any(|row| row.contains('╮'))
+    });
     let screen = rows(&frames, at);
     let top = screen.iter().position(|r| r.contains('╮')).unwrap();
-    let labels: Vec<String> = screen[top + 1..].iter().take_while(|r| !r.contains('╯')).filter_map(|r| r.rsplit('│').nth(1)).map(|l| l.trim().to_owned()).collect();
-    assert_eq!(labels, ["Go to Lead", "Copy Link", "Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00", "Dismiss"]);
+    let labels: Vec<String> = screen[top + 1..]
+        .iter()
+        .take_while(|r| !r.contains('╯'))
+        .filter_map(|r| r.rsplit('│').nth(1))
+        .map(|l| l.trim().to_owned())
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "Go to Lead",
+            "Copy Link",
+            "Snooze 15 min",
+            "Snooze 1 h",
+            "Snooze until tomorrow 09:00",
+            "Dismiss"
+        ]
+    );
 }
 
 #[test]
@@ -127,5 +227,9 @@ fn a_pr_closed_item_is_a_link_kind() {
     let _engine = engine(&fx);
     let screen = first_rows(&fx);
     let expected = linked_item_row(palette::TIER_RED, LABEL, "5m");
-    assert!(screen.contains(&expected), "the label is a link with its cue: {expected:?} on\n{}", screen.join("\n"));
+    assert!(
+        screen.contains(&expected),
+        "the label is a link with its cue: {expected:?} on\n{}",
+        screen.join("\n")
+    );
 }

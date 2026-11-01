@@ -29,7 +29,9 @@ fn fixture(env: &TestEnv, tables: &str, efforts: [&str; 3]) {
     env.fake_pi("exit 0");
     fs::create_dir_all(env.root().join("install")).unwrap();
     fs::write(env.root().join("install/current-version"), "1.0.0\n").unwrap();
-    let scope = env.root().join("install/releases/1.0.0/node_modules/@earendil-works");
+    let scope = env
+        .root()
+        .join("install/releases/1.0.0/node_modules/@earendil-works");
     for package in ["pi-coding-agent", "pi-ai"] {
         fs::create_dir_all(scope.join(package).join("dist")).unwrap();
         fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
@@ -41,7 +43,9 @@ fn fixture(env: &TestEnv, tables: &str, efforts: [&str; 3]) {
         })
         .collect();
     env.owner_policy("acme", "");
-    env.sql(&format!("UPDATE contexts SET owner = 'acme' WHERE id = 'ctx'; {rows}"));
+    env.sql(&format!(
+        "UPDATE contexts SET owner = 'acme' WHERE id = 'ctx'; {rows}"
+    ));
 }
 
 /// Efforts 0-4 for O and S, 0-3 for H.
@@ -56,21 +60,41 @@ fn tier(fx: &Fx, id: &str) -> String {
 
 fn tiers(fx: &Fx) -> Vec<(String, String)> {
     let all = fx.cpd(&["session", "list"]).ok();
-    let mut out: Vec<(String, String)> =
-        all["sessions"].as_array().unwrap().iter().map(|s| (s["id"].as_str().unwrap().to_owned(), s["tier"].as_str().unwrap().to_owned())).collect();
+    let mut out: Vec<(String, String)> = all["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["id"].as_str().unwrap().to_owned(),
+                s["tier"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
     out.sort();
     out
 }
 
 /// Everything a refusal must leave as it was: every Tier, the Events, the transactions.
 fn state(fx: &Fx) -> (Vec<(String, String)>, i64, i64) {
-    (tiers(fx), fx.env.query("SELECT count(*) FROM events"), fx.env.query("SELECT count(*) FROM txns"))
+    (
+        tiers(fx),
+        fx.env.query("SELECT count(*) FROM events"),
+        fx.env.query("SELECT count(*) FROM txns"),
+    )
 }
 
 fn not_allowed(fx: &Fx, id: &str, tier: &str) {
     let before = state(fx);
-    let e = refused(&fx.cpd(&["session", "retier", id, "--tier", tier]), "tier_not_allowed", 2);
-    assert_eq!(e["details"], json!({"tier": tier, "allowed": "O0-O4, S0-S4, H0-H4", "rule": "hs-d506, hs-d562"}));
+    let e = refused(
+        &fx.cpd(&["session", "retier", id, "--tier", tier]),
+        "tier_not_allowed",
+        2,
+    );
+    assert_eq!(
+        e["details"],
+        json!({"tier": tier, "allowed": "O0-O4, S0-S4, H0-H4", "rule": "hs-d506, hs-d562"})
+    );
     assert_eq!(state(fx), before, "a refusal changes nothing");
 }
 
@@ -81,12 +105,23 @@ fn retier_tier_moves_one_session_to_that_tier_with_one_event() {
     let out = fx.cpd(&["session", "retier", LEAD1, "--tier", "S2"]).ok();
     assert_eq!(out["retiered"].as_array().unwrap().len(), 1, "{out}");
     let one = &out["retiered"][0];
-    assert_eq!((one["session"].as_str(), one["from"].as_str(), one["to"].as_str()), (Some(LEAD1), Some("O3"), Some("S2")));
+    assert_eq!(
+        (
+            one["session"].as_str(),
+            one["from"].as_str(),
+            one["to"].as_str()
+        ),
+        (Some(LEAD1), Some("O3"), Some("S2"))
+    );
     assert_eq!(out["unchanged"], json!([]));
 
     assert_eq!(tier(&fx, LEAD1), "S2");
     let shown = show(&fx, LEAD1);
-    assert_eq!((shown["model"].as_str(), shown["thinking"].as_str()), (Some("p/sonnet"), Some("medium")), "{shown}");
+    assert_eq!(
+        (shown["model"].as_str(), shown["thinking"].as_str()),
+        (Some("p/sonnet"), Some("medium")),
+        "{shown}"
+    );
     let sent = events(&fx, "session-retiered");
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert_eq!(sent[0]["session"], LEAD1);
@@ -103,7 +138,10 @@ fn retier_tier_beats_the_review_context_target() {
     fixture(&fx.env, REVIEW, FOUR);
     fx.cpd(&["session", "retier", LEAD1, "--tier", "S2"]).ok();
     assert_eq!(tier(&fx, LEAD1), "S2", "not review_lead_tier S3");
-    assert_eq!(events(&fx, "session-retiered")[0]["data"], json!({"from": "O3", "to": "S2"}));
+    assert_eq!(
+        events(&fx, "session-retiered")[0]["data"],
+        json!({"from": "O3", "to": "S2"})
+    );
 }
 
 #[test]
@@ -114,7 +152,10 @@ fn retier_tier_moves_the_manager_too() {
     assert_eq!(tier(&fx, MANAGER), "O3", "not manager_tier O4");
     let sent = events(&fx, "session-retiered");
     assert_eq!(sent.len(), 1);
-    assert_eq!((sent[0]["session"].as_str(), sent[0]["data"].clone()), (Some(MANAGER), json!({"from": "O5", "to": "O3"})));
+    assert_eq!(
+        (sent[0]["session"].as_str(), sent[0]["data"].clone()),
+        (Some(MANAGER), json!({"from": "O5", "to": "O3"}))
+    );
 }
 
 #[test]
@@ -136,9 +177,17 @@ fn retier_tier_refuses_an_effort_pi_does_not_support_and_changes_nothing() {
     let fx = Fx::new();
     fixture(&fx.env, "", FOUR);
     let before = state(&fx);
-    let e = refused(&fx.cpd(&["session", "retier", LEAD1, "--tier", "H4"]), "tier_invalid", 2);
+    let e = refused(
+        &fx.cpd(&["session", "retier", LEAD1, "--tier", "H4"]),
+        "tier_invalid",
+        2,
+    );
     assert!(e["details"].get("efforts").is_some(), "{e}");
-    refused(&fx.cpd(&["session", "retier", LEAD1, "--tier", "x9"]), "tier_invalid", 2);
+    refused(
+        &fx.cpd(&["session", "retier", LEAD1, "--tier", "x9"]),
+        "tier_invalid",
+        2,
+    );
     assert_eq!(state(&fx), before);
 }
 
@@ -147,7 +196,11 @@ fn retier_tier_with_all_is_usage_and_changes_nothing() {
     let fx = Fx::new();
     fixture(&fx.env, "", FOUR);
     let before = state(&fx);
-    refused(&fx.cpd(&["session", "retier", "--all", "--tier", "S2"]), "usage", 2);
+    refused(
+        &fx.cpd(&["session", "retier", "--all", "--tier", "S2"]),
+        "usage",
+        2,
+    );
     assert_eq!(state(&fx), before);
 }
 
@@ -175,7 +228,9 @@ fn retier_tier_is_not_sticky() {
     drop(fx);
     let review = Fx::new();
     fixture(&review.env, REVIEW, FOUR);
-    review.cpd(&["session", "retier", LEAD1, "--tier", "S2"]).ok();
+    review
+        .cpd(&["session", "retier", LEAD1, "--tier", "S2"])
+        .ok();
     review.cpd(&["session", "retier", LEAD1]).ok();
     assert_eq!(tier(&review, LEAD1), "S3", "review_lead_tier");
 }
@@ -185,6 +240,10 @@ fn retier_tier_refuses_a_worker() {
     let fx = Fx::new();
     fixture(&fx.env, "", FOUR);
     let before = state(&fx);
-    refused(&fx.cpd(&["session", "retier", WORKER, "--tier", "S2"]), "not_a_lead", 3);
+    refused(
+        &fx.cpd(&["session", "retier", WORKER, "--tier", "S2"]),
+        "not_a_lead",
+        3,
+    );
     assert_eq!(state(&fx), before);
 }

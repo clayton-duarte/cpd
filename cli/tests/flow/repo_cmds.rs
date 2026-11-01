@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use common::fx::Fx;
-use common::{refused, Run};
-use cpd_core::git::{create_attempt_worktree, create_lead_worktree, Setup};
+use common::{Run, refused};
+use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::ports::Ports;
@@ -37,7 +37,9 @@ impl Handler for Sh {
         if command == BUILD {
             return Reply::exit(i32::from(cwd.join("BROKEN").exists()), "", "");
         }
-        if command.starts_with("echo running; echo ") && command.ends_with("> ../ran.txt; test -e GREEN") {
+        if command.starts_with("echo running; echo ")
+            && command.ends_with("> ../ran.txt; test -e GREEN")
+        {
             return Reply::exit(i32::from(!cwd.join("GREEN").exists()), "running\n", "");
         }
         Reply::exit(99, "", &format!("no reply scripted for {command:?}\n"))
@@ -66,26 +68,53 @@ fn pr_fx() -> (Fx, PathBuf) {
 }
 
 fn add_tdd(fx: &Fx, repo: &Path) -> Run {
-    fx.cpd(&["pr", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change", "--shape", "tdd", "--plan", "pl"])
+    fx.cpd(&[
+        "pr",
+        "add",
+        "pay",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        "Change",
+        "--shape",
+        "tdd",
+        "--plan",
+        "pl",
+    ])
 }
 
 #[test]
 fn pr_add_of_a_tdd_pr_takes_the_test_commands_from_the_repo_file() {
     let (fx, repo) = pr_fx();
     assert!(!repo.join(".config/cpd.toml").exists());
-    fx.env.repo_policy("acme", "shop", "[test-commands]\nbuild = \"true\"\nrun = \"true\"\n");
+    fx.env.repo_policy(
+        "acme",
+        "shop",
+        "[test-commands]\nbuild = \"true\"\nrun = \"true\"\n",
+    );
     add_tdd(&fx, &repo).ok();
 }
 
 #[test]
 fn a_cpd_toml_in_the_repo_tree_does_not_configure_the_test_commands() {
     let (fx, repo) = pr_fx();
-    fx.commit_file(&repo, ".config/cpd.toml", "[tests]\nbuild = \"true\"\nrun = \"true\"\n", "tests table");
+    fx.commit_file(
+        &repo,
+        ".config/cpd.toml",
+        "[tests]\nbuild = \"true\"\nrun = \"true\"\n",
+        "tests table",
+    );
     fx.git(&repo, &["update-ref", "refs/remotes/origin/main", "main"]);
     fx.env.repo_policy("acme", "shop", "");
     let run = add_tdd(&fx, &repo);
     let error = refused(&run, "tests_unconfigured", 3);
-    assert!(error["message"].as_str().unwrap().contains("policy/acme/shop.toml"), "{run:?}");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("policy/acme/shop.toml"),
+        "{run:?}"
+    );
 }
 
 // ---------- attempt submit ----------
@@ -103,7 +132,10 @@ struct Recorded(Arc<Mutex<Vec<Call>>>);
 
 impl Handler for Recorded {
     fn handle(&self, call: &Call) -> Reply {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).push(call.clone());
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(call.clone());
         Sh.handle(call)
     }
 }
@@ -114,11 +146,18 @@ fn fixture(repo_file: &str, files: &[(&str, &str)], kind: &str) -> Sub {
     let fx = Fx::with_ports();
     let repo = fx.keyed_repo("pay").canonicalize().unwrap();
     let bare = fx.env.root().join("pay-origin.git");
-    fx.git(fx.env.root(), &["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()]);
+    fx.git(
+        fx.env.root(),
+        &["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()],
+    );
     fx.local_origin(&repo, &bare);
     fx.git(&repo, &["push", "-q", "origin", "main"]);
     fx.env.repo_policy("acme", "pay", repo_file);
-    for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
+    for (key, value) in [
+        ("user.name", "cpd test"),
+        ("user.email", "test@cpd.invalid"),
+        ("commit.gpgsign", "false"),
+    ] {
         fx.git(&repo, &["config", key, value]);
     }
     for (path, content) in files {
@@ -131,11 +170,17 @@ fn fixture(repo_file: &str, files: &[(&str, &str)], kind: &str) -> Sub {
     fx.env.write_config("version = 1\nmachine = \"t\"\n");
     let plan = PlanId::parse(PLAN).unwrap();
     let attempt = AttemptId::parse("api-a1").unwrap();
-    let setup = |log: &str| Setup { timeout: Duration::from_secs(30), log: fx.env.root().join(log) };
+    let setup = |log: &str| Setup {
+        timeout: Duration::from_secs(30),
+        log: fx.env.root().join(log),
+    };
     // The worktrees are made by the product's own functions, on the ports of the `Fx`: git is the fake git.
     let (lead, made) = Ports::scope(&fx.fakes.ports, || {
-        let lead = create_lead_worktree(&repo, &plan, "main", &setup("setup.log")).unwrap().path;
-        let made = create_attempt_worktree(&repo, &lead, &plan, &attempt, &setup("attempt.log")).unwrap();
+        let lead = create_lead_worktree(&repo, &plan, "main", &setup("setup.log"))
+            .unwrap()
+            .path;
+        let made =
+            create_attempt_worktree(&repo, &lead, &plan, &attempt, &setup("attempt.log")).unwrap();
         (lead, made)
     });
     fx.env.sql(&format!(
@@ -149,7 +194,11 @@ fn fixture(repo_file: &str, files: &[(&str, &str)], kind: &str) -> Sub {
         repo.display(),
         lead.display()
     ));
-    let (tests, test_files) = if kind == "test" { ("'[\"t::one\"]'", "'[\"tests/t.rs\"]'") } else { ("NULL", "NULL") };
+    let (tests, test_files) = if kind == "test" {
+        ("'[\"t::one\"]'", "'[\"tests/t.rs\"]'")
+    } else {
+        ("NULL", "NULL")
+    };
     let fingerprint = "f".repeat(64);
     // One transaction, as the Jobs of a locked Plan are written: a Job and its Dependency of another transaction are `job_locked`.
     let mut jobs = format!(
@@ -175,27 +224,40 @@ fn fixture(repo_file: &str, files: &[(&str, &str)], kind: &str) -> Sub {
         made.base_sha
     ));
     let sh = Arc::new(Mutex::new(Vec::new()));
-    let _ = (*fx.fakes.runner).clone().route("sh", Arc::new(Recorded(sh.clone())));
-    Sub { fx, work: made.path, sh }
+    let _ = (*fx.fakes.runner)
+        .clone()
+        .route("sh", Arc::new(Recorded(sh.clone())));
+    Sub {
+        fx,
+        work: made.path,
+        sh,
+    }
 }
 
 impl Sub {
     fn commit(&self, path: &str, content: &str) {
-        self.fx.commit_file(&self.work, path, content, &format!("edit {path}"));
+        self.fx
+            .commit_file(&self.work, path, content, &format!("edit {path}"));
     }
 
     fn submit(&self) -> Run {
-        self.fx.cpd_in(&self.work, &["attempt", "submit", "api-a1", "--plan", PLAN])
+        self.fx
+            .cpd_in(&self.work, &["attempt", "submit", "api-a1", "--plan", PLAN])
     }
 
     fn status(&self) -> String {
-        self.fx.env.query("SELECT status FROM attempts WHERE id = 'api-a1'")
+        self.fx
+            .env
+            .query("SELECT status FROM attempts WHERE id = 'api-a1'")
     }
 
     /// The commands `sh -c` was asked to run, in order, each with its cwd.
     fn sh_calls(&self) -> Vec<(String, PathBuf)> {
         let calls = self.sh.lock().unwrap_or_else(PoisonError::into_inner);
-        calls.iter().map(|call| (call.args[1].clone(), call.cwd.clone().unwrap())).collect()
+        calls
+            .iter()
+            .map(|call| (call.args[1].clone(), call.cwd.clone().unwrap()))
+            .collect()
     }
 }
 
@@ -208,11 +270,26 @@ fn a_test_job_submit_builds_and_runs_with_the_test_commands_of_the_repo_file() {
     fx.commit("GREEN", "x\n");
     let error = refused(&fx.submit(), "tests_not_red", 3);
     assert_eq!(error["details"]["tests"], json!(["t::one"]));
-    assert!(error["details"]["tail"].as_str().unwrap().contains("running"), "{error}");
+    assert!(
+        error["details"]["tail"]
+            .as_str()
+            .unwrap()
+            .contains("running"),
+        "{error}"
+    );
     // The commands that ran are the repo file's, `build` then `run`, in the Attempt's worktree.
     assert_eq!(
-        fx.sh_calls().iter().map(|(command, cwd)| (command.as_str(), cwd.canonicalize().unwrap())).collect::<Vec<_>>(),
-        [(BUILD, work.clone()), ("echo running; echo t::one > ../ran.txt; test -e GREEN", work.clone())]
+        fx.sh_calls()
+            .iter()
+            .map(|(command, cwd)| (command.as_str(), cwd.canonicalize().unwrap()))
+            .collect::<Vec<_>>(),
+        [
+            (BUILD, work.clone()),
+            (
+                "echo running; echo t::one > ../ran.txt; test -e GREEN",
+                work.clone()
+            )
+        ]
     );
     // A red one is accepted.
     fx.fx.git(&fx.work, &["rm", "-q", "GREEN"]);
@@ -227,19 +304,36 @@ fn an_impl_job_submit_runs_the_named_tests_with_the_run_command_of_the_repo_file
     fx.commit("src/lib.rs", "// not enough\n");
     let error = refused(&fx.submit(), "tests_failed", 3);
     assert_eq!(error["details"]["tests"], json!(["t::one"]));
-    assert!(error["details"]["tail"].as_str().unwrap().contains("running"), "{error}");
+    assert!(
+        error["details"]["tail"]
+            .as_str()
+            .unwrap()
+            .contains("running"),
+        "{error}"
+    );
     fx.commit("GREEN", "x\n");
     fx.submit().ok();
     assert_eq!(fx.status(), "merging");
     // `run` is the repo file's, given the named tests (the `test` Job's), after `build`.
-    let commands: Vec<String> = fx.sh_calls().into_iter().map(|(command, _)| command).collect();
+    let commands: Vec<String> = fx
+        .sh_calls()
+        .into_iter()
+        .map(|(command, _)| command)
+        .collect();
     assert_eq!(commands.len(), 4, "{commands:?}");
-    assert_eq!(commands[1], "echo running; echo t::one > ../ran.txt; test -e GREEN");
+    assert_eq!(
+        commands[1],
+        "echo running; echo t::one > ../ran.txt; test -e GREEN"
+    );
 }
 
 #[test]
 fn a_diff_touching_a_protected_path_of_the_repo_file_is_tampering() {
-    let fx = fixture("[protected]\npaths = [\"verify.sh\", \"scripts/ci/\"]\n", &[("verify.sh", "#!/bin/sh\n")], "work");
+    let fx = fixture(
+        "[protected]\npaths = [\"verify.sh\", \"scripts/ci/\"]\n",
+        &[("verify.sh", "#!/bin/sh\n")],
+        "work",
+    );
     fx.commit("src/fine.rs", "ok\n");
     fx.commit("verify.sh", "#!/bin/sh\nexit 0\n");
     fx.commit("scripts/ci/run.sh", "x\n");

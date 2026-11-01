@@ -13,7 +13,10 @@ fn display(m: &M, target: &str, format: &str) -> String {
 fn dash_u_dash_capital_v_prints_the_version_line() {
     let m = M::new();
     let out = m.tmux.run(&m.invocation(vec!["-u".into(), "-V".into()]));
-    assert_eq!((out.code, out.stdout.as_str(), out.stderr.as_str()), (0, "tmux 3.6a\n", ""));
+    assert_eq!(
+        (out.code, out.stdout.as_str(), out.stderr.as_str()),
+        (0, "tmux 3.6a\n", "")
+    );
 }
 
 #[test]
@@ -41,7 +44,16 @@ fn a_client_added_with_a_size_answers_client_width_and_client_height() {
     let m = M::new();
     m.server();
     m.tmux.add_client("/dev/pts/9", 200, 60);
-    assert_eq!(m.ok(&["display", "-p", "-c", "/dev/pts/9", "#{client_width} #{client_height}"]), "200 60\n");
+    assert_eq!(
+        m.ok(&[
+            "display",
+            "-p",
+            "-c",
+            "/dev/pts/9",
+            "#{client_width} #{client_height}"
+        ]),
+        "200 60\n"
+    );
 }
 
 #[test]
@@ -50,8 +62,26 @@ fn two_clients_answer_each_their_own_size() {
     m.server();
     m.tmux.add_client("/dev/pts/1", 100, 30);
     m.tmux.add_client("/dev/pts/2", 200, 60);
-    assert_eq!(m.ok(&["display", "-p", "-c", "/dev/pts/2", "#{client_width}x#{client_height}"]), "200x60\n");
-    assert_eq!(m.ok(&["display", "-p", "-c", "/dev/pts/1", "#{client_width}x#{client_height}"]), "100x30\n");
+    assert_eq!(
+        m.ok(&[
+            "display",
+            "-p",
+            "-c",
+            "/dev/pts/2",
+            "#{client_width}x#{client_height}"
+        ]),
+        "200x60\n"
+    );
+    assert_eq!(
+        m.ok(&[
+            "display",
+            "-p",
+            "-c",
+            "/dev/pts/1",
+            "#{client_width}x#{client_height}"
+        ]),
+        "100x30\n"
+    );
 }
 
 #[test]
@@ -59,7 +89,13 @@ fn a_client_that_was_not_added_gives_an_empty_line_and_exit_0() {
     let m = M::new();
     m.server();
     m.tmux.add_client("/dev/pts/9", 200, 60);
-    let out = m.t(&["display", "-p", "-c", "/dev/pts/404", "#{client_width} #{client_height}"]);
+    let out = m.t(&[
+        "display",
+        "-p",
+        "-c",
+        "/dev/pts/404",
+        "#{client_width} #{client_height}",
+    ]);
     assert_eq!((out.code, out.stdout.as_str()), (0, "\n"));
 }
 
@@ -68,7 +104,10 @@ fn the_client_name_variable_is_the_name_the_client_was_added_with() {
     let m = M::new();
     m.server();
     m.tmux.add_client("/dev/pts/3", 80, 24);
-    assert_eq!(m.ok(&["display", "-p", "-c", "/dev/pts/3", "#{client_name}"]), "/dev/pts/3\n");
+    assert_eq!(
+        m.ok(&["display", "-p", "-c", "/dev/pts/3", "#{client_name}"]),
+        "/dev/pts/3\n"
+    );
 }
 
 // ---- G4: list-clients and client_activity ----
@@ -79,15 +118,25 @@ fn list_clients_lists_the_added_clients_with_their_sizes_in_the_order_they_were_
     m.server();
     m.tmux.add_client("/dev/pts/1", 100, 30);
     m.tmux.add_client("/dev/pts/2", 200, 60);
-    let out = m.ok(&["list-clients", "-F", "#{client_name} #{client_width} #{client_height}"]);
+    let out = m.ok(&[
+        "list-clients",
+        "-F",
+        "#{client_name} #{client_width} #{client_height}",
+    ]);
     assert_eq!(out, "/dev/pts/1 100 30\n/dev/pts/2 200 60\n");
 }
 
 fn activities(out: &str) -> Vec<(u64, String)> {
     out.lines()
         .map(|l| {
-            let (n, name) = l.split_once(' ').unwrap_or_else(|| panic!("no activity in {l:?}"));
-            (n.parse().unwrap_or_else(|_| panic!("activity is not a number in {l:?}")), name.to_owned())
+            let (n, name) = l
+                .split_once(' ')
+                .unwrap_or_else(|| panic!("no activity in {l:?}"));
+            (
+                n.parse()
+                    .unwrap_or_else(|_| panic!("activity is not a number in {l:?}")),
+                name.to_owned(),
+            )
         })
         .collect()
 }
@@ -96,12 +145,21 @@ fn activities(out: &str) -> Vec<(u64, String)> {
 fn client_activity_grows_with_the_order_clients_were_added() {
     let m = M::new();
     m.server();
-    for (i, name) in ["/dev/pts/1", "/dev/pts/2", "/dev/pts/3"].into_iter().enumerate() {
+    for (i, name) in ["/dev/pts/1", "/dev/pts/2", "/dev/pts/3"]
+        .into_iter()
+        .enumerate()
+    {
         m.tmux.add_client(name, 80 + i as u32, 24);
     }
     let seen = activities(&m.ok(&["list-clients", "-F", "#{client_activity} #{client_name}"]));
-    assert_eq!(seen.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(), ["/dev/pts/1", "/dev/pts/2", "/dev/pts/3"]);
-    assert!(seen.windows(2).all(|w| w[0].0 < w[1].0), "the newest client is the last: {seen:?}");
+    assert_eq!(
+        seen.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(),
+        ["/dev/pts/1", "/dev/pts/2", "/dev/pts/3"]
+    );
+    assert!(
+        seen.windows(2).all(|w| w[0].0 < w[1].0),
+        "the newest client is the last: {seen:?}"
+    );
 }
 
 #[test]
@@ -112,7 +170,10 @@ fn client_activity_grows_with_the_order_clients_attached() {
     m.ok(&["attach", "-t", "=s"]);
     let seen = activities(&m.ok(&["list-clients", "-F", "#{client_activity} #{client_name}"]));
     assert_eq!(seen.len(), 2);
-    assert!(seen[0].0 < seen[1].0, "the second attach is the newest: {seen:?}");
+    assert!(
+        seen[0].0 < seen[1].0,
+        "the second attach is the newest: {seen:?}"
+    );
 }
 
 #[test]
@@ -150,7 +211,16 @@ fn pane_active_is_1_for_the_current_pane_of_the_window_and_0_for_the_others() {
     let m = M::new();
     m.server();
     m.ok(&["split-window", "-d", "-t", "%0", "-h"]);
-    assert_eq!(m.ok(&["list-panes", "-t", "=s:w", "-F", "#{pane_id}:#{pane_active}"]), "%0:1\n%1:0\n");
+    assert_eq!(
+        m.ok(&[
+            "list-panes",
+            "-t",
+            "=s:w",
+            "-F",
+            "#{pane_id}:#{pane_active}"
+        ]),
+        "%0:1\n%1:0\n"
+    );
 }
 
 #[test]
@@ -159,7 +229,16 @@ fn pane_active_follows_select_pane() {
     m.server();
     m.ok(&["split-window", "-d", "-t", "%0", "-h"]);
     m.ok(&["select-pane", "-t", "%1"]);
-    assert_eq!(m.ok(&["list-panes", "-t", "=s:w", "-F", "#{pane_id}:#{pane_active}"]), "%0:0\n%1:1\n");
+    assert_eq!(
+        m.ok(&[
+            "list-panes",
+            "-t",
+            "=s:w",
+            "-F",
+            "#{pane_id}:#{pane_active}"
+        ]),
+        "%0:0\n%1:1\n"
+    );
 }
 
 #[test]
@@ -187,7 +266,10 @@ fn pane_current_command_is_the_file_name_of_the_program_of_the_pane() {
 fn window_width_and_window_height_are_the_size_the_session_was_created_with() {
     let m = M::new();
     m.ok(&["new-session", "-d", "-s", "s", "-x", "215", "-y", "62"]);
-    assert_eq!(display(&m, "=s:", "#{window_width}x#{window_height}"), "215x62\n");
+    assert_eq!(
+        display(&m, "=s:", "#{window_width}x#{window_height}"),
+        "215x62\n"
+    );
 }
 
 #[test]
@@ -195,5 +277,8 @@ fn socket_path_is_the_path_a_missing_server_is_reported_at() {
     let m = M::new();
     m.server();
     let uid = std::fs::metadata(m.dir.path()).unwrap().uid();
-    assert_eq!(display(&m, "%0", "#{socket_path}"), format!("{}/tmux-{uid}/t\n", m.dir.path().display()));
+    assert_eq!(
+        display(&m, "%0", "#{socket_path}"),
+        format!("{}/tmux-{uid}/t\n", m.dir.path().display())
+    );
 }

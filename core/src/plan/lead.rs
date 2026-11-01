@@ -44,7 +44,9 @@ fn spawn(env: &Env, lead: &Lead) -> Spawn {
     Spawn {
         cwd: Some(lead.cwd.to_path_buf()),
         env: vars,
-        argv: [PROGRAM, "session", "run", lead.session.as_str()].map(str::to_owned).into(),
+        argv: [PROGRAM, "session", "run", lead.session.as_str()]
+            .map(str::to_owned)
+            .into(),
     }
 }
 
@@ -54,11 +56,20 @@ fn spawn(env: &Env, lead: &Lead) -> Spawn {
 /// later (commands.md §4.1; Escalation `rs-plan-a1-q3`). Marks the pane with
 /// `@cpd_session`, then records `tmux_pane` and appends `session-moved`
 /// `{place: "parked"}` in one transaction.
-pub(super) fn start(env: &mut Env, lead: &Lead, window: &str, command: &str) -> Result<Started, CpdError> {
+pub(super) fn start(
+    env: &mut Env,
+    lead: &Lead,
+    window: &str,
+    command: &str,
+) -> Result<Started, CpdError> {
     let tmux = Tmux::new(env.config.tmux.socket.clone());
     let cockpit = env.config.tmux.cockpit_session.clone();
     let spawn = spawn(env, lead);
-    let created = if tmux.has_session(&cockpit)? { None } else { tmux.create_session(&cockpit, window, &spawn)? };
+    let created = if tmux.has_session(&cockpit)? {
+        None
+    } else {
+        tmux.create_session(&cockpit, window, &spawn)?
+    };
     let (window, pane) = match created {
         Some(ids) => ids,
         None => tmux.new_window(&cockpit, window, &spawn)?,
@@ -68,11 +79,19 @@ pub(super) fn start(env: &mut Env, lead: &Lead, window: &str, command: &str) -> 
         tmux.set_pane_session(&pane, lead.session)?;
         tmux.set_pane_title(&pane, &title(env, lead)?)?;
         env.store.write(command, |tx| {
-            tx.execute("UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2", [pane.as_str(), lead.session.as_str()])?;
-            let text = format!("Lead {} is parked in window {}.", lead.name, window.as_str());
-            let mut event = NewEvent::session_moved(text, Some(pane.as_str()), Some(window.as_str()), "parked")
-                .session(lead.session.clone())
-                .context(lead.context.clone());
+            tx.execute(
+                "UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2",
+                [pane.as_str(), lead.session.as_str()],
+            )?;
+            let text = format!(
+                "Lead {} is parked in window {}.",
+                lead.name,
+                window.as_str()
+            );
+            let mut event =
+                NewEvent::session_moved(text, Some(pane.as_str()), Some(window.as_str()), "parked")
+                    .session(lead.session.clone())
+                    .context(lead.context.clone());
             if let Some(plan) = lead.plan {
                 event = event.plan(plan.clone());
             }
@@ -96,14 +115,25 @@ fn title(env: &mut Env, lead: &Lead) -> Result<String, CpdError> {
         }
         match lead.plan {
             None => Ok(lead.name.to_owned()),
-            Some(plan) => Ok(conn.query_row("SELECT title FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?),
+            Some(plan) => Ok(conn.query_row(
+                "SELECT title FROM plans WHERE id = ?1",
+                [plan.as_str()],
+                |r| r.get(0),
+            )?),
         }
     })
 }
 
 /// The Session's dynamic title, if it has one.
-fn dynamic_title(conn: &rusqlite::Connection, session: &SessionId) -> Result<Option<String>, CpdError> {
-    Ok(conn.query_row("SELECT title FROM sessions WHERE id = ?1", [session.as_str()], |r| r.get(0))?)
+fn dynamic_title(
+    conn: &rusqlite::Connection,
+    session: &SessionId,
+) -> Result<Option<String>, CpdError> {
+    Ok(conn.query_row(
+        "SELECT title FROM sessions WHERE id = ?1",
+        [session.as_str()],
+        |r| r.get(0),
+    )?)
 }
 
 /// Sets `@cpd_title` on `session`'s live pane, if it has one: to its dynamic title when it has
@@ -112,14 +142,21 @@ pub(super) fn retitle(env: &mut Env, session: &SessionId, title: &str) -> Result
     let dynamic = env.store.read(|conn| dynamic_title(conn, session))?;
     let title = dynamic.as_deref().unwrap_or(title);
     let tmux = Tmux::new(env.config.tmux.socket.clone());
-    for pane in tmux.list_panes()?.iter().filter(|p| !p.dead && p.cpd_session.as_ref() == Some(session)) {
+    for pane in tmux
+        .list_panes()?
+        .iter()
+        .filter(|p| !p.dead && p.cpd_session.as_ref() == Some(session))
+    {
         tmux.set_pane_title(&pane.pane, title)?;
     }
     Ok(())
 }
 
 /// The window of the Session's latest `session-moved` Event, if any.
-pub(super) fn last_window(conn: &rusqlite::Connection, session: &SessionId) -> Result<Option<String>, CpdError> {
+pub(super) fn last_window(
+    conn: &rusqlite::Connection,
+    session: &SessionId,
+) -> Result<Option<String>, CpdError> {
     use rusqlite::OptionalExtension;
     Ok(conn
         .query_row(

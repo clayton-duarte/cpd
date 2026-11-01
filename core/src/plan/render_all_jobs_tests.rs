@@ -39,10 +39,20 @@ fn prs_sql(statuses: &[&str]) -> String {
     let mut sql = String::new();
     for (n, status) in statuses.iter().enumerate() {
         let n = n + 1;
-        let (worktree, started) = if matches!(*status, "waiting" | "cancelled") { ("NULL".to_owned(), "NULL") } else if matches!(*status, "dispatch" | "open" | "merged") { (format!("'/w/{status}'"), "'t'") } else { panic!("no fixture for a PR in {status}") };
+        let (worktree, started) = if matches!(*status, "waiting" | "cancelled") {
+            ("NULL".to_owned(), "NULL")
+        } else if matches!(*status, "dispatch" | "open" | "merged") {
+            (format!("'/w/{status}'"), "'t'")
+        } else {
+            panic!("no fixture for a PR in {status}")
+        };
         let (row, pull, merged_at) = match *status {
             "open" | "merged" => {
-                let state = if *status == "merged" { "merged" } else { "open" };
+                let state = if *status == "merged" {
+                    "merged"
+                } else {
+                    "open"
+                };
                 let merged = if *status == "merged" { "'t'" } else { "NULL" };
                 (
                     format!(
@@ -76,7 +86,11 @@ fn job_sql(key: &str, pr: Option<&str>, kind: &str, status: &str) -> String {
     let cancel_requested_at = q(cancelled.then(|| "t".to_owned()));
     let summary = q((is_explore(kind) && status == "merged").then(|| "The summary.".to_owned()));
     // a `test` Job names its tests and the files that hold them (trigger `jobs_kind_spec_ins`); only a `test` Job may
-    let (tests, test_files) = if kind == "test" { ("'[\"t\"]'", "'[\"f.rs\"]'") } else { ("NULL", "NULL") };
+    let (tests, test_files) = if kind == "test" {
+        ("'[\"t\"]'", "'[\"f.rs\"]'")
+    } else {
+        ("NULL", "NULL")
+    };
     let pr = q(pr.map(str::to_owned));
     format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
@@ -125,20 +139,40 @@ fn assert_every_job_is_one_row(store: &mut Store) {
     let (md, mut want) = store
         .read(|conn| {
             let prs = load_prs(conn, &plan)?;
-            let md = markdown(&Heading::Plan { title: "T", plan: PLAN }, "ctx", "dispatch", &prs, &jobs::load(conn, &plan)?, &[], "S2", &Display::of(&prs));
+            let md = markdown(
+                &Heading::Plan {
+                    title: "T",
+                    plan: PLAN,
+                },
+                "ctx",
+                "dispatch",
+                &prs,
+                &jobs::load(conn, &plan)?,
+                &[],
+                "S2",
+                &Display::of(&prs),
+            );
             let mut stmt = conn.prepare("SELECT key FROM jobs WHERE plan = ?1")?;
-            let keys = stmt.query_map([PLAN], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let keys = stmt
+                .query_map([PLAN], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok((md, keys))
         })
         .unwrap();
     let mut got = drawn_keys(&md);
     want.sort();
     got.sort();
-    let (want_set, got_set): (BTreeSet<_>, BTreeSet<_>) = (want.iter().cloned().collect(), got.iter().cloned().collect());
+    let (want_set, got_set): (BTreeSet<_>, BTreeSet<_>) = (
+        want.iter().cloned().collect(),
+        got.iter().cloned().collect(),
+    );
     let missing: Vec<_> = want_set.difference(&got_set).collect();
     let extra: Vec<_> = got.iter().filter(|k| !want_set.contains(*k)).collect();
     assert!(!want.is_empty(), "the fixture has no Job");
-    assert!(got == want, "Jobs not drawn: {missing:?}\nrows that are no Job (or drawn twice): {extra:?}");
+    assert!(
+        got == want,
+        "Jobs not drawn: {missing:?}\nrows that are no Job (or drawn twice): {extra:?}"
+    );
 }
 
 #[test]
@@ -148,7 +182,12 @@ fn every_job_of_a_plan_with_prs_is_one_row_of_plan_render() {
     for pr in statuses {
         for kind in KINDS.into_iter().filter(|k| !is_explore(k)) {
             for status in STATUSES {
-                sql.push_str(&job_sql(&format!("{pr}-{kind}-{status}"), Some(pr), kind, status));
+                sql.push_str(&job_sql(
+                    &format!("{pr}-{kind}-{status}"),
+                    Some(pr),
+                    kind,
+                    status,
+                ));
             }
         }
     }

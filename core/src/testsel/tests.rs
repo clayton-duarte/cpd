@@ -29,7 +29,12 @@ struct Out {
 }
 
 impl Out {
-    fn of(result: Result<u8, CpdError>, stdout: Vec<u8>, mut stderr: Vec<u8>, fakes: &Fakes) -> Out {
+    fn of(
+        result: Result<u8, CpdError>,
+        stdout: Vec<u8>,
+        mut stderr: Vec<u8>,
+        fakes: &Fakes,
+    ) -> Out {
         let status = match result {
             Ok(status) => status,
             Err(err) => {
@@ -48,7 +53,13 @@ impl Out {
 
     /// Everything that was said, for a failure message.
     fn what(&self) -> String {
-        format!("status {}, stdout {:?}, stderr {:?}, calls {:?}", self.status, self.stdout, self.stderr, self.argvs())
+        format!(
+            "status {}, stdout {:?}, stderr {:?}, calls {:?}",
+            self.status,
+            self.stdout,
+            self.stderr,
+            self.argvs()
+        )
     }
 
     fn argvs(&self) -> Vec<Vec<String>> {
@@ -57,12 +68,18 @@ impl Out {
 
     /// The calls of the program whose file name is `name`.
     fn calls_of(&self, name: &str) -> Vec<&Call> {
-        self.calls.iter().filter(|c| c.program.rsplit('/').next() == Some(name)).collect()
+        self.calls
+            .iter()
+            .filter(|c| c.program.rsplit('/').next() == Some(name))
+            .collect()
     }
 
     /// The `cargo.sh` calls whose first argument is `first`.
     fn cargo(&self, first: &str) -> Vec<&Call> {
-        self.calls_of("cargo.sh").into_iter().filter(|c| c.args.first().map(String::as_str) == Some(first)).collect()
+        self.calls_of("cargo.sh")
+            .into_iter()
+            .filter(|c| c.args.first().map(String::as_str) == Some(first))
+            .collect()
     }
 
     /// The git call that has `word` as an argument.
@@ -75,7 +92,9 @@ impl Out {
 }
 
 fn argv(call: &Call) -> Vec<String> {
-    std::iter::once(call.program.clone()).chain(call.args.iter().cloned()).collect()
+    std::iter::once(call.program.clone())
+        .chain(call.args.iter().cloned())
+        .collect()
 }
 
 fn words(call: &Call) -> Vec<&str> {
@@ -126,10 +145,16 @@ const BASE: &str = "89abcdef0123456789abcdef0123456789abcdef";
 /// `cpd-tui` on core, `cli/` is `cpd` on both, its integration tests one binary per area, `cli/tests/<area>/` with a
 /// module per file, and `cli/tests/common/` shared by them). `(path, text)`.
 const FILES: &[(&str, &str)] = &[
-    ("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"core\", \"tui\", \"cli\"]\n"),
+    (
+        "Cargo.toml",
+        "[workspace]\nresolver = \"3\"\nmembers = [\"core\", \"tui\", \"cli\"]\n",
+    ),
     ("core/Cargo.toml", "[package]\nname = \"cpd-core\"\n"),
     ("core/src/lib.rs", "pub fn core() {}\n"),
-    ("core/src/store/migrations/0001-initial.sql", "-- cpd-migration: additive\n"),
+    (
+        "core/src/store/migrations/0001-initial.sql",
+        "-- cpd-migration: additive\n",
+    ),
     ("tui/Cargo.toml", "[package]\nname = \"cpd-tui\"\n"),
     ("tui/src/lib.rs", "pub fn tui() {}\n"),
     ("cli/Cargo.toml", "[package]\nname = \"cpd\"\n"),
@@ -142,7 +167,10 @@ const FILES: &[(&str, &str)] = &[
     ("cli/tests/first/data/sample.txt", "sample\n"),
     ("cli/tests/second/main.rs", "mod gamma;\n"),
     ("cli/tests/second/gamma.rs", "#[test]\nfn three() {}\n"),
-    (".config/nextest.toml", "[profile.default]\nfail-fast = false\n"),
+    (
+        ".config/nextest.toml",
+        "[profile.default]\nfail-fast = false\n",
+    ),
     ("docs/notes.md", "# Notes\n"),
 ];
 
@@ -156,21 +184,35 @@ struct Selection {
 }
 
 fn crates(names: &[&str]) -> Selection {
-    Selection { workspace: false, packages: names.iter().map(|n| n.to_string()).collect(), binaries: BTreeSet::new(), filters: Vec::new() }
+    Selection {
+        workspace: false,
+        packages: names.iter().map(|n| n.to_string()).collect(),
+        binaries: BTreeSet::new(),
+        filters: Vec::new(),
+    }
 }
 
 /// Only the test binary (area) `area` of the crate `cpd`.
 fn binary(area: &str) -> Selection {
-    Selection { binaries: [area.to_string()].into(), ..crates(&["cpd"]) }
+    Selection {
+        binaries: [area.to_string()].into(),
+        ..crates(&["cpd"])
+    }
 }
 
 /// Only the module `name` in the one test binary `area`.
 fn module(area: &str, name: &str) -> Selection {
-    Selection { filters: vec![format!("test(/^{name}::/)")], ..binary(area) }
+    Selection {
+        filters: vec![format!("test(/^{name}::/)")],
+        ..binary(area)
+    }
 }
 
 fn full_suite() -> Selection {
-    Selection { workspace: true, ..crates(&[]) }
+    Selection {
+        workspace: true,
+        ..crates(&[])
+    }
 }
 
 /// A scratch git repo's worth of facts: the workspace of [`FILES`] on disk, and the files git would report changed.
@@ -189,7 +231,12 @@ impl Scratch {
         for (path, text) in FILES {
             write(&root, path, text);
         }
-        Scratch { _dir: dir, root, changed: Vec::new(), untracked: Vec::new() }
+        Scratch {
+            _dir: dir,
+            root,
+            changed: Vec::new(),
+            untracked: Vec::new(),
+        }
     }
 
     /// `path` is changed: tracked, and different from the base (committed, staged or unstaged).
@@ -235,8 +282,16 @@ impl Scratch {
         let fakes = Fakes::new();
         let _ = (*fakes.runner)
             .clone()
-            .on("git", has("rev-parse"), Reply::ok(&format!("{}\n", self.root.display())))
-            .on("git", has("merge-base"), Reply::ok(&format!("{MERGE_BASE}\n")))
+            .on(
+                "git",
+                has("rev-parse"),
+                Reply::ok(&format!("{}\n", self.root.display())),
+            )
+            .on(
+                "git",
+                has("merge-base"),
+                Reply::ok(&format!("{MERGE_BASE}\n")),
+            )
             .on("git", has("diff"), Reply::ok(&lines(&self.changed)))
             .on("git", has("ls-files"), Reply::ok(&lines(&self.untracked)))
             .on("cargo.sh", first("metadata"), Reply::ok(&self.metadata()))
@@ -247,7 +302,10 @@ impl Scratch {
     /// `cpd test changed [--dry-run] [<base>]` from `cwd`.
     fn changed(&self, cwd: &Path, dry_run: bool, base: Option<&str>, nextest: Reply) -> Out {
         let fakes = self.fakes(nextest);
-        let args = ChangedArgs { dry_run, base: base.map(str::to_owned) };
+        let args = ChangedArgs {
+            dry_run,
+            base: base.map(str::to_owned),
+        };
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let result = changed(&fakes.ports, cwd, &args, &mut out, &mut err);
         Out::of(result, out, err, &fakes)
@@ -264,11 +322,17 @@ impl Scratch {
         let out = self.dry_run();
         let what = out.what();
         assert_eq!(out.status, 0, "{what}");
-        let line = out.stdout.strip_suffix('\n').unwrap_or_else(|| panic!("stdout is not one line: {what}"));
+        let line = out
+            .stdout
+            .strip_suffix('\n')
+            .unwrap_or_else(|| panic!("stdout is not one line: {what}"));
         assert!(!line.contains('\n'), "stdout is more than one line: {what}");
         let words = shell_words(line);
         assert!(
-            words.len() >= 3 && words[0].ends_with("scripts/cargo.sh") && words[1] == "nextest" && words[2] == "run",
+            words.len() >= 3
+                && words[0].ends_with("scripts/cargo.sh")
+                && words[1] == "nextest"
+                && words[2] == "run",
             "not a `scripts/cargo.sh nextest run` command: {what}"
         );
         let mut selection = crates(&[]);
@@ -277,14 +341,28 @@ impl Scratch {
             match word.as_str() {
                 "--workspace" => selection.workspace = true,
                 "-p" => {
-                    let name = rest.next().unwrap_or_else(|| panic!("-p without a crate: {what}"));
-                    assert!(selection.packages.insert(name.clone()), "-p {name} twice: {what}");
+                    let name = rest
+                        .next()
+                        .unwrap_or_else(|| panic!("-p without a crate: {what}"));
+                    assert!(
+                        selection.packages.insert(name.clone()),
+                        "-p {name} twice: {what}"
+                    );
                 }
                 "--test" => {
-                    let name = rest.next().unwrap_or_else(|| panic!("--test without a binary: {what}"));
-                    assert!(selection.binaries.insert(name.clone()), "--test {name} twice: {what}");
+                    let name = rest
+                        .next()
+                        .unwrap_or_else(|| panic!("--test without a binary: {what}"));
+                    assert!(
+                        selection.binaries.insert(name.clone()),
+                        "--test {name} twice: {what}"
+                    );
                 }
-                "-E" => selection.filters.push(rest.next().unwrap_or_else(|| panic!("-E without a filter: {what}")).clone()),
+                "-E" => selection.filters.push(
+                    rest.next()
+                        .unwrap_or_else(|| panic!("-E without a filter: {what}"))
+                        .clone(),
+                ),
                 other => panic!("unexpected argument {other:?}: {what}"),
             }
         }
@@ -297,7 +375,10 @@ impl Scratch {
         let out = self.dry_run();
         let what = out.what();
         assert_eq!((out.status, out.stdout.as_str()), (0, ""), "{what}");
-        assert!(out.stderr.contains("test-changed: nothing to run"), "{what}");
+        assert!(
+            out.stderr.contains("test-changed: nothing to run"),
+            "{what}"
+        );
     }
 }
 
@@ -391,9 +472,13 @@ fn changes_in_two_areas_run_each_with_its_own_filter() {
     s.edit("cli/tests/second/gamma.rs");
     let want = Selection {
         binaries: ["first".to_string(), "second".to_string()].into(),
-        filters: ["binary(first) & test(/^alpha::/)", "binary(first) & test(/^beta::/)", "binary(second) & test(/^gamma::/)"]
-            .map(String::from)
-            .into(),
+        filters: [
+            "binary(first) & test(/^alpha::/)",
+            "binary(first) & test(/^beta::/)",
+            "binary(second) & test(/^gamma::/)",
+        ]
+        .map(String::from)
+        .into(),
         ..crates(&["cpd"])
     };
     assert_eq!(s.selection(), want);
@@ -407,7 +492,9 @@ fn a_whole_binary_wins_over_a_module_of_the_same_area_and_keeps_the_other_area_s
     s.edit("cli/tests/second/gamma.rs");
     let want = Selection {
         binaries: ["first".to_string(), "second".to_string()].into(),
-        filters: ["binary(first)", "binary(second) & test(/^gamma::/)"].map(String::from).into(),
+        filters: ["binary(first)", "binary(second) & test(/^gamma::/)"]
+            .map(String::from)
+            .into(),
         ..crates(&["cpd"])
     };
     assert_eq!(s.selection(), want);
@@ -434,7 +521,11 @@ fn uncommitted_changes_count_unstaged_staged_and_untracked() {
     // untracked files are the ones `git ls-files --others --exclude-standard` lists.
     let mut s = Scratch::new();
     s.edit("core/src/lib.rs");
-    assert_eq!(s.selection(), crates(&["cpd-core", "cpd-tui", "cpd"]), "unstaged");
+    assert_eq!(
+        s.selection(),
+        crates(&["cpd-core", "cpd-tui", "cpd"]),
+        "unstaged"
+    );
 
     let mut s = Scratch::new();
     s.edit("cli/src/main.rs");
@@ -479,18 +570,32 @@ fn a_change_outside_every_crate_runs_nothing() {
 // New: what the in-process logic asks of git and cargo, which the exec tests could not see.
 
 #[test]
-fn the_changes_are_those_between_the_merge_base_of_the_base_and_head_and_the_working_tree_plus_untracked_files() {
+fn the_changes_are_those_between_the_merge_base_of_the_base_and_head_and_the_working_tree_plus_untracked_files()
+ {
     let mut s = Scratch::new();
     s.edit("cli/src/main.rs");
     let out = s.dry_run();
     let what = out.what();
     let merge_base = out.git("merge-base");
-    assert!(merge_base.args.contains(&BASE.to_owned()) && merge_base.args.contains(&"HEAD".to_owned()), "{what}");
+    assert!(
+        merge_base.args.contains(&BASE.to_owned()) && merge_base.args.contains(&"HEAD".to_owned()),
+        "{what}"
+    );
     let diff = out.git("diff");
-    assert!(diff.args.contains(&"--name-only".to_owned()) && diff.args.contains(&MERGE_BASE.to_owned()), "{what}");
-    assert!(!diff.args.contains(&"--cached".to_owned()), "the diff is of the working tree, not the index: {what}");
+    assert!(
+        diff.args.contains(&"--name-only".to_owned()) && diff.args.contains(&MERGE_BASE.to_owned()),
+        "{what}"
+    );
+    assert!(
+        !diff.args.contains(&"--cached".to_owned()),
+        "the diff is of the working tree, not the index: {what}"
+    );
     let others = out.git("ls-files");
-    assert!(others.args.contains(&"--others".to_owned()) && others.args.contains(&"--exclude-standard".to_owned()), "{what}");
+    assert!(
+        others.args.contains(&"--others".to_owned())
+            && others.args.contains(&"--exclude-standard".to_owned()),
+        "{what}"
+    );
     assert!(out.unscripted.is_empty(), "{what}");
 }
 
@@ -500,7 +605,13 @@ fn the_base_defaults_to_origin_main() {
     s.edit("cli/src/main.rs");
     let out = s.changed(&s.root, true, None, Reply::ok(""));
     assert_eq!(out.status, 0, "{}", out.what());
-    assert!(out.git("merge-base").args.contains(&"origin/main".to_owned()), "{}", out.what());
+    assert!(
+        out.git("merge-base")
+            .args
+            .contains(&"origin/main".to_owned()),
+        "{}",
+        out.what()
+    );
 }
 
 #[test]
@@ -509,14 +620,26 @@ fn a_base_with_no_merge_base_with_head_is_exit_2_and_says_so() {
     let fakes = Fakes::new();
     let _ = (*fakes.runner)
         .clone()
-        .on("git", has("rev-parse"), Reply::ok(&format!("{}\n", s.root.display())))
+        .on(
+            "git",
+            has("rev-parse"),
+            Reply::ok(&format!("{}\n", s.root.display())),
+        )
         .on("git", has("merge-base"), Reply::exit(1, "", ""));
     let (mut out, mut err) = (Vec::new(), Vec::new());
-    let args = ChangedArgs { dry_run: true, base: Some("nowhere".to_owned()) };
+    let args = ChangedArgs {
+        dry_run: true,
+        base: Some("nowhere".to_owned()),
+    };
     let result = changed(&fakes.ports, &s.root, &args, &mut out, &mut err);
     let out = Out::of(result, out, err, &fakes);
     assert_eq!(out.status, 2, "{}", out.what());
-    assert!(out.stderr.contains("test-changed: no merge base between nowhere and HEAD"), "{}", out.what());
+    assert!(
+        out.stderr
+            .contains("test-changed: no merge base between nowhere and HEAD"),
+        "{}",
+        out.what()
+    );
     assert_eq!(out.stdout, "", "{}", out.what());
 }
 
@@ -528,8 +651,18 @@ fn a_dry_run_runs_no_test_and_asks_cargo_metadata_once_from_the_repo_root() {
     assert!(out.cargo("nextest").is_empty(), "{}", out.what());
     let metadata = out.cargo("metadata");
     assert_eq!(metadata.len(), 1, "{}", out.what());
-    assert_eq!(words(metadata[0]), ["metadata", "--format-version", "1", "--no-deps"], "{}", out.what());
-    assert_eq!(metadata[0].cwd.as_deref(), Some(s.root.as_path()), "{}", out.what());
+    assert_eq!(
+        words(metadata[0]),
+        ["metadata", "--format-version", "1", "--no-deps"],
+        "{}",
+        out.what()
+    );
+    assert_eq!(
+        metadata[0].cwd.as_deref(),
+        Some(s.root.as_path()),
+        "{}",
+        out.what()
+    );
 }
 
 #[test]
@@ -537,7 +670,12 @@ fn the_full_suite_fallback_prints_exactly_the_workspace_command() {
     let mut s = Scratch::new();
     s.edit("Cargo.toml");
     let out = s.dry_run();
-    assert_eq!((out.status, out.stdout.as_str()), (0, "scripts/cargo.sh nextest run --workspace\n"), "{}", out.what());
+    assert_eq!(
+        (out.status, out.stdout.as_str()),
+        (0, "scripts/cargo.sh nextest run --workspace\n"),
+        "{}",
+        out.what()
+    );
 }
 
 #[test]
@@ -546,14 +684,33 @@ fn without_a_dry_run_the_selected_command_runs_from_the_repo_root_and_its_status
     s.edit("cli/src/main.rs");
     let green = s.changed(&s.root, false, Some(BASE), Reply::exit(0, "ok\n", ""));
     assert_eq!(green.status, 0, "{}", green.what());
-    let red = s.changed(&s.root, false, Some(BASE), Reply::exit(100, "", "1 test failed\n"));
+    let red = s.changed(
+        &s.root,
+        false,
+        Some(BASE),
+        Reply::exit(100, "", "1 test failed\n"),
+    );
     assert_eq!(red.status, 100, "{}", red.what());
     for out in [&green, &red] {
         let runs = out.cargo("nextest");
         assert_eq!(runs.len(), 1, "{}", out.what());
-        assert!(runs[0].program.ends_with("scripts/cargo.sh"), "{}", out.what());
-        assert_eq!(words(runs[0]), ["nextest", "run", "-p", "cpd"], "{}", out.what());
-        assert_eq!(runs[0].cwd.as_deref(), Some(s.root.as_path()), "{}", out.what());
+        assert!(
+            runs[0].program.ends_with("scripts/cargo.sh"),
+            "{}",
+            out.what()
+        );
+        assert_eq!(
+            words(runs[0]),
+            ["nextest", "run", "-p", "cpd"],
+            "{}",
+            out.what()
+        );
+        assert_eq!(
+            runs[0].cwd.as_deref(),
+            Some(s.root.as_path()),
+            "{}",
+            out.what()
+        );
     }
 }
 
@@ -563,7 +720,11 @@ fn nothing_selected_runs_no_nextest_and_exits_0() {
     s.edit("docs/notes.md");
     let out = s.changed(&s.root, false, Some(BASE), Reply::exit(1, "", ""));
     assert_eq!(out.status, 0, "{}", out.what());
-    assert!(out.stderr.contains("test-changed: nothing to run"), "{}", out.what());
+    assert!(
+        out.stderr.contains("test-changed: nothing to run"),
+        "{}",
+        out.what()
+    );
     assert!(out.cargo("nextest").is_empty(), "{}", out.what());
 }
 
@@ -574,9 +735,23 @@ fn it_runs_from_the_repo_root_whatever_the_current_directory() {
     let deep = s.root.join("cli/src");
     let out = s.changed(&deep, false, Some(BASE), Reply::ok(""));
     assert_eq!(out.status, 0, "{}", out.what());
-    assert_eq!(out.git("rev-parse").cwd.as_deref(), Some(deep.as_path()), "{}", out.what());
-    for call in out.cargo("metadata").into_iter().chain(out.cargo("nextest")) {
-        assert_eq!(call.cwd.as_deref(), Some(s.root.as_path()), "{}", out.what());
+    assert_eq!(
+        out.git("rev-parse").cwd.as_deref(),
+        Some(deep.as_path()),
+        "{}",
+        out.what()
+    );
+    for call in out
+        .cargo("metadata")
+        .into_iter()
+        .chain(out.cargo("nextest"))
+    {
+        assert_eq!(
+            call.cwd.as_deref(),
+            Some(s.root.as_path()),
+            "{}",
+            out.what()
+        );
     }
     assert_eq!(out.cargo("nextest").len(), 1, "{}", out.what());
 }
@@ -594,7 +769,8 @@ test("a.c (1+1) [x] more", () => { assert.fail("a prefix matched"); });
 "#;
 
 /// A second pi test file, with titles in `it(` calls and in each of the three quotes.
-const OTHER_PI_TESTS: &str = "it('single', () => {});\nit(\"double\", () => {});\nit(`tick`, () => {});\n";
+const OTHER_PI_TESTS: &str =
+    "it('single', () => {});\nit(\"double\", () => {});\nit(`tick`, () => {});\n";
 
 const PI: &str = "pi/test/sample.test.ts";
 const OTHER_PI: &str = "pi/test/other.test.ts";
@@ -635,8 +811,16 @@ impl Sample {
     fn fakes(&self, scripted: impl FnOnce(FakeRunner) -> FakeRunner) -> Fakes {
         let fakes = Fakes::new();
         let _ = scripted((*fakes.runner).clone())
-            .on("git", has("rev-parse"), Reply::ok(&format!("{}\n", self.root.display())))
-            .on("cargo.sh", |c| c.args.starts_with(&owned(&["nextest", "list"])), Reply::ok(""))
+            .on(
+                "git",
+                has("rev-parse"),
+                Reply::ok(&format!("{}\n", self.root.display())),
+            )
+            .on(
+                "cargo.sh",
+                |c| c.args.starts_with(&owned(&["nextest", "list"])),
+                Reply::ok(""),
+            )
             .on("cargo.sh", first("nextest"), Reply::ok(""))
             .on("node", has("--test"), Reply::ok(""))
             .on("pnpm", has("typecheck"), Reply::ok(""));
@@ -647,7 +831,13 @@ impl Sample {
     fn run(&self, fakes: &Fakes, names: &[&str]) -> Out {
         let names = owned(names);
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        let result = run(&fakes.ports, &self.root.join("pi"), &names, &mut out, &mut err);
+        let result = run(
+            &fakes.ports,
+            &self.root.join("pi"),
+            &names,
+            &mut out,
+            &mut err,
+        );
         Out::of(result, out, err, fakes)
     }
 
@@ -680,7 +870,13 @@ fn a_rust_name_and_a_pi_name_each_run_and_pass() {
     let both = s.run(&fakes, &["green_one", &pi("passes")]);
     assert_eq!(both.status, 0, "{}", both.what());
     assert!(both.stdout.contains("passes"), "{}", both.what());
-    let fakes = s.fakes(|r| r.on("cargo.sh", has("green_one"), Reply::ok("crate1::sample green_one\n")));
+    let fakes = s.fakes(|r| {
+        r.on(
+            "cargo.sh",
+            has("green_one"),
+            Reply::ok("crate1::sample green_one\n"),
+        )
+    });
     assert_eq!(s.list(&fakes, "green_one").status, 0);
     assert_eq!(s.list(&fakes, &pi("passes")).status, 0);
 }
@@ -689,8 +885,16 @@ fn a_rust_name_and_a_pi_name_each_run_and_pass() {
 fn a_failing_test_makes_run_exit_non_zero() {
     let s = Sample::new();
     let fakes = s.fakes(|r| {
-        r.on("node", has(pattern("fails")), Reply::exit(1, "✖ fails\n", ""))
-            .on("cargo.sh", has("red_one"), Reply::exit(100, "", "red_one failed\n"))
+        r.on(
+            "node",
+            has(pattern("fails")),
+            Reply::exit(1, "✖ fails\n", ""),
+        )
+        .on(
+            "cargo.sh",
+            has("red_one"),
+            Reply::exit(100, "", "red_one failed\n"),
+        )
     });
     let out = s.run(&fakes, &[&pi("fails")]);
     assert_ne!(out.status, 0, "{}", out.what());
@@ -712,21 +916,45 @@ fn a_misspelled_name_makes_list_and_run_exit_non_zero() {
     // A title that is only a prefix of a test's title is no test either.
     assert_ne!(s.list(&fakes, &pi("pass")).status, 0);
     let out = s.run(&fakes, &[&pi("pases")]);
-    assert_ne!(out.status, 0, "a title that matches no test must not read as a pass: {}", out.what());
-    assert!(node_calls(&out).is_empty(), "a title that is in no test is not handed to node: {}", out.what());
+    assert_ne!(
+        out.status,
+        0,
+        "a title that matches no test must not read as a pass: {}",
+        out.what()
+    );
+    assert!(
+        node_calls(&out).is_empty(),
+        "a title that is in no test is not handed to node: {}",
+        out.what()
+    );
 }
 
 #[test]
 fn a_pi_title_with_regex_characters_runs_exactly_that_test() {
     let s = Sample::new();
     let title = "a.c (1+1) [x]";
-    let fakes = s.fakes(|r| r.on("node", has("--test"), Reply::ok("✔ a.c (1+1) [x] (0.3ms)\n")));
+    let fakes = s.fakes(|r| {
+        r.on(
+            "node",
+            has("--test"),
+            Reply::ok("✔ a.c (1+1) [x] (0.3ms)\n"),
+        )
+    });
     let out = s.run(&fakes, &[&pi(title)]);
     assert_eq!(out.status, 0, "{}", out.what());
     assert!(out.stdout.contains(title), "{}", out.what());
     assert!(!out.stdout.contains("abc"), "{}", out.what());
     assert!(!out.stdout.contains("more"), "{}", out.what());
-    assert_eq!(node_calls(&out), [vec!["--test", r"--test-name-pattern=^a\.c \(1\+1\) \[x\]$", PI]], "{}", out.what());
+    assert_eq!(
+        node_calls(&out),
+        [vec![
+            "--test",
+            r"--test-name-pattern=^a\.c \(1\+1\) \[x\]$",
+            PI
+        ]],
+        "{}",
+        out.what()
+    );
     assert_eq!(s.list(&fakes, &pi(title)).status, 0);
 }
 
@@ -735,15 +963,37 @@ fn build_passes_when_the_typescript_typechecks_and_fails_when_it_does_not() {
     let s = Sample::new();
     let ok = s.build(&s.fakes(|r| r));
     assert_eq!(ok.status, 0, "{}", ok.what());
-    let steps: Vec<Vec<&str>> = ok.calls.iter().filter(|c| !c.program.ends_with("git")).map(words).collect();
-    assert_eq!(steps, [vec!["nextest", "run", "--workspace", "--no-run"], vec!["run", "typecheck"]], "{}", ok.what());
-    assert_eq!(ok.calls_of("pnpm").len(), 1, "the typecheck is a pnpm call: {}", ok.what());
+    let steps: Vec<Vec<&str>> = ok
+        .calls
+        .iter()
+        .filter(|c| !c.program.ends_with("git"))
+        .map(words)
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            vec!["nextest", "run", "--workspace", "--no-run"],
+            vec!["run", "typecheck"]
+        ],
+        "{}",
+        ok.what()
+    );
+    assert_eq!(
+        ok.calls_of("pnpm").len(),
+        1,
+        "the typecheck is a pnpm call: {}",
+        ok.what()
+    );
     assert!(ok.calls_of("npm").is_empty(), "no npm call: {}", ok.what());
     let bad = s.build(&s.fakes(|r| {
         r.on("pnpm", has("typecheck"), Reply::exit(2, "pi/bad.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\n", ""))
     }));
     assert_ne!(bad.status, 0, "{}", bad.what());
-    assert!(bad.stdout.contains("TS2322") || bad.stderr.contains("TS2322"), "{}", bad.what());
+    assert!(
+        bad.stdout.contains("TS2322") || bad.stderr.contains("TS2322"),
+        "{}",
+        bad.what()
+    );
 }
 
 // New: the argv of the calls and the classification of a name.
@@ -756,10 +1006,35 @@ fn rust_names_run_in_one_nextest_call_from_the_repo_root_whatever_the_cwd() {
     assert_eq!(out.status, 0, "{}", out.what());
     let runs = out.cargo("nextest");
     assert_eq!(runs.len(), 1, "{}", out.what());
-    assert!(runs[0].program.ends_with("scripts/cargo.sh"), "{}", out.what());
-    assert_eq!(words(runs[0]), ["nextest", "run", "--workspace", "--no-fail-fast", "green_one", "watch::e4_adds_an_open_job"], "{}", out.what());
-    assert_eq!(runs[0].cwd.as_deref(), Some(s.root.as_path()), "{}", out.what());
-    assert!(node_calls(&out).is_empty(), "a Rust name never reaches node: {}", out.what());
+    assert!(
+        runs[0].program.ends_with("scripts/cargo.sh"),
+        "{}",
+        out.what()
+    );
+    assert_eq!(
+        words(runs[0]),
+        [
+            "nextest",
+            "run",
+            "--workspace",
+            "--no-fail-fast",
+            "green_one",
+            "watch::e4_adds_an_open_job"
+        ],
+        "{}",
+        out.what()
+    );
+    assert_eq!(
+        runs[0].cwd.as_deref(),
+        Some(s.root.as_path()),
+        "{}",
+        out.what()
+    );
+    assert!(
+        node_calls(&out).is_empty(),
+        "a Rust name never reaches node: {}",
+        out.what()
+    );
 }
 
 #[test]
@@ -768,22 +1043,70 @@ fn a_pi_name_runs_in_node_from_the_repo_root_and_never_in_nextest() {
     let fakes = s.fakes(|r| r);
     let out = s.run(&fakes, &[&pi("passes")]);
     assert_eq!(out.status, 0, "{}", out.what());
-    assert_eq!(node_calls(&out), [vec!["--test", "--test-name-pattern=^passes$", PI]], "{}", out.what());
-    assert_eq!(out.calls_of("node")[0].cwd.as_deref(), Some(s.root.as_path()), "{}", out.what());
-    assert!(out.cargo("nextest").is_empty(), "a pi name never reaches nextest: {}", out.what());
+    assert_eq!(
+        node_calls(&out),
+        [vec!["--test", "--test-name-pattern=^passes$", PI]],
+        "{}",
+        out.what()
+    );
+    assert_eq!(
+        out.calls_of("node")[0].cwd.as_deref(),
+        Some(s.root.as_path()),
+        "{}",
+        out.what()
+    );
+    assert!(
+        out.cargo("nextest").is_empty(),
+        "a pi name never reaches nextest: {}",
+        out.what()
+    );
 }
 
 #[test]
 fn the_titles_of_one_pi_file_run_in_one_node_call_and_each_file_in_its_own() {
     let s = Sample::new();
     let fakes = s.fakes(|r| r);
-    let out = s.run(&fakes, &[&pi("passes"), &format!("{OTHER_PI}::double"), &pi("a.c (1+1) [x]"), &format!("{OTHER_PI}::tick")]);
+    let out = s.run(
+        &fakes,
+        &[
+            &pi("passes"),
+            &format!("{OTHER_PI}::double"),
+            &pi("a.c (1+1) [x]"),
+            &format!("{OTHER_PI}::tick"),
+        ],
+    );
     assert_eq!(out.status, 0, "{}", out.what());
     let calls = node_calls(&out);
     assert_eq!(calls.len(), 2, "{}", out.what());
-    let of = |file: &str| calls.iter().find(|c| c.last() == Some(&file)).unwrap_or_else(|| panic!("no node call for {file}: {}", out.what())).clone();
-    assert_eq!(of(PI), ["--test", "--test-name-pattern=^passes$", r"--test-name-pattern=^a\.c \(1\+1\) \[x\]$", PI], "{}", out.what());
-    assert_eq!(of(OTHER_PI), ["--test", "--test-name-pattern=^double$", "--test-name-pattern=^tick$", OTHER_PI], "{}", out.what());
+    let of = |file: &str| {
+        calls
+            .iter()
+            .find(|c| c.last() == Some(&file))
+            .unwrap_or_else(|| panic!("no node call for {file}: {}", out.what()))
+            .clone()
+    };
+    assert_eq!(
+        of(PI),
+        [
+            "--test",
+            "--test-name-pattern=^passes$",
+            r"--test-name-pattern=^a\.c \(1\+1\) \[x\]$",
+            PI
+        ],
+        "{}",
+        out.what()
+    );
+    assert_eq!(
+        of(OTHER_PI),
+        [
+            "--test",
+            "--test-name-pattern=^double$",
+            "--test-name-pattern=^tick$",
+            OTHER_PI
+        ],
+        "{}",
+        out.what()
+    );
 }
 
 #[test]
@@ -791,10 +1114,21 @@ fn a_pi_title_is_found_in_a_test_or_an_it_call_in_any_of_the_three_quotes() {
     let s = Sample::new();
     let fakes = s.fakes(|r| r);
     for title in ["single", "double", "tick"] {
-        assert_eq!(s.list(&fakes, &format!("{OTHER_PI}::{title}")).status, 0, "{title}");
+        assert_eq!(
+            s.list(&fakes, &format!("{OTHER_PI}::{title}")).status,
+            0,
+            "{title}"
+        );
     }
     assert_eq!(s.list(&fakes, &pi("passes")).status, 0);
-    assert!(fakes.runner.calls().iter().all(|c| c.program.rsplit('/').next() != Some("node")), "listing a pi title starts no node");
+    assert!(
+        fakes
+            .runner
+            .calls()
+            .iter()
+            .all(|c| c.program.rsplit('/').next() != Some("node")),
+        "listing a pi title starts no node"
+    );
 }
 
 #[test]
@@ -806,13 +1140,24 @@ fn a_path_with_no_title_is_a_rust_name_and_so_is_one_with_an_empty_title() {
     assert!(node_calls(&out).is_empty(), "{}", out.what());
     let runs = out.cargo("nextest");
     assert_eq!(runs.len(), 1, "{}", out.what());
-    assert_eq!(words(runs[0])[4..], [PI.to_owned(), format!("{PI}::")], "{}", out.what());
+    assert_eq!(
+        words(runs[0])[4..],
+        [PI.to_owned(), format!("{PI}::")],
+        "{}",
+        out.what()
+    );
 }
 
 #[test]
 fn a_failed_rust_run_still_runs_the_pi_tests_and_run_exits_non_zero() {
     let s = Sample::new();
-    let fakes = s.fakes(|r| r.on("cargo.sh", has("red_one"), Reply::exit(100, "", "red_one failed\n")));
+    let fakes = s.fakes(|r| {
+        r.on(
+            "cargo.sh",
+            has("red_one"),
+            Reply::exit(100, "", "red_one failed\n"),
+        )
+    });
     let out = s.run(&fakes, &["red_one", &pi("passes")]);
     assert_ne!(out.status, 0, "{}", out.what());
     assert_eq!(node_calls(&out).len(), 1, "{}", out.what());
@@ -833,24 +1178,55 @@ fn a_run_with_no_name_is_a_usage_error() {
     let fakes = s.fakes(|r| r);
     let out = s.run(&fakes, &[]);
     assert_eq!(out.status, 2, "{}", out.what());
-    assert!(out.calls_of("node").is_empty() && out.cargo("nextest").is_empty(), "{}", out.what());
+    assert!(
+        out.calls_of("node").is_empty() && out.cargo("nextest").is_empty(),
+        "{}",
+        out.what()
+    );
 }
 
 #[test]
 fn a_rust_list_asks_nextest_for_exactly_that_name_and_is_red_when_it_finds_none() {
     let s = Sample::new();
-    let fakes = s.fakes(|r| r.on("cargo.sh", has("green_one"), Reply::ok("crate1::sample green_one\n")));
+    let fakes = s.fakes(|r| {
+        r.on(
+            "cargo.sh",
+            has("green_one"),
+            Reply::ok("crate1::sample green_one\n"),
+        )
+    });
     assert_eq!(s.list(&fakes, "green_one").status, 0);
     assert_ne!(s.list(&fakes, "gren_one").status, 0);
-    let listed: Vec<Vec<String>> = fakes.runner.calls().iter().filter(|c| c.args.first().map(String::as_str) == Some("nextest")).map(|c| c.args.clone()).collect();
-    let line = |name: &str| owned(&["nextest", "list", "--workspace", "--message-format", "oneline", name]);
+    let listed: Vec<Vec<String>> = fakes
+        .runner
+        .calls()
+        .iter()
+        .filter(|c| c.args.first().map(String::as_str) == Some("nextest"))
+        .map(|c| c.args.clone())
+        .collect();
+    let line = |name: &str| {
+        owned(&[
+            "nextest",
+            "list",
+            "--workspace",
+            "--message-format",
+            "oneline",
+            name,
+        ])
+    };
     assert_eq!(listed, [line("green_one"), line("gren_one")]);
 }
 
 #[test]
 fn a_failed_build_stops_before_the_typecheck() {
     let s = Sample::new();
-    let fakes = s.fakes(|r| r.on("cargo.sh", has("--no-run"), Reply::exit(101, "", "error[E0425]: cannot find value\n")));
+    let fakes = s.fakes(|r| {
+        r.on(
+            "cargo.sh",
+            has("--no-run"),
+            Reply::exit(101, "", "error[E0425]: cannot find value\n"),
+        )
+    });
     let out = s.build(&fakes);
     assert_ne!(out.status, 0, "{}", out.what());
     assert!(out.calls_of("pnpm").is_empty(), "{}", out.what());
@@ -872,10 +1248,16 @@ fn nothing_these_tests_ask_for_is_left_unscripted() {
 fn classify_web_name() {
     assert_eq!(
         kind_of("web/sample.test.tsx::renders a button"),
-        Kind::Web { file: "web/sample.test.tsx".into(), title: "renders a button".into() },
+        Kind::Web {
+            file: "web/sample.test.tsx".into(),
+            title: "renders a button".into()
+        },
         "a tsx web name is a web name"
     );
-    assert!(pi_name("web/sample.test.tsx::renders a button").is_none(), "a web name is not a pi name");
+    assert!(
+        pi_name("web/sample.test.tsx::renders a button").is_none(),
+        "a web name is not a pi name"
+    );
 }
 
 /// A web name runs through the web package's vitest, filtered by the exact title.
@@ -883,7 +1265,11 @@ fn classify_web_name() {
 fn dispatch_web_name_runs_vitest() {
     let s = Sample::new();
     let fakes = s.fakes(|r| {
-        r.on("pnpm", |c| c.args.iter().any(|a| a == "vitest"), Reply::ok("✓ renders a button (2ms)\n"))
+        r.on(
+            "pnpm",
+            |c| c.args.iter().any(|a| a == "vitest"),
+            Reply::ok("✓ renders a button (2ms)\n"),
+        )
     });
     let out = s.run(&fakes, &["web/sample.test.tsx::renders a button"]);
     let vitest: Vec<Vec<&str>> = out
@@ -894,12 +1280,29 @@ fn dispatch_web_name_runs_vitest() {
         .collect();
     assert_eq!(
         vitest,
-        [vec!["--filter", "cpd-web-client", "exec", "vitest", "run", "--testNamePattern", "renders a button", "web/sample.test.tsx"]],
+        [vec![
+            "--filter",
+            "cpd-web-client",
+            "exec",
+            "vitest",
+            "run",
+            "--testNamePattern",
+            "renders a button",
+            "web/sample.test.tsx"
+        ]],
         "the web dispatch is the package's vitest, filtered by the title: {}",
         out.what()
     );
-    assert!(out.cargo("nextest").is_empty(), "a web name never reaches nextest: {}", out.what());
-    assert!(node_calls(&out).is_empty(), "a web name never reaches node: {}", out.what());
+    assert!(
+        out.cargo("nextest").is_empty(),
+        "a web name never reaches nextest: {}",
+        out.what()
+    );
+    assert!(
+        node_calls(&out).is_empty(),
+        "a web name never reaches node: {}",
+        out.what()
+    );
 }
 
 /// A web title the web package does not contain is refused (`list` exits non-zero and starts no Rust or node run).
@@ -908,9 +1311,22 @@ fn list_web_unknown_title() {
     let s = Sample::new();
     let fakes = s.fakes(|r| r);
     let out = s.list(&fakes, "web/sample.test.tsx::no such test");
-    assert_ne!(out.status, 0, "a title the web package lacks is refused: {}", out.what());
-    assert!(out.cargo("nextest").is_empty(), "a web list never reaches nextest: {}", out.what());
-    assert!(out.calls_of("node").is_empty(), "a web list never reaches node: {}", out.what());
+    assert_ne!(
+        out.status,
+        0,
+        "a title the web package lacks is refused: {}",
+        out.what()
+    );
+    assert!(
+        out.cargo("nextest").is_empty(),
+        "a web list never reaches nextest: {}",
+        out.what()
+    );
+    assert!(
+        out.calls_of("node").is_empty(),
+        "a web list never reaches node: {}",
+        out.what()
+    );
 }
 
 /// A web title the package contains but that is red is still found: `list` exits 0 by asking vitest in collection mode
@@ -918,7 +1334,11 @@ fn list_web_unknown_title() {
 #[test]
 fn list_web_finds_existing_red_test() {
     let s = Sample::new();
-    write(&s.root, "web/package.json", "{\"name\":\"cpd-web-client\"}\n");
+    write(
+        &s.root,
+        "web/package.json",
+        "{\"name\":\"cpd-web-client\"}\n",
+    );
     let title = "renders a button";
     // vitest 5's `list --json` prints `[{name, file, location}]` to stdout, with the title as the last `> ` segment.
     let collected = json!([{ "name": "web/sample.test.tsx > renders a button", "file": "web/sample.test.tsx", "location": { "line": 1, "column": 1 } }]).to_string();
@@ -930,14 +1350,23 @@ fn list_web_finds_existing_red_test() {
         )
     });
     let out = s.list(&fakes, &format!("web/sample.test.tsx::{title}"));
-    assert_eq!(out.status, 0, "an existing, even red, title is found: {}", out.what());
+    assert_eq!(
+        out.status,
+        0,
+        "an existing, even red, title is found: {}",
+        out.what()
+    );
     let vitest: Vec<Vec<&str>> = out
         .calls_of("pnpm")
         .into_iter()
         .filter(|c| c.args.iter().any(|a| a == "vitest"))
         .map(words)
         .collect();
-    assert!(!vitest.is_empty(), "the web list reaches vitest: {}", out.what());
+    assert!(
+        !vitest.is_empty(),
+        "the web list reaches vitest: {}",
+        out.what()
+    );
     assert!(
         vitest.iter().all(|c| c.iter().any(|a| a == &"list")),
         "vitest is asked to list, not run: {}",
@@ -954,9 +1383,19 @@ fn list_web_finds_existing_red_test() {
             "the collection form is `--json`, not `--reporter`: {}",
             out.what()
         );
-        let file = call.iter().position(|a| a == &"web/sample.test.tsx").unwrap_or_else(|| panic!("the file positional is there: {}", out.what()));
-        let json = call.iter().position(|a| a == &"--json").unwrap_or_else(|| panic!("--json is there: {}", out.what()));
-        assert!(file < json, "the file positional precedes --json: {}", out.what());
+        let file = call
+            .iter()
+            .position(|a| a == &"web/sample.test.tsx")
+            .unwrap_or_else(|| panic!("the file positional is there: {}", out.what()));
+        let json = call
+            .iter()
+            .position(|a| a == &"--json")
+            .unwrap_or_else(|| panic!("--json is there: {}", out.what()));
+        assert!(
+            file < json,
+            "the file positional precedes --json: {}",
+            out.what()
+        );
     }
 }
 
@@ -964,11 +1403,19 @@ fn list_web_finds_existing_red_test() {
 /// segment is the title; an unrelated name does not.
 #[test]
 fn web_has_matches_trailing_segment() {
-    let report = |name: &str| json!([{ "name": name, "file": "web/sample.test.tsx", "location": { "line": 1, "column": 1 } }]).to_string();
+    let report = |name: &str| {
+        json!([{ "name": name, "file": "web/sample.test.tsx", "location": { "line": 1, "column": 1 } }]).to_string()
+    };
     let has = |name: &str| web_has(report(name).as_bytes(), "renders a button");
     assert!(has("renders a button"), "a name equal to the title matches");
-    assert!(has("web/sample.test.tsx > renders a button"), "a name whose last `> ` segment is the title matches");
-    assert!(!has("web/sample.test.tsx > something else"), "an unrelated name does not match");
+    assert!(
+        has("web/sample.test.tsx > renders a button"),
+        "a name whose last `> ` segment is the title matches"
+    );
+    assert!(
+        !has("web/sample.test.tsx > something else"),
+        "an unrelated name does not match"
+    );
 }
 
 /// `test build` typechecks the web client only when `web/package.json` exists; without it the web client is skipped.
@@ -980,21 +1427,53 @@ fn build_skips_web_when_absent() {
     let fakes = s.fakes(|r| r);
     let out = s.build(&fakes);
     assert_eq!(out.status, 0, "{}", out.what());
-    let absent: Vec<_> = out.calls_of("pnpm").into_iter().filter(|c| web(c)).collect();
-    assert!(absent.is_empty(), "no web client typecheck without web/: {}", out.what());
+    let absent: Vec<_> = out
+        .calls_of("pnpm")
+        .into_iter()
+        .filter(|c| web(c))
+        .collect();
+    assert!(
+        absent.is_empty(),
+        "no web client typecheck without web/: {}",
+        out.what()
+    );
 
     // With `web/package.json` the web client is typechecked.
     let s = Sample::new();
-    write(&s.root, "web/package.json", "{\"name\":\"cpd-web-client\"}\n");
+    write(
+        &s.root,
+        "web/package.json",
+        "{\"name\":\"cpd-web-client\"}\n",
+    );
     let fakes = s.fakes(|r| r.on("pnpm", web, Reply::ok("")));
     let out = s.build(&fakes);
-    let present: Vec<Vec<&str>> = out.calls_of("pnpm").into_iter().filter(|c| web(c)).map(words).collect();
-    assert!(!present.is_empty(), "the web client is typechecked when web/ exists: {}", out.what());
+    let present: Vec<Vec<&str>> = out
+        .calls_of("pnpm")
+        .into_iter()
+        .filter(|c| web(c))
+        .map(words)
+        .collect();
+    assert!(
+        !present.is_empty(),
+        "the web client is typechecked when web/ exists: {}",
+        out.what()
+    );
 }
 
 /// Pi and Rust names keep their current classification once web names exist.
 #[test]
 fn pi_and_rust_names_unchanged() {
-    assert_eq!(kind_of("pi/test/sample.test.ts::passes"), Kind::Pi { file: PI.into(), title: "passes".into() }, "a pi name stays a pi name");
-    assert_eq!(kind_of("green_one"), Kind::Rust, "a Rust name stays a Rust name");
+    assert_eq!(
+        kind_of("pi/test/sample.test.ts::passes"),
+        Kind::Pi {
+            file: PI.into(),
+            title: "passes".into()
+        },
+        "a pi name stays a pi name"
+    );
+    assert_eq!(
+        kind_of("green_one"),
+        Kind::Rust,
+        "a Rust name stays a Rust name"
+    );
 }

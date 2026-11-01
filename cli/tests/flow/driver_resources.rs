@@ -26,8 +26,7 @@ use serde_json::{Value, json};
 
 use super::driver::{JOB, PLAN, fixture, seed_home, seed_rows, store};
 
-const COMMAND_RECORD: &str =
-    r#"{"by":"command","pid":4242,"command":"npm run dev","session":"s9","attempt":null,"at":"2026-10-26T21:40:00.000Z"}"#;
+const COMMAND_RECORD: &str = r#"{"by":"command","pid":4242,"command":"npm run dev","session":"s9","attempt":null,"at":"2026-10-26T21:40:00.000Z"}"#;
 const OTHER_RECORD: &str = r#"{"by":"attempt","plan":"other","job":"db","attempt":"db-a1","at":"2026-10-26T21:41:00.000Z"}"#;
 
 /// A `Spawn` over the `FakeSpawn` whose `spawn` keeps a copy (a `dup`, the same open file description) of each descriptor of a
@@ -45,7 +44,9 @@ impl Driverish {
 
     /// The (device, inode) of each resource lock file that exists.
     fn targets(&self) -> Vec<(u64, u64)> {
-        let Ok(entries) = fs::read_dir(&self.locks) else { return vec![] };
+        let Ok(entries) = fs::read_dir(&self.locks) else {
+            return vec![];
+        };
         entries
             .flatten()
             .filter(|e| e.file_name().to_string_lossy().starts_with("resource."))
@@ -58,12 +59,20 @@ impl Driverish {
 impl Spawn for Driverish {
     fn spawn(&self, l: &Launch) -> io::Result<Pid> {
         let targets = self.targets();
-        let numbers: Vec<i32> = fs::read_dir("/dev/fd")?.flatten().filter_map(|e| e.file_name().to_string_lossy().parse().ok()).collect();
+        let numbers: Vec<i32> = fs::read_dir("/dev/fd")?
+            .flatten()
+            .filter_map(|e| e.file_name().to_string_lossy().parse().ok())
+            .collect();
         for n in numbers {
             // SAFETY: only `dup`s the number, which fails when it is not open.
-            let Ok(copy) = dup(unsafe { BorrowedFd::borrow_raw(n) }) else { continue };
+            let Ok(copy) = dup(unsafe { BorrowedFd::borrow_raw(n) }) else {
+                continue;
+            };
             let file = File::from(copy);
-            if file.metadata().is_ok_and(|m| targets.contains(&(m.dev(), m.ino()))) {
+            if file
+                .metadata()
+                .is_ok_and(|m| targets.contains(&(m.dev(), m.ino())))
+            {
                 self.kept.lock().unwrap().push(OwnedFd::from(file));
             }
         }
@@ -124,15 +133,28 @@ fn world(policy: &str, resources: &[&str]) -> World {
     let exe = fx.env.root().join("cpd-installed");
     fs::write(&exe, "").unwrap();
     fx.fakes.spawn.set_self_exe(&exe);
-    let spawn = Arc::new(Driverish { inner: fx.fakes.spawn.clone(), locks: fx.env.cpd_home().join("locks"), kept: Mutex::default() });
-    let ports = Ports { clock: fx.fakes.ports.clock.clone(), runner: fx.fakes.ports.runner.clone(), spawn: spawn.clone(), ..Ports::real() };
+    let spawn = Arc::new(Driverish {
+        inner: fx.fakes.spawn.clone(),
+        locks: fx.env.cpd_home().join("locks"),
+        kept: Mutex::default(),
+    });
+    let ports = Ports {
+        clock: fx.fakes.ports.clock.clone(),
+        runner: fx.fakes.ports.runner.clone(),
+        spawn: spawn.clone(),
+        ..Ports::real()
+    };
     World { fx, spawn, ports }
 }
 
 /// Job `key` of PR `repo` of Plan `pay`, queued with its Locked-Job fingerprint, listing `resources` in its Spec (null when none:
 /// a Locked Job's Spec cannot change, so they are written while it is a draft).
 fn add_job(fx: &Fx, key: &str, resources: &[&str]) {
-    let resources = if resources.is_empty() { "NULL".to_owned() } else { format!("'{}'", json!(resources)) };
+    let resources = if resources.is_empty() {
+        "NULL".to_owned()
+    } else {
+        format!("'{}'", json!(resources))
+    };
     fixture(
         &fx.env,
         &format!(
@@ -143,7 +165,13 @@ fn add_job(fx: &Fx, key: &str, resources: &[&str]) {
     let plan = PlanId::parse(PLAN).unwrap();
     let all = store(&fx.env).read(|conn| jobs::load(conn, &plan)).unwrap();
     let job = all.iter().find(|j| j.key == key).unwrap();
-    fixture(&fx.env, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = 'pay' AND key = '{key}';", locked_fingerprint(job)));
+    fixture(
+        &fx.env,
+        &format!(
+            "UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = 'pay' AND key = '{key}';",
+            locked_fingerprint(job)
+        ),
+    );
 }
 
 impl World {
@@ -152,19 +180,35 @@ impl World {
         let argv = ["cpd", "job", "dispatch", key, "--plan", PLAN].map(std::ffi::OsString::from);
         let mut stdout = Vec::new();
         let code = cpd::run_with(&self.ports, argv, &mut stdout);
-        Run { exit: exit_code(code), stdout: String::from_utf8(stdout).unwrap(), stderr: String::new() }
+        Run {
+            exit: exit_code(code),
+            stdout: String::from_utf8(stdout).unwrap(),
+            stderr: String::new(),
+        }
     }
 
     fn lock(&self, name: &str) -> PathBuf {
-        self.fx.env.cpd_home().join(format!("locks/resource.repo.acme.pay.{name}.1.lock"))
+        self.fx
+            .env
+            .cpd_home()
+            .join(format!("locks/resource.repo.acme.pay.{name}.1.lock"))
     }
 
     /// Holds `name` as another process would: its own open file description, with `record` in the file.
     fn hold(&self, name: &str, record: &str) -> File {
         let path = self.lock(name);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
-        assert!(lock::try_lock(&file).unwrap(), "the test could not take {name}");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        assert!(
+            lock::try_lock(&file).unwrap(),
+            "the test could not take {name}"
+        );
         fs::write(&path, record).unwrap();
         file
     }
@@ -178,7 +222,9 @@ impl World {
     }
 
     fn txns(&self) -> i64 {
-        store(&self.fx.env).read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap()
+        store(&self.fx.env)
+            .read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?))
+            .unwrap()
     }
 
     fn attempts(&self) -> i64 {
@@ -186,7 +232,9 @@ impl World {
     }
 
     fn status(&self, key: &str) -> String {
-        self.fx.env.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
+        self.fx.env.query(&format!(
+            "SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"
+        ))
     }
 
     fn shown(&self, key: &str) -> Value {
@@ -210,7 +258,10 @@ fn resource_hold_a_held_resource_refuses_the_start_with_resource_busy_and_takes_
     assert_eq!(w.attempts(), 0);
     assert_eq!(w.status(JOB), "queued");
     assert_eq!(w.fx.fakes.spawn.launches_but_janitor(), []);
-    assert_eq!(fs::read_to_string(w.lock("e2e-port")).unwrap(), COMMAND_RECORD);
+    assert_eq!(
+        fs::read_to_string(w.lock("e2e-port")).unwrap(),
+        COMMAND_RECORD
+    );
 }
 
 #[test]
@@ -269,10 +320,18 @@ fn resource_hold_job_show_has_no_waiting_for_on_other_jobs() {
     );
 
     // Control: the queued Job that lists resources has the key.
-    assert!(w.shown(JOB).as_object().unwrap().contains_key("waiting_for"));
+    assert!(
+        w.shown(JOB)
+            .as_object()
+            .unwrap()
+            .contains_key("waiting_for")
+    );
     for key in ["plain", "running", "cancelled"] {
         let job = w.shown(key);
-        assert!(!job.as_object().unwrap().contains_key("waiting_for"), "{key}: {job}");
+        assert!(
+            !job.as_object().unwrap().contains_key("waiting_for"),
+            "{key}: {job}"
+        );
     }
 }
 
@@ -283,16 +342,32 @@ fn resource_run_and_the_starter_cannot_both_take_the_last_slot() {
     let w = world("[resources.e2e-port]\n", &["e2e-port"]);
     assert_eq!(w.dispatch(JOB).ok()["attempt"], "api-a1");
     let rows = w.fx.env.query::<i64>("SELECT count(*) FROM job_pools WHERE plan = 'pay' AND job = 'api' AND pool = 'repo:acme/pay:e2e-port'");
-    assert_eq!(rows, 1, "the starter's row, in the transaction of the Attempt");
+    assert_eq!(
+        rows, 1,
+        "the starter's row, in the transaction of the Attempt"
+    );
 
     let repo = w.fx.keyed_repo("pay");
-    let run = w.fx.cpd_in(&repo, &["resource", "run", "e2e-port", "--", "npm", "test"]);
+    let run =
+        w.fx.cpd_in(&repo, &["resource", "run", "e2e-port", "--", "npm", "test"]);
 
     let error = refused(&run, "resource_busy", 3);
-    let holders = error["details"]["holders"].as_array().unwrap_or_else(|| panic!("{error}"));
+    let holders = error["details"]["holders"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{error}"));
     assert_eq!(holders.len(), 1, "{error}");
-    assert_eq!((&holders[0]["slot"], &holders[0]["holder"]["by"], &holders[0]["holder"]["job"]), (&Value::Null, &json!("attempt"), &json!("api")));
-    assert!(w.fx.fakes.spawn.execs().is_empty(), "the command never started");
+    assert_eq!(
+        (
+            &holders[0]["slot"],
+            &holders[0]["holder"]["by"],
+            &holders[0]["holder"]["job"]
+        ),
+        (&Value::Null, &json!("attempt"), &json!("api"))
+    );
+    assert!(
+        w.fx.fakes.spawn.execs().is_empty(),
+        "the command never started"
+    );
 }
 
 // ─── E3's `job-blocked` Event (contract §3.7 E3): the engine in-process on the fakes, on the `ManualClock` ───
@@ -310,7 +385,8 @@ fn engine(concurrency: u32, policy: &str) -> Fx {
     fx.engine_routes();
     fx.env.sql("INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');");
     fx.engine_plan();
-    fx.env.sql("UPDATE prs SET name = 'pay' WHERE plan = 'pay';");
+    fx.env
+        .sql("UPDATE prs SET name = 'pay' WHERE plan = 'pay';");
     fx.env.repo_policy("acme", "pay", policy);
     let exe = fx.env.root().join("cpd-installed");
     fs::write(&exe, "").unwrap();
@@ -323,17 +399,24 @@ fn engine(concurrency: u32, policy: &str) -> Fx {
 /// The `job-blocked` Events of Plan `pay`: their `job` and `data`, in order.
 fn blocked(fx: &Fx) -> Vec<(String, Value)> {
     fx.env.read(|conn| {
-        let mut stmt = conn.prepare("SELECT job, data FROM events WHERE kind = 'job-blocked' AND plan = 'pay' ORDER BY id")?;
+        let mut stmt = conn.prepare(
+            "SELECT job, data FROM events WHERE kind = 'job-blocked' AND plan = 'pay' ORDER BY id",
+        )?;
         let rows = stmt
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows.into_iter().map(|(job, data)| (job, serde_json::from_str(&data).unwrap())).collect())
+        Ok(rows
+            .into_iter()
+            .map(|(job, data)| (job, serde_json::from_str(&data).unwrap()))
+            .collect())
     })
 }
 
 /// The `skipped_n` of Job `key` (NULL: never skipped).
 fn skipped_n(fx: &Fx, key: &str) -> Option<i64> {
-    fx.env.query(&format!("SELECT skipped_n FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
+    fx.env.query(&format!(
+        "SELECT skipped_n FROM jobs WHERE plan = 'pay' AND key = '{key}'"
+    ))
 }
 
 #[test]
@@ -348,11 +431,19 @@ fn job_blocked_is_appended_once_per_waiting_episode() {
     fx.watch_first_tick().unwrap();
 
     let first = blocked(&fx);
-    assert_eq!(first, vec![("api".to_owned(), json!({"waiting": 1}))], "one Event on the first tick of the waiting episode: {first:?}");
+    assert_eq!(
+        first,
+        vec![("api".to_owned(), json!({"waiting": 1}))],
+        "one Event on the first tick of the waiting episode: {first:?}"
+    );
 
     // The waiting goes on: no second Event.
     fx.watch_ticks(3).unwrap();
-    assert_eq!(blocked(&fx).len(), 1, "the waiting went on: no second Event");
+    assert_eq!(
+        blocked(&fx).len(),
+        1,
+        "the waiting went on: no second Event"
+    );
 
     // `busy` merges, the slot frees: `api` starts, and no Event is appended for it.
     fx.env.sql("UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = 'abc', ended_at = 't' WHERE id = 'busy-a1';
@@ -360,8 +451,16 @@ fn job_blocked_is_appended_once_per_waiting_episode() {
     drop(busy);
     fx.watch_first_tick().unwrap();
 
-    assert_eq!(fx.env.query::<String>("SELECT status FROM jobs WHERE plan = 'pay' AND key = 'api'"), "running");
-    assert_eq!(blocked(&fx).len(), 1, "the Job started: the episode is over, no second Event");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT status FROM jobs WHERE plan = 'pay' AND key = 'api'"),
+        "running"
+    );
+    assert_eq!(
+        blocked(&fx).len(),
+        1,
+        "the Job started: the episode is over, no second Event"
+    );
 }
 
 #[test]
@@ -376,12 +475,23 @@ fn no_job_blocked_while_a_dependency_waits() {
 
     fx.watch_first_tick().unwrap();
 
-    assert_eq!(blocked(&fx), vec![("dep".to_owned(), json!({"waiting": 1}))], "only `dep`, Ready and blocked");
-    assert_eq!(skipped_n(&fx, "api"), None, "`api` is never Ready: no skip, no Event");
+    assert_eq!(
+        blocked(&fx),
+        vec![("dep".to_owned(), json!({"waiting": 1}))],
+        "only `dep`, Ready and blocked"
+    );
+    assert_eq!(
+        skipped_n(&fx, "api"),
+        None,
+        "`api` is never Ready: no skip, no Event"
+    );
 
     // The waiting goes on: `dep` still has its one Event, `api` never gets one.
     fx.watch_ticks(3).unwrap();
-    assert_eq!(blocked(&fx), vec![("dep".to_owned(), json!({"waiting": 1}))]);
+    assert_eq!(
+        blocked(&fx),
+        vec![("dep".to_owned(), json!({"waiting": 1}))]
+    );
     assert_eq!(skipped_n(&fx, "api"), None);
 }
 
@@ -397,8 +507,16 @@ fn no_job_blocked_for_an_archived_plan() {
 
     fx.watch_first_tick().unwrap();
 
-    assert_eq!(blocked(&fx), vec![], "the archived Plan's Job produced no Event");
-    assert_eq!(skipped_n(&fx, "api"), None, "its Jobs are never Ready: no skip");
+    assert_eq!(
+        blocked(&fx),
+        vec![],
+        "the archived Plan's Job produced no Event"
+    );
+    assert_eq!(
+        skipped_n(&fx, "api"),
+        None,
+        "its Jobs are never Ready: no skip"
+    );
 
     fx.watch_ticks(3).unwrap();
     assert_eq!(blocked(&fx), vec![]);

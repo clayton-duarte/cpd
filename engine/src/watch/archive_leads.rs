@@ -47,7 +47,9 @@ pub(super) fn run(engine: &mut Engine) {
         }
     }
     if archived > 0 {
-        engine.log.line(&format!("E14: archived {archived} Plan(s)"));
+        engine
+            .log
+            .line(&format!("E14: archived {archived} Plan(s)"));
     }
 }
 
@@ -70,11 +72,14 @@ fn stop_hosts(engine: &mut Engine, plan: &PlanId) {
 
 fn ready(engine: &mut Engine) -> Result<Vec<PlanId>, CpdError> {
     let now = OffsetDateTime::now_utc();
-    let cutoff = now - time::Duration::seconds(i64::from(engine.config.timeouts.archive_sleep_seconds));
+    let cutoff =
+        now - time::Duration::seconds(i64::from(engine.config.timeouts.archive_sleep_seconds));
     let (now, cutoff) = (timestamp(now), timestamp(cutoff));
     engine.store.read(|conn| {
         let mut stmt = conn.prepare(&archivable())?;
-        let rows = stmt.query_map([&now, &cutoff], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let rows = stmt
+            .query_map([&now, &cutoff], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.iter().map(|id| PlanId::parse(id)).collect()
     })
 }
@@ -85,7 +90,9 @@ fn archive_plan(engine: &mut Engine, plan: &PlanId) -> Result<bool, CpdError> {
     let objects = engine.store.read(|conn| Objects::of_plan(conn, plan))?;
     match archive::archive(&mut engine.store, &engine.config, "engine E14", &objects) {
         Ok(_) => Ok(true),
-        Err(e) if matches!(e.code(), ErrorCode::ArchiveBlocked | ErrorCode::InChatSlot) => Ok(false),
+        Err(e) if matches!(e.code(), ErrorCode::ArchiveBlocked | ErrorCode::InChatSlot) => {
+            Ok(false)
+        }
         Err(e) => Err(e),
     }
 }

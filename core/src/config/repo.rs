@@ -23,9 +23,15 @@ impl RepoTests {
     /// What serde cannot say: every command is non-empty and `list` uses the template variable `test`.
     /// The error is a sentence naming the key.
     pub fn validate(&self) -> Result<(), String> {
-        for (key, command) in [("build", Some(&self.build)), ("run", Some(&self.run)), ("list", self.list.as_ref())] {
+        for (key, command) in [
+            ("build", Some(&self.build)),
+            ("run", Some(&self.run)),
+            ("list", self.list.as_ref()),
+        ] {
             if command.is_some_and(|c| c.trim().is_empty()) {
-                return Err(format!("[tests] `{key}` is empty: a repo with nothing to build says `build = \"true\"`"));
+                return Err(format!(
+                    "[tests] `{key}` is empty: a repo with nothing to build says `build = \"true\"`"
+                ));
             }
         }
         if let Some(list) = &self.list
@@ -62,7 +68,15 @@ mod tests {
         assert!(err.contains("list") && err.contains("test"), "{err}");
         // `tests` is the plural of `run`, not `list`'s variable.
         assert!(parse("build = \"true\"\nrun = \"true\"\nlist = \"{{ tests }}\"\n").is_err());
-        assert!(parse("build = \"true\"\nrun = \"true\"\nextra = \"x\"\n").unwrap_err().contains("extra"));
-        assert!(parse("build = \" \"\nrun = \"true\"\n").unwrap_err().contains("build"));
+        assert!(
+            parse("build = \"true\"\nrun = \"true\"\nextra = \"x\"\n")
+                .unwrap_err()
+                .contains("extra")
+        );
+        assert!(
+            parse("build = \" \"\nrun = \"true\"\n")
+                .unwrap_err()
+                .contains("build")
+        );
     }
 }

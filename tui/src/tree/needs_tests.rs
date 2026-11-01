@@ -8,7 +8,10 @@ use crate::read::{Dot, Place};
 
 fn lead_tree(state: State) -> crate::read::Tree {
     let lead = session("l-ship", "ship lead", state, None, Place::Parked);
-    tree(vec![context("alpha", vec![plan("ship", "alpha", Phase::Dispatch, [0; 6], lead, vec![])])])
+    tree(vec![context(
+        "alpha",
+        vec![plan("ship", "alpha", Phase::Dispatch, [0; 6], lead, vec![])],
+    )])
 }
 
 #[test]
@@ -29,7 +32,13 @@ fn a_working_lead_needs_the_frame_clock_and_no_second_clock_with_an_empty_inbox(
 
 fn managed_tree(dot: Dot, tweak: impl FnOnce(&mut crate::read::ContextNode)) -> crate::read::Tree {
     let lead = session("l-ship", "ship lead", State::Idle, None, Place::Parked);
-    let mut c = managed(context("alpha", vec![plan("ship", "alpha", Phase::Dispatch, [0; 6], lead, vec![])]), dot);
+    let mut c = managed(
+        context(
+            "alpha",
+            vec![plan("ship", "alpha", Phase::Dispatch, [0; 6], lead, vec![])],
+        ),
+        dot,
+    );
     tweak(&mut c);
     tree(vec![c])
 }
@@ -52,12 +61,20 @@ fn a_fixing_manager_needs_the_frame_clock() {
 
 #[test]
 fn an_archived_context_with_a_working_manager_dot_needs_no_clock() {
-    let n = needs(&View::new(managed_tree(Dot::Working(None), |c| c.archived_at = Some("2026-02-01T00:00:00.000Z".into())), true));
+    let n = needs(&View::new(
+        managed_tree(Dot::Working(None), |c| {
+            c.archived_at = Some("2026-02-01T00:00:00.000Z".into())
+        }),
+        true,
+    ));
     assert!(!n.frame);
 }
 
 #[test]
 fn a_sleeping_manager_with_a_working_dot_needs_no_clock() {
-    let n = needs(&View::new(managed_tree(Dot::Working(None), |c| c.manager_asleep = true), true));
+    let n = needs(&View::new(
+        managed_tree(Dot::Working(None), |c| c.manager_asleep = true),
+        true,
+    ));
     assert!(!n.frame);
 }

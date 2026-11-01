@@ -23,7 +23,9 @@ fn fixture() -> Fixture {
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
     let store = Store::open(&home, 5000).unwrap();
     let mut f = Fixture { _dir: dir, store };
-    let mut sql = format!("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');");
+    let mut sql = format!(
+        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');"
+    );
     for plan in ["pay", "ops"] {
         sql.push_str(&format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -54,10 +56,18 @@ impl Fixture {
 
     /// A Job in its own transaction (so `created_txn` grows with each call).
     fn job(&mut self, plan: &str, pr: &str, key: &str, kind: &str, status: &str) {
-        let cause = if status == "failed" { "'crashed'" } else { "NULL" };
+        let cause = if status == "failed" {
+            "'crashed'"
+        } else {
+            "NULL"
+        };
         let sha = if status == "merged" { "'abc'" } else { "NULL" };
         let reason = if status == "cancelled" { "'r'" } else { "NULL" };
-        let reason_at = if status == "cancelled" { format!("'{T}'") } else { "NULL".to_owned() };
+        let reason_at = if status == "cancelled" {
+            format!("'{T}'")
+        } else {
+            "NULL".to_owned()
+        };
         self.sql(&format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended,
                                fingerprint, created_txn, created_at, failed_cause, merged_sha, cancel_reason, cancel_requested_at)
@@ -90,23 +100,40 @@ impl Fixture {
     }
 
     fn set(&mut self, plan: &str, key: &str, status: &str) {
-        let cause = if status == "failed" { "'crashed'" } else { "NULL" };
+        let cause = if status == "failed" {
+            "'crashed'"
+        } else {
+            "NULL"
+        };
         let sha = if status == "merged" { "'abc'" } else { "NULL" };
         let reason = if status == "cancelled" { "'r'" } else { "NULL" };
-        let reason_at = if status == "cancelled" { format!("'{T}'") } else { "NULL".to_owned() };
+        let reason_at = if status == "cancelled" {
+            format!("'{T}'")
+        } else {
+            "NULL".to_owned()
+        };
         self.sql(&format!("UPDATE jobs SET status = '{status}', failed_cause = {cause}, merged_sha = {sha}, cancel_reason = {reason}, cancel_requested_at = {reason_at} WHERE plan = '{plan}' AND key = '{key}'"));
     }
 
     /// `retry_after_fix` for `merged` of Plan `plan`, in a write transaction.
     fn retry(&mut self, plan: &str, merged: &str) -> Vec<String> {
         let (plan, merged) = (PlanId::parse(plan).unwrap(), JobKey::parse(merged).unwrap());
-        let keys = self.store.write("test", |tx| retry_after_fix(tx, &plan, &merged)).unwrap();
+        let keys = self
+            .store
+            .write("test", |tx| retry_after_fix(tx, &plan, &merged))
+            .unwrap();
         keys.iter().map(|k| k.as_str().to_owned()).collect()
     }
 
     fn column(&mut self, plan: &str, key: &str, column: &str) -> Option<String> {
         self.store
-            .read(|c| Ok(c.query_row(&format!("SELECT {column} FROM jobs WHERE plan = ?1 AND key = ?2"), [plan, key], |r| r.get(0))?))
+            .read(|c| {
+                Ok(c.query_row(
+                    &format!("SELECT {column} FROM jobs WHERE plan = ?1 AND key = ?2"),
+                    [plan, key],
+                    |r| r.get(0),
+                )?)
+            })
             .unwrap()
     }
 
@@ -118,8 +145,12 @@ impl Fixture {
     fn retried(&mut self) -> Vec<(String, String)> {
         self.store
             .read(|c| {
-                let mut stmt = c.prepare("SELECT job, text FROM events WHERE kind = 'job-retried' ORDER BY id")?;
-                Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
+                let mut stmt = c.prepare(
+                    "SELECT job, text FROM events WHERE kind = 'job-retried' ORDER BY id",
+                )?;
+                Ok(stmt
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?)
             })
             .unwrap()
     }
@@ -136,7 +167,11 @@ impl Fixture {
         if cancel {
             self.sql(&format!("UPDATE jobs SET cancel_reason = 'r', cancel_requested_at = '{T}' WHERE plan = '{plan}' AND key = '{key}'"));
         }
-        let (sha, sha_at) = if attempt_status == "merging" { ("'abc'".to_owned(), format!("'{T}'")) } else { ("NULL".to_owned(), "NULL".to_owned()) };
+        let (sha, sha_at) = if attempt_status == "merging" {
+            ("'abc'".to_owned(), format!("'{T}'"))
+        } else {
+            ("NULL".to_owned(), "NULL".to_owned())
+        };
         self.sql(&format!(
             "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, driver_pid, submitted_sha, submitted_at, started_at)
                VALUES ('{plan}', '{key}-a1', '{key}', 1, 'S2', 'ladder', '{attempt_status}', 'cpd/{plan}--{key}-a1', '/w', 4242, {sha}, {sha_at}, '{T}');"
@@ -145,17 +180,33 @@ impl Fixture {
 
     fn end(&mut self, plan: &str, key: &str, end: End, stage: Stage) {
         let plan = PlanId::parse(plan).unwrap();
-        let attempt = self.store.read(|c| ledger::load(c, &plan, &AttemptId::parse(&format!("{key}-a1")).unwrap())).unwrap();
-        let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![1, 2, 3] };
+        let attempt = self
+            .store
+            .read(|c| ledger::load(c, &plan, &AttemptId::parse(&format!("{key}-a1")).unwrap()))
+            .unwrap();
+        let model = |m: &str| TierModel {
+            model: m.to_owned(),
+            efforts: vec![1, 2, 3],
+        };
         let catalog = Catalog {
             pi_version: "1.0.0".to_owned(),
             o: model("o/m"),
             s: model("s/m"),
             h: model("h/m"),
-            g: TierModel { model: "g/m".to_owned(), efforts: vec![] },
+            g: TierModel {
+                model: "g/m".to_owned(),
+                efforts: vec![],
+            },
         };
-        let ladder = Ladder { catalog: &catalog, retry_cap: 3 };
-        self.store.write("test", |tx| ledger::end(tx, &attempt, &end, None, &ladder, stage)).unwrap();
+        let ladder = Ladder {
+            catalog: &catalog,
+            retry_cap: 3,
+        };
+        self.store
+            .write("test", |tx| {
+                ledger::end(tx, &attempt, &end, None, &ladder, stage)
+            })
+            .unwrap();
     }
 }
 
@@ -215,7 +266,11 @@ fn fix_retry_waits_while_another_job_of_the_pr_created_after_the_failure_is_queu
     assert_eq!(f.status("pay", "f"), "failed");
     assert!(f.retried().is_empty());
     f.set("pay", "other", "merged");
-    assert_eq!(f.retry("pay", "j"), vec!["f"], "nothing else is working on the PR");
+    assert_eq!(
+        f.retry("pay", "j"),
+        vec!["f"],
+        "nothing else is working on the PR"
+    );
 }
 
 #[test]
@@ -264,7 +319,11 @@ fn fix_retry_ignores_other_prs_and_other_plans() {
     f.failed("ops", "api", "other-plan", "open");
     f.failed("pay", "api", "f", "update");
     f.job("pay", "api", "j", "work", "merged");
-    assert_eq!(f.retry("pay", "j"), vec!["f"], "only the Job of the fix's PR");
+    assert_eq!(
+        f.retry("pay", "j"),
+        vec!["f"],
+        "only the Job of the fix's PR"
+    );
     assert_eq!(f.status("pay", "other-pr"), "failed");
     assert_eq!(f.status("ops", "other-plan"), "failed");
     assert_eq!(f.retried().len(), 1);
@@ -276,7 +335,10 @@ fn fix_retry_a_merged_open_or_update_job_retries_nothing() {
         let mut f = fixture();
         f.failed("pay", "api", "f", "open");
         f.job("pay", "api", "j", kind, "merged");
-        assert!(f.retry("pay", "j").is_empty(), "a merged {kind} Job is not a fix");
+        assert!(
+            f.retry("pay", "j").is_empty(),
+            "a merged {kind} Job is not a fix"
+        );
         assert_eq!(f.status("pay", "f"), "failed");
         assert!(f.retried().is_empty());
     }
@@ -291,7 +353,10 @@ fn fix_retry_never_retries_twice_for_one_failure() {
     // It fails again: the new `job-failed` Event is newer than `j`.
     f.set("pay", "f", "failed");
     f.failure("pay", "f");
-    assert!(f.retry("pay", "j").is_empty(), "j does not postdate the second failure");
+    assert!(
+        f.retry("pay", "j").is_empty(),
+        "j does not postdate the second failure"
+    );
     assert_eq!(f.status("pay", "f"), "failed");
     assert_eq!(f.retried().len(), 1);
 }
@@ -301,15 +366,34 @@ fn fix_retry_a_merge_ending_through_the_ledger_retries_in_the_same_transaction()
     let mut f = fixture();
     f.failed("pay", "api", "f", "open");
     f.running("pay", "api", "j", "merging", false);
-    f.end("pay", "j", End::Merged { sha: "abc".to_owned() }, Stage::Merge);
+    f.end(
+        "pay",
+        "j",
+        End::Merged {
+            sha: "abc".to_owned(),
+        },
+        Stage::Merge,
+    );
     assert_eq!(f.status("pay", "j"), "merged");
     assert_eq!(f.status("pay", "f"), "queued");
     assert_eq!(f.column("pay", "f", "retry_tier").as_deref(), Some("S2"));
     let retried = f.retried();
     assert_eq!(retried.len(), 1);
     assert!(retried[0].1.contains("after fix j merged"), "{retried:?}");
-    let data: String = f.store.read(|c| Ok(c.query_row("SELECT data FROM events WHERE kind = 'job-retried'", [], |r| r.get(0))?)).unwrap();
-    assert_eq!(serde_json::from_str::<serde_json::Value>(&data).unwrap(), json!({"tier": "S2"}));
+    let data: String = f
+        .store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT data FROM events WHERE kind = 'job-retried'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&data).unwrap(),
+        json!({"tier": "S2"})
+    );
 }
 
 #[test]
@@ -317,7 +401,15 @@ fn fix_retry_an_attempt_ending_failed_or_cancelled_retries_nothing() {
     let mut f = fixture();
     f.failed("pay", "api", "f", "open");
     f.running("pay", "api", "bad", "running", false);
-    f.end("pay", "bad", End::Failed { cause: Cause::Tampered, detail: "d".to_owned() }, Stage::Driver);
+    f.end(
+        "pay",
+        "bad",
+        End::Failed {
+            cause: Cause::Tampered,
+            detail: "d".to_owned(),
+        },
+        Stage::Driver,
+    );
     f.running("pay", "api", "gone", "running", true);
     f.end("pay", "gone", End::Cancelled, Stage::Driver);
     assert_eq!(f.status("pay", "bad"), "failed");
@@ -326,6 +418,13 @@ fn fix_retry_an_attempt_ending_failed_or_cancelled_retries_nothing() {
     assert!(f.retried().is_empty());
     // Control: a merge does retry.
     f.running("pay", "api", "good", "merging", false);
-    f.end("pay", "good", End::Merged { sha: "abc".to_owned() }, Stage::Merge);
+    f.end(
+        "pay",
+        "good",
+        End::Merged {
+            sha: "abc".to_owned(),
+        },
+        Stage::Merge,
+    );
     assert_eq!(f.status("pay", "f"), "queued");
 }

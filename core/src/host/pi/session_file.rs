@@ -15,7 +15,11 @@ pub fn session_file(dirs: &PiDirs, session: &SessionId) -> Option<PathBuf> {
         let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
             .ok()?
             .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_file() && p.file_name().is_some_and(|n| n.to_string_lossy().ends_with(&suffix)))
+            .filter(|p| {
+                p.is_file()
+                    && p.file_name()
+                        .is_some_and(|n| n.to_string_lossy().ends_with(&suffix))
+            })
             .collect();
         found.sort();
         found.into_iter().next()

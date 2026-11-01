@@ -3,10 +3,10 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::record::{Draft, Record, superseding};
 use super::Jira;
-use crate::clock::now;
+use super::record::{Draft, Record, superseding};
 use crate::args::Text;
+use crate::clock::now;
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -30,8 +30,7 @@ pub struct ContextRow {
 }
 
 impl ContextRow {
-    pub const COLUMNS: &'static str =
-        "id, title, jira, created_at, created_on, archived_at, owner";
+    pub const COLUMNS: &'static str = "id, title, jira, created_at, created_on, archived_at, owner";
 
     pub fn from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ContextRow> {
         Ok(ContextRow {
@@ -47,7 +46,10 @@ impl ContextRow {
 
     pub fn find(conn: &Connection, id: &ContextId) -> rusqlite::Result<Option<ContextRow>> {
         conn.query_row(
-            &format!("SELECT {} FROM contexts WHERE id = ?1 AND deleted_at IS NULL", ContextRow::COLUMNS),
+            &format!(
+                "SELECT {} FROM contexts WHERE id = ?1 AND deleted_at IS NULL",
+                ContextRow::COLUMNS
+            ),
             [id.as_str()],
             ContextRow::from_row,
         )
@@ -57,7 +59,8 @@ impl ContextRow {
     /// `context_not_found` when there is no such Context.
     pub fn require(conn: &Connection, id: &ContextId) -> Result<ContextRow, CpdError> {
         ContextRow::find(conn, id)?.ok_or_else(|| {
-            CpdError::new(ErrorCode::ContextNotFound, format!("No Context {id}.")).with("context", id.as_str())
+            CpdError::new(ErrorCode::ContextNotFound, format!("No Context {id}."))
+                .with("context", id.as_str())
         })
     }
 }
@@ -90,7 +93,10 @@ enum Next {
 
 impl<'a> Contexts<'a> {
     pub fn new(config: &Config, store: &'a mut Store) -> Contexts<'a> {
-        Contexts { machine: config.machine.clone(), store }
+        Contexts {
+            machine: config.machine.clone(),
+            store,
+        }
     }
 
     /// `context new` (commands.md §3.1): the Context's row and `context-created`.
@@ -108,25 +114,37 @@ impl<'a> Contexts<'a> {
         let existing = |conn: &Connection| -> Result<Option<ContextRow>, CpdError> {
             // A deleted Context keeps its row, and so its id: never reused (contract §2.2 "Deleted").
             let deleted: bool = conn
-                .query_row("SELECT deleted_at IS NOT NULL FROM contexts WHERE id = ?1", [id.as_str()], |r| r.get(0))
+                .query_row(
+                    "SELECT deleted_at IS NOT NULL FROM contexts WHERE id = ?1",
+                    [id.as_str()],
+                    |r| r.get(0),
+                )
                 .optional()?
                 .unwrap_or(false);
             if deleted {
-                return Err(CpdError::new(ErrorCode::ContextExists, format!("Context {id} was deleted: its id is not reused."))
-                    .with("context", id.as_str()));
+                return Err(CpdError::new(
+                    ErrorCode::ContextExists,
+                    format!("Context {id} was deleted: its id is not reused."),
+                )
+                .with("context", id.as_str()));
             }
-            let Some(row) = ContextRow::find(conn, id)? else { return Ok(None) };
+            let Some(row) = ContextRow::find(conn, id)? else {
+                return Ok(None);
+            };
             if row.title == title.as_str()
                 && row.jira.as_deref() == jira.map(Jira::as_str)
                 && row.owner.as_deref() == Some(owner.as_str())
             {
                 return Ok(Some(row));
             }
-            Err(CpdError::new(ErrorCode::ContextExists, format!("Context {id} exists with another title, Jira key or owner."))
-                .with("context", id.as_str())
-                .with("title", row.title)
-                .with("jira", row.jira)
-                .with("owner", row.owner))
+            Err(CpdError::new(
+                ErrorCode::ContextExists,
+                format!("Context {id} exists with another title, Jira key or owner."),
+            )
+            .with("context", id.as_str())
+            .with("title", row.title)
+            .with("jira", row.jira)
+            .with("owner", row.owner))
         };
         if let Some(row) = self.store.read(|conn| existing(conn))? {
             return Ok((row, true));
@@ -187,16 +205,19 @@ impl<'a> Contexts<'a> {
                     Record::from_row,
                 )
                 .optional()?;
-            if let Some((seq, record)) =
-                latest.filter(|(_, r)| r.draft == draft && r.text == text.as_str() && r.by.session == by.session)
-            {
+            if let Some((seq, record)) = latest.filter(|(_, r)| {
+                r.draft == draft && r.text == text.as_str() && r.by.session == by.session
+            }) {
                 return Ok(Next::Retry(seq, record));
             }
             check_links(conn, context, &draft)?;
-            let mut stmt =
-                conn.prepare("SELECT id FROM context_records WHERE context = ?1 AND machine = ?2 AND kind = ?3")?;
-            let ids =
-                stmt.query_map(params![context.as_str(), machine.as_str(), draft.kind().as_str()], |r| r.get::<_, String>(0))?;
+            let mut stmt = conn.prepare(
+                "SELECT id FROM context_records WHERE context = ?1 AND machine = ?2 AND kind = ?3",
+            )?;
+            let ids = stmt.query_map(
+                params![context.as_str(), machine.as_str(), draft.kind().as_str()],
+                |r| r.get::<_, String>(0),
+            )?;
             let mut highest = 0;
             for id in ids {
                 highest = highest.max(RecordId::parse(&id?)?.number().get());
@@ -204,12 +225,22 @@ impl<'a> Contexts<'a> {
             Ok(Next::Number(highest + 1))
         };
         if let Next::Retry(seq, record) = self.store.read(|conn| next(conn))? {
-            return Ok(Written { record, seq, already: true });
+            return Ok(Written {
+                record,
+                seq,
+                already: true,
+            });
         }
         self.store.write(command, |tx| {
             // The number is taken again inside the write transaction: only one writer at a time.
             let number = match next(tx)? {
-                Next::Retry(seq, record) => return Ok(Written { record, seq, already: true }),
+                Next::Retry(seq, record) => {
+                    return Ok(Written {
+                        record,
+                        seq,
+                        already: true,
+                    });
+                }
                 Next::Number(number) => number,
             };
             let record = Record {
@@ -226,7 +257,11 @@ impl<'a> Contexts<'a> {
             record.insert(tx, context)?;
             let seq = tx.last_insert_rowid();
             events::append(tx, record_event(context, &record, seq, "recorded"))?;
-            Ok(Written { record, seq, already: false })
+            Ok(Written {
+                record,
+                seq,
+                already: false,
+            })
         })
     }
 }
@@ -261,16 +296,23 @@ fn check_links(conn: &Connection, context: &ContextId, draft: &Draft) -> Result<
             )
             .optional()?;
         let Some(found) = found else {
-            return Err(CpdError::new(ErrorCode::RecordNotFound, format!("Context {context} has no record {id}."))
-                .with("context", context.as_str())
-                .with("record", id.to_string()));
+            return Err(CpdError::new(
+                ErrorCode::RecordNotFound,
+                format!("Context {context} has no record {id}."),
+            )
+            .with("context", context.as_str())
+            .with("record", id.to_string()));
         };
         let writer = draft.kind();
         if !superseding(writer).iter().any(|k| k.as_str() == found) {
             let allowed: Vec<&str> = superseding(writer).iter().map(|k| k.as_str()).collect();
             return Err(CpdError::new(
                 ErrorCode::SupersedesInvalid,
-                format!("A {} cannot supersede {id}, a {found}: it may supersede a {}.", writer.as_str(), allowed.join(" or a ")),
+                format!(
+                    "A {} cannot supersede {id}, a {found}: it may supersede a {}.",
+                    writer.as_str(),
+                    allowed.join(" or a ")
+                ),
             )
             .with("record", id.to_string())
             .with("kind", found)
@@ -305,7 +347,12 @@ fn check_links(conn: &Connection, context: &ContextId, draft: &Draft) -> Result<
 
 /// The `context-record` Event of a record (§5.2).
 fn record_event(context: &ContextId, record: &Record, seq: i64, verb: &str) -> NewEvent {
-    let snippet: String = record.text.chars().take(80).map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let snippet: String = record
+        .text
+        .chars()
+        .take(80)
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
     NewEvent::context_record(
         format!(
             "{} {} {verb} in Context {context}: {snippet}. Next: cpd context show --context {context} --since {}",

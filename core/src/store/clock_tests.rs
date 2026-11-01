@@ -47,7 +47,10 @@ fn a_database_that_is_held_is_waited_for_with_a_back_off_of_500_ms_doubling_to_5
     let expected = [500, 1000, 2000, 4000, 5000, 5000].map(Duration::from_millis);
     assert!(naps.len() >= expected.len(), "naps: {naps:?}");
     assert_eq!(naps[..expected.len()], expected);
-    assert!(naps[expected.len()..].iter().all(|n| *n == BACKOFF_MAX), "naps: {naps:?}");
+    assert!(
+        naps[expected.len()..].iter().all(|n| *n == BACKOFF_MAX),
+        "naps: {naps:?}"
+    );
 }
 
 #[test]
@@ -55,13 +58,23 @@ fn a_database_that_stays_held_gives_up_once_the_migration_wait_has_passed_in_vir
     let (_dir, home) = home();
     let _held = held_database(&home);
     let clock = ManualClock::new();
-    let err = Store::open_with(&clock, &home, 0, persist()).err().expect("still held");
+    let err = Store::open_with(&clock, &home, 0, persist())
+        .err()
+        .expect("still held");
     assert!(is_transient(&err), "{err:?}");
     let ceiling = lock::MIGRATION_WAIT_CEILING;
     let naps = clock.naps();
-    assert!(clock.elapsed() >= ceiling, "gave up after {:?}", clock.elapsed());
+    assert!(
+        clock.elapsed() >= ceiling,
+        "gave up after {:?}",
+        clock.elapsed()
+    );
     let before_last = clock.elapsed() - *naps.last().expect("it napped");
-    assert!(before_last < ceiling, "kept waiting past {ceiling:?}: {:?}", clock.elapsed());
+    assert!(
+        before_last < ceiling,
+        "kept waiting past {ceiling:?}: {:?}",
+        clock.elapsed()
+    );
 }
 
 #[test]
@@ -69,7 +82,9 @@ fn a_database_held_without_persisting_returns_the_busy_error_at_once_without_a_n
     let (_dir, home) = home();
     let _held = held_database(&home);
     let clock = ManualClock::new();
-    let err = Store::open_with(&clock, &home, 0, None).err().expect("held");
+    let err = Store::open_with(&clock, &home, 0, None)
+        .err()
+        .expect("held");
     assert!(is_transient(&err), "{err:?}");
     assert!(clock.naps().is_empty());
 }
@@ -78,7 +93,11 @@ fn a_database_held_without_persisting_returns_the_busy_error_at_once_without_a_n
 fn a_setup_lock_that_is_held_is_retried_every_20_ms() {
     let (_dir, home) = home();
     std::fs::create_dir_all(home.locks_dir()).unwrap();
-    let file = OpenOptions::new().create(true).append(true).open(home.locks_dir().join("store.lock")).unwrap();
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(home.locks_dir().join("store.lock"))
+        .unwrap();
     assert!(crate::lock::try_lock(&file).unwrap());
     let clock = ManualClock::new();
     let _ = Store::open_with(&clock, &home, 100, None);
@@ -89,10 +108,16 @@ fn a_setup_lock_that_is_held_is_retried_every_20_ms() {
 fn a_setup_lock_that_stays_held_is_lock_timeout_after_store_busy_ms_of_virtual_time() {
     let (_dir, home) = home();
     std::fs::create_dir_all(home.locks_dir()).unwrap();
-    let file = OpenOptions::new().create(true).append(true).open(home.locks_dir().join("store.lock")).unwrap();
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(home.locks_dir().join("store.lock"))
+        .unwrap();
     assert!(crate::lock::try_lock(&file).unwrap());
     let clock = ManualClock::new();
-    let err = Store::open_with(&clock, &home, 100, None).err().expect("held");
+    let err = Store::open_with(&clock, &home, 100, None)
+        .err()
+        .expect("held");
     assert_eq!(err.code(), ErrorCode::LockTimeout);
     assert!(clock.elapsed() >= Duration::from_millis(100));
 }

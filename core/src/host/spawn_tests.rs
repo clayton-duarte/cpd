@@ -7,7 +7,10 @@ use std::path::PathBuf;
 use super::spawn::{FakeSpawn, Launch, Pid, Signal, Spawn};
 
 fn launch(program: &str) -> Launch {
-    Launch { program: program.to_owned(), ..Launch::default() }
+    Launch {
+        program: program.to_owned(),
+        ..Launch::default()
+    }
 }
 
 const SIGTERM: i32 = 15;
@@ -21,7 +24,10 @@ fn a_fake_spawn_hands_out_increasing_pids() {
     let first = spawn.spawn(&launch("a")).unwrap();
     let second = spawn.spawn(&launch("b")).unwrap();
     let third = spawn.spawn(&launch("c")).unwrap();
-    assert!(first < second && second < third, "{first:?} {second:?} {third:?}");
+    assert!(
+        first < second && second < third,
+        "{first:?} {second:?} {third:?}"
+    );
 }
 
 #[test]
@@ -75,7 +81,10 @@ fn stream_records_its_launch_and_hands_out_the_next_pid() {
     let first = spawn.spawn(&launch("a")).unwrap();
     let (streamed, _lines) = spawn.stream(&launch("nvidia-smi")).unwrap();
     assert!(streamed > first);
-    assert_eq!(spawn.launches().last().map(|l| l.program.as_str()), Some("nvidia-smi"));
+    assert_eq!(
+        spawn.launches().last().map(|l| l.program.as_str()),
+        Some("nvidia-smi")
+    );
 }
 
 // ---- alive and exit ------------------------------------------------------------------------------------------------
@@ -127,7 +136,10 @@ fn try_wait_of_an_exited_pid_is_its_exit_code() {
     let spawn = FakeSpawn::new();
     let pid = spawn.spawn(&launch("driver")).unwrap();
     spawn.exit(pid, 3);
-    let status = spawn.try_wait(pid).unwrap().expect("an exited pid has a status");
+    let status = spawn
+        .try_wait(pid)
+        .unwrap()
+        .expect("an exited pid has a status");
     assert_eq!(status.code(), Some(3));
 }
 
@@ -147,7 +159,10 @@ fn a_term_signal_marks_the_pid_exited_by_that_signal() {
     let pid = spawn.spawn(&launch("driver")).unwrap();
     spawn.signal(pid, Signal::Term).unwrap();
     assert!(!spawn.alive(pid));
-    let status = spawn.try_wait(pid).unwrap().expect("a signalled pid has a status");
+    let status = spawn
+        .try_wait(pid)
+        .unwrap()
+        .expect("a signalled pid has a status");
     assert_eq!(status.signal(), Some(SIGTERM));
     assert_eq!(status.code(), None);
 }
@@ -158,7 +173,10 @@ fn a_kill_signal_marks_the_pid_exited_by_that_signal() {
     let pid = spawn.spawn(&launch("driver")).unwrap();
     spawn.signal(pid, Signal::Kill).unwrap();
     assert!(!spawn.alive(pid));
-    assert_eq!(spawn.try_wait(pid).unwrap().expect("a status").signal(), Some(SIGKILL));
+    assert_eq!(
+        spawn.try_wait(pid).unwrap().expect("a status").signal(),
+        Some(SIGKILL)
+    );
 }
 
 #[test]
@@ -177,7 +195,10 @@ fn signals_records_every_signal_in_order() {
     let two = spawn.spawn(&launch("b")).unwrap();
     spawn.signal(one, Signal::Term).unwrap();
     spawn.signal(two, Signal::Kill).unwrap();
-    assert_eq!(spawn.signals(), vec![(one, Signal::Term), (two, Signal::Kill)]);
+    assert_eq!(
+        spawn.signals(),
+        vec![(one, Signal::Term), (two, Signal::Kill)]
+    );
 }
 
 // ---- exec ----------------------------------------------------------------------------------------------------------
@@ -192,7 +213,11 @@ fn exec_returns_an_error_whose_text_is_faked_exec() {
 #[test]
 fn exec_records_its_launch_and_starts_no_pid() {
     let spawn = FakeSpawn::new();
-    let l = Launch { program: "/bin/cpd".into(), args: vec!["watch".into()], ..Launch::default() };
+    let l = Launch {
+        program: "/bin/cpd".into(),
+        args: vec!["watch".into()],
+        ..Launch::default()
+    };
     let _ = spawn.exec(&l);
     assert_eq!(spawn.launches(), vec![l]);
     assert!(spawn.signals().is_empty());
@@ -245,5 +270,9 @@ fn descendants_are_the_live_processes_below_the_root_at_any_depth_and_the_root_i
     assert_eq!(spawn.cmdline(grandchild).as_deref(), Some("sleep 60"));
 
     spawn.signal(child, Signal::Term).unwrap();
-    assert_eq!(spawn.descendants(pane), [grandchild], "an exited process is no descendant");
+    assert_eq!(
+        spawn.descendants(pane),
+        [grandchild],
+        "an exited process is no descendant"
+    );
 }

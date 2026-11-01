@@ -94,7 +94,11 @@ impl NotReady {
     }
 }
 
-pub(crate) fn not_ready(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<NotReady, CpdError> {
+pub(crate) fn not_ready(
+    conn: &rusqlite::Connection,
+    plan: &PlanId,
+    key: &PrKey,
+) -> Result<NotReady, CpdError> {
     let mut stmt = conn.prepare(concat!(
         "SELECT n.needs FROM prs r, pr_needs n, prs q WHERE r.plan = ?1 AND r.key = ?2 AND ",
         needs_unmerged!(),
@@ -103,9 +107,18 @@ pub(crate) fn not_ready(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey)
     let needs = stmt
         .query_map([plan.as_str(), key.as_str()], |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut stmt = conn.prepare(concat!("SELECT b.plan, b.key FROM prs r, prs b WHERE r.plan = ?1 AND r.key = ?2 AND ", base_pr_not_open!()))?;
+    let mut stmt = conn.prepare(concat!(
+        "SELECT b.plan, b.key FROM prs r, prs b WHERE r.plan = ?1 AND r.key = ?2 AND ",
+        base_pr_not_open!()
+    ))?;
     let base_pr = stmt
-        .query_map([plan.as_str(), key.as_str()], |r| Ok(format!("{}/{}", r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .query_map([plan.as_str(), key.as_str()], |r| {
+            Ok(format!(
+                "{}/{}",
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?
+            ))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?
         .pop();
     Ok(NotReady { needs, base_pr })
@@ -113,10 +126,18 @@ pub(crate) fn not_ready(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey)
 
 /// The PR's base PR as `<plan>/<key>` (§2.2 "The base PR": derived, the PR of its repo whose Lead Branch is its
 /// `base`), `None` when it is not stacked.
-pub(super) fn base_pr(conn: &rusqlite::Connection, plan: &PlanId, pr: &PrRow) -> Result<Option<String>, CpdError> {
+pub(super) fn base_pr(
+    conn: &rusqlite::Connection,
+    plan: &PlanId,
+    pr: &PrRow,
+) -> Result<Option<String>, CpdError> {
     use rusqlite::OptionalExtension;
     Ok(conn
-        .query_row("SELECT plan || '/' || key FROM prs WHERE plan = ?1 AND repo = ?2 AND lead_branch = ?3", [plan.as_str(), pr.repo.as_str(), pr.base.as_str()], |r| r.get(0))
+        .query_row(
+            "SELECT plan || '/' || key FROM prs WHERE plan = ?1 AND repo = ?2 AND lead_branch = ?3",
+            [plan.as_str(), pr.repo.as_str(), pr.base.as_str()],
+            |r| r.get(0),
+        )
         .optional()?)
 }
 
@@ -131,7 +152,11 @@ struct MergedBase {
     to: String,
 }
 
-fn merged_base(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<Option<MergedBase>, CpdError> {
+fn merged_base(
+    conn: &rusqlite::Connection,
+    plan: &PlanId,
+    key: &PrKey,
+) -> Result<Option<MergedBase>, CpdError> {
     use rusqlite::OptionalExtension;
     Ok(conn
         .query_row(
@@ -149,31 +174,64 @@ fn merged_base(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Resul
 /// `base` and `pr-base-changed` is appended for its Plan, once per step down a chain of merged base PRs. GitHub deleted
 /// the merged branch, so it is never looked up. `by` is who unstacks (`poll`, `engine`, `pr start`, `pr open`); the
 /// poll's Event has `number` and `url` null. Whether anything changed.
-pub(super) fn unstack(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, by: &str) -> Result<bool, CpdError> {
+pub(super) fn unstack(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    key: &PrKey,
+    by: &str,
+) -> Result<bool, CpdError> {
     use rusqlite::OptionalExtension;
     let mut seen = Vec::new();
-    while let Some(MergedBase { repo, from, from_pr, to }) = merged_base(tx, plan, key)? {
+    while let Some(MergedBase {
+        repo,
+        from,
+        from_pr,
+        to,
+    }) = merged_base(tx, plan, key)?
+    {
         if seen.contains(&from) {
-            return Err(CpdError::bad_row(format!("The base PRs of {repo} form a cycle at {from}")));
+            return Err(CpdError::bad_row(format!(
+                "The base PRs of {repo} form a cycle at {from}"
+            )));
         }
         let moved = tx.execute(
             "UPDATE prs SET base = ?3 WHERE plan = ?1 AND key = ?2 AND status IN ('waiting', 'dispatch') AND base = ?4",
             [plan.as_str(), key.as_str(), to.as_str(), from.as_str()],
         )?;
         if moved == 0 {
-            return Err(CpdError::new(ErrorCode::CasLost, format!("PR {key} of Plan {plan} changed while it was unstacked: rerun the command."))
-                .with("plan", plan.as_str())
-                .with("pr", key.as_str()));
+            return Err(CpdError::new(
+                ErrorCode::CasLost,
+                format!(
+                    "PR {key} of Plan {plan} changed while it was unstacked: rerun the command."
+                ),
+            )
+            .with("plan", plan.as_str())
+            .with("pr", key.as_str()));
         }
         let to_pr: Option<String> = tx
-            .query_row("SELECT plan || '/' || key FROM prs WHERE repo = ?1 AND lead_branch = ?2", [repo.as_str(), to.as_str()], |r| r.get(0))
+            .query_row(
+                "SELECT plan || '/' || key FROM prs WHERE repo = ?1 AND lead_branch = ?2",
+                [repo.as_str(), to.as_str()],
+                |r| r.get(0),
+            )
             .optional()?;
         let text = format!(
             "PR {key} of Plan {plan} now targets {to} (was {from}): its base PR {from_pr} merged before its pull request existed. \
              Its tree is unchanged: no new Gate is needed and it stays ready. Read it with cpd plan show --plan {plan}."
         );
-        let pull = if by == "poll" { BasePull::Null } else { BasePull::Absent };
-        let event = NewEvent::pr_base_changed(text, key, (&from, &to), (Some(&from_pr), to_pr.as_deref()), by, pull);
+        let pull = if by == "poll" {
+            BasePull::Null
+        } else {
+            BasePull::Absent
+        };
+        let event = NewEvent::pr_base_changed(
+            text,
+            key,
+            (&from, &to),
+            (Some(&from_pr), to_pr.as_deref()),
+            by,
+            pull,
+        );
         append(tx, event.plan(plan.clone()))?;
         seen.push(from);
     }
@@ -182,18 +240,33 @@ pub(super) fn unstack(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, by: &str) -
 
 /// [`unstack`] in a transaction of its own when the PR needs it (a PR already unstacked writes nothing), then the PR as
 /// it is stored.
-pub(super) fn unstack_stored(store: &mut Store, source: &str, plan: &PlanId, key: &PrKey, by: &str) -> Result<PrRow, CpdError> {
+pub(super) fn unstack_stored(
+    store: &mut Store,
+    source: &str,
+    plan: &PlanId,
+    key: &PrKey,
+    by: &str,
+) -> Result<PrRow, CpdError> {
     if store.read(|conn| Ok(merged_base(conn, plan, key)?.is_some()))? {
         store.write(source, |tx| unstack(tx, plan, key, by))?;
     }
     store
         .read(|conn| Ok(load(conn, plan)?.into_iter().find(|p| &p.key == key)))?
-        .ok_or_else(|| CpdError::bad_row(format!("PR {key} of Plan {plan} vanished while it was unstacked")))
+        .ok_or_else(|| {
+            CpdError::bad_row(format!(
+                "PR {key} of Plan {plan} vanished while it was unstacked"
+            ))
+        })
 }
 
 /// A2 of an `open` Job (contract §3.4, hs-d340): a PR stacked on a base PR that has merged is unstacked first (`pr-base-changed`, `by` `open job`),
 /// so the Worker is told a base that exists: GitHub deleted the merged base PR's branch.
-pub fn unstack_for_open_job(store: &mut Store, source: &str, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+pub fn unstack_for_open_job(
+    store: &mut Store,
+    source: &str,
+    plan: &PlanId,
+    key: &PrKey,
+) -> Result<(), CpdError> {
     unstack_stored(store, source, plan, key, "open job").map(|_| ())
 }
 
@@ -204,11 +277,17 @@ pub fn root_base(conn: &rusqlite::Connection, repo: &str, base: &str) -> Result<
     let mut base = base.to_owned();
     let mut seen = Vec::new();
     while let Some(next) = conn
-        .query_row("SELECT base FROM prs WHERE repo = ?1 AND lead_branch = ?2", [repo, base.as_str()], |r| r.get::<_, String>(0))
+        .query_row(
+            "SELECT base FROM prs WHERE repo = ?1 AND lead_branch = ?2",
+            [repo, base.as_str()],
+            |r| r.get::<_, String>(0),
+        )
         .optional()?
     {
         if seen.contains(&base) {
-            return Err(CpdError::bad_row(format!("The base PRs of {repo} form a cycle at {base}")));
+            return Err(CpdError::bad_row(format!(
+                "The base PRs of {repo} form a cycle at {base}"
+            )));
         }
         seen.push(base);
         base = next;
@@ -218,7 +297,12 @@ pub fn root_base(conn: &rusqlite::Connection, repo: &str, base: &str) -> Result<
 
 /// The refs a protected path may be brought from by a base merge (§7.5), besides the Lead tip: `origin/<base>` (`<base>`
 /// without `origin`), and for a stacked PR `origin/<root>` too, `<root>` the [`root_base`].
-pub fn tamper_bases(conn: &rusqlite::Connection, dir: &Path, repo: &str, base: &str) -> Result<Vec<String>, CpdError> {
+pub fn tamper_bases(
+    conn: &rusqlite::Connection,
+    dir: &Path,
+    repo: &str,
+    base: &str,
+) -> Result<Vec<String>, CpdError> {
     let root = root_base(conn, repo, base)?;
     let mut refs = vec![git::tamper::base_ref(dir, base)?];
     if root != base {
@@ -249,7 +333,11 @@ impl Prepared {
             Ok(pushed) => (pushed, None),
             Err(e) => (false, Some(e.with("pr", self.pr.key.as_str()))),
         };
-        Pushed { prepared: self, pushed, failed }
+        Pushed {
+            prepared: self,
+            pushed,
+            failed,
+        }
     }
 }
 
@@ -302,21 +390,39 @@ impl Failed {
 
 /// Where `pre-start`'s whole output goes: `run/<plan>/logs/lead-<key>.pre-start.log` (§7.2).
 fn pre_start_log(home: &CpdHome, plan: &PlanId, key: &PrKey) -> PathBuf {
-    home.plan_dir(plan).join("logs").join(format!("lead-{key}.{}.log", Hook::PreStart.as_str()))
+    home.plan_dir(plan)
+        .join("logs")
+        .join(format!("lead-{key}.{}.log", Hook::PreStart.as_str()))
 }
 
 /// Creates the PR's Lead worktree and runs `pre-start` in it (§7.2), in the PR's repo, for a PR that is not
 /// stacked: the one `plan lock` starts (§3.1: it starts only PRs with no base PR).
-pub fn prepare(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &PrRow) -> Result<Prepared, Failed> {
+pub fn prepare(
+    home: &CpdHome,
+    config: &Config,
+    store: &mut Store,
+    plan: &PlanId,
+    pr: &PrRow,
+) -> Result<Prepared, Failed> {
     prepare_as(home, config, store, plan, pr, false)
 }
 
 /// [`prepare`], `stacked` being whether the PR is stacked on a base PR: its Lead Branch is then cut from that
 /// PR's Lead Branch head (§7.2).
-fn prepare_as(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &PrRow, stacked: bool) -> Result<Prepared, Failed> {
+fn prepare_as(
+    home: &CpdHome,
+    config: &Config,
+    store: &mut Store,
+    plan: &PlanId,
+    pr: &PrRow,
+    stacked: bool,
+) -> Result<Prepared, Failed> {
     let key = &pr.key;
-    let policy = store.read(|conn| super::policy_of_pr(conn, home, plan, key)).map_err(Failed::Other)?;
-    let path = git::pr_lead_worktree_path(Path::new(&pr.repo), plan, key, &pr.lead_branch).map_err(Failed::Other)?;
+    let policy = store
+        .read(|conn| super::policy_of_pr(conn, home, plan, key))
+        .map_err(Failed::Other)?;
+    let path = git::pr_lead_worktree_path(Path::new(&pr.repo), plan, key, &pr.lead_branch)
+        .map_err(Failed::Other)?;
     let setup = Setup {
         timeout: Duration::from_secs(u64::from(config.timeouts.setup_minutes) * 60),
         log: pre_start_log(home, plan, key),
@@ -326,14 +432,29 @@ fn prepare_as(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId,
         (None, true) => git::Cut::Stacked,
         (None, false) => git::Cut::Base,
     };
-    match git::prepare_pr_lead_worktree(Path::new(&pr.repo), plan, &path, &pr.lead_branch, &pr.base, cut, &setup, &policy.hooks.pre_start) {
-        Ok(lead) => Ok(Prepared { pr: pr.clone(), lead }),
+    match git::prepare_pr_lead_worktree(
+        Path::new(&pr.repo),
+        plan,
+        &path,
+        &pr.lead_branch,
+        &pr.base,
+        cut,
+        &setup,
+        &policy.hooks.pre_start,
+    ) {
+        Ok(lead) => Ok(Prepared {
+            pr: pr.clone(),
+            lead,
+        }),
         Err(failure) => {
             let mut error = failure.error.with("pr", key.as_str());
             if error.code() == ErrorCode::SetupFailed {
                 error = error.with("step", failure.step.as_str());
             }
-            Err(Failed::Setup { step: failure.step, error })
+            Err(Failed::Setup {
+                step: failure.step,
+                error,
+            })
         }
     }
 }
@@ -350,15 +471,32 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
         [worktree.as_str(), plan.as_str(), pr.key.as_str()],
     )?;
     if moved == 0 {
-        return Err(CpdError::new(ErrorCode::CasLost, format!("PR {} of Plan {plan} changed while it was started: rerun the command.", pr.key))
-            .with("plan", plan.as_str())
-            .with("pr", pr.key.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::CasLost,
+            format!(
+                "PR {} of Plan {plan} changed while it was started: rerun the command.",
+                pr.key
+            ),
+        )
+        .with("plan", plan.as_str())
+        .with("pr", pr.key.as_str()));
     }
     let text = format!(
         "PR {} of Plan {plan} started: Lead Branch {} in {worktree}. Its Jobs are scheduled. Next: cpd plan show --plan {plan}",
         pr.key, lead.branch
     );
-    let event = NewEvent::pr_started(text, &pr.key, &pr.repo, &pr.base, &lead.branch, &worktree, &lead.base_sha, lead.reused(), pushed.pushed, by.as_str());
+    let event = NewEvent::pr_started(
+        text,
+        &pr.key,
+        &pr.repo,
+        &pr.base,
+        &lead.branch,
+        &worktree,
+        &lead.base_sha,
+        lead.reused(),
+        pushed.pushed,
+        by.as_str(),
+    );
     append(tx, event.plan(plan.clone()))?;
     if let Some(error) = &pushed.failed {
         let text = format!(
@@ -367,7 +505,13 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
             pr.key,
             error.message()
         );
-        let event = NewEvent::error(text, by.source(), error.code().as_str(), error.message(), error.details());
+        let event = NewEvent::error(
+            text,
+            by.source(),
+            error.code().as_str(),
+            error.message(),
+            error.details(),
+        );
         append(tx, event.plan(plan.clone()))?;
     }
     Ok(())
@@ -376,10 +520,21 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
 /// Starts one PR of a Plan in `dispatch` (E7, `pr start`): [`prepare`], push,
 /// then [`record`] in a transaction of its own. On failure the worktree and
 /// branch are removed and nothing is written.
-pub fn start(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &PrRow, by: By) -> Result<Pushed, Failed> {
+pub fn start(
+    home: &CpdHome,
+    config: &Config,
+    store: &mut Store,
+    plan: &PlanId,
+    pr: &PrRow,
+    by: By,
+) -> Result<Pushed, Failed> {
     // A base PR that merged unstacks the PR first: its branch is gone, the Lead Branch is cut from the new base (hs-d301).
-    let pr = &unstack_stored(store, by.source(), plan, &pr.key, by.as_str()).map_err(Failed::Other)?;
-    let stacked = store.read(|conn| base_pr(conn, plan, pr)).map_err(Failed::Other)?.is_some();
+    let pr =
+        &unstack_stored(store, by.source(), plan, &pr.key, by.as_str()).map_err(Failed::Other)?;
+    let stacked = store
+        .read(|conn| base_pr(conn, plan, pr))
+        .map_err(Failed::Other)?
+        .is_some();
     let pushed = prepare_as(home, config, store, plan, pr, stacked)?.push();
     match store.write(by.source(), |tx| record(tx, plan, &pushed, by)) {
         Ok(()) => Ok(pushed),
@@ -394,7 +549,14 @@ pub fn start(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, 
 /// transaction `start_failed_at` is set and one `error` Event `pr_start_failed`
 /// is appended for the Plan's Lead, `source` being the engine's. False when the
 /// PR is no longer `waiting` or was already marked: nothing is written.
-pub fn record_failure(store: &mut Store, source: &str, plan: &PlanId, key: &PrKey, step: Step, error: &CpdError) -> Result<bool, CpdError> {
+pub fn record_failure(
+    store: &mut Store,
+    source: &str,
+    plan: &PlanId,
+    key: &PrKey,
+    step: Step,
+    error: &CpdError,
+) -> Result<bool, CpdError> {
     store.write(source, |tx| {
         let marked = tx.execute(
             "UPDATE prs SET start_failed_at = (SELECT at FROM txns WHERE id = cpd_txn())
@@ -423,23 +585,35 @@ pub(super) fn run(args: StartArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let key = args.key;
     let mut env = Env::open()?;
-    let (phase, prs, held) = env.store.read(|conn| Ok((plan_phase(conn, &plan)?, load(conn, &plan)?, not_ready(conn, &plan, &key)?)))?;
+    let (phase, prs, held) = env.store.read(|conn| {
+        Ok((
+            plan_phase(conn, &plan)?,
+            load(conn, &plan)?,
+            not_ready(conn, &plan, &key)?,
+        ))
+    })?;
     if phase != Phase::Dispatch {
         return Err(wrong_phase(&plan, phase, COMMAND, "dispatch"));
     }
     let Some(pr) = prs.iter().find(|p| p.key == key) else {
-        return Err(CpdError::new(ErrorCode::PrNotFound, format!("No PR {key} in Plan {plan}."))
-            .with("plan", plan.as_str())
-            .with("pr", key.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::PrNotFound,
+            format!("No PR {key} in Plan {plan}."),
+        )
+        .with("plan", plan.as_str())
+        .with("pr", key.as_str()));
     };
     match pr.status.as_str() {
         "waiting" => {}
         "cancelled" => {
-            return Err(CpdError::new(ErrorCode::IllegalTransition, format!("PR {key} of Plan {plan} is cancelled: it cannot be started."))
-                .with("plan", plan.as_str())
-                .with("pr", key.as_str())
-                .with("from", "cancelled")
-                .with("to", "dispatch"));
+            return Err(CpdError::new(
+                ErrorCode::IllegalTransition,
+                format!("PR {key} of Plan {plan} is cancelled: it cannot be started."),
+            )
+            .with("plan", plan.as_str())
+            .with("pr", key.as_str())
+            .with("from", "cancelled")
+            .with("to", "dispatch"));
         }
         _ => {
             return Ok(Output::success(json!({"pr": {
@@ -451,20 +625,35 @@ pub(super) fn run(args: StartArgs) -> Result<Output, CpdError> {
     if !held.is_empty() {
         let mut why = Vec::new();
         if !held.needs.is_empty() {
-            why.push(format!("needs {}, which {} not merged yet", held.needs.join(", "), if held.needs.len() == 1 { "is" } else { "are" }));
+            why.push(format!(
+                "needs {}, which {} not merged yet",
+                held.needs.join(", "),
+                if held.needs.len() == 1 { "is" } else { "are" }
+            ));
         }
         if let Some(base_pr) = &held.base_pr {
             why.push(format!("is stacked on {base_pr}, which has not opened yet"));
         }
-        let mut error = CpdError::new(ErrorCode::PrNotReady, format!("PR {key} of Plan {plan} {}.", why.join(" and ")))
-            .with("plan", plan.as_str())
-            .with("pr", key.as_str())
-            .with("needs", held.needs);
+        let mut error = CpdError::new(
+            ErrorCode::PrNotReady,
+            format!("PR {key} of Plan {plan} {}.", why.join(" and ")),
+        )
+        .with("plan", plan.as_str())
+        .with("pr", key.as_str())
+        .with("needs", held.needs);
         if let Some(base_pr) = held.base_pr {
             error = error.with("base_pr", base_pr);
         }
         return Err(error);
     }
-    let pushed = start(&env.home, &env.config, &mut env.store, &plan, pr, By::PrStart).map_err(Failed::into_error)?;
+    let pushed = start(
+        &env.home,
+        &env.config,
+        &mut env.store,
+        &plan,
+        pr,
+        By::PrStart,
+    )
+    .map_err(Failed::into_error)?;
     Ok(Output::success(json!({"pr": pushed.to_json()})))
 }

@@ -13,7 +13,11 @@ use crate::output::Output;
 use crate::session::row::Row;
 
 /// Writes `switch_failed` of the Session `reference` names: `record` gets the row it is written for, in the transaction.
-fn write(reference: Option<crate::args::SessionRef>, what: &str, record: impl Fn(&Row) -> Option<String>) -> Result<Output, CpdError> {
+fn write(
+    reference: Option<crate::args::SessionRef>,
+    what: &str,
+    record: impl Fn(&Row) -> Option<String>,
+) -> Result<Output, CpdError> {
     let reference = SessionArg { session: reference }.require()?.clone();
     let mut env = Env::open()?;
     let id: SessionId = env.resolve(&reference)?;
@@ -22,14 +26,21 @@ fn write(reference: Option<crate::args::SessionRef>, what: &str, record: impl Fn
         if row.role == Role::Worker {
             return Err(not_a_lead(&row.id, row.role));
         }
-        tx.execute("UPDATE sessions SET switch_failed = ?1 WHERE id = ?2", rusqlite::params![record(&row), row.id.as_str()])?;
+        tx.execute(
+            "UPDATE sessions SET switch_failed = ?1 WHERE id = ?2",
+            rusqlite::params![record(&row), row.id.as_str()],
+        )?;
         Ok(())
     })?;
     Ok(Output::success(json!({"session": id})))
 }
 
 pub(super) fn failed(args: SwitchFailedArgs) -> Result<Output, CpdError> {
-    let SwitchFailedArgs { code, message, session } = args;
+    let SwitchFailedArgs {
+        code,
+        message,
+        session,
+    } = args;
     let at = clock::now();
     write(session, "session switch-failed", |row| {
         Some(json!({"tier": row.tier, "code": code.0, "message": message.0, "at": at}).to_string())

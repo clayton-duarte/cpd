@@ -19,7 +19,11 @@ use cpd_core::store::Store;
 /// A store in a temp directory; the directory lives as long as the returned guard.
 fn open() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(&CpdHome::resolve(Some(dir.path().into()), None).unwrap(), 5000).unwrap();
+    let store = Store::open(
+        &CpdHome::resolve(Some(dir.path().into()), None).unwrap(),
+        5000,
+    )
+    .unwrap();
     (dir, store)
 }
 
@@ -45,8 +49,16 @@ fn context(id: &str) -> String {
 fn plan_row(id: &str, phase: &str, created: &str, pr: Option<(i64, (&str, &str, &str))>) -> String {
     let late = !matches!(phase, "grounding" | "plan");
     let worktree = if late { "'/wt'" } else { "NULL" };
-    let locked = if late { "'2026-01-02T00:00:00.000Z'" } else { "NULL" };
-    let done = if phase == "done" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" };
+    let locked = if late {
+        "'2026-01-02T00:00:00.000Z'"
+    } else {
+        "NULL"
+    };
+    let done = if phase == "done" {
+        "'2026-01-09T00:00:00.000Z'"
+    } else {
+        "NULL"
+    };
     let status = match phase {
         "grounding" | "plan" => "waiting",
         "dispatch" => "dispatch",
@@ -55,7 +67,11 @@ fn plan_row(id: &str, phase: &str, created: &str, pr: Option<(i64, (&str, &str, 
     };
     let (row, number, url, opened, pull_request) = match pr {
         Some((n, (title, decision, checks))) => {
-            let (state, merged) = if status == "merged" { ("merged", "'2026-01-09T00:00:00.000Z'") } else { ("open", "NULL") };
+            let (state, merged) = if status == "merged" {
+                ("merged", "'2026-01-09T00:00:00.000Z'")
+            } else {
+                ("open", "NULL")
+            };
             (
                 format!(
                     "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
@@ -68,7 +84,13 @@ fn plan_row(id: &str, phase: &str, created: &str, pr: Option<(i64, (&str, &str, 
                 format!("(SELECT id FROM pull_requests WHERE number = {n})"),
             )
         }
-        None => (String::new(), "NULL".into(), "NULL".into(), "NULL", "NULL".into()),
+        None => (
+            String::new(),
+            "NULL".into(),
+            "NULL".into(),
+            "NULL",
+            "NULL".into(),
+        ),
     };
     format!(
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
@@ -99,7 +121,14 @@ fn moved(at: &str, plan: &str, place: &str) -> String {
 }
 
 /// One Plan's fixture row: lead label, name, phase, its PR (number and checks), its time and its pane place.
-type PlanFixture = (&'static str, &'static str, &'static str, Option<(i64, (&'static str, &'static str, &'static str))>, &'static str, Option<&'static str>);
+type PlanFixture = (
+    &'static str,
+    &'static str,
+    &'static str,
+    Option<(i64, (&'static str, &'static str, &'static str))>,
+    &'static str,
+    Option<&'static str>,
+);
 
 /// One Context and these Plans, each named by its Lead Session (the label), oldest first:
 /// - `old` ("cpd-ui"): done, its merged PR 3, every check passed, no review; the Lead in the chat slot;
@@ -112,20 +141,69 @@ type PlanFixture = (&'static str, &'static str, &'static str, Option<(i64, (&'st
 fn populate(store: &mut Store) {
     let mut s = context("alpha");
     let plans: [PlanFixture; 7] = [
-        ("old", "cpd-ui", "done", Some((3, ("cpd-ui: cockpit rows", "none", "passed"))), "2026-01-01T12:00:00.000Z", Some("chat")),
+        (
+            "old",
+            "cpd-ui",
+            "done",
+            Some((3, ("cpd-ui: cockpit rows", "none", "passed"))),
+            "2026-01-01T12:00:00.000Z",
+            Some("chat"),
+        ),
         (
             "rel",
             "cpd visual lead",
             "deploy",
-            Some((7, ("cpd-tui cockpit column and its long title", "changes_requested", "failed"))),
+            Some((
+                7,
+                (
+                    "cpd-tui cockpit column and its long title",
+                    "changes_requested",
+                    "failed",
+                ),
+            )),
             "2026-01-02T00:00:00.000Z",
             Some("parked"),
         ),
-        ("fresh", "fresh lead", "deploy", Some((11, ("Plan fresh", "none", "none"))), "2026-01-02T00:00:01.000Z", Some("parked")),
-        ("ship", "v1", "dispatch", None, "2026-01-02T00:00:02.000Z", Some("chat")),
-        ("sketch", "sketch lead", "plan", None, "2026-01-02T00:00:03.000Z", Some("none")),
-        ("away", "away lead", "done", Some((9, ("away", "approved", "pending"))), "2026-01-02T00:00:04.000Z", Some("work")),
-        ("never", "never lead", "dispatch", None, "2026-01-02T00:00:05.000Z", None),
+        (
+            "fresh",
+            "fresh lead",
+            "deploy",
+            Some((11, ("Plan fresh", "none", "none"))),
+            "2026-01-02T00:00:01.000Z",
+            Some("parked"),
+        ),
+        (
+            "ship",
+            "v1",
+            "dispatch",
+            None,
+            "2026-01-02T00:00:02.000Z",
+            Some("chat"),
+        ),
+        (
+            "sketch",
+            "sketch lead",
+            "plan",
+            None,
+            "2026-01-02T00:00:03.000Z",
+            Some("none"),
+        ),
+        (
+            "away",
+            "away lead",
+            "done",
+            Some((9, ("away", "approved", "pending"))),
+            "2026-01-02T00:00:04.000Z",
+            Some("work"),
+        ),
+        (
+            "never",
+            "never lead",
+            "dispatch",
+            None,
+            "2026-01-02T00:00:05.000Z",
+            None,
+        ),
     ];
     for (n, (id, name, phase, pr, created, place)) in plans.into_iter().enumerate() {
         s += &lead_row(id, name);
@@ -146,22 +224,46 @@ fn fixture() -> (tempfile::TempDir, Store) {
 // ---------- the Dispatch column ----------
 
 fn machine() -> Machine {
-    Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } }
+    Machine {
+        name: "homeserver".to_owned(),
+        usage: Usage {
+            cpu: Some(23),
+            gpus: vec![],
+            mem: Some(41),
+        },
+    }
 }
 
 fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|f| drop(draw(f, f.area(), &machine(), 0, &w.inbox, 0, time::OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
+    terminal
+        .draw(|f| {
+            drop(draw(
+                f,
+                f.area(),
+                &machine(),
+                0,
+                &w.inbox,
+                0,
+                time::OffsetDateTime::UNIX_EPOCH,
+                &Default::default(),
+            ))
+        })
+        .unwrap();
     terminal.backend().buffer().clone()
 }
 
 fn rows(buf: &Buffer) -> Vec<String> {
-    (0..buf.area.height).map(|y| row(buf, y).trim_end().to_owned()).collect()
+    (0..buf.area.height)
+        .map(|y| row(buf, y).trim_end().to_owned())
+        .collect()
 }
 
 /// The row as the terminal shows it: a linked cell's symbol carries its OSC 8 escapes (`ESC ] 8 ; ; <url> BEL`), which take no column.
 fn row(buf: &Buffer, y: u16) -> String {
-    (0..buf.area.width).map(|x| plain(buf[(x, y)].symbol())).collect()
+    (0..buf.area.width)
+        .map(|x| plain(buf[(x, y)].symbol()))
+        .collect()
 }
 
 fn plain(symbol: &str) -> String {
@@ -177,11 +279,14 @@ fn plain(symbol: &str) -> String {
     out
 }
 
-
 /// The first cell of the first row at or after `from` that contains `needle` (every glyph here is one column wide).
 fn find_after(buf: &Buffer, from: u16, needle: &str) -> (u16, u16) {
     (from..buf.area.height)
-        .find_map(|y| row(buf, y).find(needle).map(|b| (row(buf, y)[..b].chars().count() as u16, y)))
+        .find_map(|y| {
+            row(buf, y)
+                .find(needle)
+                .map(|b| (row(buf, y)[..b].chars().count() as u16, y))
+        })
         .unwrap_or_else(|| panic!("{needle:?} is not drawn:\n{}", rows(buf).join("\n")))
 }
 
@@ -202,14 +307,28 @@ fn the_column_shows_the_machine_and_the_inbox_under_it_and_nothing_else() {
     let (got, _) = column(25);
     let expected = ["", " homeserver", " \u{F4BC} 23%  \u{EFC5} 41%", ""];
     assert_eq!(got[..4], expected, "\n{}", got.join("\n"));
-    assert!(!got.iter().any(|r| r.contains("PRs") || r.contains("acme/repo#")), "\n{}", got.join("\n"));
+    assert!(
+        !got.iter()
+            .any(|r| r.contains("PRs") || r.contains("acme/repo#")),
+        "\n{}",
+        got.join("\n")
+    );
 }
 
 #[test]
 fn a_plan_without_a_pr_is_not_listed_and_no_label_is_drawn() {
     let (got, _) = column(25);
     let got = got.join("\n");
-    for hidden in ["v1", "sketch lead", "never lead", "no PR", "cpd-ui", "cpd visual lead", "fresh lead", "Plans in the cockpit"] {
+    for hidden in [
+        "v1",
+        "sketch lead",
+        "never lead",
+        "no PR",
+        "cpd-ui",
+        "cpd visual lead",
+        "fresh lead",
+        "Plans in the cockpit",
+    ] {
         assert!(!got.contains(hidden), "{hidden}:\n{got}");
     }
 }
@@ -272,19 +391,41 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
         assert_eq!(buf[(pill_col, y)].bg, pill.bg.unwrap(), "{name}: pill");
         assert_eq!(buf[(pill_col, y)].fg, pill.fg.unwrap(), "{name}: pill text");
         // the compact pill (hs-d474): no padding inside the caps
-        assert!(text.contains(&format!("\u{e0b6}{icon} key│S1\u{e0b4}")), "{name}: {text}");
+        assert!(
+            text.contains(&format!("\u{e0b6}{icon} key│S1\u{e0b4}")),
+            "{name}: {text}"
+        );
         // a rounded cap on each end, in the pill's colour on the default background
-        let (left, right) = (pill_col - 1, pill_col + 1 + " key│S1".chars().count() as u16);
+        let (left, right) = (
+            pill_col - 1,
+            pill_col + 1 + " key│S1".chars().count() as u16,
+        );
         for (cap_at, glyph) in [(left, "\u{e0b6}"), (right, "\u{e0b4}")] {
             let cap = &buf[(cap_at, y)];
-            assert_eq!((cap.symbol(), cap.fg, cap.bg), (glyph, pill.fg.unwrap(), Default::default()), "{name}: cap at {cap_at}: {text}");
+            assert_eq!(
+                (cap.symbol(), cap.fg, cap.bg),
+                (glyph, pill.fg.unwrap(), Default::default()),
+                "{name}: cap at {cap_at}: {text}"
+            );
         }
-        let counter = text.chars().collect::<Vec<_>>().iter().rposition(|c| *c == '3').unwrap() as u16;
-        assert_eq!(buf[(counter, y)].fg, palette::count_style(status, merging, 3).fg.unwrap(), "{name}: counter");
+        let counter = text
+            .chars()
+            .collect::<Vec<_>>()
+            .iter()
+            .rposition(|c| *c == '3')
+            .unwrap() as u16;
+        assert_eq!(
+            buf[(counter, y)].fg,
+            palette::count_style(status, merging, 3).fg.unwrap(),
+            "{name}: counter"
+        );
     }
     let counters = row(&buf, find(&buf, "counters row").1);
     assert!(counters.contains("1⋅1⋅1⋅1"), "{counters}");
-    assert!(counters.contains("planned⋅active⋅failed⋅done"), "{counters}");
+    assert!(
+        counters.contains("planned⋅active⋅failed⋅done"),
+        "{counters}"
+    );
 }
 
 #[test]
@@ -299,7 +440,9 @@ fn the_session_dots_are_listed_in_their_colours() {
     let needs_you = glyph_at("the Session needs you");
     assert_eq!(buf[needs_you].symbol(), palette::NEEDS_YOU);
     let working = glyph_at("the Lead is working");
-    let frames: String = (0..palette::SPINNER.len() as u16).map(|i| buf[(working.0 + i, working.1)].symbol().to_string()).collect();
+    let frames: String = (0..palette::SPINNER.len() as u16)
+        .map(|i| buf[(working.0 + i, working.1)].symbol().to_string())
+        .collect();
     assert_eq!(frames, palette::SPINNER.concat());
     for (text, glyph, dot) in [
         ("waiting:", palette::WAITING, Dot::Waiting),
@@ -327,18 +470,31 @@ fn the_session_dots_are_listed_in_their_colours() {
     find_after(&buf, dots, &precedence);
     let red = row(&buf, find_after(&buf, dots, "red:").1);
     assert!(red.contains("a dialog in dispatch or deploy, a stuck Job, an engine error, your own broken pull request that nobody is fixing"), "{red}");
-    assert!(!red.contains("Escalation") && !red.contains("or pr"), "{red}");
+    assert!(
+        !red.contains("Escalation") && !red.contains("or pr"),
+        "{red}"
+    );
     let yellow = row(&buf, find_after(&buf, dots, "yellow:").1);
-    assert!(yellow.contains("yellow: ready to post, ready to merge, review requested"), "{yellow}");
+    assert!(
+        yellow.contains("yellow: ready to post, ready to merge, review requested"),
+        "{yellow}"
+    );
     let waiting = row(&buf, find_after(&buf, dots, "waiting:").1);
-    assert!(waiting.contains("an agent waits for another agent"), "{waiting}");
+    assert!(
+        waiting.contains("an agent waits for another agent"),
+        "{waiting}"
+    );
 }
 
 #[test]
 fn the_pr_states_and_checks_are_listed_in_their_colours() {
     let buf = legend_buffer();
     for (name, state) in palette::PR_LEGEND {
-        assert_eq!(buf[find(&buf, &format!("#2 {name}"))].fg, palette::color_clickable(palette::pr_state(state)), "{name}");
+        assert_eq!(
+            buf[find(&buf, &format!("#2 {name}"))].fg,
+            palette::color_clickable(palette::pr_state(state)),
+            "{name}"
+        );
     }
     let checks = find(&buf, "PR Checks").1;
     for (name, c) in palette::CHECKS_LEGEND {
@@ -355,7 +511,10 @@ fn the_legend_fits_its_own_size() {
     assert!(row(&buf, 1).contains("Any Key Closes"));
     let (w, h) = legend::size();
     assert_eq!((buf.area.width, buf.area.height), (w, h));
-    assert!(row(&buf, h - 1).contains("passed"), "the last section is not cut");
+    assert!(
+        row(&buf, h - 1).contains("passed"),
+        "the last section is not cut"
+    );
 }
 
 #[test]
@@ -363,7 +522,17 @@ fn the_legend_popup_is_sized_to_the_legend_and_capped_at_the_client() {
     let (w, h) = legend::size();
     assert_eq!(
         legend::popup_args((215, 100)),
-        ["display-popup", "-E", "-T", " legend ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view legend"]
+        [
+            "display-popup",
+            "-E",
+            "-T",
+            " legend ",
+            "-w",
+            &(w + 2).to_string(),
+            "-h",
+            &(h + 2).to_string(),
+            "cpd tui view legend"
+        ]
     );
     let small = legend::popup_args((40, 20));
     assert_eq!((small[5].as_str(), small[7].as_str()), ("40", "20"));

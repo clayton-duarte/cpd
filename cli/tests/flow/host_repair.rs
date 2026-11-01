@@ -12,9 +12,9 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use serde_json::{json, Value};
-use time::format_description::well_known::Rfc3339;
+use serde_json::{Value, json};
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 /// The old HEAD the fake `git rev-parse HEAD` prints before the checkout.
 const OLD: &str = "1111111111111111111111111111111111111111";
@@ -48,13 +48,21 @@ fn backup_dir(fx: &Fx) -> PathBuf {
 /// the `checkout` call exit 1 with a line on stderr.
 fn git_fake(fx: &Fx, patch: &str, fail_checkout: bool) {
     let root = fx.env.root();
-    let (old, new, patch_file, marker) =
-        (root.join("git-old"), root.join("git-new"), root.join("git-patch"), root.join("git-checked-out"));
+    let (old, new, patch_file, marker) = (
+        root.join("git-old"),
+        root.join("git-new"),
+        root.join("git-patch"),
+        root.join("git-checked-out"),
+    );
     let _ = fs::remove_file(&marker);
     fs::write(&old, format!("{OLD}\n")).unwrap();
     fs::write(&new, format!("{NEW}\n")).unwrap();
     fs::write(&patch_file, patch).unwrap();
-    let fail = if fail_checkout { "echo 'fake git: checkout refused' >&2; exit 1" } else { "" };
+    let fail = if fail_checkout {
+        "echo 'fake git: checkout refused' >&2; exit 1"
+    } else {
+        ""
+    };
     let body = format!(
         "if [ \"$3\" = rev-parse ] && [ \"$4\" = HEAD ]; then\n\
            if [ -f '{marker}' ]; then cat '{new}'; else cat '{old}'; fi\n\
@@ -86,14 +94,33 @@ fn assert_five_calls(fx: &Fx) -> (String, String) {
     let dir = checkout(fx);
     let calls = fx.env.calls("git");
     assert_eq!(calls.len(), 5, "{calls:?}");
-    assert_eq!(calls[0], expect(&["-C", dir.as_str(), "rev-parse", "HEAD"]), "{calls:?}");
-    assert_eq!(calls[1], expect(&["-C", dir.as_str(), "diff", "HEAD"]), "{calls:?}");
     assert_eq!(
-        calls[3],
-        expect(&["-C", dir.as_str(), "checkout", "--force", "-B", "main", "origin/main"]),
+        calls[0],
+        expect(&["-C", dir.as_str(), "rev-parse", "HEAD"]),
         "{calls:?}"
     );
-    assert_eq!(calls[4], calls[0], "the second rev-parse HEAD prints the new head: {calls:?}");
+    assert_eq!(
+        calls[1],
+        expect(&["-C", dir.as_str(), "diff", "HEAD"]),
+        "{calls:?}"
+    );
+    assert_eq!(
+        calls[3],
+        expect(&[
+            "-C",
+            dir.as_str(),
+            "checkout",
+            "--force",
+            "-B",
+            "main",
+            "origin/main"
+        ]),
+        "{calls:?}"
+    );
+    assert_eq!(
+        calls[4], calls[0],
+        "the second rev-parse HEAD prints the new head: {calls:?}"
+    );
     let update = &calls[2];
     assert_eq!(update[0], "-C", "{calls:?}");
     assert_eq!(update[1], dir, "{calls:?}");
@@ -109,11 +136,16 @@ fn assert_five_calls(fx: &Fx) -> (String, String) {
 /// Every approval file in `run/host/approve/`, with what it holds.
 fn approvals(fx: &Fx) -> Vec<(PathBuf, Value)> {
     let dir = approval_dir(fx);
-    let Ok(entries) = fs::read_dir(&dir) else { return Vec::new() };
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
     entries
         .map(|e| {
             let path = e.unwrap().path();
-            (path.clone(), serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap())
+            (
+                path.clone(),
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap(),
+            )
         })
         .collect()
 }
@@ -124,15 +156,25 @@ fn write_approval(fx: &Fx, name: &str, session: &str, at: OffsetDateTime) {
     fs::create_dir_all(&dir).unwrap();
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
     let path = dir.join(name);
-    fs::write(&path, json!({"session": session, "at": at.format(&Rfc3339).unwrap()}).to_string()).unwrap();
+    fs::write(
+        &path,
+        json!({"session": session, "at": at.format(&Rfc3339).unwrap()}).to_string(),
+    )
+    .unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
 /// Rewrites the `at` of the one approval file in `run/host/approve/` (private, as it was).
 fn backdate(fx: &Fx, at: OffsetDateTime) {
     let file = &approvals(fx)[0].0;
-    let session = serde_json::from_str::<Value>(&fs::read_to_string(file).unwrap()).unwrap()["session"].clone();
-    fs::write(file, json!({"session": session, "at": at.format(&Rfc3339).unwrap()}).to_string()).unwrap();
+    let session =
+        serde_json::from_str::<Value>(&fs::read_to_string(file).unwrap()).unwrap()["session"]
+            .clone();
+    fs::write(
+        file,
+        json!({"session": session, "at": at.format(&Rfc3339).unwrap()}).to_string(),
+    )
+    .unwrap();
     fs::set_permissions(file, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
@@ -146,24 +188,44 @@ fn approve_is_the_managers_and_writes_a_private_ten_minute_approval() {
     git_fake(&fx, "", false);
 
     let r = fx.run(Who::Manager, &["host", "approve"], None);
-    assert_eq!(r.ok(), json!({"ok": true}), "the docs' output is exactly {{ok:true}}: {r:?}");
+    assert_eq!(
+        r.ok(),
+        json!({"ok": true}),
+        "the docs' output is exactly {{ok:true}}: {r:?}"
+    );
 
     let dir = approval_dir(&fx);
     assert_eq!(mode(&dir), 0o700, "{dir:?}");
     let files = approvals(&fx);
     assert_eq!(files.len(), 1, "approve writes exactly one file: {files:?}");
     let (path, held) = &files[0];
-    assert_eq!(path.extension().and_then(|e| e.to_str()), Some("json"), "{path:?}");
+    assert_eq!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("json"),
+        "{path:?}"
+    );
     assert_eq!(mode(path), 0o600, "{path:?}");
-    let mut keys: Vec<&str> = held.as_object().unwrap().keys().map(String::as_str).collect();
+    let mut keys: Vec<&str> = held
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     keys.sort_unstable();
     assert_eq!(keys, ["at", "session"], "{held:?}");
     assert_eq!(held["session"], "mgr1");
     let at = OffsetDateTime::parse(held["at"].as_str().unwrap(), &Rfc3339).unwrap();
     let now = OffsetDateTime::now_utc();
     // The docs: valid 10 minutes. A fresh approval is live now; the expired case is below.
-    assert!(at <= now && now - at < time::Duration::minutes(1), "the approval is fresh: {held:?}");
-    assert_eq!(fx.env.calls("git"), Vec::<Vec<String>>::new(), "approve runs no git");
+    assert!(
+        at <= now && now - at < time::Duration::minutes(1),
+        "the approval is fresh: {held:?}"
+    );
+    assert_eq!(
+        fx.env.calls("git"),
+        Vec::<Vec<String>>::new(),
+        "approve runs no git"
+    );
 }
 
 #[test]
@@ -176,8 +238,15 @@ fn approve_is_refused_to_a_lead_and_a_worker() {
         assert_eq!(e["code"], "not_a_manager", "{who:?}: {r:?}");
         assert_eq!(r.exit, 3, "{who:?}: {r:?}");
     }
-    assert!(approvals(&fx).is_empty(), "nothing is written for a non-Manager");
-    assert_eq!(fx.env.calls("git"), Vec::<Vec<String>>::new(), "approve runs no git");
+    assert!(
+        approvals(&fx).is_empty(),
+        "nothing is written for a non-Manager"
+    );
+    assert_eq!(
+        fx.env.calls("git"),
+        Vec::<Vec<String>>::new(),
+        "approve runs no git"
+    );
 }
 
 #[test]
@@ -199,19 +268,32 @@ fn repair_without_a_live_approval_is_refused_and_runs_no_git() {
     );
     let r = host(&fx, Who::Manager);
     let e = r.error();
-    assert_eq!(e["code"], "host_approval_required", "an expired approval: {r:?}");
+    assert_eq!(
+        e["code"], "host_approval_required",
+        "an expired approval: {r:?}"
+    );
     assert_eq!(r.exit, 3, "{r:?}");
 
-    assert_eq!(fx.env.calls("git"), Vec::<Vec<String>>::new(), "no git runs without a live approval");
+    assert_eq!(
+        fx.env.calls("git"),
+        Vec::<Vec<String>>::new(),
+        "no git runs without a live approval"
+    );
 }
 
 #[test]
 fn repair_by_a_manager_with_an_approval_saves_then_resets_main_and_consumes_the_approval() {
     let fx = Fx::new();
     git_fake(&fx, PATCH, false);
-    assert_eq!(fx.run(Who::Manager, &["host", "approve"], None).ok(), json!({"ok": true}));
+    assert_eq!(
+        fx.run(Who::Manager, &["host", "approve"], None).ok(),
+        json!({"ok": true})
+    );
     // Still live, 30 s from its 10-minute expiry: the repair proves the approval lasts ten minutes.
-    backdate(&fx, OffsetDateTime::now_utc() - time::Duration::minutes(10) + time::Duration::seconds(30));
+    backdate(
+        &fx,
+        OffsetDateTime::now_utc() - time::Duration::minutes(10) + time::Duration::seconds(30),
+    );
 
     let r = host(&fx, Who::Manager);
     let out = r.ok();
@@ -223,11 +305,22 @@ fn repair_by_a_manager_with_an_approval_saves_then_resets_main_and_consumes_the_
     assert_eq!(fs::read_to_string(&patch).unwrap(), PATCH);
     assert_eq!(mode(&patch), 0o600, "{patch:?}");
 
-    assert!(approvals(&fx).is_empty(), "the approval is consumed by the repair");
+    assert!(
+        approvals(&fx).is_empty(),
+        "the approval is consumed by the repair"
+    );
     let calls = fx.env.calls("git").len();
     let r = host(&fx, Who::Manager);
-    assert_eq!(r.error()["code"], "host_approval_required", "an approval is one repair: {r:?}");
-    assert_eq!(fx.env.calls("git").len(), calls, "the refused repair runs no git");
+    assert_eq!(
+        r.error()["code"],
+        "host_approval_required",
+        "an approval is one repair: {r:?}"
+    );
+    assert_eq!(
+        fx.env.calls("git").len(),
+        calls,
+        "the refused repair runs no git"
+    );
 }
 
 #[test]
@@ -249,33 +342,65 @@ fn repair_from_the_user_needs_no_approval() {
 fn a_failing_git_step_stops_the_repair_names_the_argv_and_keeps_the_approval() {
     let fx = Fx::new();
     git_fake(&fx, PATCH, true);
-    assert_eq!(fx.run(Who::Manager, &["host", "approve"], None).ok(), json!({"ok": true}));
+    assert_eq!(
+        fx.run(Who::Manager, &["host", "approve"], None).ok(),
+        json!({"ok": true})
+    );
 
     let r = host(&fx, Who::Manager);
     let e = r.error();
     assert_eq!(e["code"], "git_failed", "{r:?}");
     assert_eq!(r.exit, 1, "{r:?}");
     let dir = checkout(&fx);
-    assert_eq!(e["details"]["argv"], json!(["git", "-C", dir, "checkout", "--force", "-B", "main", "origin/main"]), "{r:?}");
+    assert_eq!(
+        e["details"]["argv"],
+        json!([
+            "git",
+            "-C",
+            dir,
+            "checkout",
+            "--force",
+            "-B",
+            "main",
+            "origin/main"
+        ]),
+        "{r:?}"
+    );
 
     let calls = fx.env.calls("git");
     assert_eq!(calls.len(), 4, "the checkout is the last call: {calls:?}");
-    assert_eq!(approvals(&fx).len(), 1, "a failing repair keeps the approval");
+    assert_eq!(
+        approvals(&fx).len(),
+        1,
+        "a failing repair keeps the approval"
+    );
 }
 
 #[test]
 fn a_clean_checkout_writes_no_patch_but_still_saves_the_old_head() {
     let fx = Fx::new();
     git_fake(&fx, "", false);
-    assert_eq!(fx.run(Who::Manager, &["host", "approve"], None).ok(), json!({"ok": true}));
+    assert_eq!(
+        fx.run(Who::Manager, &["host", "approve"], None).ok(),
+        json!({"ok": true})
+    );
 
     let r = host(&fx, Who::Manager);
     let out = r.ok();
     let (ts, _dir) = assert_five_calls(&fx);
     assert_eq!(out["saved"]["ref"], format!("refs/cpd-host/{ts}"), "{r:?}");
-    assert_eq!(out["saved"]["patch"], Value::Null, "a clean diff writes no patch: {r:?}");
+    assert_eq!(
+        out["saved"]["patch"],
+        Value::Null,
+        "a clean diff writes no patch: {r:?}"
+    );
     assert_eq!(out["head"], NEW, "{r:?}");
-    let backups = fs::read_dir(backup_dir(&fx)).map(|d| d.count()).unwrap_or(0);
+    let backups = fs::read_dir(backup_dir(&fx))
+        .map(|d| d.count())
+        .unwrap_or(0);
     assert_eq!(backups, 0, "a clean checkout leaves no patch file");
-    assert!(approvals(&fx).is_empty(), "the repair consumed the approval");
+    assert!(
+        approvals(&fx).is_empty(),
+        "the repair consumed the approval"
+    );
 }

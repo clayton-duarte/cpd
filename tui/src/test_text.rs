@@ -9,7 +9,11 @@ use ratatui::buffer::Buffer;
 
 /// The row of `buf` at `y`, its trailing blanks trimmed.
 pub(crate) fn row(buf: &Buffer, y: u16) -> String {
-    (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()
+    (0..buf.area.width)
+        .map(|x| buf[(x, y)].symbol())
+        .collect::<String>()
+        .trim_end()
+        .to_owned()
 }
 
 /// Every row of `buf`, each with its trailing blanks trimmed.

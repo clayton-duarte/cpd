@@ -20,7 +20,10 @@ fn write(home: &CpdHome, rel: &str, text: &str) {
 }
 
 fn repo_key() -> PolicyKey {
-    PolicyKey::Repo(OwnerLogin::parse("acme").unwrap(), RepoName::parse("cpd").unwrap())
+    PolicyKey::Repo(
+        OwnerLogin::parse("acme").unwrap(),
+        RepoName::parse("cpd").unwrap(),
+    )
 }
 
 /// Resolves the repo `acme/cpd` with the repo file `text` (an empty owner file).
@@ -42,46 +45,104 @@ fn resolve_owner(text: &str) -> Result<Resolved, CpdError> {
 fn invalid_key(text: &str) -> serde_json::Value {
     let err = resolve_repo(text).expect_err(&format!("`{text}` is policy_invalid"));
     assert_eq!(err.code(), ErrorCode::PolicyInvalid, "{text}");
-    assert!(err.details()["file"].as_str().unwrap().ends_with("acme/cpd.toml"), "{text}: {:?}", err.details());
+    assert!(
+        err.details()["file"]
+            .as_str()
+            .unwrap()
+            .ends_with("acme/cpd.toml"),
+        "{text}: {:?}",
+        err.details()
+    );
     err.details()["key"].clone()
 }
 
 #[test]
 fn the_generated_domain_defaults_empty_and_is_repo_only() {
     // cpd's compiled default: no generated path.
-    assert!(default_policy().generated.paths.is_empty(), "the default [generated] paths are []");
+    assert!(
+        default_policy().generated.paths.is_empty(),
+        "the default [generated] paths are []"
+    );
     // A repo file without the table takes the default, from the default.
     let none = resolve_repo("").unwrap();
-    assert!(none.policy.generated.paths.is_empty(), "{:?}", none.policy.generated);
-    assert!(matches!(none.sources.get(Domain::Generated).source, Source::Default));
+    assert!(
+        none.policy.generated.paths.is_empty(),
+        "{:?}",
+        none.policy.generated
+    );
+    assert!(matches!(
+        none.sources.get(Domain::Generated).source,
+        Source::Default
+    ));
 
     // `paths` is the typed key: a repo file's `[generated] paths = []` is read (the domain is set, nothing is left out).
     let empty = resolve_repo("[generated]\npaths = []\n").unwrap();
-    assert!(empty.policy.generated.paths.is_empty(), "{:?}", empty.policy.generated);
-    assert!(matches!(empty.sources.get(Domain::Generated).source, Source::Repo(_)));
-    assert!(!empty.sources.get(Domain::Generated).key_default(), "an empty table sets every typed key");
+    assert!(
+        empty.policy.generated.paths.is_empty(),
+        "{:?}",
+        empty.policy.generated
+    );
+    assert!(matches!(
+        empty.sources.get(Domain::Generated).source,
+        Source::Repo(_)
+    ));
+    assert!(
+        !empty.sources.get(Domain::Generated).key_default(),
+        "an empty table sets every typed key"
+    );
 
     // A repo-only domain, like `[protected]`: a table in an owner or a machine file is `policy_invalid`, and it has no `text`.
-    let err = resolve_owner("[generated]\npaths = [\"pnpm-lock.yaml\"]\n").expect_err("an owner file may not set [generated]");
+    let err = resolve_owner("[generated]\npaths = [\"pnpm-lock.yaml\"]\n")
+        .expect_err("an owner file may not set [generated]");
     assert_eq!(err.code(), ErrorCode::PolicyInvalid);
     assert_eq!(err.details()["key"], "generated");
     assert!(err.message().contains("exposed to repo only"), "{err:?}");
-    assert!(audience(Domain::Generated).is_empty(), "a repo-only domain reaches no agent");
-    assert_eq!(Domain::from_name("generated"), Some(Domain::Generated), "the domain is in Domain::ALL");
-    assert_eq!(invalid_key("[generated]\ntext = \"x\"\n"), serde_json::json!("generated.text"), "no `text` in a repo-only domain");
+    assert!(
+        audience(Domain::Generated).is_empty(),
+        "a repo-only domain reaches no agent"
+    );
+    assert_eq!(
+        Domain::from_name("generated"),
+        Some(Domain::Generated),
+        "the domain is in Domain::ALL"
+    );
+    assert_eq!(
+        invalid_key("[generated]\ntext = \"x\"\n"),
+        serde_json::json!("generated.text"),
+        "no `text` in a repo-only domain"
+    );
 }
 
 #[test]
 fn the_repo_file_declares_generated_paths() {
     let r = resolve_repo("[generated]\npaths = [\"pnpm-lock.yaml\", \"dist/\"]\n").unwrap();
-    assert_eq!(r.policy.generated.paths, ["pnpm-lock.yaml", "dist/"], "the repo file's [generated] paths reach the resolved policy");
-    assert!(matches!(r.sources.get(Domain::Generated).source, Source::Repo(_)));
-    assert!(!r.sources.get(Domain::Generated).key_default(), "`paths` is the typed key of the domain");
-    assert!(r.sources.get(Domain::Generated).left_out.is_empty(), "the file sets the typed key");
+    assert_eq!(
+        r.policy.generated.paths,
+        ["pnpm-lock.yaml", "dist/"],
+        "the repo file's [generated] paths reach the resolved policy"
+    );
+    assert!(matches!(
+        r.sources.get(Domain::Generated).source,
+        Source::Repo(_)
+    ));
+    assert!(
+        !r.sources.get(Domain::Generated).key_default(),
+        "`paths` is the typed key of the domain"
+    );
+    assert!(
+        r.sources.get(Domain::Generated).left_out.is_empty(),
+        "the file sets the typed key"
+    );
 
     // The key holds a list of paths: anything else is `policy_invalid` at the key.
-    assert_eq!(invalid_key("[generated]\npaths = \"pnpm-lock.yaml\"\n"), serde_json::json!("generated.paths"));
-    assert_eq!(invalid_key("[generated]\nbogus = []\n"), serde_json::json!("generated.bogus"));
+    assert_eq!(
+        invalid_key("[generated]\npaths = \"pnpm-lock.yaml\"\n"),
+        serde_json::json!("generated.paths")
+    );
+    assert_eq!(
+        invalid_key("[generated]\nbogus = []\n"),
+        serde_json::json!("generated.bogus")
+    );
     // An empty table is cpd's default, with the key left out.
     let empty = resolve_repo("[generated]\n").unwrap();
     assert!(empty.policy.generated.paths.is_empty());

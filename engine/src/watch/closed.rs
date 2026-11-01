@@ -23,12 +23,20 @@ pub(super) fn run(engine: &mut Engine) {
         Err(e) => return engine.fail(Step::E20, About::Machine, &e),
     };
     for row in rows {
-        let Some(lead) = row.lead_session.clone() else { continue };
-        if !leads.iter().any(|(plan, l)| *plan == row.plan && *l == lead) {
+        let Some(lead) = row.lead_session.clone() else {
+            continue;
+        };
+        if !leads
+            .iter()
+            .any(|(plan, l)| *plan == row.plan && *l == lead)
+        {
             continue;
         }
         match wake(engine, &row, &lead) {
-            Ok(true) => engine.log.line(&format!("E20: woke the Lead of Plan {}: PR {} has a closed pull request", row.plan, row.pr)),
+            Ok(true) => engine.log.line(&format!(
+                "E20: woke the Lead of Plan {}: PR {} has a closed pull request",
+                row.plan, row.pr
+            )),
             Ok(false) => {}
             Err(e) => engine.fail(Step::E20, About::Plan(row.plan.clone()), &e),
         }
@@ -38,7 +46,10 @@ pub(super) fn run(engine: &mut Engine) {
 
 /// What the message begins with: identifies (PR key, pull request number).
 fn prefix(plan: &PlanId, row: &ClosedUnmerged) -> String {
-    format!("PR {} of Plan {plan} is open in cpd but its pull request #{} was closed without a merge.", row.pr, row.number)
+    format!(
+        "PR {} of Plan {plan} is open in cpd but its pull request #{} was closed without a merge.",
+        row.pr, row.number
+    )
 }
 
 fn text(plan: &PlanId, row: &ClosedUnmerged) -> String {
@@ -52,7 +63,12 @@ fn text(plan: &PlanId, row: &ClosedUnmerged) -> String {
     )
 }
 
-fn sent(conn: &Connection, plan: &PlanId, row: &ClosedUnmerged, lead: &SessionId) -> Result<bool, CpdError> {
+fn sent(
+    conn: &Connection,
+    plan: &PlanId,
+    row: &ClosedUnmerged,
+    lead: &SessionId,
+) -> Result<bool, CpdError> {
     Ok(conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM events WHERE session = ?1 AND kind = 'session-message'
             AND json_extract(data, '$.from') IS NULL AND instr(json_extract(data, '$.text'), ?2) = 1)",

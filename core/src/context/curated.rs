@@ -6,9 +6,9 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
 
+use super::Record;
 use super::inforce::{in_force_without, retired};
 use super::render::Indexed;
-use super::Record;
 use crate::error::CpdError;
 use crate::ids::{ContextId, RecordId};
 
@@ -20,13 +20,28 @@ struct Loaded {
 }
 
 fn load(conn: &Connection, context: &ContextId) -> Result<Loaded, CpdError> {
-    let mut stmt = conn.prepare(&format!("SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq", Record::COLUMNS))?;
-    let records = stmt.query_map([context.as_str()], Record::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut stmt = conn.prepare("SELECT record, topic, short FROM record_curations WHERE context = ?1")?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq",
+        Record::COLUMNS
+    ))?;
+    let records = stmt
+        .query_map([context.as_str()], Record::from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut stmt =
+        conn.prepare("SELECT record, topic, short FROM record_curations WHERE context = ?1")?;
     let curations = stmt
-        .query_map([context.as_str()], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, String>(1)?, r.get::<_, String>(2)?))))?
+        .query_map([context.as_str()], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                (r.get::<_, String>(1)?, r.get::<_, String>(2)?),
+            ))
+        })?
         .collect::<rusqlite::Result<_>>()?;
-    Ok(Loaded { records, retired: retired(conn, context)?, curations })
+    Ok(Loaded {
+        records,
+        retired: retired(conn, context)?,
+        curations,
+    })
 }
 
 /// The curated records in force, oldest `seq` first: every record, the `topic` and `short` the curator gave it.
@@ -42,7 +57,11 @@ fn curated(loaded: &Loaded) -> Vec<(&Record, &str, &str)> {
 }
 
 /// Every curated record in force of `topic`, oldest first: id and short form.
-pub fn by_topic(conn: &Connection, context: &ContextId, topic: &str) -> Result<Vec<(String, String)>, CpdError> {
+pub fn by_topic(
+    conn: &Connection,
+    context: &ContextId,
+    topic: &str,
+) -> Result<Vec<(String, String)>, CpdError> {
     let loaded = load(conn, context)?;
     Ok(curated(&loaded)
         .into_iter()
@@ -54,5 +73,10 @@ pub fn by_topic(conn: &Connection, context: &ContextId, topic: &str) -> Result<V
 /// The topics in use (a curated record in force has them), sorted.
 pub fn topics(conn: &Connection, context: &ContextId) -> Result<Vec<String>, CpdError> {
     let loaded = load(conn, context)?;
-    Ok(curated(&loaded).into_iter().map(|(_, topic, _)| topic.to_owned()).collect::<std::collections::BTreeSet<_>>().into_iter().collect())
+    Ok(curated(&loaded)
+        .into_iter()
+        .map(|(_, topic, _)| topic.to_owned())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect())
 }

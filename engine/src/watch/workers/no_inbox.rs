@@ -13,8 +13,23 @@ fn the_engine_sets_no_inbox_options() {
     let before = runner.calls().len();
     super::run(&mut fx.engine);
 
-    let sent = runner.calls().into_iter().skip(before).map(|call| call.args.join(" ")).collect::<Vec<_>>().join("\n");
-    assert!(sent.contains("set -g @cpd_workers "), "the workers text is still set: {sent}");
-    assert!(sent.contains("@cpd_workers_short "), "the short text is still set: {sent}");
-    assert!(!sent.contains("@cpd_inbox"), "neither `@cpd_inbox` nor `@cpd_inbox_tier` is set: {sent}");
+    let sent = runner
+        .calls()
+        .into_iter()
+        .skip(before)
+        .map(|call| call.args.join(" "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        sent.contains("set -g @cpd_workers "),
+        "the workers text is still set: {sent}"
+    );
+    assert!(
+        sent.contains("@cpd_workers_short "),
+        "the short text is still set: {sent}"
+    );
+    assert!(
+        !sent.contains("@cpd_inbox"),
+        "neither `@cpd_inbox` nor `@cpd_inbox_tier` is set: {sent}"
+    );
 }

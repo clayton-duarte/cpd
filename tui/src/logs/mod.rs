@@ -30,8 +30,8 @@ pub use self::view::{Log, draw};
 use super::popup;
 use super::read;
 use super::runner::{ViewError, kept};
-use super::widgets::legend;
 use super::view_ports::{Ctx, Input, Tty, run_view_with};
+use super::widgets::legend;
 use super::{Capture, run_view_on};
 use cpd_core::config::Config;
 use cpd_core::error::CpdError;
@@ -63,7 +63,10 @@ const POPUP_BORDER: u16 = 2;
 pub fn popup_args(client: (u16, u16), event: Option<i64>) -> Vec<String> {
     let (w, h) = legend::size();
     let cap = |n: u16| (u32::from(n) * u32::from(SHARE) / 100) as u16;
-    let size = ((w + POPUP_BORDER).min(cap(client.0)), (h + POPUP_BORDER).min(cap(client.1)));
+    let size = (
+        (w + POPUP_BORDER).min(cap(client.0)),
+        (h + POPUP_BORDER).min(cap(client.1)),
+    );
     let command = match event {
         Some(id) => format!("{PROGRAM} tui view logs --event {id}"),
         None => format!("{PROGRAM} tui view logs"),
@@ -97,9 +100,13 @@ fn open(args: Args, zone: cpd_core::clock::TimeZone) -> Result<Opened, CpdError>
 }
 
 pub(super) fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
-    run_view_on(ports, "logs", Capture::Mouse, || open(args, ports.clock.zone()), |ctx, (mut store, poll, follow, log)| {
-        show_with(ctx, &mut store, poll, follow, log)
-    })
+    run_view_on(
+        ports,
+        "logs",
+        Capture::Mouse,
+        || open(args, ports.clock.zone()),
+        |ctx, (mut store, poll, follow, log)| show_with(ctx, &mut store, poll, follow, log),
+    )
 }
 
 /// [`run`] on a terminal, its facts and its input that the caller gives (a test's `TestBackend`, scripted input and a
@@ -112,9 +119,17 @@ pub fn run_on<B: Backend, W: Write>(
     terminal: Terminal<B>,
     input: &mut dyn Input,
 ) -> Result<Output, CpdError> {
-    run_view_with(ports, tty, out, terminal, input, "logs", Capture::Mouse, || open(args, ports.clock.zone()), |ctx, (mut store, poll, follow, log)| {
-        show_with(ctx, &mut store, poll, follow, log)
-    })
+    run_view_with(
+        ports,
+        tty,
+        out,
+        terminal,
+        input,
+        "logs",
+        Capture::Mouse,
+        || open(args, ports.clock.zone()),
+        |ctx, (mut store, poll, follow, log)| show_with(ctx, &mut store, poll, follow, log),
+    )
 }
 
 /// The keys that close the view.
@@ -143,7 +158,9 @@ pub fn show_with<B: Backend>(
         if ctx.input.poll(poll)? {
             redraw = true;
             match ctx.input.read()? {
-                Event::Key(key) if key.kind == KeyEventKind::Press && closes(key.code) => return Ok(()),
+                Event::Key(key) if key.kind == KeyEventKind::Press && closes(key.code) => {
+                    return Ok(());
+                }
                 Event::Key(key) => drop(log.key(key)),
                 Event::Mouse(mouse) => drop(log.mouse(mouse)),
                 _ => {}
@@ -161,7 +178,11 @@ pub fn show_with<B: Backend>(
 
 /// `events` (the latest, oldest first), with the Event `id` before them when it is older than all of them. An `id`
 /// that no Event has leaves them as they are.
-pub fn with_event(store: &mut Store, mut events: Vec<cpd_core::events::Event>, id: i64) -> Result<Vec<cpd_core::events::Event>, CpdError> {
+pub fn with_event(
+    store: &mut Store,
+    mut events: Vec<cpd_core::events::Event>,
+    id: i64,
+) -> Result<Vec<cpd_core::events::Event>, CpdError> {
     if events.first().is_some_and(|e| e.id <= id) {
         return Ok(events);
     }
@@ -193,7 +214,11 @@ mod docs_agree {
             (LOGS, concat!("≡", " logs")),
             (PLAN, concat!("stays", " dead")),
         ];
-        let left: Vec<&str> = stale.iter().filter(|(text, phrase)| text.contains(phrase)).map(|(_, phrase)| *phrase).collect();
+        let left: Vec<&str> = stale
+            .iter()
+            .filter(|(text, phrase)| text.contains(phrase))
+            .map(|(_, phrase)| *phrase)
+            .collect();
         assert!(left.is_empty(), "stale statements still present: {left:?}");
     }
 }

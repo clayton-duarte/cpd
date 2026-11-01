@@ -19,18 +19,24 @@ type Address = Option<(String, String)>;
 
 pub(super) fn addendum(args: AddendumArgs) -> Result<Output, CpdError> {
     if std::env::var("CPD_ATTEMPT").is_ok_and(|v| !v.is_empty()) {
-        return Err(CpdError::new(ErrorCode::NotALead, "Only the Lead adds an addendum to a Job: ask it with cpd ask."));
+        return Err(CpdError::new(
+            ErrorCode::NotALead,
+            "Only the Lead adds an addendum to a Job: ask it with cpd ask.",
+        ));
     }
     let body = match (args.text, &args.file) {
         (Some(text), None) => text,
-        (None, Some(path)) => std::fs::read_to_string(path).map_err(|e| CpdError::file_unreadable(path, e))?.parse::<Text>()?,
+        (None, Some(path)) => std::fs::read_to_string(path)
+            .map_err(|e| CpdError::file_unreadable(path, e))?
+            .parse::<Text>()?,
         _ => unreachable!("clap requires exactly one of <text> and --file"),
     };
     let plan = args.plan.require()?.clone();
     let key = args.key;
     let mut env = Env::open()?;
 
-    env.store.read(|conn| decide(conn, &plan, &key).map(|_| ()))?;
+    env.store
+        .read(|conn| decide(conn, &plan, &key).map(|_| ()))?;
     let (job, number, address) = env.store.write(COMMAND, |tx| {
         let (job, address) = decide(tx, &plan, &key)?;
         let number: u32 = tx.query_row(
@@ -82,7 +88,10 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey) -> Result<(Job, Addres
     let all = jobs::load(conn, plan)?;
     let job = find(&all, plan, key)?.clone();
     let refuse = |code: ErrorCode, message: String| {
-        CpdError::new(code, message).with("plan", plan.as_str()).with("job", key.as_str()).with("status", job.status.as_str())
+        CpdError::new(code, message)
+            .with("plan", plan.as_str())
+            .with("job", key.as_str())
+            .with("status", job.status.as_str())
     };
     match job.status.as_str() {
         "queued" | "failed" => Ok((job, None)),
@@ -96,18 +105,26 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey) -> Result<(Job, Addres
                 .optional()?;
             match latest {
                 Some((id, status, session)) if status == "running" => {
-                    let session = session.ok_or_else(|| CpdError::bad_row(format!("running Attempt {id} of Job {key} has no Worker Session")))?;
+                    let session = session.ok_or_else(|| {
+                        CpdError::bad_row(format!(
+                            "running Attempt {id} of Job {key} has no Worker Session"
+                        ))
+                    })?;
                     Ok((job, Some((id, session))))
                 }
                 _ => Err(refuse(
                     ErrorCode::AttemptNotRunning,
-                    format!("Job {key} has no running Attempt right now (one is starting, merging or ended): run the command again in a moment."),
+                    format!(
+                        "Job {key} has no running Attempt right now (one is starting, merging or ended): run the command again in a moment."
+                    ),
                 )),
             }
         }
         other => Err(refuse(
             ErrorCode::IllegalTransition,
-            format!("Job {key} is {other}: a draft is edited with job edit --spec, and an ended Job takes no new information."),
+            format!(
+                "Job {key} is {other}: a draft is edited with job edit --spec, and an ended Job takes no new information."
+            ),
         )),
     }
 }

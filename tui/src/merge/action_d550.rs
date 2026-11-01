@@ -14,13 +14,21 @@ thread_local! {
 }
 
 fn fake(words: Vec<OsString>) -> Result<Output, CpdError> {
-    let words: Vec<String> = words.iter().map(|w| w.to_string_lossy().into_owned()).collect();
-    if words.get(1).map(String::as_str) == Some("pr") && words.get(2).map(String::as_str) == Some("poll") && POLL_MERGES.get() {
+    let words: Vec<String> = words
+        .iter()
+        .map(|w| w.to_string_lossy().into_owned())
+        .collect();
+    if words.get(1).map(String::as_str) == Some("pr")
+        && words.get(2).map(String::as_str) == Some("poll")
+        && POLL_MERGES.get()
+    {
         let home = HOME.with_borrow(|h| h.clone().unwrap());
         let mut store = Store::open(&home, 5000).unwrap();
         store
             .write("fixture", |tx| {
-                tx.execute_batch("UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE number = 7")?;
+                tx.execute_batch(
+                    "UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE number = 7",
+                )?;
                 Ok::<(), CpdError>(())
             })
             .unwrap();
@@ -49,7 +57,8 @@ fn setup(dir: &tempfile::TempDir, rows: &[(i64, &str)]) -> CpdHome {
 }
 
 fn marker_file(dir: &tempfile::TempDir, number: i64) -> PathBuf {
-    dir.path().join(format!("run/tui/merging/acme__api__{number}.json"))
+    dir.path()
+        .join(format!("run/tui/merging/acme__api__{number}.json"))
 }
 
 fn run_action(home: &CpdHome, merges: bool) {
@@ -63,7 +72,8 @@ fn a_successful_merge_whose_row_stays_open_keeps_its_marker_marked_merged() {
     let dir = tempfile::tempdir().unwrap();
     let home = setup(&dir, &[(7, "open")]);
     run_action(&home, false);
-    let text = std::fs::read_to_string(marker_file(&dir, 7)).expect("the marker stays while the row is open");
+    let text = std::fs::read_to_string(marker_file(&dir, 7))
+        .expect("the marker stays while the row is open");
     let json: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(json["merged"], true, "{text}");
 }
@@ -73,7 +83,10 @@ fn a_successful_merge_whose_row_is_merged_after_the_poll_removes_its_marker() {
     let dir = tempfile::tempdir().unwrap();
     let home = setup(&dir, &[(7, "open")]);
     run_action(&home, true);
-    assert!(!marker_file(&dir, 7).exists(), "no marker once the row is merged");
+    assert!(
+        !marker_file(&dir, 7).exists(),
+        "no marker once the row is merged"
+    );
 }
 
 #[test]
@@ -87,6 +100,12 @@ fn the_action_first_removes_merged_markers_whose_row_is_not_open() {
         std::fs::write(marker_file(&dir, n), text).unwrap();
     }
     run_action(&home, false);
-    assert!(!marker_file(&dir, 8).exists(), "the merged marker of a merged row is removed");
-    assert!(marker_file(&dir, 9).exists(), "the merged marker of an open row stays");
+    assert!(
+        !marker_file(&dir, 8).exists(),
+        "the merged marker of a merged row is removed"
+    );
+    assert!(
+        marker_file(&dir, 9).exists(),
+        "the merged marker of an open row stays"
+    );
 }

@@ -25,10 +25,10 @@ use serde_json::Value;
 use crate::attempt::ledger::{self, GateFacts, Stage};
 use crate::config::{Catalog, Config};
 use crate::error::{CpdError, ErrorCode};
-use crate::git::{self, run::run, HookOutcome, Pipeline};
+use crate::git::{self, HookOutcome, Pipeline, run::run};
 use crate::home::{CpdHome, Hook};
-use crate::policy::Gate;
 use crate::ids::{AttemptId, PlanId};
+use crate::policy::Gate;
 use crate::ports::Ports;
 use crate::store::Store;
 
@@ -70,39 +70,87 @@ pub struct Merge {
 /// An `Err` is an unexpected failure (git, the store) and leaves the Attempt
 /// `merging`; the driver then ends it as commands.md §6.4 says. After an
 /// `Err` that happened after the compare-and-swap, R finds the merge.
-pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptId) -> Result<Merge, CpdError> {
+pub fn merge(
+    store: &mut Store,
+    ctx: &Ctx<'_>,
+    plan: &PlanId,
+    attempt: &AttemptId,
+) -> Result<Merge, CpdError> {
     let target = store.read(|conn| ledger::load(conn, plan, attempt))?;
     if target.status != "merging" {
         return Err(CpdError::new(
             ErrorCode::IllegalTransition,
-            format!("Attempt {attempt} is {}, not merging: there is nothing to merge.", target.status),
+            format!(
+                "Attempt {attempt} is {}, not merging: there is nothing to merge.",
+                target.status
+            ),
         )
         .with("attempt", attempt.to_string())
         .with("status", target.status));
     }
     let stepped = steps(store, ctx.home, ctx.config, &target);
-    let Stepped { end, stale, push, pulled } = match stepped {
+    let Stepped {
+        end,
+        stale,
+        push,
+        pulled,
+    } = match stepped {
         Ok(s) => s,
-        Err(e) if is_cpd_kind(&target) && is_refusal(e.code()) => {
-            Stepped::ends(End::Failed { cause: Failure::GateError, detail: format!("{}: {}", e.code().as_str(), e.message()) })
-        }
+        Err(e) if is_cpd_kind(&target) && is_refusal(e.code()) => Stepped::ends(End::Failed {
+            cause: Failure::GateError,
+            detail: format!("{}: {}", e.code().as_str(), e.message()),
+        }),
         Err(e) => return Err(e),
     };
     let metrics = (ctx.metrics)(&target);
-    let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
-    let pr = crate::ids::PrKey::parse(target.pr_str()).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", target.job, target.pr_str())))?;
+    let ladder = Ladder {
+        catalog: ctx.catalog,
+        retry_cap: ctx.config.retry_cap,
+    };
+    let pr = crate::ids::PrKey::parse(target.pr_str()).map_err(|_| {
+        CpdError::bad_row(format!(
+            "Job {} has the PR key {:?}",
+            target.job,
+            target.pr_str()
+        ))
+    })?;
     // Step 10, and every other end. An `open` Job's merge writes the PR's rows in the same transaction (§7.7).
     store.write(ctx.source, |tx| {
-        let pull = pulled.as_ref().map(|p| ledger::Pull { number: p.number(), url: p.url() });
-        ledger::end_opened(tx, &target, &end, metrics.as_ref(), &ladder, Stage::Merge, pull)?;
+        let pull = pulled.as_ref().map(|p| ledger::Pull {
+            number: p.number(),
+            url: p.url(),
+        });
+        ledger::end_opened(
+            tx,
+            &target,
+            &end,
+            metrics.as_ref(),
+            &ladder,
+            Stage::Merge,
+            pull,
+        )?;
         if let Some(pulled) = &pulled {
             crate::pr::record_pull(tx, plan, &pr, pulled)?;
         }
         if let Some(e) = &stale {
-            ledger::append_error(tx, &target, ctx.source, e, recover::stale_text(&target, e), ctx.config.watch.error_repeat())?;
+            ledger::append_error(
+                tx,
+                &target,
+                ctx.source,
+                e,
+                recover::stale_text(&target, e),
+                ctx.config.watch.error_repeat(),
+            )?;
         }
         if let Some(e) = &push {
-            ledger::append_error(tx, &target, ctx.source, e, recover::push_text(&target, e), ctx.config.watch.error_repeat())?;
+            ledger::append_error(
+                tx,
+                &target,
+                ctx.source,
+                e,
+                recover::push_text(&target, e),
+                ctx.config.watch.error_repeat(),
+            )?;
         }
         Ok(())
     })?;
@@ -121,7 +169,12 @@ struct Stepped {
 
 impl Stepped {
     fn ends(end: End) -> Stepped {
-        Stepped { end, stale: None, push: None, pulled: None }
+        Stepped {
+            end,
+            stale: None,
+            push: None,
+            pulled: None,
+        }
     }
 }
 
@@ -131,7 +184,12 @@ fn is_cpd_kind(target: &Attempt) -> bool {
 }
 
 /// Steps 1–9, with step 8's push; for an `open` or `update` Job the steps of §7.4 "An `open` or `update` Job's merge".
-fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -> Result<Stepped, CpdError> {
+fn steps(
+    store: &mut Store,
+    home: &CpdHome,
+    config: &Config,
+    target: &Attempt,
+) -> Result<Stepped, CpdError> {
     let repo = &target.repo;
     let lead = &target.lead_worktree;
     let lead_ref = format!("refs/heads/{}", target.lead_branch);
@@ -141,27 +199,42 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
     // 0. Branch check (engine-W1): the Attempt branch is still what `attempt submit` checked. A linear Attempt's
     // branch is the Lead Branch; only a rewrite that drops the submitted commit is tampering.
     let submitted = target.submitted_sha.as_deref().ok_or_else(|| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Attempt {} is merging with no submitted_sha.", target.id))
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Attempt {} is merging with no submitted_sha.", target.id),
+        )
     })?;
     if linear {
         let out = run(repo, &["merge-base", "--is-ancestor", submitted, &lead_ref])?;
         match out.code {
             0 => {}
             1 => {
-                let detail = format!("the Lead Branch {} no longer contains the submitted commit ({submitted})", target.lead_branch);
-                return Ok(Stepped::ends(End::Failed { cause: Failure::Tampered, detail }));
+                let detail = format!(
+                    "the Lead Branch {} no longer contains the submitted commit ({submitted})",
+                    target.lead_branch
+                );
+                return Ok(Stepped::ends(End::Failed {
+                    cause: Failure::Tampered,
+                    detail,
+                }));
             }
             code => {
-                return Err(CpdError::new(ErrorCode::GitFailed, "git merge-base --is-ancestor failed.")
-                    .with("exit", code)
-                    .with("stderr", git::tail(&out.stderr, git::TAIL_LINES)));
+                return Err(CpdError::new(
+                    ErrorCode::GitFailed,
+                    "git merge-base --is-ancestor failed.",
+                )
+                .with("exit", code)
+                .with("stderr", git::tail(&out.stderr, git::TAIL_LINES)));
             }
         }
     } else {
         let tip = git::run::rev_parse(repo, &format!("refs/heads/{}", target.branch))?;
         if tip != submitted {
             let detail = format!("the Attempt branch moved after submit ({submitted} -> {tip})");
-            return Ok(Stepped::ends(End::Failed { cause: Failure::Tampered, detail }));
+            return Ok(Stepped::ends(End::Failed {
+                cause: Failure::Tampered,
+                detail,
+            }));
         }
     }
     // A linear Attempt's `base_sha` is the base of its tamper diff and red-test guard: `old...branch` is empty
@@ -175,14 +248,22 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
                     |r| r.get::<_, Option<String>>(0),
                 )?)
             })?
-            .ok_or_else(|| CpdError::new(ErrorCode::StoreFailed, format!("Attempt {} is linear but has no base_sha.", target.id)))?
+            .ok_or_else(|| {
+                CpdError::new(
+                    ErrorCode::StoreFailed,
+                    format!("Attempt {} is linear but has no base_sha.", target.id),
+                )
+            })?
     } else {
         String::new()
     };
     let mut retries = 0;
     loop {
         // 1. Cancel check.
-        if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
+        if store
+            .read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?
+            .is_some()
+        {
             return Ok(Stepped::ends(End::Cancelled));
         }
         // 2. Snapshot.
@@ -201,7 +282,8 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
             crate::pr::start::tamper_bases(conn, repo, &pr_repo, &pr_base)
         })?;
         let base_refs: Vec<&str> = base_refs.iter().map(String::as_str).collect();
-        let policy = store.read(|conn| crate::pr::policy_of_job(conn, home, &target.plan, target.job.as_str()))?;
+        let policy = store
+            .read(|conn| crate::pr::policy_of_job(conn, home, &target.plan, target.job.as_str()))?;
         // The Job as stored now, for the touches check and the red-test guard (an approval reaches an Attempt already merging).
         let (all, job) = store.read(|conn| {
             let all = crate::plan::jobs::load(conn, &target.plan)?;
@@ -209,31 +291,76 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
             Ok((all, job))
         })?;
         // A linear Attempt diffs `base_sha...submitted_sha`; every other Attempt `old...branch`.
-        let (lead_compare, diff_base, diff_head): (&str, &str, &str) =
-            if linear { (base_sha.as_str(), base_sha.as_str(), submitted) } else { (&old, &old, &target.branch) };
-        let touched = git::tamper::touched_protected_over(repo, lead_compare, &policy.protected.paths, &base_refs, diff_base, diff_head)?;
+        let (lead_compare, diff_base, diff_head): (&str, &str, &str) = if linear {
+            (base_sha.as_str(), base_sha.as_str(), submitted)
+        } else {
+            (&old, &old, &target.branch)
+        };
+        let touched = git::tamper::touched_protected_over(
+            repo,
+            lead_compare,
+            &policy.protected.paths,
+            &base_refs,
+            diff_base,
+            diff_head,
+        )?;
         if !touched.is_empty() {
             let detail = format!("The diff touches protected paths: {}.", touched.join(", "));
-            return Ok(Stepped::ends(End::Failed { cause: Failure::Tampered, detail }));
+            return Ok(Stepped::ends(End::Failed {
+                cause: Failure::Tampered,
+                detail,
+            }));
         }
         // The Job's Spec `touches` (§7.5, hs-n641): the same diff may not change a path outside them, unless a base merge
         // brought it, the repo's `[generated] paths` match it, or the Lead approved it (`job approve-touches`).
         let touches = crate::job::guard::touches(&job);
         let approved = crate::job::guard::approved_touches(&job);
-        let check = git::tamper::Touches { kind: &job.kind, touches: &touches, generated: &policy.generated.paths, approved: &approved };
-        let outside = git::tamper::touched_outside(repo, lead_compare, &check, &base_refs, diff_base, diff_head)?;
+        let check = git::tamper::Touches {
+            kind: &job.kind,
+            touches: &touches,
+            generated: &policy.generated.paths,
+            approved: &approved,
+        };
+        let outside = git::tamper::touched_outside(
+            repo,
+            lead_compare,
+            &check,
+            &base_refs,
+            diff_base,
+            diff_head,
+        )?;
         if !outside.is_empty() {
-            let detail = format!("The diff changes paths outside the Job's touches: {}.", outside.join(", "));
-            return Ok(Stepped::ends(End::Failed { cause: Failure::Tampered, detail }));
+            let detail = format!(
+                "The diff changes paths outside the Job's touches: {}.",
+                outside.join(", ")
+            );
+            return Ok(Stepped::ends(End::Failed {
+                cause: Failure::Tampered,
+                detail,
+            }));
         }
         // The red tests (§7.5, §7.7): an `impl` Job's diff does not change a file a `test` Job it needs guards, unless the Lead approved
         // the path (read now, so an approval reaches an Attempt already merging).
         if target.kind == "impl" {
             let guard = crate::job::guard::of(&all, &job);
-            let changed = git::tamper::touched_guarded(repo, lead_compare, diff_base, diff_head, &guard.files, &guard.approved)?;
+            let changed = git::tamper::touched_guarded(
+                repo,
+                lead_compare,
+                diff_base,
+                diff_head,
+                &guard.files,
+                &guard.approved,
+            )?;
             if !changed.is_empty() {
-                let detail = format!("The diff changes red tests of {}: {}.", guard.jobs.join(", "), changed.join(", "));
-                return Ok(Stepped::ends(End::Failed { cause: Failure::Tampered, detail }));
+                let detail = format!(
+                    "The diff changes red tests of {}: {}.",
+                    guard.jobs.join(", "),
+                    changed.join(", ")
+                );
+                return Ok(Stepped::ends(End::Failed {
+                    cause: Failure::Tampered,
+                    detail,
+                }));
             }
         }
         // 5. Rebase in the Attempt worktree, never in the Lead worktree; skipped when the
@@ -241,13 +368,20 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
         // `update` Job never rebases: the Gate ran on the submitted HEAD, and a rebase would drop its
         // merge commit and replay the base's commits, which then conflict.
         // A linear Attempt is already the Lead Branch tip: it is contained by definition and never rebases (hs-d680).
-        let contained = if linear { true } else { contains(&target.worktree, &old)? };
+        let contained = if linear {
+            true
+        } else {
+            contains(&target.worktree, &old)?
+        };
         if cpd_kind && !contained {
             let detail = format!(
                 "lead_branch_moved: {} moved since the submit ({old} is not in the Attempt's HEAD), and an {} Job is never rebased: the next Attempt starts from the newer tip.",
                 target.lead_branch, target.kind
             );
-            return Ok(Stepped::ends(End::Failed { cause: Failure::MergeConflict, detail }));
+            return Ok(Stepped::ends(End::Failed {
+                cause: Failure::MergeConflict,
+                detail,
+            }));
         }
         if !contained {
             // hs-d747: an Attempt holding the base's commits takes the Lead tip by merge, so those commits keep their SHAs.
@@ -262,8 +396,14 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
                 rebase(&target.worktree, &old)?
             };
             if let Some(files) = conflicts {
-                let detail = format!("The rebase onto the Lead Branch conflicted in: {}.", files.join(", "));
-                return Ok(Stepped::ends(End::Failed { cause: Failure::MergeConflict, detail }));
+                let detail = format!(
+                    "The rebase onto the Lead Branch conflicted in: {}.",
+                    files.join(", ")
+                );
+                return Ok(Stepped::ends(End::Failed {
+                    cause: Failure::MergeConflict,
+                    detail,
+                }));
             }
         }
         // 6. The Gates (hs-d679), while the Attempt is still `merging`. An `open` or `update` Job's base check
@@ -271,34 +411,71 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
         if cpd_kind {
             if target.kind == "open" {
                 let (pr, ..) = pr_of_job(store, target)?;
-                store.read(|conn| crate::pr::jira_required_of(conn, home, &target.plan, &pr.key))?;
+                store
+                    .read(|conn| crate::pr::jira_required_of(conn, home, &target.plan, &pr.key))?;
             }
             let pr = pr_row(store, target)?;
             let again = format!("cpd attempt submit {}", target.id);
-            match store.read(|conn| crate::pr::base_check(conn, &target.plan, repo, &target.worktree, &pr, submitted, &again)) {
+            match store.read(|conn| {
+                crate::pr::base_check(
+                    conn,
+                    &target.plan,
+                    repo,
+                    &target.worktree,
+                    &pr,
+                    submitted,
+                    &again,
+                )
+            }) {
                 Ok(()) => {}
                 Err(e) if e.code() == ErrorCode::BaseConflict => {
-                    return Ok(Stepped::ends(End::Failed { cause: Failure::MergeConflict, detail: e.message().to_owned() }));
+                    return Ok(Stepped::ends(End::Failed {
+                        cause: Failure::MergeConflict,
+                        detail: e.message().to_owned(),
+                    }));
                 }
                 Err(e) => return Err(e),
             }
         }
         if policy.gate.merge == Gate::Local
-            && let Some(end) = run_gate(home, config, target, Hook::PreCommit, &policy.hooks.pre_commit)? {
-                return Ok(Stepped::ends(end));
-            }
-        if cpd_kind && policy.gate.pr == Gate::Local
-            && let Some(end) = run_gate(home, config, target, Hook::PreMerge, &policy.hooks.pre_merge)? {
-                return Ok(Stepped::ends(end));
-            }
+            && let Some(end) = run_gate(
+                home,
+                config,
+                target,
+                Hook::PreCommit,
+                &policy.hooks.pre_commit,
+            )?
+        {
+            return Ok(Stepped::ends(end));
+        }
+        if cpd_kind
+            && policy.gate.pr == Gate::Local
+            && let Some(end) = run_gate(
+                home,
+                config,
+                target,
+                Hook::PreMerge,
+                &policy.hooks.pre_merge,
+            )?
+        {
+            return Ok(Stepped::ends(end));
+        }
         // An `open` Job whose pull request was merged on GitHub and never recorded adopts it (§7.4 step 8b; the merge finds it, submit does not check it, §7.7): it has no
         // new commits to push, so steps 5 and 8 are skipped and step 10 writes the rows of `pr open` step 0.
         if target.kind == "open" && pull_request_is_merged(store, target)? {
             let pulled = open_pull_request(store, config, target)?;
-            return Ok(Stepped { end: End::Merged { sha: old }, stale: None, push: None, pulled: Some(pulled) });
+            return Ok(Stepped {
+                end: End::Merged { sha: old },
+                stale: None,
+                push: None,
+                pulled: Some(pulled),
+            });
         }
         // 7. Cancel check again: the last safe point.
-        if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
+        if store
+            .read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?
+            .is_some()
+        {
             return Ok(Stepped::ends(End::Cancelled));
         }
         // 8. Fast-forward with a compare-and-swap. A linear Attempt is already on the Lead Branch: no rebase and no
@@ -307,7 +484,15 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
             let new = git::run::rev_parse(&target.worktree, "HEAD")?;
             let push = publish(target, &new);
             let stale = git::sync_lead(lead, &target.lead_branch).err();
-            return finish_merge(store, config, target, submitted.to_owned(), cpd_kind, push, stale);
+            return finish_merge(
+                store,
+                config,
+                target,
+                submitted.to_owned(),
+                cpd_kind,
+                push,
+                stale,
+            );
         }
         let new = git::run::rev_parse(&target.worktree, "HEAD")?;
         git::run::ok(repo, &["merge-base", "--is-ancestor", &old, &new])?;
@@ -321,9 +506,12 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
             return finish_merge(store, config, target, new, cpd_kind, push, stale);
         }
         if git::run::rev_parse(repo, &lead_ref)? == old {
-            return Err(CpdError::new(ErrorCode::GitFailed, "git update-ref failed, and the Lead Branch did not move.")
-                .with("exit", out.code)
-                .with("stderr", git::tail(&out.stderr, git::TAIL_LINES)));
+            return Err(CpdError::new(
+                ErrorCode::GitFailed,
+                "git update-ref failed, and the Lead Branch did not move.",
+            )
+            .with("exit", out.code)
+            .with("stderr", git::tail(&out.stderr, git::TAIL_LINES)));
         }
         // The ref moved: back to step 2.
         retries += 1;
@@ -333,7 +521,10 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
                 target.lead_branch,
                 CAS_RETRIES + 1
             );
-            return Ok(Stepped::ends(End::Failed { cause: Failure::CasLost, detail }));
+            return Ok(Stepped::ends(End::Failed {
+                cause: Failure::CasLost,
+                detail,
+            }));
         }
     }
 }
@@ -351,26 +542,72 @@ fn finish_merge(
     stale: Option<CpdError>,
 ) -> Result<Stepped, CpdError> {
     if !cpd_kind {
-        return Ok(Stepped { end: End::Merged { sha }, stale, push, pulled: None });
+        return Ok(Stepped {
+            end: End::Merged { sha },
+            stale,
+            push,
+            pulled: None,
+        });
     }
     // An `open` or `update` Job's push is part of the Job: one that fails ends the Attempt `failed` / `crashed` after the
     // fast-forward (the next Attempt finds the Lead Branch already holding the merge, and its submit runs the Gate again).
     if let Some(e) = push {
         let detail = format!("push_failed: {}", e.message());
-        return Ok(Stepped { end: End::Failed { cause: Failure::Crashed, detail }, stale, push: None, pulled: None });
+        return Ok(Stepped {
+            end: End::Failed {
+                cause: Failure::Crashed,
+                detail,
+            },
+            stale,
+            push: None,
+            pulled: None,
+        });
     }
     // 8b. An `open` Job's pull request: created or adopted, never a draft; a `gh` failure ends the Attempt `crashed`.
     if target.kind == "open" {
         match open_pull_request(store, config, target) {
-            Ok(pulled) => return Ok(Stepped { end: End::Merged { sha }, stale, push: None, pulled: Some(pulled) }),
-            Err(e) if matches!(e.code(), ErrorCode::GhFailed | ErrorCode::ToolTimeout | ErrorCode::PrClosed) => {
-                let detail = format!("{}: {}", if e.code() == ErrorCode::PrClosed { "pr_closed" } else { "gh_failed" }, e.message());
-                return Ok(Stepped { end: End::Failed { cause: Failure::Crashed, detail }, stale, push: None, pulled: None });
+            Ok(pulled) => {
+                return Ok(Stepped {
+                    end: End::Merged { sha },
+                    stale,
+                    push: None,
+                    pulled: Some(pulled),
+                });
+            }
+            Err(e)
+                if matches!(
+                    e.code(),
+                    ErrorCode::GhFailed | ErrorCode::ToolTimeout | ErrorCode::PrClosed
+                ) =>
+            {
+                let detail = format!(
+                    "{}: {}",
+                    if e.code() == ErrorCode::PrClosed {
+                        "pr_closed"
+                    } else {
+                        "gh_failed"
+                    },
+                    e.message()
+                );
+                return Ok(Stepped {
+                    end: End::Failed {
+                        cause: Failure::Crashed,
+                        detail,
+                    },
+                    stale,
+                    push: None,
+                    pulled: None,
+                });
             }
             Err(e) => return Err(e),
         }
     }
-    Ok(Stepped { end: End::Merged { sha }, stale, push: None, pulled: None })
+    Ok(Stepped {
+        end: End::Merged { sha },
+        stale,
+        push: None,
+        pulled: None,
+    })
 }
 
 /// The three shapes of the `detail` an Attempt ends with after the Gate (§7.4 step 6): [`gate_detail`] writes them,
@@ -402,7 +639,9 @@ fn gate_detail(hook: Hook, log: &Path, end: GateEnd<'_>) -> String {
 
 /// The hook and the log of the Gate a `detail` written by [`gate_detail`] names; `None` for a detail of another shape.
 pub fn parse_gate_detail(detail: &str) -> Option<(Hook, PathBuf)> {
-    let (hook, rest) = [Hook::PreCommit, Hook::PreMerge].into_iter().find_map(|h| Some((h, detail.strip_prefix(h.as_str())?)))?;
+    let (hook, rest) = [Hook::PreCommit, Hook::PreMerge]
+        .into_iter()
+        .find_map(|h| Some((h, detail.strip_prefix(h.as_str())?)))?;
     let log = if let Some(rest) = rest.strip_prefix(FAILED) {
         let (exit, after) = rest.split_once(')')?;
         exit.parse::<i32>().ok()?;
@@ -427,7 +666,10 @@ fn cut_line(line: &str) -> String {
     if line.chars().count() <= TEXT_LINE_CHARS {
         return line.to_string();
     }
-    line.chars().take(TEXT_LINE_CHARS - 1).chain(std::iter::once('…')).collect()
+    line.chars()
+        .take(TEXT_LINE_CHARS - 1)
+        .chain(std::iter::once('…'))
+        .collect()
 }
 
 /// The compact body of the text of a Gate cause's `job-failed` Event: what happened, the last [`TEXT_LINES`] non-blank lines
@@ -440,7 +682,10 @@ pub fn gate_text_body(detail: &str) -> Option<String> {
     let what = if let Some(r) = head.strip_prefix(FAILED) {
         format!("{hook}{FAILED}{}).", r.split_once(')')?.0)
     } else if let Some(r) = head.strip_prefix(UNJUDGED) {
-        format!("{hook}{UNJUDGED}{}).", cut_line(&r[..r.rfind(&format!("){LOG}"))?]))
+        format!(
+            "{hook}{UNJUDGED}{}).",
+            cut_line(&r[..r.rfind(&format!("){LOG}"))?])
+        )
     } else {
         let r = head.strip_prefix(COULD_NOT_RUN)?;
         format!("{hook}{COULD_NOT_RUN}{}", cut_line(&r[..r.rfind(LOG)?]))
@@ -461,31 +706,64 @@ pub fn gate_text_body(detail: &str) -> Option<String> {
 
 /// Runs the Gate `hook` for `target` in its Attempt worktree at HEAD (§7.4 step 6, hs-d679). `None` when it passed or has no
 /// commands; `Some(end)` when it failed (`gate_failed`) or could not be judged (`gate_error`), carrying the hook tail and log.
-fn run_gate(home: &CpdHome, config: &Config, target: &Attempt, hook: Hook, pipeline: &Pipeline) -> Result<Option<End>, CpdError> {
+fn run_gate(
+    home: &CpdHome,
+    config: &Config,
+    target: &Attempt,
+    hook: Hook,
+    pipeline: &Pipeline,
+) -> Result<Option<End>, CpdError> {
     if pipeline.is_empty() {
         return Ok(None);
     }
     let log = home.hook_log(&target.plan, &target.id, hook);
     let timeout = Duration::from_secs(u64::from(config.timeouts.gate_minutes) * 60);
-    let operation = git::Operation { branch: &target.lead_branch };
-    match git::run_hook(hook, pipeline, &target.worktree, Some(&operation), timeout, &log) {
+    let operation = git::Operation {
+        branch: &target.lead_branch,
+    };
+    match git::run_hook(
+        hook,
+        pipeline,
+        &target.worktree,
+        Some(&operation),
+        timeout,
+        &log,
+    ) {
         Ok(result) => {
             let tail = result.tail.unwrap_or_default();
             match result.outcome {
                 HookOutcome::Passed => Ok(None),
                 HookOutcome::Failed { exit, command } => Ok(Some(End::GateFailed {
                     detail: gate_detail(hook, &log, GateEnd::Failed { exit, tail: &tail }),
-                    facts: GateFacts { hook: hook.as_str().to_owned(), command, exit, tail },
+                    facts: GateFacts {
+                        hook: hook.as_str().to_owned(),
+                        command,
+                        exit,
+                        tail,
+                    },
                 })),
                 HookOutcome::Error(why) => Ok(Some(End::Failed {
                     cause: Failure::GateError,
-                    detail: gate_detail(hook, &log, GateEnd::Unjudged { why: &why.to_string(), tail: &tail }),
+                    detail: gate_detail(
+                        hook,
+                        &log,
+                        GateEnd::Unjudged {
+                            why: &why.to_string(),
+                            tail: &tail,
+                        },
+                    ),
                 })),
             }
         }
         Err(e) => Ok(Some(End::Failed {
             cause: Failure::GateError,
-            detail: gate_detail(hook, &log, GateEnd::CouldNotRun { message: e.message() }),
+            detail: gate_detail(
+                hook,
+                &log,
+                GateEnd::CouldNotRun {
+                    message: e.message(),
+                },
+            ),
         })),
     }
 }
@@ -494,12 +772,23 @@ fn run_gate(home: &CpdHome, config: &Config, target: &Attempt, hook: Hook, pipel
 fn pr_row(store: &mut Store, target: &Attempt) -> Result<crate::plan::PrRow, CpdError> {
     store.read(|conn| {
         let prs = crate::plan::fingerprint::load_prs(conn, &target.plan)?;
-        prs.into_iter().find(|p| p.key.as_str() == target.pr_str()).ok_or_else(|| CpdError::bad_row(format!("Plan {} has no PR {}", target.plan, target.pr_str())))
+        prs.into_iter()
+            .find(|p| p.key.as_str() == target.pr_str())
+            .ok_or_else(|| {
+                CpdError::bad_row(format!(
+                    "Plan {} has no PR {}",
+                    target.plan,
+                    target.pr_str()
+                ))
+            })
     })
 }
 
 /// The PR of the Attempt's Job with its stored title and description, the pull request's body (§7.6 `pr open` step 3).
-fn pr_of_job(store: &mut Store, target: &Attempt) -> Result<(crate::plan::PrRow, String, Option<String>), CpdError> {
+fn pr_of_job(
+    store: &mut Store,
+    target: &Attempt,
+) -> Result<(crate::plan::PrRow, String, Option<String>), CpdError> {
     let pr = pr_row(store, target)?;
     let title = pr.title.clone().ok_or_else(|| {
         CpdError::new(
@@ -509,13 +798,20 @@ fn pr_of_job(store: &mut Store, target: &Attempt) -> Result<(crate::plan::PrRow,
         .with("plan", target.plan.as_str())
         .with("pr", pr.key.as_str())
     })?;
-    let description = store.read(|conn| crate::pr::stored_description_of(conn, &target.plan, &pr.key))?;
+    let description =
+        store.read(|conn| crate::pr::stored_description_of(conn, &target.plan, &pr.key))?;
     Ok((pr, title, description))
 }
 
 /// The refusals of an `open` or `update` Job's merge that end the Attempt `gate_error` instead of leaving it `merging`.
 fn is_refusal(code: ErrorCode) -> bool {
-    matches!(code, ErrorCode::PrTitleRequired | ErrorCode::DescriptionRequired | ErrorCode::JiraRequired | ErrorCode::BaseNotFound)
+    matches!(
+        code,
+        ErrorCode::PrTitleRequired
+            | ErrorCode::DescriptionRequired
+            | ErrorCode::JiraRequired
+            | ErrorCode::BaseNotFound
+    )
 }
 
 /// Whether the newest pull request of the PR's Lead Branch is already merged on GitHub: the `open` Job adopts it at the merge (§7.4 step 8b; §7.7).
@@ -525,9 +821,19 @@ fn pull_request_is_merged(store: &mut Store, target: &Attempt) -> Result<bool, C
 }
 
 /// Step 8b (§7.4): the pull request of the Lead Branch, created or adopted, as `pr open` steps 0 and 3 do it (never `--draft`).
-fn open_pull_request(store: &mut Store, config: &Config, target: &Attempt) -> Result<crate::pr::Pulled, CpdError> {
+fn open_pull_request(
+    store: &mut Store,
+    config: &Config,
+    target: &Attempt,
+) -> Result<crate::pr::Pulled, CpdError> {
     let (pr, title, description) = pr_of_job(store, target)?;
-    crate::pr::pull_request(&target.lead_worktree, &pr, &title, description.as_deref(), &config.inbox.bot_reviewers)
+    crate::pr::pull_request(
+        &target.lead_worktree,
+        &pr,
+        &title,
+        description.as_deref(),
+        &config.inbox.bot_reviewers,
+    )
 }
 
 /// Step 8's and R2's push of `sha`: to the PR's remote branch, and skipped for an adopted PR that has not opened unless the Job is an `open` or
@@ -545,21 +851,36 @@ pub(super) fn publish(target: &Attempt, sha: &str) -> Option<CpdError> {
 /// `push_failed` error to append. A push never fails the merge (R35).
 pub(super) fn push(lead: &std::path::Path, branch: &str, sha: &str) -> Option<CpdError> {
     let failed = |stderr: &str, exit: Option<i64>, why: String| {
-        let e = CpdError::new(ErrorCode::PushFailed, format!("git push of {branch} to origin {why}"))
-            .with("branch", branch)
-            .with("sha", sha)
-            .with("stderr", git::tail(stderr, git::TAIL_LINES));
+        let e = CpdError::new(
+            ErrorCode::PushFailed,
+            format!("git push of {branch} to origin {why}"),
+        )
+        .with("branch", branch)
+        .with("sha", sha)
+        .with("stderr", git::tail(stderr, git::TAIL_LINES));
         match exit {
             Some(code) => e.with("exit", code),
             None => e,
         }
     };
-    match git::run::has_origin(lead).and_then(|origin| if origin { git::push_commit(lead, branch, sha).map(Some) } else { Ok(None) }) {
+    match git::run::has_origin(lead).and_then(|origin| {
+        if origin {
+            git::push_commit(lead, branch, sha).map(Some)
+        } else {
+            Ok(None)
+        }
+    }) {
         Ok(None | Some(git::Push::Pushed { .. } | git::Push::Contained { .. })) => None,
-        Ok(Some(git::Push::Rejected { stderr })) => Some(failed(&stderr, None, "was rejected: not a fast-forward.".to_owned())),
+        Ok(Some(git::Push::Rejected { stderr })) => Some(failed(
+            &stderr,
+            None,
+            "was rejected: not a fast-forward.".to_owned(),
+        )),
         Err(e) => {
             let detail = |key: &str| e.details().get(key).cloned();
-            let stderr = detail("stderr").and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
+            let stderr = detail("stderr")
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_default();
             let exit = detail("exit").and_then(|v| v.as_i64());
             Some(failed(&stderr, exit, format!("failed: {}", e.message())).with("git", e.to_json()))
         }
@@ -572,23 +893,34 @@ fn contains(worktree: &std::path::Path, commit: &str) -> Result<bool, CpdError> 
     match out.code {
         0 => Ok(true),
         1 => Ok(false),
-        code => Err(CpdError::new(ErrorCode::GitFailed, "git merge-base --is-ancestor failed.")
-            .with("exit", code)
-            .with("stderr", git::tail(&out.stderr, git::TAIL_LINES))),
+        code => Err(
+            CpdError::new(ErrorCode::GitFailed, "git merge-base --is-ancestor failed.")
+                .with("exit", code)
+                .with("stderr", git::tail(&out.stderr, git::TAIL_LINES)),
+        ),
     }
 }
 
 /// Whether `worktree`'s HEAD holds commits of the base refs that `old` lacks (hs-d747).
-fn holds_base_commits(worktree: &std::path::Path, old: &str, base_refs: &[&str]) -> Result<bool, CpdError> {
+fn holds_base_commits(
+    worktree: &std::path::Path,
+    old: &str,
+    base_refs: &[&str],
+) -> Result<bool, CpdError> {
     let count = |extra: &[&str]| -> Result<u64, CpdError> {
         let mut args = vec!["rev-list", "--count", "HEAD", "--not", old];
         args.extend_from_slice(extra);
         let out = run(worktree, &args)?;
-        out.stdout.trim().parse::<u64>().ok().filter(|_| out.code == 0).ok_or_else(|| {
-            CpdError::new(ErrorCode::GitFailed, "git rev-list --count failed.")
-                .with("exit", out.code)
-                .with("stderr", git::tail(&out.stderr, git::TAIL_LINES))
-        })
+        out.stdout
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|_| out.code == 0)
+            .ok_or_else(|| {
+                CpdError::new(ErrorCode::GitFailed, "git rev-list --count failed.")
+                    .with("exit", out.code)
+                    .with("stderr", git::tail(&out.stderr, git::TAIL_LINES))
+            })
     };
     Ok(count(&[])? > count(base_refs)?)
 }
@@ -600,24 +932,42 @@ fn rebase(worktree: &std::path::Path, onto: &str) -> Result<Option<Vec<String>>,
 }
 
 /// [`rebase`] on `runner` (a test passes a `FakeRunner`).
-pub(crate) fn rebase_with(runner: &dyn crate::host::runner::Runner, worktree: &std::path::Path, onto: &str) -> Result<Option<Vec<String>>, CpdError> {
+pub(crate) fn rebase_with(
+    runner: &dyn crate::host::runner::Runner,
+    worktree: &std::path::Path,
+    onto: &str,
+) -> Result<Option<Vec<String>>, CpdError> {
     let out = git::run::run_with(runner, worktree, &["rebase", onto])?;
     if out.code == 0 {
         return Ok(None);
     }
-    let conflicts = git::run::ok_with(runner, worktree, &["diff", "--name-only", "--diff-filter=U"])?;
-    let files: Vec<String> = conflicts.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect();
+    let conflicts = git::run::ok_with(
+        runner,
+        worktree,
+        &["diff", "--name-only", "--diff-filter=U"],
+    )?;
+    let files: Vec<String> = conflicts
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect();
     // Best effort when no rebase is in progress; a failure to abort is reported below.
     let abort = git::run::run_with(runner, worktree, &["rebase", "--abort"])?;
     if files.is_empty() {
-        return Err(CpdError::new(ErrorCode::GitFailed, format!("git rebase exited {} without a conflict.", out.code))
-            .with("exit", out.code)
-            .with("stderr", git::tail(&out.stderr, git::TAIL_LINES)));
+        return Err(CpdError::new(
+            ErrorCode::GitFailed,
+            format!("git rebase exited {} without a conflict.", out.code),
+        )
+        .with("exit", out.code)
+        .with("stderr", git::tail(&out.stderr, git::TAIL_LINES)));
     }
     if abort.code != 0 {
-        return Err(CpdError::new(ErrorCode::GitFailed, "git rebase --abort failed after a conflict.")
-            .with("exit", abort.code)
-            .with("stderr", git::tail(&abort.stderr, git::TAIL_LINES)));
+        return Err(CpdError::new(
+            ErrorCode::GitFailed,
+            "git rebase --abort failed after a conflict.",
+        )
+        .with("exit", abort.code)
+        .with("stderr", git::tail(&abort.stderr, git::TAIL_LINES)));
     }
     Ok(Some(files))
 }
@@ -630,14 +980,26 @@ mod gate_detail_tests {
     fn the_three_forms_round_trip() {
         let log = Path::new("/h/run/pay/logs/api-a1.pre-commit.log");
         let forms = [
-            GateEnd::Failed { exit: 3, tail: "red\nmore" },
-            GateEnd::Unjudged { why: "killed. log: x (really)", tail: "t" },
-            GateEnd::CouldNotRun { message: "no such file. log: y" },
+            GateEnd::Failed {
+                exit: 3,
+                tail: "red\nmore",
+            },
+            GateEnd::Unjudged {
+                why: "killed. log: x (really)",
+                tail: "t",
+            },
+            GateEnd::CouldNotRun {
+                message: "no such file. log: y",
+            },
         ];
         for end in forms {
             for hook in [Hook::PreCommit, Hook::PreMerge] {
                 let detail = gate_detail(hook, log, end);
-                assert_eq!(parse_gate_detail(&detail), Some((hook, log.to_path_buf())), "{detail}");
+                assert_eq!(
+                    parse_gate_detail(&detail),
+                    Some((hook, log.to_path_buf())),
+                    "{detail}"
+                );
             }
         }
     }

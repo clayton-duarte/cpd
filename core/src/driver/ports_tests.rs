@@ -48,7 +48,12 @@ fn failure() -> CpdError {
 }
 
 pub(crate) fn config() -> Config {
-    Config::parse("version = 1\nmachine = \"test\"\n", Path::new("config.toml")).unwrap().0
+    Config::parse(
+        "version = 1\nmachine = \"test\"\n",
+        Path::new("config.toml"),
+    )
+    .unwrap()
+    .0
 }
 
 /// A `Clock` over a `ManualClock` that calls `hook(n)` after its `n`th nap: how a test changes the world between two polls
@@ -60,8 +65,15 @@ pub(crate) struct HookClock {
 }
 
 impl HookClock {
-    pub(crate) fn new(inner: &ManualClock, hook: impl Fn(usize) + Send + Sync + 'static) -> HookClock {
-        HookClock { inner: inner.clone(), naps: AtomicUsize::new(0), hook: Box::new(hook) }
+    pub(crate) fn new(
+        inner: &ManualClock,
+        hook: impl Fn(usize) + Send + Sync + 'static,
+    ) -> HookClock {
+        HookClock {
+            inner: inner.clone(),
+            naps: AtomicUsize::new(0),
+            hook: Box::new(hook),
+        }
     }
 }
 
@@ -135,16 +147,28 @@ impl Spawn for Stubborn {
 
 /// The fakes' `Ports` with `clock` instead of the `ManualClock`, and `spawn` instead of the `FakeSpawn`.
 pub(crate) fn ports_with(fakes: &Fakes, clock: Arc<dyn Clock>, spawn: Arc<dyn Spawn>) -> Ports {
-    Ports { clock, runner: fakes.ports.runner.clone(), spawn, ..Ports::real() }
+    Ports {
+        clock,
+        runner: fakes.ports.runner.clone(),
+        spawn,
+        ..Ports::real()
+    }
 }
 
 /// A process the `FakeSpawn` knows, running: pids count from 1000.
 pub(crate) fn process(spawn: &FakeSpawn) -> Pid {
-    spawn.spawn(&Launch { program: "x".to_owned(), ..Launch::default() }).unwrap()
+    spawn
+        .spawn(&Launch {
+            program: "x".to_owned(),
+            ..Launch::default()
+        })
+        .unwrap()
 }
 
 fn tmux(fakes: &Fakes) -> Tmux {
-    Tmux::new("sock").with_runner(fakes.ports.runner.clone()).with_clock(fakes.ports.clock.clone())
+    Tmux::new("sock")
+        .with_runner(fakes.ports.runner.clone())
+        .with_clock(fakes.ports.clock.clone())
 }
 
 fn pane() -> PaneId {
@@ -158,15 +182,26 @@ fn runs(call: &Call, verb: &str) -> bool {
 /// One `list-panes` line (`LIST_PANES_FORMAT`): a pane `%1` of window `@1` in session `session`.
 fn pane_line(session: &str, window: &str, dead: bool, status: &str, pid: Option<u32>) -> String {
     let pid = pid.map_or_else(String::new, |p| p.to_string());
-    format!("%1\t@1\t{session}\t{window}\t{}\t{status}\t{pid}\t\t\n", u8::from(dead))
+    format!(
+        "%1\t@1\t{session}\t{window}\t{}\t{status}\t{pid}\t\t\n",
+        u8::from(dead)
+    )
 }
 
 fn count(fakes: &Fakes, verb: &str) -> usize {
-    fakes.runner.calls().iter().filter(|c| runs(c, verb)).count()
+    fakes
+        .runner
+        .calls()
+        .iter()
+        .filter(|c| runs(c, verb))
+        .count()
 }
 
 fn attempt() -> (PlanId, AttemptId) {
-    (PlanId::parse("pay").unwrap(), AttemptId::parse("a-a1").unwrap())
+    (
+        PlanId::parse("pay").unwrap(),
+        AttemptId::parse("a-a1").unwrap(),
+    )
 }
 
 // ---- A9: the kill ladder -------------------------------------------------------------------------------------------
@@ -231,7 +266,9 @@ fn a_window_already_gone_is_success_with_no_nap() {
 /// A fake tmux whose `list-panes` always lists the Attempt's window `@1` in the work session.
 fn with_the_attempt_window(fakes: &Fakes, plan: &PlanId, id: &AttemptId) {
     let line = pane_line("cpd-work", &attempt_window(plan, id), false, "", None);
-    (*fakes.runner).clone().on("tmux", |c| runs(c, "list-panes"), Reply::ok(&line));
+    (*fakes.runner)
+        .clone()
+        .on("tmux", |c| runs(c, "list-panes"), Reply::ok(&line));
 }
 
 #[test]
@@ -255,8 +292,13 @@ fn a_window_that_cannot_be_killed_fails_after_three_tries_and_two_naps() {
     let fakes = Fakes::new();
     let (plan, id) = attempt();
     with_the_attempt_window(&fakes, &plan, &id);
-    (*fakes.runner).clone().on("tmux", |c| runs(c, "kill-window"), Reply::exit(1, "", "no\n"));
-    let err = kill_attempt_window_with(&fakes.ports, &config(), &tmux(&fakes), &plan, &id).unwrap_err();
+    (*fakes.runner).clone().on(
+        "tmux",
+        |c| runs(c, "kill-window"),
+        Reply::exit(1, "", "no\n"),
+    );
+    let err =
+        kill_attempt_window_with(&fakes.ports, &config(), &tmux(&fakes), &plan, &id).unwrap_err();
     assert_eq!(err.code(), ErrorCode::TmuxFailed);
     assert_eq!(count(&fakes, "kill-window"), 3);
     assert_eq!(fakes.clock.naps(), [SECOND, SECOND]);
@@ -271,7 +313,11 @@ fn a_window_that_is_gone_after_a_failed_kill_counts_as_killed_with_no_nap() {
         .clone()
         .once("tmux", |c| runs(c, "list-panes"), Reply::ok(&line))
         .on("tmux", |c| runs(c, "list-panes"), Reply::ok(""))
-        .on("tmux", |c| runs(c, "kill-window"), Reply::exit(1, "", "can't find window\n"));
+        .on(
+            "tmux",
+            |c| runs(c, "kill-window"),
+            Reply::exit(1, "", "can't find window\n"),
+        );
     kill_attempt_window_with(&fakes.ports, &config(), &tmux(&fakes), &plan, &id).unwrap();
     assert_eq!(count(&fakes, "kill-window"), 1);
     assert!(fakes.clock.naps().is_empty());
@@ -284,7 +330,9 @@ fn every_poll_naps_the_driver_poll_of_half_a_second_on_the_clock() {
     let fakes = Fakes::new();
     let pi = process(&fakes.spawn);
     let line = pane_line("cpd-work", "pay--a-a1", false, "", Some(pi.0));
-    (*fakes.runner).clone().on("tmux", |c| runs(c, "list-panes"), Reply::ok(&line));
+    (*fakes.runner)
+        .clone()
+        .on("tmux", |c| runs(c, "list-panes"), Reply::ok(&line));
     let tmux = tmux(&fakes);
     let mut watch = PaneWatch::default();
     for _ in 0..3 {
@@ -298,12 +346,24 @@ fn a_pane_whose_pid_runs_is_seen_alive_without_asking_tmux_again() {
     let fakes = Fakes::new();
     let pi = process(&fakes.spawn);
     let line = pane_line("cpd-work", "pay--a-a1", false, "", Some(pi.0));
-    (*fakes.runner).clone().on("tmux", |c| runs(c, "list-panes"), Reply::ok(&line));
+    (*fakes.runner)
+        .clone()
+        .on("tmux", |c| runs(c, "list-panes"), Reply::ok(&line));
     let tmux = tmux(&fakes);
     let mut watch = PaneWatch::default();
-    assert_eq!(poll_with(&fakes.ports, &mut watch, &tmux, &pane()).unwrap(), Look::Alive(Some(pi.0)));
-    assert_eq!(poll_with(&fakes.ports, &mut watch, &tmux, &pane()).unwrap(), Look::Alive(Some(pi.0)));
-    assert_eq!(count(&fakes, "list-panes"), 1, "the second look is `alive` on the FakeSpawn, with no fork");
+    assert_eq!(
+        poll_with(&fakes.ports, &mut watch, &tmux, &pane()).unwrap(),
+        Look::Alive(Some(pi.0))
+    );
+    assert_eq!(
+        poll_with(&fakes.ports, &mut watch, &tmux, &pane()).unwrap(),
+        Look::Alive(Some(pi.0))
+    );
+    assert_eq!(
+        count(&fakes, "list-panes"),
+        1,
+        "the second look is `alive` on the FakeSpawn, with no fork"
+    );
 }
 
 #[test]
@@ -318,18 +378,30 @@ fn a_worker_that_ends_between_two_polls_is_seen_gone_at_the_next_one() {
         .on("tmux", |c| runs(c, "list-panes"), Reply::ok(&dead));
     let tmux = tmux(&fakes);
     let mut watch = PaneWatch::default();
-    assert_eq!(poll_with(&fakes.ports, &mut watch, &tmux, &pane()).unwrap(), Look::Alive(Some(pi.0)));
+    assert_eq!(
+        poll_with(&fakes.ports, &mut watch, &tmux, &pane()).unwrap(),
+        Look::Alive(Some(pi.0))
+    );
     fakes.clock.advance(Duration::from_secs(30));
     fakes.spawn.exit(pi, 0);
     let look = poll_with(&fakes.ports, &mut watch, &tmux, &pane()).unwrap();
-    assert_eq!(look, Look::Gone("The Worker's pane died (exit status 0) before it submitted.".to_owned()));
-    assert_eq!(fakes.clock.elapsed(), Duration::from_secs(31), "two polls of 500 ms and the 30 s the test advanced");
+    assert_eq!(
+        look,
+        Look::Gone("The Worker's pane died (exit status 0) before it submitted.".to_owned())
+    );
+    assert_eq!(
+        fakes.clock.elapsed(),
+        Duration::from_secs(31),
+        "two polls of 500 ms and the 30 s the test advanced"
+    );
 }
 
 #[test]
 fn a_pane_missing_from_the_list_is_gone() {
     let fakes = Fakes::new();
-    (*fakes.runner).clone().on("tmux", |c| runs(c, "list-panes"), Reply::ok(""));
+    (*fakes.runner)
+        .clone()
+        .on("tmux", |c| runs(c, "list-panes"), Reply::ok(""));
     let mut watch = PaneWatch::default();
     let look = poll_with(&fakes.ports, &mut watch, &tmux(&fakes), &pane()).unwrap();
     assert_eq!(look, Look::Gone("The Worker's pane is gone.".to_owned()));
@@ -340,11 +412,18 @@ fn a_failed_list_panes_is_not_known_once_and_an_error_the_second_time() {
     let fakes = Fakes::new();
     (*fakes.runner)
         .clone()
-        .on("tmux", |c| runs(c, "list-panes"), Reply::exit(1, "", "boom\n"))
+        .on(
+            "tmux",
+            |c| runs(c, "list-panes"),
+            Reply::exit(1, "", "boom\n"),
+        )
         .on("tmux", |c| runs(c, "list-sessions"), Reply::ok("$0\n"));
     let tmux = tmux(&fakes);
     let mut watch = PaneWatch::default();
-    assert_eq!(poll_with(&fakes.ports, &mut watch, &tmux, &pane()).unwrap(), Look::Unknown);
+    assert_eq!(
+        poll_with(&fakes.ports, &mut watch, &tmux, &pane()).unwrap(),
+        Look::Unknown
+    );
     let err = poll_with(&fakes.ports, &mut watch, &tmux, &pane()).unwrap_err();
     assert_eq!(err.code(), ErrorCode::TmuxFailed);
     assert_eq!(fakes.clock.naps(), [Duration::from_millis(500); 2]);
@@ -359,7 +438,12 @@ const TEXT: &str = r#"{"type":"message","message":{"role":"assistant","content":
 /// Makes `file`'s modification time the virtual time `at` (real files in a temp dir, virtual time on them).
 pub(crate) fn modified_at(file: &Path, at: OffsetDateTime) {
     let at = UNIX_EPOCH + Duration::from_secs(u64::try_from(at.unix_timestamp()).unwrap());
-    std::fs::File::options().write(true).open(file).unwrap().set_modified(at).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(file)
+        .unwrap()
+        .set_modified(at)
+        .unwrap();
 }
 
 /// A session file inside a tool call, last written at the clock's now.
@@ -386,7 +470,10 @@ fn a_tool_call_quiet_for_less_than_the_limit_of_virtual_time_is_not_killed() {
     let (pi, a, b) = tree(&fakes.spawn);
     fakes.clock.advance(Duration::from_secs(59));
     let kids = move |_: u32| vec![a.0, b.0];
-    assert_eq!(Watch::new(60).check_with(&fakes.ports, &kids, &file, pi.0, false), None);
+    assert_eq!(
+        Watch::new(60).check_with(&fakes.ports, &kids, &file, pi.0, false),
+        None
+    );
     assert!(fakes.spawn.signals().is_empty());
 }
 
@@ -397,13 +484,28 @@ fn a_tool_call_quiet_for_the_limit_of_virtual_time_has_its_descendants_terminate
     let file = stalled(&dir, &fakes.clock);
     let (pi, a, b) = tree(&fakes.spawn);
     fakes.clock.advance(Duration::from_secs(60));
-    let kids = move |root: u32| if root == pi.0 { vec![a.0, b.0] } else { Vec::new() };
-    let line = Watch::new(60).check_with(&fakes.ports, &kids, &file, pi.0, false).expect("a stall");
+    let kids = move |root: u32| {
+        if root == pi.0 {
+            vec![a.0, b.0]
+        } else {
+            Vec::new()
+        }
+    };
+    let line = Watch::new(60)
+        .check_with(&fakes.ports, &kids, &file, pi.0, false)
+        .expect("a stall");
     assert_eq!(
         line,
-        format!("A4: stall: the Worker's tool call has been idle 60 s; killed pid {} (sleep 600), pid {} (cargo test)", a.0, b.0)
+        format!(
+            "A4: stall: the Worker's tool call has been idle 60 s; killed pid {} (sleep 600), pid {} (cargo test)",
+            a.0, b.0
+        )
     );
-    assert_eq!(fakes.spawn.signals(), [(a, Signal::Term), (b, Signal::Term)], "pi itself is never signalled");
+    assert_eq!(
+        fakes.spawn.signals(),
+        [(a, Signal::Term), (b, Signal::Term)],
+        "pi itself is never signalled"
+    );
 }
 
 #[test]
@@ -414,8 +516,13 @@ fn a_process_that_ends_on_term_is_not_killed_and_costs_no_nap() {
     let (pi, a, b) = tree(&fakes.spawn);
     fakes.clock.advance(Duration::from_secs(60));
     let kids = move |_: u32| vec![a.0, b.0];
-    Watch::new(60).check_with(&fakes.ports, &kids, &file, pi.0, false).expect("a stall");
-    assert!(fakes.clock.naps().is_empty(), "the FakeSpawn ends a pid on SIGTERM: nothing to wait for");
+    Watch::new(60)
+        .check_with(&fakes.ports, &kids, &file, pi.0, false)
+        .expect("a stall");
+    assert!(
+        fakes.clock.naps().is_empty(),
+        "the FakeSpawn ends a pid on SIGTERM: nothing to wait for"
+    );
     assert!(!fakes.spawn.alive(a) && !fakes.spawn.alive(b));
 }
 
@@ -429,16 +536,29 @@ fn a_stall_is_killed_once_and_a_new_write_makes_a_new_stall() {
     let list = |_: u32| kids.borrow().clone();
     let mut watch = Watch::new(60);
     fakes.clock.advance(Duration::from_secs(60));
-    assert!(watch.check_with(&fakes.ports, &list, &file, pi.0, false).is_some());
+    assert!(
+        watch
+            .check_with(&fakes.ports, &list, &file, pi.0, false)
+            .is_some()
+    );
     fakes.clock.advance(Duration::from_secs(600));
-    assert_eq!(watch.check_with(&fakes.ports, &list, &file, pi.0, false), None, "the same write is killed once");
+    assert_eq!(
+        watch.check_with(&fakes.ports, &list, &file, pi.0, false),
+        None,
+        "the same write is killed once"
+    );
     assert_eq!(fakes.spawn.signals(), [(a, Signal::Term)]);
     // pi wrote again, and stalled again with a new child.
     modified_at(&file, fakes.clock.utc());
     *kids.borrow_mut() = vec![b.0];
     fakes.clock.advance(Duration::from_secs(60));
-    let line = watch.check_with(&fakes.ports, &list, &file, pi.0, false).expect("a new stall");
-    assert!(line.contains(&format!("killed pid {} (cargo test)", b.0)), "{line}");
+    let line = watch
+        .check_with(&fakes.ports, &list, &file, pi.0, false)
+        .expect("a new stall");
+    assert!(
+        line.contains(&format!("killed pid {} (cargo test)", b.0)),
+        "{line}"
+    );
 }
 
 #[test]
@@ -451,13 +571,22 @@ fn an_open_check_span_is_not_a_stall_and_the_quiet_restarts_from_it() {
     let mut watch = Watch::new(60);
     // The file has been quiet for an hour, all of it inside `attempt submit`'s span.
     fakes.clock.advance(Duration::from_secs(3600));
-    assert_eq!(watch.check_with(&fakes.ports, &kids, &file, pi.0, true), None, "an open span is not a stall");
+    assert_eq!(
+        watch.check_with(&fakes.ports, &kids, &file, pi.0, true),
+        None,
+        "an open span is not a stall"
+    );
     // The span ended a moment ago: the quiet counts from the last tick that saw it.
     fakes.clock.advance(Duration::from_secs(59));
-    assert_eq!(watch.check_with(&fakes.ports, &kids, &file, pi.0, false), None);
+    assert_eq!(
+        watch.check_with(&fakes.ports, &kids, &file, pi.0, false),
+        None
+    );
     assert!(fakes.spawn.signals().is_empty());
     fakes.clock.advance(SECOND);
-    let line = watch.check_with(&fakes.ports, &kids, &file, pi.0, false).expect("60 s after the span");
+    let line = watch
+        .check_with(&fakes.ports, &kids, &file, pi.0, false)
+        .expect("60 s after the span");
     assert!(line.contains("idle 60 s"), "{line}");
 }
 
@@ -469,7 +598,10 @@ fn a_limit_of_zero_never_stalls() {
     let (pi, a, _b) = tree(&fakes.spawn);
     fakes.clock.advance(Duration::from_secs(86_400));
     let kids = move |_: u32| vec![a.0];
-    assert_eq!(Watch::new(0).check_with(&fakes.ports, &kids, &file, pi.0, false), None);
+    assert_eq!(
+        Watch::new(0).check_with(&fakes.ports, &kids, &file, pi.0, false),
+        None
+    );
     assert!(fakes.spawn.signals().is_empty());
 }
 
@@ -481,7 +613,10 @@ fn a_stall_with_no_descendants_kills_nothing() {
     let (pi, _a, _b) = tree(&fakes.spawn);
     fakes.clock.advance(Duration::from_secs(60));
     let none = |_: u32| Vec::new();
-    assert_eq!(Watch::new(60).check_with(&fakes.ports, &none, &file, pi.0, false), None);
+    assert_eq!(
+        Watch::new(60).check_with(&fakes.ports, &none, &file, pi.0, false),
+        None
+    );
     assert!(fakes.spawn.signals().is_empty());
 }
 
@@ -495,32 +630,50 @@ fn a_session_file_that_is_not_inside_a_tool_call_is_not_a_stall() {
     let (pi, a, _b) = tree(&fakes.spawn);
     fakes.clock.advance(Duration::from_secs(3600));
     let kids = move |_: u32| vec![a.0];
-    assert_eq!(Watch::new(60).check_with(&fakes.ports, &kids, &file, pi.0, false), None);
+    assert_eq!(
+        Watch::new(60).check_with(&fakes.ports, &kids, &file, pi.0, false),
+        None
+    );
     assert!(fakes.spawn.signals().is_empty());
 }
 
 #[test]
 fn a_process_that_ignores_term_gets_kill_after_ten_virtual_seconds_of_grace() {
     let fakes = Fakes::new();
-    let stubborn = Arc::new(Stubborn { inner: fakes.spawn.clone(), ignored: Mutex::default() });
+    let stubborn = Arc::new(Stubborn {
+        inner: fakes.spawn.clone(),
+        ignored: Mutex::default(),
+    });
     let ports = ports_with(&fakes, fakes.ports.clock.clone(), stubborn.clone());
     let dir = tempfile::tempdir().unwrap();
     let file = stalled(&dir, &fakes.clock);
     let (pi, a, _b) = tree(&fakes.spawn);
     fakes.clock.advance(Duration::from_secs(60));
     let kids = move |_: u32| vec![a.0];
-    let line = Watch::new(60).check_with(&ports, &kids, &file, pi.0, false).expect("a stall");
-    assert!(line.ends_with(&format!("; SIGKILL after 10 s to pid {}", a.0)), "{line}");
+    let line = Watch::new(60)
+        .check_with(&ports, &kids, &file, pi.0, false)
+        .expect("a stall");
+    assert!(
+        line.ends_with(&format!("; SIGKILL after 10 s to pid {}", a.0)),
+        "{line}"
+    );
     assert_eq!(*stubborn.ignored.lock().unwrap(), [a], "SIGTERM first");
     assert_eq!(fakes.spawn.signals(), [(a, Signal::Kill)], "then SIGKILL");
-    assert_eq!(fakes.clock.naps(), [Duration::from_millis(100); 100], "polled every 100 ms for the 10 s");
+    assert_eq!(
+        fakes.clock.naps(),
+        [Duration::from_millis(100); 100],
+        "polled every 100 ms for the 10 s"
+    );
     assert_eq!(fakes.clock.elapsed(), Duration::from_secs(70));
 }
 
 #[test]
 fn a_process_that_ends_during_the_grace_is_not_killed() {
     let fakes = Fakes::new();
-    let stubborn = Arc::new(Stubborn { inner: fakes.spawn.clone(), ignored: Mutex::default() });
+    let stubborn = Arc::new(Stubborn {
+        inner: fakes.spawn.clone(),
+        ignored: Mutex::default(),
+    });
     let (pi, a, _b) = tree(&fakes.spawn);
     let spawn = fakes.spawn.clone();
     let clock: Arc<dyn Clock> = Arc::new(HookClock::new(&fakes.clock, move |n| {
@@ -533,7 +686,9 @@ fn a_process_that_ends_during_the_grace_is_not_killed() {
     let file = stalled(&dir, &fakes.clock);
     fakes.clock.advance(Duration::from_secs(60));
     let kids = move |_: u32| vec![a.0];
-    let line = Watch::new(60).check_with(&ports, &kids, &file, pi.0, false).expect("a stall");
+    let line = Watch::new(60)
+        .check_with(&ports, &kids, &file, pi.0, false)
+        .expect("a stall");
     assert!(!line.contains("SIGKILL"), "{line}");
     assert!(fakes.spawn.signals().is_empty());
     assert_eq!(fakes.clock.naps(), [Duration::from_millis(100); 3]);
@@ -573,12 +728,20 @@ fn start_rig(live: bool) -> StartRig {
         .unwrap();
     // The Fingerprint of §2.3, computed from the stored row.
     let plan = PlanId::parse("pay").unwrap();
-    let jobs = store.read(|conn| crate::plan::jobs::load(conn, &plan)).unwrap();
-    let fingerprints: Vec<(String, String)> = jobs.iter().map(|j| (j.key.clone(), crate::plan::locked_fingerprint(j))).collect();
+    let jobs = store
+        .read(|conn| crate::plan::jobs::load(conn, &plan))
+        .unwrap();
+    let fingerprints: Vec<(String, String)> = jobs
+        .iter()
+        .map(|j| (j.key.clone(), crate::plan::locked_fingerprint(j)))
+        .collect();
     store
         .write("fixture", |tx| {
             for (key, fingerprint) in &fingerprints {
-                tx.execute("UPDATE jobs SET fingerprint = ?2 WHERE plan = 'pay' AND key = ?1", rusqlite::params![key, fingerprint])?;
+                tx.execute(
+                    "UPDATE jobs SET fingerprint = ?2 WHERE plan = 'pay' AND key = ?1",
+                    rusqlite::params![key, fingerprint],
+                )?;
             }
             Ok(())
         })
@@ -596,13 +759,29 @@ fn start_rig(live: bool) -> StartRig {
             })
             .unwrap();
     }
-    StartRig { _dir: dir, home, store }
+    StartRig {
+        _dir: dir,
+        home,
+        store,
+    }
 }
 
 /// A catalog the starter can climb without pi.
 fn catalog() -> Catalog {
-    let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![1, 2, 3] };
-    Catalog { pi_version: "1.0.0".to_owned(), o: model("o/m"), s: model("s/m"), h: model("h/m"), g: TierModel { model: "g/m".to_owned(), efforts: vec![] } }
+    let model = |m: &str| TierModel {
+        model: m.to_owned(),
+        efforts: vec![1, 2, 3],
+    };
+    Catalog {
+        pi_version: "1.0.0".to_owned(),
+        o: model("o/m"),
+        s: model("s/m"),
+        h: model("h/m"),
+        g: TierModel {
+            model: "g/m".to_owned(),
+            efforts: vec![],
+        },
+    }
 }
 
 /// Starts the next Attempt of Job `key` of Plan `pay`, through the fake spawn.
@@ -610,14 +789,32 @@ fn start_attempt(rig: &mut StartRig, fakes: &Fakes, key: &str) {
     fakes.spawn.set_self_exe(std::env::current_exe().unwrap());
     let config = config();
     let catalog = catalog();
-    let ctx = StartCtx { home: &rig.home, config: &config, catalog: &catalog, command: "test" };
-    start_with(&fakes.ports, &mut rig.store, &ctx, &PlanId::parse("pay").unwrap(), &JobKey::parse(key).unwrap()).unwrap();
+    let ctx = StartCtx {
+        home: &rig.home,
+        config: &config,
+        catalog: &catalog,
+        command: "test",
+    };
+    start_with(
+        &fakes.ports,
+        &mut rig.store,
+        &ctx,
+        &PlanId::parse("pay").unwrap(),
+        &JobKey::parse(key).unwrap(),
+    )
+    .unwrap();
 }
 
 /// The `(branch, worktree)` the starter recorded for Attempt `id`.
 fn allocated(rig: &mut StartRig, id: &str) -> (String, String) {
     rig.store
-        .read(|conn| Ok(conn.query_row("SELECT branch, worktree FROM attempts WHERE plan = 'pay' AND id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))?))
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT branch, worktree FROM attempts WHERE plan = 'pay' AND id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
         .unwrap()
 }
 
@@ -634,16 +831,42 @@ fn a_linear_attempt_takes_the_workflow_worktree() {
 }
 
 /// Start Job `key` with `allocation`; the result.
-fn start_with_alloc(rig: &mut StartRig, fakes: &Fakes, key: &str, allocation: Option<Allocation>) -> Result<(), CpdError> {
+fn start_with_alloc(
+    rig: &mut StartRig,
+    fakes: &Fakes,
+    key: &str,
+    allocation: Option<Allocation>,
+) -> Result<(), CpdError> {
     fakes.spawn.set_self_exe(std::env::current_exe().unwrap());
     let config = config();
     let catalog = catalog();
-    let ctx = StartCtx { home: &rig.home, config: &config, catalog: &catalog, command: "test" };
-    start_with_allocation(&fakes.ports, &mut rig.store, &ctx, &PlanId::parse("pay").unwrap(), &JobKey::parse(key).unwrap(), allocation).map(|_| ())
+    let ctx = StartCtx {
+        home: &rig.home,
+        config: &config,
+        catalog: &catalog,
+        command: "test",
+    };
+    start_with_allocation(
+        &fakes.ports,
+        &mut rig.store,
+        &ctx,
+        &PlanId::parse("pay").unwrap(),
+        &JobKey::parse(key).unwrap(),
+        allocation,
+    )
+    .map(|_| ())
 }
 
 fn attempt_rows(rig: &mut StartRig, id: &str) -> i64 {
-    rig.store.read(|conn| Ok(conn.query_row("SELECT count(*) FROM attempts WHERE plan = 'pay' AND id = ?1", [id], |r| r.get(0))?)).unwrap()
+    rig.store
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT count(*) FROM attempts WHERE plan = 'pay' AND id = ?1",
+                [id],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap()
 }
 
 #[test]
@@ -699,16 +922,39 @@ fn a_failed_linear_attempt_resets_the_lead_branch() {
         let mut u = universe.lock().unwrap();
         let blob = u.blob(repo.id(), b"failed\n");
         let tree = u.tree(repo.id(), &[("f.txt", &blob)]);
-        let commit = u.commit(repo.id(), &tree, std::slice::from_ref(&base), "the failed Attempt");
-        u.set_ref(repo.id(), &format!("refs/heads/{lead}"), &commit, "commit: failed");
+        let commit = u.commit(
+            repo.id(),
+            &tree,
+            std::slice::from_ref(&base),
+            "the failed Attempt",
+        );
+        u.set_ref(
+            repo.id(),
+            &format!("refs/heads/{lead}"),
+            &commit,
+            "commit: failed",
+        );
     }
     let worktree = root.join("r.lead");
-    universe.lock().unwrap().add_worktree(repo.id(), &worktree, Head::Branch(lead.to_owned()));
-    let ports = Ports { clock: fakes.ports.clock.clone(), runner: fakes.ports.runner.clone(), spawn: fakes.ports.spawn.clone(), ..Ports::real() };
-    let result = Ports::scope(&ports, || super::run::reset_linear_lead_branch(&worktree, lead, base.as_str()));
+    universe
+        .lock()
+        .unwrap()
+        .add_worktree(repo.id(), &worktree, Head::Branch(lead.to_owned()));
+    let ports = Ports {
+        clock: fakes.ports.clock.clone(),
+        runner: fakes.ports.runner.clone(),
+        spawn: fakes.ports.spawn.clone(),
+        ..Ports::real()
+    };
+    let result = Ports::scope(&ports, || {
+        super::run::reset_linear_lead_branch(&worktree, lead, base.as_str())
+    });
     assert!(result.is_ok(), "the reset failed: {result:?}");
     assert_eq!(
-        universe.lock().unwrap().ref_oid(repo.id(), &format!("refs/heads/{lead}")),
+        universe
+            .lock()
+            .unwrap()
+            .ref_oid(repo.id(), &format!("refs/heads/{lead}")),
         Some(base),
         "a failed linear Attempt resets the Lead Branch to its base_sha"
     );

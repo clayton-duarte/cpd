@@ -22,16 +22,28 @@ fn event(at: &str, text: &str) -> Event {
 
 fn row(at: &str, text: &str) -> String {
     let zone = ManualClock::new().zone();
-    line(&event(at, text), 60, &zone).spans.iter().map(|s| s.content.as_ref()).collect()
+    line(&event(at, text), 60, &zone)
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect()
 }
 
 #[test]
 fn logs_rows_show_the_local_time_of_day() {
-    assert!(row("2026-10-26T03:05:11.907Z", "Message for italic").starts_with("23:05:11 Message for italic"), "{}", row("2026-10-26T03:05:11.907Z", "Message for italic"));
+    assert!(
+        row("2026-10-26T03:05:11.907Z", "Message for italic")
+            .starts_with("23:05:11 Message for italic"),
+        "{}",
+        row("2026-10-26T03:05:11.907Z", "Message for italic")
+    );
 }
 
 #[test]
 fn logs_row_keeps_an_unparsable_time_as_written() {
     let drawn = row("not an RFC 3339 time", "Message for italic");
-    assert!(drawn.starts_with("not an RFC 3339 time Message for italic"), "{drawn}");
+    assert!(
+        drawn.starts_with("not an RFC 3339 time Message for italic"),
+        "{drawn}"
+    );
 }

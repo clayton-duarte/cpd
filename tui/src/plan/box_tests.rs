@@ -27,7 +27,10 @@ fn the_chart_has_no_padding_of_its_own() {
     let pill = chart.pills.first().expect("one Job, one pill").rect;
     let widest = chart.pills.iter().map(|p| p.rect.right()).max().unwrap();
     assert_eq!(pill.x, 0, "the first pill starts at the chart's left edge");
-    assert_eq!(chart.buf.area.width, widest, "the buffer is as wide as its widest pill");
+    assert_eq!(
+        chart.buf.area.width, widest,
+        "the buffer is as wide as its widest pill"
+    );
 }
 
 #[test]
@@ -38,9 +41,19 @@ fn the_pr_boxes_are_drawn_by_the_box_widget() {
         .take_while(|line| !line.starts_with("#[cfg(test)]"))
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(product.contains("BoxWidget"), "boxes.rs draws the PR boxes with BoxWidget");
-    for hand_built in ["Block::bordered", "BorderType::Rounded", "rect.inner(Margin"] {
-        assert!(!product.contains(hand_built), "boxes.rs still hand-builds a box: {hand_built}");
+    assert!(
+        product.contains("BoxWidget"),
+        "boxes.rs draws the PR boxes with BoxWidget"
+    );
+    for hand_built in [
+        "Block::bordered",
+        "BorderType::Rounded",
+        "rect.inner(Margin",
+    ] {
+        assert!(
+            !product.contains(hand_built),
+            "boxes.rs still hand-builds a box: {hand_built}"
+        );
     }
 }
 
@@ -52,16 +65,33 @@ fn a_pr_box_title_follows_the_corner_and_one_dash() {
     terminal.draw(|f| ui.draw(f, Some(&centre))).unwrap();
     let buf = terminal.backend().buffer();
     // row 1 is the box's top: the margin column, then `╭`, the dash and the title
-    assert_eq!(row(buf, 1).trim_end(), " ╭─ api · api-repo 󱦰 main · dispatch ─╮");
+    assert_eq!(
+        row(buf, 1).trim_end(),
+        " ╭─ api · api-repo 󱦰 main · dispatch ─╮"
+    );
     // the wall is one margin column in, the padding is the next column, and the body starts after both
     let wall = spacing::MARGIN_X;
     let body = wall + 1 + spacing::PAD_X;
-    let cells = |y: u16| buf.content[usize::from(y) * 40..usize::from(y + 1) * 40].iter().map(|c| c.symbol().to_owned()).collect::<Vec<_>>();
+    let cells = |y: u16| {
+        buf.content[usize::from(y) * 40..usize::from(y + 1) * 40]
+            .iter()
+            .map(|c| c.symbol().to_owned())
+            .collect::<Vec<_>>()
+    };
     let under = cells(2);
     assert_eq!(under[usize::from(wall)], "│");
-    assert_eq!(under[usize::from(wall + 1)..usize::from(body)].concat().trim(), "", "the padding column is blank");
+    assert_eq!(
+        under[usize::from(wall + 1)..usize::from(body)]
+            .concat()
+            .trim(),
+        "",
+        "the padding column is blank"
+    );
     let text: String = under[usize::from(body)..].concat();
-    assert!(text.starts_with("no Jobs"), "`no Jobs` starts at column {body}: {text:?}");
+    assert!(
+        text.starts_with("no Jobs"),
+        "`no Jobs` starts at column {body}: {text:?}"
+    );
 }
 
 fn text(c: &flow::Chart) -> String {
@@ -91,9 +121,22 @@ fn a_need_connector_reaches_the_top_border_with_no_arrowhead() {
 ╰────────────────────────────────────╯";
     let got = text(&c);
     assert_eq!(got, want, "\n{got}");
-    assert!(!got.contains('\u{F19B3}'), "the 󱦳 arrowhead is gone: {got:?}");
+    assert!(
+        !got.contains('\u{F19B3}'),
+        "the 󱦳 arrowhead is gone: {got:?}"
+    );
     let rows: Vec<&str> = got.lines().collect();
-    assert_eq!(rows[4], format!("{}│", " ".repeat(36)), "the routed line reaches the cell above web's top border: {got:?}");
-    assert!(rows[0].contains('\u{F19B0}'), "the TO title arrow is still in api's top row");
-    assert!(rows[5].contains('\u{F19B0}'), "the TO title arrow is still in web's top row");
+    assert_eq!(
+        rows[4],
+        format!("{}│", " ".repeat(36)),
+        "the routed line reaches the cell above web's top border: {got:?}"
+    );
+    assert!(
+        rows[0].contains('\u{F19B0}'),
+        "the TO title arrow is still in api's top row"
+    );
+    assert!(
+        rows[5].contains('\u{F19B0}'),
+        "the TO title arrow is still in web's top row"
+    );
 }

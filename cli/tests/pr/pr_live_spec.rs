@@ -2,7 +2,6 @@
 //! after the PR's base or repo changed it names the live value, never the one written at insert. The stored Spec (the `jobs`
 //! row) keeps the text written at insert: nothing is written.
 
-
 use std::fs;
 
 use super::pr_crud::{Crud, crud};
@@ -18,13 +17,27 @@ fn plan() -> PlanId {
 }
 
 fn store(fx: &Crud) -> Store {
-    Store::open(&CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap(), 5000).unwrap()
+    Store::open(
+        &CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap(),
+        5000,
+    )
+    .unwrap()
 }
 
 /// `pr add <key> --repo <repo> --shape config …`: the draft opener `open-<key>` and its Spec stay.
 fn add(fx: &Crud, key: &str, repo: &std::path::Path, extra: &[&str]) {
     let title = format!("Change {key}");
-    let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", &title, "--shape", "config"];
+    let mut args = vec![
+        "pr",
+        "add",
+        key,
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        &title,
+        "--shape",
+        "config",
+    ];
     args.extend(extra);
     args.extend(["--plan", "pay-1"]);
     fx.cpd(&args).ok();
@@ -32,17 +45,25 @@ fn add(fx: &Crud, key: &str, repo: &std::path::Path, extra: &[&str]) {
 
 fn branch(fx: &Crud, repo: &std::path::Path, name: &str) {
     fx.git(repo, &["branch", name]);
-    fx.git(repo, &["update-ref", &format!("refs/remotes/origin/{name}"), name]);
+    fx.git(
+        repo,
+        &["update-ref", &format!("refs/remotes/origin/{name}"), name],
+    );
 }
 
 fn base_of(fx: &Crud, key: &str) -> String {
-    fx.env.query::<String>(&format!("SELECT base FROM prs WHERE key = '{key}'"))
+    fx.env
+        .query::<String>(&format!("SELECT base FROM prs WHERE key = '{key}'"))
 }
 
 /// The stored row of Job `job`: `(goal, status, fingerprint)`; the tests compare the `goal`, since `render` moves the status
 /// as the lock and the engine do.
 fn stored(fx: &Crud, job: &str) -> (String, String, String) {
-    let one = |col: &str| fx.env.query::<String>(&format!("SELECT coalesce({col}, '') FROM jobs WHERE key = '{job}'"));
+    let one = |col: &str| {
+        fx.env.query::<String>(&format!(
+            "SELECT coalesce({col}, '') FROM jobs WHERE key = '{job}'"
+        ))
+    };
     (one("goal"), one("status"), one("fingerprint"))
 }
 
@@ -53,7 +74,9 @@ fn render(fx: &Crud, job: &str) -> String {
         store
             .read(|c| {
                 let jobs = cpd_core::plan::jobs::load(c, &plan())?;
-                Ok(cpd_core::plan::locked_fingerprint(jobs.iter().find(|j| j.key == job).unwrap()))
+                Ok(cpd_core::plan::locked_fingerprint(
+                    jobs.iter().find(|j| j.key == job).unwrap(),
+                ))
             })
             .unwrap()
     };
@@ -71,7 +94,11 @@ fn render(fx: &Crud, job: &str) -> String {
     let mut store = Store::open(&home, 5000).unwrap();
     let path = store
         .read(|conn| {
-            let target = ledger::load(conn, &plan(), &AttemptId::parse(&format!("{job}-a1")).unwrap())?;
+            let target = ledger::load(
+                conn,
+                &plan(),
+                &AttemptId::parse(&format!("{job}-a1")).unwrap(),
+            )?;
             let jobs = cpd_core::plan::jobs::load(conn, &plan())?;
             let job = jobs.iter().find(|j| j.key == job).expect("the Job");
             cpd_core::driver::worker::render_spec(conn, &home, &target, job)
@@ -82,7 +109,11 @@ fn render(fx: &Crud, job: &str) -> String {
 
 /// The three fragments of a base in a rendered Spec.
 fn base_fragments(base: &str, first: &str) -> [String; 3] {
-    [format!("{first} {base}"), format!("git fetch origin {base}"), format!("origin/{base} HEAD")]
+    [
+        format!("{first} {base}"),
+        format!("git fetch origin {base}"),
+        format!("origin/{base} HEAD"),
+    ]
 }
 
 /// The live base is named and the insert-time one is not; the stored row of `job` is as it was.
@@ -108,7 +139,8 @@ fn an_open_jobs_worker_spec_names_the_base_a_pr_edit_set_before_the_lock() {
     let before = stored(&fx, "open-b");
     assert!(before.0.contains("develop"), "{before:?}");
 
-    fx.cpd(&["pr", "edit", "b", "--base", "main", "--plan", "pay-1"]).ok();
+    fx.cpd(&["pr", "edit", "b", "--base", "main", "--plan", "pay-1"])
+        .ok();
     assert_eq!(base_of(&fx, "b"), "main");
 
     let spec = render(&fx, "open-b");
@@ -121,11 +153,22 @@ fn an_open_jobs_worker_spec_names_the_base_a_restack_set_after_the_lock() {
     let fx = crud("plan");
     add(&fx, "a", &fx.pay, &["--no-needs"]);
     add(&fx, "b", &fx.pay, &["--needs", "a"]);
-    fx.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z'");
+    fx.env
+        .sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z'");
     let before = stored(&fx, "open-b");
     assert!(before.0.contains("main"), "{before:?}");
 
-    fx.cpd(&["pr", "edit", "b", "--base", "a", "--no-needs", "--plan", "pay-1"]).ok();
+    fx.cpd(&[
+        "pr",
+        "edit",
+        "b",
+        "--base",
+        "a",
+        "--no-needs",
+        "--plan",
+        "pay-1",
+    ])
+    .ok();
     assert_eq!(base_of(&fx, "b"), "pay-1/a");
 
     let spec = render(&fx, "open-b");
@@ -153,7 +196,13 @@ fn an_open_jobs_worker_spec_names_the_base_an_unstack_set_when_its_base_pr_merge
     );
 
     let mut s = store(&fx);
-    cpd_core::pr::start::unstack_for_open_job(&mut s, "test", &plan(), &cpd_core::ids::PrKey::parse("b").unwrap()).unwrap();
+    cpd_core::pr::start::unstack_for_open_job(
+        &mut s,
+        "test",
+        &plan(),
+        &cpd_core::ids::PrKey::parse("b").unwrap(),
+    )
+    .unwrap();
     assert_eq!(base_of(&fx, "b"), "main");
 
     let spec = render(&fx, "open-b");
@@ -167,14 +216,28 @@ fn an_open_jobs_worker_spec_names_the_repo_a_pr_edit_set() {
     add(&fx, "b", &fx.pay, &[]);
     let before = stored(&fx, "open-b");
     let (pay, web) = (fx.pay.display().to_string(), fx.web.display().to_string());
-    assert!(before.0.contains(&format!("in the repo {pay}")) || !before.0.contains(&web), "{before:?}");
+    assert!(
+        before.0.contains(&format!("in the repo {pay}")) || !before.0.contains(&web),
+        "{before:?}"
+    );
 
-    fx.cpd(&["pr", "edit", "b", "--repo", &web, "--plan", "pay-1"]).ok();
-    assert_eq!(fx.env.query::<String>("SELECT repo FROM prs WHERE key = 'b'"), web);
+    fx.cpd(&["pr", "edit", "b", "--repo", &web, "--plan", "pay-1"])
+        .ok();
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT repo FROM prs WHERE key = 'b'"),
+        web
+    );
 
     let spec = render(&fx, "open-b");
-    assert!(spec.contains(&format!("in the repo {web}")), "the Spec lacks the live repo:\n{spec}");
-    assert!(!spec.contains(&format!("in the repo {pay}")), "the Spec still names the old repo:\n{spec}");
+    assert!(
+        spec.contains(&format!("in the repo {web}")),
+        "the Spec lacks the live repo:\n{spec}"
+    );
+    assert!(
+        !spec.contains(&format!("in the repo {pay}")),
+        "the Spec still names the old repo:\n{spec}"
+    );
     assert_eq!(stored(&fx, "open-b").0, before.0);
 }
 
@@ -186,15 +249,29 @@ fn an_update_jobs_worker_spec_names_the_base_a_pr_edit_set() {
     // The update Job is queued from the PR row BEFORE the edit: its stored text names `develop`.
     let mut s = store(&fx);
     let key = {
-        let prs = s.read(|c| cpd_core::plan::fingerprint::load_prs(c, &plan())).unwrap();
+        let prs = s
+            .read(|c| cpd_core::plan::fingerprint::load_prs(c, &plan()))
+            .unwrap();
         let pr = prs.iter().find(|p| p.key.as_str() == "b").unwrap().clone();
-        s.write("test", |tx| queue_update(tx, &plan(), &pr, Tier::parse("H3")?, "test", Cause::Conflict)).unwrap().expect("an update Job")
+        s.write("test", |tx| {
+            queue_update(
+                tx,
+                &plan(),
+                &pr,
+                Tier::parse("H3")?,
+                "test",
+                Cause::Conflict,
+            )
+        })
+        .unwrap()
+        .expect("an update Job")
     };
     let job = key.as_str().to_owned();
     let before = stored(&fx, &job);
     assert!(before.0.contains("develop"), "{before:?}");
 
-    fx.cpd(&["pr", "edit", "b", "--base", "main", "--plan", "pay-1"]).ok();
+    fx.cpd(&["pr", "edit", "b", "--base", "main", "--plan", "pay-1"])
+        .ok();
     assert_eq!(base_of(&fx, "b"), "main");
 
     let spec = render(&fx, &job);

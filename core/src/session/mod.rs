@@ -16,6 +16,10 @@
 //! - `fork_wait`: a fork's wait for its source Lead to finish its turn.
 
 mod archive;
+#[cfg(test)]
+mod durable_moves_tests;
+#[cfg(test)]
+mod durable_send_tests;
 mod first_message;
 mod fork_wait;
 mod history;
@@ -24,21 +28,17 @@ mod moves;
 mod phi_label_tests;
 #[cfg(test)]
 mod ports_tests;
-#[cfg(test)]
-mod durable_moves_tests;
-#[cfg(test)]
-mod durable_send_tests;
 mod reload;
+mod report;
 mod resolve;
 mod resume;
 mod retier;
-mod report;
-mod switch;
 pub(crate) mod retitle;
 pub(crate) mod row;
 pub(crate) mod run;
 pub(crate) mod send;
 mod state;
+mod switch;
 pub mod tail;
 #[cfg(test)]
 mod tail_tests;
@@ -55,13 +55,13 @@ use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
 use crate::ports::Ports;
 
-pub use archive::{Blocker, archive_ended_workers, archive_blocked, blockers};
-pub use moves::{Closed, Place, Placed, close_lead, gone, placed, reopen};
+pub use archive::{Blocker, archive_blocked, archive_ended_workers, blockers};
 pub(crate) use moves::lead_spawn;
-pub use row::{Role, State};
+pub use moves::{Closed, Place, Placed, close_lead, gone, placed, reopen};
 pub use resume::LOOP_GUARD_LABEL;
-pub use state::Label;
+pub use row::{Role, State};
 pub use send::{plan_inactive, sender, tell, tell_manager_of, tell_managers};
+pub use state::Label;
 
 /// The Session `reference` names (commands.md §1.3), for the commands outside this module.
 pub fn resolve(conn: &rusqlite::Connection, reference: &SessionRef) -> Result<SessionId, CpdError> {
@@ -253,7 +253,14 @@ impl std::str::FromStr for Unblocks {
     fn from_str(s: &str) -> Result<Unblocks, CpdError> {
         let chars = s.chars().count();
         if chars == 0 || chars > Unblocks::MAX_CHARS || s.chars().any(char::is_control) {
-            return Err(CpdError::new(ErrorCode::Usage, format!("--unblocks is 1 to {} characters on one line.", Unblocks::MAX_CHARS)).with("chars", chars));
+            return Err(CpdError::new(
+                ErrorCode::Usage,
+                format!(
+                    "--unblocks is 1 to {} characters on one line.",
+                    Unblocks::MAX_CHARS
+                ),
+            )
+            .with("chars", chars));
         }
         Ok(Unblocks(s.to_owned()))
     }
@@ -402,7 +409,12 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 
 /// Starts Session `id` (a Lead or Manager) as a parked window, as `command` (what engine E2 calls): [`moves::start_parked`] on
 /// an `Env` of `home` on `ports`. Returns the pane, or none when another process recorded one first.
-pub fn start_parked_as(ports: &Ports, home: crate::home::CpdHome, id: &SessionId, command: &str) -> Result<Option<crate::host::PaneId>, CpdError> {
+pub fn start_parked_as(
+    ports: &Ports,
+    home: crate::home::CpdHome,
+    id: &SessionId,
+    command: &str,
+) -> Result<Option<crate::host::PaneId>, CpdError> {
     Ports::scope(ports, || {
         let mut env = Env::open_home_with(ports, home)?;
         let row = env.store.read(|conn| row::load(conn, id))?;
@@ -424,13 +436,17 @@ impl Env {
 }
 
 fn session_not_found(id: &SessionId) -> CpdError {
-    CpdError::new(ErrorCode::SessionNotFound, format!("No Session {id}.")).with("session", id.as_str())
+    CpdError::new(ErrorCode::SessionNotFound, format!("No Session {id}."))
+        .with("session", id.as_str())
 }
 
 fn not_a_lead(id: &SessionId, role: Role) -> CpdError {
-    CpdError::new(ErrorCode::NotALead, format!("Session {id} is a {}, not a Lead.", role.as_str()))
-        .with("session", id.as_str())
-        .with("role", role.as_str())
+    CpdError::new(
+        ErrorCode::NotALead,
+        format!("Session {id} is a {}, not a Lead.", role.as_str()),
+    )
+    .with("session", id.as_str())
+    .with("role", role.as_str())
 }
 
 pub(crate) fn no_cockpit(cockpit: &str) -> CpdError {

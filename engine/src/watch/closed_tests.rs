@@ -46,7 +46,14 @@ fn fixture() -> Fx {
 fn messages(fx: &mut Fx) -> Vec<(Option<String>, Value, Value, String)> {
     fx.events("session-message")
         .into_iter()
-        .map(|(_, _, _, d)| (None, d["from"].clone(), d["wake"].clone(), d["text"].as_str().unwrap_or_default().to_owned()))
+        .map(|(_, _, _, d)| {
+            (
+                None,
+                d["from"].clone(),
+                d["wake"].clone(),
+                d["text"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
         .collect()
 }
 
@@ -60,8 +67,14 @@ fn an_idle_lead_is_told_once_when_its_open_pr_has_a_closed_pull_request() {
     closed::run(&mut fx.engine);
     let sent = messages(&mut fx);
     assert_eq!(sent.len(), 1, "{sent:?}");
-    assert_eq!((sent[0].1.clone(), sent[0].2.clone()), (Value::Null, Value::Bool(true)));
-    assert_eq!(fx.query::<String>("SELECT session FROM events WHERE kind = 'session-message'"), "lead1");
+    assert_eq!(
+        (sent[0].1.clone(), sent[0].2.clone()),
+        (Value::Null, Value::Bool(true))
+    );
+    assert_eq!(
+        fx.query::<String>("SELECT session FROM events WHERE kind = 'session-message'"),
+        "lead1"
+    );
 }
 
 #[test]
@@ -97,7 +110,11 @@ fn a_busy_lead_is_told_when_it_goes_idle() {
     let mut fx = fixture();
     fx.fixture("UPDATE sessions SET state = 'working' WHERE id = 'lead1';");
     closed::run(&mut fx.engine);
-    assert_eq!(texts(&mut fx), Vec::<String>::new(), "a busy Lead is not told");
+    assert_eq!(
+        texts(&mut fx),
+        Vec::<String>::new(),
+        "a busy Lead is not told"
+    );
     fx.fixture("UPDATE sessions SET state = 'idle' WHERE id = 'lead1';");
     closed::run(&mut fx.engine);
     closed::run(&mut fx.engine);

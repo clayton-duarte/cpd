@@ -81,43 +81,89 @@ pub struct Answer {
 }
 
 fn invalid(why: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::ModelsHelperFailed, format!("The model-discovery helper's answer is not the contract's: {why}."))
+    CpdError::new(
+        ErrorCode::ModelsHelperFailed,
+        format!("The model-discovery helper's answer is not the contract's: {why}."),
+    )
 }
 
 fn texts(value: &Value, what: &str) -> Result<Vec<String>, CpdError> {
-    let list = value.as_array().ok_or_else(|| invalid(format!("{what} is not an array")))?;
+    let list = value
+        .as_array()
+        .ok_or_else(|| invalid(format!("{what} is not an array")))?;
     list.iter()
-        .map(|v| v.as_str().filter(|s| !s.is_empty()).map(str::to_owned).ok_or_else(|| invalid(format!("{what} holds a value that is not a non-empty text"))))
+        .map(|v| {
+            v.as_str()
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    invalid(format!("{what} holds a value that is not a non-empty text"))
+                })
+        })
         .collect()
 }
 
 fn failure_of(error: &Value, provider: &str) -> Result<ProviderFailure, CpdError> {
-    let text = |key: &str| error[key].as_str().map(str::to_owned).ok_or_else(|| invalid(format!("the error of {provider:?} has no text `{key}`")));
+    let text = |key: &str| {
+        error[key]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| invalid(format!("the error of {provider:?} has no text `{key}`")))
+    };
     let details = match &error["details"] {
         Value::Object(map) => map.clone(),
         Value::Null => Map::new(),
-        _ => return Err(invalid(format!("the error of {provider:?} has `details` that is not an object"))),
+        _ => {
+            return Err(invalid(format!(
+                "the error of {provider:?} has `details` that is not an object"
+            )));
+        }
     };
-    Ok(ProviderFailure { provider: provider.to_owned(), code: text("code")?, message: text("message")?, details })
+    Ok(ProviderFailure {
+        provider: provider.to_owned(),
+        code: text("code")?,
+        message: text("message")?,
+        details,
+    })
 }
 
 fn entry_of(value: &Value) -> Result<Entry, CpdError> {
-    let provider = value["provider"].as_str().filter(|p| safe_name(p)).ok_or_else(|| invalid("an entry's `provider` is not a file-name-safe text"))?;
+    let provider = value["provider"]
+        .as_str()
+        .filter(|p| safe_name(p))
+        .ok_or_else(|| invalid("an entry's `provider` is not a file-name-safe text"))?;
     if value.get("error").is_some() {
         return Ok(Entry::Failed(failure_of(&value["error"], provider)?));
     }
-    let auth = value["auth"].as_str().filter(|a| ["oauth", "api_key", "custom"].contains(a)).ok_or_else(|| invalid(format!("the `auth` of {provider:?} is not oauth, api_key or custom")))?;
+    let auth = value["auth"]
+        .as_str()
+        .filter(|a| ["oauth", "api_key", "custom"].contains(a))
+        .ok_or_else(|| {
+            invalid(format!(
+                "the `auth` of {provider:?} is not oauth, api_key or custom"
+            ))
+        })?;
     let base = match &value["base"] {
         Value::Null => None,
         Value::String(s) => Some(s.clone()),
-        _ => return Err(invalid(format!("the `base` of {provider:?} is not text or null"))),
+        _ => {
+            return Err(invalid(format!(
+                "the `base` of {provider:?} is not text or null"
+            )));
+        }
     };
     let ids = texts(&value["ids"], &format!("the `ids` of {provider:?}"))?;
     let known = match value.get("known") {
         None | Some(Value::Null) => None,
         Some(known) => Some(texts(known, &format!("the `known` of {provider:?}"))?),
     };
-    Ok(Entry::Listed(Listed { provider: provider.to_owned(), auth: auth.to_owned(), base, ids, known }))
+    Ok(Entry::Listed(Listed {
+        provider: provider.to_owned(),
+        auth: auth.to_owned(),
+        base,
+        ids,
+        known,
+    }))
 }
 
 impl Answer {
@@ -129,8 +175,13 @@ impl Answer {
                 Err(error_of(&failure.code, &failure.message, failure.details))
             }
             Value::Bool(true) => {
-                let pi_version = value["pi_version"].as_str().ok_or_else(|| invalid("`pi_version` is not text"))?.to_owned();
-                let list = value["providers"].as_array().ok_or_else(|| invalid("`providers` is not an array"))?;
+                let pi_version = value["pi_version"]
+                    .as_str()
+                    .ok_or_else(|| invalid("`pi_version` is not text"))?
+                    .to_owned();
+                let list = value["providers"]
+                    .as_array()
+                    .ok_or_else(|| invalid("`providers` is not an array"))?;
                 let entries = list.iter().map(entry_of).collect::<Result<Vec<_>, _>>()?;
                 let names: std::collections::BTreeSet<&str> = entries
                     .iter()
@@ -142,7 +193,10 @@ impl Answer {
                 if names.len() != entries.len() {
                     return Err(invalid("a provider is listed twice"));
                 }
-                Ok(Answer { pi_version, entries })
+                Ok(Answer {
+                    pi_version,
+                    entries,
+                })
             }
             _ => Err(invalid("`ok` is not a boolean")),
         }
@@ -199,18 +253,28 @@ impl Helper {
         let out = match runner.output(&mut self.cmd, "node", DEADLINE) {
             Ok(out) => out,
             Err(Failed::Io(e)) => {
-                return Err(CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run {}: {e}.", self.argv.join(" "))).with("argv", json!(self.argv)));
+                return Err(CpdError::new(
+                    ErrorCode::SpawnFailed,
+                    format!("Cannot run {}: {e}.", self.argv.join(" ")),
+                )
+                .with("argv", json!(self.argv)));
             }
             Err(Failed::Timeout(e)) => return Err(e),
         };
         let stdout = String::from_utf8_lossy(&out.stdout);
         match serde_json::from_str::<Value>(stdout.trim()) {
             Ok(value) => Answer::parse(&value),
-            Err(_) => Err(CpdError::new(ErrorCode::SpawnFailed, format!("{} printed no result.", self.argv.join(" ")))
-                .with("argv", json!(self.argv))
-                .with("exit", out.status.code())
-                .with("stdout", tail(&stdout, TAIL_LINES))
-                .with("stderr", tail(&String::from_utf8_lossy(&out.stderr), TAIL_LINES))),
+            Err(_) => Err(CpdError::new(
+                ErrorCode::SpawnFailed,
+                format!("{} printed no result.", self.argv.join(" ")),
+            )
+            .with("argv", json!(self.argv))
+            .with("exit", out.status.code())
+            .with("stdout", tail(&stdout, TAIL_LINES))
+            .with(
+                "stderr",
+                tail(&String::from_utf8_lossy(&out.stderr), TAIL_LINES),
+            )),
         }
     }
 }

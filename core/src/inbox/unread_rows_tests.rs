@@ -20,7 +20,11 @@ fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
     let store = Store::open(&home, 5000).unwrap();
-    let mut f = Fixture { _dir: dir, home, store };
+    let mut f = Fixture {
+        _dir: dir,
+        home,
+        store,
+    };
     f.sql(&format!(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');
          INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
@@ -64,7 +68,11 @@ impl Fixture {
     }
 
     fn unread(&mut self) -> Vec<Condition> {
-        let now = OffsetDateTime::parse("2026-01-01T00:00:00Z", &time::format_description::well_known::Rfc3339).unwrap();
+        let now = OffsetDateTime::parse(
+            "2026-01-01T00:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
         let all = conditions_with(&mut self.store, &self.home, now, 20, 1, None).unwrap();
         all.into_iter().filter(|c| c.kind == Kind::Unread).collect()
     }
@@ -72,11 +80,18 @@ impl Fixture {
     fn label(&mut self, session: &str) -> String {
         let subject = format!("session:{session}");
         let found = self.unread();
-        found.iter().find(|c| c.subject == subject).unwrap_or_else(|| panic!("{found:?}")).label.clone()
+        found
+            .iter()
+            .find(|c| c.subject == subject)
+            .unwrap_or_else(|| panic!("{found:?}"))
+            .label
+            .clone()
     }
 
     fn count(&mut self, sql: &str) -> i64 {
-        self.store.read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?)).unwrap()
+        self.store
+            .read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?))
+            .unwrap()
     }
 }
 
@@ -125,22 +140,38 @@ fn an_open_unread_item_follows_its_title_in_place_and_keeps_its_snooze() {
     assert_eq!(opened.opened.len(), 1);
     let id = opened.opened[0];
     let label = |f: &mut Fixture| -> String {
-        f.store.read(|c| Ok(c.query_row("SELECT label FROM inbox_items WHERE id = ?1 AND closed_at IS NULL", [id], |r| r.get(0))?)).unwrap()
+        f.store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT label FROM inbox_items WHERE id = ?1 AND closed_at IS NULL",
+                    [id],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap()
     };
     assert_eq!(label(&mut f), "ctx replied");
-    f.sql(&format!("UPDATE inbox_items SET snoozed_until = '{SNOOZE}' WHERE id = {id}"));
+    f.sql(&format!(
+        "UPDATE inbox_items SET snoozed_until = '{SNOOZE}' WHERE id = {id}"
+    ));
     let events = "SELECT count(*) FROM events WHERE kind IN ('inbox-opened', 'inbox-closed')";
     let before = f.count(events);
-    let snooze = format!("SELECT count(*) FROM inbox_items WHERE id = {id} AND snoozed_until = '{SNOOZE}'");
+    let snooze =
+        format!("SELECT count(*) FROM inbox_items WHERE id = {id} AND snoozed_until = '{SNOOZE}'");
 
     for title in ["Payments work", "Billing work"] {
-        f.sql(&format!("UPDATE sessions SET title = '{title}' WHERE id = 'mgr'"));
+        f.sql(&format!(
+            "UPDATE sessions SET title = '{title}' WHERE id = 'mgr'"
+        ));
         let conditions = f.unread();
         let changes = reconcile(&mut f.store, &conditions, T).unwrap();
         assert!(changes.is_empty(), "{changes:?}");
         assert_eq!(label(&mut f), format!("ctx replied\n{title}"));
         assert_eq!(f.count(&snooze), 1);
         assert_eq!(f.count(events), before);
-        assert_eq!(f.count("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL"), 1);
+        assert_eq!(
+            f.count("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL"),
+            1
+        );
     }
 }

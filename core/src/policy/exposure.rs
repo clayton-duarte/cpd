@@ -17,7 +17,7 @@
 
 use std::path::Path;
 
-use super::domain::{exposure, Domain, Scope};
+use super::domain::{Domain, Scope, exposure};
 use super::load::policy_invalid;
 use crate::error::CpdError;
 

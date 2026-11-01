@@ -53,7 +53,11 @@ fn name_of(names: &Names, target: Target) -> &str {
 
 fn names_of(policy: &Policy) -> Names {
     let jira = &policy.pr.jira;
-    Names { in_progress: jira.in_progress.clone(), in_review: jira.in_review.clone(), done: jira.done.clone() }
+    Names {
+        in_progress: jira.in_progress.clone(),
+        in_review: jira.in_review.clone(),
+        done: jira.done.clone(),
+    }
 }
 
 fn about(plan: &str) -> About {
@@ -65,11 +69,17 @@ fn policy_of(engine: &mut Engine, plan: &str, pr: &str) -> Result<Policy, CpdErr
     let home = engine.home.clone();
     let plan = PlanId::parse(plan)?;
     let key = PrKey::parse(pr)?;
-    engine.store.read(|conn| cpd_core::pr::policy_of_pr(conn, &home, &plan, &key))
+    engine
+        .store
+        .read(|conn| cpd_core::pr::policy_of_pr(conn, &home, &plan, &key))
 }
 
 fn move_about(due: &Due) -> About {
-    About::Move(PlanId::parse(&due.plan).expect("a stored Plan id"), PrKey::parse(&due.pr).expect("a stored PR key"), due.target)
+    About::Move(
+        PlanId::parse(&due.plan).expect("a stored Plan id"),
+        PrKey::parse(&due.pr).expect("a stored PR key"),
+        due.target,
+    )
 }
 
 /// Reports a failure of the row `due`: machine-wide for a missing sign-in or server, else one Event of the row's Plan.
@@ -87,8 +97,19 @@ fn fail_row(engine: &mut Engine, due: &Due, status: &str, failure: Failure) {
     details.insert("ticket".into(), json!(due.ticket));
     details.insert("target".into(), json!(due.target.as_str()));
     details.insert("status".into(), json!(status));
-    let message = format!("{} could not be moved to \"{status}\": {}", due.ticket, failure.message);
-    engine.fail(Step::E19, move_about(due), Failure { code: failure.code, message, details: Value::Object(details) });
+    let message = format!(
+        "{} could not be moved to \"{status}\": {}",
+        due.ticket, failure.message
+    );
+    engine.fail(
+        Step::E19,
+        move_about(due),
+        Failure {
+            code: failure.code,
+            message,
+            details: Value::Object(details),
+        },
+    );
 }
 
 pub(super) fn run(engine: &mut Engine) {
@@ -103,7 +124,10 @@ pub(super) fn run(engine: &mut Engine) {
     reopen_parked(engine);
     let repeat = Duration::from_secs(u64::from(engine.config.watch.error_repeat_seconds));
     let now = engine.ports.clock.now();
-    engine.jira.failed_at.retain(|_, end| now.saturating_duration_since(*end) < repeat);
+    engine
+        .jira
+        .failed_at
+        .retain(|_, end| now.saturating_duration_since(*end) < repeat);
     loop {
         let skip: Vec<i64> = engine.jira.failed_at.keys().copied().collect();
         let due = match engine.store.read(|conn| jira_sync::next_due(conn, &skip)) {
@@ -129,7 +153,9 @@ pub(super) fn run(engine: &mut Engine) {
         let names = names_of(&policy);
         let status = name_of(&names, due.target).to_owned();
         if status.is_empty() {
-            match engine.store.write("engine E19", |tx| jira_sync::mark_settled(tx, due.id, Outcome::Skipped)) {
+            match engine.store.write("engine E19", |tx| {
+                jira_sync::mark_settled(tx, due.id, Outcome::Skipped)
+            }) {
                 Ok(_) => engine.clear(Step::E19, &move_about(&due)),
                 Err(e) => {
                     engine.jira.failed_at.insert(due.id, now);
@@ -139,7 +165,13 @@ pub(super) fn run(engine: &mut Engine) {
             continue;
         }
         match start(engine, &due, names, policy.pr.jira.estimate_fields.clone()) {
-            Ok(answer) => engine.jira.running = Some(Running { due, status, answer }),
+            Ok(answer) => {
+                engine.jira.running = Some(Running {
+                    due,
+                    status,
+                    answer,
+                })
+            }
             Err(failure) => {
                 engine.jira.failed_at.insert(due.id, now);
                 fail_row(engine, &due, &status, failure);
@@ -155,19 +187,33 @@ fn collect(engine: &mut Engine) {
     let answer = match running.answer.try_recv() {
         Ok(answer) => answer,
         Err(TryRecvError::Empty) => return,
-        Err(TryRecvError::Disconnected) => {
-            Err(Failure::from(&CpdError::new(ErrorCode::SpawnFailed, "The Jira helper's reader ended without an answer.")))
-        }
+        Err(TryRecvError::Disconnected) => Err(Failure::from(&CpdError::new(
+            ErrorCode::SpawnFailed,
+            "The Jira helper's reader ended without an answer.",
+        ))),
     };
     let Running { due, status, .. } = engine.jira.running.take().expect("a run was in flight");
     let ended = engine.ports.clock.now();
     match answer {
         Ok(done) => {
-            let outcome = if done == Done::Moved { Outcome::Moved } else { Outcome::Unchanged };
-            match engine.store.write("engine E19", |tx| jira_sync::mark_settled(tx, due.id, outcome)) {
+            let outcome = if done == Done::Moved {
+                Outcome::Moved
+            } else {
+                Outcome::Unchanged
+            };
+            match engine.store.write("engine E19", |tx| {
+                jira_sync::mark_settled(tx, due.id, outcome)
+            }) {
                 Ok(_) => {
                     engine.jira.failed_at.remove(&due.id);
-                    engine.log.line(&format!("E19: {} {} {} ({}): {}", outcome.as_str(), due.ticket, due.target.as_str(), due.pr, status));
+                    engine.log.line(&format!(
+                        "E19: {} {} {} ({}): {}",
+                        outcome.as_str(),
+                        due.ticket,
+                        due.target.as_str(),
+                        due.pr,
+                        status
+                    ));
                     engine.clear(Step::E19, &About::Machine);
                     engine.clear(Step::E19, &move_about(&due));
                 }
@@ -178,12 +224,28 @@ fn collect(engine: &mut Engine) {
             }
         }
         Err(failure) if failure.code == "jira_refused" => {
-            let reason = failure.details["reason"].as_str().unwrap_or("unknown").to_owned();
-            let refusal = Refusal { reason: reason.clone(), message: failure.message.clone(), ticket: due.ticket.clone(), status: status.clone() };
-            match engine.store.write("engine E19", |tx| jira_sync::refuse(tx, SOURCE, due.id, &refusal)) {
+            let reason = failure.details["reason"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_owned();
+            let refusal = Refusal {
+                reason: reason.clone(),
+                message: failure.message.clone(),
+                ticket: due.ticket.clone(),
+                status: status.clone(),
+            };
+            match engine.store.write("engine E19", |tx| {
+                jira_sync::refuse(tx, SOURCE, due.id, &refusal)
+            }) {
                 Ok(_) => {
                     engine.jira.failed_at.remove(&due.id);
-                    engine.log.line(&format!("E19: parked {} {} on {} of {}: {reason}", due.ticket, due.target.as_str(), due.pr, due.plan));
+                    engine.log.line(&format!(
+                        "E19: parked {} {} on {} of {}: {reason}",
+                        due.ticket,
+                        due.target.as_str(),
+                        due.pr,
+                        due.plan
+                    ));
                     engine.clear(Step::E19, &About::Machine);
                     engine.clear(Step::E19, &move_about(&due));
                 }
@@ -217,8 +279,17 @@ fn reopen_parked(engine: &mut Engine) {
                 engine.clear(Step::E19, &about(&due.plan));
                 let name = name_of(&names_of(&policy), due.target).to_owned();
                 if !name.is_empty() && format!("{}|{name}", due.ticket) != row.tried {
-                    match engine.store.write("engine E19", |tx| jira_sync::reopen(tx, due.id)) {
-                        Ok(_) => engine.log.line(&format!("E19: reopened {} {} on {} of {}", due.ticket, due.target.as_str(), due.pr, due.plan)),
+                    match engine
+                        .store
+                        .write("engine E19", |tx| jira_sync::reopen(tx, due.id))
+                    {
+                        Ok(_) => engine.log.line(&format!(
+                            "E19: reopened {} {} on {} of {}",
+                            due.ticket,
+                            due.target.as_str(),
+                            due.pr,
+                            due.plan
+                        )),
                         Err(e) => engine.fail(Step::E19, about(&due.plan), Failure::from(&e)),
                     }
                 }
@@ -228,17 +299,34 @@ fn reopen_parked(engine: &mut Engine) {
 }
 
 /// Starts the helper for `due` on its own thread; returns where its answer will arrive.
-fn start(engine: &Engine, due: &Due, names: Names, estimate_fields: Vec<String>) -> Result<Receiver<Result<Done, Failure>>, Failure> {
-    let request = Request { ticket: due.ticket.clone(), target: due.target, names, estimate_fields };
-    let call = cpd_core::jira::call(&engine.config, &engine.home, &request, DEADLINE).map_err(|e| Failure::from(&e))?;
+fn start(
+    engine: &Engine,
+    due: &Due,
+    names: Names,
+    estimate_fields: Vec<String>,
+) -> Result<Receiver<Result<Done, Failure>>, Failure> {
+    let request = Request {
+        ticket: due.ticket.clone(),
+        target: due.target,
+        names,
+        estimate_fields,
+    };
+    let call = cpd_core::jira::call(&engine.config, &engine.home, &request, DEADLINE)
+        .map_err(|e| Failure::from(&e))?;
     let runner = Ports::current().runner;
-    let argv: Vec<String> = std::iter::once(call.program.clone()).chain(call.args.iter().cloned()).collect();
+    let argv: Vec<String> = std::iter::once(call.program.clone())
+        .chain(call.args.iter().cloned())
+        .collect();
     let (tx, rx) = channel();
     std::thread::spawn(move || {
         let answer = match runner.run(&call) {
             Ok(out) => cpd_core::jira::answer(&out, &argv).map_err(|e| Failure::from(&e)),
             Err(Failed::Io(e)) => Err(Failure::from(
-                &CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run {}: {e}.", argv.join(" "))).with("argv", json!(argv)),
+                &CpdError::new(
+                    ErrorCode::SpawnFailed,
+                    format!("Cannot run {}: {e}.", argv.join(" ")),
+                )
+                .with("argv", json!(argv)),
             )),
             Err(Failed::Timeout(e)) => Err(Failure::from(&e)),
         };

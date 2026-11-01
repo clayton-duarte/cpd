@@ -30,7 +30,11 @@ fn sp(n: usize) -> String {
 
 /// A PR `key` of repo `repo`, base `main`, `dispatch`, needing `needs`.
 fn pr(key: &str, repo: &str, needs: &[&str]) -> PrNode {
-    PrNode { repo_name: repo.into(), needs: needs.iter().map(|n| PrKey::parse(n).unwrap()).collect(), ..sample_pr(key) }
+    PrNode {
+        repo_name: repo.into(),
+        needs: needs.iter().map(|n| PrKey::parse(n).unwrap()).collect(),
+        ..sample_pr(key)
+    }
 }
 
 fn job(pr: &str, key: &str, status: JobStatus, tier: Option<&str>, needs: &[&str]) -> JobNode {
@@ -70,13 +74,21 @@ fn box_rects(buf: &Buffer, prs: &[PrNode]) -> Vec<Rect> {
                 for x in 2..buf.area.width.saturating_sub(t.len() as u16) {
                     if t.iter().enumerate().all(|(i, c)| at(x + i as u16, y) == c) {
                         let left = x - 2;
-                        let right = (x..buf.area.width).find(|&x2| at(x2, y) == "╮").expect("a box has a `╮`");
-                        let bottom = (y + 1..buf.area.height).find(|&y2| at(left, y2) == "╰").expect("a box has a `╰`");
+                        let right = (x..buf.area.width)
+                            .find(|&x2| at(x2, y) == "╮")
+                            .expect("a box has a `╮`");
+                        let bottom = (y + 1..buf.area.height)
+                            .find(|&y2| at(left, y2) == "╰")
+                            .expect("a box has a `╰`");
                         return Rect::new(left, y, right - left + 1, bottom - y + 1);
                     }
                 }
             }
-            panic!("no title {:?} on the canvas:\n{}", title(p), rows(buf).join("\n"));
+            panic!(
+                "no title {:?} on the canvas:\n{}",
+                title(p),
+                rows(buf).join("\n")
+            );
         })
         .collect()
 }
@@ -99,7 +111,8 @@ fn joins(buf: &Buffer, boxes: &[Rect], from: usize, to: usize, to_pr: &PrNode) -
     for r in boxes {
         for y in r.y..r.bottom() {
             for x in r.x..r.right() {
-                let keep = (y == r.bottom() - 1 && buf[(x, y)].symbol() == "┬") || (y == r.y && buf[(x, y)].symbol() == "┴");
+                let keep = (y == r.bottom() - 1 && buf[(x, y)].symbol() == "┬")
+                    || (y == r.y && buf[(x, y)].symbol() == "┴");
                 if !keep {
                     clean[(x, y)].set_symbol(" ");
                 }
@@ -109,8 +122,14 @@ fn joins(buf: &Buffer, boxes: &[Rect], from: usize, to: usize, to_pr: &PrNode) -
     let (f, t) = (boxes[from], boxes[to]);
     let start = f.x + (f.width - 1) / 2;
     let goal = landing(t, to_pr);
-    let stand = |key: &str, x: u16, y: u16| Pill { key: key.into(), rect: Rect::new(x, y, 1, 1) };
-    let pills = [stand("from", start - 1, f.bottom() - 1), stand("to", goal + 1, t.y)];
+    let stand = |key: &str, x: u16, y: u16| Pill {
+        key: key.into(),
+        rect: Rect::new(x, y, 1, 1),
+    };
+    let pills = [
+        stand("from", start - 1, f.bottom() - 1),
+        stand("to", goal + 1, t.y),
+    ];
     reaches(&clean, &pills, "from", "to")
 }
 
@@ -124,15 +143,31 @@ fn shown(buf: &Buffer) -> String {
 
 fn assert_canvas(c: &Chart, prs: &[PrNode], want: &[String]) {
     let got = rows(&c.buf);
-    assert_eq!(got, want, "\ngot:\n{}\nwant:\n{}", got.join("\n"), want.join("\n"));
+    assert_eq!(
+        got,
+        want,
+        "\ngot:\n{}\nwant:\n{}",
+        got.join("\n"),
+        want.join("\n")
+    );
     let found = check(&c.buf, &c.pills, &box_rects(&c.buf, prs), c.buf.area);
-    assert!(found.is_empty(), "a connector does not touch what it joins: {found:#?}\n{}", got.join("\n"));
+    assert!(
+        found.is_empty(),
+        "a connector does not touch what it joins: {found:#?}\n{}",
+        got.join("\n")
+    );
 }
 
 fn screenshot_1() -> (Vec<PrNode>, Vec<JobNode>) {
     let prs = vec![pr("api", "api-repo", &[]), pr("web", "web-repo", &["api"])];
     let jobs = vec![
-        job("api", "api-job-long-name-for-wide-chart", JobStatus::Queued, Some("S1"), &[]),
+        job(
+            "api",
+            "api-job-long-name-for-wide-chart",
+            JobStatus::Queued,
+            Some("S1"),
+            &[],
+        ),
         job("web", "web-job", JobStatus::Queued, Some("S1"), &[]),
     ];
     (prs, jobs)
@@ -140,21 +175,54 @@ fn screenshot_1() -> (Vec<PrNode>, Vec<JobNode>) {
 
 fn screenshot_2() -> (Vec<PrNode>, Vec<JobNode>) {
     let prs = vec![
-        PrNode { status: PrStatus::Merged, ..pr("dotfiles-prev", "dotfiles", &[]) },
+        PrNode {
+            status: PrStatus::Merged,
+            ..pr("dotfiles-prev", "dotfiles", &[])
+        },
         pr("leakflake", "dotfiles", &["dotfiles-prev"]),
     ];
     let jobs = vec![
-        job("dotfiles-prev", "prev-job", JobStatus::Merged, Some("S1"), &[]),
-        job("leakflake", "leakflake-config", JobStatus::Cancelled, None, &[]),
-        job("leakflake", "leakflake-fix", JobStatus::Merged, Some("S2"), &[]),
-        job("leakflake", "open-leakflake", JobStatus::Queued, Some("S1"), &["leakflake-config", "leakflake-fix"]),
+        job(
+            "dotfiles-prev",
+            "prev-job",
+            JobStatus::Merged,
+            Some("S1"),
+            &[],
+        ),
+        job(
+            "leakflake",
+            "leakflake-config",
+            JobStatus::Cancelled,
+            None,
+            &[],
+        ),
+        job(
+            "leakflake",
+            "leakflake-fix",
+            JobStatus::Merged,
+            Some("S2"),
+            &[],
+        ),
+        job(
+            "leakflake",
+            "open-leakflake",
+            JobStatus::Queued,
+            Some("S1"),
+            &["leakflake-config", "leakflake-fix"],
+        ),
     ];
     (prs, jobs)
 }
 
 fn skipped_row() -> (Vec<PrNode>, Vec<JobNode>) {
-    let prs = vec![pr("a", "a-repo", &[]), pr("b", "b-repo", &["a"]), pr("c", "c-repo", &["b", "a"])];
-    let jobs = ["a", "b", "c"].map(|k| job(k, &format!("j-{k}"), JobStatus::Queued, Some("S1"), &[])).to_vec();
+    let prs = vec![
+        pr("a", "a-repo", &[]),
+        pr("b", "b-repo", &["a"]),
+        pr("c", "c-repo", &["b", "a"]),
+    ];
+    let jobs = ["a", "b", "c"]
+        .map(|k| job(k, &format!("j-{k}"), JobStatus::Queued, Some("S1"), &[]))
+        .to_vec();
     (prs, jobs)
 }
 
@@ -177,7 +245,11 @@ fn a_need_line_that_turns_ends_in_a_junction_on_the_needing_boxes_top_border() {
     ];
     assert_canvas(&c, &prs, &want);
     let boxes = box_rects(&c.buf, &prs);
-    assert!(joins(&c.buf, &boxes, 0, 1, &prs[1]), "no line from api's `┬` to web's `┴`\n{}", shown(&c.buf));
+    assert!(
+        joins(&c.buf, &boxes, 0, 1, &prs[1]),
+        "no line from api's `┬` to web's `┴`\n{}",
+        shown(&c.buf)
+    );
 }
 
 #[test]
@@ -196,12 +268,21 @@ fn a_need_line_lands_after_the_title_when_the_title_covers_the_middle_column() {
         format!("╭─{}┴{}╮", title(&prs[1]), rep("─", 8)),
         format!("│ {}{}│", pill(k, "leakflake-config", "—"), sp(27)),
         format!("│ {}╭──{} │", sp(24), pill(q, "open-leakflake", "S1")),
-        format!("│ {}{}╯{}│", pill(m, "leakflake-fix", "S2"), rep("─", 4), sp(24)),
+        format!(
+            "│ {}{}╯{}│",
+            pill(m, "leakflake-fix", "S2"),
+            rep("─", 4),
+            sp(24)
+        ),
         format!("╰{}╯", rep("─", 50)),
     ];
     assert_canvas(&c, &prs, &want);
     let boxes = box_rects(&c.buf, &prs);
-    assert!(joins(&c.buf, &boxes, 0, 1, &prs[1]), "no line from prev's `┬` to leakflake's `┴`\n{}", shown(&c.buf));
+    assert!(
+        joins(&c.buf, &boxes, 0, 1, &prs[1]),
+        "no line from prev's `┬` to leakflake's `┴`\n{}",
+        shown(&c.buf)
+    );
 }
 
 /// Strips the links (`ESC ] 8 ; ; … BEL`) the title's pull request carries in its cells.
@@ -239,7 +320,12 @@ fn a_box_keeps_a_dash_after_its_title() {
         let t = title(&p);
         let c = canvas_of(std::slice::from_ref(&p), &[]);
         let width = t.chars().count() + 4; // `╭`, `─`, the title, at least one `─`, `╮`
-        assert_eq!(usize::from(c.buf.area.width), width, "the box is title + 4 cells wide\n{}", shown(&c.buf));
+        assert_eq!(
+            usize::from(c.buf.area.width),
+            width,
+            "the box is title + 4 cells wide\n{}",
+            shown(&c.buf)
+        );
         if p.pull.is_none() {
             assert_eq!(plain(&c.buf, 0), format!("╭─{t}─╮"), "\n{}", shown(&c.buf));
         } else {
@@ -247,7 +333,12 @@ fn a_box_keeps_a_dash_after_its_title() {
             let w = c.buf.area.width;
             let cell = |x: u16| c.buf[(x, 0)].symbol().to_string();
             assert_eq!([cell(0), cell(1)], ["╭", "─"], "\n{}", shown(&c.buf));
-            assert_eq!([cell(w - 3), cell(w - 2), cell(w - 1)], [" ", "─", "╮"], "\n{}", shown(&c.buf));
+            assert_eq!(
+                [cell(w - 3), cell(w - 2), cell(w - 1)],
+                [" ", "─", "╮"],
+                "\n{}",
+                shown(&c.buf)
+            );
         }
     }
 }
@@ -280,28 +371,52 @@ fn a_need_line_that_skips_a_row_of_boxes_touches_both_boxes() {
     assert_canvas(&c, &prs, &want);
     let boxes = box_rects(&c.buf, &prs);
     for (from, to) in [(0, 1), (1, 2), (0, 2)] {
-        assert!(joins(&c.buf, &boxes, from, to, &prs[to]), "no line from box {from} to box {to}\n{}", shown(&c.buf));
+        assert!(
+            joins(&c.buf, &boxes, from, to, &prs[to]),
+            "no line from box {from} to box {to}\n{}",
+            shown(&c.buf)
+        );
     }
 }
 
 #[test]
 fn every_line_of_a_sweep_of_small_plans_touches_what_it_joins() {
-    let key_sets = [["a", "b", "c", "d"], ["k", "key-two", "k3", "key-number-four-long"]];
+    let key_sets = [
+        ["a", "b", "c", "d"],
+        ["k", "key-two", "k3", "key-number-four-long"],
+    ];
     let pairs: Vec<(usize, usize)> = (1..4).flat_map(|k| (0..k).map(move |i| (i, k))).collect();
     let mut cases = 0;
     for keys in key_sets {
         for needs in 0..64u32 {
             let prs: Vec<PrNode> = (0..4)
                 .map(|k| {
-                    let n: Vec<&str> = pairs.iter().enumerate().filter(|(b, (_, kk))| *kk == k && needs >> b & 1 == 1).map(|(_, (i, _))| keys[*i]).collect();
+                    let n: Vec<&str> = pairs
+                        .iter()
+                        .enumerate()
+                        .filter(|(b, (_, kk))| *kk == k && needs >> b & 1 == 1)
+                        .map(|(_, (i, _))| keys[*i])
+                        .collect();
                     pr(keys[k], &format!("{}-repo", keys[k]), &n)
                 })
                 .collect();
             let jobs: Vec<JobNode> = (0..4)
                 .flat_map(|k| {
                     [
-                        job(keys[k], &format!("live-{k}"), JobStatus::Queued, Some("S1"), &[]),
-                        job(keys[k], &format!("cancelled-job-number-{k}"), JobStatus::Cancelled, None, &[]),
+                        job(
+                            keys[k],
+                            &format!("live-{k}"),
+                            JobStatus::Queued,
+                            Some("S1"),
+                            &[],
+                        ),
+                        job(
+                            keys[k],
+                            &format!("cancelled-job-number-{k}"),
+                            JobStatus::Cancelled,
+                            None,
+                            &[],
+                        ),
                     ]
                 })
                 .collect();
@@ -315,9 +430,19 @@ fn every_line_of_a_sweep_of_small_plans_touches_what_it_joins() {
                 for need in &p.needs {
                     let i = prs.iter().position(|q| &q.key == need).unwrap();
                     let at = landing(boxes[k], p);
-                    assert!(at < boxes[k].right() - 1, "{case}\nthe landing of box {k} is on its corner");
-                    assert_eq!(c.buf[(at, boxes[k].y)].symbol(), "┴", "{case}\nno `┴` on box {k}'s top border at column {at}");
-                    assert!(joins(&c.buf, &boxes, i, k, p), "{case}\nno line from box {i} to box {k}");
+                    assert!(
+                        at < boxes[k].right() - 1,
+                        "{case}\nthe landing of box {k} is on its corner"
+                    );
+                    assert_eq!(
+                        c.buf[(at, boxes[k].y)].symbol(),
+                        "┴",
+                        "{case}\nno `┴` on box {k}'s top border at column {at}"
+                    );
+                    assert!(
+                        joins(&c.buf, &boxes, i, k, p),
+                        "{case}\nno line from box {i} to box {k}"
+                    );
                 }
             }
         }
@@ -328,7 +453,10 @@ fn every_line_of_a_sweep_of_small_plans_touches_what_it_joins() {
 /// The pane's body window of the drawn view at `offset`, as the canvas's own cells (the drawn cells put back at the offset
 /// the view clamped to), with that window; `pane` is the pane's size.
 fn drawn(centre: &super::Centre, pane: (u16, u16), offset: (u16, u16)) -> (Buffer, Rect, Buffer) {
-    let mut ui = Ui { scroll: offset, ..Ui::default() };
+    let mut ui = Ui {
+        scroll: offset,
+        ..Ui::default()
+    };
     let mut terminal = Terminal::new(TestBackend::new(pane.0, pane.1)).unwrap();
     terminal.draw(|f| ui.draw(f, Some(centre))).unwrap();
     let pane_buf = terminal.backend().buffer().clone();
@@ -347,7 +475,10 @@ fn drawn(centre: &super::Centre, pane: (u16, u16), offset: (u16, u16)) -> (Buffe
 #[test]
 fn the_lines_touch_in_every_window_of_the_drawn_view_scrolled_or_not() {
     // the Plan of the view, laid out as `snapshot` does (`sample_centre`, with the canvas margin)
-    for (name, (prs, jobs)) in [("screenshot 2", screenshot_2()), ("skipped row", skipped_row())] {
+    for (name, (prs, jobs)) in [
+        ("screenshot 2", screenshot_2()),
+        ("skipped row", skipped_row()),
+    ] {
         let centre = sample_centre(prs.clone(), jobs);
         let canvas = &centre.boxes.chart.buf;
         let boxes = box_rects(canvas, &prs);
@@ -364,15 +495,23 @@ fn the_lines_touch_in_every_window_of_the_drawn_view_scrolled_or_not() {
                 if offset == (0, 0) {
                     let edge = |x: u16, y: u16| pane_buf[(x, y)].symbol() != " ";
                     let (w, h) = pane;
-                    let mut touched: Vec<(u16, u16)> = (0..h).map(|y| (0, y)).chain((0..w).map(|x| (x, 0))).collect();
+                    let mut touched: Vec<(u16, u16)> = (0..h)
+                        .map(|y| (0, y))
+                        .chain((0..w).map(|x| (x, 0)))
+                        .collect();
                     if canvas.area.width <= w {
                         touched.extend((0..h).map(|y| (w - 1, y)));
                     }
                     if canvas.area.height <= h {
                         touched.extend((0..w).map(|x| (x, h - 1)));
                     }
-                    let touched: Vec<_> = touched.into_iter().filter(|&(x, y)| edge(x, y)).collect();
-                    assert!(touched.is_empty(), "{name}, pane {pane:?}: the canvas margin leaves {touched:?} on the pane's edge\n{}", shown(&pane_buf));
+                    let touched: Vec<_> =
+                        touched.into_iter().filter(|&(x, y)| edge(x, y)).collect();
+                    assert!(
+                        touched.is_empty(),
+                        "{name}, pane {pane:?}: the canvas margin leaves {touched:?} on the pane's edge\n{}",
+                        shown(&pane_buf)
+                    );
                 }
             }
         }

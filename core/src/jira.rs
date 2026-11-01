@@ -37,11 +37,21 @@ pub enum Done {
     Unchanged,
 }
 
-const HELPER_CODES: [ErrorCode; 5] =
-    [ErrorCode::JiraAuth, ErrorCode::JiraNotConfigured, ErrorCode::JiraFailed, ErrorCode::JiraRefused, ErrorCode::JiraHelperFailed];
+const HELPER_CODES: [ErrorCode; 5] = [
+    ErrorCode::JiraAuth,
+    ErrorCode::JiraNotConfigured,
+    ErrorCode::JiraFailed,
+    ErrorCode::JiraRefused,
+    ErrorCode::JiraHelperFailed,
+];
 
 /// The `Call` of the helper for `request`, with the machine policy's server `atlassian`.
-pub fn call(config: &Config, home: &CpdHome, request: &Request, deadline: Duration) -> Result<Call, CpdError> {
+pub fn call(
+    config: &Config,
+    home: &CpdHome,
+    request: &Request,
+    deadline: Duration,
+) -> Result<Call, CpdError> {
     let machine = load_machine(home)?;
     let Some(server) = machine.servers.get("atlassian") else {
         return Err(CpdError::new(
@@ -49,7 +59,13 @@ pub fn call(config: &Config, home: &CpdHome, request: &Request, deadline: Durati
             "No Atlassian MCP server is configured: add [mcp.servers.atlassian] to policy/host.toml.",
         ));
     };
-    crate::slack::call(config, "jira-transition.ts", &[], Some(stdin(server, request)), deadline)
+    crate::slack::call(
+        config,
+        "jira-transition.ts",
+        &[],
+        Some(stdin(server, request)),
+        deadline,
+    )
 }
 
 /// The helper's stdin: the request as one JSON object.
@@ -72,8 +88,11 @@ pub fn answer(out: &Output, argv: &[String]) -> Result<Done, CpdError> {
     match value["outcome"].as_str() {
         Some("moved") => Ok(Done::Moved),
         Some("unchanged") => Ok(Done::Unchanged),
-        other => Err(CpdError::new(ErrorCode::JiraHelperFailed, format!("The Jira helper answered an unknown outcome {other:?}."))
-            .with("code", "outcome")),
+        other => Err(CpdError::new(
+            ErrorCode::JiraHelperFailed,
+            format!("The Jira helper answered an unknown outcome {other:?}."),
+        )
+        .with("code", "outcome")),
     }
 }
 
@@ -85,7 +104,11 @@ mod tests {
     use super::*;
 
     fn output(code: i32, stdout: &str) -> Output {
-        Output { status: ExitStatus::from_raw(code << 8), stdout: stdout.as_bytes().to_vec(), stderr: Vec::new() }
+        Output {
+            status: ExitStatus::from_raw(code << 8),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: Vec::new(),
+        }
     }
 
     fn failed(line: &str) -> CpdError {
@@ -93,12 +116,28 @@ mod tests {
     }
 
     fn request() -> Request {
-        Request { ticket: "A-1".into(), target: Target::InReview, names: Names { in_progress: "".into(), in_review: "In Review".into(), done: "Done".into() }, estimate_fields: vec!["customfield_10016".into()] }
+        Request {
+            ticket: "A-1".into(),
+            target: Target::InReview,
+            names: Names {
+                in_progress: "".into(),
+                in_review: "In Review".into(),
+                done: "Done".into(),
+            },
+            estimate_fields: vec!["customfield_10016".into()],
+        }
     }
 
     #[test]
     fn the_stdin_is_the_request_with_the_server() {
-        let server = McpServer { url: "https://x/mcp".into(), description: None, exposure: None, tool_exposure: None, oauth: None, headers: None };
+        let server = McpServer {
+            url: "https://x/mcp".into(),
+            description: None,
+            exposure: None,
+            tool_exposure: None,
+            oauth: None,
+            headers: None,
+        };
         let value: serde_json::Value = serde_json::from_slice(&stdin(&server, &request())).unwrap();
         assert_eq!(
             value,
@@ -111,7 +150,12 @@ mod tests {
     fn a_missing_atlassian_server_is_jira_not_configured() {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
-        let config = Config::parse("version = 1\nmachine = \"test\"\n", std::path::Path::new("config.toml")).unwrap().0;
+        let config = Config::parse(
+            "version = 1\nmachine = \"test\"\n",
+            std::path::Path::new("config.toml"),
+        )
+        .unwrap()
+        .0;
         let error = call(&config, &home, &request(), Duration::from_secs(1)).unwrap_err();
         assert_eq!(error.code(), ErrorCode::JiraNotConfigured);
         assert!(error.message().contains("[mcp.servers.atlassian]"));
@@ -129,14 +173,19 @@ mod tests {
 
     #[test]
     fn an_unknown_code_is_jira_helper_failed_with_the_code() {
-        let error = failed(r#"{"ok":false,"error":{"code":"weird","message":"m","details":{"k":1}}}"#);
+        let error =
+            failed(r#"{"ok":false,"error":{"code":"weird","message":"m","details":{"k":1}}}"#);
         assert_eq!(error.code(), ErrorCode::JiraHelperFailed);
-        assert_eq!((&error.details()["code"], &error.details()["k"]), (&json!("weird"), &json!(1)));
+        assert_eq!(
+            (&error.details()["code"], &error.details()["k"]),
+            (&json!("weird"), &json!(1))
+        );
     }
 
     #[test]
     fn ok_lines_are_done() {
-        let moved = r#"{"ok":true,"ticket":"A-1","target":"done","outcome":"moved","from":"a","to":"b"}"#;
+        let moved =
+            r#"{"ok":true,"ticket":"A-1","target":"done","outcome":"moved","from":"a","to":"b"}"#;
         let same = r#"{"ok":true,"ticket":"A-1","target":"done","outcome":"unchanged","status":"b","why":"at_target"}"#;
         assert_eq!(answer(&output(0, moved), &[]).unwrap(), Done::Moved);
         assert_eq!(answer(&output(0, same), &[]).unwrap(), Done::Unchanged);

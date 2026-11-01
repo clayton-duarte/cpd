@@ -53,7 +53,11 @@ fn fixture() -> (tempfile::TempDir, CpdHome, Store) {
 }
 
 fn of(store: &mut Store, home: &CpdHome, kind: Kind) -> Vec<Condition> {
-    conditions_with(store, home, NOW, 20, 1, None).unwrap().into_iter().filter(|c| c.kind == kind).collect()
+    conditions_with(store, home, NOW, 20, 1, None)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.kind == kind)
+        .collect()
 }
 
 fn refs() -> Vec<(String, u64)> {
@@ -84,9 +88,15 @@ fn a_review_requested_label_has_the_pull_request_title_on_row_two() {
     let lookup: Lookup = parse_lookup(&reply(Some("Add retries")), &refs()).unwrap();
     let bots = ["github-actions".to_owned()];
     let mut github = |_: &[(String, u64)]| -> Result<Lookup, CpdError> { Ok(lookup.clone()) };
-    let team = Team { bot_reviewers: &bots, github: &mut github };
+    let team = Team {
+        bot_reviewers: &bots,
+        github: &mut github,
+    };
     let all = conditions_with(&mut store, &home, NOW, 20, 1, Some(team)).unwrap();
-    let reviews: Vec<Condition> = all.into_iter().filter(|c| c.kind == Kind::ReviewRequested).collect();
+    let reviews: Vec<Condition> = all
+        .into_iter()
+        .filter(|c| c.kind == Kind::ReviewRequested)
+        .collect();
     assert_eq!(reviews.len(), 1, "{reviews:?}");
     assert_eq!(reviews[0].label, "review pay#812\nAdd retries");
 }
@@ -95,15 +105,33 @@ fn a_review_requested_label_has_the_pull_request_title_on_row_two() {
 fn a_plan_review_label_has_the_review_title_on_row_two_and_none_without_a_title() {
     let insert = "INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at, decided_at)";
     let (_dir, home, mut store) = fixture();
-    sql(&mut store, &format!("{insert} VALUES ('pay', 'r1', 1, '{FP}', 'pending', '{T}', NULL);"));
-    sql(&mut store, "UPDATE plan_reviews SET title = 'Add retries' WHERE id = 'r1'");
+    sql(
+        &mut store,
+        &format!("{insert} VALUES ('pay', 'r1', 1, '{FP}', 'pending', '{T}', NULL);"),
+    );
+    sql(
+        &mut store,
+        "UPDATE plan_reviews SET title = 'Add retries' WHERE id = 'r1'",
+    );
     let titled = of(&mut store, &home, Kind::PlanReview);
-    assert_eq!(titled.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(), ["pay plan review\nAdd retries"]);
+    assert_eq!(
+        titled.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(),
+        ["pay plan review\nAdd retries"]
+    );
 
     let (_dir, home, mut store) = fixture();
-    sql(&mut store, &format!("{insert} VALUES ('pay', 'r1', 1, '{FP}', 'pending', '{T}', NULL);"));
+    sql(
+        &mut store,
+        &format!("{insert} VALUES ('pay', 'r1', 1, '{FP}', 'pending', '{T}', NULL);"),
+    );
     let untitled = of(&mut store, &home, Kind::PlanReview);
-    assert_eq!(untitled.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(), ["pay plan review"]);
+    assert_eq!(
+        untitled
+            .iter()
+            .map(|c| c.label.as_str())
+            .collect::<Vec<_>>(),
+        ["pay plan review"]
+    );
 }
 
 fn fake(reply: Reply) -> FakeRunner {
@@ -119,10 +147,15 @@ fn github_lookup_with_asks_for_the_title_of_each_pull_request() {
     let runner = fake(Reply::ok(&reply(Some("Add retries")).to_string()));
     github_lookup_with(&runner, &home(), &refs()).unwrap();
     let query = runner.calls()[0].args[3].clone();
-    let start = query.find("pullRequest(number: 812) {").unwrap_or_else(|| panic!("no pullRequest selection: {query}"));
+    let start = query
+        .find("pullRequest(number: 812) {")
+        .unwrap_or_else(|| panic!("no pullRequest selection: {query}"));
     let selection = &query[start..];
     let selection = &selection[..selection.find("latestReviews").unwrap_or(selection.len())];
-    assert!(selection.contains("title"), "title is not selected inside pullRequest(..) {{ .. }}: {query}");
+    assert!(
+        selection.contains("title"),
+        "title is not selected inside pullRequest(..) {{ .. }}: {query}"
+    );
 }
 
 #[test]

@@ -10,14 +10,16 @@ use serde_json::Value;
 use cpd_core::error::CpdError;
 use cpd_core::events::{Event, highest_id};
 use cpd_core::host::spawn::Pid;
-use cpd_core::inbox::model::{self, Item};
 use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, PrKey};
+use cpd_core::inbox::model::{self, Item};
 use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 
 use super::flow::{OpenEscalation, open_escalation};
+use super::shared::{
+    AttemptStatus, Checks, Place, PlanHead, PrState, SHOWN_STATUS, bad_row, id, plan_heads, tier,
+};
 use super::tree::{db_now, inbox_in, store_home};
-use super::shared::{AttemptStatus, SHOWN_STATUS, Checks, Place, PlanHead, PrState, bad_row, id, plan_heads, tier};
 
 /// What the Dispatch column shows.
 #[derive(Clone, Debug, PartialEq)]
@@ -70,9 +72,17 @@ pub struct HeldSlot {
 pub enum Engine {
     /// No engine has ever started on this machine.
     Never,
-    Running { pid: u32, since: String },
-    Stopped { at: String },
-    Crashed { pid: u32, since: String },
+    Running {
+        pid: u32,
+        since: String,
+    },
+    Stopped {
+        at: String,
+    },
+    Crashed {
+        pid: u32,
+        since: String,
+    },
 }
 
 /// A Plan: its head (counts), its label and the rows of its PRs that have a pull request. No view draws it; `cli/tests/pr.rs` reads it.
@@ -149,8 +159,15 @@ pub fn slots(store: &mut Store, concurrency: u32) -> Result<(Slots, i64), CpdErr
 /// compared with (hs-d550).
 pub fn open_pulls(store: &mut Store) -> Result<std::collections::BTreeSet<String>, CpdError> {
     store.read(|conn| {
-        let mut stmt = conn.prepare("SELECT repo, number FROM pull_requests WHERE state = 'open'")?;
-        let rows = stmt.query_map([], |r| Ok(format!("{}#{}", r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        let mut stmt =
+            conn.prepare("SELECT repo, number FROM pull_requests WHERE state = 'open'")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(format!(
+                "{}#{}",
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?
+            ))
+        })?;
         Ok(rows.collect::<Result<_, _>>()?)
     })
 }
@@ -161,12 +178,19 @@ fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
     plan_heads(conn, None)?
         .into_iter()
         .map(|head| {
-            let (label, lead_place) = labels
-                .get(head.id.as_str())
-                .cloned()
-                .ok_or_else(|| bad_row(format!("Plan {} has no Lead Session {}", head.id, head.lead_session)))?;
+            let (label, lead_place) = labels.get(head.id.as_str()).cloned().ok_or_else(|| {
+                bad_row(format!(
+                    "Plan {} has no Lead Session {}",
+                    head.id, head.lead_session
+                ))
+            })?;
             let prs = pulls.remove(head.id.as_str()).unwrap_or_default();
-            Ok(PlanCard { label, lead_place, prs, head })
+            Ok(PlanCard {
+                label,
+                lead_place,
+                prs,
+                head,
+            })
         })
         .collect()
 }
@@ -182,7 +206,8 @@ fn labels(conn: &Connection) -> Result<BTreeMap<String, (String, Place)>, CpdErr
     let mut rows = stmt.query([])?;
     let mut out = BTreeMap::new();
     while let Some(r) = rows.next()? {
-        let (plan, name, place): (String, String, Option<String>) = (r.get(0)?, r.get(1)?, r.get(2)?);
+        let (plan, name, place): (String, String, Option<String>) =
+            (r.get(0)?, r.get(1)?, r.get(2)?);
         let place = place.map_or(Ok(Place::None), |p| Place::parse("Session place", &p))?;
         out.insert(plan, (name, place));
     }
@@ -209,9 +234,18 @@ fn pulls(conn: &Connection) -> Result<BTreeMap<String, Vec<PrRow>>, CpdError> {
             "changes_requested" => ReviewDecision::ChangesRequested,
             _ => return Err(bad_row(format!("{what} has review_decision {decision:?}"))),
         };
-        let polled = PolledPr { title, decision, checks: Checks::parse(&what, &checks)? };
+        let polled = PolledPr {
+            title,
+            decision,
+            checks: Checks::parse(&what, &checks)?,
+        };
         let key = id("PR key", &key, PrKey::parse)?;
-        out.entry(plan).or_default().push(PrRow { key, number, state, polled: Some(polled) });
+        out.entry(plan).or_default().push(PrRow {
+            key,
+            number,
+            state,
+            polled: Some(polled),
+        });
     }
     Ok(out)
 }
@@ -223,7 +257,8 @@ fn held_slots(conn: &Connection, limit: u32) -> Result<Slots, CpdError> {
     let mut rows = stmt.query([])?;
     let mut held = Vec::new();
     while let Some(r) = rows.next()? {
-        let (plan, aid, tier_text, status): (String, String, String, String) = (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
+        let (plan, aid, tier_text, status): (String, String, String, String) =
+            (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
         held.push(HeldSlot {
             plan: id("Plan id", &plan, PlanId::parse)?,
             tier: tier(&format!("Attempt {plan}/{aid}"), &tier_text)?,
@@ -243,7 +278,9 @@ fn engine(conn: &Connection) -> Result<Engine, CpdError> {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()?;
-    let Some((kind, at, data)) = latest else { return Ok(Engine::Never) };
+    let Some((kind, at, data)) = latest else {
+        return Ok(Engine::Never);
+    };
     if kind == "watch-stopped" {
         return Ok(Engine::Stopped { at });
     }
@@ -252,7 +289,11 @@ fn engine(conn: &Connection) -> Result<Engine, CpdError> {
         .and_then(|d| d["pid"].as_u64())
         .and_then(|p| u32::try_from(p).ok())
         .ok_or_else(|| bad_row(format!("a watch-started Event has data {data}")))?;
-    Ok(if Ports::current().spawn.alive(Pid(pid)) { Engine::Running { pid, since: at } } else { Engine::Crashed { pid, since: at } })
+    Ok(if Ports::current().spawn.alive(Pid(pid)) {
+        Engine::Running { pid, since: at }
+    } else {
+        Engine::Crashed { pid, since: at }
+    })
 }
 
 fn escalations(conn: &Connection) -> Result<Vec<MachineEscalation>, CpdError> {
@@ -295,7 +336,8 @@ fn recent_events(conn: &Connection, n: u32) -> Result<Vec<Event>, CpdError> {
             attempt: r.get(6)?,
             session: r.get(7)?,
             text: r.get(8)?,
-            data: serde_json::from_str(&data).map_err(|_| bad_row(format!("Event {event} has data {data}")))?,
+            data: serde_json::from_str(&data)
+                .map_err(|_| bad_row(format!("Event {event} has data {data}")))?,
         });
     }
     out.reverse();

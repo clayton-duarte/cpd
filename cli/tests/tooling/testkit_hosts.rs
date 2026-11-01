@@ -50,7 +50,10 @@ fn panics(f: impl FnOnce()) -> String {
 fn message(payload: Box<dyn Any + Send>) -> String {
     match payload.downcast::<String>() {
         Ok(text) => *text,
-        Err(payload) => payload.downcast::<&str>().map(|text| (*text).to_owned()).unwrap_or_default(),
+        Err(payload) => payload
+            .downcast::<&str>()
+            .map(|text| (*text).to_owned())
+            .unwrap_or_default(),
     }
 }
 
@@ -70,7 +73,11 @@ fn call(program: &str, args: &[&str]) -> Call {
 
 /// No child of this process is alive or waiting: nothing the test did started a process.
 fn no_child() {
-    assert_eq!(waitpid(None, Some(WaitPidFlag::WNOHANG)), Err(Errno::ECHILD), "a child process lived");
+    assert_eq!(
+        waitpid(None, Some(WaitPidFlag::WNOHANG)),
+        Err(Errno::ECHILD),
+        "a child process lived"
+    );
 }
 
 fn text(bytes: Vec<u8>) -> String {
@@ -79,13 +86,26 @@ fn text(bytes: Vec<u8>) -> String {
 
 /// The subjects of the commits of `dir`, newest first.
 fn subjects(fx: &Fx, dir: &Path) -> Vec<String> {
-    fx.git(dir, &["log", "--format=%s"]).lines().map(str::to_owned).collect()
+    fx.git(dir, &["log", "--format=%s"])
+        .lines()
+        .map(str::to_owned)
+        .collect()
 }
 
 /// A bare repo of the Universe at `<root>/<name>.git`, made through the route.
 fn bare(fx: &Fx, name: &str) -> PathBuf {
     let origin = fx.env.root().join(format!("{name}.git"));
-    fx.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
+    fx.git(
+        fx.env.root(),
+        &[
+            "init",
+            "--bare",
+            "-q",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
     origin
 }
 
@@ -103,7 +123,19 @@ fn plan_pay(fx: &Fx) {
 
 /// `cpd pr add web` on `repo`, in Plan `pay-1`, in this process.
 fn pr_add(fx: &Fx, repo: &Path) -> crate::common::Run {
-    fx.cpd(&["pr", "add", "web", "--repo", repo.to_str().unwrap(), "--title", "Change web", "--shape", "config", "--plan", "pay-1"])
+    fx.cpd(&[
+        "pr",
+        "add",
+        "web",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        "Change web",
+        "--shape",
+        "config",
+        "--plan",
+        "pay-1",
+    ])
 }
 
 // ---- git_repo
@@ -123,7 +155,10 @@ fn a_git_repo_has_its_files_in_a_real_temp_dir() {
 
     let repo = fx.git_repo("pay");
 
-    assert_eq!(std::fs::read_to_string(repo.join("README.md")).unwrap(), "# pay\n");
+    assert_eq!(
+        std::fs::read_to_string(repo.join("README.md")).unwrap(),
+        "# pay\n"
+    );
 }
 
 #[test]
@@ -142,7 +177,10 @@ fn a_git_repo_has_no_real_git_directory() {
     let repo = fx.git_repo("pay");
 
     for name in ["objects", "refs", "config", "HEAD"] {
-        assert!(!repo.join(".git").join(name).exists(), ".git/{name} exists: a real repo that real git could read");
+        assert!(
+            !repo.join(".git").join(name).exists(),
+            ".git/{name} exists: a real repo that real git could read"
+        );
     }
 }
 
@@ -153,7 +191,11 @@ fn a_git_repo_is_made_with_no_process_and_no_call_of_git_outside_the_route() {
     fx.git_repo("pay");
 
     no_child();
-    assert!(fx.fakes.runner.unscripted().is_empty(), "{:?}", fx.fakes.runner.unscripted());
+    assert!(
+        fx.fakes.runner.unscripted().is_empty(),
+        "{:?}",
+        fx.fakes.runner.unscripted()
+    );
 }
 
 // ---- Fx::git
@@ -193,7 +235,10 @@ fn git_fails_the_test_naming_the_args_when_the_route_exits_non_zero() {
     });
 
     assert!(text.contains("rev-parse"), "{text}");
-    assert!(text.contains("fatal"), "the message holds the route's stderr: {text}");
+    assert!(
+        text.contains("fatal"),
+        "the message holds the route's stderr: {text}"
+    );
 }
 
 // ---- commit_file
@@ -205,7 +250,10 @@ fn commit_file_writes_the_file_in_the_working_tree() {
 
     fx.commit_file(&repo, "src/lib.rs", "pub fn pay() {}\n", "add lib");
 
-    assert_eq!(std::fs::read_to_string(repo.join("src/lib.rs")).unwrap(), "pub fn pay() {}\n");
+    assert_eq!(
+        std::fs::read_to_string(repo.join("src/lib.rs")).unwrap(),
+        "pub fn pay() {}\n"
+    );
 }
 
 #[test]
@@ -216,7 +264,11 @@ fn commit_file_commits_it_on_the_branch_with_the_message() {
     fx.commit_file(&repo, "src/lib.rs", "pub fn pay() {}\n", "add lib");
 
     assert_eq!(subjects(&fx, &repo), ["add lib", "initial"]);
-    assert_eq!(fx.git(&repo, &["status", "--porcelain"]), "", "the tree is clean after the commit");
+    assert_eq!(
+        fx.git(&repo, &["status", "--porcelain"]),
+        "",
+        "the tree is clean after the commit"
+    );
 }
 
 #[test]
@@ -256,7 +308,10 @@ fn a_keyed_repo_has_a_github_origin_named_after_the_repo() {
 
     let repo = fx.keyed_repo("pay");
 
-    assert_eq!(fx.git(&repo, &["config", "--get", "remote.origin.url"]), "https://github.com/acme/pay.git");
+    assert_eq!(
+        fx.git(&repo, &["config", "--get", "remote.origin.url"]),
+        "https://github.com/acme/pay.git"
+    );
 }
 
 #[test]
@@ -266,7 +321,10 @@ fn a_keyed_repo_has_the_remote_tracking_branch_main_at_the_commit() {
 
     let main = fx.git(&repo, &["rev-parse", "main"]);
 
-    assert_eq!(fx.git(&repo, &["rev-parse", "refs/remotes/origin/main"]), main);
+    assert_eq!(
+        fx.git(&repo, &["rev-parse", "refs/remotes/origin/main"]),
+        main
+    );
 }
 
 #[test]
@@ -290,7 +348,10 @@ fn local_origin_lets_a_keyed_repo_push_to_the_bare_repo() {
     fx.local_origin(&repo, &origin);
     fx.git(&repo, &["push", "-q", "origin", "main"]);
 
-    assert_eq!(fx.git(&origin, &["rev-parse", "main"]), fx.git(&repo, &["rev-parse", "main"]));
+    assert_eq!(
+        fx.git(&origin, &["rev-parse", "main"]),
+        fx.git(&repo, &["rev-parse", "main"])
+    );
 }
 
 #[test]
@@ -302,11 +363,17 @@ fn local_origin_lets_a_second_repo_of_the_universe_fetch_what_was_pushed() {
     fx.commit_file(&repo, "src/lib.rs", "pub fn pay() {}\n", "add lib");
     fx.git(&repo, &["push", "-q", "origin", "main"]);
     let other = fx.git_repo("other");
-    fx.git(&other, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    fx.git(
+        &other,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
 
     fx.git(&other, &["fetch", "-q", "origin"]);
 
-    assert_eq!(fx.git(&other, &["rev-parse", "refs/remotes/origin/main"]), fx.git(&repo, &["rev-parse", "main"]));
+    assert_eq!(
+        fx.git(&other, &["rev-parse", "refs/remotes/origin/main"]),
+        fx.git(&repo, &["rev-parse", "main"])
+    );
 }
 
 #[test]
@@ -317,7 +384,10 @@ fn local_origin_leaves_the_configured_url_a_github_one() {
 
     fx.local_origin(&repo, &origin);
 
-    assert_eq!(fx.git(&repo, &["config", "--get", "remote.origin.url"]), "https://github.com/acme/pay.git");
+    assert_eq!(
+        fx.git(&repo, &["config", "--get", "remote.origin.url"]),
+        "https://github.com/acme/pay.git"
+    );
 }
 
 #[test]
@@ -352,7 +422,11 @@ fn outline_for_review_outlines_the_plan_so_that_plan_review_is_not_refused_for_t
     fx.outline_for_review("pay-1");
 
     let shown = fx.cpd(&["plan", "show", "--plan", "pay-1"]).ok();
-    assert_eq!(shown["plan"]["outline"]["done_when"]["web"], serde_json::json!(["Done"]), "{shown}");
+    assert_eq!(
+        shown["plan"]["outline"]["done_when"]["web"],
+        serde_json::json!(["Done"]),
+        "{shown}"
+    );
 }
 
 // ---- unsupported git
@@ -361,13 +435,25 @@ fn outline_for_review_outlines_the_plan_so_that_plan_review_is_not_refused_for_t
 fn an_unsupported_git_subcommand_fails_the_test_at_drop_with_the_unsupported_list() {
     let fx = fx();
     let repo = fx.git_repo("pay");
-    let out = fx.fakes.ports.runner.run(&call("git", &["-C", repo.to_str().unwrap(), "frobnicate"])).expect("the route answers");
-    assert_eq!(out.status.code(), Some(1), "the route answers exit 1, which a caller could read as an answer");
+    let out = fx
+        .fakes
+        .ports
+        .runner
+        .run(&call("git", &["-C", repo.to_str().unwrap(), "frobnicate"]))
+        .expect("the route answers");
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "the route answers exit 1, which a caller could read as an answer"
+    );
 
     let text = panics(|| drop(fx));
 
     assert!(text.contains("fake-git"), "{text}");
-    assert!(text.contains("frobnicate"), "the message lists the refused call: {text}");
+    assert!(
+        text.contains("frobnicate"),
+        "the message lists the refused call: {text}"
+    );
 }
 
 #[test]
@@ -376,7 +462,10 @@ fn a_git_repo_that_asked_nothing_unsupported_drops_quietly() {
     let repo = fx.git_repo("pay");
     fx.commit_file(&repo, "a.txt", "a\n", "a");
 
-    assert!(catch_unwind(AssertUnwindSafe(|| drop(fx))).is_ok(), "drop refused calls the route models");
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| drop(fx))).is_ok(),
+        "drop refused calls the route models"
+    );
 }
 
 // ---- Fx::tmux and tmux_state
@@ -396,9 +485,16 @@ fn a_tmux_probe_reads_the_server_a_step_holds_and_records_no_call() {
     let probe = fx.tmux_probe();
     let held = probe.clone();
 
-    assert_eq!(held.run(&["list-windows", "-t", "=work", "-F", "#{window_name}"]), "w1");
+    assert_eq!(
+        held.run(&["list-windows", "-t", "=work", "-F", "#{window_name}"]),
+        "w1"
+    );
     assert_eq!(probe.state().sessions().len(), 1);
-    assert_eq!(fx.calls("tmux").len(), calls, "the probe is no call of the product's");
+    assert_eq!(
+        fx.calls("tmux").len(),
+        calls,
+        "the probe is no call of the product's"
+    );
 }
 
 #[test]
@@ -408,18 +504,51 @@ fn a_new_session_made_through_tmux_lands_in_the_state() {
     fx.tmux(&["new-session", "-d", "-s", "work", "-n", "w1", "sleep 1"]);
 
     let state = fx.tmux_state().expect("the call started a server");
-    assert_eq!(state.sessions().iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["work"]);
-    assert_eq!(state.windows().iter().map(|w| w.name.as_str()).collect::<Vec<_>>(), ["w1"]);
-    assert_eq!(state.panes().iter().map(|p| p.argv.clone()).collect::<Vec<_>>(), [["sleep 1"]]);
+    assert_eq!(
+        state
+            .sessions()
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        ["work"]
+    );
+    assert_eq!(
+        state
+            .windows()
+            .iter()
+            .map(|w| w.name.as_str())
+            .collect::<Vec<_>>(),
+        ["w1"]
+    );
+    assert_eq!(
+        state
+            .panes()
+            .iter()
+            .map(|p| p.argv.clone())
+            .collect::<Vec<_>>(),
+        [["sleep 1"]]
+    );
 }
 
 #[test]
 fn tmux_returns_the_output_of_the_route() {
     let fx = tmux_fx();
 
-    let out = fx.tmux(&["new-session", "-d", "-s", "work", "-P", "-F", "#{pane_id}", "sleep 1"]);
+    let out = fx.tmux(&[
+        "new-session",
+        "-d",
+        "-s",
+        "work",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "sleep 1",
+    ]);
 
-    assert_eq!((out.status.code(), text(out.stdout), text(out.stderr)), (Some(0), "%0\n".to_owned(), String::new()));
+    assert_eq!(
+        (out.status.code(), text(out.stdout), text(out.stderr)),
+        (Some(0), "%0\n".to_owned(), String::new())
+    );
 }
 
 #[test]
@@ -430,10 +559,22 @@ fn tmux_sends_the_private_socket_and_the_tmpdir_of_the_env() {
 
     let calls = fx.calls("tmux");
     assert_eq!(calls.len(), 1, "{calls:?}");
-    assert_eq!(calls[0].args[..2], ["-L".to_owned(), fx.env.tmux_socket().to_owned()]);
-    assert_eq!(calls[0].args[2..], ["new-session", "-d", "-s", "work", "sleep 1"]);
+    assert_eq!(
+        calls[0].args[..2],
+        ["-L".to_owned(), fx.env.tmux_socket().to_owned()]
+    );
+    assert_eq!(
+        calls[0].args[2..],
+        ["new-session", "-d", "-s", "work", "sleep 1"]
+    );
     let tmpdir = fx.env.tmux_tmpdir().display().to_string();
-    assert!(calls[0].envs.contains(&("TMUX_TMPDIR".to_owned(), Some(tmpdir))), "{:?}", calls[0].envs);
+    assert!(
+        calls[0]
+            .envs
+            .contains(&("TMUX_TMPDIR".to_owned(), Some(tmpdir))),
+        "{:?}",
+        calls[0].envs
+    );
 }
 
 #[test]
@@ -443,9 +584,20 @@ fn tmux_makes_no_socket_no_state_file_and_no_process() {
     fx.tmux(&["new-session", "-d", "-s", "work", "sleep 1"]);
 
     let tmpdir = fx.env.tmux_tmpdir();
-    assert!(!cpd::fakes::tmux::state::db_path(&tmpdir, fx.env.tmux_socket()).exists(), "the state is in memory");
-    let sockets: Vec<_> = std::fs::read_dir(&tmpdir).into_iter().flatten().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("tmux-")).collect();
-    assert!(sockets.is_empty(), "a tmux socket directory exists: {sockets:?}");
+    assert!(
+        !cpd::fakes::tmux::state::db_path(&tmpdir, fx.env.tmux_socket()).exists(),
+        "the state is in memory"
+    );
+    let sockets: Vec<_> = std::fs::read_dir(&tmpdir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("tmux-"))
+        .collect();
+    assert!(
+        sockets.is_empty(),
+        "a tmux socket directory exists: {sockets:?}"
+    );
     no_child();
 }
 
@@ -453,19 +605,50 @@ fn tmux_makes_no_socket_no_state_file_and_no_process() {
 fn a_plan_new_window_shows_its_window_and_pane_options_in_the_state() {
     let fx = tmux_fx();
     fx.fake_cpd_views();
-    fx.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
-    assert!(fx.tmux_state().is_none(), "no server before the Lead's window");
+    fx.cpd(&[
+        "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
+    ])
+    .ok();
+    assert!(
+        fx.tmux_state().is_none(),
+        "no server before the Lead's window"
+    );
 
-    let out = fx.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Pay"]).ok();
+    let out = fx
+        .cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Pay"])
+        .ok();
 
     let lead = out["lead"]["session"].as_str().unwrap().to_owned();
-    let state = fx.tmux_state().expect("plan new started the cockpit server");
-    assert_eq!(state.windows().iter().map(|w| w.name.as_str()).collect::<Vec<_>>(), ["park-pay"]);
+    let state = fx
+        .tmux_state()
+        .expect("plan new started the cockpit server");
+    assert_eq!(
+        state
+            .windows()
+            .iter()
+            .map(|w| w.name.as_str())
+            .collect::<Vec<_>>(),
+        ["park-pay"]
+    );
     let panes = state.panes();
     assert_eq!(panes.len(), 1, "{panes:?}");
-    assert!(panes[0].options.contains(&("@cpd_session".to_owned(), lead.clone())), "{:?}", panes[0].options);
-    assert_eq!(panes[0].argv[panes[0].argv.len() - 3..], ["session", "run", lead.as_str()]);
-    assert!(state.pane_env(&panes[0].id).contains(&("CPD_SESSION".to_owned(), lead)), "the pane's environment is the one the product gave it");
+    assert!(
+        panes[0]
+            .options
+            .contains(&("@cpd_session".to_owned(), lead.clone())),
+        "{:?}",
+        panes[0].options
+    );
+    assert_eq!(
+        panes[0].argv[panes[0].argv.len() - 3..],
+        ["session", "run", lead.as_str()]
+    );
+    assert!(
+        state
+            .pane_env(&panes[0].id)
+            .contains(&("CPD_SESSION".to_owned(), lead)),
+        "the pane's environment is the one the product gave it"
+    );
 }
 
 // ---- cockpit and panes
@@ -477,8 +660,22 @@ fn the_cockpit_is_session_cpd_with_window_main() {
     fx.cockpit();
 
     let state = fx.tmux_state().expect("the cockpit started a server");
-    assert_eq!(state.sessions().iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["cpd"]);
-    assert_eq!(state.windows().iter().map(|w| w.name.as_str()).collect::<Vec<_>>(), ["main"]);
+    assert_eq!(
+        state
+            .sessions()
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        ["cpd"]
+    );
+    assert_eq!(
+        state
+            .windows()
+            .iter()
+            .map(|w| w.name.as_str())
+            .collect::<Vec<_>>(),
+        ["main"]
+    );
 }
 
 #[test]
@@ -499,7 +696,12 @@ fn the_cockpit_panes_are_alive_in_the_main_window_with_no_session() {
 
     let panes = fx.panes();
     assert_eq!(panes.len(), 3, "{panes:?}");
-    assert!(panes.iter().all(|p| p.window_name == "main" && p.session.is_empty() && p.history.is_empty()), "{panes:?}");
+    assert!(
+        panes
+            .iter()
+            .all(|p| p.window_name == "main" && p.session.is_empty() && p.history.is_empty()),
+        "{panes:?}"
+    );
     assert!(fx.tmux_state().unwrap().panes().iter().all(|p| !p.dead));
 }
 
@@ -510,8 +712,15 @@ fn the_cockpit_server_has_the_server_options_of_cpd() {
     fx.cockpit();
 
     let options = fx.tmux_state().unwrap().options();
-    for option in SERVER_OPTIONS.iter().filter(|o| o.len() == 4 && o[0] == "set" && o[1] == "-g") {
-        assert!(options.contains(&(option[2].clone(), option[3].clone())), "{} is not set: {options:?}", option[2]);
+    for option in SERVER_OPTIONS
+        .iter()
+        .filter(|o| o.len() == 4 && o[0] == "set" && o[1] == "-g")
+    {
+        assert!(
+            options.contains(&(option[2].clone(), option[3].clone())),
+            "{} is not set: {options:?}",
+            option[2]
+        );
     }
 }
 
@@ -522,22 +731,54 @@ fn the_cockpit_is_built_with_no_process_and_no_call_outside_the_route() {
     fx.cockpit();
 
     no_child();
-    assert!(fx.fakes.runner.unscripted().is_empty(), "{:?}", fx.fakes.runner.unscripted());
+    assert!(
+        fx.fakes.runner.unscripted().is_empty(),
+        "{:?}",
+        fx.fakes.runner.unscripted()
+    );
 }
 
 #[test]
 fn panes_lists_a_pane_made_after_the_cockpit_with_its_window_session_and_view() {
     let fx = tmux_fx();
     fx.cockpit();
-    let pane = text(fx.tmux(&["new-window", "-d", "-t", "=cpd:", "-n", "park-pay", "-P", "-F", "#{pane_id}", "sleep 1"]).stdout);
+    let pane = text(
+        fx.tmux(&[
+            "new-window",
+            "-d",
+            "-t",
+            "=cpd:",
+            "-n",
+            "park-pay",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "sleep 1",
+        ])
+        .stdout,
+    );
     let pane = pane.trim();
     fx.tmux(&["set", "-p", "-t", pane, "@cpd_session", "lead1"]);
 
     let rows = fx.panes();
 
-    let row = rows.iter().find(|p| p.pane == pane).unwrap_or_else(|| panic!("{pane} is not in {rows:?}"));
-    assert_eq!((row.window_name.as_str(), row.session.as_str(), row.view.as_str()), ("park-pay", "lead1", ""));
-    assert_eq!(rows.len(), 4, "the cockpit's three and the new one: {rows:?}");
+    let row = rows
+        .iter()
+        .find(|p| p.pane == pane)
+        .unwrap_or_else(|| panic!("{pane} is not in {rows:?}"));
+    assert_eq!(
+        (
+            row.window_name.as_str(),
+            row.session.as_str(),
+            row.view.as_str()
+        ),
+        ("park-pay", "lead1", "")
+    );
+    assert_eq!(
+        rows.len(),
+        4,
+        "the cockpit's three and the new one: {rows:?}"
+    );
 }
 
 #[test]
@@ -554,7 +795,12 @@ fn fake_cpd_views_answers_the_chat_view_at_once() {
     let fx = fx();
     fx.fake_cpd_views();
 
-    let out = fx.fakes.ports.runner.run(&call("/opt/cpd/bin/cpd", &["tui", "view", "chat"])).expect("scripted");
+    let out = fx
+        .fakes
+        .ports
+        .runner
+        .run(&call("/opt/cpd/bin/cpd", &["tui", "view", "chat"]))
+        .expect("scripted");
 
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(fx.calls("cpd").len(), 1);
@@ -565,17 +811,29 @@ fn fake_cpd_views_answers_the_history_view_at_once() {
     let fx = fx();
     fx.fake_cpd_views();
 
-    let out = fx.fakes.ports.runner.run(&call("cpd", &["tui", "view", "history", "s1"])).expect("scripted");
+    let out = fx
+        .fakes
+        .ports
+        .runner
+        .run(&call("cpd", &["tui", "view", "history", "s1"]))
+        .expect("scripted");
 
     assert_eq!(out.status.code(), Some(0));
-    assert!(fx.fakes.clock.naps().is_empty() && fx.fakes.clock.elapsed() == Duration::ZERO, "it answers at once, in no virtual time");
+    assert!(
+        fx.fakes.clock.naps().is_empty() && fx.fakes.clock.elapsed() == Duration::ZERO,
+        "it answers at once, in no virtual time"
+    );
 }
 
 #[test]
 fn fake_cpd_views_answers_no_other_view() {
     let fx = fx();
     fx.fake_cpd_views();
-    let _ = fx.fakes.ports.runner.run(&call("cpd", &["tui", "view", "widgets"]));
+    let _ = fx
+        .fakes
+        .ports
+        .runner
+        .run(&call("cpd", &["tui", "view", "widgets"]));
 
     let text = panics(|| drop(fx));
 
@@ -589,12 +847,22 @@ fn an_unscripted_call_beside_the_host_fixtures_is_refused_at_drop() {
     let fx = tmux_fx();
     let repo = fx.git_repo("pay");
     fx.tmux(&["new-session", "-d", "-s", "work", "sleep 1"]);
-    let _ = fx.fakes.ports.runner.run(&call("curl", &["--silent", "https://example.test/x"]));
+    let _ = fx
+        .fakes
+        .ports
+        .runner
+        .run(&call("curl", &["--silent", "https://example.test/x"]));
 
     let text = panics(|| drop(fx));
 
-    assert!(text.contains("curl") && text.contains("https://example.test/x"), "{text}");
-    assert!(!text.contains(repo.to_str().unwrap()), "the git and tmux calls the routes answered are not named: {text}");
+    assert!(
+        text.contains("curl") && text.contains("https://example.test/x"),
+        "{text}"
+    );
+    assert!(
+        !text.contains(repo.to_str().unwrap()),
+        "the git and tmux calls the routes answered are not named: {text}"
+    );
 }
 
 #[test]

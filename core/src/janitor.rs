@@ -22,7 +22,11 @@ use crate::output::Output;
 const SOURCE: &str = "janitor";
 
 fn lock_failed(path: &Path, e: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the janitor lock {}: {e}.", path.display())).with("lock", path.display().to_string())
+    CpdError::new(
+        ErrorCode::StoreFailed,
+        format!("Cannot use the janitor lock {}: {e}.", path.display()),
+    )
+    .with("lock", path.display().to_string())
 }
 
 fn lock_path(home: &CpdHome) -> PathBuf {
@@ -33,8 +37,16 @@ fn lock_path(home: &CpdHome) -> PathBuf {
 fn take(home: &CpdHome) -> Result<Option<File>, CpdError> {
     let path = lock_path(home);
     std::fs::create_dir_all(home.locks_dir()).map_err(|e| lock_failed(&path, e))?;
-    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(|e| lock_failed(&path, e))?;
-    Ok(lock::try_lock(&file).map_err(|e| lock_failed(&path, e))?.then_some(file))
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|e| lock_failed(&path, e))?;
+    Ok(lock::try_lock(&file)
+        .map_err(|e| lock_failed(&path, e))?
+        .then_some(file))
 }
 
 /// One pass: takes `locks/janitor.lock` without waiting (held by another pass: `{"ok":true,"skipped":"running"}`,
@@ -72,7 +84,11 @@ pub fn log_path(home: &CpdHome) -> PathBuf {
 
 /// One line per pass: `<timestamp> <pass id> <status>`. A write failure fails nothing.
 fn log(env: &Env, status: &str) {
-    let line = format!("{} {} {status}", crate::clock::timestamp(env.ports.clock.utc()), std::process::id());
+    let line = format!(
+        "{} {} {status}",
+        crate::clock::timestamp(env.ports.clock.utc()),
+        std::process::id()
+    );
     let path = log_path(&env.home);
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -107,7 +123,12 @@ fn run(env: &mut Env) -> Result<Output, CpdError> {
         }
         let found = clean_when_idle(&env.home, merged, &tmux, &work, panes.as_ref());
         if merged.fresh {
-            events.extend(found.iter().filter(|e| matches!(e.outcome, "kept" | "failed")).map(event));
+            events.extend(
+                found
+                    .iter()
+                    .filter(|e| matches!(e.outcome, "kept" | "failed"))
+                    .map(event),
+            );
         }
         entries.extend(found);
     }
@@ -137,17 +158,32 @@ fn event(e: &Entry) -> (PlanId, NewEvent) {
     let reason = e.reason.clone().unwrap_or_default();
     let (status, pr, plan, path) = (&e.status, &e.pr, &e.plan, &e.path);
     let (message, text) = if e.outcome == "kept" {
-        let m = format!("The clean-up of the {status} PR {pr} of Plan {plan} kept {path} untouched: {reason}");
+        let m = format!(
+            "The clean-up of the {status} PR {pr} of Plan {plan} kept {path} untouched: {reason}"
+        );
         (m.clone(), m)
     } else if e.renamed {
-        let m = format!("The clean-up of the {status} PR {pr} of Plan {plan} removed {path}, but not everything: {reason}");
+        let m = format!(
+            "The clean-up of the {status} PR {pr} of Plan {plan} removed {path}, but not everything: {reason}"
+        );
         (m.clone(), format!("{m}. The next janitor pass retries."))
     } else {
-        let m = format!("The clean-up of the {status} PR {pr} of Plan {plan} did not remove {path}: {reason}");
+        let m = format!(
+            "The clean-up of the {status} PR {pr} of Plan {plan} did not remove {path}: {reason}"
+        );
         (m.clone(), format!("{m}. The next janitor pass retries."))
     };
     let details = json!({"plan": plan, "pr": pr, "status": status, "outcome": e.outcome, "path": path, "reason": reason});
-    (plan.clone(), NewEvent::error(text, SOURCE, ErrorCode::CleanupFailed.as_str(), &message, details))
+    (
+        plan.clone(),
+        NewEvent::error(
+            text,
+            SOURCE,
+            ErrorCode::CleanupFailed.as_str(),
+            &message,
+            details,
+        ),
+    )
 }
 
 /// A merged or cancelled PR with what its clean-up removes; also a live (`dispatch` or `open`) PR with only its ended
@@ -185,12 +221,17 @@ fn aside(path: &str) -> PathBuf {
 impl Merged {
     /// The parallel Attempts' worktrees on disk (a linear Attempt runs in the Lead worktree).
     fn attempt_paths(&self) -> impl Iterator<Item = &Attempt> {
-        self.attempts.iter().filter(|a| !git::worktree::is_linear(&a.branch, &self.lead_branch) && (Path::new(&a.worktree).exists() || aside(&a.worktree).exists()))
+        self.attempts.iter().filter(|a| {
+            !git::worktree::is_linear(&a.branch, &self.lead_branch)
+                && (Path::new(&a.worktree).exists() || aside(&a.worktree).exists())
+        })
     }
 
     /// The Lead worktree or its aside leftover, when on disk.
     fn lead_path(&self) -> Option<&String> {
-        self.lead_worktree.as_ref().filter(|p| Path::new(p).exists() || aside(p).exists())
+        self.lead_worktree
+            .as_ref()
+            .filter(|p| Path::new(p).exists() || aside(p).exists())
     }
 
     /// Whether a path this clean-up removes is still on disk: an Attempt or Lead worktree, or the aside leftover.
@@ -202,7 +243,9 @@ impl Merged {
     /// without creating the file. An unprobeable lock is the error.
     fn idle(&self, home: &CpdHome) -> Result<bool, CpdError> {
         for attempt in &self.attempts {
-            if !attempt.ended || crate::driver::lock::probe(home, &self.plan, &attempt.id)?.is_none() {
+            if !attempt.ended
+                || crate::driver::lock::probe(home, &self.plan, &attempt.id)?.is_none()
+            {
                 return Ok(false);
             }
         }
@@ -221,8 +264,18 @@ pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Mer
     )?;
     let rows = prs
         .query_map([], |r| {
-            let pull_request = r.get::<_, Option<String>>(5)?.zip(r.get::<_, Option<i64>>(6)?);
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, pull_request, r.get::<_, String>(7)?))
+            let pull_request = r
+                .get::<_, Option<String>>(5)?
+                .zip(r.get::<_, Option<i64>>(6)?);
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                pull_request,
+                r.get::<_, String>(7)?,
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut attempts = conn.prepare(
@@ -237,11 +290,26 @@ pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Mer
     for (plan, pr, repo, lead_branch, lead_worktree, pull_request, status) in rows {
         let live = status == "dispatch" || status == "open";
         let list = attempts
-            .query_map([&plan, &pr], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, bool>(3)?, r.get::<_, bool>(4)?)))?
+            .query_map([&plan, &pr], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, bool>(3)?,
+                    r.get::<_, bool>(4)?,
+                ))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?
             .into_iter()
             .filter(|(_, _, _, ended, sweepable)| !live || *ended && *sweepable)
-            .map(|(id, branch, worktree, ended, _)| Ok(Attempt { id: AttemptId::parse(&id)?, branch, worktree, ended }))
+            .map(|(id, branch, worktree, ended, _)| {
+                Ok(Attempt {
+                    id: AttemptId::parse(&id)?,
+                    branch,
+                    worktree,
+                    ended,
+                })
+            })
             .collect::<Result<Vec<_>, CpdError>>()?;
         let plan = PlanId::parse(&plan)?;
         let pr = PrKey::parse(&pr)?;
@@ -252,7 +320,10 @@ pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Mer
                     aside(&path.to_string_lossy()).exists()
                         || path.exists()
                             && git::worktree::list(Path::new(&repo)).is_ok_and(|all| {
-                                all.iter().any(|w| w.branch.as_deref() == Some(lead_branch.as_str()) && w.path.canonicalize().ok() == path.canonicalize().ok())
+                                all.iter().any(|w| {
+                                    w.branch.as_deref() == Some(lead_branch.as_str())
+                                        && w.path.canonicalize().ok() == path.canonicalize().ok()
+                                })
                             })
                 })
                 .map(|path| path.to_string_lossy().into_owned())
@@ -262,14 +333,30 @@ pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Mer
             lead_worktree
         };
         let seen: i64 = reported.query_row([plan.as_str(), pr.as_str()], |r| r.get(0))?;
-        found.push(Merged { plan, pr, status, repo, lead_branch, lead_worktree, pull_request, attempts: list, fresh: seen == 0 });
+        found.push(Merged {
+            plan,
+            pr,
+            status,
+            repo,
+            lead_branch,
+            lead_worktree,
+            pull_request,
+            attempts: list,
+            fresh: seen == 0,
+        });
     }
     Ok(found)
 }
 
 /// [`clean`] once the PR is idle; while it is not, every path on disk is `pending` and nothing is touched. A driver
 /// lock that cannot be probed is a failed removal.
-fn clean_when_idle(home: &CpdHome, merged: &Merged, tmux: &Tmux, work: &str, panes: Option<&Result<Vec<crate::host::tmux::Pane>, CpdError>>) -> Vec<Entry> {
+fn clean_when_idle(
+    home: &CpdHome,
+    merged: &Merged,
+    tmux: &Tmux,
+    work: &str,
+    panes: Option<&Result<Vec<crate::host::tmux::Pane>, CpdError>>,
+) -> Vec<Entry> {
     let mut paths: Vec<String> = merged.attempt_paths().map(|a| a.worktree.clone()).collect();
     paths.extend(merged.lead_path().cloned());
     let entry = |path: &str, outcome: &'static str, reason: Option<String>, renamed: bool| Entry {
@@ -283,8 +370,18 @@ fn clean_when_idle(home: &CpdHome, merged: &Merged, tmux: &Tmux, work: &str, pan
     };
     match merged.idle(home) {
         Ok(true) => {}
-        Ok(false) => return paths.iter().map(|p| entry(p, "pending", None, false)).collect(),
-        Err(e) => return paths.iter().map(|p| entry(p, "failed", Some(reason(&e)), false)).collect(),
+        Ok(false) => {
+            return paths
+                .iter()
+                .map(|p| entry(p, "pending", None, false))
+                .collect();
+        }
+        Err(e) => {
+            return paths
+                .iter()
+                .map(|p| entry(p, "failed", Some(reason(&e)), false))
+                .collect();
+        }
     }
     // The windows first: a live window still has the worktree as its working directory.
     let mut killed = Vec::new();
@@ -292,18 +389,33 @@ fn clean_when_idle(home: &CpdHome, merged: &Merged, tmux: &Tmux, work: &str, pan
         Some(Ok(panes)) => {
             for attempt in &merged.attempts {
                 let name = attempt_window(&merged.plan, &attempt.id);
-                for pane in panes.iter().filter(|p| p.session_name == work && p.window_name == name) {
+                for pane in panes
+                    .iter()
+                    .filter(|p| p.session_name == work && p.window_name == name)
+                {
                     if let Err(e) = tmux.kill_window(&pane.window) {
                         killed.push((attempt.worktree.clone(), reason(&e)));
                     }
                 }
             }
         }
-        Some(Err(e)) => return paths.iter().map(|p| entry(p, "failed", Some(reason(e)), false)).collect(),
+        Some(Err(e)) => {
+            return paths
+                .iter()
+                .map(|p| entry(p, "failed", Some(reason(e)), false))
+                .collect();
+        }
         None => {}
     }
-    let mut entries: Vec<Entry> = killed.into_iter().map(|(path, why)| entry(&path, "failed", Some(why), false)).collect();
-    entries.extend(clean(merged).into_iter().map(|(path, outcome, why, renamed)| entry(&path, outcome, why, renamed)));
+    let mut entries: Vec<Entry> = killed
+        .into_iter()
+        .map(|(path, why)| entry(&path, "failed", Some(why), false))
+        .collect();
+    entries.extend(
+        clean(merged)
+            .into_iter()
+            .map(|(path, outcome, why, renamed)| entry(&path, outcome, why, renamed)),
+    );
     entries
 }
 
@@ -321,7 +433,9 @@ fn clean(merged: &Merged) -> Vec<Cleaned> {
             Err(e) => out.push((attempt.worktree.clone(), "failed", Some(reason(&e)), false)),
         }
     }
-    let Some(lead) = merged.lead_path() else { return out };
+    let Some(lead) = merged.lead_path() else {
+        return out;
+    };
     // Rule S first, so a tree a merge left stale is not kept as dirty. A stop of it as `lead_worktree_stale` leaves
     // the worktree as it was; the check below keeps it if it is dirty.
     if Path::new(lead).exists() {
@@ -343,8 +457,15 @@ fn clean(merged: &Merged) -> Vec<Cleaned> {
     let after_rename = !Path::new(lead).exists();
     match git::remove_merged_lead(repo, Path::new(lead), &merged.lead_branch, recorded_head) {
         Ok(git::LeadRemoval::Removed) => out.push((lead.clone(), "removed", None, false)),
-        Ok(git::LeadRemoval::Kept(why)) => out.push((lead.clone(), "kept", Some(why.as_str().to_owned()), false)),
-        Err(e) => out.push((lead.clone(), "failed", Some(reason(&e)), after_rename || aside(lead).exists())),
+        Ok(git::LeadRemoval::Kept(why)) => {
+            out.push((lead.clone(), "kept", Some(why.as_str().to_owned()), false))
+        }
+        Err(e) => out.push((
+            lead.clone(),
+            "failed",
+            Some(reason(&e)),
+            after_rename || aside(lead).exists(),
+        )),
     }
     out
 }

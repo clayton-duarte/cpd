@@ -91,7 +91,9 @@ impl Fixture {
     }
 
     fn name(&mut self, key: &str) {
-        self.sql(&format!("UPDATE sessions SET working_pr = '{key}' WHERE id = 'lead1'"));
+        self.sql(&format!(
+            "UPDATE sessions SET working_pr = '{key}' WHERE id = 'lead1'"
+        ));
     }
 
     fn boxes(&mut self) -> PlanBoxes {
@@ -109,7 +111,11 @@ fn title_dot(b: &PlanBoxes, key: &str, frame: usize) -> Option<Color> {
     let chart = boxes::layout(std::slice::from_ref(pr), &b.jobs, &b.needs_user, frame).chart;
     (0..chart.buf.area.width)
         .map(|x| &chart.buf[(x, 0)])
-        .find(|cell| palette::SPINNER.iter().any(|glyph| cell.symbol().contains(glyph)))
+        .find(|cell| {
+            palette::SPINNER
+                .iter()
+                .any(|glyph| cell.symbol().contains(glyph))
+        })
         .map(|cell| cell.fg)
 }
 
@@ -118,7 +124,9 @@ fn red(frame: usize) -> Option<Color> {
 }
 
 fn phase(b: &PlanBoxes, frame: usize) -> Option<Color> {
-    palette::dot_span(Dot::working(false, b.needs_user.lead_work), frame, false).style.fg
+    palette::dot_span(Dot::working(false, b.needs_user.lead_work), frame, false)
+        .style
+        .fg
 }
 
 fn only(b: &PlanBoxes, named: &str) {
@@ -162,7 +170,11 @@ fn working_pr_dot_is_red_only_when_its_own_workflow_has_a_failed_job() {
     for frame in FRAMES {
         let dot = title_dot(&b, "dev", frame);
         assert!(dot.is_some(), "dev draws the dot, frame {frame}");
-        assert_eq!(dot, phase(&b, frame), "dev is the phase colour, frame {frame}");
+        assert_eq!(
+            dot,
+            phase(&b, frame),
+            "dev is the phase colour, frame {frame}"
+        );
         assert_ne!(dot, red(frame), "dev is not red, frame {frame}");
     }
     f.name("api");
@@ -189,7 +201,11 @@ fn working_pr_dot_is_red_for_an_open_escalation_of_its_own_workflow() {
     for frame in FRAMES {
         let dot = title_dot(&b, "dev", frame);
         assert!(dot.is_some(), "dev draws the dot, frame {frame}");
-        assert_eq!(dot, phase(&b, frame), "dev is the phase colour, frame {frame}");
+        assert_eq!(
+            dot,
+            phase(&b, frame),
+            "dev is the phase colour, frame {frame}"
+        );
         assert_ne!(dot, red(frame), "dev is not red, frame {frame}");
     }
 }
@@ -202,7 +218,11 @@ fn working_pr_dot_goes_when_the_lead_leaves_working() {
     let named: Option<String> = f
         .store
         .write("read", |tx| {
-            Ok::<_, CpdError>(tx.query_row("SELECT working_pr FROM sessions WHERE id = 'lead1'", [], |r| r.get(0))?)
+            Ok::<_, CpdError>(tx.query_row(
+                "SELECT working_pr FROM sessions WHERE id = 'lead1'",
+                [],
+                |r| r.get(0),
+            )?)
         })
         .unwrap();
     assert_eq!(named, None, "leaving working clears the name");

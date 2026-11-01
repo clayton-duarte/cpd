@@ -12,23 +12,36 @@ pub struct M {
 
 impl M {
     pub fn new() -> M {
-        M { dir: tempfile::tempdir().unwrap(), tmux: Arc::new(FakeTmux::new()) }
+        M {
+            dir: tempfile::tempdir().unwrap(),
+            tmux: Arc::new(FakeTmux::new()),
+        }
     }
     /// A `FakeTmux` whose `run-shell` calls `runner`.
     pub fn with_runner(runner: Arc<dyn Runner>) -> M {
-        M { dir: tempfile::tempdir().unwrap(), tmux: Arc::new(FakeTmux::new().with_runner(runner)) }
+        M {
+            dir: tempfile::tempdir().unwrap(),
+            tmux: Arc::new(FakeTmux::new().with_runner(runner)),
+        }
     }
     pub fn path(&self) -> PathBuf {
         self.dir.path().to_path_buf()
     }
     /// `tmux -u -L <socket> -f /dev/null <args>`, as `Tmux::command` builds it.
     pub fn argv(socket: &str, args: &[&str]) -> Vec<String> {
-        let mut argv: Vec<String> = ["-u", "-L", socket, "-f", "/dev/null"].map(String::from).to_vec();
+        let mut argv: Vec<String> = ["-u", "-L", socket, "-f", "/dev/null"]
+            .map(String::from)
+            .to_vec();
         argv.extend(args.iter().map(|a| a.to_string()));
         argv
     }
     pub fn invocation(&self, argv: Vec<String>) -> Invocation {
-        Invocation { argv, tmux_tmpdir: self.path(), cwd: self.path(), env: vec![("PATH".into(), "/usr/bin".into())] }
+        Invocation {
+            argv,
+            tmux_tmpdir: self.path(),
+            cwd: self.path(),
+            env: vec![("PATH".into(), "/usr/bin".into())],
+        }
     }
     pub fn on(&self, socket: &str, args: &[&str]) -> Outcome {
         self.tmux.run(&self.invocation(M::argv(socket, args)))

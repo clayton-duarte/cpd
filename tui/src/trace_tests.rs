@@ -13,7 +13,14 @@ fn us(n: u64) -> Duration {
 
 #[test]
 fn a_trace_is_on_only_when_the_variable_is_exactly_1() {
-    for (value, on) in [(None, false), (Some(""), false), (Some("0"), false), (Some("true"), false), (Some(" 1"), false), (Some("1"), true)] {
+    for (value, on) in [
+        (None, false),
+        (Some(""), false),
+        (Some("0"), false),
+        (Some("true"), false),
+        (Some(" 1"), false),
+        (Some("1"), true),
+    ] {
         assert_eq!(Trace::new(value).is_on(), on, "{value:?}");
     }
 }
@@ -25,14 +32,20 @@ fn a_trace_line_reads_gap_read_layout_draw_and_frame_in_microseconds() {
     t.add_read(us(120));
     t.add_layout(us(340));
     let line = t.line(us(101_000), us(560), 3).unwrap();
-    assert_eq!(line, "trace gap_us=100000 read_us=120 layout_us=340 draw_us=560 frame=3");
+    assert_eq!(
+        line,
+        "trace gap_us=100000 read_us=120 layout_us=340 draw_us=560 frame=3"
+    );
 }
 
 #[test]
 fn the_first_draw_has_a_gap_of_zero() {
     let mut t = Trace::new(Some("1"));
     let line = t.line(us(777_000), us(10), 1).unwrap();
-    assert_eq!(line, "trace gap_us=0 read_us=0 layout_us=0 draw_us=10 frame=1");
+    assert_eq!(
+        line,
+        "trace gap_us=0 read_us=0 layout_us=0 draw_us=10 frame=1"
+    );
 }
 
 #[test]
@@ -55,9 +68,15 @@ fn reads_and_layouts_are_summed_since_the_previous_draw_and_then_start_again() {
     t.add_layout(us(2));
     t.add_layout(us(3));
     let first = t.line(us(0), us(7), 0).unwrap();
-    assert_eq!(first, "trace gap_us=0 read_us=30 layout_us=6 draw_us=7 frame=0");
+    assert_eq!(
+        first,
+        "trace gap_us=0 read_us=30 layout_us=6 draw_us=7 frame=0"
+    );
     let second = t.line(us(100), us(7), 1).unwrap();
-    assert_eq!(second, "trace gap_us=100 read_us=0 layout_us=0 draw_us=7 frame=1");
+    assert_eq!(
+        second,
+        "trace gap_us=100 read_us=0 layout_us=0 draw_us=7 frame=1"
+    );
 }
 
 #[test]
@@ -86,7 +105,16 @@ fn a_trace_line_is_appended_to_the_views_log_after_its_timestamp() {
     let lines: Vec<_> = text.lines().collect();
     assert_eq!(lines.len(), 2, "{text:?}");
     let (at, rest) = lines[0].split_once(' ').unwrap();
-    assert!(time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).is_ok(), "{at}");
-    assert_eq!(rest, "trace gap_us=0 read_us=0 layout_us=0 draw_us=4 frame=2");
-    assert!(lines[1].ends_with(" trace gap_us=100000 read_us=9 layout_us=0 draw_us=5 frame=3"), "{text:?}");
+    assert!(
+        time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).is_ok(),
+        "{at}"
+    );
+    assert_eq!(
+        rest,
+        "trace gap_us=0 read_us=0 layout_us=0 draw_us=4 frame=2"
+    );
+    assert!(
+        lines[1].ends_with(" trace gap_us=100000 read_us=9 layout_us=0 draw_us=5 frame=3"),
+        "{text:?}"
+    );
 }

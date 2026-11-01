@@ -9,12 +9,12 @@ use serde_json::json;
 
 use super::spec::{self, Spec};
 use super::{
-    EditArgs, Env, check_kind_not_reserved, check_needs_available, check_needs_known, check_needs_same_pr, check_pr_live, check_shape_allows, find,
-    plan_phase, sorted_needs,
+    EditArgs, Env, check_kind_not_reserved, check_needs_available, check_needs_known,
+    check_needs_same_pr, check_pr_live, check_shape_allows, find, plan_phase, sorted_needs,
 };
 use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
 use crate::events::{NewEvent, append};
+use crate::home::CpdHome;
 use crate::ids::{JobKey, PlanId};
 use crate::output::Output;
 use crate::plan::fingerprint::load_prs;
@@ -39,7 +39,11 @@ struct Edits {
 enum Decision {
     /// No value changes.
     Already(Job),
-    Update { before: Job, after: Job, fields: Vec<&'static str> },
+    Update {
+        before: Job,
+        after: Job,
+        fields: Vec<&'static str>,
+    },
 }
 
 pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
@@ -49,7 +53,14 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
 /// [`edit`] on an open `env`: what a test hands in.
 pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
-    if args.title.is_none() && args.tier.is_none() && args.spec.is_none() && args.pr.is_none() && args.kind.is_none() && args.needs.is_none() && !args.no_needs {
+    if args.title.is_none()
+        && args.tier.is_none()
+        && args.spec.is_none()
+        && args.pr.is_none()
+        && args.kind.is_none()
+        && args.needs.is_none()
+        && !args.no_needs
+    {
         return Err(CpdError::new(
             ErrorCode::NothingToEdit,
             "Nothing to edit: pass --title, --tier, --spec, --pr, --kind, --needs or --no-needs.",
@@ -64,15 +75,28 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
         check_kind_not_reserved(kind)?;
     }
     if args.kind.as_deref().is_some_and(jobs::is_explore) {
-        return Err(CpdError::new(ErrorCode::ExploreNeedsMixed, "A Job cannot be made an explore Job: add a scout or research Job with job add.")
-            .with("kind", args.kind.clone().unwrap_or_default()));
+        return Err(CpdError::new(
+            ErrorCode::ExploreNeedsMixed,
+            "A Job cannot be made an explore Job: add a scout or research Job with job add.",
+        )
+        .with("kind", args.kind.clone().unwrap_or_default()));
     }
     // An explore Job's Spec has its own four fields: the Job's stored kind says which.
-    let stored_kind: Option<String> = env
-        .store
-        .read(|conn| Ok(conn.query_row("SELECT kind FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), args.key.as_str()], |r| r.get(0)).optional()?))?;
+    let stored_kind: Option<String> = env.store.read(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT kind FROM jobs WHERE plan = ?1 AND key = ?2",
+                [plan.as_str(), args.key.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?)
+    })?;
     let spec_kind = stored_kind.unwrap_or_else(|| "work".to_owned());
-    let spec = args.spec.as_ref().map(|path: &PathBuf| spec::read_for(path, &spec_kind)).transpose()?;
+    let spec = args
+        .spec
+        .as_ref()
+        .map(|path: &PathBuf| spec::read_for(path, &spec_kind))
+        .transpose()?;
     if let Some(tier) = args.tier {
         let pr = args.pr.clone();
         env.check_tier(&plan, &args.key, pr.as_ref(), tier)?;
@@ -89,7 +113,9 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
     let key = args.key;
 
     let home = env.home.clone();
-    let decision = env.store.read(|conn| decide(conn, &home, &plan, &key, &edits))?;
+    let decision = env
+        .store
+        .read(|conn| decide(conn, &home, &plan, &key, &edits))?;
     let (job, fields, already) = match decision {
         Decision::Already(job) => (job, Vec::new(), true),
         Decision::Update { .. } => env.store.write(COMMAND, |tx| match decide(tx, &home, &plan, &key, &edits)? {
@@ -113,7 +139,13 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
     Ok(Output::success(out))
 }
 
-fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits: &Edits) -> Result<Decision, CpdError> {
+fn decide(
+    conn: &Connection,
+    home: &CpdHome,
+    plan: &PlanId,
+    key: &JobKey,
+    edits: &Edits,
+) -> Result<Decision, CpdError> {
     let phase = plan_phase(conn, plan)?;
     let all = jobs::load(conn, plan)?;
     let before = find(&all, plan, key)?;
@@ -121,7 +153,10 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     if before.is_draft() && matches!(before.kind.as_str(), "open" | "update") {
         return Err(CpdError::new(
             ErrorCode::JobLocked,
-            format!("Job {key} is an {} Job: its Spec is cpd's, and cannot be edited.", before.kind),
+            format!(
+                "Job {key} is an {} Job: its Spec is cpd's, and cannot be edited.",
+                before.kind
+            ),
         )
         .with("plan", plan.as_str())
         .with("job", key.as_str())
@@ -129,25 +164,47 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     }
     let locked = !before.is_draft();
     if locked && edits.worker {
-        return Err(CpdError::new(ErrorCode::NotALead, "Only the Lead edits a Locked Job: ask it with cpd ask."));
+        return Err(CpdError::new(
+            ErrorCode::NotALead,
+            "Only the Lead edits a Locked Job: ask it with cpd ask.",
+        ));
     }
     if locked {
-        let attempts: i64 = conn.query_row("SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
-        let editable = before.status == "queued" && !matches!(before.kind.as_str(), "open" | "update") && attempts == 0;
-        let spec_only = edits.title.is_none() && edits.tier.is_none() && edits.pr.is_none() && edits.kind.is_none() && edits.needs.is_none();
+        let attempts: i64 = conn.query_row(
+            "SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2",
+            [plan.as_str(), key.as_str()],
+            |r| r.get(0),
+        )?;
+        let editable = before.status == "queued"
+            && !matches!(before.kind.as_str(), "open" | "update")
+            && attempts == 0;
+        let spec_only = edits.title.is_none()
+            && edits.tier.is_none()
+            && edits.pr.is_none()
+            && edits.kind.is_none()
+            && edits.needs.is_none();
         if !editable || !spec_only {
             let why = if editable {
                 "only its Spec (--spec) can change; title, Tier, PR, kind and Dependencies are Locked".to_owned()
             } else if matches!(before.kind.as_str(), "open" | "update") {
-                format!("it is an {} Job: its Spec is cpd's, and cannot be edited", before.kind)
+                format!(
+                    "it is an {} Job: its Spec is cpd's, and cannot be edited",
+                    before.kind
+                )
             } else {
-                format!("it is {} with {attempts} Attempt(s): only a queued Job with no Attempt can be edited; retry it, or cancel it and append a replacement", before.status)
+                format!(
+                    "it is {} with {attempts} Attempt(s): only a queued Job with no Attempt can be edited; retry it, or cancel it and append a replacement",
+                    before.status
+                )
             };
-            return Err(CpdError::new(ErrorCode::JobLocked, format!("Job {key} is Locked: {why}."))
-                .with("plan", plan.as_str())
-                .with("job", key.as_str())
-                .with("status", before.status.as_str())
-                .with("attempts", attempts));
+            return Err(CpdError::new(
+                ErrorCode::JobLocked,
+                format!("Job {key} is Locked: {why}."),
+            )
+            .with("plan", plan.as_str())
+            .with("job", key.as_str())
+            .with("status", before.status.as_str())
+            .with("attempts", attempts));
         }
     }
     let mut after = before.clone();
@@ -169,7 +226,11 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
         } else {
             // The Spec names no primary checkout of a PR of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
             let user_home = std::env::home_dir().unwrap_or_default();
-            spec.without_artefacts(home.root(), plan.as_str(), &user_home).check_primary_roots(&super::add::primary_roots(&load_prs(conn, plan)?), &user_home)?;
+            spec.without_artefacts(home.root(), plan.as_str(), &user_home)
+                .check_primary_roots(
+                    &super::add::primary_roots(&load_prs(conn, plan)?),
+                    &user_home,
+                )?;
             spec.check_files_relative()?;
         }
         after.spec = Some(spec.stored());
@@ -180,8 +241,16 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     // The Spec fits the kind (§5.2): a `test` Job with a Spec has `tests` and `test_files`, every other kind neither.
     if edits.kind.is_some() && after.kind != before.kind {
         if after.spec.is_some() && (after.kind == "test") != after.tests.is_some() {
-            let field = if after.kind == "test" { "tests" } else { "test_files" };
-            let why = if after.kind == "test" { "a test Job's Spec names its tests" } else { "only a test Job's Spec has tests and test_files" };
+            let field = if after.kind == "test" {
+                "tests"
+            } else {
+                "test_files"
+            };
+            let why = if after.kind == "test" {
+                "a test Job's Spec names its tests"
+            } else {
+                "only a test Job's Spec has tests and test_files"
+            };
             return Err(CpdError::new(ErrorCode::SpecInvalid, format!("The Spec is invalid at $.{field}: {why}; give --spec with the Spec that fits {}.", after.kind))
                 .with("path", format!("$.{field}"))
                 .with("job", key.as_str()));
@@ -194,9 +263,12 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     if let Some(pr) = &edits.pr {
         let prs = load_prs(conn, plan)?;
         if !prs.iter().any(|p| p.key.as_str() == pr.as_str()) {
-            return Err(CpdError::new(ErrorCode::PrNotFound, format!("No PR {pr} in Plan {plan}."))
-                .with("plan", plan.as_str())
-                .with("pr", pr.as_str()));
+            return Err(CpdError::new(
+                ErrorCode::PrNotFound,
+                format!("No PR {pr} in Plan {plan}."),
+            )
+            .with("plan", plan.as_str())
+            .with("pr", pr.as_str()));
         }
         check_pr_live(&prs, plan, pr)?;
         after.pr = Some(pr.clone());
@@ -207,8 +279,16 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
         if let Some(pr) = prs.iter().find(|p| p.key.as_str() == after.pr_str()) {
             // A Lead Branch that is not in the repo (yet) is no tree to read: the Job starts from the PR's base.
             let mut pr = pr.clone();
-            let lead_exists = crate::git::run::run(std::path::Path::new(&pr.repo), &["rev-parse", "--verify", "--quiet", &format!("{}^{{commit}}", pr.lead_branch)])
-                .is_ok_and(|o| o.code == 0);
+            let lead_exists = crate::git::run::run(
+                std::path::Path::new(&pr.repo),
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("{}^{{commit}}", pr.lead_branch),
+                ],
+            )
+            .is_ok_and(|o| o.code == 0);
             if locked && !lead_exists {
                 pr.lead_worktree = None;
             }
@@ -216,8 +296,18 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
         }
     }
     if edits.spec.is_some() || moved {
-        let names: Option<Vec<String>> = after.resources.as_ref().and_then(|r| serde_json::from_value(r.clone()).ok());
-        super::add::check_resources_declared(conn, home, plan, after.pr_str(), key.as_str(), names.as_deref())?;
+        let names: Option<Vec<String>> = after
+            .resources
+            .as_ref()
+            .and_then(|r| serde_json::from_value(r.clone()).ok());
+        super::add::check_resources_declared(
+            conn,
+            home,
+            plan,
+            after.pr_str(),
+            key.as_str(),
+            names.as_deref(),
+        )?;
     }
     if !explore && (moved || after.kind != before.kind) {
         check_shape_allows(&load_prs(conn, plan)?, plan, after.pr_str(), &after.kind)?;
@@ -233,11 +323,19 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     }
     after.needs = needs;
     if moved {
-        let needing: Vec<&str> = all.iter().filter(|j| j.needs.contains(&before.key)).map(|j| j.key.as_str()).collect();
+        let needing: Vec<&str> = all
+            .iter()
+            .filter(|j| j.needs.contains(&before.key))
+            .map(|j| j.key.as_str())
+            .collect();
         if !needing.is_empty() {
             return Err(CpdError::new(
                 ErrorCode::NeedsOtherPr,
-                format!("Job {key} cannot change PR: {} need{} it.", needing.join(", "), if needing.len() == 1 { "s" } else { "" }),
+                format!(
+                    "Job {key} cannot change PR: {} need{} it.",
+                    needing.join(", "),
+                    if needing.len() == 1 { "s" } else { "" }
+                ),
             )
             .with("plan", plan.as_str())
             .with("pr", after.pr_str())
@@ -245,11 +343,19 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
         }
     }
     if edits.needs.is_some() {
-        let others = all.iter().filter(|j| j.key != after.key).cloned().chain([after.clone()]).collect::<Vec<_>>();
+        let others = all
+            .iter()
+            .filter(|j| j.key != after.key)
+            .cloned()
+            .chain([after.clone()])
+            .collect::<Vec<_>>();
         if let Some(cycle) = jobs::cycle(&others) {
             return Err(CpdError::new(
                 ErrorCode::DependencyCycle,
-                format!("The new needs of {key} make a cycle: {}.", cycle.join(" → ")),
+                format!(
+                    "The new needs of {key} make a cycle: {}.",
+                    cycle.join(" → ")
+                ),
             )
             .with("plan", plan.as_str())
             .with("cycle", cycle));
@@ -264,7 +370,11 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     }
     // A stub gets its whole Spec at once: it is one field, `spec`, not the five columns.
     let completed = before.spec.is_none() && after.spec.is_some();
-    for (_, (name, _)) in columns(before).into_iter().zip(columns(&after)).filter(|(b, a)| b.1 != a.1) {
+    for (_, (name, _)) in columns(before)
+        .into_iter()
+        .zip(columns(&after))
+        .filter(|(b, a)| b.1 != a.1)
+    {
         match name {
             "tier" => fields.push("tier"),
             _ if !completed => fields.push(name),
@@ -284,7 +394,11 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     if before.is_draft() {
         crate::plan::parked::door(conn, plan, &phase, &all, &after)?;
     }
-    Ok(Decision::Update { before: before.clone(), after, fields })
+    Ok(Decision::Update {
+        before: before.clone(),
+        after,
+        fields,
+    })
 }
 
 /// The Tier and Spec columns (`tests` and `test_files` of a `test` Job with them) as stored, in column order: `None` is null (a stub).
@@ -308,27 +422,53 @@ fn columns(job: &Job) -> [(&'static str, Option<String>); 9] {
 /// Dependencies first, then the columns (`pr` among them), then the new ones.
 fn update(tx: &Connection, plan: &PlanId, before: &Job, after: &Job) -> Result<(), CpdError> {
     for need in before.needs.iter().filter(|n| !after.needs.contains(n)) {
-        tx.execute("DELETE FROM dependencies WHERE plan = ?1 AND job = ?2 AND needs = ?3", [plan.as_str(), after.key.as_str(), need.as_str()])?;
+        tx.execute(
+            "DELETE FROM dependencies WHERE plan = ?1 AND job = ?2 AND needs = ?3",
+            [plan.as_str(), after.key.as_str(), need.as_str()],
+        )?;
     }
-    let mut written: Vec<(&str, bool, Option<String>)> =
-        vec![("title", before.title != after.title, Some(after.title.clone())), ("kind", before.kind != after.kind, Some(after.kind.clone()))];
-    written.extend(columns(before).into_iter().zip(columns(after)).map(|(b, a)| (a.0, b.1 != a.1, a.1)));
+    let mut written: Vec<(&str, bool, Option<String>)> = vec![
+        (
+            "title",
+            before.title != after.title,
+            Some(after.title.clone()),
+        ),
+        ("kind", before.kind != after.kind, Some(after.kind.clone())),
+    ];
+    written.extend(
+        columns(before)
+            .into_iter()
+            .zip(columns(after))
+            .map(|(b, a)| (a.0, b.1 != a.1, a.1)),
+    );
     written.push(("pr", before.pr != after.pr, after.pr.clone()));
-    let changed: Vec<&(&str, bool, Option<String>)> = written.iter().filter(|(_, changed, _)| *changed).collect();
+    let changed: Vec<&(&str, bool, Option<String>)> =
+        written.iter().filter(|(_, changed, _)| *changed).collect();
     let fingerprint = (!after.is_draft()).then(|| jobs::locked_fingerprint(after));
     if !changed.is_empty() {
         let mut changed = changed;
         let fp = (fingerprint.is_some()).then(|| ("fingerprint", true, fingerprint.clone()));
         let fp_ref = fp.as_ref();
         changed.extend(fp_ref);
-        let set = changed.iter().enumerate().map(|(i, (name, _, _))| format!("{name} = ?{}", i + 3)).collect::<Vec<_>>().join(", ");
+        let set = changed
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _, _))| format!("{name} = ?{}", i + 3))
+            .collect::<Vec<_>>()
+            .join(", ");
         let plan_s = plan.as_str();
         let mut params: Vec<&dyn rusqlite::ToSql> = vec![&plan_s, &after.key];
         params.extend(changed.iter().map(|(_, _, v)| v as &dyn rusqlite::ToSql));
-        tx.execute(&format!("UPDATE jobs SET {set} WHERE plan = ?1 AND key = ?2"), params.as_slice())?;
+        tx.execute(
+            &format!("UPDATE jobs SET {set} WHERE plan = ?1 AND key = ?2"),
+            params.as_slice(),
+        )?;
     }
     for need in after.needs.iter().filter(|n| !before.needs.contains(n)) {
-        tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), after.key.as_str(), need.as_str()])?;
+        tx.execute(
+            "INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)",
+            [plan.as_str(), after.key.as_str(), need.as_str()],
+        )?;
     }
     Ok(())
 }

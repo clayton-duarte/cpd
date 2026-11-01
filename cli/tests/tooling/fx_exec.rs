@@ -20,7 +20,11 @@ fn fx() -> Fx {
 }
 
 fn launch(args: &[&str]) -> Launch {
-    Launch { program: "/opt/cpd/bin/cpd".to_owned(), args: args.iter().map(|a| (*a).to_owned()).collect(), ..Launch::default() }
+    Launch {
+        program: "/opt/cpd/bin/cpd".to_owned(),
+        args: args.iter().map(|a| (*a).to_owned()).collect(),
+        ..Launch::default()
+    }
 }
 
 /// What `exec` of the fake ports unwinds with.
@@ -69,7 +73,13 @@ fn exec_keeps_fd_3_open_on_the_same_file_and_reports_whether_it_was_close_on_exe
     drop(handed);
     assert_eq!(fd3(), None);
     let kept = exec.fd3();
-    assert_eq!((kept.metadata().unwrap().dev(), kept.metadata().unwrap().ino()), (on_disk.dev(), on_disk.ino()));
+    assert_eq!(
+        (
+            kept.metadata().unwrap().dev(),
+            kept.metadata().unwrap().ino()
+        ),
+        (on_disk.dev(), on_disk.ino())
+    );
     assert_ne!(kept.as_raw_fd(), 3);
 }
 
@@ -88,16 +98,29 @@ fn a_hand_over_closes_fd_3_only_when_it_is_still_its_file() {
 
     drop(handed);
 
-    assert_eq!(fd3(), Some((taken.metadata().unwrap().dev(), taken.metadata().unwrap().ino())), "the other file is still open");
+    assert_eq!(
+        fd3(),
+        Some((
+            taken.metadata().unwrap().dev(),
+            taken.metadata().unwrap().ino()
+        )),
+        "the other file is still open"
+    );
 }
 
 #[test]
 fn run_launch_until_exec_returns_the_run_of_a_launch_that_does_not_exec() {
     let fx = fx();
 
-    let run = fx.run_launch_until_exec(&launch(&["events", "list"]), |_, _| {}).ok().expect("no exec");
+    let run = fx
+        .run_launch_until_exec(&launch(&["events", "list"]), |_, _| {})
+        .ok()
+        .expect("no exec");
 
-    assert_eq!((run.exit, run.json()), (0, json!({"ok": true, "events": [], "next": 0})));
+    assert_eq!(
+        (run.exit, run.json()),
+        (0, json!({"ok": true, "events": [], "next": 0}))
+    );
 }
 
 #[test]
@@ -105,11 +128,18 @@ fn a_launch_with_stdout_to_has_its_result_as_the_last_line_of_that_log_and_stder
     let fx = fx();
     let log = fx.env.root().join("logs/attempt.log");
     let before = identity(2);
-    let launch = Launch { stdout_to: Some(log.clone()), ..launch(&["events", "list"]) };
+    let launch = Launch {
+        stdout_to: Some(log.clone()),
+        ..launch(&["events", "list"])
+    };
 
     let run = fx.run_launch(&launch);
     let again = fx.run_launch(&launch);
 
-    assert_eq!(std::fs::read_to_string(&log).unwrap(), format!("{}{}", run.stdout, again.stdout), "appended, as a process appends");
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        format!("{}{}", run.stdout, again.stdout),
+        "appended, as a process appends"
+    );
     assert_eq!(identity(2), before);
 }

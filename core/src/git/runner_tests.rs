@@ -40,7 +40,11 @@ fn run_with_gives_fetch_push_and_ls_remote_the_network_deadline() {
     for call in ["fetch", "push", "ls-remote"] {
         let runner = fake(Reply::ok(""));
         run_with(&runner, Path::new(DIR), &[call, "origin"]).unwrap();
-        assert_eq!(runner.calls()[0].deadline, Duration::from_secs(300), "{call}");
+        assert_eq!(
+            runner.calls()[0].deadline,
+            Duration::from_secs(300),
+            "{call}"
+        );
     }
 }
 
@@ -80,7 +84,11 @@ fn run_with_maps_a_git_that_cannot_start_to_git_failed_with_the_argv() {
     let runner = fake(Reply::io(ErrorKind::NotFound));
     let err = run_with(&runner, Path::new(DIR), &["status"]).unwrap_err();
     assert_eq!(err.code(), ErrorCode::GitFailed);
-    assert!(err.message().starts_with("Cannot run git: "), "{}", err.message());
+    assert!(
+        err.message().starts_with("Cannot run git: "),
+        "{}",
+        err.message()
+    );
     assert_eq!(err.details()["argv"], json!(["git", "-C", DIR, "status"]));
     assert_eq!(err.details()["exit"], json!(null));
 }
@@ -88,7 +96,11 @@ fn run_with_maps_a_git_that_cannot_start_to_git_failed_with_the_argv() {
 #[test]
 fn run_with_maps_a_scripted_timeout_to_tool_timeout() {
     let clock = ManualClock::new();
-    let runner = FakeRunner::new(clock.clone()).on("git", |_| true, Reply::ok("").takes(Duration::from_secs(61)));
+    let runner = FakeRunner::new(clock.clone()).on(
+        "git",
+        |_| true,
+        Reply::ok("").takes(Duration::from_secs(61)),
+    );
     let err = run_with(&runner, Path::new(DIR), &["status"]).unwrap_err();
     assert_eq!(err.code(), ErrorCode::ToolTimeout);
     assert_eq!(err.details()["tool"], "git");

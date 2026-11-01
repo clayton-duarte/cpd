@@ -27,14 +27,26 @@ const STALL_MINUTES: u64 = 1;
 
 /// `run/<plan>/durable/<attempt>.sqlite`: the transcript a durable Worker's host appends every turn (§6.12 `storePath`).
 fn transcript(live: &Live, id: &str) -> PathBuf {
-    live.fx.env.cpd_home().join("run").join(PLAN).join("durable").join(format!("{id}.sqlite"))
+    live.fx
+        .env
+        .cpd_home()
+        .join("run")
+        .join(PLAN)
+        .join("durable")
+        .join(format!("{id}.sqlite"))
 }
 
 /// Appends a byte to the transcript, as the Worker's host does at every turn it writes: the file grows.
 fn grow(live: &Live, id: &str) {
     let path = transcript(live, id);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::OpenOptions::new().create(true).append(true).open(&path).unwrap().write_all(b"x").unwrap();
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(b"x")
+        .unwrap();
 }
 
 /// The `error` Events of Plan `pay` whose `data` carries the stall code: their `data`, in order.
@@ -67,9 +79,22 @@ fn assert_one_event(live: &Live, id: &str) {
     assert_eq!(events.len(), 1, "one worker_stalled Event: {events:?}");
     let e = &events[0];
     assert_eq!(e["source"], "driver", "{e}");
-    assert_eq!(e["details"], json!({"attempt": id, "minutes": STALL_MINUTES}), "{e}");
-    let listed = live.events(id).into_iter().filter(|e| e["kind"] == "error" && e["data"]["code"] == "worker_stalled").count();
-    assert_eq!(listed, 1, "the Event is the Attempt's: {:?}", live.events(id));
+    assert_eq!(
+        e["details"],
+        json!({"attempt": id, "minutes": STALL_MINUTES}),
+        "{e}"
+    );
+    let listed = live
+        .events(id)
+        .into_iter()
+        .filter(|e| e["kind"] == "error" && e["data"]["code"] == "worker_stalled")
+        .count();
+    assert_eq!(
+        listed,
+        1,
+        "the Event is the Attempt's: {:?}",
+        live.events(id)
+    );
 }
 
 /// A Worker that commits `api.txt` and submits, as pi does at its end.
@@ -101,9 +126,19 @@ fn a_quiet_durable_transcript_appends_one_worker_stalled_and_one_inbox_item() {
                 let items = stall_items(live);
                 assert_eq!(items.len(), 1, "one engine-error item: {items:?}");
                 let (subject, label, closed_at) = &items[0];
-                assert_eq!(subject, &format!("error:driver/worker_stalled/{id}"), "{items:?}");
-                assert!(label.contains(&format!("cpd job cancel {JOB}")), "the label names the remedy: {items:?}");
-                assert_eq!(closed_at, &None, "the item is open while the Attempt runs: {items:?}");
+                assert_eq!(
+                    subject,
+                    &format!("error:driver/worker_stalled/{id}"),
+                    "{items:?}"
+                );
+                assert!(
+                    label.contains(&format!("cpd job cancel {JOB}")),
+                    "the label names the remedy: {items:?}"
+                );
+                assert_eq!(
+                    closed_at, &None,
+                    "the item is open while the Attempt runs: {items:?}"
+                );
                 stage = 1;
                 // The transcript grows again: the watch re-arms, and the second quiet minute is a second episode.
                 grow(live, id);
@@ -113,7 +148,12 @@ fn a_quiet_durable_transcript_appends_one_worker_stalled_and_one_inbox_item() {
                 if stalled(live).len() < 2 {
                     return;
                 }
-                assert_eq!(stalled(live).len(), 2, "one Event per stall episode: {:?}", stalled(live));
+                assert_eq!(
+                    stalled(live).len(),
+                    2,
+                    "one Event per stall episode: {:?}",
+                    stalled(live)
+                );
                 live.fx.engine_tick();
                 let items = stall_items(live);
                 assert_eq!(items.len(), 1, "one item per stalled Attempt: {items:?}");
@@ -128,13 +168,20 @@ fn a_quiet_durable_transcript_appends_one_worker_stalled_and_one_inbox_item() {
 
     assert_eq!(stage, 2, "the drive ended at stage {stage}");
     let attempt = live.attempt(&id);
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
+    assert_eq!(
+        (&attempt["outcome"], &attempt["cause"]),
+        (&json!("merged"), &json!("merged")),
+        "{attempt}"
+    );
     assert_eq!(stalled(&live).len(), 2);
     // The engine's next reconcile closes the item: the Attempt has ended.
     live.fx.engine_tick();
     let items = stall_items(&live);
     assert_eq!(items.len(), 1, "{items:?}");
-    assert!(items[0].2.is_some(), "the item closed when the Attempt ended: {items:?}");
+    assert!(
+        items[0].2.is_some(),
+        "the item closed when the Attempt ended: {items:?}"
+    );
 }
 
 #[test]
@@ -153,14 +200,26 @@ fn a_growing_transcript_appends_nothing() {
 
     assert!(submitted, "the Worker never submitted");
     let attempt = live.attempt(&id);
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
+    assert_eq!(
+        (&attempt["outcome"], &attempt["cause"]),
+        (&json!("merged"), &json!("merged")),
+        "{attempt}"
+    );
     // 150 polls of the driver's 500 ms are 75 s of clock: the drive covered the 60 s window, all of it growing.
     assert!(
         live.fx.fakes.clock.elapsed() >= Duration::from_secs(STALL_MINUTES * 60),
         "the drive lasted {:?}, not a full stall window",
         live.fx.fakes.clock.elapsed()
     );
-    assert_eq!(stalled(&live), Vec::<Value>::new(), "a growing transcript appends no Event");
+    assert_eq!(
+        stalled(&live),
+        Vec::<Value>::new(),
+        "a growing transcript appends no Event"
+    );
     live.fx.engine_tick();
-    assert_eq!(stall_items(&live), Vec::<(String, String, Option<String>)>::new(), "and opens no item");
+    assert_eq!(
+        stall_items(&live),
+        Vec::<(String, String, Option<String>)>::new(),
+        "and opens no item"
+    );
 }

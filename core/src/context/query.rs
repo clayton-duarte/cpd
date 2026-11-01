@@ -17,11 +17,17 @@ pub(super) fn sanitise(query: &str) -> String {
                 out.push_str(rest);
                 break;
             };
-            let end = if rest[end..].starts_with('*') { end + 1 } else { end };
+            let end = if rest[end..].starts_with('*') {
+                end + 1
+            } else {
+                end
+            };
             out.push_str(&rest[..end]);
             rest = &rest[end..];
         } else {
-            let end = rest.find(|c: char| c.is_whitespace() || c == '"').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c.is_whitespace() || c == '"')
+                .unwrap_or(rest.len());
             chunk(&rest[..end], &mut groups, &mut out);
             rest = &rest[end..];
         }
@@ -86,7 +92,10 @@ fn text(word: &str) -> String {
     if core.is_empty() {
         return format!("\"{word}\"");
     }
-    if core.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || !c.is_ascii()) {
+    if core
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || !c.is_ascii())
+    {
         return word.to_owned();
     }
     format!("\"{core}\"{star}")

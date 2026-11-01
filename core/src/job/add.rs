@@ -11,19 +11,20 @@ use std::path::PathBuf;
 
 use super::spec::{self, Spec};
 use super::{
-    AddArgs, Env, check_kind_not_reserved, check_needs_available, check_needs_known, check_needs_same_pr, check_pr_live, check_shape_allows,
-    check_impl_job_required, check_test_job_required, plan_phase, sorted_needs,
+    AddArgs, Env, check_impl_job_required, check_kind_not_reserved, check_needs_available,
+    check_needs_known, check_needs_same_pr, check_pr_live, check_shape_allows,
+    check_test_job_required, plan_phase, sorted_needs,
 };
+use crate::args::PrArg;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
 use crate::ids::{JobKey, PlanId, PrKey};
 use crate::output::Output;
-use crate::args::PrArg;
+use crate::plan::PrRow;
 use crate::plan::fingerprint::load_prs;
 use crate::plan::jobs::{self, Job};
 use crate::plan::locked_fingerprint;
-use crate::plan::PrRow;
 
 const COMMAND: &str = "job add";
 
@@ -64,9 +65,12 @@ pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
     if explore {
         // An explore Job belongs to the Plan, and is never a draft (R2, R3).
         if let Some(pr) = &args.pr.pr {
-            return Err(CpdError::new(ErrorCode::ExplorePrForbidden, format!("A {kind} Job belongs to the Plan, not to a PR: drop --pr {pr}."))
-                .with("kind", kind.as_str())
-                .with("pr", pr.as_str()));
+            return Err(CpdError::new(
+                ErrorCode::ExplorePrForbidden,
+                format!("A {kind} Job belongs to the Plan, not to a PR: drop --pr {pr}."),
+            )
+            .with("kind", kind.as_str())
+            .with("pr", pr.as_str()));
         }
         if args.draft {
             return Err(CpdError::new(ErrorCode::ExploreNoDraft, format!("A {kind} Job has no draft, no review and no lock: it is queued at once; drop --draft."))
@@ -74,7 +78,11 @@ pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
         }
     }
     require_tier_and_spec(&args)?;
-    let mut spec = args.spec.as_deref().map(|p| spec::read_for(p, &kind)).transpose()?;
+    let mut spec = args
+        .spec
+        .as_deref()
+        .map(|p| spec::read_for(p, &kind))
+        .transpose()?;
     if let Some(spec) = &mut spec {
         spec.check_kind(&kind)?;
         if explore {
@@ -108,30 +116,39 @@ pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
     let decision = env.store.read(|conn| decide(conn, &home, &plan, &wanted))?;
     let (job, already) = match decision {
         Decision::Already(job) => (job, true),
-        Decision::Insert(_) => env.store.write(COMMAND, |tx| match decide(tx, &home, &plan, &wanted)? {
-            Decision::Already(job) => Ok((job, true)),
-            Decision::Insert(job) => {
-                insert(tx, &plan, &job)?;
-                let text = format!("Job {} added to Plan {plan} as {}. Next: cpd job show {} --plan {plan}", job.key, job.status, job.key);
-                append(
-                    tx,
-                    NewEvent::job_added(
-                        text,
-                        &job.pr,
-                        &job.kind,
-                        &job.status,
-                        job.appended,
-                        job.tier.as_deref(),
-                        &job.needs,
-                        job.urgent,
-                    )
-                    .plan(plan.clone())
-                    .job(wanted.key.clone()),
-                )?;
-                if let Some(pr) = &job.pr {
-                    crate::session::working_pr::name(tx, &plan, &crate::ids::PrKey::parse(pr)?)?;
+        Decision::Insert(_) => env.store.write(COMMAND, |tx| {
+            match decide(tx, &home, &plan, &wanted)? {
+                Decision::Already(job) => Ok((job, true)),
+                Decision::Insert(job) => {
+                    insert(tx, &plan, &job)?;
+                    let text = format!(
+                        "Job {} added to Plan {plan} as {}. Next: cpd job show {} --plan {plan}",
+                        job.key, job.status, job.key
+                    );
+                    append(
+                        tx,
+                        NewEvent::job_added(
+                            text,
+                            &job.pr,
+                            &job.kind,
+                            &job.status,
+                            job.appended,
+                            job.tier.as_deref(),
+                            &job.needs,
+                            job.urgent,
+                        )
+                        .plan(plan.clone())
+                        .job(wanted.key.clone()),
+                    )?;
+                    if let Some(pr) = &job.pr {
+                        crate::session::working_pr::name(
+                            tx,
+                            &plan,
+                            &crate::ids::PrKey::parse(pr)?,
+                        )?;
+                    }
+                    Ok((job, false))
                 }
-                Ok((job, false))
             }
         })?,
     };
@@ -144,17 +161,31 @@ pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
 
 /// `--tier` and `--spec` are required, except with `--draft` (a stub draft, §5.1).
 fn require_tier_and_spec(args: &AddArgs) -> Result<(), CpdError> {
-    let missing: Vec<&str> = [("--tier", args.tier.is_none()), ("--spec", args.spec.is_none())]
-        .into_iter()
-        .filter_map(|(flag, lacks)| lacks.then_some(flag))
-        .collect();
+    let missing: Vec<&str> = [
+        ("--tier", args.tier.is_none()),
+        ("--spec", args.spec.is_none()),
+    ]
+    .into_iter()
+    .filter_map(|(flag, lacks)| lacks.then_some(flag))
+    .collect();
     if missing.is_empty() || args.draft {
         return Ok(());
     }
-    Err(CpdError::new(ErrorCode::Usage, format!("{} required for a Job that is not a --draft: only a stub draft (--draft) may leave them out.", missing.join(" and "))))
+    Err(CpdError::new(
+        ErrorCode::Usage,
+        format!(
+            "{} required for a Job that is not a --draft: only a stub draft (--draft) may leave them out.",
+            missing.join(" and ")
+        ),
+    ))
 }
 
-fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> Result<Decision, CpdError> {
+fn decide(
+    conn: &Connection,
+    home: &CpdHome,
+    plan: &PlanId,
+    wanted: &Wanted,
+) -> Result<Decision, CpdError> {
     let phase = plan_phase(conn, plan)?;
     if jobs::is_explore(&wanted.kind) {
         return decide_explore(conn, plan, wanted, &phase);
@@ -172,9 +203,15 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
     check_pr_live(&prs, plan, &pr)?;
     check_shape_allows(&prs, plan, &pr, &wanted.kind)?;
     let all = jobs::load(conn, plan)?;
-    let pr_status = &prs.iter().find(|p| p.key.as_str() == pr).expect("check_pr_live found the PR").status;
+    let pr_status = &prs
+        .iter()
+        .find(|p| p.key.as_str() == pr)
+        .expect("check_pr_live found the PR")
+        .status;
     let mut needs = wanted.needs.clone();
-    needs.extend(super::chain::leaves(&all, plan, &pr, pr_status, wanted.key.as_str())?.unwrap_or_default());
+    needs.extend(
+        super::chain::leaves(&all, plan, &pr, pr_status, wanted.key.as_str())?.unwrap_or_default(),
+    );
     needs.sort();
     needs.dedup();
     let appended = phase != "plan";
@@ -190,9 +227,21 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
         status: if draft { "draft" } else { "queued" }.to_owned(),
         appended,
         kind: wanted.kind.clone(),
-        tests: wanted.spec.as_ref().and_then(|s| s.tests.as_ref()).map(|t| json!(t)),
-        test_files: wanted.spec.as_ref().and_then(|s| s.test_files.as_ref()).map(|t| json!(t)),
-        resources: wanted.spec.as_ref().and_then(|s| s.resources.as_ref()).map(|r| json!(r)),
+        tests: wanted
+            .spec
+            .as_ref()
+            .and_then(|s| s.tests.as_ref())
+            .map(|t| json!(t)),
+        test_files: wanted
+            .spec
+            .as_ref()
+            .and_then(|s| s.test_files.as_ref())
+            .map(|t| json!(t)),
+        resources: wanted
+            .spec
+            .as_ref()
+            .and_then(|s| s.resources.as_ref())
+            .map(|r| json!(r)),
         test_approved: None,
         touches_approved: None,
         urgent: wanted.urgent,
@@ -212,7 +261,10 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
         }
         return Err(CpdError::new(
             ErrorCode::JobKeyExists,
-            format!("Plan {plan} already has a Job {} with other Locked fields.", job.key),
+            format!(
+                "Plan {plan} already has a Job {} with other Locked fields.",
+                job.key
+            ),
         )
         .with("plan", plan.as_str())
         .with("job", job.key.as_str()));
@@ -220,12 +272,23 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
     // The Spec names no primary checkout of a PR of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
     if let Some(spec) = &wanted.spec {
         let user_home = std::env::home_dir().unwrap_or_default();
-        spec.without_artefacts(home.root(), plan.as_str(), &user_home).check_primary_roots(&primary_roots(&prs), &user_home)?;
+        spec.without_artefacts(home.root(), plan.as_str(), &user_home)
+            .check_primary_roots(&primary_roots(&prs), &user_home)?;
         spec.check_files_relative()?;
-        check_resources_declared(conn, home, plan, job.pr_str(), &job.key, spec.resources.as_deref())?;
+        check_resources_declared(
+            conn,
+            home,
+            plan,
+            job.pr_str(),
+            &job.key,
+            spec.resources.as_deref(),
+        )?;
     }
     if let Some(spec) = &wanted.spec {
-        let pr = prs.iter().find(|p| p.key.as_str() == job.pr_str()).expect("check_pr_live found the PR");
+        let pr = prs
+            .iter()
+            .find(|p| p.key.as_str() == job.pr_str())
+            .expect("check_pr_live found the PR");
         check_touches(pr, &prs, &spec.touches)?;
     }
     check_needs_known(&all, plan, &job.needs)?;
@@ -248,7 +311,12 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
 }
 
 /// An explore Job (R2-R5): of the Plan, no PR, queued at once with its fingerprint, in every phase but `done`.
-fn decide_explore(conn: &Connection, plan: &PlanId, wanted: &Wanted, phase: &str) -> Result<Decision, CpdError> {
+fn decide_explore(
+    conn: &Connection,
+    plan: &PlanId,
+    wanted: &Wanted,
+    phase: &str,
+) -> Result<Decision, CpdError> {
     if phase == "done" {
         return Err(CpdError::new(
             ErrorCode::IllegalPhase,
@@ -259,9 +327,12 @@ fn decide_explore(conn: &Connection, plan: &PlanId, wanted: &Wanted, phase: &str
     }
     let all = jobs::load(conn, plan)?;
     if wanted.needs.iter().any(|n| n == wanted.key.as_str()) {
-        return Err(CpdError::new(ErrorCode::DependencyCycle, format!("Job {} needs itself.", wanted.key))
-            .with("plan", plan.as_str())
-            .with("cycle", [wanted.key.as_str(), wanted.key.as_str()]));
+        return Err(CpdError::new(
+            ErrorCode::DependencyCycle,
+            format!("Job {} needs itself.", wanted.key),
+        )
+        .with("plan", plan.as_str())
+        .with("cycle", [wanted.key.as_str(), wanted.key.as_str()]));
     }
     check_needs_known(&all, plan, &wanted.needs)?;
     check_needs_explore_only(&all, plan, wanted.key.as_str(), true, &wanted.needs)?;
@@ -295,9 +366,15 @@ fn decide_explore(conn: &Connection, plan: &PlanId, wanted: &Wanted, phase: &str
         if same_locked_fields(existing, &job) {
             return Ok(Decision::Already(existing.clone()));
         }
-        return Err(CpdError::new(ErrorCode::JobKeyExists, format!("Plan {plan} already has a Job {} with other Locked fields.", job.key))
-            .with("plan", plan.as_str())
-            .with("job", job.key.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::JobKeyExists,
+            format!(
+                "Plan {plan} already has a Job {} with other Locked fields.",
+                job.key
+            ),
+        )
+        .with("plan", plan.as_str())
+        .with("job", job.key.as_str()));
     }
     check_needs_available(&all, plan, &wanted.needs)?;
     check_needs_not_draft(&all, plan, &job)?;
@@ -307,9 +384,18 @@ fn decide_explore(conn: &Connection, plan: &PlanId, wanted: &Wanted, phase: &str
 
 /// An explore Job needs only explore Jobs, and no other Job needs one (`explore_needs_mixed`, exit 3, `details.jobs`
 /// the Jobs on the other side). `explore` is whether the Job `key` is one.
-pub(super) fn check_needs_explore_only(all: &[Job], plan: &PlanId, key: &str, explore: bool, needs: &[String]) -> Result<(), CpdError> {
-    let others: Vec<&str> =
-        all.iter().filter(|j| needs.contains(&j.key) && jobs::is_explore(&j.kind) != explore).map(|j| j.key.as_str()).collect();
+pub(super) fn check_needs_explore_only(
+    all: &[Job],
+    plan: &PlanId,
+    key: &str,
+    explore: bool,
+    needs: &[String],
+) -> Result<(), CpdError> {
+    let others: Vec<&str> = all
+        .iter()
+        .filter(|j| needs.contains(&j.key) && jobs::is_explore(&j.kind) != explore)
+        .map(|j| j.key.as_str())
+        .collect();
     if others.is_empty() {
         return Ok(());
     }
@@ -324,11 +410,24 @@ pub(super) fn check_needs_explore_only(all: &[Job], plan: &PlanId, key: &str, ex
 
 /// Every resource of a Spec is declared by the policy of the PR's repo (`resource_undeclared`, commands.md §5.1):
 /// the first one that is not fails, with the names the repo declares and the file that declares them.
-pub(crate) fn check_resources_declared(conn: &Connection, home: &CpdHome, plan: &PlanId, pr: &str, job: &str, resources: Option<&[String]>) -> Result<(), CpdError> {
-    let Some(resources) = resources else { return Ok(()) };
+pub(crate) fn check_resources_declared(
+    conn: &Connection,
+    home: &CpdHome,
+    plan: &PlanId,
+    pr: &str,
+    job: &str,
+    resources: Option<&[String]>,
+) -> Result<(), CpdError> {
+    let Some(resources) = resources else {
+        return Ok(());
+    };
     let key = PrKey::parse(pr)?;
-    let declared = crate::pr::policy_of_pr(conn, home, plan, &key)?.resources.names;
-    let Some(missing) = resources.iter().find(|r| !declared.contains(r)) else { return Ok(()) };
+    let declared = crate::pr::policy_of_pr(conn, home, plan, &key)?
+        .resources
+        .names;
+    let Some(missing) = resources.iter().find(|r| !declared.contains(r)) else {
+        return Ok(());
+    };
     let (owner, name): (String, Option<String>) = conn.query_row(
         "SELECT c.owner, r.name FROM prs r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context WHERE r.plan = ?1 AND r.key = ?2",
         [plan.as_str(), pr],
@@ -337,7 +436,9 @@ pub(crate) fn check_resources_declared(conn: &Connection, home: &CpdHome, plan: 
     let owner = crate::ids::OwnerLogin::parse(&owner)?;
     let file = match name {
         Some(name) => crate::policy::repo_path(home, &owner, &crate::ids::RepoName::parse(&name)?),
-        None => crate::policy::policy_dir(home).join(owner.as_str()).join("owner.toml"),
+        None => crate::policy::policy_dir(home)
+            .join(owner.as_str())
+            .join("owner.toml"),
     };
     Err(CpdError::new(
         ErrorCode::ResourceUndeclared,
@@ -357,7 +458,11 @@ pub(crate) fn check_resources_declared(conn: &Connection, home: &CpdHome, plan: 
 /// A `queued` Job may not need a `draft` (§5.1): it could start before its need
 /// exists. `details.jobs` lists the drafts.
 fn check_needs_not_draft(all: &[Job], plan: &PlanId, job: &Job) -> Result<(), CpdError> {
-    let drafts: Vec<&str> = all.iter().filter(|j| j.is_draft() && job.needs.contains(&j.key)).map(|j| j.key.as_str()).collect();
+    let drafts: Vec<&str> = all
+        .iter()
+        .filter(|j| j.is_draft() && job.needs.contains(&j.key))
+        .map(|j| j.key.as_str())
+        .collect();
     if drafts.is_empty() {
         return Ok(());
     }
@@ -376,8 +481,27 @@ fn check_needs_not_draft(all: &[Job], plan: &PlanId, job: &Job) -> Result<(), Cp
 
 /// The Locked fields (§2.2: the Spec, `title`, `tier`, `pr`, `kind`, `tests`, `test_files`, `resources`) and the needs.
 fn same_locked_fields(a: &Job, b: &Job) -> bool {
-    (&a.pr, &a.title, &a.tier, &a.spec, &a.needs, &a.kind, &a.tests, &a.test_files, &a.resources)
-        == (&b.pr, &b.title, &b.tier, &b.spec, &b.needs, &b.kind, &b.tests, &b.test_files, &b.resources)
+    (
+        &a.pr,
+        &a.title,
+        &a.tier,
+        &a.spec,
+        &a.needs,
+        &a.kind,
+        &a.tests,
+        &a.test_files,
+        &a.resources,
+    ) == (
+        &b.pr,
+        &b.title,
+        &b.tier,
+        &b.spec,
+        &b.needs,
+        &b.kind,
+        &b.tests,
+        &b.test_files,
+        &b.resources,
+    )
 }
 
 fn insert(tx: &Connection, plan: &PlanId, job: &Job) -> Result<(), CpdError> {
@@ -410,14 +534,19 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job) -> Result<(), CpdError> {
         ],
     )?;
     for need in &job.needs {
-        tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), job.key.as_str(), need.as_str()])?;
+        tx.execute(
+            "INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)",
+            [plan.as_str(), job.key.as_str(), need.as_str()],
+        )?;
     }
     Ok(())
 }
 
 /// The `(PR key, root)` pairs the primary-check searches: each PR of the Plan and its stored repo path.
 pub(super) fn primary_roots(prs: &[PrRow]) -> Vec<(String, PathBuf)> {
-    prs.iter().map(|p| (p.key.as_str().to_owned(), PathBuf::from(&p.repo))).collect()
+    prs.iter()
+        .map(|p| (p.key.as_str().to_owned(), PathBuf::from(&p.repo)))
+        .collect()
 }
 
 /// Every `touches` entry against the tree the Job will start from (contract §2.1, hs-d512): the PR's Lead Branch head once
@@ -432,14 +561,28 @@ pub(super) fn check_touches(pr: &PrRow, prs: &[PrRow], touches: &[String]) -> Re
     // A PR that has not started, stacked on a base PR (same Plan and repo, Lead Branch == its base) that is `waiting` or
     // `dispatch`, has no tree to read yet: the base's Lead Branch does not exist.
     let base_unopened = pr.lead_worktree.is_none()
-        && prs.iter().any(|q| q.repo == pr.repo && q.lead_branch == pr.base && matches!(q.status.as_str(), "waiting" | "dispatch"));
+        && prs.iter().any(|q| {
+            q.repo == pr.repo
+                && q.lead_branch == pr.base
+                && matches!(q.status.as_str(), "waiting" | "dispatch")
+        });
     if base_unopened {
         return Ok(());
     }
-    let tree = if pr.lead_worktree.is_some() { pr.lead_branch.as_str() } else { pr.base.as_str() };
-    let listing = crate::git::run::ok(std::path::Path::new(&pr.repo), &["ls-tree", "-r", "--name-only", "-z", tree])?;
+    let tree = if pr.lead_worktree.is_some() {
+        pr.lead_branch.as_str()
+    } else {
+        pr.base.as_str()
+    };
+    let listing = crate::git::run::ok(
+        std::path::Path::new(&pr.repo),
+        &["ls-tree", "-r", "--name-only", "-z", tree],
+    )?;
     let files: Vec<&str> = listing.split('\0').filter(|f| !f.is_empty()).collect();
-    let dirs: BTreeSet<&str> = files.iter().flat_map(|f| f.match_indices('/').map(move |(i, _)| &f[..i])).collect();
+    let dirs: BTreeSet<&str> = files
+        .iter()
+        .flat_map(|f| f.match_indices('/').map(move |(i, _)| &f[..i]))
+        .collect();
     let dir_exists = |dir: &str| dir.is_empty() || dirs.contains(dir);
     let missing: Vec<&String> = touches
         .iter()
@@ -465,9 +608,19 @@ pub(super) fn check_touches(pr: &PrRow, prs: &[PrRow], touches: &[String]) -> Re
     }
     Err(CpdError::new(
         ErrorCode::TouchesMissing,
-        format!("The Spec's touches name paths that are not in {tree}: {}.", missing.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")),
+        format!(
+            "The Spec's touches name paths that are not in {tree}: {}.",
+            missing
+                .iter()
+                .map(|m| m.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     )
-    .with("missing", missing.iter().map(|m| m.as_str()).collect::<Vec<_>>())
+    .with(
+        "missing",
+        missing.iter().map(|m| m.as_str()).collect::<Vec<_>>(),
+    )
     .with("tree", tree))
 }
 
@@ -481,14 +634,21 @@ pub(crate) fn glob_matches(pattern: &str, path: &str) -> bool {
                 let rest = rest.strip_prefix(&['/']).unwrap_or(rest);
                 (0..=s.len()).any(|i| go(rest, &s[i..]))
             }
-            Some('*') => (0..=s.len()).take_while(|&i| i == 0 || s[i - 1] != '/').any(|i| go(&p[1..], &s[i..])),
+            Some('*') => (0..=s.len())
+                .take_while(|&i| i == 0 || s[i - 1] != '/')
+                .any(|i| go(&p[1..], &s[i..])),
             Some('?') => s.first().is_some_and(|c| *c != '/') && go(&p[1..], &s[1..]),
             Some('[') => match p.iter().position(|c| *c == ']') {
-                Some(end) if end > 1 => s.first().is_some_and(|c| p[1..end].contains(c)) && go(&p[end + 1..], &s[1..]),
+                Some(end) if end > 1 => {
+                    s.first().is_some_and(|c| p[1..end].contains(c)) && go(&p[end + 1..], &s[1..])
+                }
                 _ => s.first() == Some(&'[') && go(&p[1..], &s[1..]),
             },
             Some(c) => s.first() == Some(c) && go(&p[1..], &s[1..]),
         }
     }
-    go(&pattern.chars().collect::<Vec<_>>(), &path.chars().collect::<Vec<_>>())
+    go(
+        &pattern.chars().collect::<Vec<_>>(),
+        &path.chars().collect::<Vec<_>>(),
+    )
 }

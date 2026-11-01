@@ -42,7 +42,11 @@ fn fixture(policy: &str) -> Fx {
     let fx = Lock::new();
     let env = &fx.env;
     let repo = env.git_repo("pay").canonicalize().unwrap();
-    for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
+    for (key, value) in [
+        ("user.name", "cpd test"),
+        ("user.email", "test@cpd.invalid"),
+        ("commit.gpgsign", "false"),
+    ] {
         env.git(&repo, &["config", key, value]);
     }
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
@@ -50,8 +54,13 @@ fn fixture(policy: &str) -> Fx {
     env.repo_policy("acme", "pay", policy);
     // No pull request of the Lead Branch yet: `gh pr list` answers none, so the open Job creates one.
     env.fake_gh("case \"$1 $2\" in\n  \"pr list\") echo '[]' ;;\n  *) exit 1 ;;\nesac");
-    let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("setup.log") };
-    let lead = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap().path;
+    let setup = Setup {
+        timeout: Duration::from_secs(30),
+        log: env.root().join("setup.log"),
+    };
+    let lead = create_lead_worktree(&repo, &plan(), "main", &setup)
+        .unwrap()
+        .path;
     env.sql(&format!(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -63,7 +72,14 @@ fn fixture(policy: &str) -> Fx {
         repo = repo.display(),
         lead = lead.display()
     ));
-    let made = create_attempt_worktree(&repo, &lead, &plan(), &AttemptId::parse(ATTEMPT).unwrap(), &setup).unwrap();
+    let made = create_attempt_worktree(
+        &repo,
+        &lead,
+        &plan(),
+        &AttemptId::parse(ATTEMPT).unwrap(),
+        &setup,
+    )
+    .unwrap();
     env.sql(&format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
            VALUES ('pay', 'repo', 'open-repo', 'Open the pull request', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', 1, 'open', '{}', cpd_txn(), 't');
@@ -74,27 +90,51 @@ fn fixture(policy: &str) -> Fx {
         made.path.display(),
         made.base_sha
     ));
-    Fx { fx, home, work: made.path }
+    Fx {
+        fx,
+        home,
+        work: made.path,
+    }
 }
 
 impl Fx {
     fn submit(&self) -> common::Run {
-        self.fx.env.cpd_in(&self.work, &["attempt", "submit", ATTEMPT, "--plan", PLAN])
+        self.fx
+            .env
+            .cpd_in(&self.work, &["attempt", "submit", ATTEMPT, "--plan", PLAN])
     }
 
     fn merge(&self) -> merge::Merge {
         let config = Config::load(&self.home).unwrap();
-        let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };
+        let model = |m: &str| TierModel {
+            model: m.to_owned(),
+            efforts: vec![0, 1, 2, 3, 4, 5],
+        };
         let catalog = Catalog {
             pi_version: "1.0.0".to_owned(),
             o: model("p/opus"),
             s: model("p/sonnet"),
             h: model("p/haiku"),
-            g: TierModel { model: "p/gemini".to_owned(), efforts: vec![] },
+            g: TierModel {
+                model: "p/gemini".to_owned(),
+                efforts: vec![],
+            },
         };
-        let ctx = Ctx { home: &self.home, config: &config, catalog: &catalog, source: "pr open test", metrics: &|_| None };
+        let ctx = Ctx {
+            home: &self.home,
+            config: &config,
+            catalog: &catalog,
+            source: "pr open test",
+            metrics: &|_| None,
+        };
         let mut store = Store::open(&self.home, 5000).unwrap();
-        merge::merge(&mut store, &ctx, &plan(), &AttemptId::parse(ATTEMPT).unwrap()).unwrap()
+        merge::merge(
+            &mut store,
+            &ctx,
+            &plan(),
+            &AttemptId::parse(ATTEMPT).unwrap(),
+        )
+        .unwrap()
     }
 }
 
@@ -102,7 +142,14 @@ impl Fx {
 fn the_open_jobs_merge_runs_the_pr_gate() {
     let fx = fixture("");
     let marker = fx.fx.env.root().join("pr-gate-ran");
-    fx.fx.env.repo_policy("acme", "pay", &format!("[gate]\npr = \"local\"\n\n[hooks]\npre-merge = \"touch {}\"\n", marker.display()));
+    fx.fx.env.repo_policy(
+        "acme",
+        "pay",
+        &format!(
+            "[gate]\npr = \"local\"\n\n[hooks]\npre-merge = \"touch {}\"\n",
+            marker.display()
+        ),
+    );
     fs::write(fx.work.join("a.txt"), "a\n").unwrap();
     fx.fx.env.git(&fx.work, &["add", "-A"]);
     fx.fx.env.git(&fx.work, &["commit", "-q", "-m", "a"]);
@@ -113,5 +160,8 @@ fn the_open_jobs_merge_runs_the_pr_gate() {
 
     let _ = fx.merge();
 
-    assert!(marker.exists(), "the open Job's merge did not run the PR gate (the repo's pre-merge)");
+    assert!(
+        marker.exists(),
+        "the open Job's merge did not run the PR gate (the repo's pre-merge)"
+    );
 }

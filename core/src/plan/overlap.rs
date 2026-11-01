@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-use super::prs::PrRow;
 use super::jobs::Job;
+use super::prs::PrRow;
 use crate::error::CpdError;
 use crate::ids::PlanId;
 
@@ -49,7 +49,11 @@ pub struct Overlap {
 
 impl Overlap {
     pub fn to_json(&self) -> Value {
-        let other_jobs: Vec<Value> = self.other_jobs.iter().map(|j| json!({"key": j.key, "status": j.status})).collect();
+        let other_jobs: Vec<Value> = self
+            .other_jobs
+            .iter()
+            .map(|j| json!({"key": j.key, "status": j.status}))
+            .collect();
         json!({"job": self.job, "plan": self.plan, "pr": self.pr, "other_jobs": other_jobs, "paths": self.paths})
     }
 }
@@ -74,7 +78,14 @@ pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdEr
     )?;
     let rows = stmt
         .query_map([plan.as_str()], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, Option<String>>(5)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, Option<String>>(5)?,
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
@@ -82,12 +93,20 @@ pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdEr
             // A stub draft has no Spec yet: no files to compare.
             let touches = touches
                 .map(|text| {
-                    serde_json::from_str::<Vec<String>>(&text)
-                        .map_err(|_| CpdError::bad_row(format!("Job {plan}/{job} has touches {text:?}")))
+                    serde_json::from_str::<Vec<String>>(&text).map_err(|_| {
+                        CpdError::bad_row(format!("Job {plan}/{job} has touches {text:?}"))
+                    })
                 })
                 .transpose()?
                 .unwrap_or_default();
-            Ok(Other { plan, pr, repo, job, status, touches })
+            Ok(Other {
+                plan,
+                pr,
+                repo,
+                job,
+                status,
+                touches,
+            })
         })
         .collect()
 }
@@ -108,7 +127,12 @@ pub fn find(prs: &[PrRow], jobs: &[Job], others: &[Other]) -> Vec<Overlap> {
     open.sort_by(|a, b| a.key.cmp(&b.key));
     let mut out = Vec::new();
     for job in open {
-        let Some(pr) = prs.iter().find(|p| p.key.as_str() == job.pr_str() && is_open(p)) else { continue };
+        let Some(pr) = prs
+            .iter()
+            .find(|p| p.key.as_str() == job.pr_str() && is_open(p))
+        else {
+            continue;
+        };
         let mut paths: Vec<&str> = Vec::new();
         // A stub draft has no Spec yet, so no files to compare.
         let touches = job.spec.as_ref().and_then(|s| s.touches.as_array());
@@ -120,12 +144,17 @@ pub fn find(prs: &[PrRow], jobs: &[Job], others: &[Other]) -> Vec<Overlap> {
         // By (other Plan, other PR): the Jobs there that overlap this one, and which of its paths they overlap.
         let mut groups: BTreeMap<(&str, &str), OverlapGroup> = BTreeMap::new();
         for other in others.iter().filter(|o| o.repo == pr.repo) {
-            let hit: Vec<usize> = (0..paths.len()).filter(|&i| other.touches.iter().any(|t| overlaps(paths[i], t))).collect();
+            let hit: Vec<usize> = (0..paths.len())
+                .filter(|&i| other.touches.iter().any(|t| overlaps(paths[i], t)))
+                .collect();
             if hit.is_empty() {
                 continue;
             }
             let (other_jobs, overlapped) = groups.entry((&other.plan, &other.pr)).or_default();
-            other_jobs.push(OtherJob { key: other.job.clone(), status: other.status.clone() });
+            other_jobs.push(OtherJob {
+                key: other.job.clone(),
+                status: other.status.clone(),
+            });
             overlapped.extend(hit);
         }
         for ((other_plan, other_pr), (other_jobs, overlapped)) in groups {
@@ -134,7 +163,10 @@ pub fn find(prs: &[PrRow], jobs: &[Job], others: &[Other]) -> Vec<Overlap> {
                 plan: other_plan.to_owned(),
                 pr: other_pr.to_owned(),
                 other_jobs,
-                paths: overlapped.into_iter().map(|i| paths[i].to_owned()).collect(),
+                paths: overlapped
+                    .into_iter()
+                    .map(|i| paths[i].to_owned())
+                    .collect(),
             });
         }
     }
@@ -152,7 +184,10 @@ mod tests {
         assert!(overlaps("core/src/", "core/src/x.rs"));
         assert!(overlaps("core/", "core/src/"));
         assert!(!overlaps("core/src/x.rs", "core/src/y.rs"));
-        assert!(!overlaps("core/src", "core/src/x.rs"), "a path without a trailing slash is a file");
+        assert!(
+            !overlaps("core/src", "core/src/x.rs"),
+            "a path without a trailing slash is a file"
+        );
         assert!(!overlaps("core/src/", "core/srcs/x.rs"));
     }
 }

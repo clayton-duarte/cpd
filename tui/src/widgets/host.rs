@@ -55,14 +55,21 @@ pub fn unreadable() -> ProcReader {
 
 impl std::fmt::Debug for Sampler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Sampler").field("previous", &self.previous).field("gpus", &self.gpus).finish_non_exhaustive()
+        f.debug_struct("Sampler")
+            .field("previous", &self.previous)
+            .field("gpus", &self.gpus)
+            .finish_non_exhaustive()
     }
 }
 
 impl Sampler {
     /// A sampler that reads `/proc` through `proc`.
     pub fn new(proc: ProcReader) -> Sampler {
-        Sampler { previous: None, gpus: None, proc }
+        Sampler {
+            previous: None,
+            gpus: None,
+            proc,
+        }
     }
 
     /// The usage now; on Linux the GPU tool is started through `ports.spawn`.
@@ -71,12 +78,22 @@ impl Sampler {
             macos_usage_with(&*ports.runner)
         } else {
             let times = (self.proc)("/proc/stat").and_then(|text| parse_proc_stat(&text));
-            let cpu = self.previous.zip(times).and_then(|(before, after)| cpu_share(before, after));
+            let cpu = self
+                .previous
+                .zip(times)
+                .and_then(|(before, after)| cpu_share(before, after));
             if times.is_some() {
                 self.previous = times;
             }
-            let gpus = self.gpus.get_or_insert_with(|| Gpus::start(&ports.spawn)).now();
-            Usage { cpu, gpus, mem: (self.proc)("/proc/meminfo").and_then(|text| parse_meminfo(&text)) }
+            let gpus = self
+                .gpus
+                .get_or_insert_with(|| Gpus::start(&ports.spawn))
+                .now();
+            Usage {
+                cpu,
+                gpus,
+                mem: (self.proc)("/proc/meminfo").and_then(|text| parse_meminfo(&text)),
+            }
         }
     }
 }
@@ -103,7 +120,11 @@ pub(crate) fn run_with(runner: &dyn Runner, program: &str, args: &[&str]) -> Opt
 
 /// The macOS [`Usage`] (`ioreg`, `sysctl`, `ps`, `vm_stat`) read through `runner`.
 pub(crate) fn macos_usage_with(runner: &dyn Runner) -> Usage {
-    Usage { cpu: macos_cpu(runner), gpus: macos_gpus(runner), mem: macos_mem(runner) }
+    Usage {
+        cpu: macos_cpu(runner),
+        gpus: macos_gpus(runner),
+        mem: macos_mem(runner),
+    }
 }
 
 /// The GPUs' utilization on Linux, from **one** `nvidia-smi` that prints it every 2 s for as long as the view runs (`-lms`).
@@ -120,7 +141,10 @@ struct Gpus {
 
 impl std::fmt::Debug for Gpus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Gpus").field("latest", &self.latest).field("pid", &self.child.as_ref().map(|c| c.0)).finish()
+        f.debug_struct("Gpus")
+            .field("latest", &self.latest)
+            .field("pid", &self.child.as_ref().map(|c| c.0))
+            .finish()
     }
 }
 
@@ -130,7 +154,14 @@ impl Gpus {
         let latest = Arc::new(Mutex::new(Vec::new()));
         let launch = Launch {
             program: "nvidia-smi".into(),
-            args: ["--query-gpu=index,utilization.gpu", "--format=csv,noheader,nounits", "-lms", "2000"].map(String::from).to_vec(),
+            args: [
+                "--query-gpu=index,utilization.gpu",
+                "--format=csv,noheader,nounits",
+                "-lms",
+                "2000",
+            ]
+            .map(String::from)
+            .to_vec(),
             ..Launch::default()
         };
         let streamed = spawn.stream(&launch).ok();
@@ -175,30 +206,55 @@ impl Drop for Gpus {
 }
 
 fn macos_gpus(runner: &dyn Runner) -> Vec<Option<u8>> {
-    run_with(runner, "ioreg", &["-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"]).map_or_else(Vec::new, |t| parse_ioreg(&t))
+    run_with(
+        runner,
+        "ioreg",
+        &["-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"],
+    )
+    .map_or_else(Vec::new, |t| parse_ioreg(&t))
 }
 
 fn macos_cpu(runner: &dyn Runner) -> Option<u8> {
-    let ncpu = run_with(runner, "sysctl", &["-n", "hw.ncpu"])?.trim().parse().ok()?;
+    let ncpu = run_with(runner, "sysctl", &["-n", "hw.ncpu"])?
+        .trim()
+        .parse()
+        .ok()?;
     parse_ps(&run_with(runner, "ps", &["-A", "-o", "%cpu="])?, ncpu)
 }
 
 fn macos_mem(runner: &dyn Runner) -> Option<u8> {
-    let bytes = run_with(runner, "sysctl", &["-n", "hw.memsize"])?.trim().parse().ok()?;
+    let bytes = run_with(runner, "sysctl", &["-n", "hw.memsize"])?
+        .trim()
+        .parse()
+        .ok()?;
     parse_vm_stat(&run_with(runner, "vm_stat", &[])?, bytes)
 }
 
 /// `part` of `whole` as a whole percent, rounded, at most 100; `None` for an empty whole.
 fn percent(part: u64, whole: u64) -> Option<u8> {
-    (whole > 0).then(|| u8::try_from((u128::from(part) * 100 + u128::from(whole) / 2) / u128::from(whole)).unwrap_or(100).min(100))
+    (whole > 0).then(|| {
+        u8::try_from((u128::from(part) * 100 + u128::from(whole) / 2) / u128::from(whole))
+            .unwrap_or(100)
+            .min(100)
+    })
 }
 
 /// The `cpu` line (all CPUs) of `/proc/stat`: `cpu user nice system idle iowait irq softirq steal …`; the first eight counters
 /// are the total (guest time is already in user), idle is idle + iowait.
 pub fn parse_proc_stat(text: &str) -> Option<CpuTimes> {
-    let line = text.lines().find(|l| l.split_whitespace().next() == Some("cpu"))?;
-    let n: Vec<u64> = line.split_whitespace().skip(1).take(8).map(|f| f.parse().ok()).collect::<Option<_>>()?;
-    (n.len() >= 5).then(|| CpuTimes { idle: n[3] + n[4], total: n.iter().sum() })
+    let line = text
+        .lines()
+        .find(|l| l.split_whitespace().next() == Some("cpu"))?;
+    let n: Vec<u64> = line
+        .split_whitespace()
+        .skip(1)
+        .take(8)
+        .map(|f| f.parse().ok())
+        .collect::<Option<_>>()?;
+    (n.len() >= 5).then(|| CpuTimes {
+        idle: n[3] + n[4],
+        total: n.iter().sum(),
+    })
 }
 
 /// The share of non-idle time between two samples; `None` when no time passed.
@@ -211,7 +267,9 @@ pub fn cpu_share(before: CpuTimes, after: CpuTimes) -> Option<u8> {
 /// Used / total of `/proc/meminfo`, used being `MemTotal - MemAvailable`.
 pub fn parse_meminfo(text: &str) -> Option<u8> {
     let kb = |key: &str| -> Option<u64> {
-        let line = text.lines().find_map(|l| l.strip_prefix(key)?.strip_prefix(':'))?;
+        let line = text
+            .lines()
+            .find_map(|l| l.strip_prefix(key)?.strip_prefix(':'))?;
         line.split_whitespace().next()?.parse().ok()
     };
     let (total, available) = (kb("MemTotal")?, kb("MemAvailable")?);
@@ -220,19 +278,34 @@ pub fn parse_meminfo(text: &str) -> Option<u8> {
 
 /// The sum of `ps -A -o %cpu=`'s lines divided by the number of CPUs, at most 100.
 pub fn parse_ps(text: &str, ncpu: u32) -> Option<u8> {
-    let sum = text.split_whitespace().map(|f| f.parse::<f64>().ok()).sum::<Option<f64>>()?;
+    let sum = text
+        .split_whitespace()
+        .map(|f| f.parse::<f64>().ok())
+        .sum::<Option<f64>>()?;
     (ncpu > 0).then(|| (sum / f64::from(ncpu)).round().clamp(0.0, 100.0) as u8)
 }
 
 /// macOS memory: `vm_stat`'s pages active + wired down + occupied by compressor, times the page size on its first line, over the
 /// machine's `memsize` in bytes.
 pub fn parse_vm_stat(text: &str, memsize: u64) -> Option<u8> {
-    let page_size: u64 = text.lines().next()?.split("page size of ").nth(1)?.split_whitespace().next()?.parse().ok()?;
+    let page_size: u64 = text
+        .lines()
+        .next()?
+        .split("page size of ")
+        .nth(1)?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()?;
     let pages = |key: &str| -> Option<u64> {
-        let rest = text.lines().find_map(|l| l.strip_prefix(key)?.strip_prefix(':'))?;
+        let rest = text
+            .lines()
+            .find_map(|l| l.strip_prefix(key)?.strip_prefix(':'))?;
         rest.trim().trim_end_matches('.').parse().ok()
     };
-    let used = pages("Pages active")? + pages("Pages wired down")? + pages("Pages occupied by compressor")?;
+    let used = pages("Pages active")?
+        + pages("Pages wired down")?
+        + pages("Pages occupied by compressor")?;
     percent(used * page_size, memsize)
 }
 
@@ -240,7 +313,10 @@ pub fn parse_vm_stat(text: &str, memsize: u64) -> Option<u8> {
 /// is no number from 0 to 100 (`[N/A]`) is `None` for that GPU; a line with no index is no GPU.
 pub fn parse_nvidia_smi_line(line: &str) -> Option<(u32, Option<u8>)> {
     let (index, value) = line.split_once(',')?;
-    Some((index.trim().parse().ok()?, value.trim().parse::<u8>().ok().filter(|v| *v <= 100)))
+    Some((
+        index.trim().parse().ok()?,
+        value.trim().parse::<u8>().ok().filter(|v| *v <= 100),
+    ))
 }
 
 /// `ioreg -r -d 1 -w 0 -c IOAccelerator`: each accelerator starts at a line `+-o <name>` in column 0; its `"PerformanceStatistics"`
@@ -253,7 +329,13 @@ pub fn parse_ioreg(text: &str) -> Vec<Option<u8>> {
             gpus.push(None);
         }
         let value = line.split_once(KEY).and_then(|(_, rest)| {
-            let digits: String = rest.trim_start().strip_prefix('=')?.trim_start().chars().take_while(char::is_ascii_digit).collect();
+            let digits: String = rest
+                .trim_start()
+                .strip_prefix('=')?
+                .trim_start()
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
             digits.parse::<u8>().ok().filter(|v| *v <= 100)
         });
         if let (Some(gpu), Some(value)) = (gpus.last_mut(), value) {
@@ -297,7 +379,11 @@ mod tests {
         assert_eq!(parse_nvidia_smi_line("0, 61"), Some((0, Some(61))));
         assert_eq!(parse_nvidia_smi_line("1, 0\r"), Some((1, Some(0))));
         assert_eq!(parse_nvidia_smi_line(" 2 , 100 "), Some((2, Some(100))));
-        assert_eq!(parse_nvidia_smi_line("1, [N/A]"), Some((1, None)), "a GPU with no number keeps its place");
+        assert_eq!(
+            parse_nvidia_smi_line("1, [N/A]"),
+            Some((1, None)),
+            "a GPU with no number keeps its place"
+        );
         assert_eq!(parse_nvidia_smi_line("0, 101"), Some((0, None)));
         assert_eq!(parse_nvidia_smi_line("61"), None, "no index, no GPU");
         assert_eq!(parse_nvidia_smi_line(""), None);
@@ -307,7 +393,11 @@ mod tests {
     #[test]
     fn ioreg_is_the_device_utilization_of_each_accelerator() {
         assert_eq!(parse_ioreg(IOREG_ONE), [Some(37)]);
-        assert_eq!(parse_ioreg(IOREG_TWO), [Some(12), None], "an accelerator without the number is None");
+        assert_eq!(
+            parse_ioreg(IOREG_TWO),
+            [Some(12), None],
+            "an accelerator without the number is None"
+        );
         assert_eq!(parse_ioreg(""), [], "no accelerator");
         assert_eq!(parse_ioreg("ioreg: no matching entries\n"), []);
     }
@@ -315,19 +405,69 @@ mod tests {
     #[test]
     fn proc_stat_counts_idle_plus_iowait_of_the_all_cpu_line() {
         // total = 4705 + 150 + 3120 + 84000 + 900 + 0 + 45 + 0
-        assert_eq!(parse_proc_stat(PROC_STAT), Some(CpuTimes { idle: 84900, total: 92920 }));
-        assert_eq!(parse_proc_stat("cpu0 1 2 3 4 5\n"), None, "only the all-CPU line");
+        assert_eq!(
+            parse_proc_stat(PROC_STAT),
+            Some(CpuTimes {
+                idle: 84900,
+                total: 92920
+            })
+        );
+        assert_eq!(
+            parse_proc_stat("cpu0 1 2 3 4 5\n"),
+            None,
+            "only the all-CPU line"
+        );
         assert_eq!(parse_proc_stat("cpu  1 2 x 4 5\n"), None);
         assert_eq!(parse_proc_stat(""), None);
     }
 
     #[test]
     fn the_cpu_share_is_the_non_idle_part_of_the_time_between_two_samples() {
-        let before = CpuTimes { idle: 800, total: 1000 };
-        assert_eq!(cpu_share(before, CpuTimes { idle: 850, total: 1100 }), Some(50));
-        assert_eq!(cpu_share(before, CpuTimes { idle: 800, total: 1100 }), Some(100));
-        assert_eq!(cpu_share(before, CpuTimes { idle: 900, total: 1100 }), Some(0));
-        assert_eq!(cpu_share(before, CpuTimes { idle: 802, total: 1003 }), Some(33), "rounded");
+        let before = CpuTimes {
+            idle: 800,
+            total: 1000,
+        };
+        assert_eq!(
+            cpu_share(
+                before,
+                CpuTimes {
+                    idle: 850,
+                    total: 1100
+                }
+            ),
+            Some(50)
+        );
+        assert_eq!(
+            cpu_share(
+                before,
+                CpuTimes {
+                    idle: 800,
+                    total: 1100
+                }
+            ),
+            Some(100)
+        );
+        assert_eq!(
+            cpu_share(
+                before,
+                CpuTimes {
+                    idle: 900,
+                    total: 1100
+                }
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            cpu_share(
+                before,
+                CpuTimes {
+                    idle: 802,
+                    total: 1003
+                }
+            ),
+            Some(33),
+            "rounded"
+        );
         assert_eq!(cpu_share(before, before), None, "no time passed");
     }
 
@@ -355,7 +495,10 @@ mod tests {
         assert_eq!(parse_vm_stat(VM_STAT, 8 << 30), Some(31));
         assert_eq!(parse_vm_stat(VM_STAT, 2_621_440_000), Some(100));
         assert_eq!(parse_vm_stat(VM_STAT, 1 << 20), Some(100), "capped");
-        assert_eq!(parse_vm_stat(&VM_STAT.replace("Pages wired down", "Pages wired"), 8 << 30), None);
+        assert_eq!(
+            parse_vm_stat(&VM_STAT.replace("Pages wired down", "Pages wired"), 8 << 30),
+            None
+        );
         assert_eq!(parse_vm_stat("", 8 << 30), None);
         assert_eq!(parse_vm_stat(VM_STAT, 0), None);
     }

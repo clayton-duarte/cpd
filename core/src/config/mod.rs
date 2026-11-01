@@ -37,11 +37,13 @@ use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::output::Output;
-use crate::policy::model::Models;
 use crate::policy::PolicyKey;
+use crate::policy::model::Models;
 
 pub use catalog::{PiInstall, load as load_catalog, load_with as load_catalog_with, locate_pi};
-pub use file::{Config, Events, Inbox, Preset, Source, Sources, TickSeconds, Timeouts, Tmux, Watch};
+pub use file::{
+    Config, Events, Inbox, Preset, Source, Sources, TickSeconds, Timeouts, Tmux, Watch,
+};
 pub use repo::RepoTests;
 pub use runner::{TOGGLE_COMMENT, WorkerRunner, set_in_text, toggle};
 pub use tier::{Catalog, Letter, Tier, TierModel};
@@ -90,15 +92,22 @@ fn migrate(home: &CpdHome) -> Result<Output, CpdError> {
             .with("path", path.display().to_string()));
         }
         Err(e) => {
-            return Err(CpdError::new(ErrorCode::ConfigInvalid, format!("cannot read config.toml: {e}."))
-                .with("path", path.display().to_string()));
+            return Err(CpdError::new(
+                ErrorCode::ConfigInvalid,
+                format!("cannot read config.toml: {e}."),
+            )
+            .with("path", path.display().to_string()));
         }
     };
     let (migrated, applied) = migrate::apply(&text);
     Config::parse(&migrated, &path)?;
     if migrated != text {
-        crate::atomic::write_atomic(&path, &migrated)
-            .map_err(|e| CpdError::new(ErrorCode::Internal, format!("cannot write config.toml: {e}.")))?;
+        crate::atomic::write_atomic(&path, &migrated).map_err(|e| {
+            CpdError::new(
+                ErrorCode::Internal,
+                format!("cannot write config.toml: {e}."),
+            )
+        })?;
     }
     Ok(Output::success(json!({
         "path": path.display().to_string(),

@@ -10,7 +10,11 @@ fn rows(subject: &str, sample: fn(u16, u16, Case) -> Sample) {
     for (width, height) in PANES {
         for click in CLICKS {
             let drawn = sample(width, height, Case::Menu(click));
-            check(&format!("{subject}, a right click {click:?} in a {width}x{height} pane"), width, &drawn);
+            check(
+                &format!("{subject}, a right click {click:?} in a {width}x{height} pane"),
+                width,
+                &drawn,
+            );
         }
     }
 }

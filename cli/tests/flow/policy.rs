@@ -8,10 +8,10 @@ use std::fs;
 use std::path::PathBuf;
 
 use common::fx::Fx;
-use common::{refused, Run};
+use common::{Run, refused};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const OWNER_FILE: &str = "[gate]\nmerge = \"local\"\npr = \"local\"\n\n[pr]\ntext = \"Owner pr text.\"\n\n[code]\ntext = \"Owner code text.\"\n";
 const REPO_FILE: &str = "[code]\ntext = \"Repo code text.\"\n";
@@ -58,7 +58,10 @@ fn world() -> Fx {
 }
 
 fn real(fx: &Fx, rel: &str) -> String {
-    fs::canonicalize(fx.env.cpd_home().join("policy").join(rel)).unwrap().display().to_string()
+    fs::canonicalize(fx.env.cpd_home().join("policy").join(rel))
+        .unwrap()
+        .display()
+        .to_string()
 }
 
 fn show(fx: &Fx, args: &[&str]) -> Run {
@@ -77,7 +80,10 @@ fn show_as(fx: &Fx, session: &str, attempt: Option<&str>) -> Run {
 }
 
 fn key(out: &Value) -> (&str, Option<&str>) {
-    (out["key"]["owner"].as_str().unwrap(), out["key"]["repo"].as_str())
+    (
+        out["key"]["owner"].as_str().unwrap(),
+        out["key"]["repo"].as_str(),
+    )
 }
 
 fn files(fx: &Fx, rels: &[&str]) -> Value {
@@ -88,26 +94,94 @@ fn files(fx: &Fx, rels: &[&str]) -> Value {
 fn the_output_has_exactly_the_documented_fields() {
     let fx = world();
     let out = show(&fx, &["--owner", "acme"]).ok();
-    let mut top: Vec<&str> = out.as_object().unwrap().keys().map(String::as_str).collect();
+    let mut top: Vec<&str> = out
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     top.sort_unstable();
-    assert_eq!(top, ["files", "key", "machine", "markdown", "ok", "policy", "role"]);
+    assert_eq!(
+        top,
+        [
+            "files", "key", "machine", "markdown", "ok", "policy", "role"
+        ]
+    );
     assert_eq!(out["role"], Value::Null);
-    let mut domains: Vec<&str> = out["policy"].as_object().unwrap().keys().map(String::as_str).collect();
+    let mut domains: Vec<&str> = out["policy"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     domains.sort_unstable();
-    assert_eq!(domains, ["code", "deploy", "deploys", "gate", "generated", "hooks", "instructions", "model", "monitor", "pr", "protected", "resources", "test-commands", "tests"]);
+    assert_eq!(
+        domains,
+        [
+            "code",
+            "deploy",
+            "deploys",
+            "gate",
+            "generated",
+            "hooks",
+            "instructions",
+            "model",
+            "monitor",
+            "pr",
+            "protected",
+            "resources",
+            "test-commands",
+            "tests"
+        ]
+    );
     for (name, domain) in out["policy"].as_object().unwrap() {
-        let mut fields: Vec<&str> = domain.as_object().unwrap().keys().map(String::as_str).collect();
+        let mut fields: Vec<&str> = domain
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         fields.sort_unstable();
         assert_eq!(fields, ["audience", "keys", "source", "text"], "{name}");
     }
     assert_eq!(out["policy"]["pr"]["audience"], json!(["lead", "worker"]));
     assert_eq!(out["policy"]["deploy"]["audience"], json!(["lead"]));
-    assert_eq!(out["policy"]["instructions"]["audience"], json!(["manager", "lead", "worker"]));
+    assert_eq!(
+        out["policy"]["instructions"]["audience"],
+        json!(["manager", "lead", "worker"])
+    );
     assert_eq!(out["policy"]["deploy"]["keys"], json!({}));
-    let mut keys: Vec<&str> = out["policy"]["pr"]["keys"].as_object().unwrap().keys().map(String::as_str).collect();
+    let mut keys: Vec<&str> = out["policy"]["pr"]["keys"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     keys.sort_unstable();
-    assert_eq!(keys, ["feedback.checks", "pr.excused_labels", "pr.human_gated_contexts", "pr.jira.done", "pr.jira.estimate_fields", "pr.jira.in_progress", "pr.jira.in_review", "pr.jira_required", "pr.post.channel", "pr.post.enabled", "pr.post.merged_reaction", "pr.post.template", "pr.required_checks"]);
-    let mut gate: Vec<&str> = out["policy"]["gate"]["keys"].as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        [
+            "feedback.checks",
+            "pr.excused_labels",
+            "pr.human_gated_contexts",
+            "pr.jira.done",
+            "pr.jira.estimate_fields",
+            "pr.jira.in_progress",
+            "pr.jira.in_review",
+            "pr.jira_required",
+            "pr.post.channel",
+            "pr.post.enabled",
+            "pr.post.merged_reaction",
+            "pr.post.template",
+            "pr.required_checks"
+        ]
+    );
+    let mut gate: Vec<&str> = out["policy"]["gate"]["keys"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     gate.sort_unstable();
     assert_eq!(gate, ["merge", "pr"]);
     assert_eq!(out["policy"]["gate"]["audience"], json!(["lead", "worker"]));
@@ -129,14 +203,26 @@ fn owner_key_reads_the_owner_file_and_marks_the_key_default() {
     assert_eq!(pr["source"], owner);
     assert_eq!(pr["text"], "Owner pr text.");
     // `feedback.checks` is left out of the set domain: cpd's default, marked.
-    assert_eq!(pr["keys"]["feedback.checks"], json!({"value": "any", "source": format!("{owner} (key default)")}));
+    assert_eq!(
+        pr["keys"]["feedback.checks"],
+        json!({"value": "any", "source": format!("{owner} (key default)")})
+    );
     // The `gate` domain is its own domain: the owner sets both keys.
     let gate = &out["policy"]["gate"];
     assert_eq!(gate["source"], owner);
-    assert_eq!(gate["keys"]["merge"], json!({"value": "local", "source": owner}));
-    assert_eq!(gate["keys"]["pr"], json!({"value": "local", "source": owner}));
+    assert_eq!(
+        gate["keys"]["merge"],
+        json!({"value": "local", "source": owner})
+    );
+    assert_eq!(
+        gate["keys"]["pr"],
+        json!({"value": "local", "source": owner})
+    );
     assert_eq!(out["policy"]["code"]["source"], owner);
-    assert_eq!(out["policy"]["deploy"], json!({"source": "default", "audience": ["lead"], "keys": {}, "text": ""}));
+    assert_eq!(
+        out["policy"]["deploy"],
+        json!({"source": "default", "audience": ["lead"], "keys": {}, "text": ""})
+    );
 }
 
 #[test]
@@ -144,14 +230,26 @@ fn a_repo_file_overrides_one_domain() {
     let fx = world();
     let out = show(&fx, &["--owner", "acme", "--repo", "cpd"]).ok();
     assert_eq!(key(&out), ("acme", Some("cpd")));
-    assert_eq!(out["files"], files(&fx, &["acme/owner.toml", "acme/cpd.toml"]));
-    assert_eq!(out["policy"]["code"]["source"], format!("repo:{}", real(&fx, "acme/cpd.toml")));
+    assert_eq!(
+        out["files"],
+        files(&fx, &["acme/owner.toml", "acme/cpd.toml"])
+    );
+    assert_eq!(
+        out["policy"]["code"]["source"],
+        format!("repo:{}", real(&fx, "acme/cpd.toml"))
+    );
     assert_eq!(out["policy"]["code"]["text"], "Repo code text.");
-    assert_eq!(out["policy"]["pr"]["source"], format!("owner:{}", real(&fx, "acme/owner.toml")));
+    assert_eq!(
+        out["policy"]["pr"]["source"],
+        format!("owner:{}", real(&fx, "acme/owner.toml"))
+    );
     // A repo with an empty file reads the owner's.
     fx.env.repo_policy("acme", "other", "");
     let other = show(&fx, &["--owner", "acme", "--repo", "other"]).ok();
-    assert_eq!(other["files"], files(&fx, &["acme/owner.toml", "acme/other.toml"]));
+    assert_eq!(
+        other["files"],
+        files(&fx, &["acme/owner.toml", "acme/other.toml"])
+    );
     assert_eq!(other["policy"]["code"]["text"], "Owner code text.");
 }
 
@@ -161,15 +259,27 @@ fn an_empty_owner_file_is_cpds_default_without_key_default_marks() {
     fs::write(fx.env.cpd_home().join("policy/acme/owner.toml"), "").unwrap();
     let out = show(&fx, &["--owner", "acme"]).ok();
     assert_eq!(out["policy"]["gate"]["source"], "default");
-    assert_eq!(out["policy"]["gate"]["keys"]["merge"], json!({"value": "none", "source": "default"}));
-    assert_eq!(out["policy"]["gate"]["keys"]["pr"], json!({"value": "none", "source": "default"}));
+    assert_eq!(
+        out["policy"]["gate"]["keys"]["merge"],
+        json!({"value": "none", "source": "default"})
+    );
+    assert_eq!(
+        out["policy"]["gate"]["keys"]["pr"],
+        json!({"value": "none", "source": "default"})
+    );
     assert_eq!(out["policy"]["pr"]["source"], "default");
-    assert_eq!(out["policy"]["pr"]["keys"]["feedback.checks"], json!({"value": "any", "source": "default"}));
+    assert_eq!(
+        out["policy"]["pr"]["keys"]["feedback.checks"],
+        json!({"value": "any", "source": "default"})
+    );
     // A bare `[pr]` table sets the whole `pr` domain to cpd's default: every key is defaulted.
     fs::write(fx.env.cpd_home().join("policy/acme/owner.toml"), "[pr]\n").unwrap();
     let owner = format!("owner:{}", real(&fx, "acme/owner.toml"));
     let out = show(&fx, &["--owner", "acme"]).ok();
-    assert_eq!(out["policy"]["pr"]["keys"]["feedback.checks"], json!({"value": "any", "source": format!("{owner} (key default)")}));
+    assert_eq!(
+        out["policy"]["pr"]["keys"]["feedback.checks"],
+        json!({"value": "any", "source": format!("{owner} (key default)")})
+    );
     // `[pr]` sets only the `pr` domain: `gate` stays cpd's default.
     assert_eq!(out["policy"]["gate"]["source"], "default");
 }
@@ -191,8 +301,15 @@ fn pr_selects_its_repo_or_the_owner_when_unnamed() {
     let anon = show(&fx, &["--pr", "anon", "--plan", "pl"]).ok();
     assert_eq!(key(&anon), ("acme", None));
     // The Plan may come from CPD_PLAN.
-    let out = fx.cpd_with(fx.env.root(), &["policy", "show", "--pr", "named"], &[("CPD_PLAN", "pl")]);
-    assert_eq!(serde_json::from_str::<Value>(&out.stdout).unwrap()["key"]["repo"], "cpd");
+    let out = fx.cpd_with(
+        fx.env.root(),
+        &["policy", "show", "--pr", "named"],
+        &[("CPD_PLAN", "pl")],
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&out.stdout).unwrap()["key"]["repo"],
+        "cpd"
+    );
 }
 
 #[test]
@@ -200,10 +317,17 @@ fn no_flag_resolves_the_callers_session() {
     let fx = world();
     for (session, role) in [("mgr1", "manager"), ("lead1", "lead")] {
         let out = show_as(&fx, session, None).ok();
-        assert_eq!((key(&out), out["role"].as_str()), (("acme", None), Some(role)), "{session}");
+        assert_eq!(
+            (key(&out), out["role"].as_str()),
+            (("acme", None), Some(role)),
+            "{session}"
+        );
     }
     let worker = show_as(&fx, "w-a", Some("a-a1")).ok();
-    assert_eq!((key(&worker), worker["role"].as_str()), (("acme", Some("cpd")), Some("worker")));
+    assert_eq!(
+        (key(&worker), worker["role"].as_str()),
+        (("acme", Some("cpd")), Some("worker"))
+    );
     assert_eq!(worker["policy"]["code"]["text"], "Repo code text.");
     let anon = show_as(&fx, "w-b", Some("b-a1")).ok();
     assert_eq!(key(&anon), ("acme", None));
@@ -213,13 +337,33 @@ fn no_flag_resolves_the_callers_session() {
 fn usage_refusals() {
     let fx = world();
     refused(&show(&fx, &[]), "session_required", 2);
-    refused(&show(&fx, &["--pr", "named", "--context", "ctx"]), "usage", 2);
-    refused(&show(&fx, &["--context", "ctx", "--owner", "acme"]), "usage", 2);
-    refused(&show(&fx, &["--pr", "named", "--owner", "acme"]), "usage", 2);
+    refused(
+        &show(&fx, &["--pr", "named", "--context", "ctx"]),
+        "usage",
+        2,
+    );
+    refused(
+        &show(&fx, &["--context", "ctx", "--owner", "acme"]),
+        "usage",
+        2,
+    );
+    refused(
+        &show(&fx, &["--pr", "named", "--owner", "acme"]),
+        "usage",
+        2,
+    );
     refused(&show(&fx, &["--repo", "cpd"]), "usage", 2);
-    refused(&show(&fx, &["--context", "ctx", "--repo", "cpd"]), "usage", 2);
+    refused(
+        &show(&fx, &["--context", "ctx", "--repo", "cpd"]),
+        "usage",
+        2,
+    );
     refused(&show(&fx, &["--owner", "-bad"]), "usage", 2);
-    refused(&show(&fx, &["--owner", "acme", "--repo", "a b"]), "usage", 2);
+    refused(
+        &show(&fx, &["--owner", "acme", "--repo", "a b"]),
+        "usage",
+        2,
+    );
     refused(&show(&fx, &["--pr", "named"]), "plan_required", 2);
 }
 
@@ -227,8 +371,16 @@ fn usage_refusals() {
 fn not_found_refusals() {
     let fx = world();
     refused(&show_as(&fx, "nope", None), "session_not_found", 4);
-    refused(&show(&fx, &["--pr", "named", "--plan", "zz"]), "plan_not_found", 4);
-    refused(&show(&fx, &["--pr", "zz", "--plan", "pl"]), "pr_not_found", 4);
+    refused(
+        &show(&fx, &["--pr", "named", "--plan", "zz"]),
+        "plan_not_found",
+        4,
+    );
+    refused(
+        &show(&fx, &["--pr", "zz", "--plan", "pl"]),
+        "pr_not_found",
+        4,
+    );
     refused(&show(&fx, &["--context", "zz"]), "context_not_found", 4);
 }
 
@@ -236,7 +388,14 @@ fn not_found_refusals() {
 fn owner_unset_names_the_next_command() {
     let fx = world();
     let error = refused(&show(&fx, &["--context", "bare"]), "owner_unset", 3);
-    assert!(error["details"].get("next").is_none() && error["message"].as_str().unwrap().contains("cpd context owner <login> --context bare"), "{error}");
+    assert!(
+        error["details"].get("next").is_none()
+            && error["message"]
+                .as_str()
+                .unwrap()
+                .contains("cpd context owner <login> --context bare"),
+        "{error}"
+    );
     refused(&show_as(&fx, "mgr2", None), "owner_unset", 3);
 }
 
@@ -247,9 +406,15 @@ fn a_repo_file_without_an_owner_file_is_policy_invalid() {
     fs::create_dir_all(home.join("policy/ghost")).unwrap();
     fs::write(home.join("policy/ghost/x.toml"), REPO_FILE).unwrap();
     // A directory of repo files with no `owner.toml` is refused whole (`policy_invalid`, the entry rules of §8.3), before the owner check.
-    for args in [&["--owner", "ghost", "--repo", "x"][..], &["--owner", "ghost"][..]] {
+    for args in [
+        &["--owner", "ghost", "--repo", "x"][..],
+        &["--owner", "ghost"][..],
+    ] {
         let error = refused(&show(&fx, args), "policy_invalid", 1);
-        assert_eq!(error["details"]["file"], home.join("policy/ghost").display().to_string());
+        assert_eq!(
+            error["details"]["file"],
+            home.join("policy/ghost").display().to_string()
+        );
     }
 }
 
@@ -263,26 +428,49 @@ fn policy_invalid_names_the_file_and_key() {
     assert_eq!(error["details"]["file"], real(&fx, "acme/owner.toml"));
     assert_eq!(error["details"]["key"], "pr.feedback.checks");
     fs::write(&owner, "[nonsense]\n").unwrap();
-    assert_eq!(refused(&show(&fx, &["--owner", "acme"]), "policy_invalid", 1)["details"]["key"], "nonsense");
+    assert_eq!(
+        refused(&show(&fx, &["--owner", "acme"]), "policy_invalid", 1)["details"]["key"],
+        "nonsense"
+    );
     fs::write(&owner, "not toml = = =").unwrap();
-    assert_eq!(refused(&show(&fx, &["--owner", "acme"]), "policy_invalid", 1)["details"]["key"], Value::Null);
+    assert_eq!(
+        refused(&show(&fx, &["--owner", "acme"]), "policy_invalid", 1)["details"]["key"],
+        Value::Null
+    );
     // The repo file of a key is read only for that key.
     fs::write(&owner, "").unwrap();
     fs::write(&repo, "[code]\ntext = 1\n").unwrap();
     show(&fx, &["--owner", "acme"]).ok();
-    let error = refused(&show(&fx, &["--owner", "acme", "--repo", "cpd"]), "policy_invalid", 1);
+    let error = refused(
+        &show(&fx, &["--owner", "acme", "--repo", "cpd"]),
+        "policy_invalid",
+        1,
+    );
     assert_eq!(error["details"]["file"], real(&fx, "acme/cpd.toml"));
 }
 
 #[test]
 fn a_misnamed_policy_file_is_policy_invalid_with_its_path() {
-    for (rel, invalid) in [("Clayton-Duarte/owner.toml", "Clayton-Duarte"), ("clayton_duarte/owner.toml", "clayton_duarte"), ("o/Bad Name.toml", "o/Bad Name.toml")] {
+    for (rel, invalid) in [
+        ("Clayton-Duarte/owner.toml", "Clayton-Duarte"),
+        ("clayton_duarte/owner.toml", "clayton_duarte"),
+        ("o/Bad Name.toml", "o/Bad Name.toml"),
+    ] {
         let fx = world();
         let path = fx.env.cpd_home().join("policy").join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "").unwrap();
         let error = refused(&show(&fx, &["--owner", "acme"]), "policy_invalid", 1);
-        assert_eq!(error["details"]["file"], fx.env.cpd_home().join("policy").join(invalid).display().to_string(), "{rel}");
+        assert_eq!(
+            error["details"]["file"],
+            fx.env
+                .cpd_home()
+                .join("policy")
+                .join(invalid)
+                .display()
+                .to_string(),
+            "{rel}"
+        );
         assert_eq!(error["details"]["key"], Value::Null);
     }
 }
@@ -294,27 +482,62 @@ fn policy_show_lists_gate_merge_and_pr_with_sources() {
     let out = show(&fx, &["--owner", "acme"]).ok();
     let gate = &out["policy"]["gate"];
     assert_eq!(gate["audience"], json!(["lead", "worker"]), "{out}");
-    assert_eq!(gate["keys"]["merge"], json!({"value": "local", "source": owner}), "{out}");
-    assert_eq!(gate["keys"]["pr"], json!({"value": "local", "source": owner}), "{out}");
+    assert_eq!(
+        gate["keys"]["merge"],
+        json!({"value": "local", "source": owner}),
+        "{out}"
+    );
+    assert_eq!(
+        gate["keys"]["pr"],
+        json!({"value": "local", "source": owner}),
+        "{out}"
+    );
     // A repo file that sets `pr` only replaces the whole gate domain: `merge` is cpd's `none`, marked.
     let repo = format!("repo:{}", real(&fx, "acme/cpd.toml"));
-    fs::write(fx.env.cpd_home().join("policy/acme/cpd.toml"), "[gate]\npr = \"local\"\n\n[code]\ntext = \"Repo code text.\"\n").unwrap();
+    fs::write(
+        fx.env.cpd_home().join("policy/acme/cpd.toml"),
+        "[gate]\npr = \"local\"\n\n[code]\ntext = \"Repo code text.\"\n",
+    )
+    .unwrap();
     let out = show(&fx, &["--owner", "acme", "--repo", "cpd"]).ok();
     let gate = &out["policy"]["gate"];
     assert_eq!(gate["source"], repo, "{out}");
-    assert_eq!(gate["keys"]["merge"], json!({"value": "none", "source": format!("{repo} (key default)")}), "{out}");
-    assert_eq!(gate["keys"]["pr"], json!({"value": "local", "source": repo}), "{out}");
+    assert_eq!(
+        gate["keys"]["merge"],
+        json!({"value": "none", "source": format!("{repo} (key default)")}),
+        "{out}"
+    );
+    assert_eq!(
+        gate["keys"]["pr"],
+        json!({"value": "local", "source": repo}),
+        "{out}"
+    );
 }
 
 #[test]
 fn it_writes_nothing() {
     let fx = world();
     let count = |sql: &str| -> i64 {
-        let mut store = Store::open(&CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap(), 5000).unwrap();
-        store.read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?)).unwrap()
+        let mut store = Store::open(
+            &CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap(),
+            5000,
+        )
+        .unwrap();
+        store
+            .read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?))
+            .unwrap()
     };
-    let before = (count("SELECT count(*) FROM txns"), count("SELECT count(*) FROM events"));
+    let before = (
+        count("SELECT count(*) FROM txns"),
+        count("SELECT count(*) FROM events"),
+    );
     show(&fx, &["--owner", "acme"]).ok();
     show(&fx, &["--context", "ctx"]).ok();
-    assert_eq!(before, (count("SELECT count(*) FROM txns"), count("SELECT count(*) FROM events")));
+    assert_eq!(
+        before,
+        (
+            count("SELECT count(*) FROM txns"),
+            count("SELECT count(*) FROM events")
+        )
+    );
 }

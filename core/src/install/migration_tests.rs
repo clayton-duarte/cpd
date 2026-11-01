@@ -92,7 +92,13 @@ impl Rig {
         for script in ["install-cpd.sh", "cargo.sh", "tag-version.sh"] {
             origin.write(&format!("scripts/{script}"), &format!("{script}\n"));
         }
-        for file in ["package.json", "extension.ts", "lib/cpd.ts", "lib/adapter.ts", "test/cpd.test.ts"] {
+        for file in [
+            "package.json",
+            "extension.ts",
+            "lib/cpd.ts",
+            "lib/adapter.ts",
+            "test/cpd.test.ts",
+        ] {
             origin.write(&format!("pi/{file}"), &format!("{file}\n"));
         }
         origin.write(&format!("{MIGRATIONS}/.keep"), "");
@@ -116,7 +122,15 @@ impl Rig {
                 lock_wait: super::DEFAULT_LOCK_WAIT,
             },
         };
-        let clone = rig.git(&root, &["clone", "-q", rig.origin.dir().to_str().unwrap(), rig.install.root.to_str().unwrap()]);
+        let clone = rig.git(
+            &root,
+            &[
+                "clone",
+                "-q",
+                rig.origin.dir().to_str().unwrap(),
+                rig.install.root.to_str().unwrap(),
+            ],
+        );
         assert_eq!(clone.0, 0, "the fixture's clone: {}", clone.1);
         rig
     }
@@ -124,11 +138,23 @@ impl Rig {
     /// The runner's git route, the installed `cpd` and the tagger answering exit 0 and nothing, and the built
     /// binary's `config --migrate` answering "nothing migrated" unless a test scripts it ([`Rig::built_config`]).
     fn route(fakes: &Fakes, route: &Arc<GitRoute>, built: &Path, installed: &Path, tag: &Path) {
-        let (built, installed, tag) = (built.to_path_buf(), installed.to_path_buf(), tag.to_path_buf());
+        let (built, installed, tag) = (
+            built.to_path_buf(),
+            installed.to_path_buf(),
+            tag.to_path_buf(),
+        );
         (*fakes.runner)
             .clone()
-            .on("cpd", move |c| Path::new(&c.program) == installed, Reply::ok(""))
-            .on("tag-version.sh", move |c| Path::new(&c.program) == tag, Reply::ok(""))
+            .on(
+                "cpd",
+                move |c| Path::new(&c.program) == installed,
+                Reply::ok(""),
+            )
+            .on(
+                "tag-version.sh",
+                move |c| Path::new(&c.program) == tag,
+                Reply::ok(""),
+            )
             .route("cpd", Arc::new(BuiltConfigMigrate { built }))
             .with_git(route);
     }
@@ -148,7 +174,11 @@ impl Rig {
     /// What `<target>/release/cpd --version` prints.
     fn built_says(&self, version: &str) {
         let built = self.built();
-        (*self.fakes.runner).clone().on("cpd", move |c| Path::new(&c.program) == built && c.args == ["--version"], Reply::ok(version));
+        (*self.fakes.runner).clone().on(
+            "cpd",
+            move |c| Path::new(&c.program) == built && c.args == ["--version"],
+            Reply::ok(version),
+        );
     }
 
     /// What `<target>/release/cpd config --migrate` prints; a test's rule wins over the route's default
@@ -156,15 +186,27 @@ impl Rig {
     fn built_config(&self, reply: &str) {
         let built = self.built();
         let reply = reply.to_owned();
-        (*self.fakes.runner).clone().on("cpd", move |c| Path::new(&c.program) == built && c.args == ["config", "--migrate"], Reply::ok(&reply));
+        (*self.fakes.runner).clone().on(
+            "cpd",
+            move |c| Path::new(&c.program) == built && c.args == ["config", "--migrate"],
+            Reply::ok(&reply),
+        );
     }
 
     /// `git <args>` in `dir`, through the runner: (exit, stderr).
     fn git(&self, dir: &Path, args: &[&str]) -> (i32, String) {
         let mut cmd = Command::new("git");
         cmd.current_dir(dir).args(args);
-        let out = self.fakes.ports.runner.output(&mut cmd, "git", Duration::from_secs(60)).unwrap_or_else(|e| panic!("git {args:?}: {e:?}"));
-        (std::os::unix::process::ExitStatusExt::into_raw(out.status) >> 8, String::from_utf8_lossy(&out.stderr).into_owned())
+        let out = self
+            .fakes
+            .ports
+            .runner
+            .output(&mut cmd, "git", Duration::from_secs(60))
+            .unwrap_or_else(|e| panic!("git {args:?}: {e:?}"));
+        (
+            std::os::unix::process::ExitStatusExt::into_raw(out.status) >> 8,
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
     }
 
     /// Writes (adds or changes) a migration file of the checkout's working tree, uncommitted.
@@ -177,12 +219,20 @@ impl Rig {
         let mut stderr = Vec::new();
         let exit = run(&self.fakes.ports, &self.install, &mut stderr);
         self.route.assert_supported();
-        Run { exit, stderr: String::from_utf8_lossy(&stderr).into_owned() }
+        Run {
+            exit,
+            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        }
     }
 
     /// The calls of the built binary.
     fn built_calls(&self) -> Vec<Call> {
-        self.fakes.runner.calls().into_iter().filter(|c| Path::new(&c.program) == self.built()).collect()
+        self.fakes
+            .runner
+            .calls()
+            .into_iter()
+            .filter(|c| Path::new(&c.program) == self.built())
+            .collect()
     }
 
     /// Something was installed: the binary or the adapter.
@@ -193,7 +243,10 @@ impl Rig {
     /// The installed binary and its temporary files are not there.
     fn dest_entries(&self) -> Vec<String> {
         let mut names: Vec<String> = fs::read_dir(self.install.home.join(".local/bin"))
-            .map(|d| d.map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect())
+            .map(|d| {
+                d.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
             .unwrap_or_default();
         names.sort();
         names
@@ -205,14 +258,24 @@ fn version(store: &str) -> String {
 }
 
 fn refusing(code: &str, message: &str) -> String {
-    version(&format!(r#"{{"opens":false,"refusal":{{"code":"{code}","message":"{message}"}},"unknown":[],"pending":[]}}"#))
+    version(&format!(
+        r#"{{"opens":false,"refusal":{{"code":"{code}","message":"{message}"}},"unknown":[],"pending":[]}}"#
+    ))
 }
 
 /// The install refused before it replaced anything: the built binary was not even asked its version.
 fn assert_refused_before_building(rig: &Rig, run: &Run) {
     assert_eq!(run.exit, 1, "{}", run.stderr);
-    assert!(run.stderr.contains("cpd install refused: "), "{}", run.stderr);
-    assert!(rig.built_calls().is_empty(), "the built binary ran: {:?}", rig.built_calls());
+    assert!(
+        run.stderr.contains("cpd install refused: "),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        rig.built_calls().is_empty(),
+        "the built binary ran: {:?}",
+        rig.built_calls()
+    );
     assert!(!rig.installed_anything());
 }
 
@@ -220,15 +283,37 @@ fn assert_refused_before_building(rig: &Rig, run: &Run) {
 fn a_build_that_adds_a_migration_origin_main_lacks_is_refused_before_building() {
     let rig = Rig::new(&["0001-initial.sql"]);
     // Untracked, as a new file of a Lead Branch preview is until it is committed.
-    rig.write_migration("29991231T2359-branch-only.sql", "-- cpd-migration: additive\n");
+    rig.write_migration(
+        "29991231T2359-branch-only.sql",
+        "-- cpd-migration: additive\n",
+    );
     rig.built_says(&version(OPENS));
 
     let run = rig.run();
 
     assert_refused_before_building(&rig, &run);
-    assert!(run.stderr.contains("this build carries migration 29991231T2359-branch-only.sql that is not on origin/main"), "{}", run.stderr);
-    assert!(run.stderr.contains(&format!("apply it to {}/cpd.db before the PR merges", rig.cpd_home().display())), "{}", run.stderr);
-    assert!(run.stderr.contains("Merge main into this branch, or wait until the PR merges, then install again."), "{}", run.stderr);
+    assert!(
+        run.stderr.contains(
+            "this build carries migration 29991231T2359-branch-only.sql that is not on origin/main"
+        ),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains(&format!(
+            "apply it to {}/cpd.db before the PR merges",
+            rig.cpd_home().display()
+        )),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains(
+            "Merge main into this branch, or wait until the PR merges, then install again."
+        ),
+        "{}",
+        run.stderr
+    );
 }
 
 #[test]
@@ -244,7 +329,13 @@ fn a_committed_branch_migration_is_refused_too_and_all_the_names_are_listed() {
     let run = rig.run();
 
     assert_refused_before_building(&rig, &run);
-    assert!(run.stderr.contains("migration 29991231T2358-first.sql, 29991231T2359-second.sql that is not on origin/main"), "{}", run.stderr);
+    assert!(
+        run.stderr.contains(
+            "migration 29991231T2358-first.sql, 29991231T2359-second.sql that is not on origin/main"
+        ),
+        "{}",
+        run.stderr
+    );
 }
 
 #[test]
@@ -256,14 +347,20 @@ fn a_migration_file_changed_from_origin_main_is_refused() {
     let run = rig.run();
 
     assert_refused_before_building(&rig, &run);
-    assert!(run.stderr.contains("migration 0001-initial.sql that is not on origin/main"), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("migration 0001-initial.sql that is not on origin/main"),
+        "{}",
+        run.stderr
+    );
 }
 
 #[test]
 fn a_migration_that_main_gained_after_the_branch_is_not_the_branch_check() {
     let rig = Rig::new(&["0001-initial.sql"]);
     // origin/main gets a migration the clone's tree lacks.
-    rig.origin.write(&format!("{MIGRATIONS}/29991231T2359-later.sql"), "later\n");
+    rig.origin
+        .write(&format!("{MIGRATIONS}/29991231T2359-later.sql"), "later\n");
     rig.origin.commit("later");
     rig.built_says(&version(OPENS));
 
@@ -295,21 +392,41 @@ fn a_failed_fetch_is_a_refusal_because_the_script_cannot_know() {
     let rig = Rig::new(&["0001-initial.sql"]);
     let root = rig.install.root.clone();
     let nowhere = root.parent().unwrap().join("nowhere");
-    assert_eq!(rig.git(&root, &["remote", "set-url", "origin", nowhere.to_str().unwrap()]).0, 0);
+    assert_eq!(
+        rig.git(
+            &root,
+            &["remote", "set-url", "origin", nowhere.to_str().unwrap()]
+        )
+        .0,
+        0
+    );
     rig.built_says(&version(OPENS));
 
     let run = rig.run();
 
     assert_refused_before_building(&rig, &run);
-    assert!(run.stderr.contains("cannot fetch origin/main"), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("cannot fetch origin/main"),
+        "{}",
+        run.stderr
+    );
 }
 
 #[test]
 fn the_store_verdict_refuses_with_its_message_and_the_fix_of_its_code() {
     for (code, fix) in [
-        ("store_too_new", "merge main into this branch, then install again"),
-        ("migration_changed", "restore it from origin/main or wait for the store to be repaired"),
-        ("migration_order", "rename the branch's breaking migration to a newer name with scripts/new-migration.sh, then install again"),
+        (
+            "store_too_new",
+            "merge main into this branch, then install again",
+        ),
+        (
+            "migration_changed",
+            "restore it from origin/main or wait for the store to be repaired",
+        ),
+        (
+            "migration_order",
+            "rename the branch's breaking migration to a newer name with scripts/new-migration.sh, then install again",
+        ),
     ] {
         let rig = Rig::new(&[]);
         rig.built_says(&refusing(code, "the verdict words"));
@@ -317,7 +434,14 @@ fn the_store_verdict_refuses_with_its_message_and_the_fix_of_its_code() {
         let run = rig.run();
 
         assert_eq!(run.exit, 1, "{code}: {}", run.stderr);
-        assert!(run.stderr.contains(&format!("this build cannot open {}/cpd.db: the verdict words", rig.cpd_home().display())), "{code}: {}", run.stderr);
+        assert!(
+            run.stderr.contains(&format!(
+                "this build cannot open {}/cpd.db: the verdict words",
+                rig.cpd_home().display()
+            )),
+            "{code}: {}",
+            run.stderr
+        );
         assert!(run.stderr.contains(fix), "{code}: {}", run.stderr);
         assert!(!rig.installed_anything(), "{code}");
     }
@@ -331,14 +455,22 @@ fn another_refusal_code_prints_the_message_alone() {
     let run = rig.run();
 
     assert_eq!(run.exit, 1);
-    assert!(run.stderr.contains("cpd.db: not a store\n"), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("cpd.db: not a store\n"),
+        "{}",
+        run.stderr
+    );
     assert!(!run.stderr.contains("merge main"), "{}", run.stderr);
     assert!(!rig.installed_anything());
 }
 
 #[test]
 fn a_store_that_does_not_exist_or_opens_installs_and_unknown_additive_migrations_are_no_refusal() {
-    for store in ["null", OPENS, r#"{"opens":true,"refusal":null,"unknown":["29991231T2359-later"],"pending":[]}"#] {
+    for store in [
+        "null",
+        OPENS,
+        r#"{"opens":true,"refusal":null,"unknown":["29991231T2359-later"],"pending":[]}"#,
+    ] {
         let rig = Rig::new(&[]);
         rig.built_says(&version(store));
 
@@ -358,7 +490,11 @@ fn a_version_without_a_store_verdict_or_that_fails_is_refused() {
     let run = rig.run();
 
     assert_eq!(run.exit, 1, "{}", run.stderr);
-    assert!(run.stderr.contains("reports no store verdict"), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("reports no store verdict"),
+        "{}",
+        run.stderr
+    );
     assert!(!rig.installed_anything());
 }
 
@@ -373,9 +509,17 @@ fn the_installed_binary_is_a_copy_of_the_built_one_with_mode_755_and_no_temporar
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
     assert_eq!(fs::read(rig.installed()).unwrap(), b"built cpd\n");
-    assert_eq!(fs::metadata(rig.installed()).unwrap().permissions().mode() & 0o777, 0o755);
+    assert_eq!(
+        fs::metadata(rig.installed()).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
     assert_eq!(rig.dest_entries(), ["cpd"], "no .cpd.tmp.<pid> is left");
-    assert!(run.stderr.contains(&format!("installed {} and ", rig.installed().display())), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains(&format!("installed {} and ", rig.installed().display())),
+        "{}",
+        run.stderr
+    );
 }
 
 #[test]
@@ -411,7 +555,11 @@ fn a_refused_install_leaves_the_installed_binary_as_it_was() {
         let run = rig.run();
 
         assert_eq!(run.exit, 1, "{refusal:?}: {}", run.stderr);
-        assert_eq!(fs::read(rig.installed()).unwrap(), b"old cpd\n", "{refusal:?}");
+        assert_eq!(
+            fs::read(rig.installed()).unwrap(),
+            b"old cpd\n",
+            "{refusal:?}"
+        );
         assert_eq!(rig.dest_entries(), ["cpd"], "{refusal:?}");
     }
 }
@@ -427,9 +575,21 @@ fn the_install_runs_the_built_binarys_config_migrate() {
     let run = rig.run();
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    let call = rig.built_calls().into_iter().find(|c| c.args == ["config", "--migrate"]).expect("the built binary ran config --migrate");
-    let cpd_home = call.envs.iter().find(|(key, _)| key == "CPD_HOME").and_then(|(_, value)| value.clone());
-    assert_eq!(cpd_home.as_deref(), rig.cpd_home().to_str(), "CPD_HOME is the caller's");
+    let call = rig
+        .built_calls()
+        .into_iter()
+        .find(|c| c.args == ["config", "--migrate"])
+        .expect("the built binary ran config --migrate");
+    let cpd_home = call
+        .envs
+        .iter()
+        .find(|(key, _)| key == "CPD_HOME")
+        .and_then(|(_, value)| value.clone());
+    assert_eq!(
+        cpd_home.as_deref(),
+        rig.cpd_home().to_str(),
+        "CPD_HOME is the caller's"
+    );
 }
 
 /// A config the build cannot migrate is refused before the binary is replaced: the installed
@@ -447,9 +607,17 @@ fn a_config_the_build_cannot_migrate_is_refused_before_replacing_the_binary() {
     let run = rig.run();
 
     assert_eq!(run.exit, 1, "{}", run.stderr);
-    assert!(run.stderr.contains("cpd install refused:"), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("cpd install refused:"),
+        "{}",
+        run.stderr
+    );
     assert!(run.stderr.contains("cannot migrate"), "{}", run.stderr);
-    assert_eq!(fs::read(rig.installed()).unwrap(), b"old cpd\n", "the binary was replaced");
+    assert_eq!(
+        fs::read(rig.installed()).unwrap(),
+        b"old cpd\n",
+        "the binary was replaced"
+    );
 }
 
 /// Each migration the build applied is reported on stderr.
@@ -462,5 +630,10 @@ fn the_migrations_the_build_applied_are_reported_on_stderr() {
     let run = rig.run();
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    assert!(run.stderr.contains("cpd install: config.toml migrated: distill-tier-gx"), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("cpd install: config.toml migrated: distill-tier-gx"),
+        "{}",
+        run.stderr
+    );
 }

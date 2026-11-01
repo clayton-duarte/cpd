@@ -29,20 +29,38 @@ fn due(engine: &Engine) -> Result<bool, CpdError> {
         return Ok(false);
     }
     let period = Duration::from_secs(u64::from(engine.config.watch.janitor_minutes) * 60);
-    Ok(engine.janitor_started.is_none_or(|at| engine.ports.clock.now().saturating_duration_since(at) >= period))
+    Ok(engine
+        .janitor_started
+        .is_none_or(|at| engine.ports.clock.now().saturating_duration_since(at) >= period))
 }
 
 /// Spawns `cpd janitor` detached, its output in the janitor log, its pid recorded in `run/janitor.pid`.
 fn start(engine: &mut Engine) -> Result<(), CpdError> {
-    let failed = |why: String| CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start the janitor pass: {why}."));
+    let failed = |why: String| {
+        CpdError::new(
+            ErrorCode::SpawnFailed,
+            format!("Cannot start the janitor pass: {why}."),
+        )
+    };
     let exe = engine.ports.spawn.self_exe()?;
     let log = log_path(&engine.home);
     let dir = log.parent().expect("a log lives in a directory");
     fs::create_dir_all(dir).map_err(|e| failed(format!("cannot create {}: {e}", dir.display())))?;
-    let pid = engine.ports.spawn.spawn(&detached_launch(&exe, &["janitor"], &engine.home, log)).map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
+    let pid = engine
+        .ports
+        .spawn
+        .spawn(&detached_launch(&exe, &["janitor"], &engine.home, log))
+        .map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
     engine.janitor_started = Some(engine.ports.clock.now());
     let pid_path = engine.home.root().join("run").join("janitor.pid");
-    record_detached(engine, pid, pid_path.clone()).map_err(|e| failed(format!("it runs, but its pid cannot be written to {}: {e}", pid_path.display())))?;
-    engine.log.line(&format!("E16: started the janitor pass (pid {})", pid.0));
+    record_detached(engine, pid, pid_path.clone()).map_err(|e| {
+        failed(format!(
+            "it runs, but its pid cannot be written to {}: {e}",
+            pid_path.display()
+        ))
+    })?;
+    engine
+        .log
+        .line(&format!("E16: started the janitor pass (pid {})", pid.0));
     Ok(())
 }

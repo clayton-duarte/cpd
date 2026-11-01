@@ -32,7 +32,8 @@ pub fn holographic(config: &Config) -> Check {
     };
     // `ping` opens no database; a path with an existing parent binds no file.
     match engine.ping(&env::temp_dir().join("cpd-holographic-ping.db")) {
-        Ok(pong) => Check::pass(name, Severity::Error).found(pong["version"].as_str().unwrap_or("unknown").to_owned()),
+        Ok(pong) => Check::pass(name, Severity::Error)
+            .found(pong["version"].as_str().unwrap_or("unknown").to_owned()),
         Err(e) => Check::from_error(name, Severity::Error, &e),
     }
 }

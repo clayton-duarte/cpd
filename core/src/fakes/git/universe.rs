@@ -28,7 +28,9 @@ impl Oid {
     }
     /// The 20 raw bytes a tree entry holds.
     fn raw(&self) -> Vec<u8> {
-        (0..20).map(|i| u8::from_str_radix(&self.0[i * 2..i * 2 + 2], 16).expect("an Oid is hex")).collect()
+        (0..20)
+            .map(|i| u8::from_str_radix(&self.0[i * 2..i * 2 + 2], 16).expect("an Oid is hex"))
+            .collect()
     }
 }
 
@@ -40,7 +42,10 @@ impl fmt::Display for Oid {
 
 /// Whether `text` is 40 lowercase hex characters.
 pub fn is_oid(text: &str) -> bool {
-    text.len() == 40 && text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    text.len() == 40
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// The id of an object: the sha1 of `<kind> <length>\0<body>`.
@@ -179,7 +184,12 @@ pub struct Universe {
 pub(super) fn norm_key(key: &str) -> String {
     match (key.find('.'), key.rfind('.')) {
         (Some(first), Some(last)) if first != last => {
-            format!("{}.{}.{}", key[..first].to_lowercase(), &key[first + 1..last], key[last + 1..].to_lowercase())
+            format!(
+                "{}.{}.{}",
+                key[..first].to_lowercase(),
+                &key[first + 1..last],
+                key[last + 1..].to_lowercase()
+            )
         }
         _ => key.to_lowercase(),
     }
@@ -192,7 +202,13 @@ impl Universe {
     /// A Universe with no repo and no config. Time is `clock.now()` at this call; no wall time is read.
     pub fn new(clock: Arc<dyn Clock>) -> Universe {
         let start = clock.now();
-        Universe { clock, start, global: Vec::new(), objects: HashMap::new(), repos: Vec::new() }
+        Universe {
+            clock,
+            start,
+            global: Vec::new(),
+            objects: HashMap::new(),
+            repos: Vec::new(),
+        }
     }
 
     fn repo_data(&self, repo: RepoId) -> &RepoData {
@@ -203,7 +219,9 @@ impl Universe {
     }
     fn store(&mut self, repo: RepoId, id: Oid, object: Object) -> Oid {
         let seq = self.objects.len();
-        self.objects.entry(id.clone()).or_insert(Stored { object, seq });
+        self.objects
+            .entry(id.clone())
+            .or_insert(Stored { object, seq });
         self.repos[repo.0].have.insert(id.clone());
         id
     }
@@ -218,7 +236,8 @@ impl Universe {
     /// to what `repo` holds. Entry order does not matter; a repeated path keeps the last entry, as staging
     /// it again would (a real tree has one entry per name).
     pub fn tree(&mut self, repo: RepoId, entries: &[(&str, &Oid)]) -> Oid {
-        let mut by_path: std::collections::BTreeMap<String, Oid> = std::collections::BTreeMap::new();
+        let mut by_path: std::collections::BTreeMap<String, Oid> =
+            std::collections::BTreeMap::new();
         for (path, oid) in entries {
             by_path.insert((*path).to_owned(), (*oid).clone());
         }
@@ -235,34 +254,70 @@ impl Universe {
     /// holds. Panics when no `user.name` and `user.email` is configured. It moves no ref.
     pub fn commit(&mut self, repo: RepoId, tree: &Oid, parents: &[Oid], message: &str) -> Oid {
         let user = |key: &str| {
-            self.config_values(repo, key).pop().unwrap_or_else(|| panic!("a commit needs {key} configured"))
+            self.config_values(repo, key)
+                .pop()
+                .unwrap_or_else(|| panic!("a commit needs {key} configured"))
         };
         let author = format!("{} <{}>", user("user.name"), user("user.email"));
         self.commit_as(repo, &author, tree, parents, message)
     }
     /// [`Universe::commit`] by `author` (`<name> <<email>>`): what a rebase does to the commits it replays.
-    pub(super) fn commit_as(&mut self, repo: RepoId, author: &str, tree: &Oid, parents: &[Oid], message: &str) -> Oid {
+    pub(super) fn commit_as(
+        &mut self,
+        repo: RepoId,
+        author: &str,
+        tree: &Oid,
+        parents: &[Oid],
+        message: &str,
+    ) -> Oid {
         let author = author.to_owned();
-        let time = Self::EPOCH + self.clock.now().saturating_duration_since(self.start).as_secs();
+        let time = Self::EPOCH
+            + self
+                .clock
+                .now()
+                .saturating_duration_since(self.start)
+                .as_secs();
         let mut body = format!("tree {tree}\n");
         for parent in parents {
             body.push_str(&format!("parent {parent}\n"));
         }
-        body.push_str(&format!("author {author} {time} +0000\ncommitter {author} {time} +0000\n\n{message}\n"));
+        body.push_str(&format!(
+            "author {author} {time} +0000\ncommitter {author} {time} +0000\n\n{message}\n"
+        ));
         let id = object_id("commit", body.as_bytes());
-        let commit = Commit { tree: tree.clone(), parents: parents.to_vec(), author, message: message.to_owned(), time };
+        let commit = Commit {
+            tree: tree.clone(),
+            parents: parents.to_vec(),
+            author,
+            message: message.to_owned(),
+            time,
+        };
         self.store(repo, id, Object::Commit(commit))
     }
     /// Stores an annotated tag `name` of `target` by `tagger` (`<name> <<email>>`) and adds it to what `repo` holds.
-    pub(super) fn tag_object(&mut self, repo: RepoId, target: &Oid, name: &str, tagger: &str, message: &str) -> Oid {
+    pub(super) fn tag_object(
+        &mut self,
+        repo: RepoId,
+        target: &Oid,
+        name: &str,
+        tagger: &str,
+        message: &str,
+    ) -> Oid {
         let kind = match self.kind(target) {
             Some(Kind::Tree) => "tree",
             Some(Kind::Blob) => "blob",
             Some(Kind::Tag) => "tag",
             _ => "commit",
         };
-        let time = Self::EPOCH + self.clock.now().saturating_duration_since(self.start).as_secs();
-        let body = format!("object {target}\ntype {kind}\ntag {name}\ntagger {tagger} {time} +0000\n\n{message}\n");
+        let time = Self::EPOCH
+            + self
+                .clock
+                .now()
+                .saturating_duration_since(self.start)
+                .as_secs();
+        let body = format!(
+            "object {target}\ntype {kind}\ntag {name}\ntagger {tagger} {time} +0000\n\n{message}\n"
+        );
         let id = object_id("tag", body.as_bytes());
         self.store(repo, id, Object::Tag(target.clone()))
     }
@@ -331,10 +386,23 @@ impl Universe {
     /// Makes `dir` (and parents) a repo: `<dir>/.git/` a real directory, or for `bare` `dir` itself is the
     /// git dir. `HEAD` is the unborn branch `main`.
     pub fn init(&mut self, dir: &Path, bare: bool) -> RepoId {
-        let git_dir_of = |dir: &Path| if bare { dir.to_owned() } else { dir.join(".git") };
+        let git_dir_of = |dir: &Path| {
+            if bare {
+                dir.to_owned()
+            } else {
+                dir.join(".git")
+            }
+        };
         std::fs::create_dir_all(git_dir_of(dir)).expect("the repo's directory can be made");
         let dir = dir.canonicalize().expect("the repo's directory exists");
-        let main = WtData { path: dir.clone(), id: None, head: Head::Branch("main".to_owned()), locked: None, index: None, rebase: None };
+        let main = WtData {
+            path: dir.clone(),
+            id: None,
+            head: Head::Branch("main".to_owned()),
+            locked: None,
+            index: None,
+            rebase: None,
+        };
         self.repos.push(RepoData {
             git_dir: git_dir_of(&dir),
             bare,
@@ -353,7 +421,9 @@ impl Universe {
             let mut best: Option<(usize, usize, usize)> = None;
             for (r, repo) in self.repos.iter().enumerate() {
                 for (w, wt) in repo.wts.iter().enumerate() {
-                    if path.starts_with(&wt.path) && best.is_none_or(|(_, _, len)| wt.path.as_os_str().len() > len) {
+                    if path.starts_with(&wt.path)
+                        && best.is_none_or(|(_, _, len)| wt.path.as_os_str().len() > len)
+                    {
                         best = Some((r, w, wt.path.as_os_str().len()));
                     }
                 }
@@ -363,7 +433,8 @@ impl Universe {
         search(path).or_else(|| path.canonicalize().ok().and_then(|c| search(&c)))
     }
     fn place(&self, wt: &Path) -> (usize, usize) {
-        self.locate(wt).unwrap_or_else(|| panic!("not a worktree path: {}", wt.display()))
+        self.locate(wt)
+            .unwrap_or_else(|| panic!("not a worktree path: {}", wt.display()))
     }
     /// The repo whose worktree (or bare git dir) is the nearest ancestor-or-self of `path`.
     pub fn repo_of(&self, path: &Path) -> Option<RepoId> {
@@ -371,16 +442,21 @@ impl Universe {
     }
     /// The worktree (main or linked) whose path is the nearest ancestor-or-self of `path`.
     pub fn worktree_of(&self, path: &Path) -> Option<PathBuf> {
-        self.locate(path).map(|(r, w)| self.repos[r].wts[w].path.clone())
+        self.locate(path)
+            .map(|(r, w)| self.repos[r].wts[w].path.clone())
     }
     /// The repo a remote url names: its worktree, its git dir, or a bare repo's directory, exactly.
     pub fn repo_at(&self, url: &str) -> Option<RepoId> {
         let url = Path::new(url);
         let canonical = url.canonicalize().ok();
-        self.repos.iter().position(|r| {
-            let own = [r.git_dir.as_path(), r.wts[0].path.as_path()];
-            own.iter().any(|p| *p == url || Some(*p) == canonical.as_deref())
-        }).map(RepoId)
+        self.repos
+            .iter()
+            .position(|r| {
+                let own = [r.git_dir.as_path(), r.wts[0].path.as_path()];
+                own.iter()
+                    .any(|p| *p == url || Some(*p) == canonical.as_deref())
+            })
+            .map(RepoId)
     }
     pub fn is_bare(&self, repo: RepoId) -> bool {
         self.repo_data(repo).bare
@@ -399,26 +475,49 @@ impl Universe {
         if data.bare {
             return Vec::new();
         }
-        data.wts.iter().map(|w| Worktree { path: w.path.clone(), id: w.id.clone() }).collect()
+        data.wts
+            .iter()
+            .map(|w| Worktree {
+                path: w.path.clone(),
+                id: w.id.clone(),
+            })
+            .collect()
     }
     /// Makes `path` a real directory with a `.git` FILE `gitdir: <git dir>/worktrees/<id>` and makes that
     /// admin directory; `<id>` is the last component of `path`, with the first free number appended when
     /// taken (`wt`, `wt1`, ...). Its `HEAD` is `head`.
     pub fn add_worktree(&mut self, repo: RepoId, path: &Path, head: Head) -> Worktree {
         std::fs::create_dir_all(path).expect("the worktree's directory can be made");
-        let path = path.canonicalize().expect("the worktree's directory exists");
-        let base = path.file_name().expect("a worktree path has a name").to_string_lossy().into_owned();
+        let path = path
+            .canonicalize()
+            .expect("the worktree's directory exists");
+        let base = path
+            .file_name()
+            .expect("a worktree path has a name")
+            .to_string_lossy()
+            .into_owned();
         let data = self.repo_mut(repo);
         let taken = |id: &str| data.wts.iter().any(|w| w.id.as_deref() == Some(id));
         let id = if !taken(&base) {
             base
         } else {
-            (1..).map(|n| format!("{base}{n}")).find(|id| !taken(id)).expect("a free number exists")
+            (1..)
+                .map(|n| format!("{base}{n}"))
+                .find(|id| !taken(id))
+                .expect("a free number exists")
         };
         let admin = data.git_dir.join("worktrees").join(&id);
         std::fs::create_dir_all(&admin).expect("the admin directory can be made");
-        std::fs::write(path.join(".git"), format!("gitdir: {}\n", admin.display())).expect("the .git file can be written");
-        data.wts.push(WtData { path: path.clone(), id: Some(id.clone()), head, locked: None, index: None, rebase: None });
+        std::fs::write(path.join(".git"), format!("gitdir: {}\n", admin.display()))
+            .expect("the .git file can be written");
+        data.wts.push(WtData {
+            path: path.clone(),
+            id: Some(id.clone()),
+            head,
+            locked: None,
+            index: None,
+            rebase: None,
+        });
         Worktree { path, id: Some(id) }
     }
     /// The git dir of a worktree: the common one for the main worktree, `<git dir>/worktrees/<id>` for a
@@ -452,7 +551,10 @@ impl Universe {
     pub fn forget_worktree(&mut self, wt: &Path) {
         let (r, w) = self.place(wt);
         let data = &mut self.repos[r];
-        let id = data.wts[w].id.clone().expect("only a linked worktree is forgotten");
+        let id = data.wts[w]
+            .id
+            .clone()
+            .expect("only a linked worktree is forgotten");
         data.wts.remove(w);
         let _ = std::fs::remove_dir_all(data.git_dir.join("worktrees").join(id));
     }
@@ -461,10 +563,20 @@ impl Universe {
 
     /// Points `name` (a full ref name) at `new`, and appends a reflog entry with `message`.
     pub fn set_ref(&mut self, repo: RepoId, name: &str, new: &Oid, message: &str) {
-        let tree = self.commit_data(new).map_or_else(|| new.clone(), |c| c.tree);
+        let tree = self
+            .commit_data(new)
+            .map_or_else(|| new.clone(), |c| c.tree);
         let data = self.repo_mut(repo);
         let old = data.refs.insert(name.to_owned(), new.clone());
-        data.reflogs.entry(name.to_owned()).or_default().push(ReflogEntry { old, new: new.clone(), tree, message: message.to_owned() });
+        data.reflogs
+            .entry(name.to_owned())
+            .or_default()
+            .push(ReflogEntry {
+                old,
+                new: new.clone(),
+                tree,
+                message: message.to_owned(),
+            });
     }
     pub fn ref_oid(&self, repo: RepoId, name: &str) -> Option<Oid> {
         self.repo_data(repo).refs.get(name).cloned()
@@ -479,7 +591,10 @@ impl Universe {
     pub fn rename_branch(&mut self, repo: RepoId, old: &str, new: &str) {
         let data = self.repo_mut(repo);
         let (from, to) = (format!("refs/heads/{old}"), format!("refs/heads/{new}"));
-        let oid = data.refs.remove(&from).expect("the branch to rename exists");
+        let oid = data
+            .refs
+            .remove(&from)
+            .expect("the branch to rename exists");
         data.refs.insert(to.clone(), oid);
         if let Some(log) = data.reflogs.remove(&from) {
             data.reflogs.insert(to, log);
@@ -492,15 +607,27 @@ impl Universe {
     }
     /// The direct refs whose full name starts with `prefix`, sorted by name.
     pub fn refs(&self, repo: RepoId, prefix: &str) -> Vec<(String, Oid)> {
-        self.repo_data(repo).refs.range(prefix.to_owned()..).take_while(|(n, _)| n.starts_with(prefix)).map(|(n, o)| (n.clone(), o.clone())).collect()
+        self.repo_data(repo)
+            .refs
+            .range(prefix.to_owned()..)
+            .take_while(|(n, _)| n.starts_with(prefix))
+            .map(|(n, o)| (n.clone(), o.clone()))
+            .collect()
     }
     /// Makes `name` (for example `refs/remotes/origin/HEAD`) a symbolic ref to the full ref `target`.
     pub fn set_symbolic_ref(&mut self, repo: RepoId, name: &str, target: &str) {
-        self.repo_mut(repo).symrefs.insert(name.to_owned(), target.to_owned());
+        self.repo_mut(repo)
+            .symrefs
+            .insert(name.to_owned(), target.to_owned());
     }
     /// The symbolic refs whose full name starts with `prefix`, as `(name, target)`, sorted by name.
     pub(super) fn symbolic_refs(&self, repo: RepoId, prefix: &str) -> Vec<(String, String)> {
-        self.repo_data(repo).symrefs.iter().filter(|(n, _)| n.starts_with(prefix)).map(|(n, t)| (n.clone(), t.clone())).collect()
+        self.repo_data(repo)
+            .symrefs
+            .iter()
+            .filter(|(n, _)| n.starts_with(prefix))
+            .map(|(n, t)| (n.clone(), t.clone()))
+            .collect()
     }
     pub(super) fn delete_symbolic_ref(&mut self, repo: RepoId, name: &str) {
         self.repo_mut(repo).symrefs.remove(name);
@@ -530,11 +657,18 @@ impl Universe {
     }
     /// The reflog of `name`, newest first; empty for a ref that never moved.
     pub fn reflog(&self, repo: RepoId, name: &str) -> Vec<ReflogEntry> {
-        self.repo_data(repo).reflogs.get(name).map(|log| log.iter().rev().cloned().collect()).unwrap_or_default()
+        self.repo_data(repo)
+            .reflogs
+            .get(name)
+            .map(|log| log.iter().rev().cloned().collect())
+            .unwrap_or_default()
     }
     /// The tips of `refs/remotes/<remote>/*` (what `--remotes=<remote>` selects), sorted by ref name.
     pub fn remote_tips(&self, repo: RepoId, remote: &str) -> Vec<Oid> {
-        self.refs(repo, &format!("refs/remotes/{remote}/")).into_iter().map(|(_, o)| o).collect()
+        self.refs(repo, &format!("refs/remotes/{remote}/"))
+            .into_iter()
+            .map(|(_, o)| o)
+            .collect()
     }
 
     // ---- config: multi-valued; the global one comes first ----
@@ -547,7 +681,9 @@ impl Universe {
     }
     /// Appends a value of the repo's own config.
     pub fn config_add(&mut self, repo: RepoId, key: &str, value: &str) {
-        self.repo_mut(repo).config.push((norm_key(key), value.to_owned()));
+        self.repo_mut(repo)
+            .config
+            .push((norm_key(key), value.to_owned()));
     }
     /// Replaces every value of the key in the repo's own config.
     pub fn config_set(&mut self, repo: RepoId, key: &str, value: &str) {
@@ -565,15 +701,28 @@ impl Universe {
         self.global.clone()
     }
     /// Every entry: the global ones, then the repo's, then `extra` (a call's `-c` and `GIT_CONFIG_*`), keys normalized.
-    pub fn config_entries(&self, repo: RepoId, extra: &[(String, String)]) -> Vec<(String, String)> {
+    pub fn config_entries(
+        &self,
+        repo: RepoId,
+        extra: &[(String, String)],
+    ) -> Vec<(String, String)> {
         let extra = extra.iter().map(|(k, v)| (norm_key(k), v.clone()));
-        self.global.iter().chain(&self.repo_data(repo).config).cloned().chain(extra).collect()
+        self.global
+            .iter()
+            .chain(&self.repo_data(repo).config)
+            .cloned()
+            .chain(extra)
+            .collect()
     }
     /// Every value of the key: the global ones, then the repo's, each in the order added. Section and
     /// variable names are case-insensitive, the subsection (`url.<x>.`) is not.
     pub fn config_values(&self, repo: RepoId, key: &str) -> Vec<String> {
         let key = norm_key(key);
-        self.config_entries(repo, &[]).into_iter().filter(|(k, _)| *k == key).map(|(_, v)| v).collect()
+        self.config_entries(repo, &[])
+            .into_iter()
+            .filter(|(k, _)| *k == key)
+            .map(|(_, v)| v)
+            .collect()
     }
     /// `url` rewritten by the longest matching `url.<base>.insteadOf` (git's `remote get-url`).
     pub fn resolve_url(&self, repo: RepoId, url: &str) -> String {
@@ -583,8 +732,14 @@ impl Universe {
     pub fn resolve_url_with(&self, repo: RepoId, url: &str, extra: &[(String, String)]) -> String {
         let mut best: Option<(usize, String)> = None;
         for (key, prefix) in self.config_entries(repo, extra) {
-            let Some(base) = key.strip_prefix("url.").and_then(|k| k.strip_suffix(".insteadof")) else { continue };
-            if url.starts_with(&prefix) && best.as_ref().is_none_or(|(len, _)| prefix.len() > *len) {
+            let Some(base) = key
+                .strip_prefix("url.")
+                .and_then(|k| k.strip_suffix(".insteadof"))
+            else {
+                continue;
+            };
+            if url.starts_with(&prefix) && best.as_ref().is_none_or(|(len, _)| prefix.len() > *len)
+            {
                 best = Some((prefix.len(), format!("{base}{}", &url[prefix.len()..])));
             }
         }
@@ -596,7 +751,12 @@ impl Universe {
     fn write_index(&self, wt: &Path) {
         let (r, w) = self.place(wt);
         let admin = self.admin_dir(wt);
-        let text: String = self.repos[r].wts[w].index.iter().flatten().map(|(p, o, s)| format!("{s} {o}\t{p}\n")).collect();
+        let text: String = self.repos[r].wts[w]
+            .index
+            .iter()
+            .flatten()
+            .map(|(p, o, s)| format!("{s} {o}\t{p}\n"))
+            .collect();
         let tmp = admin.join("index.new");
         std::fs::write(&tmp, text).expect("the new index can be written");
         std::fs::rename(&tmp, admin.join("index")).expect("the index can be renamed into place");
@@ -629,7 +789,10 @@ impl Universe {
         if let Some(entries) = &self.repos[r].wts[w].index {
             return entries.clone();
         }
-        self.head_tree(wt).into_iter().map(|(p, o)| (p, o, 0)).collect()
+        self.head_tree(wt)
+            .into_iter()
+            .map(|(p, o)| (p, o, 0))
+            .collect()
     }
     /// The entries of the tree of the commit `HEAD` names; empty when it is unborn.
     pub(super) fn head_tree(&self, wt: &Path) -> Vec<(String, Oid)> {
@@ -638,7 +801,10 @@ impl Universe {
             Head::Branch(b) => self.ref_oid(RepoId(r), &format!("refs/heads/{b}")),
             Head::Detached(oid) => Some(oid),
         };
-        commit.and_then(|c| self.commit_data(&c)).and_then(|c| self.tree_entries(&c.tree)).unwrap_or_default()
+        commit
+            .and_then(|c| self.commit_data(&c))
+            .and_then(|c| self.tree_entries(&c.tree))
+            .unwrap_or_default()
     }
     /// The rebase stopped in the worktree at `wt`.
     pub(super) fn rebase_state(&self, wt: &Path) -> Option<RebaseState> {
@@ -662,9 +828,10 @@ impl Universe {
         let mut stack: Vec<Oid> = start.to_vec();
         while let Some(next) = stack.pop() {
             if let Some(commit) = self.commit_data(&next)
-                && seen.insert(next) {
-                    stack.extend(commit.parents);
-                }
+                && seen.insert(next)
+            {
+                stack.extend(commit.parents);
+            }
         }
         seen
     }
@@ -675,10 +842,21 @@ impl Universe {
     /// The best common ancestor of two commits (on a criss-cross, the first); `None` for unrelated histories.
     pub fn merge_base(&self, _repo: RepoId, a: &Oid, b: &Oid) -> Option<Oid> {
         let from_b = self.ancestors(std::slice::from_ref(b));
-        let common: Vec<Oid> = self.ancestors(std::slice::from_ref(a)).into_iter().filter(|c| from_b.contains(c)).collect();
-        let parents: Vec<Oid> = common.iter().filter_map(|c| self.commit_data(c)).flat_map(|c| c.parents).collect();
+        let common: Vec<Oid> = self
+            .ancestors(std::slice::from_ref(a))
+            .into_iter()
+            .filter(|c| from_b.contains(c))
+            .collect();
+        let parents: Vec<Oid> = common
+            .iter()
+            .filter_map(|c| self.commit_data(c))
+            .flat_map(|c| c.parents)
+            .collect();
         let dominated = self.ancestors(&parents);
-        common.into_iter().filter(|c| !dominated.contains(c)).max_by_key(|c| self.order_key(c))
+        common
+            .into_iter()
+            .filter(|c| !dominated.contains(c))
+            .max_by_key(|c| self.order_key(c))
     }
     /// Whether `a` is an ancestor of `b` (a commit is its own ancestor); the first object `repo` does not
     /// hold is the error.
@@ -694,20 +872,36 @@ impl Universe {
     /// always before its parents); `no_merges` drops the commits with two parents or more.
     pub fn rev_list(&self, _repo: RepoId, sel: &Selection, no_merges: bool) -> Vec<Oid> {
         let excluded = self.ancestors(&sel.exclude);
-        let selected: HashSet<Oid> = self.ancestors(&sel.include).into_iter().filter(|c| !excluded.contains(c)).collect();
+        let selected: HashSet<Oid> = self
+            .ancestors(&sel.include)
+            .into_iter()
+            .filter(|c| !excluded.contains(c))
+            .collect();
         let mut pending: HashMap<&Oid, usize> = selected.iter().map(|c| (c, 0)).collect();
         for commit in &selected {
-            for parent in self.commit_data(commit).into_iter().flat_map(|c| c.parents).filter_map(|p| selected.get(&p)) {
-                *pending.get_mut(parent).expect("a selected parent is pending") += 1;
+            for parent in self
+                .commit_data(commit)
+                .into_iter()
+                .flat_map(|c| c.parents)
+                .filter_map(|p| selected.get(&p))
+            {
+                *pending
+                    .get_mut(parent)
+                    .expect("a selected parent is pending") += 1;
             }
         }
-        let mut ready: BinaryHeap<((u64, usize), Reverse<Oid>)> =
-            pending.iter().filter(|(_, n)| **n == 0).map(|(c, _)| (self.order_key(c), Reverse((*c).clone()))).collect();
+        let mut ready: BinaryHeap<((u64, usize), Reverse<Oid>)> = pending
+            .iter()
+            .filter(|(_, n)| **n == 0)
+            .map(|(c, _)| (self.order_key(c), Reverse((*c).clone())))
+            .collect();
         let mut out = Vec::new();
         while let Some((_, Reverse(next))) = ready.pop() {
             let data = self.commit_data(&next).expect("a selected oid is a commit");
             for parent in data.parents.iter().filter(|p| selected.contains(*p)) {
-                let n = pending.get_mut(parent).expect("a selected parent is pending");
+                let n = pending
+                    .get_mut(parent)
+                    .expect("a selected parent is pending");
                 *n -= 1;
                 if *n == 0 {
                     ready.push((self.order_key(parent), Reverse(parent.clone())));

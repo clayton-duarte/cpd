@@ -165,7 +165,9 @@ struct Review {
 
 /// A bot is an author typed `Bot`, whose login ends `[bot]`, or whose login is listed in `bots`.
 fn author_is_bot(author: &Option<Login>, bots: &[String]) -> bool {
-    author.as_ref().is_some_and(|a| a.kind == "Bot" || super::status::is_bot(&a.login, bots))
+    author
+        .as_ref()
+        .is_some_and(|a| a.kind == "Bot" || super::status::is_bot(&a.login, bots))
 }
 
 /// The login GitHub shows for an author that no longer exists.
@@ -177,27 +179,46 @@ fn login(author: &Option<Login>) -> &str {
 
 /// Whether the body ends with the marker line.
 fn marked(body: &str) -> bool {
-    body.trim_end().lines().next_back().is_some_and(|line| line.trim() == MARKER)
+    body.trim_end()
+        .lines()
+        .next_back()
+        .is_some_and(|line| line.trim() == MARKER)
 }
 
 /// The first 160 characters of `body`, whitespace collapsed.
 fn excerpt(body: &str) -> String {
-    body.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect()
+    body.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(160)
+        .collect()
 }
 
 fn failed(repo: &str, number: i64, why: &str) -> CpdError {
-    CpdError::new(ErrorCode::GhFailed, format!("The comments read of {repo}#{number} {why}.")).with("repo", repo).with("number", number)
+    CpdError::new(
+        ErrorCode::GhFailed,
+        format!("The comments read of {repo}#{number} {why}."),
+    )
+    .with("repo", repo)
+    .with("number", number)
 }
 
 /// The reads in `answer`, alias `p<i>` for the i-th pair of `prs`. An `errors` array, a missing alias, field or pull
 /// request, and more than 100 threads, comments or reviews (or comments of a thread) are `gh_failed`.
 pub fn parse(prs: &[(&str, i64)], answer: &str, bots: &[String]) -> Result<Vec<Read>, CpdError> {
     let gh = |message: String| CpdError::new(ErrorCode::GhFailed, message);
-    let answer: Answer = serde_json::from_str(answer).map_err(|e| gh(format!("The comments read printed unexpected JSON: {e}.")))?;
+    let answer: Answer = serde_json::from_str(answer)
+        .map_err(|e| gh(format!("The comments read printed unexpected JSON: {e}.")))?;
     if let Some(first) = answer.errors.iter().flatten().next() {
-        return Err(gh(format!("The comments read answered with errors: {}", first.message.as_deref().unwrap_or("(no message)"))));
+        return Err(gh(format!(
+            "The comments read answered with errors: {}",
+            first.message.as_deref().unwrap_or("(no message)")
+        )));
     }
-    let mut data = answer.data.ok_or_else(|| gh("The comments read answered without data.".to_owned()))?;
+    let mut data = answer
+        .data
+        .ok_or_else(|| gh("The comments read answered without data.".to_owned()))?;
     let me = data.viewer.login.clone();
     let mut reads = Vec::with_capacity(prs.len());
     for (i, (repo, number)) in prs.iter().enumerate() {
@@ -208,13 +229,24 @@ pub fn parse(prs: &[(&str, i64)], answer: &str, bots: &[String]) -> Result<Vec<R
             .ok_or_else(|| failed(repo, number, &format!("is missing: no alias p{i}")))?
             .and_then(|r| r.pull_request)
             .ok_or_else(|| failed(repo, number, "found no pull request"))?;
-        let whole = pull.threads.whole() && pull.comments.whole() && pull.reviews.whole() && pull.threads.nodes.iter().all(|t| t.comments.whole());
+        let whole = pull.threads.whole()
+            && pull.comments.whole()
+            && pull.reviews.whole()
+            && pull.threads.nodes.iter().all(|t| t.comments.whole());
         if !whole {
-            return Err(failed(repo, number, "has more than 100 review threads, comments, reviews or comments in a thread: it cannot be read whole"));
+            return Err(failed(
+                repo,
+                number,
+                "has more than 100 review threads, comments, reviews or comments in a thread: it cannot be read whole",
+            ));
         }
         let mut items = Vec::new();
         for thread in &pull.threads.nodes {
-            let (Some(first), Some(last)) = (thread.comments.nodes.first(), thread.comments.nodes.last()) else { continue };
+            let (Some(first), Some(last)) =
+                (thread.comments.nodes.first(), thread.comments.nodes.last())
+            else {
+                continue;
+            };
             if thread.resolved || marked(&last.body) {
                 continue;
             }
@@ -233,16 +265,19 @@ pub fn parse(prs: &[(&str, i64)], answer: &str, bots: &[String]) -> Result<Vec<R
         }
         // An issue comment or review is answered by a marked issue comment made after it.
         let answered_after = |at: &str, position: Option<usize>| {
-            pull.comments
-                .nodes
-                .iter()
-                .enumerate()
-                .any(|(j, c)| marked(&c.body) && (c.created_at.as_str() > at || (c.created_at == at && position.is_some_and(|i| j > i))))
+            pull.comments.nodes.iter().enumerate().any(|(j, c)| {
+                marked(&c.body)
+                    && (c.created_at.as_str() > at
+                        || (c.created_at == at && position.is_some_and(|i| j > i)))
+            })
         };
         let spoken = |author: &Option<Login>| login(author) != me && !author_is_bot(author, bots);
         for (i, comment) in pull.comments.nodes.iter().enumerate() {
             let author = login(&comment.author);
-            if !spoken(&comment.author) || marked(&comment.body) || answered_after(&comment.created_at, Some(i)) {
+            if !spoken(&comment.author)
+                || marked(&comment.body)
+                || answered_after(&comment.created_at, Some(i))
+            {
                 continue;
             }
             items.push(Item {
@@ -259,7 +294,8 @@ pub fn parse(prs: &[(&str, i64)], answer: &str, bots: &[String]) -> Result<Vec<R
         }
         for review in &pull.reviews.nodes {
             let author = login(&review.author);
-            let said = matches!(review.state.as_str(), "COMMENTED" | "CHANGES_REQUESTED") && !review.body.trim().is_empty();
+            let said = matches!(review.state.as_str(), "COMMENTED" | "CHANGES_REQUESTED")
+                && !review.body.trim().is_empty();
             if !said || !spoken(&review.author) || answered_after(&review.created_at, None) {
                 continue;
             }
@@ -275,7 +311,12 @@ pub fn parse(prs: &[(&str, i64)], answer: &str, bots: &[String]) -> Result<Vec<R
                 excerpt: excerpt(&review.body),
             });
         }
-        reads.push(Read { repo: repo.to_owned(), number, updated_at: pull.updated_at, items });
+        reads.push(Read {
+            repo: repo.to_owned(),
+            number,
+            updated_at: pull.updated_at,
+            items,
+        });
     }
     Ok(reads)
 }
@@ -283,5 +324,8 @@ pub fn parse(prs: &[(&str, i64)], answer: &str, bots: &[String]) -> Result<Vec<R
 /// The items of `after` whose `last` is the `last` of no item of `before` (`None` counts as empty).
 pub fn new_items<'a>(before: Option<&[Item]>, after: &'a [Item]) -> Vec<&'a Item> {
     let known = before.unwrap_or_default();
-    after.iter().filter(|item| !known.iter().any(|k| k.last == item.last)).collect()
+    after
+        .iter()
+        .filter(|item| !known.iter().any(|k| k.last == item.last))
+        .collect()
 }

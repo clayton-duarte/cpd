@@ -16,8 +16,20 @@ fn the_legend_measures_its_texts_in_columns() {
         header: Some([wide, "status", "counter"]),
         rows: vec![vec![Line::from("x"), Line::from("y"), Line::from("z")]],
     };
-    assert_eq!(section.column_widths(), vec![cells::width(wide) as u16, 6, 7], "the header is measured in columns");
+    assert_eq!(
+        section.column_widths(),
+        vec![cells::width(wide) as u16, 6, 7],
+        "the header is measured in columns"
+    );
     // The title is measured the same way: the widest thing of a title-only section is its own display width.
-    let titled = Section { title: wide, header: None, rows: Vec::new() };
-    assert_eq!(titled.width(), cells::width(wide) as u16, "the title is measured in columns");
+    let titled = Section {
+        title: wide,
+        header: None,
+        rows: Vec::new(),
+    };
+    assert_eq!(
+        titled.width(),
+        cells::width(wide) as u16,
+        "the title is measured in columns"
+    );
 }

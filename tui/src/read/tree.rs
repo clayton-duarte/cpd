@@ -8,8 +8,8 @@ use std::path::Path;
 
 use cpd_core::error::CpdError;
 use cpd_core::events::highest_id;
-use cpd_core::ids::ContextId;
 use cpd_core::home::CpdHome;
+use cpd_core::ids::ContextId;
 use cpd_core::inbox::model::{self, Filter, Item, Kind, State, Urgency};
 use cpd_core::store::Store;
 use time::OffsetDateTime;
@@ -86,8 +86,16 @@ impl ContextNode {
     /// (ties by Plan, then by the order in the Plan). The tree draws them directly under the Context, after the
     /// Plans, whatever their Plan or source.
     pub fn forks(&self) -> Vec<(&PlanNode, &SessionNode)> {
-        let mut forks: Vec<(&PlanNode, &SessionNode)> =
-            self.plans.iter().flat_map(|p| p.sessions.iter().filter(|s| !s.plan_lead).map(move |s| (p, s))).collect();
+        let mut forks: Vec<(&PlanNode, &SessionNode)> = self
+            .plans
+            .iter()
+            .flat_map(|p| {
+                p.sessions
+                    .iter()
+                    .filter(|s| !s.plan_lead)
+                    .map(move |s| (p, s))
+            })
+            .collect();
         forks.sort_by(|a, b| a.1.created_at.cmp(&b.1.created_at)); // stable
         forks
     }
@@ -125,7 +133,15 @@ fn engine_down(now: String) -> Item {
 /// The tree's snapshot: one read transaction, a fixed set of queries whatever the number of Contexts and Plans.
 /// The Inbox's open, visible items (not snoozed, not dismissed) at `now`, in the order of `cpd inbox list` (§17).
 pub(super) fn visible_items(conn: &rusqlite::Connection, now: &str) -> Result<Vec<Item>, CpdError> {
-    model::list(conn, &Filter { context: None, state: State::Visible { now: now.to_owned() } })
+    model::list(
+        conn,
+        &Filter {
+            context: None,
+            state: State::Visible {
+                now: now.to_owned(),
+            },
+        },
+    )
 }
 
 /// `engine-down` first in `inbox` when no engine holds the lock and no live Manager exists (§2.2): with a live Manager the
@@ -138,10 +154,17 @@ fn engine_down_first(inbox: &mut Vec<Item>, engine_running: bool, live_manager: 
 
 /// The Inbox's visible items at `now` as `cpd inbox list` has them, `engine-down` first by [`engine_down_first`]: what the
 /// `widgets` view draws (the tree reads the same in its own transaction).
-pub(super) fn inbox_in(conn: &rusqlite::Connection, now: &str, engine_running: bool) -> Result<Vec<Item>, CpdError> {
+pub(super) fn inbox_in(
+    conn: &rusqlite::Connection,
+    now: &str,
+    engine_running: bool,
+) -> Result<Vec<Item>, CpdError> {
     let mut inbox = visible_items(conn, now)?;
-    let live_manager: bool =
-        conn.query_row("SELECT EXISTS (SELECT 1 FROM sessions WHERE role = 'manager' AND archived_at IS NULL)", [], |r| r.get(0))?;
+    let live_manager: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sessions WHERE role = 'manager' AND archived_at IS NULL)",
+        [],
+        |r| r.get(0),
+    )?;
     engine_down_first(&mut inbox, engine_running, live_manager, now.to_owned());
     Ok(inbox)
 }
@@ -150,7 +173,12 @@ pub(super) fn inbox_in(conn: &rusqlite::Connection, now: &str, engine_running: b
 /// the `widgets` view's read of its Inbox section.
 pub fn inbox_at(store: &mut Store, now: Option<&str>) -> Result<(Vec<Item>, bool), CpdError> {
     let engine_running = model::engine_running(&store_home(store)?)?;
-    store.read(|conn| Ok((inbox_in(conn, &db_now(conn, now)?, engine_running)?, engine_running)))
+    store.read(|conn| {
+        Ok((
+            inbox_in(conn, &db_now(conn, now)?, engine_running)?,
+            engine_running,
+        ))
+    })
 }
 
 /// The mark of the Inbox: the open rows' own columns and how many Managers are live (they decide `engine-down`). It moves
@@ -162,7 +190,17 @@ pub struct InboxMark {
 }
 
 /// `id, urgency, label, url, plan, session, snoozed_until, dismissed_at, claimed_at` of an open item.
-type InboxRow = (i64, String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
+type InboxRow = (
+    i64,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 /// [`InboxMark`] now: one cheap read of the open items, never the closed history.
 pub fn inbox_mark(store: &mut Store) -> Result<InboxMark, CpdError> {
@@ -172,9 +210,25 @@ pub fn inbox_mark(store: &mut Store) -> Result<InboxMark, CpdError> {
                FROM inbox_items WHERE closed_at IS NULL ORDER BY id",
         )?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)))?
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                    r.get(8)?,
+                ))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        let managers = conn.query_row("SELECT count(*) FROM sessions WHERE role = 'manager' AND archived_at IS NULL", [], |r| r.get(0))?;
+        let managers = conn.query_row(
+            "SELECT count(*) FROM sessions WHERE role = 'manager' AND archived_at IS NULL",
+            [],
+            |r| r.get(0),
+        )?;
         Ok(InboxMark { rows, managers })
     })
 }
@@ -201,7 +255,10 @@ pub fn snooze_end(store: &mut Store) -> Result<Option<OffsetDateTime>, CpdError>
 }
 
 /// [`snooze_end`] at `now` (contract §1.3 text), the database's clock when `None`: a view on a clock of its own passes its time.
-pub fn snooze_end_at(store: &mut Store, now: Option<&str>) -> Result<Option<OffsetDateTime>, CpdError> {
+pub fn snooze_end_at(
+    store: &mut Store,
+    now: Option<&str>,
+) -> Result<Option<OffsetDateTime>, CpdError> {
     let end: Option<String> = store.read(|conn| {
         let now = db_now(conn, now)?;
         Ok(conn.query_row(
@@ -211,15 +268,22 @@ pub fn snooze_end_at(store: &mut Store, now: Option<&str>) -> Result<Option<Offs
             |r| r.get(0),
         )?)
     })?;
-    end.map(|end| OffsetDateTime::parse(&end, &Rfc3339).map_err(|_| bad_row(format!("Inbox snoozed_until {end:?}"))))
-        .transpose()
+    end.map(|end| {
+        OffsetDateTime::parse(&end, &Rfc3339)
+            .map_err(|_| bad_row(format!("Inbox snoozed_until {end:?}")))
+    })
+    .transpose()
 }
 
 /// `now` as given (contract §1.3 text), or the database's own clock.
 pub(super) fn db_now(conn: &rusqlite::Connection, now: Option<&str>) -> Result<String, CpdError> {
     match now {
         Some(now) => Ok(now.to_owned()),
-        None => Ok(conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?),
+        None => Ok(
+            conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| {
+                r.get(0)
+            })?,
+        ),
     }
 }
 

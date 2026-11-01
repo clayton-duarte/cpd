@@ -53,9 +53,18 @@ esac
 /// `clash.txt` differently, so that `feat/x` conflicts with it.
 fn fx(conflicting: bool) -> Fx {
     let env = TestEnv::new();
-    let config = format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket());
+    let config = format!(
+        "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[tmux]\nsocket = \"{}\"\n",
+        env.tmux_socket()
+    );
     fs::write(env.cpd_home().join("config.toml"), config).unwrap();
-    env.fake("cpd", &format!("if [ \"$1 $2\" = 'watch --ensure' ]; then {}; fi\nexec '{CPD}' \"$@\"", common::WATCH_OK));
+    env.fake(
+        "cpd",
+        &format!(
+            "if [ \"$1 $2\" = 'watch --ensure' ]; then {}; fi\nexec '{CPD}' \"$@\"",
+            common::WATCH_OK
+        ),
+    );
     env.fake_gh(&GH.replace("ROOT", &env.root().display().to_string()));
     fs::write(env.root().join("list.json"), "[]").unwrap();
     fs::write(env.root().join("lookup.json"), r#"{"data":{}}"#).unwrap();
@@ -79,7 +88,15 @@ fn fx(conflicting: bool) -> Fx {
     env.git(&repo, &["reset", "-q", "--hard", "HEAD~1"]);
     if conflicting {
         let other = env.root().join("other-clone");
-        env.git(env.root(), &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
+        env.git(
+            env.root(),
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ],
+        );
         fs::write(other.join("clash.txt"), "main's\n").unwrap();
         env.git(&other, &["add", "-A"]);
         env.git(&other, &["commit", "-q", "-m", "main moves"]);
@@ -93,11 +110,41 @@ fn fx(conflicting: bool) -> Fx {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at)
            VALUES ('pay', 'ctx', 'Pay the bills', 'plan', 'lead1', 't');",
     );
-    env.cpd(&["pr", "add", "web", "--repo", repo.to_str().unwrap(), "--title", "Polish", "--shape", "config", "--adopt", "7", "--plan", "pay"]).ok();
-    env.cpd(&["job", "cancel", "web-config", "--reason", "a stub of the template", "--plan", "pay"]).ok();
+    env.cpd(&[
+        "pr",
+        "add",
+        "web",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        "Polish",
+        "--shape",
+        "config",
+        "--adopt",
+        "7",
+        "--plan",
+        "pay",
+    ])
+    .ok();
+    env.cpd(&[
+        "job",
+        "cancel",
+        "web-config",
+        "--reason",
+        "a stub of the template",
+        "--plan",
+        "pay",
+    ])
+    .ok();
     env.sql("UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';");
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    Fx { env, home, repo, origin, head }
+    Fx {
+        env,
+        home,
+        repo,
+        origin,
+        head,
+    }
 }
 
 fn plan() -> PlanId {
@@ -148,8 +195,12 @@ impl Fx {
     /// Lead Branch, with one commit writing `m.txt`.
     fn submitted(&self, kind: &str) -> AttemptId {
         let attempt = AttemptId::parse("m-a1").unwrap();
-        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("attempt.log") };
-        let made = create_attempt_worktree(&self.repo, &self.lead(), &plan(), &attempt, &setup).unwrap();
+        let setup = Setup {
+            timeout: Duration::from_secs(30),
+            log: self.env.root().join("attempt.log"),
+        };
+        let made =
+            create_attempt_worktree(&self.repo, &self.lead(), &plan(), &attempt, &setup).unwrap();
         fs::write(made.path.join("m.txt"), "m\n").unwrap();
         self.git(&made.path, &["add", "-A"]);
         self.git(&made.path, &["commit", "-q", "-m", "m"]);
@@ -177,14 +228,35 @@ impl Fx {
     /// Driver step A8 for `attempt`, in this process, as `attempt run` runs it.
     fn merge(&self, attempt: &AttemptId) -> Result<End, CpdError> {
         let config = Config::load(&self.home).unwrap();
-        let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };
-        let catalog = Catalog { pi_version: "1.2.0".to_owned(), o: model("p/opus"), s: model("p/sonnet"), h: model("p/haiku"), g: TierModel { model: "p/gemini".to_owned(), efforts: vec![] } };
-        let ctx = Ctx { home: &self.home, config: &config, catalog: &catalog, source: "attempt run", metrics: &|_| None };
+        let model = |m: &str| TierModel {
+            model: m.to_owned(),
+            efforts: vec![0, 1, 2, 3, 4, 5],
+        };
+        let catalog = Catalog {
+            pi_version: "1.2.0".to_owned(),
+            o: model("p/opus"),
+            s: model("p/sonnet"),
+            h: model("p/haiku"),
+            g: TierModel {
+                model: "p/gemini".to_owned(),
+                efforts: vec![],
+            },
+        };
+        let ctx = Ctx {
+            home: &self.home,
+            config: &config,
+            catalog: &catalog,
+            source: "attempt run",
+            metrics: &|_| None,
+        };
         merge::merge(&mut self.store(), &ctx, &plan(), attempt).map(|m| m.end)
     }
 
     fn errors(&self) -> Vec<Value> {
-        self.env.cpd(&["events", "list", "--kind", "error"]).ok()["events"].as_array().unwrap().clone()
+        self.env.cpd(&["events", "list", "--kind", "error"]).ok()["events"]
+            .as_array()
+            .unwrap()
+            .clone()
     }
 }
 
@@ -195,13 +267,38 @@ const CHILD_ATTEMPT: &str = "CPD_ADOPT_LIFE_ATTEMPT";
 #[test]
 #[ignore = "run by merge_in_child, in a child process"]
 fn child_merges_the_attempt() {
-    let home = CpdHome::resolve(Some(std::env::var_os("CPD_HOME").expect("CPD_HOME")), None).unwrap();
+    let home =
+        CpdHome::resolve(Some(std::env::var_os("CPD_HOME").expect("CPD_HOME")), None).unwrap();
     let attempt = AttemptId::parse(&std::env::var(CHILD_ATTEMPT).expect(CHILD_ATTEMPT)).unwrap();
     let config = Config::load(&home).unwrap();
-    let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };
-    let catalog = Catalog { pi_version: "1.2.0".to_owned(), o: model("p/opus"), s: model("p/sonnet"), h: model("p/haiku"), g: TierModel { model: "p/gemini".to_owned(), efforts: vec![] } };
-    let ctx = Ctx { home: &home, config: &config, catalog: &catalog, source: "attempt run", metrics: &|_| None };
-    let end = merge::merge(&mut Store::open(&home, 5000).unwrap(), &ctx, &plan(), &attempt).map(|m| m.end);
+    let model = |m: &str| TierModel {
+        model: m.to_owned(),
+        efforts: vec![0, 1, 2, 3, 4, 5],
+    };
+    let catalog = Catalog {
+        pi_version: "1.2.0".to_owned(),
+        o: model("p/opus"),
+        s: model("p/sonnet"),
+        h: model("p/haiku"),
+        g: TierModel {
+            model: "p/gemini".to_owned(),
+            efforts: vec![],
+        },
+    };
+    let ctx = Ctx {
+        home: &home,
+        config: &config,
+        catalog: &catalog,
+        source: "attempt run",
+        metrics: &|_| None,
+    };
+    let end = merge::merge(
+        &mut Store::open(&home, 5000).unwrap(),
+        &ctx,
+        &plan(),
+        &attempt,
+    )
+    .map(|m| m.end);
     println!("END {end:?}");
 }
 
@@ -211,13 +308,31 @@ fn merge_in_child(fx: &Fx, attempt: &AttemptId) -> String {
     let out = fx
         .env
         .command(exe)
-        .args(["pr_adopt_life::child_merges_the_attempt", "--exact", "--ignored", "--nocapture", "--test-threads", "1"])
+        .args([
+            "pr_adopt_life::child_merges_the_attempt",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads",
+            "1",
+        ])
         .env(CHILD_ATTEMPT, attempt.to_string())
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(out.status.success(), "the child merge failed: {stdout}{}", String::from_utf8_lossy(&out.stderr));
-    stdout.split_once("END ").unwrap_or_else(|| panic!("no END: {stdout}")).1.lines().next().unwrap().to_owned()
+    assert!(
+        out.status.success(),
+        "the child merge failed: {stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    stdout
+        .split_once("END ")
+        .unwrap_or_else(|| panic!("no END: {stdout}"))
+        .1
+        .lines()
+        .next()
+        .unwrap()
+        .to_owned()
 }
 
 #[test]
@@ -226,11 +341,26 @@ fn start_cuts_the_lead_branch_from_the_remote_head_and_pushes_nothing() {
 
     let run = fx.start();
 
-    assert_eq!(fx.remote_cpd_branches(), "", "no pay/* branch ever appears on origin");
-    assert_eq!(fx.git(&fx.repo, &["branch", "--list", "feat/x"]), "", "the User's own local branch is never made");
+    assert_eq!(
+        fx.remote_cpd_branches(),
+        "",
+        "no pay/* branch ever appears on origin"
+    );
+    assert_eq!(
+        fx.git(&fx.repo, &["branch", "--list", "feat/x"]),
+        "",
+        "the User's own local branch is never made"
+    );
     run.ok();
-    assert_eq!(fx.lead_sha(), fx.head, "the Lead Branch is origin/feat/x's commit");
-    assert_eq!(fx.git(&fx.lead(), &["symbolic-ref", "--short", "HEAD"]), "pay/web");
+    assert_eq!(
+        fx.lead_sha(),
+        fx.head,
+        "the Lead Branch is origin/feat/x's commit"
+    );
+    assert_eq!(
+        fx.git(&fx.lead(), &["symbolic-ref", "--short", "HEAD"]),
+        "pay/web"
+    );
     assert_eq!(fx.git(&fx.lead(), &["rev-parse", "HEAD"]), fx.head);
 }
 
@@ -253,12 +383,20 @@ fn a_work_job_merge_pushes_nothing_for_an_adopted_pr() {
 
     let end = fx.merge(&attempt);
 
-    let Ok(End::Merged { sha }) = end else { panic!("{end:?}") };
+    let Ok(End::Merged { sha }) = end else {
+        panic!("{end:?}")
+    };
     assert_ne!(fx.lead_sha(), fx.head, "the Lead Branch moved");
     assert_eq!(fx.lead_sha(), sha);
     assert_eq!(fx.remote_head(), fx.head, "origin/feat/x did not move");
     assert_eq!(fx.remote_cpd_branches(), "");
-    assert!(fx.errors().iter().all(|e| e["data"]["code"] != "push_failed"), "{:?}", fx.errors());
+    assert!(
+        fx.errors()
+            .iter()
+            .all(|e| e["data"]["code"] != "push_failed"),
+        "{:?}",
+        fx.errors()
+    );
 }
 
 #[test]
@@ -270,28 +408,60 @@ fn an_update_jobs_merge_pushes_to_the_head_branch() {
 
     let end = fx.merge(&attempt);
 
-    let Ok(End::Merged { sha }) = end else { panic!("{end:?}") };
+    let Ok(End::Merged { sha }) = end else {
+        panic!("{end:?}")
+    };
     assert_eq!(fx.lead_sha(), sha, "the Lead Branch fast-forwarded");
     assert_ne!(sha, fx.head);
     assert_eq!(fx.remote_head(), sha, "origin/feat/x is the new tip");
-    assert_eq!(fx.remote_cpd_branches(), "", "origin still has no pay/* branch");
-    assert!(fx.errors().iter().all(|e| e["data"]["code"] != "push_failed"), "{:?}", fx.errors());
+    assert_eq!(
+        fx.remote_cpd_branches(),
+        "",
+        "origin still has no pay/* branch"
+    );
+    assert!(
+        fx.errors()
+            .iter()
+            .all(|e| e["data"]["code"] != "push_failed"),
+        "{:?}",
+        fx.errors()
+    );
 }
 
 #[test]
 fn a_pull_request_merged_on_github_is_found_by_the_head_branch() {
     let fx = fx(false);
     fx.start().ok();
-    fs::write(fx.env.root().join("list.json"), json!([{"number": 7, "url": URL, "state": "MERGED", "createdAt": "2099-01-01T00:00:00Z"}]).to_string()).unwrap();
+    fs::write(
+        fx.env.root().join("list.json"),
+        json!([{"number": 7, "url": URL, "state": "MERGED", "createdAt": "2099-01-01T00:00:00Z"}])
+            .to_string(),
+    )
+    .unwrap();
     let node = json!({"repository": {"nameWithOwner": "acme/pay"}, "number": 7, "url": URL, "title": "Polish", "isDraft": false, "state": "MERGED",
         "createdAt": "opened","updatedAt":"U1", "mergedAt": "2026-10-14T10:00:00Z", "reviewDecision": null, "mergeable": "UNKNOWN", "mergeStateStatus": "UNKNOWN",
         "viewerDidAuthor": true, "viewerLatestReviewRequest": null, "commits": {"nodes": [{"commit": {"statusCheckRollup": null}}]}});
-    fs::write(fx.env.root().join("lookup.json"), json!({"data": {"p0": {"pullRequest": node}}}).to_string()).unwrap();
+    fs::write(
+        fx.env.root().join("lookup.json"),
+        json!({"data": {"p0": {"pullRequest": node}}}).to_string(),
+    )
+    .unwrap();
     let attempt = fx.submitted("open");
     let end = merge_in_child(&fx, &attempt);
 
-    let lists: Vec<Vec<String>> = fx.env.calls("gh").into_iter().filter(|c| c[..2] == ["pr", "list"]).collect();
-    assert!(!lists.is_empty() && lists.iter().all(|c| c[3] == "feat/x"), "the lookup names the head branch: {lists:?}");
-    assert!(end.starts_with(&format!("Ok(Merged {{ sha: \"{}\"", fx.head)), "adopted as merged, nothing pushed: {end}");
+    let lists: Vec<Vec<String>> = fx
+        .env
+        .calls("gh")
+        .into_iter()
+        .filter(|c| c[..2] == ["pr", "list"])
+        .collect();
+    assert!(
+        !lists.is_empty() && lists.iter().all(|c| c[3] == "feat/x"),
+        "the lookup names the head branch: {lists:?}"
+    );
+    assert!(
+        end.starts_with(&format!("Ok(Merged {{ sha: \"{}\"", fx.head)),
+        "adopted as merged, nothing pushed: {end}"
+    );
     assert_eq!(fx.remote_cpd_branches(), "");
 }

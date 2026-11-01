@@ -14,13 +14,25 @@ fn migration_adds_asleep_at_and_the_event_kind() {
     let columns: Vec<String> = store
         .read(|c| {
             let mut stmt = c.prepare("SELECT name FROM pragma_table_info('sessions')")?;
-            Ok(stmt.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?)
+            Ok(stmt
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<_, _>>()?)
         })
         .unwrap();
-    assert!(columns.contains(&"asleep_at".to_owned()), "sessions.asleep_at: {columns:?}");
+    assert!(
+        columns.contains(&"asleep_at".to_owned()),
+        "sessions.asleep_at: {columns:?}"
+    );
 
     let kind: Option<String> = store
-        .read(|c| Ok(c.query_row("SELECT name FROM event_kinds WHERE name = 'session-asleep'", [], |r| r.get(0)).ok()))
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT name FROM event_kinds WHERE name = 'session-asleep'",
+                [],
+                |r| r.get(0),
+            )
+            .ok())
+        })
         .unwrap();
     assert_eq!(kind.as_deref(), Some("session-asleep"));
 
