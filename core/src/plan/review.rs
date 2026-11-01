@@ -130,11 +130,14 @@ struct Snapshot {
 
 fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
     let open_tier = env.config.open_tier.to_string();
-    env.store.read(|conn| {
+    let (workflows, jobs, overlaps, plan_row) = env.store.read(|conn| {
         let (workflows, jobs) = (load_workflows(conn, id)?, jobs::load(conn, id)?);
         let overlaps = overlap::find(&workflows, &jobs, &overlap::load_others(conn, id)?);
         let plan_row = row::load(conn, id)?;
-        let findings = super::lint_cmd::find(&plan_row, &workflows, &jobs);
+        Ok((workflows, jobs, overlaps, plan_row))
+    })?;
+    let findings = super::lint_cmd::find(env, &plan_row, &workflows, &jobs)?;
+    env.store.read(|conn| {
         Ok(Snapshot {
             open_tier,
             base_workflows: base_workflows(conn, id)?,

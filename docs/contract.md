@@ -834,25 +834,8 @@ The command surface of Workflows; `commands.md` specifies each command in full.
 | 7 | `workflow_empty` | error, phase `plan` only | a Workflow that is not `cancelled` has no `draft` Job, or the Plan has no Workflow that is not `cancelled` | `workflow_empty` (exit 3), `details.workflows` (`details.next` = `cpd workflow add` when the Plan has no Workflow at all); the lock's check, as one function |
 | 8 | `dependency_cycle` | error | the `needs` of the draft Jobs contain a cycle | `dependency_cycle` (exit 3), `details.cycle`; the check `jobs::cycle` |
 | 9 | `parallel_write_overlap` | warn | two Jobs of one Workflow both name a file, as the pair below defines | none (it is a warning) |
-
-**Error rules call the checks.** Each error rule calls the check named in its row and restates none of it; its finding's `details` are the refusal's `details`. An error rule yields at most one finding, except `shape_incomplete`, which yields one finding per Workflow that lacks a Job (sorted by Workflow key, each with `pr` set). The first six rows are in the order in which `plan review` (§4.6) runs its checks, so for `plan review` the first error finding is its refusal. `plan lock` (§4.8) runs the same checks in the same order, without the two outline rules, which it does not check, and with `plan_not_approved` (no lint rule) between `shape_incomplete` and `workflow_empty`.
-
-**The pair of `parallel_write_overlap`.** The rule compares Jobs of ONE Workflow only: Jobs of different Workflows are never compared, and neither are explore Jobs, which have no Workflow. Two Jobs `a` and `b` of one Workflow are a pair when all of these hold:
-1. neither is `cancelled` or `merged`;
-2. at least one is a draft under review (`Job::is_under_review`: a `draft` Job that is not `open`);
-3. neither is of kind `open` or `update`;
-4. there is no dependency path from either to the other: the closure of `needs` is taken over **all** Jobs of the Workflow, so a path through a third Job counts, even when that Job is `cancelled` or `merged`;
-5. they share an entry of `touches` that is equal in both, does not end in `/` (a directory is never compared) and is not shared (`is_shared`, contract §2.6 "Shared files").
-
-A pair is one finding: `job` is the draft under review (the smaller key when both are drafts under review), `other` the other Job, and `paths` the shared entries, sorted. The findings of this rule sort by `pr`, then `job`, then `other`. The message text is in commands §4.15.
-
-**The limits of `parallel_write_overlap`.** It is a hint, and its text says so:
-- It is a **warning, never a refusal**: no `plan review` and no `plan lock` refuses on it (decision pro-q8).
-- It compares **equal files only** (no glob, no directory) and **exempts the shared files** of §2.6: two Jobs that both touch `Cargo.lock` or another shared file are no pair.
-- It is **stateless**: each call computes it from the Jobs as they are; nothing is remembered between calls.
-- It is **a hint, not a prediction of a conflict**. Measured on 2026-10-30 on this machine's ledger: of 209 such pairs (lockfiles exempt), 5 hit a merge conflict (2.4% precision), and 4 of the 8 Jobs that conflicted were in such a pair (50% recall); 8 of the 11 conflicts sit in one Plan.
-
-**Where the lint runs.** `cpd plan lint` runs every finding (errors and warnings, commands.md §4.15). `plan review` (§4.6) runs the lint and refuses with the first error finding's own code, never `lint_failed`; it returns warnings (not a refusal); errors only in phase `plan` for `workflow_empty`, all errors in other phases. `plan render` (§4.5) runs the lint and returns warnings too, and never refuses. `plan lock` (§4.8) keeps its own checks (outline missing, outline incomplete, and its test and impl rules), and calls the same pure functions as the review where it overlaps with them (draft incomplete, test job required, impl job required, shape incomplete), never `lint_failed`; the two refusals specific to this phase are `workflow_empty` and `dependency_cycle`, from the lint.
+| 10 | `tier_advice` | warn | a Job of kind `work`, `docs`, `test`, `impl` or `verify` in status `draft` or `queued` with a Tier, whose kind has advice (§3.4b) and the advised Tier is LOWER than the Job's on the ladder | none (it is a warning) |
+**Where the lint runs.** `cpd plan lint` runs every finding (errors and warnings, commands.md §4.15). `plan review` (§4.6) runs the lint and refuses with the first error finding's own code, never `lint_failed`; it returns warnings (not a refusal); errors only in phase `plan` for `workflow_empty`, all errors in other phases.
 
 ## 3. State machines
 
@@ -1134,7 +1117,7 @@ The **Tier advice** names, for each Job kind, the Worker Tier whose history says
 
 **The limit.** The advice is history, never cause. The Lead chooses harder Jobs for higher Tiers (selection), so a cell's pass rate says what happened to the Jobs that ran on that Tier, not what the Tier does to a Job. The cells are also small: the floor and the lower bound are guards against small samples, not proof that a Tier is the cheapest one that works.
 
-**Readers:** none yet. The computation is specified here; no command or lint rule reads it.
+**Readers:** the lint rule tier_advice (§2.7). The computation is specified here; no command reads it.
 
 ### 3.5 Escalation states
 

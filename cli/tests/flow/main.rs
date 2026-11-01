@@ -53,6 +53,7 @@ mod plan_archive_drafts;
 mod plan_cancel;
 mod plan_delete;
 mod plan_lint;
+mod plan_lint_advice;
 mod plan_lint_review;
 mod plan_new_by_user;
 mod plan_new_runner;

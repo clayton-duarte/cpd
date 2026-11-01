@@ -403,7 +403,7 @@ fn pr_empty_fires_only_in_phase_plan() {
     let in_plan = lint_with(Phase::Plan, &prs, &jobs, Some(&o));
     let hits = of(&in_plan, Rule::WorkflowEmpty);
     assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].details["prs"], json!(["api"]));
+    assert_eq!(hits[0].details["workflows"], json!(["api"]));
     let later = lint_with(Phase::Dispatch, &prs, &jobs, Some(&o));
     assert!(of(&later, Rule::WorkflowEmpty).is_empty());
 }

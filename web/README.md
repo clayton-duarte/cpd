@@ -371,7 +371,7 @@ the shadcn **`resizable`** wrapper (`PanelGroup`, `Panel`, `PanelResizeHandle`).
 |---|---|
 | Context (left) | the shadcn **`sidebar-03`** block (“a sidebar with submenus”), copied verbatim |
 | Chat (centre) | the existing `web/src/views/live-chat.tsx` — no longer unchanged: it has lost its Session picker (the rail selects, next section) and takes the selected `session` from `App` |
-| Inbox (right) | a **placeholder** (“The Inbox lands here.”) — the real Inbox and the Tree/Plan panes belong to the ui-parity Plan |
+| Inbox (right) | the **Inbox rail** — the mail list of the shadcn **`sidebar-09`** block, vendored 1:1 (“The Inbox rail in the right column”, below) — the real Inbox and the Tree/Plan panes are still out of scope (the follow-up PR `chat-inbox-live` and the ui-parity Plan) |
 
 **Sizing.** The Context column **defaults to `20rem`**; dragging its handle resizes it;
 **double-clicking its handle restores `20rem`** (checked in a real browser: initial 320 px,
@@ -433,6 +433,8 @@ The left rail stops being the `sidebar-03` block's sample menu and becomes the *
 - A root row's label is the manager's `name`, falling back to the context; a nested row's label is the lead's `name`, falling back to its id.
 - The rail's header carries `cpd` with the Context count beneath it (`1 context`, `4 contexts`, `No contexts` at zero) — never the `sidebar-03` block's `Documentation` / `v1.0.0`.
 
+The rail cannot be collapsed: by the User's decision of 2026-11-01 it no longer renders `sidebar-03`'s `SidebarRail` — the 4px strip at the rail's edge, which an accidental click collapsed the whole rail through — so it has no collapse affordance at all.
+
 **The ids.** Every row is a real `<button>` — not a link — carrying `data-session-id` (the full uuid) and `title` (the same uuid), and showing the id's first 8 characters muted beside the label.
 
 **The selection.** The rail is the Chat's only navigation:
@@ -445,6 +447,22 @@ The left rail stops being the `sidebar-03` block's sample menu and becomes the *
 **The picker is gone.** `web/src/views/live-chat.tsx` no longer lists Sessions and no longer renders its `Session` `<select>` or its state/role badges. It takes the Session it is given (prop `session`), subscribes to it exactly as before, and with no Session renders "Pick a manager or a lead in the left rail to see its chat."
 
 **The adapter carries the tree's fields.** `web/src/api/live-server.ts`'s `LiveSession` gains `context` and `name`, which the dev adapter's `realDeps().list()` in `web/vite.config.ts` fills from each `cpd session list` row's `context` and `name`.
+
+### The Inbox rail in the right column
+
+The right column stops being a placeholder and becomes the **Inbox rail** — the mail list of the shadcn **`sidebar-09`** block, decided by the User on 2026-11-01 from the working dev preview (`preview/chat-shell`, `1624176c7`). It is vendored 1:1 into `web/src/components/inbox-rail.tsx` under the same registry rule as the Context rail (**`new-york-v4` only**, above): `cn` imported relatively from `web/src/lib/utils.ts`, no `@` alias.
+
+**What the block is.** `sidebar-09` ("Collapsible nested sidebars", https://ui.shadcn.com/r/styles/new-york-v4/sidebar-09.json) is two sidebars side by side: an icon column — Inbox, Drafts, Sent, Junk, Trash under an Acme Inc header and the sample user — and, beside it, the mail list.
+
+**What is vendored.** Only the block's second sidebar — its header (the title alone) and its mail list. Each row is an anchor and renders the name with its date pushed right (`ml-auto text-xs`), the subject in `font-medium`, then the teaser in `line-clamp-2 w-[260px] text-xs whitespace-break-spaces`, under the block's row classes `flex flex-col items-start gap-2 border-b p-4 text-sm leading-tight whitespace-nowrap last:border-b-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground` — rows and classes verbatim.
+
+**What is deliberately not vendored** — the User's decision: the block's first sidebar (the icon column), the `Unreads` switch in the second sidebar's header, and the `Type to search...` input the block puts under the title — so the header carries the title `Inbox` alone and the rail has no input at all.
+
+**The data.** The ten mails are the registry's own sample data (`data.mails`), verbatim and in its order. Reading the real Inbox is a named follow-up: this rail is the block's sample list, not the store.
+
+**The column.** The Inbox column defaults to `25rem` and is sized and resized like the Context column (above), double-clicking its handle restoring `25rem`. The panel wraps the rail in its own `SidebarProvider` whose `--sidebar-width` is `100%`, so the block's `Sidebar` fills the panel instead of the sidebar's `16rem` default.
+
+**Why 25rem.** The teaser is a fixed `w-[260px]` and the block's own `page.tsx` sets `--sidebar-width: 350px`; at a narrower column the teaser's last characters are clipped mid-word (measured 2026-11-01: 257px of inner width against the 260px teaser). `25rem` gives the row room.
 
 ### The durable host-socket read (`chat-host`)
 
