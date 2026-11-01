@@ -11,6 +11,7 @@ use serde_json::{Map, Value, json};
 
 use super::fingerprint::{load_prs, plan_fingerprint};
 use super::jobs::{self, Job};
+use super::lint;
 use super::prs::PrRow;
 use super::review::{check_drafts_complete, latest_approved_for, latest_json, no_draft_jobs};
 use super::row::{self, Phase};
@@ -84,42 +85,11 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         .with("review", latest)
         .with("next", format!("cpd plan review --plan {id} --title <title>")));
     };
-    let live: Vec<&PrRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
-    let empty: Vec<&str> = live
-        .iter()
-        .filter(|p| !drafts.iter().any(|j| j.pr_str() == p.key.as_str()))
-        .map(|p| p.key.as_str())
-        .collect();
-    if live.is_empty() || !empty.is_empty() {
-        let message = if live.is_empty() {
-            format!("Plan {id} has no PR: add one with cpd pr add.")
-        } else {
-            format!(
-                "Plan {id} has PRs without a draft Job: {}.",
-                empty.join(", ")
-            )
-        };
-        let mut error = CpdError::new(ErrorCode::PrEmpty, message)
-            .with("plan", id.as_str())
-            .with("prs", empty);
-        if live.is_empty() {
-            error = error.with(
-                "next",
-                format!("cpd pr add <key> --repo <path> --plan {id}"),
-            );
-        }
-        return Err(error);
+    if let Some(e) = lint::pr_empty(&id, &prs, &jobs) {
+        return Err(e);
     }
-    if let Some(cycle) = jobs::cycle(&jobs) {
-        return Err(CpdError::new(
-            ErrorCode::DependencyCycle,
-            format!(
-                "The draft Jobs of {id} depend on each other in a cycle: {}.",
-                cycle.join(" → ")
-            ),
-        )
-        .with("plan", id.as_str())
-        .with("cycle", cycle));
+    if let Some(e) = lint::dependency_cycle(&id, &jobs) {
+        return Err(e);
     }
 
     // git, outside any transaction (§7.2): every PR with no needs is prepared first,

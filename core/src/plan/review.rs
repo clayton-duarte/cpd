@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use super::display::Display;
 use super::fingerprint::{load_prs, plan_fingerprint};
 use super::jobs::{self, Job};
+use super::outline::Outline;
 use super::overlap::{self, Overlap};
 use super::prs::PrRow;
 use super::row::{self, Phase, PlanRow};
@@ -412,17 +413,55 @@ pub(super) fn no_draft_jobs(id: &PlanId) -> CpdError {
 /// Every `draft` Job has its Tier and its Spec (§4.6, §4.8, hs-d241): else
 /// `draft_incomplete`, `details.jobs` = `[{key, missing}]` in key order. A stub
 /// cannot be approved, so neither `plan review` nor `plan lock` goes on.
-pub(super) fn check_drafts_complete(
-    _conn: &Connection,
+pub(super) fn outline_missing(id: &PlanId) -> CpdError {
+    CpdError::new(
+        ErrorCode::OutlineMissing,
+        format!("Plan {id} has no outline: write what was settled with the User, then ask again."),
+    )
+    .with("plan", id.as_str())
+    .with("next", "cpd plan outline --file <outline.json>")
+}
+
+/// `outline_incomplete`: a live PR with a draft Job has no `done_when` (`details.prs`, in key order).
+pub(super) fn outline_incomplete(
     id: &PlanId,
+    outline: &Outline,
+    prs: &[PrRow],
     jobs: &[Job],
-) -> Result<(), CpdError> {
+) -> Option<CpdError> {
+    let mut without: Vec<&str> = prs
+        .iter()
+        .filter(|p| {
+            p.status != "cancelled"
+                && jobs
+                    .iter()
+                    .any(|j| j.is_draft() && j.pr_str() == p.key.as_str())
+        })
+        .map(|p| p.key.as_str())
+        .filter(|key| !outline.done_when.contains_key(*key))
+        .collect();
+    if without.is_empty() {
+        return None;
+    }
+    without.sort();
+    Some(
+        CpdError::new(
+            ErrorCode::OutlineIncomplete,
+            format!("The outline of Plan {id} has no done_when for the PRs {}: add them with cpd plan outline, then ask again.", without.join(", ")),
+        )
+        .with("plan", id.as_str())
+        .with("prs", without),
+    )
+}
+
+/// The pure part of draft checking: returns `Option<CpdError>` for incomplete drafts.
+pub(super) fn drafts_incomplete(id: &PlanId, jobs: &[Job]) -> Option<CpdError> {
     let mut stubs: Vec<&Job> = jobs
         .iter()
         .filter(|j| j.is_draft() && !j.missing().is_empty())
         .collect();
     if stubs.is_empty() {
-        return Ok(());
+        return None;
     }
     stubs.sort_by(|a, b| a.key.cmp(&b.key));
     let keys: Vec<&str> = stubs.iter().map(|j| j.key.as_str()).collect();
@@ -430,15 +469,32 @@ pub(super) fn check_drafts_complete(
         .iter()
         .map(|j| json!({"key": j.key, "missing": j.missing()}))
         .collect();
-    Err(CpdError::new(
-        ErrorCode::DraftIncomplete,
-        format!(
-            "Plan {id} has draft Jobs without their Tier or Spec: {}. Complete each with cpd job edit <key> --tier <T> --spec <file>, or cancel it, then ask again.",
-            keys.join(", ")
-        ),
+    Some(
+        CpdError::new(
+            ErrorCode::DraftIncomplete,
+            format!(
+                "Plan {id} has draft Jobs without their Tier or Spec: {}. Complete each with cpd job edit <key> --tier <T> --spec <file>, or cancel it, then ask again.",
+                keys.join(", ")
+            ),
+        )
+        .with("plan", id.as_str())
+        .with("jobs", listed),
     )
-    .with("plan", id.as_str())
-    .with("jobs", listed))
+}
+
+/// Every `draft` Job has its Tier and its Spec (§4.6, §4.8, hs-d241): else
+/// `draft_incomplete`, `details.jobs` = `[{key, missing}]` in key order. A stub
+/// cannot be approved, whether it waits or not (hs-d731), so neither
+/// `plan review` nor `plan lock` goes on.
+pub(super) fn check_drafts_complete(
+    _conn: &Connection,
+    id: &PlanId,
+    jobs: &[Job],
+) -> Result<(), CpdError> {
+    match drafts_incomplete(id, jobs) {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// `plan decide` (§4.7). In a phase after `plan`, a current approval also
