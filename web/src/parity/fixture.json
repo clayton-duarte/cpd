@@ -9,8 +9,7 @@
       "lead_session": "session-1",
       "archived_at": null,
       "counts": { "draft": 0, "queued": 0, "running": 1, "merged": 0, "failed": 0, "cancelled": 0 },
-      "prs": [],
-      "events_cursor": "evt-1"
+      "prs": []
     }
   ],
   "events_cursor": "evt-1"
