@@ -35,7 +35,7 @@ pub(super) fn pair() -> Fx {
 }
 
 /// The outline of the Plan, set by SQL, its `done_when` covering `prs`.
-fn outline(fx: &Fx, prs: &[&str]) {
+pub(super) fn outline(fx: &Fx, prs: &[&str]) {
     let done: serde_json::Map<String, Value> = prs
         .iter()
         .map(|k| ((*k).to_owned(), json!(["Done"])))
