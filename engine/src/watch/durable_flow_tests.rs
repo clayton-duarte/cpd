@@ -128,8 +128,13 @@ fn flow_plan_new_to_archive_with_a_mocked_host() {
     // 7. The archive cascade (E14) stops the host: the Plan's own Lead is archived by `plan archive`, not by
     //    `session archive`, and its host is stopped through the engine's hook.
     let old = "2020-01-01T00:00:00.000Z";
+    // The trigger walks the phases one legal step at a time (migration 0008): grounding>plan>dispatch>deploy>done,
+    // and `locked_at` is NOT NULL from `dispatch` on. The Lead approved this fixture edit (Job p1-11-impl-r).
     fx.fixture(&format!(
-        "UPDATE plans SET phase = 'done', done_at = '{old}' WHERE id = 'flow';
+        "UPDATE plans SET phase = 'plan' WHERE id = 'flow';
+         UPDATE plans SET locked_at = 't', phase = 'dispatch' WHERE id = 'flow';
+         UPDATE plans SET phase = 'deploy' WHERE id = 'flow';
+         UPDATE plans SET phase = 'done', done_at = '{old}' WHERE id = 'flow';
          UPDATE sessions SET asleep_at = '{old}' WHERE id = '{lead}';"
     ));
     archive_leads::run(&mut fx.engine);
