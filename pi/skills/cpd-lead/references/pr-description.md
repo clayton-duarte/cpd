@@ -48,7 +48,7 @@ Write the description from the Plan outline (`cpd plan show`), so nothing is wri
 
 - **What and why:** from the Plan's `goal` and the decision round(s) the User approved.
 - **How:** from the decision round(s) and the Job specs' `context` fields (what each Job needed to know about approach and trade-offs).
-- **Acceptance criteria:** the checklist per PR in the `done_when` field, with the evidence filled in once the Jobs are done (the test runs and outputs).
+- **Acceptance criteria:** the checklist per Workflow in the `done_when` field, with the evidence filled in once the Jobs are done (the test runs and outputs).
 - **Out of scope and follow-ups:** from the Plan's `out_of_scope` list and the `risks` that became registered follow-up Workflows and Jobs.
 - **Links:** from the Plan's `decided` records (the Context decisions the Plan rests on) and from any stacked or dependent Workflows.
 

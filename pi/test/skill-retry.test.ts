@@ -29,13 +29,13 @@ test("a failed open or update Job is retried and never cancelled because a cance
   const lead = readFileSync(new URL("../skills/cpd-lead/SKILL.md", import.meta.url), "utf8");
   assert.doesNotMatch(lead, /cancel[^.\n]*\badds? a fresh/i, "no sentence says a cancel makes cpd add a fresh Job");
   const row = line(section(lead, "### Documenting, Red testing, Implementing, Verifying"), "| `job-failed`");
-  const bullet = line(section(lead, "#### Failed Jobs"), "- **A PR's open or update Job**");
+  const bullet = line(section(lead, "#### Failed Jobs"), "- **A Workflow's open or update Job**");
   const check = line(section(lead, "#### Mechanical checks"), "- **`job-failed` of the open Job**");
   for (const l of [row, bullet, check]) {
     assert.match(l, /`cpd job retry <k> --tier <T>`/);
     assert.match(l, /never cancel/i);
   }
   assert.match(bullet, /commands\.md §5\.3/);
-  assert.match(bullet, /cpd pr open --pr <key>/);
-  assert.match(bullet, /cpd pr rebase --pr <key>/);
+  assert.match(bullet, /cpd pr open --workflow <key>/);
+  assert.match(bullet, /cpd pr rebase --workflow <key>/);
 });
