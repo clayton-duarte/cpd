@@ -19,7 +19,9 @@ use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::job::home::JobHome;
 use crate::job::worked_on::failed_worked_on;
-use crate::ids::{ContextId, JobKey, PlanId, PrKey, SessionId};
+use crate::ids::{ContextId, JobKey, PlanId, SessionId};
+#[cfg(test)]
+use crate::ids::PrKey;
 use crate::plan::Phase;
 use crate::plan::parked_wake::wake_state;
 use crate::ports::Ports;
@@ -33,11 +35,14 @@ const PLAN_REVIEW: &str = "φ: plan review";
 /// The `state_label` prefix of a Verdict dialog (pi adapter): the item is `<who> verdict\n<option>` (Row 1, Row 2).
 const VERDICT_PREFIX: &str = "verdict: ";
 
+/// The call that asks GitHub for the state of the posted pull requests.
+type GithubLookup<'a> = &'a mut dyn FnMut(&[(String, u64)]) -> Result<Lookup, CpdError>;
+
 /// What the team review rule needs besides the cache (contract §2.2 "The team review rule"): `inbox.bot_reviewers` and
 /// the GitHub state of the posted pull requests, one call for all of them.
 pub struct Team<'a> {
     pub bot_reviewers: &'a [String],
-    pub github: &'a mut dyn FnMut(&[(String, u64)]) -> Result<Lookup, CpdError>,
+    pub github: GithubLookup<'a>,
 }
 
 /// The GitHub answer E8 reuses between ticks ([`team::GITHUB_TTL`]).
@@ -75,7 +80,7 @@ pub fn conditions_with(
 ) -> Result<Vec<Condition>, CpdError> {
     let mut all = store.read(dialogs)?;
     all.extend(store.read(|conn| loop_guards(conn, loop_guard_turns))?);
-    all.extend(store.read(|conn| plan_reviews(conn))?);
+    all.extend(store.read(plan_reviews)?);
     all.extend(store.read(unread)?);
     // No `question` kind (hs-d306 (1)): an open Context question opens nothing, and an item an older engine opened for
     // one closes at the next reconcile, its condition no longer holding. Questions to the User go through `ask_user_question`.
@@ -1381,7 +1386,8 @@ mod tests {
         pull_request(&mut f, 6, "passed", "mergeable", "approved");
         pull_request(&mut f, 7, "passed", "mergeable", "approved");
         own(&mut f, 6);
-        for kind in [Kind::PrReady] {
+        {
+            let kind = Kind::PrReady;
             let c = one(f.of(kind).into_iter().filter(|c| c.subject == "pr:acme/shop#6").collect());
             assert_eq!(
                 (c.context.as_ref().map(|c| c.as_str()), c.plan.as_ref().map(|p| p.as_str()), c.session.as_ref().map(|s| s.as_str())),
@@ -1497,7 +1503,7 @@ mod tests {
         Lookup { me: ME_LOGIN.to_owned(), prs: prs.iter().map(|(repo, n, pr)| (((*repo).to_owned(), *n), Some(pr.clone()))).collect() }
     }
 
-    fn team<'a>(github: &'a mut dyn FnMut(&[(String, u64)]) -> Result<Lookup, CpdError>) -> Team<'a> {
+    fn team<'a>(github: GithubLookup<'a>) -> Team<'a> {
         static BOT_LIST: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| BOTS.map(str::to_owned).to_vec());
         Team { bot_reviewers: &BOT_LIST, github }
     }

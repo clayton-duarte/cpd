@@ -274,6 +274,7 @@ pub(crate) fn take_lock_with(ports: &Ports, path: &Path) -> Result<fs::File, Cpd
 
 /// The one write transaction (D5, D7): every changed row, the Events of the
 /// owning Plans.
+#[allow(clippy::too_many_arguments)] // a signature change is out of scope for the lint cleanup
 fn apply(
     tx: &WriteTxn<'_>,
     seen: &[Listed],
@@ -553,6 +554,7 @@ fn update_for_conflict(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, change: &C
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Trigger {
     /// The PR's `mergeable` became `conflicting`.
+    #[cfg(test)]
     Conflict,
     /// GitHub repointed the PR from a base PR's Lead Branch to the default branch, and the default
     /// branch holds commits the Lead Branch lacks without a conflict.
@@ -565,6 +567,7 @@ pub(super) enum Trigger {
 /// archived or a PR that is not `open` queues nothing. The Job's key when one was inserted.
 pub(super) fn queue_update_for(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, trigger: Trigger, ahead: bool, tier: Tier) -> Result<Option<JobKey>, CpdError> {
     let cause = match trigger {
+        #[cfg(test)]
         Trigger::Conflict => Cause::Conflict,
         Trigger::BaseMerged if ahead => Cause::BaseMerged,
         Trigger::BaseMerged => return Ok(None),

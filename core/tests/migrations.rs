@@ -502,6 +502,9 @@ const MAIN_FILES: [(&str, &str); 3] = [
     ("20260202T0000-additive.sql", "-- cpd-migration: additive\n"),
 ];
 
+/// An edit of a scratch clone.
+type CloneEdit = fn(&Clone);
+
 /// A scratch clone (`work/`) of a bare `origin.git` whose `main` has [`MAIN_FILES`];
 /// HEAD is a branch off it.
 struct Clone {
@@ -708,7 +711,7 @@ mod migrations {
 /// rename of a migration without the breaking header (legacy or additive).
 #[test]
 fn the_frozen_check_still_fails_on_an_edit_a_delete_or_an_additive_rename() {
-    let cases: [(&str, &str, fn(&Clone)); 4] = [
+    let cases: [(&str, &str, CloneEdit); 4] = [
         ("modified", MAIN_FILES[0].0, |c| {
             fs::write(c.migrations().join(MAIN_FILES[0].0), "CREATE TABLE a (y);\n").unwrap()
         }),
@@ -877,11 +880,10 @@ fn unnamed_columns(text: &str) -> Vec<(usize, &'static str)> {
         }
         // `INSERT INTO`, `INSERT OR <action> INTO`.
         let inserts = *word == "into" && words[i.saturating_sub(3)..i].iter().any(|(_, w)| *w == "insert");
-        if let (true, Some((table_at, table))) = (inserts, next) {
-            if !lower[table_at + table.len()..].trim_start().starts_with('(') {
+        if let (true, Some((table_at, table))) = (inserts, next)
+            && !lower[table_at + table.len()..].trim_start().starts_with('(') {
                 found.push((line_of(*at), "inserts without a column list"));
             }
-        }
     }
     found
 }

@@ -2,7 +2,8 @@
 //! text and the data of the Event, from the reasons `pulls::attention` found.
 //! Pure: no I/O.
 
-use super::gh::{Check, View};
+#[cfg(test)]
+use super::gh::View;
 use super::pulls::{PullRequest, Reason};
 use crate::events::NewEvent;
 

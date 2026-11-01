@@ -140,7 +140,7 @@ fn load(sql: &str) -> Vec<Row> {
         Ok(())
     })
     .unwrap();
-    s.read(|conn| first_attempts(conn)).unwrap()
+    s.read(first_attempts).unwrap()
 }
 
 #[test]
@@ -210,8 +210,8 @@ fn expected_cost_adds_the_next_rungs_cost_scaled_by_the_failure_rate() {
 #[test]
 fn a_tier_whose_next_rung_has_no_cost_is_not_advised() {
     let s1 = row("test", "S1", 40, 40, Some(0.2));
-    assert!(qualifying(&[s1.clone()], 30, ladder()).is_empty());
-    assert!(recommend(&[s1.clone()], 30, ladder()).is_empty());
+    assert!(qualifying(std::slice::from_ref(&s1), 30, ladder()).is_empty());
+    assert!(recommend(std::slice::from_ref(&s1), 30, ladder()).is_empty());
 
     let no_cost = [s1.clone(), row("test", "S2", 3, 3, None)];
     assert!(qualifying(&no_cost, 30, ladder()).is_empty());
@@ -233,7 +233,7 @@ fn a_cell_without_a_cost_gives_no_advice() {
 #[test]
 fn a_tier_a_worker_may_not_have_is_never_advised() {
     let o2 = row("work", "O2", 100, 100, Some(0.01));
-    assert!(recommend(&[o2.clone()], 30, ladder()).is_empty());
+    assert!(recommend(std::slice::from_ref(&o2), 30, ladder()).is_empty());
     let rows = [o2, row("work", "S1", 40, 40, Some(0.3)), row("work", "S2", 3, 3, Some(0.5))];
     let got = recommend(&rows, 30, ladder());
     assert_eq!(got.len(), 1);

@@ -408,6 +408,7 @@ fn gate(env: &Env, policy: &Policy, plan: &PlanId, pr: &PrRow, worktree: &std::p
 /// The Gate on `sha` in `worktree`, which is already at the gated tree (contract §7.6): `pre-start`
 /// when `pre_start` is set (a temporary rebase worktree), then `pre-merge`. `again` is the command
 /// the Lead runs after fixing it. Nothing runs when the PR's policy says `gate.pr` is not `local` (§8.3).
+#[allow(clippy::too_many_arguments)] // a signature change is out of scope for the lint cleanup
 fn gate_in(
     env: &Env,
     policy: &Policy,

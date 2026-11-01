@@ -150,7 +150,7 @@ impl PullRequest {
                 .into_iter()
                 .find(|s| s.as_str() == self.checks)
                 .ok_or_else(|| bad("checks", &self.checks))?,
-            mergeable: [Mergeable::Mergeable, Mergeable::Conflicting, Mergeable::Unknown]
+            mergeable: [Mergeable::Clean, Mergeable::Conflicting, Mergeable::Unknown]
                 .into_iter()
                 .find(|s| s.as_str() == self.mergeable)
                 .ok_or_else(|| bad("mergeable", &self.mergeable))?,

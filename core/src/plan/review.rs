@@ -48,11 +48,14 @@ struct Review {
 
 const REVIEW_COLUMNS: &str = "id, status, fingerprint, feedback, requested_at, decided_at";
 
-fn review_row(r: &rusqlite::Row) -> rusqlite::Result<(String, String, String, Option<String>, String, Option<String>)> {
+/// One `reviews` row: id, status, fingerprint, feedback, requested_at, decided_at.
+type ReviewRow = (String, String, String, Option<String>, String, Option<String>);
+
+fn review_row(r: &rusqlite::Row) -> rusqlite::Result<ReviewRow> {
     Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
 }
 
-fn parse_review(raw: Option<(String, String, String, Option<String>, String, Option<String>)>) -> Result<Option<Review>, CpdError> {
+fn parse_review(raw: Option<ReviewRow>) -> Result<Option<Review>, CpdError> {
     raw.map(|(id, status, fingerprint, feedback, requested_at, decided_at)| {
         Ok(Review { id: ReviewId::parse(&id)?, status, fingerprint, feedback, requested_at, decided_at })
     })

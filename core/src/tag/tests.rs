@@ -60,17 +60,17 @@ impl Handler for Origin {
             args.drain(..2);
         }
         let sub = args.first().copied().unwrap_or("");
-        if sub == "ls-remote" {
-            if let Some((asked, sha)) = s.racing.clone() {
+        if sub == "ls-remote"
+            && let Some((asked, sha)) = s.racing.clone() {
                 s.racing = Some((asked + 1, sha.clone()));
                 if asked >= 1 {
                     let name = args.last().unwrap().trim_end_matches("^{}").trim_start_matches("refs/tags/").to_owned();
                     s.origin_tags.insert(name, (true, sha));
                 }
             }
-        }
-        let failing = s.failing.iter().any(|f| *f == sub);
-        let reply = match (sub, &args[1..]) {
+        let failing = s.failing.contains(&sub);
+        
+        match (sub, &args[1..]) {
             _ if failing => fail("fatal: scripted failure\n"),
             ("fetch", ["--quiet", "origin", "main"]) => Reply::ok(""),
             ("show", [spec]) => match spec.split_once(':') {
@@ -83,7 +83,7 @@ impl Handler for Origin {
                     Some(text) => Reply::ok(&text),
                     None => fail("fatal: bad object\n"),
                 },
-                _ => return self.refuse(&mut s, call),
+                _ => self.refuse(&mut s, call),
             },
             ("ls-remote", ["--tags", "origin", spec]) => {
                 let (name, peeled) = match spec.strip_suffix("^{}") {
@@ -129,9 +129,8 @@ impl Handler for Origin {
                 }
                 None => fail("error: src refspec does not match any\n"),
             },
-            _ => return self.refuse(&mut s, call),
-        };
-        reply
+            _ => self.refuse(&mut s, call),
+        }
     }
 }
 

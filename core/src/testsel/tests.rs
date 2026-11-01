@@ -89,7 +89,7 @@ fn owned(words: &[&str]) -> Vec<String> {
 /// A rule's test: the call has `word` as one of its arguments.
 fn has(word: impl Into<String>) -> impl Fn(&Call) -> bool + Send + Sync + 'static {
     let word = word.into();
-    move |call| call.args.iter().any(|a| *a == word)
+    move |call| call.args.contains(&word)
 }
 
 /// A rule's test: the call's first argument is `word` (`scripts/cargo.sh <word> …`).

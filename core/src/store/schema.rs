@@ -69,6 +69,9 @@ pub(super) const LEGACY: &[Legacy] = &[
 /// (`verdict.rs`) never reads `$CPD_HOME`.
 pub(super) const IMPORTS_OLD_STORES: usize = 7;
 
+/// The Rust beside a migration's SQL.
+pub(super) type MigrationRun = fn(&Connection, &CpdHome) -> std::result::Result<(), CpdError>;
+
 /// A named migration (contract §4.5 N1–N4): a file of `migrations/`, listed by
 /// `build.rs`. `run` is the Rust beside its SQL, called after the SQL.
 #[derive(Clone, Copy)]
@@ -76,7 +79,7 @@ pub(super) struct Named {
     pub(super) name: &'static str,
     pub(super) compat: Compat,
     pub(super) sql: &'static str,
-    pub(super) run: Option<fn(&Connection, &CpdHome) -> std::result::Result<(), CpdError>>,
+    pub(super) run: Option<MigrationRun>,
 }
 
 include!(concat!(env!("OUT_DIR"), "/migrations.rs"));
