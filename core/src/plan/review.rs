@@ -12,7 +12,6 @@ use super::outline::Outline;
 use super::fingerprint::{load_prs, plan_fingerprint};
 use super::jobs::{self, Job};
 use super::lint::{self, Severity};
-use super::outline::Outline;
 use super::overlap::{self, Overlap};
 use super::prs::PrRow;
 use super::row::{self, Phase, PlanRow};
