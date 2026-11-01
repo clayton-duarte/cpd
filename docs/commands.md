@@ -4784,7 +4784,7 @@ Change from the spike and cpd 1's cockpit: the tree no longer discovers Sessions
 | cpd 1 | cpd 2 | Why |
 |---|---|---|
 | `--wf`, `CPD_WF`, `workflow_required` | `--plan`, `CPD_PLAN`, `plan_required` | D3 (§1.3) |
-| `workflow init` | `plan new` (also starts the Lead); since R34 it takes no `--repo` or `--base`: each repo of the Plan is a PR, added with `pr add` | D2, D3, R34 |
+| `workflow init` | `plan new` (also starts the Lead); since R34 it takes no `--repo` or `--base`: each repo of the Plan is a Workflow, added with `workflow add` | D2, D3, R34 |
 | `workflow show`, `workflow phase plan` | `plan show`, `plan phase plan` | D3 |
 | `lead start`, `lead attach` | removed: `plan new` registers the Lead and starts it with `session run` | cpd starts every Lead itself, so there is nothing to attach (§6.5) |
 | `plan decision --pending / --approved / --rejected` | `plan review`, then `plan decide` | the Plan review is a row with its own id and Event (§2.2) |
@@ -4826,9 +4826,9 @@ Rows 22–27 were added by Job `docs` of Plan `tree-menu` (renames, archive and 
 | 14 | §6.4, §3.6, §5.2, §1.2 | `session close <id>`: kills a Lead's pane, the Session is `stopped` with `session-moved {place: "none"}`, the Lead in the chat slot refused (`in_chat_slot`, exit 3) | §10.9 |
 | 15 | §6.3, reset-layout | `cpd tui --respawn` restarts every live view; a StatusBar added to an existing `main` is followed by reset-layout; `cpd tui` applies §6.1's options to a running server | §13.1 |
 | 16 | §2.2 Plan, §4.5, §7.6 | `pr poll` stores the PR's title, review decision and checks summary in `plans.pr_title`, `pr_review_decision` and `pr_checks`, added by migration 2 | §9.2 |
-| 17 | §6.2 (the views) | the Dispatch column is the machine's hostname and load, the PRs of the Plans in the cockpit, git (future) and Jira (future); no engine, slots, Escalations or Events | §13.2, §17 |
+| 17 | §6.2 (the views) | the Dispatch column is the machine's hostname and load, the Workflows of the Plans in the cockpit, git (future) and Jira (future); no engine, slots, Escalations or Events | §13.2, §17 |
 | 18 | §6.2 (the views) | the plan view's top row is ` <context id> ▸ ` and the tabs only; one tab per Lead Session of the Context with a pane; the tree's keys are ↑↓/jk, Enter, `n`, `x`, `?` and its cursor, clicks and prompts are the reference's | §13.2 |
-| 19 | §6.2 (the views) | what each view reads, in process; the tree's dot (needs you) rule from Events; the plan row no longer reads Escalations, the Plan review or the PR | §17 |
+| 19 | §6.2 (the views) | what each view reads, in process; the tree's dot (needs you) rule from Events; the plan row no longer reads Escalations, the Plan review or the pull request | §17 |
 | 20 | §6.2 (the views) | the legend opens from the tree's `?` and the StatusBar button, not from the Dispatch column; its section titles say Context and it lists no `cancelled` | §13.2 |
 | 21 | §6.2 (the views), R36 | the StatusBar's left side holds action buttons only (`󰨝`, `󰨁`, `󰧭`) and its right side read-only information; the Event log is the `logs` view, a popup the `󰧭` button opens, not part of the Dispatch column | §13.2, §17 |
 | 22 | §2.2 Context, Plan, Session | `archived_at` on the three; "Archived" (the archive rule, the cascade, the `archived` refusals); titles editable, ids immutable | §3.7–§3.9, §4.9–§4.11, §10.10–§10.11, §1.3 |
@@ -5082,14 +5082,14 @@ Writes one Slack reaction (or confirms one already present) and nothing else. Th
 
 ### 21.9 The Slack reaction queue (engine E17)
 
-Not a command. A queue of Slack reactions appended by every step that wants to add a reaction to a Slack post: today the merge reaction (Plan pr-post, PR `react`, User decision pro-d64 step 7) and the Claim reaction (Plan review-intake, PR `claim`). Engine step E17 drains the queue, running the helper (§21.8) once per tick for the oldest queued reaction that is due.
+Not a command. A queue of Slack reactions appended by every step that wants to add a reaction to a Slack post: today the merge reaction (Plan pr-post, Workflow `react`, User decision pro-d64 step 7) and the Claim reaction (Plan review-intake, Workflow `claim`). Engine step E17 drains the queue, running the helper (§21.8) once per tick for the oldest queued reaction that is due.
 
-**The table** (migration `slack-reactions`, additive; migration `20261102T1300-slack-reaction-refusal`, breaking after 73): `id INTEGER PRIMARY KEY`, `channel TEXT NOT NULL` (CHECK length 1..20), `ts TEXT NOT NULL` (CHECK length >= 1), `emoji TEXT NOT NULL` (CHECK length 1..100, no colons), `queued_at TEXT NOT NULL`, `reacted_at TEXT` (NULL until the helper succeeded), `plan TEXT` (NULL for unlinked; set for merge reactions), `pr TEXT` (NULL for unlinked; set for merge reactions; both plan and pr NULL or both set by CHECK), `refused_at TEXT` (NULL unless the row is parked; both refused_at and refusal NULL or both set by CHECK), `refusal TEXT` (the Slack error name, for example `invalid_name`; both NULL or both set); UNIQUE (channel, ts, emoji); CHECK (reacted_at IS NULL OR (refused_at IS NULL AND refusal IS NULL)); STRICT. It is a data table: it appends no Event, belongs to no Plan and is not a history table. Queue states: pending (queued_at set, reacted_at and refused_at NULL), reacted (reacted_at set), refused (refused_at set, reacted_at NULL). A row is never deleted.
+**The table** (migration `slack-reactions`, additive; migration `20261102T1300-slack-reaction-refusal`, breaking after 73): `id INTEGER PRIMARY KEY`, `channel TEXT NOT NULL` (CHECK length 1..20), `ts TEXT NOT NULL` (CHECK length >= 1), `emoji TEXT NOT NULL` (CHECK length 1..100, no colons), `queued_at TEXT NOT NULL`, `reacted_at TEXT` (NULL until the helper succeeded), `plan TEXT` (NULL for unlinked; set for merge reactions), `workflow TEXT` (NULL for unlinked; set for merge reactions; both plan and workflow NULL or both set by CHECK), `refused_at TEXT` (NULL unless the row is parked; both refused_at and refusal NULL or both set by CHECK), `refusal TEXT` (the Slack error name, for example `invalid_name`; both NULL or both set); UNIQUE (channel, ts, emoji); CHECK (reacted_at IS NULL OR (refused_at IS NULL AND refusal IS NULL)); STRICT. It is a data table: it appends no Event, belongs to no Plan and is not a history table. Queue states: pending (queued_at set, reacted_at and refused_at NULL), reacted (reacted_at set), refused (refused_at set, reacted_at NULL). A row is never deleted.
 
 - **When:** each tick, when incident mode holds (hs-d643), log `E17: holding: incident mode is on` and do nothing; otherwise, when a helper run is in flight, collect its answer; otherwise, pick the oldest queue row with `reacted_at` NULL whose last failure in this engine's life is at least `watch.error_repeat_seconds` old (the step remembers failures per row id, in memory, so one row that keeps failing never blocks the rows behind it; a restart retries at once). With none, clear the step with `engine.clear(Step::E17, &About::Machine)` and nothing else.
 - **The helper call:** `cpd_core::slack::call(&config, "slack-react.ts", &[("channel", channel), ("ts", ts), ("emoji", emoji)], None, <120 s deadline>)` (§3.7 "Deadline", §1.2 `tool_timeout`), run detached on its own thread (never holding the tick), answer read with `cpd_core::slack::answer` at a later tick.
 - **On success** (`ok: true`, `already` true or false): one store transaction sets that row's `reacted_at` to the transaction's time where it is still NULL (`UPDATE slack_reactions SET reacted_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?1 AND reacted_at IS NULL`), no Event and the step is cleared.
-- **On `slack_refused`** (contract §3.7 A4): the row is parked in one transaction: set `refused_at` to now and `refusal` to the error name (for example `invalid_name`) and append one `error` Event (`source` `watch`, code `slack_refused`, scoped to the Plan when the row has one, `details` `{id, emoji, reason, channel, ts}` plus `{plan, pr, file}` for a merge reaction; `file` the policy file that sets `post.merged_reaction` for the PR). The row is not retried by E17 but re-checked each tick: when the policy names a non-empty emoji different from the row's emoji, the row is reopened (cleared `refused_at` and `refusal`, updated `emoji`, returned to pending state); when the policy names no emoji, the row is parked with refusal `policy_empty`.
+- **On `slack_refused`** (contract §3.7 A4): the row is parked in one transaction: set `refused_at` to now and `refusal` to the error name (for example `invalid_name`) and append one `error` Event (`source` `watch`, code `slack_refused`, scoped to the Plan when the row has one, `details` `{id, emoji, reason, channel, ts}` plus `{plan, workflow, file}` for a merge reaction; `file` the policy file that sets `post.merged_reaction` for the Workflow). The row is not retried by E17 but re-checked each tick: when the policy names a non-empty emoji different from the row's emoji, the row is reopened (cleared `refused_at` and `refusal`, updated `emoji`, returned to pending state); when the policy names no emoji, the row is parked with refusal `policy_empty`.
 - **On any other failure:** `engine.fail(Step::E17, About::Machine, failure)`: one `error` Event per code (`source` `watch`, reported again only when the code changes or after `watch.error_repeat_seconds` has passed; hs-d514; the codes are the helper's: `usage` (malformed call, unverified), `slack_not_configured`, `slack_auth`, `slack_failed`, `slack_helper_failed`, or the spawn codes `pi_not_found`, `spawn_failed`, `tool_timeout`), no Inbox item and **`reacted_at` stays NULL**. The same row is tried again `watch.error_repeat_seconds` after the end of the failed run: a reaction is never lost, only late.
 - **What it does not do:** Reactions are added only by this step, never by E11 or any other operation. A parked row is not retried until the policy changes (for a merge reaction) or manually reopened (not a command today).
 
@@ -5131,9 +5131,9 @@ Writes one Slack message and nothing else. The credential is read and refreshed 
 
 ### 21.11 The Jira transition queue (engine E19)
 
-Not a command. A queue of Jira status moves, one row per PR and target, for the PR's own ticket (`prs.jira`, §9.4, pro-d127). `in_progress` is queued when the first Attempt of any Job of the PR starts, `in_review` when the PR is posted (§9.8b), `done` when the PR is recorded merged. The status names are the policy's (§22.1: `pr.jira.in_progress`, `pr.jira.in_review`, `pr.jira.done`); a target whose name is empty has no transition. The policy's `pr.jira.estimate_fields` (§22.1) names the Jira fields the helper sets to 1 before a `done` move (§21.12, step 5). The three steps that queue only append a row, in their own transaction: they never read policy and never call Jira. Engine step E19 drains the queue through the helper (§21.12). An outage never blocks or fails a step.
+Not a command. A queue of Jira status moves, one row per Workflow and target, for the Workflow's own ticket (`workflows.jira`, §9.4, pro-d127). `in_progress` is queued when the first Attempt of any Job of the Workflow starts, `in_review` when the Workflow is posted (§9.8b), `done` when the Workflow is recorded merged. The status names are the policy's (§22.1: `pr.jira.in_progress`, `pr.jira.in_review`, `pr.jira.done`); a target whose name is empty has no transition. The policy's `pr.jira.estimate_fields` (§22.1) names the Jira fields the helper sets to 1 before a `done` move (§21.12, step 5). The three steps that queue only append a row, in their own transaction: they never read policy and never call Jira. Engine step E19 drains the queue through the helper (§21.12). An outage never blocks or fails a step.
 
-**The table** (migration `<timestamp>-jira-transitions`, additive; contract §4.4): `jira_transitions`, a data table: no history triggers, no Event kind and a row is never deleted but by `plan delete` (§4.14). Its columns: `id` (INTEGER PRIMARY KEY); `plan` and `pr` (both NOT NULL, a foreign key to `prs(plan, key)`); `target`, one of `in_progress`, `in_review`, `done`; `queued_at`, the transaction's time; `settled_at` and `outcome`, `outcome` one of `moved`, `unchanged`, `skipped`; `refused_at`, `refusal` (the reason) and `refused_with` (`<ticket>|<status name>` as it was refused). UNIQUE (`plan`, `pr`, `target`): queueing a target twice is a no-op (`ON CONFLICT DO NOTHING`). STRICT. CHECKs: `settled_at` and `outcome` are both NULL or both set; `refused_at`, `refusal` and `refused_with` are all NULL or all set; a row is never settled and parked at once.
+**The table** (migration `<timestamp>-jira-transitions`, additive; contract §4.4): `jira_transitions`, a data table: no history triggers, no Event kind and a row is never deleted but by `plan delete` (§4.14). Its columns: `id` (INTEGER PRIMARY KEY); `plan` and `workflow` (both NOT NULL, a foreign key to `workflows(plan, key)`); `target`, one of `in_progress`, `in_review`, `done`; `queued_at`, the transaction's time; `settled_at` and `outcome`, `outcome` one of `moved`, `unchanged`, `skipped`; `refused_at`, `refusal` (the reason) and `refused_with` (`<ticket>|<status name>` as it was refused). UNIQUE (`plan`, `workflow`, `target`): queueing a target twice is a no-op (`ON CONFLICT DO NOTHING`). STRICT. CHECKs: `settled_at` and `outcome` are both NULL or both set; `refused_at`, `refusal` and `refused_with` are all NULL or all set; a row is never settled and parked at once.
 
 Queue states, each row in exactly one:
 - **PENDING**: `settled_at` and `refused_at` NULL.
@@ -5141,25 +5141,25 @@ Queue states, each row in exactly one:
 - **PARKED**: `refused_at`, `refusal` and `refused_with` set.
 
 **Who queues** (J4), each in the transaction of the step itself, `queued_at` the transaction's time:
-- **`in_progress`**: the transaction that starts an Attempt (`insert` in `core/src/driver/start.rs`, §5.5), for the PR of the Attempt's Job. The first Attempt of any Job of the PR queues it; later ones are no-ops.
+- **`in_progress`**: the transaction that starts an Attempt (`insert` in `core/src/driver/start.rs`, §5.5), for the Workflow of the Attempt's Job. The first Attempt of any Job of the Workflow queues it; later ones are no-ops.
 - **`in_review`**: the transaction of `cpd pr post` (§9.8b, `core/src/pr/post.rs`) that inserts `pr_posts`, only when that insert is new: a refused or repeated post queues nothing.
-- **`done`**: every transaction that records a PR merged, next to the queue of the merge reaction (`reactions::queue_merge`): the merge of `core/src/pr/poll.rs` (`pr poll`, §9.2 and `cpd pr merge`, §9.10, which goes through it) and the already-merged branch of `core/src/pr/open.rs` (§9.1).
+- **`done`**: every transaction that records a Workflow merged, next to the queue of the merge reaction (`reactions::queue_merge`): the merge of `core/src/pr/poll.rs` (`pr poll`, §9.2 and `cpd pr merge`, §9.10, which goes through it) and the already-merged branch of `core/src/pr/open.rs` (§9.1).
 
-A PR with no ticket still gets its rows: they wait, PENDING and are never read.
+A Workflow with no ticket still gets its rows: they wait, PENDING and are never read.
 
-- **When:** each tick, when incident mode holds (like E17 and E18, hs-d643), log `E19: holding: incident mode is on` and do nothing. Otherwise: first the reopen check of the bullet below, for every PARKED row; then, when a helper run is in flight, collect its answer; otherwise pick the oldest PENDING row (`next_due`, lowest `id`) whose PR has a ticket and is not `cancelled`, skipping a row that failed in this engine's life less than `watch.error_repeat_seconds` ago (the step remembers failures per row id, in memory, so a restart retries at once). A row of a PR with no ticket is never picked. With none, clear the step with `engine.clear(Step::E19, &About::Machine)` and nothing else.
-- **Policy:** the PR's policy is resolved (`policy_of_pr`). An error is E17's merge-row failure path: `engine.fail(Step::E19, About::Plan(<plan>), failure)` and the row is tried later. When the target's name is empty, the row is settled in one transaction, `mark_settled(Skipped)`: no helper and the step goes on to the next row.
+- **When:** each tick, when incident mode holds (like E17 and E18, hs-d643), log `E19: holding: incident mode is on` and do nothing. Otherwise: first the reopen check of the bullet below, for every PARKED row; then, when a helper run is in flight, collect its answer; otherwise pick the oldest PENDING row (`next_due`, lowest `id`) whose Workflow has a ticket and is not `cancelled`, skipping a row that failed in this engine's life less than `watch.error_repeat_seconds` ago (the step remembers failures per row id, in memory, so a restart retries at once). A row of a Workflow with no ticket is never picked. With none, clear the step with `engine.clear(Step::E19, &About::Machine)` and nothing else.
+- **Policy:** the Workflow's policy is resolved (`policy_of_workflow`). An error is E17's merge-row failure path: `engine.fail(Step::E19, About::Plan(<plan>), failure)` and the row is tried later. When the target's name is empty, the row is settled in one transaction, `mark_settled(Skipped)`: no helper and the step goes on to the next row.
 - **The helper call:** `cpd_core::jira::call(&config, &home, <the request: ticket, target, the three names of the policy and estimate_fields, the policy's pr.jira.estimate_fields>, <120 s deadline>)` (§21.12), run detached on its own thread (never holding the tick) and its answer read by `cpd_core::jira::answer` at a later tick, as E17 does (§21.9).
 - **On ok** (`moved` or `unchanged`): one transaction, `mark_settled(id, Moved | Unchanged)` and the step is cleared. No Event, no Inbox item. Settling clears the row's Report key (R3 below), as does the `skipped` of the Policy bullet.
-- **On `jira_refused`:** one transaction, `refuse(...)` with the helper's `details.reason` (`site_ambiguous`, `issue_not_found` or `no_transition`) and its `message` and the ticket and the status name the run used: the row is parked with `refused_with` `<ticket>|<status>` and one `error` Event is appended (`source` `watch`, code `jira_refused`, scoped to the Plan, `details` `{id, plan, pr, ticket, target, status, reason}`). Its text names the ticket, the PR, the Plan, the status and the reason and says nothing is tried again until the PR's ticket (`cpd pr edit <pr> --jira <KEY>`) or the policy key `pr.jira.<target>` changes. Parking clears the row's Report key (R3 below).
+- **On `jira_refused`:** one transaction, `refuse(...)` with the helper's `details.reason` (`site_ambiguous`, `issue_not_found` or `no_transition`) and its `message` and the ticket and the status name the run used: the row is parked with `refused_with` `<ticket>|<status>` and one `error` Event is appended (`source` `watch`, code `jira_refused`, scoped to the Plan, `details` `{id, plan, workflow, ticket, target, status, reason}`). Its text names the ticket, the Workflow, the Plan, the status and the reason and says nothing is tried again until the Workflow's ticket (`cpd workflow edit <workflow> --jira <KEY>`) or the policy key `pr.jira.<target>` changes. Parking clears the row's Report key (R3 below).
 - **On any other failure** (the rules R1-R5 of contract §3.7 E19; the row is never parked by them):
   - **R1, a row failure:** any failure of the helper run, of its start, or of the store write that settles or parks the row, whose code is not `jira_auth`, `jira_not_configured` or (the parking path) `jira_refused`: `jira_failed`, `jira_helper_failed`, `spawn_failed`, `pi_not_found`, `tool_timeout`, and a store error under its own code. The row is not parked and stays PENDING; it is skipped for `watch.error_repeat_seconds` after the failed run's end and retried, so no move is lost: only late.
-  - **R2, its Event:** one `error` Event, `source` `watch`, scoped to the row's Plan (`plan` set, no Job or Session), `code` the failure's own, `data.message` exactly `<ticket> could not be moved to "<status>": <the failure's message>` (`<status>` the policy's status name for the target), `data.details` the failure's own details plus `plan`, `pr`, `ticket`, `target`, `status` (E19's keys win a clash). Its text: `The engine failed at E19 (Jira transitions) for the <target> move of PR <pr> of Plan <plan>: <data.message> It tries again at every tick. See: cpd plan show --plan <plan>`.
-  - **R3, dedupe:** the Report key is (E19, Plan, PR, target): one Event per code until the row ends (it settles `moved`, `unchanged` or `skipped`, or is parked), and ending the row clears the key. A different code on the same row is a new Event; another row's failure, with the same code in the same Plan, is its own Event. An engine restart forgets the open keys, so a row still failing is reported once more, unless the store holds an Event of the same step, scope and code appended less than `watch.error_repeat_seconds` ago (the Report's existing restart lookup).
+  - **R2, its Event:** one `error` Event, `source` `watch`, scoped to the row's Plan (`plan` set, no Job or Session), `code` the failure's own, `data.message` exactly `<ticket> could not be moved to "<status>": <the failure's message>` (`<status>` the policy's status name for the target), `data.details` the failure's own details plus `plan`, `workflow`, `ticket`, `target`, `status` (E19's keys win a clash). Its text: `The engine failed at E19 (Jira transitions) for the <target> move of Workflow <workflow> of Plan <plan>: <data.message> It tries again at every tick. See: cpd plan show --plan <plan>`.
+  - **R3, dedupe:** the Report key is (E19, Plan, Workflow, target): one Event per code until the row ends (it settles `moved`, `unchanged` or `skipped`, or is parked), and ending the row clears the key. A different code on the same row is a new Event; another row's failure, with the same code in the same Plan, is its own Event. An engine restart forgets the open keys, so a row still failing is reported once more, unless the store holds an Event of the same step, scope and code appended less than `watch.error_repeat_seconds` ago (the Report's existing restart lookup).
   - **R4, the machine-wide codes:** `jira_auth` and `jira_not_configured` stay ONE machine-wide `error` Event each (no Plan), as today: `engine.fail(Step::E19, About::Machine, failure)`, reported again only when the code changes or after `watch.error_repeat_seconds` has passed (hs-d514). A row that settles or is parked clears that machine key as today.
   - **R5:** no Inbox item. The Event reaches the Plan's Lead exactly as any Plan-scoped `error` Event does (hs-d514); nothing about delivery changes.
-- **Reopen:** each tick, for every PARKED row, the PR's ticket and policy are read again. When the target's name is non-empty and `<ticket>|<name>` differs from `refused_with`, `reopen(id)` clears `refused_at`, `refusal` and `refused_with` and the normal path runs the row. A policy that does not resolve for a parked row is `engine.fail(Step::E19, About::Plan(<plan>), failure)`. There is no command for it.
-- **What it does not do:** no Inbox item and no Event on success; no reaction to a changed ticket after its row settled (a PR whose ticket is replaced after its rows settled is not moved again); no ticket creation or linking (Plan pr-ticket); no change to who may post (Plan post-scope); no `pr view` or `plan show` field for the queue.
+- **Reopen:** each tick, for every PARKED row, the Workflow's ticket and policy are read again. When the target's name is non-empty and `<ticket>|<name>` differs from `refused_with`, `reopen(id)` clears `refused_at`, `refusal` and `refused_with` and the normal path runs the row. A policy that does not resolve for a parked row is `engine.fail(Step::E19, About::Plan(<plan>), failure)`. There is no command for it.
+- **What it does not do:** no Inbox item and no Event on success; no reaction to a changed ticket after its row settled (a Workflow whose ticket is replaced after its rows settled is not moved again); no ticket creation or linking (Plan pr-ticket); no change to who may post (Plan post-scope); no `pr view` or `plan show` field for the queue.
 
 ### 21.12 The helper `jira-transition.ts`
 
@@ -5274,26 +5274,26 @@ The policies (contract §8.3, hs-d288): cpd's compiled-in default and the owner 
 ### 22.1 `policy show`
 
 ```
-cpd policy show [--pr <key> [--plan <id>] | --context <c> | --owner <login> [--repo <name>]]
+cpd policy show [--workflow <key> [--plan <id>] | --context <c> | --owner <login> [--repo <name>]]
 ```
 
-Prints the resolved policy of one key: every domain with its value and its source. The pi adapter runs it with no flag at a Session's start to build the Session's policy section (contract §8.3 "Delivery to agents"); a Lead runs it with `--pr` to read a PR's repo policy, which never reaches its own section.
+Prints the resolved policy of one key: every domain with its value and its source. The pi adapter runs it with no flag at a Session's start to build the Session's policy section (contract §8.3 "Delivery to agents"); a Lead runs it with `--workflow` to read a Workflow's repo policy, which never reaches its own section.
 
 | Flag | Meaning |
 |---|---|
-| (none) | the caller's Session (`CPD_SESSION`, else `session_required`, §1.3): a Manager or a Lead resolves `Owner` of its Context's owner; a Worker (its Session's Attempt, also `CPD_ATTEMPT` in its pane) resolves `Repo` of its Job's PR |
-| `--pr <key>` | that PR of the selected Plan (`--plan`, else `CPD_PLAN`; §1.3): `Repo(<Context owner>, <PR name>)`, or `Owner(<Context owner>)` for a PR whose `name` is null (contract §8.3 "Keys and resolution") |
+| (none) | the caller's Session (`CPD_SESSION`, else `session_required`, §1.3): a Manager or a Lead resolves `Owner` of its Context's owner; a Worker (its Session's Attempt, also `CPD_ATTEMPT` in its pane) resolves `Repo` of its Job's Workflow |
+| `--workflow <key>` | that Workflow of the selected Plan (`--plan`, else `CPD_PLAN`; §1.3): `Repo(<Context owner>, <Workflow name>)`, or `Owner(<Context owner>)` for a Workflow whose `name` is null (contract §8.3 "Keys and resolution") |
 | `--context <c>` | that Context: `Owner(<its owner>)` |
 | `--owner <login>` | that owner: `Owner(<login>)`; a login of contract §2.1, else `usage` |
 | `--repo <name>` | with `--owner` only (else `usage`): `Repo(<login>, <name>)`; a name of contract §2.1, else `usage` |
 
-`--pr`, `--context` and `--owner` are exclusive (`usage`).
+`--workflow`, `--context` and `--owner` are exclusive (`usage`).
 
 | Precondition | Code | Exit |
 |---|---|---|
 | with no flag, a Session was selected | `session_required` | 2 |
-| the Session, Plan, PR or Context exists | `session_not_found`, `plan_not_found`, `pr_not_found`, `context_not_found` | 4 |
-| the Context (the Session's, the PR's Plan's, or `--context`) has an owner; the message names `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
+| the Session, Plan, Workflow or Context exists | `session_not_found`, `plan_not_found`, `workflow_not_found`, `context_not_found` | 4 |
+| the Context (the Session's, the Workflow's Plan's, or `--context`) has an owner; the message names `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
 | the key's owner has `policy/<owner>/owner.toml`, also when its repo file exists; `details.owner` | `owner_unconfirmed` | 1 |
 | every file the key reads is valid TOML with known domains, keys, types and values and a valid file name; `policy/host.toml` sets no `pr.post` table (pro-d126, contract §8.3 "Key exposure"); `details.file`, `details.key` | `policy_invalid` | 1 |
 
@@ -5333,7 +5333,7 @@ Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Ses
    "deploys": {"source": "default", "audience": [], "keys": {"workflows": {"value": [], "source": "default"}}, "text": ""}}}
 ```
 
-**The machine object.** Every form of the command (`--pr`, `--context`, `--owner`, `--owner --repo` and no flag) also carries a top-level `machine` object, because every form reads the machine file (`$CPD_HOME/policy/host.toml`, contract §8.3; it is also a full policy scope, read as the "Effects" above say and the `mcp` table is the only part this object reports): `{"name": "<machine>", "mcp": {"source", "servers"}}`. `name` is the config key `machine`; `source` is `default` or `machine:<realpath>` (contract §8.3 "MCP servers of the machine scope"); `servers` maps each server name to its entry with the keys as written in the file (a key left out is absent; an entry carries `headers`, a table of header name to literal value, when the file sets it and `oauth.clientName`, a string verbatim, when the file sets it). An invalid machine file is `policy_invalid`, with the same exit and `details` (`file`, `key`) as an invalid owner file and fails every form. `markdown` gains a section `## Machine <name>` listing each server's name, `url` and `exposure`, or `No MCP servers.`. Example, on machine `pro`, `machine` only:
+**The machine object.** Every form of the command (`--workflow`, `--context`, `--owner`, `--owner --repo` and no flag) also carries a top-level `machine` object, because every form reads the machine file (`$CPD_HOME/policy/host.toml`, contract §8.3; it is also a full policy scope, read as the "Effects" above say and the `mcp` table is the only part this object reports): `{"name": "<machine>", "mcp": {"source", "servers"}}`. `name` is the config key `machine`; `source` is `default` or `machine:<realpath>` (contract §8.3 "MCP servers of the machine scope"); `servers` maps each server name to its entry with the keys as written in the file (a key left out is absent; an entry carries `headers`, a table of header name to literal value, when the file sets it and `oauth.clientName`, a string verbatim, when the file sets it). An invalid machine file is `policy_invalid`, with the same exit and `details` (`file`, `key`) as an invalid owner file and fails every form. `markdown` gains a section `## Machine <name>` listing each server's name, `url` and `exposure`, or `No MCP servers.`. Example, on machine `pro`, `machine` only:
 
 ```json
 {"machine": {"name": "pro", "mcp": {
@@ -5691,14 +5691,14 @@ Incident mode (hs-d643, user decision hs-d643; supersedes hs-d634): Plan-scoped 
 ### 23.1 `incident start`
 
 ```
-cpd incident start --plan <id> [--plan <id>...] [--reason <text>] [--until-pr <plan>/<key>]
+cpd incident start --plan <id> [--plan <id>...] [--reason <text>] [--until-workflow <plan>/<key>]
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--plan <id>` | required, repeatable at least once; names an existing Plan in this Context |
 | `--reason <text>` | optional; 1 or more characters, explanation of the incident; required only on a fresh start |
-| `--until-pr <plan>/<key>` | optional; PR key in format `<plan>/<key>` of one of the named Plans; incident ends when this PR merges |
+| `--until-workflow <plan>/<key>` | optional; PR key in format `<plan>/<key>` of one of the named Plans; incident ends when this PR merges |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -5706,35 +5706,35 @@ cpd incident start --plan <id> [--plan <id>...] [--reason <text>] [--until-pr <p
 | at least one `--plan` is present | `usage` | 2 |
 | when incident is off, `--reason` is present and at least 1 character | `usage` | 2 |
 | no `--plan` argument, or every one names an existing Plan in the store | `plan_not_found` | 4 |
-| `--until-pr` is absent, or its value is a PR of one of the named Plans and exists | `pr_not_found` | 4 |
-| `--until-pr` is absent, or its value's Plan is one of the named Plans | `until_pr_not_incident` | 3 |
-| `--until-pr` is valid JSON and `<plan>/<key>` format, or not present | `usage` | 2 |
+| `--until-workflow` is absent, or its value is a PR of one of the named Plans and exists | `pr_not_found` | 4 |
+| `--until-workflow` is absent, or its value's Plan is one of the named Plans | `until_workflow_not_incident` | 3 |
+| `--until-workflow` is valid JSON and `<plan>/<key>` format, or not present | `usage` | 2 |
 
-**Effects:** one transaction. **Fresh start** (when incident is off): insert one row in `incident` table (`id = 1`, `started_at` now, `started_by` the Manager's Session id, `reason` the text, `started_txn` the transaction id, `lead` the `lead_session` of the first `--plan` argument's Plan, `until_plan` and `until_pr` as specified or null); insert one row per named Plan in `incident_plans` table (plan, started_txn); for every running Attempt in the same transaction, if `stop_request` is null set it to `'cancelled'`; append `incident-started` Event with `data` including `plans` array; return `changed: true`. **Update on a live incident** (when incident is on): replace `incident_plans` with exactly the named Plans; when the set changed, recompute `lead` from the new first Plan's `lead_session`; when the set or `until_pr` changed, update `until_plan`, `until_pr` and `lead` and append `incident-plans` Event with the new `plans` array; when all are unchanged, append no Event; return `changed: true` when the Event is appended, `changed: false` when unchanged; run no stop-request sweep. The `started_at`, `started_by` and stored `reason` stay unchanged on an update. When `--until-pr` is absent and the stored `until_plan` is not in the new set, clear both `until_plan` and `until_pr`. The incident and incident_plans tables are registered in `history_tables` (no_delete 0).
+**Effects:** one transaction. **Fresh start** (when incident is off): insert one row in `incident` table (`id = 1`, `started_at` now, `started_by` the Manager's Session id, `reason` the text, `started_txn` the transaction id, `lead` the `lead_session` of the first `--plan` argument's Plan, `until_plan` and `until_workflow` as specified or null); insert one row per named Plan in `incident_plans` table (plan, started_txn); for every running Attempt in the same transaction, if `stop_request` is null set it to `'cancelled'`; append `incident-started` Event with `data` including `plans` array; return `changed: true`. **Update on a live incident** (when incident is on): replace `incident_plans` with exactly the named Plans; when the set changed, recompute `lead` from the new first Plan's `lead_session`; when the set or `until_workflow` changed, update `until_plan`, `until_workflow` and `lead` and append `incident-plans` Event with the new `plans` array; when all are unchanged, append no Event; return `changed: true` when the Event is appended, `changed: false` when unchanged; run no stop-request sweep. The `started_at`, `started_by` and stored `reason` stay unchanged on an update. When `--until-workflow` is absent and the stored `until_plan` is not in the new set, clear both `until_plan` and `until_workflow`. The incident and incident_plans tables are registered in `history_tables` (no_delete 0).
 
 **Output examples:**
 
 Fresh start:
 ```json
-{"ok": true, "changed": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress", "plans": ["plan-a", "plan-b"], "until_pr": null}}
+{"ok": true, "changed": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress", "plans": ["plan-a", "plan-b"], "until_workflow": null}}
 ```
 
 Update with changed set:
 ```json
-{"ok": true, "changed": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress", "plans": ["plan-c"], "until_pr": null}}
+{"ok": true, "changed": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress", "plans": ["plan-c"], "until_workflow": null}}
 ```
 
-Update with unchanged set and until_pr:
+Update with unchanged set and until_workflow:
 ```json
-{"ok": true, "changed": false, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress", "plans": ["plan-a", "plan-b"], "until_pr": null}}
+{"ok": true, "changed": false, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress", "plans": ["plan-a", "plan-b"], "until_workflow": null}}
 ```
 
 Fresh start with auto-end:
 ```json
-{"ok": true, "changed": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "fixing PR ci", "plans": ["plan-a"], "until_pr": "plan-a/pr-1"}}
+{"ok": true, "changed": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "fixing PR ci", "plans": ["plan-a"], "until_workflow": "plan-a/workflow-1"}}
 ```
 
-**Idempotent:** yes; when the set and `until_pr` are already as named, returns `changed: false` with the existing incident.
+**Idempotent:** yes; when the set and `until_workflow` are already as named, returns `changed: false` with the existing incident.
 
 ### 23.2 `incident end`
 
@@ -5775,13 +5775,13 @@ Output when off:
 Output when on:
 
 ```json
-{"ok": true, "on": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress", "plans": ["plan-a", "plan-b"], "until_pr": null}}
+{"ok": true, "on": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress", "plans": ["plan-a", "plan-b"], "until_workflow": null}}
 ```
 
 Output when on with auto-end:
 
 ```json
-{"ok": true, "on": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "fixing PR ci", "plans": ["plan-a"], "until_pr": "plan-a/pr-1"}}
+{"ok": true, "on": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "fixing PR ci", "plans": ["plan-a"], "until_workflow": "plan-a/workflow-1"}}
 ```
 
 Idempotent: yes; read-only.
@@ -5816,7 +5816,7 @@ Flags and arguments:
 - `--drop <lead-branch>`: repeatable. A worktree whose Lead Branch is one of the values is removed whether or not it is merged (rule `remove dropped`), unless it is protected.
 - `<repo>...`: one or more repos, at least one. A missing repo argument or an unknown flag is a usage error, exit 2.
 
-**Protected set.** Before anything else the command reads the store (no `cpd` child, no `jq`): for every Plan that is not done, the `lead_branch` of each PR whose status is not merged and `cpd/<plan>--<attempt id>` for each Attempt of a Job of such a PR. If the store cannot be read the command exits 2 before touching anything. `git` and `gh` (authenticated) go through the `Runner`.
+**Protected set.** Before anything else the command reads the store (no `cpd` child, no `jq`): for every Plan that is not done, the `lead_branch` of each Workflow whose status is not merged and `cpd/<plan>--<attempt id>` for each Attempt of a Job of such a Workflow. If the store cannot be read the command exits 2 before touching anything. `git` and `gh` (authenticated) go through the `Runner`.
 
 **Rules.** Per worktree (the main one is skipped), the first rule that holds wins:
 
@@ -5961,7 +5961,7 @@ A server that uses OAuth needs the User to sign in once on the machine (pro-d10)
 cpd janitor
 ```
 
-Removes the worktrees and branches of merged and cancelled PRs (pro-d70, pro-d71) and of the ended Attempts of merged Jobs on live PRs (contract §7.2). One pass, then exits. It runs once every `watch.janitor_minutes` minutes (config key, default 60) via engine step E16 (§3.7) and may be run by hand. The User calls it, not Leads or Workers (§2).
+Removes the worktrees and branches of merged and cancelled Workflows (pro-d70, pro-d71) and of the ended Attempts of merged Jobs on live Workflows (contract §7.2). One pass, then exits. It runs once every `watch.janitor_minutes` minutes (config key, default 60) via engine step E16 (§3.7) and may be run by hand. The User calls it, not Leads or Workers (§2).
 
 | Flag | Meaning |
 |---|---|
@@ -5973,13 +5973,13 @@ Removes the worktrees and branches of merged and cancelled PRs (pro-d70, pro-d71
 
 **Effects** (pro-d70, pro-d71, pro-d72; contract §7.1, §7.2):
 
-The pass scans every PR of every Plan (archived included) whose status is `merged` or `cancelled` that still has on disk an Attempt worktree, its Lead worktree, or its aside leftover (a directory `<path>.removing` from a failed removal, §4 below). It also scans the PRs whose status is `dispatch` or `open` for the ended Attempts that contract §7.2 'Ended Attempts of merged Jobs on a live PR' sweeps. It does not start a pass when another is running: the lock `locks/janitor.lock` (exclusive, non-blocking) is held by another; it prints `{"ok":true,"skipped":"running"}`, exits 0 and touches nothing.
+The pass scans every Workflow of every Plan (archived included) whose status is `merged` or `cancelled` that still has on disk an Attempt worktree, its Lead worktree, or its aside leftover (a directory `<path>.removing` from a failed removal, §4 below). It also scans the Workflows whose status is `dispatch` or `open` for the ended Attempts that contract §7.2 'Ended Attempts of merged Jobs on a live Workflow' sweeps. It does not start a pass when another is running: the lock `locks/janitor.lock` (exclusive, non-blocking) is held by another; it prints `{"ok":true,"skipped":"running"}`, exits 0 and touches nothing.
 
-For each such PR (**pending PR**), in this order:
+For each such Workflow (a **Workflow to clean**), in this order:
 
-1. **Idle check**: every Attempt of the PR's Jobs is `ended` and its driver lock is free (probed without creating the file, as `merged_prs_to_clean` does today, contract §7.2). For a swept Attempt of a `dispatch` or `open` PR (contract §7.2 'Ended Attempts of merged Jobs on a live PR') the check is that Attempt's (`ended`, lock free), not the PR's. If not, the outcome is `pending`, nothing is touched, no Event for this PR in this pass.
-2. **Kill Attempt windows**: `tmux kill-pane` on every pane of this machine's Attempt windows of the PR's Jobs (as today, `core/src/pr/poll.rs` `clean_up`).
-3. **Discard parallel Attempt worktrees**: per Attempt of the PR's Jobs whose worktree exists on disk (a linear Attempt runs in the Lead worktree): removed as contract §7.2 'Removal' says, forced: rename aside, prune, branch -D, delete the aside; an Attempt's leftover `<path>.removing` counts as on disk.
+1. **Idle check**: every Attempt of the Workflow's Jobs is `ended` and its driver lock is free (probed without creating the file, as `merged_workflows_to_clean` does today, contract §7.2). For a swept Attempt of a `dispatch` or `open` Workflow (contract §7.2 'Ended Attempts of merged Jobs on a live Workflow') the check is that Attempt's (`ended`, lock free), not the Workflow's. If not, the outcome is `pending`, nothing is touched, no Event for this Workflow in this pass.
+2. **Kill Attempt windows**: `tmux kill-pane` on every pane of this machine's Attempt windows of the Workflow's Jobs (as today, `core/src/pr/poll.rs` `clean_up`).
+3. **Discard parallel Attempt worktrees**: per Attempt of the Workflow's Jobs whose worktree exists on disk (a linear Attempt runs in the Lead worktree): removed as contract §7.2 'Removal' says, forced: rename aside, prune, branch -D, delete the aside; an Attempt's leftover `<path>.removing` counts as on disk.
 4. **Rule S** on the Lead worktree (contract §7.4: fetch, merge base): its local branch stays up to date for the dirty and unpushed check (§4 below).
 5. **Remove the Lead worktree** (§4 below).
 
@@ -5987,7 +5987,7 @@ For each such PR (**pending PR**), in this order:
 
 When the Lead worktree is dirty (output of `git --no-optional-locks status --porcelain` not empty, untracked files included) or unpushed (`git rev-list --no-merges HEAD --not --remotes=origin` not empty, **unless** `HEAD` is the pull request's recorded head commit or an ancestor of it, as the poll checks today with `headRefOid`; a squash-merged PR whose branch GitHub deleted is cleaned up; contract §7.2 "The recorded head and the unpushed rule"), the outcome is `kept` with the reason and nothing is touched. Otherwise, in this order, each step idempotent (a stop at any point leaves the worktree whole or marked for retry):
 
-(a) **Rename**: `<path>` to `<path>.removing` (atomic rename, a sibling in the same directory; PR keys have no dot, so no collision; a failing rename is `kept` with the error as reason).
+(a) **Rename**: `<path>` to `<path>.removing` (atomic rename, a sibling in the same directory; Workflow keys have no dot, so no collision; a failing rename is `kept` with the error as reason).
 (b) **Prune**: `git worktree prune` (the registered directory is gone, so git drops it).
 (c) **Delete branch**: `git branch -D <lead branch>` when it exists.
 (d) **Delete directory**: `std::fs::remove_dir_all(<path>.removing)`.
@@ -5996,44 +5996,44 @@ A stop (kill, crash, failing call) at (a) leaves the worktree whole and untouche
 
 **§5. Output and Log**:
 
-One JSON value: `{"ok":true,"outcomes":[...]}` or `{"ok":false,"error":{...}}` (store unreadable only). `outcomes` is one entry per pending PR path scanned (paths of Attempt worktrees, Lead worktrees and aside leftovers), in the order they were found. Each entry:
+One JSON value: `{"ok":true,"outcomes":[...]}` or `{"ok":false,"error":{...}}` (store unreadable only). `outcomes` is one entry per pending Workflow path scanned (paths of Attempt worktrees, Lead worktrees and aside leftovers), in the order they were found. Each entry:
 
 ```json
-{"plan": "pay-4521", "pr": "api", "status": "cancelled", "path": "/home/clayton/projects/pay.pay-4521.api", "outcome": "removed", "reason": null}
+{"plan": "pay-4521", "workflow": "api", "status": "cancelled", "path": "/home/clayton/projects/pay.pay-4521.api", "outcome": "removed", "reason": null}
 ```
 
 or, when not removed:
 
 ```json
-{"plan": "pay-4521", "pr": "api", "status": "merged", "path": "/home/clayton/projects/pay.api", "outcome": "kept", "reason": "unpushed"}
+{"plan": "pay-4521", "workflow": "api", "status": "merged", "path": "/home/clayton/projects/pay.api", "outcome": "kept", "reason": "unpushed"}
 ```
 
 or:
 
 ```json
-{"plan": "pay-4521", "pr": "api", "status": "merged", "path": "/home/clayton/projects/pay.api.removing", "outcome": "failed", "reason": "permission denied"}
+{"plan": "pay-4521", "workflow": "api", "status": "merged", "path": "/home/clayton/projects/pay.api.removing", "outcome": "failed", "reason": "permission denied"}
 ```
 
-`status` is `cancelled`, `merged`, `dispatch` or `open` (the last two for an Attempt swept under contract §7.2 'Ended Attempts of merged Jobs on a live PR'), read from the PR's status in the store. `outcome` is one of: `removed` (the path was deleted whole), `kept` (the path remains untouched, worktree dirty or unpushed), `pending` (the PR is not idle yet), or `failed` (the path was renamed but not fully deleted; the next pass retries). `reason` is present only for `kept` and `failed` (the dirty/unpushed rule, git's stderr tail, or a file error message); it is a short string suitable for an Event.
+`status` is `cancelled`, `merged`, `dispatch` or `open` (the last two for an Attempt swept under contract §7.2 'Ended Attempts of merged Jobs on a live Workflow'), read from the Workflow's status in the store. `outcome` is one of: `removed` (the path was deleted whole), `kept` (the path remains untouched, worktree dirty or unpushed), `pending` (the Workflow is not idle yet), or `failed` (the path was renamed but not fully deleted; the next pass retries). `reason` is present only for `kept` and `failed` (the dirty/unpushed rule, git's stderr tail, or a file error message); it is a short string suitable for an Event.
 
 The pass writes a log to `run/janitor.log`, appended (new lines only, one per pass, format `<timestamp> <pass id> <status>` where `<status>` is `ok`, `locked`, or an error; the file is not parsed, so its format may change). The engine's watch.log reads events from that file (§12 "The watch loop").
 
 **§6. Events**:
 
-One `error` Event `cleanup_failed` per `kept` or `failed` path, only from the first pass that sees it with no `cleanup_failed` Event of that PR yet (later passes retry silently, as `fresh` does today for a cancelled PR; a merged PR now works the same way). Never for `pending` or `removed` paths. **Text** (pro-d72):
+One `error` Event `cleanup_failed` per `kept` or `failed` path, only from the first pass that sees it with no `cleanup_failed` Event of that Workflow yet (later passes retry silently, as `fresh` does today for a cancelled Workflow; a merged Workflow now works the same way). Never for `pending` or `removed` paths. **Text** (pro-d72):
 
-- `kept`: `The clean-up of the <status> PR <pr> of Plan <plan> kept <path> untouched: <reason>`
-- `failed` (after rename at step (a) in §4): `The clean-up of the <status> PR <pr> of Plan <plan> removed <path>, but not everything: <reason>. The next janitor pass retries.`
-- `failed` (Attempt worktree discard at step 3 in Effects): `The clean-up of the <status> PR <pr> of Plan <plan> did not remove <path>: <reason>. The next janitor pass retries.`
+- `kept`: `The clean-up of the <status> Workflow <workflow> of Plan <plan> kept <path> untouched: <reason>`
+- `failed` (after rename at step (a) in §4): `The clean-up of the <status> Workflow <workflow> of Plan <plan> removed <path>, but not everything: <reason>. The next janitor pass retries.`
+- `failed` (Attempt worktree discard at step 3 in Effects): `The clean-up of the <status> Workflow <workflow> of Plan <plan> did not remove <path>: <reason>. The next janitor pass retries.`
 
-Each Event also has `details`: `{plan, pr, status, outcome, path, reason}`.
+Each Event also has `details`: `{plan, workflow, status, outcome, path, reason}`.
 
 **§7. Exit codes**:
 
 - `0` on success (outcomes list may be empty or contain `pending`, `kept`, `failed` and `removed`).
 - `2` when the store cannot be read (as `prune`, §27: `store_too_new`, `migration_failed`, `migration_changed`, `migration_order`).
 - `1` for other store errors (as `prune`, §27: `store_failed`, `store_tampered`).
-- `1` when a git or tmux call fails unexpectedly (details `{argv, exit, stderr}`); the pass continues for the next PR.
+- `1` when a git or tmux call fails unexpectedly (details `{argv, exit, stderr}`); the pass continues for the next Workflow.
 
 **Tests**: `janitor_pass_removes_cancelled_and_merged_pr_worktrees_and_branches`, `janitor_pass_finishes_what_a_killed_pass_left`, `janitor_command_is_in_the_help_tree`.
 
@@ -6041,7 +6041,7 @@ Idempotent: yes; rerunning with nothing to clean prints `ok` with an empty outco
 
 ## 30. `resource`
 
-Resources with slots, declared at host, owner or repo level (contract §8.3 "The `resources` domain", §1.4 "The resource locks and the holder record", §3.4 "Resources of a Job" and "Tenancy"; Plan `repo-lock`). Both commands derive the repo from the **current directory**: the git worktree that contains it, its `origin` keyed as `pr add` does (`repo_unkeyed`, exit 1, when it cannot), then that repo's policy (whose visible resources are the union of contract §8.3) (the owner and policy refusals of any resolve: `owner_unconfirmed`, `policy_invalid`). A directory outside a git worktree is `usage` (exit 2). The files are in contract §1.4; no command releases another tenant's slot.
+Resources with slots, declared at host, owner or repo level (contract §8.3 "The `resources` domain", §1.4 "The resource locks and the holder record", §3.4 "Resources of a Job" and "Tenancy"; Plan `repo-lock`). Both commands derive the repo from the **current directory**: the git worktree that contains it, its `origin` keyed as `workflow add` does (`repo_unkeyed`, exit 1, when it cannot), then that repo's policy (whose visible resources are the union of contract §8.3) (the owner and policy refusals of any resolve: `owner_unconfirmed`, `policy_invalid`). A directory outside a git worktree is `usage` (exit 2). The files are in contract §1.4; no command releases another tenant's slot.
 
 ### 30.1 `resource list`
 
